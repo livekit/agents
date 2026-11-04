@@ -139,7 +139,7 @@ impl VoiceDriver {
                 Some(stt) => {
                     let same_stt =
                         self.session.stt.as_ref().is_some_and(|old| old.instance == stt.instance);
-                    let activity = self.session.spans.activity();
+                    let activity = self.activity_span();
                     let (open, effect) = self.input.request_open(StreamKind::Stt, stt.id, activity);
                     self.record_effect(effect);
                     self.session.stt = Some(stt);

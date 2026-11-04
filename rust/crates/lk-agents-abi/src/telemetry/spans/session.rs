@@ -79,6 +79,9 @@ pub struct AgentStateChanged {
 #[event(name = "user_state_changed")]
 #[derive(Attrs)]
 pub struct UserStateChanged {
+    /// The change's instant, never after the step that records it.
+    #[at]
+    pub at: crate::Ts,
     #[attr("lk.old_state")]
     pub old: String,
     #[attr("lk.new_state")]

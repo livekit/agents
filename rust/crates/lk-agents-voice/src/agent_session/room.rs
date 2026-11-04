@@ -5,6 +5,7 @@ use crate::trace::{RoomLinkStep, RoomStep, Step};
 use lk_agents_abi::Ts;
 use lk_agents_abi::voice::events::CloseReason;
 use lk_agents_abi::voice::room_io::DeleteRoomRequested;
+use lk_agents_abi::voice::room_io::ParticipantInfo;
 use lk_agents_abi::voice::room_owner::RoomIoEvent;
 use lk_agents_abi::voice::rtc::DisconnectReason;
 
@@ -20,6 +21,14 @@ pub(crate) struct RoomLink {
     config: RoomLinkConfig,
     /// A later disconnect closes nothing, a second close deletes nothing.
     deletion_requested: bool,
+    /// The participants the room described, by identity.
+    participants: std::collections::BTreeMap<String, ParticipantInfo>,
+    /// The linked participant's identity, and its description.
+    linked: Option<String>,
+    linked_info: Option<ParticipantInfo>,
+    /// The agent's own participant, and whether the room is connected.
+    local: Option<ParticipantInfo>,
+    connected: bool,
 }
 
 impl RoomLink {
@@ -29,7 +38,47 @@ impl RoomLink {
             delete_room_on_close: false,
             room: String::new(),
         });
-        RoomLink { config, deletion_requested: false }
+        RoomLink {
+            config,
+            deletion_requested: false,
+            participants: Default::default(),
+            linked: None,
+            linked_info: None,
+            local: None,
+            connected: false,
+        }
+    }
+
+    /// The linked participant: the one the user turns are heard from.
+    pub(crate) fn linked_participant(&self) -> Option<&ParticipantInfo> {
+        self.linked_info.as_ref()
+    }
+
+    /// The agent's own participant, while the room is connected.
+    pub(crate) fn local_participant(&self) -> Option<&ParticipantInfo> {
+        self.local.as_ref().filter(|_| self.connected)
+    }
+
+    /// The room described a participant: the linked one, or the agent's own (`local`).
+    fn describe(&mut self, info: &ParticipantInfo, local: bool) {
+        if local {
+            self.local = Some(info.clone());
+            return;
+        }
+        let identity = info.identity.as_str();
+        if self.linked.as_deref() == Some(identity) {
+            self.linked_info = Some(info.clone());
+        }
+        self.participants.insert(identity.to_owned(), info.clone());
+    }
+
+    /// The participant `identity` linked (`left: false`) or left: its description, when the room
+    /// gave one before.
+    fn link(&mut self, identity: &str, left: bool) -> Option<ParticipantInfo> {
+        let known = self.participants.get(identity).cloned();
+        self.linked = (!left).then(|| identity.to_owned());
+        self.linked_info = known.clone().filter(|_| !left);
+        known
     }
 
     /// Does this disconnect end the session? A deletion in flight is the end of the call already
@@ -56,7 +105,8 @@ impl VoiceDriver {
         match &ev {
             RoomIoEvent::ParticipantUnlinked(unlinked) => {
                 let identity = unlinked.identity.as_str();
-                self.session.spans.participant(now, identity, Some(unlinked.reason));
+                let known = self.session.room.link(identity, true);
+                self.participant_span_event(identity, known, Some(unlinked.reason));
                 {
                     let updates = self.session.states.on_link(now, false, closing);
                     self.apply_user_state_updates(updates);
@@ -72,7 +122,9 @@ impl VoiceDriver {
             }
             RoomIoEvent::ParticipantLinked { participant, outbound_sip } => {
                 self.record_trace(RoomStep::Link(RoomLinkStep::Linked));
-                self.session.spans.participant(now, participant.identity.as_str(), None);
+                let identity = participant.identity.as_str();
+                let known = self.session.room.link(identity, false);
+                self.participant_span_event(identity, known, None);
                 {
                     let updates = self.session.states.on_link(now, true, closing);
                     self.apply_user_state_updates(updates);
@@ -110,10 +162,11 @@ impl VoiceDriver {
             }
             // For the spans only.
             RoomIoEvent::ParticipantInfo { participant, local } => {
-                return self.session.spans.participant_info(participant, *local);
+                return self.session.room.describe(participant, *local);
             }
             RoomIoEvent::ConnectionStateChanged(state) => {
-                return self.session.spans.connection(now, *state);
+                self.session.room.connected = state.is_connected();
+                return self.connection_span_event(*state);
             }
             RoomIoEvent::TextInput(_) | RoomIoEvent::DeleteRoomRequested(_) => {}
         }

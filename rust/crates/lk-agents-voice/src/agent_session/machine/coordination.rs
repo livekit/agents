@@ -314,10 +314,14 @@ impl VoiceDriver {
         }
         // The user state and away deadline are decided on the way to the host.
         self.on_session_edge(now, &ev);
-        // The spans this event ended go out right before it.
-        self.observe_spans(now, &ev);
-        self.flush_spans();
+        // The heard user turn's evidence, and the close of every span; the spans this event ended
+        // go out right before it.
+        self.hear_user_turn(now, &ev);
         let closed = matches!(ev, SessionEvent::Close { .. });
+        if closed {
+            self.close_spans();
+        }
+        self.flush_spans();
         if let SessionEvent::PreemptiveGeneration(pg) = &ev {
             self.on_preemptive_generation(now, pg.new_transcript.clone(), pg.started_speaking_at);
         }

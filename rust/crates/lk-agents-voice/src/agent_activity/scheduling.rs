@@ -6,6 +6,7 @@ use crate::agent_session::effects::Timer;
 use crate::agent_session::machine::coordination::{PauseResult, VoiceCallback};
 use crate::events::SessionEvent;
 use crate::speech_handle::{SpeechState, SpeechUpdate};
+use crate::telemetry;
 use crate::trace::{CloseAct, CloseStep, InterruptCause, InterruptStep, SpeechStep, TurnStep};
 use lk_agents_abi::Ts;
 use lk_agents_abi::voice::events::AgentState;
@@ -66,7 +67,7 @@ mod speech_scheduler {
         Discarded,
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug)]
     struct Entry {
         /// The speech's state, from scheduling until release: the queue is where the loop holds
         /// it.
@@ -77,6 +78,9 @@ mod speech_scheduler {
         add_to_chat_ctx: bool,
         status: Status,
         run: Option<crate::events::RunId>,
+        /// The speech's `agent_turn`, from its first generation to its release; a handover moves
+        /// it to the speech answering the same user turn.
+        span: Option<telemetry::AgentTurnSpan>,
     }
 
     /// `AgentActivity`'s scheduling state (`_speech_q`, `_current_speech`, `_scheduling_paused`,
@@ -106,6 +110,9 @@ mod speech_scheduler {
         released: Vec<(SpeechId, SpeechUpdate)>,
         /// Released speeches something may still name (a run's verdict, a tool still running).
         retiring: std::collections::BTreeSet<SpeechId>,
+        /// A preemptive generation discarded for the speech that answers instead: that speech
+        /// continues its turn, until the next session event goes out.
+        handover: Option<SpeechId>,
     }
 
     impl Default for SpeechScheduler {
@@ -128,6 +135,7 @@ mod speech_scheduler {
                 preemptive_generation_count: 0,
                 released: Vec::new(),
                 retiring: Default::default(),
+                handover: None,
             }
         }
 
@@ -287,7 +295,7 @@ mod speech_scheduler {
             add_to_chat_ctx: bool,
             status: Status,
         ) {
-            let entry = Entry { state, kind, add_to_chat_ctx, status, run: None };
+            let entry = Entry { state, kind, add_to_chat_ctx, status, run: None, span: None };
             self.speeches.insert(speech, entry);
         }
 
@@ -375,8 +383,13 @@ mod speech_scheduler {
         }
 
         /// The speech is over: its entry (and state) go, the current speech and its gap move.
-        /// `Some(quiet)`: no current speech and nothing in its tools (`listening`).
-        pub(super) fn finish(&mut self, speech: SpeechId, now: Ts) -> Option<bool> {
+        /// `Some((quiet, turn))`: no current speech and nothing in its tools (`listening`), and
+        /// the speech's agent turn, for the caller to end or hand to its running tools.
+        pub(super) fn finish(
+            &mut self,
+            speech: SpeechId,
+            now: Ts,
+        ) -> Option<(bool, Option<telemetry::AgentTurnSpan>)> {
             let mut entry = self.speeches.remove(&speech)?;
             let last = entry.state.take_updates().into_iter().chain([SpeechUpdate::Released]);
             self.released.extend(last.map(|u| (speech, u)));
@@ -401,13 +414,65 @@ mod speech_scheduler {
                 step => step,
             };
             let working = self.speeches.values().any(|e| e.status == Status::Working);
-            Some(
-                !working
-                    && matches!(
-                        self.step,
-                        SchedulingStep::Idle | SchedulingStep::Delaying { next: None, .. }
-                    ),
-            )
+            let quiet = !working
+                && matches!(
+                    self.step,
+                    SchedulingStep::Idle | SchedulingStep::Delaying { next: None, .. }
+                );
+            Some((quiet, entry.span))
+        }
+
+        /// The agent turn of a speech the queue holds.
+        pub(crate) fn agent_turn(
+            &mut self,
+            speech: SpeechId,
+        ) -> Option<&mut telemetry::AgentTurnSpan> {
+            self.speeches.get_mut(&speech)?.span.as_mut()
+        }
+
+        /// Every agent turn the queue holds.
+        pub(crate) fn agent_turns(
+            &mut self,
+        ) -> impl Iterator<Item = &mut telemetry::AgentTurnSpan> {
+            self.speeches.values_mut().filter_map(|e| e.span.as_mut())
+        }
+
+        /// The agent turn speech `speech`'s first generation opened, or adopted. Returns it when
+        /// the queue no longer holds the speech, for the caller to end.
+        pub(crate) fn begin_agent_turn(
+            &mut self,
+            speech: SpeechId,
+            turn: telemetry::AgentTurnSpan,
+        ) -> Option<telemetry::AgentTurnSpan> {
+            match self.speeches.get_mut(&speech) {
+                Some(entry) => entry.span.replace(turn),
+                None => Some(turn),
+            }
+        }
+
+        /// Every agent turn the queue holds, taken for the close.
+        pub(crate) fn take_agent_turns(&mut self) -> Vec<telemetry::AgentTurnSpan> {
+            self.speeches.values_mut().filter_map(|e| e.span.take()).collect()
+        }
+
+        /// A preemptive generation was discarded for a speech this step starts: it continues the
+        /// discarded one's turn.
+        pub(crate) fn hand_over(&mut self, speech: SpeechId) {
+            if self.speeches.get(&speech).is_some_and(|e| e.span.is_some()) {
+                self.handover = Some(speech);
+            }
+        }
+
+        /// The discarded generation's turn, for the speech that answers instead.
+        pub(crate) fn take_handover(&mut self) -> Option<telemetry::AgentTurnSpan> {
+            let speech = self.handover.take()?;
+            self.speeches.get_mut(&speech)?.span.take()
+        }
+
+        /// A session event went out: an unclaimed handover lapses, the turn stays the discarded
+        /// generation's.
+        pub(crate) fn lapse_handover(&mut self) {
+            self.handover = None;
         }
 
         /// `_pause_scheduling_task`: one more promise; the close's drain outranks the pause it
@@ -847,7 +912,9 @@ impl VoiceDriver {
             return;
         };
         state.authorize_generation();
-        self.session.spans.turns(now, |_, _, turns| turns.authorized(now, candidate));
+        if let Some(turn) = self.activity.speech_scheduler.agent_turn(candidate) {
+            turn.authorized(now);
+        }
         // Whoever was paused has lost the floor to this speech, or is this speech: either way the
         // sink plays again. A pause left on a speech that ended under it would hold every later
         // speech's audio until the close.
@@ -878,7 +945,12 @@ impl VoiceDriver {
     /// The speech is over (`Done`, `Failed` or the watchdog): the current speech and its gap, then
     /// `_on_pipeline_reply_done`'s `listening` when nothing speaks and nothing is in its tools.
     pub(super) fn speech_finished(&mut self, now: Ts, speech: SpeechId) {
-        let Some(quiet) = self.activity.speech_scheduler.finish(speech, now) else { return };
+        let Some((quiet, turn)) = self.activity.speech_scheduler.finish(speech, now) else {
+            return;
+        };
+        if let Some(turn) = turn {
+            self.agent_turn_released(turn);
+        }
         if self.clear_deadline_if_set(Timer::InterruptionTimeout(speech)) {
             self.record_trace(SpeechStep::WatchdogCleared { speech });
         }
@@ -964,7 +1036,9 @@ impl VoiceDriver {
                 if let Some(state) = self.activity.speech_scheduler.speech_mut(speech) {
                     state.mark_scheduled();
                 }
-                self.session.spans.turns(now, |_, _, turns| turns.scheduled(now, speech));
+                if let Some(turn) = self.activity.speech_scheduler.agent_turn(speech) {
+                    turn.scheduled(now);
+                }
                 self.record_trace(TurnStep::PreemptiveReconciled { speech, verdict });
                 Some(speech)
             }
@@ -988,7 +1062,7 @@ impl VoiceDriver {
         // Discarded for the speech that answers instead (a newer attempt, the turn's reply):
         // that speech continues its turn.
         if reason != PreemptiveDiscard::TurnAbandoned {
-            self.session.spans.turns(now, |_, _, turns| turns.discarded(speech));
+            self.activity.speech_scheduler.hand_over(speech);
         }
         let _ = self.interrupt_speech(now, speech, InterruptCause::Superseded, true);
     }

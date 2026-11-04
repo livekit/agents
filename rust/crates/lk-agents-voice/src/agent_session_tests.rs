@@ -231,12 +231,24 @@ fn a_say_released_before_its_step_reports_keeps_its_source() {
 /// A session's decision core with no provider or leg, at the zero instant; nothing runs it, so
 /// nothing exports its spans.
 pub(crate) fn driver() -> VoiceDriver {
+    let parts =
+        SessionParts { agent: "agent".into(), max_unrecoverable_errors: 3, ..Default::default() };
+    let now = Now { at: lk_agents_abi::Ts::ZERO, wall: std::time::UNIX_EPOCH };
+    driver_with(parts, None, now)
+}
+
+/// [`driver`] with these parts, hooks hosted and bounded by `hook_bound`, built at `now`.
+pub(crate) fn driver_with(
+    parts: SessionParts,
+    hook_bound: Option<std::time::Duration>,
+    now: Now,
+) -> VoiceDriver {
     let legs = lk_agents_abi::voice::session_options::SessionLegs::none();
     let config = crate::agent_activity::DriverConfig::new(Default::default(), legs);
     let view = Arc::new(SessionView {
         launch_holds: Default::default(),
         config: config.clone(),
-        agent: "agent".into(),
+        agent: parts.agent.clone(),
         agent_scope: 0,
         vad: None,
         usage: Default::default(),
@@ -245,16 +257,12 @@ pub(crate) fn driver() -> VoiceDriver {
     VoiceDriver::new(InitialSession {
         rt_resolved: config.effective.turn.owner(),
         config,
-        parts: SessionParts {
-            agent: "agent".into(),
-            max_unrecoverable_errors: 3,
-            ..Default::default()
-        },
+        parts,
         instructions: Default::default(),
         dynamic_instructions: None,
         output_nodes: Default::default(),
         toolset: Default::default(),
-        hook_bound: None,
+        hook_bound,
         expressive: Default::default(),
         sinks: Default::default(),
         video_instance: None,
@@ -272,7 +280,7 @@ pub(crate) fn driver() -> VoiceDriver {
                 next
             }
         }),
-        now: Now { at: lk_agents_abi::Ts::ZERO, wall: std::time::UNIX_EPOCH },
+        now,
         journalled: false,
         forward_chat_context: true,
         keyterms: None,

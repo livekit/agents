@@ -2,6 +2,7 @@ use super::effects::KeytermEffect;
 use crate::agent_session::VoiceDriver;
 use crate::agent_session::effects::Timer;
 use crate::generation::GenEvent;
+use crate::telemetry;
 use crate::trace::{DetectorName, DetectorStep, InputStep};
 use lk_agents_abi::metrics::base::LlmMetrics;
 use lk_agents_abi::resources::ResourceId;
@@ -70,6 +71,8 @@ pub(crate) struct KeytermSlot {
     inflight: Option<u64>,
     /// Whether an STT without the `keyterms` capability was told so once already.
     warned_unsupported: bool,
+    /// The pass in flight's `keyterm_detection`, until it answers or fails.
+    span: Option<crate::telemetry::Span<crate::telemetry::KeytermDetection>>,
 }
 
 /// The `record_keyterms` spec (`keyterm_detection.STTContextOptions`): three string lists, forced.
@@ -110,6 +113,7 @@ impl KeytermSlot {
             tools_host: setup.tools_host,
             inflight: None,
             warned_unsupported: false,
+            span: None,
         };
         (slot, initial)
     }
@@ -838,8 +842,7 @@ impl VoiceDriver {
         let before = self.session.keyterms.as_ref().map(|s| s.pass.keyterms()).unwrap_or_default();
         self.keyterms_step(now, KeytermIn::Answer { req, update });
         let after = self.session.keyterms.as_ref().map(|s| s.pass.keyterms()).unwrap_or_default();
-        let lists = Some((before.as_slice(), after.as_slice()));
-        self.session.spans.keyterm_answered(now, lists);
+        self.keyterm_span_ended(Some((before.as_slice(), after.as_slice())));
     }
 
     /// `asyncio.wait_for(.., timeout)` expired: no change, the slot frees.
@@ -852,7 +855,7 @@ impl VoiceDriver {
 
     fn keyterms_failed(&mut self, now: Ts, req: u64) {
         self.record_trace(InputStep::LegFailed { leg: DetectorName::Keyterms, recoverable: true });
-        self.session.spans.keyterm_answered(now, None);
+        self.keyterm_span_ended(None);
         self.keyterms_step(now, KeytermIn::Failed { req });
     }
 
@@ -906,12 +909,45 @@ impl VoiceDriver {
         self.record_trace(InputStep::LegRequested { leg: DetectorName::Keyterms, req });
         self.set_deadline(Timer::KeytermTimeout, now.saturating_add(timeout));
         let model = self.session.llm.as_ref().filter(|l| l.id == llm).map(|l| &l.provider);
-        let span = self.session.spans.keyterm_requested(now, model);
+        let decl = telemetry::KeytermDetection {
+            model: model.map(|l| l.model.clone()).unwrap_or_default(),
+            provider: model
+                .and_then(|l| lk_agents_core::telemetry::gen_ai::provider_name(&l.provider))
+                .unwrap_or_default(),
+        };
+        // A pass still open (its answer never came) ends first.
+        self.keyterm_span_ended(None);
+        let span = self.session.span.as_ref().map(|root| self.telemetry.open_in(root, decl));
+        let context = span.as_ref().and_then(|s| self.telemetry.context(s));
+        if let Some(slot) = self.session.keyterms.as_mut() {
+            slot.span = span;
+        } else if let Some(span) = span {
+            self.telemetry
+                .end(span, telemetry::KeytermDetectionEnd { count: 0, added: 0, removed: 0 });
+        }
         self.record_effect(crate::agent_session::effects::VoiceEffect::RequestKeyterms {
             llm,
             req,
             request: Box::new(request),
-            span,
+            span: context,
         });
+    }
+
+    /// The pass answered with the effective lists before and after it, or failed (`None`): its
+    /// `keyterm_detection` ends.
+    pub(crate) fn keyterm_span_ended(&mut self, lists: Option<(&[String], &[String])>) {
+        let Some(span) = self.session.keyterms.as_mut().and_then(|s| s.span.take()) else {
+            return;
+        };
+        let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
+        let end = match lists {
+            Some((before, after)) => telemetry::KeytermDetectionEnd {
+                count: count(after.len()),
+                added: count(after.iter().filter(|t| !before.contains(t)).count()),
+                removed: count(before.iter().filter(|t| !after.contains(t)).count()),
+            },
+            None => telemetry::KeytermDetectionEnd { count: 0, added: 0, removed: 0 },
+        };
+        self.telemetry.end(span, end);
     }
 }

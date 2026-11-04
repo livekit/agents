@@ -22,6 +22,7 @@ pub mod machine;
 pub mod output;
 mod report;
 pub mod room;
+mod spans;
 pub(crate) mod storage;
 pub mod time;
 
@@ -91,8 +92,19 @@ pub(crate) struct VoiceSessionState {
     pub(crate) expressive: crate::generation::ExpressiveLayers,
     /// `session._amd._on_end_of_turn(info)` would answer `True`: the AMD's (`SkipReplies`).
     pub(crate) amd_skips_replies: bool,
-    /// The session's spans.
-    pub(crate) spans: crate::telemetry::SessionSpans,
+    /// The session's span (`agent_session`), from `start()` to the end of the close.
+    pub(crate) span: Option<crate::telemetry::Span<crate::telemetry::AgentSession>>,
+    /// The opening's `session_start`, until it and the first agent's activity are done.
+    pub(crate) starting: Option<crate::telemetry::Holding<crate::telemetry::SessionStart>>,
+    /// The close's `session_close`, from its request to the close. It opens before `closing`
+    /// exists: the exits the request issues run under it.
+    pub(crate) closing_span: Option<crate::telemetry::Span<crate::telemetry::SessionClose>>,
+    /// The answering-machine detection, from the detector's attach to its verdict.
+    pub(crate) amd: Option<crate::telemetry::AmdDetection>,
+    /// The event-loop stalls, which `agent_session` ends with.
+    pub(crate) blocking: crate::telemetry::Blocking,
+    /// The turn span of each chat item, for the session report.
+    pub(crate) item_turns: crate::telemetry::ItemTurns,
     pub(crate) storage: storage::StorageTurns,
     /// The frontend expert event queue, kept across agent replacements.
     pub(crate) experts: crate::experts::Experts,
@@ -121,12 +133,7 @@ pub struct SessionParts {
 }
 
 impl VoiceSessionState {
-    pub(crate) fn new(
-        config: DriverConfig,
-        parts: SessionParts,
-        next_id: NextId,
-        now: crate::agent_session::Now,
-    ) -> Self {
+    pub(crate) fn new(config: DriverConfig, parts: SessionParts, next_id: NextId) -> Self {
         let SessionParts {
             llm,
             tts,
@@ -140,9 +147,8 @@ impl VoiceSessionState {
             chat_ctx: opening_items,
             session_id,
             storage_enabled,
-            telemetry,
+            telemetry: _,
         } = parts;
-        let spans = crate::telemetry::SessionSpans::new(&session_id, telemetry, now);
         let mut chat_ctx = crate::agent::SessionChatCtx::new(&agent);
         if let Some(items) = opening_items {
             chat_ctx.update_agent_chat_ctx(items, &agent);
@@ -180,7 +186,12 @@ impl VoiceSessionState {
             providers: Default::default(),
             expressive: Default::default(),
             amd_skips_replies: false,
-            spans,
+            span: None,
+            starting: None,
+            closing_span: None,
+            amd: None,
+            blocking: Default::default(),
+            item_turns: Default::default(),
             storage: storage::StorageTurns::new(storage_enabled),
             experts: Default::default(),
         }
@@ -664,8 +675,7 @@ mod label_tests {
         let legs = crate::agent_activity::options::SessionLegs::none();
         let mut config = DriverConfig::new(Default::default(), legs);
         config.effective.timers.aec_warmup = lk_agents_abi::Maybe::Given(aec);
-        let now = Now { at: Ts::ZERO, wall: std::time::UNIX_EPOCH };
-        VoiceSessionState::new(config, SessionParts::default(), Box::new(|| 1), now)
+        VoiceSessionState::new(config, SessionParts::default(), Box::new(|| 1))
     }
 
     #[test]

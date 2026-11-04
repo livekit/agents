@@ -83,7 +83,9 @@ impl VoiceDriver {
             return;
         }
         self.record_trace(CloseStep::Requested { reason, drain });
-        self.session.spans.closing(now, reason, drain, error.as_ref());
+        if self.session.closing_span.is_none() {
+            self.session.closing_span = self.session_close_span(reason, drain, error.as_ref());
+        }
         // The systems (AMD, IVR) close themselves on this, in this instant.
         self.record_effect(VoiceEffect::Tap(crate::agent_session::SystemTap::CloseRequested));
         // The keyterm pass: the request in flight is cancelled, no push after this.

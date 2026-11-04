@@ -280,7 +280,9 @@ impl VoiceDriver {
             || self.activity.paused_speech.paused_handle() == Some(speech);
         let sink = self.session.output_bindings.active_speech_audio(speech).filter(|_| in_the_sink);
         self.record_trace(InterruptStep::Interrupted { speech, cause, force });
-        self.session.spans.turns(now, |_, _, turns| turns.interrupted(speech, cause));
+        if let Some(turn) = self.agent_turn(speech) {
+            turn.interrupted(cause);
+        }
         // A filler dies with the interruption of the speech that owns its tool.
         self.fillers_speech_ended(speech);
         // A tool's `foreground()` / `wait_for_idle()` ask is refused too when the cut lands during

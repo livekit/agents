@@ -1,8 +1,9 @@
 //! The agent's turn: one `agent_turn` per speech, from its first generation to its end and the
 //! end of the tools it started, with `agent_speaking` as a direct child and a `generation` event
-//! at each step's start. The runtime opens the nodes, the realtime inference and the tool calls
-//! under the turn's [`SpanRef`]. A preemptive generation discarded for the speech that answers
-//! the same user turn hands that speech its turn, as 1.8.10 does.
+//! at each step's start. The speech's scheduler entry owns its [`AgentTurnSpan`]; the runtime
+//! opens the nodes, the realtime inference and the tool calls under the turn's [`SpanRef`]. A
+//! preemptive generation discarded for the speech that answers the same user turn hands that
+//! speech its turn, as 1.8.10 does.
 
 use super::participant_attrs;
 use crate::agent_activity::scheduling::SpeechId;
@@ -19,11 +20,10 @@ use lk_agents_abi::telemetry::spans::agent_turn::{
     PreemptiveGenerationDiscarded,
 };
 use lk_agents_abi::telemetry::spans::common::GenAiOperation;
-use lk_agents_abi::telemetry::spans::session::AgentSession;
 use lk_agents_abi::voice::room_io::ParticipantInfo;
 use lk_agents_abi::{FunctionCall, MetricsReport, ProviderId};
-use lk_agents_core::telemetry::span::{ManualSpan, Trace};
-use std::collections::BTreeMap;
+use lk_agents_core::telemetry::span::{Span, Trace};
+use std::collections::BTreeSet;
 use std::time::Duration;
 
 /// What a speech's turn starts with.
@@ -55,15 +55,6 @@ struct Progress {
     done: Option<(SpeechOutcome, Option<ProviderError>)>,
 }
 
-struct Turn {
-    span: ManualSpan<AgentTurn>,
-    /// `lk.speech_id`, unique across sessions.
-    id: String,
-    started: Ts,
-    reply: Reply,
-    progress: Progress,
-}
-
 fn decl(id: &str, reply: &Reply, participant: Option<&ParticipantInfo>) -> AgentTurn {
     let pipeline = !reply.realtime;
     AgentTurn {
@@ -93,107 +84,117 @@ pub(crate) fn interruption_source(cause: InterruptCause) -> InterruptionSource {
     }
 }
 
-#[derive(Default)]
-pub(crate) struct AgentTurns {
-    turns: BTreeMap<SpeechId, Turn>,
-    /// Every speech's turn span, for the chat items it produced.
-    spans: BTreeMap<SpeechId, SpanRef>,
-    /// Running tools and the speech that started them.
-    tools: BTreeMap<String, SpeechId>,
-    speaking: Option<(SpeechId, ManualSpan<AgentSpeaking>)>,
-    /// A discarded preemptive generation whose turn the next speech of this step continues.
-    handover: Option<SpeechId>,
-    /// The agent's own participant, while the room is connected.
-    pub(crate) participant: Option<ParticipantInfo>,
+/// One speech's `agent_turn` and its `agent_speaking`, with what the turn learns while it runs.
+/// The speech's scheduler entry owns it; a speech that ends while tools it started still run
+/// hands it to the record of those calls, and the last one to end ends it.
+pub(crate) struct AgentTurnSpan {
+    span: Span<AgentTurn>,
+    /// The speech whose turn it is: the one that adopted it after a handover.
+    speech: SpeechId,
+    /// `lk.speech_id`, unique across sessions.
+    id: String,
+    started: Ts,
+    reply: Reply,
+    progress: Progress,
+    speaking: Option<Span<AgentSpeaking>>,
+    /// The tool calls it started that still run.
+    calls: BTreeSet<String>,
 }
 
-impl AgentTurns {
-    /// The span of speech `speech`'s turn.
-    pub(crate) fn span_of(&self, speech: SpeechId) -> Option<SpanRef> {
-        self.spans.get(&speech).copied()
+impl std::fmt::Debug for AgentTurnSpan {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentTurnSpan").field("speech", &self.speech).field("id", &self.id).finish()
     }
+}
 
-    /// The speech's first generation starts: its turn opens, or continues the discarded
-    /// preemptive generation's.
-    pub(crate) fn started(
-        &mut self,
+impl AgentTurnSpan {
+    /// The speech's first generation: its turn opens. `session` makes `lk.speech_id` unique.
+    pub(crate) fn open(
         trace: &mut Trace,
-        root: &ManualSpan<AgentSession>,
-        now: Ts,
         session: &str,
         speech: SpeechId,
         reply: Reply,
-    ) -> SpanRef {
-        if let Some(turn) = self.turns.get(&speech) {
-            return turn.span.context();
-        }
+        participant: Option<&ParticipantInfo>,
+    ) -> Self {
         let id = format!("{session}_{speech}");
-        let decl = decl(&id, &reply, self.participant.as_ref());
-        let (span, started) = match self.handover.take().and_then(|old| self.turns.remove(&old)) {
-            Some(old) => {
-                let discarded = PreemptiveGenerationDiscarded { speech_id: old.id };
-                old.span.event(trace, now, discarded);
-                old.span.set(trace, decl);
-                (old.span, old.started)
-            }
-            None => (root.child(trace, now, decl), now),
-        };
-        span.event(trace, now, generation(&id, 1));
-        let context = span.context();
+        let span = trace.open(decl(&id, &reply, participant));
+        trace.event(&span, generation(&id, 1));
+        let started = trace.now();
         let progress = Progress { steps: 1, ..Progress::default() };
-        self.turns.insert(speech, Turn { span, id, started, reply, progress });
-        self.spans.insert(speech, context);
-        context
-    }
-
-    /// A preemptive generation was discarded for a speech this step starts: it continues the
-    /// discarded one's turn. Unclaimed by the end of the step, the turn stays the discarded one's.
-    pub(crate) fn discarded(&mut self, speech: SpeechId) {
-        if self.turns.contains_key(&speech) {
-            self.handover = Some(speech);
+        AgentTurnSpan {
+            span,
+            speech,
+            id,
+            started,
+            reply,
+            progress,
+            speaking: None,
+            calls: BTreeSet::new(),
         }
     }
 
-    /// The step is over: an unclaimed handover lapses.
-    pub(crate) fn settle(&mut self) {
-        self.handover = None;
+    /// A discarded preemptive generation's turn, continued by `speech`, the one answering the
+    /// same user turn (as 1.8.10 does).
+    pub(crate) fn adopt(
+        mut self,
+        trace: &mut Trace,
+        session: &str,
+        speech: SpeechId,
+        reply: Reply,
+        participant: Option<&ParticipantInfo>,
+    ) -> Self {
+        let id = format!("{session}_{speech}");
+        let discarded = PreemptiveGenerationDiscarded { speech_id: std::mem::take(&mut self.id) };
+        trace.event(&self.span, discarded);
+        trace.set(&self.span, decl(&id, &reply, participant));
+        trace.event(&self.span, generation(&id, 1));
+        self.speech = speech;
+        self.id = id;
+        self.reply = reply;
+        self.progress = Progress { steps: 1, ..Progress::default() };
+        self
+    }
+
+    /// The speech whose turn it is.
+    pub(crate) fn speech(&self) -> SpeechId {
+        self.speech
+    }
+
+    /// What the runtime's work for the speech nests under.
+    pub(crate) fn context(&self, trace: &Trace) -> Option<SpanRef> {
+        trace.context(&self.span)
     }
 
     /// The speech entered the queue (`_mark_scheduled`), once.
-    pub(crate) fn scheduled(&mut self, now: Ts, speech: SpeechId) {
-        if let Some(turn) = self.turns.get_mut(&speech) {
-            turn.progress.scheduled.get_or_insert(now);
-        }
+    pub(crate) fn scheduled(&mut self, now: Ts) {
+        self.progress.scheduled.get_or_insert(now);
     }
 
     /// The speech was first authorized to play (`_authorize_generation`).
-    pub(crate) fn authorized(&mut self, now: Ts, speech: SpeechId) {
-        if let Some(turn) = self.turns.get_mut(&speech) {
-            turn.progress.authorized.get_or_insert(now);
-        }
+    pub(crate) fn authorized(&mut self, now: Ts) {
+        self.progress.authorized.get_or_insert(now);
     }
 
     /// The speech's first interruption landed.
-    pub(crate) fn interrupted(&mut self, speech: SpeechId, cause: InterruptCause) {
-        if let Some(turn) = self.turns.get_mut(&speech) {
-            turn.progress.interruption.get_or_insert(interruption_source(cause));
-        }
+    pub(crate) fn interrupted(&mut self, cause: InterruptCause) {
+        self.progress.interruption.get_or_insert(interruption_source(cause));
     }
 
     /// One of the speech's segments finished playing at `position`.
-    pub(crate) fn played(&mut self, speech: SpeechId, position: Duration, interrupted: bool) {
-        let Some(turn) = self.turns.get_mut(&speech) else { return };
+    pub(crate) fn played(&mut self, position: Duration, interrupted: bool) {
         if !interrupted {
             return;
         }
         // A realtime response's messages play one after the other; a pipeline step is one.
-        let base = turn.progress.playout.filter(|_| turn.reply.realtime).unwrap_or(0.0);
-        turn.progress.playout = Some(base + position.as_secs_f64());
+        let base = self.progress.playout.filter(|_| self.reply.realtime).unwrap_or(0.0);
+        self.progress.playout = Some(base + position.as_secs_f64());
     }
 
     /// A realtime response's function call.
-    pub(crate) fn function_call(&mut self, speech: SpeechId, call: &FunctionCall) {
-        let Some(turn) = self.turns.get_mut(&speech).filter(|t| t.reply.realtime) else { return };
+    pub(crate) fn function_call(&mut self, call: &FunctionCall) {
+        if !self.reply.realtime {
+            return;
+        }
         let mut fields = serde_json::json!({
             "id": call.id,
             "call_id": call.call_id,
@@ -204,94 +205,79 @@ impl AgentTurns {
         if let Some(group) = &call.group_id {
             fields["group_id"] = serde_json::Value::String(group.clone());
         }
-        turn.progress.function_calls.push(fields);
+        self.progress.function_calls.push(fields);
     }
 
     /// The tool loop's next step starts.
-    pub(crate) fn step(&mut self, trace: &mut Trace, now: Ts, speech: SpeechId, step: u32) {
-        let Some(turn) = self.turns.get_mut(&speech) else { return };
-        turn.progress.steps = turn.progress.steps.max(step);
-        turn.span.event(trace, now, generation(&turn.id, step));
+    pub(crate) fn step(&mut self, trace: &mut Trace, step: u32) {
+        self.progress.steps = self.progress.steps.max(step);
+        trace.event(&self.span, generation(&self.id, step));
     }
 
-    /// The speech's first audio frame: `wall` dates it for the end-to-end latency.
-    pub(crate) fn speaking(&mut self, trace: &mut Trace, now: Ts, wall: f64, speech: SpeechId) {
-        self.stopped(trace, now);
-        let Some(turn) = self.turns.get_mut(&speech) else { return };
-        if turn.progress.e2e.is_none() {
-            let stopped = turn.reply.user.as_ref().and_then(|u| u.stopped_speaking_at);
-            turn.progress.e2e = stopped.map(|stopped| (wall - stopped).max(0.0));
+    /// The speech's first audio frame: `wall` dates it for the end-to-end latency. The caller
+    /// ended every other turn's `agent_speaking` first.
+    pub(crate) fn speaking(
+        &mut self,
+        trace: &mut Trace,
+        wall: f64,
+        participant: Option<&ParticipantInfo>,
+    ) {
+        self.stopped(trace);
+        if self.progress.e2e.is_none() {
+            let stopped = self.reply.user.as_ref().and_then(|u| u.stopped_speaking_at);
+            self.progress.e2e = stopped.map(|stopped| (wall - stopped).max(0.0));
         }
-        let participant = self.participant.as_ref().map(participant_attrs);
-        let span = turn.span.child(trace, now, AgentSpeaking { participant });
-        self.speaking = Some((speech, span));
+        let participant = participant.map(participant_attrs);
+        self.speaking = Some(trace.open_in(&self.span, AgentSpeaking { participant }));
     }
 
-    /// The agent left the speaking state.
-    pub(crate) fn stopped(&mut self, trace: &mut Trace, now: Ts) {
-        if let Some((_, span)) = self.speaking.take() {
-            span.end(trace, now, ());
+    /// The agent left the speaking state, or another speech speaks.
+    pub(crate) fn stopped(&mut self, trace: &mut Trace) {
+        if let Some(span) = self.speaking.take() {
+            trace.end(span, ());
         }
     }
 
     /// The speech's words, as committed to the conversation.
-    pub(crate) fn response(&mut self, speech: SpeechId, text: &str) {
-        let Some(turn) = self.turns.get_mut(&speech) else { return };
-        let response = &mut turn.progress.response;
+    pub(crate) fn response(&mut self, text: &str) {
+        let response = &mut self.progress.response;
         if !response.is_empty() && !text.is_empty() {
             response.push(' ');
         }
         response.push_str(text);
     }
 
-    pub(crate) fn tool_started(&mut self, speech: SpeechId, call_id: &str) {
-        if self.turns.contains_key(&speech) {
-            self.tools.insert(call_id.to_owned(), speech);
-        }
+    /// A tool call the speech started.
+    pub(crate) fn tool_started(&mut self, call_id: &str) {
+        self.calls.insert(call_id.to_owned());
     }
 
-    /// A tool ended; the turn ends with its last tool once the speech is done.
-    pub(crate) fn tool_ended(&mut self, trace: &mut Trace, now: Ts, call_id: &str) {
-        let Some(speech) = self.tools.remove(call_id) else { return };
-        if self.turns.get(&speech).is_some_and(|t| t.progress.done.is_some()) {
-            self.finish(trace, now, speech);
-        }
+    /// A tool call ended: `true` when it was one of this turn's.
+    pub(crate) fn tool_ended(&mut self, call_id: &str) -> bool {
+        self.calls.remove(call_id)
     }
 
-    /// The speech is done; its turn ends now, or with the last tool it still runs.
+    /// Tool calls the speech started still run.
+    pub(crate) fn running_tools(&self) -> bool {
+        !self.calls.is_empty()
+    }
+
+    /// The speech is done: its outcome, which the turn ends with.
     pub(crate) fn done(
         &mut self,
         trace: &mut Trace,
-        now: Ts,
-        speech: SpeechId,
         outcome: SpeechOutcome,
         error: Option<ProviderError>,
     ) {
-        if self.speaking.as_ref().is_some_and(|(s, _)| *s == speech) {
-            self.stopped(trace, now);
-        }
-        let Some(turn) = self.turns.get_mut(&speech) else { return };
-        turn.progress.done.get_or_insert((outcome, error));
-        self.finish(trace, now, speech);
+        self.stopped(trace);
+        self.progress.done.get_or_insert((outcome, error));
     }
 
-    fn finish(&mut self, trace: &mut Trace, now: Ts, speech: SpeechId) {
-        if self.tools.values().any(|s| *s == speech) {
-            return;
-        }
-        if let Some(turn) = self.turns.remove(&speech) {
-            end_turn(trace, now, turn);
-        }
-    }
-
-    /// The session closed: every turn ends with what it has.
-    pub(crate) fn close(&mut self, trace: &mut Trace, now: Ts) {
-        self.stopped(trace, now);
-        self.tools.clear();
-        self.handover = None;
-        for (_, turn) in std::mem::take(&mut self.turns) {
-            end_turn(trace, now, turn);
-        }
+    /// The turn ends with what it has: at its speech's release, at its last tool's end, or at the
+    /// close.
+    pub(crate) fn end(mut self, trace: &mut Trace) {
+        self.stopped(trace);
+        end_turn(trace, self);
     }
 }
 
@@ -302,13 +288,16 @@ fn generation(id: &str, step: u32) -> Generation {
     }
 }
 
-fn end_turn(trace: &mut Trace, now: Ts, turn: Turn) {
-    let Turn { span, id, started, reply, progress: p } = turn;
+fn end_turn(trace: &mut Trace, turn: AgentTurnSpan) {
+    let AgentTurnSpan { span, id, started, reply, progress: p, .. } = turn;
+    let now = trace.now();
+    // A turn opened outside the session's life records nothing, its measurements included.
+    let recording = trace.context(&span).is_some();
     let (outcome, error) = p.done.unwrap_or((SpeechOutcome::Completed, None));
     let interrupted = outcome == SpeechOutcome::Interrupted;
     let user = reply.user.as_ref().filter(|_| p.e2e.is_some());
     if let (SpeechOutcome::Failed, Some(error)) = (outcome, &error) {
-        span.fail(trace, now, error);
+        trace.fail(&span, error);
     }
     let queue_wait = p.scheduled.zip(p.authorized).map(|(scheduled, authorized)| {
         Seconds(authorized.saturating_duration_since(scheduled).as_secs_f64())
@@ -331,7 +320,10 @@ fn end_turn(trace: &mut Trace, now: Ts, turn: Turn) {
             .and_then(|u| u.on_user_turn_completed_delay)
             .map(Seconds),
     };
-    span.end(trace, now, end);
+    trace.end(span, end);
+    if !recording {
+        return;
+    }
     // Labeled as 1.8.10's report: the latency with the LLM, the hook's delay with the user turn's
     // STT.
     let labels = |provider: &str, model: &str| ModelLabels {

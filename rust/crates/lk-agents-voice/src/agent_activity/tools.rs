@@ -153,7 +153,9 @@ impl VoiceDriver {
             name: call.name.clone(),
             hosted: hosted.is_some(),
         });
-        self.session.spans.turns(now, |_, _, turns| turns.function_call(speech, &call));
+        if let Some(turn) = self.agent_turn(speech) {
+            turn.function_call(&call);
+        }
         // The call is the run's once it starts, whichever run is open when it is committed: one
         // answered without running (an unknown tool) too, as its output is.
         if let Some(run) = self.session.runs.current()
@@ -170,7 +172,9 @@ impl VoiceDriver {
         };
         let output_id = self.session.ids.mint("item");
         let call_id = call.call_id.as_str();
-        self.session.spans.turns(now, |_, _, turns| turns.tool_started(speech, call_id));
+        if let Some(turn) = self.agent_turn(speech) {
+            turn.tool_started(call_id);
+        }
         self.publish_event(SessionEvent::ToolExecutionUpdated(ToolLifecycle::Started {
             call: call.clone(),
         }));
@@ -310,6 +314,7 @@ impl VoiceDriver {
             let updates = self.session.states.on_tool_call_ended(now, closing);
             self.apply_user_state_updates(updates);
         };
+        self.agent_turn_tool_ended(&call_id);
         self.publish_event(SessionEvent::ToolExecutionUpdated(ToolLifecycle::Ended {
             id: call_id.clone(),
             call_id,

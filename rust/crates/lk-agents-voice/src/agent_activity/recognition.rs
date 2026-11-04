@@ -322,7 +322,7 @@ impl VoiceDriver {
                 let delay = self.activity.audio_recognition.min_delay().as_secs_f64();
                 let manual = telemetry::Endpointing { source: telemetry::MANUAL, delay };
                 if let Some(turn) = &mut self.activity.user_turn {
-                    turn.retriggered(&mut self.session.spans.trace, manual);
+                    turn.retriggered(&mut self.telemetry, manual);
                 }
                 let eff = self.activity.audio_recognition.commit_user_turn(now, None, skip_reply);
                 self.apply_recognition_effects(eff);
@@ -336,7 +336,7 @@ impl VoiceDriver {
                 self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned);
                 // Clearing only unwinds, a running countdown included.
                 if let Some(mut turn) = self.activity.user_turn.take() {
-                    turn.end(&mut self.session.spans.trace, telemetry::UserTurnOutcome::Cleared);
+                    turn.end(&mut self.telemetry, telemetry::UserTurnOutcome::Cleared);
                 }
                 let eff = self.activity.audio_recognition.clear_user_turn(now);
                 self.apply_recognition_effects(eff);
@@ -477,26 +477,25 @@ impl VoiceDriver {
         {
             return None;
         }
-        let trace = &mut self.session.spans.trace;
         let mut span = match self.activity.user_turn.take() {
             Some(span) => span,
             None => {
-                let started_at = info.metrics.started_speaking_at.unwrap_or(trace.now());
-                let participant = self.session.spans.linked_participant().cloned();
+                let started_at = info.metrics.started_speaking_at.unwrap_or(self.telemetry.now());
+                let participant = self.session.room.linked_participant();
                 let stt = self.span_stt();
-                let trace = &mut self.session.spans.trace;
+                let trace = &mut self.telemetry;
                 let origin = telemetry::UserTurnOrigin::Transcript;
-                telemetry::UserTurnSpan::open(trace, started_at, origin, participant.as_ref(), &stt)
+                telemetry::UserTurnSpan::open(trace, started_at, origin, participant, &stt)
             }
         };
-        let trace = &mut self.session.spans.trace;
+        let trace = &mut self.telemetry;
         let outcome = span.decide(trace, info, verdict);
         if outcome != telemetry::UserTurnOutcome::Committed {
             span.end(trace, outcome);
             return None;
         }
         if let Some(context) = span.context(trace) {
-            self.session.spans.user_turn_committed(info.turn_id, context);
+            self.session.item_turns.user_turn(info.turn_id, context);
         }
         Some(span)
     }
@@ -524,7 +523,7 @@ impl VoiceDriver {
                 .with("lk.pii.user_input", info.new_transcript.clone()),
             ));
             self.activity.last_turn = Some(info.turn_id);
-            span.end(&mut self.session.spans.trace, telemetry::UserTurnOutcome::Dropped);
+            span.end(&mut self.telemetry, telemetry::UserTurnOutcome::Dropped);
             self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned);
             return;
         }
@@ -533,7 +532,7 @@ impl VoiceDriver {
         if self.activity.hook_bound.is_some() && !info.skip_reply {
             self.issue_turn_hook(now, info, span);
         } else {
-            span.end(&mut self.session.spans.trace, telemetry::UserTurnOutcome::Committed);
+            span.end(&mut self.telemetry, telemetry::UserTurnOutcome::Committed);
             self.finish_turn(now, info, Vec::new());
         }
     }

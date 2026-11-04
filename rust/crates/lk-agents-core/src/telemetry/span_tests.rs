@@ -7,7 +7,8 @@ use lk_agents_abi::telemetry::spans::session::{
     AgentSession, AgentSessionEnd, AgentStateChanged, OnEnter, SessionStart, StartAgentActivity,
 };
 use lk_agents_abi::telemetry::spans::user_turn::{
-    UserSpeaking, UserSpeakingEnd, UserTurn, UserTurnEnd, UserTurnOrigin, UserTurnOutcome,
+    EouDetection, EouDetectionEnd, EouOutcome, EouWait, EouWaitEnd, UserSpeaking, UserSpeakingEnd,
+    UserTurn, UserTurnEnd, UserTurnOrigin, UserTurnOutcome,
 };
 
 const EPOCH_S: u64 = 1_700_000_000;
@@ -92,9 +93,12 @@ fn spans_nest_under_their_parent_on_the_anchor_timeline() {
     let external = SpanRef { trace_id: TraceId(42), span_id: SpanId(9), sampled: true };
     t.step(ts(0));
     let root = t.open_root(Some(external), None, session());
-    let start = root.child(&mut t, ts(5), SessionStart);
-    start.end(&mut t, ts(20), ());
-    root.end(&mut t, ts(30), session_end());
+    t.step(ts(5));
+    let start = t.open_in(&root, SessionStart);
+    t.step(ts(20));
+    t.end(start, ());
+    t.step(ts(30));
+    t.end(root, session_end());
     let records = t.drain();
     let [start, root] = spans(&records)[..] else { panic!("{records:?}") };
     assert_eq!(root.parent, Some(SpanId(9)));
@@ -115,9 +119,9 @@ fn a_backdated_start_is_clamped_to_the_parent() {
     let mut t = trace();
     t.step(ts(100));
     let root = t.open_root(None, None, session());
-    let turn = root.child_at(&mut t, ts(40), user_turn());
-    let speaking =
-        turn.child_at(&mut t, ts(120), UserSpeaking { started_at: ts(120), participant: None });
+    let turn = t.open_in(&root, UserTurn { started_at: ts(40), ..user_turn() });
+    t.step(ts(120));
+    let speaking = t.open_in(&turn, UserSpeaking { started_at: ts(120), participant: None });
     let verdict = UserSpeakingEnd {
         ended_at: ts(110),
         is_interruption: None,
@@ -126,9 +130,11 @@ fn a_backdated_start_is_clamped_to_the_parent() {
         prediction_duration: None,
         detection_delay: None,
     };
-    speaking.end(&mut t, ts(110), verdict);
-    turn.end(&mut t, ts(130), turn_end(None));
-    root.end(&mut t, ts(200), session_end());
+    t.end(speaking, verdict);
+    t.step(ts(130));
+    t.end(turn, turn_end(None));
+    t.step(ts(200));
+    t.end(root, session_end());
     let records = t.drain();
     let [speaking, turn, _] = spans(&records)[..] else { panic!("{records:?}") };
     assert_eq!(turn.start_unix_nanos, wall_ms(100), "clamped to the session's start");
@@ -143,10 +149,9 @@ fn the_close_sweep_ends_what_is_left_child_first_as_cancelled() {
     let mut t = trace();
     t.step(ts(0));
     let root = t.open_root(None, None, session());
-    let start = root.child(&mut t, ts(1), SessionStart);
-    let activity = start.child(
-        &mut t,
-        ts(2),
+    let start = t.open_in(&root, SessionStart);
+    let activity = t.open_in(
+        &start,
         StartAgentActivity {
             agent_label: "a".into(),
             operation: GenAiOperation::CreateAgent,
@@ -155,7 +160,7 @@ fn the_close_sweep_ends_what_is_left_child_first_as_cancelled() {
             model: None,
         },
     );
-    let enter = activity.child(&mut t, ts(3), OnEnter { agent_label: "a".into() });
+    let enter = t.open_in(&activity, OnEnter { agent_label: "a".into() });
     assert_eq!(t.close(ts(9)), 4);
     assert_eq!(t.swept(), 4);
     let records = t.drain();
@@ -163,10 +168,10 @@ fn the_close_sweep_ends_what_is_left_child_first_as_cancelled() {
     assert_eq!(names, ["on_enter", "start_agent_activity", "session_start", "agent_session"]);
     assert!(spans(&records).iter().all(|s| attr(s, "lk.cancelled") == Some(&Value::Bool(true))));
     // The owners still end their handles; nothing is recorded twice.
-    enter.end(&mut t, ts(10), ());
-    activity.end(&mut t, ts(10), ());
-    start.end(&mut t, ts(10), ());
-    root.end(&mut t, ts(10), session_end());
+    t.end(enter, ());
+    t.end(activity, ());
+    t.end(start, ());
+    t.end(root, session_end());
     assert!(t.drain().is_empty());
 }
 
@@ -177,15 +182,14 @@ fn events_and_failures_are_recorded_on_the_span() {
     let mut t = trace();
     t.step(ts(0));
     let root = t.open_root(None, None, session());
-    root.event(
-        &mut t,
-        ts(4),
-        AgentStateChanged { old: "listening".into(), new: "thinking".into() },
-    );
+    t.step(ts(4));
+    t.event(&root, AgentStateChanged { old: "listening".into(), new: "thinking".into() });
     let error = HostError::new("boom");
     let error = HostError { kind: "ValueError".into(), ..error };
-    root.fail(&mut t, ts(6), &error);
-    root.end(&mut t, ts(8), session_end());
+    t.step(ts(6));
+    t.fail(&root, &error);
+    t.step(ts(8));
+    t.end(root, session_end());
     let records = t.drain();
     let [root] = spans(&records)[..] else { panic!("{records:?}") };
     assert_eq!(root.status, Status::Error("boom".into()));
@@ -209,8 +213,9 @@ fn a_measured_end_field_records_its_instrument() {
     let mut t = trace();
     t.step(ts(0));
     let root = t.open_root(None, None, session());
-    root.child(&mut t, ts(1), user_turn()).end(&mut t, ts(2), turn_end(Some(0.25)));
-    root.end(&mut t, ts(3), session_end());
+    let turn = t.open_in(&root, user_turn());
+    t.end(turn, turn_end(Some(0.25)));
+    t.end(root, session_end());
     let records = t.drain();
     let measured: Vec<_> = records
         .iter()
@@ -239,10 +244,10 @@ fn ids_come_from_the_injected_source() {
         let mut t = Trace::new(seeded_ids(seed), Ts::ZERO, wall, None, None);
         t.step(Ts::ZERO);
         let root = t.open_root(None, None, session());
-        let child = root.child(&mut t, Ts::ZERO, SessionStart);
+        let child = t.open_in(&root, SessionStart);
         let out = (root.context(), child.context());
-        child.end(&mut t, Ts::ZERO, ());
-        root.end(&mut t, Ts::ZERO, session_end());
+        t.end(child, ());
+        t.end(root, session_end());
         out
     };
     assert_eq!(ids(1), ids(1));
@@ -268,12 +273,26 @@ fn a_parent_never_ends_before_its_children() {
     let mut t = trace();
     t.step(ts(0));
     let root = t.open_root(None, None, session());
-    let start = root.child(&mut t, ts(1), SessionStart);
-    start.end(&mut t, ts(50), ());
-    root.end(&mut t, ts(20), session_end());
+    let turn = t.open(user_turn());
+    t.step(ts(1));
+    let decl = EouWait { started_at: ts(1), source: "vad".into(), endpointing_delay: Seconds(0.5) };
+    let wait = t.open_in(&turn, decl);
+    let detection = t.open_in(&wait, EouDetection);
+    t.step(ts(50));
+    t.end(detection, EouDetectionEnd { ended_at: ts(50), prediction: None });
+    let end = EouWaitEnd {
+        ended_at: ts(20),
+        outcome: EouOutcome::Committed,
+        wait_duration: Seconds(0.019),
+        rearm_count: 0,
+        not_committed_count: 0,
+    };
+    t.end(wait, end);
+    t.end(turn, turn_end(None));
+    t.end(root, session_end());
     let records = t.drain();
-    let [start, root] = spans(&records)[..] else { panic!("{records:?}") };
-    assert_eq!(root.end_unix_nanos, start.end_unix_nanos);
+    let [detection, wait, ..] = spans(&records)[..] else { panic!("{records:?}") };
+    assert_eq!(wait.end_unix_nanos, detection.end_unix_nanos);
 }
 
 // Catches: `set` appending a second copy of the start attributes instead of replacing them, or
@@ -283,10 +302,10 @@ fn set_replaces_the_start_attributes_and_labels() {
     let mut t = trace();
     t.step(ts(0));
     let root = t.open_root(None, None, session());
-    let turn = root.child(&mut t, ts(1), user_turn());
-    turn.set(&mut t, UserTurn { stt_model: Some("nova-3".into()), ..user_turn() });
-    turn.end(&mut t, ts(2), turn_end(Some(0.25)));
-    root.end(&mut t, ts(3), session_end());
+    let turn = t.open_in(&root, user_turn());
+    t.set(&turn, UserTurn { stt_model: Some("nova-3".into()), ..user_turn() });
+    t.end(turn, turn_end(Some(0.25)));
+    t.end(root, session_end());
     let records = t.drain();
     let span = spans(&records).into_iter().find(|s| s.name == "user_turn").expect("user_turn");
     let models: Vec<_> =

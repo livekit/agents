@@ -29,6 +29,8 @@ struct HookRecord {
     hosted: bool,
     run: Option<crate::events::RunId>,
     completion: Option<(HookEnd, HookOutcome)>,
+    /// `on_enter`'s or `on_exit`'s span and its activity's, while the host runs it.
+    span: Option<telemetry::HookSpan>,
 }
 
 impl Hooks {
@@ -42,7 +44,8 @@ impl Hooks {
     }
 
     fn wait_for(&mut self, hook: HookId, kind: HookKind, hosted: bool) {
-        self.pending.insert(hook, HookRecord { kind, hosted, run: None, completion: None });
+        let record = HookRecord { kind, hosted, run: None, completion: None, span: None };
+        self.pending.insert(hook, record);
     }
 
     /// First accepted result wins. The record remains live while its continuation is queued.
@@ -62,6 +65,16 @@ impl Hooks {
 
     fn abandon(&mut self, hook: HookId) -> Option<HookRecord> {
         self.pending.remove(&hook)
+    }
+
+    /// A callback's activity still runs under `under`.
+    pub(crate) fn running_under(&self, under: telemetry::Under) -> bool {
+        self.pending.values().any(|r| r.span.as_ref().is_some_and(|s| s.under() == under))
+    }
+
+    /// Every callback's span, taken for the close: the records stay, with nothing to end.
+    pub(crate) fn take_spans(&mut self) -> Vec<telemetry::HookSpan> {
+        self.pending.values_mut().filter_map(|r| r.span.take()).collect()
     }
 
     /// Invalidate every callback before any abandonment fallback can admit more work.
@@ -105,15 +118,23 @@ impl VoiceDriver {
             return;
         }
         // Its span opens first: the host runs the hook under it.
-        let arriving = self.activity.handoff.arriving();
-        let llm = self.session.llm.as_ref().map(|llm| &llm.provider);
-        let agent = &self.activity.agent;
         let span = match kind {
             // The committed turn's hook runs in its turn, which its parked turn owns.
             HookKind::OnUserTurnCompleted => (self.activity.pending_turn.as_mut())
                 .filter(|p| p.hook == Some(id))
-                .and_then(|p| p.span.hook_issued(&mut self.session.spans.trace, agent)),
-            _ => self.session.spans.hook_issued(now, id, kind, agent, arriving, llm),
+                .and_then(|p| p.span.hook_issued(&mut self.telemetry, &self.activity.agent)),
+            HookKind::OnEnter | HookKind::OnExit => {
+                let arriving = self.activity.handoff.arriving().map(str::to_owned);
+                let span = self.hook_span(kind, arriving.as_deref());
+                let context = span.as_ref().and_then(|s| s.context(&self.telemetry));
+                if let Some(record) = self.activity.hooks.pending.get_mut(&id) {
+                    record.span = span;
+                }
+                context
+            }
+            HookKind::OnUserTurnExceeded
+            | HookKind::FillerSource
+            | HookKind::FunctionToolsExecuted => None,
         };
         call.set_span(span);
         self.record_effect(crate::agent_session::effects::VoiceEffect::Host(VoiceHostEvent::Hook(
@@ -183,14 +204,14 @@ impl VoiceDriver {
     pub(crate) fn dispatch_hook_completion(&mut self, now: Ts, id: HookId) {
         let Some(mut record) = self.activity.hooks.take_finished(id) else { return };
         let (how, outcome) = record.completion.take().expect("finished record has an outcome");
-        self.account_hook_completion(id, &record, how, Some(&outcome));
+        self.account_hook_completion(id, &mut record, how, Some(&outcome));
         self.hook_ended(now, record.kind, id, outcome, how == HookEnd::NoHost);
     }
 
     fn account_hook_completion(
         &mut self,
         id: HookId,
-        record: &HookRecord,
+        record: &mut HookRecord,
         how: HookEnd,
         outcome: Option<&HookOutcome>,
     ) {
@@ -212,10 +233,15 @@ impl VoiceDriver {
                     if let Some(pending) =
                         self.activity.pending_turn.as_mut().filter(|p| p.hook == Some(id))
                     {
-                        pending.span.hook_finished(&mut self.session.spans.trace, failure, stop);
+                        pending.span.hook_finished(&mut self.telemetry, failure, stop);
                     }
                 }
-                _ => self.session.spans.hook_finished(self.step.now, id, failure),
+                _ => {
+                    if let Some(span) = record.span.take() {
+                        let failure = failure.as_ref().map(telemetry::HookFailure::failure);
+                        self.hook_span_ended(span, failure);
+                    }
+                }
             }
         }
         self.clear_deadline_if_set(Timer::Hook(id));
@@ -228,20 +254,23 @@ impl VoiceDriver {
         self.account_abandoned_hook(id, record);
     }
 
-    fn account_abandoned_hook(&mut self, id: HookId, record: HookRecord) {
+    fn account_abandoned_hook(&mut self, id: HookId, mut record: HookRecord) {
         let how = record.completion.as_ref().map_or(HookEnd::Abandoned, |(how, _)| *how);
-        let outcome = record.completion.as_ref().map(|(_, outcome)| outcome);
-        self.account_hook_completion(id, &record, how, outcome);
+        let completion = record.completion.take();
+        let outcome = completion.as_ref().map(|(_, outcome)| outcome);
+        self.account_hook_completion(id, &mut record, how, outcome);
     }
 
     /// All records are invalidated before releasing participation or running the one required
     /// tools-executed fallback. Accepted terminal provenance is retained even when abandoned.
     pub(crate) fn abandon_hooks(&mut self) {
-        let records = self.activity.hooks.take_all();
-        for (id, record) in &records {
+        let mut records = self.activity.hooks.take_all();
+        for (id, record) in &mut records {
             let how = record.completion.as_ref().map_or(HookEnd::Abandoned, |(how, _)| *how);
-            let outcome = record.completion.as_ref().map(|(_, outcome)| outcome);
+            let completion = record.completion.take();
+            let outcome = completion.as_ref().map(|(_, outcome)| outcome);
             self.account_hook_completion(*id, record, how, outcome);
+            record.completion = completion;
         }
         for (id, record) in records {
             if record.kind == HookKind::FunctionToolsExecuted {

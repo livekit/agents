@@ -427,10 +427,13 @@ it in its declaration, in a field marked `#[at]` (`started_at`, `ended_at`, an
 event's `at`) that is not an attribute; `Trace` clamps a backdated start to the
 parent's start.
 
-A declaration holds only what its call site knows. Session-wide attributes
-(participant attributes, the STT model and provider, `gen_ai.conversation.id`)
-are stamped by `self.telemetry` from its session context, the same way the
-exporter stamps job identity; a declaration never repeats them.
+A declaration holds the attributes its span carries, filled where the span is
+opened. Participant attributes and the STT model and provider are ordinary
+declared fields (`#[attrs] participant: Option<ParticipantAttrs>`,
+`stt_model`), read from session state the opening code can see: the room link's
+linked or local participant, the session's STT. Only `gen_ai.conversation.id`,
+the session flags and job identity are written by `Trace` and the exporter on
+every record, as the `EverySpan` group and the identity stamp.
 
 | Rule | Enforced by |
 | --- | --- |
@@ -442,11 +445,25 @@ exporter stamps job identity; a declaration never repeats them.
 | A child is opened only under a declared parent | `open_in` takes `&telemetry::Span<P>` with `P: ParentOf<D>`; `open` exists only for declarations whose parent is the session |
 | One clock | the runtime's injected clock, the voice core's `now` and the `Trace` anchor all come from the `ProcessEnv` clock, so a `ScopedSpan` nested under a sans-I/O span shares its timeline |
 
-An entity that outlives its first owner hands its span over by value. A speech
-that ends while its background tools still run moves its `agent_turn` span into
-the record of those calls, and the last call to finish ends it. A move is
-explicit, so a span is never dropped or left open without the type system or
-the `Drop` assertion noticing.
+An entity that outlives its first owner hands its span over by value. A
+speech's `agent_turn` lives in its speech scheduler entry, which the scheduler
+returns when it releases the speech; a speech that ends while tool calls it
+started still run moves its turn into the record of those calls (the tool
+executor's), and the last call to end ends it. A preemptive generation
+discarded for the speech that answers the same user turn hands that speech its
+turn, moved from one entry to the other. A move is explicit, so a span is never
+dropped or left open without the type system or the `Drop` assertion noticing.
+
+| Span | Owner |
+| --- | --- |
+| `agent_session`, `session_start` | the session, from `start()`; `session_start` ends once the opening and the first `on_enter` are done |
+| `session_close` | the session's close, from its request (the exits it issues run under it) |
+| `user_turn` and its children | the activity's user turn ([The user turn](#the-user-turn)) |
+| `agent_turn`, `agent_speaking` | the speech's scheduler entry, then the record of its running tool calls |
+| `start_agent_activity` + `on_enter`, `drain_agent_activity` + `on_exit` | the callback's hook record |
+| `update_agent` | the activity's agent update, ended once done and no callback runs under it |
+| `amd` | the session's AMD detection, from the detector's attach to its verdict |
+| `keyterm_detection` | the keyterm slot's pass in flight |
 
 Core work that continues in the runtime (an LLM node, a TTS node, a tool call)
 receives `self.telemetry.context(&speech.span)` in its effect, and the runtime

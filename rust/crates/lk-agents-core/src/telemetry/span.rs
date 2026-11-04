@@ -552,96 +552,10 @@ impl<D: SpanDecl> ManualSpan<D> {
         ManualSpan { context: none, ended: false, recording: false, _decl: PhantomData }
     }
 
-    /// What a child, a link or an effect carries.
-    pub fn context(&self) -> SpanRef {
+    /// The span's context, recording or not; the machine reads it through [`Trace::context`].
+    #[cfg(test)]
+    pub(crate) fn context(&self) -> SpanRef {
         self.context
-    }
-
-    /// Opens a child at `now`.
-    pub fn child<C: SpanDecl>(&self, trace: &mut Trace, now: Ts, decl: C) -> ManualSpan<C>
-    where
-        D: ParentOf<C>,
-    {
-        self.child_at(trace, now, decl)
-    }
-
-    /// Opens a child at `started_at`, the time of its first evidence, clamped to this span's
-    /// start.
-    pub fn child_at<C: SpanDecl>(&self, trace: &mut Trace, started_at: Ts, decl: C) -> ManualSpan<C>
-    where
-        D: ParentOf<C>,
-    {
-        let floor = trace.open.get(&self.context.span_id).map_or(0, |o| o.start);
-        let at = trace.wall(started_at).max(floor);
-        trace.start(at, Some(self.context), None, decl)
-    }
-
-    /// Opens a child reserved before this trace knew of it, with the reservation's context and
-    /// start, clamped to this span's start.
-    pub fn child_reserved<C: SpanDecl>(
-        &self,
-        trace: &mut Trace,
-        reserved: Reserved<C>,
-        decl: C,
-    ) -> ManualSpan<C>
-    where
-        D: ParentOf<C>,
-    {
-        let floor = trace.open.get(&self.context.span_id).map_or(0, |o| o.start);
-        trace.start(reserved.start.max(floor), Some(self.context), Some(reserved.context), decl)
-    }
-
-    /// The span's start, unix nanoseconds; `None` once ended.
-    pub fn started(&self, trace: &Trace) -> Option<u64> {
-        trace.open.get(&self.context.span_id).map(|o| o.start)
-    }
-
-    /// Replaces the start attributes, as OpenTelemetry's `set_attributes` does on a live span:
-    /// for what the entity learns after the span opened (a re-armed wait's source, the speech
-    /// that adopted a turn).
-    pub fn set(&self, trace: &mut Trace, decl: D) {
-        let Some(open) = trace.open.get_mut(&self.context.span_id) else { return };
-        open.attributes.clear();
-        decl.write(&mut open.attributes);
-        open.labels.clear();
-        decl.labels(&mut open.labels);
-    }
-
-    /// Adds a declared event at `now`.
-    pub fn event<E: EventDecl>(&self, trace: &mut Trace, now: Ts, event: E)
-    where
-        D: HasEvent<E>,
-    {
-        let at = trace.wall(now);
-        push_event(trace, self.context.span_id, at, E::NAME, &event);
-    }
-
-    /// Records a failure: status `ERROR`, `error.type` and an `exception` event.
-    pub fn fail(&self, trace: &mut Trace, now: Ts, error: &dyn SpanFailure) {
-        let at = trace.wall(now);
-        let exception = Exception {
-            kind: error.error_type(),
-            message: error.message(),
-            stacktrace: error.stacktrace(),
-        };
-        push_event(trace, self.context.span_id, at, Exception::NAME, &exception);
-        if let Some(open) = trace.open.get_mut(&self.context.span_id) {
-            open.status = Status::Error(exception.message);
-            open.error_type = Some(exception.kind);
-        }
-    }
-
-    /// Ends the span with its end attributes. A span the close sweep already ended stays ended.
-    pub fn end(mut self, trace: &mut Trace, now: Ts, end: D::End) {
-        self.ended = true;
-        let Some(mut open) = trace.open.remove(&self.context.span_id) else { return };
-        let mut attributes = KeyValues::new();
-        end.write(&mut attributes);
-        end.labels(&mut open.labels);
-        let mut measured = Vec::new();
-        end.measure(&mut measured);
-        let at = trace.wall(now);
-        trace.finish(open, at, attributes, measured, false);
     }
 }
 

@@ -708,9 +708,11 @@ impl VoiceDriver {
                     .or_else(|| self.activity.realtime().map(|r| &r.provider))
                     .cloned(),
             };
-            let span = self.session.spans.speech_started(now, id, reply);
-            if kind.scheduled() {
-                self.session.spans.turns(now, |_, _, turns| turns.scheduled(now, id));
+            let span = self.agent_turn_started(id, reply);
+            if kind.scheduled()
+                && let Some(turn) = self.activity.speech_scheduler.agent_turn(id)
+            {
+                turn.scheduled(now);
             }
             self.record_effect(crate::agent_session::effects::VoiceEffect::StartSpeech {
                 speech: id,
@@ -772,10 +774,10 @@ impl VoiceDriver {
                 item,
                 cut_at,
             } => {
-                if let Some(position) = cut_at {
-                    self.session
-                        .spans
-                        .turns(now, |_, _, turns| turns.played(speech, position, true));
+                if let Some(position) = cut_at
+                    && let Some(turn) = self.agent_turn(speech)
+                {
+                    turn.played(position, true);
                 }
                 self.activity.set_tools_in_flight(speech, tools_running);
                 let text = item.as_ref().and_then(|m| m.raw_text_content());
@@ -817,9 +819,9 @@ impl VoiceDriver {
                     debug_assert_eq!(advanced, step, "the reply and the core disagree on its step");
                 }
                 self.record_trace(ToolStep::StepStarted { speech, step });
-                self.session
-                    .spans
-                    .turns(now, |trace, _, turns| turns.step(trace, now, speech, step));
+                if let Some(turn) = self.activity.agent_turn(speech) {
+                    turn.step(&mut self.telemetry, step);
+                }
                 self.requeue_speech(now, speech);
             }
 
@@ -832,9 +834,9 @@ impl VoiceDriver {
             }
 
             GenEvent::PlaybackFinished { speech, position, interrupted } => {
-                self.session
-                    .spans
-                    .turns(now, |_, _, turns| turns.played(speech, position, interrupted));
+                if let Some(turn) = self.agent_turn(speech) {
+                    turn.played(position, interrupted);
+                }
             }
             GenEvent::PlaybackStarted { speech } => {
                 // The launch hold is over for this speech: its first frame is out (I-06, I-07).
@@ -934,7 +936,7 @@ impl VoiceDriver {
             return;
         }
         let wall = self.step.wall_secs_at(now);
-        self.session.spans.turns(now, |trace, _, turns| turns.speaking(trace, now, wall, speech));
+        self.agent_turn_speaking(speech, wall);
         // The labels arm the AEC warmup at the session's first `speaking` edge with audio output.
         self.set_agent_state(now, AgentState::Speaking);
         let eff = self.activity.audio_recognition.on_start_of_agent_speech(now, now);
@@ -1124,9 +1126,7 @@ impl VoiceDriver {
             let view = state.view();
             let (outcome, failed) = (view.outcome(), view.error.is_some());
             let error = view.error.clone();
-            self.session
-                .spans
-                .turns(now, |trace, _, turns| turns.done(trace, now, speech, outcome, error));
+            self.agent_turn_done(speech, outcome, error);
             self.publish_event(SessionEvent::SpeechDone { speech, outcome });
             // The run that owned it lets it go, and its verdict moves to this speech.
             self.run_speech_ended(speech, failed);
@@ -1157,6 +1157,7 @@ impl VoiceDriver {
             .plays_audio();
         let (old, deadline) = self.session.update_agent_state(now, next, audio_output_ready);
         if let Some(old) = old {
+            self.agent_state_span_event(old, next);
             self.publish_event(SessionEvent::AgentStateChanged { old, new: next });
         }
         if let Some(at) = deadline {

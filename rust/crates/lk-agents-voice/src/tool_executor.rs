@@ -42,6 +42,9 @@ pub(crate) struct Tools {
     pub(crate) deferred: Vec<Deferred>,
     /// The calls `tool_choice="none"` dropped, by step, reported when the step's tools finish.
     pub(crate) dropped: BTreeMap<(SpeechId, u32), Vec<String>>,
+    /// The agent turns of speeches that ended while calls they started still run: the last of
+    /// those calls to end ends the turn.
+    pub(crate) turns: Vec<crate::telemetry::AgentTurnSpan>,
 }
 
 /// A call the model made, as the reply task saw it: what the step offered and how it may call.

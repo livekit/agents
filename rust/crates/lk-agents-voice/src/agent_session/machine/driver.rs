@@ -120,6 +120,10 @@ pub struct VoiceDriver {
     /// The [`SessionView`](crate::agent_session::SessionView) last published, so a step that changed
     /// none of it publishes nothing.
     pub(crate) view: Arc<crate::agent_session::SessionView>,
+    /// The session's span state: what the entities owning spans open and end them through.
+    pub(crate) telemetry: crate::telemetry::Trace,
+    /// A runtime exports the records: only a unit test's core may be dropped before its close.
+    pub(crate) exported: bool,
 }
 
 impl VoiceDriver {
@@ -139,34 +143,22 @@ impl VoiceDriver {
         self.outbox.push(crate::agent_session::effects::VoiceEffect::Emit(ev));
     }
 
-    /// The spans ended since the last flush, for the exporter.
+    /// The spans ended since the last flush, for the exporter. An unclaimed agent turn handover
+    /// lapses with them.
     pub(crate) fn flush_spans(&mut self) {
-        let records = self.session.spans.drain();
+        self.activity.lapse_agent_turn_handover();
+        let records = self.telemetry.drain();
         if !records.is_empty() {
             let ev = SessionEvent::Telemetry(Arc::new(records));
             self.outbox.push(crate::agent_session::effects::VoiceEffect::Emit(ev));
         }
     }
 
-    /// The runtime drops the session without its close: the spans still open end and join the
-    /// outbox. `true` when the session was open.
-    pub fn abandon_spans(&mut self) -> bool {
-        self.close_user_turns();
-        let abandoned = self.session.spans.abandon();
-        self.flush_spans();
-        abandoned
-    }
-
     /// A core no runtime runs (a unit test): dropping it before its close loses nothing.
     #[cfg(test)]
     pub(crate) fn unexported(mut self) -> Self {
-        self.session.spans.unexported();
+        self.exported = false;
         self
-    }
-
-    /// Spans the session's close sweep ended because their owner never did: a bug.
-    pub fn spans_swept(&self) -> u32 {
-        self.session.spans.swept()
     }
 
     /// Performed with its events on the host stream, so `start()` returns after them. Idempotent.
@@ -175,7 +167,7 @@ impl VoiceDriver {
             return Vec::new();
         }
         self.step.set(now);
-        self.session.spans.trace.step(now.at);
+        self.telemetry.step(now.at);
         let now = now.at;
         // The AEC warmup is *not* armed here but at the first `speaking` edge; armed now, it would
         // refuse every interruption for the session.
@@ -193,15 +185,9 @@ impl VoiceDriver {
                 self.attach_recorder(now, recorder);
             }
             self.issue_on_enter(now);
-            self.session.spans.opened(now);
+            self.session_opened();
             self.settle_step()
         }
-    }
-
-    /// `session_start`, while the session starts: the room connection and the waits the
-    /// runtime runs for it nest under it.
-    pub fn session_start_span(&self) -> Option<lk_agents_abi::telemetry::record::SpanRef> {
-        self.session.spans.starting()
     }
 
     pub fn stopped(&self) -> bool {
@@ -334,7 +320,7 @@ impl VoiceDriver {
         now: Now,
     ) -> Vec<crate::agent_session::effects::VoiceEffect> {
         self.step.set(now);
-        self.session.spans.trace.step(now.at);
+        self.telemetry.step(now.at);
         let now = now.at;
         // A shared invocation may be settling cancelled host work even when the session
         // has no domain timer. Its cleanup bound is part of this driver's wake contract.
@@ -478,8 +464,8 @@ impl VoiceDriver {
             Command::HookDone { id, outcome } => self.on_hook_done(now, id, outcome),
             Command::Run(spec) => self.on_run(now, *spec),
             Command::VoiceTask(cmd) => self.on_voice_task(now, cmd),
-            Command::AmdSpan(ev) => self.session.spans.amd(now, &ev),
-            Command::EventLoopBlocked(duration) => self.session.spans.blocked(now, duration),
+            Command::AmdSpan(ev) => self.amd_span(&ev),
+            Command::EventLoopBlocked(duration) => self.event_loop_blocked(duration),
             Command::Dtmf(cmd) => self.dtmf_step(cmd.into()),
             Command::HostMetrics(record) => {
                 self.publish_event(crate::events::SessionEvent::MetricsCollected {
@@ -721,12 +707,14 @@ impl VoiceDriver {
         let paused_speech = PausedSpeech::new(&initial.config.effective, sink, audio_enabled);
         let realtime_disabled = initial.rt_session.as_ref().map(|_| initial.rt_disabled);
         let activity = AgentActivity::from_initial(&mut initial, paused_speech);
-        let mut session = VoiceSessionState::new(
-            initial.config.clone(),
-            initial.parts,
-            initial.next_id,
+        let mut telemetry = std::mem::take(&mut initial.parts.telemetry);
+        let trace = crate::agent_session::spans::trace(
+            &initial.parts.session_id,
+            &mut telemetry,
             initial.now,
         );
+        let mut session =
+            VoiceSessionState::new(initial.config.clone(), initial.parts, initial.next_id);
         session.expressive = initial.expressive;
         let input = crate::agent_activity::io::AgentInput::new(
             initial.sinks,
@@ -769,6 +757,8 @@ impl VoiceDriver {
             step: crate::agent_session::time::StepClock::new(),
             stopped: false,
             opened: false,
+            telemetry: trace,
+            exported: true,
         };
         if let Some(stream) = driver.input.live_stt {
             driver.stt_stream_opened(stream);
@@ -776,7 +766,7 @@ impl VoiceDriver {
         driver.session.providers = driver.providers_held();
         driver.step.set(initial.now);
         let agent = driver.activity.agent_name().to_owned();
-        driver.session.spans.open(initial.now.at, &agent);
+        driver.open_session_spans(telemetry, &agent);
         driver.publish_activity();
         driver.flush_activity();
         driver.open_session(initial.forward_chat_context, initial.keyterms);
@@ -883,7 +873,12 @@ impl VoiceDriver {
         use crate::agent_session::effects::Timer;
         for update in updates {
             match update {
-                AgentUserStateUpdate::PublishSessionEvent(event) => self.publish_event(event),
+                AgentUserStateUpdate::PublishSessionEvent(event) => {
+                    if let SessionEvent::UserStateChanged { old, new, at } = &event {
+                        self.user_state_span_event(*old, *new, *at);
+                    }
+                    self.publish_event(event)
+                }
                 AgentUserStateUpdate::SetAwayDeadline(at) => self.set_deadline(Timer::UserAway, at),
                 AgentUserStateUpdate::ClearAwayDeadline => self.clear_deadline(Timer::UserAway),
             }

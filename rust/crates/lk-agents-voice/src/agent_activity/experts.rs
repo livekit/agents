@@ -137,6 +137,7 @@ impl VoiceDriver {
             ToolEnd::Cancelled => ToolEndStatus::Cancelled,
             ToolEnd::Done | ToolEnd::Detached => ToolEndStatus::Done,
         };
+        self.agent_turn_tool_ended(call_id);
         self.publish_event(SessionEvent::ToolExecutionUpdated(ToolLifecycle::Ended {
             id: call_id.to_owned(),
             call_id: call_id.to_owned(),

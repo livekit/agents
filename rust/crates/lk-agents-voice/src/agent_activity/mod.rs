@@ -174,6 +174,14 @@ pub(crate) struct AgentActivity {
     waiting_turns: std::collections::VecDeque<recognition::DecidedTurn>,
     /// The user turn being heard, from its first evidence to its decision.
     pub(crate) user_turn: Option<crate::telemetry::UserTurnSpan>,
+    /// The agent update in progress (`update_agent`): from a handoff's `on_exit` or a VoiceTask's
+    /// suspension to the arriving agent's `on_enter`.
+    update: Option<crate::telemetry::Holding<crate::telemetry::UpdateAgent>>,
+    /// The spans the arriving agent's toolsets were set up under, which its activity opens as.
+    pub(crate) arriving: Option<crate::telemetry::Arriving>,
+    /// The last agent activity opened (`start_agent_activity`): what its input streams keep
+    /// running under.
+    running_activity: Option<crate::telemetry::SpanRef>,
     /// So a preemptive generation can be keyed to the turn after it.
     last_turn: Option<crate::audio_recognition::TurnId>,
     /// A final arrived while the current speech was still uninterrupted: the preemptive
@@ -430,7 +438,7 @@ impl VoiceDriver {
                 self.refuse_handoff(None, update, refused)
             }
             ActivityCommand::Update(update) => {
-                self.session.spans.activation(&update.agent, update.activation);
+                self.arriving(&update.agent, update.activation);
                 let run = self.session.runs.current().map(|run| run.id);
                 if run.is_some() {
                     self.session.runs.participated();
@@ -652,6 +660,7 @@ impl VoiceDriver {
             replaced = true;
             if entry.visibility.history() {
                 let run = self.run_of_item(&entry.source);
+                self.item_turn(&entry.item, &entry.source);
                 self.publish_event(crate::events::SessionEvent::ConversationItemAdded {
                     item: Box::new(entry.item),
                     agent: entry.agent,
@@ -692,6 +701,7 @@ impl VoiceDriver {
                     self.answer_pending_input(&m.text_content().unwrap_or_default());
                 }
                 let run = self.run_of_item(&entry.source);
+                self.item_turn(&entry.item, &entry.source);
                 self.publish_event(crate::events::SessionEvent::ConversationItemAdded {
                     item: Box::new(entry.item),
                     agent: entry.agent,
@@ -757,6 +767,9 @@ impl AgentActivity {
             turn_limit: Default::default(),
             waiting_turns: Default::default(),
             user_turn: None,
+            update: None,
+            arriving: None,
+            running_activity: None,
             last_turn: None,
             live_speech_at_final: false,
             preemptive_turn: None,
