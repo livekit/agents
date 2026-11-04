@@ -19,6 +19,7 @@ import pytest
 from livekit import rtc
 from livekit.agents import Agent, AgentSession, function_tool, utils
 from livekit.agents.llm import FunctionCall, GenerationCreatedEvent, MessageGeneration
+from livekit.agents.voice.speech_handle import SpeechHandle
 
 from .fake_io import FakeAudioOutput
 from .fake_realtime import FakeRealtimeModel, fake_capabilities
@@ -312,3 +313,93 @@ async def test_realtime_tool_reply_waiting_behind_speech_keeps_agent_thinking(ou
             assert "away" in user_states
         finally:
             release_tool.set()
+
+
+@pytest.mark.parametrize("run_mode", ["none", "active", "timed_out"])
+@pytest.mark.parametrize("outcome", ["reply", "interrupt", "close"])
+async def test_on_enter_completion_preserves_pending_server_reply(
+    run_mode: str, outcome: str
+) -> None:
+    """A hook finishing must not drop busy state, even after the RunResult wait expires."""
+    model = FakeRealtimeModel(capabilities=fake_capabilities())
+    entered = asyncio.Event()
+    release_enter = asyncio.Event()
+
+    class ToolAgent(Agent):
+        async def on_enter(self) -> None:
+            entered.set()
+            await release_enter.wait()
+
+        @function_tool
+        async def lookup(self) -> str:
+            """Look up an order."""
+            return "order 42 shipped"
+
+    async with AgentSession(llm=model, user_away_timeout=0.1) as session:
+        session.output.audio = FakeAudioOutput()
+        speeches: list[SpeechHandle] = []
+        session.on("speech_created", lambda ev: speeches.append(ev.speech_handle))
+        await session.start(ToolAgent(instructions="Answer briefly."))
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        run = session.run(user_input="go") if run_mode != "none" else None
+        if run is None:
+            session.generate_reply()
+        try:
+            for _ in range(500):
+                if model.active_session._reply_futs:
+                    break
+                await asyncio.sleep(0)
+            model.active_session._reply_futs[0].set_result(
+                _generation(
+                    response_id="lookup",
+                    text="checking",
+                    audio_duration=0.1,
+                    function_calls=[FunctionCall(call_id="1", name="lookup", arguments="{}")],
+                )
+            )
+            await asyncio.wait_for(speeches[0].wait_for_playout(), timeout=5)
+            assert session.agent_state == "thinking"
+            activity = session._activity
+            assert activity is not None
+            if run_mode == "timed_out":
+                await asyncio.sleep(5.1)
+                assert activity._pending_auto_tool_reply_fut is None
+            elif run is not None:
+                assert activity._pending_auto_tool_reply_fut is not None
+                assert not run.done()
+
+            states: list[str] = []
+            user_states: list[str] = []
+            session.on("agent_state_changed", lambda ev: states.append(ev.new_state))
+            session.on("user_state_changed", lambda ev: user_states.append(ev.new_state))
+            release_enter.set()
+            assert activity._on_enter_task is not None
+            await activity._on_enter_task
+            await asyncio.sleep(0.2)
+            assert session.agent_state == "thinking"
+            assert "listening" not in states
+            assert "away" not in user_states
+
+            if outcome == "close":
+                await session.aclose()
+                assert not activity._awaiting_auto_tool_reply
+                assert activity._pending_auto_tool_reply_fut is None
+                if run is not None:
+                    await asyncio.wait_for(run, timeout=5)
+                return
+            if outcome == "interrupt":
+                await session.interrupt()
+            else:
+                answer = _generation(
+                    response_id="answer", text="order 42 shipped", audio_duration=0.1
+                )
+                answer.user_initiated = False
+                model.active_session.emit("generation_created", answer)
+                await asyncio.wait_for(speeches[-1].wait_for_playout(), timeout=5)
+            await _wait_for_agent_state(session, "listening")
+            if run is not None:
+                await asyncio.wait_for(run, timeout=5)
+            await asyncio.sleep(0.2)
+            assert "away" in user_states
+        finally:
+            release_enter.set()

@@ -320,6 +320,7 @@ class _ToolExecutor:
 
     @property
     def has_pending_replies(self) -> bool:
+        """Whether buffered tool updates still require a deferred reply to be scheduled."""
         return bool(self._pending_updates)
 
     @property

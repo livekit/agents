@@ -478,6 +478,10 @@ class AgentActivity(RecognitionHooks):
         # speeches that audio playout finished but not done because of tool calls
         self._background_speeches: set[SpeechHandle] = set()
 
+        # Busy state outlives the bounded RunResult placeholder below and also
+        # applies when a realtime turn has no active RunResult.
+        self._awaiting_auto_tool_reply = False
+
         # placeholder used to hold a RunResult open while waiting for a realtime
         # model to auto-generate a tool reply (auto_tool_reply_generation=True).
         self._pending_auto_tool_reply_fut: asyncio.Future[None] | None = None
@@ -1603,6 +1607,7 @@ class AgentActivity(RecognitionHooks):
 
     async def _close_session(self) -> None:
         assert self._lock.locked(), "_close_session should only be used when locked."
+        self._clear_pending_auto_tool_reply()
 
         if isinstance(self.llm, llm.LLM):
             self.llm.off("metrics_collected", self._on_metrics_collected)
@@ -1965,6 +1970,7 @@ class AgentActivity(RecognitionHooks):
 
         if self._rt_session is not None:
             self._rt_session.interrupt()
+            self._clear_pending_auto_tool_reply()
 
         # _speech_q is a heap, so its list order is not the order it pops in
         for _, _, speech in sorted(self._speech_q, key=lambda item: (item[0], item[1])):
@@ -1983,6 +1989,7 @@ class AgentActivity(RecognitionHooks):
             interrupted_speeches.append(speech)
 
         if not interrupted_speeches:
+            self._update_agent_state_if_idle()
             future.set_result(None)
         else:
 
@@ -2363,6 +2370,7 @@ class AgentActivity(RecognitionHooks):
             name="AgentActivity.realtime_generation",
         )
 
+        self._awaiting_auto_tool_reply = False
         if (fut := self._pending_auto_tool_reply_fut) and not fut.done():
             if (run_state := self._session._global_run_state) is not None and not run_state.done():
                 run_state._watch_handle(handle)
@@ -3196,9 +3204,18 @@ class AgentActivity(RecognitionHooks):
 
     @property
     def _has_pending_agent_work(self) -> bool:
+        """Report owed replies across tool scopes and unfinished local speech work.
+
+        Server-generated replies stay pending independently of the RunResult wait.
+        The task checking its own playout completion is excluded.
+        """
         from ..llm.async_toolset import AsyncToolset
 
-        if self._background_speeches or self._tool_executor.has_pending_replies:
+        if (
+            self._awaiting_auto_tool_reply
+            or self._background_speeches
+            or self._tool_executor.has_pending_replies
+        ):
             return True
         if any(
             isinstance(toolset, AsyncToolset) and toolset._executor.has_pending_replies
@@ -3223,6 +3240,7 @@ class AgentActivity(RecognitionHooks):
                 self.interruption_by_audio_activity_enabled = True
 
     def _on_speech_task_done(self, task: asyncio.Task[Any]) -> None:
+        """Release busy state after a hook or a dropped speech task finishes."""
         info = _get_activity_task_info(task)
         speech = info.speech_handle if info else None
         if speech is not None and (
@@ -3233,6 +3251,10 @@ class AgentActivity(RecognitionHooks):
 
         # A dropped reply (or a hook that was keeping speech work alive) has no
         # playout path to release "thinking". Only the current active agent may do so.
+        self._update_agent_state_if_idle()
+
+    def _update_agent_state_if_idle(self) -> None:
+        """Return the current active agent to listening once no owed work remains."""
         if (
             self._session._activity is self
             and not self._closed
@@ -3242,6 +3264,14 @@ class AgentActivity(RecognitionHooks):
             and not self._has_pending_agent_work
         ):
             self._session._update_agent_state("listening")
+
+    def _clear_pending_auto_tool_reply(self) -> None:
+        """Drop a server reply on interruption or session close and release its run wait."""
+        self._awaiting_auto_tool_reply = False
+        if (fut := self._pending_auto_tool_reply_fut) is not None:
+            self._pending_auto_tool_reply_fut = None
+            if not fut.done():
+                fut.set_result(None)
 
     @utils.log_exceptions(logger=logger)
     async def _tts_task(
@@ -4955,6 +4985,11 @@ class AgentActivity(RecognitionHooks):
                 if (
                     self._rt_session.capabilities.auto_tool_reply_generation
                     and fnc_executed_ev.has_tool_reply
+                ):
+                    self._awaiting_auto_tool_reply = True
+                if (
+                    self._rt_session.capabilities.auto_tool_reply_generation
+                    and fnc_executed_ev.has_tool_reply
                     and self._pending_auto_tool_reply_fut is None
                     and (run_state := self._session._global_run_state) is not None
                     and not run_state.done()
@@ -4988,6 +5023,7 @@ class AgentActivity(RecognitionHooks):
                         "failed to update chat context before generating the function calls results",  # noqa: E501
                         extra={"error": str(e)},
                     )
+                    self._awaiting_auto_tool_reply = False
                     if auto_reply_fut is not None and not auto_reply_fut.done():
                         if self._pending_auto_tool_reply_fut is auto_reply_fut:
                             self._pending_auto_tool_reply_fut = None
