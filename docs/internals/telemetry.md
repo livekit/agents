@@ -738,8 +738,8 @@ Rules:
 
 | Output | Path | Reader |
 | --- | --- | --- |
-| Weaver registry | `otel/registry/` and `otel/manifest.yaml` | `weaver registry check`, protocol's live-check and combined docs |
-| Consumer schema | `otel/schema.json` | Cloud consumers; the golden test |
+| Weaver registry | `rust/otel/registry/` and `rust/otel/manifest.yaml` | `weaver registry check`, protocol's live-check and combined docs |
+| Consumer schema | `rust/otel/schema.json` | Cloud consumers; the golden test |
 | Python constants | `livekit/agents/_generated/semconv.py` | the framework's Python code |
 | Trace rules | `tests/trace_schema.py` | trace tests and the DST rule set |
 
@@ -764,7 +764,7 @@ A key moves to protocol only when a second producer emits it.
 | `lk-agents-codegen --check` | declarations out of sync with generated outputs, `Content<T>` outside `lk.pii.*`, unknown semconv keys |
 | `weaver registry check` | violations of protocol's naming policies |
 | Golden OTLP | any wire change: a fixed fake session (pipeline and realtime voice turns, an interruption and a backchannel, a tool call, a handoff, AMD, a failed hook, a text run with a remote agent) exports OTLP JSON compared with `tests/telemetry/golden/` |
-| Dashboard rendering | the golden traces and logs are published under `otel/golden/`; the session view's tests in `livekit/web` load them and assert the turns, stages, latencies, tokens, tool time, transcript and evaluations they render |
+| Dashboard rendering | the golden traces and logs are published under `rust/otel/golden/`; the session view's tests in `livekit/web` load them and assert the turns, stages, latencies, tokens, tool time, transcript and evaluations they render |
 | DST span rules | every span ends exactly once; children end within their parent unless `outlives_parent`; parents are declared; an `Err` result is never recorded as cancelled; nothing reaches the close sweep |
 | Conformance tests | an application span inside a tool parents under `function_tool`; a `RemoteAgent` call continues the trace; concurrent jobs keep their identity; Cloud disabled; queue saturation; bounded shutdown |
 

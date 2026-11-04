@@ -2,7 +2,7 @@
 # Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from rust/crates/lk-agents-abi/src/telemetry/.
 
 file_format: "definition_manifest/2.0"
-schema_url: "https://github.com/livekit/agents/tree/main/otel"
+schema_url: "https://github.com/livekit/agents/tree/main/rust/otel"
 stability: "development"
 description: "LiveKit Agents telemetry: the framework's spans, events, metrics and report records."
 dependencies:

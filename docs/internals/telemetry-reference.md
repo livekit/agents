@@ -2,7 +2,7 @@
 
 What the framework emits and what each consumer reads. The design and the API
 that produce it are in [telemetry internals](telemetry.md). The declarations in
-`lk-agents-abi/src/telemetry/` are the source of truth; `otel/schema.json` is
+`lk-agents-abi/src/telemetry/` are the source of truth; `rust/otel/schema.json` is
 generated from them and this page describes it.
 
 ## Standard conventions

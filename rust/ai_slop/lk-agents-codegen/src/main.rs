@@ -39,7 +39,7 @@ const PYTHON_GENERATED: &str = "livekit/agents/_generated";
 /// Where `_core.pyi` sits, beside the extension.
 const PYTHON_CORE: &str = "livekit/agents";
 /// The Weaver registry's generated definitions.
-const OTEL_REGISTRY: &str = "otel/registry";
+const OTEL_REGISTRY: &str = "rust/otel/registry";
 /// The trace rules the Python trace tests and scripts import.
 const TRACE_SCHEMA: &str = "tests/trace_schema.py";
 /// The entity-owned (`handle = Manual`) spans the DST's span rule checks.
@@ -306,8 +306,8 @@ mod drift {
             "livekit-agents-next/livekit/agents/_generated/_core_llm.pyi",
             "livekit-agents-next/livekit/agents/_core.pyi",
             "livekit-agents-next/livekit/agents/_generated/semconv.py",
-            "otel/schema.json",
-            "otel/registry/spans.yaml",
+            "rust/otel/schema.json",
+            "rust/otel/registry/spans.yaml",
             TRACE_SCHEMA,
             MANUAL_SPANS,
             CORE_NAMES,

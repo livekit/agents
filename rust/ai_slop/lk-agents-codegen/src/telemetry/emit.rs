@@ -1,5 +1,6 @@
-//! The registry's outputs: the Weaver registry (`otel/`), the consumer schema (`otel/schema.json`),
-//! the Python constants (`_generated/semconv.py`) and the trace rules (`tests/trace_schema.py`).
+//! The registry's outputs: the Weaver registry (`rust/otel/`), the consumer schema
+//! (`rust/otel/schema.json`), the Python constants (`_generated/semconv.py`) and the trace rules
+//! (`tests/trace_schema.py`).
 
 use super::{Attr, Content, Encoding, Parent, Registry, Shape, ShapeField, Wire};
 use lk_agents_bindgen::telemetry::{InstrumentKind, SpanKind, Unmeasured};
@@ -145,7 +146,7 @@ fn parent_name(p: &Parent) -> String {
     }
 }
 
-// --- otel/schema.json ---------------------------------------------------------------------------
+// --- rust/otel/schema.json -----------------------------------------------------------------------
 
 fn schema_attr(a: &Attr) -> V {
     let mut f =
@@ -339,7 +340,7 @@ fn schema(r: &Registry) -> String {
     out
 }
 
-// --- otel/manifest.yaml and otel/registry/ ------------------------------------------------------
+// --- rust/otel/manifest.yaml and rust/otel/registry/ ---------------------------------------------
 
 fn header() -> String {
     format!(
@@ -359,7 +360,7 @@ fn manifest() -> String {
     };
     yaml_file(vec![
         ("file_format", s("definition_manifest/2.0")),
-        ("schema_url", s("https://github.com/livekit/agents/tree/main/otel")),
+        ("schema_url", s("https://github.com/livekit/agents/tree/main/rust/otel")),
         ("stability", s("development")),
         (
             "description",
@@ -571,16 +572,16 @@ fn imports_yaml(r: &Registry) -> String {
     ])
 }
 
-/// Every file under `otel/`, by repo-relative path.
+/// Every file under `rust/otel/`, by repo-relative path.
 pub fn otel(r: &Registry) -> Vec<(String, String)> {
     vec![
-        ("otel/manifest.yaml".into(), manifest()),
-        ("otel/registry/attributes.yaml".into(), attributes_yaml(r)),
-        ("otel/registry/spans.yaml".into(), spans_yaml(r)),
-        ("otel/registry/events.yaml".into(), events_yaml(r)),
-        ("otel/registry/metrics.yaml".into(), metrics_yaml(r)),
-        ("otel/registry/imports.yaml".into(), imports_yaml(r)),
-        ("otel/schema.json".into(), schema(r)),
+        ("rust/otel/manifest.yaml".into(), manifest()),
+        ("rust/otel/registry/attributes.yaml".into(), attributes_yaml(r)),
+        ("rust/otel/registry/spans.yaml".into(), spans_yaml(r)),
+        ("rust/otel/registry/events.yaml".into(), events_yaml(r)),
+        ("rust/otel/registry/metrics.yaml".into(), metrics_yaml(r)),
+        ("rust/otel/registry/imports.yaml".into(), imports_yaml(r)),
+        ("rust/otel/schema.json".into(), schema(r)),
     ]
 }
 

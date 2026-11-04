@@ -264,7 +264,7 @@ fn outputs_describe_the_declarations() {
     let files: std::collections::BTreeMap<String, String> =
         telemetry::otel(&r).into_iter().collect();
     let schema: serde_json::Value =
-        serde_json::from_str(&files["otel/schema.json"]).expect("schema is JSON");
+        serde_json::from_str(&files["rust/otel/schema.json"]).expect("schema is JSON");
     let turn = &schema["spans"][1];
     assert_eq!((turn["name"].as_str(), turn["kind"].as_str()), (Some("turn"), Some("client")));
     assert_eq!(
@@ -276,7 +276,7 @@ fn outputs_describe_the_declarations() {
     assert_eq!(schema["spans"][0]["parents"], serde_json::json!(["<external>", "<current>"]));
     assert_eq!(schema["groups"][0]["name"], "identity");
 
-    let attributes = &files["otel/registry/attributes.yaml"];
+    let attributes = &files["rust/otel/registry/attributes.yaml"];
     assert!(
         attributes.contains("id: \"lk.origin\"") && attributes.contains("value: \"server_speech\""),
         "{attributes}"
@@ -287,7 +287,7 @@ fn outputs_describe_the_declarations() {
             && !attributes.contains("id: \"lk.room_id\""),
         "dependency keys are referenced, never redefined: {attributes}"
     );
-    let spans = &files["otel/registry/spans.yaml"];
+    let spans = &files["rust/otel/registry/spans.yaml"];
     assert!(
         spans.contains("  - id: \"span.turn\"\n    type: \"span\"\n    span_kind: \"client\""),
         "{spans}"
@@ -298,13 +298,15 @@ fn outputs_describe_the_declarations() {
         ),
         "{spans}"
     );
-    let metrics = &files["otel/registry/metrics.yaml"];
+    let metrics = &files["rust/otel/registry/metrics.yaml"];
     assert!(
         metrics.contains("metric_name: \"lk.turn.delay\"") && !metrics.contains("invoke_agent"),
         "{metrics}"
     );
-    assert!(files["otel/registry/imports.yaml"].contains("- \"gen_ai.invoke_agent.duration\""));
-    let manifest = &files["otel/manifest.yaml"];
+    assert!(
+        files["rust/otel/registry/imports.yaml"].contains("- \"gen_ai.invoke_agent.duration\"")
+    );
+    let manifest = &files["rust/otel/manifest.yaml"];
     assert!(
         manifest.contains("livekit/protocol.git@") && manifest.contains("[otel/model/shared]"),
         "{manifest}"
