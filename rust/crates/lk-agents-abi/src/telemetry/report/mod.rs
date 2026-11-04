@@ -11,6 +11,8 @@ use serde_json::Value;
 use crate::ChatItem;
 use crate::usage::Usage;
 
+pub mod records;
+
 /// What the session records to LiveKit Cloud. Every part is on unless the session turns it off.
 ///
 /// `redaction = False` never disables project-level redaction; it only declines to ask for it.

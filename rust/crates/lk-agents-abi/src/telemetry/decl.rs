@@ -1,6 +1,6 @@
 //! The telemetry declaration model: what a span, an event, a metric instrument or a report record
 //! is, and how each attribute is encoded on the wire. Declarations are `Attrs` structs with a role
-//! attribute (`spans`, `instruments`, `report_records`); `lk-agents-codegen` reads them into the
+//! attribute (`spans`, `instruments`, `report::records`); `lk-agents-codegen` reads them into the
 //! registry, the consumer schema and the Python constants.
 
 pub use super::record::{InstrumentKind, KeyValues, Number, SpanKind, SpanRef, Value};

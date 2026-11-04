@@ -13,10 +13,10 @@ mod upload;
 use lk_agents_abi::ChatItem;
 use lk_agents_abi::telemetry::decl::{JsonObject, KvList, RecordDecl, Value};
 use lk_agents_abi::telemetry::record::{JobKey, Key, LogRecord, SpanId, SpanRef, TraceId};
-use lk_agents_abi::telemetry::report::{RecordingOptions, SessionReport};
-use lk_agents_abi::telemetry::report_records::{
-    ChatItemRecord, EvaluationRecord, OutcomeRecord, SessionReportRecord, TagRecord,
+use lk_agents_abi::telemetry::report::records::{
+    ChatItemLog, EvaluationLog, OutcomeLog, SessionReportLog, TagLog,
 };
+use lk_agents_abi::telemetry::report::{RecordingOptions, SessionReport};
 use serde_json::{Map, Value as Json};
 
 pub use upload::{RecordingUpload, TRANSCRIPT_BYTES, TRANSCRIPT_ITEMS, upload};
@@ -56,7 +56,7 @@ pub fn records(report: &SessionReport, options: &RecordingOptions) -> Vec<LogRec
         let mut tags: Vec<String> = report.tags.iter().map(|t| t.name.clone()).collect();
         tags.sort();
         let usage = &report.usage.models;
-        let summary = SessionReportRecord {
+        let summary = SessionReportLog {
             options: KvList(session_options(&report.options)),
             report_timestamp: report.timestamp,
             tags: (!tags.is_empty()).then_some(tags),
@@ -76,7 +76,7 @@ pub fn records(report: &SessionReport, options: &RecordingOptions) -> Vec<LogRec
                 span_id: SpanId(span),
                 sampled,
             });
-            let record = ChatItemRecord { item: KvList(chat_item::chat_item(item)), turn };
+            let record = ChatItemLog { item: KvList(chat_item::chat_item(item)), turn };
             let error = matches!(item, ChatItem::FunctionCallOutput(o) if o.is_error);
             let at = item.created_at().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
             push(&record, at.as_nanos() as u64, error);
@@ -92,7 +92,7 @@ pub fn records(report: &SessionReport, options: &RecordingOptions) -> Vec<LogRec
             ("instructions", &e.instructions),
         ]);
         let fail = e.verdict == "fail";
-        push(&EvaluationRecord { evaluation: KvList(evaluation) }, nanos(report.timestamp), fail);
+        push(&EvaluationLog { evaluation: KvList(evaluation) }, nanos(report.timestamp), fail);
     }
 
     for tag in &report.tags {
@@ -100,7 +100,7 @@ pub fn records(report: &SessionReport, options: &RecordingOptions) -> Vec<LogRec
         let mut m = Map::new();
         m.insert("name".into(), tag.name.clone().into());
         m.insert("metadata".into(), metadata.clone());
-        push(&TagRecord { tag: KvList(m) }, nanos(tag.timestamp), false);
+        push(&TagLog { tag: KvList(m) }, nanos(tag.timestamp), false);
     }
 
     if let Some(outcome) = &report.outcome {
@@ -109,7 +109,7 @@ pub fn records(report: &SessionReport, options: &RecordingOptions) -> Vec<LogRec
             m.insert("reason".into(), reason.clone().into());
         }
         let fail = outcome.outcome == lk_agents_abi::Outcome::Fail;
-        push(&OutcomeRecord { outcome: KvList(m) }, nanos(report.timestamp), fail);
+        push(&OutcomeLog { outcome: KvList(m) }, nanos(report.timestamp), fail);
     }
     out
 }

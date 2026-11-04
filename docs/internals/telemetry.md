@@ -268,7 +268,7 @@ Everything that carries attributes is one kind of thing, a struct deriving
 | Span event | `#[event(name)]` | `Generation` |
 | Attribute group, flattened with `#[attrs]` | a plain `Attrs` struct | `GenAiUsage`, `ParticipantAttrs` |
 | Metric instrument (its labels) | `#[metric(name, kind, unit)]` | `LlmInputTokens` |
-| Report record | `#[record(scope, body)]` | `ChatItemRecord` |
+| Report record | `#[record(scope, body)]` | `ChatItemLog` |
 
 ```rust
 /// One request to an LLM provider, retries included.
@@ -654,7 +654,7 @@ Records Cloud reads as OTLP logs are typed:
 ```rust
 #[record(scope = "chat_history")]
 #[derive(Attrs)]
-pub struct ChatItemRecord {
+pub struct ChatItemLog {
     #[attr("chat.item")]
     pub item: KvList<ChatItemWire>,
     #[span_id]
@@ -663,7 +663,7 @@ pub struct ChatItemRecord {
 
 #[record(scope = "evaluations", body = "evaluation")]
 #[derive(Attrs)]
-pub struct EvaluationRecord {
+pub struct EvaluationLog {
     #[attr("evaluation")]
     pub evaluation: KvList<EvaluationWire>,
 }
@@ -714,7 +714,7 @@ lk-agents-worker     job end: the session closes and is snapshotted, on_session_
 
 | Crate | Owns | Does not |
 | --- | --- | --- |
-| `lk-agents-abi` | `SessionReport` (the read-only value and its generated Python view), `RecordingOptions`, the record and upload wire declarations (`ChatItemRecord`, `SessionSummaryRecord`, `EvaluationRecord`, `RecordingHeader`, `SessionSummary`) | behavior |
+| `lk-agents-abi` | `SessionReport` (the read-only value and its generated Python view), `RecordingOptions`, the record and upload wire declarations (`ChatItemLog`, `SessionReportLog`, `EvaluationLog`, `TagLog`, `OutcomeLog`, `RecordingHeader`, `SessionSummary`) | behavior |
 | `lk-agents-voice` | `VoiceSession::report`: chat history, events, usage, options, start time and recording path, read from the session's own state | encoding, I/O |
 | `lk-agents-core` | `report::Tagger` (tags, evaluations, outcome); `report::records` and `report::upload`: pure projections into OTLP log records, the `chat_history.json` bytes, the header and the session summary, with their bounds | I/O, host calls |
 | `lk-agents-worker` | the job-end sequence: snapshot, `on_session_end`, then the outputs under one deadline, inside the `job_shutdown` span (`on_session_end`, `session_end_upload`) | decisions about content or shape |

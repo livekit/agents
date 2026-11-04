@@ -47,9 +47,9 @@ groups:
               stability: "development"
         stability: "development"
         brief: "How severe the stall was."
-  - id: "registry.livekit.agents.report_records"
+  - id: "registry.livekit.agents.records"
     type: "attribute_group"
-    brief: "Attributes declared in `lk_agents_abi::telemetry::report_records`."
+    brief: "Attributes declared in `lk_agents_abi::telemetry::report::records`."
     attributes:
       - id: "agent_name"
         type: "string"
