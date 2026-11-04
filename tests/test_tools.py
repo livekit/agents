@@ -2047,6 +2047,10 @@ class _DuplicateJob(BaseModel):
         return "redacted"
 
 
+class _AliasedDuplicateJob(_DuplicateJob):
+    recipient: str = Field(alias="to", repr=False)
+
+
 class TestDuplicateScopeThroughExecute:
     """scope="name_and_args" driven through execute(), where the key derivation
     order relative to the CONFIRM_DUPLICATE_PARAM pop matters."""
@@ -2141,9 +2145,21 @@ class TestDuplicateScopeThroughExecute:
             await _asyncio.gather(*calls, return_exceptions=True)
 
     @pytest.mark.parametrize("mode", ["reject", "confirm", "replace"])
-    @pytest.mark.parametrize("field", ["recipient", "delivery_token"])
+    @pytest.mark.parametrize(
+        "model_type, field, raw_field, read_extra",
+        [
+            pytest.param(_DuplicateJob, "recipient", "recipient", False, id="hidden-recipient"),
+            pytest.param(
+                _DuplicateJob, "delivery_token", "delivery_token", False, id="excluded-token"
+            ),
+            pytest.param(_AliasedDuplicateJob, "recipient", "to", False, id="aliased-field"),
+            pytest.param(
+                _AliasedDuplicateJob, "recipient", "recipient", True, id="colliding-extra"
+            ),
+        ],
+    )
     async def test_nested_model_distinct_values_are_not_duplicates(
-        self, mode, field, _clear_running_tasks
+        self, mode, model_type, field, raw_field, read_extra, _clear_running_tasks
     ):
         """Presentation and serialization settings must not hide a tool's inputs."""
         from livekit.agents.voice.tool_executor import _ToolExecutor
@@ -2155,18 +2171,21 @@ class TestDuplicateScopeThroughExecute:
         @function_tool(
             on_duplicate=mode, duplicate_scope="name_and_args", flags=ToolFlag.CANCELLABLE
         )
-        async def notify(jobs: dict[str, list[_DuplicateJob]]) -> str:
+        async def notify(jobs: dict[str, list[model_type]]) -> str:
             job = jobs["pending"][0]
             received.append(job)
             started[len(received) - 1].set()
             await gate.wait()
-            return getattr(job, field)
+            return job.model_extra[field] if read_extra else getattr(job, field)
 
         executor = _ToolExecutor()
         calls = []
         try:
             for index, value in enumerate(("first", "second")):
-                arguments = {"recipient": "someone", field: value}
+                arguments = {"recipient": "someone"}
+                if model_type is _AliasedDuplicateJob:
+                    arguments = {"to": "someone", "recipient": "extra"}
+                arguments[raw_field] = value
                 calls.append(
                     asyncio.create_task(
                         executor.execute(
@@ -2182,13 +2201,16 @@ class TestDuplicateScopeThroughExecute:
             assert all(not task.exe_task.done() for task in executor._running_tasks.values())
             gate.set()
             assert await asyncio.gather(*calls) == ["first", "second"]
-            assert [getattr(job, field) for job in received] == ["first", "second"]
+            assert [
+                job.model_extra[field] if read_extra else getattr(job, field) for job in received
+            ] == ["first", "second"]
         finally:
             gate.set()
             await asyncio.gather(*calls, return_exceptions=True)
             await executor.aclose()
 
-    async def test_equivalent_nested_models_are_rejected(self, _clear_running_tasks):
+    @pytest.mark.parametrize("model_type", [_DuplicateJob, _AliasedDuplicateJob])
+    async def test_equivalent_nested_models_are_rejected(self, model_type, _clear_running_tasks):
         """Validated defaults, coercion and nested mapping order still mean one call."""
         from livekit.agents.voice.tool_executor import _ToolExecutor
 
@@ -2197,18 +2219,21 @@ class TestDuplicateScopeThroughExecute:
         received = []
 
         @function_tool(on_duplicate="reject", duplicate_scope="name_and_args")
-        async def notify(job: _DuplicateJob) -> str:
+        async def notify(job: model_type) -> str:
             received.append(job)
             started.set()
             await gate.wait()
             return "done"
 
         executor = _ToolExecutor()
+        recipient = {"recipient": "someone"}
+        if model_type is _AliasedDuplicateJob:
+            recipient = {"to": "someone", "recipient": "extra"}
         first = asyncio.create_task(
             executor.execute(
                 tool=notify,
                 run_ctx=_make_run_context(call_id="first", name="notify"),
-                raw_arguments={"job": {"recipient": "someone", "metadata": {"a": "1", "b": 2}}},
+                raw_arguments={"job": {**recipient, "metadata": {"a": "1", "b": 2}}},
             )
         )
         try:
@@ -2220,7 +2245,7 @@ class TestDuplicateScopeThroughExecute:
                     raw_arguments={
                         "job": {
                             "name": "notify",
-                            "recipient": "someone",
+                            **recipient,
                             "delivery_token": "default",
                             "metadata": {"b": 2, "a": 1},
                         }

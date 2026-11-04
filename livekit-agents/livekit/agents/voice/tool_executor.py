@@ -223,9 +223,10 @@ def _canonical_args(raw_arguments: dict[str, Any]) -> str:
         if isinstance(value, BaseModel):
             # Compare the values the tool receives. repr=False, exclude=True and
             # custom serializers can all hide meaningful inputs from str/model_dump.
+            # An aliased field's name can also be an extra key; keep both values.
             return {
-                **{name: getattr(value, name) for name in type(value).model_fields},
-                **(value.model_extra or {}),
+                "fields": {name: getattr(value, name) for name in type(value).model_fields},
+                "extra": value.model_extra or {},
             }
         return str(value)
 
