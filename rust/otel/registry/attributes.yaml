@@ -417,7 +417,7 @@
           "id": "job_id",
           "type": "string",
           "stability": "development",
-          "brief": "The job id under the spelling Cloud's consumers read today."
+          "brief": "The job id: Cloud's consumers find a job's records by it."
         },
         {
           "id": "lk.cancelled",
@@ -471,7 +471,7 @@
           "id": "room_id",
           "type": "string",
           "stability": "development",
-          "brief": "The room session id under the spelling Cloud's ingest and session view read today."
+          "brief": "The room session id: Cloud's ingest, session view and Agent Insights find a job by it."
         }
       ]
     },
@@ -480,42 +480,6 @@
       "type": "attribute_group",
       "brief": "Attributes declared in `lk_agents_abi::telemetry::spans::inference`.",
       "attributes": [
-        {
-          "id": "gen_ai.usage.input_audio_tokens",
-          "type": "int",
-          "stability": "development",
-          "brief": "Audio input tokens, under Langfuse's spelling."
-        },
-        {
-          "id": "gen_ai.usage.input_cached_tokens",
-          "type": "int",
-          "stability": "development",
-          "brief": "Cached input tokens, under Langfuse's spelling."
-        },
-        {
-          "id": "gen_ai.usage.input_text_tokens",
-          "type": "int",
-          "stability": "development",
-          "brief": "Text input tokens, under Langfuse's spelling."
-        },
-        {
-          "id": "gen_ai.usage.output_audio_tokens",
-          "type": "int",
-          "stability": "development",
-          "brief": "Audio output tokens, under Langfuse's spelling."
-        },
-        {
-          "id": "gen_ai.usage.output_text_tokens",
-          "type": "int",
-          "stability": "development",
-          "brief": "Text output tokens, under Langfuse's spelling."
-        },
-        {
-          "id": "gen_ai.usage.reasoning_tokens",
-          "type": "int",
-          "stability": "development",
-          "brief": "Reasoning tokens, under Langfuse's spelling."
-        },
         {
           "id": "langfuse.observation.completion_start_time",
           "type": "string",

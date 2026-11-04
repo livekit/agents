@@ -78,16 +78,10 @@ pub struct GenAiUsage {
     pub output_tokens: u64,
     #[attr(otel::GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS)]
     pub cache_read_input_tokens: Option<u64>,
-    /// Cached input tokens, under Langfuse's spelling.
-    #[attr("gen_ai.usage.input_cached_tokens")]
-    pub input_cached_tokens: Option<u64>,
     #[attr(otel::GEN_AI_USAGE_CACHE_WRITE_INPUT_TOKENS)]
     pub cache_write_input_tokens: Option<u64>,
     #[attr(otel::GEN_AI_USAGE_REASONING_OUTPUT_TOKENS)]
     pub reasoning_output_tokens: Option<u64>,
-    /// Reasoning tokens, under Langfuse's spelling.
-    #[attr("gen_ai.usage.reasoning_tokens")]
-    pub reasoning_tokens: Option<u64>,
 }
 
 /// A request's input as a delta over an earlier span's, with message capture.
@@ -284,20 +278,6 @@ pub struct RealtimeUsage {
     pub audio_cache_read_input_tokens: u64,
     #[attr(otel::GEN_AI_USAGE_IMAGE_CACHE_READ_INPUT_TOKENS)]
     pub image_cache_read_input_tokens: u64,
-    /// Text input tokens, under Langfuse's spelling.
-    #[attr("gen_ai.usage.input_text_tokens")]
-    pub input_text_tokens: u64,
-    /// Audio input tokens, under Langfuse's spelling.
-    #[attr("gen_ai.usage.input_audio_tokens")]
-    pub input_audio_tokens: u64,
-    #[attr("gen_ai.usage.input_cached_tokens")]
-    pub input_cached_tokens: u64,
-    /// Text output tokens, under Langfuse's spelling.
-    #[attr("gen_ai.usage.output_text_tokens")]
-    pub output_text_tokens: u64,
-    /// Audio output tokens, under Langfuse's spelling.
-    #[attr("gen_ai.usage.output_audio_tokens")]
-    pub output_audio_tokens: u64,
 }
 
 /// How a model response ended.

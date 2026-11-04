@@ -11,15 +11,15 @@ use crate::telemetry::semconv::{otel, protocol};
 #[derive(Attrs)]
 pub struct JobIdentity {
     #[attr(protocol::LK_ROOM_ID)]
-    pub room_id: String,
-    /// The room session id under the spelling Cloud's ingest and session view read today.
+    pub lk_room_id: String,
+    /// The room session id: Cloud's ingest, session view and Agent Insights find a job by it.
     #[attr("room_id")]
-    pub legacy_room_id: String,
+    pub room_id: String,
     #[attr(protocol::LK_JOB_ID)]
-    pub job_id: String,
-    /// The job id under the spelling Cloud's consumers read today.
+    pub lk_job_id: String,
+    /// The job id: Cloud's consumers find a job's records by it.
     #[attr("job_id")]
-    pub legacy_job_id: String,
+    pub job_id: String,
     #[attr(protocol::LK_PII_ROOM_NAME)]
     pub room_name: Content<String>,
     #[attr(protocol::LK_AGENT_NAME)]

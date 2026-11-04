@@ -298,7 +298,7 @@ step's start, `preemptive_generation_discarded` (`lk.speech_id`).
 | `lk.input.delta`, `lk.input.base_span_id`, `lk.input.dropped_from_base`, and a span link to the base | | with message capture and input deltas |
 | `lk.llm_metrics` | JSON (`ttft`, `prompt_tokens`, `prompt_cached_tokens`, `completion_tokens`, `duration`, ...) | end, after a successful response |
 | `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens` | int | end |
-| `gen_ai.usage.cache_read.input_tokens` and `gen_ai.usage.input_cached_tokens`; `gen_ai.usage.cache_write.input_tokens`; `gen_ai.usage.reasoning.output_tokens` and `gen_ai.usage.reasoning_tokens` | int | end, when > 0 |
+| `gen_ai.usage.cache_read.input_tokens`, `gen_ai.usage.cache_write.input_tokens`, `gen_ai.usage.reasoning.output_tokens` | int | end, when > 0 |
 | `gen_ai.response.id`, `gen_ai.response.model`, `gen_ai.response.finish_reasons` (`stop`, `tool_call`, `error`) | | end |
 | `gen_ai.response.time_to_first_chunk` | s | end, when measured |
 | `gen_ai.output.messages` | JSON | end, with message capture |
@@ -312,7 +312,7 @@ step's start, `preemptive_generation_discarded` (`lk.speech_id`).
 | `gen_ai.operation.name` = `generate_content`, `gen_ai.provider.name`, `gen_ai.request.model`, `gen_ai.request.stream`, `gen_ai.output.type` (`speech`, `text`) | | start |
 | `lk.realtime_model_metrics` | JSON (`ttft` = `-1` when unmeasured, ...) | when the response's metrics arrive |
 | `gen_ai.response.model`, `gen_ai.response.id` | string | same |
-| `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.usage.{text,audio,image}.input_tokens`, `gen_ai.usage.{text,audio}.output_tokens`, `gen_ai.usage.cache_read.input_tokens`, `gen_ai.usage.{text,audio,image}.cache_read.input_tokens`, and the flat forms `gen_ai.usage.input_text_tokens`, `gen_ai.usage.input_audio_tokens`, `gen_ai.usage.input_cached_tokens`, `gen_ai.usage.output_text_tokens`, `gen_ai.usage.output_audio_tokens` | int | same |
+| `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.usage.{text,audio,image}.input_tokens`, `gen_ai.usage.{text,audio}.output_tokens`, `gen_ai.usage.cache_read.input_tokens`, `gen_ai.usage.{text,audio,image}.cache_read.input_tokens` | int | same |
 | `gen_ai.response.time_to_first_chunk` | s | same, when measured |
 | `langfuse.observation.completion_start_time` | string, ISO 8601 | same, when measured |
 

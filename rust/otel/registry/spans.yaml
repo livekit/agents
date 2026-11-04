@@ -920,19 +920,11 @@
           "requirement_level": "recommended"
         },
         {
-          "ref": "gen_ai.usage.input_cached_tokens",
-          "requirement_level": "recommended"
-        },
-        {
           "ref": "gen_ai.usage.cache_write.input_tokens",
           "requirement_level": "recommended"
         },
         {
           "ref": "gen_ai.usage.reasoning.output_tokens",
-          "requirement_level": "recommended"
-        },
-        {
-          "ref": "gen_ai.usage.reasoning_tokens",
           "requirement_level": "recommended"
         },
         {
@@ -971,10 +963,8 @@
             "gen_ai.usage.input_tokens",
             "gen_ai.usage.output_tokens",
             "gen_ai.usage.cache_read.input_tokens",
-            "gen_ai.usage.input_cached_tokens",
             "gen_ai.usage.cache_write.input_tokens",
             "gen_ai.usage.reasoning.output_tokens",
-            "gen_ai.usage.reasoning_tokens",
             "gen_ai.response.id",
             "gen_ai.response.model",
             "gen_ai.response.finish_reasons",
@@ -1232,26 +1222,6 @@
           "requirement_level": "recommended"
         },
         {
-          "ref": "gen_ai.usage.input_text_tokens",
-          "requirement_level": "recommended"
-        },
-        {
-          "ref": "gen_ai.usage.input_audio_tokens",
-          "requirement_level": "recommended"
-        },
-        {
-          "ref": "gen_ai.usage.input_cached_tokens",
-          "requirement_level": "recommended"
-        },
-        {
-          "ref": "gen_ai.usage.output_text_tokens",
-          "requirement_level": "recommended"
-        },
-        {
-          "ref": "gen_ai.usage.output_audio_tokens",
-          "requirement_level": "recommended"
-        },
-        {
           "ref": "gen_ai.response.time_to_first_chunk",
           "requirement_level": "recommended"
         },
@@ -1280,11 +1250,6 @@
             "gen_ai.usage.text.cache_read.input_tokens",
             "gen_ai.usage.audio.cache_read.input_tokens",
             "gen_ai.usage.image.cache_read.input_tokens",
-            "gen_ai.usage.input_text_tokens",
-            "gen_ai.usage.input_audio_tokens",
-            "gen_ai.usage.input_cached_tokens",
-            "gen_ai.usage.output_text_tokens",
-            "gen_ai.usage.output_audio_tokens",
             "gen_ai.response.time_to_first_chunk",
             "langfuse.observation.completion_start_time"
           ]
@@ -1364,26 +1329,6 @@
         },
         {
           "ref": "gen_ai.usage.image.cache_read.input_tokens",
-          "requirement_level": "required"
-        },
-        {
-          "ref": "gen_ai.usage.input_text_tokens",
-          "requirement_level": "required"
-        },
-        {
-          "ref": "gen_ai.usage.input_audio_tokens",
-          "requirement_level": "required"
-        },
-        {
-          "ref": "gen_ai.usage.input_cached_tokens",
-          "requirement_level": "required"
-        },
-        {
-          "ref": "gen_ai.usage.output_text_tokens",
-          "requirement_level": "required"
-        },
-        {
-          "ref": "gen_ai.usage.output_audio_tokens",
           "requirement_level": "required"
         },
         {

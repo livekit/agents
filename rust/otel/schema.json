@@ -1497,11 +1497,6 @@
           "registry": "otel"
         },
         {
-          "key": "gen_ai.usage.input_cached_tokens",
-          "type": "int",
-          "required": false
-        },
-        {
           "key": "gen_ai.usage.cache_write.input_tokens",
           "type": "int",
           "required": false,
@@ -1512,11 +1507,6 @@
           "type": "int",
           "required": false,
           "registry": "otel"
-        },
-        {
-          "key": "gen_ai.usage.reasoning_tokens",
-          "type": "int",
-          "required": false
         },
         {
           "key": "gen_ai.response.id",
@@ -2146,31 +2136,6 @@
           "registry": "otel"
         },
         {
-          "key": "gen_ai.usage.input_text_tokens",
-          "type": "int",
-          "required": false
-        },
-        {
-          "key": "gen_ai.usage.input_audio_tokens",
-          "type": "int",
-          "required": false
-        },
-        {
-          "key": "gen_ai.usage.input_cached_tokens",
-          "type": "int",
-          "required": false
-        },
-        {
-          "key": "gen_ai.usage.output_text_tokens",
-          "type": "int",
-          "required": false
-        },
-        {
-          "key": "gen_ai.usage.output_audio_tokens",
-          "type": "int",
-          "required": false
-        },
-        {
           "key": "gen_ai.response.time_to_first_chunk",
           "type": "double",
           "required": false,
@@ -2490,31 +2455,6 @@
           "type": "int",
           "required": true,
           "registry": "otel"
-        },
-        {
-          "key": "gen_ai.usage.input_text_tokens",
-          "type": "int",
-          "required": true
-        },
-        {
-          "key": "gen_ai.usage.input_audio_tokens",
-          "type": "int",
-          "required": true
-        },
-        {
-          "key": "gen_ai.usage.input_cached_tokens",
-          "type": "int",
-          "required": true
-        },
-        {
-          "key": "gen_ai.usage.output_text_tokens",
-          "type": "int",
-          "required": true
-        },
-        {
-          "key": "gen_ai.usage.output_audio_tokens",
-          "type": "int",
-          "required": true
         },
         {
           "key": "gen_ai.response.time_to_first_chunk",

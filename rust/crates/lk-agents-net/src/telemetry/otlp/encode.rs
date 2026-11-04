@@ -52,10 +52,10 @@ pub(crate) fn job_stamp(
     write(
         &mut out,
         &Stamp {
+            lk_room_id: job.room_id.clone(),
             room_id: job.room_id.clone(),
-            legacy_room_id: job.room_id.clone(),
+            lk_job_id: job.job_id.clone(),
             job_id: job.job_id.clone(),
-            legacy_job_id: job.job_id.clone(),
             room_name: Content(if room_name { job.room_name.clone() } else { String::new() }),
             agent_name: job.agent_name.clone().unwrap_or_default(),
             cloud_agent_id: process.cloud_agent_id.clone(),

@@ -674,11 +674,6 @@ fn response(
             text_cache_read_input_tokens: n(t.cache_read_text_tokens),
             audio_cache_read_input_tokens: n(t.cache_read_audio_tokens),
             image_cache_read_input_tokens: n(t.cache_read_image_tokens),
-            input_text_tokens: n(t.input_text_tokens),
-            input_audio_tokens: n(t.input_audio_tokens),
-            input_cached_tokens: n(t.cache_read_tokens),
-            output_text_tokens: n(t.output_text_tokens),
-            output_audio_tokens: n(t.output_audio_tokens),
         },
         time_to_first_chunk: telemetry::Measured(ttft.map(telemetry::Seconds)),
         completion_start_time: ttft.map(|ttft| {
