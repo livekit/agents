@@ -4,8 +4,6 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use lk_agents_abi::telemetry::policy::TelemetryValue;
-
 use super::{ReportAdmission, RetainedEvents};
 use crate::env::ProcessEnv;
 
@@ -25,23 +23,6 @@ pub struct EventRetention {
 impl EventRetention {
     pub fn with_admission(capture_content: bool, admission: &ReportAdmission) -> Self {
         Self { capture_content, job_id: None, retained: 0, process: admission.events.clone() }
-    }
-
-    fn count(&mut self) {
-        self.retained += 1;
-        if self.retained == SESSION_EVENTS_WARNING + 1 {
-            log::warn!(
-                target: "livekit.agents",
-                "the session report retains more than {SESSION_EVENTS_WARNING} events"
-            );
-        }
-        let process = self.process.items.fetch_add(1, Ordering::Relaxed) + 1;
-        if process > PROCESS_EVENTS_WARNING && !self.process.warned.swap(true, Ordering::Relaxed) {
-            log::warn!(
-                target: "livekit.agents",
-                "session reports retain {process} events across the process"
-            );
-        }
     }
 }
 
@@ -70,13 +51,21 @@ impl lk_agents_abi::telemetry::report::EventRetention for EventRetention {
         lk_agents_core::telemetry::report::event_allowed(&kind, self.capture_content, redaction)
     }
 
-    fn admit(&mut self, _event: TelemetryValue, _now_ns: u64) -> (usize, bool) {
-        self.count();
-        (0, true)
-    }
-
-    fn expire(&mut self, _now_ns: u64) -> usize {
-        0
+    fn admit(&mut self) {
+        self.retained += 1;
+        if self.retained == SESSION_EVENTS_WARNING + 1 {
+            log::warn!(
+                target: "livekit.agents",
+                "the session report retains more than {SESSION_EVENTS_WARNING} events"
+            );
+        }
+        let process = self.process.items.fetch_add(1, Ordering::Relaxed) + 1;
+        if process > PROCESS_EVENTS_WARNING && !self.process.warned.swap(true, Ordering::Relaxed) {
+            log::warn!(
+                target: "livekit.agents",
+                "session reports retain {process} events across the process"
+            );
+        }
     }
 }
 
@@ -105,9 +94,9 @@ mod tests {
         assert!(!opted_in.accepts("user_input_transcribed".into(), true));
 
         for _ in 0..PROCESS_EVENTS_WARNING + 1 {
-            assert_eq!(recording.admit(TelemetryValue::None, 1), (0, true));
+            recording.admit();
         }
-        assert_eq!(recording.expire(u64::MAX), 0);
+        assert_eq!(recording.retained, PROCESS_EVENTS_WARNING + 1);
         assert!(admission.events.warned.load(Ordering::Relaxed));
         drop(recording);
         assert_eq!(admission.events.items.load(Ordering::Relaxed), 0);

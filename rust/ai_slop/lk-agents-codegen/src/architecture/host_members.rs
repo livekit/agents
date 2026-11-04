@@ -89,7 +89,6 @@ impl Members {
             && matches!(
                 (self.file.as_str(), self.function.as_str()),
                 ("py_values.rs", "extra_to_py" | "value_to_py" | "map_to_py")
-                    | ("py_values.rs", "telemetry_value_to_py")
                     | ("py_logging.rs", "emit")
             )
         {

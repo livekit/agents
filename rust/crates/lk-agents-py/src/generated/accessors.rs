@@ -395,36 +395,6 @@ impl TimeModule {
     }
 }
 
-/// Python interface: `pydantic.BaseModel`.
-pub use crate::py_values::interfaces::PydanticModel;
-impl PydanticModel {
-    pub fn import(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
-        static CLASS: pyo3::sync::PyOnceLock<Py<pyo3::types::PyType>> =
-            pyo3::sync::PyOnceLock::new();
-        Ok(CLASS.import(py, "pydantic", "BaseModel")?.as_any().clone())
-    }
-    pub fn dict_fields<'py>(
-        obj: &Bound<'py, impl pyo3::PyTypeInfo>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        obj.as_any().getattr("__dict__")
-    }
-    pub fn pydantic_extra<'py>(
-        obj: &Bound<'py, impl pyo3::PyTypeInfo>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        obj.as_any().getattr("__pydantic_extra__")
-    }
-}
-
-/// Python interface: `dataclass instance`.
-pub use crate::py_values::interfaces::DataclassInstance;
-impl DataclassInstance {
-    pub fn dataclass_fields<'py>(
-        obj: &Bound<'py, impl pyo3::PyTypeInfo>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        obj.as_any().getattr("__dataclass_fields__")
-    }
-}
-
 /// Python interface: `numpy`.
 pub use crate::py_values::interfaces::NumpyModule;
 impl NumpyModule {

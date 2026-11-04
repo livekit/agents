@@ -106,7 +106,6 @@ def _core_telemetry_configure(
     *,
     endpoint: str | None = None,
     headers: Mapping[str, str] | None = None,
-    protocol: str | None = None,
     metadata: Mapping[str, object] | None = None,
     allow_pii: bool | None = None,
 ) -> None:
@@ -200,8 +199,8 @@ class Tagger:
         """One judgment of a judge group's result: its ``lk.judge.<name>:<verdict>`` tag and record."""
 
 class _core_EventRetention:
-    """Bounded retention of a session report's host event snapshots. The native policy retains only
-    byte charges and supplied monotonic timestamps; the adapter owns independent model copies.
+    """A session report's host event snapshots: which are accepted and how many are kept. The adapter
+    owns the snapshots.
     """
     def __new__(cls) -> Self:
         """Takes the process's GenAI message capture setting as it is now."""
@@ -211,10 +210,7 @@ class _core_EventRetention:
         """Sessions started outside a job retain their existing application-owned access contract."""
     def accepts(self, kind: str, redaction: bool) -> bool:
         """Reject content without creation-time consent, unknown schemas and live-object events."""
-    def admit(self, event: object, now_ns: int) -> tuple[int, bool]:
-        """Expire old entries, then admit `event` only within the item and byte budgets. The adapter
-        removes exactly the returned prefix before appending its snapshot of an admitted event.
-        """
-    def expire(self, now_ns: int) -> int: ...
+    def admit(self) -> None:
+        """Counts one retained event; every accepted event is kept."""
 
 TELEMETRY_MAX_DEPTH: int

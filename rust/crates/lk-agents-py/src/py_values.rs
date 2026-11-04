@@ -21,18 +21,6 @@ pub mod interfaces {
     #[lk_agents_abi::host(interface(module = "time", attrs(time, perf_counter)))]
     pub struct TimeModule;
 
-    #[lk_agents_abi::host(interface(
-        host = "pydantic.BaseModel",
-        attrs(dict_fields(name = "__dict__"), pydantic_extra(name = "__pydantic_extra__"))
-    ))]
-    pub struct PydanticModel;
-
-    #[lk_agents_abi::host(interface(
-        protocol = "dataclass instance",
-        attrs(dataclass_fields(name = "__dataclass_fields__"))
-    ))]
-    pub struct DataclassInstance;
-
     #[lk_agents_abi::host(interface(module = "numpy", attrs(asarray, int16, float32)))]
     pub struct NumpyModule;
 }
@@ -40,7 +28,6 @@ pub mod interfaces {
 use crate::generated::accessors as access;
 use lk_agents_abi::Extra;
 use lk_agents_abi::Maybe;
-use lk_agents_abi::telemetry;
 use lk_agents_abi::voice::session_options::Expressive;
 use lk_agents_abi::voice::session_options::ExpressiveConfig;
 use lk_agents_abi::voice::session_options::TurnDetectionKwarg;
@@ -58,9 +45,7 @@ use pyo3::types::PyDict;
 use pyo3::types::PyFloat;
 use pyo3::types::PyInt;
 use pyo3::types::PyList;
-use pyo3::types::PyMapping;
 use pyo3::types::PyMemoryView;
-use pyo3::types::PySequence;
 use pyo3::types::PyString;
 use pyo3::types::PyTuple;
 use pyo3::types::PyType;
@@ -495,161 +480,6 @@ pub fn expressive_from_py(obj: &Bound<'_, PyAny>) -> PyResult<Expressive> {
         return Ok(Expressive(obj.is_truthy()?.then(ExpressiveConfig::default)));
     }
     Ok(Expressive(Some(crate::generated::records::expressive::expressive_options_from_py(obj)?)))
-}
-
-pub fn telemetry_value_from_py(
-    obj: &Bound<'_, PyAny>,
-) -> PyResult<telemetry::policy::TelemetryValue> {
-    read(obj, 0)
-}
-
-fn read(obj: &Bound<'_, PyAny>, depth: usize) -> PyResult<telemetry::policy::TelemetryValue> {
-    if depth > telemetry::policy::MAX_DEPTH {
-        return Ok(telemetry::policy::TelemetryValue::Unsupported);
-    }
-    if obj.is_none() {
-        return Ok(telemetry::policy::TelemetryValue::None);
-    }
-    // `bool` before `int`: `True` is an `int`.
-    if let Ok(b) = obj.cast::<PyBool>() {
-        return Ok(telemetry::policy::TelemetryValue::Bool(b.is_true()));
-    }
-    if obj.is_instance_of::<PyInt>() {
-        return Ok(obj.extract::<i64>().map_or(
-            telemetry::policy::TelemetryValue::Unsupported,
-            telemetry::policy::TelemetryValue::Int,
-        ));
-    }
-    if obj.is_instance_of::<PyFloat>() {
-        return Ok(telemetry::policy::TelemetryValue::Float(obj.extract()?));
-    }
-    if let Ok(s) = obj.cast::<PyString>() {
-        return Ok(telemetry::policy::TelemetryValue::String(s.to_cow()?.into_owned()));
-    }
-    if let Ok(b) = obj.cast::<PyBytes>() {
-        return Ok(telemetry::policy::TelemetryValue::Bytes(b.as_bytes().to_vec()));
-    }
-    if let Ok(d) = obj.cast::<PyDict>() {
-        if d.len() > telemetry::policy::MAX_COLLECTION {
-            return Ok(telemetry::policy::TelemetryValue::Unsupported);
-        }
-        return map(d.items().into_iter().collect(), depth);
-    }
-    if let Some(entries) = record_fields(obj)? {
-        return match entries {
-            Some(entries) => map(entries, depth),
-            None => Ok(telemetry::policy::TelemetryValue::Unsupported),
-        };
-    }
-    if let Ok(m) = obj.cast::<PyMapping>() {
-        if m.len()? > telemetry::policy::MAX_COLLECTION {
-            return Ok(telemetry::policy::TelemetryValue::Unsupported);
-        }
-        return map(m.items()?.into_iter().collect(), depth);
-    }
-    if let Ok(seq) = obj.cast::<PySequence>() {
-        let len = seq.len()?;
-        if len > telemetry::policy::MAX_COLLECTION {
-            return Ok(telemetry::policy::TelemetryValue::Unsupported);
-        }
-        let items = seq.try_iter()?.map(|item| read(&item?, depth + 1));
-        return Ok(telemetry::policy::TelemetryValue::Array(items.collect::<PyResult<_>>()?));
-    }
-    Ok(telemetry::policy::TelemetryValue::Unsupported)
-}
-
-/// A mapping with a key that is not a string has no attribute form: it is refused as a whole,
-/// charged like any other unsupported value, rather than losing the entry silently.
-fn map(
-    entries: Vec<Bound<'_, PyAny>>,
-    depth: usize,
-) -> PyResult<telemetry::policy::TelemetryValue> {
-    if entries.len() > telemetry::policy::MAX_COLLECTION {
-        return Ok(telemetry::policy::TelemetryValue::Unsupported);
-    }
-    let mut out = Vec::with_capacity(entries.len());
-    for entry in entries {
-        let (key, value): (Bound<'_, PyAny>, Bound<'_, PyAny>) = entry.extract()?;
-        let Ok(key) = key.cast::<PyString>() else {
-            return Ok(telemetry::policy::TelemetryValue::Unsupported);
-        };
-        out.push((key.to_cow()?.into_owned(), read(&value, depth + 1)?));
-    }
-    Ok(telemetry::policy::TelemetryValue::Map(out))
-}
-
-/// A pydantic model's fields and declared extra, or a dataclass's public fields, as
-/// `(name, value)` tuples (`Some(None)` past the collection limit, counted before any value is
-/// read); `None` for any other object. Private attributes (`_cache`, provider state) are never
-/// read: they are private and may be large.
-#[allow(clippy::type_complexity, reason = "not a record, past the limit, or its fields")]
-fn record_fields<'py>(obj: &Bound<'py, PyAny>) -> PyResult<Option<Option<Vec<Bound<'py, PyAny>>>>> {
-    if obj.is_instance_of::<PyType>() {
-        return Ok(None);
-    }
-    let py = obj.py();
-    if obj.is_instance(&access::PydanticModel::import(py)?)? {
-        let mut parts = Vec::new();
-        for value in
-            [access::PydanticModel::dict_fields(obj), access::PydanticModel::pydantic_extra(obj)]
-        {
-            if let Ok(d) = value?.cast_into::<PyDict>() {
-                parts.push(d);
-            }
-        }
-        if parts.iter().map(|d| d.len()).sum::<usize>() > telemetry::policy::MAX_COLLECTION {
-            return Ok(Some(None));
-        }
-        return Ok(Some(Some(parts.iter().flat_map(|d| d.items()).collect())));
-    }
-    if let Ok(fields) = access::DataclassInstance::dataclass_fields(obj) {
-        let mut names = Vec::new();
-        for name in fields.cast_into::<PyDict>()?.keys() {
-            if !name.cast::<PyString>()?.to_cow()?.starts_with('_') {
-                names.push(name);
-            }
-        }
-        if names.len() > telemetry::policy::MAX_COLLECTION {
-            return Ok(Some(None));
-        }
-        let mut entries = Vec::with_capacity(names.len());
-        for name in names {
-            let value = obj.getattr(name.cast::<PyString>()?)?;
-            entries.push((name, value).into_pyobject(py)?.into_any());
-        }
-        return Ok(Some(Some(entries)));
-    }
-    Ok(None)
-}
-
-pub fn telemetry_value_to_py<'py>(
-    py: Python<'py>,
-    value: telemetry::policy::TelemetryValue,
-) -> PyResult<Bound<'py, PyAny>> {
-    Ok(match value {
-        telemetry::policy::TelemetryValue::None
-        | telemetry::policy::TelemetryValue::Unsupported => py.None().into_bound(py),
-        telemetry::policy::TelemetryValue::Bool(b) => PyBool::new(py, b).to_owned().into_any(),
-        telemetry::policy::TelemetryValue::Int(i) => i.into_pyobject(py)?.into_any(),
-        telemetry::policy::TelemetryValue::Float(f) => f.into_pyobject(py)?.into_any(),
-        telemetry::policy::TelemetryValue::String(s) => s.into_pyobject(py)?.into_any(),
-        telemetry::policy::TelemetryValue::Bytes(b) => PyBytes::new(py, &b).into_any(),
-        telemetry::policy::TelemetryValue::Array(items) => pyo3::types::PyList::new(
-            py,
-            items
-                .into_iter()
-                .map(|item| telemetry_value_to_py(py, item))
-                .collect::<PyResult<Vec<_>>>()?,
-        )?
-        .into_any(),
-        telemetry::policy::TelemetryValue::Map(entries) => {
-            let d = PyDict::new(py);
-            for (key, value) in entries {
-                d.set_item(key, telemetry_value_to_py(py, value)?)?;
-            }
-            d.into_any()
-        }
-    })
 }
 
 /// Byte buffers have one-dimensional C layout. PCM additionally accepts signed 16-bit little

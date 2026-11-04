@@ -694,14 +694,13 @@ pub fn _core_telemetry_install(py: Python<'_>, sdk_version: ::std::string::Strin
 
 /// Replaces the application endpoint; arguments override the environment.
 #[pyfunction]
-#[pyo3(signature = (*, endpoint = None, headers = None, protocol = None, metadata = None, allow_pii = None))]
+#[pyo3(signature = (*, endpoint = None, headers = None, metadata = None, allow_pii = None))]
 pub fn _core_telemetry_configure(
     py: Python<'_>,
     endpoint: ::std::option::Option<::std::string::String>,
     headers: ::std::option::Option<
         ::std::collections::BTreeMap<::std::string::String, ::std::string::String>,
     >,
-    protocol: ::std::option::Option<::std::string::String>,
     metadata: Option<Bound<'_, PyAny>>,
     allow_pii: ::std::option::Option<bool>,
 ) -> PyResult<()> {
@@ -719,7 +718,7 @@ pub fn _core_telemetry_configure(
             })
         })
         .transpose()?;
-    py.detach(|| <TelemetryImpl as ::lk_agents_abi::telemetry::host::Telemetry>::_core_telemetry_configure(endpoint, headers, protocol, metadata, allow_pii)).map_err(|e: ::lk_agents_abi::telemetry::host::TelemetryConfigError| <::lk_agents_abi::telemetry::host::TelemetryConfigError as crate::py_errors::HostException>::to_py_err(&e))?;
+    py.detach(|| <TelemetryImpl as ::lk_agents_abi::telemetry::host::Telemetry>::_core_telemetry_configure(endpoint, headers, metadata, allow_pii)).map_err(|e: ::lk_agents_abi::telemetry::host::TelemetryConfigError| <::lk_agents_abi::telemetry::host::TelemetryConfigError as crate::py_errors::HostException>::to_py_err(&e))?;
     Ok(())
 }
 
@@ -959,24 +958,9 @@ impl Tagger {
 // Declared in rust/crates/lk-agents-abi/src/telemetry/report/mod.rs.
 type CoreEventRetentionImpl =
     <crate::generated::implementations::Selected as super::Implementations>::EventRetention;
-type EventRetentionAdmitOutput = (usize, bool);
 
-fn _extract_event_retention_admit_now_ns(
-    obj: &Bound<'_, PyAny>,
-) -> PyResult<EventRetentionAdmitNowNsInput> {
-    crate::py_values::number_from_py::<u64>(obj.as_any(), "now_ns")
-}
-type EventRetentionAdmitNowNsInput = u64;
-
-fn _extract_event_retention_expire_now_ns(
-    obj: &Bound<'_, PyAny>,
-) -> PyResult<EventRetentionExpireNowNsInput> {
-    crate::py_values::number_from_py::<u64>(obj.as_any(), "now_ns")
-}
-type EventRetentionExpireNowNsInput = u64;
-
-/// Bounded retention of a session report's host event snapshots. The native policy retains only
-/// byte charges and supplied monotonic timestamps; the adapter owns independent model copies.
+/// A session report's host event snapshots: which are accepted and how many are kept. The adapter
+/// owns the snapshots.
 #[pyclass(name = "_core_EventRetention", module = "livekit.agents._core")]
 pub struct CoreEventRetention(pub(crate) CoreEventRetentionImpl);
 
@@ -1025,39 +1009,13 @@ impl CoreEventRetention {
         ::pyo3::PyResult::Ok(out)
     }
 
-    /// Expire old entries, then admit `event` only within the item and byte budgets. The adapter
-    /// removes exactly the returned prefix before appending its snapshot of an admitted event.
-    #[pyo3(signature = (event, now_ns))]
-    fn admit(
-        &mut self,
-        event: Bound<'_, PyAny>,
-        #[pyo3(from_py_with = _extract_event_retention_admit_now_ns)]
-        now_ns: EventRetentionAdmitNowNsInput,
-    ) -> PyResult<EventRetentionAdmitOutput> {
+    /// Counts one retained event; every accepted event is kept.
+    fn admit(&mut self) -> PyResult<()> {
         crate::py_calls::check_pid()?;
-        let event = crate::py_values::telemetry_value_from_py(event.as_any())?;
-        let out =
-            <CoreEventRetentionImpl as ::lk_agents_abi::telemetry::report::EventRetention>::admit(
-                &mut self.0,
-                event,
-                now_ns,
-            );
-        ::pyo3::PyResult::Ok(out)
-    }
-
-    #[pyo3(signature = (now_ns))]
-    fn expire(
-        &mut self,
-        #[pyo3(from_py_with = _extract_event_retention_expire_now_ns)]
-        now_ns: EventRetentionExpireNowNsInput,
-    ) -> PyResult<usize> {
-        crate::py_calls::check_pid()?;
-        let out =
-            <CoreEventRetentionImpl as ::lk_agents_abi::telemetry::report::EventRetention>::expire(
-                &mut self.0,
-                now_ns,
-            );
-        ::pyo3::PyResult::Ok(out)
+        <CoreEventRetentionImpl as ::lk_agents_abi::telemetry::report::EventRetention>::admit(
+            &mut self.0,
+        );
+        Ok(())
     }
 }
 

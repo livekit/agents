@@ -74,7 +74,6 @@ pub trait Telemetry {
     fn _core_telemetry_configure(
         #[host(kw, default = None)] endpoint: Option<String>,
         #[host(kw, default = None)] headers: Option<BTreeMap<String, String>>,
-        #[host(kw, default = None)] protocol: Option<String>,
         #[host(kw, default = None)] metadata: Option<BTreeMap<String, Value>>,
         #[host(kw, default = None)] allow_pii: Option<bool>,
     ) -> Result<(), TelemetryConfigError>;

@@ -192,7 +192,6 @@ impl lk_agents_abi::telemetry::host::Telemetry for Telemetry {
     fn _core_telemetry_configure(
         endpoint: Option<String>,
         headers: Option<BTreeMap<String, String>>,
-        _protocol: Option<String>,
         metadata: Option<BTreeMap<String, JsonValue>>,
         allow_pii: Option<bool>,
     ) -> Result<(), TelemetryConfigError> {

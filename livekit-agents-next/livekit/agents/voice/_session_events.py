@@ -284,9 +284,6 @@ _HANDLERS: dict[type, Callable[[VoiceSession[Any], Any], None]] = {
 
 
 def report_snapshots(self: VoiceSession[Any]) -> list[dict[str, Any]]:
-    expired = self._event_retention.expire(time.monotonic_ns())
-    for _ in range(expired):
-        self._event_snapshots.popleft()
     return [
         event
         for event in self._event_snapshots
@@ -298,8 +295,5 @@ def record_snapshot(self: VoiceSession[Any], arg: AgentEvent) -> None:
     # the event as the report records it: no live objects (a model client, an exception)
     if self._event_retention.accepts(arg.type, self._recording_options["redaction"]):
         snapshot = event_dict(arg, json=True)
-        expired, admitted = self._event_retention.admit(snapshot, time.monotonic_ns())
-        for _ in range(expired):
-            self._event_snapshots.popleft()
-        if admitted:
-            self._event_snapshots.append(snapshot)
+        self._event_retention.admit()
+        self._event_snapshots.append(snapshot)

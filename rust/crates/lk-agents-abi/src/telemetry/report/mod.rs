@@ -305,8 +305,8 @@ pub struct RecordingOptionsPatch {
     pub redaction: crate::Maybe<bool>,
 }
 
-/// Bounded retention of a session report's host event snapshots. The native policy retains only
-/// byte charges and supplied monotonic timestamps; the adapter owns independent model copies.
+/// A session report's host event snapshots: which are accepted and how many are kept. The adapter
+/// owns the snapshots.
 #[crate::host(class(name = "_core_EventRetention"))]
 pub trait EventRetention: Send + Sized + 'static {
     /// What the hosting process lends the class.
@@ -329,11 +329,7 @@ pub trait EventRetention: Send + Sized + 'static {
     #[host(call)]
     fn accepts(&self, kind: String, redaction: bool) -> bool;
 
-    /// Expire old entries, then admit `event` only within the item and byte budgets. The adapter
-    /// removes exactly the returned prefix before appending its snapshot of an admitted event.
+    /// Counts one retained event; every accepted event is kept.
     #[host(call)]
-    fn admit(&mut self, event: super::policy::TelemetryValue, now_ns: u64) -> (usize, bool);
-
-    #[host(call)]
-    fn expire(&mut self, now_ns: u64) -> usize;
+    fn admit(&mut self);
 }
