@@ -53,9 +53,9 @@ pub(crate) use lk_agents_abi::telemetry::spans::session::{
 pub(crate) use lk_agents_abi::telemetry::spans::text::{
     A2aRequest, AgentRun, AgentRunEnd, RunStatus,
 };
-pub(crate) use lk_agents_core::telemetry::{gen_ai, log_keys};
 pub(crate) use lk_agents_core::telemetry::provider::Context;
 pub(crate) use lk_agents_core::telemetry::span::seeded_ids;
+pub(crate) use lk_agents_core::telemetry::{gen_ai, log_keys};
 pub(crate) use lk_agents_inference::telemetry::{LlmTrace, TtsTrace, model_labels, provider_name};
 pub(crate) use lk_agents_net::telemetry::{
     Cx, ErrorType, Failure, ScopedSpan, Tracer, check, end_with, event, fail, measure,

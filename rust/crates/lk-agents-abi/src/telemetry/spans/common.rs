@@ -3,8 +3,8 @@
 
 use crate::telemetry::decl::{Attrs, Content, SpanValue, event};
 use crate::telemetry::errors::ErrorType;
-use crate::voice::rtc;
 use crate::telemetry::semconv::{otel, protocol};
+use crate::voice::rtc;
 
 /// The job's identity, stamped by the exporter on every span, log record and Cloud measurement of
 /// the job (and, without the room name, on the Cloud resource). Never set by a declaration; an

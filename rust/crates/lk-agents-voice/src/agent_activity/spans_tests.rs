@@ -261,7 +261,12 @@ fn info(turn: u64, transcript: &str) -> EndOfTurnInfo {
 /// The user speaks from `from` to `to` and says `text`.
 fn speak(s: &mut Session, from: u64, to: u64, text: &str) {
     s.user_speaks(from, UserTurnOrigin::Speech);
-    s.hear(to, UserTurnOrigin::Speech).transcript(1.0, SttEventType::FinalTranscript, text, "req_1");
+    s.hear(to, UserTurnOrigin::Speech).transcript(
+        1.0,
+        SttEventType::FinalTranscript,
+        text,
+        "req_1",
+    );
     s.speech_ended(to, endpointing());
 }
 
@@ -504,7 +509,12 @@ fn a_user_turn_for_each_origin_and_outcome() {
     }
     // A committed turn with no hook to run ends as it is answered.
     s.retire(6_600, 5, UserTurnOutcome::Committed);
-    s.hear(7_000, UserTurnOrigin::Transcript).transcript(7.0, SttEventType::InterimTranscript, "hi", "");
+    s.hear(7_000, UserTurnOrigin::Transcript).transcript(
+        7.0,
+        SttEventType::InterimTranscript,
+        "hi",
+        "",
+    );
     s.abandon(7_100, UserTurnOutcome::Cleared);
     s.user_speaks(7_200, UserTurnOrigin::ServerSpeech);
     s.abandon(7_300, UserTurnOutcome::TranscriptionTimeout);

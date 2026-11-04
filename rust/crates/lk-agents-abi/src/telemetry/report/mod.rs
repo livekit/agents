@@ -11,8 +11,8 @@ use super::decl::SpanValue;
 use serde_json::Value;
 
 use crate::ChatItem;
-use crate::voice::events::CloseReason;
 use crate::usage::Usage;
+use crate::voice::events::CloseReason;
 
 pub mod records;
 

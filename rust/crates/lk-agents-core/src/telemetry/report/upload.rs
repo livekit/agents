@@ -1,13 +1,13 @@
 //! The session report's recording upload, decided before any I/O: the header and its session
 //! summary, the `chat_history.json` bytes within their bound, and the audio file to send.
 
+use lk_agents_abi::livekit_protocol::agent as proto;
 use lk_agents_abi::telemetry::report::{
     ErrorCounts, RecordingHeader, RecordingOptions, SESSION_SUMMARY_BYTES, SessionReport,
     SessionSummary,
 };
 use lk_agents_abi::voice::events::CloseReason;
 use lk_agents_abi::{ChatItem, Role, ToDictHost, ToDictOptions};
-use lk_agents_abi::livekit_protocol::agent as proto;
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
@@ -170,8 +170,12 @@ fn summary_options(options: &Value) -> Value {
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ReportEvent {
-    Error { error: ReportedError },
-    Close { reason: String },
+    Error {
+        error: ReportedError,
+    },
+    Close {
+        reason: String,
+    },
     #[serde(other)]
     Other,
 }

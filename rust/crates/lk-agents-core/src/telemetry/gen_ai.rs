@@ -267,7 +267,8 @@ mod tests {
         assert_eq!(input.as_array().map(Vec::len), Some(2), "{input:?}");
         assert_eq!(input[1]["parts"].as_array().map(Vec::len), Some(2));
         assert_eq!(input[1]["parts"][0]["arguments"], serde_json::json!({"a": 1}));
-        let out = serde_json::to_value(output_messages("ok", &[], finish_reason(false, false))).unwrap();
+        let out =
+            serde_json::to_value(output_messages("ok", &[], finish_reason(false, false))).unwrap();
         assert_eq!(out[0]["finish_reason"], "stop");
         assert!(output_messages("", &[], FinishReason::Stop).is_empty());
     }

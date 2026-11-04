@@ -11,7 +11,7 @@ use lk_agents_abi::telemetry::errors::SpanError;
 use lk_agents_abi::telemetry::spans::agent_turn::ChatContextDict;
 use lk_agents_abi::telemetry::spans::user_turn::{
     EouDetection, EouDetectionEnd, EouOutcome, EouPrediction, EouSource, EouWait, EouWaitEnd,
-    OnUserTurnCompleted, Rearmed, StopResponse, Superseded, SttEvent, SttEventType, UserResumed,
+    OnUserTurnCompleted, Rearmed, StopResponse, SttEvent, SttEventType, Superseded, UserResumed,
     UserSpeaking, UserSpeakingEnd, UserTurn, UserTurnEnd, UserTurnOrigin, UserTurnOutcome,
 };
 use lk_agents_abi::voice::events::OverlappingSpeechEvent;

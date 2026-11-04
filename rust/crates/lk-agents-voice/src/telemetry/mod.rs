@@ -14,9 +14,9 @@ use std::borrow::Cow;
 
 use lk_agents_abi::telemetry::errors::ErrorType;
 pub(crate) use lk_agents_abi::telemetry::errors::SpanError;
-pub(crate) use lk_agents_abi::telemetry::spans::common::log_keys;
 use lk_agents_abi::telemetry::record::JobKey;
 use lk_agents_abi::telemetry::spans::common::ParticipantAttrs;
+pub(crate) use lk_agents_abi::telemetry::spans::common::log_keys;
 use lk_agents_abi::voice::room_io::ParticipantInfo;
 use lk_agents_abi::voice::rtc::DisconnectReason;
 use lk_agents_core::telemetry::span::IdSource;

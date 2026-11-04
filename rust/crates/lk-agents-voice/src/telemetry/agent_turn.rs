@@ -16,9 +16,8 @@ use lk_agents_abi::telemetry::instruments::{
     InvokeAgentDuration, ModelLabels, TurnE2eLatency, TurnOnUserTurnCompletedDelay,
 };
 use lk_agents_abi::telemetry::spans::agent_turn::{
-    ResponseFunctionCall,
     AgentSpeaking, AgentTurn, AgentTurnEnd, Generation, InterruptionSource,
-    PreemptiveGenerationDiscarded,
+    PreemptiveGenerationDiscarded, ResponseFunctionCall,
 };
 use lk_agents_abi::telemetry::spans::common::GenAiOperation;
 use lk_agents_abi::voice::room_io::ParticipantInfo;
