@@ -1,4 +1,4 @@
-//! Destination content policy and Cloud admission. No host objects cross here.
+//! Destination content policy. No host objects cross here.
 
 use lk_agents_abi::telemetry::policy::REDACTED_EXCEPTION;
 use lk_agents_abi::telemetry::record::{KeyValues, LogRecord, SpanRecord, Status, Value};
@@ -12,41 +12,6 @@ pub fn marks_pii(key: &str) -> bool {
 
 pub fn content_allowed(capture_content: bool, redaction: bool) -> bool {
     capture_content && !redaction
-}
-
-/// What the Cloud destination does with one of a job's records.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ExportAction {
-    Export,
-    /// Kept until the job's recording decision.
-    Hold,
-    Drop,
-    /// Dropped: the job's hold is full.
-    Capacity,
-    /// Dropped: the project disabled the job's recording.
-    Disabled,
-}
-
-/// Spans one undecided job holds in the exporter before its recording decision (as 1.8.10).
-pub const HELD_SPANS: usize = 1024;
-
-/// The Cloud destination's admission of a job's record: export, hold until the job decides, or
-/// drop. Only spans are held, up to [`HELD_SPANS`].
-pub fn cloud_export_action(
-    registered: bool,
-    signal_enabled: bool,
-    job_open: bool,
-    held_spans: usize,
-) -> ExportAction {
-    if registered {
-        if signal_enabled { ExportAction::Export } else { ExportAction::Drop }
-    } else if !job_open {
-        ExportAction::Drop
-    } else if held_spans < HELD_SPANS {
-        ExportAction::Hold
-    } else {
-        ExportAction::Capacity
-    }
 }
 
 /// GenAI content keys. Cloud's ingest does not recognize them, so the Cloud destination removes
@@ -187,14 +152,5 @@ mod tests {
         assert_eq!(keys(ContentPolicy::application(true)), (8, secret));
         // Only the exception message, options and its model remain.
         assert_eq!(keys(ContentPolicy::application(false)), (3, redacted));
-    }
-
-    #[test]
-    fn the_cloud_hold_is_bounded_per_job_and_never_exports_an_undecided_job() {
-        assert_eq!(cloud_export_action(true, true, false, 0), ExportAction::Export);
-        assert_eq!(cloud_export_action(true, false, true, 0), ExportAction::Drop);
-        assert_eq!(cloud_export_action(false, true, false, 0), ExportAction::Drop);
-        assert_eq!(cloud_export_action(false, false, true, HELD_SPANS - 1), ExportAction::Hold);
-        assert_eq!(cloud_export_action(false, false, true, HELD_SPANS), ExportAction::Capacity);
     }
 }

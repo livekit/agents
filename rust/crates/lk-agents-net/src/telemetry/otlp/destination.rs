@@ -6,10 +6,25 @@ use std::sync::Arc;
 
 use super::proto::metrics::v1::Metric;
 use lk_agents_abi::telemetry::record::{JobKey, LogRecord, Record, SpanRecord};
-use lk_agents_core::telemetry::policy::{ExportAction as Action, cloud_export_action};
 
 use super::config::{AppConfig, CloudEndpoint, CloudRecording, JobIdentity, ProcessIdentity};
 use super::metrics::Aggregator;
+
+/// Spans one undecided job holds in the exporter before its recording decision (as 1.8.10).
+pub(super) const HELD_SPANS: usize = 1024;
+
+/// What the Cloud destination does with one of a job's records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Action {
+    Export,
+    /// Kept until the job's recording decision.
+    Hold,
+    Drop,
+    /// Dropped: the job's hold is full.
+    Capacity,
+    /// Dropped: the project disabled the job's recording.
+    Disabled,
+}
 
 /// Records one request carries.
 pub(crate) const BATCH_RECORDS: usize = 512;
@@ -294,7 +309,8 @@ impl State {
         admitted
     }
 
-    /// The Cloud admission of a record: `None` when Cloud never sees it.
+    /// The Cloud admission of a record: `None` when Cloud never sees it. An undecided job's
+    /// spans are held, up to [`HELD_SPANS`]; nothing of it is exported.
     fn cloud_action(&self, key: Option<&JobKey>, record: &Record) -> Option<Action> {
         self.cloud.as_ref()?;
         let job = self.jobs.get(key?)?;
@@ -305,10 +321,17 @@ impl State {
             (Decision::Recording(r), Record::Measurement(_)) => (true, r.metrics),
             (Decision::Disabled, _) => return Some(Action::Disabled),
         };
-        // Logs are never held: report records are produced after the decision.
-        let open = !registered && !matches!(record, Record::Log(_));
         let held = if matches!(record, Record::Span(_)) { job.held.len() } else { 0 };
-        Some(cloud_export_action(registered, enabled, open, held))
+        Some(if registered {
+            if enabled { Action::Export } else { Action::Drop }
+        } else if matches!(record, Record::Log(_)) {
+            // Logs are never held: report records are produced after the decision.
+            Action::Drop
+        } else if held < HELD_SPANS {
+            Action::Hold
+        } else {
+            Action::Capacity
+        })
     }
 
     /// Batches to export now: full batches, or everything with `take.all`; metrics with

@@ -296,7 +296,7 @@ async fn spans_are_held_until_the_recording_decision() {
     exporter.open_job(key("AJ_3"), identity("AJ_3"));
     exporter.record(span("job_entrypoint", Some("AJ_1"), vec![]));
     exporter.record(span("job_entrypoint", Some("AJ_2"), vec![]));
-    let held = lk_agents_core::telemetry::policy::HELD_SPANS;
+    let held = super::destination::HELD_SPANS;
     for _ in 0..=held {
         exporter.record(span("job_entrypoint", Some("AJ_3"), vec![]));
     }
