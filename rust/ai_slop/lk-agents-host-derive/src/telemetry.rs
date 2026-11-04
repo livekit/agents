@@ -223,9 +223,8 @@ pub fn role(role: &str, args: TokenStream, item: TokenStream) -> syn::Result<Tok
     Ok(quote!(#item #impls))
 }
 
-/// `#[span(Decl { .. })]` on a function taking `cx: &Cx` and returning a `Result`: the body runs
-/// with `cx` as the span's context, its result goes through `check`, and an `Ok` value ends the
-/// span through its `SpanEnd<Decl>` implementation. An `Err` ends it as that error.
+/// `#[span(Decl { .. })]` on a function taking `cx: &telemetry::Cx` and returning a `Result`: the
+/// body runs with `cx` as the span's context and its result goes through `telemetry::end`.
 pub fn span_fn(args: TokenStream, mut function: syn::ItemFn) -> syn::Result<TokenStream> {
     let decl: syn::ExprStruct = syn::parse2(args).map_err(|e| {
         syn::Error::new(e.span(), "#[span] on a function takes the span's value: `Decl { .. }`")
@@ -351,8 +350,8 @@ mod tests {
         assert!(out.contains("carries no data"), "{out}");
     }
 
-    // Catches: the body escaping the span's context or `check`, an `Ok` not ended through
-    // `SpanEnd`, or a function without `cx` accepted.
+    // Catches: the body escaping the span's context, its result not ending the span, or a
+    // function without `cx` accepted.
     #[test]
     fn span_functions_run_their_body_in_the_span() {
         let function = syn::parse2(quote! {
@@ -366,7 +365,7 @@ mod tests {
             .to_string();
         assert!(
             out.contains(
-                "let __span = :: lk_agents_net :: telemetry :: Cx :: start_span (cx , LlmRequest { model : request . model () }) ;"
+                "let __span : :: lk_agents_net :: telemetry :: ScopedSpan < LlmRequest > = :: lk_agents_net :: telemetry :: start (cx , LlmRequest { model : request . model () }) ;"
             ),
             "{out}"
         );
@@ -375,14 +374,13 @@ mod tests {
             "{out}"
         );
         assert!(out.contains("async { let __result : Result < Response , Error > ="), "{out}");
-        assert!(out.contains("__span . check (__result)"), "{out}");
-        assert!(out.contains("SpanEnd < LlmRequest > > :: end (value)"), "{out}");
+        assert!(out.contains(":: lk_agents_net :: telemetry :: end (__span , __result)"), "{out}");
         let sync = syn::parse2(quote! { fn f(cx: &Cx) -> Result<u8, E> { Ok(1) } }).unwrap();
         let out = super::span_fn(quote!(Marker {}), sync).unwrap().to_string();
         assert!(out.contains("(| | -> Result < u8 , E > { { Ok (1) } }) ()"), "{out}");
         let no_cx = syn::parse2(quote! { fn f(x: u8) -> Result<u8, E> { Ok(x) } }).unwrap();
         let err = super::span_fn(quote!(Marker {}), no_cx).unwrap_err().to_string();
-        assert!(err.contains("takes `cx: &Cx`"), "{err}");
+        assert!(err.contains("takes `cx: &telemetry::Cx`"), "{err}");
     }
 
     // Catches: a parent, an event, the end type, the kind or the outlive reason lost, or a role
