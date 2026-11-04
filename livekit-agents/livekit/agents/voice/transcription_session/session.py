@@ -16,11 +16,7 @@ from ...types import (
     ATTRIBUTE_TRANSCRIPTION_FINAL,
     ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID,
     ATTRIBUTE_TRANSCRIPTION_TRACK_ID,
-    DEFAULT_API_CONNECT_OPTIONS,
-    NOT_GIVEN,
     TOPIC_TRANSCRIPTION,
-    APIConnectOptions,
-    NotGivenOr,
     TimedString,
 )
 from ...utils import aio, log_exceptions, shortuuid
@@ -29,7 +25,14 @@ from .activity import ActivityTimeline
 from .attribution import AttributionMethod, _Attributor, _Run
 from .mixer import _Mixer, _TrackInput
 
+_SAMPLE_RATE = 16000
 _BLOCK_DURATION = 0.02
+
+# speaker activity kept for attribution; longer than any STT takes to return a transcript
+_RETENTION = 30.0
+
+# a second participant at least this loud, relative to the loudest, marks a segment overlapping
+_OVERLAP_RATIO = 0.5
 
 # how long the mix waits past a block's due time for a participant whose audio is late
 _JITTER = 0.06
@@ -40,17 +43,15 @@ _MAX_BUFFER = 1.0
 # the mix falls this far behind real time (a stalled loop) before it stops trying to catch up
 _MAX_LAG = 1.0
 
-# how far the mix runs behind its inputs so a ducked participant's first word isn't ducked
-_LOOKAHEAD = 0.04
-
 # on close, how long the STT gets to return what it heard in the last of the audio
 _CLOSE_TIMEOUT = 2.0
 
-_DEFAULT_KINDS = (
+# agents are left out, so an agent's own speech is never transcribed
+_TRANSCRIBED_KINDS = {
     rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
     rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
     rtc.ParticipantKind.PARTICIPANT_KIND_INGRESS,
-)
+}
 
 
 @dataclass
@@ -98,16 +99,8 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
         *,
         stt: STT,
         gate: Callable[[], AudioGate] | None = None,
-        sample_rate: int = 16000,
-        participant_kinds: Iterable[rtc.ParticipantKind.ValueType] = _DEFAULT_KINDS,
         participant_identities: Iterable[str] | None = None,
-        ducking_db: float | None = -18.0,
         publish_transcriptions: bool = True,
-        language: NotGivenOr[str] = NOT_GIVEN,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-        retention: float = 30.0,
-        overlap_ratio: float = 0.5,
-        drop_unattributed: bool = False,
     ) -> None:
         """Create a transcription session.
 
@@ -115,23 +108,10 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
             stt: A streaming STT. Wrap a non-streaming one with ``stt.StreamAdapter``.
             gate: Builds the gate that decides when each participant is speaking. Defaults to
                 :class:`~livekit.agents.utils.audio_gate.AdaptiveNoiseGate`.
-            sample_rate: Rate of the mixed stream sent to the STT.
-            participant_kinds: Which kinds of participant are transcribed. Agents are left out
-                by default so an agent's own speech isn't transcribed.
-            participant_identities: Only transcribe these participants, when given.
-            ducking_db: How far to turn down a participant while its gate is closed, so open
-                microphones don't add their noise floors to the mix. None mixes everyone at
-                full level.
+            participant_identities: Only transcribe these participants, when given. Agents are
+                never transcribed.
             publish_transcriptions: Publish segments to the room on ``lk.transcription``,
                 attributed to the participant who spoke them.
-            language: Passed to the STT stream.
-            conn_options: Passed to the STT stream.
-            retention: How much speaker activity is kept, in seconds. Must exceed the STT's
-                latency, or late transcripts can't be attributed.
-            overlap_ratio: A second participant at least this loud, relative to the loudest,
-                marks a segment as overlapping.
-            drop_unattributed: Drop segments nobody was audible for, rather than emitting them
-                with no participant.
 
         Raises:
             ValueError: If the STT does not stream.
@@ -144,26 +124,17 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
 
         self._stt = stt
         self._gate_factory = gate or AdaptiveNoiseGate
-        self._sample_rate = sample_rate
-        self._block_size = int(sample_rate * _BLOCK_DURATION)
-        self._participant_kinds = set(participant_kinds)
+        self._block_size = int(_SAMPLE_RATE * _BLOCK_DURATION)
         self._participant_identities = (
             set(participant_identities) if participant_identities is not None else None
         )
         self._publish = publish_transcriptions
-        self._language = language
-        self._conn_options = conn_options
-        self._drop_unattributed = drop_unattributed
 
-        self._timeline = ActivityTimeline(block_duration=_BLOCK_DURATION, retention=retention)
+        self._timeline = ActivityTimeline(block_duration=_BLOCK_DURATION, retention=_RETENTION)
         self._mixer = _Mixer(
-            sample_rate=sample_rate,
-            block_size=self._block_size,
-            timeline=self._timeline,
-            duck_gain=10 ** (ducking_db / 20) if ducking_db is not None else None,
-            lookahead_blocks=round(_LOOKAHEAD / _BLOCK_DURATION),
+            sample_rate=_SAMPLE_RATE, block_size=self._block_size, timeline=self._timeline
         )
-        self._attributor = _Attributor(self._timeline, overlap_ratio=overlap_ratio)
+        self._attributor = _Attributor(self._timeline, overlap_ratio=_OVERLAP_RATIO)
 
         self._room: rtc.Room | None = None
         self._stream: RecognizeStream | None = None
@@ -204,7 +175,7 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
             raise RuntimeError("TranscriptionSession already started")
         self._started = True
 
-        self._stream = self._stt.stream(language=self._language, conn_options=self._conn_options)
+        self._stream = self._stt.stream()
         self._mix_atask = asyncio.create_task(self._mix_task(self._stream))
         self._recv_atask = asyncio.create_task(self._recv_task(self._stream))
 
@@ -306,7 +277,7 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
             identity,
             track_sid=track_sid,
             gate=self._gate_factory(),
-            sample_rate=self._sample_rate,
+            sample_rate=_SAMPLE_RATE,
             block_size=self._block_size,
             max_blocks=round(_MAX_BUFFER / _BLOCK_DURATION),
         )
@@ -378,8 +349,6 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
         runs = self._attributor.attribute(
             alt, fallback=(self._last_final_end, self._timeline.duration)
         )
-        if self._drop_unattributed:
-            runs = [run for run in runs if run.identity is not None]
 
         segments = [
             self._segment(f"{self._utterance_id}_{i}", run, alt, final)
@@ -449,7 +418,7 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
                 logger.warning("failed to publish transcription to room: %s", e)
 
     def _accepts(self, participant: rtc.RemoteParticipant) -> bool:
-        if participant.kind not in self._participant_kinds:
+        if participant.kind not in _TRANSCRIBED_KINDS:
             return False
         return (
             self._participant_identities is None
@@ -481,9 +450,7 @@ class TranscriptionSession(rtc.EventEmitter[EventTypes]):
         ):
             return
 
-        stream = rtc.AudioStream.from_track(
-            track=track, sample_rate=self._sample_rate, num_channels=1
-        )
+        stream = rtc.AudioStream.from_track(track=track, sample_rate=_SAMPLE_RATE, num_channels=1)
         self.add_input(participant.identity, _track_frames(stream), track_sid=publication.sid)
 
     def _on_track_unsubscribed(

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass
 
 import numpy as np
 
@@ -10,15 +9,6 @@ from livekit import rtc
 from ...log import logger
 from ...utils.audio_gate import AudioGate, frame_rms
 from .activity import ActivityTimeline, TrackActivity
-
-
-@dataclass
-class _DelayedBlock:
-    samples: np.ndarray
-    open: bool
-    rms: float
-    real: bool
-    """False for the silence that stands in for a block the participant never sent."""
 
 
 class _TrackInput:
@@ -48,9 +38,6 @@ class _TrackInput:
         self._resampler: rtc.AudioResampler | None = None
         self._resampler_rate = 0
         self._overrun_logged = False
-
-        self.delay: deque[_DelayedBlock] = deque()
-        self.gain = 1.0
 
     @property
     def ready(self) -> bool:
@@ -99,27 +86,12 @@ class _TrackInput:
 
 
 class _Mixer:
-    """Sums every participant into one block at a time and records who was audible in it.
+    """Sums every participant into one block at a time and records who was audible in it."""
 
-    A participant whose gate is closed is ducked rather than summed at full level, so a room of
-    open microphones doesn't hand the STT the sum of their noise floors. The mix runs
-    ``lookahead_blocks`` behind its inputs so the gate has opened before a word's onset is mixed.
-    """
-
-    def __init__(
-        self,
-        *,
-        sample_rate: int,
-        block_size: int,
-        timeline: ActivityTimeline,
-        duck_gain: float | None,
-        lookahead_blocks: int,
-    ) -> None:
+    def __init__(self, *, sample_rate: int, block_size: int, timeline: ActivityTimeline) -> None:
         self._sample_rate = sample_rate
         self._block_size = block_size
         self._timeline = timeline
-        self._duck_gain = duck_gain
-        self._lookahead = lookahead_blocks if duck_gain is not None else 0
         self._inputs: dict[str, _TrackInput] = {}
 
     @property
@@ -141,14 +113,12 @@ class _Mixer:
 
     def has_pending(self) -> bool:
         """Whether any audio a participant sent is still waiting to be mixed."""
-        return any(
-            inp.ready or any(block.real for block in inp.delay) for inp in self._inputs.values()
-        )
+        return any(inp.ready for inp in self._inputs.values())
 
     def prune(self) -> None:
         """Drop inputs that ended and have nothing left to mix."""
         for identity, inp in list(self._inputs.items()):
-            if inp.ended and not inp.ready and not any(block.real for block in inp.delay):
+            if inp.ended and not inp.ready:
                 del self._inputs[identity]
 
     def mix(self) -> rtc.AudioFrame:
@@ -156,39 +126,21 @@ class _Mixer:
         activity: dict[str, TrackActivity] = {}
 
         for inp in self._inputs.values():
-            samples = inp.pop()
-            if samples is None:
-                # an underrun is silence, but not silence the gate should learn its floor from
-                inp.delay.append(
-                    _DelayedBlock(
-                        np.zeros(self._block_size, dtype=np.int16), False, 0.0, real=False
-                    )
-                )
-            else:
-                frame = rtc.AudioFrame(
-                    data=samples.tobytes(),
-                    sample_rate=self._sample_rate,
-                    num_channels=1,
-                    samples_per_channel=self._block_size,
-                )
-                inp.delay.append(
-                    _DelayedBlock(samples, inp.gate.update(frame), frame_rms(frame), real=True)
-                )
+            # a participant whose audio hasn't arrived is silent in this block, and the gate
+            # doesn't learn its floor from that silence
+            if (samples := inp.pop()) is None:
+                continue
 
-            if len(inp.delay) <= self._lookahead:
-                continue  # still filling the pre-roll
-
-            block = inp.delay.popleft()
-            gain = 1.0
-            if self._duck_gain is not None and not (
-                block.open or any(ahead.open for ahead in inp.delay)
-            ):
-                gain = self._duck_gain
-
-            ramp = np.linspace(inp.gain, gain, self._block_size, dtype=np.float32)
-            inp.gain = gain
-            mixed += block.samples.astype(np.float32) * ramp
-            activity[inp.identity] = TrackActivity(rms=block.rms, open=block.open)
+            frame = rtc.AudioFrame(
+                data=samples.tobytes(),
+                sample_rate=self._sample_rate,
+                num_channels=1,
+                samples_per_channel=self._block_size,
+            )
+            mixed += samples
+            activity[inp.identity] = TrackActivity(
+                rms=frame_rms(frame), open=inp.gate.update(frame)
+            )
 
         self._timeline.append(activity)
         return rtc.AudioFrame(

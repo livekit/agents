@@ -113,9 +113,9 @@ class _ScriptedStream(RecognizeStream):
 
 
 async def _run_session(
-    stt: _ScriptedSTT, tracks: dict[str, list[rtc.AudioFrame]], **kwargs: object
+    stt: _ScriptedSTT, tracks: dict[str, list[rtc.AudioFrame]]
 ) -> list[TranscriptSegment]:
-    session = TranscriptionSession(stt=stt, publish_transcriptions=False, **kwargs)  # type: ignore[arg-type]
+    session = TranscriptionSession(stt=stt, publish_transcriptions=False)
     segments: list[TranscriptSegment] = []
     session.on("transcript_segment", segments.append)
     await session.start()
@@ -257,15 +257,9 @@ def test_diarization_never_overrides_a_clear_energy_margin() -> None:
 # -- mixer ----------------------------------------------------------------------------------
 
 
-def _mixer(duck_gain: float | None, lookahead: int = 2) -> tuple[_Mixer, ActivityTimeline]:
+def _mixer() -> tuple[_Mixer, ActivityTimeline]:
     timeline = ActivityTimeline(block_duration=_BLOCK, retention=60.0)
-    mixer = _Mixer(
-        sample_rate=_SR,
-        block_size=int(_SR * _BLOCK),
-        timeline=timeline,
-        duck_gain=duck_gain,
-        lookahead_blocks=lookahead,
-    )
+    mixer = _Mixer(sample_rate=_SR, block_size=int(_SR * _BLOCK), timeline=timeline)
     return mixer, timeline
 
 
@@ -285,26 +279,24 @@ def _rms(frame: rtc.AudioFrame) -> float:
     return float(np.sqrt(np.mean(samples**2)))
 
 
-def test_mixer_ducks_a_closed_gate_and_keeps_the_onset() -> None:
-    mixer, timeline = _mixer(duck_gain=0.1)
+def test_mixer_records_speech_but_not_room_tone() -> None:
+    mixer, timeline = _mixer()
     inp = _input("a")
     mixer.add(inp)
     for frame in _track((1.0, 0.05), (0.2, 0.3)):
         inp.push(frame)
 
     out = [mixer.mix() for _ in range(60)]
-    # steady room tone never opens the gate: ducked to a tenth once the ramp settles
-    assert _rms(out[40]) == pytest.approx(0.005, rel=0.2)
-    # the speech starts at block 50 of the input, block 52 of the mix; the lookahead had the gate
-    # open before it, so the onset block plays at full level
-    assert _rms(out[52]) == pytest.approx(0.3, rel=0.05)
+    # mixed at full level throughout; steady room tone never opens the gate, speech does
+    assert _rms(out[40]) == pytest.approx(0.05, rel=0.05)
+    assert _rms(out[55]) == pytest.approx(0.3, rel=0.05)
     assert timeline.end_index == 60
     assert not timeline.scores(0.0, 1.0)
-    assert "a" in timeline.scores(1.04, 1.06)
+    assert "a" in timeline.scores(1.0, 1.02)
 
 
 def test_mixer_sums_participants_on_one_clock() -> None:
-    mixer, timeline = _mixer(duck_gain=None, lookahead=0)
+    mixer, timeline = _mixer()
     a, b = _input("a"), _input("b")
     mixer.add(a)
     mixer.add(b)
@@ -318,7 +310,7 @@ def test_mixer_sums_participants_on_one_clock() -> None:
 
 
 def test_underrun_is_silence_and_leaves_the_clock_alone() -> None:
-    mixer, timeline = _mixer(duck_gain=None, lookahead=0)
+    mixer, timeline = _mixer()
     a, b = _input("a"), _input("b")
     mixer.add(a)
     mixer.add(b)
@@ -350,7 +342,7 @@ def test_track_input_resamples_and_downmixes() -> None:
 
 
 async def test_session_attributes_each_participant() -> None:
-    # 0.6 s of room tone each, then a talks for 0.6 s, then b does; the mix runs 40 ms behind
+    # 0.6 s of room tone each, then a talks for 0.6 s, then b does
     words = [
         _word("good", 0.70, 0.90),
         _word("morning", 0.95, 1.20),
@@ -402,16 +394,16 @@ async def test_session_closes_interim_segments_a_final_drops() -> None:
     assert finals[interims[1].id].text == ""
 
 
-async def test_session_drops_unattributed_when_asked() -> None:
+async def test_session_leaves_unheard_speech_unattributed() -> None:
     stt = _ScriptedSTT([(0.5, _final("phantom", start_time=0.1, end_time=0.4))])
-    segments = await _run_session(stt, {"alice": _track((1.0, _QUIET))}, drop_unattributed=True)
-    assert segments == []
+    [segment] = await _run_session(stt, {"alice": _track((1.0, _QUIET))})
+    assert (segment.participant_identity, segment.attribution) == (None, "none")
 
 
 async def test_session_mixes_everything_it_was_sent_before_closing() -> None:
     stt = _ScriptedSTT([])
     await _run_session(stt, {"alice": _track((1.0, _QUIET)), "bob": _track((0.5, _QUIET))})
-    assert sum(f.duration for f in stt.pushed) == pytest.approx(1.0 + 0.04, abs=0.021)
+    assert sum(f.duration for f in stt.pushed) == pytest.approx(1.0, abs=0.021)
 
 
 async def test_session_follows_an_input_stream_until_it_ends() -> None:
