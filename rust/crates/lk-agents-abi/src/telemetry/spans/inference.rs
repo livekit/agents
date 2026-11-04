@@ -1,6 +1,9 @@
 //! Model requests: LLM and TTS requests, their attempts and adapters, and the usage groups.
 
+use serde::Serialize;
+
 use super::common::GenAiOperation;
+use crate::metrics::base::{LlmMetrics, Metadata, RealtimeModelMetrics, TtsMetrics};
 use crate::telemetry::decl::{
     Attrs, Content, Current, GenAiContent, Json, Measured, Seconds, span,
 };
@@ -43,10 +46,9 @@ pub struct LlmRequest {
 
 #[derive(Attrs)]
 pub struct LlmRequestEnd {
-    /// The response's metrics: `ttft`, `prompt_tokens`, `prompt_cached_tokens`,
-    /// `completion_tokens`, `duration`, ...
+    /// The response's metrics, as 1.8.10's `LLMMetrics`.
     #[attr("lk.llm_metrics")]
-    pub legacy: Option<Json<serde_json::Value>>,
+    pub metrics: Option<Json<LlmMetricsSummary>>,
     #[attrs]
     pub usage: GenAiUsage,
     #[attr(otel::GEN_AI_RESPONSE_ID)]
@@ -63,9 +65,9 @@ pub struct LlmRequestEnd {
     pub time_to_first_chunk: Measured<Seconds>,
     #[attr(otel::GEN_AI_OUTPUT_MESSAGES)]
     pub output_messages: Option<GenAiContent<Json<serde_json::Value>>>,
-    /// The first chunk's time, as a JSON-quoted ISO 8601 string, for Langfuse.
+    /// The first chunk's time, for Langfuse.
     #[attr("langfuse.observation.completion_start_time")]
-    pub completion_start_time: Option<String>,
+    pub completion_start_time: Option<Json<UtcInstant>>,
 }
 
 /// Token usage of an LLM response.
@@ -208,9 +210,9 @@ pub struct TtsRequestEnd {
     /// The synthesized text, after success.
     #[attr("lk.pii.input_text")]
     pub input_text: Option<Content<String>>,
-    /// The request's metrics: `ttfb`, `characters_count`, `audio_duration`, ...
+    /// The request's metrics, as 1.8.10's `TTSMetrics`.
     #[attr("lk.tts_metrics")]
-    pub legacy: Option<Json<serde_json::Value>>,
+    pub metrics: Option<Json<TtsMetricsSummary>>,
 }
 
 /// One attempt of a TTS request, or of an adapter's.
@@ -245,9 +247,9 @@ pub struct TtsStreamAdapter {
 /// A realtime response's metrics, on `realtime_inference` or a late `realtime_metrics`.
 #[derive(Attrs)]
 pub struct RealtimeResponse {
-    /// The response's metrics; `ttft` is `-1` when unmeasured.
+    /// The response's metrics, as 1.8.10's `RealtimeModelMetrics`.
     #[attr("lk.realtime_model_metrics")]
-    pub legacy: Json<serde_json::Value>,
+    pub metrics: Json<RealtimeMetricsSummary>,
     #[attr(otel::GEN_AI_RESPONSE_MODEL, label)]
     pub response_model: Option<String>,
     #[attr(otel::GEN_AI_RESPONSE_ID)]
@@ -259,8 +261,9 @@ pub struct RealtimeResponse {
         metric = "gen_ai.client.operation.time_to_first_chunk"
     )]
     pub time_to_first_chunk: Measured<Seconds>,
+    /// The first chunk's time, for Langfuse.
     #[attr("langfuse.observation.completion_start_time")]
-    pub completion_start_time: Option<String>,
+    pub completion_start_time: Option<Json<UtcInstant>>,
 }
 
 /// Token usage of a realtime response, split by modality.
@@ -302,4 +305,237 @@ pub struct RealtimeUsage {
     /// Audio output tokens, under Langfuse's spelling.
     #[attr("gen_ai.usage.output_audio_tokens")]
     pub output_audio_tokens: u64,
+}
+
+/// An instant as ISO 8601 UTC with microseconds (`2023-11-14T22:13:20.250000+00:00`), as Python's
+/// `datetime.isoformat()` writes it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct UtcInstant {
+    pub unix_seconds: f64,
+}
+
+impl Serialize for UtcInstant {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let micros = (self.unix_seconds * 1e6).round() as i64;
+        let at = chrono::DateTime::from_timestamp_micros(micros).unwrap_or_default();
+        serializer.collect_str(&at.format("%Y-%m-%dT%H:%M:%S%.6f+00:00"))
+    }
+}
+
+/// The model a metrics summary is for.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ModelMetadata {
+    pub model_name: Option<String>,
+    pub model_provider: Option<String>,
+}
+
+impl From<&Metadata> for ModelMetadata {
+    fn from(m: &Metadata) -> Self {
+        ModelMetadata { model_name: m.model_name.clone(), model_provider: m.model_provider.clone() }
+    }
+}
+
+/// `lk.llm_metrics`: `LLMMetrics` as 1.8.10's `model_dump_json()` wrote it, which Cloud parses.
+/// Unmeasured durations are `-1`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "type", rename = "llm_metrics")]
+pub struct LlmMetricsSummary {
+    pub label: String,
+    pub request_id: String,
+    pub timestamp: f64,
+    pub duration: f64,
+    pub ttft: f64,
+    pub cancelled: bool,
+    pub completion_tokens: u64,
+    pub prompt_tokens: u64,
+    pub prompt_cached_tokens: u64,
+    pub cache_creation_tokens: u64,
+    pub reasoning_tokens: u64,
+    pub total_tokens: u64,
+    pub tokens_per_second: f64,
+    pub speech_id: Option<String>,
+    pub metadata: Option<ModelMetadata>,
+}
+
+impl From<&LlmMetrics> for LlmMetricsSummary {
+    fn from(m: &LlmMetrics) -> Self {
+        let t = &m.tokens;
+        LlmMetricsSummary {
+            label: m.label.clone(),
+            request_id: m.request_id.clone(),
+            timestamp: m.timestamp,
+            duration: m.duration,
+            ttft: m.ttft.unwrap_or(-1.0),
+            cancelled: m.cancelled,
+            completion_tokens: t.output_tokens,
+            prompt_tokens: t.input_tokens,
+            prompt_cached_tokens: t.cache_read_tokens.unwrap_or(0),
+            cache_creation_tokens: t.cache_write_tokens.unwrap_or(0),
+            reasoning_tokens: t.output_reasoning_tokens.unwrap_or(0),
+            total_tokens: t.total_tokens(),
+            tokens_per_second: m.tokens_per_second,
+            speech_id: m.speech_id.clone(),
+            metadata: m.metadata.as_ref().map(ModelMetadata::from),
+        }
+    }
+}
+
+/// `lk.tts_metrics`: `TTSMetrics` as 1.8.10's `model_dump_json()` wrote it. An unmeasured `ttfb`
+/// is `-1`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "type", rename = "tts_metrics")]
+pub struct TtsMetricsSummary {
+    pub label: String,
+    pub request_id: String,
+    pub timestamp: f64,
+    pub ttfb: f64,
+    pub duration: f64,
+    pub audio_duration: f64,
+    pub cancelled: bool,
+    pub characters_count: u32,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub streamed: bool,
+    pub acquire_time: f64,
+    pub connection_reused: bool,
+    pub segment_id: Option<String>,
+    pub speech_id: Option<String>,
+    pub metadata: Option<ModelMetadata>,
+}
+
+impl From<&TtsMetrics> for TtsMetricsSummary {
+    fn from(m: &TtsMetrics) -> Self {
+        TtsMetricsSummary {
+            label: m.label.clone(),
+            request_id: m.request_id.clone(),
+            timestamp: m.timestamp,
+            ttfb: m.ttfb.unwrap_or(-1.0),
+            duration: m.duration,
+            audio_duration: m.audio_duration,
+            cancelled: m.cancelled,
+            characters_count: m.characters_count,
+            input_tokens: m.tokens.input_tokens,
+            output_tokens: m.tokens.output_tokens,
+            streamed: m.streamed,
+            acquire_time: m.acquire_time.unwrap_or(0.0),
+            connection_reused: m.connection_reused,
+            segment_id: m.segment_id.clone(),
+            speech_id: m.speech_id.clone(),
+            metadata: m.metadata.as_ref().map(ModelMetadata::from),
+        }
+    }
+}
+
+/// `lk.realtime_model_metrics`: `RealtimeModelMetrics` as 1.8.10's `model_dump_json()` wrote it,
+/// its token details nested. An unmeasured `ttft` is `-1`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "type", rename = "realtime_model_metrics")]
+pub struct RealtimeMetricsSummary {
+    pub label: String,
+    pub request_id: String,
+    pub timestamp: f64,
+    pub duration: f64,
+    pub session_duration: f64,
+    pub ttft: f64,
+    pub cancelled: bool,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub total_tokens: u64,
+    pub tokens_per_second: f64,
+    pub input_token_details: InputTokenDetails,
+    pub output_token_details: OutputTokenDetails,
+    pub acquire_time: f64,
+    pub connection_reused: bool,
+    pub metadata: Option<ModelMetadata>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct InputTokenDetails {
+    pub audio_tokens: u64,
+    pub text_tokens: u64,
+    pub image_tokens: u64,
+    pub cached_tokens: u64,
+    /// Absent unless the provider split its cached tokens by modality.
+    pub cached_tokens_details: Option<CachedTokenDetails>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct CachedTokenDetails {
+    pub audio_tokens: u64,
+    pub text_tokens: u64,
+    pub image_tokens: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct OutputTokenDetails {
+    pub text_tokens: u64,
+    pub audio_tokens: u64,
+    pub image_tokens: u64,
+}
+
+impl From<&RealtimeModelMetrics> for RealtimeMetricsSummary {
+    fn from(m: &RealtimeModelMetrics) -> Self {
+        let t = &m.tokens;
+        let n = |v: Option<u64>| v.unwrap_or(0);
+        let cached_split = t.cache_read_text_tokens.is_some()
+            || t.cache_read_audio_tokens.is_some()
+            || t.cache_read_image_tokens.is_some();
+        RealtimeMetricsSummary {
+            label: m.label.clone(),
+            request_id: m.request_id.clone(),
+            timestamp: m.timestamp,
+            duration: m.duration,
+            session_duration: m.connection_duration.unwrap_or(0.0),
+            ttft: m.ttft.unwrap_or(-1.0),
+            cancelled: m.cancelled,
+            input_tokens: t.input_tokens,
+            output_tokens: t.output_tokens,
+            total_tokens: t.total_tokens(),
+            tokens_per_second: m.tokens_per_second,
+            input_token_details: InputTokenDetails {
+                audio_tokens: n(t.input_audio_tokens),
+                text_tokens: n(t.input_text_tokens),
+                image_tokens: n(t.input_image_tokens),
+                cached_tokens: n(t.cache_read_tokens),
+                cached_tokens_details: cached_split.then(|| CachedTokenDetails {
+                    audio_tokens: n(t.cache_read_audio_tokens),
+                    text_tokens: n(t.cache_read_text_tokens),
+                    image_tokens: n(t.cache_read_image_tokens),
+                }),
+            },
+            output_token_details: OutputTokenDetails {
+                text_tokens: n(t.output_text_tokens),
+                audio_tokens: n(t.output_audio_tokens),
+                image_tokens: n(t.output_image_tokens),
+            },
+            acquire_time: m.acquire_time.unwrap_or(0.0),
+            connection_reused: m.connection_reused,
+            metadata: m.metadata.as_ref().map(ModelMetadata::from),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Catches: a date or fraction misformatted for Langfuse.
+    #[test]
+    fn instants_are_iso_8601_utc() {
+        let iso = |unix_seconds| serde_json::to_string(&UtcInstant { unix_seconds }).unwrap();
+        assert_eq!(iso(0.0), "\"1970-01-01T00:00:00.000000+00:00\"");
+        assert_eq!(iso(1_700_000_000.25), "\"2023-11-14T22:13:20.250000+00:00\"");
+        assert_eq!(iso(951_782_400.000_001), "\"2000-02-29T00:00:00.000001+00:00\"");
+        assert_eq!(iso(-0.5), "\"1969-12-31T23:59:59.500000+00:00\"");
+    }
+
+    // Catches: the `type` tag lost or moved, or an unmeasured ttft written as null.
+    #[test]
+    fn metrics_summaries_keep_the_reference_shape() {
+        let m = LlmMetrics { ttft: None, metadata: None, ..crate::metrics::testkit::llm() };
+        let v = serde_json::to_value(LlmMetricsSummary::from(&m)).unwrap();
+        assert_eq!(v.as_object().unwrap().keys().next().map(String::as_str), Some("type"));
+        assert_eq!((v["type"].as_str(), v["ttft"].as_f64()), (Some("llm_metrics"), Some(-1.0)));
+        assert!(v["metadata"].is_null());
+    }
 }

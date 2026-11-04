@@ -656,7 +656,7 @@ fn response(
     let n = |v: Option<u64>| v.unwrap_or(0);
     let ttft = m.ttft.filter(|t| *t >= 0.0);
     telemetry::RealtimeResponse {
-        legacy: telemetry::Json(telemetry::legacy_json::realtime(m)),
+        metrics: telemetry::Json(m.into()),
         response_model: model.map(|p| p.model.clone()),
         response_id: Some(m.request_id.clone()).filter(|id| !id.is_empty()),
         usage: telemetry::RealtimeUsage {
@@ -678,6 +678,7 @@ fn response(
             output_audio_tokens: n(t.output_audio_tokens),
         },
         time_to_first_chunk: telemetry::Measured(ttft.map(telemetry::Seconds)),
-        completion_start_time: ttft.map(|ttft| telemetry::legacy_json::iso8601(m.timestamp + ttft)),
+        completion_start_time: ttft
+            .map(|ttft| telemetry::Json(telemetry::UtcInstant { unix_seconds: m.timestamp + ttft })),
     }
 }

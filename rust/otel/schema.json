@@ -1061,7 +1061,8 @@
         {
           "key": "langfuse.observation.completion_start_time",
           "type": "string",
-          "required": false
+          "required": false,
+          "encoding": "json"
         }
       ],
       "events": []
@@ -1362,7 +1363,8 @@
         {
           "key": "langfuse.observation.completion_start_time",
           "type": "string",
-          "required": false
+          "required": false,
+          "encoding": "json"
         }
       ],
       "events": []
@@ -1518,7 +1520,8 @@
         {
           "key": "langfuse.observation.completion_start_time",
           "type": "string",
-          "required": false
+          "required": false,
+          "encoding": "json"
         }
       ],
       "end": [],

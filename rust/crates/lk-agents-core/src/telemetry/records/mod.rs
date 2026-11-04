@@ -1,8 +1,6 @@
 //! What the host's logger records for a metrics event: `metrics/utils.py`'s `log_metrics`. Rust
 //! decides what to record, the host owns the logger.
 
-pub mod legacy_json;
-
 use lk_agents_abi::metrics::AgentMetrics;
 use lk_agents_abi::usage::TokenUsage;
 use serde_json::{Map, Value};

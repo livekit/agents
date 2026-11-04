@@ -1,6 +1,6 @@
 //! Model request spans (docs/internals/telemetry-reference.md "Span trees"): one `llm_request` or
 //! `tts_request` per request wherever it is made, an `llm_request_run` or `tts_request_run` per
-//! attempt, and the request's usage, timing and 1.8.10 metrics blob recorded as it ends. A fallback
+//! attempt, and the request's usage, timing and 1.8.10 metrics summary recorded as it ends. A fallback
 //! adapter records its own spans, and a registered `llm_node` makes its own request: the caller
 //! opens none and hands it the context instead.
 
@@ -12,14 +12,13 @@ use lk_agents_abi::telemetry::instruments::{
 };
 use lk_agents_abi::telemetry::spans::common::GenAiOperation;
 use lk_agents_abi::telemetry::spans::inference::{
-    AttemptEnd, GenAiUsage, LlmRequest, LlmRequestEnd, TtsFallbackAdapter, TtsRequest,
-    TtsRequestEnd, TtsStreamAdapter, TtsTarget,
+    AttemptEnd, GenAiUsage, LlmMetricsSummary, LlmRequest, LlmRequestEnd, TtsFallbackAdapter,
+    TtsMetricsSummary, TtsRequest, TtsRequestEnd, TtsStreamAdapter, TtsTarget, UtcInstant,
 };
 use lk_agents_abi::usage::TokenUsage;
 use lk_agents_abi::{ChatRequest, Llm, LlmChunk, ProviderId, SynthesizedAudio, Tts};
 use lk_agents_core::telemetry::gen_ai;
 use lk_agents_core::telemetry::provider::LlmMetricState;
-use lk_agents_core::telemetry::records::legacy_json;
 use serde_json::Value;
 
 // What the crate's logic names, spelled `telemetry::` there (`telemetry.md`, rule 4).
@@ -269,9 +268,9 @@ impl LlmTrace {
             };
             (now as f64 / 1e9, context)
         });
-        let legacy = metrics.map(|mut m| {
+        let summary = metrics.map(|mut m| {
             m.speech_id = speech_id.map(str::to_owned);
-            Json(legacy_json::llm(&m))
+            Json(LlmMetricsSummary::from(&m))
         });
         let finish = gen_ai::finish_reason(!self.calls.is_empty(), interrupted);
         let output = self
@@ -282,7 +281,7 @@ impl LlmTrace {
         lk_agents_net::telemetry::end_with(
             span,
             LlmRequestEnd {
-                legacy,
+                metrics: summary,
                 usage: GenAiUsage {
                     input_tokens: usage.input_tokens,
                     output_tokens: usage.output_tokens,
@@ -301,7 +300,7 @@ impl LlmTrace {
                 output_messages: output,
                 completion_start_time: self
                     .first_chunk
-                    .map(|at| format!("\"{}\"", legacy_json::iso8601(at as f64 / 1e9))),
+                    .map(|at| Json(UtcInstant { unix_seconds: at as f64 / 1e9 })),
             },
         );
     }
@@ -415,7 +414,7 @@ impl TtsTrace {
     pub fn end(self, text: String, metrics: Option<&TtsMetrics>) {
         let end = TtsRequestEnd {
             input_text: Some(Content(text)),
-            legacy: metrics.map(|m| Json(legacy_json::tts(m))),
+            metrics: metrics.map(|m| Json(TtsMetricsSummary::from(m))),
         };
         match self.span {
             TtsRequestSpan::Request(span) => lk_agents_net::telemetry::end_with(span, end),

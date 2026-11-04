@@ -30,7 +30,7 @@ use serde_json::Value as JsonValue;
 
 // What the runtime's logic names, spelled `telemetry::` there (`telemetry.md`, rule 4).
 pub(crate) use lk_agents_abi::telemetry::decl::{Content, Json, Measured, Seconds};
-pub(crate) use lk_agents_abi::telemetry::instruments::{TurnLlmTtft, TurnTtsTtfb};
+pub(crate) use lk_agents_abi::telemetry::instruments::{AudioConsumer, TurnLlmTtft, TurnTtsTtfb};
 pub(crate) use lk_agents_abi::telemetry::record::{JobKey, SpanId, SpanRef, TraceContext, TraceId};
 #[cfg(test)]
 pub(crate) use lk_agents_abi::telemetry::record::{Record, RecordSink, Value};
@@ -40,7 +40,7 @@ pub(crate) use lk_agents_abi::telemetry::spans::agent_turn::{
 };
 pub(crate) use lk_agents_abi::telemetry::spans::common::GenAiOperation;
 pub(crate) use lk_agents_abi::telemetry::spans::inference::{
-    RealtimeResponse, RealtimeUsage, TtsRequestRun,
+    RealtimeResponse, RealtimeUsage, TtsRequestRun, UtcInstant,
 };
 pub(crate) use lk_agents_abi::telemetry::spans::job::{
     FirstFrame, PreConnectAudio, PublishAudioOutput, PublishAudioOutputEnd, TrackSubscribed,
@@ -55,7 +55,6 @@ pub(crate) use lk_agents_abi::telemetry::spans::text::{
 };
 pub(crate) use lk_agents_core::telemetry::gen_ai;
 pub(crate) use lk_agents_core::telemetry::provider::Context;
-pub(crate) use lk_agents_core::telemetry::records::legacy_json;
 pub(crate) use lk_agents_core::telemetry::span::seeded_ids;
 pub(crate) use lk_agents_inference::telemetry::{LlmTrace, TtsTrace, model_labels, provider_name};
 pub(crate) use lk_agents_net::telemetry::{

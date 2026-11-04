@@ -339,7 +339,10 @@ groups:
       - id: "langfuse.observation.completion_start_time"
         type: "string"
         stability: "development"
-        brief: "The first chunk's time, as a JSON-quoted ISO 8601 string, for Langfuse."
+        brief: "The first chunk's time, for Langfuse."
+        annotations:
+          livekit:
+            encoding: "json"
       - id: "lk.fallback.index"
         type: "int"
         stability: "development"
