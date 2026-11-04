@@ -29,6 +29,7 @@ def _make_recognition(
     recognition._backchannel_boundary = (0.0, end_boundary)
     recognition._backchannel_boundary_timer = None
     recognition._transcript_buffer = deque()
+    recognition._stt_events = []
     recognition._transcript_gate_active = True
     recognition._stt_aligned_transcript = False
     recognition._hooks = MagicMock()

@@ -22,9 +22,10 @@ from livekit.agents import Plugin
 
 from .llm import LLM
 from .log import logger
+from .models import CerebrasChatModels
 from .version import __version__
 
-__all__ = ["LLM", "__version__"]
+__all__ = ["LLM", "CerebrasChatModels", "__version__"]
 
 
 class CerebrasPlugin(Plugin):

@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator, Callable
 
-import httpx
+import httpx2 as httpx
 import openai
 import pytest
 

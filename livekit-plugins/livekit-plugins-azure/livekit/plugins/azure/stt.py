@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import os
 import time
 import weakref
@@ -31,6 +32,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents.stt import SpeechData
 from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
@@ -61,6 +63,8 @@ class STTOptions:
     phrase_list: NotGivenOr[list[str] | None] = NOT_GIVEN
     explicit_punctuation: bool = False
     true_text_post_processing: bool = False
+    # stored as JSON: the SDK config wraps a native handle, which can't be deep-copied per stream
+    pronunciation_assessment: str | None = None
 
 
 class STT(stt.STT):
@@ -83,6 +87,7 @@ class STT(stt.STT):
         phrase_list: NotGivenOr[list[str] | None] = NOT_GIVEN,
         explicit_punctuation: bool = False,
         true_text_post_processing: bool = False,
+        pronunciation_assessment: speechsdk.PronunciationAssessmentConfig | None = None,
     ):
         """
         Create a new instance of Azure STT.
@@ -102,6 +107,11 @@ class STT(stt.STT):
                         where punctuation marks are added explicitly. If False (default), uses Azure's
                         default punctuation behavior.
             true_text_post_processing: Enables Azure "TrueText" post-processing in the recognition result.
+            pronunciation_assessment: Assess pronunciation on the streaming recognition itself,
+                        so the same audio isn't sent (and billed) twice. Each final transcript then
+                        carries Azure's assessment in ``SpeechData.metadata["pronunciation_assessment"]``
+                        (scores and per-word breakdown, as returned by Azure). Leave
+                        ``reference_text`` empty for unscripted assessment.
         """
 
         super().__init__(
@@ -159,6 +169,9 @@ class STT(stt.STT):
             phrase_list=phrase_list,
             explicit_punctuation=explicit_punctuation,
             true_text_post_processing=true_text_post_processing,
+            pronunciation_assessment=(
+                pronunciation_assessment.to_json() if pronunciation_assessment else None
+            ),
         )
         self._streams = weakref.WeakSet[SpeechStream]()
 
@@ -227,6 +240,7 @@ class SpeechStream(stt.SpeechStream):
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._opts = opts
         self._speaking = False
+        self._final_alternatives: list[SpeechData] = []
 
         self._session_stopped_event = asyncio.Event()
         self._session_started_event = asyncio.Event()
@@ -259,6 +273,7 @@ class SpeechStream(stt.SpeechStream):
         while True:
             self._session_stopped_event.clear()
             self._cancellation_error = None
+            self._final_alternatives = []
 
             self._stream = speechsdk.audio.PushAudioInputStream(
                 stream_format=speechsdk.audio.AudioStreamFormat(
@@ -281,6 +296,8 @@ class SpeechStream(stt.SpeechStream):
                 await asyncio.wait_for(
                     self._session_started_event.wait(), self._conn_options.timeout
                 )
+
+                self._input_ch.restart_provider_clock()
 
                 async def process_input() -> None:
                     async for input in self._input_ch:
@@ -340,6 +357,8 @@ class SpeechStream(stt.SpeechStream):
                 await asyncio.to_thread(_cleanup)
 
     def _on_recognized(self, evt: speechsdk.SpeechRecognitionEventArgs) -> None:
+        with contextlib.suppress(RuntimeError):
+            self._loop.call_soon_threadsafe(self._mark_provider_progress)
         res = speechsdk.AutoDetectSourceLanguageResult(evt.result)
         detected_lg = LanguageCode(res.language or "")
         text = evt.result.text.strip()
@@ -349,6 +368,12 @@ class SpeechStream(stt.SpeechStream):
         if not detected_lg and self._opts.language:
             detected_lg = LanguageCode(self._opts.language[0])
 
+        metadata = None
+        if self._opts.pronunciation_assessment:
+            assessment = _pronunciation_assessment(evt.result)
+            if assessment is not None:
+                metadata = {"pronunciation_assessment": assessment}
+
         # TODO: @chenghao-mou get confidence from NBest with `detailed` output format
         final_data = stt.SpeechData(
             language=detected_lg,
@@ -356,7 +381,9 @@ class SpeechStream(stt.SpeechStream):
             text=evt.result.text,
             start_time=evt.result.offset / 10**7 + self.start_time_offset,
             end_time=(evt.result.offset + evt.result.duration) / 10**7 + self.start_time_offset,
+            metadata=metadata,
         )
+        self._final_alternatives = [final_data] if evt.result.duration > 0 else []
 
         with contextlib.suppress(RuntimeError):
             self._loop.call_soon_threadsafe(
@@ -386,6 +413,8 @@ class SpeechStream(stt.SpeechStream):
             )
 
     def _on_recognizing(self, evt: speechsdk.SpeechRecognitionEventArgs) -> None:
+        with contextlib.suppress(RuntimeError):
+            self._loop.call_soon_threadsafe(self._mark_provider_progress)
         res = speechsdk.AutoDetectSourceLanguageResult(evt.result)
         detected_lg = LanguageCode(res.language or "")
         text = evt.result.text.strip()
@@ -402,6 +431,7 @@ class SpeechStream(stt.SpeechStream):
             start_time=evt.result.offset / 10**7 + self.start_time_offset,
             end_time=(evt.result.offset + evt.result.duration) / 10**7 + self.start_time_offset,
         )
+        self._final_alternatives = []
 
         with contextlib.suppress(RuntimeError):
             self._loop.call_soon_threadsafe(
@@ -413,6 +443,9 @@ class SpeechStream(stt.SpeechStream):
             )
 
     def _on_speech_start(self, evt: speechsdk.SpeechRecognitionEventArgs) -> None:
+        self._final_alternatives = []
+        with contextlib.suppress(RuntimeError):
+            self._loop.call_soon_threadsafe(self._mark_provider_progress)
         if self._speaking:
             return
 
@@ -424,16 +457,33 @@ class SpeechStream(stt.SpeechStream):
                 stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH),
             )
 
-    def _on_speech_end(self, evt: speechsdk.SpeechRecognitionEventArgs) -> None:
+    def _on_speech_end(self, evt: speechsdk.RecognitionEventArgs) -> None:
+        with contextlib.suppress(RuntimeError):
+            self._loop.call_soon_threadsafe(self._mark_provider_progress)
         if not self._speaking:
             return
 
         self._speaking = False
+        # At stream close, the SDK's event offset can include trailing silence.
+        # A completed transcript reports the duration of recognized speech.
+        alternatives = self._final_alternatives
+        if not alternatives and evt.offset > 0:
+            alternatives = [
+                stt.SpeechData(
+                    language=LanguageCode(""),
+                    text="",
+                    end_time=evt.offset / 10**7 + self.start_time_offset,
+                )
+            ]
+        self._final_alternatives = []
 
         with contextlib.suppress(RuntimeError):
             self._loop.call_soon_threadsafe(
                 self._event_ch.send_nowait,
-                stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH),
+                stt.SpeechEvent(
+                    type=stt.SpeechEventType.END_OF_SPEECH,
+                    alternatives=alternatives,
+                ),
             )
 
     def _on_session_started(self, evt: speechsdk.SpeechRecognitionEventArgs) -> None:
@@ -527,4 +577,22 @@ def _create_speech_recognizer(
         for phrase in config.phrase_list:
             phrase_list_grammar.addPhrase(phrase)
 
+    if config.pronunciation_assessment:
+        speechsdk.PronunciationAssessmentConfig(
+            json_string=config.pronunciation_assessment
+        ).apply_to(speech_recognizer)
+
     return speech_recognizer
+
+
+def _pronunciation_assessment(result: speechsdk.SpeechRecognitionResult) -> dict[str, Any] | None:
+    """Best hypothesis of Azure's detailed result: assessment scores and per-word breakdown."""
+    if not result.json:
+        return None
+    try:
+        best = json.loads(result.json)["NBest"][0]
+    except (ValueError, KeyError, IndexError, TypeError):
+        # the payload holds the transcript, so keep it out of the log
+        logger.warning("could not read the Azure pronunciation assessment result")
+        return None
+    return best if isinstance(best, dict) and "PronunciationAssessment" in best else None

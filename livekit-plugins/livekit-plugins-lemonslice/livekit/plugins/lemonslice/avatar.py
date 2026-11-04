@@ -27,7 +27,7 @@ from .meeting.audio import MeetingAudioInput, stream_meeting_relay
 from .meeting.chat import MeetingChatRelay
 from .meeting.room import JoinMeetingResult
 
-SAMPLE_RATE = 16000
+DEFAULT_AUDIO_SAMPLE_RATE = 24000
 _MEETING_BROADCAST_IDENTITY = "lemonslice-meeting-broadcast"
 _AVATAR_AGENT_IDENTITY = "lemonslice-avatar-agent"
 _AVATAR_AGENT_NAME = "lemonslice-avatar-agent"
@@ -49,11 +49,15 @@ class AvatarSession(BaseAvatarSession):
         api_key: NotGivenOr[str] = NOT_GIVEN,
         avatar_participant_identity: NotGivenOr[str] = NOT_GIVEN,
         avatar_participant_name: NotGivenOr[str] = NOT_GIVEN,
+        audio_sample_rate: int = DEFAULT_AUDIO_SAMPLE_RATE,
+        model: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         **kwargs: Any,
     ) -> None:
         super().__init__()
         self._agent_id = agent_id
+        self._audio_sample_rate = audio_sample_rate
+        self._model = model
         self._agent_image_url = agent_image_url
         self._agent_image = agent_image
         self._agent_prompt = agent_prompt
@@ -141,7 +145,7 @@ class AvatarSession(BaseAvatarSession):
             DataStreamAudioOutput(
                 room=room,
                 destination_identity=self._avatar_participant_identity,
-                sample_rate=SAMPLE_RATE,
+                sample_rate=self._audio_sample_rate,
                 wait_remote_track=rtc.TrackKind.KIND_VIDEO,
                 clear_buffer_timeout=None,
                 wait_playback_start=True,
@@ -164,6 +168,8 @@ class AvatarSession(BaseAvatarSession):
                 livekit_url=livekit_url,
                 livekit_token=livekit_token,
                 livekit_session_id=livekit_session_id,
+                audio_sample_rate=self._audio_sample_rate,
+                model=self._model,
                 extra_payload=self._extra_payload,
             )
 

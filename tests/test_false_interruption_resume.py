@@ -104,6 +104,7 @@ def _recognition(hooks: AgentActivity, last_speaking_time: float) -> AudioRecogn
     ar._speaking = False
     ar._final_transcript_confidence = []
     ar._stt_request_ids = []
+    ar._stt_events = []
     ar._last_speaking_time = last_speaking_time
     ar._last_final_transcript_time = None
     ar._speech_start_time = None

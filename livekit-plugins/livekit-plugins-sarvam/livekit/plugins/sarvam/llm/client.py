@@ -18,7 +18,7 @@ import os
 import platform
 from typing import Any
 
-import httpx
+import httpx2 as httpx
 import openai
 from openai.types import ReasoningEffort
 

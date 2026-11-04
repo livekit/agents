@@ -34,6 +34,7 @@ class TestAudioRecognitionAclose:
         audio_recognition._backchannel_boundary_timer = None
         audio_recognition._AudioRecognition__stt_context = None
         audio_recognition._user_turn_span = None
+        audio_recognition._stt_events = []
         audio_recognition._user_turn_start = None
         audio_recognition._eou_wait_span = None
         audio_recognition._eou_wait_started_at_ns = None

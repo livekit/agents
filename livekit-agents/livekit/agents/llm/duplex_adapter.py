@@ -385,7 +385,15 @@ class _DuplexRealtimeSession(RealtimeSession):
         finally:
             if idle_timeout is not None:
                 idle_timeout.cancel()
+            # the stream is over, so no sound will reach the words still waiting: they belong to
+            # the burst in flight, or go out as text on their own rather than be lost
+            if (burst := self._burst) is not None:
+                self._attach_fragments(burst)
+                while self._fragments:
+                    burst.attach(self._fragments.popleft())
             self._close_burst()
+            if self._fragments:
+                self._emit_as_text(len(self._fragments))
 
     def _on_audio_frame(self, f: DuplexAudioFrame) -> None:
         if f.start_ms is not None:
@@ -411,11 +419,7 @@ class _DuplexRealtimeSession(RealtimeSession):
                 "duplex transcript outlived the audio it describes",
                 extra={"lk.pii.transcript": "".join(f.text for f in self._fragments)},
             )
-            burst = self._open_burst(kind="text")
-            while self._fragments:
-                burst.attach(self._fragments.popleft())
-            if (message := burst.close()) is not None:
-                self._chat_ctx.insert(message)
+            self._emit_as_text(len(self._fragments))
 
     def _open_burst(self, *, kind: Literal["speech", "text", "tool"] = "speech") -> _Burst:
         burst = _Burst(
@@ -491,11 +495,15 @@ class _DuplexRealtimeSession(RealtimeSession):
                 break
             late += 1
         if late:
-            burst = self._open_burst(kind="text")
-            for _ in range(late):
-                burst.attach(self._fragments.popleft())
-            if (message := burst.close()) is not None:
-                self._chat_ctx.insert(message)
+            self._emit_as_text(late)
+
+    def _emit_as_text(self, count: int) -> None:
+        """Hands the oldest ``count`` waiting fragments over as a generation of text alone."""
+        burst = self._open_burst(kind="text")
+        for _ in range(count):
+            burst.attach(self._fragments.popleft())
+        if (message := burst.close()) is not None:
+            self._chat_ctx.insert(message)
 
     def _on_input_transcription(self, ev: InputTranscriptionCompleted) -> None:
         if ev.is_final:

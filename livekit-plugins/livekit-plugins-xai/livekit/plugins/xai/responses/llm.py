@@ -1,6 +1,6 @@
 import os
 
-import httpx
+import httpx2 as httpx
 from openai.types import Reasoning
 
 from livekit.agents.llm import ToolChoice

@@ -47,7 +47,6 @@ from .models import GeminiTTSModels, Gender, SpeechLanguages
 
 NUM_CHANNELS = 1
 DEFAULT_LANGUAGE = "en-US"
-DEFAULT_GENDER = "neutral"
 
 
 @dataclass
@@ -103,7 +102,7 @@ class TTS(tts.TTS):
 
         Args:
             language (SpeechLanguages | str, optional): Language code (e.g., "en-US"). Default is "en-US".
-            gender (Gender | str, optional): Voice gender ("male", "female", "neutral"). Default is "neutral".
+            gender (Gender | str, optional): Voice gender ("male", "female", "neutral"). Default is unspecified, which lets Google use the selected voice's own gender.
             voice_name (str, optional): Specific voice name. Default is an empty string. See https://docs.cloud.google.com/text-to-speech/docs/gemini-tts#voice_options for supported voice in Gemini TTS models.
             voice_cloning_key (str, optional): Voice clone key. Created via https://cloud.google.com/text-to-speech/docs/chirp3-instant-custom-voice
             model_name (GeminiTTSModels | str, optional): Model name for TTS (e.g., "gemini-2.5-flash-tts", "chirp_3"). Default is "gemini-2.5-flash-tts" or "chirp_3" depending on the voice_name and voice_cloning_key.
@@ -142,7 +141,13 @@ class TTS(tts.TTS):
         self._location = location
 
         lang = LanguageCode(language) if is_given(language) else DEFAULT_LANGUAGE
-        ssml_gender = _gender_from_str(DEFAULT_GENDER if not is_given(gender) else gender)
+        # every Google voice has a fixed gender, and some (e.g. Neural2) reject NEUTRAL,
+        # so only send a gender when the caller asked for one
+        ssml_gender = (
+            _gender_from_str(gender)
+            if is_given(gender)
+            else SsmlVoiceGender.SSML_VOICE_GENDER_UNSPECIFIED
+        )
 
         if not is_given(model_name):
             # chirp3 voice name format: <locale>-<model>-<voice>

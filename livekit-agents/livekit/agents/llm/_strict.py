@@ -217,14 +217,16 @@ def _ensure_strict_json_schema(
             )
             assert is_dict(non_null)
 
-            if "type" not in non_null:
+            # A nullable type still cannot satisfy a non-null const constraint.
+            if "type" not in non_null or "const" in non_null:
                 continue
 
             t = non_null["type"]
             non_null["type"] = [t, "null"] if isinstance(t, str) else t
             enum = non_null.get("enum")
             if is_list(enum):
-                enum.append(None)
+                # the list is shared with the `$defs` entry this branch was expanded from
+                non_null["enum"] = [*enum, None]
 
             json_schema = {
                 k: v for k, v in json_schema.items() if k not in ("anyOf", "oneOf")

@@ -9,6 +9,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from dataclasses import dataclass
 from typing import Annotated, Literal
 
+import simulation
 from database import (
     COMMON_INSTRUCTIONS,
     FakeDB,
@@ -463,7 +464,7 @@ async def on_session_end(ctx: JobContext) -> None:
     _ = json.dumps(report.to_dict(), indent=2)
 
 
-@server.rtc_session(on_session_end=on_session_end)
+@server.rtc_session(on_session_end=on_session_end, on_simulation_end=simulation.on_simulation_end)
 async def drive_thru_agent(ctx: JobContext) -> None:
     userdata = await new_userdata()
     session = AgentSession[Userdata](
@@ -550,6 +551,9 @@ async def drive_thru_agent(ctx: JobContext) -> None:
         push_task = asyncio.create_task(_push_runner())
 
     userdata.order.on_change = push_cart
+
+    if sim := ctx.simulation_context():
+        simulation.setup(sim, session, DriveThruAgent)
 
     idle_task: asyncio.Task[None] | None = None
 

@@ -3,8 +3,10 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import inspect
+import json
 import logging
 import ssl
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,12 +18,17 @@ import pytest
 from google.rpc import error_details_pb2, status_pb2
 
 from livekit.agents import Agent, AgentSession
+from livekit.agents.llm import ChatContext, ChatMessage
+from livekit.agents.metrics import LLMModelUsage
+from livekit.agents.observability import Tagger
 from livekit.agents.telemetry.traces import _upload_session_report
 from livekit.agents.voice.agent_session import (
     _RECORDING_ALL_OFF,
     _RECORDING_ALL_ON,
     RecordingOptions,
 )
+from livekit.agents.voice.events import CloseEvent, CloseReason
+from livekit.agents.voice.report import SessionReport
 from livekit.protocol import metrics as proto_metrics
 
 from .fake_io import FakeAudioInput, FakeAudioOutput, FakeTextOutput
@@ -80,8 +87,14 @@ def _make_mock_job_ctx(enable_recording: bool = True) -> MagicMock:
 
 
 @contextlib.contextmanager
-def _patch_job_ctx(mock_ctx: MagicMock, *, patch_recorder: bool = False) -> Iterator[None]:
-    """Patch get_job_context and optionally RecorderIO."""
+def _patch_job_ctx(
+    mock_ctx: MagicMock, *, patch_recorder: bool = False
+) -> Iterator[MagicMock | None]:
+    """Patch get_job_context and optionally RecorderIO.
+
+    Yields the mocked RecorderIO class when patch_recorder=True (so a test can assert on its
+    constructor args via mock_cls.call_args), otherwise None.
+    """
     with patch(f"{_AGENT_SESSION_MOD}.get_job_context", return_value=mock_ctx):
         if patch_recorder:
             with patch(f"{_AGENT_SESSION_MOD}.RecorderIO") as mock_cls:
@@ -91,9 +104,9 @@ def _patch_job_ctx(mock_ctx: MagicMock, *, patch_recorder: bool = False) -> Iter
                 recorder.start = AsyncMock()
                 recorder.aclose = AsyncMock()
                 mock_cls.return_value = recorder
-                yield
+                yield mock_cls
         else:
-            yield
+            yield None
 
 
 def _make_mock_report(recording_options: RecordingOptions | None = None) -> MagicMock:
@@ -108,10 +121,17 @@ def _make_mock_report(recording_options: RecordingOptions | None = None) -> Magi
     report.audio_recording_path = None
     report.audio_recording_started_at = None
     report.duration = 10.0
+    report.sdk_version = "1.0.0"
     report.started_at = 1000.0
     report.timestamp = 1010.0
     report.options = MagicMock()
     report.options.recording_options = recording_options or _RECORDING_ALL_ON.copy()
+    # a fresh dict per call: the session summary edits the one it gets
+    report.to_dict.side_effect = lambda **_: {
+        "job_id": "job-1",
+        "audio_recording_path": None,
+        "usage": None,
+    }
     return report
 
 
@@ -660,6 +680,22 @@ def test_session_report_constructor_includes_recording_options_in_options() -> N
     assert report.options.recording_options["audio"] is False
 
 
+def test_make_session_report_duration_without_audio_recording() -> None:
+    from livekit.agents.job import JobContext
+
+    session = _create_simple_session()
+    session._started_at = time.time() - 5.0
+
+    ctx = object.__new__(JobContext)
+    ctx._info = SimpleNamespace(job=_make_mock_job_ctx().job)
+    ctx._tagger = Tagger()
+    report = ctx.make_session_report(session)
+
+    assert report.audio_recording_started_at is None
+    assert report.duration is not None
+    assert report.duration > 0
+
+
 async def test_upload_audio_only_no_file() -> None:
     """When transcript=False, audio=True but no audio file exists, no upload is made."""
     report = _make_mock_report({"audio": True, "traces": False, "logs": False, "transcript": False})
@@ -731,6 +767,67 @@ async def test_upload_multipart_header_carries_simulation_redaction() -> None:
     header = proto_metrics.MetricsRecordingHeader.FromString(parts["header"]._value)
     assert header.simulated is True
     assert header.redaction_enabled is True
+
+
+def _make_report(**kwargs: Any) -> SessionReport:
+    """Create a real SessionReport so the summary sees real ``to_dict`` output."""
+    options = AgentSession().options
+    options.recording_options = {"audio": False, "traces": False, "logs": False, "transcript": True}
+    return SessionReport(
+        job_id="job-1",
+        room_id="room-1",
+        room="test-room",
+        options=options,
+        events=kwargs.pop("events", []),
+        chat_history=ChatContext(kwargs.pop("chat_items", [])),
+        duration=12.5,
+        started_at=1000.0,
+        timestamp=1010.0,
+        sdk_version="1.0.0",
+        **kwargs,
+    )
+
+
+async def _upload_and_read_header(
+    report: SessionReport | MagicMock,
+) -> proto_metrics.MetricsRecordingHeader:
+    mock_http = _make_mock_http()
+    with _patch_upload_deps():
+        await _call_upload(report, http_session=mock_http)
+
+    mp_writer = mock_http.post.call_args.kwargs.get("data") or mock_http.post.call_args[1]["data"]
+    parts = _get_multipart_parts(mp_writer)
+    return proto_metrics.MetricsRecordingHeader.FromString(parts["header"]._value)
+
+
+def _expected_summary(report: SessionReport) -> dict[str, Any]:
+    return report.to_dict(include_chat_history=False, include_events=False)
+
+
+async def test_upload_header_carries_session_summary() -> None:
+    report = _make_report(
+        agent_name="support",
+        tags=["vip"],
+        chat_items=[ChatMessage(role="user", content=["hi"])],
+        model_usage=[LLMModelUsage(provider="openai", model="gpt-4o", input_tokens=10)],
+        events=[CloseEvent(reason=CloseReason.PARTICIPANT_DISCONNECTED)],
+    )
+
+    header = await _upload_and_read_header(report)
+
+    summary = json.loads(header.session_summary)
+    assert summary == _expected_summary(report)
+    assert "chat_history" not in summary
+    assert "events" not in summary
+    assert header.duration == 12500
+
+
+async def test_session_summary_empty_session() -> None:
+    report = _make_report()
+
+    header = await _upload_and_read_header(report)
+
+    assert json.loads(header.session_summary) == _expected_summary(report)
 
 
 def test_job_context_otel_metadata_includes_redaction_option() -> None:
@@ -854,7 +951,7 @@ def test_setup_cloud_tracer_logger_provider_always_created() -> None:
     """LoggerProvider should be set up even when enable_logs=False."""
     with (
         _stub_cloud_tracer_deps() as stubs,
-        patch(f"{_TRACES_MOD}.Resource.create") as mock_resource_create,
+        patch(f"{_TRACES_MOD}._resource") as mock_resource,
     ):
         _setup_cloud_tracer_for_job(
             enable_traces=False,
@@ -864,9 +961,7 @@ def test_setup_cloud_tracer_logger_provider_always_created() -> None:
 
     stubs.set_logger_provider.assert_called_once()
     service_resource_calls = [
-        call.args[0]
-        for call in mock_resource_create.call_args_list
-        if "service.name" in call.args[0]
+        call.args[0] for call in mock_resource.call_args_list if "service.name" in call.args[0]
     ]
     assert service_resource_calls
     assert not any(k.startswith("lk.simulation.") for k in service_resource_calls[0])
@@ -877,21 +972,21 @@ def test_setup_cloud_tracer_logger_provider_always_created() -> None:
 
 def _resource_attrs_for_env(env: dict[str, str]) -> dict[str, Any]:
     """Run _setup_cloud_tracer under the given os.environ and return the dict
-    passed to Resource.create."""
+    passed to _resource."""
     with (
         patch.dict("os.environ", env, clear=True),
         _stub_cloud_tracer_deps(),
-        patch(f"{_TRACES_MOD}.Resource.create") as mock_resource_create,
+        patch(f"{_TRACES_MOD}._resource") as mock_resource,
     ):
         _setup_cloud_tracer_for_job(enable_traces=False, enable_logs=False)
-    # Resource.create is also called internally by LoggerProvider() with an
-    # empty dict, so select the call that built the tracing resource (the one
+    # _resource also builds the LoggerProvider's resource from an empty dict,
+    # so select the call that built the tracing resource (the one
     # carrying service.name) rather than relying on call ordering.
-    for call in mock_resource_create.call_args_list:
+    for call in mock_resource.call_args_list:
         attrs = call.args[0]
         if "service.name" in attrs:
             return attrs
-    raise AssertionError("Resource.create was not called with the service resource")
+    raise AssertionError("_resource was not called with the service resource")
 
 
 def test_setup_cloud_tracer_adds_identity_from_env() -> None:
@@ -1662,3 +1757,47 @@ async def test_recorder_io_not_created_when_audio_false() -> None:
 
     assert session._recorder_io is None
     await _cleanup(session)
+
+
+async def test_recorder_io_receives_bit_rate_options_from_record_dict() -> None:
+    """Ensure session.start forwards recorder options to RecorderIO."""
+    session = _create_simple_session()
+    mock_ctx = _make_mock_job_ctx()
+
+    with _patch_job_ctx(mock_ctx, patch_recorder=True) as mock_cls:
+        assert mock_cls is not None
+        await session.start(
+            SimpleAgent(),
+            record={"audio": True, "bit_rate": 32000, "constant_bit_rate": True},
+        )
+        assert mock_cls.call_args.kwargs["bit_rate"] == 32000
+        assert mock_cls.call_args.kwargs["constant_bit_rate"] is True
+        await _cleanup(session)
+
+
+async def test_recorder_io_defaults() -> None:
+    """record=True should leave bit rate defaults (None, False) to RecorderIO."""
+    session = _create_simple_session()
+    mock_ctx = _make_mock_job_ctx()
+
+    with _patch_job_ctx(mock_ctx, patch_recorder=True) as mock_cls:
+        assert mock_cls is not None
+        await session.start(SimpleAgent(), record=True)
+        assert mock_cls.call_args.kwargs["bit_rate"] is None
+        assert mock_cls.call_args.kwargs["constant_bit_rate"] is False
+        await _cleanup(session)
+
+
+@pytest.mark.parametrize("audio", [True, False])
+async def test_invalid_recorder_bit_rate_rejected(audio: bool) -> None:
+    """Invalid recorder options must fail before session startup creates room tasks."""
+    session = _create_simple_session()
+    mock_ctx = _make_mock_job_ctx()
+
+    with _patch_job_ctx(mock_ctx):
+        with pytest.raises(ValueError, match="bit_rate"):
+            await session.start(SimpleAgent(), record={"audio": audio, "bit_rate": 1_000_000})
+
+    assert mock_ctx._primary_agent_session is None
+    assert session._room_io is None
+    assert not session._started

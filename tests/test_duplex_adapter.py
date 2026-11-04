@@ -579,6 +579,56 @@ async def test_words_that_arrive_after_the_last_frame_still_join_their_burst(dup
     assert (await asyncio.wait_for(_read(generations[0]), timeout=1))[1] == "Hello there."
 
 
+async def test_words_held_past_their_sound_join_the_burst_when_the_stream_ends(duplex) -> None:
+    """A first word too quiet to open the gate anchors the burst on its own, earlier sound, so the
+    words after it wait past theirs. Once the stream ends no sound will claim them: the caller
+    hangs up mid-sentence, and the words they heard must not vanish from the transcript."""
+    fake, session, generations = duplex
+    fake.push(0.001, count=20)
+    await _settle()
+    fake.say("Okay.", start_ms=2000, end_ms=2300)
+    fake.push(0.002, count=3)  # under the gate
+    fake.push(0.001, count=17)
+    await _settle()
+    fake.say(" Sending it.", start_ms=4000, end_ms=4600)
+    fake.push(0.3, count=6)  # its sound plays in full, but by the anchor it is 2 s away
+    await _settle()
+    assert len(generations) == 1
+    assert session._fragments
+
+    fake.audio_ch.close()
+    await _settle()
+
+    assert not session._fragments
+    assert (await asyncio.wait_for(_read(generations[0]), timeout=1))[1] == "Okay. Sending it."
+
+
+async def test_words_held_past_a_closed_burst_go_out_as_text_when_the_stream_ends(duplex) -> None:
+    """The burst ended on silence with its last words still held, and the stream ends before the
+    unclaimed timeout: no audio is left to run that clock, so they are emitted now."""
+    fake, session, generations = duplex
+    fake.push(0.001, count=20)
+    await _settle()
+    fake.say("Okay.", start_ms=2000, end_ms=2300)
+    fake.push(0.002, count=3)  # under the gate
+    fake.push(0.001, count=17)
+    await _settle()
+    fake.say(" Sending it.", start_ms=4000, end_ms=4600)
+    fake.push(0.3, count=6)
+    fake.push(0.001, count=8)
+    await _settle()
+    assert len(generations) == 1
+    assert session._fragments
+
+    fake.audio_ch.close()
+    await _settle()
+
+    assert len(generations) == 2
+    assert not session._fragments
+    assert (await asyncio.wait_for(_read(generations[0]), timeout=1))[1] == "Okay."
+    assert (await asyncio.wait_for(_read(generations[1]), timeout=1)) == (0, " Sending it.")
+
+
 async def test_words_for_sound_already_played_go_out_as_text_on_their_own(duplex) -> None:
     """The burst has ended by the time its last words arrive; by its anchor they sit on sound it
     already played, so they are handed over at once and never anchor the next utterance."""
