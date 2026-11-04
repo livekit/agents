@@ -224,7 +224,7 @@ impl Server {
     }
 
     /// The voice is fixed once assistant audio exists; an update naming another is refused whole.
-    fn refuses_voice(&self, voice: Option<&String>) -> bool {
+    fn refuses_voice(&self, voice: Option<&serde_json::Value>) -> bool {
         self.voiced && voice.is_some_and(|v| Some(v) != self.config.voice.as_ref())
     }
 

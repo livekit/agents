@@ -57,7 +57,7 @@ class RealtimeModel(llm_realtime.RealtimeModel):
         self,
         *,
         model: RealtimeModels | str = "gpt-realtime",
-        voice: str = DEFAULT_VOICE,
+        voice: str | dict[str, Any] = DEFAULT_VOICE,
         modalities: NotGivenOr[list[Literal["text", "audio"]]] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice | None] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
@@ -81,7 +81,7 @@ class RealtimeModel(llm_realtime.RealtimeModel):
 
         Args:
             model (str): Realtime model name, e.g., "gpt-realtime".
-            voice (str): Voice used for audio responses. Defaults to "marin".
+            voice (str | dict): Voice used for audio responses, a name or the provider's voice object. Defaults to "marin".
             modalities (list[Literal["text", "audio"]] | NotGiven): Modalities to enable. Defaults to ["text", "audio"] if not provided.
             tool_choice (llm.ToolChoice | None | NotGiven): Tool selection policy for responses.
             base_url (str | NotGiven): HTTP base URL of the OpenAI/Azure API. If not provided, uses OPENAI_BASE_URL for OpenAI; for Azure, constructed from AZURE_OPENAI_ENDPOINT.
@@ -104,7 +104,8 @@ class RealtimeModel(llm_realtime.RealtimeModel):
         """
         is_azure = entra_token is not None or azure_deployment is not None
 
-        api_key = api_key or os.environ.get("OPENAI_API_KEY")
+        if not is_azure:
+            api_key = api_key or os.environ.get("OPENAI_API_KEY")
         if api_key is None and not is_azure:
             raise ValueError(
                 "The api_key client option must be set either by passing api_key "
@@ -245,7 +246,7 @@ class RealtimeModel(llm_realtime.RealtimeModel):
     def update_options(
         self,
         *,
-        voice: NotGivenOr[str] = NOT_GIVEN,
+        voice: NotGivenOr[str | dict[str, Any]] = NOT_GIVEN,
         turn_detection: NotGivenOr[Any] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice | None] = NOT_GIVEN,
         input_audio_transcription: NotGivenOr[Any] = NOT_GIVEN,

@@ -14,7 +14,7 @@ use lk_agents_net::transport::{TransportError, WsMessage, WsTransport};
 use tokio::sync::{Mutex, mpsc};
 
 use crate::headers::BoundIdentity;
-use crate::realtime::dialect::{Dialect, TurnDetection};
+use crate::realtime::dialect::{Dialect, Protocol, TurnDetection};
 use crate::realtime::machine::{OptionsPatch, RealtimeMachine, SessionOptions, Step};
 use crate::realtime::openai::wire::{self, Azure, IdGen, RandomIds, WireShape};
 use lk_agents_abi::llm::realtime::{Event, RealtimeCapabilities};
@@ -54,9 +54,10 @@ impl Connect {
         }
     }
 
-    pub fn shape(&self) -> WireShape {
+    pub fn shape(&self, dialect: &Dialect) -> WireShape {
         WireShape {
-            azure: self.azure.is_some(),
+            protocol: dialect.protocol,
+            beta_event_names: self.azure.is_some() || dialect.protocol == Protocol::Beta,
             drop_model: matches!(self.auth, Auth::Inference { .. }),
         }
     }
@@ -313,7 +314,7 @@ impl OpenAIRealtime {
             shared: shared.clone(),
             url,
             connect: self.connect.clone(),
-            shape: self.connect.shape(),
+            shape: self.connect.shape(&self.dialect),
             transport: self.transport.clone(),
             clock: self.clock.clone(),
             provider_label: self.dialect.provider_label,

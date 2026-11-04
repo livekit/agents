@@ -15,97 +15,54 @@ See [https://docs.livekit.io/agents/integrations/azure/](https://docs.livekit.io
 
 ```bash
 pip install livekit-plugins-azure
-
-# For the Azure Voice Live realtime model
-pip install "livekit-plugins-azure[realtime]"
 ```
 
 ## Realtime Mode (Azure Voice Live)
 
 ### Azure Credentials
 
-For the realtime speech-to-speech model:
-
 ```bash
-export AZURE_VOICE_LIVE_ENDPOINT=https://<region>.api.cognitive.microsoft.com/
-export AZURE_VOICE_LIVE_API_KEY=<your-speech-key>
-export AZURE_VOICE_LIVE_MODEL=<model-name>  # e.g., gpt-realtime, gpt-4o, gpt-4o-mini, etc.
+export AZURE_VOICE_LIVE_ENDPOINT=https://<resource>.services.ai.azure.com
+export AZURE_VOICE_LIVE_API_KEY=<your-key>
+export AZURE_VOICE_LIVE_MODEL=<model-name>  # e.g., gpt-realtime, gpt-4.1
 ```
 
-To authenticate with Microsoft Entra ID instead of an API key, pass `use_default_credential=True`, which uses [`DefaultAzureCredential`](https://learn.microsoft.com/en-us/python/api/azure-identity/azure.identity.aio.defaultazurecredential).
+To authenticate with Microsoft Entra ID instead of an API key, pass `entra_token=` a token with the `https://ai.azure.com/.default` scope.
 
-To power the intelligence of your voice agent, you have flexibility and choice in the generative AI model between GPT-Realtime, GPT-5, GPT-4.1, Phi, and more options. For supported models and regions, see [Supported models and regions](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/voice-live#supported-models-and-regions).
-
-
+You can choose between GPT-Realtime, GPT-5, GPT-4.1, Phi and more. For supported models and regions, see [Supported models and regions](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/voice-live#supported-models-and-regions).
 
 ### Quick Start
-Azure Voice Live provides end-to-end speech-to-speech:
 
 ```python
-from livekit import agents
-from livekit.agents import Agent, AgentServer, AgentSession
+from livekit.agents import Agent, VoiceSession
 from livekit.plugins import azure
 
-assistant = Agent(instructions="You are a helpful voice assistant powered by Azure.")
-
-server = AgentServer()
-
-@server.rtc_session()
-async def entrypoint(ctx: agents.JobContext):
-    session = AgentSession(
-        llm=azure.realtime.RealtimeModel(
-            voice="en-US-AvaMultilingualNeural",
-        )
-    )
-
-    await session.start(room=ctx.room, agent=assistant)
-    await session.generate_reply(instructions="Greet the user and offer assistance")
-
-if __name__ == "__main__":
-    agents.cli.run_app(server)
+session = VoiceSession(
+    llm=azure.realtime.RealtimeModel(voice="en-US-AvaMultilingualNeural"),
+)
 ```
 
 ### Advanced Configuration
 
-For full control over Azure Voice Live settings:
+Voice Live options are passed as the JSON the service documents:
 
 ```python
 import os
-from azure.ai.voicelive.models import AzureSemanticVadEn, AudioInputTranscriptionOptions
-from livekit.agents import AgentSession
 from livekit.plugins import azure
 
-# Configure Semantic VAD for intelligent turn detection
-# Options:
-# - AzureSemanticVad: Default semantic VAD (multilingual)
-# - AzureSemanticVadEn: English-only, optimized for English
-# - AzureSemanticVadMultilingual: Explicit multilingual support
-turn_detection = AzureSemanticVadEn(
-    threshold=0.5,              # Voice activity detection threshold (0.0-1.0)
-    silence_duration_ms=500,    # Silence duration before turn ends
-    prefix_padding_ms=300,      # Audio padding before speech
-    speech_duration_ms=200,     # Minimum speech duration to trigger detection
-    remove_filler_words=True,   # Remove filler words like "um", "uh"
-)
-
-# Configure input audio transcription with language constraint
-# This helps prevent language misidentification
-# Use azure-speech with text models such as gpt-4o, whisper-1 with gpt-realtime or gpt-realtime-mini
-input_audio_transcription = AudioInputTranscriptionOptions(
-    model="azure-speech",
-    language="en-US",  # Constrain to English for reliable detection
-)
-
-session = AgentSession(
-    llm=azure.realtime.RealtimeModel(
-        endpoint=os.getenv("AZURE_VOICE_LIVE_ENDPOINT"),
-        api_key=os.getenv("AZURE_VOICE_LIVE_API_KEY"),
-        model=os.getenv("AZURE_VOICE_LIVE_MODEL", "gpt-4o"),
-        voice=os.getenv("AZURE_VOICE_LIVE_VOICE", "en-US-AvaMultilingualNeural"),
-        input_audio_transcription=input_audio_transcription,
-        turn_detection=turn_detection,
-        tool_choice="auto",  # Enable function calling
-    )
+model = azure.realtime.RealtimeModel(
+    endpoint=os.getenv("AZURE_VOICE_LIVE_ENDPOINT"),
+    api_key=os.getenv("AZURE_VOICE_LIVE_API_KEY"),
+    model="gpt-4.1",
+    voice="en-US-AvaMultilingualNeural",
+    # azure-speech with text models such as gpt-4.1, whisper-1 with gpt-realtime
+    input_audio_transcription={"model": "azure-speech", "language": "en-US"},
+    turn_detection={
+        "type": "azure_semantic_vad",
+        "silence_duration_ms": 500,
+        "remove_filler_words": True,
+    },
+    input_audio_noise_reduction={"type": "azure_deep_noise_suppression"},
 )
 ```
 
@@ -113,42 +70,19 @@ session = AgentSession(
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `endpoint` | Azure Voice Live endpoint URL | `AZURE_VOICE_LIVE_ENDPOINT` env var |
+| `endpoint` | Azure Voice Live resource endpoint | `AZURE_VOICE_LIVE_ENDPOINT` env var |
 | `api_key` | Azure API key | `AZURE_VOICE_LIVE_API_KEY` env var |
-| `use_default_credential` | Authenticate with `DefaultAzureCredential` instead of an API key | `False` |
+| `entra_token` | Microsoft Entra token, instead of an API key | None |
 | `model` | Model name | `AZURE_VOICE_LIVE_MODEL` env var, or `gpt-realtime` |
-| `voice` | Azure neural voice name | `en-US-AvaMultilingualNeural` |
-| `modalities` | Output modalities, `["text"]` for text-only responses | `["text", "audio"]` |
-| `input_audio_transcription` | Audio transcription config (model, language), `None` to disable | `azure-speech` for non-multimodal models (e.g. `gpt-4.1`) and `phi4-mm-realtime`, `whisper-1` for the other models, with auto-detect |
-| `turn_detection` | VAD configuration object | `ServerVad(threshold=0.5)` |
-| `tool_choice` | Function calling mode ("auto", "none", etc.) | "auto" |
-| `temperature` | Sampling temperature | `0.8` |
+| `voice` | Azure voice name, OpenAI voice name, or a Voice Live voice object | `en-US-AvaMultilingualNeural` |
+| `modalities` | `["text"]` for text-only responses | audio |
+| `input_audio_transcription` | Transcription config (model, language), `None` to disable | `azure-speech` for text models and `phi4-mm-realtime`, `whisper-1` otherwise |
+| `turn_detection` | Turn detection config, e.g. `server_vad`, `azure_semantic_vad`, `azure_semantic_vad_multilingual` | `server_vad` |
+| `input_audio_noise_reduction` | Noise suppression config | None |
+| `tool_choice` | Function calling mode | `"auto"` |
 | `max_output_tokens` | Maximum output tokens per response | `4096` |
 
-### Turn Detection Options
-
-| VAD Type | Description |
-|----------|-------------|
-| `AzureSemanticVad` | Default semantic VAD (multilingual) |
-| `AzureSemanticVadEn` | English-only, optimized for English |
-| `AzureSemanticVadMultilingual` | Explicit multilingual support |
-
-### VAD Parameters
-
-| Parameter | Description | Range |
-|-----------|-------------|-------|
-| `threshold` | Voice activity detection sensitivity | 0.0-1.0 |
-| `silence_duration_ms` | Silence duration before turn ends | milliseconds |
-| `prefix_padding_ms` | Audio padding before detected speech | milliseconds |
-| `speech_duration_ms` | Minimum speech duration to trigger | milliseconds |
-| `remove_filler_words` | Remove "um", "uh", etc. | boolean |
-
-### Azure Voice Live Capabilities
-
-- **Low-latency conversations** - Realtime bidirectional streaming
-- **Multilingual support** - Works with Azure's multilingual neural voices
-- **Function calling** - Built-in tool use for agentic workflows
-- **Interruption handling** - Graceful handling of user interruptions
+See [How to use the Voice Live API](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/voice-live-how-to) for every turn detection, noise suppression and voice option.
 
 ## Pipeline Mode (STT + LLM + TTS)
 

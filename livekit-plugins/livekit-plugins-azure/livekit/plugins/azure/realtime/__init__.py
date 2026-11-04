@@ -1,4 +1,4 @@
-"""Azure Voice Live Realtime API support for LiveKit Agents."""
+"""Azure Voice Live realtime support for LiveKit Agents."""
 
 from .realtime_model import RealtimeModel, RealtimeSession
 

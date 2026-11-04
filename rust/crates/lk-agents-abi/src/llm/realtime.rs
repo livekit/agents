@@ -740,7 +740,8 @@ pub struct RealtimeOptions {
     pub truncation: Maybe<Option<serde_json::Value>>,
     pub reasoning: Maybe<Option<serde_json::Value>>,
     pub max_session_duration: Maybe<Option<f64>>,
-    pub voice: Maybe<String>,
+    /// A voice name, or the provider's voice object.
+    pub voice: Maybe<serde_json::Value>,
     pub max_response_output_tokens: Maybe<Option<serde_json::Value>>,
 }
 
@@ -756,7 +757,7 @@ pub struct OpenAIRealtimeConfig {
     #[host(default = None)]
     pub model: Option<String>,
     #[host(default = None)]
-    pub voice: Option<String>,
+    pub voice: Option<serde_json::Value>,
     #[host(default = None)]
     pub modalities: Option<Vec<String>>,
     #[host(default = None)]

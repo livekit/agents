@@ -9749,7 +9749,8 @@ pub mod realtime_options {
                 if crate::py_values::is_not_given(v)? {
                     Ok(::lk_agents_abi::Maybe::NotGiven)
                 } else {
-                    (v.extract::<::std::string::String>()).map(::lk_agents_abi::Maybe::Given)
+                    (crate::py_values::value_from_py(v, "RealtimeOptions.voice"))
+                        .map(::lk_agents_abi::Maybe::Given)
                 }
             })?,
             max_response_output_tokens: crate::py_values::attr_with(
@@ -9829,7 +9830,7 @@ pub mod realtime_options {
                 if v.is_none() {
                     Ok(None)
                 } else {
-                    (v.extract::<::std::string::String>()).map(Some)
+                    (crate::py_values::value_from_py(v, "OpenAIRealtimeConfig.voice")).map(Some)
                 }
             })?,
             modalities: crate::py_values::attr_with(

@@ -83,13 +83,23 @@ impl TurnDetection {
     }
 }
 
-/// The three capability bits a dialect flips after the shared computation; `None` keeps the
+/// The capability bits a dialect flips after the shared computation; `None` keeps the
 /// shared rule's answer.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CapabilityOverrides {
+    pub message_truncation: Option<bool>,
     pub per_response_tool_choice: Option<bool>,
     pub can_disable_turn_detection: Option<bool>,
     pub supports_say: Option<bool>,
+}
+
+/// The OpenAI Realtime protocol version a provider speaks.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Protocol {
+    #[default]
+    Ga,
+    /// The pre-GA protocol: a flat `session` and the beta event names.
+    Beta,
 }
 
 /// One `(nested path, top-level name)` promotion in a `session.update` payload.
@@ -119,6 +129,8 @@ pub struct Dialect {
     pub promote: &'static [Promotion],
     /// Drop `session.audio` entirely when the promotions emptied both of its halves.
     pub prune_empty_audio: bool,
+    /// Applied on the socket by [`crate::realtime::openai::wire::WireShape`].
+    pub protocol: Protocol,
 
     // --- behaviour switches, each one an `if` in `machine.rs` ---
     /// `session(turn_detection_disabled=True)` is honoured. xAI ignores the argument.
@@ -238,12 +250,14 @@ pub const OPENAI: Dialect = Dialect {
     default_max_session_duration: Some(Duration::from_secs(20 * 60)),
     forced_modalities: None,
     caps: CapabilityOverrides {
+        message_truncation: None,
         per_response_tool_choice: None,
         can_disable_turn_detection: None,
         supports_say: None,
     },
     promote: &[],
     prune_empty_audio: false,
+    protocol: Protocol::Ga,
     supports_turn_detection_disabled: true,
     ignore_unknown_function_calls: false,
     defer_transcript_finalization: false,
@@ -288,6 +302,7 @@ pub const XAI: Dialect = Dialect {
     default_max_session_duration: None,
     forced_modalities: Some(&["audio", "text"]),
     caps: CapabilityOverrides {
+        message_truncation: None,
         per_response_tool_choice: Some(false),
         // "client turn-taking is not stable during testing"
         can_disable_turn_detection: Some(false),
@@ -299,6 +314,7 @@ pub const XAI: Dialect = Dialect {
         (&["audio", "input", "turn_detection"], "turn_detection"),
     ],
     prune_empty_audio: true,
+    protocol: Protocol::Ga,
     supports_turn_detection_disabled: false,
     ignore_unknown_function_calls: true,
     defer_transcript_finalization: true,
@@ -309,6 +325,29 @@ pub const XAI: Dialect = Dialect {
     extra_fatal_codes: &[],
 };
 
+/// `livekit-plugins-azure/realtime`: Azure Voice Live, the beta protocol behind an Azure
+/// endpoint. The plugin supplies the endpoint and the voice object.
+pub const VOICE_LIVE: Dialect = Dialect {
+    provider_label: "Azure Voice Live",
+    default_base_url: "",
+    api_key_env: "AZURE_VOICE_LIVE_API_KEY",
+    default_voice: "en-US-AvaMultilingualNeural",
+    // Chosen per model by the plugin: `azure-speech` is the only one text models accept.
+    default_transcription_model: None,
+    default_turn_detection: Some(TurnDetection::ServerVad {
+        threshold: 0.5,
+        prefix_padding_ms: 300,
+        silence_duration_ms: 500,
+        create_response: true,
+        interrupt_response: true,
+    }),
+    default_max_session_duration: None,
+    // Voice Live has no `conversation.item.truncate`.
+    caps: CapabilityOverrides { message_truncation: Some(false), ..OPENAI.caps },
+    protocol: Protocol::Beta,
+    ..OPENAI
+};
+
 /// A dialect name this build does not speak; the message lists the ones it does.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnknownDialect(pub String);
@@ -317,7 +356,7 @@ impl std::fmt::Display for UnknownDialect {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "unknown realtime dialect {:?}; this port speaks \"openai\", \"xai\" and \"inference\"",
+            "unknown realtime dialect {:?}; this port speaks \"openai\", \"xai\", \"voice_live\" and \"inference\"",
             self.0
         )
     }
@@ -325,12 +364,13 @@ impl std::fmt::Display for UnknownDialect {
 
 impl std::error::Error for UnknownDialect {}
 
-/// `"openai"` or `"xai"`.
+/// The name [`std::str::FromStr`] reads.
 impl std::fmt::Display for Dialect {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self.provider_label {
             l if l == XAI.provider_label => "xai",
             l if l == INFERENCE.provider_label => "inference",
+            l if l == VOICE_LIVE.provider_label => "voice_live",
             _ => "openai",
         })
     }
@@ -344,6 +384,7 @@ impl std::str::FromStr for Dialect {
             "openai" => Ok(OPENAI),
             "xai" => Ok(XAI),
             "inference" => Ok(INFERENCE),
+            "voice_live" => Ok(VOICE_LIVE),
             other => Err(UnknownDialect(other.to_owned())),
         }
     }
@@ -390,7 +431,7 @@ impl Dialect {
     ) -> RealtimeCapabilities {
         let c = self.caps;
         RealtimeCapabilities {
-            message_truncation: true,
+            message_truncation: c.message_truncation.unwrap_or(true),
             turn_detection: TurnDetection::server_turn_taking(turn_detection),
             // Same as `turn_detection` until the dialects say otherwise (R-11).
             auto_turn_reply_generation: TurnDetection::server_turn_taking(turn_detection),

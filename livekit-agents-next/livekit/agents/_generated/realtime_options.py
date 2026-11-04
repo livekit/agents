@@ -36,7 +36,8 @@ class RealtimeOptions:
     truncation: NotGivenOr[object | None] = NOT_GIVEN
     reasoning: NotGivenOr[object | None] = NOT_GIVEN
     max_session_duration: NotGivenOr[float | None] = NOT_GIVEN
-    voice: NotGivenOr[str] = NOT_GIVEN
+    voice: NotGivenOr[object] = NOT_GIVEN
+    """A voice name, or the provider's voice object."""
     max_response_output_tokens: NotGivenOr[object | None] = NOT_GIVEN
 
 
@@ -48,7 +49,7 @@ class OpenAIRealtimeConfig:
     options: RealtimeOptions
     dialect: str | None = None
     model: str | None = None
-    voice: str | None = None
+    voice: object | None = None
     modalities: list[str] | None = None
     azure_deployment: str | None = None
     entra_token: str | None = None

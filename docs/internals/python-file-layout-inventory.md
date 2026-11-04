@@ -188,12 +188,9 @@ and ToolContext refers to TOOL_BEHAVIOR through the removed module. Import autho
 record types directly and keep the existing pure type alias with the tool declarations.
 Runtime type-hint resolution must work without restoring an eager conversion-utils import.
 
-Remove `llm.remote_chat_context` from the public API: it is a server-history mirror for
-realtime providers, not an application or provider-contract type. Its only consumer is the
-Azure Voice Live plugin (`azure-ai-voicelive`, an OpenAI-Realtime-shaped protocol). Azure
-OpenAI realtime already uses the Rust realtime path through `with_azure` and never touches it.
-The Python wrapper file is retired; how Voice Live tracks history is a pending decision
-(shared Rust realtime path, or a private realtime helper). Either way it adds no file.
+Remove `llm.remote_chat_context` and its native class: it was a server-history mirror for the
+Azure Voice Live plugin, which now runs on the shared Rust realtime path as the `voice_live`
+dialect (the beta protocol behind an Azure endpoint). Nothing else uses it.
 Native-backed records/events whose declared public module names a retired leaf must point
 to the retained public home. Update authoritative declarations and regenerate normally;
 generated files themselves are not consolidation targets.
@@ -447,7 +444,7 @@ namespace. Update authoritative class/proxy/error paths and regenerate where req
 | `from livekit.agents.voice.agent import Agent` | `from livekit.agents import Agent`; internal voice code imports from its package |
 | `from livekit.agents.llm.realtime import RealtimeModel` | Unchanged; llm-root exports remain supported too |
 | `from livekit.agents.llm.duplex_adapter import DuplexRealtimeAdapter` | `from livekit.agents.llm.duplex import DuplexRealtimeAdapter`; llm-root export remains |
-| `llm.remote_chat_context.RemoteChatContext(...)` | Not public; Azure Voice Live migrates per the pending decision |
+| `llm.remote_chat_context.RemoteChatContext(...)` | Removed; no remaining consumer |
 | `from livekit.agents.llm._provider_format import convert_mid_conversation_instructions` | Import the same helper from llm.utils |
 | `from livekit.agents.a2a.auth import Credentials` | `from livekit.agents.a2a import Credentials` |
 | `from livekit.agents.a2a.endpoint import a2a_session` | `from livekit.agents import a2a_session`; integration code can use agents.a2a |
@@ -659,7 +656,7 @@ These source classifications are not additive savings; the exact target contains
 | [llm/mcp.py](../../livekit-agents-next/livekit/agents/llm/mcp.py) | 339 | Retain | `llm/mcp.py`. Keep optional MCP lifecycle/custom SDK stream boundary separate from generic tools. |
 | [llm/realtime.py](../../livekit-agents-next/livekit/agents/llm/realtime.py) | 38 | Retain | `llm/realtime.py`. Retain the familiar public generic realtime contract and absorb its fallback implementation. |
 | [llm/realtime_fallback_adapter.py](../../livekit-agents-next/livekit/agents/llm/realtime_fallback_adapter.py) | 117 | Merge | `llm/realtime.py`. Group generic realtime fallback with its base contract while preserving llm-root class exports. |
-| [llm/remote_chat_context.py](../../livekit-agents-next/livekit/agents/llm/remote_chat_context.py) | 33 | Remove | Not public. Only Azure Voice Live uses it; destination is the pending Voice Live history decision. |
+| [llm/remote_chat_context.py](../../livekit-agents-next/livekit/agents/llm/remote_chat_context.py) | 33 | Remove | Not public; its only consumer, Azure Voice Live, moved to the shared Rust realtime path. |
 | [llm/tool_context.py](../../livekit-agents-next/livekit/agents/llm/tool_context.py) | 616 | Retain | `llm/tool_context.py`. Single tool authoring/Toolset/decorator implementation with generated tool handling option exports. |
 | [llm/utils.py](../../livekit-agents-next/livekit/agents/llm/utils.py) | 472 | Retain | `llm/utils.py`. One provider serialization/schema/argument-format helper leaf. |
 

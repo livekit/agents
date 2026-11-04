@@ -791,7 +791,7 @@ fn the_legacy_azure_session_carries_reasoning() {
         Arc::new(crate::testkit::NoImages),
     );
     let mut frame = m.open(at(0)).frames.remove(0);
-    wire::WireShape { azure: true, drop_model: false }.outbound(&mut frame);
+    wire::WireShape { beta_event_names: true, ..wire::WireShape::default() }.outbound(&mut frame);
     assert_eq!(frame["session"]["reasoning"], json!({"effort": "medium"}));
 }
 

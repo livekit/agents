@@ -63,7 +63,7 @@ impl OpenAIRealtimeModel for OpenAIRealtime {
         }
         if is_inference && opts.model.starts_with("xai/") {
             opts.transcription = Some(json!({"model": "grok-transcribe"}));
-            opts.voice = "eve".to_owned();
+            opts.voice = json!("eve");
             opts.turn_detection = Some(TurnDetection::ServerVad {
                 threshold: 0.5,
                 prefix_padding_ms: 300,

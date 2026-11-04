@@ -12,7 +12,7 @@ use lk_agents_abi::{ChatContent, ChatItem, ChatMessage, FunctionCall, FunctionCa
 use serde_json::{Map, Value, json};
 use std::time::SystemTime;
 
-use crate::realtime::dialect::{NUM_CHANNELS, SAMPLE_RATE};
+use crate::realtime::dialect::{NUM_CHANNELS, Protocol, SAMPLE_RATE};
 
 /// Azure's deployment, for the URL.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -92,14 +92,17 @@ pub fn process_base_url(url: &str, model: &str, azure: Option<&Azure>) -> String
 /// in each direction.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct WireShape {
-    /// Azure: the beta event names come in, and are read as the GA ones.
-    pub azure: bool,
+    /// Beta: messages go out in the beta shape ([`to_beta`]).
+    pub protocol: Protocol,
+    /// The beta event names come in (the beta protocol, and Azure OpenAI's GA endpoint), and are
+    /// read as the GA ones.
+    pub beta_event_names: bool,
     /// LiveKit Inference picks the model from the URL; `session.model` is dropped.
     pub drop_model: bool,
 }
 
-/// `_AZURE_EVENT_MAPPING`.
-const AZURE_EVENT_MAPPING: &[(&str, &str)] = &[
+/// Beta event names and their GA equivalents.
+const BETA_EVENT_NAMES: &[(&str, &str)] = &[
     ("response.text.delta", "response.output_text.delta"),
     ("response.text.done", "response.output_text.done"),
     ("response.audio_transcript.delta", "response.output_audio_transcript.delta"),
@@ -112,6 +115,9 @@ const AZURE_EVENT_MAPPING: &[(&str, &str)] = &[
 impl WireShape {
     /// A frame about to be sent.
     pub fn outbound(&self, frame: &mut Value) {
+        if self.protocol == Protocol::Beta {
+            to_beta(frame);
+        }
         if frame.get("type").and_then(Value::as_str) == Some("session.update")
             && self.drop_model
             && let Some(Value::Object(session)) = frame.get_mut("session")
@@ -122,12 +128,62 @@ impl WireShape {
 
     /// A frame just received.
     pub fn inbound(&self, frame: &mut Value) {
-        if !self.azure {
+        if !self.beta_event_names {
             return;
         }
         let ty = frame.get("type").and_then(Value::as_str).unwrap_or("");
-        if let Some((_, ga)) = AZURE_EVENT_MAPPING.iter().find(|(beta, _)| *beta == ty) {
+        if let Some((_, ga)) = BETA_EVENT_NAMES.iter().find(|(beta, _)| *beta == ty) {
             frame["type"] = json!(ga);
+        }
+    }
+}
+
+/// A GA message in the beta protocol: a flat `session` with `pcm16` format names, `modalities`
+/// and `max_response_output_tokens`, and `text` parts in assistant messages.
+fn to_beta(frame: &mut Value) {
+    match frame.get("type").and_then(Value::as_str) {
+        Some("session.update") => {
+            if let Some(Value::Object(session)) = frame.get_mut("session") {
+                beta_session(session);
+            }
+        }
+        Some("conversation.item.create") => {
+            let parts = frame.pointer_mut("/item/content").and_then(Value::as_array_mut);
+            for part in parts.into_iter().flatten() {
+                if part["type"] == "output_text" {
+                    part["type"] = json!("text");
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn beta_session(session: &mut Map<String, Value>) {
+    session.remove("type");
+    if let Some(Value::Array(modalities)) = session.remove("output_modalities") {
+        // Beta has no audio-only response: audio always comes with its transcript.
+        let audio = modalities.iter().any(|m| m == "audio");
+        let modalities = if audio { json!(["text", "audio"]) } else { json!(["text"]) };
+        session.insert("modalities".into(), modalities);
+    }
+    if let Some(tokens) = session.remove("max_output_tokens") {
+        session.insert("max_response_output_tokens".into(), tokens);
+    }
+    if session.get("tracing").is_some_and(Value::is_null) {
+        session.remove("tracing");
+    }
+    let Some(Value::Object(mut audio)) = session.remove("audio") else { return };
+    // `audio.input.transcription` is `input_audio_transcription`; output fields keep their name.
+    for (half, prefix) in [("input", "input_audio_"), ("output", "")] {
+        let Some(Value::Object(fields)) = audio.remove(half) else { continue };
+        for (key, value) in fields {
+            match key.as_str() {
+                // 24 kHz mono PCM, the only format either side uses.
+                "format" => session.insert(format!("{half}_audio_format"), json!("pcm16")),
+                "turn_detection" => session.insert(key, value),
+                _ => session.insert(format!("{prefix}{key}"), value),
+            };
         }
     }
 }
@@ -762,10 +818,43 @@ mod tests {
         );
     }
 
+    // Catches: a GA key leaking into a beta session, or an assistant part the beta protocol
+    // rejects (`output_text`).
+    #[test]
+    fn the_beta_protocol_flattens_the_session_and_renames_assistant_text() {
+        let shape =
+            WireShape { protocol: Protocol::Beta, beta_event_names: true, ..WireShape::default() };
+        let mut update = json!({"type": "session.update", "session": {
+            "type": "realtime", "output_modalities": ["text"], "max_output_tokens": "inf",
+            "tracing": null,
+            "audio": {
+                "input": {"format": audio_format(), "transcription": {"model": "whisper-1"},
+                          "noise_reduction": null, "turn_detection": null},
+                "output": {"format": audio_format(), "voice": "alloy", "speed": 1.0},
+            },
+        }});
+        shape.outbound(&mut update);
+        assert_eq!(
+            update["session"],
+            json!({
+                "modalities": ["text"], "max_response_output_tokens": "inf",
+                "input_audio_format": "pcm16", "output_audio_format": "pcm16",
+                "input_audio_transcription": {"model": "whisper-1"},
+                "input_audio_noise_reduction": null, "turn_detection": null,
+                "voice": "alloy", "speed": 1.0,
+            })
+        );
+
+        let mut create = json!({"type": "conversation.item.create", "item": {"type": "message",
+            "role": "assistant", "content": [{"type": "output_text", "text": "hi"}]}});
+        shape.outbound(&mut create);
+        assert_eq!(create["item"]["content"][0]["type"], json!("text"));
+    }
+
     // Catches: Azure's beta event names unmapped.
     #[test]
     fn azure_beta_event_names_read_as_the_ga_ones() {
-        let shape = WireShape { azure: true, drop_model: false };
+        let shape = WireShape { beta_event_names: true, ..WireShape::default() };
         let mut inc = json!({"type": "response.audio.delta"});
         shape.inbound(&mut inc);
         assert_eq!(inc["type"], json!("response.output_audio.delta"));

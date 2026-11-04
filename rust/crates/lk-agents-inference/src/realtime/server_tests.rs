@@ -128,7 +128,7 @@ fn unhandled(event_type: &str) -> Incoming {
 struct Config {
     vad: Option<Vad>,
     instructions: Option<String>,
-    voice: Option<String>,
+    voice: Option<serde_json::Value>,
     create_response: bool,
     interrupt_response: bool,
     transcription: bool,

@@ -27,7 +27,7 @@ def realtime_options(
     truncation: object = NOT_GIVEN,
     reasoning: object = NOT_GIVEN,
     max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
-    voice: NotGivenOr[str] = NOT_GIVEN,
+    voice: NotGivenOr[str | dict[str, object]] = NOT_GIVEN,
     max_response_output_tokens: object = NOT_GIVEN,
 ) -> RealtimeOptions:
     return RealtimeOptions(

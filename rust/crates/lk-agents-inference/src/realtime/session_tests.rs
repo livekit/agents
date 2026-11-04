@@ -21,7 +21,7 @@ use std::time::Duration;
 use lk_agents_abi::Maybe;
 use lk_agents_inference::realtime::openai::{
     AudioDelta, Auth, Azure, Connect, Event, GenerationCreated, INFERENCE, OPENAI, OpenAIRealtime,
-    OptionsPatch, SeqIds, XAI,
+    OptionsPatch, SeqIds, VOICE_LIVE, XAI,
 };
 use lk_agents_inference::testkit::{FakeWs, NoImages, text};
 use lk_agents_net::clock::RealClock;
@@ -364,6 +364,43 @@ async fn azure_gets_its_url_and_header() {
             break;
         }
     }
+    session.aclose().await;
+}
+
+// Catches: the beta protocol applied to the machine but not the socket. Voice Live takes the Azure
+// URL and key, its model as the `model` query parameter, and rejects the GA session shape.
+#[tokio::test]
+async fn voice_live_connects_through_azure_and_sends_the_beta_session() {
+    let ws = Arc::new(FakeWs::new(vec![]).keep_open());
+    let connect = Connect {
+        base_url: "https://res.services.ai.azure.com/voice-live/realtime?api-version=2026-04-10"
+            .into(),
+        azure: Some(Azure { deployment: Some("gpt-realtime".into()) }),
+        auth: Auth::Azure { api_key: Some("az-key".into()), entra_token: None },
+        conn: Default::default(),
+    };
+    let realtime = model(ws.clone(), VOICE_LIVE).with_connect(connect);
+    realtime.update_options(OptionsPatch {
+        voice: Maybe::Given(json!({"type": "azure-standard", "name": "en-US-AvaNeural"})),
+        ..Default::default()
+    });
+    let session = realtime.session(false).await;
+
+    let sent = frames(&ws, 1).await;
+    let s = &sent[0]["session"];
+    assert!(s.get("type").is_none() && s.get("audio").is_none(), "{s}");
+    assert_eq!(s["voice"], json!({"type": "azure-standard", "name": "en-US-AvaNeural"}));
+    assert_eq!(s["modalities"], json!(["text", "audio"]));
+    assert_eq!(s["input_audio_format"], json!("pcm16"));
+    assert_eq!(s["turn_detection"]["type"], json!("server_vad"));
+    assert!(s.get("max_response_output_tokens").is_some() && s.get("tracing").is_none());
+    let (url, headers) = ws.last_connect().unwrap();
+    assert_eq!(
+        url,
+        "wss://res.services.ai.azure.com/voice-live/realtime?api-version=2026-04-10&model=gpt-realtime"
+    );
+    assert!(headers.contains(&("api-key".to_owned(), "az-key".to_owned())));
+    assert!(!realtime.capabilities().message_truncation);
     session.aclose().await;
 }
 

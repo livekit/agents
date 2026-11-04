@@ -6,7 +6,8 @@ use std::time::Duration;
 #[derive(Debug, Clone)]
 pub struct SessionOptions {
     pub model: String,
-    pub voice: String,
+    /// A voice name, or the provider's voice object.
+    pub voice: Value,
     pub instructions: Option<String>,
     pub tool_choice: Option<ToolChoice>,
     pub turn_detection: Option<TurnDetection>,
@@ -34,7 +35,7 @@ impl SessionOptions {
         let disable = turn_detection_disabled && d.supports_turn_detection_disabled;
         SessionOptions {
             model: d.default_model.to_owned(),
-            voice: d.default_voice.to_owned(),
+            voice: json!(d.default_voice),
             instructions: None,
             tool_choice: None,
             turn_detection: if disable { None } else { d.default_turn_detection.clone() },
@@ -91,7 +92,7 @@ impl SessionOptions {
 #[derive(Clone, Default)]
 pub struct OptionsPatch {
     pub tool_choice: Maybe<Option<ToolChoice>>,
-    pub voice: Maybe<String>,
+    pub voice: Maybe<Value>,
     pub turn_detection: Maybe<Option<TurnDetection>>,
     pub max_output_tokens: Maybe<Value>,
     pub transcription: Maybe<Option<Value>>,
