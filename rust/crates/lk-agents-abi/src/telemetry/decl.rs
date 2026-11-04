@@ -60,18 +60,40 @@ pub trait SpanDecl: Attrs {
     /// `handle = Manual`: opened only as an entity-owned `ManualSpan` (sans-I/O crates), never a
     /// `ScopedSpan`; each handle refuses the other's declarations at compile time.
     const MANUAL: bool;
-    /// The declared parents' [`SpanParent::PARENT_NAME`]s, for the runtime parent check.
-    const PARENTS: &'static [&'static str];
+    /// The declared parents, for checks against a recorded span.
+    const PARENTS: &'static [Parent];
+}
+
+/// A declared parent, as checks against recorded spans read it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Parent {
+    /// The declared span of this name.
+    Span(&'static str),
+    /// [`Current`]: any parent.
+    Current,
+    /// [`External`]: a span from outside the framework, or none.
+    External,
+}
+
+impl Parent {
+    /// Whether `parents` allow opening under `current`: the current span's declared name, `None`
+    /// for a span from outside the framework or no span.
+    pub fn allows(parents: &[Parent], current: Option<&str>) -> bool {
+        parents.iter().any(|p| match (p, current) {
+            (Parent::Current, _) | (Parent::External, None) => true,
+            (Parent::Span(name), Some(current)) => *name == current,
+            _ => false,
+        })
+    }
 }
 
 /// What a span may be opened under: a declared span, [`Current`] or [`External`].
 pub trait SpanParent {
-    /// The span name, or `Current`'s and `External`'s markers.
-    const PARENT_NAME: &'static str;
+    const PARENT: Parent;
 }
 
 impl<T: SpanDecl> SpanParent for T {
-    const PARENT_NAME: &'static str = <T as SpanDecl>::NAME;
+    const PARENT: Parent = Parent::Span(<T as SpanDecl>::NAME);
 }
 
 /// `Self` is a declared parent of `D`.
@@ -81,7 +103,7 @@ pub trait ParentOf<D: SpanDecl>: SpanParent {}
 pub struct Current;
 
 impl SpanParent for Current {
-    const PARENT_NAME: &'static str = "<current>";
+    const PARENT: Parent = Parent::Current;
 }
 
 /// The span continues a context from outside the process (a job dispatch, an A2A request), or
@@ -89,7 +111,25 @@ impl SpanParent for Current {
 pub struct External;
 
 impl SpanParent for External {
-    const PARENT_NAME: &'static str = "<external>";
+    const PARENT: Parent = Parent::External;
+}
+
+/// What a span's declaration says of its place in the tree.
+#[derive(Debug, Clone, Copy)]
+pub struct Declared {
+    pub name: &'static str,
+    pub parents: &'static [Parent],
+    pub outlives_parent: bool,
+}
+
+impl Declared {
+    pub const fn of<D: SpanDecl>() -> Declared {
+        Declared {
+            name: D::NAME,
+            parents: D::PARENTS,
+            outlives_parent: D::OUTLIVES_PARENT.is_some(),
+        }
+    }
 }
 
 /// A span event.

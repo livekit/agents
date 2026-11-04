@@ -1,10 +1,10 @@
 //! The telemetry registry: the span, event, metric and record declarations of
 //! `lk_agents_abi::telemetry`, read from the ABI source and checked, then written as the Weaver
-//! registry, the consumer schema, the Python constants and the trace rules (`emit`).
+//! registry, the consumer schema and the Python constants (`emit`).
 
 mod emit;
 
-pub use emit::{manual_spans, otel, semconv_py, trace_schema};
+pub use emit::{otel, semconv_py};
 
 use crate::decl::tree::{Crate, Found};
 use lk_agents_bindgen::telemetry::{self as t, InstrumentKind, Role, SpanKind, Unmeasured};
@@ -332,7 +332,59 @@ impl Reader<'_> {
             }
         }
         check(&r)?;
+        let mut listed = self.manual_list()?;
+        let mut manual: Vec<String> =
+            r.spans.iter().filter(|s| s.manual).map(|s| s.name.clone()).collect();
+        listed.sort();
+        manual.sort();
+        if listed != manual {
+            return Err(format!(
+                "telemetry::spans::MANUAL lists {listed:?}; the `handle = Manual` spans are {manual:?}"
+            ));
+        }
         Ok(r)
+    }
+
+    /// The span names `telemetry::spans::MANUAL` lists, one `Declared::of::<D>()` each.
+    fn manual_list(&self) -> Result<Vec<String>, String> {
+        let here = "telemetry::spans::MANUAL";
+        let found = self
+            .krate
+            .modules
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| m.path == ["telemetry", "spans"])
+            .find_map(|(i, m)| {
+                m.items.iter().find_map(|item| match item {
+                    syn::Item::Const(c) if c.ident == "MANUAL" => Some((i, &*c.expr)),
+                    _ => None,
+                })
+            });
+        let Some((module, expr)) = found else { return Ok(Vec::new()) };
+        let syn::Expr::Reference(r) = expr else { return Err(format!("{here} is `&[..]`")) };
+        let syn::Expr::Array(items) = &*r.expr else { return Err(format!("{here} is `&[..]`")) };
+        let mut names = Vec::new();
+        for item in &items.elems {
+            let ty = match item {
+                syn::Expr::Call(call) => match &*call.func {
+                    syn::Expr::Path(p) => p.path.segments.last().and_then(|s| match &s.arguments {
+                        syn::PathArguments::AngleBracketed(a) => match a.args.first() {
+                            Some(syn::GenericArgument::Type(syn::Type::Path(t))) => Some(&t.path),
+                            _ => None,
+                        },
+                        _ => None,
+                    }),
+                    _ => None,
+                },
+                _ => None,
+            };
+            let ty = ty.ok_or_else(|| format!("{here} holds `Declared::of::<D>()` items"))?;
+            match self.struct_at(module, ty, here)? {
+                (_, Some(Role::Span(span))) => names.push(span.name.value()),
+                _ => return Err(format!("{here}: `{}` is not a `#[span]`", path_str(ty))),
+            }
+        }
+        Ok(names)
     }
 
     /// The structs a declaration flattens or names as a span's end: not groups of their own.

@@ -40,10 +40,6 @@ const PYTHON_GENERATED: &str = "livekit/agents/_generated";
 const PYTHON_CORE: &str = "livekit/agents";
 /// The Weaver registry's generated definitions.
 const OTEL_REGISTRY: &str = "rust/otel/registry";
-/// The trace rules the Python trace tests and scripts import.
-const TRACE_SCHEMA: &str = "tests/trace_schema.py";
-/// The entity-owned (`handle = Manual`) spans the DST's span rule checks.
-const MANUAL_SPANS: &str = "rust/crates/lk-agents-fuzz/src/manual_spans.rs";
 /// The names `dir(_core)` returns, which the registration test of `lk-agents-py` reads.
 const CORE_NAMES: &str = "rust/crates/lk-agents-py/src/generated/core_names.json";
 
@@ -112,8 +108,6 @@ fn generate(root: &Path, python_packages: &[&str]) -> Result<Outputs, String> {
         o.add(PathBuf::from(path), &text);
     }
     o.dirs.push(PathBuf::from(OTEL_REGISTRY));
-    o.add(PathBuf::from(TRACE_SCHEMA), &telemetry::trace_schema(&registry));
-    o.add(PathBuf::from(MANUAL_SPANS), &telemetry::manual_spans(&registry));
     let semconv = telemetry::semconv_py(&registry)?;
     let python_backend = decl::tree::Crate::read(root, "rust/crates/lk-agents-py", "lk_agents_py")?;
     declared.local_interfaces = accessors::read(&python_backend)?;
@@ -308,8 +302,6 @@ mod drift {
             "livekit-agents-next/livekit/agents/_generated/semconv.py",
             "rust/otel/schema.json",
             "rust/otel/registry/spans.yaml",
-            TRACE_SCHEMA,
-            MANUAL_SPANS,
             CORE_NAMES,
         ];
         for family in families {

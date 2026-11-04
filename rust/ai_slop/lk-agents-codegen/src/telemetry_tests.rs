@@ -250,6 +250,10 @@ fn registry_rules_refuse_mistakes() {
             format!("{}\n/// M.\n#[metric(name = \"m\", kind = Histogram, unit = \"s\")]\n#[derive(Attrs)]\npub struct M {{ /// Model.\n#[attr(\"model_name\")] pub m: Label }}", span("/// D.\n#[attr(\"lk.d\", metric = \"m\")] pub d: Measured<Seconds>,")),
             "needs the label `model_name`",
         ),
+        (
+            "/// S.\n#[span(name = \"s\", parent = Current, handle = Manual)]\n#[derive(Attrs)]\npub struct S;".into(),
+            "the `handle = Manual` spans are",
+        ),
     ] {
         let error = registry(&decls).err().unwrap_or_else(|| panic!("accepted:\n{decls}"));
         assert!(error.contains(message), "{message}: {error}");
@@ -257,7 +261,7 @@ fn registry_rules_refuse_mistakes() {
 }
 
 // Catches: an output missing a declaration or misreporting it, a dependency key redefined in
-// the Weaver registry, the pins lost, or the trace rules diverging from the declared parents.
+// the Weaver registry, or the pins lost.
 #[test]
 fn outputs_describe_the_declarations() {
     let r = registry(TURN).expect("reads");
@@ -327,16 +331,6 @@ fn outputs_describe_the_declarations() {
     ] {
         assert!(python.contains(line), "{line}: {python}");
     }
-    let rules = telemetry::trace_schema(&r);
-    assert!(
-        rules.contains("        \"session\": {ANY, ROOT},\n        \"turn\": {\"session\"},\n"),
-        "{rules}"
-    );
-    assert!(rules.contains("    (\"turn\", \"session\"): \"late\",\n"), "{rules}");
-    assert!(
-        rules.starts_with("# GENERATED FILE -- DO NOT EDIT.") && rules.contains("def check_trace("),
-        "{rules}"
-    );
 }
 
 /// The 1.8.10 keys the declarations write under another name, on purpose.

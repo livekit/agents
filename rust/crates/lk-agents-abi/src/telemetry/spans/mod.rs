@@ -7,6 +7,32 @@ pub mod inference;
 pub mod job;
 pub mod session;
 
+use crate::telemetry::decl::Declared;
+
+/// Every `handle = Manual` declaration, the spans the voice core records, for the DST's span
+/// rule. `lk-agents-codegen --check` rejects a manual span missing here.
+pub const MANUAL: &[Declared] = &[
+    Declared::of::<session::AgentSession>(),
+    Declared::of::<session::SessionStart>(),
+    Declared::of::<session::SessionClose>(),
+    Declared::of::<session::UpdateAgent>(),
+    Declared::of::<session::StartAgentActivity>(),
+    Declared::of::<session::OnEnter>(),
+    Declared::of::<session::DrainAgentActivity>(),
+    Declared::of::<session::OnExit>(),
+    Declared::of::<session::PauseAgentActivity>(),
+    Declared::of::<session::ResumeAgentActivity>(),
+    Declared::of::<session::Amd>(),
+    Declared::of::<session::KeytermDetection>(),
+    Declared::of::<agent_turn::AgentTurn>(),
+    Declared::of::<agent_turn::AgentSpeaking>(),
+    Declared::of::<user_turn::UserTurn>(),
+    Declared::of::<user_turn::UserSpeaking>(),
+    Declared::of::<user_turn::EouWait>(),
+    Declared::of::<user_turn::EouDetection>(),
+    Declared::of::<user_turn::OnUserTurnCompleted>(),
+];
+
 /// Text runs and evaluation judges.
 pub mod text {
     use super::common::GenAiOperation;

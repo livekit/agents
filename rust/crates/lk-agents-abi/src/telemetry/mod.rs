@@ -266,10 +266,10 @@ impl Cx {
         self.current.map(|c| c.span)
     }
 
-    /// The current span's declared name, for the parent check; `Some(None)` for a span from
+    /// The current span's declared name, for the parent check; `None` for no span or one from
     /// outside the framework.
-    pub fn current_name(&self) -> Option<Option<&'static str>> {
-        self.current.map(|c| c.name)
+    pub fn current_name(&self) -> Option<&'static str> {
+        self.current.and_then(|c| c.name)
     }
 
     pub fn job(&self) -> Option<&JobKey> {

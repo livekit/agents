@@ -750,7 +750,6 @@ Rules:
 | Weaver registry | `rust/otel/registry/` and `rust/otel/manifest.yaml` | `weaver registry check`, protocol's live-check and combined docs |
 | Consumer schema | `rust/otel/schema.json` | Cloud consumers; the golden test |
 | Python constants | `livekit/agents/_generated/semconv.py` | the framework's Python code |
-| Trace rules | `tests/trace_schema.py` | trace tests and the DST rule set |
 
 The agents registry depends on two registries, each pinned by git ref:
 

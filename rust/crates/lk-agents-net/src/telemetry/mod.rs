@@ -15,7 +15,7 @@ use std::time::SystemTime;
 
 use lk_agents_abi::Clock;
 use lk_agents_abi::telemetry::decl::{
-    Attrs, EventDecl, HasEvent, KeyValues, MetricDecl, Number, SpanDecl, finish_span,
+    Attrs, EventDecl, HasEvent, KeyValues, MetricDecl, Number, Parent, SpanDecl, finish_span,
 };
 use lk_agents_abi::telemetry::record::{
     EventRecord, Key, Measurement, Record, RecordSink, SpanId, SpanRecord, SpanRef, Status,
@@ -227,7 +227,7 @@ fn nanos(at: SystemTime) -> u64 {
 
 fn debug_check_parent<D: SpanDecl>(cx: &Cx) {
     debug_assert!(
-        parent_declared(D::PARENTS, cx.current_name()),
+        Parent::allows(D::PARENTS, cx.current_name()),
         "{} opened under {:?}; declared parents {:?}",
         D::NAME,
         cx.current_name(),
@@ -343,17 +343,6 @@ pub fn measure<M: MetricDecl>(cx: &Cx, labels: &M, value: impl Into<Number>) {
 pub fn reserve<D: SpanDecl>(cx: &Cx) -> Reserved<D> {
     debug_check_parent::<D>(cx);
     Reserved::new(cx.child_context(), cx.now_nanos())
-}
-
-/// `Current` accepts any parent; `External` a missing or foreign one; otherwise the parent must
-/// be one of the declared span names.
-fn parent_declared(parents: &[&str], current: Option<Option<&'static str>>) -> bool {
-    use lk_agents_abi::telemetry::decl::{Current as AnyParent, External, SpanParent};
-    parents.contains(&<AnyParent as SpanParent>::PARENT_NAME)
-        || match current {
-            None | Some(None) => parents.contains(&<External as SpanParent>::PARENT_NAME),
-            Some(Some(name)) => parents.contains(&name),
-        }
 }
 
 struct Open {

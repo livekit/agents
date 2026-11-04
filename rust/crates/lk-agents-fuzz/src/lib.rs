@@ -32,7 +32,6 @@ pub mod check;
 pub mod drive;
 pub mod fakes;
 pub mod input;
-mod manual_spans;
 pub mod record;
 pub mod rules;
 pub mod sched;

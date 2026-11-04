@@ -165,8 +165,8 @@ pub fn role(role: &str, args: TokenStream, item: TokenStream) -> syn::Result<Tok
                     type End = #end;
                     const OUTLIVES_PARENT: ::core::option::Option<&'static str> = #outlives;
                     const MANUAL: bool = #manual;
-                    const PARENTS: &'static [&'static str] =
-                        &[#( <#parents as #d::SpanParent>::PARENT_NAME ),*];
+                    const PARENTS: &'static [#d::Parent] =
+                        &[#( <#parents as #d::SpanParent>::PARENT ),*];
                 }
                 #( impl #d::ParentOf<#ident> for #parents {} )*
                 #( impl #d::HasEvent<#events> for #ident {} )*
@@ -412,7 +412,7 @@ mod tests {
                 && out.contains("ParentOf < LlmRequest > for Current"),
             "{out}"
         );
-        assert!(out.contains("& [< LlmNode as :: lk_agents_abi :: telemetry :: decl :: SpanParent > :: PARENT_NAME , < Current as"), "{out}");
+        assert!(out.contains("& [< LlmNode as :: lk_agents_abi :: telemetry :: decl :: SpanParent > :: PARENT , < Current as"), "{out}");
         assert!(out.contains("HasEvent < Generation > for LlmRequest"), "{out}");
         let out = role("span", quote!(name = "x", parent = A), item.clone());
         assert!(

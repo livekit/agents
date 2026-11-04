@@ -1,6 +1,5 @@
 //! The registry's outputs: the Weaver registry (`rust/otel/`), the consumer schema
-//! (`rust/otel/schema.json`), the Python constants (`_generated/semconv.py`) and the trace rules
-//! (`tests/trace_schema.py`).
+//! (`rust/otel/schema.json`) and the Python constants (`_generated/semconv.py`).
 
 use super::{Attr, Content, Encoding, Parent, Registry, Shape, ShapeField, Wire};
 use lk_agents_bindgen::telemetry::{InstrumentKind, SpanKind, Unmeasured};
@@ -628,78 +627,4 @@ pub fn semconv_py(r: &Registry) -> Result<String, String> {
         }
     }
     Ok(out)
-}
-
-// --- tests/trace_schema.py ----------------------------------------------------------------------
-
-const TRACE_SCHEMA: &str = include_str!("trace_schema.py.in");
-
-fn py_parent(p: &Parent) -> String {
-    match p {
-        Parent::Span(name) => quote(name),
-        Parent::Current => "ANY".into(),
-        Parent::External => "ROOT".into(),
-    }
-}
-
-/// The entity-owned spans for the DST's span rule: name, declared parents (as
-/// `SpanDecl::PARENTS` spells them), whether the span may outlive its parent.
-pub fn manual_spans(r: &Registry) -> String {
-    let mut spans: Vec<_> = r.spans.iter().filter(|s| s.manual).collect();
-    spans.sort_by(|a, b| a.name.cmp(&b.name));
-    let mut out = String::from(
-        "//! GENERATED FILE -- DO NOT EDIT.\n//!\n//! Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the\n//! `handle = Manual` span declarations of `lk-agents-abi`.\n\n/// An entity-owned span: what the span rule checks it against.\npub(crate) struct ManualSpan {\n    pub name: &'static str,\n    pub parents: &'static [&'static str],\n    pub outlives_parent: bool,\n}\n\n/// Every `handle = Manual` span declaration, by name.\npub(crate) const MANUAL_SPANS: &[ManualSpan] = &[\n",
-    );
-    for span in spans {
-        let mut parents: Vec<String> = span
-            .parents
-            .iter()
-            .map(|p| match p {
-                Parent::Span(name) => format!("{name:?}"),
-                Parent::Current => "\"<current>\"".into(),
-                Parent::External => "\"<external>\"".into(),
-            })
-            .collect();
-        parents.sort();
-        out.push_str(&format!(
-            "    ManualSpan {{\n        name: {:?},\n        parents: &[{}],\n        outlives_parent: {},\n    }},\n",
-            span.name,
-            parents.join(", "),
-            span.outlives_parent.is_some()
-        ));
-    }
-    out.push_str("];\n");
-    out
-}
-
-/// The trace rules: the checker with its span parents and outliving edges from the declarations.
-pub fn trace_schema(r: &Registry) -> String {
-    let mut spans: Vec<_> = r.spans.iter().collect();
-    spans.sort_by(|a, b| a.name.cmp(&b.name));
-    let mut parents = String::new();
-    let mut outlive = String::new();
-    for span in &spans {
-        let mut allowed: Vec<String> = span.parents.iter().map(py_parent).collect();
-        allowed.sort();
-        parents.push_str(&format!("        {}: {{{}}},\n", quote(&span.name), allowed.join(", ")));
-        let Some(reason) = &span.outlives_parent else { continue };
-        for p in &span.parents {
-            let parent = match p {
-                Parent::External => continue,
-                p => py_parent(p),
-            };
-            let line = format!("    ({}, {parent}): {},", quote(&span.name), quote(reason));
-            if line.len() <= 100 {
-                outlive.push_str(&line);
-                outlive.push('\n');
-            } else {
-                outlive.push_str(&format!(
-                    "    (\n        {},\n        {parent},\n    ): {},\n",
-                    quote(&span.name),
-                    quote(reason)
-                ));
-            }
-        }
-    }
-    TRACE_SCHEMA.replace("{span_parents}", &parents).replace("{may_outlive_parent}", &outlive)
 }

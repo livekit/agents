@@ -8,17 +8,16 @@
 //! its job is never exported to Cloud.
 use std::collections::BTreeMap;
 
-use lk_agents_abi::telemetry::decl::SpanDecl;
+use lk_agents_abi::telemetry::decl::{Parent, SpanDecl};
 use lk_agents_abi::telemetry::record::{
     Key, Record, SpanId, SpanRecord, SpanRef, Status, TraceId, Value,
 };
-use lk_agents_abi::telemetry::spans::{agent_turn, session};
+use lk_agents_abi::telemetry::spans::{MANUAL, agent_turn, session};
 use lk_agents_voice::events::SessionEvent;
 use lk_agents_voice::trace::{PlayoutStep, Step, ToolStep};
 
 use crate::{
     authored::Authored,
-    manual_spans::MANUAL_SPANS,
     check::{Check, Contract, Rule, Subject},
     drive::{Case, Setup},
     input::{AgentText, Input, Millis, SayInput},
@@ -98,7 +97,7 @@ impl Rule for SpansNestAndEnd {
             })
             .map(|speech| format!("_{}", speech.id))
             .collect();
-        let decl = |name: &str| MANUAL_SPANS.iter().find(|d| d.name == name);
+        let decl = |name: &str| MANUAL.iter().find(|d| d.name == name);
         let mut by_id: BTreeMap<SpanId, &SpanRecord> = BTreeMap::new();
         for span in &spans {
             if decl(&span.name).is_none() {
@@ -154,7 +153,7 @@ impl Rule for SpansNestAndEnd {
             let Some(parent) = span.parent.and_then(|id| by_id.get(&id)) else { continue };
             check.expect(
                 Subject::Session,
-                d.parents.contains(&&*parent.name),
+                Parent::allows(d.parents, Some(&*parent.name)),
                 format!("{} under {}, not a declared parent", span.name, parent.name),
             );
             check.expect(
