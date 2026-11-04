@@ -1,4 +1,4 @@
-//! MCP tool logic: option resolution, schemas, setup and transport choice, and the
+//! MCP tool logic: option resolution, schemas, setup decisions, and the
 //! interpretation of tool results. The session and its transports are the runtime's I/O.
 
 use std::sync::Arc;
@@ -48,21 +48,6 @@ pub enum McpSetup {
     Skip,
     ConnectThenList,
     ListOnly,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HttpTransport {
-    Sse,
-    StreamableHttp,
-}
-
-/// `transport_type` when given, else streamable HTTP.
-pub fn http_transport(transport_type: Option<&str>) -> Result<HttpTransport, McpError> {
-    match transport_type {
-        Some("sse") => Ok(HttpTransport::Sse),
-        Some("streamable_http") | None => Ok(HttpTransport::StreamableHttp),
-        Some(other) => Err(McpError::InvalidTransport(other.to_owned())),
-    }
 }
 
 /// One transport's teardown as the runtime observes it: whether it closed, the readers still
@@ -264,13 +249,6 @@ impl McpToolsPort for McpTools {
             McpSetup::ListOnly => "list_only",
         }
         .into()
-    }
-    fn http_transport(transport_type: Option<String>) -> Result<String, McpError> {
-        Ok(match http_transport(transport_type.as_deref())? {
-            HttpTransport::Sse => "sse",
-            HttpTransport::StreamableHttp => "streamable_http",
-        }
-        .into())
     }
     fn render_result(tool_name: String, result: Value) -> Result<String, McpError> {
         render_result(&tool_name, &result)

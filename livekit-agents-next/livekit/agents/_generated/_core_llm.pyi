@@ -292,9 +292,8 @@ class McpSession:
         self,
         url: str,
         headers: Sequence[tuple[str, str]],
-        transport: str,
         timeout: float,
-        sse_read_timeout: float,
+        read_timeout: float,
     ) -> None: ...
     async def connect_stdio(
         self,
@@ -324,8 +323,6 @@ def mcp_raw_schema(
 ) -> object: ...
 
 def mcp_plan_setup(toolset_initialized: bool, server_connected: bool) -> str: ...
-
-def mcp_http_transport(transport_type: str | None) -> str: ...
 
 def mcp_render_result(tool_name: str, result: object) -> str: ...
 

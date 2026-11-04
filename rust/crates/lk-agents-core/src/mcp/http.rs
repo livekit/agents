@@ -1,8 +1,6 @@
 //! MCP's HTTP protocol decisions over response status, headers and the message kind: the runtime
 //! executes the exchange and reads bodies; these rules choose what each response means.
 
-use url::Url;
-
 /// The header naming the streamable HTTP session.
 pub const SESSION_HEADER: &str = "Mcp-Session-Id";
 
@@ -177,41 +175,4 @@ pub fn stream_reply(
 /// A session DELETE: 405 means the server keeps no deletable session, which is not a failure.
 pub fn delete_status(status: u16, www_authenticate: Option<&str>) -> Result<(), Failure> {
     if status == 405 { Ok(()) } else { check_status(status, www_authenticate) }
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum EndpointError {
-    #[error(transparent)]
-    Url(#[from] url::ParseError),
-    #[error("SSE endpoint origin differs from connection")]
-    CrossOrigin,
-}
-
-/// The legacy SSE transport: the stream first names the POST endpoint, then carries messages.
-#[derive(Debug, Clone)]
-pub struct LegacySse {
-    base: Url,
-}
-
-impl LegacySse {
-    pub fn new(url: &str) -> Result<Self, EndpointError> {
-        Ok(Self { base: Url::parse(url)? })
-    }
-    /// The POST endpoint an `endpoint` event names, resolved against the connection URL and
-    /// accepted only on its origin; `None` for the events that precede it.
-    pub fn endpoint(&self, event: &str, data: &str) -> Option<Result<Url, EndpointError>> {
-        (event == "endpoint").then(|| {
-            let endpoint = self.base.join(data)?;
-            if endpoint.origin() != self.base.origin() {
-                return Err(EndpointError::CrossOrigin);
-            }
-            Ok(endpoint)
-        })
-    }
-}
-
-/// After the endpoint, a non-empty `message` event carries one JSON-RPC message; other events
-/// carry none.
-pub fn sse_message<'a>(event: &str, data: &'a str) -> Option<&'a str> {
-    (event == "message" && !data.is_empty()).then_some(data)
 }

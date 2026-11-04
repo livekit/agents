@@ -108,7 +108,6 @@ from ._generated._core_llm import (
     inject_confirm_duplicate as inject_confirm_duplicate,
     inject_schema_defaults as inject_schema_defaults,
     llm_usage_chunk as llm_usage_chunk,
-    mcp_http_transport as mcp_http_transport,
     mcp_plan_setup as mcp_plan_setup,
     mcp_raw_schema as mcp_raw_schema,
     mcp_render_result as mcp_render_result,

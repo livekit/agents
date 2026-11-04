@@ -366,7 +366,7 @@ lk-agents-runtime/src/
   text_session/   TextSession driver over agent_run's execution; the declared runner
   a2a/            turn: executes TaskMachine steps against storage and the handler;
                   door/: decodes, admits, calls storage, publishes response streams
-  mcp/            the SDK session, stdio/host/HTTP/SSE transports, the SDK's HTTP client over lk-agents-net
+  mcp/            the SDK session, stdio/host/Streamable HTTP transports, the SDK's HTTP client over lk-agents-net
   voice/          session executor (effects, legs, audio drains, storage, recorder observers)
     events.rs           execution envelopes, opened streams and SDK event-to-observation mapping
     io.rs               session output assembly and transcript-wrapper ownership
@@ -900,7 +900,7 @@ fakes calibrated against the same peers.
 | Request streams | Consumer/read admission, event envelopes, text accumulation and presentation accounting | Core owns the consumption state; runtime binds native runner sources directly, executes cancellation and settles sources/resources with injected execution ports. Cursors retain admission through language delivery. Python hydrates typed results and retains exception identity; it owns no stream task or presentation buffer |
 | Text invocation resources | Temporary namespace/thread creation, context borrowing and owned activation lifetime | One native owner surrounds a direct run or every frame of a text-session turn. Cancelled startup/close waiters cannot abandon cleanup. Toolset cleanup settles before owned context/storage close; Python only hydrates thread/store handles and releases cached language objects |
 | Toolset lifetimes | Pending acquisitions, sharing, last-user release, cancellation and scope selection | Runtime executes declared setup/close callbacks through HostInvoker. Failed initialization settles acquired roots and nested children before returning the failure, in both text and voice. Failed parents do not run their authored close. Ready lifetimes retain no host callback; closed lease groups release theirs |
-| MCP | Tool listing, schema rendering, result and error mapping, pagination, close decisions and HTTP response classification (`lk_agents_core::mcp::http`), in `lk-agents-core` | The runtime's thin session I/O uses the SDK for stdio/HTTP/SSE and only executes; do not duplicate the MCP protocol engine |
+| MCP | Tool listing, schema rendering, result and error mapping, pagination, close decisions and HTTP response classification (`lk_agents_core::mcp::http`), in `lk-agents-core` | The runtime's thin session I/O uses the SDK for stdio and Streamable HTTP and only executes; do not duplicate the MCP protocol engine |
 | Avatar provider | Create/terminate request policy and provider session identity | Gateway requests retry under one operation identity; a created session is delivered or terminated; voice owns presentation |
 
 Protocol decoding validates external input before core dispatch. Secrets,

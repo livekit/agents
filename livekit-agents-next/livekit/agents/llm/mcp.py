@@ -8,7 +8,7 @@ import contextvars
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
 from pathlib import Path
-from typing import Any, Literal, Self, cast
+from typing import Any, Self, cast
 
 from pydantic import JsonValue
 
@@ -201,22 +201,21 @@ class MCPServer:
 
 
 class MCPServerHTTP(MCPServer):
-    """An MCP server over HTTP: streamable HTTP, or SSE (deprecated).
+    """An MCP server over Streamable HTTP.
 
     Args:
-        url: The server's URL.
-        transport_type: ``"sse"`` or ``"streamable_http"`` (the default).
+        url: The server's MCP endpoint.
         allowed_tools: The tool names exposed; all when ``None``.
         headers: HTTP headers sent with every request.
         timeout: The connect timeout in finite, non-negative seconds; zero expires immediately.
-        sse_read_timeout: The read timeout in finite, non-negative seconds.
+        sse_read_timeout: How long a reply stream may stay idle, in finite, non-negative seconds.
         client_session_timeout_seconds: The timeout of one request in finite, non-negative seconds.
     """
 
     def __init__(
         self,
         url: str,
-        transport_type: Literal["sse", "streamable_http"] | None = None,
+        *,
         allowed_tools: list[str] | None = None,
         headers: dict[str, str] | None = None,
         timeout: float = 5,
@@ -230,7 +229,6 @@ class MCPServerHTTP(MCPServer):
         self.headers = headers or {}
         self._timeout = timeout
         self._sse_read_timeout = sse_read_timeout
-        self._transport = _core.mcp_http_transport(transport_type)
         self._allowed_tools = list(allowed_tools or [])
         self._session.set_allowed_tools(self._allowed_tools)
 
@@ -238,14 +236,13 @@ class MCPServerHTTP(MCPServer):
         await self._session.connect_http(
             self.url,
             [(k, str(v)) for k, v in self.headers.items()],
-            self._transport,
             self._timeout,
             self._sse_read_timeout,
         )
 
     def __repr__(self) -> str:
         allowed = f", allowed_tools={self._allowed_tools}" if self._allowed_tools else ""
-        return f"MCPServerHTTP(url={self.url}, transport={self._transport}{allowed})"
+        return f"MCPServerHTTP(url={self.url}{allowed})"
 
 
 class MCPServerStdio(MCPServer):

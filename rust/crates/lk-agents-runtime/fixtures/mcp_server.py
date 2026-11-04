@@ -50,9 +50,8 @@ async def stdio():
 
 def http():
     import uvicorn
-    from mcp.server.sse import SseServerTransport
     from starlette.applications import Starlette
-    from starlette.routing import Mount, Route
+    from starlette.routing import Route
 
     manager = StreamableHTTPSessionManager(server, json_response=True)
 
@@ -65,26 +64,16 @@ def http():
         async def __call__(self, scope, receive, send):
             await manager.handle_request(scope, receive, send)
 
-    sse = SseServerTransport("/messages/")
-
-    class SseEndpoint:
-        async def __call__(self, scope, receive, send):
-            async with sse.connect_sse(scope, receive, send) as (read, write):
-                await server.run(read, write, server.create_initialization_options())
-
     app = Starlette(
         routes=[
             Route("/mcp", Endpoint(), methods=["GET", "POST", "DELETE"]),
-            Route("/sse", SseEndpoint()),
-            Mount("/messages/", app=sse.handle_post_message),
         ],
         lifespan=lifespan,
     )
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))
     sock.listen()
-    path = "sse" if mode == "sse" else "mcp"
-    (events / "url").write_text(f"http://127.0.0.1:{sock.getsockname()[1]}/{path}")
+    (events / "url").write_text(f"http://127.0.0.1:{sock.getsockname()[1]}/mcp")
     uvicorn.Server(uvicorn.Config(app, log_level="error")).run(sockets=[sock])
 
 

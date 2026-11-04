@@ -4,14 +4,12 @@ use crate::telemetry;
 use lk_agents_abi::{OwnedTask, SpawnerExt, TaskError};
 use lk_agents_net::task::TokioSpawner;
 use parking_lot::Mutex;
-use std::pin::Pin;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
-use futures_util::{Sink, Stream, StreamExt};
+use futures_util::StreamExt;
 use lk_agents_core::mcp::TransportSettlement;
-use lk_agents_core::mcp::http::{LegacySse, sse_message};
 use rmcp::model::{ClientJsonRpcMessage, ServerJsonRpcMessage};
 use rmcp::service::RoleClient;
 use rmcp::transport::async_rw::AsyncRwTransport;
@@ -266,54 +264,16 @@ impl Transport<RoleClient> for StdioTransport {
     }
 }
 
-type Messages = Pin<Box<dyn Stream<Item = ServerJsonRpcMessage> + Send>>;
-type Posts = Pin<Box<dyn Sink<ClientJsonRpcMessage, Error = McpError> + Send>>;
-pub(super) enum HttpConnection {
-    Streamable(StreamableHttpClientTransport<CleanupClient>),
-    Sse(rmcp::transport::sink_stream::SinkStreamTransport<Posts, Messages>),
-}
-impl Transport<RoleClient> for HttpConnection {
-    type Error = McpError;
-    fn send(
-        &mut self,
-        item: ClientJsonRpcMessage,
-    ) -> impl Future<Output = Result<(), McpError>> + Send + 'static {
-        // rmcp's tuple adapter owns the sink; streamable HTTP uses its upstream transport.
-        match self {
-            Self::Streamable(transport) => {
-                let send = transport.send(item);
-                Box::pin(async move { send.await.map_err(conn) })
-                    as Pin<Box<dyn Future<Output = Result<(), McpError>> + Send>>
-            }
-            Self::Sse(transport) => {
-                let send = <_ as Transport<RoleClient>>::send(transport, item);
-                Box::pin(send)
-            }
-        }
-    }
-    async fn receive(&mut self) -> Option<ServerJsonRpcMessage> {
-        match self {
-            Self::Streamable(t) => t.receive().await,
-            Self::Sse(t) => <_ as Transport<RoleClient>>::receive(t).await,
-        }
-    }
-    async fn close(&mut self) -> Result<(), McpError> {
-        match self {
-            Self::Streamable(t) => t.close().await.map_err(conn),
-            Self::Sse(t) => <_ as Transport<RoleClient>>::close(t).await,
-        }
-    }
-}
-
-pub(super) async fn connect_http(
+/// The Streamable HTTP transport over the shared exchange; the SDK opens the session on its
+/// first message.
+pub(super) fn connect_http(
     env: &ProcessEnv,
     url: String,
     headers: Vec<(String, String)>,
-    transport: &str,
     timeout: Duration,
     read_timeout: Duration,
     receipt: Arc<TransportReceipt>,
-) -> Result<HttpConnection, McpError> {
+) -> Result<StreamableHttpClientTransport<CleanupClient>, McpError> {
     let headers = headers
         .into_iter()
         .map(|(name, value)| {
@@ -336,72 +296,8 @@ pub(super) async fn connect_http(
         clock: env.clock.clone(),
         receipt: receipt.clone(),
     };
-    match lk_agents_core::mcp::http_transport(Some(transport))? {
-        lk_agents_core::mcp::HttpTransport::StreamableHttp => {
-            Ok(HttpConnection::Streamable(StreamableHttpClientTransport::with_client(
-                client,
-                StreamableHttpClientTransportConfig::with_uri(url),
-            )))
-        }
-        lk_agents_core::mcp::HttpTransport::Sse => {
-            let (posts, messages) = connect_sse(client, &url, receipt).await?;
-            Ok(HttpConnection::Sse(rmcp::transport::sink_stream::SinkStreamTransport::new(
-                posts, messages,
-            )))
-        }
-    }
-}
-
-async fn connect_sse(
-    client: CleanupClient,
-    url: &str,
-    receipt: Arc<TransportReceipt>,
-) -> Result<(Posts, Messages), McpError> {
-    let legacy = LegacySse::new(url).map_err(conn)?;
-    let mut events = client.legacy_get(url).await.map_err(conn)?;
-    let endpoint = loop {
-        match events.next().await {
-            Ok(Some(event)) => match legacy.endpoint(&event.event, &event.data) {
-                Some(endpoint) => break endpoint.map_err(conn)?,
-                None => continue,
-            },
-            Err(error) => return Err(conn(error)),
-            Ok(None) => {
-                return Err(conn(std::io::Error::new(
-                    std::io::ErrorKind::UnexpectedEof,
-                    "SSE closed before endpoint",
-                )));
-            }
-        }
-    };
-    events.expect_response(false);
-    let events = receipt.track_reader(events.into_stream());
-    let messages = events
-        .scan((), move |_, event| {
-            std::future::ready(match event {
-                Ok(event) => match sse_message(&event.event, &event.data) {
-                    Some(data) => match serde_json::from_str(data) {
-                        Ok(message) => Some(Some(message)),
-                        Err(error) => {
-                            receipt.fail(McpError::Decode(Arc::new(error)));
-                            None
-                        }
-                    },
-                    None => Some(None),
-                },
-                Err(error) => {
-                    receipt.fail(conn(error));
-                    None
-                }
-            })
-        })
-        .filter_map(std::future::ready);
-    let posts = futures_util::sink::unfold(
-        (client, endpoint),
-        |(client, endpoint), message: ClientJsonRpcMessage| async move {
-            client.legacy_post(endpoint.as_str(), message).await.map_err(conn)?;
-            Ok::<_, McpError>((client, endpoint))
-        },
-    );
-    Ok((Box::pin(posts), Box::pin(messages)))
+    Ok(StreamableHttpClientTransport::with_client(
+        client,
+        StreamableHttpClientTransportConfig::with_uri(url),
+    ))
 }

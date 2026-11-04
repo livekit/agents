@@ -315,7 +315,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(llm::resolve_mcp_tool_options, m)?)?;
     m.add_function(wrap_pyfunction!(llm::mcp_raw_schema, m)?)?;
     m.add_function(wrap_pyfunction!(llm::mcp_plan_setup, m)?)?;
-    m.add_function(wrap_pyfunction!(llm::mcp_http_transport, m)?)?;
     m.add_function(wrap_pyfunction!(llm::mcp_render_result, m)?)?;
     m.add_function(wrap_pyfunction!(llm::_core_mcp_timeout_check, m)?)?;
     m.add_function(wrap_pyfunction!(llm::to_provider_format, m)?)?;

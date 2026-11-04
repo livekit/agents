@@ -60,9 +60,6 @@ pub enum McpError {
     ToolFailed(String),
     #[error("MCPServer isn't initialized")]
     NotInitialized,
-    #[error("transport_type must be 'sse' or 'streamable_http', got '{0}'")]
-    #[host(kind = "ValueError")]
-    InvalidTransport(String),
     #[error("{0} must be a finite number of seconds >= 0 and <= 100 years")]
     #[host(kind = "ValueError")]
     InvalidTimeout(String),
@@ -172,9 +169,8 @@ pub trait McpSession: Send + Sync + Sized + 'static {
         env: &Self::Env,
         url: String,
         headers: Vec<(String, String)>,
-        transport: String,
         timeout: f64,
-        sse_read_timeout: f64,
+        read_timeout: f64,
     ) -> Result<(), McpError>;
     #[host(await)]
     async fn connect_stdio(
@@ -218,8 +214,6 @@ pub trait McpTools {
     ) -> serde_json::Value;
     #[host(function, name = "mcp_plan_setup")]
     fn plan_setup(toolset_initialized: bool, server_connected: bool) -> String;
-    #[host(function, name = "mcp_http_transport")]
-    fn http_transport(transport_type: Option<String>) -> Result<String, McpError>;
     #[host(function, name = "mcp_render_result")]
     fn render_result(tool_name: String, result: serde_json::Value) -> Result<String, McpError>;
     /// Validate public MCP constructor arguments before a transport can be opened.

@@ -221,7 +221,6 @@
     "llm_unsupported_params",
     "llm_usage_chunk",
     "local_models_init",
-    "mcp_http_transport",
     "mcp_plan_setup",
     "mcp_raw_schema",
     "mcp_render_result",

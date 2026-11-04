@@ -536,7 +536,7 @@ namespaces and supported SDK/data contracts are explicitly retained.
   preserving supported diarization, forwarding and endpoint behavior.
 - [ ] P28–P32: remove deprecated Krisp constructor arguments, Tavus identifiers/env/persona
   endpoint and retired direct-Anthropic model suggestions after their caller migrations.
-- [ ] D01–D05: retire old MCP/RTC/provider protocols, stored-usage decoding and Krisp direct
+- [ ] D02–D05: retire old RTC/provider protocols, stored-usage decoding and Krisp direct
   method shims only after their explicit server/client/data/lifecycle prerequisites.
 
 ### File regrouping and verification

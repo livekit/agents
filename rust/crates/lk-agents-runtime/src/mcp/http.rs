@@ -9,7 +9,7 @@ use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::{ApiConnectOptions, Clock};
 use lk_agents_core::mcp::http::{
     Challenge, Failure, MessageKind, PostReply, PostResponse, Rejected, SESSION_HEADER,
-    StreamReply, check_status, delete_status, post_reply, reserved_header, stream_reply,
+    StreamReply, delete_status, post_reply, reserved_header, stream_reply,
 };
 use lk_agents_net::http::GatewayHttp;
 use lk_agents_net::http::exchange::{Exchange, HttpEvent, ResponsePolicy};
@@ -85,24 +85,6 @@ impl CleanupClient {
                 _ => unreachable!("headers precede the response body"),
             }
         }
-    }
-
-    pub async fn legacy_get(&self, uri: &str) -> Result<lk_agents_net::sse::EventStream, Error> {
-        let mut headers = HeaderMap::new();
-        headers.insert(reqwest::header::ACCEPT, HeaderValue::from_static("text/event-stream"));
-        headers.insert(reqwest::header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-        let response = self.request(Method::GET, uri, Vec::new(), headers).await?;
-        response.check(check_status(response.status.as_u16(), response.challenge()?))?;
-        Ok(lk_agents_net::sse::EventStream::new(response.exchange, BODY_LIMIT))
-    }
-
-    pub async fn legacy_post(&self, uri: &str, message: ClientJsonRpcMessage) -> Result<(), Error> {
-        let mut headers = HeaderMap::new();
-        headers.insert(reqwest::header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        let response =
-            self.request(Method::POST, uri, serde_json::to_vec(&message)?, headers).await?;
-        response.check(check_status(response.status.as_u16(), response.challenge()?))?;
-        response.body().await.map(|_| ())
     }
 
     fn events(

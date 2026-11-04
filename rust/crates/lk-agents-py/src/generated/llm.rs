@@ -1505,12 +1505,12 @@ fn _extract_mcp_session_connect_http_timeout(
 }
 type McpSessionConnectHttpTimeoutInput = f64;
 
-fn _extract_mcp_session_connect_http_sse_read_timeout(
+fn _extract_mcp_session_connect_http_read_timeout(
     obj: &Bound<'_, PyAny>,
-) -> PyResult<McpSessionConnectHttpSseReadTimeoutInput> {
-    crate::py_values::number_from_py::<f64>(obj.as_any(), "sse_read_timeout")
+) -> PyResult<McpSessionConnectHttpReadTimeoutInput> {
+    crate::py_values::number_from_py::<f64>(obj.as_any(), "read_timeout")
 }
-type McpSessionConnectHttpSseReadTimeoutInput = f64;
+type McpSessionConnectHttpReadTimeoutInput = f64;
 
 /// An SDK session whose owner cancels and joins independently of request borrowers.
 #[pyclass(frozen, name = "McpSession", module = "livekit.agents._core")]
@@ -1564,16 +1564,16 @@ impl McpSession {
         Ok(())
     }
 
-    #[pyo3(signature = (url, headers, transport, timeout, sse_read_timeout))]
+    #[pyo3(signature = (url, headers, timeout, read_timeout))]
     fn connect_http<'py>(
         &self,
         py: Python<'py>,
         url: ::std::string::String,
         headers: ::std::vec::Vec<(::std::string::String, ::std::string::String)>,
-        transport: ::std::string::String,
         #[pyo3(from_py_with = _extract_mcp_session_connect_http_timeout)]
         timeout: McpSessionConnectHttpTimeoutInput,
-        #[pyo3(from_py_with = _extract_mcp_session_connect_http_sse_read_timeout)] sse_read_timeout: McpSessionConnectHttpSseReadTimeoutInput,
+        #[pyo3(from_py_with = _extract_mcp_session_connect_http_read_timeout)]
+        read_timeout: McpSessionConnectHttpReadTimeoutInput,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
         let env = crate::process::env();
@@ -1584,9 +1584,8 @@ impl McpSession {
                 &env,
                 url,
                 headers,
-                transport,
                 timeout,
-                sse_read_timeout,
+                read_timeout,
             )
             .await
             .map_err(|e: ::lk_agents_abi::llm::mcp::McpError| {
@@ -1794,23 +1793,6 @@ pub fn mcp_plan_setup(
             server_connected,
         )
     });
-    ::pyo3::PyResult::Ok(out)
-}
-
-#[pyfunction]
-#[pyo3(signature = (transport_type))]
-pub fn mcp_http_transport(
-    py: Python<'_>,
-    transport_type: ::std::option::Option<::std::string::String>,
-) -> PyResult<::std::string::String> {
-    crate::py_calls::check_pid()?;
-    let out = py
-        .detach(|| {
-            <McpToolsImpl as ::lk_agents_abi::llm::mcp::McpTools>::http_transport(transport_type)
-        })
-        .map_err(|e: ::lk_agents_abi::llm::mcp::McpError| {
-            <::lk_agents_abi::llm::mcp::McpError as crate::py_errors::HostException>::to_py_err(&e)
-        })?;
     ::pyo3::PyResult::Ok(out)
 }
 
@@ -4872,9 +4854,6 @@ impl crate::py_errors::HostException for ::lk_agents_abi::llm::mcp::McpError {
                 "ToolError",
                 ::std::string::ToString::to_string(self),
             ),
-            Self::InvalidTransport(..) => {
-                ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
-            }
             Self::InvalidTimeout(..) => {
                 ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
             }

@@ -152,22 +152,18 @@ impl McpSessionPort for McpSession {
         env: &ProcessEnv,
         url: String,
         headers: Vec<(String, String)>,
-        transport: String,
         timeout: f64,
-        sse_read_timeout: f64,
+        read_timeout: f64,
     ) -> Result<(), McpError> {
         let timeout = timeout_duration("timeout", timeout)?;
-        let sse_read_timeout = timeout_duration("sse_read_timeout", sse_read_timeout)?;
+        let read_timeout = timeout_duration("read_timeout", read_timeout)?;
         let _connecting = self.connecting.lock().await;
         if self.connected() {
             return Ok(());
         }
         let cancel = self.begin_connect();
         let receipt = Arc::new(TransportReceipt::default());
-        let transport = tokio::select! {
-            _ = cancel.cancelled() => return Err(cancelled()),
-            transport = connect_http(env, url, headers, &transport, timeout, sse_read_timeout, receipt.clone()) => transport?,
-        };
+        let transport = connect_http(env, url, headers, timeout, read_timeout, receipt.clone())?;
         self.serve(transport, receipt, cancel).await
     }
     async fn connect_stdio(
