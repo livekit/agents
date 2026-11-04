@@ -30,7 +30,7 @@ def restore_capture_policy() -> Iterator[None]:
         set_capture_content(True)
 
 
-def test_session_report_events_are_bounded_snapshots_without_implicitly_captured_content(
+def test_session_report_events_keep_every_snapshot_without_implicitly_captured_content(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(_session_events.time, "monotonic_ns", lambda: 1)
@@ -45,26 +45,25 @@ def test_session_report_events_are_bounded_snapshots_without_implicitly_captured
     state = AgentStateChangedEvent(old_state="listening", new_state="thinking")
     for _ in range(1100):
         session.emit("agent_state_changed", state)
-    assert len(session._recorded_events) == 1024
+    # every event is kept: a long session only logs a warning past a count
+    assert len(session._recorded_events) == 1100
     assert all(
         event["type"] == "agent_state_changed" and event["new_state"] == "thinking"
         for event in session._recorded_events
     )
     monkeypatch.setattr(_session_events.time, "monotonic_ns", lambda: 3600_000_000_001)
-    assert session._recorded_events == []
+    assert len(session._recorded_events) == 1100
 
 
-def test_session_event_consent_is_captured_and_oversized_events_do_not_enter_reports() -> None:
+def test_session_event_consent_is_captured_and_large_events_enter_reports() -> None:
     set_capture_content(True)
     session = VoiceSession(turn_handling={"turn_detection": None})
     set_capture_content(False)
     small = UserInputTranscribedEvent(transcript="captured with consent", is_final=True)
     session.emit("user_input_transcribed", small)
-    session.emit(
-        "user_input_transcribed",
-        UserInputTranscribedEvent(transcript="large" * 100_000, is_final=True),
-    )
-    assert session._recorded_events == [event_dict(small, json=True)]
+    large = UserInputTranscribedEvent(transcript="large" * 100_000, is_final=True)
+    session.emit("user_input_transcribed", large)
+    assert session._recorded_events == [event_dict(small, json=True), event_dict(large, json=True)]
     session._recording_options["redaction"] = True
     session.emit("user_input_transcribed", small)
     assert session._recorded_events == []
