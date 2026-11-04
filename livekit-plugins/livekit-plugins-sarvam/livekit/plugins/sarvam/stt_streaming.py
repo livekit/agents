@@ -52,11 +52,13 @@ USER_AGENT = f"Livekit/{livekit_version} Python/{platform.python_version()}"
 SARVAM_STT_REALTIME_URL = "wss://api.sarvam.ai/speech-to-text-realtime/ws"
 REALTIME_MODEL = "saaras:v3-realtime"
 
+RealtimeModel = Literal["saaras:v3-realtime", "saaras:v4"]
 RealtimeStreamType = Literal["fast", "balanced", "simulated"]
 RealtimeEndpointing = Literal["vad", "manual"]
 RealtimeEncoding = Literal["linear16", "linear32", "mulaw", "alaw"]
 RealtimeMode = Literal["transcribe", "translate", "verbatim", "translit", "codemix"]
 
+SUPPORTED_MODELS = {"saaras:v3-realtime", "saaras:v4"}
 SUPPORTED_SAMPLE_RATES = {8000, 16000}
 SUPPORTED_STREAM_TYPES = {"fast", "balanced", "simulated"}
 SUPPORTED_ENDPOINTING = {"vad", "manual"}
@@ -150,7 +152,7 @@ class RealtimeSTTOptions:
     endpointing: RealtimeEndpointing | str = "vad"
     encoding: RealtimeEncoding | str = "linear16"
     sample_rate: int = 16000
-    model: str = REALTIME_MODEL
+    model: RealtimeModel | str = REALTIME_MODEL
     base_url: str = SARVAM_STT_REALTIME_URL
     prompt: str | None = None
     return_timestamps: bool = False
@@ -160,8 +162,8 @@ class RealtimeSTTOptions:
     vad_prefix_padding_ms: int | None = None
 
     def __post_init__(self) -> None:
-        if self.model != REALTIME_MODEL:
-            raise ValueError(f"model must be {REALTIME_MODEL}")
+        if self.model not in SUPPORTED_MODELS:
+            raise ValueError(f"model must be one of {', '.join(sorted(SUPPORTED_MODELS))}")
         if self.language not in SUPPORTED_LANGUAGES:
             raise ValueError(f"language {self.language} is not supported")
         if self.stream_type not in SUPPORTED_STREAM_TYPES:
@@ -219,7 +221,9 @@ def _build_realtime_ws_url(base_url: str, opts: RealtimeSTTOptions) -> str:
 
 
 class STTRealtime(stt.STT):
-    """Speech-to-text using Sarvam's realtime WebSocket endpoint (``saaras:v3-realtime``).
+    """Speech-to-text using Sarvam's realtime WebSocket endpoint.
+
+    The endpoint serves ``saaras:v3-realtime`` (the default) and ``saaras:v4``.
 
     This endpoint streams interim and final transcripts over a single
     WebSocket connection and supports either server-side VAD or
@@ -230,6 +234,7 @@ class STTRealtime(stt.STT):
         self,
         *,
         language: str = "en-IN",
+        model: RealtimeModel | str = REALTIME_MODEL,
         stream_type: RealtimeStreamType | str = "balanced",
         mode: RealtimeMode | str = "transcribe",
         endpointing: RealtimeEndpointing | str = "vad",
@@ -249,6 +254,8 @@ class STTRealtime(stt.STT):
 
         Args:
             language: BCP-47 language code, or ``auto`` for adaptive language identification.
+            model: Realtime model: ``saaras:v3-realtime`` or ``saaras:v4``. Fixed for the
+                lifetime of each connection.
             stream_type: Latency profile: ``fast``, ``balanced``, or ``simulated``.
             mode: Task applied to finals: ``transcribe``, ``translate``, ``verbatim``,
                 ``translit``, or ``codemix``.
@@ -290,6 +297,7 @@ class STTRealtime(stt.STT):
         self._opts = RealtimeSTTOptions(
             language=language,
             api_key=api_key,
+            model=model,
             stream_type=stream_type,
             mode=mode,
             endpointing=endpointing,
@@ -310,7 +318,7 @@ class STTRealtime(stt.STT):
     @property
     def model(self) -> str:
         """Name of the Sarvam realtime model backing this instance."""
-        return REALTIME_MODEL
+        return self._opts.model
 
     @property
     def provider(self) -> str:
@@ -380,6 +388,7 @@ class STTRealtime(stt.STT):
         opts = RealtimeSTTOptions(
             language=language if is_given(language) else self._opts.language,
             api_key=self._opts.api_key,
+            model=self._opts.model,
             stream_type=stream_type if is_given(stream_type) else self._opts.stream_type,
             mode=mode if is_given(mode) else self._opts.mode,
             endpointing=endpointing if is_given(endpointing) else self._opts.endpointing,
@@ -441,6 +450,7 @@ class STTRealtime(stt.STT):
         opts = RealtimeSTTOptions(
             language=language if is_given(language) else self._opts.language,
             api_key=self._opts.api_key,
+            model=self._opts.model,
             stream_type=self._opts.stream_type,
             mode=self._opts.mode,
             endpointing=self._opts.endpointing,
