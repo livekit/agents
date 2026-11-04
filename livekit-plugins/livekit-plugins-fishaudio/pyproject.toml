@@ -22,8 +22,8 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "livekit-agents[codecs]>=1.8.9",
-    "msgpack>=1.0",
+    "livekit-agents[codecs]>=1.8.10",
+    "msgpack>=1.2.3",
 ]
 
 [project.urls]

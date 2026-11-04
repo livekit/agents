@@ -17,8 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from dataclasses import dataclass
-from enum import Enum, auto
+from dataclasses import dataclass, replace
 
 import aiohttp
 
@@ -45,7 +44,6 @@ from .rtzrapi import DEFAULT_SAMPLE_RATE, RTZRConnectionError, RTZROpenAPIClient
 _DEFAULT_CHUNK_MS = 100
 _IDLE_TIMEOUT_SECONDS = 25.0
 _RECV_COMPLETION_TIMEOUT = 5.0
-_IDLE_CHECK_INTERVAL = 1.0
 
 
 @dataclass
@@ -60,15 +58,6 @@ class _STTOptions:
     active_threshold: float = 0.80
     use_punctuation: bool = False
     keywords: list[str] | list[tuple[str, float]] | None = None
-
-
-class _StreamState(Enum):
-    """State machine for SpeechStream lifecycle."""
-
-    IDLE = auto()  # No active speech, no WS connection
-    ACTIVE = auto()  # Speech active, WS connected
-    CLOSING = auto()  # Sending EOS, waiting for recv completion
-    CLOSED = auto()  # Stream fully closed
 
 
 class STT(stt.STT):
@@ -92,7 +81,6 @@ class STT(stt.STT):
             capabilities=stt.STTCapabilities(
                 streaming=True,
                 interim_results=True,
-                # word timestamps don't seem to work despite the docs saying they do
                 aligned_transcript="chunk",
                 offline_recognize=False,
             )
@@ -152,11 +140,7 @@ class SpeechStream(stt.SpeechStream):
         self._rtzr_stt: STT = stt
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._recv_task: asyncio.Task[None] | None = None
-        self._state = _StreamState.IDLE
-        self._connection_lock = asyncio.Lock()
         self._idle_timeout = _IDLE_TIMEOUT_SECONDS
-        self._last_audio_at: float | None = None
-        self._idle_task: asyncio.Task[None] | None = None
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         config = self._rtzr_stt._client.build_config(
@@ -202,65 +186,28 @@ class SpeechStream(stt.SpeechStream):
             raise APIConnectionError("RTZR API connection failed") from e
 
     async def _run(self) -> None:
-        send_task = asyncio.create_task(self._send_audio_task(), name="RTZR.send_audio")
-        self._idle_task = asyncio.create_task(self._idle_watchdog(), name="RTZR.idle_watchdog")
-
         try:
-            await send_task
+            await self._send_audio_task()
         finally:
-            self._state = _StreamState.CLOSED
-            if self._idle_task and not self._idle_task.done():
-                await utils.aio.gracefully_cancel(self._idle_task)
             await self._await_recv_completion()
             await self._cleanup_connection()
 
     async def _ensure_connected(self) -> None:
         """Lazy connect on first audio."""
-        async with self._connection_lock:
-            if self._ws is not None:
-                return
-            try:
-                ws = await self._connect_ws()
-                self._ws = ws
-                self._state = _StreamState.ACTIVE
-                self._recv_task = asyncio.create_task(self._recv_loop(ws), name="RTZR.recv_loop")
-                self._last_audio_at = time.monotonic()
-            except Exception:
-                self._state = _StreamState.IDLE
-                raise
+        if self._ws is None:
+            self._ws = await self._connect_ws()
+            self._recv_task = asyncio.create_task(self._recv_loop(self._ws), name="RTZR.recv_loop")
 
     async def _end_segment(self) -> None:
-        """Close current segment, prepare for next."""
-        async with self._connection_lock:
-            if not self._ws:
-                return
-            self._state = _StreamState.CLOSING
-            try:
-                await self._ws.send_str("EOS")
-                logger.info("Sent EOS to close audio segment")
-            except Exception:
-                logger.exception("Failed to send EOS")
-            await self._await_recv_completion()
-            await self._cleanup_connection()
-            self._state = _StreamState.IDLE
-            self._last_audio_at = None
-
-    async def _idle_watchdog(self) -> None:
+        """Drain the current connection before reading audio for the next one."""
+        if self._ws is None:
+            return
         try:
-            while self._state != _StreamState.CLOSED:
-                await asyncio.sleep(_IDLE_CHECK_INTERVAL)
-                if self._state != _StreamState.ACTIVE or not self._ws:
-                    continue
-                if self._last_audio_at is None:
-                    continue
-                if time.monotonic() - self._last_audio_at >= self._idle_timeout:
-                    logger.info(
-                        "RTZR STT idle timeout reached (%.0fs); closing segment",
-                        self._idle_timeout,
-                    )
-                    await self._end_segment()
-        except asyncio.CancelledError:
-            pass
+            await self._ws.send_str("EOS")
+        except Exception:
+            logger.exception("Failed to send EOS")
+        await self._await_recv_completion()
+        await self._cleanup_connection()
 
     async def _cleanup_connection(self) -> None:
         if self._ws:
@@ -286,48 +233,49 @@ class SpeechStream(stt.SpeechStream):
             samples_per_channel=self._rtzr_stt._params.sample_rate // (1000 // _DEFAULT_CHUNK_MS),
         )
 
-        has_ended = False
-        async for data in self._input_ch:
-            frames: list[rtc.AudioFrame] = []
+        self._input_ch.restart_provider_clock()
+        while True:
+            try:
+                data = await asyncio.wait_for(
+                    self._input_ch.recv(),
+                    timeout=self._idle_timeout if self._ws is not None else None,
+                )
+            except asyncio.TimeoutError:
+                data = self._FlushSentinel()
+            except utils.aio.ChanClosed:
+                break
 
             if isinstance(data, rtc.AudioFrame):
-                frames.extend(audio_bstream.write(data.data.tobytes()))
-            elif isinstance(data, self._FlushSentinel):
-                frames.extend(audio_bstream.flush())
-                has_ended = True
+                frames = audio_bstream.write(data.data.tobytes())
+            else:
+                frames = audio_bstream.flush()
 
-            if frames and not self._ws:
+            if frames:
                 await self._ensure_connected()
-
-            for frame in frames:
-                if self._ws:
+                assert self._ws is not None
+                for frame in frames:
                     await self._ws.send_bytes(frame.data.tobytes())
-                    self._last_audio_at = time.monotonic()
 
-            if has_ended:
-                if self._ws:
-                    await self._end_segment()
-                has_ended = False  # always reset - flush without active WS is a no-op
+            if isinstance(data, self._FlushSentinel):
+                await self._end_segment()
+                self._input_ch.restart_provider_clock()
 
-        # Final shutdown
-        if self._ws:
-            self._state = _StreamState.CLOSING
-            try:
-                await self._ws.send_str("EOS")
-                logger.info("Sent final EOS to close audio stream")
-            except Exception:
-                logger.exception("Failed to send final EOS")
-            await self._await_recv_completion()
-            await self._cleanup_connection()
-        self._state = _StreamState.IDLE
+        frames = audio_bstream.flush()
+        if frames:
+            await self._ensure_connected()
+            assert self._ws is not None
+            for frame in frames:
+                await self._ws.send_bytes(frame.data.tobytes())
+        await self._end_segment()
 
-    def _parse_words(self, words: list[dict]) -> list[TimedString]:
+    def _parse_words(self, words: list[dict], *, start_time: float) -> list[TimedString]:
         """Parse word timing data from RTZR response."""
         return [
             TimedString(
                 text=w.get("text", ""),
-                start_time=w.get("start_at", 0) / 1000.0 + self.start_time_offset,
+                start_time=start_time + w.get("start_at", 0) / 1000.0 + self.start_time_offset,
                 end_time=(w.get("start_at", 0) + w.get("duration", 0)) / 1000.0
+                + start_time
                 + self.start_time_offset,
             )
             for w in words
@@ -362,12 +310,12 @@ class SpeechStream(stt.SpeechStream):
         """
         start_time = data.get("start_at", 0) / 1000.0
         duration = data.get("duration", 0) / 1000.0
-        words = data.get("words", [])
-
         if "alternatives" not in data or not data["alternatives"]:
             return [], in_speech, speech_started_at
 
-        text = data["alternatives"][0].get("text", "")
+        alternative = data["alternatives"][0]
+        text = alternative.get("text", "")
+        words = alternative.get("words", [])
         is_final = bool(data.get("final", False))
 
         if not text:
@@ -395,7 +343,7 @@ class SpeechStream(stt.SpeechStream):
                         language=self._rtzr_stt._params.language,
                         start_time=start_time + self.start_time_offset,
                         end_time=start_time + duration + self.start_time_offset,
-                        words=self._parse_words(words) if words else None,
+                        words=self._parse_words(words, start_time=start_time) if words else None,
                     )
                 ],
             )
@@ -406,7 +354,22 @@ class SpeechStream(stt.SpeechStream):
                 time.monotonic() - speech_started_at if speech_started_at is not None else 0.0
             )
             logger.debug("RTZR final transcript received (speech_duration=%.2fs)", speech_duration)
-            events.append(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+            end_alternatives = []
+            # The utterance duration includes endpointing silence; word times are
+            # relative to the utterance's start_at, not the beginning of the stream.
+            if words and words[-1].get("duration", 0) > 0:
+                end_time = (
+                    start_time
+                    + (words[-1].get("start_at", 0) + words[-1]["duration"]) / 1000.0
+                    + self.start_time_offset
+                )
+                end_alternatives = [replace(events[-1].alternatives[0], end_time=end_time)]
+            events.append(
+                stt.SpeechEvent(
+                    type=stt.SpeechEventType.END_OF_SPEECH,
+                    alternatives=end_alternatives,
+                )
+            )
             in_speech = False
             speech_started_at = None
 

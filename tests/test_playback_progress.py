@@ -188,6 +188,32 @@ async def test_a_drained_source_ends_its_run_when_it_ran_dry() -> None:
     assert ev.started_at == pytest.approx(dry_at - played)
 
 
+async def test_a_stalled_capture_still_ends_the_run_when_it_ran_dry() -> None:
+    """The event loop can return from capture_frame after the source played out what it
+    was handed; the run still ends where the audio did."""
+    async with _Harness() as h:
+        capture = h.source.capture_frame
+
+        async def stalled(frame: rtc.AudioFrame) -> None:
+            await capture(frame)
+            h.now += 0.3  # the loop resumes 300 ms later, the frame long played out
+            h.source.queued_duration = 0.0
+
+        submitted_at = h.now
+        h.source.capture_frame = stalled  # type: ignore[method-assign]
+        await h.push(0.05)
+        h.source.capture_frame = capture  # type: ignore[method-assign]
+        played = h.sink._source_pushed_duration
+
+        h.now += 0.5
+        await h.push(0.1)
+
+    assert len(h.progress) == 1
+    ev = h.progress[0]
+    assert ev.duration == pytest.approx(played)
+    assert ev.started_at == pytest.approx(submitted_at)
+
+
 async def test_a_flush_after_the_source_drained_ends_the_run_when_it_ran_dry() -> None:
     """A segment whose flush trails its own playout still sits where it played."""
     async with _Harness() as h:

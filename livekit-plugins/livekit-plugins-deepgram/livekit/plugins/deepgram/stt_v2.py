@@ -19,7 +19,7 @@ import json
 import os
 import weakref
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal
 
 import aiohttp
@@ -160,12 +160,6 @@ class STTv2(stt.STT):
                     f"eager_eot_threshold ({eager_eot_threshold}) must be less than or equal to eot_threshold "
                     f"({effective_eot}); increase eot_threshold (max 0.9) to use a higher eager value"
                 )
-        if language_hint and model != "flux-general-multi":
-            logger.warning(
-                "`language_hint` is only supported by `flux-general-multi` and will be ignored for model '%s'",
-                model,
-            )
-
         self._opts = STTOptions(
             model=model,
             sample_rate=sample_rate,
@@ -292,11 +286,6 @@ class STTv2(stt.STT):
             self._opts.tags = _validate_tags(tags)
         if is_given(language_hint):
             self._opts.language_hint = language_hint
-            if language_hint and self._opts.model != "flux-general-multi":
-                logger.warning(
-                    "`language_hint` is only supported by `flux-general-multi` and will be ignored for model '%s'",
-                    self._opts.model,
-                )
         if is_given(endpoint_url):
             self._opts.endpoint_url = endpoint_url
         if is_given(eager_eot_threshold):
@@ -359,6 +348,8 @@ class SpeechStreamv2(stt.SpeechStream):
         # active connection for in-band Configure updates; None while disconnected
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._reconfigure_atask: asyncio.Task[None] | None = None
+        # one warning per stream: a reconnect rebuilds the config and must not re-warn
+        self._language_hint_warned = False
 
     def update_options(
         self,
@@ -448,7 +439,7 @@ class SpeechStreamv2(stt.SpeechStream):
         if is_given(keyterm):
             # keyterms replaces the whole list, so send the full effective set
             changed_options["keyterms"] = self._opts.keyterm
-        if is_given(language_hint):
+        if is_given(language_hint) and self._configure_language_hint():
             changed_options["language_hints"] = self._opts.language_hint
 
         if changed_options:
@@ -573,6 +564,7 @@ class SpeechStreamv2(stt.SpeechStream):
         while True:
             try:
                 ws = await self._connect_ws()
+                self._input_ch.restart_provider_clock()
                 # expose the connection for in-band Configure updates
                 self._ws = ws
                 tasks = [
@@ -608,6 +600,34 @@ class SpeechStreamv2(stt.SpeechStream):
                 if ws is not None:
                     await ws.close()
 
+    def _sends_language_hint(self) -> bool:
+        """Whether this connection carries the hint, warning once per stream when it cannot."""
+        if not self._opts.language_hint:
+            return False
+        if _language_hint_applies(self._opts.model):
+            return True
+        if not self._language_hint_warned:
+            self._language_hint_warned = True
+            logger.warning(
+                "not sending `language_hint` for model '%s': Deepgram applies a hint only on "
+                "`flux-general-multi`. The hint stays set, and is sent again if the model "
+                "switches back",
+                self._opts.model,
+            )
+        return False
+
+    def _configure_language_hint(self) -> bool:
+        """Whether the hint belongs on a Configure frame.
+
+        Flux keeps omitted fields, so an explicit clear has to be sent as an empty
+        array — which Deepgram reads as "clear all" — or the connection's previous
+        language bias survives until it reconnects. A non-empty hint follows the
+        connect-time rule, warning once per stream when the model cannot take it.
+        """
+        if not self._opts.language_hint:
+            return _language_hint_applies(self._opts.model)
+        return self._sends_language_hint()
+
     def _live_config(self) -> dict[str, Any]:
         live_config: dict[str, Any] = {
             "model": self._opts.model,
@@ -631,7 +651,7 @@ class SpeechStreamv2(stt.SpeechStream):
         if self._opts.tags:
             live_config["tag"] = self._opts.tags
 
-        if self._opts.language_hint:
+        if self._sends_language_hint():
             live_config["language_hint"] = self._opts.language_hint
 
         if self._opts.numerals:
@@ -688,7 +708,9 @@ class SpeechStreamv2(stt.SpeechStream):
         )
         self._event_ch.send_nowait(usage_event)
 
-    def _send_transcript_event(self, event_type: stt.SpeechEventType, data: dict) -> None:
+    def _send_transcript_event(
+        self, event_type: stt.SpeechEventType, data: dict
+    ) -> list[stt.SpeechData]:
         alts = _parse_transcription(self._opts.language, data, self.start_time_offset)
         if alts:
             event = stt.SpeechEvent(
@@ -697,6 +719,7 @@ class SpeechStreamv2(stt.SpeechStream):
                 alternatives=alts,
             )
             self._event_ch.send_nowait(event)
+        return alts
 
     def _process_stream_event(self, data: dict) -> None:
         assert self._opts.language is not None
@@ -743,9 +766,19 @@ class SpeechStreamv2(stt.SpeechStream):
 
                 self._speaking = False
 
-                self._send_transcript_event(stt.SpeechEventType.FINAL_TRANSCRIPT, data)
+                alts = self._send_transcript_event(stt.SpeechEventType.FINAL_TRANSCRIPT, data)
+                words = data.get("words") or []
+                last_word_end = words[-1].get("end", 0) if words else 0
 
-                end_event = stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+                end_event = stt.SpeechEvent(
+                    type=stt.SpeechEventType.END_OF_SPEECH,
+                    alternatives=[
+                        replace(alt, end_time=self.start_time_offset + last_word_end)
+                        for alt in alts
+                    ]
+                    if last_word_end > 0
+                    else [],
+                )
                 self._event_ch.send_nowait(end_event)
 
         elif data["type"] == "ConfigureSuccess":
@@ -794,6 +827,16 @@ def _parse_transcription(
         ],
     )
     return [sd]
+
+
+def _language_hint_applies(model: V2Models | str) -> bool:
+    """Whether `language_hint` reaches the wire for this model.
+
+    Deepgram applies a hint only on `flux-general-multi`, its multilingual model, and
+    answers any other model with a 400. The hint stays on the options regardless, so a
+    model switch back to the multilingual one sends it again.
+    """
+    return model == "flux-general-multi"
 
 
 def _validate_tags(tags: list[str]) -> list[str]:
