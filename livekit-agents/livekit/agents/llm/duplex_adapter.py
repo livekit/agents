@@ -13,7 +13,7 @@ from livekit import rtc
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr, TimedString
 from ..utils import aio, is_given, shortuuid
-from ..utils.audio_gate import AdaptiveNoiseGate, AudioGate
+from ..utils.audio_gate import AdaptiveNoiseGate, AudioGate, FixedGate  # noqa: F401 (re-export)
 from .chat_context import ChatContext, ChatMessage, FunctionCall
 from .duplex import (
     DuplexAudioFrame,
