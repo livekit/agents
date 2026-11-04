@@ -16,13 +16,12 @@ use super::proto::resource::v1::Resource;
 use super::proto::trace::v1 as trace;
 use lk_agents_abi::telemetry::decl::{Attrs, Content};
 use lk_agents_abi::telemetry::record::{
-    Key, KeyValues, LogRecord, Record, SpanKind, SpanRecord, SpanRef, Status, Value,
+    FRAMEWORK, Key, KeyValues, LogRecord, Record, SpanKind, SpanRecord, SpanRef, Status, Value,
 };
+use lk_agents_abi::telemetry::semconv::otel::SERVICE_NAME;
 use lk_agents_abi::telemetry::spans::common::{JobIdentity as Stamp, SdkResource, SessionFlags};
 
 use super::config::{CloudRecording, JobIdentity, ProcessIdentity};
-
-const SERVICE_NAME: &str = "service.name";
 
 /// Sets each key, replacing a producer's value: the stamp is the one place identity is written.
 pub(crate) fn stamp(attributes: &mut KeyValues, stamp: &KeyValues) {
@@ -92,7 +91,7 @@ fn sdk(process: &ProcessIdentity, out: &mut KeyValues) {
 }
 
 pub(crate) fn cloud_resource(process: &ProcessIdentity, job: &JobIdentity) -> Resource {
-    let mut attributes: KeyValues = vec![(Cow::Borrowed(SERVICE_NAME), "livekit-agents".into())];
+    let mut attributes: KeyValues = vec![(Cow::Borrowed(SERVICE_NAME), FRAMEWORK.into())];
     sdk(process, &mut attributes);
     attributes.extend(job_stamp(process, job, false));
     resource(&attributes)
@@ -256,9 +255,6 @@ pub(crate) fn logs_request(resource: Resource, records: &[LogRecord]) -> ExportL
     }
 }
 
-/// The framework's instrumentation scope for measurements.
-pub(crate) const METRICS_SCOPE: &str = "livekit-agents";
-
 pub(crate) fn metrics_request(
     resource: Resource,
     metrics: Vec<metrics::Metric>,
@@ -267,7 +263,7 @@ pub(crate) fn metrics_request(
         resource_metrics: vec![metrics::ResourceMetrics {
             resource: Some(resource),
             scope_metrics: vec![metrics::ScopeMetrics {
-                scope: scope(&Cow::Borrowed(METRICS_SCOPE)),
+                scope: scope(&Cow::Borrowed(FRAMEWORK)),
                 metrics,
                 ..Default::default()
             }],

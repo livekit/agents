@@ -4,6 +4,7 @@
 use crate::telemetry::decl::{Attrs, Content, SpanValue, event};
 use crate::telemetry::errors::ErrorType;
 use crate::telemetry::semconv::{otel, protocol};
+use crate::types::attributes;
 use crate::voice::rtc;
 
 /// The job's identity, stamped by the exporter on every span, log record and Cloud measurement of
@@ -38,16 +39,16 @@ pub struct JobIdentity {
 #[derive(Attrs)]
 pub struct SessionFlags {
     /// PII redaction is on for the session; a native boolean on every record.
-    #[attr("lk.redaction.enabled")]
+    #[attr(attributes::ATTRIBUTE_REDACTION_ENABLED)]
     pub redaction: bool,
     /// The session is a simulation; a native boolean on every record.
-    #[attr("lk.simulation.enabled")]
+    #[attr(attributes::ATTRIBUTE_SIMULATION_ENABLED)]
     pub simulation: bool,
     /// Simulation run the session belongs to.
-    #[attr("lk.simulation.run_id")]
+    #[attr(attributes::ATTRIBUTE_SIMULATION_RUN_ID)]
     pub simulation_run_id: Option<String>,
     /// Simulation run job (one scenario) behind the session.
-    #[attr("lk.simulation.job_id")]
+    #[attr(attributes::ATTRIBUTE_SIMULATION_JOB_ID)]
     pub simulation_job_id: Option<String>,
 }
 

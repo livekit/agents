@@ -4,6 +4,9 @@
 
 use std::borrow::Cow;
 
+/// The framework's instrumentation scope, and its `service.name` unless the application names one.
+pub const FRAMEWORK: &str = "livekit-agents";
+
 /// An attribute key: a declared or semconv constant, or an application's own key.
 pub type Key = Cow<'static, str>;
 

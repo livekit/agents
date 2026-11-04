@@ -92,7 +92,6 @@ pub mod provider {
     }
 }
 
-pub mod attributes;
 pub mod decl;
 pub mod errors;
 pub mod host;
@@ -127,6 +126,7 @@ pub mod semconv {
     /// OpenTelemetry semantic conventions v1.44.0 and the GenAI registry.
     pub mod otel {
         pub const ERROR_TYPE: &str = "error.type";
+        pub const SERVICE_NAME: &str = "service.name";
         pub const EXCEPTION_TYPE: &str = "exception.type";
         pub const EXCEPTION_MESSAGE: &str = "exception.message";
         pub const EXCEPTION_STACKTRACE: &str = "exception.stacktrace";
@@ -176,6 +176,8 @@ pub mod semconv {
         pub const GEN_AI_USAGE_IMAGE_CACHE_READ_INPUT_TOKENS: &str =
             "gen_ai.usage.image.cache_read.input_tokens";
         pub const GEN_AI_WORKFLOW_NAME: &str = "gen_ai.workflow.name";
+        /// `input` or `output` on `gen_ai.client.token.usage`. Deprecated upstream; as emitted.
+        pub const GEN_AI_TOKEN_TYPE: &str = "gen_ai.token.type";
 
         /// Metrics imported from the GenAI registry.
         pub const GEN_AI_EXECUTE_TOOL_DURATION: &str = "gen_ai.execute_tool.duration";

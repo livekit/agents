@@ -52,7 +52,6 @@ mod testkit;
 
 // The session report. Its `RecordingOptions` is not re-exported: `voice::session_options` has a
 // type of that name.
-pub(crate) use telemetry::attributes;
 pub use telemetry::report::{EvaluationRecord, Outcome, TAG_FAIL, TAG_SUCCESS};
 
 pub use media::emitter::EmitterError;
@@ -92,7 +91,7 @@ pub use vad::types::{Vad, VadCapabilities, VadSink, VadSource};
 /// At the root because generated extract code names it through `use lk_agents_abi::*`.
 pub use tokenize::language::LanguageCode;
 
-pub use attributes::{
+pub use types::attributes::{
     ATTRIBUTE_AGENT_NAME, ATTRIBUTE_AGENT_STATE, ATTRIBUTE_PUBLISH_ON_BEHALF,
     ATTRIBUTE_REDACTION_ENABLED, ATTRIBUTE_SIMULATION_ENABLED, ATTRIBUTE_SIMULATOR,
     ATTRIBUTE_SIMULATOR_DISPATCH, ATTRIBUTE_TRANSCRIPTION_EXPRESSION,

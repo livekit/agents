@@ -1,6 +1,6 @@
 # GENERATED FILE -- DO NOT EDIT.
 # From ABI declarations and authored plugin bases:
-#     rust/crates/lk-agents-abi/src/telemetry/attributes.rs
+#     rust/crates/lk-agents-abi/src/types/attributes.rs
 
 from __future__ import annotations
 

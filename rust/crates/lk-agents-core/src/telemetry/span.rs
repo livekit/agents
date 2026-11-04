@@ -11,17 +11,14 @@ use lk_agents_abi::telemetry::decl::{
 };
 use lk_agents_abi::telemetry::errors::{ErrorType, SpanError};
 use lk_agents_abi::telemetry::record::{
-    EventRecord, JobKey, Key, KeyValues, Measurement, Number, Record, SpanId, SpanKind, SpanRecord,
-    SpanRef, Status, TraceId,
+    EventRecord, FRAMEWORK, JobKey, Key, KeyValues, Measurement, Number, Record, SpanId, SpanKind,
+    SpanRecord, SpanRef, Status, TraceId,
 };
 use lk_agents_abi::telemetry::spans::common::{EverySpan, Exception};
 use lk_agents_abi::telemetry::spans::session::AgentSession;
 use std::collections::BTreeMap;
 use std::marker::PhantomData;
 use std::time::{Duration, SystemTime};
-
-/// The instrumentation scope of every framework span.
-pub const FRAMEWORK_SCOPE: &str = "livekit-agents";
 
 /// Where span and trace ids come from: random in production, seeded in the DST.
 pub type IdSource = Box<dyn FnMut() -> u64 + Send>;
@@ -436,7 +433,7 @@ impl Trace {
             events,
             links: Vec::new(),
             status,
-            scope: Key::Borrowed(FRAMEWORK_SCOPE),
+            scope: Key::Borrowed(FRAMEWORK),
             job: self.job.clone(),
         };
         let records = &mut self.records;

@@ -1,7 +1,8 @@
 //! What the exporter is told: the process and job identity, the Cloud endpoint and a job's
 //! recording decision, and the application endpoint (`OTEL_EXPORTER_OTLP_*` or explicit).
 
-use lk_agents_abi::telemetry::record::KeyValues;
+use lk_agents_abi::telemetry::record::{FRAMEWORK, KeyValues};
+use lk_agents_abi::telemetry::semconv::otel::SERVICE_NAME;
 
 /// `lk.sdk.name`: the SDK a process runs, a closed set Agent Insights reads. The Python binding
 /// passes [`SdkName::Python`].
@@ -104,15 +105,12 @@ pub struct AppConfig {
     pub allow_pii: bool,
 }
 
-const SERVICE_NAME: &str = "service.name";
-const DEFAULT_SERVICE: &str = "livekit-agents";
-
 impl AppConfig {
     /// Both signals under an OTLP base endpoint (`.../v1/traces`, `.../v1/metrics`).
     pub fn with_endpoint(endpoint: &str) -> Self {
         let mut config = AppConfig::default();
         config.set_base(endpoint);
-        config.resource = vec![(SERVICE_NAME.into(), DEFAULT_SERVICE.into())];
+        config.resource = vec![(SERVICE_NAME.into(), FRAMEWORK.into())];
         config
     }
 
@@ -162,7 +160,7 @@ impl AppConfig {
         };
         let mut resource = var("OTEL_RESOURCE_ATTRIBUTES").map(|v| pairs(&v)).unwrap_or_default();
         resource.retain(|(k, _)| k != SERVICE_NAME || var("OTEL_SERVICE_NAME").is_none());
-        let service = var("OTEL_SERVICE_NAME").unwrap_or_else(|| DEFAULT_SERVICE.into());
+        let service = var("OTEL_SERVICE_NAME").unwrap_or_else(|| FRAMEWORK.into());
         if !resource.iter().any(|(k, _)| k == SERVICE_NAME) {
             resource.insert(0, (SERVICE_NAME.into(), service));
         }

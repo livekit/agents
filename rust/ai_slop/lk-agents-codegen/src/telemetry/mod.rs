@@ -307,19 +307,19 @@ impl Reader<'_> {
                         }
                         label.label = Some(label.key.clone());
                     }
-                    let upstream = matches!(metric.name, t::Name::Path(_));
+                    let (name, registry) = self.key(module, &metric.name, &here)?;
                     let bounds = match &metric.bounds {
                         Some(path) => self.bounds(module, path, &here)?,
                         None => Vec::new(),
                     };
                     r.metrics.push(Metric {
-                        name: self.metric_name(module, metric, &here)?,
+                        name,
                         kind: metric.kind,
                         unit: metric.unit.value(),
                         bounds,
                         labels,
                         brief,
-                        upstream,
+                        upstream: registry != "agents",
                     });
                 }
                 Some(Role::Record { scope, body }) => {
@@ -383,7 +383,7 @@ impl Reader<'_> {
             let syn::Expr::Path(p) = item else {
                 return Err(format!("{here} holds key constants"));
             };
-            keys.push(self.key(module, &p.path, here)?.0);
+            keys.push(self.key(module, &t::Name::Path(p.path.clone()), here)?.0);
         }
         Ok(keys)
     }
@@ -486,18 +486,12 @@ impl Reader<'_> {
         attr: t::Attr,
         at: &str,
     ) -> Result<Attr, String> {
-        let (key, registry) = match &attr.key {
-            t::Name::Lit(lit) => {
-                let key = lit.value();
-                if let Some(registry) = self.semconv.get(&key) {
-                    return Err(format!(
-                        "{at}: `{key}` belongs to the {registry} registry; name its `semconv::{registry}` constant"
-                    ));
-                }
-                (key, "agents".to_owned())
-            }
-            t::Name::Path(path) => self.key(module, path, at)?,
-        };
+        let (key, registry) = self.key(module, &attr.key, at)?;
+        if registry == "agents" && key.starts_with("gen_ai.") {
+            return Err(format!(
+                "{at}: `{key}` is in the GenAI registry's namespace; declare it in `semconv::otel`"
+            ));
+        }
         let ty = self.ty(module, &field.ty, at)?;
         let fail = |message: &str| Err(format!("{at} (`{key}`): {message}"));
         let pii = key.split('.').take(2).eq(["lk", "pii"]);
@@ -520,12 +514,11 @@ impl Reader<'_> {
         let label = match (attr.label, &attr.label_key) {
             (false, _) => None,
             (true, None) => Some(key.clone()),
-            (true, Some(t::Name::Lit(lit))) => Some(lit.value()),
-            (true, Some(t::Name::Path(path))) => Some(self.key(module, path, at)?.0),
+            (true, Some(name)) => Some(self.key(module, name, at)?.0),
         };
         let metric = match &attr.metric {
             Some(path) => match self.struct_at(module, path, at)? {
-                ((m, _), Some(Role::Metric(metric))) => Some(self.metric_name(m, metric, at)?),
+                ((m, _), Some(Role::Metric(metric))) => Some(self.key(m, &metric.name, at)?.0),
                 _ => return fail(&format!("`{}` is not a `#[metric]`", path_str(path))),
             },
             None => None,
@@ -548,14 +541,6 @@ impl Reader<'_> {
         })
     }
 
-    /// The wire name of the instrument `metric`, declared in `module`.
-    fn metric_name(&self, module: usize, metric: &t::Metric, at: &str) -> Result<String, String> {
-        match &metric.name {
-            t::Name::Lit(lit) => Ok(lit.value()),
-            t::Name::Path(path) => Ok(self.key(module, path, at)?.0),
-        }
-    }
-
     /// The values of a `&[f64]` bounds constant: increasing.
     fn bounds(&self, module: usize, path: &syn::Path, at: &str) -> Result<Vec<f64>, String> {
         let expr =
@@ -576,24 +561,38 @@ impl Reader<'_> {
         Ok(out)
     }
 
-    /// A dependency constant: its value and its registry.
-    fn key(&self, module: usize, path: &syn::Path, at: &str) -> Result<(String, String), String> {
-        let found = self.krate.resolve(module, path).map_err(|e| format!("{at}: {e}"))?;
-        let Found::Item { module: owner, .. } = found else {
-            return Err(format!("{at}: `{}` is not a constant", path_str(path)));
+    /// A key or name and its registry: `agents` for a literal or a constant declared here, else
+    /// the dependency registry whose `semconv` constant it is. A dependency registry's key is only
+    /// ever named through its constant.
+    fn key(&self, module: usize, name: &t::Name, at: &str) -> Result<(String, String), String> {
+        let (value, owner) = match name {
+            t::Name::Lit(lit) => (lit.value(), None),
+            t::Name::Path(path) => {
+                let found = self.krate.resolve(module, path).map_err(|e| format!("{at}: {e}"))?;
+                let Found::Item { module: owner, .. } = found else {
+                    return Err(format!("{at}: `{}` is not a constant", path_str(path)));
+                };
+                let expr = syn::Expr::Path(syn::ExprPath {
+                    attrs: Vec::new(),
+                    qself: None,
+                    path: path.clone(),
+                });
+                let constant =
+                    self.krate.constant(module, &expr).map_err(|e| format!("{at}: {e}"))?;
+                let value = string(&constant)
+                    .ok_or_else(|| format!("{at}: `{}` is a string constant", path_str(path)))?;
+                (value, Some(owner))
+            }
         };
-        let owner_path = &self.krate.modules[owner].path;
-        if !is_semconv(owner_path) {
+        if let Some(owner) = owner.map(|o| &self.krate.modules[o].path).filter(|p| is_semconv(p)) {
+            return Ok((value, owner[2].clone()));
+        }
+        if let Some(registry) = self.semconv.get(&value) {
             return Err(format!(
-                "{at}: `{}` is not a `semconv` constant; a key owned here is a literal",
-                path_str(path)
+                "{at}: `{value}` belongs to the {registry} registry; name its `semconv::{registry}` constant"
             ));
         }
-        let expr =
-            syn::Expr::Path(syn::ExprPath { attrs: Vec::new(), qself: None, path: path.clone() });
-        let value = string(&self.krate.constant(module, &expr).map_err(|e| format!("{at}: {e}"))?)
-            .ok_or_else(|| format!("{at}: `{}` is a string constant", path_str(path)))?;
-        Ok((value, owner_path[2].clone()))
+        Ok((value, "agents".to_owned()))
     }
 
     /// The struct `path` names from `module`, with its role.

@@ -19,8 +19,8 @@ use lk_agents_abi::telemetry::decl::{
     finish_span,
 };
 use lk_agents_abi::telemetry::record::{
-    EventRecord, Key, Measurement, Record, RecordSink, SpanId, SpanRecord, SpanRef, Status,
-    TraceContext, TraceId,
+    EventRecord, FRAMEWORK, Key, Measurement, Record, RecordSink, SpanId, SpanRecord, SpanRef,
+    Status, TraceContext, TraceId,
 };
 use lk_agents_abi::telemetry::spans::common::{EverySpan, Exception};
 use parking_lot::{Mutex, RwLock};
@@ -33,7 +33,7 @@ pub use lk_agents_abi::telemetry::decl::span;
 pub use lk_agents_abi::telemetry::errors::{ErrorType, Failure, SpanError};
 pub use lk_agents_abi::telemetry::{Cx, Recorder};
 pub use lk_agents_core::telemetry::span::Reserved;
-use lk_agents_core::telemetry::span::{FRAMEWORK_SCOPE, IdSource, seeded_ids};
+use lk_agents_core::telemetry::span::{IdSource, seeded_ids};
 
 /// What an `Ok` value of a `#[span]` function ends its span with.
 pub trait SpanEnd<D: SpanDecl> {
@@ -418,7 +418,7 @@ impl<D: SpanDecl> ScopedSpan<D> {
             events: open.events,
             links: Vec::new(),
             status: open.failure.map_or(Status::Unset, |f| Status::Error(f.message)),
-            scope: Key::Borrowed(FRAMEWORK_SCOPE),
+            scope: Key::Borrowed(FRAMEWORK),
             job: self.cx.job().cloned(),
         };
         finish_span(span, open.labels, open.measured, end, every, &mut |r| tracer.record(r));

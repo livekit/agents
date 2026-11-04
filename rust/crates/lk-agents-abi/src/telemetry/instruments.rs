@@ -17,14 +17,18 @@ pub const TOKEN_BOUNDS: &[f64] = &[
     16777216.0, 67108864.0,
 ];
 
+/// The model label keys, which the turn spans' `label = ..` fields take too.
+pub const MODEL_PROVIDER: &str = "model_provider";
+pub const MODEL_NAME: &str = "model_name";
+
 /// The model a measurement is about; what is not known is omitted.
 #[derive(Attrs, Default)]
 pub struct ModelLabels {
     /// The model's provider.
-    #[attr("model_provider")]
+    #[attr(MODEL_PROVIDER)]
     pub provider: Option<Label>,
     /// The model's name.
-    #[attr("model_name")]
+    #[attr(MODEL_NAME)]
     pub model: Option<Label>,
 }
 
@@ -256,7 +260,7 @@ pub struct GenAiTokenUsage {
     #[attrs]
     pub operation: GenAiLabels,
     /// `input` or `output`. Deprecated upstream; declared as emitted.
-    #[attr("gen_ai.token.type")]
+    #[attr(otel::GEN_AI_TOKEN_TYPE)]
     pub token_type: TokenType,
 }
 

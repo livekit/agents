@@ -19,27 +19,6 @@
           }
         },
         {
-          "id": "gen_ai.token.type",
-          "type": {
-            "members": [
-              {
-                "id": "input",
-                "value": "input",
-                "brief": "input",
-                "stability": "development"
-              },
-              {
-                "id": "output",
-                "value": "output",
-                "brief": "output",
-                "stability": "development"
-              }
-            ]
-          },
-          "stability": "development",
-          "brief": "`input` or `output`. Deprecated upstream; declared as emitted."
-        },
-        {
           "id": "model_name",
           "type": "string",
           "stability": "development",

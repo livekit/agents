@@ -223,9 +223,10 @@ fn registry_rules_refuse_mistakes() {
         (span("#[attr(\"lk.t\")] pub t: String,"), "needs a `///` brief"),
         (span("/// A.\n#[attr(\"lk.t\")] pub a: String, #[attr(\"lk.t\")] pub b: String,"), "written twice"),
         (
-            format!("pub const OWN: &str = \"lk.own\";\n{}", span("/// T.\n#[attr(OWN)] pub t: String,")),
-            "is not a `semconv` constant",
+            format!("pub const OWN: &str = \"lk.room_id\";\n{}", span("/// T.\n#[attr(OWN)] pub t: String,")),
+            "name its `semconv::protocol` constant",
         ),
+        (span("/// T.\n#[attr(\"gen_ai.mine\")] pub t: String,"), "GenAI registry's namespace"),
         (
             format!("{}\n/// E.\n#[event(name = \"e\")]\n#[derive(Attrs)]\npub struct E {{ /// T.\n#[attr(\"lk.t\")] pub t: i64 }}", span("/// T.\n#[attr(\"lk.t\")] pub t: String,")),
             "one key, one type",

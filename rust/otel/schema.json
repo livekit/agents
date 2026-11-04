@@ -4195,6 +4195,7 @@
           "key": "gen_ai.token.type",
           "type": "string",
           "required": true,
+          "registry": "otel",
           "members": [
             "input",
             "output"

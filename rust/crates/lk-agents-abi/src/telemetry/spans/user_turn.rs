@@ -9,7 +9,9 @@ use crate::Ts;
 use crate::telemetry::decl::{
     Attrs, BoolString, Content, Json, Measured, Seconds, SpanValue, event, span,
 };
-use crate::telemetry::instruments::{TurnEndOfTurnDelay, TurnTranscriptionDelay};
+use crate::telemetry::instruments::{
+    MODEL_NAME, MODEL_PROVIDER, TurnEndOfTurnDelay, TurnTranscriptionDelay,
+};
 use crate::telemetry::semconv::otel;
 
 /// One user turn, opened by its first evidence and ended with its outcome.
@@ -25,10 +27,10 @@ pub struct UserTurn {
     #[attrs]
     pub participant: Option<ParticipantAttrs>,
     /// The STT.
-    #[attr(otel::GEN_AI_REQUEST_MODEL, label = "model_name")]
+    #[attr(otel::GEN_AI_REQUEST_MODEL, label = MODEL_NAME)]
     pub stt_model: Option<String>,
     /// The STT's provider.
-    #[attr(otel::GEN_AI_PROVIDER_NAME, label = "model_provider")]
+    #[attr(otel::GEN_AI_PROVIDER_NAME, label = MODEL_PROVIDER)]
     pub stt_provider: Option<String>,
 }
 

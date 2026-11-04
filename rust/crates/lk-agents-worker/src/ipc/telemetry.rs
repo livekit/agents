@@ -3,7 +3,7 @@
 //! latencies between them; the job's registration with the exporter's Cloud destination; and the
 //! names the job's logic spells `telemetry::` (`telemetry.md`, rule 4).
 
-use lk_agents_abi::telemetry::attributes::ATTRIBUTE_SIMULATOR_DISPATCH;
+use lk_agents_abi::ATTRIBUTE_SIMULATOR_DISPATCH;
 use lk_agents_abi::telemetry::decl::Seconds;
 pub(crate) use lk_agents_abi::telemetry::record::JobKey;
 use lk_agents_abi::telemetry::spans::job::{
