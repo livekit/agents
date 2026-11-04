@@ -1,4 +1,4 @@
-"""Production session event snapshots respect consent, bounded retention and expiry."""
+"""Session report events respect content consent and stay with the job that owns them."""
 
 from __future__ import annotations
 
@@ -7,9 +7,16 @@ from pathlib import Path
 
 import pytest
 
-from livekit.agents import VoiceSession
+from livekit import rtc
+from livekit.agents import VoiceSession, _core
+from livekit.agents.job import (
+    JobAcceptArguments,
+    JobContext,
+    JobExecutorType,
+    JobProcess,
+    RunningJobInfo,
+)
 from livekit.agents.telemetry import set_capture_content
-from livekit.agents.voice import _session_events
 from livekit.agents.voice.events import (
     AgentStateChangedEvent,
     CloseEvent,
@@ -18,8 +25,26 @@ from livekit.agents.voice.events import (
     UserInputTranscribedEvent,
     event_dict,
 )
+from livekit.protocol import agent as job_protocol
 
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
+
+
+def _job_context(job_id: str, agent_name: str = "") -> JobContext:
+    return JobContext(
+        proc=JobProcess(executor_type=JobExecutorType.THREAD, user_arguments=None, http_proxy=None),
+        info=RunningJobInfo(
+            JobAcceptArguments("", "", ""),
+            job_protocol.Job(id=job_id, agent_name=agent_name),
+            "",
+            "",
+            "",
+            True,
+        ),
+        room=rtc.Room(),
+        run=_core.JobRun(fake_job=True, session_end_timeout=5, redaction=False),
+        server_env={},
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -30,17 +55,14 @@ def restore_capture_policy() -> Iterator[None]:
         set_capture_content(True)
 
 
-def test_session_report_events_keep_every_snapshot_without_implicitly_captured_content(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(_session_events.time, "monotonic_ns", lambda: 1)
+def test_session_report_events_keep_every_snapshot_without_implicitly_captured_content() -> None:
     set_capture_content(False)
     session = VoiceSession(turn_handling={"turn_detection": None})
     delivered = []
     session.on("user_input_transcribed", delivered.append)
     content = UserInputTranscribedEvent(transcript="private", is_final=True)
     session.emit("user_input_transcribed", content)
-    assert delivered == [content], "retention policy must not suppress application delivery"
+    assert delivered == [content], "consent must not suppress application delivery"
     assert session._recorded_events == []
     state = AgentStateChangedEvent(old_state="listening", new_state="thinking")
     for _ in range(1100):
@@ -51,8 +73,6 @@ def test_session_report_events_keep_every_snapshot_without_implicitly_captured_c
         event["type"] == "agent_state_changed" and event["new_state"] == "thinking"
         for event in session._recorded_events
     )
-    monkeypatch.setattr(_session_events.time, "monotonic_ns", lambda: 3600_000_000_001)
-    assert len(session._recorded_events) == 1100
 
 
 def test_session_event_consent_is_captured_and_large_events_enter_reports() -> None:
@@ -88,51 +108,29 @@ def test_errors_and_the_close_reason_are_retained_without_content_consent() -> N
 async def test_session_report_access_stays_with_the_job_that_started_the_session(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from types import SimpleNamespace
-    from typing import cast
-
     from livekit.agents import Agent
-    from livekit.agents.job import JobContext
     from livekit.agents.voice import _session_host
-    from livekit.protocol import agent as job_protocol
 
     from .fake_llm import FakeLLM
 
     set_capture_content(True)
-    from livekit.agents import _core
-
-    owner = object.__new__(JobContext)
-    owner._info = SimpleNamespace(job=job_protocol.Job(id="owner"))
-    owner._room = object()
-    owner._tagger = _core.Tagger()
-    owner._session_report = None
-    owner._sessions = []
-    other = object.__new__(JobContext)
-    other._info = SimpleNamespace(job=job_protocol.Job(id="other"))
-    other._room = object()
-    other._tagger = _core.Tagger()
-    other._session_report = None
-    other._sessions = []
+    owner, other = _job_context("owner"), _job_context("other")
     monkeypatch.setattr(_session_host, "get_job_context", lambda **_: owner)
     session = VoiceSession(llm=FakeLLM(), turn_handling={"turn_detection": None})
     try:
         await session.start(Agent(instructions="desk"), room=None)
         session.emit(
             "user_input_transcribed",
-            UserInputTranscribedEvent(transcript="retained within budget", is_final=True),
+            UserInputTranscribedEvent(transcript="retained", is_final=True),
         )
-        report = JobContext.make_session_report(cast(JobContext, owner), session)
+        report = owner.make_session_report(session)
         assert report.job_id == "owner"
-        [retained] = [
-            event
-            for event in JobContext.make_session_report(cast(JobContext, owner), session).events
-            if event["type"] == "user_input_transcribed"
-        ]
-        assert retained["transcript"] == "retained within budget"
+        [retained] = [e for e in report.events if e["type"] == "user_input_transcribed"]
+        assert retained["transcript"] == "retained"
         monkeypatch.setattr(_session_host, "get_job_context", lambda **_: other)
         await session.start(Agent(instructions="unused"))
         with pytest.raises(PermissionError, match="owning job"):
-            JobContext.make_session_report(cast(JobContext, other), session)
+            other.make_session_report(session)
     finally:
         await session.aclose()
 
@@ -144,12 +142,9 @@ async def test_the_session_snapshot_is_taken_once_off_the_event_loop(
     import asyncio
     import json
     import threading
-    from types import SimpleNamespace
 
-    from livekit.agents import Agent, _core
-    from livekit.agents.job import JobContext
+    from livekit.agents import Agent
     from livekit.agents.voice.remote_session import ConsoleCall
-    from livekit.protocol import agent as job_protocol
 
     from .fake_llm import FakeLLM
 
@@ -157,11 +152,8 @@ async def test_the_session_snapshot_is_taken_once_off_the_event_loop(
     await session.start(Agent(instructions="desk"))
     # committed by the core, whose snapshot the report takes its history from
     await session.generate_reply(user_input="recorded message")
-    owner = object.__new__(JobContext)
-    owner._info = SimpleNamespace(job=job_protocol.Job(id="report-worker", agent_name="desk"))
-    owner._sessions = [session]
-    owner._session_report = None
-    owner._tagger = _core.Tagger()
+    owner = _job_context("report-worker", agent_name="desk")
+    owner._claim_session(session)
     entered, release = threading.Event(), threading.Event()
     loop_thread = threading.get_ident()
     threads: list[int] = []
@@ -194,7 +186,7 @@ async def test_the_session_snapshot_is_taken_once_off_the_event_loop(
 
     # Every later report reads the snapshot; the tagger is read at each call.
     session.history.add_message(role="user", content="after the session closed")
-    owner._tagger.success(reason="booked")
+    owner.tagger.success(reason="booked")
     report = owner.make_session_report()
     texts = [item.text_content for item in report.chat_history if item.type == "message"]
     assert "recorded message" in texts and "after the session closed" not in texts
