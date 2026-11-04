@@ -59,6 +59,19 @@ DEFAULT_STREAM_IDLE_TIMEOUT = 5.0  # seconds
 # Rotate to a fresh stream at a sentence boundary
 # well before Soniox's fixed 2-minute per-stream cap.
 MAX_STREAM_AGE = 90.0  # seconds
+# Models that report supports_silence_reduction: false in the List models API
+# (https://soniox.com/docs/api-reference/tts/get_tts_models). Newer models are
+# assumed to support reduce_silence; the server still rejects unknown models.
+MODELS_WITHOUT_SILENCE_REDUCTION = frozenset({"tts-rt-v1", "tts-rt-v1-preview"})
+
+
+def _validate_reduce_silence(model: str, reduce_silence: bool) -> None:
+    if reduce_silence and model in MODELS_WITHOUT_SILENCE_REDUCTION:
+        raise ValueError(
+            f"reduce_silence is not supported on model {model!r}; use a model with "
+            "supports_silence_reduction (e.g. tts-rt-v2). "
+            "See https://soniox.com/docs/tts/concepts/reduce-silence"
+        )
 
 
 def _audio_format_to_mime_type(audio_format: str) -> str:
@@ -88,11 +101,13 @@ class TTS(tts.TTS):
         sample_rate: int = DEFAULT_SAMPLE_RATE,
         bitrate: int | None = None,
         speed: float = DEFAULT_SPEED,
+        reduce_silence: bool = False,
         api_key: str | None = None,
         websocket_url: str = WEBSOCKET_URL,
         http_session: aiohttp.ClientSession | None = None,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         stream_idle_timeout: float = DEFAULT_STREAM_IDLE_TIMEOUT,
+        client_reference_id: str | None = None,
     ) -> None:
         """Initialize instance of Soniox Text-to-Speech API service.
 
@@ -105,6 +120,9 @@ class TTS(tts.TTS):
             bitrate (int): Codec bitrate in bps for compressed formats. Optional.
             speed (float): Speaking rate. 1.0 is the normal rate; values below 1.0 slow speech
                 down and values above 1.0 speed it up. Range is [0.7, 1.3]. Defaults to 1.0.
+            reduce_silence (bool): Shorten the pauses between words. Only supported on
+                models that report supports_silence_reduction (e.g. tts-rt-v2); the server
+                rejects it on other models. Defaults to False.
             api_key (str): Soniox API key. If not provided, will look for SONIOX_API_KEY env variable.
             websocket_url (str): Base WebSocket URL for Soniox TTS API.
             http_session (aiohttp.ClientSession): Optional aiohttp.ClientSession to use for requests.
@@ -115,6 +133,9 @@ class TTS(tts.TTS):
                 stream is finalized; the next sentence starts a fresh stream. Prevents slow
                 LLM gaps from hitting the server's per-stream timeout (observed ~8-18s).
                 Defaults to 5.0.
+            client_reference_id (str): Optional client-defined identifier recorded with each
+                request in Soniox usage logs, e.g. to attribute cost to a session. Does not need
+                to be unique. Optional.
         """
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True),
@@ -132,10 +153,13 @@ class TTS(tts.TTS):
         if stream_idle_timeout <= 0:
             raise ValueError(f"stream_idle_timeout must be > 0, but got {stream_idle_timeout}")
 
+        _validate_reduce_silence(model, reduce_silence)
+
         self._opts = _TTSOptions(
             model=model,
             language=language,
             voice=voice,
+            reduce_silence=reduce_silence,
             audio_format=audio_format,
             sample_rate=sample_rate,
             bitrate=bitrate,
@@ -143,6 +167,7 @@ class TTS(tts.TTS):
             websocket_url=websocket_url,
             api_key=api_key,
             stream_idle_timeout=stream_idle_timeout,
+            client_reference_id=client_reference_id,
         )
         self._session = http_session
         self._sentence_tokenizer = (
@@ -199,6 +224,7 @@ class TTS(tts.TTS):
         language: NotGivenOr[str] = NOT_GIVEN,
         voice: NotGivenOr[str] = NOT_GIVEN,
         speed: NotGivenOr[float] = NOT_GIVEN,
+        reduce_silence: NotGivenOr[bool] = NOT_GIVEN,
         stream_idle_timeout: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         """
@@ -207,8 +233,14 @@ class TTS(tts.TTS):
             language: Language code to use.
             voice: Voice to use.
             speed: Speaking rate in the range [0.7, 1.3]; 1.0 is the normal rate.
+            reduce_silence: Shorten the pauses between words (models with
+                supports_silence_reduction only).
             stream_idle_timeout: Idle seconds before the current stream is finalized.
         """
+        _validate_reduce_silence(
+            model if is_given(model) else self._opts.model,
+            reduce_silence if is_given(reduce_silence) else self._opts.reduce_silence,
+        )
         if is_given(model):
             self._opts.model = model
         if is_given(language):
@@ -221,6 +253,8 @@ class TTS(tts.TTS):
                     f"speed must be between {MIN_SPEED} and {MAX_SPEED}, but got {speed}"
                 )
             self._opts.speed = speed
+        if is_given(reduce_silence):
+            self._opts.reduce_silence = reduce_silence
         if is_given(stream_idle_timeout):
             if stream_idle_timeout <= 0:
                 raise ValueError(f"stream_idle_timeout must be > 0, but got {stream_idle_timeout}")
@@ -532,6 +566,7 @@ class _TTSOptions:
     model: str
     language: str
     voice: str
+    reduce_silence: bool
     audio_format: str
     sample_rate: int
     bitrate: int | None
@@ -539,6 +574,7 @@ class _TTSOptions:
     websocket_url: str
     api_key: str
     stream_idle_timeout: float
+    client_reference_id: str | None = None
 
 
 @dataclass
@@ -594,6 +630,7 @@ class _Connection:
         self._close_task: asyncio.Task[None] | None = None
         self._is_current = True
         self._closed = False
+        self._error: BaseException | None = None
 
     @property
     def is_current(self) -> bool:
@@ -632,7 +669,10 @@ class _Connection:
             return
 
         try:
-            self._ws = await self._session.ws_connect(self._opts.websocket_url)
+            self._ws = await self._session.ws_connect(
+                self._opts.websocket_url,
+                headers={"Authorization": f"Bearer {self._opts.api_key}"},
+            )
         except Exception:
             self._closed = True
             self._is_current = False
@@ -654,9 +694,11 @@ class _Connection:
         opts: _TTSOptions,
     ) -> None:
         """Register a new stream and queue its config message."""
-        if self._closed:
+        if self._closed or self._error is not None:
             if not waiter.done():
-                waiter.set_exception(APIConnectionError("Soniox TTS connection is closed"))
+                waiter.set_exception(
+                    self._error or APIConnectionError("Soniox TTS connection is closed")
+                )
             return
 
         if stream_id in self._streams:
@@ -716,7 +758,6 @@ class _Connection:
 
                 if isinstance(msg, _StartConfig):
                     config: dict[str, Any] = {
-                        "api_key": msg.opts.api_key,
                         "model": msg.opts.model,
                         "language": msg.opts.language,
                         "voice": msg.opts.voice,
@@ -727,6 +768,10 @@ class _Connection:
                     }
                     if msg.opts.bitrate is not None:
                         config["bitrate"] = msg.opts.bitrate
+                    if msg.opts.reduce_silence:
+                        config["reduce_silence"] = True
+                    if msg.opts.client_reference_id is not None:
+                        config["client_reference_id"] = msg.opts.client_reference_id
                     await self._ws.send_str(json.dumps(config))
                 elif isinstance(msg, _SendText):
                     payload: dict[str, Any] = {"stream_id": msg.stream_id}
@@ -771,13 +816,22 @@ class _Connection:
                 resp = json.loads(msg.data)
                 stream_id = resp.get("stream_id")
 
-                if stream_id is None:
+                if not stream_id:
                     # Connection-level message (only errors are expected here).
                     if resp.get("error_code"):
                         logger.error(
                             f"Soniox TTS connection-level error: "
                             f"{resp.get('error_code')} - {resp.get('error_message')}"
                         )
+                        self._fail_all(
+                            APIStatusError(
+                                message=resp.get("error_message", "Unknown error"),
+                                status_code=resp["error_code"],
+                                request_id=resp.get("request_id"),
+                                body=resp,
+                            )
+                        )
+                        break
                     continue
 
                 stream = self._streams.get(stream_id)
@@ -859,9 +913,10 @@ class _Connection:
 
     def _fail_all(self, err: BaseException) -> None:
         """Fail all registered streams and mark the connection non-current."""
+        self._error = self._error or err
         for stream in list(self._streams.values()):
             if not stream.waiter.done():
-                stream.waiter.set_exception(err)
+                stream.waiter.set_exception(self._error)
         self._streams.clear()
         self._is_current = False
 

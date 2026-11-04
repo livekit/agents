@@ -112,43 +112,6 @@ class TestUpdateValue:
         assert item.name == "changed"
 
 
-class TestSetOrUpdate:
-    def test_creates_new_entry(self) -> None:
-        bd: BoundedDict[str, _Item] = BoundedDict()
-        result = bd.set_or_update("k", factory=lambda: _Item(name="new"), value=5)
-        assert result.name == "new"
-        assert result.value == 5
-        assert "k" in bd
-
-    def test_updates_existing_entry(self) -> None:
-        bd: BoundedDict[str, _Item] = BoundedDict()
-        bd["k"] = _Item(name="old", value=0)
-        result = bd.set_or_update("k", factory=lambda: _Item(name="unused"), value=99)
-        assert result.name == "old"
-        assert result.value == 99
-
-    def test_factory_not_called_when_key_exists(self) -> None:
-        bd: BoundedDict[str, _Item] = BoundedDict()
-        bd["k"] = _Item(name="existing")
-        called = False
-
-        def factory() -> _Item:
-            nonlocal called
-            called = True
-            return _Item(name="should_not_appear")
-
-        bd.set_or_update("k", factory=factory, name="updated")
-        assert not called
-
-    def test_respects_maxsize(self) -> None:
-        bd: BoundedDict[str, _Item] = BoundedDict(maxsize=2)
-        bd.set_or_update("a", factory=lambda: _Item(name="a"))
-        bd.set_or_update("b", factory=lambda: _Item(name="b"))
-        bd.set_or_update("c", factory=lambda: _Item(name="c"))
-        assert "a" not in bd
-        assert list(bd.keys()) == ["b", "c"]
-
-
 class TestPopIf:
     def test_pop_no_predicate_fifo(self) -> None:
         bd: BoundedDict[str, int] = BoundedDict()

@@ -92,13 +92,20 @@ def safe_render(template: str, data: dict[str, object]) -> str:
         def get_field(self, field_name: str, args: Any, kwargs: Any) -> Any:
             try:
                 return super().get_field(field_name, args, kwargs)
-            except (KeyError, AttributeError, TypeError):
+            except (KeyError, IndexError, AttributeError, TypeError):
                 logger.error(
                     "template placeholder '{%s}' has no value (available: %s)",
                     field_name,
                     available_paths,
                 )
-                return ("", field_name)
+                # None renders empty in format_field and skips the format spec
+                return (None, field_name)
+
+        def convert_field(self, value: Any, conversion: str | None) -> Any:
+            # keep None for format_field, or !s / !r would render it as "None"
+            if value is None:
+                return None
+            return super().convert_field(value, conversion)
 
         def format_field(self, value: Any, format_spec: str) -> str:
             if value is None:

@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import contextlib
 import json
 import logging
 from types import SimpleNamespace
@@ -10,6 +11,7 @@ import aiohttp
 import pytest
 
 from livekit.agents import tts as agents_tts, utils
+from livekit.agents.voice.io import TimedString
 from livekit.plugins.elevenlabs import tts as elevenlabs_tts
 
 pytestmark = pytest.mark.plugin("elevenlabs")
@@ -33,12 +35,14 @@ class _FakeEmitter:
     def __init__(self) -> None:
         self.audio_chunks: list[bytes] = []
         self.timed_transcript_pushes = 0
+        self.timed_words: list[TimedString] = []
 
     def push(self, audio: bytes) -> None:
         self.audio_chunks.append(audio)
 
-    def push_timed_transcript(self, _timed_words: object) -> None:
+    def push_timed_transcript(self, timed_words: list[TimedString]) -> None:
         self.timed_transcript_pushes += 1
+        self.timed_words.extend(timed_words)
 
 
 class _FakeStream:
@@ -65,6 +69,7 @@ class _FakeConnection:
             )
         }
         self.preferred_alignment = "normalized"
+        self._opts = SimpleNamespace(encoding="pcm_24000", sample_rate=24000)
 
     def unregister_stream(self, context_id: str) -> None:
         elevenlabs_tts._Connection.unregister_stream(self, context_id)  # pyright: ignore[reportArgumentType]
@@ -98,6 +103,159 @@ def test_auto_mode_respects_explicit_value_with_chunk_length_schedule() -> None:
         auto_mode=True,
     )
     assert tts._opts.auto_mode is True
+
+
+@pytest.mark.asyncio
+async def test_prewarm_opens_connection(monkeypatch: pytest.MonkeyPatch) -> None:
+    opened = asyncio.Event()
+
+    async def _current_connection(
+        self: object,
+    ) -> tuple[SimpleNamespace, float, bool]:
+        opened.set()
+        return SimpleNamespace(_recv_task=None), 0.0, False
+
+    monkeypatch.setattr(elevenlabs_tts.TTS, "_current_connection", _current_connection)
+
+    tts = elevenlabs_tts.TTS(api_key="test-key")
+    tts.prewarm()
+    await asyncio.wait_for(opened.wait(), timeout=1)
+    await tts.aclose()
+
+
+@pytest.mark.asyncio
+async def test_option_update_during_connect_discards_stale_socket(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connect_started = asyncio.Event()
+    resume_connect = asyncio.Event()
+    connections: list[object] = []
+
+    class _StubConnection:
+        def __init__(self, opts: object, session: object) -> None:
+            self._opts = opts
+            self._closed = False
+            self.is_current = True
+            self._recv_task = None
+            connections.append(self)
+
+        async def connect(self) -> None:
+            if len(connections) == 1:
+                connect_started.set()
+                await resume_connect.wait()
+
+        async def aclose(self) -> None:
+            self._closed = True
+
+        def mark_non_current(self) -> None:
+            self.is_current = False
+
+    monkeypatch.setattr(elevenlabs_tts, "_Connection", _StubConnection)
+
+    async with aiohttp.ClientSession() as session:
+        tts = elevenlabs_tts.TTS(api_key="test-key", voice_id="old", http_session=session)
+        connection_task = asyncio.create_task(tts._current_connection())
+        await asyncio.wait_for(connect_started.wait(), timeout=1)
+
+        tts.update_options(voice_id="new")
+        resume_connect.set()
+        connection, _, _ = await asyncio.wait_for(connection_task, timeout=1)
+
+        assert len(connections) == 2
+        assert connections[0]._closed  # pyright: ignore[reportAttributeAccessIssue]
+        assert connection is connections[1]
+        assert connection._opts.voice_id == "new"
+
+        await tts.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.asyncio
+async def test_prewarm_stops_on_non_retryable_api_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    attempts = 0
+    finished = asyncio.Event()
+
+    async def _current_connection(self: object) -> tuple[SimpleNamespace, float, bool]:
+        nonlocal attempts
+        attempts += 1
+        raise elevenlabs_tts.APIStatusError("Unauthorized", status_code=401)
+
+    monkeypatch.setattr(elevenlabs_tts.TTS, "_current_connection", _current_connection)
+    monkeypatch.setattr(
+        elevenlabs_tts.asyncio,
+        "sleep",
+        lambda _delay: finished.set(),
+    )
+
+    tts = elevenlabs_tts.TTS(api_key="test-key")
+    tts.prewarm()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    assert attempts == 1
+    assert not finished.is_set()
+    await tts.aclose()
+
+
+async def test_prewarm_retries_with_exponential_backoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts = 0
+    delays: list[float] = []
+    ready = asyncio.Event()
+
+    async def _current_connection(
+        self: object,
+    ) -> tuple[SimpleNamespace, float, bool]:
+        nonlocal attempts
+        attempts += 1
+        if attempts <= 3:
+            raise ConnectionError("temporary failure")
+        ready.set()
+        return SimpleNamespace(_recv_task=None), 0.0, False
+
+    async def _sleep(delay: float) -> None:
+        delays.append(delay)
+
+    monkeypatch.setattr(elevenlabs_tts.TTS, "_current_connection", _current_connection)
+    monkeypatch.setattr(elevenlabs_tts.asyncio, "sleep", _sleep)
+
+    tts = elevenlabs_tts.TTS(api_key="test-key")
+    tts.prewarm()
+    await asyncio.wait_for(ready.wait(), timeout=1)
+    await tts.aclose()
+
+    assert attempts == 4
+    assert delays == [1.0, 2.0, 4.0]
+
+
+async def test_dialogue_prewarm_reconnects_when_idle_socket_closes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connections: list[asyncio.Future[None]] = []
+    reconnected = asyncio.Event()
+
+    async def _current_connection(
+        self: object,
+    ) -> tuple[SimpleNamespace, float, bool]:
+        recv_task = asyncio.get_running_loop().create_future()
+        connections.append(recv_task)
+        if len(connections) == 2:
+            reconnected.set()
+        return SimpleNamespace(_recv_task=recv_task), 0.0, False
+
+    monkeypatch.setattr(elevenlabs_tts.TTS, "_current_connection", _current_connection)
+
+    tts = elevenlabs_tts.TTS(api_key="test-key", model="eleven_v4")
+    tts.prewarm()
+    while not connections:
+        await asyncio.sleep(0)
+
+    connections[0].cancel()
+    await asyncio.wait_for(reconnected.wait(), timeout=1)
+    await tts.aclose()
+
+    assert len(connections) == 2
+    assert not connections[1].cancelled()
 
 
 def test_build_context_init_packet_includes_generation_config() -> None:
@@ -283,6 +441,74 @@ async def test_recv_loop_drops_audio_for_unregistered_context() -> None:
     assert connection.emitter.audio_chunks == []
     # the server released the context, so the connection can drain
     assert connection._active_contexts == set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "connection_cls", [elevenlabs_tts._Connection, elevenlabs_tts._DialogueConnection]
+)
+@pytest.mark.parametrize("input_closed", [False, True])
+async def test_recv_loop_resets_timeout_timer_on_audio(
+    connection_cls: type, input_closed: bool
+) -> None:
+    context_id = "ctx_123"
+    connection = _FakeConnection(
+        context_id,
+        [
+            _websocket_text_message(
+                {
+                    "context_id": context_id,
+                    "audio": base64.b64encode(b"hello-audio").decode("ascii"),
+                }
+            ),
+        ],
+    )
+    ctx = connection._context_data[context_id]
+    ctx.input_closed = input_closed
+    timer = asyncio.get_event_loop().call_later(60, lambda: None)
+    ctx.timeout_timer = timer
+    restarted: list[str] = []
+    connection._start_timeout_timer = restarted.append  # type: ignore[attr-defined]
+
+    with contextlib.suppress(Exception):
+        await connection_cls._recv_loop(connection)
+
+    # cleared so _start_timeout_timer can arm a new timer on the next send
+    assert timer.cancelled()
+    assert ctx.timeout_timer is None
+    # after close_context, no send will re-arm it: the audio handler must
+    assert restarted == ([context_id] if input_closed else [])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("connection_cls", "model"),
+    [
+        (elevenlabs_tts._Connection, "eleven_flash_v2_5"),
+        (elevenlabs_tts._DialogueConnection, "eleven_v3_conversational"),
+    ],
+)
+async def test_send_loop_arms_timeout_on_close_context(connection_cls: type, model: str) -> None:
+    tts = elevenlabs_tts.TTS(api_key="test-key", model=model, voice_id="voice-1")
+    async with aiohttp.ClientSession() as session:
+        connection = connection_cls(tts._opts, session)
+        connection._ws = _RecordingWs()
+        ctx = elevenlabs_tts._StreamData(
+            emitter=_FakeEmitter(),  # type: ignore[arg-type]
+            stream=SimpleNamespace(_conn_options=SimpleNamespace(timeout=60)),  # type: ignore[arg-type]
+            waiter=asyncio.get_event_loop().create_future(),
+        )
+        connection._context_data["ctx-1"] = ctx
+        connection._active_contexts.add("ctx-1")
+        connection.close_context("ctx-1")
+        connection._input_queue.close()
+
+        await asyncio.wait_for(connection._send_loop(), timeout=1.0)
+
+        # no more sends will arm it, so close_context must
+        assert ctx.input_closed
+        assert ctx.timeout_timer is not None
+        ctx.timeout_timer.cancel()
 
 
 def test_unregister_stream_keeps_the_context_closable() -> None:
@@ -514,6 +740,116 @@ async def test_dialogue_recv_loop_parses_audio_and_alignment() -> None:
     assert connection.waiter.done()
     assert connection.waiter.result() is None
     assert connection._context_data == {}
+
+
+@pytest.mark.asyncio
+async def test_dialogue_recv_loop_offsets_chunk_relative_alignment() -> None:
+    context_id = "ctx_123"
+
+    def pcm(ms: int) -> str:
+        return base64.b64encode(b"\x00\x00" * (24000 * ms // 1000)).decode("ascii")
+
+    def chunk(text: str, audio_ms: int) -> object:
+        # text-to-dialogue alignment restarts at 0 on every message
+        return _websocket_text_message(
+            {
+                "context_id": context_id,
+                "audio": pcm(audio_ms),
+                "alignment": {
+                    "chars": list(text),
+                    "char_start_times_ms": [i * 100 for i in range(len(text))],
+                    "char_durations_ms": [100] * len(text),
+                },
+            }
+        )
+
+    connection = _FakeConnection(
+        context_id,
+        [
+            # audio without alignment still moves the clock
+            _websocket_text_message({"context_id": context_id, "audio": pcm(500)}),
+            chunk("hi there ", 900),
+            chunk("you ", 400),
+            _websocket_text_message({"context_id": context_id, "is_final": True}),
+        ],
+    )
+
+    await elevenlabs_tts._DialogueConnection._recv_loop(  # pyright: ignore[reportPrivateUsage]
+        connection
+    )
+
+    assert [(w, w.start_time, w.end_time) for w in connection.emitter.timed_words] == [
+        ("hi ", 0.5, 0.8),
+        ("there ", 0.8, 1.4),
+        ("you ", 1.4, 1.8),
+    ]
+
+
+def _ogg_page(granule: int, payload: bytes) -> bytes:
+    # CRC is left at 0: the plugin only reads the page layout and granule position
+    segments = [255] * (len(payload) // 255) + [len(payload) % 255]
+    return (
+        b"OggS\x00\x00"
+        + granule.to_bytes(8, "little", signed=True)
+        + bytes(12)
+        + bytes([len(segments)])
+        + bytes(segments)
+        + payload
+    )
+
+
+@pytest.mark.asyncio
+async def test_dialogue_recv_loop_offsets_opus_alignment_by_ogg_granule() -> None:
+    context_id = "ctx_123"
+    pages = _ogg_page(0, b"OpusHead" + bytes(11)) + _ogg_page(0, b"OpusTags" + bytes(8))
+    first = pages + _ogg_page(24000, bytes(300))  # 500 ms, no alignment
+    second = _ogg_page(24000 + 43200, bytes(900))  # 900 ms more
+    connection = _FakeConnection(
+        context_id,
+        [
+            _websocket_text_message(
+                {"context_id": context_id, "audio": base64.b64encode(first).decode("ascii")}
+            ),
+            _websocket_text_message(
+                {
+                    "context_id": context_id,
+                    # split mid-page: the clock catches up once the page completes
+                    "audio": base64.b64encode(second[:400]).decode("ascii"),
+                    "alignment": {
+                        "chars": list("hi there "),
+                        "char_start_times_ms": [i * 100 for i in range(9)],
+                        "char_durations_ms": [100] * 9,
+                    },
+                }
+            ),
+            _websocket_text_message(
+                {"context_id": context_id, "audio": base64.b64encode(second[400:]).decode("ascii")}
+            ),
+            _websocket_text_message(
+                {
+                    "context_id": context_id,
+                    "audio": base64.b64encode(_ogg_page(67200 + 19200, bytes(400))).decode("ascii"),
+                    "alignment": {
+                        "chars": list("you "),
+                        "char_start_times_ms": [0, 100, 200, 300],
+                        "char_durations_ms": [100] * 4,
+                    },
+                }
+            ),
+            _websocket_text_message({"context_id": context_id, "is_final": True}),
+        ],
+    )
+    connection._opts = SimpleNamespace(encoding="opus_48000_32", sample_rate=48000)
+
+    await elevenlabs_tts._DialogueConnection._recv_loop(  # pyright: ignore[reportPrivateUsage]
+        connection
+    )
+
+    assert [(w, w.start_time, w.end_time) for w in connection.emitter.timed_words] == [
+        ("hi ", 0.5, 0.8),
+        ("there ", 0.8, 1.4),
+        ("you ", 1.4, 1.8),
+    ]
 
 
 @pytest.mark.asyncio

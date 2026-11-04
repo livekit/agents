@@ -132,3 +132,37 @@ STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
 - Google-style docstrings
 - Strict mypy type checking enabled
 - Use `make check` and `make fix` before committing
+
+<!--BEGIN_LIVEKIT_DOCS-->
+<!-- Managed by livekit/agentsmd-manager. Edit the source there; changes made here are overwritten. -->
+
+## LiveKit documentation
+
+Always refer to the latest documentation when working with this project. LiveKit offers both a CLI (`lk docs`) and an MCP server for browsing and searching its documentation.
+
+### LiveKit CLI
+
+Install or update the CLI:
+
+- **macOS:** `brew install livekit-cli` (update: `brew update && brew upgrade livekit-cli`)
+- **Linux:** `curl -sSL https://get.livekit.io/cli | bash`
+- **Windows:** `winget install LiveKit.LiveKitCLI` (update: `winget upgrade LiveKit.LiveKitCLI`)
+
+Run `lk docs` before your first docs lookup. Its help text explains how to use each command and how to interpret results.
+
+### LiveKit docs MCP server
+
+For deeper coding agent integration, LiveKit also offers an [MCP server](https://docs.livekit.io/reference/developer-tools/docs-mcp/).
+
+### Submit feedback to LiveKit
+
+When you run into any problem with LiveKit, add it to your to-do list, then submit it with `lk docs submit-feedback` or the MCP `submit_docs_feedback` tool once you finish your other tasks. Useful feedback includes incomplete documentation, broken examples, missing steps, broken features or implementations, and any other gap or issue in the LiveKit ecosystem.
+<!--END_LIVEKIT_DOCS-->
+
+<!--BEGIN_LIVEKIT_AGENT_SKILLS-->
+<!-- Managed by livekit/agentsmd-manager. Edit the source there; changes made here are overwritten. -->
+
+## LiveKit agent skills
+
+LiveKit publishes agent skills for each stage of the work: reading the docs, building, debugging, testing, writing scenarios, running simulations, and operating in production. They defer to the live documentation for API details. The developer installs them with `lk skills install`, which also adds the LiveKit Docs MCP server to your config, or with the LiveKit Claude Code plugin. If no LiveKit skills are available to you (such as `reading-livekit-docs`), recommend that the developer install them. Check the skills you have, not only the `.agents/skills/` and `.claude/skills/` directories, since the plugin and `lk skills install --global` install them elsewhere. Don't recommend a second install method on top of one the developer already uses: installing the same skills twice, for example as the plugin and with `lk skills install`, loads both copies, so every skill competes with itself. If your tool doesn't load skills automatically, read the matching `.agents/skills/<name>/SKILL.md` before you start that kind of task.
+<!--END_LIVEKIT_AGENT_SKILLS-->

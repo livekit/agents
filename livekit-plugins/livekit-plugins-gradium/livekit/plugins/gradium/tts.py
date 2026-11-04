@@ -26,6 +26,7 @@ import aiohttp
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     tokenize,
@@ -35,9 +36,51 @@ from livekit.agents import (
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
+from .api import ws_headers
 from .log import logger
 
 SUPPORTED_SAMPLE_RATE = 48000
+# Catalog voice "Everly" (en-us), used when neither `voice` nor `voice_id` is given.
+DEFAULT_VOICE_ID = "vjFyp2BcCyTlUmYb"
+
+# Websocket close codes the server uses for requests it would reject again verbatim:
+# protocol error and unsupported data (unknown model, setup validation). Everything
+# else is worth a retry. 1008 (policy violation) covers the org's concurrency cap,
+# which frees up when another session ends, next to credits and API-key failures
+# that will not; the frame does not tell them apart, so the transient reading wins.
+# 1011 covers worker failures and "no worker available" (but also unknown voice ids,
+# which the server does not distinguish for clients either). The server's idle and
+# duration limits close with 1008 after an error frame; a 1000/1001 before
+# end_of_stream means the server shut the socket mid-session, also worth a retry.
+_NON_RETRYABLE_CLOSE_CODES = frozenset({1002, 1003})
+
+
+def _close_error(
+    message: str, *, code: int | None, body: Any, reason: Any = None
+) -> APIStatusError:
+    code = code if isinstance(code, int) else -1
+    if isinstance(reason, str) and reason:
+        # the close frame's reason is the server's own explanation of the failure
+        message = f"{message}: {reason}"
+    return APIStatusError(
+        message,
+        status_code=code,
+        body=body,
+        retryable=code not in _NON_RETRYABLE_CLOSE_CODES,
+    )
+
+
+def _api_error(msg_data: dict[str, Any]) -> APIStatusError:
+    """Build the error for a `{"type": "error"}` frame.
+
+    The server sends it right before closing the socket, so the message is the only
+    place the actual failure reason (invalid voice, no credits, worker failure, ...)
+    shows up. Its `code` is the websocket close code that follows.
+    """
+    message = msg_data.get("message") or "unknown error"
+    return _close_error(
+        f"Gradium returned error: {message}", code=msg_data.get("code"), body=msg_data
+    )
 
 
 @dataclass
@@ -57,7 +100,7 @@ class TTS(tts.TTS):
         model_endpoint: str | None = None,
         model_name: str = "default",
         voice: str | None = None,
-        voice_id: str | None = "4SZHfMpw-p46Ywgs",
+        voice_id: str | None = None,
         pronunciation_id: str | None = None,
         json_config: dict[str, Any] | None = None,
         http_session: aiohttp.ClientSession | None = None,
@@ -70,8 +113,9 @@ class TTS(tts.TTS):
             api_key (str): Gradium API key, or `GRADIUM_API_KEY` env var.
             model_endpoint (str): Gradium model endpoint, or `GRADIUM_MODEL_ENDPOINT` env var.
             model_name (str): Model name.
-            voice (str): Speaker voice.
-            voice_id (str): Speaker voice ID.
+            voice (str): Speaker voice name. Mutually exclusive with `voice_id`.
+            voice_id (str): Speaker voice ID. Mutually exclusive with `voice`; used by
+                default (`DEFAULT_VOICE_ID`) when neither is given.
             pronunciation_id (str): Optional pronunciation ID for controlling TTS pronunciation.
             word_tokenizer (tokenize.WordTokenizer): Tokenizer for processing text. Defaults to basic WordTokenizer.
         """
@@ -100,6 +144,13 @@ class TTS(tts.TTS):
         self._model_endpoint = model_endpoint
         self._model_name = model_name
 
+        # The server resolves `voice_id` to an embedding and then ignores `voice`, so
+        # sending both would silently discard the voice name.
+        if voice is not None and voice_id is not None:
+            raise ValueError("`voice` and `voice_id` are mutually exclusive")
+        if voice is None and voice_id is None:
+            voice_id = DEFAULT_VOICE_ID
+
         if not word_tokenizer:
             word_tokenizer = tokenize.basic.WordTokenizer(ignore_punctuation=False)
         self._opts = _TTSOptions(
@@ -113,23 +164,26 @@ class TTS(tts.TTS):
 
     @property
     def model(self) -> str:
-        return "unknown"
+        return self._model_name
 
     @property
     def provider(self) -> str:
         return "Gradium"
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
+        """Open the websocket, bounding the handshake by `timeout`.
+
+        The shared aiohttp session has no connect timeout of its own, so a hung
+        handshake would otherwise block for aiohttp's default of five minutes.
+        """
         return await asyncio.wait_for(
             self._ensure_session().ws_connect(
                 self._model_endpoint,
-                headers={"x-api-key": self._api_key, "x-api-source": "livekit"},
+                headers=ws_headers(self._api_key),
+                timeout=aiohttp.ClientWSTimeout(ws_receive=timeout, ws_close=10),
             ),
             timeout,
         )
-
-    async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
-        await ws.close()
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -144,10 +198,14 @@ class TTS(tts.TTS):
         voice_id: NotGivenOr[str] = NOT_GIVEN,
         json_config: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> None:
+        if is_given(voice) and is_given(voice_id):
+            raise ValueError("`voice` and `voice_id` are mutually exclusive")
         if is_given(voice):
             self._opts.voice = voice
+            self._opts.voice_id = None
         if is_given(voice_id):
             self._opts.voice_id = voice_id
+            self._opts.voice = None
         if is_given(json_config):
             self._opts.json_config = json_config
 
@@ -195,11 +253,7 @@ class ChunkedStream(tts.ChunkedStream):
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         # TODO(laurent): once we support the POST requests, we should use it here rather than the websocket API.
         try:
-            async with self._tts._ensure_session().ws_connect(
-                self._tts._model_endpoint,
-                headers={"x-api-key": self._tts._api_key},
-                timeout=aiohttp.ClientWSTimeout(ws_receive=self._conn_options.timeout, ws_close=10),
-            ) as ws:
+            async with await self._tts._connect_ws(self._conn_options.timeout) as ws:
                 output_emitter.initialize(
                     request_id=utils.shortuuid(),
                     sample_rate=SUPPORTED_SAMPLE_RATE,
@@ -228,14 +282,19 @@ class ChunkedStream(tts.ChunkedStream):
 
                 while True:
                     msg = await ws.receive()
+                    if msg.type == aiohttp.WSMsgType.ERROR:
+                        raise APIConnectionError("Gradium websocket error") from ws.exception()
                     if msg.type in (
                         aiohttp.WSMsgType.CLOSE,
                         aiohttp.WSMsgType.CLOSED,
                         aiohttp.WSMsgType.CLOSING,
                     ):
-                        # TODO(laurent): once we support returning eos in the api, we should enable this back.
-                        # raise APIStatusError("Gradium websocket connection closed unexpectedly")
-                        break
+                        raise _close_error(
+                            "Gradium connection closed unexpectedly",
+                            code=ws.close_code,
+                            body=f"{msg.data=} {msg.extra=}",
+                            reason=msg.extra,
+                        )
 
                     if msg.type == aiohttp.WSMsgType.TEXT:
                         msg_data = json.loads(msg.data)
@@ -250,12 +309,16 @@ class ChunkedStream(tts.ChunkedStream):
                             output_emitter.push(audio)
                         elif type_ == "end_of_stream":
                             break
+                        elif type_ == "error":
+                            raise _api_error(msg_data)
                         else:
                             logger.warning(f"unknown message type: {type_}")
                 output_emitter.flush()
 
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
+        except APIError:
+            raise
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
                 message=e.message, status_code=e.status, request_id=None, body=None
@@ -311,6 +374,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             await asyncio.gather(*tasks)
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
+        except APIError:
+            raise
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
                 message=e.message, status_code=e.status, request_id=request_id, body=None
@@ -354,15 +419,19 @@ class SynthesizeStream(tts.SynthesizeStream):
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             while True:
                 msg = await ws.receive()
+                if msg.type == aiohttp.WSMsgType.ERROR:
+                    raise APIConnectionError("Gradium websocket error") from ws.exception()
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    # TODO(laurent): once we support returning eos in the api, we should enable this back.
-                    # raise APIStatusError("Gradium websocket connection closed unexpectedly")
-                    output_emitter.end_segment()
-                    break
+                    raise _close_error(
+                        "Gradium connection closed unexpectedly",
+                        code=ws.close_code,
+                        body=f"{msg.data=} {msg.extra=}",
+                        reason=msg.extra,
+                    )
 
                 if msg.type == aiohttp.WSMsgType.TEXT:
                     msg_data = json.loads(msg.data)
@@ -378,14 +447,12 @@ class SynthesizeStream(tts.SynthesizeStream):
                     elif type_ == "end_of_stream":
                         output_emitter.end_segment()
                         break
+                    elif type_ == "error":
+                        raise _api_error(msg_data)
                     else:
                         logger.warning(f"unknown message type: {type_}")
 
-        async with self._tts._ensure_session().ws_connect(
-            self._tts._model_endpoint,
-            headers={"x-api-key": self._tts._api_key},
-            timeout=aiohttp.ClientWSTimeout(ws_receive=self._conn_options.timeout, ws_close=10),
-        ) as ws:
+        async with await self._tts._connect_ws(self._conn_options.timeout) as ws:
             tasks = [
                 asyncio.create_task(send_task(ws)),
                 asyncio.create_task(recv_task(ws)),

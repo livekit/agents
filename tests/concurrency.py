@@ -857,12 +857,21 @@ def run_group(group: AsyncioConcurrentGroup, nextgroup: AsyncioConcurrentGroup |
 
 
 def _current_event_loop() -> asyncio.AbstractEventLoop:
+    """Return the loop pytest-asyncio installed, or a fresh one.
+
+    A group's runner teardown closes its loop and can leave that closed loop set on the
+    policy restored afterwards. The next group normally replaces it while setting up
+    fixtures. If every member fails setup first (nothing installs a new loop), running
+    the group would raise ``Event loop is closed`` and abort the session.
+    """
     try:
-        return asyncio.get_event_loop()
+        loop = asyncio.get_event_loop()
     except RuntimeError:
+        loop = None
+    if loop is None or loop.is_closed():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        return loop
+    return loop
 
 
 async def run_member_capturing(item: pytest.Function) -> object:
@@ -978,6 +987,28 @@ if PYTEST_ASYNCIO_CONCURRENT_INSTALLED:
         # the concurrent group members it converted back to ordinary sequential items.
         outcome = yield
         repromote_collected(outcome, collector.config)
+
+    @pytest.hookimpl(hookwrapper=True, tryfirst=True)
+    def pytest_runtest_setup(item: pytest.Item) -> Any:
+        # Concurrent members stay off SetupState: their finalizers are stored on the group
+        # instead (pytest-asyncio-concurrent). pytest 9.1 treats ``getfixturevalue`` as
+        # teardown when the requesting node is not on that stack, so function-scoped
+        # fixtures (``event_loop_policy`` and the other autouse fixtures) fail at setup.
+        # Mark the member active only while fixtures are created. Finalizers still go to
+        # the group via ``AsyncioConcurrentGroupMember.addfinalizer``.
+        if not isinstance(item, AsyncioConcurrentGroupMember):
+            yield
+            return
+
+        stack = item.session._setupstate.stack
+        inserted = item not in stack
+        if inserted:
+            stack[item] = ([], None)
+        try:
+            yield
+        finally:
+            if inserted:
+                stack.pop(item, None)
 
     @pytest.hookimpl(specname="pytest_runtest_protocol_async_group", tryfirst=True)
     def pytest_runtest_protocol_async_group(

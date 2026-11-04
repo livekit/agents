@@ -11,6 +11,7 @@ from livekit.agents.llm import (
     ChatMessage,
     FunctionCall,
     FunctionCallOutput,
+    ImageContent,
     utils,
 )
 from livekit.agents.llm.chat_context import _ReadOnlyChatContext
@@ -495,6 +496,30 @@ async def test_summarize_head_tail_split_basic():
 
 
 @pytest.mark.asyncio
+async def test_summarize_keeps_prior_summary():
+    ctx = ChatContext()
+    ctx.add_message(role="system", content="System prompt.")
+    ctx.add_message(
+        role="assistant",
+        content="<chat_history_summary>earlier summary</chat_history_summary>",
+        extra={"is_summary": True},
+    )
+    ctx.add_message(role="user", content="msg1")
+    ctx.add_message(role="assistant", content="reply1")
+    ctx.add_message(role="user", content="msg2")
+    ctx.add_message(role="assistant", content="reply2")
+
+    llm = _FixedSummaryLLM(CANNED_SUMMARY)
+    result = await ctx._summarize(llm, keep_last_turns=1)
+
+    summaries = [it for it in result.items if it.type == "message" and it.extra.get("is_summary")]
+    texts = [it.text_content for it in summaries]
+    assert len(summaries) == 2
+    assert any("earlier summary" in t for t in texts)
+    assert any(CANNED_SUMMARY in t for t in texts)
+
+
+@pytest.mark.asyncio
 async def test_summarize_head_tail_split_with_renderables():
     ctx = _build_conversation_ctx()
 
@@ -865,6 +890,22 @@ def test_resolve_template_identical_variants_collapse():
     assert instr.render(modality="audio") == "You are a helpful assistant.\n\nshared note"
 
 
+@pytest.mark.parametrize(
+    "template, expected",
+    [
+        ("Hello {name}, total {}", "Hello Alex, total "),
+        ("Hello {name}, item {0}", "Hello Alex, item "),
+        ("Hello {name}, price {price:.2f}", "Hello Alex, price "),
+        ("Hello {name}, caller {caller!s}", "Hello Alex, caller "),
+    ],
+)
+def test_render_missing_placeholders_become_empty(template: str, expected: str):
+    """Placeholders with no value render empty, whatever their field or format spec."""
+    from livekit.agents.llm.chat_context import Instructions
+
+    assert Instructions(template).render(data={"name": "Alex"}) == expected
+
+
 def test_upsert_places_a_backdated_item_where_it_happened():
     """A realtime user turn is stamped when it began, which can predate what is already there."""
     ctx = ChatContext.empty()
@@ -1086,3 +1127,77 @@ def test_readonly_chat_ctx_blocks_every_mutation_path():
     # nothing above may reach the context the read-only view was built from
     assert len(ro.items) == 1
     assert len(ctx.items) == 1
+
+
+def _equivalence_items() -> list[Any]:
+    return [
+        ChatMessage(id="m", role="user", content=["hi"]),
+        FunctionCall(id="c", call_id="1", name="f", arguments="{}"),
+        FunctionCallOutput(id="o", call_id="1", name="f", output="ok", is_error=False),
+        AgentHandoff(id="h", new_agent_id="b"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("index", "update"),
+    [
+        (0, {"role": "assistant"}),
+        (0, {"content": ["hello"]}),
+        (0, {"interrupted": True}),
+        (1, {"arguments": '{"x": 1}'}),
+        (1, {"name": "g"}),
+        (2, {"output": "nope"}),
+        (2, {"is_error": True}),
+    ],
+)
+def test_essential_field_change_breaks_equivalence_and_fingerprint(
+    index: int, update: dict[str, Any]
+) -> None:
+    items = _equivalence_items()
+    changed = list(items)
+    changed[index] = items[index].model_copy(update=update)
+
+    assert not ChatContext(items).is_equivalent(ChatContext(changed))
+    assert items[index]._fingerprint() != changed[index]._fingerprint()
+
+
+def test_metadata_does_not_affect_equivalence_or_fingerprint() -> None:
+    items = _equivalence_items()
+    changed = [
+        items[0].model_copy(
+            update={"created_at": 0.0, "transcript_confidence": 0.5, "extra": {"k": 1}}
+        ),
+        items[1].model_copy(update={"created_at": 0.0, "group_id": "g"}),
+        items[2].model_copy(update={"created_at": 0.0, "reply_required": False}),
+        # handoffs are compared by id and type only
+        items[3].model_copy(update={"new_agent_id": "c"}),
+    ]
+
+    assert ChatContext(items).is_equivalent(ChatContext(changed))
+    assert [i._fingerprint() for i in items] == [i._fingerprint() for i in changed]
+
+
+def test_fingerprint_detects_replaced_image_without_hashing_payload() -> None:
+    a = ChatMessage(role="user", content=[ImageContent(id="img", image="data:image/png;base64,AA")])
+    b = a.model_copy(update={"content": [ImageContent(id="img", image="data:image/png;base64,BB")]})
+    other = a.model_copy(
+        update={"content": [ImageContent(id="img2", image="data:image/png;base64,AA")]}
+    )
+    assert a._fingerprint() != b._fingerprint()
+    assert a._fingerprint() != other._fingerprint()
+
+
+def test_fingerprint_tracks_image_url_and_inference_settings() -> None:
+    a = ChatMessage(role="user", content=[ImageContent(id="img", image="https://a.example/img")])
+    changed_url = a.model_copy(
+        update={"content": [ImageContent(id="img", image="https://b.example/img")]}
+    )
+    changed_detail = a.model_copy(
+        update={
+            "content": [
+                ImageContent(id="img", image="https://a.example/img", inference_detail="high")
+            ]
+        }
+    )
+    assert a._fingerprint() != changed_url._fingerprint()
+    assert a._fingerprint() != changed_detail._fingerprint()

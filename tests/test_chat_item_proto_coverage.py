@@ -63,7 +63,14 @@ SATURATED_ITEMS: list[llm.ChatItem] = [
             "llm_node_ttfs": 1.0,
         },
     ),
-    FunctionCall(id="item_fc", call_id="call-1", name="fn", arguments="{}", created_at=_TS),
+    FunctionCall(
+        id="item_fc",
+        call_id="call-1",
+        name="fn",
+        arguments="{}",
+        extra={"livekit": {"inference_deployment": "d"}},
+        created_at=_TS,
+    ),
     FunctionCallOutput(
         id="item_fco",
         call_id="call-1",
@@ -119,6 +126,13 @@ def test_every_proto_field_is_populated(serializer: str, item: llm.ChatItem) -> 
 def test_message_content_is_one_entry_per_part() -> None:
     msg = encode_chat_item(SATURATED_ITEMS[0]).message
     assert [c.text for c in msg.content] == ["hello", "bye"]
+
+
+def test_map_values_are_stringified() -> None:
+    # extra dicts hold provider payloads and flags, the wire maps only strings
+    extra = {"livekit": {"inference_deployment": "d"}, "flag": True}
+    msg = encode_by_name(agent_pb.ChatMessage, {"extra": extra})
+    assert dict(msg.extra) == {k: str(v) for k, v in extra.items()}
 
 
 def _saturated(src_type: Any, msg_type: type[Message]) -> Any:

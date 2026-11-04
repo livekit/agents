@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-import httpx
+import httpx2 as httpx
 import openai
 from openai.types import ReasoningEffort
 from openai.types.chat import completion_create_params
