@@ -284,7 +284,7 @@ impl Inner {
         }
         let (reason, user_initiated) = self.state.lock().shutdown.clone().unwrap_or_default();
         let shutdown = telemetry::start(
-            &job,
+            job,
             telemetry::JobShutdown { reason: reason.clone(), user_initiated },
         );
         let cx = &under(cx, shutdown.cx());
@@ -321,7 +321,7 @@ impl Inner {
 
         if let Some(session_end) = &self.session_end {
             let span = telemetry::start(
-                &shutdown.cx(),
+                shutdown.cx(),
                 telemetry::OnSessionEnd { callback: session_end.clone() },
             );
             let call = under(cx, span.cx());
@@ -333,7 +333,7 @@ impl Inner {
             )
             .await;
         }
-        let span = telemetry::start(&shutdown.cx(), telemetry::SessionEndUpload);
+        let span = telemetry::start(shutdown.cx(), telemetry::SessionEndUpload);
         let call = under(cx, span.cx());
         self.step(
             span,
@@ -354,7 +354,7 @@ impl Inner {
         if let Some(parent) = self.parent.get() {
             let _ = parent.send(ToParent::Exiting { reason: bounded(reason.clone()) }).await;
         }
-        let disconnect = telemetry::start(&shutdown.cx(), telemetry::RoomDisconnect);
+        let disconnect = telemetry::start(shutdown.cx(), telemetry::RoomDisconnect);
         let disconnected =
             telemetry::check(&disconnect, host.disconnect(&under(cx, disconnect.cx())).await);
         telemetry::end_with(disconnect, ());

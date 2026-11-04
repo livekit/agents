@@ -217,7 +217,7 @@ impl TtsNodeTrace {
         let Some(span) = self.span else { return };
         if let (Some(ttfb), Some(id)) = (self.ttfb, &self.id) {
             let model = telemetry::model_labels(id);
-            telemetry::measure(&span.cx(), &telemetry::TurnTtsTtfb { model }, ttfb);
+            telemetry::measure(span.cx(), &telemetry::TurnTtsTtfb { model }, ttfb);
         }
         telemetry::end_with(
             span,

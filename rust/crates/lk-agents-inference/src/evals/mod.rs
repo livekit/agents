@@ -169,7 +169,7 @@ impl Judges {
             Judge::BuiltIn(judge) => judge.name.to_owned(),
             Judge::Host { name, .. } => name.clone(),
         };
-        let span = telemetry::start(&cx, telemetry::JudgeEvaluation { name: name.clone() });
+        let span = telemetry::start(cx, telemetry::JudgeEvaluation { name: name.clone() });
         let judged = match judge {
             Judge::BuiltIn(judge) => self.built_in(span.cx(), judge, chat_ctx, reference).await,
             Judge::Host { evaluator, .. } => {

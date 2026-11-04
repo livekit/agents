@@ -104,7 +104,7 @@ impl LlmTrace {
             let items = &req.chat_ctx.items;
             let capture = |values: Vec<Value>| captured(values).filter(|_| capture);
             Some(lk_agents_net::telemetry::start(
-                &cx,
+                cx,
                 LlmRequest {
                     operation: GenAiOperation::Chat,
                     provider: provider_name(&id.provider),
@@ -150,7 +150,7 @@ impl LlmTrace {
         self.request_ids.clear();
         let span = self.span.as_ref()?;
         Some(lk_agents_net::telemetry::start(
-            &span.cx(),
+            span.cx(),
             LlmRequestRun {
                 attempt: Attempt {
                     provider: provider_name(&self.id.provider),
@@ -209,7 +209,7 @@ impl LlmTrace {
 
     pub fn fail(&self, error: &ProviderError) {
         if let Some(span) = &self.span {
-            lk_agents_net::telemetry::fail(&span, error);
+            lk_agents_net::telemetry::fail(span, error);
         }
     }
 
@@ -245,7 +245,7 @@ impl LlmTrace {
         };
         let now = cx.tracer().now_nanos();
         lk_agents_net::telemetry::measure(
-            &cx,
+            cx,
             &GenAiOperationDuration { operation: labels() },
             seconds(self.started, now),
         );
@@ -253,7 +253,7 @@ impl LlmTrace {
             [(TokenType::Input, usage.input_tokens), (TokenType::Output, usage.output_tokens)]
         {
             lk_agents_net::telemetry::measure(
-                &cx,
+                cx,
                 &GenAiTokenUsage { operation: labels(), token_type },
                 count,
             );
@@ -347,17 +347,14 @@ impl TtsTrace {
         };
         let span = if label == FALLBACK_TTS_LABEL {
             TtsRequestSpan::Fallback(lk_agents_net::telemetry::start(
-                &cx,
+                cx,
                 TtsFallbackAdapter { target },
             ))
         } else if label.starts_with(STREAM_ADAPTER_LABEL) {
-            TtsRequestSpan::Stream(lk_agents_net::telemetry::start(
-                &cx,
-                TtsStreamAdapter { target },
-            ))
+            TtsRequestSpan::Stream(lk_agents_net::telemetry::start(cx, TtsStreamAdapter { target }))
         } else {
             TtsRequestSpan::Request(lk_agents_net::telemetry::start(
-                &cx,
+                cx,
                 TtsRequest { target, recovery: None },
             ))
         };
@@ -374,7 +371,7 @@ impl TtsTrace {
         self.attempts += 1;
         self.request_ids.clear();
         lk_agents_net::telemetry::start(
-            &self.cx(),
+            self.cx(),
             TtsRequestRun {
                 attempt: Attempt {
                     provider: provider_name(&self.id.provider),
@@ -409,9 +406,9 @@ impl TtsTrace {
 
     pub fn fail(&self, error: &ProviderError) {
         match &self.span {
-            TtsRequestSpan::Request(span) => lk_agents_net::telemetry::fail(&span, error),
-            TtsRequestSpan::Fallback(span) => lk_agents_net::telemetry::fail(&span, error),
-            TtsRequestSpan::Stream(span) => lk_agents_net::telemetry::fail(&span, error),
+            TtsRequestSpan::Request(span) => lk_agents_net::telemetry::fail(span, error),
+            TtsRequestSpan::Fallback(span) => lk_agents_net::telemetry::fail(span, error),
+            TtsRequestSpan::Stream(span) => lk_agents_net::telemetry::fail(span, error),
         }
     }
 

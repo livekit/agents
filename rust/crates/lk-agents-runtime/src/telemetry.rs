@@ -312,7 +312,7 @@ pub(crate) struct Blocked(Mutex<(std::collections::VecDeque<u64>, u32)>);
 pub(crate) fn event_loop_blocked(cx: &Cx, blocked: &Blocked, duration: f64, task: Option<String>) {
     let severity =
         if duration >= BLOCKED_ERROR { BlockingSeverity::Error } else { BlockingSeverity::Warning };
-    lk_agents_net::telemetry::measure(&cx, &EventLoopBlockedDuration { severity }, duration);
+    lk_agents_net::telemetry::measure(cx, &EventLoopBlockedDuration { severity }, duration);
     let now = cx.tracer().now_nanos();
     let suppressed = {
         let (sent, suppressed) = &mut *blocked.0.lock();
@@ -328,7 +328,7 @@ pub(crate) fn event_loop_blocked(cx: &Cx, blocked: &Blocked, duration: f64, task
     };
     let start = now.saturating_sub((duration * 1e9) as u64);
     let span = lk_agents_net::telemetry::start_at(
-        &cx,
+        cx,
         EventLoopBlocked {
             duration: Seconds(duration),
             threshold: Seconds(BLOCKED_WARNING),
@@ -365,7 +365,7 @@ pub(crate) fn function_tool(
         serde_json::from_str(&call.arguments).unwrap_or(JsonValue::String(call.arguments.clone()));
     let capture = cx.tracer().capture_content();
     lk_agents_net::telemetry::start(
-        &cx,
+        cx,
         FunctionTool {
             id: call.id.clone(),
             name: call.name.clone(),
@@ -404,7 +404,7 @@ pub(crate) fn end_function_tool(
     let error_type = error.then(|| "tool_error".to_owned());
     let seconds = cx.tracer().now_nanos().saturating_sub(started) as f64 / 1e9;
     lk_agents_net::telemetry::measure(
-        &cx,
+        cx,
         &ExecuteToolDuration {
             operation: GenAiOperation::ExecuteTool,
             tool: Label(call.name.clone()),
@@ -478,7 +478,7 @@ pub(crate) fn record_usage(cx: &Cx, metrics: &AgentMetrics) {
         && acquire > 0.0
     {
         lk_agents_net::telemetry::measure(
-            &cx,
+            cx,
             &ConnectionAcquireTime { model: model(), reused: BoolString(reused) },
             acquire,
         );

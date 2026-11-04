@@ -417,7 +417,7 @@ impl LlmNodeTrace {
         let ttft = trace.first_chunk_at().map(|at| at.saturating_sub(self.started) as f64 / 1e9);
         if let Some(ttft) = ttft {
             let model = telemetry::model_labels(&llm.id());
-            telemetry::measure(&span.cx(), &telemetry::TurnLlmTtft { model }, ttft);
+            telemetry::measure(span.cx(), &telemetry::TurnLlmTtft { model }, ttft);
         }
         telemetry::end_with(
             span,

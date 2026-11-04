@@ -414,7 +414,7 @@ impl ParticipantAudioInput {
         if let Some((span, subscribed)) = self.first_frame.lock().as_mut() {
             let track_id = sid.as_str().to_owned();
             telemetry::event(
-                &span,
+                span,
                 telemetry::TrackSubscribed { track_id, source: source_name(source).to_owned() },
             );
             *subscribed = Some(span.cx().tracer().now_nanos());
@@ -487,7 +487,7 @@ impl ParticipantAudioInput {
             let duration: std::time::Duration =
                 frames.iter().map(lk_agents_abi::voice::rtc::frame_duration).sum();
             telemetry::event(
-                &span,
+                span,
                 telemetry::PreConnectAudio { duration: telemetry::Seconds(duration.as_secs_f64()) },
             );
         }

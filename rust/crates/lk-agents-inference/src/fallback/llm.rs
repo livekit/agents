@@ -389,7 +389,7 @@ impl Llm for FallbackLlm {
                     }
                     Err(e) => {
                         if let Some(span) = &span {
-                            telemetry::fail(&span, &e);
+                            telemetry::fail(span, &e);
                         }
                         let _ = tx.send(Err(e)).await;
                     }
