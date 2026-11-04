@@ -11,12 +11,25 @@ use lk_agents_abi::Clock;
 use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::telemetry::report::RecordingHeader;
 use lk_agents_core::attempts::{AttemptStep, Attempts, RequestPolicy};
-use lk_agents_core::telemetry::report::{RecordingUpload, is_disabled_response};
+use lk_agents_core::telemetry::report::RecordingUpload;
 use prost::Message;
 
 use super::ReportAdmission;
 use super::UploadError;
 use crate::telemetry::otlp::CloudEndpoint;
+
+/// The 401 that means "the project owner turned recording off", matched case-insensitively.
+/// Other 401s must not disable uploads.
+const DISABLED_MARKERS: [&str; 2] = ["data recording is disabled", "disabled by owner"];
+
+/// Whether a Cloud response is the project's "recording disabled" refusal.
+pub(crate) fn is_disabled_response(status_code: u16, body: &[u8]) -> bool {
+    if status_code != 401 {
+        return false;
+    }
+    let text = String::from_utf8_lossy(body).to_lowercase();
+    DISABLED_MARKERS.iter().any(|m| text.contains(m))
+}
 
 const CHUNK_BYTES: usize = 64 * 1024;
 const RESPONSE_BYTES: usize = 64 * 1024;
@@ -295,4 +308,15 @@ pub(super) fn retry_delay(body: &[u8]) -> Option<u64> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    // Catches: any 401 disabling uploads, or the owner's refusal missed for its casing.
+    #[test]
+    fn only_the_owners_refusal_disables_uploads() {
+        assert!(super::is_disabled_response(401, b"Project data recording is DISABLED by owner"));
+        assert!(!super::is_disabled_response(401, b"bad token"));
+        assert!(!super::is_disabled_response(403, b"data recording is disabled"));
+    }
 }

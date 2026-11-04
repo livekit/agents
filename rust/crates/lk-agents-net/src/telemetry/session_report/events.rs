@@ -1,84 +1,53 @@
-//! The session report's event retention: per-session snapshot budgets under the process ceiling
-//! of its [`ReportAdmission`].
+//! The session report's event retention: every event a session accepts is kept until the report
+//! is built. A session, or the process, retaining an unusual number of them logs one warning.
 
-use std::collections::VecDeque;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use lk_agents_abi::telemetry::policy::TelemetryValue;
-use lk_agents_core::telemetry::policy::value_bytes;
 
-use super::{EventQuota, ReportAdmission};
+use super::{ReportAdmission, RetainedEvents};
 use crate::env::ProcessEnv;
 
-/// Session report snapshots expire after one hour. These budgets apply before the host copies
-/// an event, independently of SDK exporter retention.
-const EVENT_ITEMS: usize = lk_agents_abi::telemetry::policy::REPORT_EVENT_ITEMS;
-const EVENT_BYTES: usize = lk_agents_abi::telemetry::policy::REPORT_EVENT_BYTES;
-const EVENT_RECORD_BYTES: usize = lk_agents_abi::telemetry::policy::REPORT_EVENT_RECORD_BYTES;
-const EVENT_RETENTION_NS: u64 = 3600 * 1_000_000_000;
+/// A session retaining more events than this logs a warning, once.
+const SESSION_EVENTS_WARNING: usize = 10_000;
+/// Every session of the process retaining more events than this logs a warning, once per process.
+pub(super) const PROCESS_EVENTS_WARNING: usize = 100_000;
 
-struct RetainedEvents {
-    quota: Arc<EventQuota>,
-    job_id: Option<String>,
-    entries: VecDeque<(u64, usize)>,
-    bytes: usize,
-    now_ns: u64,
-}
-
-impl RetainedEvents {
-    fn new(quota: Arc<EventQuota>) -> Self {
-        Self { quota, job_id: None, entries: VecDeque::new(), bytes: 0, now_ns: 0 }
-    }
-
-    fn expire(&mut self, now_ns: u64) -> usize {
-        // Admission time, rather than the event's wall timestamp, orders the expiry queue.
-        self.now_ns = self.now_ns.max(now_ns);
-        let mut expired = 0;
-        let mut released_bytes = 0;
-        while self
-            .entries
-            .front()
-            .is_some_and(|(at, _)| self.now_ns.saturating_sub(*at) >= EVENT_RETENTION_NS)
-        {
-            let (_, bytes) = self.entries.pop_front().expect("front exists");
-            self.bytes -= bytes;
-            released_bytes += bytes;
-            expired += 1;
-        }
-        self.quota.release(expired, released_bytes);
-        expired
-    }
-
-    fn admit(&mut self, bytes: usize, now_ns: u64) -> (usize, bool) {
-        let expired = self.expire(now_ns);
-        if bytes > EVENT_RECORD_BYTES
-            || self.entries.len() >= EVENT_ITEMS
-            || bytes > EVENT_BYTES.saturating_sub(self.bytes)
-            || !self.quota.admit(bytes)
-        {
-            return (expired, false);
-        }
-        self.entries.push_back((self.now_ns, bytes));
-        self.bytes += bytes;
-        (expired, true)
-    }
-}
-
-impl Drop for RetainedEvents {
-    fn drop(&mut self) {
-        self.quota.release(self.entries.len(), self.bytes);
-    }
-}
-
-/// A session's retained events, charged to the process's report admission.
+/// A session's retained events, counted in the process's report admission.
 pub struct EventRetention {
     capture_content: bool,
-    retained: RetainedEvents,
+    job_id: Option<String>,
+    retained: usize,
+    process: Arc<RetainedEvents>,
 }
 
 impl EventRetention {
     pub fn with_admission(capture_content: bool, admission: &ReportAdmission) -> Self {
-        Self { capture_content, retained: RetainedEvents::new(admission.events.clone()) }
+        Self { capture_content, job_id: None, retained: 0, process: admission.events.clone() }
+    }
+
+    fn count(&mut self) {
+        self.retained += 1;
+        if self.retained == SESSION_EVENTS_WARNING + 1 {
+            log::warn!(
+                target: "livekit.agents",
+                "the session report retains more than {SESSION_EVENTS_WARNING} events"
+            );
+        }
+        let process = self.process.items.fetch_add(1, Ordering::Relaxed) + 1;
+        if process > PROCESS_EVENTS_WARNING && !self.process.warned.swap(true, Ordering::Relaxed) {
+            log::warn!(
+                target: "livekit.agents",
+                "session reports retain {process} events across the process"
+            );
+        }
+    }
+}
+
+impl Drop for EventRetention {
+    fn drop(&mut self) {
+        self.process.items.fetch_sub(self.retained, Ordering::Relaxed);
     }
 }
 
@@ -90,38 +59,37 @@ impl lk_agents_abi::telemetry::report::EventRetention for EventRetention {
     }
 
     fn claim(&mut self, job_id: String) {
-        self.retained.job_id.get_or_insert(job_id);
+        self.job_id.get_or_insert(job_id);
     }
 
     fn allows_read(&self, job_id: String) -> bool {
-        self.retained.job_id.as_ref().is_none_or(|owner| owner == &job_id)
+        self.job_id.as_ref().is_none_or(|owner| owner == &job_id)
     }
 
     fn accepts(&self, kind: String, redaction: bool) -> bool {
         lk_agents_core::telemetry::report::event_allowed(&kind, self.capture_content, redaction)
     }
 
-    fn admit(&mut self, event: TelemetryValue, now_ns: u64) -> (usize, bool) {
-        self.retained.admit(value_bytes(&event), now_ns)
+    fn admit(&mut self, _event: TelemetryValue, _now_ns: u64) -> (usize, bool) {
+        self.count();
+        (0, true)
     }
 
-    fn expire(&mut self, now_ns: u64) -> usize {
-        self.retained.expire(now_ns)
+    fn expire(&mut self, _now_ns: u64) -> usize {
+        0
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::{PROCESS_EVENT_BYTES, PROCESS_EVENT_ITEMS};
+    use lk_agents_abi::telemetry::report::EventRetention as _;
+
     use super::*;
 
-    type Retention = EventRetention;
-
     #[test]
-    fn event_retention_expires_charged_snapshots_and_refuses_live_or_denied_content() {
-        use lk_agents_abi::telemetry::report::EventRetention as _;
+    fn event_retention_keeps_every_event_and_refuses_live_or_denied_content() {
         let admission = ReportAdmission::default();
-        let mut recording = Retention::with_admission(false, &admission);
+        let mut recording = EventRetention::with_admission(false, &admission);
         assert!(recording.allows_read("outside".into()));
         recording.claim("owner".into());
         recording.claim("another".into());
@@ -132,68 +100,16 @@ mod tests {
         assert!(!recording.accepts("unknown".into(), false));
         assert!(recording.accepts("agent_state_changed".into(), false));
         assert!(recording.accepts("error".into(), true) && recording.accepts("close".into(), true));
-        let opted_in = Retention::with_admission(true, &admission);
+        let opted_in = EventRetention::with_admission(true, &admission);
         assert!(opted_in.accepts("user_input_transcribed".into(), false));
         assert!(!opted_in.accepts("user_input_transcribed".into(), true));
-        for _ in 0..EVENT_BYTES / EVENT_RECORD_BYTES {
-            assert_eq!(recording.retained.admit(EVENT_RECORD_BYTES, 1), (0, true));
-        }
-        assert_eq!(recording.retained.admit(1, 2), (0, false));
-        assert_eq!(recording.expire(EVENT_RETENTION_NS), 0);
-        assert_eq!(recording.expire(EVENT_RETENTION_NS + 1), 16);
-        assert_eq!(
-            recording.retained.admit(EVENT_RECORD_BYTES + 1, EVENT_RETENTION_NS + 2),
-            (0, false)
-        );
-        for _ in 0..EVENT_ITEMS {
-            assert_eq!(recording.retained.admit(1, EVENT_RETENTION_NS + 2), (0, true));
-        }
-        assert_eq!(recording.retained.admit(0, EVENT_RETENTION_NS + 2), (0, false));
-        assert_eq!(recording.expire(0), 0, "a backwards clock cannot corrupt expiry order");
-        assert_eq!(recording.expire(2 * EVENT_RETENTION_NS + 2), EVENT_ITEMS);
-        assert_eq!(recording.retained.bytes, 0);
-    }
 
-    #[test]
-    fn session_event_stores_share_capacity_until_expiry_or_drop() {
-        use lk_agents_abi::telemetry::report::EventRetention as _;
-
-        let admission = ReportAdmission::default();
-        let store = || Retention::with_admission(false, &admission);
-        let records_per_store = EVENT_BYTES / EVENT_RECORD_BYTES;
-        let mut stores: Vec<_> = (0..PROCESS_EVENT_BYTES / EVENT_BYTES).map(|_| store()).collect();
-        // Concurrent sessions consume the process's full byte ceiling before any is released.
-        std::thread::scope(|scope| {
-            for session in &mut stores {
-                scope.spawn(move || {
-                    for _ in 0..records_per_store {
-                        assert_eq!(session.retained.admit(EVENT_RECORD_BYTES, 1), (0, true));
-                    }
-                });
-            }
-        });
-        let mut overflow = store();
-        assert_eq!(overflow.retained.admit(EVENT_RECORD_BYTES, 1), (0, false));
-        assert_eq!(stores[0].expire(EVENT_RETENTION_NS + 1), records_per_store);
-        assert_eq!(overflow.retained.admit(EVENT_RECORD_BYTES, 1), (0, true));
-        drop(stores.pop());
-        for _ in 1..records_per_store {
-            assert_eq!(overflow.retained.admit(EVENT_RECORD_BYTES, 1), (0, true));
+        for _ in 0..PROCESS_EVENTS_WARNING + 1 {
+            assert_eq!(recording.admit(TelemetryValue::None, 1), (0, true));
         }
-        assert_eq!(overflow.retained.admit(1, 1), (0, false), "session ceiling still applies");
-        drop(stores);
-        drop(overflow);
-
-        // Tiny events exhaust the process's item ceiling before its byte ceiling.
-        let mut stores: Vec<_> = (0..PROCESS_EVENT_ITEMS / EVENT_ITEMS).map(|_| store()).collect();
-        for session in &mut stores {
-            for _ in 0..EVENT_ITEMS {
-                assert_eq!(session.retained.admit(1, 1), (0, true));
-            }
-        }
-        let mut overflow = store();
-        assert_eq!(overflow.retained.admit(1, 1), (0, false));
-        drop(stores);
-        assert_eq!(overflow.retained.admit(1, 1), (0, true));
+        assert_eq!(recording.expire(u64::MAX), 0);
+        assert!(admission.events.warned.load(Ordering::Relaxed));
+        drop(recording);
+        assert_eq!(admission.events.items.load(Ordering::Relaxed), 0);
     }
 }

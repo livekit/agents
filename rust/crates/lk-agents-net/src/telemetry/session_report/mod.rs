@@ -11,7 +11,7 @@ pub mod recording;
 pub mod tagger;
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::time::Duration;
 
 use lk_agents_abi::Clock;
@@ -75,21 +75,18 @@ pub async fn export(
 
 /// Recordings in flight; further uploads wait, within their own deadline.
 const UPLOADS: usize = 2;
-/// The retained session events of every session in the process.
-const PROCESS_EVENT_ITEMS: usize = 65_536;
-const PROCESS_EVENT_BYTES: usize = 64 * 1024 * 1024;
 
 /// The session report's process admission: recordings in flight and the retained session events
 /// of every session. One per process; clones share it.
 #[derive(Clone)]
 pub struct ReportAdmission {
     uploads: Arc<Semaphore>,
-    events: Arc<EventQuota>,
+    events: Arc<RetainedEvents>,
 }
 
 impl Default for ReportAdmission {
     fn default() -> Self {
-        Self { uploads: Arc::new(Semaphore::new(UPLOADS)), events: Arc::new(EventQuota::default()) }
+        Self { uploads: Arc::new(Semaphore::new(UPLOADS)), events: Arc::default() }
     }
 }
 
@@ -107,42 +104,12 @@ impl ReportAdmission {
     }
 }
 
-/// Retained event items and bytes. Quotas publish no payload; in-flight reservations may
-/// conservatively refuse optional data.
+/// The retained session events of every session in the process, and whether their count was
+/// already reported.
 #[derive(Default)]
-struct EventQuota {
+struct RetainedEvents {
     items: AtomicUsize,
-    bytes: AtomicUsize,
-}
-
-impl EventQuota {
-    fn admit(&self, bytes: usize) -> bool {
-        if self
-            .items
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |items| {
-                (items < PROCESS_EVENT_ITEMS).then_some(items + 1)
-            })
-            .is_err()
-        {
-            return false;
-        }
-        if self
-            .bytes
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |retained| {
-                retained.checked_add(bytes).filter(|total| *total <= PROCESS_EVENT_BYTES)
-            })
-            .is_err()
-        {
-            self.items.fetch_sub(1, Ordering::Relaxed);
-            return false;
-        }
-        true
-    }
-
-    fn release(&self, items: usize, bytes: usize) {
-        self.bytes.fetch_sub(bytes, Ordering::Relaxed);
-        self.items.fetch_sub(items, Ordering::Relaxed);
-    }
+    warned: AtomicBool,
 }
 
 #[cfg(test)]

@@ -1,9 +1,6 @@
-//! Destination content policy, Cloud admission and the session report's retention charges. No
-//! host objects cross here.
+//! Destination content policy and Cloud admission. No host objects cross here.
 
-use lk_agents_abi::telemetry::policy::{
-    REDACTED_EXCEPTION, REPORT_EVENT_RECORD_BYTES, TelemetryValue,
-};
+use lk_agents_abi::telemetry::policy::REDACTED_EXCEPTION;
 use lk_agents_abi::telemetry::record::{KeyValues, LogRecord, SpanRecord, Status, Value};
 use lk_agents_abi::telemetry::semconv::otel;
 
@@ -15,37 +12,6 @@ pub fn marks_pii(key: &str) -> bool {
 
 pub fn content_allowed(capture_content: bool, redaction: bool) -> bool {
     capture_content && !redaction
-}
-
-const REFUSED_BYTES: usize = REPORT_EVENT_RECORD_BYTES + 1;
-
-fn total(base: usize, charges: impl IntoIterator<Item = usize>) -> usize {
-    charges.into_iter().fold(base, usize::saturating_add).min(REFUSED_BYTES)
-}
-
-fn string_bytes(s: &str) -> usize {
-    64usize.saturating_add(s.chars().count().saturating_mul(4))
-}
-
-/// What retaining `value` costs the host: Python keeps up to four bytes per character and its
-/// integers in 30-bit digits of four bytes. More than [`REPORT_EVENT_RECORD_BYTES`] (or a value
-/// the host could not represent) refuses it.
-pub fn value_bytes(value: &TelemetryValue) -> usize {
-    match value {
-        TelemetryValue::None | TelemetryValue::Bool(_) | TelemetryValue::Float(_) => 32,
-        TelemetryValue::Int(i) => {
-            let bits = (u64::BITS - i.unsigned_abs().leading_zeros()) as usize;
-            32 + bits.div_ceil(30) * 4
-        }
-        TelemetryValue::String(s) => string_bytes(s).min(REFUSED_BYTES),
-        TelemetryValue::Bytes(b) => 64usize.saturating_add(b.len()).min(REFUSED_BYTES),
-        TelemetryValue::Array(items) => total(64, items.iter().map(value_bytes)),
-        TelemetryValue::Map(entries) => total(
-            128,
-            entries.iter().flat_map(|(key, value)| [string_bytes(key), value_bytes(value)]),
-        ),
-        TelemetryValue::Unsupported => REFUSED_BYTES,
-    }
 }
 
 /// What the Cloud destination does with one of a job's records.
@@ -181,16 +147,6 @@ mod tests {
     fn pii_marker_is_a_whole_segment() {
         assert!(marks_pii("lk.pii.input"));
         assert!(!marks_pii("lk.pii_input"));
-    }
-
-    #[test]
-    fn retention_refuses_large_or_unsupported_values() {
-        use TelemetryValue as V;
-        assert_eq!(value_bytes(&V::String("abc".into())), 76);
-        assert_eq!(value_bytes(&V::Map(vec![("abc".into(), V::None)])), 236);
-        assert_eq!(value_bytes(&V::Int(i64::MAX)), 44);
-        assert_eq!(value_bytes(&V::String("x".repeat(REPORT_EVENT_RECORD_BYTES))), REFUSED_BYTES);
-        assert_eq!(value_bytes(&V::Array(vec![V::Unsupported])), REFUSED_BYTES);
     }
 
     // Catches: Cloud stripping `lk.pii.*` (its ingest does), Cloud redacting an unredacted

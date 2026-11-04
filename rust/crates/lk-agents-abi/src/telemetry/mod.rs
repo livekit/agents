@@ -19,11 +19,6 @@ pub mod policy {
     /// What a redacted destination sees in place of an exception message or error status.
     pub const REDACTED_EXCEPTION: &str = "exception details redacted";
 
-    pub const REPORT_EVENT_ITEMS: usize = 1024;
-    pub const REPORT_EVENT_BYTES: usize = 1024 * 1024;
-    /// Retained bytes one event may charge.
-    pub const REPORT_EVENT_RECORD_BYTES: usize = 64 * 1024;
-
     /// A host value as OpenTelemetry's `AnyValue`, read once from the host object: a mapping's
     /// non-string keys are skipped, a host record (a pydantic model, a dataclass) reads as the
     /// mapping of its fields.
@@ -40,7 +35,6 @@ pub mod policy {
         Map(Vec<(String, TelemetryValue)>),
         /// What OTel cannot carry: another host object, an integer beyond 64 bits, or a collection
         /// nested deeper than [`MAX_DEPTH`] or longer than [`MAX_COLLECTION`], which is not walked.
-        /// Retention refuses it.
         Unsupported,
     }
 }
