@@ -39,9 +39,10 @@ mod tests;
 
 #[derive(Default)]
 struct State {
-    /// The first reason the job ends with, and whether the user asked for it.
-    shutdown: Option<(String, bool)>,
+    /// The first reason the job ends with.
+    shutdown: Option<String>,
     connected: bool,
+    /// Whether any end was the user's, whichever reason came first.
     user_shutdown: bool,
     /// `add_participant_entrypoint`'s, in order, each with the participant kinds it runs for.
     entrypoints: Vec<Entrypoint>,
@@ -139,9 +140,16 @@ impl Inner {
         let mut st = self.state.lock();
         st.user_shutdown |= user_initiated;
         if st.shutdown.is_none() {
-            st.shutdown = Some((reason, user_initiated));
+            st.shutdown = Some(reason);
             self.ended.send_replace(true);
         }
+    }
+
+    /// The first reason, and whether any end was the user's: the session's close can reach the
+    /// job before the user's own `shutdown`.
+    fn shutdown(&self) -> (String, bool) {
+        let st = self.state.lock();
+        (st.shutdown.clone().unwrap_or_default(), st.user_shutdown)
     }
 
     fn host(&self) -> Option<&Arc<dyn JobProcess>> {
@@ -281,7 +289,7 @@ impl Inner {
                 _ = ended.wait_for(|e| *e) => break,
             }
         }
-        let (reason, user_initiated) = self.state.lock().shutdown.clone().unwrap_or_default();
+        let (reason, user_initiated) = self.shutdown();
         let shutdown = telemetry::start(
             job,
             telemetry::JobShutdown { reason: reason.clone(), user_initiated },

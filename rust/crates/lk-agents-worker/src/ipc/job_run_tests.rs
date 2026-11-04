@@ -251,3 +251,24 @@ async fn report_preparation_and_upload_share_one_budget_and_shutdown_always_cont
         assert!(host.objects.values.lock().is_empty(), "shutdown retained a host object");
     }
 }
+
+#[tokio::test]
+async fn a_shutdown_stays_user_initiated_when_the_session_closed_first() {
+    use lk_agents_abi::worker::ipc_host::{JobExecution, JobRun as _};
+    let run = JobRun::new(
+        &ProcessEnv::current_runtime(),
+        true,
+        5.0,
+        false,
+        "ws://localhost".into(),
+        None,
+        5.0,
+        None,
+        String::new(),
+        String::new(),
+    )
+    .unwrap();
+    run.session_closed("user_initiated".into());
+    run.end("shutdown".into(), true);
+    assert_eq!(run.inner.shutdown(), ("user_initiated".to_owned(), true));
+}
