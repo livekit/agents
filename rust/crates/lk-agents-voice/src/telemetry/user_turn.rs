@@ -9,7 +9,7 @@ use lk_agents_abi::Ts;
 use lk_agents_abi::telemetry::decl::{BoolString, Content, Json, Measured, Seconds, SpanRef};
 use lk_agents_abi::telemetry::errors::SpanError;
 use lk_agents_abi::telemetry::spans::user_turn::{
-    EouDetection, EouDetectionEnd, EouOutcome, EouPrediction, EouWait, EouWaitEnd,
+    EouDetection, EouDetectionEnd, EouOutcome, EouPrediction, EouSource, EouWait, EouWaitEnd,
     OnUserTurnCompleted, Rearmed, StopResponse, Superseded, UserResumed, UserSpeaking,
     UserSpeakingEnd, UserTurn, UserTurnEnd, UserTurnOrigin, UserTurnOutcome,
 };
@@ -42,22 +42,15 @@ pub(crate) struct Stt {
 /// What triggered the end-of-turn countdown (`lk.eou.source`) and the delay it waits.
 #[derive(Clone, Copy)]
 pub(crate) struct Endpointing {
-    pub(crate) source: &'static str,
+    pub(crate) source: EouSource,
     pub(crate) delay: f64,
 }
 
 impl Endpointing {
     fn decl(self, started_at: Ts) -> EouWait {
-        EouWait {
-            started_at,
-            source: self.source.to_owned(),
-            endpointing_delay: Seconds(self.delay),
-        }
+        EouWait { started_at, source: self.source, endpointing_delay: Seconds(self.delay) }
     }
 }
-
-/// `lk.eou.source` of a manual commit.
-pub(crate) const MANUAL: &str = "manual";
 
 struct Speaking {
     span: Span<UserSpeaking>,
@@ -199,7 +192,7 @@ impl UserTurnSpan {
     /// A later trigger (a final transcript, a manual commit) restarts the countdown of the turn
     /// waiting on its decision: the wait is re-armed, or opened by a manual commit.
     pub(crate) fn retriggered(&mut self, trace: &mut Trace, endpointing: Endpointing) {
-        if self.wait.is_some() || endpointing.source == MANUAL {
+        if self.wait.is_some() || endpointing.source == EouSource::Manual {
             let now = trace.now();
             self.trigger(trace, now, endpointing);
         }
@@ -211,8 +204,7 @@ impl UserTurnSpan {
             Some(wait) => {
                 wait.rearms += 1;
                 wait.endpointing = endpointing;
-                let source = endpointing.source.to_owned();
-                trace.event(&wait.span, Rearmed { at, source });
+                trace.event(&wait.span, Rearmed { at, source: endpointing.source });
                 trace.set(&wait.span, endpointing.decl(wait.started));
             }
             None => {
@@ -262,7 +254,7 @@ impl UserTurnSpan {
             chat_ctx: Content(Json(chat_ctx)),
             endpointing_delay: Seconds(delay.as_secs_f64()),
             language: Some(language.clone().unwrap_or_default()),
-            source: wait.endpointing.source.to_owned(),
+            source: wait.endpointing.source,
             from_cache: *from_cache,
             probability: p.probability,
             unlikely_threshold: p.threshold,

@@ -5,11 +5,12 @@ use lk_agents_abi::telemetry::decl::{Measured, Seconds};
 use lk_agents_abi::telemetry::record::Value;
 use lk_agents_abi::telemetry::spans::common::GenAiOperation;
 use lk_agents_abi::telemetry::spans::session::{
-    AgentSession, AgentSessionEnd, AgentStateChanged, OnEnter, SessionStart, StartAgentActivity,
+    AgentSession, AgentSessionEnd, AgentStateChanged, ConversationState, OnEnter, SessionStart,
+    StartAgentActivity,
 };
 use lk_agents_abi::telemetry::spans::user_turn::{
-    EouDetection, EouDetectionEnd, EouOutcome, EouWait, EouWaitEnd, UserSpeaking, UserSpeakingEnd,
-    UserTurn, UserTurnEnd, UserTurnOrigin, UserTurnOutcome,
+    EouDetection, EouDetectionEnd, EouOutcome, EouSource, EouWait, EouWaitEnd, UserSpeaking,
+    UserSpeakingEnd, UserTurn, UserTurnEnd, UserTurnOrigin, UserTurnOutcome,
 };
 
 const EPOCH_S: u64 = 1_700_000_000;
@@ -184,7 +185,10 @@ fn events_and_failures_are_recorded_on_the_span() {
     t.step(ts(0));
     let root = t.open_root(None, None, session());
     t.step(ts(4));
-    t.event(&root, AgentStateChanged { old: "listening".into(), new: "thinking".into() });
+    t.event(
+        &root,
+        AgentStateChanged { old: ConversationState::Listening, new: ConversationState::Thinking },
+    );
     let error = HostError::new("boom");
     let error = HostError { kind: "ValueError".into(), ..error };
     t.step(ts(6));
@@ -194,7 +198,7 @@ fn events_and_failures_are_recorded_on_the_span() {
     let records = t.drain();
     let [root] = spans(&records)[..] else { panic!("{records:?}") };
     assert_eq!(root.status, Status::Error("boom".into()));
-    assert_eq!(attr(root, "error.type"), Some(&Value::String("ValueError".into())));
+    assert_eq!(attr(root, "error.type"), Some(&Value::String("exception".into())));
     assert_eq!(attr(root, "lk.cancelled"), None);
     let names: Vec<_> =
         root.events.iter().map(|e| (e.name.to_string(), e.time_unix_nanos)).collect();
@@ -276,7 +280,8 @@ fn a_parent_never_ends_before_its_children() {
     let root = t.open_root(None, None, session());
     let turn = t.open(user_turn());
     t.step(ts(1));
-    let decl = EouWait { started_at: ts(1), source: "vad".into(), endpointing_delay: Seconds(0.5) };
+    let decl =
+        EouWait { started_at: ts(1), source: EouSource::Vad, endpointing_delay: Seconds(0.5) };
     let wait = t.open_in(&turn, decl);
     let detection = t.open_in(&wait, EouDetection);
     t.step(ts(50));
@@ -377,16 +382,17 @@ fn an_end_attribute_replaces_the_start_value_under_its_key() {
     t.step(ts(0));
     let root = t.open_root(None, None, session());
     let turn = t.open(user_turn());
-    let decl = EouWait { started_at: ts(0), source: "vad".into(), endpointing_delay: Seconds(0.5) };
+    let decl =
+        EouWait { started_at: ts(0), source: EouSource::Vad, endpointing_delay: Seconds(0.5) };
     let mut wait = t.open_in(&turn, decl);
     wait.ended = true;
     let open = t.open.remove(&wait.context.span_id).expect("open");
-    t.finish(open, wall_ms(1), Some(&Rearmed { at: ts(1), source: "model".into() }));
+    t.finish(open, wall_ms(1), Some(&Rearmed { at: ts(1), source: EouSource::Stt }));
     t.end(turn, turn_end(None));
     t.end(root, session_end());
     let records = t.drain();
     let wait = spans(&records).into_iter().find(|s| s.name == "eou_wait").expect("eou_wait");
     let sources: Vec<_> = wait.attributes.iter().filter(|(k, _)| k == "lk.eou.source").collect();
     assert_eq!(sources.len(), 1, "{:?}", wait.attributes);
-    assert_eq!(attr(wait, "lk.eou.source"), Some(&Value::String("model".into())));
+    assert_eq!(attr(wait, "lk.eou.source"), Some(&Value::String("stt".into())));
 }

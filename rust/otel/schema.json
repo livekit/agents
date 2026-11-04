@@ -379,7 +379,8 @@
         {
           "key": "lk.eou.source",
           "type": "string",
-          "required": false
+          "required": false,
+          "members": ["vad", "stt", "manual", "realtime_llm"]
         },
         {
           "key": "lk.eou.from_cache",
@@ -415,7 +416,8 @@
         {
           "key": "lk.eou.source",
           "type": "string",
-          "required": true
+          "required": true,
+          "members": ["vad", "stt", "manual", "realtime_llm"]
         },
         {
           "key": "lk.eou.endpointing_delay",
@@ -552,7 +554,8 @@
           "key": "gen_ai.tool.type",
           "type": "string",
           "required": true,
-          "registry": "otel"
+          "registry": "otel",
+          "members": ["function"]
         },
         {
           "key": "gen_ai.tool.call.id",
@@ -598,7 +601,8 @@
           "key": "error.type",
           "type": "string",
           "required": false,
-          "registry": "otel"
+          "registry": "otel",
+          "members": ["exception", "timeout", "cancelled", "api_error", "api_status_error", "api_connection_error", "storage_error", "auth_error", "io_error", "tool_error", "run_error", "judge_error", "unanswered", "event_loop_blocked"]
         },
         {
           "key": "gen_ai.tool.call.result",
@@ -706,7 +710,8 @@
           "key": "gen_ai.evaluation.score.label",
           "type": "string",
           "required": false,
-          "registry": "otel"
+          "registry": "otel",
+          "members": ["pass", "fail", "maybe"]
         },
         {
           "key": "gen_ai.evaluation.explanation",
@@ -791,7 +796,8 @@
           "key": "gen_ai.output.type",
           "type": "string",
           "required": true,
-          "registry": "otel"
+          "registry": "otel",
+          "members": ["text", "speech"]
         }
       ],
       "end": [
@@ -928,7 +934,8 @@
           "key": "gen_ai.output.type",
           "type": "string",
           "required": true,
-          "registry": "otel"
+          "registry": "otel",
+          "members": ["text", "speech"]
         },
         {
           "key": "gen_ai.system_instructions",
@@ -1237,7 +1244,8 @@
           "key": "gen_ai.output.type",
           "type": "string",
           "required": true,
-          "registry": "otel"
+          "registry": "otel",
+          "members": ["text", "speech"]
         }
       ],
       "end": [
@@ -2274,12 +2282,14 @@
         {
           "key": "lk.old_state",
           "type": "string",
-          "required": true
+          "required": true,
+          "members": ["initializing", "idle", "listening", "thinking", "speaking", "away"]
         },
         {
           "key": "lk.new_state",
           "type": "string",
-          "required": true
+          "required": true,
+          "members": ["initializing", "idle", "listening", "thinking", "speaking", "away"]
         }
       ]
     },
@@ -2475,7 +2485,8 @@
         {
           "key": "lk.eou.source",
           "type": "string",
-          "required": true
+          "required": true,
+          "members": ["vad", "stt", "manual", "realtime_llm"]
         }
       ]
     },
@@ -2526,12 +2537,14 @@
         {
           "key": "lk.old_state",
           "type": "string",
-          "required": true
+          "required": true,
+          "members": ["initializing", "idle", "listening", "thinking", "speaking", "away"]
         },
         {
           "key": "lk.new_state",
           "type": "string",
-          "required": true
+          "required": true,
+          "members": ["initializing", "idle", "listening", "thinking", "speaking", "away"]
         }
       ]
     }
@@ -2685,6 +2698,7 @@
           "type": "string",
           "required": false,
           "registry": "otel",
+          "members": ["exception", "timeout", "cancelled", "api_error", "api_status_error", "api_connection_error", "storage_error", "auth_error", "io_error", "tool_error", "run_error", "judge_error", "unanswered", "event_loop_blocked"],
           "label": true
         }
       ]
@@ -3883,7 +3897,8 @@
           "key": "error.type",
           "type": "string",
           "required": false,
-          "registry": "otel"
+          "registry": "otel",
+          "members": ["exception", "timeout", "cancelled", "api_error", "api_status_error", "api_connection_error", "storage_error", "auth_error", "io_error", "tool_error", "run_error", "judge_error", "unanswered", "event_loop_blocked"]
         },
         {
           "key": "lk.cancelled",

@@ -130,7 +130,7 @@ pub struct EouWait {
     pub started_at: Ts,
     /// What decides the end of the turn.
     #[attr("lk.eou.source")]
-    pub source: String,
+    pub source: EouSource,
     /// Seconds the endpointing waits.
     #[attr("lk.eou.endpointing_delay")]
     pub endpointing_delay: Seconds,
@@ -155,6 +155,15 @@ pub struct EouWaitEnd {
     pub not_committed_count: u32,
 }
 
+/// What triggers the end-of-turn countdown.
+#[derive(SpanValue, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EouSource {
+    Vad,
+    Stt,
+    Manual,
+    RealtimeLlm,
+}
+
 #[derive(SpanValue, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EouOutcome {
     Committed,
@@ -169,7 +178,7 @@ pub struct Rearmed {
     #[at]
     pub at: Ts,
     #[attr("lk.eou.source")]
-    pub source: String,
+    pub source: EouSource,
 }
 
 /// The user resumed speaking before the decision.
@@ -212,7 +221,7 @@ pub struct EouPrediction {
     #[attr("lk.eou.language")]
     pub language: Option<String>,
     #[attr("lk.eou.source")]
-    pub source: String,
+    pub source: EouSource,
     /// The prediction came from the detector's cache.
     #[attr("lk.eou.from_cache")]
     pub from_cache: bool,

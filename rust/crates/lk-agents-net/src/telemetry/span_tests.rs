@@ -103,7 +103,7 @@ fn check_records_the_exception_and_end_its_attributes() {
     let spans = sink.spans();
     let [failed, ended] = spans.as_slice() else { panic!("{spans:?}") };
     assert_eq!(failed.status, Status::Error("boom".into()));
-    assert_eq!(attr(failed, "error.type"), Some(&Value::String("HostError".into())));
+    assert_eq!(attr(failed, "error.type"), Some(&Value::String("exception".into())));
     assert_eq!(attr(failed, "lk.cancelled"), None, "an error is never a cancellation");
     let exception = &failed.events[0];
     assert_eq!(exception.name, "exception");

@@ -29,7 +29,7 @@ use otlp::Exporter;
 /// `#[telemetry::span(Decl { .. })]` on a function taking `cx: &telemetry::Cx`: the function is
 /// that one span.
 pub use lk_agents_abi::telemetry::decl::span;
-pub use lk_agents_abi::telemetry::errors::{Failure, SpanError};
+pub use lk_agents_abi::telemetry::errors::{ErrorType, Failure, SpanError};
 pub use lk_agents_abi::telemetry::{Cx, Recorder};
 pub use lk_agents_core::telemetry::span::Reserved;
 use lk_agents_core::telemetry::span::{FRAMEWORK_SCOPE, IdSource, seeded_ids};
@@ -356,7 +356,7 @@ struct Open {
 }
 
 struct Recorded {
-    error_type: String,
+    error_type: ErrorType,
     message: String,
 }
 
@@ -380,7 +380,7 @@ impl<D: SpanDecl> ScopedSpan<D> {
         let message = error.message();
         let mut attributes = KeyValues::new();
         Exception {
-            kind: error_type.clone(),
+            kind: error.exception_type().into_owned(),
             message: message.clone(),
             stacktrace: error.stacktrace(),
         }
@@ -402,7 +402,7 @@ impl<D: SpanDecl> ScopedSpan<D> {
         // Dropped without `end`: cancelled, unless it failed (an error is never a cancellation).
         let every = EverySpan {
             conversation_id: self.cx.conversation().map(str::to_owned),
-            error_type: open.failure.as_ref().map(|f| f.error_type.clone()),
+            error_type: open.failure.as_ref().map(|f| f.error_type),
             cancelled: (end.is_none() && open.failure.is_none()).then_some(true),
         };
         let span = SpanRecord {

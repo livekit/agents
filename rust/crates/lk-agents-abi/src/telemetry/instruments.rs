@@ -2,6 +2,7 @@
 //! the others are recorded where their value is computed.
 
 use super::decl::{Attrs, BoolString, Label, metric};
+use super::errors::ErrorType;
 use super::semconv::otel;
 use super::spans::common::GenAiOperation;
 use super::spans::session::BlockingSeverity;
@@ -238,7 +239,7 @@ pub struct ExecuteToolDuration {
     #[attr(otel::GEN_AI_TOOL_NAME)]
     pub tool: Label,
     #[attr(otel::ERROR_TYPE)]
-    pub error_type: Option<Label>,
+    pub error_type: Option<ErrorType>,
 }
 
 /// Duration of each agent turn.

@@ -101,7 +101,11 @@ impl JudgeRunner for Judges {
             Ok(judgment) => telemetry::end_with(
                 span,
                 telemetry::JudgeEvaluationEnd {
-                    verdict: Some(if judgment.success { "pass" } else { "fail" }.into()),
+                    verdict: Some(if judgment.success {
+                        telemetry::JudgeVerdict::Pass
+                    } else {
+                        telemetry::JudgeVerdict::Fail
+                    }),
                     explanation: cx
                         .capture_content()
                         .then(|| telemetry::GenAiContent(judgment.reason.clone())),
@@ -109,7 +113,10 @@ impl JudgeRunner for Judges {
             ),
             Err(error) => telemetry::fail(
                 &span,
-                &telemetry::Failure { kind: "judge_error", message: error.to_string() },
+                &telemetry::Failure {
+                    kind: telemetry::ErrorType::JudgeError,
+                    message: error.to_string(),
+                },
             ),
         }
         judged
@@ -181,7 +188,12 @@ impl Judges {
                 telemetry::end_with(
                     span,
                     telemetry::JudgeEvaluationEnd {
-                        verdict: Some(judgment.verdict.clone()),
+                        verdict: match judgment.verdict.as_str() {
+                            "pass" => Some(telemetry::JudgeVerdict::Pass),
+                            "fail" => Some(telemetry::JudgeVerdict::Fail),
+                            "maybe" => Some(telemetry::JudgeVerdict::Maybe),
+                            _ => None,
+                        },
                         explanation: capture
                             .then(|| telemetry::GenAiContent(judgment.reasoning.clone())),
                     },
@@ -191,7 +203,10 @@ impl Judges {
             Err(error) => {
                 telemetry::fail(
                     &span,
-                    &telemetry::Failure { kind: "judge_error", message: error.clone() },
+                    &telemetry::Failure {
+                        kind: telemetry::ErrorType::JudgeError,
+                        message: error.clone(),
+                    },
                 );
                 JudgeOutcome::Failed { name, error }
             }

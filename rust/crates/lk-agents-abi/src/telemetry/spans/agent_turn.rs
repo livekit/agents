@@ -1,12 +1,13 @@
 //! The agent's turn: one speech, its nodes, realtime inference and tool calls.
 
-use super::common::{GenAiOperation, ParticipantAttrs};
+use super::common::{GenAiOperation, OutputType, ParticipantAttrs, ToolType};
 use super::inference::{InputDelta, RealtimeResponse};
 use super::session::AgentSession;
 use super::text::AgentRun;
 use crate::telemetry::decl::{
     Attrs, Content, GenAiContent, Json, Measured, Seconds, SpanValue, event, span,
 };
+use crate::telemetry::errors::ErrorType;
 use crate::telemetry::semconv::otel;
 
 /// One speech, from its first generation to done.
@@ -174,9 +175,8 @@ pub struct RealtimeInference {
     pub model: String,
     #[attr(otel::GEN_AI_REQUEST_STREAM)]
     pub stream: bool,
-    /// `speech` or `text`.
     #[attr(otel::GEN_AI_OUTPUT_TYPE)]
-    pub output_type: String,
+    pub output_type: OutputType,
 }
 
 /// A realtime response's metrics that arrived after its inference ended.
@@ -216,9 +216,8 @@ pub struct FunctionTool {
     pub operation: GenAiOperation,
     #[attr(otel::GEN_AI_TOOL_NAME)]
     pub tool_name: String,
-    /// `function`.
     #[attr(otel::GEN_AI_TOOL_TYPE)]
-    pub tool_type: String,
+    pub tool_type: ToolType,
     #[attr(otel::GEN_AI_TOOL_CALL_ID)]
     pub call_id: String,
     #[attr(otel::GEN_AI_AGENT_NAME)]
@@ -237,9 +236,9 @@ pub struct FunctionToolEnd {
     /// The tool raised an error.
     #[attr("lk.function_tool.is_error")]
     pub is_error: bool,
-    /// `tool_error` on a tool error.
+    /// On a tool error.
     #[attr(otel::ERROR_TYPE)]
-    pub error_type: Option<String>,
+    pub error_type: Option<ErrorType>,
     #[attr(otel::GEN_AI_TOOL_CALL_RESULT)]
     pub result: Option<GenAiContent<String>>,
 }

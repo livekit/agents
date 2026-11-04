@@ -7,8 +7,8 @@ use crate::audio_recognition::{
 };
 use crate::events::SpeechOutcome;
 use crate::telemetry::{
-    Activation, Endpointing, HookFailure, JobIds, Opening, Reply, Reserved, SessionTelemetry, Stt,
-    Trace, UserTurnSpan,
+    Activation, Endpointing, EouSource, HookFailure, JobIds, Opening, Reply, Reserved,
+    SessionTelemetry, Stt, Trace, UserTurnSpan,
 };
 use crate::trace::InterruptCause;
 use lk_agents_abi::Ts;
@@ -239,7 +239,7 @@ fn stt() -> Stt {
 }
 
 fn endpointing() -> Endpointing {
-    Endpointing { source: "vad", delay: 0.5 }
+    Endpointing { source: EouSource::Vad, delay: 0.5 }
 }
 
 fn info(turn: u64, transcript: &str) -> EndOfTurnInfo {
@@ -454,12 +454,12 @@ fn a_handoff_is_one_update_agent_and_a_raised_hook_records_its_exception() {
         traceback: Some("Traceback (most recent call last): ...".into()),
     };
     s.at(200);
-    s.d.hook_span_ended(exit, Some(HookFailure::Raised(&error).failure()));
+    s.d.hook_span_ended(exit, Some(&HookFailure::Raised(&error)));
     s.at(300);
     s.d.activity.agent = "back".into();
     let enter = s.d.hook_span(HookKind::OnEnter, None).expect("its span");
     s.at(400);
-    s.d.hook_span_ended(enter, Some(HookFailure::TimedOut.failure()));
+    s.d.hook_span_ended(enter, Some(&HookFailure::TimedOut));
     let records = s.close(1_000);
     well_formed(&records);
     let update = one(&records, "update_agent");
@@ -474,8 +474,9 @@ fn a_handoff_is_one_update_agent_and_a_raised_hook_records_its_exception() {
     assert!(update.end_unix_nanos <= 1_000_000_000 + 400_000_000, "the entry ends the handoff");
     let exit = one(&records, "on_exit");
     assert_eq!(exit.status, Status::Error("no table".into()));
-    assert_eq!(attr(exit, "error.type"), Some(&st("ValueError")));
+    assert_eq!(attr(exit, "error.type"), Some(&st("exception")));
     assert_eq!(exit.events[0].name, "exception");
+    assert!(exit.events[0].attributes.contains(&("exception.type".into(), st("ValueError"))));
     let traceback = st("Traceback (most recent call last): ...");
     assert!(exit.events[0].attributes.contains(&("exception.stacktrace".into(), traceback)));
 }
@@ -775,7 +776,7 @@ fn a_user_turn_records_its_transcripts_and_detections() {
         turn.detection(trace, &predicted, ctx);
         trace.step(ms(800));
         turn.transcript(1.8, "final_transcript", "book it", "r2");
-        let stt_trigger = Endpointing { source: "stt", delay: 0.5 };
+        let stt_trigger = Endpointing { source: EouSource::Stt, delay: 0.5 };
         turn.retriggered(trace, stt_trigger);
     }
     s.decide(1_200, 1, UserTurnCommitVerdict::Reply);

@@ -320,7 +320,7 @@ impl VoiceDriver {
                 ));
                 // 1.8.10's `manual` trigger: the wait opens, or is re-armed.
                 let delay = self.activity.audio_recognition.min_delay().as_secs_f64();
-                let manual = telemetry::Endpointing { source: telemetry::MANUAL, delay };
+                let manual = telemetry::Endpointing { source: telemetry::EouSource::Manual, delay };
                 if let Some(turn) = &mut self.activity.user_turn {
                     turn.retriggered(&mut self.telemetry, manual);
                 }

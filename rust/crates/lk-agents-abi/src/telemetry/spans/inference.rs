@@ -2,7 +2,7 @@
 
 use serde::Serialize;
 
-use super::common::GenAiOperation;
+use super::common::{GenAiOperation, OutputType};
 use crate::metrics::base::{LlmMetrics, Metadata, RealtimeModelMetrics, TtsMetrics};
 use crate::telemetry::decl::{
     Attrs, Content, Current, GenAiContent, Json, Measured, Seconds, span,
@@ -28,9 +28,8 @@ pub struct LlmRequest {
     pub model: String,
     #[attr(otel::GEN_AI_REQUEST_STREAM)]
     pub stream: bool,
-    /// `text`.
     #[attr(otel::GEN_AI_OUTPUT_TYPE)]
-    pub output_type: String,
+    pub output_type: OutputType,
     #[attr(otel::GEN_AI_SYSTEM_INSTRUCTIONS)]
     pub system_instructions: Option<GenAiContent<Json<serde_json::Value>>>,
     #[attr(otel::GEN_AI_INPUT_MESSAGES)]
@@ -149,7 +148,7 @@ pub struct LlmFallbackAdapter {
     #[attr(otel::GEN_AI_REQUEST_STREAM)]
     pub stream: bool,
     #[attr(otel::GEN_AI_OUTPUT_TYPE)]
-    pub output_type: String,
+    pub output_type: OutputType,
 }
 
 /// The instance that served a fallback adapter's request.

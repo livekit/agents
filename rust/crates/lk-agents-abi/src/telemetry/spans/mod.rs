@@ -88,11 +88,17 @@ pub mod text {
 
     #[derive(Attrs)]
     pub struct JudgeEvaluationEnd {
-        /// The verdict.
         #[attr(otel::GEN_AI_EVALUATION_SCORE_LABEL)]
-        pub verdict: Option<String>,
+        pub verdict: Option<JudgeVerdict>,
         #[attr(otel::GEN_AI_EVALUATION_EXPLANATION)]
         pub explanation: Option<GenAiContent<String>>,
+    }
+
+    #[derive(SpanValue, Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum JudgeVerdict {
+        Pass,
+        Fail,
+        Maybe,
     }
 }
 

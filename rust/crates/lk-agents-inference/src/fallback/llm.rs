@@ -194,7 +194,7 @@ impl FallbackLlm {
                     retry_count: 0,
                 },
                 stream: true,
-                output_type: "text".to_owned(),
+                output_type: telemetry::OutputType::Text,
             },
         );
         req.trace = Some(span.cx().trace_context());

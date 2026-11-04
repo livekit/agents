@@ -370,7 +370,10 @@ impl Execution {
             Err(error) => {
                 telemetry::fail(
                     &span,
-                    &telemetry::Failure { kind: "run_error", message: error.to_string() },
+                    &telemetry::Failure {
+                        kind: telemetry::ErrorType::RunError,
+                        message: error.to_string(),
+                    },
                 );
                 telemetry::RunStatus::Failed
             }

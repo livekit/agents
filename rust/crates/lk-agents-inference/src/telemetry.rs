@@ -11,6 +11,7 @@ use lk_agents_abi::telemetry::instruments::{
     GenAiLabels, GenAiOperationDuration, GenAiTokenUsage, ModelLabels, TokenType,
 };
 use lk_agents_abi::telemetry::spans::common::GenAiOperation;
+pub(crate) use lk_agents_abi::telemetry::spans::common::OutputType;
 use lk_agents_abi::telemetry::spans::inference::{
     AttemptEnd, GenAiUsage, LlmMetricsSummary, LlmRequest, LlmRequestEnd, TtsFallbackAdapter,
     TtsMetricsSummary, TtsRequest, TtsRequestEnd, TtsStreamAdapter, TtsTarget, UtcInstant,
@@ -26,9 +27,13 @@ pub(crate) use lk_agents_abi::telemetry::decl::GenAiContent;
 pub(crate) use lk_agents_abi::telemetry::spans::inference::{
     Attempt, FallbackChoice, LlmFallbackAdapter, LlmFallbackChoice, LlmRequestRun, TtsRequestRun,
 };
-pub(crate) use lk_agents_abi::telemetry::spans::text::{JudgeEvaluation, JudgeEvaluationEnd};
+pub(crate) use lk_agents_abi::telemetry::spans::text::{
+    JudgeEvaluation, JudgeEvaluationEnd, JudgeVerdict,
+};
 pub(crate) use lk_agents_core::telemetry::provider::{Context, TtsMetricState};
-pub(crate) use lk_agents_net::telemetry::{Cx, Failure, ScopedSpan, Tracer, end_with, fail, start};
+pub(crate) use lk_agents_net::telemetry::{
+    Cx, ErrorType, Failure, ScopedSpan, Tracer, end_with, fail, start,
+};
 
 /// `llm.FallbackAdapter`'s label: an LLM that records its own `llm_fallback_adapter` spans.
 pub const FALLBACK_LLM_LABEL: &str = "llm.FallbackAdapter";
@@ -108,7 +113,7 @@ impl LlmTrace {
                     provider: provider_name(&id.provider),
                     model: id.model.clone(),
                     stream: true,
-                    output_type: "text".to_owned(),
+                    output_type: OutputType::Text,
                     system_instructions: capture(gen_ai::system_instructions(items)),
                     input_messages: capture(gen_ai::input_messages(items)),
                     tool_definitions: capture(gen_ai::tool_definitions(&req.tools)),

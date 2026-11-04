@@ -2,6 +2,7 @@
 //! carries, the participant group and the failure event.
 
 use crate::telemetry::decl::{Attrs, Content, SpanValue, event};
+use crate::telemetry::errors::ErrorType;
 use crate::telemetry::semconv::{otel, protocol};
 
 /// The job's identity, stamped by the exporter on every span, log record and Cloud measurement of
@@ -66,7 +67,7 @@ pub struct EverySpan {
     pub conversation_id: Option<String>,
     /// On a recorded failure.
     #[attr(otel::ERROR_TYPE)]
-    pub error_type: Option<String>,
+    pub error_type: Option<ErrorType>,
     /// The span was dropped without `end`.
     #[attr("lk.cancelled")]
     pub cancelled: Option<bool>,
@@ -96,6 +97,19 @@ pub struct ParticipantAttrs {
     /// the room has not described the participant.
     #[attr("lk.participant_kind")]
     pub kind: Option<String>,
+}
+
+/// `gen_ai.output.type`: what a model request produces.
+#[derive(SpanValue, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputType {
+    Text,
+    Speech,
+}
+
+/// `gen_ai.tool.type`.
+#[derive(SpanValue, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolType {
+    Function,
 }
 
 /// The GenAI operation a span performs.

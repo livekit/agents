@@ -97,7 +97,11 @@ impl VoiceDriver {
             R::UserInitiated => CloseReason::UserInitiated,
             R::TaskCompleted => CloseReason::TaskCompleted,
         };
-        let decl = SessionClose { reason, drain, error: error.map(|e| e.error.error_type()) };
+        let decl = SessionClose {
+            reason,
+            drain,
+            error: error.map(|e| e.error.exception_type().into_owned()),
+        };
         Some(self.telemetry.open_in(root, decl))
     }
 
@@ -166,7 +170,7 @@ impl VoiceDriver {
     /// The agent state changed: the session's event; leaving `speaking` ends `agent_speaking`.
     pub(crate) fn agent_state_span_event(&mut self, old: AgentState, new: AgentState) {
         if let Some(root) = &self.session.span {
-            let event = AgentStateChanged { old: old.as_str().into(), new: new.as_str().into() };
+            let event = AgentStateChanged { old: old.into(), new: new.into() };
             self.telemetry.event(root, event);
         }
         if old == AgentState::Speaking {
@@ -178,7 +182,7 @@ impl VoiceDriver {
     pub(crate) fn user_state_span_event(&mut self, old: UserState, new: UserState, at: Ts) {
         let Some(root) = &self.session.span else { return };
         let at = at.min(self.telemetry.now());
-        let event = UserStateChanged { at, old: old.as_str().into(), new: new.as_str().into() };
+        let event = UserStateChanged { at, old: old.into(), new: new.into() };
         self.telemetry.event(root, event);
     }
 

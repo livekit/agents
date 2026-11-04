@@ -229,7 +229,7 @@ impl VoiceDriver {
             match record.kind {
                 // The hook ends, and its turn with it.
                 HookKind::OnUserTurnCompleted => {
-                    let failure = failure.as_ref().map(telemetry::HookFailure::failure);
+                    let failure = failure.as_ref().map(|f| f as &dyn telemetry::SpanError);
                     if let Some(pending) =
                         self.activity.pending_turn.as_mut().filter(|p| p.hook == Some(id))
                     {
@@ -238,7 +238,7 @@ impl VoiceDriver {
                 }
                 _ => {
                     if let Some(span) = record.span.take() {
-                        let failure = failure.as_ref().map(telemetry::HookFailure::failure);
+                        let failure = failure.as_ref().map(|f| f as &dyn telemetry::SpanError);
                         self.hook_span_ended(span, failure);
                     }
                 }

@@ -38,7 +38,7 @@ pub(crate) use lk_agents_abi::telemetry::report::SessionReport;
 pub(crate) use lk_agents_abi::telemetry::spans::agent_turn::{
     AgentTurn, LlmNode, LlmNodeEnd, RealtimeInference, RealtimeMetrics, TtsNode, TtsNodeEnd,
 };
-pub(crate) use lk_agents_abi::telemetry::spans::common::GenAiOperation;
+pub(crate) use lk_agents_abi::telemetry::spans::common::{GenAiOperation, OutputType, ToolType};
 pub(crate) use lk_agents_abi::telemetry::spans::inference::{
     RealtimeResponse, RealtimeUsage, TtsRequestRun, UtcInstant,
 };
@@ -58,8 +58,8 @@ pub(crate) use lk_agents_core::telemetry::provider::Context;
 pub(crate) use lk_agents_core::telemetry::span::seeded_ids;
 pub(crate) use lk_agents_inference::telemetry::{LlmTrace, TtsTrace, model_labels, provider_name};
 pub(crate) use lk_agents_net::telemetry::{
-    Cx, Failure, ScopedSpan, Tracer, check, end_with, event, fail, measure, parse_traceparent,
-    random_seed, reserve, start,
+    Cx, ErrorType, Failure, ScopedSpan, Tracer, check, end_with, event, fail, measure,
+    parse_traceparent, random_seed, reserve, start,
 };
 pub(crate) use lk_agents_voice::telemetry::{
     Activation, JobIds, Opening, SessionTelemetry, participant_attrs,
@@ -331,7 +331,7 @@ pub(crate) fn event_loop_blocked(cx: &Cx, blocked: &Blocked, duration: f64, task
         lk_agents_net::telemetry::fail(
             &span,
             &lk_agents_net::telemetry::Failure {
-                kind: "event_loop_blocked",
+                kind: ErrorType::EventLoopBlocked,
                 message: format!("the event loop was blocked for {duration:.3}s"),
             },
         );
@@ -357,7 +357,7 @@ pub(crate) fn function_tool(
             arguments: Content(Json(arguments.clone())),
             operation: GenAiOperation::ExecuteTool,
             tool_name: call.name.clone(),
-            tool_type: "function".to_owned(),
+            tool_type: ToolType::Function,
             call_id: call.call_id.clone(),
             agent_name: agent.to_owned(),
             description: description.filter(|_| capture).map(|d| GenAiContent(d.to_owned())),
@@ -386,14 +386,14 @@ pub(crate) fn end_function_tool(
         _ => (String::new(), false),
     };
     let cx = span.cx();
-    let error_type = error.then(|| "tool_error".to_owned());
+    let error_type = error.then_some(ErrorType::ToolError);
     let seconds = cx.now_nanos().saturating_sub(started) as f64 / 1e9;
     lk_agents_net::telemetry::measure(
         cx,
         &ExecuteToolDuration {
             operation: GenAiOperation::ExecuteTool,
             tool: Label(call.name.clone()),
-            error_type: error_type.clone().map(Label),
+            error_type,
         },
         seconds,
     );

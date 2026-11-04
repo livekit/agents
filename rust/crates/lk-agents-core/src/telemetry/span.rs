@@ -9,7 +9,7 @@ use lk_agents_abi::Ts;
 use lk_agents_abi::telemetry::decl::{
     Attrs, Current, EventDecl, HasEvent, MetricDecl, ParentOf, SpanDecl, finish_span,
 };
-use lk_agents_abi::telemetry::errors::SpanError;
+use lk_agents_abi::telemetry::errors::{ErrorType, SpanError};
 use lk_agents_abi::telemetry::record::{
     EventRecord, JobKey, Key, KeyValues, Measurement, Number, Record, SpanId, SpanKind, SpanRecord,
     SpanRef, Status, TraceId,
@@ -88,7 +88,7 @@ struct Open {
     labels: KeyValues,
     events: Vec<EventRecord>,
     status: Status,
-    error_type: Option<String>,
+    error_type: Option<ErrorType>,
     /// The latest end of its children: a backdated end never ends it before them.
     children_end: u64,
     /// Opening order, for the close sweep.
@@ -233,14 +233,14 @@ impl Trace {
     pub fn fail<D: SpanDecl>(&mut self, span: &Span<D>, error: &dyn SpanError) {
         let at = self.wall(self.now);
         let exception = Exception {
-            kind: error.error_type(),
+            kind: error.exception_type().into_owned(),
             message: error.message(),
             stacktrace: error.stacktrace(),
         };
         push_event(self, span.context.span_id, at, Exception::NAME, &exception);
         if let Some(open) = self.open.get_mut(&span.context.span_id) {
             open.status = Status::Error(exception.message);
-            open.error_type = Some(exception.kind);
+            open.error_type = Some(error.error_type());
         }
     }
 

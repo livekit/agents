@@ -10,7 +10,10 @@ pub(crate) mod session;
 pub(crate) mod user_turn;
 
 use lk_agents_abi::telemetry::decl::Content;
-use lk_agents_abi::telemetry::errors::SpanError;
+use std::borrow::Cow;
+
+use lk_agents_abi::telemetry::errors::ErrorType;
+pub(crate) use lk_agents_abi::telemetry::errors::SpanError;
 use lk_agents_abi::telemetry::record::JobKey;
 use lk_agents_abi::telemetry::spans::common::ParticipantAttrs;
 use lk_agents_abi::voice::room_io::ParticipantInfo;
@@ -18,9 +21,10 @@ use lk_agents_abi::voice::rtc::DisconnectReason;
 use lk_agents_core::telemetry::span::IdSource;
 
 pub(crate) use agent_turn::{AgentTurnSpan, Reply};
+pub(crate) use lk_agents_abi::telemetry::spans::user_turn::EouSource;
 pub(crate) use lk_agents_core::telemetry::span::{Reserved, Span, Trace, seeded_ids};
 pub(crate) use session::{AmdDetection, Arriving, Blocking, Holding, HookSpan, ItemTurns, Under};
-pub(crate) use user_turn::{Endpointing, MANUAL, Stt, UserTurnSpan};
+pub(crate) use user_turn::{Endpointing, Stt, UserTurnSpan};
 
 // The declarations and records logic code names, under `telemetry::` (`telemetry.md`, rule 4).
 pub(crate) use lk_agents_abi::telemetry::record::SpanRef;
@@ -91,43 +95,39 @@ pub struct Activation {
     pub activity: Reserved<StartAgentActivity>,
 }
 
-/// A hook that timed out.
-struct TimedOut;
-
-impl SpanError for TimedOut {
-    fn error_type(&self) -> String {
-        "timeout".to_owned()
-    }
-    fn message(&self) -> String {
-        "the callback did not return within its bound".to_owned()
-    }
-}
-
-/// A hook that failed with no exception (its agent was gone, its call undeliverable).
-struct Unanswered;
-
-impl SpanError for Unanswered {
-    fn error_type(&self) -> String {
-        "unanswered".to_owned()
-    }
-    fn message(&self) -> String {
-        "the callback could not run".to_owned()
-    }
-}
-
 /// How a hook failed, as its span records it.
 pub(crate) enum HookFailure<'a> {
     Raised(&'a lk_agents_abi::errors::HostError),
     TimedOut,
+    /// No exception: its agent was gone, its call undeliverable.
     Failed,
 }
 
-impl HookFailure<'_> {
-    pub(crate) fn failure(&self) -> &dyn SpanError {
+impl SpanError for HookFailure<'_> {
+    fn error_type(&self) -> ErrorType {
         match self {
-            HookFailure::Raised(error) => *error,
-            HookFailure::TimedOut => &TimedOut,
-            HookFailure::Failed => &Unanswered,
+            HookFailure::Raised(error) => error.error_type(),
+            HookFailure::TimedOut => ErrorType::Timeout,
+            HookFailure::Failed => ErrorType::Unanswered,
+        }
+    }
+    fn message(&self) -> String {
+        match self {
+            HookFailure::Raised(error) => error.message(),
+            HookFailure::TimedOut => "the callback did not return within its bound".to_owned(),
+            HookFailure::Failed => "the callback could not run".to_owned(),
+        }
+    }
+    fn exception_type(&self) -> Cow<'static, str> {
+        match self {
+            HookFailure::Raised(error) => error.exception_type(),
+            _ => self.error_type().as_str().into(),
+        }
+    }
+    fn stacktrace(&self) -> Option<String> {
+        match self {
+            HookFailure::Raised(error) => error.stacktrace(),
+            _ => None,
         }
     }
 }

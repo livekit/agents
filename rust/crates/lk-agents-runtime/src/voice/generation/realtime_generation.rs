@@ -583,8 +583,11 @@ impl RealtimeSpans {
                 provider: telemetry::provider_name(&model.provider),
                 model: model.model,
                 stream: true,
-                output_type: if shared.audio_output().is_some() { "speech" } else { "text" }
-                    .to_owned(),
+                output_type: if shared.audio_output().is_some() {
+                    telemetry::OutputType::Speech
+                } else {
+                    telemetry::OutputType::Text
+                },
             },
         );
         Some(RealtimeSpan(span))
@@ -678,7 +681,8 @@ fn response(
             output_audio_tokens: n(t.output_audio_tokens),
         },
         time_to_first_chunk: telemetry::Measured(ttft.map(telemetry::Seconds)),
-        completion_start_time: ttft
-            .map(|ttft| telemetry::Json(telemetry::UtcInstant { unix_seconds: m.timestamp + ttft })),
+        completion_start_time: ttft.map(|ttft| {
+            telemetry::Json(telemetry::UtcInstant { unix_seconds: m.timestamp + ttft })
+        }),
     }
 }

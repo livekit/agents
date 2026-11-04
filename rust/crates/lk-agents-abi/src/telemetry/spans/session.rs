@@ -5,6 +5,7 @@ use super::common::{GenAiOperation, ParticipantAttrs};
 use super::job::JobEntrypoint;
 use crate::telemetry::decl::{Attrs, Content, Current, Seconds, SpanValue, Template, event, span};
 use crate::telemetry::semconv::{otel, protocol};
+use crate::voice::events::{AgentState, UserState};
 
 /// The agent session, `session.start()` to the end of close.
 #[span(
@@ -69,10 +70,10 @@ pub struct ParticipantLinked {
 pub struct AgentStateChanged {
     /// State before the transition.
     #[attr("lk.old_state")]
-    pub old: String,
+    pub old: ConversationState,
     /// State after the transition.
     #[attr("lk.new_state")]
-    pub new: String,
+    pub new: ConversationState,
 }
 
 /// The user's state changed.
@@ -83,9 +84,42 @@ pub struct UserStateChanged {
     #[at]
     pub at: crate::Ts,
     #[attr("lk.old_state")]
-    pub old: String,
+    pub old: ConversationState,
     #[attr("lk.new_state")]
-    pub new: String,
+    pub new: ConversationState,
+}
+
+/// The agent's or the user's state.
+#[derive(SpanValue, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConversationState {
+    Initializing,
+    Idle,
+    Listening,
+    Thinking,
+    Speaking,
+    Away,
+}
+
+impl From<AgentState> for ConversationState {
+    fn from(state: AgentState) -> Self {
+        match state {
+            AgentState::Initializing => Self::Initializing,
+            AgentState::Idle => Self::Idle,
+            AgentState::Listening => Self::Listening,
+            AgentState::Thinking => Self::Thinking,
+            AgentState::Speaking => Self::Speaking,
+        }
+    }
+}
+
+impl From<UserState> for ConversationState {
+    fn from(state: UserState) -> Self {
+        match state {
+            UserState::Speaking => Self::Speaking,
+            UserState::Listening => Self::Listening,
+            UserState::Away => Self::Away,
+        }
+    }
 }
 
 /// The room connection state changed.

@@ -8,7 +8,8 @@ use crate::agent_session::{HookKind, VoiceDriver};
 use crate::audio_recognition::{EouDetected, TurnDetectionMode};
 use crate::events::SessionEvent;
 use crate::telemetry::{
-    self, AgentTurnSpan, Arriving, Endpointing, Holding, HookSpan, Reply, SpanRef, Stt, Under,
+    self, AgentTurnSpan, Arriving, Endpointing, EouSource, Holding, HookSpan, Reply, SpanRef, Stt,
+    Under,
 };
 use lk_agents_abi::llm::chat_context::CopyOptions;
 use lk_agents_abi::telemetry::errors::SpanError;
@@ -38,10 +39,10 @@ impl VoiceDriver {
     fn span_endpointing(&self) -> Endpointing {
         let recognition = &self.activity.audio_recognition;
         let source = match recognition.turn_detection_mode() {
-            TurnDetectionMode::Vad => "vad",
-            TurnDetectionMode::Stt => "stt",
-            TurnDetectionMode::Manual => crate::telemetry::MANUAL,
-            TurnDetectionMode::RealtimeLlm => "realtime_llm",
+            TurnDetectionMode::Vad => EouSource::Vad,
+            TurnDetectionMode::Stt => EouSource::Stt,
+            TurnDetectionMode::Manual => EouSource::Manual,
+            TurnDetectionMode::RealtimeLlm => EouSource::RealtimeLlm,
         };
         Endpointing { source, delay: recognition.min_delay().as_secs_f64() }
     }
@@ -90,7 +91,7 @@ impl VoiceDriver {
                     // A final heard after the speech re-arms the countdown (1.8.10's `stt`
                     // trigger).
                     if t.is_final && !speaking && mode != TurnDetectionMode::Manual {
-                        let stt = Endpointing { source: "stt", ..endpointing };
+                        let stt = Endpointing { source: EouSource::Stt, ..endpointing };
                         turn.retriggered(&mut self.telemetry, stt);
                     }
                 }
