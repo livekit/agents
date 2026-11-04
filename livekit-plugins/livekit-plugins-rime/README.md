@@ -468,10 +468,12 @@ smaller tool list cannot strip the parent call. Pending calls cannot be cleared.
 These helpers do not support a model inside a fallback adapter.
 
 `PrismHistoryUpdateError` is an `Exception` with the following fields. Catch this
-concrete type for history update errors. It no longer inherits from
-`llm.RealtimeError`. LiveKit treats that base type as a best-effort input failure
-and can still request a reply. The separate exception stops the operation that
-depends on the failed update, including the reply to rejected typed input.
+concrete type for history update errors. The base class does not inherit from
+`llm.RealtimeError`. A partial ordinary update that only appends live tool results
+uses a subclass of both types if an accepted result has `reply_required=True`.
+LiveKit can then request a reply from that accepted result. The update still
+raises a structured error and emits the history notice. All other failed updates
+stop their dependent work, including the reply to rejected typed input.
 
 | Field | Meaning |
 | --- | --- |
@@ -528,11 +530,14 @@ except PrismHistoryUpdateError as error:
     raise
 ```
 
-A failed update stops its dependent work. A refused typed input does not start
+A refused typed input does not start
 its own reply. A later `session.generate_reply()` can start an independent reply
 without repair. Accepted tool results retain their continuation ownership and are
-not submitted or executed again. After a failed tool-result batch, the application
-can submit missing results or request a continuation for an accepted result.
+not submitted or executed again. A known partial tool-result-only batch can
+continue automatically from an accepted result that requires a reply. Fully
+rejected batches, mixed text/tool edits, explicit replacements or clears, and
+uncertain writes still stop dependent replies. The application can submit missing
+results or request a later independent continuation for an accepted result.
 Reconciliation does not start replies. Provider-initiated speech remains under
 Prism's control. The helpers do not rewrite the session's past event log.
 

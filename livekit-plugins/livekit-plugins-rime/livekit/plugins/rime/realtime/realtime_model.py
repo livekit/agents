@@ -42,7 +42,7 @@ from livekit.agents.utils import is_given
 from livekit.agents.voice.io import AudioOutput
 
 from ..log import logger
-from ._history import HistoryUpdateError, HistoryUpdateNotice, PrismHistory
+from ._history import HistoryUpdateError, HistoryUpdateNotice, PrismHistory, _PartialToolResultError
 from ._playback import Playback, PrismAudioOutput, _Output
 
 _GENERATION_LIMIT = 128
@@ -667,6 +667,18 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
                         logger.warning("Rime history notice callback failed")
                 if not error.recoverable:
                     self._fatal(error)
+                if (
+                    token is None
+                    and error.partial
+                    and result.tool_results_only
+                    and any(output.reply_required for _, output in result.submitted)
+                ):
+                    raise _PartialToolResultError(
+                        str(error),
+                        status=error.status,
+                        confirmed_chat_ctx=error.confirmed_chat_ctx,
+                        needs_reconciliation=error.needs_reconciliation,
+                    ) from error
                 raise error
 
         await self._settle_update(apply())

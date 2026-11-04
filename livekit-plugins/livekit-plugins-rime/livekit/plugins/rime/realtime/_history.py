@@ -18,8 +18,9 @@ from livekit.agents import llm
 class PrismHistoryUpdateError(Exception):
     """A failed edit, separate from the usability of the provider session.
 
-    This is not a ``llm.RealtimeError``: LiveKit treats that type as a best-effort
-    input update and can start a reply even when the input was rejected.
+    The base type is not a ``llm.RealtimeError``: LiveKit treats that type as a
+    best-effort update. Only partial live-tool-result updates can use both types
+    to allow a reply from an accepted result without allowing rejected input.
     ``needs_reconciliation`` signals possible local/provider differences. Repair
     is optional for recoverable errors; independent operations remain available.
     Messages exclude transcript content.
@@ -48,6 +49,12 @@ class PrismHistoryUpdateError(Exception):
 HistoryUpdateError = PrismHistoryUpdateError
 
 
+class _PartialToolResultError(PrismHistoryUpdateError, llm.RealtimeError):
+    """Report a failed batch while allowing LiveKit to reply to accepted results."""
+
+    code: str
+
+
 @dataclass(frozen=True)
 class HistoryUpdateNotice:
     """A failed update snapshot; reconciliation repairs local state, not admission."""
@@ -66,6 +73,7 @@ class HistorySyncResult:
     committed: bool = False
     created: set[str] = field(default_factory=set)
     history_read: bool = False
+    tool_results_only: bool = False
 
 
 def _items(ctx: llm.ChatContext) -> list[llm.ChatItem]:
@@ -486,6 +494,12 @@ class PrismHistory:
             not removed
             and len(unchanged) == len(old)
             and [i.id for i in desired[: len(old)]] == [i.id for i in old]
+        )
+        # Classify the entire requested edit before any write. A partial batch
+        # must not hide a rejected text append, removal, or replacement.
+        result.tool_results_only = append_only and all(
+            isinstance(item, llm.FunctionCallOutput) and item.call_id in self._calls
+            for item in added
         )
         # Prism places an imported result directly after its call, even when
         # newer turns exist. Complete those calls without replacing their history.

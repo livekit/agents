@@ -44,6 +44,7 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
     RunContext,
+    StopResponse,
     ToolError,
     function_tool,
     llm,
@@ -3982,47 +3983,119 @@ class TestRealtime:
                 await peer.end(response)
                 await pending
 
-    async def test_rejected_last_result_preserves_earlier_reply_requirement(self):
-        async with peer_model() as (peer, model, _):
-            async with AgentSession(llm=model) as owner:
-                agent = Agent(instructions="test")
-                await owner.start(agent)
-                session = model._session
-                await session._update_session(instructions="test")
-                parent = await peer.start()
-                for index in range(2):
+    @pytest.mark.parametrize("context_mode", ["strict", "shared"])
+    @pytest.mark.parametrize("edit", ["ordinary", "no_reply", "mixed", "uncertain"])
+    async def test_partial_tool_result_reply_policy(self, context_mode, edit):
+        notices = []
+        async with peer_model(
+            context_mode=context_mode, playback="discard", on_history_update=notices.append
+        ) as (peer, model, _):
+            provider = model.session()
+            errors = []
+            provider.on("error", errors.append)
+            await provider.update_instructions("test")
+            await tool_turn(peer, "first", "second")
+            target = provider.chat_ctx
+            for index, call in enumerate(("first", "second")):
+                target.items.append(
+                    llm.FunctionCallOutput(
+                        call_id=call,
+                        output="42",
+                        is_error=False,
+                        reply_required=index == (1 if edit == "no_reply" else 0),
+                    )
+                )
+            peer.fail_history_at = 2
+            if edit == "mixed":
+                target.add_message(role="user", content="not accepted")
+            if edit == "uncertain":
+                peer.fail_history_scope = "session"
+            with pytest.raises((PrismHistoryUpdateError, asyncio.CancelledError)) as caught:
+                await provider.update_chat_ctx(target)
+            error = caught.value
+            if edit == "uncertain":
+                # Terminal SDK failure can close the session before the pending
+                # update returns its structured error. Neither path may reply.
+                await wait_until(lambda: any(not error.recoverable for error in errors))
+                assert peer.requests.empty()
+                assert not isinstance(error, llm.RealtimeError)
+                if isinstance(error, PrismHistoryUpdateError):
+                    assert error.status == "uncertain"
+                    assert error.confirmed_chat_ctx is None
+                return
+            assert isinstance(error, llm.RealtimeError) == (edit == "ordinary")
+            assert error.status == "partial"
+            assert error.code == f"history_update_{error.status}"
+            assert len(notices) == 1
+            assert notices[0].status == error.status
+            assert peer.requests.empty()
+            assert error.recoverable
+            assert [
+                i.call_id
+                for i in error.confirmed_chat_ctx.items
+                if isinstance(i, llm.FunctionCallOutput)
+            ] == ["first"]
+            if edit == "no_reply":
+                return
+            request = await reply(peer, provider)
+            assert request["response"]["prism_call_id"] == "first"
+            assert len(peer.history_operations) == 2
+            await provider.update_chat_ctx(target)
+            assert len(peer.history_operations) == (4 if edit == "mixed" else 3)
+
+    @pytest.mark.parametrize("context_mode", ["strict", "shared"])
+    async def test_explicit_partial_tool_result_edit_still_stops(self, context_mode):
+        ran = []
+        hold = asyncio.Event()
+
+        @function_tool
+        async def lookup() -> str:
+            """Look up a value."""
+            ran.append(True)
+            await asyncio.wait_for(hold.wait(), 3)
+            raise StopResponse()
+
+        notices = []
+        async with peer_model(context_mode=context_mode, on_history_update=notices.append) as (
+            peer,
+            model,
+            _,
+        ):
+            async with AgentSession(llm=model) as session:
+                agent = Agent(instructions="test", tools=[lookup])
+                await session.start(agent)
+                session.generate_reply()
+                parent = await peer.start(await peer.next())
+                for call in ("first", "second"):
                     await peer.emit(
                         "response.function_call_arguments.done",
                         response_id=parent,
-                        item_id=f"tool-{index}",
-                        call_id=f"call-{index}",
+                        item_id=call,
+                        call_id=call,
                         name="lookup",
                         arguments="{}",
                     )
                 await peer.end(parent)
-                await wait_until(lambda: len(session.chat_ctx.items) == 2)
-                target = session.chat_ctx
-                for index in range(2):
+                await wait_until(lambda: len(ran) == 2)
+                target = model._session.chat_ctx
+                for call in ("first", "second"):
                     target.items.append(
                         llm.FunctionCallOutput(
-                            call_id=f"call-{index}",
+                            call_id=call,
                             output="42",
                             is_error=False,
-                            reply_required=index == 0,
+                            reply_required=True,
                         )
                     )
                 peer.fail_history_at = 2
-                with pytest.raises(PrismHistoryUpdateError):
-                    await session.update_chat_ctx(target)
-                pending = session.generate_reply()
-                request = await peer.next()
-                assert request["response"]["prism_call_id"] == "call-0"
-                response = await peer.start(request)
-                await peer.end(response)
-                await pending
-                assert len(peer.history_operations) == 2
-                await session.update_chat_ctx(target)
-                assert len(peer.history_operations) == 3
+                with pytest.raises(PrismHistoryUpdateError) as caught:
+                    await model.replace_chat_ctx(agent, target)
+                assert caught.value.status == "partial"
+                assert not isinstance(caught.value, llm.RealtimeError)
+                assert not caught.value.needs_reconciliation
+                assert len(notices) == 1 and notices[0].status == "partial"
+                assert peer.requests.empty()
+                hold.set()
 
     @pytest.mark.parametrize("failure", ["session", "disconnect"])
     async def test_partial_append_with_uncertain_or_session_failure_remains_fatal(self, failure):
@@ -4055,7 +4128,12 @@ class TestRealtime:
             ran.append(True)
             return "42"
 
-        async with peer_model(context_mode=context_mode) as (peer, model, _):
+        notices = []
+        async with peer_model(context_mode=context_mode, on_history_update=notices.append) as (
+            peer,
+            model,
+            _,
+        ):
             async with AgentSession(llm=model) as session:
                 agent = Agent(instructions="test", tools=[lookup])
                 await session.start(agent)
@@ -4076,16 +4154,18 @@ class TestRealtime:
                 peer.fail_history_at = refused_at
                 await peer.end(parent)
                 await wait_until(lambda: len(peer.history_operations) == refused_at)
-                await asyncio.wait_for(failed_handle.wait_for_playout(), 3)
-                assert peer.requests.empty()
-                rejected_target = agent.chat_ctx.copy()
                 if refused_at == 2:
-                    resumed_handle = session.generate_reply()
+                    # The same speech handle continues automatically with the
+                    # accepted result; no application generate_reply() is needed.
                     resumed = await peer.next()
                     assert resumed["response"]["prism_call_id"] == "call-0"
                     response = await peer.start(resumed)
                     await peer.end(response)
-                    await asyncio.wait_for(resumed_handle.wait_for_playout(), 3)
+                await asyncio.wait_for(failed_handle.wait_for_playout(), 3)
+                assert peer.requests.empty()
+                rejected_target = agent.chat_ctx.copy()
+                assert len(notices) == 1
+                assert notices[0].status == ("partial" if refused_at == 2 else "rejected")
                 assert not any(not error.recoverable for error in errors)
                 assert "Prism history update failed" in caplog.text
                 assert len(ran) == 2
