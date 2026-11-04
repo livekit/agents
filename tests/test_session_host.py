@@ -829,6 +829,31 @@ class TestSessionHostWithoutSession:
         await host.aclose()
 
     @pytest.mark.asyncio
+    async def test_finalize_whose_reply_fails_to_send_still_ends_the_wait(
+        self, simulated_job: MagicMock
+    ) -> None:
+        # the job waits on this before it shuts down; a reply the transport can't deliver
+        # must not hold the shutdown for the whole session_end_timeout
+        class _BrokenTransport(InMemoryTransport):
+            async def send_message(self, msg: agent_pb.AgentSessionMessage) -> None:
+                raise RuntimeError("room session transport is closed")
+
+        host = SessionHost(_BrokenTransport())
+        await host.start()
+
+        await host._handle_request_safe(
+            agent_pb.SessionRequest(
+                request_id="req-fin",
+                finalize_simulation=agent_pb.SessionRequest.FinalizeSimulation(
+                    provisional_success=True
+                ),
+            )
+        )
+
+        await asyncio.wait_for(host.wait_for_simulation_finalized(), timeout=0.1)
+        await host.aclose()
+
+    @pytest.mark.asyncio
     async def test_a_run_cut_short_by_the_close_fails_after_session_closed(self) -> None:
         # an event still on the wire holds back the events queued after it
         class _SlowEventsTransport(InMemoryTransport):

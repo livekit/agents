@@ -1017,8 +1017,12 @@ class SessionHost:
                 ),
             )
         )
-        await self._transport.send_message(resp)
-        self._simulation_finalized.set()
+        try:
+            await self._transport.send_message(resp)
+        finally:
+            # the simulator has had its one answer, delivered or not; the job's shutdown
+            # must not keep waiting for one
+            self._simulation_finalized.set()
 
 
 RemoteSessionEventTypes = Literal[
