@@ -1,5 +1,7 @@
 //! The agent's turn: one speech, its nodes, realtime inference and tool calls.
 
+use serde::Serialize;
+
 use super::common::{GenAiOperation, OutputType, ParticipantAttrs, ToolType};
 use super::inference::{InputDelta, RealtimeResponse};
 use super::session::AgentSession;
@@ -62,7 +64,7 @@ pub struct AgentTurnEnd {
     pub response_text: Option<Content<String>>,
     /// The function calls of a realtime response.
     #[attr("lk.pii.response.function_calls")]
-    pub function_calls: Option<Content<Json<serde_json::Value>>>,
+    pub function_calls: Option<Content<Json<Vec<ResponseFunctionCall>>>>,
     /// Seconds from the user's end of speech to the agent's first audio.
     #[attr("lk.e2e_latency")]
     pub e2e_latency: Measured<Seconds>,
@@ -115,7 +117,7 @@ pub struct AgentSpeaking {
 pub struct LlmNode {
     /// The chat context sent.
     #[attr("lk.pii.chat_ctx")]
-    pub chat_ctx: Content<Json<serde_json::Value>>,
+    pub chat_ctx: Content<Json<ChatContextDict>>,
     /// Function tools offered.
     #[attr("lk.function_tools")]
     pub function_tools: Vec<String>,
@@ -136,7 +138,7 @@ pub struct LlmNodeEnd {
     #[attr("lk.pii.response.text")]
     pub response_text: Content<String>,
     #[attr("lk.pii.response.function_calls")]
-    pub function_calls: Content<Json<serde_json::Value>>,
+    pub function_calls: Content<Json<Vec<ResponseFunctionCall>>>,
     /// Seconds to the first token, measured at the node.
     #[attr("lk.response.ttft")]
     pub ttft: Measured<Seconds>,
@@ -207,9 +209,9 @@ pub struct FunctionTool {
     /// The tool's name.
     #[attr("lk.function_tool.name")]
     pub name: String,
-    /// The call's arguments.
+    /// The call's arguments, as the model wrote them.
     #[attr("lk.pii.function_tool.arguments")]
-    pub arguments: Content<Json<serde_json::Value>>,
+    pub arguments: Content<String>,
     /// `execute_tool`.
     #[attr(otel::GEN_AI_OPERATION_NAME)]
     pub operation: GenAiOperation,
@@ -224,7 +226,7 @@ pub struct FunctionTool {
     #[attr(otel::GEN_AI_TOOL_DESCRIPTION)]
     pub description: Option<GenAiContent<String>>,
     #[attr(otel::GEN_AI_TOOL_CALL_ARGUMENTS)]
-    pub call_arguments: Option<GenAiContent<Json<serde_json::Value>>>,
+    pub call_arguments: Option<GenAiContent<String>>,
 }
 
 #[derive(Attrs)]
@@ -238,3 +240,17 @@ pub struct FunctionToolEnd {
     #[attr(otel::GEN_AI_TOOL_CALL_RESULT)]
     pub result: Option<GenAiContent<String>>,
 }
+
+/// A function call a response made.
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct ResponseFunctionCall {
+    pub call_id: String,
+    pub name: String,
+    /// The arguments, as the model wrote them.
+    pub arguments: String,
+}
+
+/// A chat context in `ChatContext.to_dict()`'s form (`lk_agents_core::llm::chat_dict`).
+#[derive(Serialize, Debug, Clone, PartialEq, Default)]
+#[serde(transparent)]
+pub struct ChatContextDict(pub serde_json::Map<String, serde_json::Value>);
