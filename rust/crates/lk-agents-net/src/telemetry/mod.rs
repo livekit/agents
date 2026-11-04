@@ -33,9 +33,7 @@ pub use errors::{Failure, SpanError};
 pub use lk_agents_abi::telemetry::decl::span;
 pub use lk_agents_abi::telemetry::{Cx, Recorder};
 pub use lk_agents_core::telemetry::span::Reserved;
-
-/// The instrumentation scope of framework spans.
-pub const SCOPE: &str = "livekit-agents";
+use lk_agents_core::telemetry::span::{FRAMEWORK_SCOPE, IdSource, seeded_ids};
 
 /// What an `Ok` value of a `#[span]` function ends its span with.
 pub trait SpanEnd<D: SpanDecl> {
@@ -51,7 +49,7 @@ struct Inner {
     sink: Arc<dyn RecordSink>,
     exporter: Option<Arc<ExporterSlot>>,
     clock: Arc<dyn Clock>,
-    ids: Mutex<u64>,
+    ids: Mutex<IdSource>,
     capture_content: AtomicBool,
 }
 
@@ -113,7 +111,13 @@ impl Tracer {
         seed: u64,
     ) -> Self {
         let capture_content = AtomicBool::new(true);
-        Tracer(Arc::new(Inner { sink, exporter, clock, ids: Mutex::new(seed), capture_content }))
+        Tracer(Arc::new(Inner {
+            sink,
+            exporter,
+            clock,
+            ids: Mutex::new(seeded_ids(seed)),
+            capture_content,
+        }))
     }
 
     /// The process exporter, for its job registry and configuration; `None` before installation
@@ -124,7 +128,7 @@ impl Tracer {
 
     /// A forked child's ids diverge from its parent's.
     pub fn reseed(&self, seed: u64) {
-        *self.0.ids.lock() = seed;
+        *self.0.ids.lock() = seeded_ids(seed);
     }
 
     /// GenAI message capture: whether request and response messages and judge explanations are
@@ -172,17 +176,13 @@ impl Recorder for Inner {
         nanos(self.clock.wall())
     }
 
-    /// splitmix64: never zero.
+    /// Never zero.
     fn next_id(&self) -> u64 {
-        let mut state = self.ids.lock();
+        let mut ids = self.ids.lock();
         loop {
-            *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-            let mut z = *state;
-            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-            z ^= z >> 31;
-            if z != 0 {
-                return z;
+            let id = ids();
+            if id != 0 {
+                return id;
             }
         }
     }
@@ -460,7 +460,7 @@ impl<D: SpanDecl> ScopedSpan<D> {
             events: open.events,
             links: Vec::new(),
             status: open.failure.map_or(Status::Unset, |f| Status::Error(f.message)),
-            scope: Key::Borrowed(SCOPE),
+            scope: Key::Borrowed(FRAMEWORK_SCOPE),
             job,
         }));
     }
