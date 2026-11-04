@@ -14,11 +14,11 @@
 
 """Thin async client for the Atmee API used by the plugin.
 
-Two resources matter here: **avatars** — Atmee v1 avatars, i.e. talking heads
-generated from a single portrait — (create one from a portrait, read its
-status) and **avatar sessions** (render an avatar into your LiveKit room for
-your agent, end it). Authentication is your Atmee API key (``sk_atmee_...``)
-in the ``X-Api-Key`` header; the key never reaches a browser.
+Two resources matter here: **avatars** (create a v1 avatar from a single
+portrait, read an avatar's status) and **avatar sessions** (render an avatar,
+v1 or v2, into your LiveKit room for your agent, end it). Authentication is
+your Atmee API key (``sk_atmee_...``) in the ``X-Api-Key`` header; the key
+never reaches a browser.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ import mimetypes
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 from urllib.parse import urlsplit
 
 import aiohttp
@@ -47,23 +47,21 @@ DEFAULT_API_URL = "https://api.atmanity.us"
 
 WaitFor = Literal["initializing", "avatar_joined"]
 
-AvatarVersion = Literal["v1", "v2"]
-"""An Atmee avatar generation.
-
-``"v1"`` is a talking head generated from a single portrait, lip-synced to the
-agent's speech: the avatars this plugin renders today. ``"v2"`` is the name of
-Atmee's next avatar generation; it is not available through this plugin yet
-and requesting it raises :class:`ValueError`.
-"""
-
-SUPPORTED_AVATAR_VERSIONS: frozenset[AvatarVersion] = frozenset({"v1"})
-"""The avatar versions this release of the plugin can render."""
-
-# Overall budget of the start call: the worker acknowledges within seconds, but
-# waiting for the avatar to join covers model priming on a cold pod (the
-# server's own join timeout is 90 s) plus the room join.
-_START_TOTAL_TIMEOUT: dict[str, float] = {"initializing": 60.0, "avatar_joined": 180.0}
-_DEFAULT_TOTAL_TIMEOUT = 120.0
+# Overall budget of the start call. A v1 avatar's start is acknowledged within
+# seconds. The first v2 session after a quiet period can take minutes to start:
+# the API asks clients to allow 7 for the avatar to join, and answers
+# `avatar_warming` to be asked again meanwhile. The avatar decides which
+# generation renders, so every start allows for the slower one.
+_START_TOTAL_TIMEOUT: dict[str, float] = {"initializing": 300.0, "avatar_joined": 450.0}
+# How long to wait before asking again after `avatar_warming` (or an
+# interrupted start) when the server gives no Retry-After, and the bounds on
+# what it gives.
+_WARMING_RETRY_DEFAULT = 5.0
+_WARMING_RETRY_BOUNDS = (1.0, 30.0)
+# Budget of an avatar create: an upload, never retried.
+_CREATE_TOTAL_TIMEOUT = 120.0
+# Engines whose avatars render a selected take (`v2pro` is V2 HD's former name).
+_V2_ENGINES = frozenset({"v2", "v2hd", "v2pro"})
 
 
 class AtmeeException(Exception):
@@ -104,30 +102,40 @@ class AtmeeNoCapacityError(AtmeeException):
         self.retry_after = retry_after
 
 
+class AtmeeAvatarWarmingError(AtmeeException):
+    """The render could not start yet, and nothing was billed (HTTP 503):
+    ``avatar_warming``, a v2 avatar is still getting ready to render, or
+    ``avatar_start_interrupted``, the render ended before the avatar joined.
+
+    :meth:`AtmeeAPI.create_avatar_session` asks again by itself within its
+    start budget; this is raised only once that budget is spent.
+    ``retry_after`` is the server's hint in seconds, when it sent one.
+    """
+
+    def __init__(self, message: str, *, code: str, retry_after: float | None = None) -> None:
+        super().__init__(message, status_code=503, code=code)
+        self.retry_after = retry_after
+
+
+_RETRYABLE_START_CODES = frozenset({"avatar_warming", "avatar_start_interrupted"})
+
+
 class AtmeeAvatarNotReadyError(AtmeeException):
     """The avatar cannot be rendered yet (HTTP 409 ``avatar_not_renderable``):
     it has no portrait, or its appearance is still being processed."""
 
 
-def _check_avatar_version(avatar_version: str) -> None:
-    """Reject an avatar version this plugin cannot render, before any API call."""
-    if avatar_version in SUPPORTED_AVATAR_VERSIONS:
-        return
-    supported = ", ".join(f"'{v}'" for v in sorted(SUPPORTED_AVATAR_VERSIONS))
-    raise ValueError(
-        f"avatar_version '{avatar_version}' is not supported by livekit-plugins-atmee yet; "
-        f"only {supported} (talking-head avatars rendered from a single portrait) "
-        "can be rendered today"
-    )
+def _check_wait_for(wait_for: str) -> None:
+    allowed = get_args(WaitFor)
+    if wait_for not in allowed:
+        raise ValueError(
+            f"wait_for must be one of {', '.join(repr(v) for v in allowed)}, got {wait_for!r}"
+        )
 
 
 @dataclass
 class AvatarSessionInfo:
-    """The ``202`` body of ``POST /v1/avatars/{avatarId}/avatar_sessions``.
-
-    ``avatar_version`` is the avatar generation the session was requested for
-    (``"v1"``); the plugin fills it in, the API body carries no such field.
-    """
+    """The ``202`` body of ``POST /v1/avatars/{avatarId}/avatar_sessions``."""
 
     session_id: str
     status: str
@@ -136,7 +144,6 @@ class AvatarSessionInfo:
     room_name: str
     max_duration_seconds: int
     billing_mode: str
-    avatar_version: str = "v1"
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
 
@@ -145,20 +152,23 @@ class AvatarInfo:
     """What ``GET /v1/avatars/{avatarId}`` (and a create) report about an avatar.
 
     ``kind`` (``conversational`` | ``render_only``) says whether the avatar has
-    a voice and persona; ``version`` is the avatar generation (``"v1"``, filled
-    in by the plugin: the API reports no version).
+    a voice and persona; ``engine`` is its generation as the API reports it
+    (``"v1"``, ``"v2"`` or ``"v2hd"``; ``None`` when the API names none).
     """
 
     avatar_id: str
     status: str
     kind: str | None = None
     name: str | None = None
-    version: str = "v1"
+    engine: str | None = None
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
     @property
     def ready(self) -> bool:
-        return self.status == "ready"
+        """Whether it can be rendered: built, and for a v2 avatar, serving a take."""
+        if self.status != "ready":
+            return False
+        return self.engine not in _V2_ENGINES or bool(self.raw.get("servingCandidateId"))
 
 
 _IMAGE_TYPES = {
@@ -175,8 +185,12 @@ class AtmeeAPI:
     Args:
         api_key: your ``sk_atmee_...`` key; defaults to ``ATMEE_API_KEY``.
         api_url: API base; defaults to ``ATMEE_API_URL`` or ``https://api.atmanity.us``.
-        conn_options: retry/timeout policy for transport failures and 5xx
-            answers (a 503 ``no_capacity`` is never retried).
+        conn_options: retry/timeout policy. ``timeout`` bounds the connect of
+            every request and each attempt of the calls that are safe to
+            repeat (reading and ending a session, reading an avatar), which
+            are retried ``max_retry`` times on transport failures and 5xx
+            answers. Starting a session and creating an avatar are never
+            repeated and have budgets of their own.
         session: an ``aiohttp.ClientSession`` to reuse. Inside a LiveKit job the
             worker's shared session is used; outside (scripts, tests) a private
             one is created and closed by :meth:`aclose`.
@@ -203,10 +217,6 @@ class AtmeeAPI:
         self._session = session
         self._owns_session = False
 
-    @property
-    def api_url(self) -> str:
-        return self._api_url
-
     # --- avatar sessions -------------------------------------------------
 
     async def create_avatar_session(
@@ -219,7 +229,6 @@ class AtmeeAPI:
         max_duration_seconds: int | None = None,
         metadata: dict[str, Any] | None = None,
         wait_for: WaitFor = "initializing",
-        avatar_version: AvatarVersion = "v1",
     ) -> AvatarSessionInfo:
         """Render ``avatar_id`` into the room ``livekit_token`` grants.
 
@@ -230,12 +239,14 @@ class AtmeeAPI:
         you). Returns as soon as the rendering worker acknowledged the start,
         or once the avatar joined with ``wait_for="avatar_joined"``.
 
-        ``avatar_version`` names the avatar generation to render; only
-        ``"v1"`` is available today and anything else raises ``ValueError``
-        before the request is sent. It is plugin-side only: the request body
-        carries no version field.
+        Any avatar renders as what it is, v1 or v2; the request names no
+        generation. A v1 start is acknowledged within seconds. The first v2
+        session after a quiet period can take minutes, so the call allows up
+        to 5 minutes (7.5 with ``wait_for="avatar_joined"``), and while the API
+        answers ``avatar_warming`` or ``avatar_start_interrupted`` (nothing
+        billed) it asks again after the ``Retry-After`` given.
         """
-        _check_avatar_version(avatar_version)
+        _check_wait_for(wait_for)
         payload: dict[str, Any] = {"livekitUrl": livekit_url, "livekitToken": livekit_token}
         if agent_identity:
             payload["agentIdentity"] = agent_identity
@@ -246,18 +257,34 @@ class AtmeeAPI:
         params: dict[str, str] | None = (
             {"waitFor": wait_for} if wait_for != "initializing" else None
         )
-        # Never retried: the POST reserves and bills a session as soon as the
-        # server accepts it, so a retry after a timeout or a 5xx could open a
-        # second render for the same room. The caller decides whether to try
-        # again (the AvatarSession does not).
-        data = await self._request(
-            "POST",
-            f"/v1/avatars/{avatar_id}/avatar_sessions",
-            json=payload,
-            params=params,
-            retry=False,
-            total_timeout=_START_TOTAL_TIMEOUT[wait_for],
-        )
+        # Never retried on a timeout or a 5xx: the POST reserves and bills a
+        # session as soon as the server accepts it, so asking again could open
+        # a second render for the same room. Only the answers that say nothing
+        # was reserved (`avatar_warming`, `avatar_start_interrupted`) are asked
+        # again, within the start budget.
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + _START_TOTAL_TIMEOUT[wait_for]
+        while True:
+            try:
+                data = await self._request(
+                    "POST",
+                    f"/v1/avatars/{avatar_id}/avatar_sessions",
+                    json=payload,
+                    params=params,
+                    retry=False,
+                    total_timeout=max(1.0, deadline - loop.time()),
+                )
+                break
+            except AtmeeAvatarWarmingError as e:
+                pause = e.retry_after if e.retry_after is not None else _WARMING_RETRY_DEFAULT
+                pause = min(max(pause, _WARMING_RETRY_BOUNDS[0]), _WARMING_RETRY_BOUNDS[1])
+                if loop.time() + pause >= deadline:
+                    raise
+                logger.info(
+                    "atmee avatar render not started yet; asking again",
+                    extra={"code": e.code, "retry_in": pause},
+                )
+                await asyncio.sleep(pause)
         session_id = data.get("sessionId")
         if not isinstance(session_id, str) or not session_id:
             raise AtmeeException(
@@ -272,7 +299,6 @@ class AtmeeAPI:
             room_name=str(data.get("roomName", "")),
             max_duration_seconds=int(data.get("maxDurationSeconds") or 0),
             billing_mode=str(data.get("billingMode", "")),
-            avatar_version=avatar_version,
             raw=data,
         )
 
@@ -294,7 +320,6 @@ class AtmeeAPI:
         *,
         description: str | None = None,
         content_type: str | None = None,
-        avatar_version: AvatarVersion = "v1",
     ) -> str:
         """Create a render-only **v1 avatar** from a single portrait and return its id.
 
@@ -303,17 +328,11 @@ class AtmeeAPI:
         at once; nothing to poll. Add a voice later in the Atmee studio (or
         ``PUT /v1/avatars/{id}/voice``) to make it conversational as well.
 
-        ``avatar_version`` is the avatar generation to create; only ``"v1"``
-        is available today and anything else raises ``ValueError`` before any
-        request is sent. The API contract has no version field, so nothing is
-        added to the request.
+        A v2 avatar also needs a voice and a take built over minutes: create
+        one in the Atmee studio, CLI or MCP server, and render it here by id.
         """
         info = await self.create_avatar_info(
-            name,
-            image,
-            description=description,
-            content_type=content_type,
-            avatar_version=avatar_version,
+            name, image, description=description, content_type=content_type
         )
         return info.avatar_id
 
@@ -324,10 +343,8 @@ class AtmeeAPI:
         *,
         description: str | None = None,
         content_type: str | None = None,
-        avatar_version: AvatarVersion = "v1",
     ) -> AvatarInfo:
         """Like :meth:`create_avatar`, returning the whole response."""
-        _check_avatar_version(avatar_version)
         if isinstance(image, str) and _is_url(image):
             manifest: dict[str, Any] = {
                 "schemaVersion": 1,
@@ -336,8 +353,14 @@ class AtmeeAPI:
             }
             if description:
                 manifest["description"] = description
-            data = await self._request("POST", "/v1/avatars", json=manifest, retry=False)
-            return _avatar_info(data, version=avatar_version)
+            data = await self._request(
+                "POST",
+                "/v1/avatars",
+                json=manifest,
+                retry=False,
+                total_timeout=_CREATE_TOTAL_TIMEOUT,
+            )
+            return _avatar_info(data)
 
         if isinstance(image, bytes | bytearray):
             blob = bytes(image)
@@ -350,8 +373,10 @@ class AtmeeAPI:
         if description:
             form.add_field("description", description)
         form.add_field("file", blob, filename=filename, content_type=ctype)
-        data = await self._request("POST", "/v1/avatars", data=form, retry=False)
-        return _avatar_info(data, version=avatar_version)
+        data = await self._request(
+            "POST", "/v1/avatars", data=form, retry=False, total_timeout=_CREATE_TOTAL_TIMEOUT
+        )
+        return _avatar_info(data)
 
     async def get_avatar(self, avatar_id: str) -> AvatarInfo:
         return await self._get_avatar(avatar_id)
@@ -427,28 +452,30 @@ class AtmeeAPI:
         data: aiohttp.FormData | None = None,
         params: dict[str, str] | None = None,
         retry: bool = True,
-        total_timeout: float = _DEFAULT_TOTAL_TIMEOUT,
+        total_timeout: float | None = None,
         deadline: float | None = None,
     ) -> dict[str, Any]:
         """One API call with the plugin's retry policy: transport errors and
         5xx answers are retried up to ``conn_options.max_retry`` times after the
-        first attempt; a 503
-        ``no_capacity`` and every 4xx are final. ``retry=False`` for calls
-        that are not idempotent (creating a session or an avatar).
+        first attempt; a 503 ``no_capacity`` or ``avatar_warming`` and every
+        4xx are final. ``retry=False`` for calls that are not idempotent
+        (creating a session or an avatar).
 
-        ``deadline`` (event-loop time) bounds the whole call, retries and the
-        pauses between them included."""
+        Each attempt is bounded by ``total_timeout``, ``conn_options.timeout``
+        when none is given; ``deadline`` (event-loop time) bounds the whole
+        call, retries and the pauses between them included."""
         loop = asyncio.get_running_loop()
         attempts = self._conn_options.max_retry + 1 if retry else 1
+        per_attempt = self._conn_options.timeout if total_timeout is None else total_timeout
         last_error: Exception | None = None
         for attempt in range(attempts):
-            attempt_timeout = total_timeout
+            attempt_timeout = per_attempt
             if deadline is not None:
                 remaining = deadline - loop.time()
                 if remaining <= 0:
                     # the budget ran out: report a timeout, keep the last failure as its cause
                     raise AtmeeException(f"{method} {path} timed out") from last_error
-                attempt_timeout = min(total_timeout, remaining)
+                attempt_timeout = min(per_attempt, remaining)
             try:
                 async with self._ensure_session().request(
                     method,
@@ -475,7 +502,9 @@ class AtmeeAPI:
                         return payload if isinstance(payload, dict) else {"data": payload}
                     raise await _error_from_response(response)
             except AtmeeException as e:
-                if e.status_code >= 500 and not isinstance(e, AtmeeNoCapacityError):
+                if e.status_code >= 500 and not isinstance(
+                    e, AtmeeNoCapacityError | AtmeeAvatarWarmingError
+                ):
                     last_error = e
                 else:
                     raise
@@ -511,6 +540,16 @@ def _check_api_url(url: str) -> None:
     )
 
 
+def _retry_after(response: aiohttp.ClientResponse) -> float | None:
+    header = response.headers.get("Retry-After")
+    if not header:
+        return None
+    try:
+        return float(header)
+    except ValueError:
+        return None
+
+
 async def _error_from_response(response: aiohttp.ClientResponse) -> AtmeeException:
     text = await response.text()
     code: str | None = None
@@ -523,26 +562,22 @@ async def _error_from_response(response: aiohttp.ClientResponse) -> AtmeeExcepti
         code = body.get("error") if isinstance(body.get("error"), str) else None
         message = str(body.get("message") or body.get("detail") or message)
     if response.status == 503 and code == "no_capacity":
-        retry_after: float | None = None
-        header = response.headers.get("Retry-After")
-        if header:
-            try:
-                retry_after = float(header)
-            except ValueError:
-                retry_after = None
-        return AtmeeNoCapacityError(message, retry_after=retry_after)
+        return AtmeeNoCapacityError(message, retry_after=_retry_after(response))
+    if response.status == 503 and code in _RETRYABLE_START_CODES:
+        return AtmeeAvatarWarmingError(message, code=code, retry_after=_retry_after(response))
     if response.status == 409 and code == "avatar_not_renderable":
         return AtmeeAvatarNotReadyError(message, status_code=409, code=code)
     return AtmeeException(message, status_code=response.status, code=code)
 
 
-def _avatar_info(data: dict[str, Any], *, version: AvatarVersion = "v1") -> AvatarInfo:
+def _avatar_info(data: dict[str, Any]) -> AvatarInfo:
+    engine = data.get("engine")
     return AvatarInfo(
         avatar_id=str(data.get("avatarId") or data.get("id") or ""),
         status=str(data.get("status", "")),
         kind=data.get("kind"),
         name=data.get("name"),
-        version=version,
+        engine=engine if isinstance(engine, str) and engine else None,
         raw=data,
     )
 

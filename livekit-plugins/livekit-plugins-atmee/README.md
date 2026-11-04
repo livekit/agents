@@ -1,8 +1,12 @@
 # Atmee plugin for LiveKit Agents
 
-Give a LiveKit voice agent a face with an [Atmee](https://www.atmee.ai/) avatar. Atmee renders a
-talking head from a single portrait; the avatar joins the room as its own participant and speaks
-the agent's audio with lips in sync. Your agent keeps its own speech recognition, model and voice.
+Give a LiveKit voice agent a face with an [Atmee](https://www.atmee.ai/) avatar. The avatar joins
+the room as its own participant and speaks the agent's audio with lips in sync. Your agent keeps its
+own speech recognition, model and voice.
+
+Any Atmee avatar renders by its id: a **v1 avatar** is a talking head generated from a single
+portrait (`create_avatar` below); a **v2 avatar** moves as a whole and is created in the
+[Atmee studio](https://www.atmee.ai/studio).
 
 See the [Atmee integration docs](https://docs.livekit.io/agents/models/avatar/plugins/atmee/) for more information.
 
@@ -34,9 +38,10 @@ await session.start(agent=Agent(...), room=ctx.room)
 ```
 
 `start()` returns once Atmee's rendering worker has acknowledged the session; the avatar's video
-and audio tracks appear in the room a few seconds later. The session ends when your agent leaves
-the room, when `aclose()` runs (registered as a job shutdown callback), or at
-`max_duration_seconds`.
+and audio tracks appear in the room a few seconds later. The first v2 session after a quiet period
+can take a few minutes to start, and `start()` waits for it (up to 5 minutes, 7.5 with
+`wait_for="avatar_joined"`). The session ends when your agent leaves the room, when `aclose()` runs
+(registered as a job shutdown callback), or at `max_duration_seconds`.
 
 ## Parameters
 
@@ -47,11 +52,12 @@ the room, when `aclose()` runs (registered as a job shutdown callback), or at
 | `api_url` | `ATMEE_API_URL` or `https://api.atmanity.us` | Atmee API base URL. |
 | `avatar_participant_identity` | `"atmee-avatar-agent"` | The LiveKit identity the avatar joins under. Must be unique per concurrent avatar in a room. |
 | `avatar_participant_name` | `"atmee-avatar-agent"` | The LiveKit display name the avatar joins under. |
-| `avatar_version` | `"v1"` | The avatar generation to render. `"v1"` (a talking head from one portrait) is the only version available through the plugin today; anything else raises `ValueError`. |
 | `max_duration_seconds` | `3600` | Hard ceiling of the session. |
 | `wait_for` | `"initializing"` | `"avatar_joined"` makes `start()` block until the avatar is in the room. |
 | `metadata` | `None` | Free-form JSON stored with the session on the Atmee side. |
 
 API failures raise `atmee.AtmeeException` with `status_code`, `code` and `message`;
 `atmee.AtmeeNoCapacityError` (check `retry_after`) and `atmee.AtmeeAvatarNotReadyError` are
-subclasses worth handling.
+subclasses worth handling. `atmee.AtmeeAvatarWarmingError` means a v2 avatar was still getting
+ready when the start's wait ran out; nothing was billed, and you can try again after
+`retry_after`.
