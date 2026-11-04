@@ -324,7 +324,7 @@ step's start, `preemptive_generation_discarded` (`lk.speech_id`).
 | `gen_ai.operation.name` = `execute_tool`, `gen_ai.tool.name`, `gen_ai.tool.type` = `function`, `gen_ai.tool.call.id`, `gen_ai.agent.name` | string | start |
 | `gen_ai.tool.description`, `gen_ai.tool.call.arguments` (JSON) | | start, with message capture |
 | `lk.pii.function_tool.output`, `lk.function_tool.is_error` (bool) | | end |
-| `error.type` = `tool_error` | string | end, on a tool error |
+| `error.type` = `tool_error`, status `ERROR` and an `exception` event | string | end, on a tool error |
 | `gen_ai.tool.call.result` | JSON | end, with message capture, on success |
 
 ### Evaluation and text runs

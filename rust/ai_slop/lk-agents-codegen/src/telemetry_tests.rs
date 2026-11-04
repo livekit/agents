@@ -251,6 +251,10 @@ fn registry_rules_refuse_mistakes() {
             "increase strictly",
         ),
         (
+            format!("/// E.\n#[derive(Attrs)]\npub struct EverySpan {{ /// C.\n#[attr(\"lk.cancelled\")] pub c: Option<bool> }}\n{}", span("/// C.\n#[attr(\"lk.cancelled\")] pub c: bool,")),
+            "written on every span",
+        ),
+        (
             "/// S.\n#[span(name = \"s\", parent = Current, handle = Manual)]\n#[derive(Attrs)]\npub struct S;".into(),
             "the `handle = Manual` spans are",
         ),

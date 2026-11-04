@@ -405,10 +405,30 @@ pub type JsonObject = serde_json::Map<String, serde_json::Value>;
 #[derive(Debug, Clone, PartialEq)]
 pub struct KvList<T>(pub T);
 
-/// `T`'s serde form, its absent (`null`) fields omitted.
-impl<T: serde::Serialize> SpanValue for KvList<T> {
+/// A value written as an OTLP key-value list.
+pub trait ToKvList {
+    fn kv_list(&self) -> Vec<(String, Value)>;
+}
+
+impl ToKvList for JsonObject {
+    fn kv_list(&self) -> Vec<(String, Value)> {
+        self.iter().filter_map(|(k, v)| Some((k.clone(), json(v)?))).collect()
+    }
+}
+
+/// One model's entry of the `Usage` model, without its absent fields.
+impl ToKvList for crate::usage::ModelUsage {
+    fn kv_list(&self) -> Vec<(String, Value)> {
+        match serde_json::to_value(self) {
+            Ok(serde_json::Value::Object(o)) => o.kv_list(),
+            _ => Vec::new(),
+        }
+    }
+}
+
+impl<T: ToKvList> SpanValue for KvList<T> {
     fn value(&self) -> Option<Value> {
-        json(&serde_json::to_value(&self.0).ok()?)
+        Some(Value::KvList(self.0.kv_list()))
     }
 }
 
@@ -424,9 +444,7 @@ pub fn json(v: &serde_json::Value) -> Option<Value> {
         },
         J::String(s) => Value::String(s.clone()),
         J::Array(a) => Value::Array(a.iter().filter_map(json).collect()),
-        J::Object(o) => {
-            Value::KvList(o.iter().filter_map(|(k, v)| Some((k.clone(), json(v)?))).collect())
-        }
+        J::Object(o) => Value::KvList(o.kv_list()),
     })
 }
 

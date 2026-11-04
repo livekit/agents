@@ -314,26 +314,7 @@
           "type": "string",
           "required": false,
           "encoding": "json",
-          "content": "pii",
-          "shape": {
-            "fields": [
-              {
-                "key": "call_id",
-                "type": "string",
-                "required": true
-              },
-              {
-                "key": "name",
-                "type": "string",
-                "required": true
-              },
-              {
-                "key": "arguments",
-                "type": "string",
-                "required": true
-              }
-            ]
-          }
+          "content": "pii"
         },
         {
           "key": "lk.e2e_latency",
@@ -641,6 +622,7 @@
           "key": "lk.pii.function_tool.arguments",
           "type": "string",
           "required": true,
+          "encoding": "json",
           "content": "pii"
         },
         {
@@ -696,6 +678,7 @@
           "type": "string",
           "required": false,
           "registry": "otel",
+          "encoding": "json",
           "content": "gen_ai"
         }
       ],
@@ -710,28 +693,6 @@
           "key": "lk.function_tool.is_error",
           "type": "boolean",
           "required": true
-        },
-        {
-          "key": "error.type",
-          "type": "string",
-          "required": false,
-          "registry": "otel",
-          "members": [
-            "exception",
-            "timeout",
-            "cancelled",
-            "api_error",
-            "api_status_error",
-            "api_connection_error",
-            "storage_error",
-            "auth_error",
-            "io_error",
-            "tool_error",
-            "run_error",
-            "judge_error",
-            "unanswered",
-            "event_loop_blocked"
-          ]
         },
         {
           "key": "gen_ai.tool.call.result",
@@ -1041,26 +1002,7 @@
           "type": "string",
           "required": true,
           "encoding": "json",
-          "content": "pii",
-          "shape": {
-            "fields": [
-              {
-                "key": "call_id",
-                "type": "string",
-                "required": true
-              },
-              {
-                "key": "name",
-                "type": "string",
-                "required": true
-              },
-              {
-                "key": "arguments",
-                "type": "string",
-                "required": true
-              }
-            ]
-          }
+          "content": "pii"
         },
         {
           "key": "lk.response.ttft",
@@ -1132,102 +1074,7 @@
           "required": false,
           "registry": "otel",
           "encoding": "json",
-          "content": "gen_ai",
-          "shape": {
-            "tag": "type",
-            "variants": [
-              {
-                "value": "text",
-                "fields": [
-                  {
-                    "key": "content",
-                    "type": "string",
-                    "required": true
-                  }
-                ]
-              },
-              {
-                "value": "tool_call",
-                "fields": [
-                  {
-                    "key": "id",
-                    "type": "string",
-                    "required": true
-                  },
-                  {
-                    "key": "name",
-                    "type": "string",
-                    "required": true
-                  },
-                  {
-                    "key": "arguments",
-                    "type": "kvlist",
-                    "required": true
-                  }
-                ]
-              },
-              {
-                "value": "tool_call_response",
-                "fields": [
-                  {
-                    "key": "id",
-                    "type": "string",
-                    "required": true
-                  },
-                  {
-                    "key": "response",
-                    "type": "kvlist",
-                    "required": true
-                  },
-                  {
-                    "key": "name",
-                    "type": "string",
-                    "required": false
-                  }
-                ]
-              },
-              {
-                "value": "uri",
-                "fields": [
-                  {
-                    "key": "modality",
-                    "type": "string",
-                    "required": true
-                  },
-                  {
-                    "key": "mime_type",
-                    "type": "string",
-                    "required": false
-                  },
-                  {
-                    "key": "uri",
-                    "type": "string",
-                    "required": true
-                  }
-                ]
-              },
-              {
-                "value": "blob",
-                "fields": [
-                  {
-                    "key": "modality",
-                    "type": "string",
-                    "required": true
-                  },
-                  {
-                    "key": "content",
-                    "type": "string",
-                    "required": true
-                  },
-                  {
-                    "key": "transcript",
-                    "type": "string",
-                    "required": false
-                  }
-                ]
-              }
-            ]
-          }
+          "content": "gen_ai"
         },
         {
           "key": "gen_ai.input.messages",
@@ -1235,116 +1082,7 @@
           "required": false,
           "registry": "otel",
           "encoding": "json",
-          "content": "gen_ai",
-          "shape": {
-            "fields": [
-              {
-                "key": "role",
-                "type": "string",
-                "required": true
-              },
-              {
-                "key": "parts",
-                "type": "kvlist[]",
-                "required": true,
-                "shape": {
-                  "tag": "type",
-                  "variants": [
-                    {
-                      "value": "text",
-                      "fields": [
-                        {
-                          "key": "content",
-                          "type": "string",
-                          "required": true
-                        }
-                      ]
-                    },
-                    {
-                      "value": "tool_call",
-                      "fields": [
-                        {
-                          "key": "id",
-                          "type": "string",
-                          "required": true
-                        },
-                        {
-                          "key": "name",
-                          "type": "string",
-                          "required": true
-                        },
-                        {
-                          "key": "arguments",
-                          "type": "kvlist",
-                          "required": true
-                        }
-                      ]
-                    },
-                    {
-                      "value": "tool_call_response",
-                      "fields": [
-                        {
-                          "key": "id",
-                          "type": "string",
-                          "required": true
-                        },
-                        {
-                          "key": "response",
-                          "type": "kvlist",
-                          "required": true
-                        },
-                        {
-                          "key": "name",
-                          "type": "string",
-                          "required": false
-                        }
-                      ]
-                    },
-                    {
-                      "value": "uri",
-                      "fields": [
-                        {
-                          "key": "modality",
-                          "type": "string",
-                          "required": true
-                        },
-                        {
-                          "key": "mime_type",
-                          "type": "string",
-                          "required": false
-                        },
-                        {
-                          "key": "uri",
-                          "type": "string",
-                          "required": true
-                        }
-                      ]
-                    },
-                    {
-                      "value": "blob",
-                      "fields": [
-                        {
-                          "key": "modality",
-                          "type": "string",
-                          "required": true
-                        },
-                        {
-                          "key": "content",
-                          "type": "string",
-                          "required": true
-                        },
-                        {
-                          "key": "transcript",
-                          "type": "string",
-                          "required": false
-                        }
-                      ]
-                    }
-                  ]
-                }
-              }
-            ]
-          }
+          "content": "gen_ai"
         },
         {
           "key": "gen_ai.tool.definitions",
@@ -1352,26 +1090,7 @@
           "required": false,
           "registry": "otel",
           "encoding": "json",
-          "content": "gen_ai",
-          "shape": {
-            "fields": [
-              {
-                "key": "type",
-                "type": "string",
-                "required": true
-              },
-              {
-                "key": "name",
-                "type": "string",
-                "required": true
-              },
-              {
-                "key": "description",
-                "type": "string",
-                "required": false
-              }
-            ]
-          }
+          "content": "gen_ai"
         },
         {
           "key": "lk.input.delta",
@@ -1574,121 +1293,7 @@
           "required": false,
           "registry": "otel",
           "encoding": "json",
-          "content": "gen_ai",
-          "shape": {
-            "fields": [
-              {
-                "key": "role",
-                "type": "string",
-                "required": true
-              },
-              {
-                "key": "parts",
-                "type": "kvlist[]",
-                "required": true,
-                "shape": {
-                  "tag": "type",
-                  "variants": [
-                    {
-                      "value": "text",
-                      "fields": [
-                        {
-                          "key": "content",
-                          "type": "string",
-                          "required": true
-                        }
-                      ]
-                    },
-                    {
-                      "value": "tool_call",
-                      "fields": [
-                        {
-                          "key": "id",
-                          "type": "string",
-                          "required": true
-                        },
-                        {
-                          "key": "name",
-                          "type": "string",
-                          "required": true
-                        },
-                        {
-                          "key": "arguments",
-                          "type": "kvlist",
-                          "required": true
-                        }
-                      ]
-                    },
-                    {
-                      "value": "tool_call_response",
-                      "fields": [
-                        {
-                          "key": "id",
-                          "type": "string",
-                          "required": true
-                        },
-                        {
-                          "key": "response",
-                          "type": "kvlist",
-                          "required": true
-                        },
-                        {
-                          "key": "name",
-                          "type": "string",
-                          "required": false
-                        }
-                      ]
-                    },
-                    {
-                      "value": "uri",
-                      "fields": [
-                        {
-                          "key": "modality",
-                          "type": "string",
-                          "required": true
-                        },
-                        {
-                          "key": "mime_type",
-                          "type": "string",
-                          "required": false
-                        },
-                        {
-                          "key": "uri",
-                          "type": "string",
-                          "required": true
-                        }
-                      ]
-                    },
-                    {
-                      "value": "blob",
-                      "fields": [
-                        {
-                          "key": "modality",
-                          "type": "string",
-                          "required": true
-                        },
-                        {
-                          "key": "content",
-                          "type": "string",
-                          "required": true
-                        },
-                        {
-                          "key": "transcript",
-                          "type": "string",
-                          "required": false
-                        }
-                      ]
-                    }
-                  ]
-                }
-              },
-              {
-                "key": "finish_reason",
-                "type": "string",
-                "required": true
-              }
-            ]
-          }
+          "content": "gen_ai"
         },
         {
           "key": "langfuse.observation.completion_start_time",
@@ -3620,26 +3225,7 @@
           "key": "lk.stt.events",
           "type": "string",
           "required": true,
-          "encoding": "json",
-          "shape": {
-            "fields": [
-              {
-                "key": "received_at",
-                "type": "double",
-                "required": true
-              },
-              {
-                "key": "type",
-                "type": "string",
-                "required": true
-              },
-              {
-                "key": "transcript_length",
-                "type": "int",
-                "required": true
-              }
-            ]
-          }
+          "encoding": "json"
         },
         {
           "key": "lk.eou.resume_count",
@@ -5503,36 +5089,7 @@
         {
           "key": "evaluation",
           "type": "kvlist",
-          "required": true,
-          "shape": {
-            "fields": [
-              {
-                "key": "name",
-                "type": "string",
-                "required": true
-              },
-              {
-                "key": "tag",
-                "type": "string",
-                "required": true
-              },
-              {
-                "key": "verdict",
-                "type": "string",
-                "required": true
-              },
-              {
-                "key": "reasoning",
-                "type": "string",
-                "required": true
-              },
-              {
-                "key": "instructions",
-                "type": "string",
-                "required": true
-              }
-            ]
-          }
+          "required": true
         }
       ]
     },
@@ -5545,21 +5102,7 @@
         {
           "key": "tag",
           "type": "kvlist",
-          "required": true,
-          "shape": {
-            "fields": [
-              {
-                "key": "name",
-                "type": "string",
-                "required": true
-              },
-              {
-                "key": "metadata",
-                "type": "kvlist",
-                "required": true
-              }
-            ]
-          }
+          "required": true
         }
       ]
     },
@@ -5572,21 +5115,7 @@
         {
           "key": "outcome",
           "type": "kvlist",
-          "required": true,
-          "shape": {
-            "fields": [
-              {
-                "key": "outcome",
-                "type": "string",
-                "required": true
-              },
-              {
-                "key": "reason",
-                "type": "string",
-                "required": false
-              }
-            ]
-          }
+          "required": true
         }
       ]
     }

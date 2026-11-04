@@ -948,6 +948,22 @@ fn check(r: &Registry) -> Result<(), String> {
             }
         }
     }
+    // The span handles write `EverySpan`'s keys on every span; a declaration never does.
+    if let Some(every) = r.groups.iter().find(|g| g.name == "every_span") {
+        for span in &r.spans {
+            if let Some(a) = span
+                .start
+                .iter()
+                .chain(&span.end)
+                .find(|a| every.attrs.iter().any(|e| e.key == a.key))
+            {
+                return Err(format!(
+                    "{}: `{}` is written on every span by the span handles (`EverySpan`)",
+                    span.name, a.key
+                ));
+            }
+        }
+    }
     for a in &r.owned {
         if a.brief.is_empty() {
             return Err(format!(

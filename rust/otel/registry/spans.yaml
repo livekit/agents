@@ -558,10 +558,6 @@
           "requirement_level": "required"
         },
         {
-          "ref": "error.type",
-          "requirement_level": "recommended"
-        },
-        {
           "ref": "gen_ai.tool.call.result",
           "requirement_level": "recommended"
         }
@@ -575,7 +571,6 @@
           "end_attributes": [
             "lk.pii.function_tool.output",
             "lk.function_tool.is_error",
-            "error.type",
             "gen_ai.tool.call.result"
           ]
         }
