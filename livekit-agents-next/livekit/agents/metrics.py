@@ -41,5 +41,4 @@ def log_metrics(metrics: AgentMetrics, *, logger: logging.Logger | None = None) 
     """Log ``metrics`` at info level with its fields as ``extra`` (the core's
     ``metrics_log_fields``); VAD and EOT inference metrics are not logged."""
     if (entry := _core.metrics_log_fields(metrics)) is not None:
-        message, fields = entry
-        (logger or default_logger).info(message, extra=fields)
+        (logger or default_logger).info(entry.message, extra=entry.extra)

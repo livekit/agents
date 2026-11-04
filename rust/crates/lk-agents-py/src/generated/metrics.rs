@@ -27,8 +27,8 @@ pub fn runtime_busy_seconds(py: Python<'_>) -> PyResult<RuntimeLoadRuntimeBusySe
 type MetricsRecordsImpl =
     <crate::generated::implementations::Selected as super::Implementations>::MetricsRecords;
 
-/// `log_metrics(metrics)` minus the logging: `(message, extra)`, or `None` for do not log
-/// (`VADMetrics` and `EOTInferenceMetrics` have no branch in the reference).
+/// `log_metrics(metrics)` minus the logging, or `None` for do not log (`VADMetrics` and
+/// `EOTInferenceMetrics` have no branch in the reference).
 #[pyfunction]
 #[pyo3(signature = (metrics))]
 pub fn metrics_log_fields<'py>(
@@ -42,20 +42,7 @@ pub fn metrics_log_fields<'py>(
             metrics,
         )
     });
-    out.map(|value| {
-        ::pyo3::PyResult::Ok({
-            let (x0, x1) = value;
-            ::pyo3::types::PyTuple::new(
-                py,
-                [
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(x0, py)?,
-                    crate::py_values::extra_to_py(py, &x1)?.into_any(),
-                ],
-            )?
-            .into_any()
-        })
-    })
-    .transpose()
+    out.map(|value| crate::generated::records::metrics::metrics_log_to_py(py, value)).transpose()
 }
 
 // Declared in rust/crates/lk-agents-abi/src/metrics/provider.rs.

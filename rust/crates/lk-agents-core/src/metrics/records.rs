@@ -1,16 +1,15 @@
 //! What the host's logger records for a metrics event: `metrics/utils.py`'s `log_metrics`. Rust
 //! decides what to record, the host owns the logger.
 
-use lk_agents_abi::metrics::AgentMetrics;
+use lk_agents_abi::metrics::{AgentMetrics, MetricsLog};
 use lk_agents_abi::usage::TokenUsage;
 use serde_json::{Map, Value};
 
 pub struct MetricsRecords;
 
 impl lk_agents_abi::metrics::MetricsRecords for MetricsRecords {
-    fn metrics_log_fields(metrics: AgentMetrics) -> Option<(String, Map<String, Value>)> {
-        let (message, fields) = log_fields(&metrics)?;
-        Some((message.to_owned(), fields))
+    fn metrics_log_fields(metrics: AgentMetrics) -> Option<MetricsLog> {
+        log_fields(&metrics)
     }
 }
 
@@ -75,7 +74,7 @@ fn token_fields(fields: &mut Fields, t: &TokenUsage) {
 }
 
 /// `None` for `VADMetrics` and `EOTInferenceMetrics`, which the reference silently ignores.
-fn log_fields(metrics: &AgentMetrics) -> Option<(&'static str, Fields)> {
+fn log_fields(metrics: &AgentMetrics) -> Option<MetricsLog> {
     let mut f = metadata_fields(metrics);
     let message = match metrics {
         AgentMetrics::Llm(m) => {
@@ -134,7 +133,7 @@ fn log_fields(metrics: &AgentMetrics) -> Option<(&'static str, Fields)> {
         // No branch in the reference's chain: nothing is logged for either.
         AgentMetrics::Vad(_) | AgentMetrics::EotInference(_) => return None,
     };
-    Some((message, f))
+    Some(MetricsLog { message: message.to_owned(), extra: f })
 }
 
 #[cfg(test)]
@@ -144,12 +143,12 @@ mod tests {
     use lk_agents_abi::metrics::testkit as tk;
     use serde_json::json;
 
-    fn keys(l: &(&str, Fields)) -> Vec<String> {
-        l.1.keys().cloned().collect()
+    fn keys(l: &MetricsLog) -> Vec<String> {
+        l.extra.keys().cloned().collect()
     }
 
-    fn get(l: &(&str, Fields), k: &str) -> Option<Value> {
-        l.1.get(k).cloned()
+    fn get(l: &MetricsLog, k: &str) -> Option<Value> {
+        l.extra.get(k).cloned()
     }
 
     // Catches: logging VAD or EOT inference metrics (they would flood the log).
@@ -232,7 +231,7 @@ mod tests {
         m.session_started_time = Some(0.0);
         m.avatar_joined_time = Some(4.0);
         let l = log_fields(&AgentMetrics::Avatar(m)).unwrap();
-        assert!(l.1.is_empty(), "got {:?}", l.1);
+        assert!(l.extra.is_empty(), "got {:?}", l.extra);
     }
 
     // Catches: two-digit avatar fields, or the join latency computed backwards.
@@ -253,7 +252,7 @@ mod tests {
         let mut eou = tk::eou();
         eou.on_user_turn_completed_delay = Some(9.0);
         let l = log_fields(&AgentMetrics::Eou(eou)).unwrap();
-        assert_eq!(l.0, "EOU metrics");
+        assert_eq!(l.message, "EOU metrics");
         assert_eq!(keys(&l), ["end_of_utterance_delay", "transcription_delay"]);
     }
 }

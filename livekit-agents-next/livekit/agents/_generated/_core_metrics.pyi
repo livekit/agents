@@ -9,16 +9,16 @@ from collections.abc import Sequence
 from typing import Self
 
 from .llm import ChatChunk
-from .metrics import AgentMetrics, LLMMetrics, STTMetrics, TTSMetrics
+from .metrics import AgentMetrics, LLMMetrics, MetricsLog, STTMetrics, TTSMetrics
 from .stt import SpeechEvent
 from .tts import SynthesizedAudio
 
 def runtime_busy_seconds() -> list[float]:
     """Each async worker's total busy seconds so far; empty before the runtime started."""
 
-def metrics_log_fields(metrics: AgentMetrics) -> tuple[str, dict[str, object]] | None:
-    """`log_metrics(metrics)` minus the logging: `(message, extra)`, or `None` for do not log
-    (`VADMetrics` and `EOTInferenceMetrics` have no branch in the reference).
+def metrics_log_fields(metrics: AgentMetrics) -> MetricsLog | None:
+    """`log_metrics(metrics)` minus the logging, or `None` for do not log (`VADMetrics` and
+    `EOTInferenceMetrics` have no branch in the reference).
     """
 
 def stt_batch_metrics(

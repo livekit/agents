@@ -7820,6 +7820,25 @@ pub mod mcp_session {
 pub mod metrics {
     use pyo3::prelude::*;
 
+    // Declared in rust/crates/lk-agents-abi/src/metrics/mod.rs.
+    static METRICS_LOG: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn metrics_log_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::metrics::MetricsLog,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ::lk_agents_abi::metrics::MetricsLog { message, extra } = value;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item("message", ::pyo3::IntoPyObjectExt::into_bound_py_any(message, py)?)?;
+        kwargs.set_item("extra", crate::py_values::extra_to_py(py, &extra)?.into_any())?;
+        crate::py_calls::call(
+            METRICS_LOG.import(py, "livekit.agents._generated.metrics", "MetricsLog")?.as_any(),
+            (),
+            Some(&kwargs),
+        )
+    }
+
     // Declared in rust/crates/lk-agents-abi/src/metrics/base.rs.
     static METADATA: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();

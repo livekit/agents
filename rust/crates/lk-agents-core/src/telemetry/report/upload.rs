@@ -42,8 +42,8 @@ pub fn upload(
         return None;
     }
     let (chat_history, omitted) = if transcript {
-        let (json, omitted) = chat_history(&report.chat_history);
-        (Some(json), omitted)
+        let transcript = chat_history(&report.chat_history);
+        (Some(transcript.json), transcript.omitted)
     } else {
         (None, 0)
     };
@@ -59,8 +59,14 @@ pub fn upload(
     Some(RecordingUpload { header, chat_history, audio_path })
 }
 
-/// The newest items that fit the transcript's bounds, and how many older ones were left out.
-fn chat_history(items: &[ChatItem]) -> (String, u64) {
+/// The uploaded transcript, and how many older items it left out.
+struct Transcript {
+    json: String,
+    omitted: u64,
+}
+
+/// The newest items that fit the transcript's bounds.
+fn chat_history(items: &[ChatItem]) -> Transcript {
     let options = ToDictOptions { exclude_timestamp: false, ..Default::default() };
     let host = ToDictHost::default();
     let mut kept: Vec<String> = Vec::new();
@@ -80,7 +86,7 @@ fn chat_history(items: &[ChatItem]) -> (String, u64) {
     }
     let omitted = (items.len() - kept.len()) as u64;
     kept.reverse();
-    (format!("{{\"items\":[{}]}}", kept.join(",")), omitted)
+    Transcript { json: format!("{{\"items\":[{}]}}", kept.join(",")), omitted }
 }
 
 /// The summary agent evaluations read, within [`SESSION_SUMMARY_BYTES`]: past it, the options,

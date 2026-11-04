@@ -2,6 +2,7 @@
 #
 # Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[host(record)]`
 # declarations in:
+#     rust/crates/lk-agents-abi/src/metrics/mod.rs
 #     rust/crates/lk-agents-abi/src/metrics/base.rs
 #
 # Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
@@ -9,12 +10,21 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Literal, TypeAlias
 
 from pydantic import BaseModel, Field
 
 from .. import _bindings
 from .usage import TokenUsage
+
+
+@dataclass(kw_only=True, slots=True)
+class MetricsLog:
+    """One metrics event's log line: its message and the fields logged as `extra`."""
+
+    message: str
+    extra: dict[str, object]
 
 
 class Metadata(BaseModel):

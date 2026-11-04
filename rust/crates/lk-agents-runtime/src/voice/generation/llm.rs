@@ -412,7 +412,7 @@ impl LlmNodeTrace {
         if let Some(error) = failed {
             telemetry::fail(&span, error);
         }
-        let (text, calls) = trace.response();
+        let (text, calls) = (trace.text(), trace.calls());
         let ttft = trace.first_chunk_at().map(|at| at.saturating_sub(self.started) as f64 / 1e9);
         if let Some(ttft) = ttft {
             let model = telemetry::model_labels(&llm.id());

@@ -19,8 +19,8 @@ use lk_agents_abi::telemetry::spans::inference::{
 };
 use lk_agents_abi::usage::TokenUsage;
 use lk_agents_abi::{ChatRequest, Llm, LlmChunk, ProviderId, SynthesizedAudio, Tts};
-use lk_agents_core::telemetry::gen_ai;
 use lk_agents_core::metrics::provider::LlmMetricState;
+use lk_agents_core::telemetry::gen_ai;
 
 // What the crate's logic names, spelled `telemetry::` there (`telemetry.md`, rule 4).
 pub(crate) use lk_agents_abi::telemetry::decl::GenAiContent;
@@ -227,9 +227,14 @@ impl LlmTrace {
         self.first_chunk
     }
 
-    /// The response so far: its text and its calls.
-    pub fn response(&self) -> (&str, &[ResponseFunctionCall]) {
-        (&self.text, &self.calls)
+    /// The response's text so far.
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    /// The response's function calls so far.
+    pub fn calls(&self) -> &[ResponseFunctionCall] {
+        &self.calls
     }
 
     /// Ends the request with its usage, timing and metrics, and records its measurements.

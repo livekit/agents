@@ -225,7 +225,7 @@ fn a_registered_node_makes_its_own_request() {
     assert!(attempt.is_none());
     trace.observe(&chunk("hi"));
     trace.end_attempt(attempt, None);
-    assert_eq!(trace.response().0, "hi", "the node span still reads the response");
+    assert_eq!(trace.text(), "hi", "the node span still reads the response");
     trace.end(false, None);
     assert!(records.spans().is_empty() && records.measurements().is_empty());
     assert_eq!(req.trace.and_then(|t| t.span), Some(PARENT));
