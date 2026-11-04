@@ -235,3 +235,80 @@ async def test_realtime_tool_reply_from_the_server_keeps_the_agent_thinking() ->
         await asyncio.sleep(4.0)  # longer than user_away_timeout
         assert session.agent_state == "thinking"
         assert "away" not in user_states
+
+
+@pytest.mark.parametrize("outcome", ["reply", "silent", "interrupted"])
+async def test_realtime_tool_reply_waiting_behind_speech_keeps_agent_thinking(outcome: str) -> None:
+    model = FakeRealtimeModel(capabilities=fake_capabilities(auto_tool_reply_generation=False))
+    tool_started = asyncio.Event()
+    release_tool = asyncio.Event()
+
+    class ToolAgent(Agent):
+        @function_tool
+        async def lookup(self) -> str:
+            """Look up an order."""
+            tool_started.set()
+            await release_tool.wait()
+            return "order 42 shipped"
+
+    async with AgentSession(llm=model, user_away_timeout=0.1) as session:
+        session.output.audio = FakeAudioOutput()
+        await session.start(ToolAgent(instructions="Answer briefly."))
+        reply = session.generate_reply()
+        for _ in range(500):
+            if model.active_session._reply_futs:
+                break
+            await asyncio.sleep(0)
+        model.active_session._reply_futs[0].set_result(
+            _generation(
+                response_id="lookup",
+                text="checking",
+                audio_duration=0.1,
+                function_calls=[FunctionCall(call_id="1", name="lookup", arguments="{}")],
+            )
+        )
+        await asyncio.wait_for(tool_started.wait(), timeout=5)
+        try:
+            await _wait_for_agent_state(session, "thinking")
+            filler = session.say("a story first")
+            for _ in range(500):
+                if model.active_session.say_futs:
+                    break
+                await asyncio.sleep(0)
+            model.active_session.say_futs[0].set_result(
+                _generation(response_id="story", text="a story first", audio_duration=0.5)
+            )
+            await _wait_for_agent_state(session, "speaking")
+            states: list[str] = []
+            user_states: list[str] = []
+            session.on("agent_state_changed", lambda ev: states.append(ev.new_state))
+            session.on("user_state_changed", lambda ev: user_states.append(ev.new_state))
+            release_tool.set()
+            await asyncio.wait_for(filler.wait_for_playout(), timeout=5)
+
+            for _ in range(500):
+                if len(model.active_session._reply_futs) == 2:
+                    break
+                await asyncio.sleep(0)
+            assert len(model.active_session._reply_futs) == 2
+            assert session.agent_state == "thinking"
+            assert "listening" not in states
+            await asyncio.sleep(0.2)
+            assert "away" not in user_states
+
+            if outcome == "interrupted":
+                reply.interrupt()
+            else:
+                model.active_session._reply_futs[1].set_result(
+                    _generation(
+                        response_id="answer",
+                        text="order 42 shipped" if outcome == "reply" else "",
+                        audio_duration=0.1,
+                    )
+                )
+            await asyncio.wait_for(reply.wait_for_playout(), timeout=5)
+            await _wait_for_agent_state(session, "listening")
+            await asyncio.sleep(0.2)
+            assert "away" in user_states
+        finally:
+            release_tool.set()

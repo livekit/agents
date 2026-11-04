@@ -229,3 +229,55 @@ async def test_session_scoped_reply_is_dropped_on_close() -> None:
     assert not toolset._executor._reply_task.done()
 
     await asyncio.wait_for(sess.aclose(), timeout=5.0)
+
+
+@pytest.mark.parametrize("scope", ["activity", "agent_toolset", "session_toolset"])
+@pytest.mark.parametrize("answer", ["The link has been sent.", ""])
+async def test_pending_reply_keeps_agent_thinking(scope: str, answer: str) -> None:
+    """A completed async tool still owes a reply when another speech finishes (#8362)."""
+    toolset = AsyncToolset(id="links", tools=[send_link])
+    agent = Agent(
+        instructions="Answer briefly.",
+        tools=[send_link] if scope == "activity" else [toolset] if scope == "agent_toolset" else [],
+    )
+    model = FakeLLM(
+        fake_responses=[
+            FakeLLMResponse(
+                input="go",
+                content="",
+                ttft=0.1,
+                duration=0.1,
+                tool_calls=[FunctionToolCall(name="send_link", arguments="{}", call_id="link")],
+            ),
+            FakeLLMResponse(input="busy", content="Here is a story.", ttft=1.0, duration=1.0),
+            FakeLLMResponse(input="tool result", content=answer, ttft=0.1, duration=0.1),
+        ]
+    )
+    async with AgentSession(
+        llm=model,
+        tools=[toolset] if scope == "session_toolset" else [],
+        tool_handling={
+            "async_options": {
+                "reply_at_tail_template": "tool result",
+                "reply_maybe_covered_template": "tool result",
+            }
+        },
+    ) as session:
+        await session.start(agent)
+        await session.run(user_input="go")
+        states: list[str] = []
+        session.on("agent_state_changed", lambda ev: states.append(ev.new_state))
+
+        # send_link finishes during the second generation, before it starts speaking.
+        await asyncio.wait_for(session.run(user_input="busy"), timeout=5.0)
+        await asyncio.sleep(0)
+
+        # Even an empty deferred generation must release the busy state at completion.
+        assert states[-1] == "listening"
+        assert "listening" not in states[:-1], states
+        assert "thinking" in states[states.index("speaking") + 1 :], states
+        if answer:
+            assert any(
+                item.type == "message" and item.role == "assistant" and item.text_content == answer
+                for item in session.history.items
+            )
