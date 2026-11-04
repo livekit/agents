@@ -95,10 +95,14 @@ def proc_main(args: ProcStartArgs) -> None:
 
     client = _ProcClient(args.mp_cch, args.log_cch, job_proc.initialize, job_proc.entrypoint)
     try:
-        client.initialize()
+        initialized = client.initialize()
     except Exception:
         log_handler.close()
         return  # initialization failed, exit (initialize will send an error to the worker)
+
+    if not initialized:
+        log_handler.close()
+        return  # shutdown requested before initialization, exit
 
     client.run()
 
@@ -618,7 +622,25 @@ def thread_main(
         )
 
         client = _ProcClient(args.mp_cch, None, job_proc.initialize, job_proc.entrypoint)
-        client.initialize()
+        try:
+            initialized = client.initialize()
+        except Exception:
+            if client.warmup_failed:
+                # the warm-up itself raised: initialize() already reported the error
+                # to the worker, but the traceback only exists here, so keep it
+                # instead of reporting the failure as a channel that closed
+                logger.exception("thread runner: initialization failed")
+            else:
+                # the worker closed the channel during the warm-up (e.g. a close
+                # that could not wait for the initialize response frame): nothing
+                # ran, exit cleanly like proc_main instead of letting the channel
+                # error surface as an unhandled thread exception
+                logger.debug("thread runner: channel closed during initialization")
+            return
+        if not initialized:
+            # the worker closed the runner before it was initialized: nothing
+            # ran, exit cleanly without starting the job loop
+            return
         client.run()
     finally:
         args.join_fnc()

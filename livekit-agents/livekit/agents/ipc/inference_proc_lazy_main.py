@@ -43,9 +43,12 @@ def proc_main(args: ProcStartArgs) -> None:
 
     client = _ProcClient(args.mp_cch, args.log_cch, inf_proc.initialize, inf_proc.entrypoint)
     try:
-        client.initialize()
+        initialized = client.initialize()
     except Exception:
         return  # initialization failed, exit (initialize will send an error to the worker)
+
+    if not initialized:
+        return  # shutdown requested before initialization, exit
 
     client.run()
 
