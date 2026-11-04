@@ -210,6 +210,7 @@ class _JobProc:
         self._simulation_end_fnc = simulation_end_fnc
         self._session_end_timeout = session_end_timeout
         self._job_task: asyncio.Task[None] | None = None
+        self._join_timing_task: asyncio.Task[None] | None = None
         self._entrypoint_started_mono = 0.0
 
         # used to warn users if both connect and shutdown are not called inside the job_entry
@@ -485,6 +486,11 @@ class _JobProc:
             except Exception as e:
                 trace_utils.record_exception(span, e)
                 logger.exception("error in job_ctx._on_session_end")
+
+        # the worker reports the join timing once per job, so it must go out before the job exits
+        if self._join_timing_task is not None:
+            with contextlib.suppress(Exception):
+                await self._join_timing_task
 
         await self._client.send(ShuttingDown())
 
