@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -9,6 +10,7 @@ import aiohttp
 import httpx2 as httpx
 import openai
 import pytest
+from openai.types import Reasoning
 from pydantic import BaseModel
 from yarl import URL
 
@@ -86,13 +88,14 @@ def _make_rest_llm(
     )
 
 
-def _make_ws_llm() -> ResponsesLLM:
+def _make_ws_llm(**kwargs: Any) -> ResponsesLLM:
     return ResponsesLLM(
         "openai/gpt-4.1",
         base_url="https://gw.test/v1",
         api_key="k",
         api_secret="s",
         use_websocket=True,
+        **kwargs,
     )
 
 
@@ -526,3 +529,189 @@ def test_to_text_format_flattens_chat_shape() -> None:
     fmt = inference_responses._to_text_format(_Answer)
 
     assert list(fmt) == ["type", "name", "schema", "strict"]
+
+
+def _warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+
+
+async def test_no_reasoning_sends_no_reasoning_field(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = _GatewayTransport()
+    model = _make_rest_llm(monkeypatch, transport)
+
+    await _drain(model)
+
+    assert "reasoning" not in transport.body()
+
+
+async def test_reasoning_string_sends_effort(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = _GatewayTransport()
+    model = _make_rest_llm(monkeypatch, transport, reasoning="low")
+
+    await _drain(model)
+
+    assert transport.body()["reasoning"] == {"effort": "low"}
+
+
+async def test_reasoning_dict_passes_through(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = _GatewayTransport()
+    model = _make_rest_llm(monkeypatch, transport, reasoning={"effort": "low", "summary": "auto"})
+
+    await _drain(model)
+
+    assert transport.body()["reasoning"] == {"effort": "low", "summary": "auto"}
+
+
+async def test_reasoning_object_sends_only_its_set_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = _GatewayTransport()
+    model = _make_rest_llm(
+        monkeypatch, transport, reasoning=Reasoning(effort="low", summary="auto")
+    )
+
+    await _drain(model)
+
+    assert transport.body()["reasoning"] == {"effort": "low", "summary": "auto"}
+
+
+async def test_reasoning_overrides_extra_kwargs_reasoning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = _GatewayTransport()
+    model = _make_rest_llm(
+        monkeypatch, transport, reasoning="high", extra_kwargs={"reasoning": {"effort": "low"}}
+    )
+
+    await _drain(model)
+
+    assert transport.body()["reasoning"] == {"effort": "high"}
+
+
+async def test_extra_kwargs_reasoning_still_sent_without_reasoning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = _GatewayTransport()
+    model = _make_rest_llm(monkeypatch, transport, extra_kwargs={"reasoning": {"effort": "low"}})
+
+    await _drain(model)
+
+    assert transport.body()["reasoning"] == {"effort": "low"}
+
+
+async def test_per_call_extra_kwargs_reasoning_overrides_reasoning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = _GatewayTransport()
+    model = _make_rest_llm(monkeypatch, transport, reasoning="low")
+
+    await _drain(model, extra_kwargs={"reasoning": {"effort": "high"}})
+
+    assert transport.body()["reasoning"] == {"effort": "high"}
+
+
+async def test_reasoning_conflicting_with_extra_kwargs_logs_warning(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.WARNING, logger="livekit.agents")
+
+    model = _make_rest_llm(
+        monkeypatch,
+        _GatewayTransport(),
+        reasoning="high",
+        extra_kwargs={"reasoning": {"effort": "low"}},
+    )
+    await model.aclose()
+
+    assert any("extra_kwargs['reasoning']" in m for m in _warnings(caplog))
+
+
+async def test_reasoning_matching_extra_kwargs_logs_nothing(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.WARNING, logger="livekit.agents")
+
+    model = _make_rest_llm(
+        monkeypatch,
+        _GatewayTransport(),
+        reasoning="low",
+        extra_kwargs={"reasoning": Reasoning(effort="low")},
+    )
+    await model.aclose()
+
+    assert _warnings(caplog) == []
+
+
+async def test_update_options_reasoning_changes_effort(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = _GatewayTransport()
+    model = _make_rest_llm(monkeypatch, transport, reasoning="low")
+
+    model.update_options(reasoning="high")
+    await _drain(model)
+
+    assert transport.body()["reasoning"] == {"effort": "high"}
+
+
+async def test_update_options_reasoning_keeps_extra_kwargs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = _GatewayTransport()
+    model = _make_rest_llm(monkeypatch, transport, extra_kwargs={"max_output_tokens": 64})
+
+    model.update_options(reasoning="high")
+    await _drain(model)
+
+    assert transport.body()["max_output_tokens"] == 64
+
+
+async def test_update_options_reasoning_none_clears_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = _GatewayTransport()
+    model = _make_rest_llm(monkeypatch, transport, reasoning="low")
+
+    model.update_options(reasoning=None)
+    await _drain(model)
+
+    assert "reasoning" not in transport.body()
+
+
+async def test_update_options_without_reasoning_keeps_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = _GatewayTransport()
+    model = _make_rest_llm(monkeypatch, transport, reasoning="low")
+
+    model.update_options(extra_kwargs={"max_output_tokens": 64})
+    await _drain(model)
+
+    assert transport.body()["reasoning"] == {"effort": "low"}
+
+
+async def test_reasoning_rides_the_ws_payload() -> None:
+    model = _make_ws_llm(reasoning="low")
+    session = _ScriptedSession()
+    _gateway_ws(model)._session = session  # type: ignore[assignment]
+
+    await _consume(model.chat(chat_ctx=_ctx(), conn_options=APIConnectOptions(max_retry=0)))
+
+    assert json.loads(session.sockets[0].sent[0])["reasoning"] == {"effort": "low"}
+
+
+async def test_effort_below_model_minimum_logs_warning(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.WARNING, logger="livekit.agents")
+
+    model = ResponsesLLM("openai/gpt-6.1-sol", api_key="k", api_secret="s", reasoning="none")
+    await model.aclose()
+
+    assert any("lowest" in m for m in _warnings(caplog))
+
+
+async def test_update_options_model_below_effort_minimum_logs_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.WARNING, logger="livekit.agents")
+    model = ResponsesLLM("openai/gpt-6-luna", api_key="k", api_secret="s", reasoning="none")
+
+    model.update_options(model="openai/gpt-6.1-sol")
+    await model.aclose()
+
+    assert any("lowest" in m for m in _warnings(caplog))

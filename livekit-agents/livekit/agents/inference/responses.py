@@ -51,7 +51,13 @@ from ._utils import (
     get_inference_headers,
     resolve_credentials,
 )
-from .llm import LLMModels, supports_prompt_cache_breakpoints
+from .llm import (
+    LLMModels,
+    ReasoningSetting,
+    _reasoning_fields,
+    _warn_if_below_min_effort,
+    supports_prompt_cache_breakpoints,
+)
 
 # the gateway closes a socket 60 minutes after the upgrade (WSConnectionMaxLifetime) and the
 # pool checks age only at get(), so leave room for a turn to finish before that
@@ -112,6 +118,8 @@ class _LLMOptions:
     extra_kwargs: dict[str, Any]
     prompt_cache_breakpoints: bool | Literal["auto"]
     use_websocket: bool = False
+    # Responses reasoning fields; empty when set to None
+    reasoning: NotGivenOr[dict[str, Any]] = NOT_GIVEN
 
 
 class LLM(llm.LLM):
@@ -128,6 +136,10 @@ class LLM(llm.LLM):
     rejected with HTTP 400, or a ``gateway.error`` over WebSocket.
 
     ``prompt_cache_options`` (including ``ttl``) is forwarded as given.
+
+    ``reasoning`` takes an effort such as ``"low"``, or the whole Responses object such as
+    ``{"effort": "low", "summary": "auto"}``. It overrides ``extra_kwargs["reasoning"]``,
+    and a ``chat()`` call's own ``extra_kwargs["reasoning"]`` overrides it for that turn.
 
     Each read waits ``conn_options.timeout`` for the next event. REST streams get gateway
     keepalives while a model reasons silently; over WebSocket they are rolling out behind a
@@ -149,6 +161,7 @@ class LLM(llm.LLM):
         extra_kwargs: ResponsesOptions | dict[str, Any] | None = None,
         prompt_cache_breakpoints: bool | Literal["auto"] = "auto",
         use_websocket: bool = False,
+        reasoning: NotGivenOr[ReasoningSetting] = NOT_GIVEN,
     ) -> None:
         super().__init__()
 
@@ -163,7 +176,9 @@ class LLM(llm.LLM):
             extra_kwargs=_copy_kwargs(extra_kwargs or {}),
             prompt_cache_breakpoints=prompt_cache_breakpoints,
             use_websocket=use_websocket,
+            reasoning=_reasoning_fields(reasoning) if is_given(reasoning) else NOT_GIVEN,
         )
+        self._check_reasoning()
         self._ws: ResponsesWebsocket | None = None
         self._retired_ws: set[_GatewayResponsesWebsocket] = set()
         self._ws_close_tasks: set[asyncio.Task[None]] = set()
@@ -233,15 +248,19 @@ class LLM(llm.LLM):
         model: NotGivenOr[LLMModels | str] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[ResponsesOptions | dict[str, Any]] = NOT_GIVEN,
         prompt_cache_breakpoints: NotGivenOr[bool | Literal["auto"]] = NOT_GIVEN,
+        reasoning: NotGivenOr[ReasoningSetting] = NOT_GIVEN,
     ) -> None:
         """Update LLM configuration options.
 
         Each option is read on the next ``chat()`` call. ``extra_kwargs`` *replaces* the
-        persistent kwargs dict rather than merging; pass ``{}`` to clear it. Over WebSocket a
-        new ``model`` gets a new pool and new ``extra_headers`` invalidate it, since both are
-        bound to the socket at the upgrade. A turn created before a model swap keeps the old
-        model's pool, so its retries dial the model it sends.
+        persistent kwargs dict rather than merging; pass ``{}`` to clear it. ``reasoning``
+        changes only reasoning and leaves ``extra_kwargs`` as is; ``None`` clears it. Over
+        WebSocket a new ``model`` gets a new pool and new ``extra_headers`` invalidate it, since
+        both are bound to the socket at the upgrade. A turn created before a model swap keeps
+        the old model's pool, so its retries dial the model it sends.
         """
+        # read first, so a rejected setting changes nothing
+        reasoning_fields = _reasoning_fields(reasoning) if is_given(reasoning) else NOT_GIVEN
         if is_given(model) and model != self._opts.model:
             self._opts.model = model
             if isinstance(self._ws, _GatewayResponsesWebsocket):
@@ -257,6 +276,27 @@ class LLM(llm.LLM):
         # isinstance rather than is_given: mypy cannot narrow the bool | Literal union through it
         if not isinstance(prompt_cache_breakpoints, NotGiven):
             self._opts.prompt_cache_breakpoints = prompt_cache_breakpoints
+        if is_given(reasoning_fields):
+            self._opts.reasoning = reasoning_fields
+        if is_given(model) or is_given(extra_kwargs) or is_given(reasoning):
+            self._check_reasoning()
+
+    def _check_reasoning(self) -> None:
+        """Warn about a reasoning setting that is unlikely to do what the caller meant.
+
+        Logs when it overrides a different ``extra_kwargs["reasoning"]``, or its effort is
+        below the model's lowest. It only warns; nothing it checks is changed.
+        """
+        reasoning = self._opts.reasoning
+        if not is_given(reasoning) or not reasoning:
+            return
+        configured = self._opts.extra_kwargs.get("reasoning")
+        if configured is not None and _reasoning_fields(configured) != reasoning:
+            logger.warning(
+                "reasoning overrides extra_kwargs['reasoning']",
+                extra={"reasoning": reasoning, "configured": _reasoning_fields(configured)},
+            )
+        _warn_if_below_min_effort(self._opts.model, reasoning.get("effort"))
 
     def _prewarm_swapped_ws(self, ws: _GatewayResponsesWebsocket) -> None:
         # prewarm dials a socket, so only replace a warm pool with a warm one, and never
@@ -310,6 +350,9 @@ class LLM(llm.LLM):
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> ResponsesLLMStream:
         extra: dict[str, Any] = dict(self._opts.extra_kwargs)
+        if is_given(self._opts.reasoning) and self._opts.reasoning:
+            extra["reasoning"] = dict(self._opts.reasoning)
+        # after reasoning: a turn's own extra_kwargs override the LLM's settings
         if is_given(extra_kwargs):
             extra.update(extra_kwargs)
 
