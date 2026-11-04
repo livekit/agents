@@ -48,6 +48,9 @@ _SILENCE_RMS = 0.0006
 # long enough that a pause between sentences does not split an utterance in two
 _MIN_SILENCE_DURATION = 0.8
 _MIN_SILENCE_MS = _MIN_SILENCE_DURATION * 1000
+# the service rejects an input audio burst over 5 s of audio, whatever its encoding, and audio
+# queued before session.started goes out in one burst when the session starts
+_MAX_QUEUED_INPUT_AUDIO_SAMPLES = 4 * SAMPLE_RATE
 
 # the asks generate_reply sends as commentary. each ends with the same two sentences, which make
 # the model speak now rather than wait for the caller; what precedes them says what to speak
@@ -440,6 +443,33 @@ class GPTLiveSession(
         with contextlib.suppress(utils.aio.channel.ChanClosed):
             self._msg_ch.send_nowait(event)
 
+    def _drain_trimmed_backlog(self) -> list[types.ClientEvent | dict[str, Any]]:
+        queued: list[types.ClientEvent | dict[str, Any]] = []
+        while not self._msg_ch.empty():
+            queued.append(self._msg_ch.recv_nowait())
+
+        kept: list[types.ClientEvent | dict[str, Any]] = []
+        kept_samples = dropped_samples = 0
+        for event in reversed(queued):
+            if isinstance(event, types.InputAudioAppendEvent):
+                samples = len(base64.b64decode(event.audio)) // (2 * NUM_CHANNELS)
+                if dropped_samples or kept_samples + samples > _MAX_QUEUED_INPUT_AUDIO_SAMPLES:
+                    dropped_samples += samples
+                    continue
+                kept_samples += samples
+            kept.append(event)
+
+        if dropped_samples:
+            logger.info(
+                "gpt-live dropped queued input audio at session start",
+                extra={
+                    "dropped_s": dropped_samples / SAMPLE_RATE,
+                    "kept_s": kept_samples / SAMPLE_RATE,
+                },
+            )
+        kept.reverse()
+        return kept
+
     def _build_delegation(self) -> types.Delegation:
         if self._opts.delegation == "client":
             return types.Delegation(type="client")
@@ -638,19 +668,22 @@ class GPTLiveSession(
             start = self._session_start_event()
             self._session_start_sent = True
             await self._ws_send(ws_conn, start)
-            if self._input_muted:
+            muted = self._input_muted
+            # the protocol asks for session.started before any audio or command goes out
+            started = self._session_started_fut
+            await asyncio.wait([started])
+            if started.cancelled():
+                await _close_ws()
+                return
+            if muted:
                 # a new connection is a new session, and a session starts unmuted, so the mute
                 # the app asked for is re-applied before this one can hear anything
-                if not self._session_started_fut.done():
-                    await self._session_started_fut
                 await self._ws_send(
                     ws_conn, types.InputAudioMuteEvent(event_id=utils.shortuuid("mute_"))
                 )
-
+            for msg in self._drain_trimmed_backlog():
+                await self._ws_send(ws_conn, msg)
             async for msg in self._msg_ch:
-                # the protocol asks for session.started before any audio or command goes out
-                if not self._session_started_fut.done():
-                    await self._session_started_fut
                 await self._ws_send(ws_conn, msg)
 
             await _close_ws()
