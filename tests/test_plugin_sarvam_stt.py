@@ -420,8 +420,9 @@ async def test_sarvam_stt_stream_forces_single_attempt_conn_options(
             conn_options: APIConnectOptions,
             api_key: str,
             http_session: object,
+            user_keyterms: object,
         ) -> None:
-            del stt, opts, api_key
+            del stt, opts, api_key, user_keyterms
             captured["conn_options"] = conn_options
             captured["http_session"] = http_session
 
