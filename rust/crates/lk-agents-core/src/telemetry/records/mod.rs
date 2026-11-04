@@ -11,37 +11,13 @@ pub struct MetricsRecords;
 
 impl lk_agents_abi::metrics::MetricsRecords for MetricsRecords {
     fn metrics_log_fields(metrics: AgentMetrics) -> Option<(String, Map<String, Value>)> {
-        let out = log_fields(&metrics)?;
-        let fields = out
-            .fields
-            .into_iter()
-            .map(|(key, value)| {
-                let value = match value {
-                    LogValue::Str(s) => s.into(),
-                    LogValue::Float(f) => f.into(),
-                    LogValue::Int(i) => i.into(),
-                };
-                (key.to_owned(), value)
-            })
-            .collect();
-        Some((out.message.to_owned(), fields))
+        let (message, fields) = log_fields(&metrics)?;
+        Some((message.to_owned(), fields))
     }
 }
 
-/// Ints and floats stay distinct, as in the reference.
-#[derive(Debug, Clone, PartialEq)]
-enum LogValue {
-    Str(String),
-    Float(f64),
-    Int(u64),
-}
-
-/// `fields` keeps insertion order.
-#[derive(Debug, Clone, PartialEq)]
-struct MetricsLog {
-    message: &'static str,
-    fields: Vec<(&'static str, LogValue)>,
-}
+/// The log line's fields, in insertion order; ints and floats stay distinct, as in the reference.
+type Fields = Map<String, Value>;
 
 /// `round(x, n)`, half-to-even as Python's (`round(0.125, 2)` is `0.12`).
 fn round_to(x: f64, digits: u32) -> f64 {
@@ -50,36 +26,35 @@ fn round_to(x: f64, digits: u32) -> f64 {
 }
 
 /// `utils.py:22`. Presence outside, `or "unknown"` inside; absent metadata adds neither key.
-fn metadata_fields(m: &AgentMetrics) -> Vec<(&'static str, LogValue)> {
-    match m.metadata() {
-        None => Vec::new(),
-        Some(md) => {
-            let or_unknown = |s: &Option<String>| {
-                LogValue::Str(match s {
-                    Some(v) if !v.is_empty() => v.clone(),
-                    _ => "unknown".to_owned(),
-                })
-            };
-            vec![
-                ("model_name", or_unknown(&md.model_name)),
-                ("model_provider", or_unknown(&md.model_provider)),
-            ]
-        }
+fn metadata_fields(m: &AgentMetrics) -> Fields {
+    let mut fields = Fields::new();
+    if let Some(md) = m.metadata() {
+        let or_unknown = |s: &Option<String>| match s {
+            Some(v) if !v.is_empty() => Value::from(v.clone()),
+            _ => Value::from("unknown"),
+        };
+        fields.insert("model_name".into(), or_unknown(&md.model_name));
+        fields.insert("model_provider".into(), or_unknown(&md.model_provider));
     }
+    fields
+}
+
+fn put(fields: &mut Fields, key: &str, value: impl Into<Value>) {
+    fields.insert(key.into(), value.into());
 }
 
 /// A measurement, rounded to two digits; an unavailable one is not logged.
-fn seconds(key: &'static str, value: Option<f64>) -> Option<(&'static str, LogValue)> {
-    value.map(|v| (key, LogValue::Float(round_to(v, 2))))
+fn seconds(fields: &mut Fields, key: &str, value: Option<f64>) {
+    if let Some(v) = value {
+        put(fields, key, round_to(v, 2));
+    }
 }
 
 /// usage.md's token names; a breakdown the provider did not report is not logged.
-fn token_fields(t: &TokenUsage) -> Vec<(&'static str, LogValue)> {
-    let mut fields = vec![
-        ("input_tokens", LogValue::Int(t.input_tokens)),
-        ("output_tokens", LogValue::Int(t.output_tokens)),
-        ("total_tokens", LogValue::Int(t.total_tokens())),
-    ];
+fn token_fields(fields: &mut Fields, t: &TokenUsage) {
+    put(fields, "input_tokens", t.input_tokens);
+    put(fields, "output_tokens", t.output_tokens);
+    put(fields, "total_tokens", t.total_tokens());
     let breakdowns = [
         ("cache_read_tokens", t.cache_read_tokens),
         ("cache_write_tokens", t.cache_write_tokens),
@@ -94,52 +69,55 @@ fn token_fields(t: &TokenUsage) -> Vec<(&'static str, LogValue)> {
         ("cache_read_audio_tokens", t.cache_read_audio_tokens),
         ("cache_read_image_tokens", t.cache_read_image_tokens),
     ];
-    fields.extend(breakdowns.into_iter().filter_map(|(k, v)| Some((k, LogValue::Int(v?)))));
-    fields
+    for (key, value) in breakdowns {
+        if let Some(v) = value {
+            put(fields, key, v);
+        }
+    }
 }
 
 /// `None` for `VADMetrics` and `EOTInferenceMetrics`, which the reference silently ignores.
-fn log_fields(metrics: &AgentMetrics) -> Option<MetricsLog> {
-    let mut fields = metadata_fields(metrics);
+fn log_fields(metrics: &AgentMetrics) -> Option<(&'static str, Fields)> {
+    let mut f = metadata_fields(metrics);
     let message = match metrics {
         AgentMetrics::Llm(m) => {
-            fields.extend(seconds("ttft", m.ttft));
-            fields.extend(token_fields(&m.tokens));
-            fields.push(("tokens_per_second", LogValue::Float(round_to(m.tokens_per_second, 2))));
+            seconds(&mut f, "ttft", m.ttft);
+            token_fields(&mut f, &m.tokens);
+            put(&mut f, "tokens_per_second", round_to(m.tokens_per_second, 2));
             "LLM metrics"
         }
         AgentMetrics::RealtimeModel(m) => {
-            fields.extend(seconds("ttft", m.ttft));
-            fields.extend(token_fields(&m.tokens));
-            fields.push(("tokens_per_second", LogValue::Float(round_to(m.tokens_per_second, 2))));
+            seconds(&mut f, "ttft", m.ttft);
+            token_fields(&mut f, &m.tokens);
+            put(&mut f, "tokens_per_second", round_to(m.tokens_per_second, 2));
             "RealtimeModel metrics"
         }
         AgentMetrics::Tts(m) => {
             // `ttfb` is the one duration in the whole function that is *not* rounded.
-            fields.extend(m.ttfb.map(|ttfb| ("ttfb", LogValue::Float(ttfb))));
-            fields.push(("audio_duration", LogValue::Float(round_to(m.audio_duration, 2))));
+            if let Some(ttfb) = m.ttfb {
+                put(&mut f, "ttfb", ttfb);
+            }
+            put(&mut f, "audio_duration", round_to(m.audio_duration, 2));
             "TTS metrics"
         }
         AgentMetrics::Eou(m) => {
-            fields.extend(seconds("end_of_utterance_delay", m.end_of_utterance_delay));
-            fields.extend(seconds("transcription_delay", m.transcription_delay));
+            seconds(&mut f, "end_of_utterance_delay", m.end_of_utterance_delay);
+            seconds(&mut f, "transcription_delay", m.transcription_delay);
             // `on_user_turn_completed_delay` is on the record but not in the log line.
             "EOU metrics"
         }
         AgentMetrics::Stt(m) => {
-            fields.extend(seconds("audio_duration", m.audio_duration));
-            fields.extend(token_fields(&m.tokens));
+            seconds(&mut f, "audio_duration", m.audio_duration);
+            token_fields(&mut f, &m.tokens);
             "STT metrics"
         }
         AgentMetrics::Interruption(m) => {
-            fields.extend([
-                ("total_duration", LogValue::Float(round_to(m.total_duration, 2))),
-                ("prediction_duration", LogValue::Float(round_to(m.prediction_duration, 2))),
-                ("detection_delay", LogValue::Float(round_to(m.detection_delay, 2))),
-                ("num_interruptions", LogValue::Int(u64::from(m.num_interruptions))),
-                ("num_backchannels", LogValue::Int(u64::from(m.num_backchannels))),
-                ("num_requests", LogValue::Int(u64::from(m.num_requests))),
-            ]);
+            put(&mut f, "total_duration", round_to(m.total_duration, 2));
+            put(&mut f, "prediction_duration", round_to(m.prediction_duration, 2));
+            put(&mut f, "detection_delay", round_to(m.detection_delay, 2));
+            put(&mut f, "num_interruptions", m.num_interruptions);
+            put(&mut f, "num_backchannels", m.num_backchannels);
+            put(&mut f, "num_requests", m.num_requests);
             "Interruption metrics"
         }
         AgentMetrics::Avatar(m) => {
@@ -148,18 +126,17 @@ fn log_fields(metrics: &AgentMetrics) -> Option<MetricsLog> {
             if let (Some(started), Some(joined)) =
                 (truthy(m.session_started_time), truthy(m.avatar_joined_time))
             {
-                fields
-                    .push(("avatar_join_latency", LogValue::Float(round_to(joined - started, 3))));
+                put(&mut f, "avatar_join_latency", round_to(joined - started, 3));
             }
             if m.playback_latency != 0.0 {
-                fields.push(("playback_latency", LogValue::Float(round_to(m.playback_latency, 3))));
+                put(&mut f, "playback_latency", round_to(m.playback_latency, 3));
             }
             "Avatar metrics"
         }
         // No branch in the reference's chain: nothing is logged for either.
         AgentMetrics::Vad(_) | AgentMetrics::EotInference(_) => return None,
     };
-    Some(MetricsLog { message, fields })
+    Some((message, f))
 }
 
 #[cfg(test)]
@@ -167,13 +144,14 @@ mod tests {
     use super::*;
     use lk_agents_abi::metrics::base::Metadata;
     use lk_agents_abi::metrics::testkit as tk;
+    use serde_json::json;
 
-    fn keys(l: &MetricsLog) -> Vec<&'static str> {
-        l.fields.iter().map(|(k, _)| *k).collect()
+    fn keys(l: &(&str, Fields)) -> Vec<String> {
+        l.1.keys().cloned().collect()
     }
 
-    fn get(l: &MetricsLog, k: &str) -> Option<LogValue> {
-        l.fields.iter().find(|(n, _)| *n == k).map(|(_, v)| v.clone())
+    fn get(l: &(&str, Fields), k: &str) -> Option<Value> {
+        l.1.get(k).cloned()
     }
 
     // Catches: logging VAD or EOT inference metrics (they would flood the log).
@@ -193,13 +171,13 @@ mod tests {
 
         m.metadata = Some(Metadata { model_name: Some(String::new()), model_provider: None });
         let empty = log_fields(&AgentMetrics::Stt(m.clone())).unwrap();
-        assert_eq!(get(&empty, "model_name"), Some(LogValue::Str("unknown".into())));
-        assert_eq!(get(&empty, "model_provider"), Some(LogValue::Str("unknown".into())));
+        assert_eq!(get(&empty, "model_name"), Some(Value::from("unknown")));
+        assert_eq!(get(&empty, "model_provider"), Some(Value::from("unknown")));
 
         m.metadata = tk::meta("deepgram", "nova-3");
         let named = log_fields(&AgentMetrics::Stt(m)).unwrap();
-        assert_eq!(get(&named, "model_name"), Some(LogValue::Str("nova-3".into())));
-        assert_eq!(get(&named, "model_provider"), Some(LogValue::Str("deepgram".into())));
+        assert_eq!(get(&named, "model_name"), Some(Value::from("nova-3")));
+        assert_eq!(get(&named, "model_provider"), Some(Value::from("deepgram")));
     }
 
     // Catches: an unreported breakdown logged as a zero, or a reported zero dropped.
@@ -213,8 +191,8 @@ mod tests {
             ..Default::default()
         };
         let l = log_fields(&AgentMetrics::RealtimeModel(m)).unwrap();
-        assert_eq!(get(&l, "cache_read_tokens"), Some(LogValue::Int(0)));
-        assert_eq!(get(&l, "input_text_tokens"), Some(LogValue::Int(4)));
+        assert_eq!(get(&l, "cache_read_tokens"), Some(json!(0)));
+        assert_eq!(get(&l, "input_text_tokens"), Some(json!(4)));
         assert_eq!(get(&l, "input_audio_tokens"), None);
         assert_eq!(get(&l, "ttft"), None, "no audio token was sent");
     }
@@ -226,8 +204,8 @@ mod tests {
         m.ttfb = Some(0.18437);
         m.audio_duration = 1.23456;
         let l = log_fields(&AgentMetrics::Tts(m)).unwrap();
-        assert_eq!(get(&l, "ttfb"), Some(LogValue::Float(0.18437)));
-        assert_eq!(get(&l, "audio_duration"), Some(LogValue::Float(1.23)));
+        assert_eq!(get(&l, "ttfb"), Some(json!(0.18437)));
+        assert_eq!(get(&l, "audio_duration"), Some(json!(1.23)));
     }
 
     // Catches: `(x * 100.0).round()`, which rounds the 0.125 tie away from zero.
@@ -237,14 +215,14 @@ mod tests {
         m.audio_duration = Some(0.125);
         assert_eq!(
             get(&log_fields(&AgentMetrics::Stt(m)).unwrap(), "audio_duration"),
-            Some(LogValue::Float(0.12))
+            Some(json!(0.12))
         );
         // A non-tie, so "always round down" fails.
         let mut m = tk::stt();
         m.audio_duration = Some(0.135);
         assert_eq!(
             get(&log_fields(&AgentMetrics::Stt(m)).unwrap(), "audio_duration"),
-            Some(LogValue::Float(0.14))
+            Some(json!(0.14))
         );
     }
 
@@ -256,7 +234,7 @@ mod tests {
         m.session_started_time = Some(0.0);
         m.avatar_joined_time = Some(4.0);
         let l = log_fields(&AgentMetrics::Avatar(m)).unwrap();
-        assert!(l.fields.is_empty(), "got {:?}", l.fields);
+        assert!(l.1.is_empty(), "got {:?}", l.1);
     }
 
     // Catches: two-digit avatar fields, or the join latency computed backwards.
@@ -267,8 +245,8 @@ mod tests {
         m.avatar_joined_time = Some(12.3456);
         m.playback_latency = 0.98765;
         let l = log_fields(&AgentMetrics::Avatar(m)).unwrap();
-        assert_eq!(get(&l, "avatar_join_latency"), Some(LogValue::Float(2.346)));
-        assert_eq!(get(&l, "playback_latency"), Some(LogValue::Float(0.988)));
+        assert_eq!(get(&l, "avatar_join_latency"), Some(json!(2.346)));
+        assert_eq!(get(&l, "playback_latency"), Some(json!(0.988)));
     }
 
     // Catches: `on_user_turn_completed_delay` in the EOU line.
@@ -277,7 +255,7 @@ mod tests {
         let mut eou = tk::eou();
         eou.on_user_turn_completed_delay = Some(9.0);
         let l = log_fields(&AgentMetrics::Eou(eou)).unwrap();
-        assert_eq!(l.message, "EOU metrics");
+        assert_eq!(l.0, "EOU metrics");
         assert_eq!(keys(&l), ["end_of_utterance_delay", "transcription_delay"]);
     }
 }
