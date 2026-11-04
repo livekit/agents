@@ -6,6 +6,7 @@ import contextvars
 import heapq
 import json
 import time
+from collections import deque
 from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
@@ -478,9 +479,9 @@ class AgentActivity(RecognitionHooks):
         # speeches that audio playout finished but not done because of tool calls
         self._background_speeches: set[SpeechHandle] = set()
 
-        # Busy state outlives the bounded RunResult placeholder below and also
-        # applies when a realtime turn has no active RunResult.
-        self._awaiting_auto_tool_reply = False
+        # Track each tool turn until a server generation arrives. Busy state
+        # outlives the bounded RunResult placeholder and applies without a run.
+        self._pending_auto_tool_replies: deque[SpeechHandle] = deque()
 
         # placeholder used to hold a RunResult open while waiting for a realtime
         # model to auto-generate a tool reply (auto_tool_reply_generation=True).
@@ -1607,7 +1608,7 @@ class AgentActivity(RecognitionHooks):
 
     async def _close_session(self) -> None:
         assert self._lock.locked(), "_close_session should only be used when locked."
-        self._clear_pending_auto_tool_reply()
+        self._clear_pending_auto_tool_replies()
 
         if isinstance(self.llm, llm.LLM):
             self.llm.off("metrics_collected", self._on_metrics_collected)
@@ -1970,7 +1971,7 @@ class AgentActivity(RecognitionHooks):
 
         if self._rt_session is not None:
             self._rt_session.interrupt()
-            self._clear_pending_auto_tool_reply()
+            self._clear_pending_auto_tool_replies()
 
         # _speech_q is a heap, so its list order is not the order it pops in
         for _, _, speech in sorted(self._speech_q, key=lambda item: (item[0], item[1])):
@@ -2370,12 +2371,16 @@ class AgentActivity(RecognitionHooks):
             name="AgentActivity.realtime_generation",
         )
 
-        self._awaiting_auto_tool_reply = False
+        if self._pending_auto_tool_replies:
+            # A generation takes over one pending turn; other turns can still
+            # owe server replies after this speech plays out.
+            self._pending_auto_tool_replies.popleft()
         if (fut := self._pending_auto_tool_reply_fut) and not fut.done():
             if (run_state := self._session._global_run_state) is not None and not run_state.done():
                 run_state._watch_handle(handle)
-            self._pending_auto_tool_reply_fut = None
-            fut.set_result(None)
+            if not self._pending_auto_tool_replies:
+                self._pending_auto_tool_reply_fut = None
+                fut.set_result(None)
 
         self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
 
@@ -3212,7 +3217,7 @@ class AgentActivity(RecognitionHooks):
         from ..llm.async_toolset import AsyncToolset
 
         if (
-            self._awaiting_auto_tool_reply
+            self._pending_auto_tool_replies
             or self._background_speeches
             or self._tool_executor.has_pending_replies
         ):
@@ -3265,9 +3270,9 @@ class AgentActivity(RecognitionHooks):
         ):
             self._session._update_agent_state("listening")
 
-    def _clear_pending_auto_tool_reply(self) -> None:
-        """Drop a server reply on interruption or session close and release its run wait."""
-        self._awaiting_auto_tool_reply = False
+    def _clear_pending_auto_tool_replies(self) -> None:
+        """Drop outstanding server replies and release their shared bounded run wait."""
+        self._pending_auto_tool_replies.clear()
         if (fut := self._pending_auto_tool_reply_fut) is not None:
             self._pending_auto_tool_reply_fut = None
             if not fut.done():
@@ -4922,6 +4927,7 @@ class AgentActivity(RecognitionHooks):
         # important: no agent output should be used after this point
 
         tool_reply_expected = False
+        server_reply_failed = False
         if len(tool_output.output) > 0:
             max_steps_reached = speech_handle.num_steps >= self._session.options.max_tool_steps + 1
             speech_handle._num_steps += 1
@@ -4986,7 +4992,7 @@ class AgentActivity(RecognitionHooks):
                     self._rt_session.capabilities.auto_tool_reply_generation
                     and fnc_executed_ev.has_tool_reply
                 ):
-                    self._awaiting_auto_tool_reply = True
+                    self._pending_auto_tool_replies.append(speech_handle)
                 if (
                     self._rt_session.capabilities.auto_tool_reply_generation
                     and fnc_executed_ev.has_tool_reply
@@ -5023,13 +5029,15 @@ class AgentActivity(RecognitionHooks):
                         "failed to update chat context before generating the function calls results",  # noqa: E501
                         extra={"error": str(e)},
                     )
-                    self._awaiting_auto_tool_reply = False
-                    if auto_reply_fut is not None and not auto_reply_fut.done():
-                        if self._pending_auto_tool_reply_fut is auto_reply_fut:
-                            self._pending_auto_tool_reply_fut = None
-                        auto_reply_fut.set_result(None)
+                    server_reply_failed = self._rt_session.capabilities.auto_tool_reply_generation
+                    # Drop only this turn's reply: another tool turn may still
+                    # await its own server generation (and share the run wait).
+                    if speech_handle in self._pending_auto_tool_replies:
+                        self._pending_auto_tool_replies.remove(speech_handle)
+                    if not self._pending_auto_tool_replies:
+                        self._clear_pending_auto_tool_replies()
 
-            tool_reply_expected = fnc_executed_ev.has_tool_reply
+            tool_reply_expected = fnc_executed_ev.has_tool_reply and not server_reply_failed
             if tool_reply_expected and not self._rt_session.capabilities.auto_tool_reply_generation:
                 self._rt_session.interrupt()
 

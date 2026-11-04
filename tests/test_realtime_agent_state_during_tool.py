@@ -18,7 +18,13 @@ import pytest
 
 from livekit import rtc
 from livekit.agents import Agent, AgentSession, function_tool, utils
-from livekit.agents.llm import FunctionCall, GenerationCreatedEvent, MessageGeneration
+from livekit.agents.llm import (
+    ChatContext,
+    FunctionCall,
+    GenerationCreatedEvent,
+    MessageGeneration,
+    RealtimeError,
+)
 from livekit.agents.voice.speech_handle import SpeechHandle
 
 from .fake_io import FakeAudioOutput
@@ -382,7 +388,7 @@ async def test_on_enter_completion_preserves_pending_server_reply(
 
             if outcome == "close":
                 await session.aclose()
-                assert not activity._awaiting_auto_tool_reply
+                assert not activity._pending_auto_tool_replies
                 assert activity._pending_auto_tool_reply_fut is None
                 if run is not None:
                     await asyncio.wait_for(run, timeout=5)
@@ -403,3 +409,182 @@ async def test_on_enter_completion_preserves_pending_server_reply(
             assert "away" in user_states
         finally:
             release_enter.set()
+
+
+@pytest.mark.parametrize("with_run", [False, True])
+@pytest.mark.parametrize("last_outcome", ["reply", "interrupt", "close", "sync_error"])
+async def test_staggered_server_tool_replies_preserve_busy_state(
+    with_run: bool, last_outcome: str
+) -> None:
+    """Delivering one tool turn's answer must not release another turn's pending answer."""
+    model = FakeRealtimeModel(capabilities=fake_capabilities())
+
+    class ToolAgent(Agent):
+        @function_tool
+        async def lookup(self) -> str:
+            """Look up an order."""
+            return "order shipped"
+
+    async with AgentSession(llm=model, user_away_timeout=0.1) as session:
+        session.output.audio = FakeAudioOutput()
+        speeches: list[SpeechHandle] = []
+        session.on("speech_created", lambda ev: speeches.append(ev.speech_handle))
+        await session.start(ToolAgent(instructions="Answer briefly."))
+        run = session.run(user_input="first") if with_run else None
+        if run is None:
+            session.generate_reply()
+        try:
+            # Both tool turns finish before either server-generated answer arrives.
+            for index in range(2):
+                if index:
+                    session.generate_reply()
+                    if last_outcome == "sync_error":
+                        model.active_session.update_error = RealtimeError("tool result sync failed")
+                for _ in range(500):
+                    if len(model.active_session._reply_futs) > index:
+                        break
+                    await asyncio.sleep(0)
+                model.active_session._reply_futs[index].set_result(
+                    _generation(
+                        response_id=f"lookup-{index}",
+                        text="checking",
+                        audio_duration=0.1,
+                        function_calls=[
+                            FunctionCall(call_id=str(index), name="lookup", arguments="{}")
+                        ],
+                    )
+                )
+                await asyncio.wait_for(speeches[index].wait_for_playout(), timeout=5)
+
+            model.active_session.update_error = None
+            states: list[str] = []
+            user_states: list[str] = []
+            session.on("agent_state_changed", lambda ev: states.append(ev.new_state))
+            session.on("user_state_changed", lambda ev: user_states.append(ev.new_state))
+            if last_outcome == "sync_error":
+                # Dropping the second turn's failed update must not drop the first
+                # turn's pending reply or release its shared RunResult wait.
+                filler = session.say("still checking")
+                for _ in range(500):
+                    if model.active_session.say_futs:
+                        break
+                    await asyncio.sleep(0)
+                model.active_session.say_futs[0].set_result(
+                    _generation(response_id="filler", text="still checking", audio_duration=0.1)
+                )
+                await asyncio.wait_for(filler.wait_for_playout(), timeout=5)
+                assert session.agent_state == "thinking"
+                assert "listening" not in states
+                if run is not None:
+                    assert not run.done()
+
+            answer = _generation(response_id="first-answer", text="first order", audio_duration=0.1)
+            answer.user_initiated = False
+            model.active_session.emit("generation_created", answer)
+            await asyncio.wait_for(speeches[-1].wait_for_playout(), timeout=5)
+            await asyncio.sleep(0.2)
+            if last_outcome == "sync_error":
+                assert session.agent_state == "listening"
+                assert "away" in user_states
+                if run is not None:
+                    await asyncio.wait_for(run, timeout=5)
+                return
+            assert session.agent_state == "thinking"
+            assert "listening" not in states
+            assert "away" not in user_states
+            if run is not None:
+                assert not run.done()
+
+            if last_outcome == "close":
+                await session.aclose()
+            elif last_outcome == "interrupt":
+                await session.interrupt()
+            else:
+                answer = _generation(
+                    response_id="second-answer", text="second order", audio_duration=0.1
+                )
+                answer.user_initiated = False
+                model.active_session.emit("generation_created", answer)
+                await asyncio.wait_for(speeches[-1].wait_for_playout(), timeout=5)
+            if run is not None:
+                await asyncio.wait_for(run, timeout=5)
+            assert session._activity is None or not session._activity._pending_auto_tool_replies
+            if last_outcome != "close":
+                await _wait_for_agent_state(session, "listening")
+                await asyncio.sleep(0.2)
+                assert "away" in user_states
+        finally:
+            if session._activity is not None:
+                await session.interrupt()
+
+
+async def test_late_tool_sync_failure_releases_last_pending_server_reply(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed second update can land after the first server reply has already played."""
+    model = FakeRealtimeModel(capabilities=fake_capabilities())
+    sync_started = asyncio.Event()
+    fail_sync = asyncio.Event()
+
+    class ToolAgent(Agent):
+        @function_tool
+        async def lookup(self) -> str:
+            """Look up an order."""
+            return "order shipped"
+
+    async with AgentSession(llm=model, user_away_timeout=0.1) as session:
+        session.output.audio = FakeAudioOutput()
+        speeches: list[SpeechHandle] = []
+        session.on("speech_created", lambda ev: speeches.append(ev.speech_handle))
+        await session.start(ToolAgent(instructions="Answer briefly."))
+        original_update = model.active_session.update_chat_ctx
+
+        async def _update(chat_ctx: ChatContext) -> None:
+            """Hold the second tool result until the first server answer has played."""
+            if any(
+                item.type == "function_call_output" and item.call_id == "1"
+                for item in chat_ctx.items
+            ):
+                sync_started.set()
+                await fail_sync.wait()
+                raise RealtimeError("tool result sync failed")
+            await original_update(chat_ctx)
+
+        monkeypatch.setattr(model.active_session, "update_chat_ctx", _update)
+        run = session.run(user_input="go")
+        try:
+            for index in range(2):
+                if index:
+                    session.generate_reply()
+                for _ in range(500):
+                    if len(model.active_session._reply_futs) > index:
+                        break
+                    await asyncio.sleep(0)
+                model.active_session._reply_futs[index].set_result(
+                    _generation(
+                        response_id=f"lookup-{index}",
+                        text="checking",
+                        audio_duration=0.1,
+                        function_calls=[
+                            FunctionCall(call_id=str(index), name="lookup", arguments="{}")
+                        ],
+                    )
+                )
+                if index == 0:
+                    await asyncio.wait_for(speeches[0].wait_for_playout(), timeout=5)
+                else:
+                    await asyncio.wait_for(sync_started.wait(), timeout=5)
+
+            answer = _generation(response_id="answer", text="first order", audio_duration=0.1)
+            answer.user_initiated = False
+            model.active_session.emit("generation_created", answer)
+            await asyncio.wait_for(speeches[-1].wait_for_playout(), timeout=5)
+            assert session.agent_state == "thinking"
+            assert not run.done()
+
+            fail_sync.set()
+            await asyncio.wait_for(run, timeout=5)
+            await _wait_for_agent_state(session, "listening")
+        finally:
+            fail_sync.set()
+            await session.interrupt()
