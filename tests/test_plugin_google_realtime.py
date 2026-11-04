@@ -418,6 +418,31 @@ async def test_combined_turn_complete_and_tool_call_finalizes_once(
         assert await _drain_generation(generations[0]) == ("", 0, ["lookup"])
 
 
+async def test_tool_call_is_recorded_after_the_turn_it_ends(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(monkeypatch) as session:
+        session._start_new_generation()
+        session._handle_live_server_message(
+            types.LiveServerMessage(
+                server_content=types.LiveServerContent(
+                    input_transcription=types.Transcription(text="What's the weather?"),
+                    output_transcription=types.Transcription(text="Let me check."),
+                )
+            )
+        )
+        session._handle_live_server_message(
+            types.LiveServerMessage(tool_call=_tool_call(call_id="fc-order"))
+        )
+
+        kinds = [
+            (item.type, getattr(item, "role", None))
+            for item in session.chat_ctx.items
+            if item.type in ("message", "function_call")
+        ]
+        assert kinds == [("message", "user"), ("message", "assistant"), ("function_call", None)]
+
+
 async def test_lone_tool_call_finalizes_generation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -660,7 +685,7 @@ async def test_tool_response_scheduling_follows_the_output(
     """
     async with _make_connected_session(monkeypatch, non_blocking_tools=True) as session:
         session._start_new_generation()
-        session._handle_tool_calls(_tool_call())
+        session._handle_live_server_message(types.LiveServerMessage(tool_call=_tool_call()))
         await _drain_sent(session)
 
         chat_ctx = session.chat_ctx.copy()
@@ -685,12 +710,14 @@ async def test_blocking_tools_send_the_response_and_warn_it_cannot_be_silent(
     """
     async with _make_connected_session(monkeypatch) as session:
         session._start_new_generation()
-        session._handle_tool_calls(
-            types.LiveServerToolCall(
-                function_calls=[
-                    types.FunctionCall(id="fc_1", name="lookup", args={}),
-                    types.FunctionCall(id="fc_2", name="search", args={}),
-                ]
+        session._handle_live_server_message(
+            types.LiveServerMessage(
+                tool_call=types.LiveServerToolCall(
+                    function_calls=[
+                        types.FunctionCall(id="fc_1", name="lookup", args={}),
+                        types.FunctionCall(id="fc_2", name="search", args={}),
+                    ]
+                )
             )
         )
         await _drain_sent(session)
@@ -740,7 +767,7 @@ async def test_tool_response_carries_the_call_id(
         session._opts.vertexai = vertexai
         session._opts.tool_behavior = types.Behavior.BLOCKING
         session._start_new_generation()
-        session._handle_tool_calls(_tool_call())
+        session._handle_live_server_message(types.LiveServerMessage(tool_call=_tool_call()))
         await _drain_sent(session)
 
         chat_ctx = session.chat_ctx.copy()
@@ -767,7 +794,9 @@ async def test_tool_response_omits_a_locally_made_call_id(
         session._opts.vertexai = vertexai
         session._opts.tool_behavior = types.Behavior.BLOCKING
         session._start_new_generation()
-        session._handle_tool_calls(_tool_call(call_id=None))
+        session._handle_live_server_message(
+            types.LiveServerMessage(tool_call=_tool_call(call_id=None))
+        )
         await _drain_sent(session)
         assert len(session._synthetic_call_ids) == 1
         (call_id,) = session._synthetic_call_ids

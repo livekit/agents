@@ -1337,12 +1337,18 @@ class RealtimeSession(llm.RealtimeSession):
                     [item for item in self._chat_ctx.items if item.id not in self._unsent_item_ids]
                 )
 
+        calls: list[tuple[str, str, str]] = []
         if response.server_content:
             self._handle_server_content(response.server_content)
         if response.tool_call:
-            self._handle_tool_calls(response.tool_call)
+            calls = self._handle_tool_calls(response.tool_call)
         if ((sc := response.server_content) and sc.turn_complete) or response.tool_call:
             self._mark_current_generation_done()
+
+        # mirror the server history, after the turn's messages added above, so the
+        # tool results the framework appends to `chat_ctx` keep their calls
+        for call_id, name, arguments in calls:
+            self._chat_ctx.insert(llm.FunctionCall(call_id=call_id, name=name, arguments=arguments))
         if response.tool_call_cancellation:
             self._handle_tool_call_cancellation(response.tool_call_cancellation)
         if response.usage_metadata:
@@ -1674,10 +1680,10 @@ class RealtimeSession(llm.RealtimeSession):
         ]
         self._send_client_event(types.LiveClientToolResponse(function_responses=responses))
 
-    def _handle_tool_calls(self, tool_call: types.LiveServerToolCall) -> None:
+    def _handle_tool_calls(self, tool_call: types.LiveServerToolCall) -> list[tuple[str, str, str]]:
         if not self._current_generation:
             logger.warning("received tool call but no active generation.")
-            return
+            return []
 
         gen = self._current_generation
         calls: list[tuple[str, str, str]] = []
@@ -1698,10 +1704,7 @@ class RealtimeSession(llm.RealtimeSession):
                 )
             )
 
-        # mirror the server history, after the turn's messages added above, so the
-        # tool results the framework appends to `chat_ctx` keep their calls
-        for call_id, name, arguments in calls:
-            self._chat_ctx.insert(llm.FunctionCall(call_id=call_id, name=name, arguments=arguments))
+        return calls
 
     def _handle_tool_call_cancellation(
         self, tool_call_cancellation: types.LiveServerToolCallCancellation
