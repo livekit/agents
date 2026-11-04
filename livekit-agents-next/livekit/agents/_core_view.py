@@ -21,6 +21,7 @@ from livekit import rtc
 from . import _core, llm
 from ._generated import duplex, realtime_wire, rtc_wire
 from ._generated.llm_fallback import AvailabilityChanged
+from ._generated.tool_options import ProviderToolDeclaration, ToolSpec
 from ._generated.turn_events import EotPrediction
 from ._generated.types import ProviderId
 from .llm.chat_context import ChatItem
@@ -404,13 +405,14 @@ def _views() -> dict[type, Any]:
 # --- tools ------------------------------------------------------------------------------------
 
 
-def tool_specs(tools: Sequence[Tool | Toolset]) -> list[dict[str, Any]]:
+def tool_specs(tools: Sequence[Tool | Toolset]) -> list[ToolSpec]:
     """Project function schemas and provider declarations through the core's tool boundary."""
     from .llm.utils import tool_schema
 
-    specs = []
+    specs: list[ToolSpec] = []
     for tool in llm.ToolContext(tools).flatten():
         ignore_on_enter = False
+        provider_tool: ProviderToolDeclaration | None
         if isinstance(tool, ProviderTool):
             name, description, parameters = tool.id, "", None
             provider_tool = {"provider": tool.provider, "payload": tool.to_dict()}
@@ -420,15 +422,15 @@ def tool_specs(tools: Sequence[Tool | Toolset]) -> list[dict[str, Any]]:
             provider_tool = None
         else:
             continue
-        specs.append(
-            {
-                "name": name,
-                "description": description,
-                "json_schema": parameters,
-                "ignore_on_enter": ignore_on_enter,
-                "provider_tool": provider_tool,
-            }
-        )
+        spec: ToolSpec = {
+            "name": name,
+            "description": description,
+            "json_schema": parameters,
+            "ignore_on_enter": ignore_on_enter,
+        }
+        if provider_tool is not None:
+            spec["provider_tool"] = provider_tool
+        specs.append(spec)
     return specs
 
 
