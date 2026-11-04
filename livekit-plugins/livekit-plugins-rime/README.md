@@ -281,17 +281,11 @@ session = AgentSession(llm=model)
 The plugin package requires `livekit-agents>=1.7.1`. Prism requires Python 3.11
 or later and the `realtime` extra. Earlier installation checks covered LiveKit
 1.7.1 and 1.8.0 through 1.8.10 with `rimelabs-sdk==0.1.0a28`.
-Release version bumps preserve Rime's declared core minimum. Revalidate supported
-core versions before changing that minimum.
+These checks apply to the PR build. Future package releases can raise the minimum
+LiveKit version; check their declared requirements before upgrading.
 
-Keep the application's LiveKit version pinned when adding the plugin. For example,
-after this change is released:
-
-```sh
-uv add 'livekit-agents==1.7.1' 'livekit-plugins-rime[realtime]'
-```
-
-Until release, install the plugin from the PR commit into a Python 3.11+ virtual
+Keep the application's LiveKit version pinned when adding the plugin.
+Install the plugin from the PR commit into a Python 3.11+ virtual
 environment. Replace `<commit>` with its full commit ID:
 
 ```sh
