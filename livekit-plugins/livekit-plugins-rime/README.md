@@ -413,9 +413,11 @@ A successful return confirms that Prism acknowledged all updates in the call.
 
 Tool fillers are optional. Pass
 `tool_fillers={"lookup": PrismFiller(type="text", text="Checking your order.")}`,
-with `PrismFiller` imported from `rimelabs_sdk.realtime`. The keys must name
-registered tools. Use `type="none"` to suppress filler or `type="auto"` for generated
-filler. Change them with `model.update_options(tool_fillers=...)`.
+with `PrismFiller` imported from `rimelabs_sdk.realtime`. Each key names a tool.
+The plugin sends fillers only for active tools and keeps the configured map
+across handoffs. Use `type="none"` to suppress filler or `type="auto"` for generated
+filler. Replace the map with `model.update_options(tool_fillers=...)`, or pass
+`tool_fillers={}` to clear it.
 
 ### History and recovery
 
@@ -439,20 +441,10 @@ For headless tests, discard audio output:
 model = rime.realtime.RealtimeModel(playback="discard")
 ```
 
-Shared mode also preserves omitted messages that were never played. Use an
-explicit edit to remove those messages. Task views and provider history need not
-be equal. Exact edits, including punctuation changes, use these helpers:
-
-```python
-await model.replace_chat_ctx(session.current_agent, target_context)
-await model.clear_chat_ctx(session.current_agent)
-await model.reconcile_chat_ctx(session.current_agent)
-```
-
-**Migration:** shared mode is now the default. Applications that depend on
-`agent.update_chat_ctx()` replacing or clearing provider history must set
-`context_mode="strict"` explicitly, or use the helpers above. Reducing an agent's
-local context in shared mode does not remove that history from Prism's context.
+Shared mode also preserves omitted messages that were never played. To replace
+or clear provider history through `agent.update_chat_ctx()`, set
+`context_mode="strict"`. Reducing local context in shared mode does not remove
+that history from Prism.
 
 Explicit `context_mode="strict"` retains replacement semantics. Append, prepend,
 middle insertion, deletion, replacement, and reorder are supported. Edits that
@@ -461,18 +453,12 @@ call and its result together. Every write has a separate acknowledgment;
 replacement is not atomic. Use shared mode for tasks inside tools, where LiveKit
 can omit the parent's pending call from the task's context.
 
-Helpers require an active agent that uses this model directly. Pause competing
-local context edits and handoffs during each call. Helpers preserve local
-configuration records and use `exclude_invalid_function_calls=False` so a task's
-smaller tool list cannot strip the parent call. Pending calls cannot be cleared.
-These helpers do not support a model inside a fallback adapter.
-
 `PrismHistoryUpdateError` is an `Exception` with the following fields. Catch this
 concrete type for history update errors. The base class does not inherit from
 `llm.RealtimeError`. A partial ordinary update that only appends live tool results
 uses a subclass of both types if an accepted result has `reply_required=True`.
 LiveKit can then request a reply from that accepted result. The update still
-raises a structured error and emits the history notice. All other failed updates
+raises a structured error and logs a warning. All other failed updates
 stop their dependent work, including the reply to rejected typed input.
 
 | Field | Meaning |
@@ -483,8 +469,7 @@ stop their dependent work, including the reply to rejected typed input.
 | `needs_reconciliation` | Local context may differ; optional reconciliation can repair it |
 
 Error codes are `history_update_rejected`, `history_update_partial`, and
-`history_update_uncertain`. Messages and notice representations exclude transcript
-content. The plugin records each accepted write before the next write. A known
+`history_update_uncertain`. Error messages exclude transcript content. The plugin records each accepted write before the next write. A known
 partial edit keeps the connection open. An acknowledgment timeout or unknown
 write outcome retains the SDK's terminal failure behavior. No mutation is retried.
 If new history items arrive during a write, the plugin makes at most one history
@@ -496,39 +481,9 @@ failure, explicit provider rejection, or known partial update. Each later update
 starts from confirmed provider history. Strict mode still applies an exact target;
 shared mode still preserves omitted items and rejects conflicting edits.
 
-Local and provider history can differ after a failed update. Reconciliation is
-optional. It restores the confirmed projection locally without provider writes.
-The explicit replacement helper attempts this repair after a known failure, then
-raises the original error. Its `needs_reconciliation` flag becomes false if repair
-succeeds. The synchronous notice describes state before that repair. An event
-that races with repair can prevent it.
-
-For ordinary updates, a synchronous callback can record the failed update and its
-confirmed projection. Applications can choose to repair local context:
-
-```python
-import asyncio
-from livekit.plugins.rime.realtime import PrismHistoryUpdateError
-
-notices = asyncio.Queue()
-model = rime.realtime.RealtimeModel(
-    context_mode="shared", on_history_update=notices.put_nowait,
-)
-session = AgentSession(llm=model)
-
-async def repair_next_update():
-    notice = await notices.get()
-    if notice.recoverable and notice.needs_reconciliation:
-        # Application must first pause competing edits and handoffs.
-        await model.reconcile_chat_ctx(session.current_agent)
-
-try:
-    await model.replace_chat_ctx(session.current_agent, target_context)
-except PrismHistoryUpdateError as error:
-    if error.recoverable and error.needs_reconciliation:
-        await model.reconcile_chat_ctx(session.current_agent)
-    raise
-```
+Local and provider history can differ after a failed update. The error includes
+the confirmed context when the outcome is known. Later updates start from
+confirmed provider history.
 
 A refused typed input does not start
 its own reply. A later `session.generate_reply()` can start an independent reply
@@ -538,8 +493,7 @@ continue automatically from an accepted result that requires a reply. Fully
 rejected batches, mixed text/tool edits, explicit replacements or clears, and
 uncertain writes still stop dependent replies. The application can submit missing
 results or request a later independent continuation for an accepted result.
-Reconciliation does not start replies. Provider-initiated speech remains under
-Prism's control. The helpers do not rewrite the session's past event log.
+Provider-initiated speech remains under Prism's control.
 
 The realtime extra requires SDK alpha29 or later. The plugin uses `hold_response`
 for long tasks and delayed playback beyond 128 responses.
@@ -585,8 +539,7 @@ before the provider acknowledges it, so rejected or cancelled edits can leave
 agent and provider history different. Fallback startup can also return before a
 backup is ready, and a failed restart can emit more than one reconnect event.
 Use a known valid history when starting a replacement session after these errors;
-use the direct-model helpers for known history failures. Fallback swaps retain
-their existing dropped-update and startup behavior.
+fallback swaps retain their existing dropped-update and startup behavior.
 
 ### Response metrics
 

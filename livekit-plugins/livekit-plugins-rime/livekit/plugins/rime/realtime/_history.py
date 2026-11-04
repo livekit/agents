@@ -55,17 +55,6 @@ class _PartialToolResultError(PrismHistoryUpdateError, llm.RealtimeError):
     code: str
 
 
-@dataclass(frozen=True)
-class HistoryUpdateNotice:
-    """A failed update snapshot; reconciliation repairs local state, not admission."""
-
-    session_id: str
-    status: Literal["rejected", "partial", "uncertain"]
-    recoverable: bool
-    confirmed_chat_ctx: llm.ChatContext | None = field(repr=False)
-    needs_reconciliation: bool = True
-
-
 @dataclass
 class HistorySyncResult:
     submitted: list[tuple[r.ToolCallRef, llm.FunctionCallOutput]] = field(default_factory=list)

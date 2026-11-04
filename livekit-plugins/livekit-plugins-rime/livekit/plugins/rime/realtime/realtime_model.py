@@ -12,7 +12,7 @@ import asyncio
 import math
 import time
 from collections import OrderedDict
-from collections.abc import Callable, Coroutine, Mapping
+from collections.abc import Coroutine, Mapping
 from contextlib import AbstractAsyncContextManager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -42,7 +42,7 @@ from livekit.agents.utils import is_given
 from livekit.agents.voice.io import AudioOutput
 
 from ..log import logger
-from ._history import HistoryUpdateError, HistoryUpdateNotice, PrismHistory, _PartialToolResultError
+from ._history import HistoryUpdateError, PrismHistory, _PartialToolResultError
 from ._playback import Playback, PrismAudioOutput, _Output
 
 _GENERATION_LIMIT = 128
@@ -104,7 +104,7 @@ class RealtimeModel(llm.RealtimeModel):
     Omit endpoint to use public Prism. An injected Rime client stays caller-owned.
     Otherwise Rime reads RIME_API_KEY. Settings updates wait for acknowledgment.
     Context updates preserve omitted history by default. Use context_mode="strict"
-    for replacement semantics, or use the explicit history-edit helpers.
+    for replacement semantics through Agent.update_chat_ctx().
     A closed session may be replaced with a fresh conversation, such as an
     explicit fallback restart. Concurrent sessions are unsupported.
     """
@@ -114,7 +114,6 @@ class RealtimeModel(llm.RealtimeModel):
         *,
         playback: Literal["auto", "estimated", "discard"] = "auto",
         context_mode: Literal["strict", "shared"] = "shared",
-        on_history_update: Callable[[HistoryUpdateNotice], None] | None = None,
         endpoint: str | None = None,
         client: Rime | None = None,
         voice: str | None = None,
@@ -150,11 +149,8 @@ class RealtimeModel(llm.RealtimeModel):
             raise ValueError("playback must be auto, estimated, or discard")
         if context_mode not in ("strict", "shared"):
             raise ValueError("context_mode must be strict or shared")
-        if on_history_update is not None and not callable(on_history_update):
-            raise ValueError("on_history_update must be callable")
         self._playback_mode = playback
         self._context_mode = context_mode
-        self._on_history_update = on_history_update
         self._conn_options = conn_options
         self._startup_timeout = startup_timeout
         self._endpoint = endpoint
@@ -175,14 +171,14 @@ class RealtimeModel(llm.RealtimeModel):
         self._wrapped_output = True
         return PrismAudioOutput(output)
 
-    async def replace_chat_ctx(self, agent: Agent, chat_ctx: llm.ChatContext) -> None:
+    async def _replace_chat_ctx(self, agent: Agent, chat_ctx: llm.ChatContext) -> None:
         """Apply an exact edit. Pause other local edits and handoffs during this call."""
         await self._edit_context(agent, chat_ctx, "replace")
 
-    async def clear_chat_ctx(self, agent: Agent) -> None:
-        await self.replace_chat_ctx(agent, llm.ChatContext.empty())
+    async def _clear_chat_ctx(self, agent: Agent) -> None:
+        await self._replace_chat_ctx(agent, llm.ChatContext.empty())
 
-    async def reconcile_chat_ctx(self, agent: Agent) -> None:
+    async def _reconcile_chat_ctx(self, agent: Agent) -> None:
         """Restore confirmed provider history locally, without provider writes."""
         await self._edit_context(agent, None, "reconcile")
 
@@ -233,7 +229,7 @@ class RealtimeModel(llm.RealtimeModel):
         if failure is not None:
             if operation == "replace" and failure.recoverable and token.consumed:
                 try:
-                    await self.reconcile_chat_ctx(agent)
+                    await self._reconcile_chat_ctx(agent)
                     failure.needs_reconciliation = False
                 except HistoryUpdateError:
                     pass
@@ -250,7 +246,7 @@ class RealtimeModel(llm.RealtimeModel):
         """Update provider settings on the live session; return after acknowledgment."""
         if self._session is None:
             raise llm.RealtimeError("Prism session is not open")
-        await self._session.update_session(
+        await self._session._update_model_options(
             voice=voice,
             response_metadata=response_metadata,
             tool_fillers=tool_fillers,
@@ -372,11 +368,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
     def _sdk_tools(
         self, tools: list[llm.Tool], fillers: Mapping[str, r.PrismFiller]
     ) -> list[r.ToolDefinition]:
-        definitions = [_tool(tool, fillers) for tool in tools]
-        unknown = fillers.keys() - {tool.name for tool in definitions}
-        if unknown:
-            raise RimeInputError(f"Tool fillers name unregistered tools: {sorted(unknown)}")
-        return definitions
+        return [_tool(tool, fillers) for tool in tools]
 
     @property
     def chat_ctx(self) -> llm.ChatContext:
@@ -496,7 +488,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
     async def update_tools(self, tools: list[llm.Tool]) -> None:
         await self._apply_settings(tools=tools)
 
-    async def update_session(
+    async def _update_model_options(
         self,
         *,
         voice: NotGivenOr[str] = NOT_GIVEN,
@@ -526,54 +518,66 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
         await asyncio.shield(self._initialized)
         self._require()
 
-        async def apply() -> None:
-            async with self._settings_lock:
-                sdk = self._require()
-                fillers = dict(tool_fillers) if is_given(tool_fillers) else self._tool_fillers
-                new_tools = list(tools) if is_given(tools) else self._tool_list
-                if is_given(tools) and not is_given(tool_fillers):
-                    names = {_tool(tool).name for tool in new_tools}
-                    fillers = {name: filler for name, filler in fillers.items() if name in names}
-                definitions = (
-                    self._sdk_tools(new_tools, fillers)
-                    if is_given(tools) or is_given(tool_fillers)
-                    else None
-                )
-                try:
-                    if any(
-                        is_given(v)
-                        for v in (
-                            instructions,
-                            tools,
-                            voice,
-                            tool_fillers,
-                            truncation,
-                        )
-                    ):
-                        await sdk.update(
-                            truncation=cast(r.Truncation, truncation)
-                            if is_given(truncation)
-                            else None,
-                            instructions=instructions if is_given(instructions) else None,
-                            tools=definitions
-                            if is_given(tools) or is_given(tool_fillers)
-                            else None,
-                            voice=voice if is_given(voice) else None,
-                        )
-                        self._tool_list = new_tools
-                        self._tool_fillers = fillers
-                        self._model._tool_fillers = dict(fillers)
-                        if is_given(voice):
-                            self._model._voice = voice
-                        if is_given(truncation):
-                            self._model._truncation = cast(r.Truncation, truncation)
-                    if is_given(response_metadata):
-                        await sdk.set_response_metadata(dict(response_metadata))
-                        self._model._response_metadata = dict(response_metadata)
-                except r.RimeRealtimeError as error:
-                    raise PrismError(error.fault) from error
+        await self._settle_update(
+            self._send_settings(
+                instructions=instructions,
+                tools=tools,
+                voice=voice,
+                response_metadata=response_metadata,
+                tool_fillers=tool_fillers,
+                truncation=truncation,
+            )
+        )
 
-        await self._settle_update(apply())
+    async def _send_settings(
+        self,
+        *,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
+        voice: NotGivenOr[str] = NOT_GIVEN,
+        response_metadata: NotGivenOr[Mapping[str, str]] = NOT_GIVEN,
+        tool_fillers: NotGivenOr[Mapping[str, r.PrismFiller]] = NOT_GIVEN,
+        truncation: NotGivenOr[r.Truncation] = NOT_GIVEN,
+    ) -> None:
+        """Send settings and retain local state only after acknowledgment."""
+        async with self._settings_lock:
+            sdk = self._require()
+            fillers = dict(tool_fillers) if is_given(tool_fillers) else self._tool_fillers
+            new_tools = list(tools) if is_given(tools) else self._tool_list
+            definitions = (
+                self._sdk_tools(new_tools, fillers)
+                if is_given(tools) or is_given(tool_fillers)
+                else None
+            )
+            try:
+                if any(
+                    is_given(v)
+                    for v in (
+                        instructions,
+                        tools,
+                        voice,
+                        tool_fillers,
+                        truncation,
+                    )
+                ):
+                    await sdk.update(
+                        truncation=cast(r.Truncation, truncation) if is_given(truncation) else None,
+                        instructions=instructions if is_given(instructions) else None,
+                        tools=definitions if is_given(tools) or is_given(tool_fillers) else None,
+                        voice=voice if is_given(voice) else None,
+                    )
+                    self._tool_list = new_tools
+                    self._tool_fillers = fillers
+                    self._model._tool_fillers = dict(fillers)
+                    if is_given(voice):
+                        self._model._voice = voice
+                    if is_given(truncation):
+                        self._model._truncation = cast(r.Truncation, truncation)
+                if is_given(response_metadata):
+                    await sdk.set_response_metadata(dict(response_metadata))
+                    self._model._response_metadata = dict(response_metadata)
+            except r.RimeRealtimeError as error:
+                raise PrismError(error.fault) from error
 
     def update_options(self, *, tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN) -> None:
         if not is_given(tool_choice):
@@ -626,62 +630,48 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
                 raise HistoryUpdateError("Expired or mismatched history operation")
             token.consumed = True
 
-        async def apply() -> None:
-            self._require()
-            assert self._history is not None
-            if token is not None and token.operation == "reconcile":
-                await self._history.reconcile(chat_ctx, token.revision)
-                return
-            result = await self._history.sync(
-                chat_ctx, shared=token is None and self._model._context_mode == "shared"
-            )
-            for ref, output in result.submitted:
-                if output.reply_required:
-                    if (
-                        self._latest
-                        and ref.response_id == self._latest.response_id
-                        and not self._history.has_pending_calls(self._latest)
-                    ):
-                        self._set_tool_reply(self._latest, self._report)
-                    else:
-                        self._set_tool_reply(self._parent, ref)
-                else:
-                    self._release_tool_response(ref)
-            if result.failure is not None:
-                error = result.failure
-                logger.warning("Prism history update failed", extra={"status": error.status})
-                callback = self._model._on_history_update
-                if callback is not None:
-                    try:
-                        callback(
-                            HistoryUpdateNotice(
-                                session_id=self._require().info.session_id,
-                                status=error.status,
-                                recoverable=error.recoverable,
-                                confirmed_chat_ctx=self._history.projection(llm.ChatContext.empty())
-                                if error.recoverable
-                                else None,
-                            )
-                        )
-                    except Exception:
-                        logger.warning("Rime history notice callback failed")
-                if not error.recoverable:
-                    self._fatal(error)
-                if (
-                    token is None
-                    and error.partial
-                    and result.tool_results_only
-                    and any(output.reply_required for _, output in result.submitted)
-                ):
-                    raise _PartialToolResultError(
-                        str(error),
-                        status=error.status,
-                        confirmed_chat_ctx=error.confirmed_chat_ctx,
-                        needs_reconciliation=error.needs_reconciliation,
-                    ) from error
-                raise error
+        await self._settle_update(self._sync_chat_ctx(chat_ctx, token))
 
-        await self._settle_update(apply())
+    async def _sync_chat_ctx(self, chat_ctx: llm.ChatContext, token: _Edit | None) -> None:
+        """Sync history and preserve continuation ownership for accepted tool results."""
+        self._require()
+        assert self._history is not None
+        if token is not None and token.operation == "reconcile":
+            await self._history.reconcile(chat_ctx, token.revision)
+            return
+        result = await self._history.sync(
+            chat_ctx, shared=token is None and self._model._context_mode == "shared"
+        )
+        for ref, output in result.submitted:
+            if output.reply_required:
+                if (
+                    self._latest
+                    and ref.response_id == self._latest.response_id
+                    and not self._history.has_pending_calls(self._latest)
+                ):
+                    self._set_tool_reply(self._latest, self._report)
+                else:
+                    self._set_tool_reply(self._parent, ref)
+            else:
+                self._release_tool_response(ref)
+        if result.failure is not None:
+            error = result.failure
+            logger.warning("Prism history update failed", extra={"status": error.status})
+            if not error.recoverable:
+                self._fatal(error)
+            if (
+                token is None
+                and error.partial
+                and result.tool_results_only
+                and any(output.reply_required for _, output in result.submitted)
+            ):
+                raise _PartialToolResultError(
+                    str(error),
+                    status=error.status,
+                    confirmed_chat_ctx=error.confirmed_chat_ctx,
+                    needs_reconciliation=error.needs_reconciliation,
+                ) from error
+            raise error
 
     async def _settle_update(self, operation: Coroutine[Any, Any, None]) -> None:
         """Finish acknowledged state changes before propagating caller cancellation.

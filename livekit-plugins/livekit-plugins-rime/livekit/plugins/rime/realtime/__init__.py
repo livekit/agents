@@ -1,4 +1,4 @@
-from ._history import HistoryUpdateNotice, PrismHistoryUpdateError
+from ._history import PrismHistoryUpdateError
 from .realtime_model import (
     PrismError,
     PrismModelError,
@@ -8,7 +8,6 @@ from .realtime_model import (
 )
 
 __all__ = [
-    "HistoryUpdateNotice",
     "PrismHistoryUpdateError",
     "PrismError",
     "PrismModelError",
