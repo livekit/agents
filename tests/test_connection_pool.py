@@ -174,6 +174,19 @@ async def test_prewarm_retries_after_failure():
     assert len(pool._available) == 1
 
 
+def test_prewarm_without_running_loop_warns_instead_of_raising(caplog):
+    # e.g. TTS.prewarm() called from an AgentServer setup_fnc, which has no running loop
+    async def connect(timeout: float):
+        raise AssertionError("must not connect without a running loop")
+
+    pool = ConnectionPool(connect_cb=connect)
+    with caplog.at_level("WARNING"):
+        pool.prewarm()
+
+    assert pool._prewarm_task is None
+    assert "needs a running event loop" in caplog.text
+
+
 def _closing_pool(max_session_duration: float | None = 60):
     """A pool that records every connection handed to its close callback."""
     closed: list[DummyConnection] = []
