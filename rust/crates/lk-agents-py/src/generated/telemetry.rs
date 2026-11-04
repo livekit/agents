@@ -789,7 +789,6 @@ pub fn _core_event_loop_blocked(
 
 // Declared in rust/crates/lk-agents-abi/src/telemetry/report/mod.rs.
 type TaggerImpl = <crate::generated::implementations::Selected as super::Implementations>::Tagger;
-type TaggerSortedTagsOutput = ::std::vec::Vec<::std::string::String>;
 type TaggerOutcomeReasonOutput = ::std::option::Option<::std::string::String>;
 
 /// Tag sessions with metadata for observability.
@@ -888,13 +887,6 @@ impl Tagger {
         )
     }
 
-    /// ``sorted(tagger.tags)``.
-    fn sorted_tags(&self) -> PyResult<TaggerSortedTagsOutput> {
-        crate::py_calls::check_pid()?;
-        let out = <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::sorted_tags(&self.0);
-        ::pyo3::PyResult::Ok(out)
-    }
-
     /// The tags in insertion order, with their metadata and when they were added.
     fn entries<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
@@ -908,12 +900,6 @@ impl Tagger {
             )?
             .into_any(),
         )
-    }
-
-    fn is_empty(&self) -> PyResult<bool> {
-        crate::py_calls::check_pid()?;
-        let out = <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::is_empty(&self.0);
-        ::pyo3::PyResult::Ok(out)
     }
 
     /// The judgments recorded by judge groups.
@@ -968,13 +954,6 @@ impl Tagger {
         );
         Ok(())
     }
-
-    /// Whether the session has judgments or an outcome to upload.
-    fn has_evals(&self) -> PyResult<bool> {
-        crate::py_calls::check_pid()?;
-        let out = <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::has_evals(&self.0);
-        ::pyo3::PyResult::Ok(out)
-    }
 }
 
 // Declared in rust/crates/lk-agents-abi/src/telemetry/report/mod.rs.
@@ -995,7 +974,6 @@ fn _extract_event_retention_expire_now_ns(
     crate::py_values::number_from_py::<u64>(obj.as_any(), "now_ns")
 }
 type EventRetentionExpireNowNsInput = u64;
-type EventRetentionDiagnosticsOutput = ::std::vec::Vec<(::std::string::String, u64)>;
 
 /// Bounded retention of a session report's host event snapshots. The native policy retains only
 /// byte charges and supplied monotonic timestamps; the adapter owns independent model copies.
@@ -1033,14 +1011,6 @@ impl CoreEventRetention {
     fn allows_read(&self, job_id: ::std::string::String) -> PyResult<bool> {
         crate::py_calls::check_pid()?;
         let out = <CoreEventRetentionImpl as ::lk_agents_abi::telemetry::report::EventRetention>::allows_read(&self.0, job_id);
-        ::pyo3::PyResult::Ok(out)
-    }
-
-    /// Immutable consent captured when this session's report retention was created.
-    #[getter]
-    fn capture_content(&self) -> PyResult<bool> {
-        crate::py_calls::check_pid()?;
-        let out = <CoreEventRetentionImpl as ::lk_agents_abi::telemetry::report::EventRetention>::capture_content(&self.0);
         ::pyo3::PyResult::Ok(out)
     }
 
@@ -1087,13 +1057,6 @@ impl CoreEventRetention {
                 &mut self.0,
                 now_ns,
             );
-        ::pyo3::PyResult::Ok(out)
-    }
-
-    #[getter]
-    fn diagnostics(&self) -> PyResult<EventRetentionDiagnosticsOutput> {
-        crate::py_calls::check_pid()?;
-        let out = <CoreEventRetentionImpl as ::lk_agents_abi::telemetry::report::EventRetention>::diagnostics(&self.0);
         ::pyo3::PyResult::Ok(out)
     }
 }

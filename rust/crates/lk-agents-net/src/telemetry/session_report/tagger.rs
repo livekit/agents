@@ -43,16 +43,8 @@ impl lk_agents_abi::telemetry::report::Tagger for Tagger {
         self.state.tags()
     }
 
-    fn sorted_tags(&self) -> Vec<String> {
-        self.state.tags().into_iter().collect()
-    }
-
     fn entries(&self) -> Vec<ReportTag> {
         self.state.entries()
-    }
-
-    fn is_empty(&self) -> bool {
-        self.state.is_empty()
     }
 
     fn evaluations(&self) -> Vec<EvaluationRecord> {
@@ -75,10 +67,6 @@ impl lk_agents_abi::telemetry::report::Tagger for Tagger {
         instructions: String,
     ) {
         self.state.record_judgment(name, verdict, reasoning, instructions, self.clock.wall());
-    }
-
-    fn has_evals(&self) -> bool {
-        self.state.has_evals()
     }
 }
 

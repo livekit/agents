@@ -79,10 +79,6 @@ impl Tagger {
             .collect()
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.tags.is_empty()
-    }
-
     pub fn evaluations(&self) -> &[EvaluationRecord] {
         &self.evaluations
     }
@@ -119,9 +115,5 @@ impl Tagger {
         let tag = format!("lk.judge.{name}:{verdict}");
         self.add(tag.clone(), None, at);
         self.evaluations.push(EvaluationRecord { name, tag, verdict, reasoning, instructions });
-    }
-
-    pub fn has_evals(&self) -> bool {
-        !self.evaluations.is_empty() || self.outcome().is_some()
     }
 }

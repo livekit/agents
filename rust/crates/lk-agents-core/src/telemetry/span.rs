@@ -231,17 +231,6 @@ impl Trace {
         self.start(at, Some(root), None, decl)
     }
 
-    /// Opens a span under the root reserved before this trace knew of it, with the reservation's
-    /// context and start.
-    pub fn open_reserved<D: SpanDecl>(&mut self, reserved: Reserved<D>, decl: D) -> Span<D>
-    where
-        AgentSession: ParentOf<D>,
-    {
-        let Some(root) = self.root.filter(|_| !self.closed) else { return Span::dormant() };
-        let at = reserved.start.max(self.floor(root));
-        self.start(at, Some(root), Some(reserved.context), decl)
-    }
-
     /// Opens a child of `parent`, at the step's instant or its declaration's `#[at]`, clamped to
     /// the parent's start.
     pub fn open_in<P, D: SpanDecl>(&mut self, parent: &Span<P>, decl: D) -> Span<D>

@@ -256,16 +256,9 @@ pub trait Tagger: Send + Sized + 'static {
     #[host(getter)]
     fn tags(&self) -> BTreeSet<String>;
 
-    /// ``sorted(tagger.tags)``.
-    #[host(call)]
-    fn sorted_tags(&self) -> Vec<String>;
-
     /// The tags in insertion order, with their metadata and when they were added.
     #[host(call)]
     fn entries(&self) -> Vec<ReportTag>;
-
-    #[host(call)]
-    fn is_empty(&self) -> bool;
 
     /// The judgments recorded by judge groups.
     #[host(getter)]
@@ -288,10 +281,6 @@ pub trait Tagger: Send + Sized + 'static {
         reasoning: String,
         instructions: String,
     );
-
-    /// Whether the session has judgments or an outcome to upload.
-    #[host(call)]
-    fn has_evals(&self) -> bool;
 }
 
 // Public data contracts. Python behavior remains in its adapters.
@@ -336,10 +325,6 @@ pub trait EventRetention: Send + Sized + 'static {
     #[host(call)]
     fn allows_read(&self, job_id: String) -> bool;
 
-    /// Immutable consent captured when this session's report retention was created.
-    #[host(getter)]
-    fn capture_content(&self) -> bool;
-
     /// Reject content without creation-time consent, unknown schemas and live-object events.
     #[host(call)]
     fn accepts(&self, kind: String, redaction: bool) -> bool;
@@ -351,7 +336,4 @@ pub trait EventRetention: Send + Sized + 'static {
 
     #[host(call)]
     fn expire(&mut self, now_ns: u64) -> usize;
-
-    #[host(getter)]
-    fn diagnostics(&self) -> Vec<(String, u64)>;
 }

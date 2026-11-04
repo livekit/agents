@@ -179,11 +179,8 @@ class Tagger:
     @property
     def tags(self) -> frozenset[str]:
         """The session's tags."""
-    def sorted_tags(self) -> list[str]:
-        """``sorted(tagger.tags)``."""
     def entries(self) -> list[ReportTag]:
         """The tags in insertion order, with their metadata and when they were added."""
-    def is_empty(self) -> bool: ...
     @property
     def evaluations(self) -> list[EvaluationRecord]:
         """The judgments recorded by judge groups."""
@@ -201,8 +198,6 @@ class Tagger:
         instructions: str,
     ) -> None:
         """One judgment of a judge group's result: its ``lk.judge.<name>:<verdict>`` tag and record."""
-    def has_evals(self) -> bool:
-        """Whether the session has judgments or an outcome to upload."""
 
 class _core_EventRetention:
     """Bounded retention of a session report's host event snapshots. The native policy retains only
@@ -214,9 +209,6 @@ class _core_EventRetention:
         """Bind report access to the first job that starts the session. Ownership cannot transfer."""
     def allows_read(self, job_id: str) -> bool:
         """Sessions started outside a job retain their existing application-owned access contract."""
-    @property
-    def capture_content(self) -> bool:
-        """Immutable consent captured when this session's report retention was created."""
     def accepts(self, kind: str, redaction: bool) -> bool:
         """Reject content without creation-time consent, unknown schemas and live-object events."""
     def admit(self, event: object, now_ns: int) -> tuple[int, bool]:
@@ -224,7 +216,5 @@ class _core_EventRetention:
         removes exactly the returned prefix before appending its snapshot of an admitted event.
         """
     def expire(self, now_ns: int) -> int: ...
-    @property
-    def diagnostics(self) -> list[tuple[str, int]]: ...
 
 TELEMETRY_MAX_DEPTH: int

@@ -23,21 +23,11 @@ struct RetainedEvents {
     entries: VecDeque<(u64, usize)>,
     bytes: usize,
     now_ns: u64,
-    dropped: u64,
-    expired: u64,
 }
 
 impl RetainedEvents {
     fn new(quota: Arc<EventQuota>) -> Self {
-        Self {
-            quota,
-            job_id: None,
-            entries: VecDeque::new(),
-            bytes: 0,
-            now_ns: 0,
-            dropped: 0,
-            expired: 0,
-        }
+        Self { quota, job_id: None, entries: VecDeque::new(), bytes: 0, now_ns: 0 }
     }
 
     fn expire(&mut self, now_ns: u64) -> usize {
@@ -56,7 +46,6 @@ impl RetainedEvents {
             expired += 1;
         }
         self.quota.release(expired, released_bytes);
-        self.expired = self.expired.saturating_add(expired as u64);
         expired
     }
 
@@ -67,7 +56,6 @@ impl RetainedEvents {
             || bytes > EVENT_BYTES.saturating_sub(self.bytes)
             || !self.quota.admit(bytes)
         {
-            self.dropped = self.dropped.saturating_add(1);
             return (expired, false);
         }
         self.entries.push_back((self.now_ns, bytes));
@@ -109,10 +97,6 @@ impl lk_agents_abi::telemetry::report::EventRetention for EventRetention {
         self.retained.job_id.as_ref().is_none_or(|owner| owner == &job_id)
     }
 
-    fn capture_content(&self) -> bool {
-        self.capture_content
-    }
-
     fn accepts(&self, kind: String, redaction: bool) -> bool {
         lk_agents_core::telemetry::report::event_allowed(&kind, self.capture_content, redaction)
     }
@@ -123,16 +107,6 @@ impl lk_agents_abi::telemetry::report::EventRetention for EventRetention {
 
     fn expire(&mut self, now_ns: u64) -> usize {
         self.retained.expire(now_ns)
-    }
-
-    fn diagnostics(&self) -> Vec<(String, u64)> {
-        let retained = &self.retained;
-        vec![
-            ("retained_events".into(), retained.entries.len() as u64),
-            ("retained_bytes".into(), retained.bytes as u64),
-            ("dropped_events".into(), retained.dropped),
-            ("expired_events".into(), retained.expired),
-        ]
     }
 }
 
@@ -177,9 +151,7 @@ mod tests {
         assert_eq!(recording.retained.admit(0, EVENT_RETENTION_NS + 2), (0, false));
         assert_eq!(recording.expire(0), 0, "a backwards clock cannot corrupt expiry order");
         assert_eq!(recording.expire(2 * EVENT_RETENTION_NS + 2), EVENT_ITEMS);
-        let counters = recording.diagnostics();
-        assert!(counters.contains(&("retained_bytes".into(), 0)));
-        assert!(counters.contains(&("dropped_events".into(), 3)));
+        assert_eq!(recording.retained.bytes, 0);
     }
 
     #[test]
