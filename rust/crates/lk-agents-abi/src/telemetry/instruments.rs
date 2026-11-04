@@ -273,6 +273,8 @@ pub enum AudioPolicy {
 pub enum AudioConsumer {
     /// The session's microphone, read from the room.
     RoomInput,
+    /// A realtime model's input audio.
+    Realtime,
 }
 
 /// Input and output tokens of each LLM and realtime response. Deprecated upstream; declared as

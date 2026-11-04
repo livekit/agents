@@ -1025,7 +1025,7 @@ impl Step {
     fn event(e: Event) -> Step {
         Step { events: vec![e], ..Default::default() }
     }
-    fn merge(&mut self, other: Step) {
+    pub(crate) fn merge(&mut self, other: Step) {
         self.frames.extend(other.frames);
         self.events.extend(other.events);
         self.recycle |= other.recycle;

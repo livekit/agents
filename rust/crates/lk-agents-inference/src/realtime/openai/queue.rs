@@ -1,14 +1,17 @@
-//! Bounded realtime ingress and event delivery with one reserved terminal observation.
+//! Realtime ingress over a leaky audio channel, and bounded event delivery with one reserved terminal observation.
 
-use super::session::{Cmd, Shared};
+use super::session::Cmd;
+use lk_agents_abi::RealtimeCommand as Command;
 use lk_agents_abi::errors::ApiError;
-use lk_agents_abi::llm::realtime::{Event, RealtimeModelError};
+use lk_agents_abi::llm::realtime::{
+    Event, GenerateReply, GenerateReplyFailed, PushAudio, RealtimeError, RealtimeModelError, Say,
+};
 use lk_agents_abi::{Clock, Ts};
+use lk_agents_net::leaky;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::{mpsc, watch};
 
-pub(super) const COMMAND_BACKLOG: usize = 128;
 pub(crate) const EVENT_BACKLOG: usize = 256;
 /// Queued audio bytes. Text and tool-argument events are bounded only by `EVENT_BACKLOG` times
 /// the WebSocket message limit.
@@ -160,8 +163,9 @@ impl EventReceiver {
 }
 
 pub(super) struct Ingress {
-    pub(super) commands: mpsc::Sender<Cmd>,
-    pub(super) shared: Arc<Shared>,
+    /// Audio and every command, in one ordered queue: a commit, clear or reply is never
+    /// reordered against the audio before it.
+    pub(super) input: leaky::Sender<Cmd>,
     pub(super) events: Delivery,
     pub(super) clock: Arc<dyn Clock>,
     pub(super) label: String,
@@ -169,14 +173,48 @@ pub(super) struct Ingress {
 
 impl Ingress {
     pub(super) fn send(&self, command: Cmd) {
-        if let Err(mpsc::error::TrySendError::Full(command)) = self.commands.try_send(command) {
-            let mut error =
-                ApiError::new("realtime command backlog exceeded").with_retryable(false);
-            if let Cmd::Core(command) = command {
-                error.request_id = command.req_id().map(str::to_owned);
+        let command = match command {
+            Cmd::Core(Command::PushAudio(PushAudio { frame })) => return self.input.push(frame),
+            Cmd::Core(Command::ClearAudio(clear)) => {
+                self.input.clear();
+                Cmd::Core(Command::ClearAudio(clear))
             }
-            self.events.fail(self.clock.now(), &self.label, error);
-            self.shared.closing.notify_one();
+            command => command,
+        };
+        let reply = match &command {
+            Cmd::Core(Command::GenerateReply(GenerateReply { req_id, .. }))
+            | Cmd::Core(Command::Say(Say { req_id, .. })) => Some(req_id.clone()),
+            _ => None,
+        };
+        if let Err(stuck) = self.input.control(command) {
+            self.stuck(stuck, reply);
+        }
+    }
+
+    /// The pump stopped draining: the command is lost, reported as a recoverable error, and a
+    /// reply it asked for fails instead of waiting forever.
+    fn stuck(&self, stuck: leaky::Stuck, reply: Option<String>) {
+        let now = self.clock.now();
+        let error = ApiError::new(stuck.to_string()).with_retryable(true);
+        let mut events = vec![Event::Error(RealtimeModelError {
+            timestamp: now,
+            label: self.label.clone(),
+            message: error.message.clone(),
+            recoverable: true,
+            req_id: reply.clone(),
+            code: None,
+            provider_error: Some(error),
+        })];
+        events.extend(reply.map(|req_id| {
+            Event::GenerateReplyFailed(GenerateReplyFailed {
+                req_id,
+                error: RealtimeError::new("realtime input stopped draining"),
+            })
+        }));
+        for event in events {
+            if let Err(error) = self.events.send(event) {
+                self.events.fail(now, &self.label, error);
+            }
         }
     }
 }

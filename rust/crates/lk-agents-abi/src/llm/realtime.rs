@@ -449,6 +449,9 @@ pub trait RealtimeSession: Send + Sync {
     fn chat_ctx(&self) -> crate::BoxFuture<'_, crate::ChatContext>;
 
     fn aclose(&self) -> crate::BoxFuture<'_, ()>;
+
+    /// Reports the input audio the session drops under `cx`'s job.
+    fn observe(&self, _cx: crate::telemetry::Cx) {}
 }
 
 /// What the driver sends a session. A host session is sent the ones it applies at once

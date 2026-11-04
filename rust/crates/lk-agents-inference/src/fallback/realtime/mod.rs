@@ -258,6 +258,7 @@ impl Realtime for RealtimeFallbackModel {
                     events: VecDeque::new(),
                     generation: None,
                     closed: false,
+                    audio: None,
                 }),
                 restart_tx,
                 changed: tokio::sync::Notify::new(),

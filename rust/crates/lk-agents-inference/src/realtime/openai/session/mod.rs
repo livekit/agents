@@ -11,6 +11,7 @@ use lk_agents_abi::llm::provider_format::ImageResolver;
 use lk_agents_abi::{ApiConnectOptions, ChatContext};
 use lk_agents_abi::{Spawner, SpawnerExt};
 use lk_agents_net::transport::{TransportError, WsMessage, WsTransport};
+use lk_agents_net::{leaky, telemetry};
 use tokio::sync::{Mutex, mpsc};
 
 use crate::headers::BoundIdentity;
@@ -217,6 +218,9 @@ pub fn warn_on_half_disabled_turn_taking(td: &lk_agents_abi::Maybe<Option<TurnDe
     }
 }
 
+/// The session's input: a backlog keeps up to ten seconds of what the person said.
+const INPUT_POLICY: leaky::Policy = leaky::Policy::CatchUp { max: Duration::from_secs(10) };
+
 /// What a session's pump is told: the core's commands, the model's option changes, and the close.
 pub(crate) enum Cmd {
     Core(Command),
@@ -288,7 +292,7 @@ impl OpenAIRealtime {
                 self.clock.wall() - Duration::from_nanos(self.clock.now().as_nanos()),
             );
 
-        let (cmd_tx, cmd_rx) = mpsc::channel(super::queue::COMMAND_BACKLOG);
+        let (input, input_rx) = leaky::audio_channel(INPUT_POLICY);
         let (ev_tx, ev_rx) = super::queue::events();
         let shared = Arc::new(Shared {
             machine: Mutex::new(machine),
@@ -302,8 +306,7 @@ impl OpenAIRealtime {
             disposal: Arc::default(),
         });
         let commands = Arc::new(super::queue::Ingress {
-            commands: cmd_tx,
-            shared: shared.clone(),
+            input,
             events: ev_tx.clone(),
             clock: self.clock.clone(),
             label: label.clone(),
@@ -323,7 +326,7 @@ impl OpenAIRealtime {
             images: self.images.clone(),
             spawner: self.spawner.clone(),
         };
-        let pump = self.spawner.spawn(pump.run(cmd_rx));
+        let pump = self.spawner.spawn(pump.run(input_rx));
 
         OpenAIRealtimeSession {
             shared,
@@ -464,14 +467,14 @@ struct Pump {
 impl Pump {
     /// `_main_task`: connect, run, and reconnect, retrying a failed connection on the connect
     /// options' budget, until a terminal error or a close.
-    async fn run(self, commands: mpsc::Receiver<Cmd>) {
+    async fn run(self, commands: leaky::Receiver<Cmd>) {
         self.run_loop(commands).await;
         self.close().await;
         self.wait_for_retirement().await;
         self.events.finish();
     }
 
-    async fn run_loop(&self, mut commands: mpsc::Receiver<Cmd>) {
+    async fn run_loop(&self, mut commands: leaky::Receiver<Cmd>) {
         use crate::realtime::machine::connection::RealtimeConnection;
         let mut connection = RealtimeConnection::new(&self.connect.conn, self.clock.now());
         let mut effects = connection.start(self.clock.now());
@@ -552,7 +555,7 @@ impl Pump {
     /// failure, retryable or not.
     async fn connect_and_run(
         &self,
-        commands: &mut mpsc::Receiver<Cmd>,
+        commands: &mut leaky::Receiver<Cmd>,
         reconnecting: bool,
         connection: &mut crate::realtime::machine::connection::RealtimeConnection,
         generation: u64,
@@ -600,7 +603,7 @@ impl Pump {
 
     async fn run_ws(
         &self,
-        commands: &mut mpsc::Receiver<Cmd>,
+        input: &mut leaky::Receiver<Cmd>,
         sender: Arc<dyn lk_agents_net::transport::WsSender>,
         mut receiver: Box<dyn lk_agents_net::transport::WsReceiver>,
         initial: Step,
@@ -620,11 +623,12 @@ impl Pump {
             sent,
         );
         tokio::pin!(writer);
-        self.dispatch(initial, &outgoing)?;
+        // Every step is taken under a write permit, so no local backlog can fail the session.
+        let mut permit = outgoing.try_reserve().ok();
+        self.dispatch(initial, &mut permit)?;
         let mut decoding: Option<
             lk_agents_abi::BoxFuture<'static, Result<wire::Incoming, ApiError>>,
         > = None;
-        let mut context_due = false;
         loop {
             {
                 let mut machine = self.shared.machine.lock().await;
@@ -634,28 +638,31 @@ impl Pump {
             }
 
             // The machine owns every deadline; the driver only asks how long to sleep.
-            let deadline = self
-                .shared
-                .machine
-                .lock()
-                .await
-                .next_deadline()
-                .into_iter()
-                .chain(connection.next_deadline())
-                .min();
+            let (deadline, pages_pending, continuation_ready) = {
+                let machine = self.shared.machine.lock().await;
+                let deadline =
+                    machine.next_deadline().into_iter().chain(connection.next_deadline()).min();
+                (deadline, machine.context_pages_pending(), machine.context_continuation_ready())
+            };
             let sleep = deadline.map(|at| self.clock.wait_until(at));
             let context_wake = self.shared.context_ready.notified();
             tokio::pin!(context_wake);
             context_wake.as_mut().enable();
-            let continuation_ready = self.shared.machine.lock().await.context_continuation_ready();
-            let can_continue = continuation_ready && outgoing.capacity() > 0;
+            let writable = permit.is_some();
+            let can_continue = continuation_ready && writable;
             if can_continue {
                 tokio::task::yield_now().await;
             }
 
             let mut step = tokio::select! {
                 biased;
-                () = async { match sleep { Some(s) => s.await, None => std::future::pending().await } } => {
+                result = &mut writer => return result.map(|()| Outcome::Closed),
+                () = self.shared.closing.notified() => { self.close().await; return Ok(Outcome::Closed); },
+                reserved = outgoing.reserve(), if !writable => {
+                    permit = Some(reserved.map_err(|_| ApiError::new("realtime writer closed").with_retryable(false))?);
+                    continue;
+                },
+                () = async { match sleep { Some(s) => s.await, None => std::future::pending().await } }, if writable => {
                     let effects = connection.tick(self.clock.now());
                     if effects.iter().any(|effect| !matches!(effect, crate::effects::RealtimeConnectionEffect::CleanupIncomplete { .. })) {
                         return Ok(Outcome::ConnectionEffects(effects));
@@ -664,8 +671,6 @@ impl Pump {
                     let mut m = self.shared.machine.lock().await;
                     m.tick(self.clock.now())
                 },
-                result = &mut writer => return result.map(|()| Outcome::Closed),
-                () = self.shared.closing.notified() => { self.close().await; return Ok(Outcome::Closed); },
                 () = &mut context_wake => continue,
                 Some(sent) = receipts.recv() => {
                     self.shared.machine.lock().await.response_sent(sent.generation, sent.at, &sent.req_id, sent.is_say);
@@ -674,7 +679,7 @@ impl Pump {
                 decoded = async { match decoding.as_mut() {
                     Some(work) => work.await,
                     None => std::future::pending().await,
-                } } => {
+                } }, if writable => {
                     decoding = None;
                     let incoming = decoded?;
                     let mut machine = self.shared.machine.lock().await;
@@ -702,47 +707,64 @@ impl Pump {
                     Err(TransportError::Timeout) => continue,
                     Err(_) => return Err(self.lost()),
                 },
-                cmd = commands.recv(), if !context_due || !can_continue => {
-                    context_due = true;
-                    match cmd {
-                    Some(Cmd::Core(cmd)) => {
-                        let mut m = self.shared.machine.lock().await;
-                        m.command(self.clock.now(), cmd)
+                // Context pages go out before the input after them.
+                () = std::future::ready(()), if can_continue => {
+                    self.shared.machine.lock().await.continue_context(self.clock.now())
+                },
+                // Input waits in its channel until the writer has nothing else queued: this task
+                // is the only sender, so the queue is still empty when the batch is taken.
+                items = async {
+                    match outgoing.reserve_many(super::writer::WRITE_BACKLOG - 1).await {
+                        Ok(empty) => drop(empty),
+                        Err(_) => std::future::pending().await,
                     }
-                    Some(Cmd::Options(patch)) => {
-                        let mut m = self.shared.machine.lock().await;
-                        let step = m.update_options(*patch);
-                        *self.shared.caps.lock() = m.capabilities();
-                        step
-                    }
-                    Some(Cmd::Close) | None => {
+                    input.recv().await
+                }, if writable && !pages_pending => match self.apply(items).await {
+                    Some(step) => step,
+                    None => {
                         self.close().await;
                         return Ok(Outcome::Closed);
                     }
-                    }
                 },
-                capacity = outgoing.reserve(), if continuation_ready && !can_continue => {
-                    drop(capacity.map_err(|_| ApiError::new("realtime writer closed during context replay").with_retryable(false))?);
-                    continue;
-                },
-                () = std::future::ready(()), if can_continue => {
-                    context_due = false;
-                    self.shared.machine.lock().await.continue_context(self.clock.now())
-                }
-
             };
 
             if let Some(error) = step.fatal.take() {
-                let _ = self.dispatch(step, &outgoing);
+                let _ = self.dispatch(step, &mut permit);
                 return Ok(Outcome::Fatal(error));
             }
             let recycle = step.recycle;
-            self.dispatch(step, &outgoing)?;
+            self.dispatch(step, &mut permit)?;
             if recycle {
                 log::debug!("recycling the {} connection", self.provider_label);
                 return Ok(Outcome::Recycle);
             }
         }
+    }
+
+    /// One drained input batch through the machine, in order; `None` on a close.
+    async fn apply(&self, items: Option<Vec<leaky::Item<Cmd>>>) -> Option<Step> {
+        let now = self.clock.now();
+        let mut m = self.shared.machine.lock().await;
+        let mut step = Step::default();
+        for item in items? {
+            let next = match item {
+                leaky::Item::Audio(frame) => m.command(
+                    now,
+                    Command::PushAudio(lk_agents_abi::llm::realtime::PushAudio { frame }),
+                ),
+                // The model only hears less: nothing marks the gap on the wire.
+                leaky::Item::Gap(_) => continue,
+                leaky::Item::Control(Cmd::Core(command)) => m.command(now, command),
+                leaky::Item::Control(Cmd::Options(patch)) => {
+                    let next = m.update_options(*patch);
+                    *self.shared.caps.lock() = m.capabilities();
+                    next
+                }
+                leaky::Item::Control(Cmd::Close) => return None,
+            };
+            step.merge(next);
+        }
+        Some(step)
     }
 
     /// "connection closed unexpectedly": retryable, so the session reconnects.
@@ -779,13 +801,11 @@ impl Pump {
     fn dispatch(
         &self,
         step: Step,
-        outgoing: &mpsc::Sender<Vec<crate::realtime::machine::Outgoing>>,
+        permit: &mut Option<mpsc::Permit<'_, Vec<crate::realtime::machine::Outgoing>>>,
     ) -> Result<(), ApiError> {
         self.wake_retirement();
         if !step.frames.is_empty() {
-            outgoing.try_send(step.frames).map_err(|_| {
-                ApiError::new("realtime write backlog exceeded").with_retryable(false)
-            })?;
+            permit.take().expect("every step is taken under a write permit").send(step.frames);
         }
         for event in step.events {
             self.events.send(event)?;
@@ -901,6 +921,10 @@ impl lk_agents_abi::RealtimeSession for OpenAIRealtimeSession {
 
     fn aclose(&self) -> lk_agents_abi::BoxFuture<'_, ()> {
         Box::pin(async move { OpenAIRealtimeSession::aclose(self).await })
+    }
+
+    fn observe(&self, cx: telemetry::Cx) {
+        self.commands.input.observe(cx, telemetry::AudioConsumer::Realtime);
     }
 }
 

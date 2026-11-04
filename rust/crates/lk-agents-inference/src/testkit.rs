@@ -37,6 +37,8 @@ pub struct FakeWs {
     hang_connect: bool,
     /// Never complete a send: a peer that stopped reading, its TCP window full.
     stall_sends: bool,
+    /// Hold each handshake until notified: a slow connect.
+    connect_gate: Option<Arc<tokio::sync::Notify>>,
 }
 
 impl FakeWs {
@@ -49,6 +51,7 @@ impl FakeWs {
             keep_open: false,
             hang_connect: false,
             stall_sends: false,
+            connect_gate: None,
         }
     }
 
@@ -66,6 +69,12 @@ impl FakeWs {
     /// Connected and kept open, but no send ever completes.
     pub fn stalling_sends() -> Self {
         FakeWs { stall_sends: true, ..FakeWs::new(Vec::new()).keep_open() }
+    }
+
+    /// Finish each handshake only once `gate` is notified.
+    pub fn connect_on(mut self, gate: Arc<tokio::sync::Notify>) -> Self {
+        self.connect_gate = Some(gate);
+        self
     }
 
     pub fn failing(err: TransportError) -> Self {
@@ -109,6 +118,9 @@ impl WsTransport for FakeWs {
         }
         if self.hang_connect {
             std::future::pending::<()>().await;
+        }
+        if let Some(gate) = &self.connect_gate {
+            gate.notified().await;
         }
         let sender = Arc::new(FakeWsSender {
             sent: self.sent.clone(),

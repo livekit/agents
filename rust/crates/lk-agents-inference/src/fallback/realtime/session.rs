@@ -24,6 +24,8 @@ pub(super) struct SessionState {
     pub(super) events: VecDeque<Event>,
     pub(super) generation: Option<OpenGeneration>,
     pub(super) closed: bool,
+    /// Where each child reports the input audio it drops.
+    pub(super) audio: Option<lk_agents_abi::telemetry::Cx>,
 }
 
 pub struct FallbackSession {
@@ -205,6 +207,9 @@ impl FallbackSession {
                 match outcome {
                     Ok(()) => {
                         st.active = opened.take().expect("successful realtime open").1;
+                        if let Some(cx) = st.audio.clone() {
+                            st.active.observe(cx);
+                        }
                         st.active_index = target;
                         self.model_active.store(target, std::sync::atomic::Ordering::Relaxed);
                         st.events.push_back(Event::SessionSwapped {
@@ -452,5 +457,11 @@ impl RealtimeSession for FallbackSession {
             self.changed.notify_one();
             active.aclose().await;
         })
+    }
+
+    fn observe(&self, cx: lk_agents_abi::telemetry::Cx) {
+        let mut st = self.lock();
+        st.active.observe(cx.clone());
+        st.audio = Some(cx);
     }
 }

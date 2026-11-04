@@ -128,7 +128,7 @@ async fn refused_admission_retains_all_owners_after_the_last_caller_leaves() {
 
 #[tokio::test]
 async fn reconnect_and_live_commands_survive_asynchronous_cleanup_backpressure() {
-    use lk_agents_abi::llm::realtime::{CancelReply, Interrupt, PushAudio};
+    use lk_agents_abi::llm::realtime::{CancelReply, Interrupt};
     use lk_agents_media::pool::{JobClass, MediaPool, MediaPoolLimits};
     use lk_agents_net::transport::WsMessage;
 
@@ -152,7 +152,7 @@ async fn reconnect_and_live_commands_survive_asynchronous_cleanup_backpressure()
         settled,
         media_pool.clone(),
     ));
-    let (commands, incoming) = mpsc::channel(128);
+    let (commands, incoming) = leaky::audio_channel(INPUT_POLICY);
     let running = tokio::spawn(pump.run(incoming));
     wait_for_wire(&ws, "session update", |frames| {
         frames.iter().any(|frame| frame["type"] == "session.update")
@@ -227,8 +227,7 @@ async fn reconnect_and_live_commands_survive_asynchronous_cleanup_backpressure()
             .collect(),
     );
     commands
-        .send(Cmd::Core(Command::UpdateChatCtx(UpdateChatCtx { chat_ctx: target })))
-        .await
+        .control(Cmd::Core(Command::UpdateChatCtx(UpdateChatCtx { chat_ctx: target })))
         .unwrap();
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
@@ -244,12 +243,11 @@ async fn reconnect_and_live_commands_survive_asynchronous_cleanup_backpressure()
     .expect("an identical update did not finish preparation while cleanup was withheld");
 
     commands
-        .send(Cmd::Core(Command::GenerateReply(GenerateReply {
+        .control(Cmd::Core(Command::GenerateReply(GenerateReply {
             req_id: "live".into(),
             instructions: None,
             tool_choice: None,
         })))
-        .await
         .unwrap();
     wait_for_wire(&ws, "live reply", |frames| {
         frames.iter().any(|frame| {
@@ -280,27 +278,21 @@ async fn reconnect_and_live_commands_survive_asynchronous_cleanup_backpressure()
             if matches!(receiver.next().await, Some(Event::GenerationCreated(created)) if created.response_id == "control-response") { break; }
         }
     }).await.unwrap();
-    commands.send(Cmd::Core(Command::Interrupt(Interrupt { response_id: None }))).await.unwrap();
+    commands.control(Cmd::Core(Command::Interrupt(Interrupt { response_id: None }))).unwrap();
     wait_for_wire(&ws, "interrupt", |frames| {
         frames.iter().any(|frame| frame["type"] == "response.cancel")
     })
     .await;
-    // Keep each burst below the independent 32-batch socket write backlog. The writer
-    // aggregates five 20 ms frames into one 100 ms append; all 140 commands must proceed
-    // while cleanup is withheld, without accumulating in the core's deferred-media queue.
+    // The writer aggregates 20 ms frames into 100 ms appends; all 140 frames must proceed while
+    // cleanup is withheld, without accumulating in the core's deferred-media queue.
     for burst in 1..=7 {
         for _ in 0..20 {
-            commands
-                .send(Cmd::Core(Command::PushAudio(PushAudio {
-                    frame: lk_agents_abi::AudioFrame {
-                        data: vec![0u8; 960].into(),
-                        sample_rate: 24_000,
-                        num_channels: 1,
-                        samples_per_channel: 480,
-                    },
-                })))
-                .await
-                .unwrap();
+            commands.push(lk_agents_abi::AudioFrame {
+                data: vec![0u8; 960].into(),
+                sample_rate: 24_000,
+                num_channels: 1,
+                samples_per_channel: 480,
+            });
         }
         wait_for_wire(&ws, "audio", |frames| {
             frames.iter().filter(|frame| frame["type"] == "input_audio_buffer.append").count()
@@ -310,7 +302,7 @@ async fn reconnect_and_live_commands_survive_asynchronous_cleanup_backpressure()
     }
     assert_eq!(ws.connect_count(), 2, "ordinary cleanup forced another socket acquisition");
     drop(held);
-    commands.send(Cmd::Close).await.unwrap();
+    commands.control(Cmd::Close).unwrap();
     tokio::time::timeout(Duration::from_secs(5), running).await.unwrap().unwrap();
     cleanup.await.unwrap();
 }

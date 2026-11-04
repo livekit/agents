@@ -13,7 +13,8 @@ use lk_agents_net::transport::WsSender;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-/// Batches retain bounded control traffic while one previous batch is in I/O.
+/// Batches retain bounded control traffic while one previous batch is in I/O. Input is taken
+/// only once this queue is empty, so audio waits in its own channel, under its policy.
 pub(super) const WRITE_BACKLOG: usize = 32;
 
 pub(super) const RESPONSE_RECEIPTS: usize = 32;

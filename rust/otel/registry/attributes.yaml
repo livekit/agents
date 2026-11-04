@@ -27,6 +27,12 @@
                 "value": "room_input",
                 "brief": "room_input",
                 "stability": "development"
+              },
+              {
+                "id": "realtime",
+                "value": "realtime",
+                "brief": "realtime",
+                "stability": "development"
               }
             ]
           },

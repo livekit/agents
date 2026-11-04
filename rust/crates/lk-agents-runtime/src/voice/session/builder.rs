@@ -326,10 +326,14 @@ impl DriverBuilder {
         let activity = opening.activity.map_or(opening.start.context, |activity| activity.context);
         let trace = telemetry::TraceContext { span: Some(activity), ..self.trace.clone() };
         let cx = self.tracer.resume(&trace);
-        let opened =
-            executor.open_legs(&self.resources, self.stt.clone(), self.vad.clone(), cx).await?;
+        let opened = executor
+            .open_legs(&self.resources, self.stt.clone(), self.vad.clone(), cx.clone())
+            .await?;
         self.install_legs(&mut sinks, opened);
         let realtime = self.open_realtime(executor, &mut sinks).await?;
+        if let Some(realtime) = &realtime {
+            realtime.session.observe(cx);
+        }
         let realtime_events = realtime.as_ref().map(|realtime| Arc::clone(&realtime.session));
         let Sinks { by_channel: sinks, forwarder } = sinks;
 

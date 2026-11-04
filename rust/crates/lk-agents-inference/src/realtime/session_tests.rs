@@ -787,3 +787,141 @@ async fn realtime_unsent_say_never_claims_a_proactive_server_response() {
     );
     session.aclose().await;
 }
+
+/// 10 ms of 24 kHz mono whose samples count on from the frame before, so order is checkable.
+fn counted_frame(index: usize) -> lk_agents_abi::AudioFrame {
+    let data: Vec<u8> =
+        (0..240).flat_map(|sample| ((index * 240 + sample) as u16).to_le_bytes()).collect();
+    lk_agents_abi::AudioFrame::new(data, 24_000, 1, 240)
+}
+
+/// The wire's event types after the opening `session.update`, and the audio appended, in order.
+fn input_on_the_wire(sent: &[serde_json::Value]) -> (Vec<String>, Vec<u8>) {
+    use base64::Engine as _;
+    let mut audio = Vec::new();
+    let types = sent[1..]
+        .iter()
+        .map(|frame| {
+            if frame["type"] == json!("input_audio_buffer.append") {
+                let chunk = frame["audio"].as_str().expect("base64 audio");
+                audio.extend(base64::engine::general_purpose::STANDARD.decode(chunk).unwrap());
+            }
+            frame["type"].as_str().unwrap().to_owned()
+        })
+        .collect();
+    (types, audio)
+}
+
+async fn sent_until(ws: &FakeWs, last: &str) -> Vec<serde_json::Value> {
+    tokio::time::timeout(BOUND, async {
+        loop {
+            let sent = ws.sent_json();
+            if sent.last().is_some_and(|frame| frame["type"] == json!(last)) {
+                return sent;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("expected a final {last}, saw {:?}", ws.sent()))
+}
+
+async fn no_errors(session: &lk_agents_inference::realtime::openai::OpenAIRealtimeSession) {
+    session.aclose().await;
+    while let Some(event) = tokio::time::timeout(BOUND, session.next_event()).await.unwrap() {
+        assert!(!matches!(event, Event::Error(_)), "{event:?}");
+    }
+}
+
+// Catches: the console crash. Pre-connect audio and the mic backlog reach a session whose socket
+// is still connecting, one frame per 10 ms, as a burst; each frame was a queued command and then
+// a writer batch, and a full queue was a non-retryable "write backlog exceeded". Seconds of audio
+// must wait, arrive whole and in order, and stay before the commit and the reply that follow it.
+#[tokio::test]
+async fn seconds_of_audio_before_a_slow_connect_arrive_in_order_before_the_commit() {
+    let gate = Arc::new(tokio::sync::Notify::new());
+    let ws = Arc::new(FakeWs::new(vec![]).keep_open().connect_on(gate.clone()));
+    let session = model(ws.clone(), OPENAI).session(false).await;
+
+    let frames: Vec<_> = (0..300).map(counted_frame).collect();
+    for frame in &frames {
+        session.push_audio(frame.clone());
+    }
+    session.send(lk_agents_abi::RealtimeCommand::CommitAudio(
+        lk_agents_abi::llm::realtime::CommitAudio {},
+    ));
+    session.generate_reply(None);
+    for _ in 0..16 {
+        tokio::task::yield_now().await;
+    }
+    gate.notify_one();
+
+    let (types, audio) = input_on_the_wire(&sent_until(&ws, "response.create").await);
+    let mut expected = vec!["input_audio_buffer.append"; 30];
+    expected.extend(["input_audio_buffer.commit", "response.create"]);
+    assert_eq!(types, expected, "three seconds is thirty 100 ms appends, then the commit");
+    let pushed: Vec<u8> = frames.iter().flat_map(|frame| frame.data.iter().copied()).collect();
+    assert!(audio == pushed, "the audio arrived reordered or cut");
+    no_errors(&session).await;
+}
+
+// Catches: a clear reordered against the audio around it. The audio before it is dropped
+// locally, the server is still told to clear its buffer, and the audio after it is what the
+// commit names.
+#[tokio::test]
+async fn a_clear_drops_the_audio_before_it_and_keeps_the_audio_after_it() {
+    let gate = Arc::new(tokio::sync::Notify::new());
+    let ws = Arc::new(FakeWs::new(vec![]).keep_open().connect_on(gate.clone()));
+    let session = model(ws.clone(), OPENAI).session(false).await;
+
+    for index in 0..20 {
+        session.push_audio(counted_frame(index));
+    }
+    session.send(lk_agents_abi::RealtimeCommand::ClearAudio(
+        lk_agents_abi::llm::realtime::ClearAudio {},
+    ));
+    let kept: Vec<_> = (100..120).map(counted_frame).collect();
+    for frame in &kept {
+        session.push_audio(frame.clone());
+    }
+    session.send(lk_agents_abi::RealtimeCommand::CommitAudio(
+        lk_agents_abi::llm::realtime::CommitAudio {},
+    ));
+    gate.notify_one();
+
+    let (types, audio) = input_on_the_wire(&sent_until(&ws, "input_audio_buffer.commit").await);
+    assert_eq!(
+        types,
+        [
+            "input_audio_buffer.clear",
+            "input_audio_buffer.append",
+            "input_audio_buffer.append",
+            "input_audio_buffer.commit"
+        ]
+    );
+    let after: Vec<u8> = kept.iter().flat_map(|frame| frame.data.iter().copied()).collect();
+    assert!(audio == after, "audio from before the clear reached the server");
+    no_errors(&session).await;
+}
+
+// Catches: a pump that never drains turning local pressure into a dead session. The command it
+// could not take is lost, so its reply fails, and the error is recoverable.
+#[tokio::test]
+async fn a_stuck_input_fails_the_lost_reply_recoverably() {
+    let ws = Arc::new(FakeWs::hanging());
+    let session = model(ws.clone(), OPENAI).session(false).await;
+    for _ in 0..64 {
+        session.send(lk_agents_abi::RealtimeCommand::Interrupt(
+            lk_agents_abi::llm::realtime::Interrupt { response_id: None },
+        ));
+    }
+    let req_id = session.generate_reply(None);
+    match next_event(&session).await {
+        Event::Error(error) => assert!(error.recoverable, "{error:?}"),
+        other => panic!("expected the stuck input, got {other:?}"),
+    }
+    match next_event(&session).await {
+        Event::GenerateReplyFailed(failed) => assert_eq!(failed.req_id, req_id),
+        other => panic!("expected the lost reply to fail, got {other:?}"),
+    }
+}

@@ -4359,7 +4359,8 @@
           "type": "string",
           "required": true,
           "members": [
-            "room_input"
+            "room_input",
+            "realtime"
           ],
           "label": true
         }
