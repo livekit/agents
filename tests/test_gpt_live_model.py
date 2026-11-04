@@ -1033,6 +1033,51 @@ async def test_a_reconnected_session_receives_only_the_newest_four_seconds_queue
         await model.aclose()
 
 
+class _AppendFailingWS(_LifecycleWS):
+    async def send_str(self, data: str) -> None:
+        if json.loads(data)["type"] == "session.input_audio.append":
+            raise ConnectionError
+        await super().send_str(data)
+
+
+async def test_a_send_failure_in_the_backlog_leaves_the_rest_for_the_next_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sockets = [_AppendFailingWS(start=False), _LifecycleWS()]
+    connections = iter(sockets)
+
+    async def connect(self: GPTLiveSession) -> _LifecycleWS:
+        return next(connections)
+
+    monkeypatch.setattr(GPTLiveSession, "_create_ws_conn", connect)
+    model = GPTLiveModel(
+        api_key="sk-test", conn_options=APIConnectOptions(max_retry=1, retry_interval=0)
+    )
+    session = model.session()
+    try:
+        await session._update_session()
+        await asyncio.wait_for(sockets[0].started.wait(), timeout=1)
+        for number in range(60):
+            session.push_audio(_numbered_frame(number))
+        session.append_commentary("The caller is on hold.")
+        sockets[0].emit({"type": "session.started", "session": {"id": "live_1"}})
+
+        await asyncio.wait_for(sockets[1].started.wait(), timeout=1)
+        await asyncio.sleep(0.05)
+        assert _numbered_traffic(sockets[1].sent) == [
+            "session.start",
+            *range(21, 60),
+            "session.commentary.append",
+        ]
+    finally:
+        for ws in sockets:
+            ws.emit(
+                {"type": "session.closed", "reason": "close_requested", "usage": {"seconds": 0}}
+            )
+        await session.aclose()
+        await model.aclose()
+
+
 async def test_a_backlog_under_the_cap_is_sent_whole(monkeypatch: pytest.MonkeyPatch) -> None:
     ws = _connect_hook(monkeypatch, auto_start=False)
 

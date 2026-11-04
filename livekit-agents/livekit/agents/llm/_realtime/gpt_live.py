@@ -681,8 +681,15 @@ class GPTLiveSession(
                 await self._ws_send(
                     ws_conn, types.InputAudioMuteEvent(event_id=utils.shortuuid("mute_"))
                 )
-            for msg in self._drain_trimmed_backlog():
-                await self._ws_send(ws_conn, msg)
+            backlog = self._drain_trimmed_backlog()
+            # on the channel, what a failed send leaves reaches the next session; a closed
+            # channel takes nothing back, and no session follows it
+            if self._msg_ch.closed:
+                for msg in backlog:
+                    await self._ws_send(ws_conn, msg)
+            else:
+                for msg in backlog:
+                    self._msg_ch.send_nowait(msg)
             async for msg in self._msg_ch:
                 await self._ws_send(ws_conn, msg)
 
