@@ -9,6 +9,7 @@ pub mod amd;
 mod audio;
 pub mod background_audio;
 pub mod console;
+pub mod default_nodes;
 mod effects;
 pub mod events;
 pub use events::VoiceRuntimeEvent;

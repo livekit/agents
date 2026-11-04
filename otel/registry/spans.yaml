@@ -488,18 +488,12 @@ groups:
         requirement_level: "recommended"
       - ref: "lk.input.dropped_from_base"
         requirement_level: "recommended"
-      - ref: "gen_ai.request.model"
-        requirement_level: "recommended"
-      - ref: "gen_ai.provider.name"
-        requirement_level: "recommended"
       - ref: "lk.pii.response.text"
         requirement_level: "required"
       - ref: "lk.pii.response.function_calls"
         requirement_level: "required"
       - ref: "lk.response.ttft"
         requirement_level: "required"
-      - ref: "gen_ai.response.model"
-        requirement_level: "recommended"
     annotations:
       livekit:
         parents:
@@ -508,7 +502,6 @@ groups:
           - "lk.pii.response.text"
           - "lk.pii.response.function_calls"
           - "lk.response.ttft"
-          - "gen_ai.response.model"
   - id: "span.llm_request"
     type: "span"
     span_kind: "client"
@@ -1045,21 +1038,14 @@ groups:
     stability: "development"
     brief: "The agent's TTS node for one step."
     attributes:
-      - ref: "gen_ai.request.model"
-        requirement_level: "recommended"
-      - ref: "gen_ai.provider.name"
-        requirement_level: "recommended"
       - ref: "lk.response.ttfb"
         requirement_level: "required"
-      - ref: "gen_ai.response.model"
-        requirement_level: "recommended"
     annotations:
       livekit:
         parents:
           - "agent_turn"
         end_attributes:
           - "lk.response.ttfb"
-          - "gen_ai.response.model"
   - id: "span.tts_request"
     type: "span"
     span_kind: "client"

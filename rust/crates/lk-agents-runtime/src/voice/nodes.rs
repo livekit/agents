@@ -1,27 +1,23 @@
-//! The session's registered nodes over the host's `_SessionNodes` (`_core.AgentNodes`), and the
-//! default `tts_node` and `stt_node` those nodes may run. The core feeds each node its input,
-//! drains its output and calls nothing but the node. [`Nodes`]: a registered `llm_node`, `tts_node` or
-//! `stt_node` as the leg the session runs, speaking as the provider below it.
+//! The session's registered nodes over the host's `_SessionNodes` (`_core.AgentNodes`). The core
+//! feeds each node its input, drains its output and calls nothing but the node. [`Nodes`]: a
+//! registered `llm_node`, `tts_node` or `stt_node` as the leg the session runs, speaking as the
+//! provider below it. The default nodes they may run are `default_nodes`.
 
 use parking_lot::Mutex;
-use std::any::Any;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use lk_agents_abi::errors::{HostError, ProviderError};
 use lk_agents_abi::metrics::base::{AgentMetrics, ConnectionAcquired};
 use lk_agents_abi::telemetry::record::TraceContext;
-use lk_agents_abi::types::connect::ApiConnectOptionsError;
 use lk_agents_abi::utils::stream::{CallLedger, RetryReport};
 use lk_agents_abi::voice::io::{IoError, TextOutput};
-use lk_agents_abi::voice::nodes::{
-    NodeChunk, NodeFactory, NodeFrame, ProviderCalls, SessionNodes, TextNode,
-};
+use lk_agents_abi::voice::nodes::{NodeChunk, NodeFactory, ProviderCalls, SessionNodes, TextNode};
 use lk_agents_abi::{
-    ApiConnectOptions, AudioFrame, ChatRequest, ChoiceDelta, Clock, Closed, HOST_TEARDOWN_TIMEOUT,
-    LanguageCode, Llm, LlmChunk, LlmStream, Role, Spawner, SpawnerExt as _, SpeechEvent,
-    StreamInput, StreamOutput, Stt, SttCapabilities, SttSink, SttSource, SynthesizedAudio,
-    TranscriptChunk, Ts, Tts, TtsCapabilities, TtsSink, TtsSource, Vad,
+    AudioFrame, ChatRequest, ChoiceDelta, Clock, Closed, HOST_TEARDOWN_TIMEOUT, LanguageCode, Llm,
+    LlmChunk, LlmStream, Role, Spawner, SpawnerExt as _, SpeechEvent, StreamInput, StreamOutput,
+    Stt, SttCapabilities, SttSink, SttSource, SynthesizedAudio, TranscriptChunk, Ts, Tts,
+    TtsCapabilities, TtsSink, TtsSource,
 };
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::task::TaskSet;
@@ -67,8 +63,9 @@ impl NodeFactory for AgentNodes {
         req: &'a ChatRequest,
     ) -> lk_agents_abi::BoxFuture<'a, Result<LlmStream, ProviderError>> {
         Box::pin(async move {
-            let trace = req.trace.as_ref().map(TraceContext::in_node).unwrap_or_default();
-            let out = self.host.llm(req, trace).await?;
+            let trace = req.trace.clone().unwrap_or_default();
+            let calls = Arc::new(NodeCalls { trace: trace.clone(), ..NodeCalls::default() });
+            let out = self.host.llm(req, calls, trace).await?;
             Ok(Box::new(Mapped { source: out, map: llm_chunk, calls: None }) as LlmStream)
         })
     }
@@ -83,8 +80,9 @@ impl NodeFactory for AgentNodes {
     > {
         Box::pin(async move {
             let (sink, input) = channel();
-            let calls = Arc::new(NodeCalls { expressive, ..NodeCalls::default() });
-            let out = self.host.tts(Box::new(input), calls.clone(), trace.in_node()).await?;
+            let calls =
+                Arc::new(NodeCalls { expressive, trace: trace.clone(), ..NodeCalls::default() });
+            let out = self.host.tts(Box::new(input), calls.clone(), trace).await?;
             let request_id = node_id("tts_node_");
             let relay = calls.clone();
             let map = move |audio: SynthesizedAudio| SynthesizedAudio {
@@ -447,15 +445,17 @@ impl<A: Send + 'static, T, M: FnMut(A) -> T + Send> lk_agents_abi::utils::stream
     }
 }
 
-/// The provider calls of the default nodes a `tts_node` runs, as the reference meters a TTS's
-/// streams and not the node's output, and the connection a default node's provider acquired,
-/// which the node's output does not carry across the host.
+/// The provider calls of the default node a registered node runs, as the reference meters a TTS's
+/// streams and not the node's output, the connection its provider acquired, which the node's
+/// output does not carry across the host, and the step's trace its request records for.
 #[derive(Default)]
 pub struct NodeCalls {
     state: Mutex<NodeCallState>,
     /// The synthesis carries expressive markup; the default node opens its provider with it.
-    expressive: bool,
+    pub(super) expressive: bool,
     connection: Mutex<Option<ConnectionAcquired>>,
+    /// The step's node span, job and conversation.
+    pub(super) trace: TraceContext,
 }
 
 #[derive(Default)]
@@ -470,7 +470,7 @@ enum NodeCallState {
 }
 
 impl NodeCalls {
-    fn record(&self, ledger: Option<CallLedger>) {
+    pub(super) fn record(&self, ledger: Option<CallLedger>) {
         let mut state = self.state.lock();
         match (ledger, &mut *state) {
             (_, NodeCallState::Streamed) => {}
@@ -481,7 +481,7 @@ impl NodeCalls {
     }
 
     /// Reported by the node's next output that can carry it.
-    fn connected(&self, connection: Option<ConnectionAcquired>) {
+    pub(super) fn connected(&self, connection: Option<ConnectionAcquired>) {
         if connection.is_some() {
             *self.connection.lock() = connection;
         }
@@ -505,194 +505,6 @@ impl NodeCalls {
 impl ProviderCalls for NodeCalls {}
 
 impl lk_agents_abi::voice::nodes::NodeCalls for NodeCalls {}
-
-// ----------------------------------------------------------------------------- the default nodes
-
-pub struct DefaultNodes;
-
-/// What a default node pumps into: read by the host as an async iterator.
-pub struct NodeOutput<T>(tokio::sync::Mutex<mpsc::Receiver<Result<T, ProviderError>>>);
-
-impl<T> NodeOutput<T> {
-    async fn recv(&self) -> Result<Option<T>, ProviderError> {
-        self.0.lock().await.recv().await.transpose()
-    }
-}
-
-impl lk_agents_abi::voice::nodes::TtsNodeFrames for NodeOutput<NodeFrame> {
-    async fn next(&self) -> Result<Option<NodeFrame>, ProviderError> {
-        self.recv().await
-    }
-}
-
-impl lk_agents_abi::voice::nodes::SttNodeEvents for NodeOutput<SpeechEvent> {
-    async fn next(&self) -> Result<Option<SpeechEvent>, ProviderError> {
-        self.recv().await
-    }
-}
-
-impl lk_agents_abi::voice::nodes::DefaultNodes for DefaultNodes {
-    type Env = ProcessEnv;
-    type Frames = NodeOutput<NodeFrame>;
-    type Events = NodeOutput<SpeechEvent>;
-
-    fn tts_node(
-        env: &ProcessEnv,
-        tts: Arc<dyn Tts>,
-        text: Box<dyn StreamOutput<String>>,
-        conn_options: Option<ApiConnectOptions>,
-        calls: Option<Arc<dyn ProviderCalls>>,
-    ) -> Result<NodeOutput<NodeFrame>, ApiConnectOptionsError> {
-        let conn_options = policy(conn_options, tts.conn_options())?;
-        let tts = tts.with_conn_options(&conn_options).unwrap_or(tts);
-        let clock = Arc::clone(&env.clock);
-        let tts = lk_agents_inference::tts::sentence_adapter::StreamAdapter::adapted_for(
-            tts,
-            Arc::clone(&clock),
-            conn_options,
-        );
-        let calls = calls
-            .and_then(|calls| (calls as Arc<dyn Any + Send + Sync>).downcast::<NodeCalls>().ok());
-        let expressive = calls.as_ref().is_some_and(|calls| calls.expressive);
-        Ok(pumped(env, async move {
-            let opened = tts.stream(expressive, Default::default()).await;
-            if let (Ok(stream), Some(calls)) = (&opened, &calls) {
-                calls.record(stream.output().call_ledger());
-            }
-            (opened, text, clock, move |audio: SynthesizedAudio| {
-                if let Some(calls) = &calls {
-                    calls.connected(audio.connection);
-                }
-                NodeFrame {
-                    frame: audio.frame,
-                    timed_transcript: audio.timed_transcript,
-                    started_time: audio.started_time,
-                }
-            })
-        }))
-    }
-
-    fn stt_node(
-        env: &ProcessEnv,
-        stt: Arc<dyn Stt>,
-        audio: Box<dyn StreamOutput<AudioFrame>>,
-        conn_options: Option<ApiConnectOptions>,
-        vad: Option<Arc<dyn Vad>>,
-        calls: Option<Arc<dyn ProviderCalls>>,
-    ) -> Result<NodeOutput<SpeechEvent>, ApiConnectOptionsError> {
-        let conn_options = policy(conn_options, stt.conn_options())?;
-        let stt = stt.with_conn_options(&conn_options).unwrap_or(stt);
-        let clock = Arc::clone(&env.clock);
-        let stt = lk_agents_inference::stt::stream_adapter::StreamAdapter::adapted(
-            stt,
-            vad,
-            Arc::clone(&clock),
-        );
-        let calls = calls
-            .and_then(|calls| (calls as Arc<dyn Any + Send + Sync>).downcast::<NodeCalls>().ok());
-        Ok(pumped(env, async move {
-            let label = stt.label();
-            let opened = stt.stream(None, None, Default::default()).await.and_then(|opened| {
-                opened.ok_or_else(|| {
-                    lk_agents_abi::errors::ApiError::new(format!(
-                        "the STT ({label}) does not stream: add a VAD, or wrap it in an stt.StreamAdapter"
-                    ))
-                    .into()
-                })
-            });
-            (opened, audio, clock, move |event: SpeechEvent| {
-                if let (Some(calls), Some(usage)) = (&calls, &event.recognition_usage) {
-                    calls.connected(usage.connection);
-                }
-                event
-            })
-        }))
-    }
-}
-
-/// The node's `conn_options`, else the provider's own policy (models.md), else the defaults.
-fn policy(
-    given: Option<ApiConnectOptions>,
-    provider: Option<ApiConnectOptions>,
-) -> Result<ApiConnectOptions, ApiConnectOptionsError> {
-    let Some(given) = given else { return Ok(provider.unwrap_or_default()) };
-    given.validate()?;
-    Ok(given)
-}
-
-type Opened<I, O> = Result<
-    lk_agents_abi::DuplexStream<Box<dyn StreamInput<I>>, Box<dyn lk_agents_abi::ProviderStream<O>>>,
-    ProviderError,
->;
-
-/// The provider's stream, once `open` opens it, fed from the caller's input and drained into the
-/// returned output until either side stops. Detached: the pump ends once the caller's input ends
-/// or its reader is gone.
-fn pumped<I, O, T, F, M>(env: &ProcessEnv, open: F) -> NodeOutput<T>
-where
-    I: Send + 'static,
-    O: Send + 'static,
-    T: Send + 'static,
-    F: std::future::Future<Output = (Opened<I, O>, Box<dyn StreamOutput<I>>, Arc<dyn Clock>, M)>
-        + Send
-        + 'static,
-    M: Fn(O) -> T + Send + Sync + 'static,
-{
-    let (tx, rx) = mpsc::channel(1);
-    let spawner = match (env.spawner)() {
-        Ok(spawner) => spawner,
-        Err(error) => {
-            let _ = tx.try_send(Err(lk_agents_abi::errors::ApiError::new(error).into()));
-            return NodeOutput(tokio::sync::Mutex::new(rx));
-        }
-    };
-    let pump = async move {
-        let (opened, mut input, clock, map) = open.await;
-        let (sink, mut source) = match opened {
-            Ok(stream) => stream.split(),
-            Err(e) => {
-                let _ = tx.send(Err(e)).await;
-                return;
-            }
-        };
-        let feed_clock = Arc::clone(&clock);
-        let feed = async move {
-            while let Ok(Some(item)) = input.next().await {
-                if sink.push(item).is_err() {
-                    break;
-                }
-            }
-            sink.end_input();
-            input.close(feed_clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT)).await;
-            // fed: what remains is the provider's
-            std::future::pending::<()>().await
-        };
-        let drain = async {
-            loop {
-                let next = source.next().await;
-                let end = !matches!(next, Ok(Some(_)));
-                let item = match next {
-                    Ok(Some(item)) => Ok(map(item)),
-                    Ok(None) => return,
-                    Err(e) => Err(e),
-                };
-                if tx.send(item).await.is_err() || end {
-                    return;
-                }
-            }
-        };
-        tokio::select! {
-            biased;
-            () = tx.closed() => {}
-            () = drain => {}
-            () = feed => {}
-        }
-        source.close(clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT)).await;
-    };
-    // Detached: the returned output owns the pump; dropping it closes `tx`, which ends the pump.
-    spawner.spawn_detached(pump);
-    NodeOutput(tokio::sync::Mutex::new(rx))
-}
 
 /// The nodes the session registers; a leg without one is the provider itself.
 #[derive(Default, Clone)]
@@ -770,6 +582,12 @@ impl<T: Send + 'static> lk_agents_abi::utils::stream::ProviderStream<T> for Fina
     }
 }
 
+/// A provider's duplex stream, as it opened.
+pub(super) type Opened<I, O> = Result<
+    lk_agents_abi::DuplexStream<Box<dyn StreamInput<I>>, Box<dyn lk_agents_abi::ProviderStream<O>>>,
+    ProviderError,
+>;
+
 fn duplex<I, T: Send + 'static>(opened: Opened<I, T>) -> Opened<I, T> {
     let (sink, source) = opened.map_err(final_error)?.split();
     Ok(lk_agents_abi::DuplexStream::new(sink, Box::new(Final(source))))
@@ -794,6 +612,10 @@ impl Llm for Node<dyn Llm> {
 
     fn failed(&self, error: ProviderError, recoverable: bool) {
         self.below.failed(error, recoverable);
+    }
+
+    fn is_node(&self) -> bool {
+        true
     }
 
     fn chat<'a>(
@@ -826,6 +648,10 @@ impl Tts for Node<dyn Tts> {
 
     fn failed(&self, error: ProviderError, recoverable: bool) {
         self.below.failed(error, recoverable);
+    }
+
+    fn is_node(&self) -> bool {
+        true
     }
 
     fn sample_rate(&self) -> u32 {

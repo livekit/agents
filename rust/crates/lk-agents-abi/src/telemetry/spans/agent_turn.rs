@@ -127,12 +127,10 @@ pub struct LlmNode {
     pub tool_sets: Vec<String>,
     #[attrs]
     pub input: Option<InputDelta>,
-    #[attr(otel::GEN_AI_REQUEST_MODEL, label = "model_name")]
-    pub model: Option<String>,
-    #[attr(otel::GEN_AI_PROVIDER_NAME, label = "model_provider")]
-    pub provider: Option<String>,
 }
 
+// What the node yielded. The model and provider are its requests' (`llm_request`): a node makes
+// one only when it runs the default.
 #[derive(Attrs)]
 pub struct LlmNodeEnd {
     #[attr("lk.pii.response.text")]
@@ -140,30 +138,22 @@ pub struct LlmNodeEnd {
     #[attr("lk.pii.response.function_calls")]
     pub function_calls: Content<Json<serde_json::Value>>,
     /// Seconds to the first token, measured at the node.
-    #[attr("lk.response.ttft", metric = "lk.agents.turn.llm_ttft")]
+    #[attr("lk.response.ttft")]
     pub ttft: Measured<Seconds>,
-    /// The model that served the step, after a fallback.
-    #[attr(otel::GEN_AI_RESPONSE_MODEL)]
-    pub response_model: Option<String>,
 }
 
 /// The agent's TTS node for one step.
+// The model and provider are its requests' (`tts_request`): a node makes one only when it runs
+// the default.
 #[span(name = "tts_node", parent = AgentTurn, end = TtsNodeEnd)]
 #[derive(Attrs)]
-pub struct TtsNode {
-    #[attr(otel::GEN_AI_REQUEST_MODEL, label = "model_name")]
-    pub model: Option<String>,
-    #[attr(otel::GEN_AI_PROVIDER_NAME, label = "model_provider")]
-    pub provider: Option<String>,
-}
+pub struct TtsNode;
 
 #[derive(Attrs)]
 pub struct TtsNodeEnd {
     /// Seconds from the text anchor to the first audio frame.
-    #[attr("lk.response.ttfb", metric = "lk.agents.turn.tts_ttfb")]
+    #[attr("lk.response.ttfb")]
     pub ttfb: Measured<Seconds>,
-    #[attr(otel::GEN_AI_RESPONSE_MODEL)]
-    pub response_model: Option<String>,
 }
 
 /// One realtime model response; usage and timing on the span itself.

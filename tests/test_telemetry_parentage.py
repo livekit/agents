@@ -287,6 +287,87 @@ async def _run(
     return seen, seen_after_yield
 
 
+# The provider request spans and the node spans they nest under, by how the step's nodes run.
+REQUEST_PARENTS = {
+    # a node making its own output makes no provider request
+    "custom": {},
+    # a node running the default makes the request, under its node span
+    "delegating": {"llm_request": "llm_node", "tts_request": "tts_node"},
+    # with no node registered the pipeline makes it, under the same spans
+    "default": {"llm_request": "llm_node", "tts_request": "tts_node"},
+}
+# Node spans describe the callback; the model and provider are their requests'.
+REQUEST_ONLY_KEYS = {"gen_ai.request.model", "gen_ai.provider.name", "gen_ai.response.model"}
+
+
+# Catches: a request span opened around a registered node (a custom node's output reported as a
+# provider request), a node running the default losing its request or the step's identity, or a
+# node span carrying its request's model.
+@pytest.mark.parametrize("nodes", list(REQUEST_PARENTS))
+async def test_a_provider_request_nests_under_the_node_that_makes_it(
+    collector: _Collector, nodes: str
+) -> None:
+    model = FakeLLM(
+        fake_responses=[FakeLLMResponse(input="hello", content="Hi there.", ttft=0, duration=0)]
+    )
+    tts_model = FakeTTS(fake_audio_duration=0.1)
+    session = VoiceSession(llm=model, tts=tts_model, aec_warmup_duration=None)
+    session.output.audio = FakeAudioOutput()
+
+    if nodes == "custom":
+
+        @session.llm_node
+        async def think(
+            ctx: RunContext, chat_ctx: ChatContext, tools: list[llm.Tool], settings: ModelSettings
+        ) -> AsyncIterator[str]:
+            yield "Hi there."
+
+        @session.tts_node
+        async def speak(
+            ctx: RunContext, text: AsyncIterable[str], settings: ModelSettings
+        ) -> AsyncIterator[rtc.AudioFrame]:
+            async for _ in text:
+                pass
+            yield rtc.AudioFrame.create(tts_model.sample_rate, 1, tts_model.sample_rate // 10)
+
+    elif nodes == "delegating":
+
+        @session.llm_node
+        def think(
+            ctx: RunContext, chat_ctx: ChatContext, tools: list[llm.Tool], settings: ModelSettings
+        ) -> AsyncIterator[Any]:
+            return session.default.llm_node(ctx, chat_ctx, tools, settings)
+
+        @session.tts_node
+        def speak(
+            ctx: RunContext, text: AsyncIterable[str], settings: ModelSettings
+        ) -> AsyncIterator[rtc.AudioFrame]:
+            return session.default.tts_node(ctx, text, settings)
+
+    async with session:
+        await session.start(Agent(instructions="Greet the caller.", name="desk"))
+        await session.generate_reply(user_input="hello")
+    await _settle(collector, {"llm_node", "tts_node", "agent_session"})
+
+    expected = REQUEST_PARENTS[nodes]
+    for name in ("llm_request", "tts_request"):
+        parents = {collector.parent_name(s) for s in collector.named(name)}
+        assert parents == ({expected[name]} if name in expected else set()), (name, parents)
+    for name in ("llm_node", "tts_node"):
+        (node,) = collector.named(name)
+        keys = {a["key"] for a in node.get("attributes", [])}
+        assert not keys & REQUEST_ONLY_KEYS, (name, keys)
+    for request in collector.named("llm_request") + collector.named("tts_request"):
+        node = collector.spans[request["parentSpanId"]]
+        conversation = _attr(node, "gen_ai.conversation.id")
+        assert conversation and _attr(request, "gen_ai.conversation.id") == conversation
+        assert _attr(request, "gen_ai.request.model") is not None
+
+
+def _attr(span: dict[str, Any], key: str) -> Any:
+    return next((a["value"] for a in span.get("attributes", []) if a["key"] == key), None)
+
+
 async def test_job_callbacks_spans_nest_under_their_job_spans(
     collector: _Collector, own_executor: Callable[[JobExecutor], JobExecutor]
 ) -> None:

@@ -32,6 +32,7 @@ from .background_audio_wire import Sound
 from .chat_items import ChatContent, ChatItem
 from .connect import APIConnectOptions
 from .io_events import AvatarPlaybackSegment, PlaybackSegment
+from .llm import ChatChunk
 from .metrics import AvatarMetrics
 from .rtc_frames import AudioFrame
 from .rtc_wire import PlaybackInfo
@@ -265,6 +266,11 @@ class AgentNodes:
 class _core_NodeCalls:
     ...
 
+class LlmNodeChunks:
+    """The default `llm_node`'s chunks."""
+    def __aiter__(self) -> Self: ...
+    async def __anext__(self) -> ChatChunk: ...
+
 class TtsNodeFrames:
     """The default `tts_node`'s frames."""
     def __aiter__(self) -> Self: ...
@@ -274,6 +280,22 @@ class SttNodeEvents:
     """The default `stt_node`'s speech events."""
     def __aiter__(self) -> Self: ...
     async def __anext__(self) -> SpeechEvent: ...
+
+def llm_node(
+    llm: LLM[Any],
+    chat_ctx: Sequence[ChatItem],
+    chat_ctx_host: object,
+    *,
+    tools: Sequence[ToolSpec],
+    tools_host: object | None = None,
+    tool_choice: ToolChoice | None = None,
+    conn_options: APIConnectOptions | None = None,
+    calls: _core_NodeCalls | None = None,
+) -> LlmNodeChunks:
+    """A completion of `chat_ctx` (its items, and the host's `llm.ChatContext` a host LLM is
+    handed) offering `tools` (their specs, and the host's `list[Tool]`). `conn_options`: the
+    session's, else the defaults. `calls`: the running agent node's, when it runs this one.
+    """
 
 def tts_node(
     tts: TTS[Any],

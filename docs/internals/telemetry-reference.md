@@ -55,8 +55,8 @@ job_entrypoint                          job dispatch to entrypoint exit; events 
 │   │   │                               the step started, with lk.generation_id and
 │   │   │                               lk.parent_generation_id
 │   │   ├── agent_speaking
-│   │   ├── llm_node > llm_request > llm_request_run (one per attempt)
-│   │   ├── tts_node > tts_request > tts_request_run (one per attempt)
+│   │   ├── llm_node > llm_request > llm_request_run (one per attempt; see the node rows)
+│   │   ├── tts_node > tts_request > tts_request_run (one per attempt; see the node rows)
 │   │   ├── realtime_inference          usage and timing on the span itself
 │   │   │   └── realtime_metrics        only for metrics that arrive after the inference ended
 │   │   ├── function_tool
@@ -277,11 +277,11 @@ step's start, `preemptive_generation_discarded` (`lk.speech_id`).
 | Span | Parent | Keys |
 | --- | --- | --- |
 | `agent_speaking` | `agent_turn` (direct child) | participant attributes |
-| `llm_node` | `agent_turn` | start: `lk.pii.chat_ctx` (JSON), `lk.function_tools`, `lk.provider_tools`, `lk.tool_sets` (string arrays), `lk.input.delta`, `lk.input.base_span_id`, `lk.input.dropped_from_base` with input deltas; end: `lk.pii.response.text`, `lk.pii.response.function_calls` (JSON), `lk.response.ttft` (s, measured at the node); `gen_ai.request.model`, `gen_ai.provider.name`, and `gen_ai.response.model` after a fallback; a node override that makes no `llm_request` carries the `llm_request` GenAI keys itself |
+| `llm_node` | `agent_turn` | the callback, the same keys whatever it is: start: `lk.pii.chat_ctx` (JSON), `lk.function_tools`, `lk.provider_tools`, `lk.tool_sets` (string arrays), `lk.input.delta`, `lk.input.base_span_id`, `lk.input.dropped_from_base` with input deltas; end: `lk.pii.response.text`, `lk.pii.response.function_calls` (JSON), `lk.response.ttft` (s, measured at the node). No model or provider: those are its `llm_request`'s. The request is a child only where one is made: the default pipeline's, or the one `session.default.llm_node` makes for an override that runs it (under the span current there); an override making its own output has none |
 | `llm_request` (kind `CLIENT`) | current | below |
 | `llm_request_run` | `llm_request` | `gen_ai.provider.name`, `gen_ai.request.model`, `lk.retry_count` (int); `lk.provider_request_ids` at the attempt's end |
 | `llm_fallback_adapter` | current | `gen_ai.provider.name`, `gen_ai.request.model` (next instance), `gen_ai.request.stream`, `gen_ai.output.type`, `lk.retry_count`; on success `lk.fallback.label`, `lk.fallback.index` (int), `gen_ai.response.model`, `gen_ai.provider.name` (served); one `llm_request` child per instance tried |
-| `tts_node` | `agent_turn` | `gen_ai.request.model`, `gen_ai.provider.name`; `lk.response.ttfb` (s, from the text anchor) at the first audio frame; `gen_ai.response.model` after a fallback |
+| `tts_node` | `agent_turn` | the callback: `lk.response.ttfb` (s, from the text anchor) at the first audio frame. No model or provider: those are its `tts_request`'s, a child only where one is made (the default pipeline's, or `session.default.tts_node`'s for an override that runs it) |
 | `tts_request` (kind `CLIENT`) | current | `lk.tts.streaming` (bool), `lk.tts.label`, `gen_ai.provider.name`, `gen_ai.request.model`; after success `lk.pii.input_text`; `lk.tts_metrics` (JSON: `ttfb`, `characters_count`, `audio_duration`, ...); `lk.fallback.recovery` (bool) for a recovery probe |
 | `tts_request_run` | `tts_request` | `gen_ai.provider.name`, `gen_ai.request.model`, `lk.retry_count`; `lk.provider_request_ids` |
 | `tts_fallback_adapter`, `tts_stream_adapter` | current | the `tts_request` start keys and `lk.retry_count`; fallback success adds `lk.fallback.label`, `lk.fallback.index`, `gen_ai.response.model` |
@@ -344,8 +344,8 @@ and `model_name`, the `G` labels `gen_ai.operation.name`, `gen_ai.provider.name`
 | Instrument | Kind | Unit | Labels | Recorded |
 | --- | --- | --- | --- | --- |
 | `lk.agents.turn.e2e_latency` | histogram | s | the LLM's `M` | each answered turn |
-| `lk.agents.turn.llm_ttft` | histogram | s | the LLM's `M` | each turn, from `llm_node` |
-| `lk.agents.turn.tts_ttfb` | histogram | s | the TTS's `M` | each turn, from `tts_node` |
+| `lk.agents.turn.llm_ttft` | histogram | s | the LLM's `M` | each turn, with `llm_node`'s `lk.response.ttft` |
+| `lk.agents.turn.tts_ttfb` | histogram | s | the TTS's `M` | each turn, with `tts_node`'s `lk.response.ttfb` |
 | `lk.agents.turn.transcription_delay`, `lk.agents.turn.end_of_turn_delay`, `lk.agents.turn.on_user_turn_completed_delay` | histogram | s | the STT's `M` | each user turn |
 | `lk.agents.usage.llm_input_tokens`, `llm_input_cached_tokens`, `llm_output_tokens`, `llm_input_audio_tokens`, `llm_input_text_tokens`, `llm_output_audio_tokens`, `llm_output_text_tokens` | counter | tokens | `M` | each request's usage, when > 0 |
 | `lk.agents.usage.llm_session_duration`, `tts_audio_duration`, `stt_audio_duration` | counter | s | `M` | when > 0 |

@@ -230,7 +230,6 @@ async fn startup_runs_under_the_spans_start_reserved() {
         span: Some(ENTRYPOINT),
         job: Some(JobKey(JOB.into())),
         conversation: Some("AT_thread".into()),
-        ..Default::default()
     };
     let cx = tracer.resume(&trace);
     let reserved = cx.reserve::<AgentSession>();
@@ -296,7 +295,7 @@ fn a_stall_reaches_the_sessions_of_its_job() {
 /// audio, as the host's do, so nothing but the node's calls carries what the provider acquired.
 struct DefaultTtsNode(Arc<dyn lk_agents_abi::Tts>);
 
-struct HostFrames(crate::voice::nodes::NodeOutput<lk_agents_abi::voice::nodes::NodeFrame>);
+struct HostFrames(crate::voice::default_nodes::NodeOutput<lk_agents_abi::voice::nodes::NodeFrame>);
 
 impl lk_agents_abi::StreamOutput<lk_agents_abi::SynthesizedAudio> for HostFrames {
     fn next(
@@ -326,6 +325,7 @@ impl lk_agents_abi::voice::nodes::SessionNodes for DefaultTtsNode {
     fn llm<'a>(
         &'a self,
         _: &'a lk_agents_abi::ChatRequest,
+        _: Arc<dyn lk_agents_abi::voice::nodes::ProviderCalls>,
         _: TraceContext,
     ) -> lk_agents_abi::BoxFuture<
         'a,
@@ -351,12 +351,13 @@ impl lk_agents_abi::voice::nodes::SessionNodes for DefaultTtsNode {
     > {
         use lk_agents_abi::voice::nodes::DefaultNodes as _;
         let env = lk_agents_net::env::ProcessEnv::current_runtime();
-        let frames = crate::voice::nodes::DefaultNodes::tts_node(
+        let frames = crate::voice::default_nodes::DefaultNodes::tts_node(
             &env,
             self.0.clone(),
             text,
             None,
             Some(calls),
+            Default::default(),
         )
         .expect("default options");
         Box::pin(async move { Ok(Box::new(HostFrames(frames)) as Box<_>) })

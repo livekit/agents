@@ -118,13 +118,10 @@ async fn perform_llm_inference(
     let (speech, step) = (handle.id(), ctx.plan.step);
     // The engine owns the budget; the request carries the same options.
     let mut attempts = Attempts::retrying(&req.conn_options, shared.time.now());
-    // The step's `llm_node`, one `llm_request` in it, its attempts each an `llm_request_run`.
-    let node = LlmNodeTrace::start(shared, ctx.span, llm.as_ref(), &req);
+    // The step's `llm_node`, one `llm_request` in it, its attempts each an `llm_request_run`. A
+    // registered `llm_node` runs under the node span and makes its own request, if any.
+    let node = LlmNodeTrace::start(shared, ctx.span, &req);
     let mut trace = LlmTrace::start(node.cx(shared), llm.as_ref(), &mut req);
-    // A registered `llm_node` runs under the node span, not the request the call opened.
-    if let Some(span) = node.context() {
-        req.trace.get_or_insert_with(|| node.cx(shared).trace_context()).node = Some(span);
-    }
     loop {
         let attempt = trace.attempt();
         shared.trace(GenerationStep::ChatRequested {
@@ -372,7 +369,8 @@ pub(super) fn report_metrics(shared: &SessionShared, handle: &SpeechHandle, reco
 }
 
 /// A step's `llm_node`, under the speech's `agent_turn`: the context sent, the tools offered, and
-/// the response with its time to first token measured from the node's start.
+/// the response with its time to first token measured from the node's start. The model and
+/// provider are its request's: the LLM's labels only its time to first token measurement.
 struct LlmNodeTrace {
     span: Option<lk_agents_net::telemetry::ScopedSpan<LlmNode>>,
     started: u64,
@@ -382,13 +380,11 @@ impl LlmNodeTrace {
     fn start(
         shared: &SessionShared,
         turn: Option<lk_agents_abi::telemetry::record::SpanRef>,
-        llm: &dyn lk_agents_abi::Llm,
         req: &ChatRequest,
     ) -> Self {
         use lk_agents_abi::telemetry::decl::{Content, Json};
         use lk_agents_abi::telemetry::spans::agent_turn::AgentTurn;
         let span = turn.map(|turn| {
-            let id = llm.id();
             let (provider, function): (Vec<_>, Vec<_>) =
                 req.tools.iter().partition(|tool| tool.provider_tool.is_some());
             let names = |tools: Vec<&lk_agents_abi::ToolSpec>| {
@@ -402,16 +398,9 @@ impl LlmNodeTrace {
                 provider_tools: names(provider),
                 tool_sets: Vec::new(),
                 input: None,
-                model: Some(id.model),
-                provider: Some(lk_agents_inference::telemetry::provider_name(&id.provider)),
             })
         });
         LlmNodeTrace { span, started: shared.tracer.now_nanos() }
-    }
-
-    /// The node span, inside a turn.
-    fn context(&self) -> Option<lk_agents_abi::telemetry::record::SpanRef> {
-        self.span.as_ref().and_then(|span| span.cx().span())
     }
 
     /// What the request runs under: the node, or the session outside a turn.
@@ -426,16 +415,15 @@ impl LlmNodeTrace {
             span.fail(error);
         }
         let (text, calls) = trace.response();
-        let ttft =
-            trace.first_chunk_at().map(|at| Seconds(at.saturating_sub(self.started) as f64 / 1e9));
-        // After a fallback, the model that served the step.
-        let served = (llm.label() == lk_agents_inference::telemetry::FALLBACK_LLM_LABEL)
-            .then(|| llm.id().model);
+        let ttft = trace.first_chunk_at().map(|at| at.saturating_sub(self.started) as f64 / 1e9);
+        if let Some(ttft) = ttft {
+            let model = lk_agents_inference::telemetry::model_labels(&llm.id());
+            span.cx().measure(&lk_agents_abi::telemetry::instruments::TurnLlmTtft { model }, ttft);
+        }
         span.end(LlmNodeEnd {
             response_text: Content(text.to_owned()),
             function_calls: Content(Json(serde_json::Value::Array(calls))),
-            ttft: Measured(ttft),
-            response_model: served,
+            ttft: Measured(ttft.map(Seconds)),
         });
     }
 }

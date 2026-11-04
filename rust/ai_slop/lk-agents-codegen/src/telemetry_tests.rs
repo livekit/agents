@@ -342,6 +342,14 @@ const RENAMED: [(&str, &str); 2] = [("lk.room_sid", "lk.room_id"), ("lk.track_si
 /// Spans whose kind changed from 1.8.10's `INTERNAL`, on purpose.
 const NEW_KINDS: [&str; 5] =
     ["llm_request", "tts_request", "realtime_inference", "rpc_handler", "rpc_call"];
+/// The request keys 1.8.10 copied onto its node spans, decided out (QUESTIONS 90): a node span
+/// describes its callback; the model and provider are only its request's.
+const NODE_REQUEST_KEYS: [(&str, &str); 4] = [
+    ("llm_node", "gen_ai.request.model"),
+    ("llm_node", "gen_ai.provider.name"),
+    ("tts_node", "gen_ai.request.model"),
+    ("tts_node", "gen_ai.provider.name"),
+];
 /// Log attributes Python's logging handler added in 1.8.10; report records do not carry them.
 const LOGGING_HANDLER: [&str; 1] = ["logger.name"];
 
@@ -386,7 +394,10 @@ fn declarations_cover_the_1_8_10_wire() {
         let mut missing = Vec::new();
         for (key, types) in attrs.as_object().expect("attributes") {
             let key = rename(key);
-            if stamped.contains(&key.as_str()) || LOGGING_HANDLER.contains(&key.as_str()) {
+            if stamped.contains(&key.as_str())
+                || LOGGING_HANDLER.contains(&key.as_str())
+                || NODE_REQUEST_KEYS.contains(&(at, key.as_str()))
+            {
                 continue;
             }
             let Some(a) = declared.iter().find(|a| a.key == key) else {

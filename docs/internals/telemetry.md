@@ -188,6 +188,16 @@ row per application entry point and the stream cases above.
 Parentage always comes from explicit data. No span is found through a
 process-global current span.
 
+**A request span exists where a request is made.** `llm_request` and
+`tts_request` are the provider request; `llm_node` and `tts_node` are the
+overridable callback and carry the same keys whatever it does. With no node
+registered the reply's leg makes the request under its node span. A registered
+node replaces the provider, so the leg opens no request around it: the default
+node it may run (`session.default.llm_node`, `_core.llm_node`;
+`session.default.tts_node`, `_core.tts_node`) makes the request, under the span
+current at that call and for the step's job and conversation, which the node's
+`ProviderCalls` carry. A node making its own output has no request span.
+
 ## Recording defaults
 
 A session in a job connected to LiveKit Cloud records everything by default:

@@ -863,20 +863,6 @@
           "key": "lk.input.dropped_from_base",
           "type": "int",
           "required": false
-        },
-        {
-          "key": "gen_ai.request.model",
-          "type": "string",
-          "required": false,
-          "registry": "otel",
-          "label": "model_name"
-        },
-        {
-          "key": "gen_ai.provider.name",
-          "type": "string",
-          "required": false,
-          "registry": "otel",
-          "label": "model_provider"
         }
       ],
       "end": [
@@ -898,14 +884,7 @@
           "type": "double",
           "required": true,
           "unit": "s",
-          "unmeasured": "omit",
-          "metric": "lk.agents.turn.llm_ttft"
-        },
-        {
-          "key": "gen_ai.response.model",
-          "type": "string",
-          "required": false,
-          "registry": "otel"
+          "unmeasured": "omit"
         }
       ],
       "events": []
@@ -1901,36 +1880,14 @@
       "kind": "internal",
       "parents": ["agent_turn"],
       "outlives_parent": null,
-      "start": [
-        {
-          "key": "gen_ai.request.model",
-          "type": "string",
-          "required": false,
-          "registry": "otel",
-          "label": "model_name"
-        },
-        {
-          "key": "gen_ai.provider.name",
-          "type": "string",
-          "required": false,
-          "registry": "otel",
-          "label": "model_provider"
-        }
-      ],
+      "start": [],
       "end": [
         {
           "key": "lk.response.ttfb",
           "type": "double",
           "required": true,
           "unit": "s",
-          "unmeasured": "omit",
-          "metric": "lk.agents.turn.tts_ttfb"
-        },
-        {
-          "key": "gen_ai.response.model",
-          "type": "string",
-          "required": false,
-          "registry": "otel"
+          "unmeasured": "omit"
         }
       ],
       "events": []

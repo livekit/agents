@@ -186,6 +186,43 @@ fn request_metrics_carry_the_genai_labels() {
     assert!(!keys.iter().any(|k| k.starts_with("model_")), "{keys:?}");
 }
 
+/// A session's registered `llm_node` over `Script`.
+struct Node(Script);
+
+impl Llm for Node {
+    fn label(&self) -> String {
+        self.0.label()
+    }
+    fn is_node(&self) -> bool {
+        true
+    }
+    fn chat<'a>(
+        &'a self,
+        req: &'a ChatRequest,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<LlmStream, ProviderError>> {
+        self.0.chat(req)
+    }
+}
+
+// Catches: a request span opened around a registered `llm_node` (the node's own output recorded
+// as a provider request, or a delegating node's request doubled), or the node not handed the
+// context its default request opens under.
+#[test]
+fn a_registered_node_makes_its_own_request() {
+    let (records, cx) = traced(true);
+    let mut req = request();
+    let mut trace =
+        LlmTrace::start(&cx, &Node(Script { label: "openai.LLM", serves: true }), &mut req);
+    let attempt = trace.attempt();
+    assert!(attempt.is_none());
+    trace.observe(&chunk("hi"));
+    trace.end_attempt(attempt, None);
+    assert_eq!(trace.response().0, "hi", "the node span still reads the response");
+    trace.end(false, None);
+    assert!(records.spans().is_empty() && records.measurements().is_empty());
+    assert_eq!(req.trace.and_then(|t| t.span), Some(PARENT));
+}
+
 // Catches: a fallback adapter's caller opening an `llm_request` of its own, the adapter span not
 // parenting each entry's request, or the served entry not recorded on it.
 #[tokio::test]

@@ -235,7 +235,6 @@ impl Cx {
             span: self.span(),
             job: self.job.clone(),
             conversation: self.conversation.as_deref().map(str::to_owned),
-            node: None,
         }
     }
 

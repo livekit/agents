@@ -173,9 +173,11 @@ pub trait Implementations: 'static {
     type PlaybackReports: ::lk_agents_abi::voice::io::PlaybackReports;
     type AgentNodes: ::lk_agents_abi::voice::nodes::AgentNodes;
     type NodeCalls: ::lk_agents_abi::voice::nodes::NodeCalls;
+    type LlmNodeChunks: ::lk_agents_abi::voice::nodes::LlmNodeChunks;
     type TtsNodeFrames: ::lk_agents_abi::voice::nodes::TtsNodeFrames;
     type SttNodeEvents: ::lk_agents_abi::voice::nodes::SttNodeEvents;
     type DefaultNodes: ::lk_agents_abi::voice::nodes::DefaultNodes<
+            Chunks = Self::LlmNodeChunks,
             Frames = Self::TtsNodeFrames,
             Events = Self::SttNodeEvents,
         >;
@@ -437,8 +439,10 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(voice::_core_playback_finished, m)?)?;
     m.add_class::<voice::AgentNodes>()?;
     m.add_class::<voice::CoreNodeCalls>()?;
+    m.add_class::<voice::LlmNodeChunks>()?;
     m.add_class::<voice::TtsNodeFrames>()?;
     m.add_class::<voice::SttNodeEvents>()?;
+    m.add_function(wrap_pyfunction!(voice::llm_node, m)?)?;
     m.add_function(wrap_pyfunction!(voice::tts_node, m)?)?;
     m.add_function(wrap_pyfunction!(voice::stt_node, m)?)?;
     m.add_class::<voice::RoomEventBus>()?;

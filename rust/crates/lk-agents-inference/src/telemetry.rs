@@ -1,13 +1,14 @@
 //! Model request spans (docs/internals/telemetry-reference.md "Span trees"): one `llm_request` or
 //! `tts_request` per request wherever it is made, an `llm_request_run` or `tts_request_run` per
 //! attempt, and the request's usage, timing and 1.8.10 metrics blob recorded as it ends. A fallback
-//! adapter records its own spans: its caller opens none and hands it the context instead.
+//! adapter records its own spans, and a registered `llm_node` makes its own request: the caller
+//! opens none and hands it the context instead.
 
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::metrics::base::{Metadata, TtsMetrics};
 use lk_agents_abi::telemetry::decl::{Content, GenAiContent, Json, Label, Measured, Seconds};
 use lk_agents_abi::telemetry::instruments::{
-    GenAiLabels, GenAiOperationDuration, GenAiTokenUsage, TokenType,
+    GenAiLabels, GenAiOperationDuration, GenAiTokenUsage, ModelLabels, TokenType,
 };
 use lk_agents_abi::telemetry::spans::common::GenAiOperation;
 use lk_agents_abi::telemetry::spans::inference::{
@@ -36,6 +37,11 @@ pub fn provider_name(provider: &str) -> String {
     gen_ai::provider_name(provider).unwrap_or_else(|| "unknown".to_owned())
 }
 
+/// A model's `M` labels: its provider as the GenAI registry spells it, and its name.
+pub fn model_labels(id: &ProviderId) -> ModelLabels {
+    ModelLabels { provider: Label(provider_name(&id.provider)), model: Label(id.model.clone()) }
+}
+
 fn seconds(from: u64, to: u64) -> f64 {
     to.saturating_sub(from) as f64 / 1e9
 }
@@ -46,7 +52,8 @@ fn captured(values: Vec<Value>) -> Option<GenAiContent<Json<Value>>> {
 
 /// One LLM request, retries included: its span and what its chunks reported.
 pub struct LlmTrace {
-    /// `None` for an LLM that records its own spans (a fallback adapter).
+    /// `None` for an LLM that records its own spans (a fallback adapter) or makes no request (a
+    /// registered `llm_node`).
     span: Option<ScopedSpan<LlmRequest>>,
     cx: Cx,
     id: ProviderId,
@@ -67,7 +74,8 @@ pub struct LlmTrace {
 
 impl LlmTrace {
     /// Opens the request's span under `cx`'s current span, with the request's messages when
-    /// message capture is on. A fallback adapter gets the context in `req` instead.
+    /// message capture is on. A fallback adapter or a registered `llm_node` gets the context in
+    /// `req` instead.
     pub fn start(cx: &Cx, llm: &dyn Llm, req: &mut ChatRequest) -> Self {
         LlmTrace::open(cx, llm, req, None)
     }
@@ -80,7 +88,7 @@ impl LlmTrace {
     fn open(cx: &Cx, llm: &dyn Llm, req: &mut ChatRequest, recovery: Option<bool>) -> Self {
         let id = llm.id();
         let capture = cx.tracer().capture_content();
-        let span = if llm.label() == FALLBACK_LLM_LABEL {
+        let span = if llm.is_node() || llm.label() == FALLBACK_LLM_LABEL {
             req.trace = Some(cx.trace_context());
             None
         } else {

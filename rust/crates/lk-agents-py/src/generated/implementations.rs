@@ -129,11 +129,14 @@ impl super::Implementations for Selected {
     type PlaybackReports = ::lk_agents_runtime::voice::playback::Tracker;
     type AgentNodes = ::lk_agents_runtime::voice::nodes::AgentNodes;
     type NodeCalls = ::lk_agents_runtime::voice::nodes::NodeCalls;
-    type TtsNodeFrames =
-        ::lk_agents_runtime::voice::nodes::NodeOutput<::lk_agents_abi::voice::nodes::NodeFrame>;
+    type LlmNodeChunks =
+        ::lk_agents_runtime::voice::default_nodes::NodeOutput<::lk_agents_abi::LlmChunk>;
+    type TtsNodeFrames = ::lk_agents_runtime::voice::default_nodes::NodeOutput<
+        ::lk_agents_abi::voice::nodes::NodeFrame,
+    >;
     type SttNodeEvents =
-        ::lk_agents_runtime::voice::nodes::NodeOutput<::lk_agents_abi::SpeechEvent>;
-    type DefaultNodes = ::lk_agents_runtime::voice::nodes::DefaultNodes;
+        ::lk_agents_runtime::voice::default_nodes::NodeOutput<::lk_agents_abi::SpeechEvent>;
+    type DefaultNodes = ::lk_agents_runtime::voice::default_nodes::DefaultNodes;
     type RoomEventBus = ::lk_agents_runtime::rtc::events::RoomEventBus;
     type RtcRuntime = ::lk_agents_runtime::rtc::events::RoomEventBus;
     type AVSynchronizer = ::lk_agents_runtime::rtc::synchronizer::AVSynchronizer;

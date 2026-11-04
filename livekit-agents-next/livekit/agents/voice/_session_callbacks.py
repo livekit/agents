@@ -24,13 +24,13 @@ from ..llm import (
 )
 from ..log import logger
 from ..types import (
-    DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     USERDATA_TIMED_TRANSCRIPT,
     USERDATA_TTS_STARTED_TIME,
     FlushSentinel,
     TranscriptChunk,
 )
+from ..utils import is_given
 from .agent import (
     Agent,
     ModelSettings,
@@ -191,11 +191,16 @@ class _SessionNodes:
         ctx = RunContext(function_call=None, session=self._session)
         return self._session._steps[step](ctx, *args, settings or ModelSettings())
 
-    def llm(self, req: _core.ChatRequest) -> AsyncIterator[Any]:
+    def llm(self, req: _core.ChatRequest, calls: Any) -> AsyncIterator[Any]:
         chat_ctx, tools = chat_request(req)
         choice = req.tool_choice
         settings = ModelSettings(tool_choice=NOT_GIVEN if choice is None else choice)
-        return _node_output(lambda: self._call("llm_node", chat_ctx, tools, settings=settings))
+
+        def node() -> Any:
+            _NodeCallsVar.set(calls)
+            return self._call("llm_node", chat_ctx, tools, settings=settings)
+
+        return _node_output(node)
 
     def tts(self, text: Any, calls: Any) -> AsyncIterator[Any]:
         def node() -> Any:
@@ -222,7 +227,7 @@ class DefaultPipeline:
     def __init__(self, session: VoiceSession[Any]) -> None:
         self._session = session
 
-    async def llm_node(
+    def llm_node(
         self,
         ctx: RunContext[Any],
         chat_ctx: ChatContext,
@@ -232,15 +237,17 @@ class DefaultPipeline:
         """A request to the session's LLM."""
         model = self._session.llm
         assert isinstance(model, llm.LLM), "llm_node needs an LLM (not a realtime model)"
-        conn_options = self._session.conn_options.llm_conn_options or DEFAULT_API_CONNECT_OPTIONS
-        async with model.chat(
-            chat_ctx=chat_ctx,
-            tools=tools,
-            tool_choice=model_settings.tool_choice,
-            conn_options=conn_options,
-        ) as stream:
-            async for chunk in stream:
-                yield chunk
+        choice = model_settings.tool_choice
+        return _core.llm_node(
+            model,
+            chat_ctx.items,
+            chat_ctx,
+            tools=tool_specs(tools),
+            tools_host=tools,
+            tool_choice=choice if is_given(choice) else None,
+            conn_options=self._session.conn_options.llm_conn_options,
+            calls=_NodeCallsVar.get(None),
+        )
 
     def stt_node(
         self,

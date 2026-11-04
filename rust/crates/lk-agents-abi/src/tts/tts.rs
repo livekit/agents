@@ -212,6 +212,13 @@ pub trait Tts: Send + Sync {
     #[host(notify, name = "_core_failed")]
     fn failed(&self, _error: ProviderError, _recoverable: bool) {}
 
+    // Native only: a session's registered `tts_node` standing in for the provider. It makes no
+    // request itself, so its caller opens no `tts_request` around it; the default node it may
+    // run does.
+    fn is_node(&self) -> bool {
+        false
+    }
+
     /// Synthesize `text`, its attempts retried per `conn_options`.
     ///
     /// Args:

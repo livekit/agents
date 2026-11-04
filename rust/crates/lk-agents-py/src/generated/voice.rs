@@ -1134,6 +1134,32 @@ inventory::submit! {
 }
 
 // Declared in rust/crates/lk-agents-abi/src/voice/nodes.rs.
+type LlmNodeChunksImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::LlmNodeChunks;
+
+/// The default `llm_node`'s chunks.
+#[pyclass(frozen, name = "LlmNodeChunks", module = "livekit.agents._core")]
+pub struct LlmNodeChunks(pub(crate) ::std::sync::Arc<LlmNodeChunksImpl>);
+
+#[pymethods]
+impl LlmNodeChunks {
+    fn __aiter__(slf: Py<Self>) -> Py<Self> {
+        slf
+    }
+
+    fn __anext__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::py_calls::future_into_py(py, async move {
+            match <LlmNodeChunksImpl as ::lk_agents_abi::voice::nodes::LlmNodeChunks>::next(&this).await.map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(&e))? {
+                Some(out) => Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(crate::generated::records::llm::chat_chunk_to_py(py, out)?, py)),
+                None => Err(::pyo3::exceptions::PyStopAsyncIteration::new_err(())),
+            }
+        })
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/voice/nodes.rs.
 type TtsNodeFramesImpl =
     <crate::generated::implementations::Selected as super::Implementations>::TtsNodeFrames;
 
@@ -1189,6 +1215,92 @@ impl SttNodeEvents {
 type DefaultNodesImpl =
     <crate::generated::implementations::Selected as super::Implementations>::DefaultNodes;
 
+/// A completion of `chat_ctx` (its items, and the host's `llm.ChatContext` a host LLM is
+/// handed) offering `tools` (their specs, and the host's `list[Tool]`). `conn_options`: the
+/// session's, else the defaults. `calls`: the running agent node's, when it runs this one.
+#[pyfunction]
+#[pyo3(signature = (llm, chat_ctx, chat_ctx_host, *, tools, tools_host = None, tool_choice = None, conn_options = None, calls = None))]
+pub fn llm_node(
+    py: Python<'_>,
+    llm: Bound<'_, PyAny>,
+    chat_ctx: Bound<'_, PyAny>,
+    chat_ctx_host: Bound<'_, PyAny>,
+    tools: Bound<'_, PyAny>,
+    tools_host: Option<Bound<'_, PyAny>>,
+    tool_choice: Option<Bound<'_, PyAny>>,
+    conn_options: Option<Bound<'_, PyAny>>,
+    calls: Option<Bound<'_, PyAny>>,
+) -> PyResult<super::voice::LlmNodeChunks> {
+    crate::py_calls::check_pid()?;
+    let env = crate::process::env();
+    let llm = crate::generated::llm::LlmProxy::from_host(llm.as_any())?;
+    let chat_ctx = chat_ctx.try_iter().and_then(|items| {
+        items
+            .map(|item| {
+                let item = item?;
+                crate::generated::records::chat_items::chat_item_from_py(item.as_any())
+            })
+            .collect::<PyResult<Vec<_>>>()
+    })?;
+    let chat_ctx_host = crate::py_objects::object_ref_from_py(chat_ctx_host.as_any())?;
+    let tools = tools.try_iter().and_then(|items| {
+        items
+            .map(|item| {
+                let item = item?;
+                crate::generated::records::tool_options::tool_spec_from_py(item.as_any())
+            })
+            .collect::<PyResult<Vec<_>>>()
+    })?;
+    let tools_host =
+        tools_host.map(|v| crate::py_objects::object_ref_from_py(v.as_any())).transpose()?;
+    let tool_choice = tool_choice
+        .map(|v| {
+            crate::generated::records::from_representation::<
+                ::lk_agents_abi::ToolChoice,
+                ::serde_json::Value,
+            >(crate::py_values::value_from_py(v.as_any(), "\"tool_choice\"")?)
+        })
+        .transpose()?;
+    let conn_options = conn_options
+        .map(|v| crate::generated::records::connect::api_connect_options_from_py(v.as_any()))
+        .transpose()?;
+    let calls = calls
+        .map(|v| {
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::nodes::ProviderCalls>(
+                v.as_any(),
+            )
+            .ok_or_else(|| {
+                ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                    "calls",
+                    ": expected the calls of a registered tts_node"
+                ))
+            })
+        })
+        .transpose()?;
+    let context = crate::py_calls::entered();
+    let out = py
+        .detach(|| {
+            <DefaultNodesImpl as ::lk_agents_abi::voice::nodes::DefaultNodes>::llm_node(
+                &env,
+                llm,
+                chat_ctx,
+                chat_ctx_host,
+                tools,
+                tools_host,
+                tool_choice,
+                conn_options,
+                calls,
+                context,
+            )
+        })
+        .map_err(|e: ::lk_agents_abi::ApiConnectOptionsError| {
+            <::lk_agents_abi::ApiConnectOptionsError as crate::py_errors::HostException>::to_py_err(
+                &e,
+            )
+        })?;
+    ::pyo3::PyResult::Ok(super::voice::LlmNodeChunks(::std::sync::Arc::new(out)))
+}
+
 /// `conn_options`: the node's, else the provider's own policy (models.md), else the
 /// defaults. `calls`: the running agent node's, when it runs this one.
 #[pyfunction]
@@ -1233,6 +1345,7 @@ pub fn tts_node(
             })
         })
         .transpose()?;
+    let context = crate::py_calls::entered();
     let out = py
         .detach(|| {
             <DefaultNodesImpl as ::lk_agents_abi::voice::nodes::DefaultNodes>::tts_node(
@@ -1241,6 +1354,7 @@ pub fn tts_node(
                 text,
                 conn_options,
                 calls,
+                context,
             )
         })
         .map_err(|e: ::lk_agents_abi::ApiConnectOptionsError| {
@@ -6932,6 +7046,7 @@ impl ::lk_agents_abi::voice::nodes::SessionNodes for SessionNodesProxy {
     fn llm<'a>(
         &'a self,
         req: &::lk_agents_abi::ChatRequest,
+        calls: ::std::sync::Arc<dyn ::lk_agents_abi::voice::nodes::ProviderCalls>,
         trace: ::lk_agents_abi::telemetry::record::TraceContext,
     ) -> ::lk_agents_abi::BoxFuture<
         'a,
@@ -6944,6 +7059,7 @@ impl ::lk_agents_abi::voice::nodes::SessionNodes for SessionNodesProxy {
     > {
         let host = ::std::sync::Arc::clone(&self.host);
         let req_arg = ::std::clone::Clone::clone(req);
+        let calls_arg = calls;
         let context = ::lk_agents_abi::agent::HostContext::host_context(
             &::lk_agents_abi::invoke::Traced(&self.context, trace.span),
         )
@@ -6958,11 +7074,7 @@ impl ::lk_agents_abi::voice::nodes::SessionNodes for SessionNodesProxy {
             &::lk_agents_abi::invoke::Traced(&self.context, trace.span),
             &[],
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::Bound::new(
-                    py,
-                    crate::generated::llm::ChatRequest(::std::sync::Arc::new(req_arg)),
-                )?
-                .into_any()];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::Bound::new(py, crate::generated::llm::ChatRequest(::std::sync::Arc::new(req_arg)))?.into_any(), <dyn ::lk_agents_abi::voice::nodes::ProviderCalls as super::NativeToHost>::to_host(py, calls_arg)?];
                 Ok((host.bind(py).getattr("llm")?, ::pyo3::types::PyTuple::new(py, args)?))
             }),
         );
