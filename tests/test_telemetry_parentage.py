@@ -23,11 +23,11 @@ from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTrace
 from livekit import rtc
 from livekit.agents import (
     Agent,
+    APIConnectOptions,
     JobContext,
     ModelSettings,
     RunContext,
     VoiceSession,
-    _core,
     llm,
     stt,
     telemetry,
@@ -38,13 +38,12 @@ from livekit.agents.job import JobAcceptArguments, RunningJobInfo
 from livekit.agents.llm import ChatContext, ChatMessage, FunctionToolCall
 from livekit.protocol import agent as agent_proto
 
-from .conformance.conftest import own_executor  # noqa: F401  (the fixture)
+from .a2a_peer import Peer
 from .fake_io import FakeAudioInput, FakeAudioOutput
 from .fake_llm import FakeLLM, FakeLLMResponse
 from .fake_stt import FakeSTT, FakeUserSpeech
 from .fake_tts import FakeTTS
 from .fake_vad import FakeVAD
-from .test_a2a_delegation import OPTIONS, Peer, peer  # noqa: F401  (the fixture)
 
 pytestmark = pytest.mark.unit
 
@@ -111,11 +110,13 @@ async def collector() -> AsyncIterator[_Collector]:
     await site.start()
     port = site._server.sockets[0].getsockname()[1]  # type: ignore[union-attr]
     telemetry.configure(endpoint=f"http://127.0.0.1:{port}")
-    _core._core_telemetry_install("test")
+    telemetry._install()
     try:
         yield sink
     finally:
-        telemetry.configure(endpoint="")
+        # back to the environment's destination, with no exporter left for the next module
+        telemetry.configure()
+        await telemetry._shutdown()
         await runner.cleanup()
 
 
@@ -151,10 +152,12 @@ async def test_a_tool_and_llm_node_under_a_fallback_llm(collector: _Collector) -
 
 async def test_a_delegation_from_a_tool_continues_under_its_function_tool(
     collector: _Collector,
-    peer: Peer,  # noqa: F811  (the imported fixture)
+    peer: Peer,
 ) -> None:
     async def delegate() -> None:
-        client = AgentClient(peer.url, conn_options=OPTIONS)
+        client = AgentClient(
+            peer.url, conn_options=APIConnectOptions(max_retry=0, read_timeout=2.0)
+        )
         try:
             reply = await client.send("Check my coverage")
             async for _ in reply:
@@ -388,7 +391,7 @@ def _attr(span: dict[str, Any], key: str) -> Any:
 
 async def test_job_callbacks_spans_nest_under_their_job_spans(
     collector: _Collector,
-    own_executor: Callable[[JobExecutor], JobExecutor],  # noqa: F811  (the imported fixture)
+    own_executor: Callable[[JobExecutor], JobExecutor],
 ) -> None:
     async def entrypoint(ctx: JobContext) -> None:
         with _opened("entrypoint"):
@@ -441,7 +444,7 @@ async def test_spans_still_export_after_a_server_in_this_process_shut_down(
     # `AgentServer` flushes the process exporter when it stops; a server started afterwards in
     # the same process (tests, embedded use) installs a new one.
     await telemetry._shutdown()
-    _core._core_telemetry_install("test")
+    telemetry._install()
     with _opened("after_shutdown"):
         pass
     await _settle(collector, {"app.after_shutdown"})

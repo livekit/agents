@@ -3,7 +3,8 @@ import dataclasses
 import logging
 import re
 import sys
-from collections.abc import Iterator
+import weakref
+from collections.abc import AsyncIterator, Callable, Iterator
 from functools import cache
 from pathlib import Path
 from typing import Literal, NamedTuple
@@ -12,8 +13,10 @@ import pytest
 
 from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, _core, utils
 from livekit.agents.cli import NOISY_LOGGERS
+from livekit.agents.ipc import JobExecutor
 
 from . import concurrency
+from .a2a_peer import peer  # noqa: F401  (re-exported so pytest discovers the fixture)
 from .storage_fixture import (  # noqa: F401  (re-exported so pytest discovers the fixtures)
     thread_storage,
     thread_storage_worker,
@@ -327,6 +330,31 @@ def _restore_logging(_logging_baseline):
         logger.setLevel(level)
         logger.handlers[:] = handlers
         logger.propagate = propagate
+
+
+@pytest.fixture
+async def own_executor(tmp_path: Path) -> AsyncIterator[Callable[[JobExecutor], JobExecutor]]:
+    """Registers the executors a test starts; closes each, with cleanup evidence, at teardown."""
+    from .conformance.ipc_processes import close_owned_executor
+
+    executors: list[weakref.ReferenceType[JobExecutor]] = []
+
+    def register(executor: JobExecutor) -> JobExecutor:
+        executors.append(weakref.ref(executor))
+        return executor
+
+    yield register
+    failures: list[Exception] = []
+    for reference in executors:
+        executor = reference()
+        if executor is None:
+            continue
+        try:
+            await close_owned_executor(executor, tmp_path / "ipc-cleanup")
+        except Exception as error:
+            failures.append(error)
+    if failures:
+        raise ExceptionGroup("IPC fixture cleanup failures", failures)
 
 
 @pytest.fixture
