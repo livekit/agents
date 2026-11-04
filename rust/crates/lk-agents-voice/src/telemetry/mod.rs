@@ -10,11 +10,12 @@ pub(crate) mod session;
 pub(crate) mod user_turn;
 
 use lk_agents_abi::telemetry::decl::Content;
+use lk_agents_abi::telemetry::errors::SpanError;
 use lk_agents_abi::telemetry::record::JobKey;
 use lk_agents_abi::telemetry::spans::common::ParticipantAttrs;
 use lk_agents_abi::voice::room_io::ParticipantInfo;
 use lk_agents_abi::voice::rtc::DisconnectReason;
-use lk_agents_core::telemetry::span::{IdSource, SpanFailure};
+use lk_agents_core::telemetry::span::IdSource;
 
 pub(crate) use agent_turn::{AgentTurnSpan, Reply};
 pub(crate) use lk_agents_core::telemetry::span::{Reserved, Span, Trace, seeded_ids};
@@ -93,7 +94,7 @@ pub struct Activation {
 /// A hook that timed out.
 struct TimedOut;
 
-impl SpanFailure for TimedOut {
+impl SpanError for TimedOut {
     fn error_type(&self) -> String {
         "timeout".to_owned()
     }
@@ -105,7 +106,7 @@ impl SpanFailure for TimedOut {
 /// A hook that failed with no exception (its agent was gone, its call undeliverable).
 struct Unanswered;
 
-impl SpanFailure for Unanswered {
+impl SpanError for Unanswered {
     fn error_type(&self) -> String {
         "unanswered".to_owned()
     }
@@ -122,7 +123,7 @@ pub(crate) enum HookFailure<'a> {
 }
 
 impl HookFailure<'_> {
-    pub(crate) fn failure(&self) -> &dyn SpanFailure {
+    pub(crate) fn failure(&self) -> &dyn SpanError {
         match self {
             HookFailure::Raised(error) => *error,
             HookFailure::TimedOut => &TimedOut,

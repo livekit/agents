@@ -1,6 +1,7 @@
-//! What a span records of a failure (docs/internals/telemetry.md "Errors").
+//! What a span records of a failure (docs/internals/telemetry.md "Errors"), for both span
+//! handles.
 
-use lk_agents_abi::errors::{ApiError, ApiErrorKind, HostError, ProviderError};
+use crate::errors::{ApiError, ApiErrorKind, HostError, ProviderError};
 
 /// A typed failure a span records: `error.type`, the status message and the exception event.
 pub trait SpanError {
@@ -63,7 +64,7 @@ impl SpanError for ProviderError {
 }
 
 /// A deadline that passed.
-impl SpanError for lk_agents_abi::Elapsed {
+impl SpanError for crate::Elapsed {
     fn error_type(&self) -> String {
         "timeout".to_owned()
     }
@@ -73,7 +74,7 @@ impl SpanError for lk_agents_abi::Elapsed {
 }
 
 /// A storage failure: its kind and message.
-impl SpanError for lk_agents_abi::storage::StorageError {
+impl SpanError for crate::storage::StorageError {
     fn error_type(&self) -> String {
         "storage_error".to_owned()
     }
@@ -83,7 +84,7 @@ impl SpanError for lk_agents_abi::storage::StorageError {
 }
 
 /// An A2A request the door refused or failed.
-impl SpanError for lk_agents_abi::a2a::door::DoorError {
+impl SpanError for crate::a2a::door::DoorError {
     fn error_type(&self) -> String {
         match self {
             Self::Auth(_) => "auth_error".to_owned(),
@@ -96,7 +97,7 @@ impl SpanError for lk_agents_abi::a2a::door::DoorError {
 }
 
 /// A room I/O failure.
-impl SpanError for lk_agents_abi::voice::io::IoError {
+impl SpanError for crate::voice::io::IoError {
     fn error_type(&self) -> String {
         "io_error".to_owned()
     }

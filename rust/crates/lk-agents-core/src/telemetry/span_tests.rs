@@ -1,4 +1,5 @@
 use super::*;
+use lk_agents_abi::errors::HostError;
 use lk_agents_abi::telemetry::decl::{Content, Json};
 use lk_agents_abi::telemetry::decl::{Measured, Seconds};
 use lk_agents_abi::telemetry::record::Value;

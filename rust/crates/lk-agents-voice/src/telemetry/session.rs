@@ -5,10 +5,11 @@
 use crate::agent_activity::scheduling::SpeechId;
 use crate::audio_recognition::TurnId;
 use lk_agents_abi::telemetry::decl::{Seconds, SpanDecl, SpanRef};
+use lk_agents_abi::telemetry::errors::SpanError;
 use lk_agents_abi::telemetry::spans::session::{
     AgentSessionEnd, Amd, DrainAgentActivity, OnEnter, OnExit, StartAgentActivity, UpdateAgent,
 };
-use lk_agents_core::telemetry::span::{Reserved, Span, SpanFailure, Trace};
+use lk_agents_core::telemetry::span::{Reserved, Span, Trace};
 use std::collections::BTreeMap;
 
 /// The span an agent's activity runs in.
@@ -57,7 +58,7 @@ impl HookSpan {
 
     /// The callback returned, raised, timed out or was abandoned: it ends, then its activity.
     /// Returns the span the activity ran in.
-    pub(crate) fn end(self, trace: &mut Trace, failure: Option<&dyn SpanFailure>) -> Under {
+    pub(crate) fn end(self, trace: &mut Trace, failure: Option<&dyn SpanError>) -> Under {
         match self {
             HookSpan::Enter { under, activity, hook } => {
                 if let Some(failure) = failure {

@@ -7,6 +7,7 @@ use super::participant_attrs;
 use crate::audio_recognition::{EndOfTurnInfo, EouDetected, UserTurnCommitVerdict};
 use lk_agents_abi::Ts;
 use lk_agents_abi::telemetry::decl::{BoolString, Content, Json, Measured, Seconds, SpanRef};
+use lk_agents_abi::telemetry::errors::SpanError;
 use lk_agents_abi::telemetry::spans::user_turn::{
     EouDetection, EouDetectionEnd, EouOutcome, EouPrediction, EouWait, EouWaitEnd,
     OnUserTurnCompleted, Rearmed, StopResponse, Superseded, UserResumed, UserSpeaking,
@@ -14,7 +15,7 @@ use lk_agents_abi::telemetry::spans::user_turn::{
 };
 use lk_agents_abi::voice::events::OverlappingSpeechEvent;
 use lk_agents_abi::voice::room_io::ParticipantInfo;
-use lk_agents_core::telemetry::span::{Span, SpanFailure, Trace};
+use lk_agents_core::telemetry::span::{Span, Trace};
 
 /// Every way a decided turn ends; a new verdict is a new arm here.
 impl From<UserTurnCommitVerdict> for UserTurnOutcome {
@@ -353,7 +354,7 @@ impl UserTurnSpan {
     pub(crate) fn hook_finished(
         &mut self,
         trace: &mut Trace,
-        failure: Option<&dyn SpanFailure>,
+        failure: Option<&dyn SpanError>,
         stop_response: bool,
     ) {
         if let Some(hook) = self.hook.take() {

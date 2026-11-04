@@ -4,7 +4,6 @@
 //! [`fail`], [`event`], [`measure`], [`reserve`] and `#[telemetry::span]`.
 //! Ended spans and measurements reach the process's `RecordSink` (the OTLP exporter).
 
-mod errors;
 pub mod host;
 pub mod otlp;
 pub mod session_report;
@@ -27,10 +26,10 @@ use parking_lot::{Mutex, RwLock};
 
 use otlp::Exporter;
 
-pub use errors::{Failure, SpanError};
 /// `#[telemetry::span(Decl { .. })]` on a function taking `cx: &telemetry::Cx`: the function is
 /// that one span.
 pub use lk_agents_abi::telemetry::decl::span;
+pub use lk_agents_abi::telemetry::errors::{Failure, SpanError};
 pub use lk_agents_abi::telemetry::{Cx, Recorder};
 pub use lk_agents_core::telemetry::span::Reserved;
 use lk_agents_core::telemetry::span::{FRAMEWORK_SCOPE, IdSource, seeded_ids};

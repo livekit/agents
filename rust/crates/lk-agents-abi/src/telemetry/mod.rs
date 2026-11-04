@@ -117,6 +117,7 @@ pub mod provider {
 
 pub mod attributes;
 pub mod decl;
+pub mod errors;
 pub mod host;
 pub mod instruments;
 pub mod record;

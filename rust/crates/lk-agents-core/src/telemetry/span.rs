@@ -6,10 +6,10 @@
 //! [`Record`]s the caller drains each step.
 
 use lk_agents_abi::Ts;
-use lk_agents_abi::errors::{ApiErrorKind, HostError, ProviderError};
 use lk_agents_abi::telemetry::decl::{
     Attrs, Current, EventDecl, HasEvent, MetricDecl, ParentOf, SpanDecl, finish_span,
 };
+use lk_agents_abi::telemetry::errors::SpanError;
 use lk_agents_abi::telemetry::record::{
     EventRecord, JobKey, Key, KeyValues, Measurement, Number, Record, SpanId, SpanKind, SpanRecord,
     SpanRef, Status, TraceId,
@@ -36,56 +36,6 @@ pub fn seeded_ids(seed: u64) -> IdSource {
         z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
         z ^ (z >> 31)
     })
-}
-
-/// A failure a span records, as `record_exception` writes it (`telemetry.md`, "Errors").
-pub trait SpanFailure {
-    /// `error.type` and `exception.type`.
-    fn error_type(&self) -> String;
-    fn message(&self) -> String;
-    fn stacktrace(&self) -> Option<String> {
-        None
-    }
-}
-
-impl SpanFailure for HostError {
-    fn error_type(&self) -> String {
-        if self.kind.is_empty() { "HostError".to_owned() } else { self.kind.clone() }
-    }
-    fn message(&self) -> String {
-        self.message.clone()
-    }
-    fn stacktrace(&self) -> Option<String> {
-        self.traceback.clone()
-    }
-}
-
-impl SpanFailure for ProviderError {
-    fn error_type(&self) -> String {
-        match self {
-            ProviderError::Host { error, .. } => error.error_type(),
-            ProviderError::Local(error) => match error.kind {
-                ApiErrorKind::Api => "api_error",
-                ApiErrorKind::Status => "status_error",
-                ApiErrorKind::Connection => "connection_error",
-                ApiErrorKind::Timeout => "timeout",
-                ApiErrorKind::Cancelled => "cancelled",
-            }
-            .to_owned(),
-        }
-    }
-    fn message(&self) -> String {
-        match self {
-            ProviderError::Host { error, .. } => error.message.clone(),
-            ProviderError::Local(error) => error.message.clone(),
-        }
-    }
-    fn stacktrace(&self) -> Option<String> {
-        match self {
-            ProviderError::Host { error, .. } => error.stacktrace(),
-            ProviderError::Local(_) => None,
-        }
-    }
 }
 
 /// A span context allocated before its owner opens it: startup work in the runtime runs under
@@ -280,7 +230,7 @@ impl Trace {
     }
 
     /// Records a failure on `span`: status `ERROR`, `error.type` and an `exception` event.
-    pub fn fail<D: SpanDecl>(&mut self, span: &Span<D>, error: &dyn SpanFailure) {
+    pub fn fail<D: SpanDecl>(&mut self, span: &Span<D>, error: &dyn SpanError) {
         let at = self.wall(self.now);
         let exception = Exception {
             kind: error.error_type(),

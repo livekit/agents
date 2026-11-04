@@ -11,6 +11,7 @@ use crate::telemetry::{
     self, AgentTurnSpan, Arriving, Endpointing, Holding, HookSpan, Reply, SpanRef, Stt, Under,
 };
 use lk_agents_abi::llm::chat_context::CopyOptions;
+use lk_agents_abi::telemetry::errors::SpanError;
 use lk_agents_abi::telemetry::spans::common::GenAiOperation;
 use lk_agents_abi::telemetry::spans::session::{
     DrainAgentActivity, OnEnter, OnExit, PauseAgentActivity, ResumeAgentActivity,
@@ -21,7 +22,7 @@ use lk_agents_abi::{ChatContext, ChatMessage, Role, ToDictHost, ToDictOptions};
 use lk_agents_abi::{SpeechEventType, Ts};
 use lk_agents_core::llm::chat_dict::to_dict;
 use lk_agents_core::llm::history::ChatContextExt;
-use lk_agents_core::telemetry::span::{Reserved, SpanFailure};
+use lk_agents_core::telemetry::span::Reserved;
 
 /// `_EOU_MAX_HISTORY_TURNS`: the items an `eou_detection` span records.
 const EOU_HISTORY: usize = 6;
@@ -404,7 +405,7 @@ impl VoiceDriver {
 
     /// The callback returned, raised or timed out: its span ends, and the activity it ran in; the
     /// `session_start` or `update_agent` holding it ends once done and holding no other.
-    pub(crate) fn hook_span_ended(&mut self, span: HookSpan, failure: Option<&dyn SpanFailure>) {
+    pub(crate) fn hook_span_ended(&mut self, span: HookSpan, failure: Option<&dyn SpanError>) {
         let entered = matches!(span, HookSpan::Enter { .. });
         let under = span.end(&mut self.telemetry, failure);
         match (entered, under) {

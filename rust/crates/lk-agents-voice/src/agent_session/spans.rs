@@ -11,6 +11,7 @@ use crate::telemetry::{
 };
 use lk_agents_abi::Ts;
 use lk_agents_abi::telemetry::decl::{Content, Seconds, SpanDecl, SpanRef};
+use lk_agents_abi::telemetry::errors::SpanError;
 use lk_agents_abi::telemetry::spans::common::{GenAiOperation, ParticipantAttrs};
 use lk_agents_abi::telemetry::spans::session::{
     AgentSession, AgentStateChanged, Amd, AmdVerdict, CloseReason, ConnectionStateChanged,
@@ -20,7 +21,6 @@ use lk_agents_abi::telemetry::spans::session::{
 use lk_agents_abi::voice::events::{AgentState, UserState};
 use lk_agents_abi::voice::room_io::ParticipantInfo;
 use lk_agents_abi::voice::rtc::{ConnectionState, DisconnectReason};
-use lk_agents_core::telemetry::span::SpanFailure;
 use lk_agents_core::tts::markup::ChatMessageExt;
 
 /// The session's trace: span ids from `telemetry.ids`, else seeded from the session id (tests,
