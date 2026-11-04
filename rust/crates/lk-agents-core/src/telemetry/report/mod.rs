@@ -1,14 +1,13 @@
 //! The session report's pure projections (docs/internals/telemetry.md "Session report"): one
 //! `SessionReport` and its recording options become the Cloud records ([`records()`]) and the
-//! recording upload ([`upload()`]), bounds decided here, before any I/O. [`Tagger`] holds the
-//! session's tags. `lk-agents-net` exports and uploads.
+//! recording upload ([`upload()`]), bounds decided here, before any I/O. `lk-agents-net` exports
+//! and uploads.
 //!
 //! The Cloud records (OTLP logs) are as 1.8.10's `_upload_session_report` emitted them: the
 //! `chat_history` scope's session summary and chat items, the `evaluations` scope's evaluations,
 //! tags and outcome.
 
 mod chat_item;
-mod tagger;
 mod upload;
 
 use lk_agents_abi::ChatItem;
@@ -20,7 +19,6 @@ use lk_agents_abi::telemetry::report_records::{
 };
 use serde_json::{Map, Value as Json};
 
-pub use tagger::{DISABLED_MARKERS, Tagger, is_disabled_response};
 pub use upload::{RecordingUpload, TRANSCRIPT_BYTES, TRANSCRIPT_ITEMS, upload};
 
 /// Whether the session's event retention may keep an event of `kind`: state changes, errors and

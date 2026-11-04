@@ -427,24 +427,3 @@ fn timestamps_are_protobuf_rfc3339() {
     assert_eq!(rfc3339(-1, 500_000_000), "1969-12-31T23:59:59.500Z");
     assert_eq!(rfc3339(4_102_444_799, 999_999_999), "2099-12-31T23:59:59.999999999Z");
 }
-
-// Catches: tags losing insertion order, or an outcome surviving its tag's removal.
-#[test]
-fn the_tagger_reports_its_state() {
-    let mut tagger = Tagger::default();
-    tagger.add("b:1".into(), Some(json!({"k": 1})), at(2.0));
-    tagger.success(Some("done".into()), at(3.0));
-    tagger.add("b:1".into(), None, at(4.0));
-    let names: Vec<String> = tagger.entries().into_iter().map(|t| t.name).collect();
-    assert_eq!(names, ["b:1", "lk.success"]);
-    assert_eq!(
-        tagger.report_outcome(),
-        Some(ReportOutcome { outcome: Outcome::Success, reason: Some("done".into()) })
-    );
-    tagger.fail(None, at(5.0));
-    assert_eq!(tagger.outcome(), Some(Outcome::Fail));
-    tagger.remove("lk.fail");
-    assert_eq!(tagger.report_outcome(), None);
-    assert!(is_disabled_response(401, b"Project data recording is DISABLED by owner"));
-    assert!(!is_disabled_response(401, b"bad token"));
-}

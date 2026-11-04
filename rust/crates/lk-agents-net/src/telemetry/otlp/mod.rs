@@ -24,9 +24,10 @@ use std::time::{Duration, SystemTime};
 use futures_util::StreamExt as _;
 use lk_agents_abi::telemetry::record::{JobKey, Record, RecordSink};
 use lk_agents_abi::{Clock, OwnedTask, Spawner, SpawnerExt as _, Ts, before, timeout};
-use lk_agents_core::telemetry::report::is_disabled_response;
 use parking_lot::Mutex;
 use tokio::sync::{Notify, OnceCell};
+
+use crate::telemetry::session_report::recording;
 
 pub use config::{
     AppConfig, CloudEndpoint, CloudRecording, JobIdentity, ProcessIdentity, SdkName, Simulation,
@@ -494,7 +495,7 @@ impl Shared {
             }
             body.extend_from_slice(&chunk);
         }
-        if cloud && is_disabled_response(status.as_u16(), &body) {
+        if cloud && recording::is_disabled_response(status.as_u16(), &body) {
             return Outcome::Disabled;
         }
         Outcome::Failed(format!("{url} answered HTTP {}", status.as_u16()))
