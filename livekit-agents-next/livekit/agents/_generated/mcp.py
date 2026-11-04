@@ -1,15 +1,10 @@
 # GENERATED FILE -- DO NOT EDIT.
-#
-# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[host(record)]`
-# declarations in:
+# From ABI declarations and authored plugin bases:
 #     rust/crates/lk-agents-abi/src/llm/mcp.rs
-#
-# Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
-# non-empty diff, so a hand edit here is reverted rather than merged.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from typing_extensions import TypedDict
 
@@ -17,6 +12,9 @@ if TYPE_CHECKING:
     from livekit.agents.llm.tool_context import ToolFlag
 
     from .tool_context import DuplicateMode, DuplicateScope
+
+
+# Record declarations:
 
 
 class ResolvedToolOptions(TypedDict):
@@ -32,6 +30,8 @@ class ResolvedToolOptions(TypedDict):
     """
     retries: int | None
     """The tool's `retries=`; `None` reads the run's tool budget."""
+    timeout: float | None
+    """This tool's request timeout in seconds, in place of the server's `request_timeout`."""
 
 
 class MCPToolOptions(TypedDict, total=False):
@@ -47,6 +47,14 @@ class MCPToolOptions(TypedDict, total=False):
     """Whether to forward the tool's progress notifications to ctx.update()."""
     retries: int
     """The tool's retry budget, in place of the agent's ``retries['tools']``."""
+    timeout: float
+    """Seconds one call may wait without a reply or progress, in place of the server's
+    ``request_timeout``.
+    """
 
 
 MCPToolOptions.__module__ = "livekit.agents.llm.mcp"
+
+
+MCP_IDLE_CLOSE_SECONDS: Final = 60.0
+"""Seconds a connection stays open after its toolset's last run ends, for the next run to reuse."""

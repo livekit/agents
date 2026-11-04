@@ -1,33 +1,30 @@
 """MCP servers as tool sources. The client sessions and their transports are the core's
-(``_core.McpSession``); a server with its own ``client_streams()`` needs the ``mcp`` package."""
+(``_core.McpSession``)."""
 
 from __future__ import annotations
 
 import asyncio
 import contextvars
 from collections.abc import Awaitable, Callable
-from contextlib import AbstractAsyncContextManager
 from pathlib import Path
 from typing import Any, Self, cast
 
 from pydantic import JsonValue
 
 from .. import _core
-from .._generated.mcp import MCPToolOptions, ResolvedToolOptions
+from .._generated.mcp import MCP_IDLE_CLOSE_SECONDS, MCPToolOptions, ResolvedToolOptions
+from ..log import logger
 from ..utils import aio
 from ..voice.events import RunContext
 from .tool_context import AsyncToolset, RawFunctionTool, function_tool
 
-# the documented surface (docs/tools.md "Toolsets"); custom transports and result resolvers are
-# the framework's own
+# the documented surface (docs/tools.md "Toolsets")
 __all__ = [
     "MCPServerHTTP",
     "MCPServerStdio",
     "MCPToolOptions",
     "MCPToolset",
 ]
-
-MCPTool = RawFunctionTool
 
 
 class _Progress:
@@ -40,110 +37,33 @@ class _Progress:
         await self._ctx.update(message)
 
 
-class _Streams:
-    """Keep a custom SDK context's enter/exit in one task across native host callbacks."""
-
-    def __init__(self, cm: AbstractAsyncContextManager[Any]) -> None:
-        self._cm = cm
-        self._read: Any = None
-        self._write: Any = None
-        self._reader_task: asyncio.Task[Any] | None = None
-        self._ready: asyncio.Future[BaseException | None] = (
-            asyncio.get_running_loop().create_future()
-        )
-        self._closing = asyncio.Event()
-        self._driver: asyncio.Task[None] | None = None
-        self._close_task: asyncio.Task[None] | None = None
-
-    async def _run(self) -> None:
-        try:
-            async with self._cm as streams:
-                self._read, self._write = streams[0], streams[1]
-                self._ready.set_result(None)
-                await self._closing.wait()
-        except BaseException as error:
-            if not self._ready.done():
-                # Report startup failures as a value: abandoning the opening waiter must not
-                # leave an unobserved exception in a separate readiness future.
-                self._ready.set_result(error)
-            else:
-                raise
-
-    async def _core_start(self, _invocation: object) -> None:
-        if self._closing.is_set():
-            raise RuntimeError("MCP transport is closed")
-        if self._driver is None:
-            self._driver = asyncio.create_task(self._run())
-        try:
-            error = await asyncio.shield(self._ready)
-            if error is not None:
-                raise error
-            if self._closing.is_set():
-                raise RuntimeError("MCP transport closed during startup")
-        except BaseException:
-            await self._core_close(_invocation)
-            raise
-
-    async def _core_send(self, _invocation: object, message: dict[str, Any]) -> None:
-        from mcp.shared.message import SessionMessage
-        from mcp.types import JSONRPCMessage
-        from pydantic import TypeAdapter
-
-        parsed: JSONRPCMessage = TypeAdapter(JSONRPCMessage).validate_python(message)
-        await self._write.send(SessionMessage(parsed))
-
-    async def _core_receive(self, _invocation: object) -> dict[str, Any] | None:
-        import anyio
-
-        self._reader_task = asyncio.current_task()
-        try:
-            message = await self._read.receive()
-        except (anyio.EndOfStream, anyio.ClosedResourceError):
-            return None
-        finally:
-            self._reader_task = None
-        if isinstance(message, Exception):
-            raise message
-        return message.message.model_dump(by_alias=True, exclude_none=True, mode="json")  # type: ignore[no-any-return]
-
-    async def _core_close(self, _invocation: object) -> None:
-        self._closing.set()
-        if self._close_task is None:
-            self._close_task = asyncio.create_task(self._close())
-        await aio.await_cleanup(self._close_task)
-
-    async def _close(self) -> None:
-        if self._driver is None:
-            return
-        if not self._ready.done():
-            await aio.cancel_and_wait(self._driver)
-            return
-        readers = [self._reader_task] if self._reader_task is not None else []
-        await asyncio.gather(aio.cancel_and_wait(*readers), self._driver)
-
-
 class MCPServer:
-    """An MCP server; subclasses connect it (``initialize``) or give its ``client_streams()``."""
+    """An MCP server: a session that reconnects on its own after losing its connection."""
 
-    def __init__(self, *, client_session_timeout_seconds: float) -> None:
-        self._session = _core.McpSession(client_session_timeout_seconds)
+    def __init__(
+        self,
+        *,
+        init_timeout: float,
+        request_timeout: float | None,
+        read_timeout: float | None = None,
+    ) -> None:
+        self._session = _core.McpSession(init_timeout, request_timeout, read_timeout)
 
     @property
     def initialized(self) -> bool:
         return self._session.connected
 
-    async def initialize(self) -> None:
-        await self._session.connect_host(
-            _Streams(self.client_streams()),
-            (asyncio.get_running_loop(), contextvars.copy_context()),
-        )
+    @property
+    def _retry_in(self) -> float:
+        """Seconds until the session's backoff lets it try to connect again."""
+        return self._session.retry_in
 
-    def client_streams(self) -> AbstractAsyncContextManager[Any]:
+    async def initialize(self) -> None:
         raise NotImplementedError
 
     async def list_tools(
         self, *, tool_options: dict[str, MCPToolOptions] | None = None
-    ) -> list[MCPTool]:
+    ) -> list[RawFunctionTool]:
         options = tool_options or {}
         tools = cast(list[dict[str, Any]], await self._session.list_tools())
         return [
@@ -165,11 +85,14 @@ class MCPServer:
         meta: dict[str, Any] | None,
         *,
         options: ResolvedToolOptions,
-    ) -> MCPTool:
+    ) -> RawFunctionTool:
+        timeout = options["timeout"]
+
         async def _call(raw_arguments: dict[str, Any], progress: _Progress | None) -> Any:
             result = await self._session.call_tool(
                 name,
                 raw_arguments,
+                timeout,
                 progress,
                 (asyncio.get_running_loop(), contextvars.copy_context()),
             )
@@ -205,58 +128,59 @@ class MCPServerHTTP(MCPServer):
 
     Args:
         url: The server's MCP endpoint.
-        allowed_tools: The tool names exposed; all when ``None``.
         headers: HTTP headers sent with every request.
-        timeout: The connect timeout in finite, non-negative seconds; zero expires immediately.
-        sse_read_timeout: How long a reply stream may stay idle, in finite, non-negative seconds.
-        client_session_timeout_seconds: The timeout of one request in finite, non-negative seconds.
+        init_timeout: Seconds to connect, complete the handshake and list the tools.
+        read_timeout: Seconds a reply stream may stay idle; ``None`` for no limit.
+        request_timeout: Seconds one request may go without a reply or progress; ``None`` for
+            no limit. ``MCPToolOptions(timeout=)`` sets one tool's.
     """
 
     def __init__(
         self,
         url: str,
         *,
-        allowed_tools: list[str] | None = None,
         headers: dict[str, str] | None = None,
-        timeout: float = 5,
-        sse_read_timeout: float = 60 * 5,
-        client_session_timeout_seconds: float = 5,
+        init_timeout: float = 5,
+        read_timeout: float | None = 300,
+        request_timeout: float | None = 30,
     ) -> None:
-        super().__init__(client_session_timeout_seconds=client_session_timeout_seconds)
-        _core._core_mcp_timeout_check("timeout", timeout)
-        _core._core_mcp_timeout_check("sse_read_timeout", sse_read_timeout)
+        super().__init__(
+            init_timeout=init_timeout, request_timeout=request_timeout, read_timeout=read_timeout
+        )
         self.url = url
         self.headers = headers or {}
-        self._timeout = timeout
-        self._sse_read_timeout = sse_read_timeout
-        self._allowed_tools = list(allowed_tools or [])
-        self._session.set_allowed_tools(self._allowed_tools)
 
     async def initialize(self) -> None:
-        await self._session.connect_http(
-            self.url,
-            [(k, str(v)) for k, v in self.headers.items()],
-            self._timeout,
-            self._sse_read_timeout,
-        )
+        await self._session.connect_http(self.url, [(k, str(v)) for k, v in self.headers.items()])
 
     def __repr__(self) -> str:
-        allowed = f", allowed_tools={self._allowed_tools}" if self._allowed_tools else ""
-        return f"MCPServerHTTP(url={self.url}{allowed})"
+        return f"MCPServerHTTP(url={self.url})"
 
 
 class MCPServerStdio(MCPServer):
-    """An MCP server run as a child process, over its stdio."""
+    """An MCP server run as a child process, over its stdio; restarted if it exits.
+
+    Args:
+        command: The program to run.
+        args: Its arguments.
+        env: Environment variables, over a minimal inherited set.
+        cwd: Its working directory.
+        init_timeout: Seconds to start it, complete the handshake and list the tools.
+        request_timeout: Seconds one request may go without a reply or progress; ``None`` for
+            no limit. ``MCPToolOptions(timeout=)`` sets one tool's.
+    """
 
     def __init__(
         self,
         command: str,
         args: list[str],
+        *,
         env: dict[str, str] | None = None,
         cwd: str | Path | None = None,
-        client_session_timeout_seconds: float = 5,
+        init_timeout: float = 5,
+        request_timeout: float | None = 30,
     ) -> None:
-        super().__init__(client_session_timeout_seconds=client_session_timeout_seconds)
+        super().__init__(init_timeout=init_timeout, request_timeout=request_timeout)
         self.command = command
         self.args = args
         self.env = env
@@ -275,6 +199,10 @@ class MCPServerStdio(MCPServer):
 class MCPToolset(AsyncToolset):
     """An ``MCPServer``'s tools for an ``Agent``; ``setup()`` connects and fetches them.
 
+    A server that cannot be reached leaves the toolset without tools instead of failing the run
+    or the call; it keeps trying in the background, and later runs and activations get the tools
+    once it answers. The connection stays open for a while after the last run, for the next.
+
     Per-tool behavior is set with ``MCPToolOptions`` in ``tool_options`` (keyed by tool name);
     unlisted tools are plain blocking calls.
 
@@ -282,10 +210,10 @@ class MCPToolset(AsyncToolset):
 
         MCPToolset(
             id="mcp",
-            mcp_server=MCPServerHTTP(url="...", client_session_timeout_seconds=120),
+            mcp_server=MCPServerHTTP("https://mcp.example.com/mcp"),
             tool_options={
                 "book_flight": MCPToolOptions(
-                    on_duplicate="confirm", report_progress=True
+                    on_duplicate="confirm", report_progress=True, timeout=120
                 ),
             },
         )
@@ -301,36 +229,63 @@ class MCPToolset(AsyncToolset):
         super().__init__(id=id)
         self._mcp_server = mcp_server
         self._tool_options = dict(tool_options or {})
-        self._initialized = False
+        self._listed = False
         self._lock = asyncio.Lock()
+        self._recovery: asyncio.Task[None] | None = None
+        self._idle_close: asyncio.TimerHandle | None = None
+        self._closing: asyncio.Task[None] | None = None
 
     async def setup(self) -> Self:
-        """Connect the server when it is not, then fetch its tools; a no-op once done."""
+        """Fetch the server's tools, connecting it when it is not; without them while the server
+        cannot be reached."""
         await super().setup()
         async with self._lock:
-            plan = _core.mcp_plan_setup(self._initialized, self._mcp_server.initialized)
-            if plan == "skip":
+            if self._idle_close is not None:
+                self._idle_close.cancel()
+                self._idle_close = None
+            if self._listed or self._recovery is not None:
                 return self
             try:
-                if plan == "connect_then_list":
-                    await self._mcp_server.initialize()
-                self._tools = list(
-                    await self._mcp_server.list_tools(tool_options=self._tool_options)
+                await self._list()
+            except Exception as error:
+                logger.warning(
+                    "MCP server unavailable, continuing without its tools",
+                    extra={"mcp_server": repr(self._mcp_server), "error": str(error)},
                 )
-            except BaseException:
-                await self._mcp_server.aclose()
-                self._initialized = False
-                self._tools = []
-                raise
-            self._initialized = True
+                self._recovery = asyncio.create_task(self._recover())
             return self
+
+    async def _list(self) -> None:
+        if not self._mcp_server.initialized:
+            await self._mcp_server.initialize()
+        self._tools = list(await self._mcp_server.list_tools(tool_options=self._tool_options))
+        self._listed = True
+
+    async def _recover(self) -> None:
+        """Retry the listing at the session's own backoff until the server answers."""
+        while True:
+            await asyncio.sleep(self._mcp_server._retry_in)
+            try:
+                await self._list()
+            except Exception:
+                continue
+            self._recovery = None
+            return
 
     async def aclose(self) -> None:
         try:
             await super().aclose()
         finally:
-            try:
-                await self._mcp_server.aclose()
-            finally:
-                self._initialized = False
-                self._tools = []
+            if self._recovery is not None:
+                await aio.cancel_and_wait(self._recovery)
+                self._recovery = None
+            self._idle_close = asyncio.get_running_loop().call_later(
+                MCP_IDLE_CLOSE_SECONDS, self._close_idle
+            )
+
+    def _close_idle(self) -> None:
+        self._idle_close = None
+        self._listed = False
+        self._tools = []
+        # Holds the close until it settles; a later setup reconnects.
+        self._closing = asyncio.create_task(self._mcp_server.aclose())

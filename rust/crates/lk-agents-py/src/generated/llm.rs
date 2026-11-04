@@ -1491,26 +1491,45 @@ pub fn llm_usage_chunk<'py>(
 type McpSessionImpl =
     <crate::generated::implementations::Selected as super::Implementations>::McpSession;
 
-fn _extract_mcp_session_new_client_session_timeout_seconds(
+fn _extract_mcp_session_new_init_timeout(
     obj: &Bound<'_, PyAny>,
-) -> PyResult<McpSessionNewClientSessionTimeoutSecondsInput> {
-    crate::py_values::number_from_py::<f64>(obj.as_any(), "client_session_timeout_seconds")
+) -> PyResult<McpSessionNewInitTimeoutInput> {
+    crate::py_values::number_from_py::<f64>(obj.as_any(), "init_timeout")
 }
-type McpSessionNewClientSessionTimeoutSecondsInput = f64;
+type McpSessionNewInitTimeoutInput = f64;
 
-fn _extract_mcp_session_connect_http_timeout(
+fn _extract_mcp_session_new_request_timeout(
     obj: &Bound<'_, PyAny>,
-) -> PyResult<McpSessionConnectHttpTimeoutInput> {
-    crate::py_values::number_from_py::<f64>(obj.as_any(), "timeout")
+) -> PyResult<McpSessionNewRequestTimeoutInput> {
+    if obj.is_none() {
+        Ok(None)
+    } else {
+        (crate::py_values::number_from_py::<f64>(obj.as_any(), "request_timeout")).map(Some)
+    }
 }
-type McpSessionConnectHttpTimeoutInput = f64;
+type McpSessionNewRequestTimeoutInput = ::std::option::Option<f64>;
 
-fn _extract_mcp_session_connect_http_read_timeout(
+fn _extract_mcp_session_new_read_timeout(
     obj: &Bound<'_, PyAny>,
-) -> PyResult<McpSessionConnectHttpReadTimeoutInput> {
-    crate::py_values::number_from_py::<f64>(obj.as_any(), "read_timeout")
+) -> PyResult<McpSessionNewReadTimeoutInput> {
+    if obj.is_none() {
+        Ok(None)
+    } else {
+        (crate::py_values::number_from_py::<f64>(obj.as_any(), "read_timeout")).map(Some)
+    }
 }
-type McpSessionConnectHttpReadTimeoutInput = f64;
+type McpSessionNewReadTimeoutInput = ::std::option::Option<f64>;
+
+fn _extract_mcp_session_call_tool_timeout(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<McpSessionCallToolTimeoutInput> {
+    if obj.is_none() {
+        Ok(None)
+    } else {
+        (crate::py_values::number_from_py::<f64>(obj.as_any(), "timeout")).map(Some)
+    }
+}
+type McpSessionCallToolTimeoutInput = ::std::option::Option<f64>;
 
 /// An SDK session whose owner cancels and joins independently of request borrowers.
 #[pyclass(frozen, name = "McpSession", module = "livekit.agents._core")]
@@ -1518,18 +1537,27 @@ pub struct McpSession(pub(crate) ::std::sync::Arc<McpSessionImpl>);
 
 #[pymethods]
 impl McpSession {
+    /// `init_timeout` bounds connecting, the handshake and a listing; `request_timeout` one
+    /// request without a reply or progress, `None` for no limit; `read_timeout` an idle HTTP
+    /// reply stream.
     #[new]
-    #[pyo3(signature = (client_session_timeout_seconds))]
+    #[pyo3(signature = (init_timeout, request_timeout, read_timeout))]
     fn new(
         py: Python<'_>,
-        #[pyo3(from_py_with = _extract_mcp_session_new_client_session_timeout_seconds)]
-        client_session_timeout_seconds: McpSessionNewClientSessionTimeoutSecondsInput,
+        #[pyo3(from_py_with = _extract_mcp_session_new_init_timeout)]
+        init_timeout: McpSessionNewInitTimeoutInput,
+        #[pyo3(from_py_with = _extract_mcp_session_new_request_timeout)]
+        request_timeout: McpSessionNewRequestTimeoutInput,
+        #[pyo3(from_py_with = _extract_mcp_session_new_read_timeout)]
+        read_timeout: McpSessionNewReadTimeoutInput,
     ) -> PyResult<McpSession> {
         crate::py_calls::check_pid()?;
         let out = py
             .detach(|| {
                 <McpSessionImpl as ::lk_agents_abi::llm::mcp::McpSession>::new(
-                    client_session_timeout_seconds,
+                    init_timeout,
+                    request_timeout,
+                    read_timeout,
                 )
             })
             .map_err(|e: ::lk_agents_abi::llm::mcp::McpError| {
@@ -1549,43 +1577,29 @@ impl McpSession {
         ::pyo3::PyResult::Ok(out)
     }
 
-    #[pyo3(signature = (allowed))]
-    fn set_allowed_tools(
-        &self,
-        py: Python<'_>,
-        allowed: ::std::vec::Vec<::std::string::String>,
-    ) -> PyResult<()> {
+    /// Seconds until a failed session may reconnect; zero when it may now.
+    #[getter]
+    fn retry_in(&self, py: Python<'_>) -> PyResult<f64> {
         crate::py_calls::check_pid()?;
-        py.detach(|| {
-            <McpSessionImpl as ::lk_agents_abi::llm::mcp::McpSession>::set_allowed_tools(
-                &self.0, allowed,
-            )
+        let out = py.detach(|| {
+            <McpSessionImpl as ::lk_agents_abi::llm::mcp::McpSession>::retry_in(&self.0)
         });
-        Ok(())
+        ::pyo3::PyResult::Ok(out)
     }
 
-    #[pyo3(signature = (url, headers, timeout, read_timeout))]
+    #[pyo3(signature = (url, headers))]
     fn connect_http<'py>(
         &self,
         py: Python<'py>,
         url: ::std::string::String,
         headers: ::std::vec::Vec<(::std::string::String, ::std::string::String)>,
-        #[pyo3(from_py_with = _extract_mcp_session_connect_http_timeout)]
-        timeout: McpSessionConnectHttpTimeoutInput,
-        #[pyo3(from_py_with = _extract_mcp_session_connect_http_read_timeout)]
-        read_timeout: McpSessionConnectHttpReadTimeoutInput,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
         let env = crate::process::env();
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
             let () = <McpSessionImpl as ::lk_agents_abi::llm::mcp::McpSession>::connect_http(
-                &this,
-                &env,
-                url,
-                headers,
-                timeout,
-                read_timeout,
+                &this, &env, url, headers,
             )
             .await
             .map_err(|e: ::lk_agents_abi::llm::mcp::McpError| {
@@ -1622,34 +1636,6 @@ impl McpSession {
         })
     }
 
-    #[pyo3(signature = (transport, host_context))]
-    fn connect_host<'py>(
-        &self,
-        py: Python<'py>,
-        transport: Bound<'_, PyAny>,
-        host_context: Option<Bound<'_, PyAny>>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        crate::py_calls::check_pid()?;
-        let transport = crate::generated::llm::McpTransportProxy::from_host(transport.as_any())?;
-        let host_context =
-            host_context.map(|v| crate::py_objects::object_ref_from_py(v.as_any())).transpose()?;
-        let this = ::std::sync::Arc::clone(&self.0);
-        crate::py_calls::future_into_py(py, async move {
-            let () = <McpSessionImpl as ::lk_agents_abi::llm::mcp::McpSession>::connect_host(
-                &this,
-                transport,
-                host_context,
-            )
-            .await
-            .map_err(|e: ::lk_agents_abi::llm::mcp::McpError| {
-                <::lk_agents_abi::llm::mcp::McpError as crate::py_errors::HostException>::to_py_err(
-                    &e,
-                )
-            })?;
-            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
-        })
-    }
-
     fn list_tools<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
@@ -1662,12 +1648,14 @@ impl McpSession {
         })
     }
 
-    #[pyo3(signature = (name, arguments, progress, host_context))]
+    #[pyo3(signature = (name, arguments, timeout, progress, host_context))]
     fn call_tool<'py>(
         &self,
         py: Python<'py>,
         name: ::std::string::String,
         arguments: Bound<'_, PyAny>,
+        #[pyo3(from_py_with = _extract_mcp_session_call_tool_timeout)]
+        timeout: McpSessionCallToolTimeoutInput,
         progress: Option<Bound<'_, PyAny>>,
         host_context: Option<Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
@@ -1690,6 +1678,7 @@ impl McpSession {
                 &this,
                 name,
                 arguments,
+                timeout,
                 progress,
                 host_context,
             )
@@ -1719,13 +1708,6 @@ impl McpSession {
 type McpToolsImpl =
     <crate::generated::implementations::Selected as super::Implementations>::McpTools;
 
-fn _extract_mcp_tools_timeout_check_seconds(
-    obj: &Bound<'_, PyAny>,
-) -> PyResult<McpToolsTimeoutCheckSecondsInput> {
-    crate::py_values::number_from_py::<f64>(obj.as_any(), "seconds")
-}
-type McpToolsTimeoutCheckSecondsInput = f64;
-
 #[pyfunction]
 #[pyo3(signature = (config))]
 pub fn resolve_mcp_tool_options<'py>(
@@ -1736,9 +1718,13 @@ pub fn resolve_mcp_tool_options<'py>(
     let config = config
         .map(|v| crate::generated::records::mcp::mcp_tool_options_from_py(v.as_any()))
         .transpose()?;
-    let out = py.detach(|| {
-        <McpToolsImpl as ::lk_agents_abi::llm::mcp::McpTools>::resolve_tool_options(config)
-    });
+    let out = py
+        .detach(|| {
+            <McpToolsImpl as ::lk_agents_abi::llm::mcp::McpTools>::resolve_tool_options(config)
+        })
+        .map_err(|e: ::lk_agents_abi::llm::mcp::McpError| {
+            <::lk_agents_abi::llm::mcp::McpError as crate::py_errors::HostException>::to_py_err(&e)
+        })?;
     crate::generated::records::mcp::resolved_tool_options_to_py(py, out)
 }
 
@@ -1780,23 +1766,6 @@ pub fn mcp_raw_schema<'py>(
 }
 
 #[pyfunction]
-#[pyo3(signature = (toolset_initialized, server_connected))]
-pub fn mcp_plan_setup(
-    py: Python<'_>,
-    toolset_initialized: bool,
-    server_connected: bool,
-) -> PyResult<::std::string::String> {
-    crate::py_calls::check_pid()?;
-    let out = py.detach(|| {
-        <McpToolsImpl as ::lk_agents_abi::llm::mcp::McpTools>::plan_setup(
-            toolset_initialized,
-            server_connected,
-        )
-    });
-    ::pyo3::PyResult::Ok(out)
-}
-
-#[pyfunction]
 #[pyo3(signature = (tool_name, result))]
 pub fn mcp_render_result(
     py: Python<'_>,
@@ -1813,24 +1782,6 @@ pub fn mcp_render_result(
             <::lk_agents_abi::llm::mcp::McpError as crate::py_errors::HostException>::to_py_err(&e)
         })?;
     ::pyo3::PyResult::Ok(out)
-}
-
-/// Validate public MCP constructor arguments before a transport can be opened.
-#[pyfunction]
-#[pyo3(signature = (field, seconds))]
-pub fn _core_mcp_timeout_check(
-    py: Python<'_>,
-    field: ::std::string::String,
-    #[pyo3(from_py_with = _extract_mcp_tools_timeout_check_seconds)]
-    seconds: McpToolsTimeoutCheckSecondsInput,
-) -> PyResult<()> {
-    py.detach(|| {
-        <McpToolsImpl as ::lk_agents_abi::llm::mcp::McpTools>::timeout_check(&field, seconds)
-    })
-    .map_err(|e: ::lk_agents_abi::llm::mcp::McpError| {
-        <::lk_agents_abi::llm::mcp::McpError as crate::py_errors::HostException>::to_py_err(&e)
-    })?;
-    Ok(())
 }
 
 // Declared in rust/crates/lk-agents-abi/src/llm/provider_format/host.rs.
@@ -3494,223 +3445,6 @@ impl ::lk_agents_abi::llm::fallback::ChainObserver for ChainObserverProxy {
                 ))
             }),
         );
-    }
-}
-
-// Declared in rust/crates/lk-agents-abi/src/llm/mcp.rs.
-
-/// [`::lk_agents_abi::llm::mcp::McpTransport`] over a host `livekit.agents.llm.mcp._Streams`.
-#[derive(Clone)]
-pub struct McpTransportProxy {
-    host: ::std::sync::Arc<Py<PyAny>>,
-}
-
-impl McpTransportProxy {
-    /// A registered native class as itself, any other host object behind this proxy.
-    pub fn from_host(
-        obj: &Bound<'_, PyAny>,
-    ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::mcp::McpTransport>> {
-        if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::llm::mcp::McpTransport>(obj)
-        {
-            return Ok(native);
-        }
-        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
-    }
-
-    /// A host object a call returned, its calls run in a copy of the context that call ran in.
-    pub fn in_context(
-        obj: &Bound<'_, PyAny>,
-        context: &::lk_agents_abi::utils::host_ref::HostRef,
-    ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::mcp::McpTransport>> {
-        if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::llm::mcp::McpTransport>(obj)
-        {
-            return Ok(native);
-        }
-        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
-    }
-
-    /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
-    pub fn owned(
-        obj: &Bound<'_, PyAny>,
-    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::llm::mcp::McpTransport>> {
-        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
-    }
-
-    fn take(
-        obj: &Bound<'_, PyAny>,
-        context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
-    ) -> PyResult<Self> {
-        let _ = context;
-        Ok(McpTransportProxy { host: ::std::sync::Arc::new(obj.clone().unbind()) })
-    }
-}
-
-impl ::lk_agents_abi::llm::mcp::McpTransport for McpTransportProxy {
-    fn start<'a>(
-        &'a self,
-        cx: &::lk_agents_abi::telemetry::Cx,
-        invocation: &::lk_agents_abi::llm::mcp::McpInvocation,
-    ) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
-    {
-        let host = ::std::sync::Arc::clone(&self.host);
-        let invocation_arg = ::std::clone::Clone::clone(invocation);
-        let started = ::lk_agents_runtime::host::call(
-            &crate::py_calls::Entry,
-            "McpTransport._core_start",
-            invocation,
-            &[],
-            cx,
-            ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
-                    [crate::generated::records::mcp_session::mcp_invocation_to_py(
-                        py,
-                        invocation_arg,
-                    )?];
-                Ok((host.bind(py).getattr("_core_start")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }),
-        );
-        ::std::boxed::Box::pin(async move {
-            let out = started.await;
-            ::pyo3::Python::attach(|py| {
-                let out = match out {
-                    Ok(out) => out,
-                    Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
-                    }
-                };
-                let o = out.value.bind(py);
-                let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
-                Ok(())
-            })
-        })
-    }
-
-    fn send<'a>(
-        &'a self,
-        cx: &::lk_agents_abi::telemetry::Cx,
-        invocation: &::lk_agents_abi::llm::mcp::McpInvocation,
-        message: &::serde_json::Value,
-    ) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
-    {
-        let host = ::std::sync::Arc::clone(&self.host);
-        let invocation_arg = ::std::clone::Clone::clone(invocation);
-        let message_arg = ::std::clone::Clone::clone(message);
-        let started = ::lk_agents_runtime::host::call(
-            &crate::py_calls::Entry,
-            "McpTransport._core_send",
-            invocation,
-            &[],
-            cx,
-            ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
-                    crate::generated::records::mcp_session::mcp_invocation_to_py(
-                        py,
-                        invocation_arg,
-                    )?,
-                    crate::py_values::value_to_py(py, &message_arg)?,
-                ];
-                Ok((host.bind(py).getattr("_core_send")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }),
-        );
-        ::std::boxed::Box::pin(async move {
-            let out = started.await;
-            ::pyo3::Python::attach(|py| {
-                let out = match out {
-                    Ok(out) => out,
-                    Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
-                    }
-                };
-                let o = out.value.bind(py);
-                let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
-                Ok(())
-            })
-        })
-    }
-
-    fn receive<'a>(
-        &'a self,
-        cx: &::lk_agents_abi::telemetry::Cx,
-        invocation: &::lk_agents_abi::llm::mcp::McpInvocation,
-    ) -> ::lk_agents_abi::BoxFuture<
-        'a,
-        ::std::result::Result<::serde_json::Value, ::lk_agents_abi::errors::HostError>,
-    > {
-        let host = ::std::sync::Arc::clone(&self.host);
-        let invocation_arg = ::std::clone::Clone::clone(invocation);
-        let started = ::lk_agents_runtime::host::call(
-            &crate::py_calls::Entry,
-            "McpTransport._core_receive",
-            invocation,
-            &[],
-            cx,
-            ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
-                    [crate::generated::records::mcp_session::mcp_invocation_to_py(
-                        py,
-                        invocation_arg,
-                    )?];
-                Ok((
-                    host.bind(py).getattr("_core_receive")?,
-                    ::pyo3::types::PyTuple::new(py, args)?,
-                ))
-            }),
-        );
-        ::std::boxed::Box::pin(async move {
-            let out = started.await;
-            ::pyo3::Python::attach(|py| {
-                let out = match out {
-                    Ok(out) => out,
-                    Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
-                    }
-                };
-                let o = out.value.bind(py);
-                let out = (crate::py_values::value_from_py(o.as_any(), "McpTransport._core_receive")).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
-                Ok(out)
-            })
-        })
-    }
-
-    fn close<'a>(
-        &'a self,
-        cx: &::lk_agents_abi::telemetry::Cx,
-        invocation: &::lk_agents_abi::llm::mcp::McpInvocation,
-    ) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
-    {
-        let host = ::std::sync::Arc::clone(&self.host);
-        let invocation_arg = ::std::clone::Clone::clone(invocation);
-        let started = ::lk_agents_runtime::host::call(
-            &crate::py_calls::Entry,
-            "McpTransport._core_close",
-            invocation,
-            &[],
-            cx,
-            ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
-                    [crate::generated::records::mcp_session::mcp_invocation_to_py(
-                        py,
-                        invocation_arg,
-                    )?];
-                Ok((host.bind(py).getattr("_core_close")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }),
-        );
-        ::std::boxed::Box::pin(async move {
-            let out = started.await;
-            ::pyo3::Python::attach(|py| {
-                let out = match out {
-                    Ok(out) => out,
-                    Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
-                    }
-                };
-                let o = out.value.bind(py);
-                let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
-                Ok(())
-            })
-        })
     }
 }
 

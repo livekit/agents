@@ -1,4 +1,5 @@
-//! The SDK service has one owner; requests borrow its peer, never its join handle.
+//! The SDK service has one owner; requests borrow its peer, never its join handle. The session
+//! keeps its target, so a lost connection reconnects on the next listing or call.
 
 use crate::telemetry;
 use lk_agents_abi::SpawnerExt;
@@ -6,20 +7,22 @@ use lk_agents_net::task::TokioSpawner;
 use parking_lot::Mutex;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::time::Instant;
 
 use futures_util::StreamExt;
-use lk_agents_abi::llm::mcp::{McpInvocation, McpSession as McpSessionPort};
+use lk_agents_abi::llm::mcp::{McpInvocation, McpSession as McpSessionPort, McpTimeout};
 use lk_agents_abi::utils::host_ref::HostRef;
 use lk_agents_abi::utils::stream::HOST_TEARDOWN_TIMEOUT;
 use lk_agents_core::mcp::timeout_duration;
 use lk_agents_core::mcp::{
-    ConnectionSettlement, ListStep, ToolListing, TransportSettlement, progress_message,
+    ConnectionSettlement, ListStep, ReconnectGate, ToolListing, TransportSettlement,
+    progress_message,
 };
 use lk_agents_net::env::ProcessEnv;
 use rmcp::handler::client::progress::ProgressDispatcher;
 use rmcp::model::{
-    CallToolRequest, CallToolRequestParams, ClientRequest, PaginatedRequestParams,
-    ProgressNotificationParam, ServerResult,
+    CallToolRequest, CallToolRequestParams, CancelledNotification, CancelledNotificationParam,
+    ClientRequest, PaginatedRequestParams, ProgressNotificationParam, RequestId, ServerResult,
 };
 use rmcp::service::serve_client_with_ct;
 use rmcp::service::{
@@ -31,8 +34,13 @@ use serde_json::{Map, Value};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
-use super::transport::{HostStreams, Observed, StdioTransport, TransportReceipt, connect_http};
-use super::{McpError, McpProgress, McpTransport};
+use super::transport::{Observed, StdioTransport, TransportReceipt, connect_http};
+use super::{McpError, McpProgress};
+
+/// The `notifications/cancelled` reason for a request its caller stopped awaiting.
+const CALLER_CANCELLED: &str = "cancelled by the caller";
+/// The cancellation reason of a request the session's close ended.
+const SESSION_CLOSED: &str = "session closed";
 
 #[derive(Clone, Default)]
 struct Progress(ProgressDispatcher);
@@ -44,6 +52,24 @@ impl ClientHandler for Progress {
     ) {
         self.0.handle_notification(params).await;
     }
+}
+
+/// How the session connects, kept so that it can connect again.
+#[derive(Clone)]
+enum Target {
+    Http {
+        env: ProcessEnv,
+        url: String,
+        headers: Vec<(String, String)>,
+    },
+    Stdio {
+        command: String,
+        args: Vec<String>,
+        env: Vec<(String, String)>,
+        cwd: Option<String>,
+    },
+    #[cfg(test)]
+    Fake(Arc<dyn Fn() -> super::tests::FakeTransport + Send + Sync>),
 }
 
 struct Connection {
@@ -66,7 +92,29 @@ impl Drop for Call {
     }
 }
 
+/// A request the caller stopped awaiting, an interruption among them, is cancelled on the server.
+struct CancelOnDrop {
+    peer: Peer<RoleClient>,
+    id: Option<RequestId>,
+}
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        let Some(id) = self.id.take() else { return };
+        let peer = self.peer.clone();
+        TokioSpawner::current().spawn_detached(async move {
+            let reason = Some(CALLER_CANCELLED.into());
+            let notification =
+                CancelledNotification::new(CancelledNotificationParam::new(Some(id), reason));
+            let _ = peer.send_notification(notification.into()).await;
+        });
+    }
+}
+
 impl Connection {
+    fn alive(&self) -> bool {
+        !self.cancel.is_cancelled() && !self.peer.is_transport_closed()
+    }
+
     fn borrow(self: &Arc<Self>) -> Result<Call, McpError> {
         self.state.lock().borrow()?;
         Ok(Call(self.clone()))
@@ -111,7 +159,14 @@ impl Connection {
 }
 
 pub struct McpSession {
-    timeout: Duration,
+    init_timeout: Duration,
+    request_timeout: Option<Duration>,
+    read_timeout: Option<Duration>,
+    target: Mutex<Option<Target>>,
+    /// Set by `close`, cleared by a `connect_*`: a closed session never reconnects by itself.
+    closed: Mutex<bool>,
+    gate: Mutex<ReconnectGate>,
+    epoch: Instant,
     connection: Mutex<Option<Arc<Connection>>>,
     previous: Mutex<Option<Arc<Connection>>>,
     initializing: Mutex<Option<Arc<TransportReceipt>>>,
@@ -123,12 +178,22 @@ pub struct McpSession {
 impl McpSessionPort for McpSession {
     type Env = ProcessEnv;
 
-    fn new(client_session_timeout_seconds: f64) -> Result<Self, McpError> {
+    fn new(
+        init_timeout: f64,
+        request_timeout: Option<f64>,
+        read_timeout: Option<f64>,
+    ) -> Result<Self, McpError> {
+        let limit = |field, seconds: Option<f64>| {
+            seconds.map(|seconds| timeout_duration(field, seconds)).transpose()
+        };
         Ok(Self {
-            timeout: timeout_duration(
-                "client_session_timeout_seconds",
-                client_session_timeout_seconds,
-            )?,
+            init_timeout: timeout_duration(McpTimeout::Init, init_timeout)?,
+            request_timeout: limit(McpTimeout::Request, request_timeout)?,
+            read_timeout: limit(McpTimeout::Read, read_timeout)?,
+            target: Mutex::default(),
+            closed: Mutex::new(false),
+            gate: Mutex::default(),
+            epoch: Instant::now(),
             connection: Mutex::default(),
             previous: Mutex::default(),
             initializing: Mutex::default(),
@@ -138,13 +203,10 @@ impl McpSessionPort for McpSession {
         })
     }
     fn connected(&self) -> bool {
-        self.connection
-            .lock()
-            .as_ref()
-            .is_some_and(|c| !c.cancel.is_cancelled() && !c.peer.is_transport_closed())
+        self.connection.lock().as_ref().is_some_and(|c| c.alive())
     }
-    fn set_allowed_tools(&self, allowed: Vec<String>) {
-        self.listing.lock().set_allowed(allowed);
+    fn retry_in(&self) -> f64 {
+        self.gate.lock().wait(self.epoch.elapsed()).as_secs_f64()
     }
 
     async fn connect_http(
@@ -152,19 +214,8 @@ impl McpSessionPort for McpSession {
         env: &ProcessEnv,
         url: String,
         headers: Vec<(String, String)>,
-        timeout: f64,
-        read_timeout: f64,
     ) -> Result<(), McpError> {
-        let timeout = timeout_duration("timeout", timeout)?;
-        let read_timeout = timeout_duration("read_timeout", read_timeout)?;
-        let _connecting = self.connecting.lock().await;
-        if self.connected() {
-            return Ok(());
-        }
-        let cancel = self.begin_connect();
-        let receipt = Arc::new(TransportReceipt::default());
-        let transport = connect_http(env, url, headers, timeout, read_timeout, receipt.clone())?;
-        self.serve(transport, receipt, cancel).await
+        self.connect_to(Target::Http { env: env.clone(), url, headers }).await
     }
     async fn connect_stdio(
         &self,
@@ -173,73 +224,81 @@ impl McpSessionPort for McpSession {
         env: Vec<(String, String)>,
         cwd: Option<String>,
     ) -> Result<(), McpError> {
-        let _connecting = self.connecting.lock().await;
-        if self.connected() {
-            return Ok(());
-        }
-        let cancel = self.begin_connect();
-        let receipt = Arc::new(TransportReceipt::default());
-        let transport = StdioTransport::spawn(command, args, env, cwd)?;
-        self.serve(transport, receipt, cancel).await
-    }
-    async fn connect_host(
-        &self,
-        host: Arc<dyn McpTransport>,
-        host_context: Option<HostRef>,
-    ) -> Result<(), McpError> {
-        let _connecting = self.connecting.lock().await;
-        if self.connected() {
-            return Ok(());
-        }
-        let cancel = self.begin_connect();
-        let invocation = McpInvocation { host_context };
-        host.start(&telemetry::Cx::NONE, &invocation).await?;
-        let receipt = Arc::new(TransportReceipt::default());
-        let transport = HostStreams::new(host, invocation, receipt.clone());
-        self.serve(transport, receipt, cancel).await
+        self.connect_to(Target::Stdio { command, args, env, cwd }).await
     }
     async fn list_tools(&self) -> Result<Value, McpError> {
-        let connection = self.live(McpError::NotInitialized)?;
-        let _call = connection.borrow()?;
-        let mut step = self.listing.lock().list();
-        loop {
-            let (pages, cursor) = match step {
-                ListStep::Done(tools) => return Ok(tools.into()),
-                ListStep::Fetch { pages, cursor } => (pages, cursor),
-            };
-            let params = PaginatedRequestParams::default().with_cursor(cursor);
-            let request =
-                ClientRequest::ListToolsRequest(rmcp::model::ListToolsRequest::with_param(params));
-            let ServerResult::ListToolsResult(page) = self.request(&connection, request).await?
-            else {
-                return Err(McpError::UnexpectedResponse);
-            };
-            let tools = page
-                .tools
-                .into_iter()
-                .map(serde_json::to_value)
-                .collect::<Result<_, _>>()
-                .map_err(|e| McpError::Decode(Arc::new(e)))?;
-            let closing = connection.cancel.is_cancelled();
-            step = self.listing.lock().page(pages, tools, page.next_cursor, closing);
+        // A connection that answered but could not list counts against the gate, as a failed
+        // connect already does, so that retries back off.
+        let mut reached = false;
+        let fetch = async {
+            let connection = self.ensure(McpError::NotInitialized).await?;
+            reached = true;
+            let _call = connection.borrow()?;
+            let mut step = self.listing.lock().list();
+            loop {
+                let (pages, cursor) = match step {
+                    ListStep::Done(tools) => return Ok(tools),
+                    ListStep::Fetch { pages, cursor } => (pages, cursor),
+                };
+                let params = PaginatedRequestParams::default().with_cursor(cursor);
+                let request = ClientRequest::ListToolsRequest(
+                    rmcp::model::ListToolsRequest::with_param(params),
+                );
+                let ServerResult::ListToolsResult(page) =
+                    self.request(&connection, request).await?
+                else {
+                    return Err(McpError::UnexpectedResponse);
+                };
+                let tools = page
+                    .tools
+                    .into_iter()
+                    .map(serde_json::to_value)
+                    .collect::<Result<_, _>>()
+                    .map_err(|e| McpError::Decode(Arc::new(e)))?;
+                let closing = connection.cancel.is_cancelled();
+                step = self.listing.lock().page(pages, tools, page.next_cursor, closing);
+            }
+        };
+        let result = match tokio::time::timeout(self.init_timeout, fetch).await {
+            Ok(result) => result,
+            Err(_) => Err(timed_out(self.init_timeout)),
+        };
+        if result.is_err() && reached {
+            self.gate.lock().failed(self.epoch.elapsed());
+        }
+        match result {
+            Ok(tools) => Ok(tools.into()),
+            Err(error) => match self.listing.lock().last_known() {
+                Some(tools) if !matches!(error, McpError::NotInitialized) => {
+                    log::warn!("MCP tool listing failed, using the last listing: {error}");
+                    Ok(tools.into())
+                }
+                _ => Err(error),
+            },
         }
     }
     async fn call_tool(
         &self,
         name: String,
         arguments: Map<String, Value>,
+        timeout: Option<f64>,
         progress: Option<Arc<dyn McpProgress>>,
         host_context: Option<HostRef>,
     ) -> Result<Value, McpError> {
-        let connection = self.live(McpError::Unavailable)?;
+        let timeout = match timeout {
+            Some(seconds) => Some(timeout_duration(McpTimeout::Tool, seconds)?),
+            None => self.request_timeout,
+        };
+        let connection = self.ensure(McpError::Unavailable).await?;
         let _call = connection.borrow()?;
         let mut params = CallToolRequestParams::new(name);
         params.arguments = Some(arguments);
         let request = ClientRequest::CallToolRequest(CallToolRequest::new(params));
         let handle = tokio::select! {
             _ = connection.cancel.cancelled() => return Err(cancelled()),
-            result = connection.peer.send_cancellable_request(request, self.options()) => result.map_err(|e| connection.error(e))?,
+            result = connection.peer.send_cancellable_request(request, options(timeout)) => result.map_err(|e| connection.error(e))?,
         };
+        let mut guard = CancelOnDrop { peer: connection.peer.clone(), id: Some(handle.id.clone()) };
         let mut updates = connection.progress.0.subscribe(handle.progress_token.clone()).await;
         let response = handle.await_response();
         tokio::pin!(response);
@@ -247,7 +306,11 @@ impl McpSessionPort for McpSession {
             tokio::select! {
                 biased;
                 _ = connection.cancel.cancelled() => return Err(cancelled()),
-                result = &mut response => break result.map_err(|e| connection.error(e))?,
+                result = &mut response => {
+                    // A reply, or a timeout the SDK already cancelled on the server.
+                    guard.id = None;
+                    break result.map_err(|e| connection.error(e))?;
+                }
                 Some(update) = updates.next() => {
                     if let (Some(sink), Some(message)) = (&progress, progress_message(update.message.as_deref())) {
                         let invocation = McpInvocation { host_context: host_context.clone() };
@@ -267,14 +330,10 @@ impl McpSessionPort for McpSession {
         }
     }
     async fn close(&self) {
+        *self.closed.lock() = true;
         self.cancel.lock().cancel();
         let _connecting = self.connecting.lock().await;
-        let connection = self.connection.lock().take();
-        if let Some(ref connection) = connection {
-            connection.close();
-            *self.previous.lock() = Some(connection.clone());
-        }
-        self.listing.lock().invalidate();
+        self.retire();
         let previous = self.previous.lock().clone();
         if let Some(connection) = previous
             && tokio::time::timeout(HOST_TEARDOWN_TIMEOUT, connection.settled()).await.is_err()
@@ -291,11 +350,105 @@ impl McpSessionPort for McpSession {
 }
 
 impl McpSession {
-    fn begin_connect(&self) -> CancellationToken {
+    async fn connect_to(&self, target: Target) -> Result<(), McpError> {
+        let _connecting = self.connecting.lock().await;
+        *self.target.lock() = Some(target);
+        *self.closed.lock() = false;
+        if self.connected() {
+            return Ok(());
+        }
+        self.connect().await
+    }
+
+    #[cfg(test)]
+    pub(super) async fn connect_fake(
+        &self,
+        transport: impl Fn() -> super::tests::FakeTransport + Send + Sync + 'static,
+    ) -> Result<(), McpError> {
+        self.connect_to(Target::Fake(Arc::new(transport))).await
+    }
+
+    /// The live connection, reconnecting a lost one when the gate allows; `missing` when the
+    /// session has no target or was closed.
+    async fn ensure(&self, missing: McpError) -> Result<Arc<Connection>, McpError> {
+        if let Some(connection) = self.live() {
+            return Ok(connection);
+        }
+        let _connecting = self.connecting.lock().await;
+        if let Some(connection) = self.live() {
+            return Ok(connection);
+        }
+        if *self.closed.lock() || self.target.lock().is_none() {
+            return Err(missing);
+        }
+        if !self.gate.lock().wait(self.epoch.elapsed()).is_zero() {
+            return Err(McpError::Unavailable);
+        }
+        self.connect().await?;
+        self.live().ok_or(McpError::Unavailable)
+    }
+
+    /// One bounded attempt on the target; the caller holds `connecting`.
+    async fn connect(&self) -> Result<(), McpError> {
+        self.retire();
+        let Some(target) = self.target.lock().clone() else { return Err(McpError::NotInitialized) };
         let cancel = CancellationToken::new();
         *self.cancel.lock() = cancel.clone();
-        cancel
+        let receipt = Arc::new(TransportReceipt::default());
+        let attempt = async {
+            match target {
+                Target::Http { env, url, headers } => {
+                    let transport = connect_http(
+                        &env,
+                        url,
+                        headers,
+                        self.init_timeout,
+                        self.read_timeout,
+                        receipt.clone(),
+                    )?;
+                    self.serve(transport, receipt.clone(), cancel.clone()).await
+                }
+                Target::Stdio { command, args, env, cwd } => {
+                    let transport = StdioTransport::spawn(command, args, env, cwd)?;
+                    self.serve(transport, receipt.clone(), cancel.clone()).await
+                }
+                #[cfg(test)]
+                Target::Fake(make) => self.serve(make(), receipt.clone(), cancel.clone()).await,
+            }
+        };
+        tokio::pin!(attempt);
+        let result = tokio::select! {
+            biased;
+            result = &mut attempt => result,
+            _ = tokio::time::sleep(self.init_timeout) => {
+                // Cancelling lets the attempt release its transport before reporting the deadline.
+                cancel.cancel();
+                let _ = attempt.await;
+                Err(timed_out(self.init_timeout))
+            }
+        };
+        let now = self.epoch.elapsed();
+        match &result {
+            Ok(()) => {
+                self.gate.lock().succeeded();
+                self.listing.lock().refresh();
+            }
+            Err(error) => {
+                log::warn!("MCP connection failed: {error}");
+                self.gate.lock().failed(now);
+            }
+        }
+        result
     }
+
+    /// Close the current connection, alive or lost; `close` waits for the one retired last.
+    fn retire(&self) {
+        if let Some(connection) = self.connection.lock().take() {
+            connection.close();
+            *self.previous.lock() = Some(connection);
+        }
+    }
+
     async fn serve<T: Transport<RoleClient> + 'static>(
         &self,
         transport: T,
@@ -334,13 +487,8 @@ impl McpSession {
         }));
         Ok(())
     }
-    fn live(&self, error: McpError) -> Result<Arc<Connection>, McpError> {
-        self.connection.lock().clone().ok_or(error)
-    }
-    fn options(&self) -> PeerRequestOptions {
-        let mut options = PeerRequestOptions::no_options();
-        options.timeout = Some(self.timeout);
-        options
+    fn live(&self) -> Option<Arc<Connection>> {
+        self.connection.lock().clone().filter(|c| c.alive())
     }
     async fn request(
         &self,
@@ -349,9 +497,17 @@ impl McpSession {
     ) -> Result<ServerResult, McpError> {
         tokio::select! {
             _ = connection.cancel.cancelled() => Err(cancelled()),
-            result = async { connection.peer.send_cancellable_request(request, self.options()).await?.await_response().await } => result.map_err(|e| connection.error(e)),
+            result = async { connection.peer.send_cancellable_request(request, options(self.request_timeout)).await?.await_response().await } => result.map_err(|e| connection.error(e)),
         }
     }
+}
+
+/// A request's limit, reset by each of its progress notifications.
+fn options(timeout: Option<Duration>) -> PeerRequestOptions {
+    let mut options = PeerRequestOptions::no_options();
+    options.timeout = timeout;
+    options.reset_timeout_on_progress = true;
+    options
 }
 
 impl Drop for McpSession {
@@ -377,6 +533,11 @@ pub(super) fn service_error(error: ServiceError) -> McpError {
     }
 }
 
+fn timed_out(timeout: Duration) -> McpError {
+    let cause = std::io::Error::from(std::io::ErrorKind::TimedOut);
+    McpError::Timeout { timeout, cause: Arc::new(cause) }
+}
+
 fn cancelled() -> McpError {
-    McpError::Cancelled(Arc::new(ServiceError::Cancelled { reason: Some("session closed".into()) }))
+    McpError::Cancelled(Arc::new(ServiceError::Cancelled { reason: Some(SESSION_CLOSED.into()) }))
 }

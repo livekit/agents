@@ -1,7 +1,6 @@
 //! SDK transports whose readers and close the runtime tracks until they drain.
 
-use crate::telemetry;
-use lk_agents_abi::{OwnedTask, SpawnerExt, TaskError};
+use lk_agents_abi::SpawnerExt;
 use lk_agents_net::task::TokioSpawner;
 use parking_lot::Mutex;
 use std::process::Stdio;
@@ -18,8 +17,7 @@ use rmcp::transport::{StreamableHttpClientTransport, Transport};
 use tokio::sync::Notify;
 
 use super::http::CleanupClient;
-use super::{McpError, McpTransport, conn};
-use lk_agents_abi::llm::mcp::McpInvocation;
+use super::{McpError, conn};
 use lk_agents_net::env::ProcessEnv;
 
 /// The transport's settlement (`lk_agents_core::mcp::TransportSettlement`) and its waiters.
@@ -132,80 +130,6 @@ impl<T: Transport<RoleClient> + 'static> Drop for Observed<T> {
     }
 }
 
-pub(super) struct HostStreams {
-    host: Arc<dyn McpTransport>,
-    invocation: McpInvocation,
-    receiver: tokio::sync::mpsc::Receiver<ServerJsonRpcMessage>,
-    /// Cancelled with the streams.
-    reader: OwnedTask,
-    receipt: Arc<TransportReceipt>,
-}
-impl HostStreams {
-    pub fn new(
-        host: Arc<dyn McpTransport>,
-        invocation: McpInvocation,
-        receipt: Arc<TransportReceipt>,
-    ) -> Self {
-        let (sender, receiver) = tokio::sync::mpsc::channel(16);
-        let reader_host = host.clone();
-        let reader_receipt = receipt.clone();
-        let reader_invocation = invocation.clone();
-        let reader_guard = receipt.reader();
-        let reader = TokioSpawner::current().spawn(async move {
-            let _reader_guard = reader_guard;
-            loop {
-                let value =
-                    match reader_host.receive(&telemetry::Cx::NONE, &reader_invocation).await {
-                        Ok(serde_json::Value::Null) => break,
-                        Ok(value) => value,
-                        Err(error) => {
-                            reader_receipt.fail(McpError::Host(error));
-                            break;
-                        }
-                    };
-                match serde_json::from_value(value) {
-                    Ok(message) => {
-                        if sender.send(message).await.is_err() {
-                            break;
-                        }
-                    }
-                    Err(error) => {
-                        reader_receipt.fail(McpError::Decode(Arc::new(error)));
-                        break;
-                    }
-                }
-            }
-        });
-        Self { host, invocation, receiver, reader, receipt }
-    }
-}
-impl Transport<RoleClient> for HostStreams {
-    type Error = McpError;
-    fn send(
-        &mut self,
-        item: ClientJsonRpcMessage,
-    ) -> impl Future<Output = Result<(), McpError>> + Send + 'static {
-        let host = self.host.clone();
-        let invocation = self.invocation.clone();
-        async move {
-            let value = serde_json::to_value(item).map_err(|e| McpError::Decode(Arc::new(e)))?;
-            host.send(&telemetry::Cx::NONE, &invocation, &value).await.map_err(McpError::Host)
-        }
-    }
-    async fn receive(&mut self) -> Option<ServerJsonRpcMessage> {
-        self.receiver.recv().await
-    }
-    async fn close(&mut self) -> Result<(), McpError> {
-        self.reader.cancel();
-        match (&mut self.reader).await {
-            Ok(()) => {}
-            Err(TaskError::Cancelled) => {}
-            Err(error) => self.receipt.fail(conn(error)),
-        }
-        self.host.close(&telemetry::Cx::NONE, &self.invocation).await.map_err(McpError::Host)
-    }
-}
-
 pub(super) struct StdioTransport {
     io: AsyncRwTransport<RoleClient, tokio::process::ChildStdout, tokio::process::ChildStdin>,
     child: tokio::process::Child,
@@ -271,7 +195,7 @@ pub(super) fn connect_http(
     url: String,
     headers: Vec<(String, String)>,
     timeout: Duration,
-    read_timeout: Duration,
+    read_timeout: Option<Duration>,
     receipt: Arc<TransportReceipt>,
 ) -> Result<StreamableHttpClientTransport<CleanupClient>, McpError> {
     let headers = headers
@@ -290,7 +214,7 @@ pub(super) fn connect_http(
             max_retry: 0,
             connect_timeout: Some(timeout.as_secs_f64()),
             write_timeout: Some(timeout.as_secs_f64()),
-            read_timeout: Some(read_timeout.as_secs_f64()),
+            read_timeout: read_timeout.map(|limit| limit.as_secs_f64()),
             ..Default::default()
         },
         clock: env.clock.clone(),

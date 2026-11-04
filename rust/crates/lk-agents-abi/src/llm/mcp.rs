@@ -3,8 +3,11 @@
 // The generated module globs this one to resolve field types.
 pub use crate::llm::provider_format::tools::{DuplicateMode, DuplicateScope, ToolFlag};
 
+#[crate::host(file(module = "mcp"))]
+const _: () = ();
+
 /// Resolved per-tool behavior passed to the host's function-tool decorator.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 #[crate::host(record(module = "mcp", name = "ResolvedToolOptions", emit, typed_dict))]
 pub struct McpToolOptions {
     /// Passed through to the `@function_tool` decorator, using `ToolFlag`.
@@ -16,10 +19,12 @@ pub struct McpToolOptions {
     pub report_progress: bool,
     /// The tool's `retries=`; `None` reads the run's tool budget.
     pub retries: Option<u32>,
+    /// This tool's request timeout in seconds, in place of the server's `request_timeout`.
+    pub timeout: Option<f64>,
 }
 
 /// Per-tool behavior for MCP tools exposed by an MCPToolset.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 #[crate::host(record(
     module = "mcp",
     path = "livekit.agents.llm.mcp",
@@ -43,6 +48,29 @@ pub struct McpToolOptionsPatch {
     /// The tool's retry budget, in place of the agent's ``retries['tools']``.
     #[host(default = None)]
     pub retries: Option<u32>,
+    /// Seconds one call may wait without a reply or progress, in place of the server's
+    /// ``request_timeout``.
+    #[host(default = None)]
+    pub timeout: Option<f64>,
+}
+
+/// Seconds a connection stays open after its toolset's last run ends, for the next run to reuse.
+#[crate::host(constant)]
+pub const MCP_IDLE_CLOSE_SECONDS: f64 = 60.0;
+
+/// The MCP limits a caller sets, by their public argument names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[crate::host(wire_strs(msg = format!("unknown MCP limit {s:?}")))]
+pub enum McpTimeout {
+    #[host(rename = "init_timeout")]
+    Init,
+    #[host(rename = "request_timeout")]
+    Request,
+    #[host(rename = "read_timeout")]
+    Read,
+    /// A tool's own `MCPToolOptions(timeout=)`.
+    #[host(rename = "timeout")]
+    Tool,
 }
 
 /// MCP failures preserve their native cause, including the upstream SDK error.
@@ -62,7 +90,7 @@ pub enum McpError {
     NotInitialized,
     #[error("{0} must be a finite number of seconds >= 0 and <= 100 years")]
     #[host(kind = "ValueError")]
-    InvalidTimeout(String),
+    InvalidTimeout(McpTimeout),
     #[error("MCP protocol error {code}: {message}")]
     Protocol {
         code: i32,
@@ -109,36 +137,6 @@ impl crate::agent::HostContext for McpInvocation {
     }
 }
 
-/// The host's SDK streams. Dropping receive cancels the host coroutine through the shared bridge.
-#[crate::host(proxy(host = "livekit.agents.llm.mcp._Streams"))]
-pub trait McpTransport: Send + Sync {
-    #[host(await, name = "_core_start")]
-    fn start<'a>(
-        &'a self,
-        cx: &crate::telemetry::Cx,
-        #[host(context)] invocation: &'a McpInvocation,
-    ) -> crate::BoxFuture<'a, Result<(), crate::errors::HostError>>;
-    #[host(await, name = "_core_send")]
-    fn send<'a>(
-        &'a self,
-        cx: &crate::telemetry::Cx,
-        #[host(context)] invocation: &'a McpInvocation,
-        message: &'a serde_json::Value,
-    ) -> crate::BoxFuture<'a, Result<(), crate::errors::HostError>>;
-    #[host(await, name = "_core_receive")]
-    fn receive<'a>(
-        &'a self,
-        cx: &crate::telemetry::Cx,
-        #[host(context)] invocation: &'a McpInvocation,
-    ) -> crate::BoxFuture<'a, Result<serde_json::Value, crate::errors::HostError>>;
-    #[host(await, name = "_core_close")]
-    fn close<'a>(
-        &'a self,
-        cx: &crate::telemetry::Cx,
-        #[host(context)] invocation: &'a McpInvocation,
-    ) -> crate::BoxFuture<'a, Result<(), crate::errors::HostError>>;
-}
-
 #[crate::host(proxy(host = "livekit.agents.llm.mcp._Progress"))]
 pub trait McpProgress: Send + Sync {
     #[host(await, name = "_core_update")]
@@ -157,20 +155,26 @@ pub trait McpSession: Send + Sync + Sized + 'static {
     #[host(env)]
     type Env;
 
+    /// `init_timeout` bounds connecting, the handshake and a listing; `request_timeout` one
+    /// request without a reply or progress, `None` for no limit; `read_timeout` an idle HTTP
+    /// reply stream.
     #[host(new)]
-    fn new(client_session_timeout_seconds: f64) -> Result<Self, McpError>;
+    fn new(
+        init_timeout: f64,
+        request_timeout: Option<f64>,
+        read_timeout: Option<f64>,
+    ) -> Result<Self, McpError>;
     #[host(getter)]
     fn connected(&self) -> bool;
-    #[host(call)]
-    fn set_allowed_tools(&self, allowed: Vec<String>);
+    /// Seconds until a failed session may reconnect; zero when it may now.
+    #[host(getter)]
+    fn retry_in(&self) -> f64;
     #[host(await)]
     async fn connect_http(
         &self,
         env: &Self::Env,
         url: String,
         headers: Vec<(String, String)>,
-        timeout: f64,
-        read_timeout: f64,
     ) -> Result<(), McpError>;
     #[host(await)]
     async fn connect_stdio(
@@ -181,18 +185,13 @@ pub trait McpSession: Send + Sync + Sized + 'static {
         cwd: Option<String>,
     ) -> Result<(), McpError>;
     #[host(await)]
-    async fn connect_host(
-        &self,
-        transport: std::sync::Arc<dyn McpTransport>,
-        host_context: Option<crate::utils::host_ref::HostRef>,
-    ) -> Result<(), McpError>;
-    #[host(await)]
     async fn list_tools(&self) -> Result<serde_json::Value, McpError>;
     #[host(await)]
     async fn call_tool(
         &self,
         name: String,
         arguments: serde_json::Map<String, serde_json::Value>,
+        timeout: Option<f64>,
         progress: Option<std::sync::Arc<dyn McpProgress>>,
         host_context: Option<crate::utils::host_ref::HostRef>,
     ) -> Result<serde_json::Value, McpError>;
@@ -204,7 +203,9 @@ pub trait McpSession: Send + Sync + Sized + 'static {
 #[crate::host(functions)]
 pub trait McpTools {
     #[host(function, name = "resolve_mcp_tool_options")]
-    fn resolve_tool_options(config: Option<McpToolOptionsPatch>) -> McpToolOptions;
+    fn resolve_tool_options(
+        config: Option<McpToolOptionsPatch>,
+    ) -> Result<McpToolOptions, McpError>;
     #[host(function, name = "mcp_raw_schema")]
     fn raw_schema(
         name: String,
@@ -212,11 +213,6 @@ pub trait McpTools {
         input_schema: serde_json::Map<String, serde_json::Value>,
         meta: Option<serde_json::Map<String, serde_json::Value>>,
     ) -> serde_json::Value;
-    #[host(function, name = "mcp_plan_setup")]
-    fn plan_setup(toolset_initialized: bool, server_connected: bool) -> String;
     #[host(function, name = "mcp_render_result")]
     fn render_result(tool_name: String, result: serde_json::Value) -> Result<String, McpError>;
-    /// Validate public MCP constructor arguments before a transport can be opened.
-    #[host(function, name = "_core_mcp_timeout_check", pid = false)]
-    fn timeout_check(field: &str, seconds: f64) -> Result<(), McpError>;
 }

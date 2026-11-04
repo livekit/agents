@@ -2,100 +2,14 @@
 
 import asyncio
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 from typing import Any
 
-import anyio
 import pytest
 
 from livekit.agents import _bindings
-from livekit.agents.llm.mcp import _Streams
 from livekit.agents.utils import aio
 
 pytestmark = pytest.mark.unit
-
-
-async def test_mcp_sdk_context_enters_and_exits_in_one_task_across_host_calls() -> None:
-    tasks: list[asyncio.Task[object] | None] = []
-
-    @asynccontextmanager
-    async def context() -> AsyncIterator[tuple[object, object]]:
-        async with anyio.create_task_group():
-            tasks.append(asyncio.current_task())
-            try:
-                yield object(), object()
-            finally:
-                tasks.append(asyncio.current_task())
-
-    streams = _Streams(context())
-    async with asyncio.timeout(5):
-        await asyncio.create_task(streams._core_start(None))
-        await asyncio.create_task(streams._core_close(None))
-    assert len(tasks) == 2 and tasks[0] is tasks[1]
-
-
-async def test_mcp_cancelled_start_settles_sdk_entry() -> None:
-    entering, settled = asyncio.Event(), asyncio.Event()
-
-    @asynccontextmanager
-    async def context() -> AsyncIterator[tuple[object, object]]:
-        try:
-            entering.set()
-            await asyncio.Event().wait()
-            yield object(), object()
-        finally:
-            settled.set()
-
-    streams = _Streams(context())
-    async with asyncio.timeout(5):
-        opening = asyncio.create_task(streams._core_start(None))
-        await entering.wait()
-        opening.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await opening
-        assert settled.is_set()
-        await streams._core_close(None)
-
-
-async def test_mcp_close_before_start_never_enters_sdk() -> None:
-    @asynccontextmanager
-    async def context() -> AsyncIterator[tuple[object, object]]:
-        pytest.fail("closed transport entered SDK")
-        yield object(), object()
-
-    streams = _Streams(context())
-    await streams._core_close(None)
-    with pytest.raises(RuntimeError, match="closed"):
-        await streams._core_start(None)
-
-
-async def test_mcp_cancelled_close_waiter_can_rejoin_sdk_exit() -> None:
-    exiting, release, settled = asyncio.Event(), asyncio.Event(), asyncio.Event()
-
-    @asynccontextmanager
-    async def context() -> AsyncIterator[tuple[object, object]]:
-        async with anyio.create_task_group():
-            try:
-                yield object(), object()
-            finally:
-                exiting.set()
-                await release.wait()
-                settled.set()
-
-    streams = _Streams(context())
-    async with asyncio.timeout(5):
-        await streams._core_start(None)
-        closing = asyncio.create_task(streams._core_close(None))
-        try:
-            await exiting.wait()
-            closing.cancel()
-            with pytest.raises(asyncio.CancelledError):
-                await closing
-            assert not settled.is_set()
-        finally:
-            release.set()
-            await streams._core_close(None)
-        assert settled.is_set()
 
 
 class _Native:

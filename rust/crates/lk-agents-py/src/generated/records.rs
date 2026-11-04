@@ -7689,6 +7689,7 @@ pub mod mcp {
             duplicate_scope,
             report_progress,
             retries,
+            timeout,
         } = value;
         let dict = ::pyo3::types::PyDict::new(py);
         dict.set_item("flags", {
@@ -7714,6 +7715,13 @@ pub mod mcp {
         dict.set_item(
             "retries",
             match retries {
+                None => py.None().into_bound(py),
+                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+            },
+        )?;
+        dict.set_item(
+            "timeout",
+            match timeout {
                 None => py.None().into_bound(py),
                 Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
             },
@@ -7779,6 +7787,15 @@ pub mod mcp {
                     (crate::py_values::number_from_py::<u32>(
                         v.as_any(),
                         "MCPToolOptions.retries",
+                    ))?,
+                ),
+                _ => None,
+            },
+            timeout: match obj.get_item("timeout")? {
+                Some(v) if !v.is_none() && !crate::py_values::is_not_given(&v)? => Some(
+                    (crate::py_values::number_from_py::<f64>(
+                        v.as_any(),
+                        "MCPToolOptions.timeout",
                     ))?,
                 ),
                 _ => None,

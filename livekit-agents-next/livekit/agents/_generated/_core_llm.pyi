@@ -10,7 +10,7 @@ from typing import Any, Self
 
 from livekit.agents._core_view import Duplex, FallbackListener
 from livekit.agents.llm import LLM, Toolset
-from livekit.agents.llm.mcp import _Progress, _Streams
+from livekit.agents.llm.mcp import _Progress
 from livekit.agents.llm.realtime import RealtimeModel
 from livekit.agents.llm.tool_context import ToolChoice
 from livekit.agents.tts import TTS
@@ -284,17 +284,22 @@ def llm_usage_chunk(chunk: object) -> ChatChunk | None:
 
 class McpSession:
     """An SDK session whose owner cancels and joins independently of request borrowers."""
-    def __new__(cls, client_session_timeout_seconds: float) -> Self: ...
+    def __new__(
+        cls,
+        init_timeout: float,
+        request_timeout: float | None,
+        read_timeout: float | None,
+    ) -> Self:
+        """`init_timeout` bounds connecting, the handshake and a listing; `request_timeout` one
+        request without a reply or progress, `None` for no limit; `read_timeout` an idle HTTP
+        reply stream.
+        """
     @property
     def connected(self) -> bool: ...
-    def set_allowed_tools(self, allowed: Sequence[str]) -> None: ...
-    async def connect_http(
-        self,
-        url: str,
-        headers: Sequence[tuple[str, str]],
-        timeout: float,
-        read_timeout: float,
-    ) -> None: ...
+    @property
+    def retry_in(self) -> float:
+        """Seconds until a failed session may reconnect; zero when it may now."""
+    async def connect_http(self, url: str, headers: Sequence[tuple[str, str]]) -> None: ...
     async def connect_stdio(
         self,
         command: str,
@@ -302,12 +307,12 @@ class McpSession:
         env: Sequence[tuple[str, str]],
         cwd: str | None,
     ) -> None: ...
-    async def connect_host(self, transport: _Streams, host_context: object | None) -> None: ...
     async def list_tools(self) -> object: ...
     async def call_tool(
         self,
         name: str,
         arguments: dict[str, object],
+        timeout: float | None,
         progress: _Progress | None,
         host_context: object | None,
     ) -> object: ...
@@ -322,12 +327,7 @@ def mcp_raw_schema(
     meta: dict[str, object] | None,
 ) -> object: ...
 
-def mcp_plan_setup(toolset_initialized: bool, server_connected: bool) -> str: ...
-
 def mcp_render_result(tool_name: str, result: object) -> str: ...
-
-def _core_mcp_timeout_check(field: str, seconds: float) -> None:
-    """Validate public MCP constructor arguments before a transport can be opened."""
 
 async def to_provider_format(
     format: str,

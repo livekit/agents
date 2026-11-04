@@ -115,6 +115,8 @@ dev = [
     "tiktoken>=0.9.0",
     "pytest-xdist>=3.8.0",
     "jsonschema>=4.25.0",
+    # the MCP test server (rust/crates/lk-agents-runtime/fixtures/mcp_server.py)
+    "mcp>=2.2,<3",
     "playwright>=1.58.0",
     "a2a-sdk[http-server]>=1.1.2,<2",
     "uvicorn>=0.30",

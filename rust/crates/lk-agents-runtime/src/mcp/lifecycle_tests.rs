@@ -57,7 +57,8 @@ async fn exercise(session: Arc<McpSession>, peer: &Peer) -> Result {
     let tools = session.list_tools().await?;
     assert_eq!(tools.as_array().unwrap().len(), 2, "must discover both pages");
     assert_eq!(tools[1]["name"], "second");
-    let error = session.call_tool("rpc_error".into(), Map::new(), None, None).await.unwrap_err();
+    let error =
+        session.call_tool("rpc_error".into(), Map::new(), None, None, None).await.unwrap_err();
     match &error {
         McpError::Protocol { code, data, cause, .. } => {
             assert_eq!(*code, -32602);
@@ -68,7 +69,9 @@ async fn exercise(session: Arc<McpSession>, peer: &Peer) -> Result {
     }
     let caller = session.clone();
     let call =
-        tokio::spawn(async move { caller.call_tool("wait".into(), Map::new(), None, None).await });
+        tokio::spawn(
+            async move { caller.call_tool("wait".into(), Map::new(), None, None, None).await },
+        );
     peer.receipt("called").await?;
     session.close().await;
     assert!(
@@ -82,7 +85,7 @@ async fn exercise(session: Arc<McpSession>, peer: &Peer) -> Result {
 #[tokio::test]
 async fn mcp_real_server_lifecycle_stdio() -> Result {
     let peer = Peer::new("stdio");
-    let session = Arc::new(McpSession::new(30.0)?);
+    let session = Arc::new(McpSession::new(5.0, Some(30.0), Some(30.0))?);
     let result = async {
         session.connect_stdio(peer.python.clone(), peer.args("stdio"), Vec::new(), None).await?;
         exercise(session.clone(), &peer).await?;
@@ -110,10 +113,10 @@ async fn mcp_real_server_lifecycle_http() -> Result {
         .args(peer.args("http"))
         .kill_on_drop(true)
         .spawn()?;
-    let session = Arc::new(McpSession::new(30.0)?);
+    let session = Arc::new(McpSession::new(5.0, Some(30.0), Some(30.0))?);
     let result = async {
         let url = peer.receipt("url").await?;
-        session.connect_http(&ProcessEnv::current_runtime(), url, Vec::new(), 5.0, 30.0).await?;
+        session.connect_http(&ProcessEnv::current_runtime(), url, Vec::new()).await?;
         exercise(session.clone(), &peer).await
     }
     .await;

@@ -4,22 +4,28 @@
 use std::sync::Arc;
 
 use lk_agents_abi::llm::mcp::{
-    McpError, McpToolOptions, McpToolOptionsPatch, McpTools as McpToolsPort,
+    McpError, McpTimeout, McpToolOptions, McpToolOptionsPatch, McpTools as McpToolsPort,
 };
 use serde_json::{Map, Value, json};
 
 pub mod http;
 
 /// `_resolve_tool_options`: `{**defaults, **config}`, key by key.
-pub fn resolve_tool_options(config: Option<&McpToolOptionsPatch>) -> McpToolOptions {
+pub fn resolve_tool_options(
+    config: Option<&McpToolOptionsPatch>,
+) -> Result<McpToolOptions, McpError> {
     let (d, p) = (McpToolOptions::default(), config.copied().unwrap_or_default());
-    McpToolOptions {
+    if let Some(seconds) = p.timeout {
+        timeout_duration(McpTimeout::Tool, seconds)?;
+    }
+    Ok(McpToolOptions {
         flags: p.flags.unwrap_or(d.flags),
         on_duplicate: p.on_duplicate.unwrap_or(d.on_duplicate),
         duplicate_scope: p.duplicate_scope.unwrap_or(d.duplicate_scope),
         report_progress: p.report_progress.unwrap_or(d.report_progress),
         retries: p.retries,
-    }
+        timeout: p.timeout,
+    })
 }
 
 pub fn raw_schema(
@@ -33,21 +39,6 @@ pub fn raw_schema(
         schema["meta"] = json!(meta);
     }
     schema
-}
-
-pub fn plan_setup(toolset_initialized: bool, server_connected: bool) -> McpSetup {
-    match (toolset_initialized, server_connected) {
-        (true, true) => McpSetup::Skip,
-        (_, false) => McpSetup::ConnectThenList,
-        (false, true) => McpSetup::ListOnly,
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum McpSetup {
-    Skip,
-    ConnectThenList,
-    ListOnly,
 }
 
 /// One transport's teardown as the runtime observes it: whether it closed, the readers still
@@ -115,12 +106,12 @@ impl ConnectionSettlement {
     }
 }
 
-/// The session's tool listing: the server's tools cached across runs, exposed through the allowed
-/// names, fetched page by page when nothing is cached.
+/// The session's tool listing: the server's tools cached across runs, refetched page by page after
+/// each new connection, and the last complete listing while a refetch cannot complete.
 #[derive(Debug, Default)]
 pub struct ToolListing {
     cache: Option<Vec<Value>>,
-    allowed: Vec<String>,
+    stale: bool,
 }
 
 /// The next step of one `list_tools` call.
@@ -138,17 +129,19 @@ pub enum ListStep {
 pub struct ToolPages(Vec<Value>);
 
 impl ToolListing {
-    pub fn set_allowed(&mut self, allowed: Vec<String>) {
-        self.allowed = allowed;
-    }
-    pub fn invalidate(&mut self) {
-        self.cache = None;
+    /// A new connection: its server may list other tools.
+    pub fn refresh(&mut self) {
+        self.stale = true;
     }
     pub fn list(&self) -> ListStep {
         match &self.cache {
-            Some(tools) => ListStep::Done(self.allowed(tools.clone())),
-            None => ListStep::Fetch { pages: ToolPages::default(), cursor: None },
+            Some(tools) if !self.stale => ListStep::Done(tools.clone()),
+            _ => ListStep::Fetch { pages: ToolPages::default(), cursor: None },
         }
+    }
+    /// The last complete listing, for a refetch that failed.
+    pub fn last_known(&self) -> Option<Vec<Value>> {
+        self.cache.clone()
     }
     /// One fetched page. The complete listing is cached unless its connection is closing: a
     /// closing connection must not repopulate the next run's cache.
@@ -165,21 +158,36 @@ impl ToolListing {
         }
         if !closing {
             self.cache = Some(pages.0.clone());
+            self.stale = false;
         }
-        ListStep::Done(self.allowed(pages.0))
+        ListStep::Done(pages.0)
     }
-    /// All the tools, or only the allowed names.
-    fn allowed(&self, tools: Vec<Value>) -> Vec<Value> {
-        tools
-            .into_iter()
-            .filter(|tool| {
-                self.allowed.is_empty()
-                    || tool
-                        .get("name")
-                        .and_then(Value::as_str)
-                        .is_some_and(|n| self.allowed.iter().any(|a| a == n))
-            })
-            .collect()
+}
+
+/// When a session whose connection failed may connect again: at once after a success, then
+/// after a backoff doubling from one second to thirty while attempts keep failing. Calls in
+/// between fail fast instead of each waiting out a connect.
+#[derive(Debug, Default)]
+pub struct ReconnectGate {
+    failures: u32,
+    retry_at: Option<std::time::Duration>,
+}
+
+impl ReconnectGate {
+    const FIRST: std::time::Duration = std::time::Duration::from_secs(1);
+    const MAX: std::time::Duration = std::time::Duration::from_secs(30);
+
+    /// How long from `now` until an attempt is allowed; zero when it is.
+    pub fn wait(&self, now: std::time::Duration) -> std::time::Duration {
+        self.retry_at.map_or(std::time::Duration::ZERO, |at| at.saturating_sub(now))
+    }
+    pub fn failed(&mut self, now: std::time::Duration) {
+        let backoff = Self::FIRST.saturating_mul(1 << self.failures.min(5)).min(Self::MAX);
+        self.failures += 1;
+        self.retry_at = Some(now + backoff);
+    }
+    pub fn succeeded(&mut self) {
+        *self = Self::default();
     }
 }
 
@@ -216,22 +224,28 @@ fn content(result: &Value) -> Result<&[Value], McpError> {
 }
 
 /// A scalar MCP deadline within the shared connection-policy duration range.
-pub fn timeout_duration(field: &str, seconds: f64) -> Result<std::time::Duration, McpError> {
+pub fn timeout_duration(field: McpTimeout, seconds: f64) -> Result<std::time::Duration, McpError> {
     lk_agents_abi::types::connect::duration_from_seconds(seconds)
-        .ok_or_else(|| McpError::InvalidTimeout(field.to_owned()))
+        .ok_or(McpError::InvalidTimeout(field))
 }
 
+/// What the model reads: a lone text block as its text; other content as its JSON blocks.
 pub fn render_result(tool_name: &str, result: &Value) -> Result<String, McpError> {
     Ok(match content(result)? {
         [] => return Err(McpError::EmptyResult(tool_name.into())),
-        [one] => one.to_string(),
+        [one] => match (one.get("type").and_then(Value::as_str), one.get("text")) {
+            (Some("text"), Some(Value::String(text))) => text.clone(),
+            _ => one.to_string(),
+        },
         many => Value::from(many.to_vec()).to_string(),
     })
 }
 
 pub struct McpTools;
 impl McpToolsPort for McpTools {
-    fn resolve_tool_options(config: Option<McpToolOptionsPatch>) -> McpToolOptions {
+    fn resolve_tool_options(
+        config: Option<McpToolOptionsPatch>,
+    ) -> Result<McpToolOptions, McpError> {
         resolve_tool_options(config.as_ref())
     }
     fn raw_schema(
@@ -242,18 +256,7 @@ impl McpToolsPort for McpTools {
     ) -> Value {
         raw_schema(&name, description.as_deref(), &input_schema, meta.as_ref())
     }
-    fn plan_setup(toolset_initialized: bool, server_connected: bool) -> String {
-        match plan_setup(toolset_initialized, server_connected) {
-            McpSetup::Skip => "skip",
-            McpSetup::ConnectThenList => "connect_then_list",
-            McpSetup::ListOnly => "list_only",
-        }
-        .into()
-    }
     fn render_result(tool_name: String, result: Value) -> Result<String, McpError> {
         render_result(&tool_name, &result)
-    }
-    fn timeout_check(field: &str, seconds: f64) -> Result<(), McpError> {
-        timeout_duration(field, seconds).map(drop)
     }
 }

@@ -380,9 +380,24 @@ member_services = Agent(..., tools=[Cards(), rewards])
 | `Toolset(id=, tools=)` | a group of tools; a subclass adds its `@function_tool` methods |
 | `AsyncToolset(id=, tools=, tool_handling=)` | on a call, background work from its tools survives a handoff when the toolset is passed to `VoiceSession(tools=)` |
 | `MCPToolset(id=, mcp_server=, tool_options=)` | an `AsyncToolset` of an MCP server's tools, `MCPServerHTTP(url)` or `MCPServerStdio(command, args)` |
-| `MCPServerHTTP(url, *, headers=, allowed_tools=, timeout=, sse_read_timeout=, client_session_timeout_seconds=)` | an MCP server over Streamable HTTP; `timeout` bounds the connect, `sse_read_timeout` an idle reply stream and `client_session_timeout_seconds` one request |
-| `MCPServerStdio(command, args, env=, cwd=, client_session_timeout_seconds=)` | an MCP server run as a child process |
-| `MCPToolOptions(retries=, flags=, on_duplicate=, duplicate_scope=, report_progress=)` | one MCP tool's options, keyed by tool name in `tool_options`; `report_progress` turns the server's progress into `ctx.update()` |
+| `MCPServerHTTP(url, *, headers=, init_timeout=5, read_timeout=300, request_timeout=30)` | an MCP server over Streamable HTTP |
+| `MCPServerStdio(command, args, *, env=, cwd=, init_timeout=5, request_timeout=30)` | an MCP server run as a child process, restarted if it exits |
+| `MCPToolOptions(retries=, flags=, on_duplicate=, duplicate_scope=, report_progress=, timeout=)` | one MCP tool's options, keyed by tool name in `tool_options`; `report_progress` turns the server's progress into `ctx.update()`, `timeout` replaces `request_timeout` for that tool |
+
+No MCP wait is unbounded, so a slow or dead server never holds a call or a run:
+`init_timeout` bounds connecting, the handshake and listing the tools; `request_timeout`
+bounds one request that receives neither a reply nor progress, each progress message restarting
+it (`None` removes the limit); `read_timeout` bounds an idle HTTP reply stream. A tool call
+that the caller stops awaiting, an interruption among them, is cancelled on the server. A lone
+text result reaches the model as its text; other content as its JSON blocks.
+
+A lost connection, or a stdio server that exited, reconnects on the next listing or call.
+While reconnecting keeps failing, attempts back off from one second to thirty and calls in
+between fail at once as a tool error the model can answer around. A server that cannot be
+reached at `setup()` leaves its `MCPToolset` without tools instead of failing the activation
+or the run; the toolset keeps retrying, and a later run or activation gets the tools once the
+server answers. Once listed, the tools stay available through a later outage. The connection
+stays open for a minute after the toolset's last run, so the next run reuses it.
 
 A toolset connects per run of the agent: `setup()` when the agent's
 activity starts, a call or a run, and `aclose()` when its last using activity
@@ -390,7 +405,7 @@ ends. Concurrent runs sharing a toolset share its connection; one run finishing
 does not close it beneath another. An `MCPToolset` connects to its server and
 lists its tools in `setup()`.
 Toolsets passed to `VoiceSession(tools=)` live for the whole call.
-Setup failure aborts initialization in both text and voice. Successfully acquired
+Setup failure, other than an unreachable MCP server, aborts initialization in both text and voice. Successfully acquired
 resources, including nested toolsets, close before the error reaches the caller;
 the failed toolset's own `aclose()` is not called. A failed agent activation does
 not replace the active voice agent with a partially initialized one.

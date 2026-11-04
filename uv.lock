@@ -100,6 +100,7 @@ dev = [
     { name = "a2a-sdk", extras = ["http-server"], specifier = ">=1.1.2,<2" },
     { name = "jiwer", specifier = ">=3.1.0" },
     { name = "jsonschema", specifier = ">=4.25.0" },
+    { name = "mcp", specifier = ">=2.2,<3" },
     { name = "mypy" },
     { name = "opentelemetry-sdk", specifier = ">=1.45,<1.46" },
     { name = "playwright", specifier = ">=1.58.0" },
@@ -2111,9 +2112,6 @@ liveavatar = [
 lmnt = [
     { name = "livekit-plugins-lmnt" },
 ]
-mcp = [
-    { name = "mcp" },
-]
 meta = [
     { name = "livekit-plugins-meta" },
 ]
@@ -2311,7 +2309,6 @@ requires-dist = [
     { name = "livekit-plugins-vakyam", marker = "extra == 'vakyam'", editable = "livekit-plugins/livekit-plugins-vakyam" },
     { name = "livekit-plugins-xai", marker = "extra == 'xai'", editable = "livekit-plugins/livekit-plugins-xai" },
     { name = "livekit-protocol", editable = "../python-sdks/livekit-protocol" },
-    { name = "mcp", marker = "extra == 'mcp'", specifier = ">=2.2,<3" },
     { name = "numpy", specifier = ">=1.26.0" },
     { name = "numpy", marker = "extra == 'codecs'", specifier = ">=1.26.0" },
     { name = "opentelemetry-api", specifier = ">=1.45,<1.46" },
@@ -2324,7 +2321,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "wsproto", specifier = ">=1.3,<2" },
 ]
-provides-extras = ["mcp", "codecs", "images", "anam", "anthropic", "assemblyai", "asyncai", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "bland", "boson-avatar", "cambai", "cartesia", "cerebras", "clova", "deepgram", "elevenlabs", "fal", "fishaudio", "fireworksai", "gladia", "gnani", "google", "groq", "hume", "inworld", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "meta", "microsoft-ai", "minimax", "mistralai", "murf", "nabrah", "neuphonic", "nltk", "nvidia", "openai", "palabra", "perplexity", "protoface", "resemble", "respeecher", "rime", "runway", "rtzr", "sarvam", "silero", "simli", "smallestai", "simplismart", "slng", "soniox", "speechify", "speechmatics", "spatius", "spitch", "synthesia", "tavus", "trugen", "ultravox", "upliftai", "vakyam", "gradium", "xai", "phonic", "did"]
+provides-extras = ["codecs", "images", "anam", "anthropic", "assemblyai", "asyncai", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "bland", "boson-avatar", "cambai", "cartesia", "cerebras", "clova", "deepgram", "elevenlabs", "fal", "fishaudio", "fireworksai", "gladia", "gnani", "google", "groq", "hume", "inworld", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "meta", "microsoft-ai", "minimax", "mistralai", "murf", "nabrah", "neuphonic", "nltk", "nvidia", "openai", "palabra", "perplexity", "protoface", "resemble", "respeecher", "rime", "runway", "rtzr", "sarvam", "silero", "simli", "smallestai", "simplismart", "slng", "soniox", "speechify", "speechmatics", "spatius", "spitch", "synthesia", "tavus", "trugen", "ultravox", "upliftai", "vakyam", "gradium", "xai", "phonic", "did"]
 
 [[package]]
 name = "livekit-api"

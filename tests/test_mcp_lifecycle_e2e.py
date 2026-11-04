@@ -26,7 +26,7 @@ async def server(request: pytest.FixtureRequest, tmp_path: Path) -> AsyncIterato
     )
     mode = request.param
     if mode == "stdio":
-        server = MCPServerStdio(sys.executable, [str(script), mode, str(tmp_path)])
+        server: MCPServer = MCPServerStdio(sys.executable, [str(script), mode, str(tmp_path)])
         try:
             yield server
         finally:
@@ -64,7 +64,9 @@ async def test_mcp_toolset_discovers_and_calls_real_server(server: MCPServer) ->
         tools = [tool for tool in toolset.tools if isinstance(tool, RawFunctionTool)]
         assert [tool.info.name for tool in tools] == ["first", "second"]
         assert tools[0].info.on_duplicate == "reject"
-        assert await tools[0]({}) == '{"type":"text","text":"hello"}'
+        assert await tools[0]({}) == "hello", "a lone text block reaches the model as its text"
     finally:
         await toolset.aclose()
+    assert server.initialized, "the connection stays open for the next run"
+    await server.aclose()
     assert not server.initialized
