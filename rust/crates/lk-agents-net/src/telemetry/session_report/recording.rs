@@ -14,8 +14,8 @@ use lk_agents_core::attempts::{AttemptStep, Attempts, RequestPolicy};
 use lk_agents_core::telemetry::report::{RecordingUpload, is_disabled_response};
 use prost::Message;
 
+use super::ReportAdmission;
 use super::UploadError;
-use super::admission::ReportAdmission;
 use crate::telemetry::otlp::CloudEndpoint;
 
 const CHUNK_BYTES: usize = 64 * 1024;

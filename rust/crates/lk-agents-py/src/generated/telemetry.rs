@@ -10,7 +10,7 @@
 
 use pyo3::prelude::*;
 
-// Declared in rust/crates/lk-agents-abi/src/telemetry/provider.rs.
+// Declared in rust/crates/lk-agents-abi/src/telemetry/mod.rs.
 type ProviderMetricsImpl =
     <crate::generated::implementations::Selected as super::Implementations>::ProviderMetrics;
 
@@ -145,7 +145,7 @@ pub fn stt_stream_metrics<'py>(
     })
 }
 
-// Declared in rust/crates/lk-agents-abi/src/telemetry/provider.rs.
+// Declared in rust/crates/lk-agents-abi/src/telemetry/mod.rs.
 type LlmMetricStateImpl =
     <crate::generated::implementations::Selected as super::Implementations>::LlmMetricState;
 
@@ -255,7 +255,7 @@ impl LlmMetricState {
     }
 }
 
-// Declared in rust/crates/lk-agents-abi/src/telemetry/provider.rs.
+// Declared in rust/crates/lk-agents-abi/src/telemetry/mod.rs.
 type TtsMetricStateImpl =
     <crate::generated::implementations::Selected as super::Implementations>::TtsMetricState;
 

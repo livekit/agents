@@ -7,7 +7,7 @@ use std::sync::Arc;
 use lk_agents_abi::telemetry::policy::TelemetryValue;
 use lk_agents_core::telemetry::policy::value_bytes;
 
-use super::admission::{EventQuota, ReportAdmission};
+use super::{EventQuota, ReportAdmission};
 use crate::env::ProcessEnv;
 
 /// Session report snapshots expire after one hour. These budgets apply before the host copies
@@ -138,7 +138,7 @@ impl lk_agents_abi::telemetry::report::EventRetention for EventRetention {
 
 #[cfg(test)]
 mod tests {
-    use super::super::admission::{PROCESS_EVENT_BYTES, PROCESS_EVENT_ITEMS};
+    use super::super::{PROCESS_EVENT_BYTES, PROCESS_EVENT_ITEMS};
     use super::*;
 
     type Retention = EventRetention;
