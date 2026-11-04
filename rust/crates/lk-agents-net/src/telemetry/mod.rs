@@ -68,6 +68,11 @@ impl ExporterSlot {
         self.0.write().get_or_insert_with(|| Arc::new(start())).clone()
     }
 
+    /// Removes the installed exporter, so a later install starts a new one.
+    pub fn take(&self) -> Option<Arc<Exporter>> {
+        self.0.write().take()
+    }
+
     /// Abandons a fork-inherited exporter without dropping it: its task belongs to the parent's
     /// runtime.
     pub fn forget(&self) {

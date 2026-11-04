@@ -107,9 +107,10 @@ pub(crate) fn reinit() {
     PROCESS.tracer.reseed(seed());
 }
 
-/// The process-exit flush, bounded by [`SHUTDOWN_TIMEOUT`].
+/// The process-exit flush, bounded by [`SHUTDOWN_TIMEOUT`]. The exporter leaves the slot, so a
+/// server started again in this process installs a new one instead of a closed one.
 pub async fn shutdown() {
-    if let Some(exporter) = PROCESS.slot.get() {
+    if let Some(exporter) = PROCESS.slot.take() {
         exporter.shutdown(SHUTDOWN_TIMEOUT).await;
     }
 }

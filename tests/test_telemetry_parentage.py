@@ -36,13 +36,13 @@ from livekit.agents.job import JobAcceptArguments, RunningJobInfo
 from livekit.agents.llm import ChatContext, ChatMessage, FunctionToolCall
 from livekit.protocol import agent as agent_proto
 
+from .conformance.conftest import own_executor  # noqa: F401  (the fixture)
 from .fake_io import FakeAudioInput, FakeAudioOutput
 from .fake_llm import FakeLLM, FakeLLMResponse
 from .fake_stt import FakeSTT, FakeUserSpeech
 from .fake_tts import FakeTTS
-from .conformance.conftest import own_executor  # noqa: F401  (the fixture)
-from .test_a2a_delegation import OPTIONS, Peer, peer  # noqa: F401  (the fixture)
 from .fake_vad import FakeVAD
+from .test_a2a_delegation import OPTIONS, Peer, peer  # noqa: F401  (the fixture)
 
 pytestmark = pytest.mark.unit
 
@@ -143,7 +143,8 @@ async def test_a_tool_and_llm_node_under_a_fallback_llm(collector: _Collector) -
 
 
 async def test_a_delegation_from_a_tool_continues_under_its_function_tool(
-    collector: _Collector, peer: Peer
+    collector: _Collector,
+    peer: Peer,  # noqa: F811  (the imported fixture)
 ) -> None:
     async def delegate() -> None:
         client = AgentClient(peer.url, conn_options=OPTIONS)
@@ -174,9 +175,7 @@ async def _run(
     delegate: Callable[[], Awaitable[None]] | None = None,
 ) -> tuple[dict[str, list[str]], list[str]]:
     """One call through every callback: the parents each entry's application spans got."""
-    speech = [
-        FakeUserSpeech(start_time=0.1, end_time=0.5, transcript="look it up", stt_delay=0.05)
-    ]
+    speech = [FakeUserSpeech(start_time=0.1, end_time=0.5, transcript="look it up", stt_delay=0.05)]
     model = FakeLLM(
         fake_responses=[
             FakeLLMResponse(
@@ -269,10 +268,12 @@ async def _run(
 
     session.on(
         "conversation_item_added",
-        lambda ev: ev.item.type == "message"
-        and ev.item.role == "assistant"
-        and "Here it is" in (ev.item.text_content or "")
-        and replied.set(),
+        lambda ev: (
+            ev.item.type == "message"
+            and ev.item.role == "assistant"
+            and "Here it is" in (ev.item.text_content or "")
+            and replied.set()
+        ),
     )
     async with session:
         await session.start(agent)
@@ -281,7 +282,9 @@ async def _run(
     entries = [*EXPECTED_PARENT, "stt_node"]
     await _settle(collector, {f"app.{e}" for e in entries} | {"agent_session"})
     seen = {
-        entry: sorted({collector.parent_name(s) or "<none>" for s in collector.named(f"app.{entry}")})
+        entry: sorted(
+            {collector.parent_name(s) or "<none>" for s in collector.named(f"app.{entry}")}
+        )
         for entry in entries
     }
     return seen, seen_after_yield
@@ -369,7 +372,8 @@ def _attr(span: dict[str, Any], key: str) -> Any:
 
 
 async def test_job_callbacks_spans_nest_under_their_job_spans(
-    collector: _Collector, own_executor: Callable[[JobExecutor], JobExecutor]
+    collector: _Collector,
+    own_executor: Callable[[JobExecutor], JobExecutor],  # noqa: F811  (the imported fixture)
 ) -> None:
     async def entrypoint(ctx: JobContext) -> None:
         with _opened("entrypoint"):
@@ -408,7 +412,22 @@ async def test_job_callbacks_spans_nest_under_their_job_spans(
         await executor.aclose()
     await _settle(collector, {"app.entrypoint", "app.on_session_end"})
     parents = {
-        entry: sorted({collector.parent_name(s) or "<none>" for s in collector.named(f"app.{entry}")})
+        entry: sorted(
+            {collector.parent_name(s) or "<none>" for s in collector.named(f"app.{entry}")}
+        )
         for entry in ("entrypoint", "on_session_end")
     }
     assert parents == {"entrypoint": ["job_entrypoint"], "on_session_end": ["on_session_end"]}
+
+
+async def test_spans_still_export_after_a_server_in_this_process_shut_down(
+    collector: _Collector,
+) -> None:
+    # `AgentServer` flushes the process exporter when it stops; a server started afterwards in
+    # the same process (tests, embedded use) installs a new one.
+    await telemetry.shutdown()
+    _core._core_telemetry_install("test")
+    with _opened("after_shutdown"):
+        pass
+    await _settle(collector, {"app.after_shutdown"})
+    assert collector.named("app.after_shutdown")
