@@ -84,7 +84,7 @@ class TTS(tts.TTS):
         Args:
             voice: Voice id. ``"default"`` is the English default voice; other ids
                 (for example ``custom:<id>``) are listed by ``GET /v1/voices``.
-            speed: Speaking rate multiplier, 0.5-4.0.
+            speed: Speaking rate multiplier. 1.0 is normal speed.
             engine: ``"live"`` (default, lowest latency and price, built for voice
                 agents) or ``"studio"``.
             sample_rate: Output sample rate in Hz, one of 8000, 16000 or 24000. Use
