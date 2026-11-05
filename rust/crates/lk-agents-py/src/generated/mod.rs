@@ -104,7 +104,6 @@ pub trait Implementations: 'static {
     type ImageFunctions: ::lk_agents_abi::media::images::ImageFunctions;
     type AudioEmitter: ::lk_agents_abi::media::emitter::AudioEmitter;
     type AudioDecoder: ::lk_agents_abi::media::codecs::AudioDecoder;
-    type MediaTokenization: ::lk_agents_abi::media::codecs::MediaTokenization;
     type RuntimeLoad: ::lk_agents_abi::metrics::RuntimeLoad;
     type MetricsRecords: ::lk_agents_abi::metrics::MetricsRecords;
     type ProviderMetrics: ::lk_agents_abi::metrics::provider::ProviderMetrics;
@@ -138,6 +137,7 @@ pub trait Implementations: 'static {
     type HostTokenization: ::lk_agents_abi::tokenize::bindings::HostTokenization;
     type WordTokenizer: ::lk_agents_abi::tokenize::bindings::WordTokenizer;
     type SentenceTokenizer: ::lk_agents_abi::tokenize::bindings::SentenceTokenizer;
+    type BlingfireSentenceTokenizer: ::lk_agents_abi::tokenize::bindings::BlingfireSentenceTokenizer;
     type BufferedTokens: ::lk_agents_abi::tokenize::bindings::BufferedTokens;
     type LanguageFunctions: ::lk_agents_abi::tokenize::language::LanguageFunctions;
     type SearchDocument: ::lk_agents_abi::tokenize::search::SearchDocument;
@@ -349,7 +349,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(media::serialize_image_url, m)?)?;
     m.add_class::<media::AudioEmitter>()?;
     m.add_class::<media::AudioDecoder>()?;
-    m.add_function(wrap_pyfunction!(media::split_sentences, m)?)?;
     m.add_function(wrap_pyfunction!(metrics::runtime_busy_seconds, m)?)?;
     m.add_function(wrap_pyfunction!(metrics::metrics_log_fields, m)?)?;
     m.add_function(wrap_pyfunction!(metrics::_core_token_usage_total, m)?)?;
@@ -390,6 +389,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(tokenize::xml_tokenize, m)?)?;
     m.add_class::<tokenize::BasicWordTokenizer>()?;
     m.add_class::<tokenize::BasicSentenceTokenizer>()?;
+    m.add_class::<tokenize::BlingfireSentenceTokenizer>()?;
     m.add_class::<tokenize::TokenBuffer>()?;
     m.add_function(wrap_pyfunction!(tokenize::normalize_language, m)?)?;
     m.add_function(wrap_pyfunction!(tokenize::base_language, m)?)?;

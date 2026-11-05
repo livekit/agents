@@ -160,19 +160,6 @@ pub fn split_sentences(
     Ok(out)
 }
 
-pub struct MediaTokenization;
-
-impl lk_agents_abi::media::codecs::MediaTokenization for MediaTokenization {
-    fn split_sentences(
-        text: &str,
-        min_sentence_len: usize,
-        retain_format: bool,
-    ) -> Result<Vec<(String, usize, usize)>, lk_agents_abi::media::codecs::CodecFailure> {
-        split_sentences(text, min_sentence_len, retain_format)
-            .map_err(|error| lk_agents_abi::media::codecs::CodecFailure(error.to_string()))
-    }
-}
-
 /// `re.sub(r"\s*\n+\s*", " ", s).strip()`: only runs containing a newline collapse. Python's `\s`
 /// also counts the C0 separators `\x1c`-`\x1f`.
 fn collapse_newlines(s: &str) -> String {

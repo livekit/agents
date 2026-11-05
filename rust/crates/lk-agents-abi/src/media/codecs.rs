@@ -39,14 +39,3 @@ pub trait AudioDecoder: Send + Sync + Sized + 'static {
     #[host(await)]
     async fn aclose(&self) -> Result<(), CodecFailure>;
 }
-
-/// Native sentence tokenization shared by buffered TTS token streams.
-#[crate::host(functions(pid = false))]
-pub trait MediaTokenization: Send + Sync + Sized + 'static {
-    #[host(function)]
-    fn split_sentences(
-        text: &str,
-        #[host(default = 20)] min_sentence_len: usize,
-        #[host(kw, default = false)] retain_format: bool,
-    ) -> Result<Vec<(String, usize, usize)>, CodecFailure>;
-}

@@ -101,10 +101,3 @@ class AudioDecoder:
         """The next decoded frame, at the requested format; `None` at the end of input."""
     async def aclose(self) -> None:
         """Cancel decoding and observe release of the native decoder's worker admission."""
-
-def split_sentences(
-    text: str,
-    min_sentence_len: int = 20,
-    *,
-    retain_format: bool = False,
-) -> list[tuple[str, int, int]]: ...

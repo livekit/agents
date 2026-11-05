@@ -700,7 +700,7 @@ These source classifications are not additive savings; the exact target contains
 | Current file | Lines | Action | Target and reason |
 | --- | ---: | --- | --- |
 | [tokenize/__init__.py](../../livekit-agents-next/livekit/agents/tokenize/__init__.py) | 296 | Retain | `tokenize/__init__.py`. Keep base tokenizer/stream contracts and existing native/basic namespace. |
-| [tokenize/blingfire.py](../../livekit-agents-next/livekit/agents/tokenize/blingfire.py) | 83 | Retain | `tokenize/blingfire.py`. Keep baseline concrete tokenizer; eliminating it requires a class naming or abstractness decision beyond file grouping. |
+| `tokenize/blingfire.py` | 83 | Removed | `livekit.agents.tokenize.blingfire` is generated from its ABI declaration (`BlingfireSentenceTokenizer`). |
 
 ### utils
 

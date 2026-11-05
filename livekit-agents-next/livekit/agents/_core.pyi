@@ -133,7 +133,6 @@ from ._generated._core_media import (
     encode_image as encode_image,
     serialize_image_frame as serialize_image_frame,
     serialize_image_url as serialize_image_url,
-    split_sentences as split_sentences,
 )
 from ._generated._core_metrics import (
     LlmMetricState as LlmMetricState,
@@ -191,6 +190,7 @@ from ._generated._core_text_session import (
 from ._generated._core_tokenize import (
     BasicSentenceTokenizer as BasicSentenceTokenizer,
     BasicWordTokenizer as BasicWordTokenizer,
+    BlingfireSentenceTokenizer as BlingfireSentenceTokenizer,
     BM25Index as BM25Index,
     SearchDocument as SearchDocument,
     TokenBuffer as TokenBuffer,

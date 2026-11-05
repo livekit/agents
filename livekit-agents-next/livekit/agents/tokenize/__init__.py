@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Callable
 from typing import Any, overload
@@ -276,6 +277,8 @@ class _CoreSentenceTokenizer(SentenceTokenizer):
             tokenizer=self._core._core_split,
             min_token_len=self._core._core_min_token_len,
             min_ctx_len=self._core._core_min_ctx_len,
+            max_token_len=self._core._core_max_token_len,
+            xml_aware=self._core._core_xml_aware,
         )
 
 
@@ -295,6 +298,9 @@ class _CoreWordTokenizer(WordTokenizer):
         )
 
 
-# the tokenizers build on the definitions above
-from .._generated import tokenize_basic as basic  # noqa: E402
-from . import blingfire  # noqa: E402
+# the tokenizers build on the definitions above, importable as ``livekit.agents.tokenize.basic``
+# and ``livekit.agents.tokenize.blingfire``
+from .._generated import tokenize_basic as basic, tokenize_blingfire as blingfire  # noqa: E402
+
+sys.modules[f"{__name__}.basic"] = basic
+sys.modules[f"{__name__}.blingfire"] = blingfire

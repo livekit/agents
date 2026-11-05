@@ -70,6 +70,49 @@ class BasicSentenceTokenizer:
     def _core_min_token_len(self) -> int: ...
     @property
     def _core_min_ctx_len(self) -> int: ...
+    @property
+    def _core_max_token_len(self) -> int | None: ...
+    @property
+    def _core_xml_aware(self) -> bool: ...
+
+class BlingfireSentenceTokenizer:
+    """Sentences split by the BlingFire model, batched for speech.
+
+    Args:
+        min_sentence_len: minimum length for a span to be treated as its own sentence; shorter
+            spans are merged forward into the next one.
+        stream_context_len: minimum buffered text before the stream emits.
+        retain_format: keep original whitespace/formatting in emitted tokens.
+        max_token_len: hard cap on emitted token length; a token is flushed before appending a
+            sentence that would exceed it.
+        min_token_len: minimum length a token must reach before it is emitted. Sentences are
+            batched until the running token reaches this length, so raising it (e.g. toward
+            ``max_token_len``) yields larger, fewer chunks. Defaults to ``min_sentence_len``.
+        xml_aware: treat XML markup as atomic: never split a tag across tokens and keep tags
+            attached to the following sentence. Only enable when the input carries markup (e.g.
+            expressive TTS): a stray "<" in plain text can otherwise hold back streaming.
+    """
+    def __new__(
+        cls,
+        *,
+        min_sentence_len: int = 20,
+        stream_context_len: int = 10,
+        retain_format: bool = False,
+        max_token_len: int | None = None,
+        min_token_len: int | None = None,
+        xml_aware: bool = False,
+    ) -> Self: ...
+    def tokenize(self, text: str, *, language: str | None = None) -> list[str]:
+        """The sentences of `text`, markup kept whole when `xml_aware`."""
+    def _core_split(self, text: str) -> list[tuple[str, int, int]]: ...
+    @property
+    def _core_min_token_len(self) -> int: ...
+    @property
+    def _core_min_ctx_len(self) -> int: ...
+    @property
+    def _core_max_token_len(self) -> int | None: ...
+    @property
+    def _core_xml_aware(self) -> bool: ...
 
 class TokenBuffer:
     def __new__(

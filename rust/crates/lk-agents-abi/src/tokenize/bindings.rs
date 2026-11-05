@@ -114,6 +114,61 @@ pub trait SentenceTokenizer: Send + Sized + 'static {
     fn min_token_len(&self) -> usize;
     #[host(getter, name = "_core_min_ctx_len")]
     fn min_ctx_len(&self) -> usize;
+    #[host(getter, name = "_core_max_token_len")]
+    fn max_token_len(&self) -> Option<usize>;
+    #[host(getter, name = "_core_xml_aware")]
+    fn xml_aware(&self) -> bool;
+}
+
+/// Sentences split by the BlingFire model, batched for speech.
+///
+/// Args:
+///     min_sentence_len: minimum length for a span to be treated as its own sentence; shorter
+///         spans are merged forward into the next one.
+///     stream_context_len: minimum buffered text before the stream emits.
+///     retain_format: keep original whitespace/formatting in emitted tokens.
+///     max_token_len: hard cap on emitted token length; a token is flushed before appending a
+///         sentence that would exceed it.
+///     min_token_len: minimum length a token must reach before it is emitted. Sentences are
+///         batched until the running token reaches this length, so raising it (e.g. toward
+///         ``max_token_len``) yields larger, fewer chunks. Defaults to ``min_sentence_len``.
+///     xml_aware: treat XML markup as atomic: never split a tag across tokens and keep tags
+///         attached to the following sentence. Only enable when the input carries markup (e.g.
+///         expressive TTS): a stray "<" in plain text can otherwise hold back streaming.
+#[crate::host(class(name = "BlingfireSentenceTokenizer", pid = false))]
+#[python(wrapper(
+    module = "tokenize_blingfire",
+    path = "livekit.agents.tokenize.blingfire",
+    name = "SentenceTokenizer",
+    base = "..tokenize:_CoreSentenceTokenizer"
+))]
+pub trait BlingfireSentenceTokenizer: Send + Sized + 'static {
+    #[host(new)]
+    fn new(
+        #[host(kw, default = 20)] min_sentence_len: usize,
+        #[host(default = 10)] stream_context_len: usize,
+        #[host(default = false)] retain_format: bool,
+        #[host(default = None)] max_token_len: Option<usize>,
+        #[host(default = None)] min_token_len: Option<usize>,
+        #[host(default = false)] xml_aware: bool,
+    ) -> Self;
+    /// The sentences of `text`, markup kept whole when `xml_aware`.
+    #[host(call)]
+    fn tokenize(
+        &self,
+        text: String,
+        #[host(kw, default = None)] language: Option<String>,
+    ) -> Vec<String>;
+    #[host(call, name = "_core_split")]
+    fn split(&self, text: String) -> Vec<(String, usize, usize)>;
+    #[host(getter, name = "_core_min_token_len")]
+    fn min_token_len(&self) -> usize;
+    #[host(getter, name = "_core_min_ctx_len")]
+    fn min_ctx_len(&self) -> usize;
+    #[host(getter, name = "_core_max_token_len")]
+    fn max_token_len(&self) -> Option<usize>;
+    #[host(getter, name = "_core_xml_aware")]
+    fn xml_aware(&self) -> bool;
 }
 
 #[crate::host(class(name = "TokenBuffer", pid = false))]

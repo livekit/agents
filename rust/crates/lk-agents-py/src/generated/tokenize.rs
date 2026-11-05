@@ -186,6 +186,7 @@ fn _extract_sentence_tokenizer_new_stream_context_len(
 type SentenceTokenizerNewStreamContextLenInput = usize;
 type SentenceTokenizerTokenizeOutput = ::std::vec::Vec<::std::string::String>;
 type SentenceTokenizerSplitOutput = ::std::vec::Vec<(::std::string::String, usize, usize)>;
+type SentenceTokenizerMaxTokenLenOutput = ::std::option::Option<usize>;
 
 /// Really naive implementation of a sentence tokenizer: rule-based, and only English is really
 /// tested.
@@ -242,6 +243,156 @@ impl BasicSentenceTokenizer {
     #[pyo3(name = "_core_min_ctx_len")]
     fn min_ctx_len(&self, py: Python<'_>) -> PyResult<usize> {
         let out = py.detach(|| <BasicSentenceTokenizerImpl as ::lk_agents_abi::tokenize::bindings::SentenceTokenizer>::min_ctx_len(&self.0));
+        ::pyo3::PyResult::Ok(out)
+    }
+
+    #[getter]
+    #[pyo3(name = "_core_max_token_len")]
+    fn max_token_len(&self, py: Python<'_>) -> PyResult<SentenceTokenizerMaxTokenLenOutput> {
+        let out = py.detach(|| <BasicSentenceTokenizerImpl as ::lk_agents_abi::tokenize::bindings::SentenceTokenizer>::max_token_len(&self.0));
+        ::pyo3::PyResult::Ok(out)
+    }
+
+    #[getter]
+    #[pyo3(name = "_core_xml_aware")]
+    fn xml_aware(&self, py: Python<'_>) -> PyResult<bool> {
+        let out = py.detach(|| <BasicSentenceTokenizerImpl as ::lk_agents_abi::tokenize::bindings::SentenceTokenizer>::xml_aware(&self.0));
+        ::pyo3::PyResult::Ok(out)
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/tokenize/bindings.rs.
+type BlingfireSentenceTokenizerImpl = <crate::generated::implementations::Selected as super::Implementations>::BlingfireSentenceTokenizer;
+
+fn _extract_blingfire_sentence_tokenizer_new_min_sentence_len(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<BlingfireSentenceTokenizerNewMinSentenceLenInput> {
+    crate::py_values::number_from_py::<usize>(obj.as_any(), "min_sentence_len")
+}
+type BlingfireSentenceTokenizerNewMinSentenceLenInput = usize;
+
+fn _extract_blingfire_sentence_tokenizer_new_stream_context_len(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<BlingfireSentenceTokenizerNewStreamContextLenInput> {
+    crate::py_values::number_from_py::<usize>(obj.as_any(), "stream_context_len")
+}
+type BlingfireSentenceTokenizerNewStreamContextLenInput = usize;
+
+fn _extract_blingfire_sentence_tokenizer_new_max_token_len(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<BlingfireSentenceTokenizerNewMaxTokenLenInput> {
+    if obj.is_none() {
+        Ok(None)
+    } else {
+        (crate::py_values::number_from_py::<usize>(obj.as_any(), "max_token_len")).map(Some)
+    }
+}
+type BlingfireSentenceTokenizerNewMaxTokenLenInput = ::std::option::Option<usize>;
+
+fn _extract_blingfire_sentence_tokenizer_new_min_token_len(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<BlingfireSentenceTokenizerNewMinTokenLenInput> {
+    if obj.is_none() {
+        Ok(None)
+    } else {
+        (crate::py_values::number_from_py::<usize>(obj.as_any(), "min_token_len")).map(Some)
+    }
+}
+type BlingfireSentenceTokenizerNewMinTokenLenInput = ::std::option::Option<usize>;
+type BlingfireSentenceTokenizerTokenizeOutput = ::std::vec::Vec<::std::string::String>;
+type BlingfireSentenceTokenizerSplitOutput = ::std::vec::Vec<(::std::string::String, usize, usize)>;
+type BlingfireSentenceTokenizerMaxTokenLenOutput = ::std::option::Option<usize>;
+
+/// Sentences split by the BlingFire model, batched for speech.
+///
+/// Args:
+///     min_sentence_len: minimum length for a span to be treated as its own sentence; shorter
+///         spans are merged forward into the next one.
+///     stream_context_len: minimum buffered text before the stream emits.
+///     retain_format: keep original whitespace/formatting in emitted tokens.
+///     max_token_len: hard cap on emitted token length; a token is flushed before appending a
+///         sentence that would exceed it.
+///     min_token_len: minimum length a token must reach before it is emitted. Sentences are
+///         batched until the running token reaches this length, so raising it (e.g. toward
+///         ``max_token_len``) yields larger, fewer chunks. Defaults to ``min_sentence_len``.
+///     xml_aware: treat XML markup as atomic: never split a tag across tokens and keep tags
+///         attached to the following sentence. Only enable when the input carries markup (e.g.
+///         expressive TTS): a stray "<" in plain text can otherwise hold back streaming.
+#[pyclass(frozen, name = "BlingfireSentenceTokenizer", module = "livekit.agents._core")]
+pub struct BlingfireSentenceTokenizer(pub(crate) ::std::sync::Arc<BlingfireSentenceTokenizerImpl>);
+
+#[pymethods]
+impl BlingfireSentenceTokenizer {
+    #[new]
+    #[pyo3(signature = (*, min_sentence_len = 20, stream_context_len = 10, retain_format = false, max_token_len = None, min_token_len = None, xml_aware = false))]
+    fn new(
+        py: Python<'_>,
+        #[pyo3(from_py_with = _extract_blingfire_sentence_tokenizer_new_min_sentence_len)]
+        min_sentence_len: BlingfireSentenceTokenizerNewMinSentenceLenInput,
+        #[pyo3(from_py_with = _extract_blingfire_sentence_tokenizer_new_stream_context_len)]
+        stream_context_len: BlingfireSentenceTokenizerNewStreamContextLenInput,
+        retain_format: bool,
+        #[pyo3(from_py_with = _extract_blingfire_sentence_tokenizer_new_max_token_len)]
+        max_token_len: BlingfireSentenceTokenizerNewMaxTokenLenInput,
+        #[pyo3(from_py_with = _extract_blingfire_sentence_tokenizer_new_min_token_len)]
+        min_token_len: BlingfireSentenceTokenizerNewMinTokenLenInput,
+        xml_aware: bool,
+    ) -> PyResult<BlingfireSentenceTokenizer> {
+        let out = py.detach(|| <BlingfireSentenceTokenizerImpl as ::lk_agents_abi::tokenize::bindings::BlingfireSentenceTokenizer>::new(min_sentence_len, stream_context_len, retain_format, max_token_len, min_token_len, xml_aware));
+        ::pyo3::PyResult::Ok(BlingfireSentenceTokenizer(::std::sync::Arc::new(out)))
+    }
+
+    /// The sentences of `text`, markup kept whole when `xml_aware`.
+    #[pyo3(signature = (text, *, language = None))]
+    fn tokenize(
+        &self,
+        py: Python<'_>,
+        text: ::std::string::String,
+        language: ::std::option::Option<::std::string::String>,
+    ) -> PyResult<BlingfireSentenceTokenizerTokenizeOutput> {
+        let out = py.detach(|| <BlingfireSentenceTokenizerImpl as ::lk_agents_abi::tokenize::bindings::BlingfireSentenceTokenizer>::tokenize(&self.0, text, language));
+        ::pyo3::PyResult::Ok(out)
+    }
+
+    #[pyo3(name = "_core_split")]
+    #[pyo3(signature = (text))]
+    fn split(
+        &self,
+        py: Python<'_>,
+        text: ::std::string::String,
+    ) -> PyResult<BlingfireSentenceTokenizerSplitOutput> {
+        let out = py.detach(|| <BlingfireSentenceTokenizerImpl as ::lk_agents_abi::tokenize::bindings::BlingfireSentenceTokenizer>::split(&self.0, text));
+        ::pyo3::PyResult::Ok(out)
+    }
+
+    #[getter]
+    #[pyo3(name = "_core_min_token_len")]
+    fn min_token_len(&self, py: Python<'_>) -> PyResult<usize> {
+        let out = py.detach(|| <BlingfireSentenceTokenizerImpl as ::lk_agents_abi::tokenize::bindings::BlingfireSentenceTokenizer>::min_token_len(&self.0));
+        ::pyo3::PyResult::Ok(out)
+    }
+
+    #[getter]
+    #[pyo3(name = "_core_min_ctx_len")]
+    fn min_ctx_len(&self, py: Python<'_>) -> PyResult<usize> {
+        let out = py.detach(|| <BlingfireSentenceTokenizerImpl as ::lk_agents_abi::tokenize::bindings::BlingfireSentenceTokenizer>::min_ctx_len(&self.0));
+        ::pyo3::PyResult::Ok(out)
+    }
+
+    #[getter]
+    #[pyo3(name = "_core_max_token_len")]
+    fn max_token_len(
+        &self,
+        py: Python<'_>,
+    ) -> PyResult<BlingfireSentenceTokenizerMaxTokenLenOutput> {
+        let out = py.detach(|| <BlingfireSentenceTokenizerImpl as ::lk_agents_abi::tokenize::bindings::BlingfireSentenceTokenizer>::max_token_len(&self.0));
+        ::pyo3::PyResult::Ok(out)
+    }
+
+    #[getter]
+    #[pyo3(name = "_core_xml_aware")]
+    fn xml_aware(&self, py: Python<'_>) -> PyResult<bool> {
+        let out = py.detach(|| <BlingfireSentenceTokenizerImpl as ::lk_agents_abi::tokenize::bindings::BlingfireSentenceTokenizer>::xml_aware(&self.0));
         ::pyo3::PyResult::Ok(out)
     }
 }

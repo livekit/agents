@@ -596,31 +596,6 @@ impl AudioDecoder {
     }
 }
 
-// Declared in rust/crates/lk-agents-abi/src/media/codecs.rs.
-type MediaTokenizationImpl =
-    <crate::generated::implementations::Selected as super::Implementations>::MediaTokenization;
-type MediaTokenizationSplitSentencesOutput = ::std::vec::Vec<(::std::string::String, usize, usize)>;
-
-fn _extract_media_tokenization_split_sentences_min_sentence_len(
-    obj: &Bound<'_, PyAny>,
-) -> PyResult<MediaTokenizationSplitSentencesMinSentenceLenInput> {
-    crate::py_values::number_from_py::<usize>(obj.as_any(), "min_sentence_len")
-}
-type MediaTokenizationSplitSentencesMinSentenceLenInput = usize;
-
-#[pyfunction]
-#[pyo3(signature = (text, min_sentence_len = 20, *, retain_format = false))]
-pub fn split_sentences(
-    py: Python<'_>,
-    text: ::std::string::String,
-    #[pyo3(from_py_with = _extract_media_tokenization_split_sentences_min_sentence_len)]
-    min_sentence_len: MediaTokenizationSplitSentencesMinSentenceLenInput,
-    retain_format: bool,
-) -> PyResult<MediaTokenizationSplitSentencesOutput> {
-    let out = py.detach(|| <MediaTokenizationImpl as ::lk_agents_abi::media::codecs::MediaTokenization>::split_sentences(&text, min_sentence_len, retain_format)).map_err(|e: ::lk_agents_abi::media::codecs::CodecFailure| <::lk_agents_abi::media::codecs::CodecFailure as crate::py_errors::HostException>::to_py_err(&e))?;
-    ::pyo3::PyResult::Ok(out)
-}
-
 // Declared in rust/crates/lk-agents-abi/src/media/emitter.rs.
 
 /// [`::lk_agents_abi::media::emitter::EmitterOutput`] over a host `livekit.agents.utils.aio.Chan[livekit.agents.tts.SynthesizedAudio]`.

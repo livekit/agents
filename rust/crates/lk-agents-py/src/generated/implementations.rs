@@ -65,7 +65,6 @@ impl super::Implementations for Selected {
     type ImageFunctions = ::lk_agents_runtime::inference::images::ImageFunctions;
     type AudioEmitter = ::lk_agents_runtime::inference::tts::emitter::AudioEmitter;
     type AudioDecoder = ::lk_agents_runtime::inference::codecs::StreamDecoder;
-    type MediaTokenization = ::lk_agents_runtime::media::blingfire::MediaTokenization;
     type RuntimeLoad = ::lk_agents_runtime::process::RuntimeLoad;
     type MetricsRecords = ::lk_agents_runtime::cores::MetricsRecords;
     type ProviderMetrics = ::lk_agents_runtime::cores::ProviderMetrics;
@@ -91,6 +90,8 @@ impl super::Implementations for Selected {
     type HostTokenization = ::lk_agents_runtime::cores::HostTokenizer;
     type WordTokenizer = ::lk_agents_runtime::cores::BasicWordTokenizer;
     type SentenceTokenizer = ::lk_agents_runtime::cores::BasicSentenceTokenizer;
+    type BlingfireSentenceTokenizer =
+        ::lk_agents_runtime::inference::tts::sentences::BlingfireSentenceTokenizer;
     type BufferedTokens = ::lk_agents_runtime::cores::BufferedTokenStream;
     type LanguageFunctions = ::lk_agents_runtime::cores::Languages;
     type SearchDocument = ::lk_agents_runtime::cores::SearchDocument;

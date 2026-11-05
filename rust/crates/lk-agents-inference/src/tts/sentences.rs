@@ -32,6 +32,64 @@ impl Tokenize for Blingfire {
     }
 }
 
+/// `tokenize.blingfire.SentenceTokenizer`: [`Blingfire`] sentences, batched by the host's
+/// buffered stream with these options.
+pub struct BlingfireSentenceTokenizer {
+    blingfire: Blingfire,
+    stream_context_len: usize,
+    max_token_len: Option<usize>,
+    min_token_len: Option<usize>,
+    xml_aware: bool,
+}
+
+impl lk_agents_abi::tokenize::bindings::BlingfireSentenceTokenizer for BlingfireSentenceTokenizer {
+    fn new(
+        min_sentence_len: usize,
+        stream_context_len: usize,
+        retain_format: bool,
+        max_token_len: Option<usize>,
+        min_token_len: Option<usize>,
+        xml_aware: bool,
+    ) -> Self {
+        BlingfireSentenceTokenizer {
+            blingfire: Blingfire { min_sentence_len, retain_format },
+            stream_context_len,
+            max_token_len,
+            min_token_len,
+            xml_aware,
+        }
+    }
+
+    fn tokenize(&self, text: String, _language: Option<String>) -> Vec<String> {
+        if !self.xml_aware {
+            return self.blingfire.tokenize(&text).into_iter().map(|s| s.text).collect();
+        }
+        let plan = lk_agents_core::tokenize::xml::Tokenization::new(&text);
+        let spans = plan.input().map(|input| self.blingfire.tokenize(input)).unwrap_or_default();
+        plan.finish(spans).into_iter().map(|s| s.text).collect()
+    }
+
+    fn split(&self, text: String) -> Vec<(String, usize, usize)> {
+        self.blingfire.tokenize(&text).into_iter().map(|s| (s.text, s.start, s.end)).collect()
+    }
+
+    fn min_token_len(&self) -> usize {
+        self.min_token_len.unwrap_or(self.blingfire.min_sentence_len)
+    }
+
+    fn min_ctx_len(&self) -> usize {
+        self.stream_context_len
+    }
+
+    fn max_token_len(&self) -> Option<usize> {
+        self.max_token_len
+    }
+
+    fn xml_aware(&self) -> bool {
+        self.xml_aware
+    }
+}
+
 /// `TokenBuffer<Blingfire>` with the reference's `BufferedSentenceStream` defaults. The
 /// parameters are audible: without batching, short utterances reach the TTS alone and sound clipped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

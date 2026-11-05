@@ -227,4 +227,13 @@ impl lk_agents_abi::tokenize::bindings::SentenceTokenizer for BasicSentenceToken
     fn min_ctx_len(&self) -> usize {
         self.stream_context_len
     }
+
+    /// No cap on a token's length.
+    fn max_token_len(&self) -> Option<usize> {
+        None
+    }
+
+    fn xml_aware(&self) -> bool {
+        false
+    }
 }
