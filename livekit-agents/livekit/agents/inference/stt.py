@@ -948,6 +948,11 @@ class STT(stt.STT):
             stream._on_session_keyterms_changed()
 
     def _push_conversation_item(self, ev: ConversationItemAddedEvent) -> None:
+        # a FallbackAdapter forwards every item to each STT it wraps, and the session's
+        # subscription outlives a model switch: skip models that cannot read agent_context
+        if not self._capabilities.chat_context:
+            super()._push_conversation_item(ev)  # warns once, then ignores
+            return
         if (
             (chat_item := ev.item).type == "message"
             and chat_item.role == "assistant"
@@ -1500,7 +1505,8 @@ class SpeechStream(stt.SpeechStream):
 
         if not text and not is_final:
             return
-        self._process_start_of_speech()
+        if text:
+            self._process_start_of_speech()
 
         speech_data = self._build_speech_data(data)
 
@@ -1517,6 +1523,11 @@ class SpeechStream(stt.SpeechStream):
                 )
                 self._speech_duration = 0
 
+            # An empty flush result can account for trailing silence without
+            # starting another turn after the previous final already ended it.
+            if not text and not self._speaking:
+                return
+
             event = stt.SpeechEvent(
                 type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                 request_id=request_id,
@@ -1526,7 +1537,17 @@ class SpeechStream(stt.SpeechStream):
 
             if self._speaking:
                 self._speaking = False
-                end_event = stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+                end_alternatives = []
+                # speech_data.end_time uses start + duration. Some providers report
+                # billed audio duration (e.g. Ink-2), so use word timing for EOS.
+                if (words := data.get("words")) and (last_word_end := words[-1].get("end", 0)) > 0:
+                    end_alternatives = [
+                        replace(speech_data, end_time=self.start_time_offset + last_word_end)
+                    ]
+                end_event = stt.SpeechEvent(
+                    type=stt.SpeechEventType.END_OF_SPEECH,
+                    alternatives=end_alternatives,
+                )
                 self._event_ch.send_nowait(end_event)
                 self._on_end_of_speech()
         else:

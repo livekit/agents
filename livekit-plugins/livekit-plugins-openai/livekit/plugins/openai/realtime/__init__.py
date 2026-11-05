@@ -1,5 +1,8 @@
 from . import gpt_live_types as gpt_live_types, utils as utils
 from .gpt_live_model import (
+    DecisionEventEnvelope,
+    DecisionsOptions,
+    DecisionsTrigger,
     GPTLiveDelegation,
     GPTLiveModel,
     GPTLiveSession,
@@ -13,6 +16,9 @@ __all__ = [
     "InferenceRealtimeModel",
     "RealtimeSession",
     "RealtimeModel",
+    "DecisionEventEnvelope",
+    "DecisionsOptions",
+    "DecisionsTrigger",
     "GPTLiveModel",
     "GPTLiveSession",
     "GPTLiveDelegation",

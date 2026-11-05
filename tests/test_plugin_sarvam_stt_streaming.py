@@ -58,6 +58,7 @@ def _make_stream(
     stream._utterance_start_audio_pos = 0.0
     stream._utterance_speech_end_audio_pos = None
     stream._utterance_speech_end_wall = None
+    stream._input_ch = SimpleNamespace(start_time_offset=0.0)
     stream._final_received_for_utterance = False
     stream._eos_emitted_for_utterance = False
     stream._manual_speech_started = False
@@ -1687,6 +1688,69 @@ async def test_manual_endpointing_emits_boundary_events_and_resets_each_turn() -
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("switch_to_vad", [False, True], ids=["manual", "manual_to_vad"])
+async def test_manual_eos_precedes_final_received_during_send(switch_to_vad: bool) -> None:
+    stream = _make_stream(endpointing="manual")
+    stream._input_ch = stt_streaming.stt.RecognizeStream._InputChan()
+    stream._input_ch.send_nowait(stt_streaming.rtc.AudioFrame.create(16000, 1, 8000))
+    stream._input_ch.send_nowait(stream._FlushSentinel())
+    stream._input_ch.close()
+    switch_requested = False
+
+    async def send_bytes(payload: bytes) -> None:
+        nonlocal switch_requested
+        if not switch_to_vad or switch_requested:
+            return
+        switch_requested = True
+        stream.update_options(endpointing="vad")
+        await stream._send_pending_config_update(ws)
+        await stream._handle_message(
+            {
+                "event": "config.updated",
+                "applied": ["endpointing=vad (pending: applies next boundary)"],
+            }
+        )
+        assert stream._active_endpointing == "manual"
+
+    async def send_str(payload: str) -> None:
+        if json.loads(payload)["event"] == "speech_end":
+            assert stream._active_endpointing == ("vad" if switch_to_vad else "manual")
+            assert stream._utterance_speech_end_audio_pos == pytest.approx(0.5)
+            # A socket send can yield to the receive task before it returns.
+            await stream._handle_message(
+                {
+                    "event": "transcript.final",
+                    "utterance_idx": 0,
+                    "text": "hello",
+                    "start_s": 0.1,
+                    "end_s": 0.4,
+                }
+            )
+            assert stream._pending_final_data is None
+
+    ws = SimpleNamespace(
+        closed=False,
+        send_str=send_str,
+        send_bytes=send_bytes,
+    )
+    await stream._process_audio(ws)
+
+    events = [
+        event
+        for event in stream._event_ch.events
+        if event.type != stt_streaming.stt.SpeechEventType.RECOGNITION_USAGE
+    ]
+    assert [event.type for event in events] == [
+        stt_streaming.stt.SpeechEventType.START_OF_SPEECH,
+        stt_streaming.stt.SpeechEventType.END_OF_SPEECH,
+        stt_streaming.stt.SpeechEventType.FINAL_TRANSCRIPT,
+    ]
+    assert events[1].alternatives == []
+    assert events[1].speech_end_time is None
+    assert events[2].alternatives[0].end_time == pytest.approx(0.4)
+
+
+@pytest.mark.asyncio
 async def test_manual_final_uses_current_turn_timings_after_first_turn() -> None:
     stream = _make_stream(endpointing="manual")
     stream._audio_position = 4.0
@@ -1741,6 +1805,22 @@ async def test_end_of_speech_is_emitted_as_a_bare_pipeline_sentinel(endpointing:
     assert len(eos_events) == 1
     assert eos_events[0].alternatives == []
     assert eos_events[0].request_id == stream._request_id
+
+
+@pytest.mark.parametrize("endpointing", ["vad", "manual"])
+@pytest.mark.parametrize("end_s", [0.4, 0.0, None])
+async def test_final_transcript_timing_includes_session_offset(endpointing, end_s):
+    stream = _make_stream(endpointing=endpointing)
+    stream.start_time_offset = 7.0
+    await stream._handle_message({"event": "vad.speech_start"})
+    await stream._handle_message({"event": "transcript.final", "text": "hello", "end_s": end_s})
+    await stream._handle_message({"event": "vad.speech_end"})
+    final = next(
+        event
+        for event in stream._event_ch.events
+        if event.type == stt_streaming.stt.SpeechEventType.FINAL_TRANSCRIPT
+    )
+    assert final.alternatives[0].end_time == pytest.approx(7.4 if end_s else 0.0)
 
 
 @pytest.mark.asyncio

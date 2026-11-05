@@ -969,9 +969,10 @@ class RealtimeSpeechStream(stt.SpeechStream):
             if isinstance(data, self._FlushSentinel):
                 self._audio_duration_collector.flush()
                 if self._active_endpointing == "manual" and self._manual_speech_started:
-                    await self._safe_send_str(ws, {"event": "speech_end"})
                     self._manual_speech_started = False
+                    # Emit EOS before the send can yield to a final transcript response.
                     self._end_manual_utterance()
+                    await self._safe_send_str(ws, {"event": "speech_end"})
 
         self._emit_local_usage_fallback()
         if not self._session_ended:
@@ -1293,8 +1294,8 @@ class RealtimeSpeechStream(stt.SpeechStream):
         speech_data = stt.SpeechData(
             language=LanguageCode(language),
             text=text,
-            start_time=start_time,
-            end_time=end_time,
+            start_time=start_time + self.start_time_offset if end_time > 0 else 0.0,
+            end_time=end_time + self.start_time_offset if end_time > 0 else 0.0,
             confidence=float(confidence),
             metadata=metadata or None,
         )
