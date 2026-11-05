@@ -18,7 +18,7 @@ pub(super) struct SttStreamExecutor {
     /// Seconds added to every timestamp: the caller's, plus the time spent on failed attempts, so
     /// transcripts stay on one linear timeline across reconnects.
     pub(super) offset: f64,
-    pub(super) audio_rx: media_queue::Receiver<AudioFrame, Flush>,
+    pub(super) audio_rx: media_queue::AudioReceiver<Flush>,
     pub(super) update_rx: mpsc::UnboundedReceiver<serde_json::Value>,
     pub(super) deferred: Arc<DeferredExtra>,
     pub(super) update_tx: mpsc::UnboundedSender<serde_json::Value>,
@@ -263,7 +263,7 @@ impl SttStreamExecutor {
     )]
     async fn send_loop(
         sender: Arc<dyn WsSender>,
-        audio_rx: &mut media_queue::Receiver<AudioFrame, Flush>,
+        audio_rx: &mut media_queue::AudioReceiver<Flush>,
         update_rx: &mut mpsc::UnboundedReceiver<serde_json::Value>,
         gaps: Arc<Mutex<Gaps>>,
         mut vad_sink: Option<crate::abi::VadSink>,

@@ -13,7 +13,9 @@ use lk_agents_abi::voice::rtc::{
     VideoFrameRef,
 };
 use lk_agents_abi::{AudioFrame, Clock, Closed, HOST_TEARDOWN_TIMEOUT, Spawner, StreamOutput, Ts};
-use lk_agents_media::media_queue::{self, Item, Media};
+use lk_agents_media::media_queue::{
+    self, AudioReceiver, AudioSender, Item, Stuck, VideoReceiver, VideoSender,
+};
 use lk_agents_net::audio_drops::AudioDrops;
 use lk_agents_net::task::TaskSet;
 use lk_agents_voice::room_io::machine::input::{
@@ -37,24 +39,83 @@ enum InputEvent {
     Failed(IoError),
 }
 
-struct State<M> {
+/// One kind of input's queue, as its readers drive it.
+trait Queue: Send + Sync + 'static {
+    type Frame: Send + 'static;
+    type Receiver: Send + 'static;
+    /// Returns the audio the push dropped.
+    fn push(&self, frame: Self::Frame) -> Duration;
+    fn event(&self, event: InputEvent) -> std::result::Result<(), Stuck>;
+    fn flush(&self, event: InputEvent) -> std::result::Result<(), Stuck>;
+    fn is_closed(&self) -> bool;
+    fn recv(
+        receiver: &mut Self::Receiver,
+    ) -> impl Future<Output = Option<Item<Self::Frame, InputEvent>>> + Send;
+}
+
+impl Queue for AudioSender<InputEvent> {
+    type Frame = AudioFrame;
+    type Receiver = AudioReceiver<InputEvent>;
+    fn push(&self, frame: AudioFrame) -> Duration {
+        AudioSender::push(self, frame)
+    }
+    fn event(&self, event: InputEvent) -> std::result::Result<(), Stuck> {
+        AudioSender::event(self, event)
+    }
+    fn flush(&self, event: InputEvent) -> std::result::Result<(), Stuck> {
+        AudioSender::flush(self, event)
+    }
+    fn is_closed(&self) -> bool {
+        AudioSender::is_closed(self)
+    }
+    fn recv(
+        receiver: &mut AudioReceiver<InputEvent>,
+    ) -> impl Future<Output = Option<Item<AudioFrame, InputEvent>>> + Send {
+        receiver.recv()
+    }
+}
+
+impl Queue for VideoSender<InputEvent> {
+    type Frame = VideoFrameRef;
+    type Receiver = VideoReceiver<InputEvent>;
+    fn push(&self, frame: VideoFrameRef) -> Duration {
+        VideoSender::push(self, frame);
+        Duration::ZERO
+    }
+    fn event(&self, event: InputEvent) -> std::result::Result<(), Stuck> {
+        VideoSender::event(self, event)
+    }
+    fn flush(&self, event: InputEvent) -> std::result::Result<(), Stuck> {
+        VideoSender::flush(self, event)
+    }
+    fn is_closed(&self) -> bool {
+        VideoSender::is_closed(self)
+    }
+    fn recv(
+        receiver: &mut VideoReceiver<InputEvent>,
+    ) -> impl Future<Output = Option<Item<VideoFrameRef, InputEvent>>> + Send {
+        receiver.recv()
+    }
+}
+
+struct State<Q> {
     readers: ParticipantInput,
-    queue: Option<media_queue::Sender<M, InputEvent>>,
+    queue: Option<Q>,
 }
 
 /// The selection, the queue it admits frames into, and one wake for every reader.
-struct Readers<M> {
-    state: Mutex<State<M>>,
-    queue: tokio::sync::Mutex<media_queue::Receiver<M, InputEvent>>,
+struct Readers<Q: Queue> {
+    state: Mutex<State<Q>>,
+    queue: tokio::sync::Mutex<Q::Receiver>,
     changed: Notify,
     /// Where an audio queue's drops are reported.
     drops: Option<AudioDrops>,
 }
 
-impl<M: Media + Send + 'static> Readers<M> {
+impl<Q: Queue> Readers<Q> {
     fn new(
         sources: &'static [TrackSource],
-        (tx, rx): (media_queue::Sender<M, InputEvent>, media_queue::Receiver<M, InputEvent>),
+        (tx, rx): (Q, Q::Receiver),
         drops: Option<AudioDrops>,
     ) -> Self {
         Self {
@@ -89,7 +150,7 @@ impl<M: Media + Send + 'static> Readers<M> {
     }
 
     /// `false` stops the reader.
-    fn deliver(&self, generation: u64, item: Result<M>) -> bool {
+    fn deliver(&self, generation: u64, item: Result<Q::Frame>) -> bool {
         self.admitted(generation, |queue| match item {
             Ok(frame) => queue.push(frame),
             Err(error) => {
@@ -101,11 +162,7 @@ impl<M: Media + Send + 'static> Readers<M> {
 
     /// Hands a frame of the reader of `generation` to `deliver` as voice admits it, and reports
     /// the audio its push dropped. `false` stops the reader.
-    fn admitted(
-        &self,
-        generation: u64,
-        deliver: impl FnOnce(&media_queue::Sender<M, InputEvent>) -> Duration,
-    ) -> bool {
+    fn admitted(&self, generation: u64, deliver: impl FnOnce(&Q) -> Duration) -> bool {
         let (open, dropped) = {
             let state = self.state.lock();
             match (state.readers.admit(generation), &state.queue) {
@@ -136,10 +193,10 @@ impl<M: Media + Send + 'static> Readers<M> {
         }
     }
 
-    async fn recv(&self) -> Result<Option<M>> {
+    async fn recv(&self) -> Result<Option<Q::Frame>> {
         let mut queue = self.queue.lock().await;
         loop {
-            match queue.recv().await {
+            match Q::recv(&mut queue).await {
                 Some(Item::Media(frame)) => return Ok(Some(frame)),
                 Some(Item::Event(InputEvent::Failed(error))) => return Err(error),
                 Some(Item::Gap(_) | Item::Event(InputEvent::SourceChanged)) => {}
@@ -187,9 +244,9 @@ fn publications(participant: &dyn RemoteParticipant) -> Result<PublicationSnapsh
 
 /// One kind of input's SDK reader: opens the selected track and pumps it.
 trait Reader: Sized + Send + Sync + 'static {
-    type Frame: Media + Send + 'static;
+    type Queue: Queue;
 
-    fn readers(&self) -> &Readers<Self::Frame>;
+    fn readers(&self) -> &Readers<Self::Queue>;
     fn room(&self) -> &dyn RtcRoom;
     /// Opens the stream and spawns its reader, which reports `retired` when its stream is closed.
     fn open(
@@ -268,13 +325,13 @@ fn route<R: Reader>(reader: &Arc<R>, event: &RoomEvent) -> Result<()> {
 
 /// Reads a stream until voice retires its reader or it ends, then retires the stream. `admit`
 /// turns a stream item into the frame it delivers, if any.
-async fn pump<S: Send + 'static, M: Media + Send + 'static, A: Future<Output = Option<M>>>(
-    readers: &Readers<M>,
+async fn pump<S: Send + 'static, Q: Queue, A: Future<Output = Option<Q::Frame>>>(
+    readers: &Readers<Q>,
     clock: &dyn Clock,
     generation: u64,
     mut stream: Box<dyn StreamOutput<S>>,
     replay: impl Future<Output = bool>,
-    end: impl FnOnce() -> Option<M>,
+    end: impl FnOnce() -> Option<Q::Frame>,
     mut admit: impl FnMut(S) -> A,
 ) {
     let reading = async {
@@ -316,7 +373,7 @@ pub struct ParticipantVideoInput {
     room: Arc<dyn RtcRoom>,
     spawner: Arc<dyn Spawner>,
     clock: Arc<dyn Clock>,
-    readers: Readers<VideoFrameRef>,
+    readers: Readers<VideoSender<InputEvent>>,
     /// A track's pump, which ends once its generation is replaced or its stream ends.
     pumps: Arc<TaskSet>,
 }
@@ -359,9 +416,9 @@ impl ParticipantVideoInput {
 }
 
 impl Reader for ParticipantVideoInput {
-    type Frame = VideoFrameRef;
+    type Queue = VideoSender<InputEvent>;
 
-    fn readers(&self) -> &Readers<VideoFrameRef> {
+    fn readers(&self) -> &Readers<VideoSender<InputEvent>> {
         &self.readers
     }
 
@@ -413,7 +470,7 @@ pub struct ParticipantAudioInput {
     pre_connect: Option<Arc<PreConnectAudioHandler>>,
     /// Where a processor's failing span is reported to the session.
     failures: tokio::sync::mpsc::Sender<ProcessorFailure>,
-    readers: Readers<AudioFrame>,
+    readers: Readers<AudioSender<InputEvent>>,
     /// A track's pump, which ends once its generation is replaced or its stream ends.
     pumps: Arc<TaskSet>,
     /// The session's `wait_for_audio_track`, until the first frame; with the subscription's time.
@@ -582,9 +639,9 @@ impl ParticipantAudioInput {
 }
 
 impl Reader for ParticipantAudioInput {
-    type Frame = AudioFrame;
+    type Queue = AudioSender<InputEvent>;
 
-    fn readers(&self) -> &Readers<AudioFrame> {
+    fn readers(&self) -> &Readers<AudioSender<InputEvent>> {
         &self.readers
     }
 

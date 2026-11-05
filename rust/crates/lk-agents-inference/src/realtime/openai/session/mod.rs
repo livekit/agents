@@ -473,14 +473,14 @@ struct Pump {
 impl Pump {
     /// `_main_task`: connect, run, and reconnect, retrying a failed connection on the connect
     /// options' budget, until a terminal error or a close.
-    async fn run(self, commands: media_queue::Receiver<AudioFrame, Cmd>) {
+    async fn run(self, commands: media_queue::AudioReceiver<Cmd>) {
         self.run_loop(commands).await;
         self.close().await;
         self.wait_for_retirement().await;
         self.events.finish();
     }
 
-    async fn run_loop(&self, mut commands: media_queue::Receiver<AudioFrame, Cmd>) {
+    async fn run_loop(&self, mut commands: media_queue::AudioReceiver<Cmd>) {
         use crate::realtime::machine::connection::RealtimeConnection;
         let mut connection = RealtimeConnection::new(&self.connect.conn, self.clock.now());
         let mut effects = connection.start(self.clock.now());
@@ -561,7 +561,7 @@ impl Pump {
     /// failure, retryable or not.
     async fn connect_and_run(
         &self,
-        commands: &mut media_queue::Receiver<AudioFrame, Cmd>,
+        commands: &mut media_queue::AudioReceiver<Cmd>,
         reconnecting: bool,
         connection: &mut crate::realtime::machine::connection::RealtimeConnection,
         generation: u64,
@@ -609,7 +609,7 @@ impl Pump {
 
     async fn run_ws(
         &self,
-        input: &mut media_queue::Receiver<AudioFrame, Cmd>,
+        input: &mut media_queue::AudioReceiver<Cmd>,
         sender: Arc<dyn lk_agents_net::transport::WsSender>,
         mut receiver: Box<dyn lk_agents_net::transport::WsReceiver>,
         initial: Step,

@@ -1,7 +1,6 @@
 //! Realtime ingress over a media queue, and bounded event delivery with one reserved terminal observation.
 
 use super::session::Cmd;
-use lk_agents_abi::AudioFrame;
 use lk_agents_abi::RealtimeCommand as Command;
 use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::llm::realtime::{
@@ -166,7 +165,7 @@ impl EventReceiver {
 pub(super) struct Ingress {
     /// Audio and every command, in one ordered queue: a commit, clear or reply is never
     /// reordered against the audio before it.
-    pub(super) input: media_queue::Sender<AudioFrame, Cmd>,
+    pub(super) input: media_queue::AudioSender<Cmd>,
     pub(super) drops: lk_agents_net::audio_drops::AudioDrops,
     pub(super) events: Delivery,
     pub(super) clock: Arc<dyn Clock>,

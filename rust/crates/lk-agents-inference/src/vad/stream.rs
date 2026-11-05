@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::{AudioFrame, Clock, Closed, StreamInput, StreamOutput, Ts};
-use lk_agents_media::media_queue::{self, Item, Policy, Sender};
+use lk_agents_media::media_queue::{self, AudioSender, Item, Policy};
 use lk_agents_media::pool::{Job, JobClass, MediaPool};
 use lk_agents_net::audio_drops::AudioDrops;
 use lk_agents_net::telemetry;
@@ -31,16 +31,13 @@ struct Flush;
 
 struct Input {
     /// `None` once the input ended.
-    audio: Mutex<Option<Sender<AudioFrame, Flush>>>,
+    audio: Mutex<Option<AudioSender<Flush>>>,
     drops: AudioDrops,
     cancelled: CancellationToken,
 }
 
 impl Input {
-    fn send<R>(
-        &self,
-        op: impl FnOnce(&Sender<AudioFrame, Flush>) -> R,
-    ) -> Result<R, ProviderError> {
+    fn send<R>(&self, op: impl FnOnce(&AudioSender<Flush>) -> R) -> Result<R, ProviderError> {
         if self.cancelled.is_cancelled() {
             return Err(failed("the VAD stream is closed"));
         }

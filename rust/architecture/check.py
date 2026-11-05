@@ -22,8 +22,7 @@ PURE = CORES | {"lk-agents-abi"}
 UNRESTRICTED = (
     "rust/crates/lk-agents-media/src/pool.rs",
     "rust/crates/lk-agents-media/src/pool_tests.rs",
-    "rust/crates/lk-agents-media/src/media_queue.rs",
-    "rust/crates/lk-agents-media/src/media_queue_tests.rs",
+    "rust/crates/lk-agents-media/src/media_queue/",
 )
 # Async I/O crates (decisions 69, 77, 82): exempt from the purity bans; their edges are still
 # checked.

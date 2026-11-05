@@ -19,7 +19,7 @@ use lk_agents_abi::utils::stream::{Closed, Entry, RetryReport, StreamInput, Stre
 use lk_agents_abi::voice::rtc::frame_duration;
 use lk_agents_abi::{ApiConnectOptions, AudioFrame, Clock, HOST_TEARDOWN_TIMEOUT, before};
 use lk_agents_core::attempts::{AttemptStep, Attempts, RequestPolicy};
-use lk_agents_media::media_queue::{Item, Receiver};
+use lk_agents_media::media_queue::{AudioReceiver, Item};
 
 pub struct RetryingStt {
     inner: Arc<dyn Stt>,
@@ -298,7 +298,7 @@ impl RetryingStt {
 /// What the caller pushed, handed to the attempt serving one entry at a time, each awaited: a slow
 /// attempt, or none open, leaves the backlog in the queue, whose policy bounds it.
 struct Pump {
-    audio: Receiver<AudioFrame, Flush>,
+    audio: AudioReceiver<Flush>,
     sink: Option<Arc<dyn StreamInput<AudioFrame>>>,
     sending: Option<lk_agents_abi::BoxFuture<'static, Result<(), ProviderError>>>,
     ended: bool,

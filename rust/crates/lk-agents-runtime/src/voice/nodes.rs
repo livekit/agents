@@ -434,11 +434,11 @@ const NODE_AUDIO_POLICY: Policy = Policy::CatchUp(Duration::from_secs(10));
 /// has no segment marker, so nothing but audio travels in it.
 struct AudioSink {
     /// `None` once the input ended.
-    audio: Mutex<Option<media_queue::Sender<AudioFrame, Infallible>>>,
+    audio: Mutex<Option<media_queue::AudioSender<Infallible>>>,
     drops: AudioDrops,
 }
 
-struct AudioSource(media_queue::Receiver<AudioFrame, Infallible>);
+struct AudioSource(media_queue::AudioReceiver<Infallible>);
 
 fn audio_channel() -> (AudioSink, AudioSource) {
     let (tx, rx) = media_queue::audio(NODE_AUDIO_POLICY);

@@ -14,14 +14,14 @@ use crate::interruption::options::InterruptionOptions;
 use crate::interruption::proto::{
     ClientMessage, ENCODING_S16LE, ServerMessage, SessionCreateSettings, frame_request,
 };
+use lk_agents_abi::ApiConnectOptions;
 use lk_agents_abi::Clock;
 use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::turn::detector::ReqId;
 use lk_agents_abi::types::retry::{RequestKind, RetryDecision};
-use lk_agents_abi::{ApiConnectOptions, AudioFrame};
 use lk_agents_abi::{OwnedTask, SpawnerExt, TaskError};
 use lk_agents_core::attempts::RequestPolicy;
-use lk_agents_media::media_queue::{self, Item, Policy, Sender};
+use lk_agents_media::media_queue::{self, AudioSender, Item, Policy};
 use lk_agents_net::audio_drops::AudioDrops;
 use lk_agents_net::task::TokioSpawner;
 use lk_agents_net::telemetry;
@@ -204,7 +204,7 @@ impl StreamContext {
 const INPUT_POLICY: Policy = Policy::Now(Duration::from_millis(500));
 
 /// The input queue: audio, and the sentinels in order with it.
-type InputRx = media_queue::Receiver<AudioFrame, InputEvent>;
+type InputRx = media_queue::AudioReceiver<InputEvent>;
 
 /// The stream's synchronous input half. Audio the queue drops reaches the detector as a
 /// [`InputEvent::Gap`], which restarts its window; a sentinel is never dropped, so a detector
@@ -214,7 +214,7 @@ pub struct InterruptionInput(Arc<InputShared>);
 
 struct InputShared {
     /// `None` once the input ended.
-    queue: Mutex<Option<Sender<AudioFrame, InputEvent>>>,
+    queue: Mutex<Option<AudioSender<InputEvent>>>,
     drops: AudioDrops,
     failure: watch::Sender<Option<ApiError>>,
 }

@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 use lk_agents_abi::errors::{ApiError, TimeoutPhase};
 use lk_agents_abi::{ApiConnectOptions, AudioFrame, Clock, Elapsed, EotInferenceMetrics};
-use lk_agents_media::media_queue::{self, Item, Policy, Sender};
+use lk_agents_media::media_queue::{self, AudioSender, Item, Policy};
 use lk_agents_net::audio_drops::AudioDrops;
 use lk_agents_net::telemetry;
 use lk_agents_net::transport::{
@@ -71,7 +71,7 @@ fn duration_millis(d: Option<&pbjson_types::Duration>) -> i64 {
 #[derive(Default)]
 struct CloudState {
     /// The connection's queue: audio, and the control messages in order with it.
-    send: Option<Sender<AudioFrame, Message>>,
+    send: Option<AudioSender<Message>>,
     session_id: Option<String>,
 }
 

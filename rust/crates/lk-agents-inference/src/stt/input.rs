@@ -2,7 +2,7 @@
 //! the provider, so a slow provider never fails the stream; ending the input drops the sender.
 
 use lk_agents_abi::AudioFrame;
-use lk_agents_media::media_queue::{self, Policy, Receiver, Sender, Stuck};
+use lk_agents_media::media_queue::{self, AudioReceiver, AudioSender, Policy, Stuck};
 use lk_agents_net::audio_drops::AudioDrops;
 use lk_agents_net::telemetry;
 use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
@@ -16,12 +16,12 @@ pub(crate) const INPUT_POLICY: Policy = Policy::CatchUp(Duration::from_secs(10))
 pub(crate) struct Flush;
 
 pub(crate) struct AudioInput {
-    audio: Mutex<Option<Sender<AudioFrame, Flush>>>,
+    audio: Mutex<Option<AudioSender<Flush>>>,
     drops: AudioDrops,
 }
 
 impl AudioInput {
-    pub(crate) fn new() -> (Self, Receiver<AudioFrame, Flush>) {
+    pub(crate) fn new() -> (Self, AudioReceiver<Flush>) {
         let (audio, rx) = media_queue::audio(INPUT_POLICY);
         let drops = AudioDrops::new(telemetry::AudioConsumer::Stt, INPUT_POLICY);
         (AudioInput { audio: Mutex::new(Some(audio)), drops }, rx)
@@ -48,7 +48,7 @@ impl AudioInput {
         drop(self.audio.lock().take());
     }
 
-    fn open(&self) -> Option<MappedMutexGuard<'_, Sender<AudioFrame, Flush>>> {
+    fn open(&self) -> Option<MappedMutexGuard<'_, AudioSender<Flush>>> {
         MutexGuard::try_map(self.audio.lock(), |audio| {
             audio.as_mut().filter(|audio| !audio.is_closed())
         })

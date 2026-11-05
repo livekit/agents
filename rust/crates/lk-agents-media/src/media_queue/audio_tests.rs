@@ -1,12 +1,11 @@
 use super::*;
-use lk_agents_abi::{MediaRef, RefRegistry};
+use crate::media_queue::MAX_EVENTS;
 use std::future::Future;
 use std::pin::pin;
-use std::task::Context;
+use std::sync::Arc;
+use std::task::{Context, Poll, Waker};
 
 const CATCH_UP: Policy = Policy::CatchUp(Duration::from_millis(100));
-
-type Audio = MediaQueue<AudioFrame, &'static str>;
 
 /// `ms` of 16 kHz mono, every sample `tag`.
 fn frame(ms: u32, tag: i16) -> AudioFrame {
@@ -18,8 +17,20 @@ fn ms(n: u64) -> Duration {
     Duration::from_millis(n)
 }
 
-fn drain<M: Media, E>(queue: &mut MediaQueue<M, E>) -> Vec<Item<M, E>> {
-    std::iter::from_fn(|| queue.pop()).collect()
+/// What is queued now, without waiting.
+fn now<F: Future>(f: F) -> Option<F::Output> {
+    match pin!(f).poll(&mut Context::from_waker(Waker::noop())) {
+        Poll::Ready(v) => Some(v),
+        Poll::Pending => None,
+    }
+}
+
+fn next<E>(rx: &mut AudioReceiver<E>) -> Option<Item<AudioFrame, E>> {
+    now(rx.recv()).flatten()
+}
+
+fn drain<E>(rx: &mut AudioReceiver<E>) -> Vec<Item<AudioFrame, E>> {
+    std::iter::from_fn(|| next(rx)).collect()
 }
 
 /// Each item as `(kind, ms, first sample)`, so assertions read as the timeline.
@@ -53,26 +64,26 @@ fn samples(items: &[Item<AudioFrame, &'static str>]) -> Vec<i16> {
 // what it hears.
 #[test]
 fn a_consumer_that_keeps_up_receives_the_pushed_frames_themselves() {
-    let mut queue = Audio::audio(CATCH_UP);
+    let (tx, mut rx) = audio::<&str>(CATCH_UP);
     for tag in 0..5 {
         let pushed = frame(10, tag);
         let data = pushed.data.as_ptr();
-        queue.push(pushed);
-        let Some(Item::Media(got)) = queue.pop() else { panic!("one frame") };
+        tx.push(pushed);
+        let Some(Item::Media(got)) = next(&mut rx) else { panic!("one frame") };
         assert_eq!(got.data.as_ptr(), data, "the same buffer, not a copy");
         assert_eq!(got.samples_per_channel, 160);
-        assert_eq!(queue.pop(), None);
+        assert_eq!(next(&mut rx), None);
     }
 }
 
 // Catches: a backlog delivered one 10 ms item at a time, or merged past 50 ms, or reordered.
 #[test]
 fn a_backlog_comes_out_as_frames_of_at_most_50ms_in_order() {
-    let mut queue = Audio::audio(Policy::CatchUp(ms(10_000)));
+    let (tx, mut rx) = audio::<&str>(Policy::CatchUp(ms(10_000)));
     for tag in 0..23 {
-        queue.push(frame(10, tag));
+        tx.push(frame(10, tag));
     }
-    let items = drain(&mut queue);
+    let items = drain(&mut rx);
     assert_eq!(
         timeline(&items),
         [
@@ -90,21 +101,21 @@ fn a_backlog_comes_out_as_frames_of_at_most_50ms_in_order() {
 // Catches: merging that waits for a frame to fill, delivering a sample later than unmerged.
 #[test]
 fn a_merged_frame_is_never_later_than_the_frames_unmerged() {
-    let mut queue = Audio::audio(Policy::CatchUp(ms(10_000)));
-    queue.push(frame(10, 1));
-    queue.push(frame(10, 2));
-    assert_eq!(timeline(&drain(&mut queue)), [("audio", 20, 1)], "pending audio, at once");
+    let (tx, mut rx) = audio::<&str>(Policy::CatchUp(ms(10_000)));
+    tx.push(frame(10, 1));
+    tx.push(frame(10, 2));
+    assert_eq!(timeline(&drain(&mut rx)), [("audio", 20, 1)], "pending audio, at once");
 }
 
 // Catches: a merged frame over 50 ms for any mix of frame sizes.
 #[test]
 fn no_merged_frame_exceeds_50ms() {
-    let mut queue = Audio::audio(Policy::CatchUp(ms(10_000)));
+    let (tx, mut rx) = audio::<&str>(Policy::CatchUp(ms(10_000)));
     for size in [10, 20, 30, 40, 50, 10, 10, 25, 5, 45, 15, 20] {
-        queue.push(frame(size, 0));
+        tx.push(frame(size, 0));
     }
-    queue.push(frame(80, 0));
-    let durations: Vec<u64> = timeline(&drain(&mut queue)).iter().map(|(_, ms, _)| *ms).collect();
+    tx.push(frame(80, 0));
+    let durations: Vec<u64> = timeline(&drain(&mut rx)).iter().map(|(_, ms, _)| *ms).collect();
     assert_eq!(durations.iter().sum::<u64>(), 360);
     assert!(durations[..durations.len() - 1].iter().all(|ms| *ms <= 50), "{durations:?}");
     assert_eq!(durations.last(), Some(&80), "a long frame passes through unmerged");
@@ -113,16 +124,16 @@ fn no_merged_frame_exceeds_50ms() {
 // Catches: merging across a format change, an event or a gap.
 #[test]
 fn merging_stops_at_a_format_change_an_event_and_a_gap() {
-    let mut queue = Audio::audio(Policy::CatchUp(ms(30)));
-    queue.push(frame(10, 1));
-    queue.push(AudioFrame::new(vec![0; 640], 32_000, 1, 320));
-    queue.push(frame(10, 2));
-    queue.event("commit").unwrap();
+    let (tx, mut rx) = audio::<&str>(Policy::CatchUp(ms(30)));
+    tx.push(frame(10, 1));
+    tx.push(AudioFrame::new(vec![0; 640], 32_000, 1, 320));
+    tx.push(frame(10, 2));
+    tx.event("commit").unwrap();
     for tag in 3..8 {
-        queue.push(frame(10, tag));
+        tx.push(frame(10, tag));
     }
     let kinds: Vec<_> =
-        timeline(&drain(&mut queue)).iter().map(|(kind, ms, _)| (*kind, *ms)).collect();
+        timeline(&drain(&mut rx)).iter().map(|(kind, ms, _)| (*kind, *ms)).collect();
     assert_eq!(
         kinds,
         [("audio", 10), ("audio", 10), ("audio", 10), ("event", 0), ("gap", 20), ("audio", 30)]
@@ -133,52 +144,52 @@ fn merging_stops_at_a_format_change_an_event_and_a_gap() {
 // that are not counted.
 #[test]
 fn catch_up_drops_the_oldest_frames_into_one_gap() {
-    let mut queue = Audio::audio(CATCH_UP);
+    let (tx, mut rx) = audio::<&str>(CATCH_UP);
     for tag in 0..15 {
-        assert_eq!(queue.push(frame(10, tag)), if tag > 9 { ms(10) } else { Duration::ZERO });
+        assert_eq!(tx.push(frame(10, tag)), if tag > 9 { ms(10) } else { Duration::ZERO });
     }
-    assert_eq!(queue.dropped(), 5);
-    assert_eq!(timeline(&drain(&mut queue)), [("gap", 50, 0), ("audio", 50, 5), ("audio", 50, 10)]);
-    queue.push(frame(10, 15));
-    assert_eq!(timeline(&drain(&mut queue)), [("audio", 10, 15)]);
-    assert_eq!(queue.dropped(), 5, "monotone, and nothing new dropped");
+    assert_eq!(rx.dropped(), 5);
+    assert_eq!(timeline(&drain(&mut rx)), [("gap", 50, 0), ("audio", 50, 5), ("audio", 50, 10)]);
+    tx.push(frame(10, 15));
+    assert_eq!(timeline(&drain(&mut rx)), [("audio", 10, 15)]);
+    assert_eq!(rx.dropped(), 5, "monotone, and nothing new dropped");
 }
 
 // Catches: the bound measuring audio the consumer already took, so a consumer that keeps up
 // still loses audio.
 #[test]
 fn received_audio_no_longer_counts_against_the_bound() {
-    let mut queue = Audio::audio(CATCH_UP);
+    let (tx, mut rx) = audio::<&str>(CATCH_UP);
     for tag in 0..100 {
-        queue.push(frame(10, tag));
-        queue.pop();
+        tx.push(frame(10, tag));
+        next(&mut rx);
     }
-    assert_eq!(queue.dropped(), 0);
+    assert_eq!(rx.dropped(), 0);
 }
 
 // Catches: a lagging `Now` consumer handed a bounded backlog of old audio instead of the present.
 #[test]
 fn now_drops_to_the_newest_frame_once_the_consumer_lags() {
-    let mut queue = Audio::audio(Policy::Now(ms(50)));
+    let (tx, mut rx) = audio::<&str>(Policy::Now(ms(50)));
     for tag in 0..5 {
-        queue.push(frame(10, tag));
+        tx.push(frame(10, tag));
     }
-    assert_eq!(queue.dropped(), 0, "within its lag");
-    queue.push(frame(10, 5));
-    assert_eq!(timeline(&drain(&mut queue)), [("gap", 50, 0), ("audio", 10, 5)]);
+    assert_eq!(rx.dropped(), 0, "within its lag");
+    tx.push(frame(10, 5));
+    assert_eq!(timeline(&drain(&mut rx)), [("gap", 50, 0), ("audio", 10, 5)]);
 }
 
 // Catches: the pre-connect head dropped by `Now`, losing the start of the first sentence.
 #[test]
 fn the_head_is_kept_in_full_under_now() {
-    let mut queue = Audio::audio(Policy::Now(ms(20)));
+    let (tx, mut rx) = audio::<&str>(Policy::Now(ms(20)));
     for tag in 0..10 {
-        queue.head(frame(10, tag));
+        tx.head(frame(10, tag));
     }
     for tag in 10..14 {
-        queue.push(frame(10, tag));
+        tx.push(frame(10, tag));
     }
-    let items = drain(&mut queue);
+    let items = drain(&mut rx);
     assert_eq!(&samples(&items)[..1600], (0..10).flat_map(|tag| [tag; 160]).collect::<Vec<_>>());
     assert_eq!(timeline(&items)[2..], [("gap", 20, 0), ("audio", 20, 12)]);
 }
@@ -186,15 +197,15 @@ fn the_head_is_kept_in_full_under_now() {
 // Catches: the bound dropping audio an event was ordered after (a committed buffer).
 #[test]
 fn audio_before_an_event_is_never_dropped_by_the_bound() {
-    let mut queue = Audio::audio(CATCH_UP);
+    let (tx, mut rx) = audio::<&str>(CATCH_UP);
     for tag in 0..20 {
-        queue.push(frame(10, tag));
+        tx.push(frame(10, tag));
     }
-    queue.event("commit").unwrap();
+    tx.event("commit").unwrap();
     for tag in 20..40 {
-        queue.push(frame(10, tag));
+        tx.push(frame(10, tag));
     }
-    let items = timeline(&drain(&mut queue));
+    let items = timeline(&drain(&mut rx));
     assert_eq!(items[0], ("gap", 100, 0), "dropped before the event was sent");
     let event = items.iter().position(|item| item.0 == "event").unwrap();
     assert_eq!(items[1..event].iter().map(|item| item.1).sum::<u64>(), 100);
@@ -205,94 +216,42 @@ fn audio_before_an_event_is_never_dropped_by_the_bound() {
 // Catches: `flush` keeping media, dropping an event, or reporting the flushed audio as a gap.
 #[test]
 fn flush_drops_the_queued_media_and_keeps_the_events() {
-    let mut queue = Audio::audio(CATCH_UP);
-    queue.push(frame(10, 1));
-    queue.event("commit").unwrap();
+    let (tx, mut rx) = audio::<&str>(CATCH_UP);
+    tx.push(frame(10, 1));
+    tx.event("commit").unwrap();
     for tag in 2..20 {
-        queue.push(frame(10, tag));
+        tx.push(frame(10, tag));
     }
-    queue.flush("cleared").unwrap();
-    queue.push(frame(10, 30));
-    assert_eq!(timeline(&drain(&mut queue)), [("event", 0, 0), ("event", 0, 0), ("audio", 10, 30)]);
-    assert_eq!(queue.dropped(), 8, "only the bound's drops before the flush count");
+    tx.flush("cleared").unwrap();
+    tx.push(frame(10, 30));
+    assert_eq!(timeline(&drain(&mut rx)), [("event", 0, 0), ("event", 0, 0), ("audio", 10, 30)]);
+    assert_eq!(rx.dropped(), 8, "only the bound's drops before the flush count");
 }
 
 // Catches: events piling up without bound behind a consumer that stopped draining, or a stuck
 // flush keeping the media it was asked to drop.
 #[test]
 fn a_consumer_that_stops_draining_events_is_stuck() {
-    let mut queue = MediaQueue::<AudioFrame, u32>::audio(CATCH_UP);
+    let (tx, mut rx) = audio::<u32>(CATCH_UP);
     for n in 0..MAX_EVENTS as u32 {
-        queue.event(n).unwrap();
+        tx.event(n).unwrap();
     }
-    assert_eq!(queue.event(99), Err(Stuck));
-    queue.push(frame(10, 1));
-    assert_eq!(queue.flush(99), Err(Stuck));
-    assert_eq!(queue.pop(), Some(Item::Event(0)));
-    assert_eq!(queue.event(64), Ok(()), "draining one makes room for one");
-    assert_eq!(drain(&mut queue).len(), MAX_EVENTS, "the flushed frame is gone");
+    assert_eq!(tx.event(99), Err(Stuck));
+    tx.push(frame(10, 1));
+    assert_eq!(tx.flush(99), Err(Stuck));
+    assert_eq!(next(&mut rx), Some(Item::Event(0)));
+    assert_eq!(tx.event(64), Ok(()), "draining one makes room for one");
+    assert_eq!(drain(&mut rx).len(), MAX_EVENTS, "the flushed frame is gone");
 }
 
-/// A video frame numbered `n`.
-fn video(n: u64) -> VideoFrameRef {
-    struct Noop;
-    impl RefRegistry for Noop {
-        fn release(&self, _: u64) {}
-    }
-    let registry: Arc<dyn RefRegistry> = Arc::new(Noop);
-    VideoFrameRef { media: MediaRef::new(n, &registry), width: 2, height: 2, timestamp_us: 0 }
-}
-
-fn ids(items: Vec<Item<VideoFrameRef, &'static str>>) -> Vec<Option<u64>> {
-    items
-        .into_iter()
-        .map(|item| match item {
-            Item::Media(frame) => Some(frame.media.id()),
-            Item::Event(_) => None,
-            Item::Gap(_) => panic!("video never reports a gap"),
-        })
-        .collect()
-}
-
-// Catches `mpsc::try_send`'s behaviour on video: rejecting the newest frame when full, merging,
-// or a gap.
-#[test]
-fn a_full_video_queue_drops_the_oldest_frame() {
-    let mut queue = MediaQueue::<VideoFrameRef, &str>::video(3);
-    for n in 1..=5 {
-        assert_eq!(queue.push(video(n)), Duration::ZERO);
-    }
-    assert_eq!(queue.dropped(), 2);
-    assert_eq!(ids(drain(&mut queue)), [Some(3), Some(4), Some(5)]);
-}
-
-// Catches: a video flush keeping frames from before it, or the bound reaching past an event.
-#[test]
-fn a_video_flush_drops_the_queued_frames() {
-    let mut queue = MediaQueue::<VideoFrameRef, &str>::video(2);
-    queue.push(video(1));
-    queue.event("mark").unwrap();
-    queue.push(video(2));
-    queue.push(video(3));
-    queue.push(video(4));
-    assert_eq!(ids(drain(&mut queue)), [Some(1), None, Some(3), Some(4)]);
-    queue.push(video(5));
-    queue.flush("changed").unwrap();
-    queue.push(video(6));
-    assert_eq!(ids(drain(&mut queue)), [None, Some(6)]);
-}
-
-// ------------------------------------------------------------------- the shared handle
+// ------------------------------------------------------------------- waking and closing
 
 /// Real-time guard: a lost wakeup fails instead of hanging.
 const GUARD: Duration = Duration::from_secs(2);
 
 /// One poll: every wait below is on a queue that already holds its answer.
 fn ready<F: Future>(f: F) -> F::Output {
-    match pin!(f).poll(&mut Context::from_waker(Waker::noop())) {
-        Poll::Ready(v) => v,
-        Poll::Pending => panic!("the queue hung instead of answering"),
-    }
+    now(f).expect("the queue hung instead of answering")
 }
 
 /// Polls `f` on this thread, parked between polls; a wait no wake ends fails.
