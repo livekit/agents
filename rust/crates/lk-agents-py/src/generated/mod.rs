@@ -46,6 +46,7 @@ pub trait Implementations: 'static {
     type A2ADoor: ::lk_agents_abi::a2a::door::A2ADoor;
     type RemoteInteraction: ::lk_agents_abi::a2a::remote::RemoteInteraction;
     type RemoteConfiguration: ::lk_agents_abi::a2a::remote::RemoteConfiguration;
+    type HandlerTurn: ::lk_agents_abi::a2a::turn::HandlerTurn;
     type Turn: ::lk_agents_abi::a2a::turn::Turn<Thread = Self::Thread>;
     type HandlerOutcomes: ::lk_agents_abi::a2a::turn::HandlerOutcomes;
     type VoiceAgent: ::lk_agents_abi::agent::VoiceAgent;
@@ -248,6 +249,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<a2a::CoreRemoteInteraction>()?;
     m.add_function(wrap_pyfunction!(a2a::_core_delegation_tool, m)?)?;
     m.add_function(wrap_pyfunction!(a2a::_core_remote_token, m)?)?;
+    m.add_class::<a2a::CoreHandlerTurn>()?;
     m.add_class::<a2a::Turn>()?;
     m.add_function(wrap_pyfunction!(a2a::normalize_handler_output, m)?)?;
     m.add_class::<agent::VoiceAgent>()?;
@@ -533,6 +535,19 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
 pub(crate) trait NativeToHost {
     fn to_host<'py>(py: Python<'py>, native: ::std::sync::Arc<Self>)
     -> PyResult<Bound<'py, PyAny>>;
+}
+
+impl NativeToHost for dyn ::lk_agents_abi::a2a::turn::HandlerPort {
+    fn to_host<'py>(
+        py: Python<'py>,
+        native: ::std::sync::Arc<Self>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let native: ::std::sync::Arc<dyn ::std::any::Any + Send + Sync> = native;
+        match native.downcast::<<crate::generated::implementations::Selected as Implementations>::HandlerTurn>() {
+            Ok(native) => Ok(Py::new(py, a2a::CoreHandlerTurn(native))?.into_bound(py).into_any()),
+            Err(_) => Err(::pyo3::exceptions::PyTypeError::new_err("this `::lk_agents_abi::a2a::turn::HandlerPort` is no declared class")),
+        }
+    }
 }
 
 impl NativeToHost for dyn ::lk_agents_abi::voice::nodes::ProviderCalls {

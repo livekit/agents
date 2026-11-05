@@ -10,165 +10,66 @@ use lk_agents_abi::a2a::card::EndpointDescriptor;
 use lk_agents_abi::a2a::door::{A2ADoor as _, DoorConfig, DoorError, TextServing};
 use lk_agents_abi::a2a::metadata::EXTENSION_URI;
 use lk_agents_abi::a2a::options::{DebounceSpec, Policy, PolicySpec, TurnOptions};
-use lk_agents_abi::a2a::turn::{HandlerOutput, TurnContext, TurnEvent, TurnHost, Verdict};
+use lk_agents_abi::a2a::turn::{HandlerOutput, HandlerPort, TurnContext, TurnHost};
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::worker::http::{
     EndpointRequest, ExchangeError, ExchangeEvent, ExchangeMessage, HttpExchange, HttpScheme,
     RequestHead,
 };
-use lk_agents_abi::{Closed, StreamInput, StreamOutput, Ts};
 use lk_agents_runtime::a2a::door::serve::serve;
 use lk_agents_runtime::a2a::door::{Door, MAX_PAYLOAD_BYTES};
 use lk_agents_storage::testing::{Backend, Store};
 use serde_json::{Value, json};
 
-struct Host;
-struct Sink;
-struct Events(std::collections::VecDeque<TurnEvent>);
+/// A scripted handler: `run` reports through the turn and returns the output.
+macro_rules! host {
+    ($name:ident, |$ctx:ident, $turn:ident| $body:expr) => {
+        struct $name;
 
-impl StreamInput<Verdict> for Sink {
-    fn push(&self, _: Verdict) -> Result<(), ProviderError> {
-        Ok(())
-    }
-    fn flush(&self) -> Result<(), ProviderError> {
-        Ok(())
-    }
-    fn end_input(&self) {}
+        impl TurnHost for $name {
+            fn handle<'a>(
+                &'a self,
+                _cx: &lk_agents_abi::telemetry::Cx,
+                $ctx: &'a TurnContext,
+                $turn: Arc<dyn HandlerPort>,
+                _cancel: Arc<dyn lk_agents_abi::invoke::Cancellation>,
+            ) -> lk_agents_abi::BoxFuture<'a, Result<HandlerOutput, ProviderError>> {
+                Box::pin(async move { Ok($body) })
+            }
+        }
+    };
 }
 
-impl StreamOutput<TurnEvent> for Events {
-    fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<TurnEvent>, ProviderError>> {
-        Box::pin(async move { Ok(self.0.pop_front()) })
-    }
-    fn close(self: Box<Self>, _: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
-        Box::pin(async move { Closed::Clean })
-    }
-}
+host!(Host, |_ctx, turn| {
+    turn.progress("working".into()).await;
+    turn.token("reply".into()).await;
+    HandlerOutput { output: Some(json!("reply")), ..Default::default() }
+});
 
-impl lk_agents_abi::utils::stream::ProviderStream<TurnEvent> for Events {}
-
-impl TurnHost for Host {
-    fn handle<'a>(
-        &'a self,
-        _cx: &lk_agents_abi::telemetry::Cx,
-        ctx: &'a TurnContext,
-    ) -> lk_agents_abi::BoxFuture<
-        'a,
-        Result<
-            lk_agents_abi::DuplexStream<
-                Box<dyn StreamInput<Verdict>>,
-                Box<dyn StreamOutput<TurnEvent>>,
-            >,
-            ProviderError,
-        >,
-    > {
-        Box::pin(async move {
-            let events = [
-                TurnEvent::Progress { task_id: ctx.task_id.clone(), text: "working".into() },
-                TurnEvent::Token { task_id: ctx.task_id.clone(), delta: "reply".into() },
-                TurnEvent::Output {
-                    output: Box::new(HandlerOutput {
-                        output: Some(json!("reply")),
-                        ..Default::default()
-                    }),
-                },
-            ];
-            Ok(lk_agents_abi::DuplexStream::new(
-                Box::new(Sink) as Box<dyn StreamInput<_>>,
-                Box::new(Events(events.into())) as Box<dyn StreamOutput<_>>,
-            ))
+host!(AskingHost, |ctx, turn| {
+    let text = ctx
+        .batch
+        .last()
+        .and_then(|message| message.parts.first())
+        .and_then(|part| match part {
+            lk_agents_abi::a2a::client::MessagePart::TextPart { text, .. } => Some(text.as_str()),
+            _ => None,
         })
+        .unwrap_or_default();
+    turn.progress("answering".into()).await;
+    if text == "start" {
+        HandlerOutput { input_required: Some("Your name?".into()), ..Default::default() }
+    } else {
+        HandlerOutput { output: Some(json!(format!("Hello {text}"))), ..Default::default() }
     }
-}
+});
 
-struct AskingHost;
-
-impl TurnHost for AskingHost {
-    fn handle<'a>(
-        &'a self,
-        _cx: &lk_agents_abi::telemetry::Cx,
-        ctx: &'a TurnContext,
-    ) -> lk_agents_abi::BoxFuture<
-        'a,
-        Result<
-            lk_agents_abi::DuplexStream<
-                Box<dyn StreamInput<Verdict>>,
-                Box<dyn StreamOutput<TurnEvent>>,
-            >,
-            ProviderError,
-        >,
-    > {
-        Box::pin(async move {
-            let text = ctx
-                .batch
-                .last()
-                .and_then(|message| message.parts.first())
-                .and_then(|part| match part {
-                    lk_agents_abi::a2a::client::MessagePart::TextPart { text, .. } => {
-                        Some(text.as_str())
-                    }
-                    _ => None,
-                })
-                .unwrap_or_default();
-            let output = if text == "start" {
-                HandlerOutput { input_required: Some("Your name?".into()), ..Default::default() }
-            } else {
-                HandlerOutput { output: Some(json!(format!("Hello {text}"))), ..Default::default() }
-            };
-            Ok(lk_agents_abi::DuplexStream::new(
-                Box::new(Sink) as Box<dyn StreamInput<_>>,
-                Box::new(Events(
-                    [
-                        TurnEvent::Progress {
-                            task_id: ctx.task_id.clone(),
-                            text: "answering".into(),
-                        },
-                        TurnEvent::Output { output: Box::new(output) },
-                    ]
-                    .into(),
-                )) as Box<dyn StreamOutput<_>>,
-            ))
-        })
+host!(BurstHost, |_ctx, turn| {
+    for n in 0..100 {
+        turn.progress(format!("step {n}")).await;
     }
-}
-
-struct BurstHost;
-
-impl TurnHost for BurstHost {
-    fn handle<'a>(
-        &'a self,
-        _cx: &lk_agents_abi::telemetry::Cx,
-        ctx: &'a TurnContext,
-    ) -> lk_agents_abi::BoxFuture<
-        'a,
-        Result<
-            lk_agents_abi::DuplexStream<
-                Box<dyn StreamInput<Verdict>>,
-                Box<dyn StreamOutput<TurnEvent>>,
-            >,
-            ProviderError,
-        >,
-    > {
-        Box::pin(async move {
-            let mut events: std::collections::VecDeque<_> = (0..100)
-                .map(|n| TurnEvent::Progress {
-                    task_id: ctx.task_id.clone(),
-                    text: format!("step {n}"),
-                })
-                .collect();
-            events.push_back(TurnEvent::Output {
-                output: Box::new(HandlerOutput {
-                    output: Some(json!("done")),
-                    ..Default::default()
-                }),
-            });
-            Ok(lk_agents_abi::DuplexStream::new(
-                Box::new(Sink) as Box<dyn StreamInput<_>>,
-                Box::new(Events(events)) as Box<dyn StreamOutput<_>>,
-            ))
-        })
-    }
-}
+    HandlerOutput { output: Some(json!("done")), ..Default::default() }
+});
 
 fn principal(write: bool) -> AuthPrincipal {
     AuthPrincipal {

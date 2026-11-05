@@ -181,7 +181,7 @@ Core/voice own workflow ordering, prompt plans and tool-search ranking. Python r
 
 ### Storage hydration and execution
 
-Native storage/runtime own transactions, revisions, thread resolution and run-resource lifetimes. Python retains Pydantic/dataclass hydration and application services. The checkpoint bridge invokes the authored handler through a shared channel, with terminal errors and retained close settlement.
+Native storage/runtime own transactions, revisions, thread resolution and run-resource lifetimes. Python retains Pydantic/dataclass hydration and application services. An `a2a_session` handler is one awaited host call (`_TurnHost._core_handle`); its checkpoints, progress and tokens cross through the native `_core_HandlerTurn`, whose bounded queue, verdicts, cancellation and close settlement the runtime owns.
 
 | File | Lines |
 | --- | ---: |

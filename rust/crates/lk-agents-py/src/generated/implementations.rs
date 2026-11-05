@@ -11,6 +11,7 @@ impl super::Implementations for Selected {
     type A2ADoor = ::lk_agents_runtime::a2a::door::Door;
     type RemoteInteraction = ::lk_agents_runtime::net::a2a_client::remote::RemoteInteraction;
     type RemoteConfiguration = ::lk_agents_runtime::net::a2a_client::remote::RemoteInteraction;
+    type HandlerTurn = ::lk_agents_runtime::a2a::handler::HandlerTurn;
     type Turn = ::lk_agents_runtime::a2a::Turn;
     type HandlerOutcomes = ::lk_agents_runtime::cores::HandlerOutcomes;
     type VoiceAgent = ::lk_agents_runtime::voice::VoiceAgentFrame;

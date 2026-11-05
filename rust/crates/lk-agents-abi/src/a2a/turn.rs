@@ -79,42 +79,63 @@ pub struct TurnResult {
     pub run_id: Option<String>,
 }
 
-#[crate::host(record(module = "storage_turn", emit, extract))]
+/// The turn's answer to a checkpoint the handler reached.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verdict {
-    #[host(rename = "continue")]
     Continue,
-    #[host(rename = "yield")]
     Yield,
 }
 
-#[crate::host(record(module = "storage_turn", extract))]
+/// What a handler reports while it runs, for the turn's response stream.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TurnEvent {
-    #[host(name = "Checkpoint")]
-    Checkpoint,
-    #[host(name = "Output")]
-    Output { output: Box<HandlerOutput> },
-    #[host(name = "Progress")]
     Progress { task_id: String, text: String },
-    #[host(name = "Token")]
     Token { task_id: String, delta: String },
 }
 
-/// One handler operation: verdicts in and turn events out.
-pub type TurnStream = crate::DuplexStream<
-    Box<dyn crate::StreamInput<Verdict>>,
-    Box<dyn crate::StreamOutput<TurnEvent>>,
->;
+/// The handler's side of one turn (docs/server.md "Progress, checkpoints and cancellation"):
+/// what it reports, in the order it awaited each report.
+#[crate::host(native(refused = "expected a native handler turn"))]
+pub trait HandlerPort: std::any::Any + Send + Sync {
+    /// The run reached a checkpoint; whether it yields. Waits for the turn's verdict.
+    fn checkpoint(&self) -> crate::BoxFuture<'_, bool>;
+    /// A progress message for the client; waits while the turn's queue is full.
+    fn progress(&self, text: String) -> crate::BoxFuture<'_, ()>;
+    /// One piece of the reply; waits while the turn's queue is full.
+    fn token(&self, delta: String) -> crate::BoxFuture<'_, ()>;
+}
 
+/// One turn as its handler sees it: the handler awaits each report, and the turn reads them in
+/// that order, publishing progress and tokens and answering checkpoints.
+///
+/// A report waits while the turn holds 64 unread ones, so a handler never runs ahead of the
+/// turn. `checkpoint()` returns `True` when the run should yield (a newer message waits under
+/// `interrupt`, or the client cancelled the task). Once the turn ended, or was closed, reports
+/// are dropped and `checkpoint()` returns `True`.
+#[crate::host(class(name = "_core_HandlerTurn", native = HandlerPort))]
+pub trait HandlerTurn: Send + Sync + Sized + 'static {
+    #[host(await)]
+    async fn checkpoint(&self) -> bool;
+    #[host(await)]
+    async fn progress(&self, text: String);
+    #[host(await)]
+    async fn token(&self, delta: String);
+}
+
+/// The handler a turn runs on the host.
 #[crate::host(proxy(host = "livekit.agents.storage.session._TurnHost"))]
 pub trait TurnHost: Send + Sync {
+    /// Run the handler on `ctx` to its output, reporting through `turn`. Cancelled when the turn
+    /// closes it (a lost lease, a failed step); the turn then waits for its cleanup, within the
+    /// host teardown bound.
     #[host(await, name = "_core_handle")]
     fn handle<'a>(
         &'a self,
         cx: &crate::telemetry::Cx,
         #[host(context)] ctx: &'a TurnContext,
-    ) -> crate::BoxFuture<'a, Result<TurnStream, ProviderError>>;
+        turn: Arc<dyn HandlerPort>,
+        #[host(cancel)] cancel: Arc<dyn crate::invoke::Cancellation>,
+    ) -> crate::BoxFuture<'a, Result<HandlerOutput, ProviderError>>;
 }
 
 impl crate::agent::HostContext for TurnContext {

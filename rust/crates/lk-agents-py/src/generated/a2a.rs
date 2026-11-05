@@ -639,6 +639,80 @@ pub fn _core_remote_token(
 }
 
 // Declared in rust/crates/lk-agents-abi/src/a2a/turn.rs.
+type CoreHandlerTurnImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::HandlerTurn;
+
+/// One turn as its handler sees it: the handler awaits each report, and the turn reads them in
+/// that order, publishing progress and tokens and answering checkpoints.
+///
+/// A report waits while the turn holds 64 unread ones, so a handler never runs ahead of the
+/// turn. `checkpoint()` returns `True` when the run should yield (a newer message waits under
+/// `interrupt`, or the client cancelled the task). Once the turn ended, or was closed, reports
+/// are dropped and `checkpoint()` returns `True`.
+#[pyclass(frozen, name = "_core_HandlerTurn", module = "livekit.agents._core")]
+pub struct CoreHandlerTurn(pub(crate) ::std::sync::Arc<CoreHandlerTurnImpl>);
+
+#[pymethods]
+impl CoreHandlerTurn {
+    fn checkpoint<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::py_calls::future_into_py(py, async move {
+            let out =
+                <CoreHandlerTurnImpl as ::lk_agents_abi::a2a::turn::HandlerTurn>::checkpoint(&this)
+                    .await;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+        })
+    }
+
+    #[pyo3(signature = (text))]
+    fn progress<'py>(
+        &self,
+        py: Python<'py>,
+        text: ::std::string::String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::py_calls::future_into_py(py, async move {
+            let () = <CoreHandlerTurnImpl as ::lk_agents_abi::a2a::turn::HandlerTurn>::progress(
+                &this, text,
+            )
+            .await;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
+        })
+    }
+
+    #[pyo3(signature = (delta))]
+    fn token<'py>(
+        &self,
+        py: Python<'py>,
+        delta: ::std::string::String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::py_calls::future_into_py(py, async move {
+            let () = <CoreHandlerTurnImpl as ::lk_agents_abi::a2a::turn::HandlerTurn>::token(
+                &this, delta,
+            )
+            .await;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
+        })
+    }
+}
+
+// Wherever the host passes a `::lk_agents_abi::a2a::turn::HandlerPort`, an instance of this class is itself.
+inventory::submit! {
+    crate::py_objects::HostNative {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::a2a::turn::HandlerPort>(),
+        read: |obj| {
+            let this = obj.cast::<CoreHandlerTurn>().ok()?;
+            let native: ::std::sync::Arc<dyn ::lk_agents_abi::a2a::turn::HandlerPort> = this.get().0.clone();
+            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        },
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/a2a/turn.rs.
 type TurnImpl = <crate::generated::implementations::Selected as super::Implementations>::Turn;
 
 #[pyclass(frozen, name = "Turn", module = "livekit.agents._core")]
@@ -980,32 +1054,32 @@ impl ::lk_agents_abi::a2a::turn::TurnHost for TurnHostProxy {
         &'a self,
         cx: &::lk_agents_abi::telemetry::Cx,
         ctx: &::lk_agents_abi::a2a::turn::TurnContext,
+        turn: ::std::sync::Arc<dyn ::lk_agents_abi::a2a::turn::HandlerPort>,
+        cancel: ::std::sync::Arc<dyn ::lk_agents_abi::invoke::Cancellation>,
     ) -> ::lk_agents_abi::BoxFuture<
         'a,
         ::std::result::Result<
-            ::lk_agents_abi::DuplexStream<
-                ::std::boxed::Box<
-                    dyn ::lk_agents_abi::StreamInput<::lk_agents_abi::a2a::turn::Verdict>,
-                >,
-                ::std::boxed::Box<
-                    dyn ::lk_agents_abi::StreamOutput<::lk_agents_abi::a2a::turn::TurnEvent>,
-                >,
-            >,
+            ::lk_agents_abi::a2a::turn::HandlerOutput,
             ::lk_agents_abi::errors::ProviderError,
         >,
     > {
         let host = ::std::sync::Arc::clone(&self.host);
         let ctx_arg = ::std::clone::Clone::clone(ctx);
-        let context = ::lk_agents_abi::agent::HostContext::host_context(ctx).cloned();
-        let started = ::lk_agents_runtime::host::call(
+        let turn_arg = turn;
+        let started = ::lk_agents_runtime::host::call_cancellable(
             &crate::py_calls::Entry,
             "TurnHost._core_handle",
             ctx,
             &[],
             cx,
+            cancel,
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
-                    [crate::generated::records::storage_turn::turn_context_to_py(py, ctx_arg)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
+                    crate::generated::records::storage_turn::turn_context_to_py(py, ctx_arg)?,
+                    <dyn ::lk_agents_abi::a2a::turn::HandlerPort as super::NativeToHost>::to_host(
+                        py, turn_arg,
+                    )?,
+                ];
                 Ok((
                     host.bind(py).getattr("_core_handle")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
@@ -1022,12 +1096,8 @@ impl ::lk_agents_abi::a2a::turn::TurnHost for TurnHostProxy {
                         return Err(<::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e));
                     }
                 };
-                let Some(context) = context.as_ref() else {
-                    return Err(<::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &::pyo3::exceptions::PyRuntimeError::new_err("TurnHost._core_handle: the call captured no host context")));
-                };
-                let context = &out.returned_context(py, context).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 let o = out.value.bind(py);
-                let out = (crate::py_streams::HostStream::duplex(py, o, context, crate::generated::records::storage_turn::verdict_to_py, |o| crate::generated::records::storage_turn::turn_event_from_py(o.as_any()), ::lk_agents_runtime::process::host_clock()).map(|stream| { let (sink, source) = stream.split(); ::lk_agents_abi::DuplexStream::new(::std::boxed::Box::new(sink) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamInput<::lk_agents_abi::a2a::turn::Verdict>>, ::std::boxed::Box::new(source) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamOutput<::lk_agents_abi::a2a::turn::TurnEvent>>) })).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                let out = (crate::generated::records::storage_turn::handler_output_from_py(o.as_any())).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
         })

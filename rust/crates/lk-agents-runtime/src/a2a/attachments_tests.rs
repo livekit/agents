@@ -2,9 +2,8 @@
 use std::sync::Arc;
 
 use lk_agents_abi::a2a::client::MessagePart;
-use lk_agents_abi::a2a::turn::{HandlerOutput, TurnContext, TurnEvent, TurnHost, Verdict};
+use lk_agents_abi::a2a::turn::{HandlerOutput, HandlerPort, TurnContext, TurnHost};
 use lk_agents_abi::errors::ProviderError;
-use lk_agents_abi::{Closed, StreamInput, StreamOutput, Ts};
 use lk_agents_core::a2a::{Policy, PolicySpec, TurnOptions};
 use lk_agents_net::clock::RealClock;
 use lk_agents_runtime::a2a::Turn;
@@ -14,45 +13,15 @@ use lk_agents_storage::{Storage, shortuuid};
 use serde_json::json;
 
 struct Host;
-struct Sink;
-struct Events(Option<TurnEvent>);
-
-impl StreamInput<Verdict> for Sink {
-    fn push(&self, _: Verdict) -> Result<(), ProviderError> {
-        Ok(())
-    }
-    fn flush(&self) -> Result<(), ProviderError> {
-        Ok(())
-    }
-    fn end_input(&self) {}
-}
-
-impl StreamOutput<TurnEvent> for Events {
-    fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<TurnEvent>, ProviderError>> {
-        Box::pin(async move { Ok(self.0.take()) })
-    }
-    fn close(self: Box<Self>, _: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
-        Box::pin(async move { Closed::Clean })
-    }
-}
-
-impl lk_agents_abi::utils::stream::ProviderStream<TurnEvent> for Events {}
 
 impl TurnHost for Host {
     fn handle<'a>(
         &'a self,
         _cx: &lk_agents_abi::telemetry::Cx,
         ctx: &'a TurnContext,
-    ) -> lk_agents_abi::BoxFuture<
-        'a,
-        Result<
-            lk_agents_abi::DuplexStream<
-                Box<dyn StreamInput<Verdict>>,
-                Box<dyn StreamOutput<TurnEvent>>,
-            >,
-            ProviderError,
-        >,
-    > {
+        _turn: Arc<dyn HandlerPort>,
+        _cancel: Arc<dyn lk_agents_abi::invoke::Cancellation>,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<HandlerOutput, ProviderError>> {
         Box::pin(async move {
             let parts = &ctx.batch[0].parts;
             assert!(matches!(&parts[0], MessagePart::TextPart { text, .. } if text == "review"));
@@ -63,16 +32,7 @@ impl TurnHost for Host {
                     matches!(part, MessagePart::FilePart { url: Some(url), data: None, .. } if url == expected)
                 );
             }
-            let event = TurnEvent::Output {
-                output: Box::new(HandlerOutput {
-                    output: Some(json!("received references")),
-                    ..Default::default()
-                }),
-            };
-            Ok(lk_agents_abi::DuplexStream::new(
-                Box::new(Sink) as Box<dyn StreamInput<_>>,
-                Box::new(Events(Some(event))) as Box<dyn StreamOutput<_>>,
-            ))
+            Ok(HandlerOutput { output: Some(json!("received references")), ..Default::default() })
         })
     }
 }

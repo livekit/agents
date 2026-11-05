@@ -79,34 +79,6 @@ class TurnResult:
     run_id: str | None
 
 
-Verdict: TypeAlias = Literal["continue", "yield"]
-
-
-@dataclass(kw_only=True, slots=True)
-class Checkpoint:
-    pass
-
-
-@dataclass(kw_only=True, slots=True)
-class Output:
-    output: HandlerOutput
-
-
-@dataclass(kw_only=True, slots=True)
-class Progress:
-    task_id: str
-    text: str
-
-
-@dataclass(kw_only=True, slots=True)
-class Token:
-    task_id: str
-    delta: str
-
-
-TurnEvent: TypeAlias = Checkpoint | Output | Progress | Token
-
-
 @dataclass(kw_only=True, slots=True)
 class ToolExecution:
     """`tool_execution_updated`: one call's start, a progress update from `ctx.update()`, its end."""

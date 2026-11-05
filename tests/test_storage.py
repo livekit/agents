@@ -6,6 +6,7 @@ stale commit) is tested in the crate: ``rust/crates/lk-agents-storage/tests``.""
 from __future__ import annotations
 
 import asyncio
+import itertools
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -941,13 +942,16 @@ async def test_handler_transactions_join_the_turn_or_commit_on_exit(
             raise RuntimeError("the turn failed")
         return "ok"
 
+    probes = itertools.count()
+
     async def bodies() -> list[str]:
         async def read(ctx: A2ASessionContext) -> str:
             async with ctx.store.independent_transaction() as tx:
                 return ",".join(str(row[0]) for row in await tx.fetch("SELECT body FROM notes"))
 
+        # each probe is a new message: a repeated id would replay the first probe's answer
         result = await run_turn(
-            storage, thread_id, "probe", a2a("?", f"p{id(read)}"), "queue", read
+            storage, thread_id, "probe", a2a("?", f"p{next(probes)}"), "queue", read
         )
         return str(result.output).split(",")
 

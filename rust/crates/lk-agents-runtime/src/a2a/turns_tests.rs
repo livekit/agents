@@ -8,12 +8,12 @@ use std::time::Duration;
 use livekit_protocol::agent::chat_context::{ChatItem, chat_item};
 use livekit_protocol::agent::chat_message::{ChatContent, chat_content::Payload};
 use livekit_protocol::agent::{ChatMessage, ChatRole, FunctionCall, FunctionCallOutput};
+use lk_agents_abi::Clock;
+use lk_agents_abi::a2a::turn::HandlerPort;
 use lk_agents_abi::a2a::turn::TurnContext;
 use lk_agents_abi::errors::{HostError, ProviderError};
-use lk_agents_abi::{Clock, Closed, StreamInput, StreamOutput, Ts};
 use lk_agents_core::a2a::{
-    DebounceSpec, HandlerOutput, PendingCall, Policy, PolicySpec, TurnEvent, TurnHost, TurnOptions,
-    TurnResult, Verdict,
+    DebounceSpec, HandlerOutput, PendingCall, Policy, PolicySpec, TurnHost, TurnOptions, TurnResult,
 };
 use lk_agents_net::clock::RealClock;
 use lk_agents_runtime::a2a::Turn;
@@ -30,7 +30,7 @@ use parking_lot::Mutex;
 
 use lk_agents_storage::StorageError;
 use serde_json::{Value, json};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::watch;
 
 const LANE: &str = "front-desk";
 
@@ -222,80 +222,37 @@ fn text(output: &str) -> HandlerOutput {
     HandlerOutput { output: Some(json!(output)), ..HandlerOutput::default() }
 }
 
-/// The turn's verdicts, as the host's sink.
-struct Verdicts(mpsc::UnboundedSender<Verdict>);
-
-impl StreamInput<Verdict> for Verdicts {
-    fn push(&self, item: Verdict) -> Result<(), ProviderError> {
-        let _ = self.0.send(item);
-        Ok(())
-    }
-    fn flush(&self) -> Result<(), ProviderError> {
-        Ok(())
-    }
-    fn end_input(&self) {}
-}
-
-/// The handler's events, as the host's source.
-struct Events(mpsc::UnboundedReceiver<Result<TurnEvent, ProviderError>>);
-
-impl StreamOutput<TurnEvent> for Events {
-    fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<TurnEvent>, ProviderError>> {
-        Box::pin(async move { self.0.recv().await.transpose() })
-    }
-    fn close(self: Box<Self>, _deadline: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
-        Box::pin(async move { Closed::Clean })
-    }
-}
-
-impl lk_agents_abi::utils::stream::ProviderStream<TurnEvent> for Events {}
-
 /// A checkpoint of the fake's run: `true` when the turn answered `yield`.
-struct Checkpoints {
-    events: mpsc::UnboundedSender<Result<TurnEvent, ProviderError>>,
-    verdicts: mpsc::UnboundedReceiver<Verdict>,
-}
+struct Checkpoints(Arc<dyn HandlerPort>);
 
 impl Checkpoints {
     async fn check(&mut self) -> bool {
-        let _ = self.events.send(Ok(TurnEvent::Checkpoint));
-        self.verdicts.recv().await == Some(Verdict::Yield)
+        self.0.checkpoint().await
     }
 }
 
 impl TurnHost for Fake {
-    #[allow(clippy::type_complexity)]
     fn handle<'a>(
         &'a self,
         _cx: &lk_agents_abi::telemetry::Cx,
         ctx: &'a TurnContext,
-    ) -> lk_agents_abi::BoxFuture<
-        'a,
-        Result<
-            lk_agents_abi::DuplexStream<
-                Box<dyn StreamInput<Verdict>>,
-                Box<dyn StreamOutput<TurnEvent>>,
-            >,
-            ProviderError,
-        >,
-    > {
+        turn: Arc<dyn HandlerPort>,
+        cancel: Arc<dyn lk_agents_abi::invoke::Cancellation>,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<lk_agents_abi::a2a::turn::HandlerOutput, ProviderError>>
+    {
         Box::pin(async move {
-            let (verdicts, verdicts_rx) = mpsc::unbounded_channel();
-            let (events, events_rx) = mpsc::unbounded_channel();
-            let fake = self.clone();
-            let ctx = ctx.clone();
-            tokio::spawn(async move {
-                let mut checkpoints = Checkpoints { events: events.clone(), verdicts: verdicts_rx };
-                let out = fake
-                    .run(ctx, &mut checkpoints)
-                    .await
-                    .map(|out| TurnEvent::Output { output: Box::new(out.into()) });
-                let _ = events.send(out);
-            });
-            Ok(lk_agents_abi::DuplexStream::new(
-                Box::new(Verdicts(verdicts)) as Box<dyn StreamInput<_>>,
-                Box::new(Events(events_rx)) as Box<dyn StreamOutput<_>>,
-            ))
+            let mut checkpoints = Checkpoints(turn);
+            // cancelled as the host cancels its task: the run stops where it waits
+            tokio::select! {
+                biased;
+                () = cancel.cancelled() => Err(ProviderError::Host {
+                    error: HostError { kind: "CancelledError".into(), ..HostError::new("") },
+                    api_kind: None,
+                    retryable: false,
+                    status_code: None,
+                }),
+                out = self.run(ctx.clone(), &mut checkpoints) => out.map(Into::into),
+            }
         })
     }
 }

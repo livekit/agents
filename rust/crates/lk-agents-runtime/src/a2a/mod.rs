@@ -5,18 +5,20 @@
 //! the machine's; this file only executes.
 
 pub mod door;
+pub mod handler;
 
 use crate::telemetry;
+use handler::{Handler, Read};
 use lk_agents_abi::a2a::turn::Turn as TurnContract;
 use lk_agents_abi::storage::thread::TaskWrite;
-use lk_agents_abi::{Clock, Closed, HOST_TEARDOWN_TIMEOUT, StreamInput, StreamOutput};
+use lk_agents_abi::{Clock, HOST_TEARDOWN_TIMEOUT};
 use lk_agents_core::a2a::task::{
     A2aTaskEffect, A2aTaskEvent, Access, Completion, Handle, HandlerEvent, LaneRun, Operation,
     RunEnd, Stage, TaskMachine, rejected_commit,
 };
 use lk_agents_core::a2a::{
-    HandlerOutput, Message, Policy, TurnContext, TurnEvent, TurnHost, TurnOptions, TurnResult,
-    Verdict, caller_history_of, host_error, resolve_policy,
+    HandlerOutput, Message, Policy, TurnContext, TurnHost, TurnOptions, TurnResult, Verdict,
+    caller_history_of, host_error, resolve_policy,
 };
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::task::{TaskSet, TokioSpawner};
@@ -27,12 +29,8 @@ use lk_agents_storage::{CommitOptions, Lane, Lease, Run, RunOptions, Thread, sho
 use serde_json::Value;
 use std::sync::Arc;
 
-/// The handler's turn: its checkpoint verdicts in, its events out.
-type Handler =
-    lk_agents_abi::DuplexStream<Box<dyn StreamInput<Verdict>>, Box<dyn StreamOutput<TurnEvent>>>;
-
 /// One message's live resources while its machine runs: the lane, the open run, a kept lease,
-/// the handler's stream.
+/// the open handler.
 struct Call {
     lane: Lane,
     run: Option<Run>,
@@ -380,8 +378,8 @@ impl Turn {
         Ok(Completion::Done)
     }
 
-    /// Opens the host handler's turn over the open run. A lease lost before the host answers
-    /// ends the open with `LeaseLost`.
+    /// Opens the host handler's turn over the open run; the handler starts when first read. A
+    /// lease already lost ends the open with `LeaseLost`.
     async fn open_handler(
         &self,
         call: &mut Call,
@@ -410,15 +408,8 @@ impl Turn {
         if let Some(lease) = &lease {
             lease.check()?;
         }
-        let handler = self.host.handle(&telemetry::Cx::NONE.continuing(self.span), &host_ctx);
-        call.handler = Some(match lease {
-            Some(lease) => tokio::select! {
-                biased;
-                error = lease.lost() => return Err(error),
-                handler = handler => handler.map_err(host_error)?,
-            },
-            None => handler.await.map_err(host_error)?,
-        });
+        let cx = telemetry::Cx::NONE.continuing(self.span);
+        call.handler = Some(Handler::open(self.host.clone(), cx, host_ctx));
         Ok(Completion::Done)
     }
 
@@ -448,12 +439,11 @@ impl Turn {
         verdict: Option<Verdict>,
     ) -> Result<HandlerEvent, StorageError> {
         let lease = call.run.as_ref().and_then(Run::lease).cloned();
-        let (verdicts, events) = call
+        let handler = call
             .handler
             .as_mut()
-            .ok_or_else(|| StorageError::Invalid("no A2A handler is open".into()))?
-            .split_mut();
-        let read = self.read_handler_event(verdicts, events, lease.as_ref(), verdict);
+            .ok_or_else(|| StorageError::Invalid("no A2A handler is open".into()))?;
+        let read = self.read_handler_event(handler, lease.as_ref(), verdict);
         match &lease {
             Some(lease) => tokio::select! {
                 biased;
@@ -464,12 +454,11 @@ impl Turn {
         }
     }
 
-    /// Pushes the verdict, then publishes the handler's progress until its next checkpoint or
-    /// output; the lease is checked before the push and after every event.
+    /// Answers the checkpoint, then publishes the handler's progress until its next checkpoint
+    /// or output; the lease is checked before the answer and after every report.
     async fn read_handler_event(
         &self,
-        verdicts: &mut Box<dyn StreamInput<Verdict>>,
-        events: &mut Box<dyn StreamOutput<TurnEvent>>,
+        handler: &mut Handler,
         lease: Option<&Lease>,
         verdict: Option<Verdict>,
     ) -> Result<HandlerEvent, StorageError> {
@@ -477,25 +466,25 @@ impl Turn {
             lease.check()?;
         }
         if let Some(verdict) = verdict {
-            verdicts.push(verdict).map_err(host_error)?;
+            handler.answer(verdict);
         }
         loop {
-            let event = events.next().await.map_err(host_error)?;
+            let read = handler.next().await;
             if let Some(lease) = lease {
                 lease.check()?;
             }
-            match event {
-                Some(TurnEvent::Checkpoint) => return Ok(HandlerEvent::Checkpoint),
-                Some(event @ (TurnEvent::Progress { .. } | TurnEvent::Token { .. })) => {
+            match read {
+                Some(Read::Checkpoint) => return Ok(HandlerEvent::Checkpoint),
+                Some(Read::Event(event)) => {
                     if let Some(publisher) = &self.publisher {
                         publisher.event(&event).await;
                     }
                 }
-                Some(TurnEvent::Output { output }) => return self.handler_output(*output),
+                Some(Read::Output(output)) => {
+                    return self.handler_output((*output).map_err(host_error)?);
+                }
                 None => {
-                    return Err(StorageError::Invalid(
-                        "the handler's stream ended without its output".into(),
-                    ));
+                    return Err(StorageError::Invalid("the handler already returned".into()));
                 }
             }
         }
@@ -512,13 +501,13 @@ impl Turn {
         Ok(HandlerEvent::Output(Box::new(out)))
     }
 
-    /// Closes the handler's stream, if one is open, within the host teardown bound.
+    /// Closes the handler, if one is open: a running one is cancelled and its cleanup awaited
+    /// within the host teardown bound.
     async fn close_handler(&self, call: &mut Call) {
-        let Some(stream) = call.handler.take() else { return };
-        let (_, events) = stream.split();
+        let Some(handler) = call.handler.take() else { return };
         let deadline = self.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
-        if events.close(deadline).await == Closed::TimedOut {
-            log::warn!(target: "livekit.agents", lane = self.lane.as_str(); "the handler's stream did not close within its deadline; its host task is still running");
+        if !handler.close(self.clock.as_ref(), deadline).await {
+            log::warn!(target: "livekit.agents", lane = self.lane.as_str(); "the handler did not settle within its deadline; its host task is still running");
         }
     }
 }
@@ -567,42 +556,48 @@ impl TurnContract for Turn {
 #[cfg(test)]
 mod lease_tests {
     use super::*;
+    use lk_agents_abi::BoxFuture;
+    use lk_agents_abi::a2a::turn::HandlerPort;
     use lk_agents_abi::errors::ProviderError;
-    use lk_agents_abi::{BoxFuture, Ts};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
+    /// Counts the handler calls the host was entered for.
     #[derive(Clone)]
     struct Probe(Arc<AtomicUsize>);
-
-    impl StreamInput<Verdict> for Probe {
-        fn push(&self, _: Verdict) -> Result<(), ProviderError> {
-            self.0.fetch_add(1, Ordering::Relaxed);
-            Ok(())
-        }
-        fn flush(&self) -> Result<(), ProviderError> {
-            Ok(())
-        }
-        fn end_input(&self) {}
-    }
-
-    impl StreamOutput<TurnEvent> for Probe {
-        fn next(&mut self) -> BoxFuture<'_, Result<Option<TurnEvent>, ProviderError>> {
-            self.0.fetch_add(1, Ordering::Relaxed);
-            Box::pin(async { Ok(Some(TurnEvent::Checkpoint)) })
-        }
-        fn close(self: Box<Self>, _: Ts) -> BoxFuture<'static, Closed> {
-            Box::pin(async { Closed::Clean })
-        }
-    }
 
     impl TurnHost for Probe {
         fn handle<'a>(
             &'a self,
             _cx: &telemetry::Cx,
             _: &'a lk_agents_abi::a2a::turn::TurnContext,
-        ) -> BoxFuture<'a, Result<lk_agents_abi::a2a::turn::TurnStream, ProviderError>> {
-            Box::pin(async { panic!("this test supplies an already-open handler") })
+            turn: Arc<dyn HandlerPort>,
+            _cancel: Arc<dyn lk_agents_abi::invoke::Cancellation>,
+        ) -> BoxFuture<'a, Result<lk_agents_abi::a2a::turn::HandlerOutput, ProviderError>> {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            Box::pin(async move {
+                turn.checkpoint().await;
+                Ok(Default::default())
+            })
+        }
+    }
+
+    fn context() -> lk_agents_abi::a2a::turn::TurnContext {
+        lk_agents_abi::a2a::turn::TurnContext {
+            thread_id: "AT_loss".into(),
+            lane: "desk".into(),
+            message: Default::default(),
+            batch: Vec::new(),
+            history: Vec::new(),
+            state: None,
+            context_scope_id: String::new(),
+            context_scopes: Vec::new(),
+            read_only: false,
+            task_id: "task".into(),
+            tasks: Vec::new(),
+            caller_history: None,
+            answer_tool: None,
+            host_context: None,
         }
     }
 
@@ -620,11 +615,9 @@ mod lease_tests {
         run.lease().unwrap().stop();
         tokio::time::advance(Duration::from_secs(10)).await;
         let probe = Probe(Arc::default());
-        let turn = Turn::new(thread, "desk", Arc::new(probe.clone()), clock, Default::default());
-        let handler = lk_agents_abi::DuplexStream::new(
-            Box::new(probe.clone()) as Box<dyn StreamInput<Verdict>>,
-            Box::new(probe.clone()) as Box<dyn StreamOutput<TurnEvent>>,
-        );
+        let host: Arc<dyn TurnHost> = Arc::new(probe.clone());
+        let turn = Turn::new(thread, "desk", host.clone(), clock, Default::default());
+        let handler = Handler::open(host, telemetry::Cx::NONE, context());
         let mut call = Call {
             lane,
             run: Some(run),

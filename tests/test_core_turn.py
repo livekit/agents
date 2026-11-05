@@ -21,7 +21,6 @@ from livekit.agents._generated.storage_turn import HandlerOutput, TurnContext
 from livekit.agents._proto import item_to_payload, payload_to_item
 from livekit.agents.llm import ChatMessage
 from livekit.agents.storage import Storage
-from livekit.agents.storage.session import _TurnStream
 
 pytestmark = pytest.mark.unit
 
@@ -51,8 +50,10 @@ class Host:
         self.contexts: list[TurnContext] = []
         self.yielded: list[bool] = []
 
-    async def _core_handle(self, ctx: TurnContext) -> _TurnStream:
-        return _TurnStream(lambda checkpoint: self.run(ctx, checkpoint))
+    async def _core_handle(
+        self, ctx: TurnContext, reports: _core._core_HandlerTurn
+    ) -> HandlerOutput:
+        return await self.run(ctx, reports.checkpoint)
 
     async def run(
         self, ctx: TurnContext, checkpoint: Callable[[], Awaitable[bool]]

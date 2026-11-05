@@ -66,9 +66,7 @@ impl Publisher {
 
     /// A handler's progress or answer token.
     pub async fn event(&self, event: &TurnEvent) {
-        let (TurnEvent::Progress { task_id, .. } | TurnEvent::Token { task_id, .. }) = event else {
-            return;
-        };
+        let (TurnEvent::Progress { task_id, .. } | TurnEvent::Token { task_id, .. }) = event;
         let published =
             self.state.lock().await.0.event(event, &self.context, shortuuid("msg_"), unix_now_ms());
         self.emit(published.into_iter().collect(), task_id).await;

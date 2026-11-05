@@ -88,6 +88,31 @@ state, passes it to `session.run()`, and saves the returned state.
 | `update(text)`      | a progress message to the client while the turn runs                                                                 |
 | `stream(source)`    | forward text chunks from an async iterable as they arrive; returns the joined text                                   |
 
+### Progress, checkpoints and cancellation
+
+The handler runs as one call the turn awaits. What it reports, `update(text)`,
+the text `stream(...)` and managed forwarding send, and each checkpoint a run
+reaches, crosses to the turn in the order the handler awaited it:
+
+- **Ordering.** Reports reach the client in that order, and all reports awaited
+  before the handler returned are delivered before its answer.
+- **Backpressure.** At most 64 reports wait unread. Past that, `update()` and token
+  forwarding wait until the turn reads, so a handler never runs ahead of its turn.
+- **Checkpoints.** A run's checkpoint (before a model request or a result delivery,
+  and `stream()` before its first chunk) waits for the turn's verdict. It yields once
+  a newer message waits under `interrupt` or the client cancelled the task; the run
+  then stops and the turn ends `interrupted`.
+- **Cancellation.** A turn that loses its lease or fails a step cancels the handler.
+  The handler sees `CancelledError` where it waits. Its cleanup (`finally`, `async with`)
+  completes before the turn closes, up to the host teardown limit. A cancelled
+  handler commits nothing.
+- **A departed client.** A client that disconnects or stops reading does not stop the
+  turn. The handler keeps running, its reports are dropped from that client's stream
+  (`update()` texts still reach the journal), and the answer is committed and
+  available to a later `tasks/get` or resubscribe.
+- **After the answer.** A task the handler left running reports into nothing:
+  its reports are dropped, and a checkpoint returns "yield" at once.
+
 | Decorator parameter                 | What                                                                                                                                     |
 | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | `endpoint`                          | the last path segment of the endpoint's URL                                                                                              |

@@ -182,6 +182,19 @@ def _core_remote_token(
     none), a grant for the caller's `thread_id`, or a project credential without one.
     """
 
+class _core_HandlerTurn:
+    """One turn as its handler sees it: the handler awaits each report, and the turn reads them in
+    that order, publishing progress and tokens and answering checkpoints.
+
+    A report waits while the turn holds 64 unread ones, so a handler never runs ahead of the
+    turn. `checkpoint()` returns `True` when the run should yield (a newer message waits under
+    `interrupt`, or the client cancelled the task). Once the turn ended, or was closed, reports
+    are dropped and `checkpoint()` returns `True`.
+    """
+    async def checkpoint(self) -> bool: ...
+    async def progress(self, text: str) -> None: ...
+    async def token(self, delta: str) -> None: ...
+
 class Turn:
     def __new__(
         cls,
