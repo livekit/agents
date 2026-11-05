@@ -34,6 +34,7 @@ def inference_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
         "xai/grok-voice",
         "xai/grok-voice-latest",
         "xai/grok-voice-3.0",
+        "rime/prism",
         # retired ids stay realtime rather than falling through to a text LLM
         "openai/gpt-realtime-2",
         "openai/gpt-realtime-1.5",

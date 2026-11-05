@@ -21,7 +21,11 @@ XAIRealtimeModels = Literal[
     "xai/grok-voice-3.0",
 ]
 
-RealtimeModels = OpenAIRealtimeModels | GoogleRealtimeModels | XAIRealtimeModels
+RimeRealtimeModels = Literal["rime/prism"]
+
+RealtimeModels = (
+    OpenAIRealtimeModels | GoogleRealtimeModels | XAIRealtimeModels | RimeRealtimeModels
+)
 
 OpenAIDuplexModels = Literal["openai/gpt-live-1"]
 
