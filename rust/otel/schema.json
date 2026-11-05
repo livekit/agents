@@ -5633,41 +5633,41 @@
   "groups": [
     {
       "name": "job_identity",
-      "brief": "The job's identity, stamped by the exporter on every span, log record and Cloud measurement of the job (and, without the room name, on the Cloud resource). Never set by a declaration; an empty value is omitted.",
+      "brief": "The job's identity, stamped by the exporter on every span, log record and Cloud measurement of the job (and, without the room name, on the Cloud resource). Never set by a declaration.",
       "attributes": [
         {
           "key": "lk.room_id",
           "type": "string",
-          "required": true,
+          "required": false,
           "registry": "protocol"
         },
         {
           "key": "room_id",
           "type": "string",
-          "required": true
+          "required": false
         },
         {
           "key": "lk.job_id",
           "type": "string",
-          "required": true,
+          "required": false,
           "registry": "protocol"
         },
         {
           "key": "job_id",
           "type": "string",
-          "required": true
+          "required": false
         },
         {
           "key": "lk.pii.room_name",
           "type": "string",
-          "required": true,
+          "required": false,
           "registry": "protocol",
           "content": "pii"
         },
         {
           "key": "lk.agent_name",
           "type": "string",
-          "required": true,
+          "required": false,
           "registry": "protocol"
         },
         {
