@@ -248,6 +248,73 @@ class Run:
     ) -> int: ...
     async def abandon(self, outcome: str, reason: str) -> None: ...
 
+class _core_ThreadHandle:
+    """`ctx.thread` (docs/threads.md): one thread of a storage namespace, as the agent `agent` reads
+    it. Each read opens the thread's database for the call and releases it after; there is
+    nothing to open or close.
+    """
+    def __new__(cls, namespace: Storage, thread_id: str, holder: str, agent: str) -> Self:
+        """`holder` signs the handle's writes; reads take no lease."""
+    @property
+    def id(self) -> str:
+        """The thread id."""
+    @property
+    def agent(self) -> str:
+        """The agent whose history `chat_history()` reads by default."""
+    @property
+    def namespace(self) -> Storage:
+        """The namespace the thread lives in."""
+    async def info(self) -> ThreadInfo:
+        """The platform's record: scope, attributes, created, last active, expiry."""
+    async def update(
+        self,
+        *,
+        attributes: Mapping[str, str] | None = None,
+        idle_ttl_seconds: int | None = None,
+    ) -> ThreadInfo:
+        """Change the attributes a listing returns, or the idle period."""
+    async def list_items(
+        self,
+        *,
+        agent: str | None = None,
+        after: str | None = None,
+        limit: int = 100,
+    ) -> ThreadItemPage:
+        """One page of the thread's committed chat items in insertion order, every lane's or
+        `agent`'s; pass the page's `after` to read the next (empty on the last page). The same
+        records Cloud's threads API answers, for an application's own read routes.
+        """
+    async def list_tasks(
+        self,
+        *,
+        agent: str | None = None,
+        status: TaskState | None = None,
+        order: str = "inserted",
+        page_token: str | None = None,
+        limit: int = 50,
+    ) -> TaskPage:
+        """One page of the thread's A2A task records: in insertion order (`order="inserted"`), or
+        last updated first (`"updated"`) as A2A `tasks/list` lists them; of `agent`'s lane and
+        `status` when given. Pass the page's `next_page_token` to read the next; a token is bound
+        to its listing.
+        """
+    async def task(self, task_id: str) -> TaskRecord | None:
+        """One task record, `None` when this thread has none of that id."""
+    async def journal(self, after_id: int = 0, limit: int = 100) -> list[EventRow]:
+        """One page of the journal (docs/internals/storage.md#journal), every lane, in order; pass
+        the last `id` to read the next.
+        """
+    async def history(self, agent: str) -> list[ItemRow]:
+        """`agent`'s lane history, in order."""
+    async def tasks(
+        self,
+        agent: str,
+        *,
+        status: TaskState | None = None,
+        limit: int = 50,
+    ) -> list[TaskRecord]:
+        """`agent`'s lane task records, most recent first; only those in `status` when given."""
+
 class _core_ThreadServer:
     @property
     def port(self) -> int: ...

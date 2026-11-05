@@ -181,7 +181,7 @@ Core/voice own workflow ordering, prompt plans and tool-search ranking. Python r
 
 ### Storage hydration and execution
 
-Native storage/runtime own transactions, revisions, thread resolution and run-resource lifetimes. Python retains Pydantic/dataclass hydration and application services. An `a2a_session` handler is one awaited host call (`_TurnHost._core_handle`); its checkpoints, progress and tokens cross through the native `_core_HandlerTurn`, whose bounded queue, verdicts, cancellation and close settlement the runtime owns.
+Native storage/runtime own transactions, revisions, thread resolution and run-resource lifetimes. Python retains Pydantic/dataclass hydration and application services. `ctx.thread` (`Thread`) is the generated `ThreadReads` facade over the native `_core_ThreadHandle`, which opens the thread's database for each read and releases it; Python keeps only the `ChatContext` hydration of `chat_history()` and `Lane.history()`. An `a2a_session` handler is one awaited host call (`_TurnHost._core_handle`); its checkpoints, progress and tokens cross through the native `_core_HandlerTurn`, whose bounded queue, verdicts, cancellation and close settlement the runtime owns.
 
 | File | Lines |
 | --- | ---: |

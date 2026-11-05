@@ -7,20 +7,17 @@ import functools
 import json
 import os
 import socket
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any
 
 from .. import _core
 from .._generated.storage_class import (
-    EventRow,
     LocalStorageOptions,
-    TaskPage,
     TaskRecord,
     TaskState,
     ThreadInfo,
-    ThreadItemPage,
 )
 from .._generated.storage_errors import (
     LeaseLost as LeaseLost,
@@ -32,6 +29,7 @@ from .._generated.storage_errors import (
     TooLarge as TooLarge,
     VersionConflict as VersionConflict,
 )
+from .._generated.thread_reads import ThreadReads
 from ..llm import ChatContext
 from ..log import logger
 from .context import (
@@ -217,32 +215,20 @@ async def _resolve_thread(
     return _ResolvedThread(thread=await threads.create_thread(scope=scope), created=True)
 
 
-class Thread:
-    """``ctx.thread``: the durable thread (docs/threads.md). Reads open the thread's database for
-    the call."""
+class Thread(ThreadReads):
+    """``ctx.thread``: the durable thread (docs/threads.md). Each read opens the thread's
+    database for the call; there is nothing to open or close."""
 
     def __init__(self, storage: Storage, thread_id: str, *, agent_name: str) -> None:
         self._storage = storage
-        self._id = thread_id
         self._agent_name = agent_name
+        self._handle = _core._core_ThreadHandle(
+            storage.threads, thread_id, storage.holder, agent_name
+        )
 
     @property
-    def id(self) -> str:
-        return self._id
-
-    async def info(self) -> ThreadInfo:
-        """The platform's record: scope, attributes, created, last active, expiry."""
-        return await self._storage.threads.get_thread(self._id)
-
-    async def update(
-        self, *, attributes: Mapping[str, str] | None = None, idle_ttl_seconds: int | None = None
-    ) -> ThreadInfo:
-        """Change the attributes a listing returns, or the idle period."""
-        return await self._storage.threads.update_thread(
-            self._id,
-            attributes=dict(attributes) if attributes is not None else None,
-            idle_ttl_seconds=idle_ttl_seconds,
-        )
+    def _native(self) -> _core._core_ThreadHandle:
+        return self._handle
 
     def lane(self, agent: str) -> Lane:
         """An agent's lane of this thread: its history and its tasks."""
@@ -252,82 +238,21 @@ class Thread:
         """This agent's history, or another agent's."""
         return await self.lane(agent or self._agent_name).history()
 
-    async def list_items(
-        self, *, agent: str | None = None, after: str | None = None, limit: int = 100
-    ) -> ThreadItemPage:
-        """One page of the thread's committed chat items in insertion order, every lane's or
-        ``agent``'s; pass the page's ``after`` to read the next (empty on the last page). The
-        same records Cloud's threads API answers, for an application's own read routes."""
-        core = await self._open()
-        try:
-            return await core.list_items(agent, after, limit)
-        finally:
-            core.close()
-
-    async def list_tasks(
-        self,
-        *,
-        agent: str | None = None,
-        status: TaskState | None = None,
-        order: Literal["inserted", "updated"] = "inserted",
-        page_token: str | None = None,
-        limit: int = 50,
-    ) -> TaskPage:
-        """One page of the thread's A2A task records: in insertion order, or last updated first
-        as A2A ``tasks/list`` lists them; of ``agent``'s lane and ``status`` when given. Pass
-        the page's ``next_page_token`` to read the next; a token is bound to its listing."""
-        core = await self._open()
-        try:
-            return await core.list_tasks(agent, status, order, limit, page_token)
-        finally:
-            core.close()
-
-    async def task(self, task_id: str) -> TaskRecord | None:
-        """One task record, ``None`` when this thread has none of that id."""
-        core = await self._open()
-        try:
-            return await core.task(task_id)
-        finally:
-            core.close()
-
-    async def journal(self, after_id: int = 0, limit: int = 100) -> list[EventRow]:
-        """One page of the journal (docs/internals/storage.md#journal), every lane, in order;
-        pass the last ``id`` to read the next."""
-        core = await self._open()
-        try:
-            return await core.journal(after_id, limit)
-        finally:
-            core.close()
-
-    async def _open(self) -> _core.Thread:
-        return await self._storage._open(self._id)
-
 
 class Lane:
     """One agent's lane of a thread (docs/threads.md): ``thread.lane(agent)``."""
 
     def __init__(self, thread: Thread, agent: str) -> None:
-        self._thread = thread
+        self._native = thread._native
         self._agent = agent
 
     async def history(self) -> ChatContext:
         """The lane's whole history, in order."""
-        core = await self._thread._open()
-        try:
-            return history_of(await core.history(self._agent))
-        finally:
-            core.close()
+        return history_of(await self._native.history(self._agent))
 
     async def tasks(self, *, status: TaskState | None = None, limit: int = 50) -> list[TaskRecord]:
         """The lane's A2A task records, most recent first; only those in ``status`` when given."""
-        core = await self._thread._open()
-        try:
-            if status is None:
-                return await core.tasks(self._agent, limit=limit)
-            page = await core.list_tasks(self._agent, status, "updated", limit)
-            return page.tasks
-        finally:
-            core.close()
+        return await self._native.tasks(self._agent, status=status, limit=limit)
 
 
 @dataclass(frozen=True)

@@ -12,7 +12,7 @@ import pytest
 
 from livekit.agents import _core
 from livekit.agents._generated.storage_turn import HandlerOutput, TurnContext, TurnResult
-from livekit.agents.storage import SQLiteStorage, StorageUnavailable, ThreadNotFound
+from livekit.agents.storage import SQLiteStorage, StorageUnavailable, Thread, ThreadNotFound
 
 pytestmark = pytest.mark.unit
 
@@ -165,3 +165,45 @@ async def test_reports_after_the_answer_are_dropped_and_checkpoints_yield(
         for n in range(100):
             await reports.progress(f"late {n}")
         assert await reports.checkpoint()
+
+
+async def test_a_thread_handle_reads_each_lane_through_its_own_open_database(
+    tmp_path: Path,
+) -> None:
+    storage = SQLiteStorage(directory=tmp_path)
+    try:
+        thread_id = (await storage.threads.create_thread()).thread_id
+        core = await storage._open(thread_id)
+        try:
+            message = {"messageId": "m1", "role": "ROLE_USER", "parts": [{"text": "hi"}]}
+
+            async def run(ctx: TurnContext, reports: _core._core_HandlerTurn) -> HandlerOutput:
+                return _output()
+
+            answered = await _core.Turn(core, "desk", _Host(run)).run(message)
+        finally:
+            core.close()
+        thread = Thread(storage, thread_id, agent_name="desk")
+        reads = await asyncio.gather(
+            thread.info(),
+            thread.chat_history(),
+            thread.lane("desk").tasks(status="completed"),
+            thread.lane("other").history(),
+            thread.list_tasks(agent="desk", order="updated"),
+            thread.task(answered.task.task_id),
+            thread.journal(),
+            thread.list_items(),
+        )
+        info, history, tasks, other, page, task, journal, items = reads
+        assert thread.id == info.thread_id == thread_id
+        assert [i.role for i in history.items] == ["user", "assistant"]
+        assert other.items == [] and len(items.items) == 2
+        assert [t.task_id for t in tasks] == [answered.task.task_id]
+        assert [t.task_id for t in page.tasks] == [answered.task.task_id]
+        assert task is not None and task.status == "completed"
+        assert (journal[0].type, journal[-1].type) == ("run_started", "run_ended")
+        updated = await thread.update(attributes={"customer": "42"})
+        assert updated.attributes == {"customer": "42"}
+        assert await thread.task("AST_missing") is None
+    finally:
+        await storage.aclose()

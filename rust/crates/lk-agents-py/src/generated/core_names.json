@@ -128,6 +128,7 @@
     "_core_SessionStorage",
     "_core_StreamEvents",
     "_core_StreamText",
+    "_core_ThreadHandle",
     "_core_ThreadServer",
     "_core_ToolsetGroup",
     "_core_ToolsetLifetime",

@@ -122,6 +122,7 @@ pub trait Implementations: 'static {
     type AppTransaction: ::lk_agents_abi::storage::context::AppTransaction;
     type Thread: ::lk_agents_abi::storage::handles::Thread<Run = Self::Run>;
     type Run: ::lk_agents_abi::storage::handles::Run;
+    type ThreadHandle: ::lk_agents_abi::storage::handles::ThreadHandle<Namespace = Self::Storage>;
     type ThreadServer: ::lk_agents_abi::storage::http::ThreadServer;
     type VoiceStore: ::lk_agents_abi::storage::voice::VoiceStore<ContextActivation = Self::ContextActivation>;
     type FallbackStt: ::lk_agents_abi::stt::fallback::FallbackStt;
@@ -353,6 +354,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<storage::CoreAppTransaction>()?;
     m.add_class::<storage::Thread>()?;
     m.add_class::<storage::Run>()?;
+    m.add_class::<storage::CoreThreadHandle>()?;
     m.add_class::<storage::CoreThreadServer>()?;
     m.add_class::<storage::CoreVoiceStore>()?;
     m.add_class::<stt::FallbackStt>()?;

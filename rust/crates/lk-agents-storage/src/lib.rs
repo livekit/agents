@@ -9,6 +9,7 @@
 
 pub mod backends;
 pub mod context;
+pub mod handle;
 pub mod http;
 pub mod namespace;
 pub mod sql;
