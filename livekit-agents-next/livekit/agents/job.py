@@ -446,7 +446,7 @@ class JobContext:
         about itself outranks what an individual model was configured with. Empty for
         an ordinary job.
         """
-        from .inference._utils import HEADER_INFERENCE_PRIORITY
+        from .inference import HEADER_INFERENCE_PRIORITY
 
         headers: dict[str, str] = {}
 

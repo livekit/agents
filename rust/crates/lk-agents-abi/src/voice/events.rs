@@ -575,7 +575,7 @@ pub struct SessionErrorWire {
 #[crate::host(record(
     module = "overlap",
     name = "OverlappingSpeechEvent",
-    path = "livekit.agents.inference.interruption",
+    path = "livekit.agents.inference",
     pydantic,
     arbitrary_types,
     serializer = "overlapping_speech_serialize",
@@ -793,7 +793,7 @@ pub struct ConversationItemAddedEvent {
     constant(type = "close")
 ))]
 pub struct CloseEvent {
-    #[host(default = None, annotation = ".llm.LLMError | livekit.agents.stt.STTError | livekit.agents.tts.TTSError | livekit.agents.llm.RealtimeModelError | livekit.agents.inference.interruption.InterruptionDetectionError | None")]
+    #[host(default = None, annotation = ".llm.LLMError | livekit.agents.stt.STTError | livekit.agents.tts.TTSError | livekit.agents.llm.RealtimeModelError | livekit.agents.inference.InterruptionDetectionError | None")]
     pub error: Option<crate::HostRef>,
     pub reason: CloseReason,
     #[host(default_factory = "time.time")]
@@ -855,11 +855,11 @@ pub struct FunctionToolsExecutedEvent {
 ))]
 pub struct ErrorEvent {
     #[host(
-        annotation = ".llm.LLMError | livekit.agents.stt.STTError | livekit.agents.tts.TTSError | livekit.agents.llm.RealtimeModelError | livekit.agents.inference.interruption.InterruptionDetectionError | livekit.agents.voice.room_io.AudioProcessingError | typing.Any"
+        annotation = ".llm.LLMError | livekit.agents.stt.STTError | livekit.agents.tts.TTSError | livekit.agents.llm.RealtimeModelError | livekit.agents.inference.InterruptionDetectionError | livekit.agents.voice.room_io.AudioProcessingError | typing.Any"
     )]
     pub error: crate::HostRef,
     #[host(
-        annotation = ".llm.LLM | livekit.agents.stt.STT | livekit.agents.tts.TTS | livekit.agents.llm.RealtimeModel | livekit.agents.inference.interruption.AdaptiveInterruptionDetector | typing.Any"
+        annotation = ".llm.LLM | livekit.agents.stt.STT | livekit.agents.tts.TTS | livekit.agents.llm.RealtimeModel | livekit.agents.inference.AdaptiveInterruptionDetector | typing.Any"
     )]
     pub source: crate::HostRef,
     #[host(default_factory = "time.time")]

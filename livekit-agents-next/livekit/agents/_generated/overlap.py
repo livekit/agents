@@ -51,4 +51,4 @@ class OverlappingSpeechEvent(BaseModel):
         return _bindings.overlapping_speech_serialize(self, handler)
 
 
-OverlappingSpeechEvent.__module__ = "livekit.agents.inference.interruption"
+OverlappingSpeechEvent.__module__ = "livekit.agents.inference"

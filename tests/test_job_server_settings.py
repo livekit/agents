@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from livekit.agents import AgentServer, JobContext, inference
-from livekit.agents.inference._utils import get_default_inference_url, resolve_credentials
+from livekit.agents.inference import get_default_inference_url, resolve_credentials
 from livekit.agents.job import JobExecutorType
 from livekit.agents.storage import SQLiteStorage
 

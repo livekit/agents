@@ -40,9 +40,7 @@ from .._generated.events import (
 )
 from .._generated.tool_report import ToolOutcomeUpdate, ToolReport
 from .._generated.voice_session import VoiceCommandOrigin, VoiceCommandOriginTool
-from ..inference.interruption import (
-    OverlappingSpeechEvent,
-)
+from ..inference import OverlappingSpeechEvent
 from ..llm import (
     FunctionCall,
 )

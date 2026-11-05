@@ -29,7 +29,7 @@ from .._generated.inference_tts import (
 from .._generated.language import LanguageCode
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given, shortuuid
-from ._utils import Credentials, get_inference_headers
+from . import Credentials, get_inference_headers
 
 FallbackModelType = FallbackModel | str
 

@@ -39,7 +39,7 @@ pub use transport::{
 
 /// `type(self).__module__ + "." + type(self).__name__` (`inference/interruption.py:342`), stamped
 /// on every [`InterruptionDetectionError`] and read by `agent_session`'s error routing.
-pub const LABEL: &str = "livekit.agents.inference.interruption.AdaptiveInterruptionDetector";
+pub const LABEL: &str = "livekit.agents.inference.AdaptiveInterruptionDetector";
 
 /// `AdaptiveInterruptionDetector.model`.
 pub const MODEL: &str = "adaptive interruption";

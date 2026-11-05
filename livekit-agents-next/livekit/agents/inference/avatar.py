@@ -17,7 +17,7 @@ from ..types import (
 )
 from ..utils import is_given
 from ..voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
-from ._utils import Credentials, get_inference_headers
+from . import Credentials, get_inference_headers
 
 if TYPE_CHECKING:
     import aiohttp

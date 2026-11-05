@@ -67,7 +67,7 @@ pub trait InterruptionSource: Send + Sync {
 
 #[crate::host(record(
     module = "interruption_errors",
-    path = "livekit.agents.inference.interruption",
+    path = "livekit.agents.inference",
     pydantic,
     arbitrary_types,
     constant(type = "interruption_detection_error")

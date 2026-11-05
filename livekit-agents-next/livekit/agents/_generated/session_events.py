@@ -24,10 +24,7 @@ from pydantic import (
     model_validator,
 )
 
-from livekit.agents.inference.interruption import (
-    AdaptiveInterruptionDetector,
-    InterruptionDetectionError,
-)
+from livekit.agents.inference import AdaptiveInterruptionDetector, InterruptionDetectionError
 from livekit.agents.llm import AgentHandoff, RealtimeModel, RealtimeModelError
 from livekit.agents.stt import STT, STTError
 from livekit.agents.tts import TTS, TTSError

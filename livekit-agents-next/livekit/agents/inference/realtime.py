@@ -8,7 +8,7 @@ from ..llm import realtime as llm_realtime
 from ..llm._realtime import RealtimeModel as _RealtimeModel, RealtimeSession, realtime_options
 from ..llm.tool_context import ToolChoice
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
-from ._utils import (
+from . import (
     InferenceClass,
     get_default_inference_url,
     get_inference_headers,

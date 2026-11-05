@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Literal
 
 from .. import _bindings, _core, inference
 from .._generated.amd import AMDCategory, AMDConfig, AMDPredictionEvent, DetectionOptions
-from ..inference._utils import default_api_key, default_api_secret
+from ..inference import default_api_key, default_api_secret
 from ..job import _server_credentials
 from ..llm import LLM as _LLM
 from ..llm.tool_context import function_tool

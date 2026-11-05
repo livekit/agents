@@ -174,7 +174,7 @@ async fn an_unreachable_gateway_climbs_the_ladder_and_then_gives_up() {
         } else {
             fatal += 1;
         }
-        assert_eq!(e.label, "livekit.agents.inference.interruption.AdaptiveInterruptionDetector");
+        assert_eq!(e.label, "livekit.agents.inference.AdaptiveInterruptionDetector");
     }
     assert_eq!((recoverable, fatal), (2, 1), "two retries announced, then one give-up");
     let err = within(

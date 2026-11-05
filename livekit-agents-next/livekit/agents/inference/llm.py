@@ -29,7 +29,7 @@ from ..llm.tool_context import Tool
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given
-from ._utils import (
+from . import (
     HEADER_INFERENCE_PROVIDER,
     Credentials,
     InferenceClass,

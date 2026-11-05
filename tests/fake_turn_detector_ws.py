@@ -21,12 +21,12 @@ from unittest.mock import MagicMock
 
 import aiohttp
 
-from livekit.agents.inference.eot.base import (
+from livekit.agents.inference.base import (
     TurnDetectorOptions,
     _BaseStreamingTurnDetectorStream,
 )
-from livekit.agents.inference.eot.languages import ThresholdOptions
-from livekit.agents.inference.eot.transports import _CloudTransport, _CloudTransportOptions
+from livekit.agents.inference.languages import ThresholdOptions
+from livekit.agents.inference.transports import _CloudTransport, _CloudTransportOptions
 from livekit.agents.types import APIConnectOptions
 from livekit.protocol.agent_pb.agent_inference import ClientMessage
 

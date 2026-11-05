@@ -37,7 +37,7 @@ from .._generated.language import LanguageCode
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given
-from ._utils import Credentials, get_inference_headers
+from . import Credentials, get_inference_headers
 
 FallbackModelType = FallbackModel | str
 
@@ -152,7 +152,7 @@ class STT(stt.STT):
                 )
                 return None
             case "create_default":
-                from .vad import VAD
+                from . import VAD
 
                 return VAD()
         return vad

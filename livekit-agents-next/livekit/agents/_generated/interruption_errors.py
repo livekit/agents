@@ -24,4 +24,4 @@ class InterruptionDetectionError(BaseModel):
     recoverable: bool
 
 
-InterruptionDetectionError.__module__ = "livekit.agents.inference.interruption"
+InterruptionDetectionError.__module__ = "livekit.agents.inference"
