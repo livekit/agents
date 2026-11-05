@@ -1997,6 +1997,14 @@ Preserve the delivery contract of the API that produces the data. Media dropping
 accounts for lost samples/time; a capacity limit cannot silently change playback
 accounting.
 
+Audio into a consumer goes through a `lk_agents_media::media_queue`, its policy
+chosen by what the consumer is for: `CatchUp` where what was said matters,
+`Now` where only current audio does, the pre-connect head kept in full under
+both. A bounded channel whose overflow fails the stream is not allowed for
+audio, and local pressure (a slow socket, worker or plugin) is never a
+non-retryable error: the queue drops old audio and reports it as a gap, and a
+pump that hands audio to a slower consumer awaits it instead of refusing.
+
 Cancellation, shutdown and required completion delivery remain serviceable
 while data capacity is exhausted. Do not create a wait cycle where releasing
 capacity requires an event blocked behind that capacity. EOF and flush retain
