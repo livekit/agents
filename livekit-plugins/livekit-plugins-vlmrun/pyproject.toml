@@ -1,0 +1,45 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "livekit-plugins-vlmrun"
+dynamic = ["version"]
+description = "Agent Framework plugin for VLM Run vision models (chat completions and System One decisions)."
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10.0"
+authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
+keywords = ["webrtc", "realtime", "audio", "video", "livekit", "vlmrun", "vision", "vlm"]
+classifiers = [
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3 :: Only",
+]
+dependencies = [
+    "livekit-agents[images,openai]>=1.8.10",
+    # llm.py builds requests with the openai SDK directly; SDK 3.x uses httpx2.
+    "openai>=3.28,<4",
+    "httpx2>=2.12,<3",
+]
+
+[project.urls]
+Documentation = "https://docs.livekit.io"
+Website = "https://livekit.io/"
+Source = "https://github.com/livekit/agents"
+
+[tool.hatch.version]
+path = "livekit/plugins/vlmrun/version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["livekit"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/livekit"]
+
+[tool.uv]
+exclude-newer = "7 days"
+exclude-newer-package = { livekit-agents = "0 days" }
