@@ -16,6 +16,7 @@ from livekit.agents import (
     AgentFalseInterruptionEvent,
     AgentSession,
     AgentStateChangedEvent,
+    AgentTask,
     APIConnectionError,
     ConversationItemAddedEvent,
     FlushSentinel,
@@ -24,6 +25,7 @@ from livekit.agents import (
     ModelSettings,
     NotGivenOr,
     RunContext,
+    StopResponse,
     TurnHandlingOptions,
     UserInputTranscribedEvent,
     UserStateChangedEvent,
@@ -998,8 +1000,10 @@ async def test_generate_reply() -> None:
     assert agent.chat_ctx.items[7].type == "function_call_output"
 
 
-async def test_on_enter_hides_ignore_on_enter_tools() -> None:
-    """IGNORE_ON_ENTER tools (bare + toolset-nested) are hidden inside on_enter, restored after."""
+@pytest.mark.parametrize("with_task", [False, True])
+async def test_on_enter_hides_ignore_on_enter_tools(with_task: bool) -> None:
+    """IGNORE_ON_ENTER tools (bare + toolset-nested) are hidden inside on_enter, restored after,
+    also when on_enter awaits an AgentTask (the resumed activity must not keep the marker)."""
 
     class _Toolset(Toolset):
         def __init__(self) -> None:
@@ -1020,11 +1024,22 @@ async def test_on_enter_hides_ignore_on_enter_tools() -> None:
     async def bare_ignored() -> None:
         """A bare flagged tool."""
 
+    class _Task(AgentTask[None]):
+        def __init__(self) -> None:
+            super().__init__(instructions="complete the setup")
+
+        async def on_enter(self) -> None:
+            self.complete(None)
+
     class _Agent(Agent):
         def __init__(self) -> None:
             super().__init__(instructions="you are helpful", tools=[_Toolset(), bare_ignored])
 
         async def on_enter(self) -> None:
+            if with_task:
+                await _Task()
+                # The fake input sends only one frame; prime it again after resume.
+                session.input.audio.push(0.1)
             self.session.generate_reply(instructions="instructions:say hello to the user")
 
     actions = FakeActions()
@@ -1054,6 +1069,75 @@ async def test_on_enter_hides_ignore_on_enter_tools() -> None:
     assert captured[0] == {"keep"}
     # a later (non-on_enter) turn sees every tool again
     assert captured[1] == {"keep", "end_call", "bare_ignored"}
+
+
+async def test_on_enter_marker_does_not_follow_a_handoff_back() -> None:
+    """A handoff made from on_enter starts the next activity inside that on_enter's context. When
+    the session later hands back to the same agent, its new activity must not inherit the stale
+    marker and keep hiding the IGNORE_ON_ENTER tools on every turn."""
+
+    @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
+    async def end_call() -> None:
+        """Ends the call."""
+
+    @function_tool
+    async def keep() -> None:
+        """A normal tool."""
+
+    class _Router(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="you route the caller", tools=[end_call, keep])
+            self.entered = 0
+
+        async def on_enter(self) -> None:
+            self.entered += 1
+            if self.entered == 1:
+                await self.session.generate_reply(instructions="instructions:greet the user")
+                self.session.update_agent(specialist)
+
+    class _Specialist(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="you are a specialist")
+
+        async def on_user_turn_completed(
+            self, turn_ctx: ChatContext, new_message: ChatMessage
+        ) -> None:
+            self.session.update_agent(router)
+            raise StopResponse()
+
+    router = _Router()
+    specialist = _Specialist()
+
+    actions = FakeActions()
+    actions.add_llm("Hello!", input="instructions:greet the user")
+    actions.add_tts(1.0)
+    actions.add_user_speech(3.0, 4.0, "take me back")
+    actions.add_user_speech(6.0, 7.0, "goodbye")
+    actions.add_llm("Bye!")
+    actions.add_tts(1.0)
+
+    # no preemptive reply from the specialist, so the only LLM calls are the router's
+    session = create_session(actions, turn_handling={"preemptive_generation": {"enabled": False}})
+
+    captured: list[set[str]] = []
+    orig_chat = session.llm.chat
+
+    def _recording_chat(*, chat_ctx, tools=None, **kwargs):  # type: ignore[no-untyped-def]
+        captured.append(
+            {t.info.name for t in (tools or []) if isinstance(t, (FunctionTool, RawFunctionTool))}
+        )
+        return orig_chat(chat_ctx=chat_ctx, tools=tools, **kwargs)
+
+    session.llm.chat = _recording_chat  # type: ignore[method-assign]
+
+    await asyncio.wait_for(run_session(session, router), timeout=SESSION_TIMEOUT)
+
+    assert router.entered == 2
+    assert len(captured) == 2
+    greeting, user_turn = captured
+    assert greeting == {"keep"}
+    # the router's turn after the handoff back sees every tool again
+    assert user_turn == {"keep", "end_call"}
 
 
 async def test_on_enter_hides_tools_in_nested_tool_reply() -> None:
@@ -1420,6 +1504,267 @@ async def test_stt_eos_falls_back_to_update_vad_when_no_active_stream() -> None:
             await recognition._on_stt_event(SpeechEvent(type=SpeechEventType.END_OF_SPEECH))
 
         update_vad.assert_called_once_with(recognition._vad)
+    finally:
+        if recognition._end_of_turn_task is not None:
+            await aio.cancel_and_wait(recognition._end_of_turn_task)
+        await _close_test_session(recognition._session)
+
+
+def _make_stt_turn_recognition(*, min_delay: float) -> tuple[AudioRecognition, list[str]]:
+    committed: list[str] = []
+
+    class _CommitRecordingHooks(_TestRecognitionHooks):
+        def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool:
+            committed.append(info.new_transcript)
+            return True
+
+    recognition = AudioRecognition(
+        create_session(FakeActions()),
+        hooks=_CommitRecordingHooks(),
+        endpointing=BaseEndpointing(min_delay=min_delay, max_delay=min_delay),
+        stt=MagicMock(),
+        vad=None,
+        interruption_detection=None,
+        turn_detection="stt",
+    )
+    return recognition, committed
+
+
+async def _send_stt_event(
+    recognition: AudioRecognition, type: SpeechEventType, text: str | None = None
+) -> None:
+    alternatives = [SpeechData(text=text, language=LanguageCode(""))] if text else []
+    await recognition._on_stt_event(SpeechEvent(type=type, alternatives=alternatives))
+    await asyncio.sleep(0.05)
+
+
+async def _send_vad_end(recognition: AudioRecognition) -> None:
+    await recognition._on_vad_event(
+        vad.VADEvent(
+            type=vad.VADEventType.END_OF_SPEECH,
+            samples_index=0,
+            timestamp=time.time(),
+            speech_duration=0.5,
+            silence_duration=0.3,
+        )
+    )
+    await asyncio.sleep(0.05)
+
+
+@pytest.mark.parametrize(
+    ("min_delay", "first_turns"),
+    [
+        pytest.param(0.0, ["I need the OTP.", "For the guard."], id="committed-before-final"),
+        pytest.param(0.5, ["I need the OTP. For the guard."], id="final-within-delay"),
+    ],
+)
+async def test_stt_final_after_a_later_end_of_speech_still_ends_a_turn(
+    min_delay: float, first_turns: list[str]
+) -> None:
+    recognition, committed = _make_stt_turn_recognition(min_delay=min_delay)
+    try:
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "I need the OTP.")
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "For the guard.")
+        await asyncio.sleep(min_delay + 0.1)
+
+        assert committed == first_turns
+        assert recognition._audio_transcript == ""
+
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "Thanks.")
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        await asyncio.sleep(min_delay + 0.1)
+
+        assert committed == [*first_turns, "Thanks."]
+    finally:
+        if recognition._end_of_turn_task is not None:
+            await aio.cancel_and_wait(recognition._end_of_turn_task)
+        await _close_test_session(recognition._session)
+
+
+async def test_stt_resume_supersedes_a_pending_end_of_speech() -> None:
+    """A provider START_OF_SPEECH reopens the turn; only its next END_OF_SPEECH ends it."""
+    recognition, committed = _make_stt_turn_recognition(min_delay=0.0)
+    try:
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "I need the OTP.")
+        await _send_vad_end(recognition)
+        assert committed == []
+
+        await _send_vad_end(recognition)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "For the")
+        assert committed == []
+
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        assert committed == ["I need the OTP. For the"]
+    finally:
+        if recognition._end_of_turn_task is not None:
+            await aio.cancel_and_wait(recognition._end_of_turn_task)
+        await _close_test_session(recognition._session)
+
+
+async def test_stt_resume_after_final_is_not_ended_by_a_vad_pause() -> None:
+    """Deepgram Flux order: EndOfTurn sends FINAL_TRANSCRIPT then END_OF_SPEECH (#8302)."""
+    recognition, committed = _make_stt_turn_recognition(min_delay=0.3)
+    try:
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "I live in Cantu.")
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        # the user resumes within min_delay
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.INTERIM_TRANSCRIPT, "in the province")
+        # a short pause: VAD ends before the provider does
+        await _send_vad_end(recognition)
+        await asyncio.sleep(0.4)
+        assert committed == []
+
+        await _send_stt_event(
+            recognition, SpeechEventType.FINAL_TRANSCRIPT, "in the province of Como."
+        )
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        await asyncio.sleep(0.4)
+        assert committed == ["I live in Cantu. in the province of Como."]
+    finally:
+        if recognition._end_of_turn_task is not None:
+            await aio.cancel_and_wait(recognition._end_of_turn_task)
+        await _close_test_session(recognition._session)
+
+
+async def test_stt_resume_without_words_is_ended_by_the_next_end_of_speech() -> None:
+    """A resume that transcribes nothing still commits the pending text on the provider's end."""
+    recognition, committed = _make_stt_turn_recognition(min_delay=0.3)
+    try:
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "I live in Cantu.")
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await asyncio.sleep(0.4)
+        assert committed == []
+
+        # e.g. a Flux EndOfTurn without words: no final, only END_OF_SPEECH
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        await asyncio.sleep(0.4)
+        assert committed == ["I live in Cantu."]
+    finally:
+        if recognition._end_of_turn_task is not None:
+            await aio.cancel_and_wait(recognition._end_of_turn_task)
+        await _close_test_session(recognition._session)
+
+
+async def test_stt_final_after_resume_waits_for_the_provider_end_of_speech() -> None:
+    """A final for the resumed speech doesn't let a VAD pause end the turn early."""
+    recognition, committed = _make_stt_turn_recognition(min_delay=0.3)
+    try:
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "I need")
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        # the user resumes within min_delay
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        # a mid-turn final for the resumed speech
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "the OTP")
+        await _send_vad_end(recognition)
+        await asyncio.sleep(0.4)
+        assert committed == []
+
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "for the guard")
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        await asyncio.sleep(0.4)
+        assert committed == ["I need the OTP for the guard"]
+    finally:
+        if recognition._end_of_turn_task is not None:
+            await aio.cancel_and_wait(recognition._end_of_turn_task)
+        await _close_test_session(recognition._session)
+
+
+async def test_stt_pending_end_of_turn_survives_vad_only_speech() -> None:
+    """VAD speech the provider ignores cancels the pending end of turn; its VAD end resumes it."""
+    recognition, committed = _make_stt_turn_recognition(min_delay=0.3)
+    try:
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "I live in Cantu.")
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        await recognition._on_vad_event(
+            vad.VADEvent(
+                type=vad.VADEventType.START_OF_SPEECH,
+                samples_index=0,
+                timestamp=time.time(),
+                speech_duration=0.1,
+                silence_duration=0.0,
+            )
+        )
+        await asyncio.sleep(0.4)
+        assert committed == []
+
+        await _send_vad_end(recognition)
+        await asyncio.sleep(0.4)
+        assert committed == ["I live in Cantu."]
+    finally:
+        if recognition._end_of_turn_task is not None:
+            await aio.cancel_and_wait(recognition._end_of_turn_task)
+        await _close_test_session(recognition._session)
+
+
+async def test_stt_turn_end_does_not_carry_into_manual_turn_detection() -> None:
+    recognition, committed = _make_stt_turn_recognition(min_delay=0.0)
+    try:
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "I need the OTP.")
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        assert committed == ["I need the OTP."]
+
+        recognition._update_options(turn_detection="manual")
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "For the guard.")
+        await asyncio.sleep(0.1)
+
+        assert committed == ["I need the OTP."]
+        assert recognition._audio_transcript == "For the guard."
+    finally:
+        if recognition._end_of_turn_task is not None:
+            await aio.cancel_and_wait(recognition._end_of_turn_task)
+        await _close_test_session(recognition._session)
+
+
+async def test_stt_turn_is_not_ended_by_vad_after_the_user_resumes() -> None:
+    recognition, committed = _make_stt_turn_recognition(min_delay=0.0)
+    try:
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "I need the OTP.")
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        assert committed == ["I need the OTP."]
+
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_vad_end(recognition)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "For the")
+        assert committed == ["I need the OTP."]
+
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        assert committed == ["I need the OTP.", "For the"]
+    finally:
+        if recognition._end_of_turn_task is not None:
+            await aio.cancel_and_wait(recognition._end_of_turn_task)
+        await _close_test_session(recognition._session)
+
+
+async def test_stt_cleared_turn_waits_for_its_own_end_of_speech() -> None:
+    recognition, committed = _make_stt_turn_recognition(min_delay=0.0)
+    try:
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "I need the OTP.")
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        assert committed == ["I need the OTP."]
+
+        recognition._clear_user_turn()
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "For the guard.")
+        assert committed == ["I need the OTP."]
+
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        assert committed == ["I need the OTP.", "For the guard."]
     finally:
         if recognition._end_of_turn_task is not None:
             await aio.cancel_and_wait(recognition._end_of_turn_task)
