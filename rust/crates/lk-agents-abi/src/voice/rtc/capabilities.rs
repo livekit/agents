@@ -17,8 +17,8 @@ use super::{
 };
 use crate::{AudioFrame, StreamOutput};
 
-/// A connected room: `room_io.Room`, the adapter holding an `rtc.Room` as its `rtc`, its event
-/// bus and its RPC router. Reads of the SDK room address `rtc` directly.
+/// A connected room: `room_io.Room`, the adapter holding an `rtc.Room` as its `sdk`, its event
+/// bus and its RPC router. Reads of the SDK room address `sdk` directly.
 ///
 /// `connection_state` rather than `isconnected`: the reference's boolean cannot distinguish
 /// disconnected from reconnecting, and [`ConnectionState::is_connected`] recovers it exactly.
@@ -41,9 +41,9 @@ pub trait RtcRoom: Send + Sync {
         Err(RtcError::Unsupported("create_video_source"))
     }
     /// Owned and asked every time: a room's name is `""` until it connects.
-    #[host(call, getter = "rtc.name")]
+    #[host(call, getter = "sdk.name")]
     fn name(&self) -> Result<String, RtcError>;
-    #[host(call, getter = "rtc.connection_state")]
+    #[host(call, getter = "sdk.connection_state")]
     fn connection_state(&self) -> Result<ConnectionState, RtcError>;
     /// Lent, so read once: the agent's participant object outlives its connection (the host's
     /// resolves the SDK's on each call).
@@ -87,7 +87,7 @@ pub trait RtcRoom: Send + Sync {
     ) -> Result<(), RtcError>;
     /// Idempotent: unregistering a topic with no handler is a no-op, because `aclose` runs on
     /// paths where `register` may never have succeeded.
-    #[host(call, name = "rtc.unregister_byte_stream_handler")]
+    #[host(call, name = "sdk.unregister_byte_stream_handler")]
     fn unregister_byte_stream_handler(&self, topic: &str) -> Result<(), RtcError>;
     #[host(call, name = "_core_register_text_stream_handler")]
     fn register_text_stream_handler(
@@ -95,7 +95,7 @@ pub trait RtcRoom: Send + Sync {
         topic: &str,
         streams: Arc<dyn TextStreamIngress>,
     ) -> Result<(), RtcError>;
-    #[host(call, name = "rtc.unregister_text_stream_handler")]
+    #[host(call, name = "sdk.unregister_text_stream_handler")]
     fn unregister_text_stream_handler(&self, topic: &str) -> Result<(), RtcError>;
 
     /// Native subscriptions use the runtime fan-out already taken with this room.
@@ -104,7 +104,7 @@ pub trait RtcRoom: Send + Sync {
     }
 }
 
-/// The agent itself in the room: `room_io.LocalParticipant`, whose `rtc` is the room's
+/// The agent itself in the room: `room_io.LocalParticipant`, whose `sdk` is the room's
 /// `rtc.LocalParticipant`, resolved on each read.
 #[crate::host(proxy(host = "livekit.agents.voice.room_io.LocalParticipant", sdk))]
 pub trait LocalParticipant: Send + Sync {
@@ -132,15 +132,15 @@ pub trait LocalParticipant: Send + Sync {
     /// participant to it, `_on_participant_connected` skips participants publishing *on behalf of*
     /// it, and `_on_local_track_published` gates on it. Owned and asked every time: before the room
     /// connects it is `""`, which no reader can match.
-    #[host(call, getter = "rtc.identity")]
+    #[host(call, getter = "sdk.identity")]
     fn identity(&self) -> Result<ParticipantIdentity, RtcError>;
 
     /// The agent's own kind (`agent`), which `wait_for_participant(include_local=True)` filters.
-    #[host(call, getter = "rtc.kind")]
+    #[host(call, getter = "sdk.kind")]
     fn kind(&self) -> Result<ParticipantKind, RtcError>;
 
     /// The agent's own participant sid, `""` before the room connects; its spans' identity.
-    #[host(call, getter = "rtc.sid")]
+    #[host(call, getter = "sdk.sid")]
     fn sid(&self) -> Result<String, RtcError>;
 
     /// `find_micro_track_id` scans these when the agent is its own transcription target.
@@ -159,7 +159,7 @@ pub trait LocalParticipant: Send + Sync {
         opts: TrackPublishOptions,
     ) -> crate::BoxFuture<'a, Result<PublishedAudioTrack, RtcError>>;
 
-    #[host(await, name = "rtc.unpublish_track")]
+    #[host(await, name = "sdk.unpublish_track")]
     fn unpublish_track<'a>(
         &'a self,
         _cx: &crate::telemetry::Cx,
@@ -171,7 +171,7 @@ pub trait LocalParticipant: Send + Sync {
 
     /// `ATTRIBUTE_AGENT_STATE` is the only writer; the reference cancels an in-flight call before
     /// issuing the next, so implementations need not serialise.
-    #[host(await, name = "rtc.set_attributes")]
+    #[host(await, name = "sdk.set_attributes")]
     fn set_attributes<'a>(
         &'a self,
         cx: &crate::telemetry::Cx,
@@ -237,14 +237,14 @@ pub trait LocalParticipant: Send + Sync {
         Err(RtcError::Unsupported("register_rpc_method"))
     }
 
-    #[host(call, name = "rtc.unregister_rpc_method")]
+    #[host(call, name = "sdk.unregister_rpc_method")]
     fn unregister_rpc_method(&self, method: String) -> Result<(), RtcError> {
         let _ = method;
         Err(RtcError::Unsupported("unregister_rpc_method"))
     }
 
     /// `publish_dtmf(code=, digit=)`: a keypad tone to the room's SIP participants.
-    #[host(await, name = "rtc.publish_dtmf")]
+    #[host(await, name = "sdk.publish_dtmf")]
     fn publish_dtmf<'a>(
         &'a self,
         _cx: &crate::telemetry::Cx,
@@ -301,7 +301,7 @@ pub trait TextStreamWriter: Send + Sync {
 ///
 /// It is separate from [`LocalParticipant`] because "clear the buffer on *this* track" has to be
 /// expressible: the avatar path publishes its own source alongside `RoomIO`'s, and an interruption
-/// must truncate one and not the other. `room_io.AudioSource`: its `rtc.AudioSource` as `rtc`,
+/// must truncate one and not the other. `room_io.AudioSource`: its `rtc.AudioSource` as `sdk`,
 /// with the ledger of what it played and threw away.
 #[crate::host(proxy(host = "livekit.agents.voice.room_io.AudioSource"))]
 pub trait AudioSource: Any + Send + Sync {
@@ -329,7 +329,7 @@ pub trait AudioSource: Any + Send + Sync {
 
     /// Audio pushed but not yet played. `_forward_audio` reads it to account for what a pause
     /// throws away, and `_wait_for_playout` to find where the playhead stopped.
-    #[host(call, getter = "rtc.queued_duration")]
+    #[host(call, getter = "sdk.queued_duration")]
     fn queued_duration(&self) -> Result<std::time::Duration, RtcError>;
 
     /// Resolve when the queue drains -- immediately after a [`clear_queue`](Self::clear_queue).
@@ -356,22 +356,22 @@ pub trait AudioSource: Any + Send + Sync {
     fn playback_info(&self) -> Result<PlaybackInfo, RtcError>;
 
     /// `rtc.AudioSource.aclose()`. Idempotent.
-    #[host(await, name = "rtc.aclose")]
+    #[host(await, name = "sdk.aclose")]
     fn close<'a>(&'a self, cx: &crate::telemetry::Cx)
     -> crate::BoxFuture<'a, Result<(), RtcError>>;
 }
 
-/// Someone else in the room: `room_io.RemoteParticipant`, its `rtc.RemoteParticipant` as `rtc`.
+/// Someone else in the room: `room_io.RemoteParticipant`, its `rtc.RemoteParticipant` as `sdk`.
 #[crate::host(proxy(host = "livekit.agents.voice.room_io.RemoteParticipant", sdk))]
 pub trait RemoteParticipant: Send + Sync {
-    #[host(read_once, getter = "rtc.sid")]
+    #[host(read_once, getter = "sdk.sid")]
     fn sid(&self) -> &str;
 
-    #[host(read_once, getter = "rtc.identity")]
+    #[host(read_once, getter = "sdk.identity")]
     fn identity(&self) -> &ParticipantIdentity;
 
     /// `RoomOptions.participant_kinds` filters auto-linking on this.
-    #[host(read_once, getter = "rtc.kind")]
+    #[host(read_once, getter = "sdk.kind")]
     fn kind(&self) -> ParticipantKind;
 
     /// Whether the participant is active (`ParticipantState.PARTICIPANT_STATE_ACTIVE`): connected
@@ -382,7 +382,7 @@ pub trait RemoteParticipant: Send + Sync {
     /// Read for `ATTRIBUTE_PUBLISH_ON_BEHALF`: a participant publishing on the agent's behalf (an
     /// avatar worker) must not be linked as the user. Returned by value because the host's map is
     /// mutable and a borrow across the FFI would alias it.
-    #[host(call, getter = "rtc.attributes")]
+    #[host(call, getter = "sdk.attributes")]
     fn attributes(&self) -> Result<BTreeMap<String, String>, RtcError>;
 
     #[host(call, name = "_core_track_publications")]
@@ -394,19 +394,19 @@ pub trait RemoteParticipant: Send + Sync {
 /// One trait over `rtc.LocalTrackPublication` and `rtc.RemoteTrackPublication`, as in the SDK
 /// where both derive from `TrackPublication`. The two side-specific methods default to
 /// [`RtcError::Unsupported`] so a shim implements only its own half; see that variant for why this
-/// is one trait and not two. `room_io.TrackPublication`: its SDK publication as `rtc`.
+/// is one trait and not two. `room_io.TrackPublication`: its SDK publication as `sdk`.
 #[crate::host(proxy(host = "livekit.agents.voice.room_io.TrackPublication", sdk))]
 pub trait TrackPublication: Send + Sync {
-    #[host(read_once, getter = "rtc.sid")]
+    #[host(read_once, getter = "sdk.sid")]
     fn sid(&self) -> &TrackSid;
-    #[host(read_once, getter = "rtc.name")]
+    #[host(read_once, getter = "sdk.name")]
     fn name(&self) -> &str;
-    #[host(read_once, getter = "rtc.source")]
+    #[host(read_once, getter = "sdk.source")]
     fn source(&self) -> TrackSource;
 
     /// `rtc.TrackKind`'s number (`TRACK_KIND_AUDIO`, `TRACK_KIND_VIDEO`); a host without it reads
     /// the kind off the source.
-    #[host(read_once, getter = "rtc.kind")]
+    #[host(read_once, getter = "sdk.kind")]
     fn kind(&self) -> i32;
 
     /// Whether the track is subscribed and its media can be read. On a remote publication this is
@@ -416,7 +416,7 @@ pub trait TrackPublication: Send + Sync {
 
     /// `TF_PRECONNECT_BUFFER` here is what gates the pre-connect audio path (`_input.py`); the
     /// rest of the set has no reader today.
-    #[host(read_once, getter = "rtc.audio_features")]
+    #[host(read_once, getter = "sdk.audio_features")]
     fn audio_features(&self) -> Vec<AudioTrackFeature>;
 
     /// Remote only.
@@ -434,7 +434,7 @@ pub trait TrackPublication: Send + Sync {
     ///
     /// `_ParticipantAudioOutput` gates `capture_frame` on this so the first syllable of the
     /// greeting is not published into a room with nobody listening.
-    #[host(await, name = "rtc.wait_for_subscription")]
+    #[host(await, name = "sdk.wait_for_subscription")]
     fn wait_for_subscription<'a>(
         &'a self,
         _cx: &crate::telemetry::Cx,

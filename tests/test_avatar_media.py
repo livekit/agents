@@ -33,12 +33,12 @@ class Generator(VideoGenerator):
 
 
 class Source:
-    """A ``room_io.AudioSource``: its SDK source as ``rtc``, its ledger calls as ``_core_*``."""
+    """A ``room_io.AudioSource``: its SDK source as ``sdk``, its ledger calls as ``_core_*``."""
 
     def __init__(self, events, kind):
         self.events = events
         self.kind = kind
-        self.rtc = SimpleNamespace(queued_duration=0.0, aclose=self.aclose)
+        self.sdk = SimpleNamespace(queued_duration=0.0, aclose=self.aclose)
 
     async def aclose(self):
         self.events.append(("close", self.kind))
@@ -75,12 +75,12 @@ class VideoSource:
 
 
 class Publication:
-    """A ``room_io.TrackPublication``: its SDK publication as ``rtc``."""
+    """A ``room_io.TrackPublication``: its SDK publication as ``sdk``."""
 
     def __init__(self, events, kind, subscribed):
         self.events, self.kind, self.subscribed = events, kind, subscribed
         audio = kind == "audio"
-        self.rtc = SimpleNamespace(
+        self.sdk = SimpleNamespace(
             sid=kind,
             name=f"avatar_{kind}",
             source=rtc.TrackSource.SOURCE_MICROPHONE if audio else rtc.TrackSource.SOURCE_CAMERA,
@@ -125,7 +125,7 @@ async def test_publication_order_rollback_and_sdk_source_reuse(monkeypatch, fail
     monkeypatch.setattr(room_io.LocalParticipant, "_core_publish_audio_source", publish_audio)
     monkeypatch.setattr(room_io.LocalParticipant, "_core_publish_video_source", publish_video)
     local = SimpleNamespace(unpublish_track=unpublish)
-    monkeypatch.setattr(room_io.LocalParticipant, "rtc", property(lambda self: local))
+    monkeypatch.setattr(room_io.LocalParticipant, "sdk", property(lambda self: local))
     audio = QueueAudioOutput(sample_rate=16000)
     generator = Generator()
     runner = AvatarRunner(

@@ -1282,16 +1282,16 @@ A proxy can target an SDK class directly (`proxy(host = "livekit.rtc.ByteStreamW
 `proxy(.., sdk)` reads each `wire_enum` the host returns as its SDK number through the enum's
 `TryFrom<i32>`: an unknown number reads as the enum's `Default` and is dropped from a list. An
 adapter that carries state beside its SDK object (a room's event bus, a source's playout ledger)
-holds that object as `rtc`, and its declarations read through it:
+holds that object as `sdk`, and its declarations read through it:
 
 ```rust
 #[crate::host(proxy(host = "livekit.agents.voice.room_io.Room", sdk))]
 pub trait RtcRoom: Send + Sync {
-    #[host(call, getter = "rtc.connection_state")]
+    #[host(call, getter = "sdk.connection_state")]
     fn connection_state(&self) -> Result<ConnectionState, RtcError>;
     #[host(read_once, getter = "local")]
     fn local(&self) -> &Arc<dyn LocalParticipant>;
-    #[host(call, name = "rtc.unregister_byte_stream_handler")]
+    #[host(call, name = "sdk.unregister_byte_stream_handler")]
     fn unregister_byte_stream_handler(&self, topic: &str) -> Result<(), RtcError>;
 }
 ```

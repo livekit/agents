@@ -7582,7 +7582,7 @@ impl ::lk_agents_abi::voice::rtc::RtcRoom for RtcRoomProxy {
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
-                    host.bind(py).getattr("rtc")?,
+                    host.bind(py).getattr("sdk")?,
                     ::pyo3::types::PyString::new(py, "name").into_any(),
                 ];
                 Ok((
@@ -7620,7 +7620,7 @@ impl ::lk_agents_abi::voice::rtc::RtcRoom for RtcRoomProxy {
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
-                    host.bind(py).getattr("rtc")?,
+                    host.bind(py).getattr("sdk")?,
                     ::pyo3::types::PyString::new(py, "connection_state").into_any(),
                 ];
                 Ok((
@@ -7811,7 +7811,7 @@ impl ::lk_agents_abi::voice::rtc::RtcRoom for RtcRoomProxy {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [::pyo3::IntoPyObjectExt::into_bound_py_any(topic_arg, py)?];
                 Ok((
-                    host.bind(py).getattr("rtc")?.getattr("unregister_byte_stream_handler")?,
+                    host.bind(py).getattr("sdk")?.getattr("unregister_byte_stream_handler")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -7890,7 +7890,7 @@ impl ::lk_agents_abi::voice::rtc::RtcRoom for RtcRoomProxy {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [::pyo3::IntoPyObjectExt::into_bound_py_any(topic_arg, py)?];
                 Ok((
-                    host.bind(py).getattr("rtc")?.getattr("unregister_text_stream_handler")?,
+                    host.bind(py).getattr("sdk")?.getattr("unregister_text_stream_handler")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -8099,7 +8099,7 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
-                    host.bind(py).getattr("rtc")?,
+                    host.bind(py).getattr("sdk")?,
                     ::pyo3::types::PyString::new(py, "identity").into_any(),
                 ];
                 Ok((
@@ -8137,7 +8137,7 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
-                    host.bind(py).getattr("rtc")?,
+                    host.bind(py).getattr("sdk")?,
                     ::pyo3::types::PyString::new(py, "kind").into_any(),
                 ];
                 Ok((
@@ -8168,7 +8168,7 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
-                    host.bind(py).getattr("rtc")?,
+                    host.bind(py).getattr("sdk")?,
                     ::pyo3::types::PyString::new(py, "sid").into_any(),
                 ];
                 Ok((
@@ -8314,7 +8314,7 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
         let sid_arg = ::std::clone::Clone::clone(sid);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
-            "LocalParticipant.rtc.unpublish_track",
+            "LocalParticipant.sdk.unpublish_track",
             &self.context,
             &[],
             cx,
@@ -8322,7 +8322,7 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [crate::py_values::str_to_py(py, &sid_arg)];
                 Ok((
-                    host.bind(py).getattr("rtc")?.getattr("unpublish_track")?,
+                    host.bind(py).getattr("sdk")?.getattr("unpublish_track")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -8356,7 +8356,7 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
         let attrs_arg = attrs;
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
-            "LocalParticipant.rtc.set_attributes",
+            "LocalParticipant.sdk.set_attributes",
             &self.context,
             &[],
             cx,
@@ -8364,7 +8364,7 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [::pyo3::IntoPyObjectExt::into_bound_py_any(attrs_arg, py)?];
                 Ok((
-                    host.bind(py).getattr("rtc")?.getattr("set_attributes")?,
+                    host.bind(py).getattr("sdk")?.getattr("set_attributes")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -8640,7 +8640,7 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [::pyo3::IntoPyObjectExt::into_bound_py_any(method_arg, py)?];
                 Ok((
-                    host.bind(py).getattr("rtc")?.getattr("unregister_rpc_method")?,
+                    host.bind(py).getattr("sdk")?.getattr("unregister_rpc_method")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -8681,14 +8681,14 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
         let digit_arg = digit;
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
-            "LocalParticipant.rtc.publish_dtmf",
+            "LocalParticipant.sdk.publish_dtmf",
             &self.context,
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("rtc")?.getattr("publish_dtmf")?,
+                    host.bind(py).getattr("sdk")?.getattr("publish_dtmf")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     Some({
                         let kwargs = ::pyo3::types::PyDict::new(py);
@@ -9179,7 +9179,7 @@ impl ::lk_agents_abi::voice::rtc::AudioSource for AudioSourceProxy {
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
-                    host.bind(py).getattr("rtc")?,
+                    host.bind(py).getattr("sdk")?,
                     ::pyo3::types::PyString::new(py, "queued_duration").into_any(),
                 ];
                 Ok((
@@ -9199,13 +9199,13 @@ impl ::lk_agents_abi::voice::rtc::AudioSource for AudioSourceProxy {
             let o = out.value.bind(py);
             let out = (crate::py_values::number_from_py::<f64>(
                 o.as_any(),
-                "AudioSource.rtc.queued_duration",
+                "AudioSource.sdk.queued_duration",
             )
             .and_then(|s| {
                 ::std::time::Duration::try_from_secs_f64(s).map_err(|e| {
                     ::pyo3::exceptions::PyValueError::new_err(format!(
                         "{}: {e}",
-                        "AudioSource.rtc.queued_duration"
+                        "AudioSource.sdk.queued_duration"
                     ))
                 })
             }))
@@ -9301,14 +9301,14 @@ impl ::lk_agents_abi::voice::rtc::AudioSource for AudioSourceProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
-            "AudioSource.rtc.aclose",
+            "AudioSource.sdk.aclose",
             &self.context,
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("rtc")?.getattr("aclose")?,
+                    host.bind(py).getattr("sdk")?.getattr("aclose")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -9386,15 +9386,15 @@ impl RemoteParticipantProxy {
             None => crate::py_calls::capture_context(obj.py())?,
         };
         let sid = {
-            let v = obj.getattr("rtc")?.getattr("sid")?;
+            let v = obj.getattr("sdk")?.getattr("sid")?;
             v.extract::<::std::string::String>()?
         };
         let identity = {
-            let v = obj.getattr("rtc")?.getattr("identity")?;
+            let v = obj.getattr("sdk")?.getattr("identity")?;
             crate::py_values::str_from_py(v.as_any())?
         };
         let kind = {
-            let v = obj.getattr("rtc")?.getattr("kind")?;
+            let v = obj.getattr("sdk")?.getattr("kind")?;
             v.extract::<i32>().map(|v| <::lk_agents_abi::voice::room_io::ParticipantKind as ::std::convert::TryFrom<i32>>::try_from(v).unwrap_or_default())?
         };
         Ok(RemoteParticipantProxy {
@@ -9461,7 +9461,7 @@ impl ::lk_agents_abi::voice::rtc::RemoteParticipant for RemoteParticipantProxy {
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
-                    host.bind(py).getattr("rtc")?,
+                    host.bind(py).getattr("sdk")?,
                     ::pyo3::types::PyString::new(py, "attributes").into_any(),
                 ];
                 Ok((
@@ -9610,23 +9610,23 @@ impl TrackPublicationProxy {
             None => crate::py_calls::capture_context(obj.py())?,
         };
         let sid = {
-            let v = obj.getattr("rtc")?.getattr("sid")?;
+            let v = obj.getattr("sdk")?.getattr("sid")?;
             crate::py_values::str_from_py(v.as_any())?
         };
         let name = {
-            let v = obj.getattr("rtc")?.getattr("name")?;
+            let v = obj.getattr("sdk")?.getattr("name")?;
             v.extract::<::std::string::String>()?
         };
         let source = {
-            let v = obj.getattr("rtc")?.getattr("source")?;
+            let v = obj.getattr("sdk")?.getattr("source")?;
             v.extract::<i32>().map(|v| <::lk_agents_abi::voice::room_io::TrackSource as ::std::convert::TryFrom<i32>>::try_from(v).unwrap_or_default())?
         };
         let kind = {
-            let v = obj.getattr("rtc")?.getattr("kind")?;
-            crate::py_values::number_from_py::<i32>(v.as_any(), "TrackPublication.rtc.kind")?
+            let v = obj.getattr("sdk")?.getattr("kind")?;
+            crate::py_values::number_from_py::<i32>(v.as_any(), "TrackPublication.sdk.kind")?
         };
         let audio_features = {
-            let v = obj.getattr("rtc")?.getattr("audio_features")?;
+            let v = obj.getattr("sdk")?.getattr("audio_features")?;
             v.try_iter().and_then(|items| items.map(|item| item?.extract::<i32>()).collect::<::pyo3::PyResult<Vec<i32>>>()).map(|v| v.into_iter().filter_map(|v| <::lk_agents_abi::voice::rtc::AudioTrackFeature as ::std::convert::TryFrom<i32>>::try_from(v).ok()).collect::<Vec<_>>())?
         };
         Ok(TrackPublicationProxy {
@@ -9744,14 +9744,14 @@ impl ::lk_agents_abi::voice::rtc::TrackPublication for TrackPublicationProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
-            "TrackPublication.rtc.wait_for_subscription",
+            "TrackPublication.sdk.wait_for_subscription",
             &self.context,
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("rtc")?.getattr("wait_for_subscription")?,
+                    host.bind(py).getattr("sdk")?.getattr("wait_for_subscription")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))

@@ -1,6 +1,6 @@
 """The room a session runs in: its options (``RoomOptions`` and the per-track input and output
 options), and ``livekit.rtc`` as the core's room traits see it (``RtcRoom`` and its participants,
-publications and sources). Each adapter holds its SDK object as ``rtc``: the core's generated
+publications and sources). Each adapter holds its SDK object as ``sdk``: the core's generated
 proxies read and call the SDK through it, and each ``_core_<method>`` here is an SDK call that
 builds or converts more than a name. Stream writers and video sources are SDK objects the core
 calls directly. SDK enums reach the core's events as the names ``_core.rtc_wire_names()`` lists."""
@@ -73,9 +73,9 @@ def _name(names: list[str], value: int, unknown: str) -> str:
 
 
 class Room:
-    """An ``rtc.Room`` (``rtc``) as the core's ``RtcRoom``: its event bus (``bus``), RPC router
+    """An ``rtc.Room`` (``sdk``) as the core's ``RtcRoom``: its event bus (``bus``), RPC router
     and local participant. Its SDK events are re-emitted into the bus; one per room (``of``), so
-    the handlers are registered once. The core reads the SDK room's attributes through ``rtc``;
+    the handlers are registered once. The core reads the SDK room's attributes through ``sdk``;
     the methods here are the calls that build SDK objects or register SDK handlers."""
 
     @classmethod
@@ -87,7 +87,7 @@ class Room:
         return adapter
 
     def __init__(self, room: rtc.Room) -> None:
-        self.rtc = room
+        self.sdk = room
         self.bus = _core.RoomEventBus()
         self.rpc_router = _core._core_RoomRpcRouter()
         self.local = LocalParticipant(self)
@@ -174,11 +174,11 @@ class Room:
         return rtc.VideoSource(opts.width, opts.height)
 
     def _core_participant(self, identity: str) -> RemoteParticipant | None:
-        participant = self.rtc.remote_participants.get(identity)
+        participant = self.sdk.remote_participants.get(identity)
         return self._remote(participant) if participant is not None else None
 
     def _core_remote_participants(self) -> list[RemoteParticipant]:
-        return [self._remote(p) for p in self.rtc.remote_participants.values()]
+        return [self._remote(p) for p in self.sdk.remote_participants.values()]
 
     def _core_register_byte_stream_handler(
         self, topic: str, streams: _core.ByteStreamSender
@@ -187,7 +187,7 @@ class Room:
             if not streams.open(reader.info, sender, reader):
                 reader.close()
 
-        self.rtc.register_byte_stream_handler(topic, opened)
+        self.sdk.register_byte_stream_handler(topic, opened)
 
     def _core_register_text_stream_handler(
         self, topic: str, streams: _core.TextStreamSender
@@ -196,7 +196,7 @@ class Room:
             if not streams.open(reader.info, sender, reader):
                 reader.close()
 
-        self.rtc.register_text_stream_handler(topic, opened)
+        self.sdk.register_text_stream_handler(topic, opened)
 
 
 class _TextStreamSender(TypedDict, total=False):
@@ -204,7 +204,7 @@ class _TextStreamSender(TypedDict, total=False):
 
 
 class LocalParticipant:
-    """The room's ``rtc.LocalParticipant`` (``rtc``, resolved on each read: it exists once the
+    """The room's ``rtc.LocalParticipant`` (``sdk``, resolved on each read: it exists once the
     room connects) as the core's ``LocalParticipant``. The methods here build SDK tracks,
     transcriptions, streams and RPC handlers."""
 
@@ -212,17 +212,17 @@ class LocalParticipant:
         self._room = room
 
     @property
-    def rtc(self) -> rtc.LocalParticipant:
-        return self._room.rtc.local_participant
+    def sdk(self) -> rtc.LocalParticipant:
+        return self._room.sdk.local_participant
 
     def _core_track_publications(self) -> list[TrackPublication]:
-        return [self._room._publication(p) for p in self.rtc.track_publications.values()]
+        return [self._room._publication(p) for p in self.sdk.track_publications.values()]
 
     async def _core_publish_audio_source(
         self, source: AudioSource, opts: rtc_wire.TrackPublishOptions
     ) -> TrackPublication:
-        track = rtc.LocalAudioTrack.create_audio_track(opts.name, source.rtc)
-        publication = await self.rtc.publish_track(
+        track = rtc.LocalAudioTrack.create_audio_track(opts.name, source.sdk)
+        publication = await self.sdk.publish_track(
             track,
             rtc.TrackPublishOptions(
                 source=cast(rtc.TrackSource.ValueType, _SOURCES.index(opts.source))
@@ -234,7 +234,7 @@ class LocalParticipant:
         self, source: rtc.VideoSource, opts: rtc_wire.VideoTrackOptions
     ) -> TrackPublication:
         track = rtc.LocalVideoTrack.create_video_track(opts.name, source)
-        publication = await self.rtc.publish_track(
+        publication = await self.sdk.publish_track(
             track,
             rtc.TrackPublishOptions(
                 source=cast(rtc.TrackSource.ValueType, _SOURCES.index(opts.source))
@@ -253,7 +253,7 @@ class LocalParticipant:
             options = rtc.TrackPublishOptions(
                 source=cast(rtc.TrackSource.ValueType, _SOURCES.index(opts.source))
             )
-            publication = await self.rtc.publish_track(track, options)
+            publication = await self.sdk.publish_track(track, options)
         except BaseException as error:
             try:
                 await source.aclose()
@@ -263,7 +263,7 @@ class LocalParticipant:
         return AudioSource(source), self._room._publication(publication)
 
     async def _core_publish_transcription(self, transcription: rtc_wire.Transcription) -> None:
-        await self.rtc.publish_transcription(
+        await self.sdk.publish_transcription(
             rtc.Transcription(
                 participant_identity=transcription.participant_identity,
                 track_sid=transcription.track_sid,
@@ -275,10 +275,10 @@ class LocalParticipant:
         sender: _TextStreamSender = {}
         if opts.sender_identity is not None:
             sender["sender_identity"] = opts.sender_identity
-        return await self.rtc.stream_text(topic=opts.topic, attributes=opts.attributes, **sender)
+        return await self.sdk.stream_text(topic=opts.topic, attributes=opts.attributes, **sender)
 
     async def _core_stream_bytes(self, opts: rtc_wire.StreamBytesOptions) -> rtc.ByteStreamWriter:
-        return await self.rtc.stream_bytes(
+        return await self.sdk.stream_bytes(
             name=opts.name,
             topic=opts.topic,
             destination_identities=opts.destination_identities,
@@ -289,79 +289,79 @@ class LocalParticipant:
         self, destination: str, method: str, payload: str
     ) -> tuple[int, str]:
         try:
-            return 0, await self.rtc.perform_rpc(
+            return 0, await self.sdk.perform_rpc(
                 destination_identity=destination, method=method, payload=payload
             )
         except rtc.RpcError as e:
             return e.code, e.message
 
     def _core_register_rpc_method(self, method: str, handler: _core.RpcHandler) -> None:
-        self.rtc.register_rpc_method(
+        self.sdk.register_rpc_method(
             method, lambda data: handler.call(data.caller_identity, data.payload)
         )
 
 
 class AudioSource:
-    """An ``rtc.AudioSource`` (``rtc``), with the ledger of what it played and threw away."""
+    """An ``rtc.AudioSource`` (``sdk``), with the ledger of what it played and threw away."""
 
     def __init__(self, source: rtc.AudioSource) -> None:
-        self.rtc = source
+        self.sdk = source
         self._ledger = _core.PlayoutLedger()
 
     async def _core_capture(self, frame: rtc.AudioFrame) -> None:
-        await self.rtc.capture_frame(frame)
+        await self.sdk.capture_frame(frame)
         self._ledger.add_pushed_samples(frame.samples_per_channel, frame.sample_rate)
 
     def _core_clear_queue(self) -> None:
-        self._ledger.add_discarded(self.rtc.queued_duration)
-        self.rtc.clear_queue()
+        self._ledger.add_discarded(self.sdk.queued_duration)
+        self.sdk.clear_queue()
 
     async def _core_wait_for_playout(self) -> rtc_wire.PlaybackInfo:
-        await self.rtc.wait_for_playout()
+        await self.sdk.wait_for_playout()
         return self._ledger.settle()
 
     def _core_playback_info(self) -> rtc_wire.PlaybackInfo:
-        return self._ledger.snapshot(self.rtc.queued_duration)
+        return self._ledger.snapshot(self.sdk.queued_duration)
 
 
 class RemoteParticipant:
-    """An ``rtc.RemoteParticipant`` (``rtc``) of ``room``, whose publications it hands out."""
+    """An ``rtc.RemoteParticipant`` (``sdk``) of ``room``, whose publications it hands out."""
 
     def __init__(self, room: Room, participant: rtc.RemoteParticipant) -> None:
         self._room = room
-        self.rtc = participant
+        self.sdk = participant
 
     def _core_active(self) -> bool:
-        return self.rtc.state == rtc.ParticipantState.PARTICIPANT_STATE_ACTIVE
+        return self.sdk.state == rtc.ParticipantState.PARTICIPANT_STATE_ACTIVE
 
     def _core_track_publications(self) -> list[TrackPublication]:
-        return [self._room._publication(p) for p in self.rtc.track_publications.values()]
+        return [self._room._publication(p) for p in self.sdk.track_publications.values()]
 
 
 class TrackPublication:
-    """A local or remote ``rtc.TrackPublication`` (``rtc``) of ``room``; each side answers its own
+    """A local or remote ``rtc.TrackPublication`` (``sdk``) of ``room``; each side answers its own
     half. The methods here open its SDK streams and change its subscription."""
 
     def __init__(self, room: Room, publication: rtc.TrackPublication) -> None:
         self._room = room
-        self.rtc = publication
+        self.sdk = publication
 
     def _core_is_subscribed(self) -> bool:
-        return self.rtc.track is not None
+        return self.sdk.track is not None
 
     async def _core_set_subscribed(self, subscribed: bool) -> None:
-        assert isinstance(self.rtc, rtc.RemoteTrackPublication)
-        self.rtc.set_subscribed(subscribed)
+        assert isinstance(self.sdk, rtc.RemoteTrackPublication)
+        self.sdk.set_subscribed(subscribed)
 
     def _core_open_audio_stream(self, opts: rtc_wire.AudioStreamOptions) -> _AudioStream:
-        track = self.rtc.track
+        track = self.sdk.track
         if track is None:
-            raise RuntimeError(f"track {self.rtc.sid} is no longer subscribed")
+            raise RuntimeError(f"track {self.sdk.sid} is no longer subscribed")
         noise_cancellation = opts.noise_cancellation
         owned = False
         if callable(noise_cancellation) and not isinstance(noise_cancellation, rtc.FrameProcessor):
             owned = True
-            participant = self._room.rtc.remote_participants[opts.participant_identity]
+            participant = self._room.sdk.remote_participants[opts.participant_identity]
             noise_cancellation = noise_cancellation(NoiseCancellationParams(participant, track))
         try:
             apm = (
@@ -393,9 +393,9 @@ class TrackPublication:
         return _AudioStream(open_stream, noise_cancellation, apm, owns_processor=owned)
 
     def _core_open_video_stream(self) -> _VideoStream:
-        track = self.rtc.track
+        track = self.sdk.track
         if track is None:
-            raise RuntimeError(f"track {self.rtc.sid} is no longer subscribed")
+            raise RuntimeError(f"track {self.sdk.sid} is no longer subscribed")
         return _VideoStream(
             functools.partial(
                 rtc.VideoStream.from_track, track=track, capacity=_core.video_queue_frames()
