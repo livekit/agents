@@ -183,12 +183,42 @@ async def test_a_warming_avatar_is_asked_again_within_the_start_budget(
 
     # once the next ask would land past the budget, the warming error is raised
     monkeypatch.setattr(atmee_api, "_WARMING_RETRY_BOUNDS", (1.0, 30.0))
-    monkeypatch.setattr(atmee_api, "_START_TOTAL_TIMEOUT", {"initializing": 0.05})
+    monkeypatch.setattr(
+        atmee_api, "_START_TOTAL_TIMEOUT", {g: {"initializing": 0.05} for g in ("v1", "v2")}
+    )
     fake.script("POST", START, 503, {"error": "avatar_warming"}, headers={"Retry-After": "9"})
     with pytest.raises(AtmeeAvatarWarmingError) as exc:
         await _start(api)
     assert (exc.value.code, exc.value.retry_after) == ("avatar_warming", 9.0)
     assert len(fake.calls("POST", START)) == 4
+
+
+@pytest.mark.parametrize(
+    ("avatar", "asks"),
+    [
+        ((200, {"avatarId": AVATAR_ID, "status": "ready", "engine": "v1"}), 1),
+        ((200, {"avatarId": AVATAR_ID, "status": "ready", "engine": "v2hd"}), 3),
+        ((403, {"error": "forbidden"}), 3),  # unreadable: allow for a v2 start
+    ],
+)
+async def test_the_start_budget_follows_the_avatars_engine(
+    fake: FakeAtmee, monkeypatch: pytest.MonkeyPatch, avatar: tuple[int, Any], asks: int
+) -> None:
+    # A v1 start that is not answered in time gives up after the v1 budget,
+    # not the minutes a v2 avatar's first start may need.
+    monkeypatch.setattr(atmee_api, "_WARMING_RETRY_BOUNDS", (0.05, 0.05))
+    budgets = {"v1": {"initializing": 0.01}, "v2": {"initializing": 5.0}}
+    monkeypatch.setattr(atmee_api, "_START_TOTAL_TIMEOUT", budgets)
+    fake.script("GET", f"/v1/avatars/{AVATAR_ID}", *avatar)
+    fake.script("POST", START, 503, {"error": "avatar_warming"}, times=2)
+    fake.script("POST", START, 202, STARTED)
+    api = AtmeeAPI(session=fake.session, conn_options=FAST)
+    if asks == 1:
+        with pytest.raises(AtmeeAvatarWarmingError):
+            await _start(api)
+    else:
+        assert (await _start(api)).session_id == SESSION_ID
+    assert len(fake.calls("POST", START)) == asks
 
 
 @pytest.mark.parametrize(
@@ -375,7 +405,7 @@ async def test_avatar_version_is_accepted_but_ignored(
     assert [r.message for r in caplog.records].count(
         "avatar_version is deprecated and ignored, the avatar's own engine decides how it renders"
     ) == 3
-    assert all("avatarVersion" not in c.json for c in fake.requests)
+    assert all("avatarVersion" not in (c.json or {}) for c in fake.requests)
 
 
 @pytest.mark.parametrize("trigger", ["avatar_left", "agent_session_closed"])
@@ -437,12 +467,13 @@ async def test_close_removes_the_avatar_without_waiting_for_the_end(
     assert avatar._ended
 
 
-@pytest.mark.parametrize("trigger", ["aclose", "agent_session_closed"])
+@pytest.mark.parametrize("trigger", ["aclose", "agent_session_closed", "start_cancelled"])
 async def test_close_during_a_pending_start_ends_the_late_render(
     fake: FakeAtmee, trigger: str
 ) -> None:
     # The start is still waiting (a v2 avatar's slow first start) when the job
-    # shuts down or the agent session closes.
+    # shuts down, the agent session closes, or the caller gives up on start().
+    # The request is never cut off: the render it opens could not be ended.
     fake.script("POST", START, 202, STARTED, delay=0.3)
     fake.script("POST", END, 200, {})
     room, agent_session = FakeRoom(), FakeAgentSession()
@@ -450,15 +481,39 @@ async def test_close_during_a_pending_start_ends_the_late_render(
     starting = asyncio.create_task(avatar.start(agent_session, room))  # type: ignore[arg-type]
     while not fake.calls("POST", START):
         await asyncio.sleep(0.01)
-    if trigger == "aclose":
-        await asyncio.wait_for(avatar.aclose(), timeout=0.2)  # never waits for the start
+    if trigger == "start_cancelled":
+        starting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await starting
+        await asyncio.wait_for(asyncio.gather(*avatar._settle_tasks), timeout=1)
     else:
-        agent_session.emit("close", None)
-    with pytest.raises(AtmeeException) as exc:
-        await starting
-    assert exc.value.code == "closed" and len(fake.calls("POST", END)) == 1  # the late render ended
+        if trigger == "aclose":
+            await asyncio.wait_for(avatar.aclose(), timeout=0.2)  # never waits for the start
+        else:
+            agent_session.emit("close", None)
+        with pytest.raises(AtmeeException) as exc:
+            await starting
+        assert exc.value.code == "closed"
+    assert len(fake.calls("POST", END)) == 1  # the late render ended
     assert agent_session.audio_tails == [] and avatar._api._session is None  # nothing wired up
     assert not any(agent_session._events.values()) and not any(room._events.values())
+
+
+async def test_close_stops_asking_a_warming_avatar_again(fake: FakeAtmee) -> None:
+    # Nothing is reserved between warming answers: a close ends the wait at once
+    # and never sends the request that would open a render.
+    fake.script("POST", START, 503, {"error": "avatar_warming"}, headers={"Retry-After": "30"})
+    fake.script("POST", START, 202, STARTED)
+    avatar = _avatar(http_session=fake.session)
+    starting = asyncio.create_task(avatar.start(FakeAgentSession(), FakeRoom()))  # type: ignore[arg-type]
+    while not fake.calls("POST", START):
+        await asyncio.sleep(0.01)
+    await asyncio.sleep(0.05)  # now waiting out the Retry-After
+    await asyncio.wait_for(avatar.aclose(), timeout=0.2)
+    with pytest.raises(AtmeeException) as exc:
+        await asyncio.wait_for(starting, timeout=1)
+    assert exc.value.code == "closed"
+    assert len(fake.calls("POST", START)) == 1 and fake.calls("POST", END) == []
 
 
 async def test_start_forwards_its_options_and_is_one_shot(fake: FakeAtmee) -> None:

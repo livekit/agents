@@ -38,10 +38,31 @@ await session.start(agent=Agent(...), room=ctx.room)
 ```
 
 `start()` returns once Atmee's rendering worker has acknowledged the session; the avatar's video
-and audio tracks appear in the room a few seconds later. The first v2 session after a quiet period
-can take a few minutes to start, and `start()` waits for it (up to 5 minutes, 7.5 with
-`wait_for="avatar_joined"`). The session ends when your agent leaves the room, when `aclose()` runs
-(registered as a job shutdown callback), or at `max_duration_seconds`.
+and audio tracks appear in the room a few seconds later. It first reads the avatar's generation:
+a v1 start may take up to 1 minute (3 with `wait_for="avatar_joined"`). The first v2 session after
+a quiet period can take a few minutes, so a v2 start may take up to 5 (7.5). The session ends when
+your agent leaves the room, when `aclose()` runs (registered as a job shutdown callback), or at
+`max_duration_seconds`. If `aclose()` runs while `start()` is still waiting, the render that start
+opens is ended and `start()` raises `atmee.AtmeeException` with `code="closed"`.
+
+### Start the agent first
+
+Started before `session.start()`, the avatar carries the agent's voice from the first word, but a
+slow v2 start keeps the user waiting with no agent. To let the agent talk right away and give it a
+face once the avatar is in the room, start the avatar after the session, without awaiting it:
+
+```python
+await session.start(agent=Agent(...), room=ctx.room)  # the agent speaks with its own voice
+
+async def attach_avatar() -> None:
+    avatar = atmee.AvatarSession(avatar_id=avatar_id, wait_for="avatar_joined")
+    try:
+        await avatar.start(session, room=ctx.room)  # the agent's voice moves to the avatar
+    except atmee.AtmeeException:
+        logger.warning("continuing without an avatar", exc_info=True)
+
+attach_task = asyncio.create_task(attach_avatar())  # keep a reference
+```
 
 ## Parameters
 

@@ -48,12 +48,16 @@ DEFAULT_API_URL = "https://api.atmanity.us"
 
 WaitFor = Literal["initializing", "avatar_joined"]
 
-# Overall budget of the start call. A v1 avatar's start is acknowledged within
-# seconds. The first v2 session after a quiet period can take minutes to start:
-# the API asks clients to allow 7 for the avatar to join, and answers
-# `avatar_warming` to be asked again meanwhile. The avatar decides which
-# generation renders, so every start allows for the slower one.
-_START_TOTAL_TIMEOUT: dict[str, float] = {"initializing": 300.0, "avatar_joined": 450.0}
+# Overall budget of the start call, by the avatar's generation. A v1 start is
+# acknowledged within seconds and its avatar joins within a couple of minutes.
+# The first v2 session after a quiet period can take minutes to start: the API
+# asks clients to allow 7 for the avatar to join, and answers `avatar_warming`
+# to be asked again meanwhile. An avatar whose generation could not be read
+# gets the longer budget.
+_START_TOTAL_TIMEOUT: dict[str, dict[str, float]] = {
+    "v1": {"initializing": 60.0, "avatar_joined": 180.0},
+    "v2": {"initializing": 300.0, "avatar_joined": 450.0},
+}
 # How long to wait before asking again after `avatar_warming` (or an
 # interrupted start) when the server gives no Retry-After, and the bounds on
 # what it gives.
@@ -240,6 +244,7 @@ class AtmeeAPI:
         metadata: dict[str, Any] | None = None,
         wait_for: WaitFor = "initializing",
         avatar_version: NotGivenOr[str] = NOT_GIVEN,
+        stop: asyncio.Event | None = None,
     ) -> AvatarSessionInfo:
         """Render ``avatar_id`` into the room ``livekit_token`` grants.
 
@@ -251,11 +256,17 @@ class AtmeeAPI:
         or once the avatar joined with ``wait_for="avatar_joined"``.
 
         Any avatar renders as what it is, v1 or v2; the request names no
-        generation. A v1 start is acknowledged within seconds. The first v2
-        session after a quiet period can take minutes, so the call allows up
-        to 5 minutes (7.5 with ``wait_for="avatar_joined"``), and while the API
-        answers ``avatar_warming`` or ``avatar_start_interrupted`` (nothing
-        billed) it asks again after the ``Retry-After`` given.
+        generation. The call first reads the avatar's generation to know how
+        long the start may take: a v1 start may take up to 1 minute (3 with
+        ``wait_for="avatar_joined"``). The first v2 session after a quiet
+        period can take minutes, so a v2 start may take up to 5 (7.5), and
+        while the API answers ``avatar_warming`` or ``avatar_start_interrupted``
+        (nothing billed) it asks again after the ``Retry-After`` given.
+
+        Once ``stop`` is set, the call asks no more: it raises an
+        ``AtmeeException`` with ``code="closed"`` instead of asking again. A
+        request already sent is still awaited, since it may open a session
+        that must then be ended.
         """
         _check_wait_for(wait_for)
         _warn_avatar_version(avatar_version)
@@ -275,8 +286,11 @@ class AtmeeAPI:
         # was reserved (`avatar_warming`, `avatar_start_interrupted`) are asked
         # again, within the start budget.
         loop = asyncio.get_running_loop()
-        deadline = loop.time() + _START_TOTAL_TIMEOUT[wait_for]
+        budget = await self._start_budget(avatar_id, wait_for)
+        deadline = loop.time() + budget
         while True:
+            if stop is not None and stop.is_set():
+                raise AtmeeException("the avatar session start was stopped", code="closed")
             try:
                 data = await self._request(
                     "POST",
@@ -296,7 +310,14 @@ class AtmeeAPI:
                     "atmee avatar render not started yet; asking again",
                     extra={"code": e.code, "retry_in": pause},
                 )
-                await asyncio.sleep(pause)
+                # nothing is reserved while waiting: a stop ends the wait at once
+                if stop is None:
+                    await asyncio.sleep(pause)
+                else:
+                    try:
+                        await asyncio.wait_for(stop.wait(), timeout=pause)
+                    except asyncio.TimeoutError:
+                        pass
         session_id = data.get("sessionId")
         if not isinstance(session_id, str) or not session_id:
             raise AtmeeException(
@@ -313,6 +334,23 @@ class AtmeeAPI:
             billing_mode=str(data.get("billingMode", "")),
             raw=data,
         )
+
+    async def _start_budget(self, avatar_id: str, wait_for: WaitFor) -> float:
+        """How long a start of ``avatar_id`` may take, from its generation."""
+        try:
+            info = await self._get_avatar(
+                avatar_id, deadline=asyncio.get_running_loop().time() + self._conn_options.timeout
+            )
+        except AtmeeException as e:
+            # A key without read access to the avatar, or a slow read: allow
+            # for the slower generation; the start reports real failures.
+            logger.debug(
+                "could not read the atmee avatar's generation; allowing for a v2 start",
+                extra={"avatar_id": avatar_id, "error": str(e)},
+            )
+            return _START_TOTAL_TIMEOUT["v2"][wait_for]
+        generation = "v2" if info.engine in _V2_ENGINES else "v1"
+        return _START_TOTAL_TIMEOUT[generation][wait_for]
 
     async def end_avatar_session(self, session_id: str) -> dict[str, Any]:
         """Stop billing for a session now. Idempotent: ending an ended session
