@@ -35,8 +35,6 @@ __all__ = [
     "DetectionOptions",
 ]
 
-AMD_PROMPT: str = _core.amd_constants()["prompt"]
-
 
 @function_tool
 async def save_prediction(label: AMDCategory) -> None:
@@ -58,12 +56,6 @@ CLASSIFIER_TOOLS = [save_prediction, postpone_termination]
 
 
 _CONSTANTS = _core.amd_constants()
-
-
-EVALUATED_LLM_MODELS: set[str] = set(_CONSTANTS["evaluated_llm_models"])
-
-
-EVALUATED_STT_MODELS: set[str] = set(_CONSTANTS["evaluated_stt_models"])
 
 
 class AMD(EventEmitter[Literal["amd_prediction"]]):

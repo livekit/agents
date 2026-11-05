@@ -7,22 +7,26 @@ import asyncio
 import contextvars
 from collections import deque
 from collections.abc import AsyncIterable, Callable, Coroutine
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
 
+from google.protobuf.json_format import MessageToDict
 from typing_extensions import TypeVar
 
 from livekit import rtc
 from livekit.agents._generated.recording_options import RecordingOptions as RecordingOptions
 
 from .. import _bindings, _core, inference, llm, stt, tts
-from .._bindings import TurnDetector, tool_specs
+from .._bindings import TurnDetector, realtime_model, tool_specs
 from .._generated.connect import SessionConnectOptions as SessionConnectOptions
 from .._generated.keyterms import STTContextOptions
+from .._generated.remote_session_wire import STATE_OPTION_FIELDS
 from .._generated.session_options import SessionKwargs
 from .._generated.session_owner import ProviderBindings
 from .._generated.session_wire import DEFAULT_HOOK_BOUND, DEFAULT_SILENT_FPS, DEFAULT_SPEAKING_FPS
 from .._generated.vad import VAD
+from .._generated.voice_session import VoiceSessionArgs
 from ..inference.llm import llm_from_model_string
+from ..job import get_job_context
 from ..llm import (
     LLM,
     ChatContext,
@@ -37,6 +41,7 @@ from ..types import (
     TranscriptChunk,
 )
 from ..utils import is_dev_mode, is_given, is_hosted, shortuuid
+from ..version import __version__
 from . import Agent, ModelSettings, _BindingContextVar, _VoiceBinding, io
 from ._session_callbacks import _DynamicInstructions, _SessionNodes
 from .events import (
@@ -44,6 +49,7 @@ from .events import (
     RunContext,
     UserTurnExceededEvent,
 )
+from .room_io import Room as _RtcRoom, RoomOptions
 
 if TYPE_CHECKING:
     from .._core import VoiceAgent as _NativeAgent
@@ -51,33 +57,11 @@ if TYPE_CHECKING:
     from ..storage import Thread
     from .agent_session import VoiceSession
     from .io import EndpointingOptions, TurnDetectionMode
-from typing import TYPE_CHECKING
-
-from .._bindings import realtime_model
-from .._generated.voice_session import VoiceSessionArgs
-from ..job import get_job_context
-from .room_io import Room as _RtcRoom, RoomOptions
-
-if TYPE_CHECKING:
-    from .agent_session import VoiceSession
-from typing import TYPE_CHECKING, ClassVar
-
-from google.protobuf.json_format import MessageToDict
-
-from .._generated.remote_session_wire import STATE_OPTION_FIELDS
-from ..version import __version__
-
-if TYPE_CHECKING:
-    from .agent_session import VoiceSession
 
 
 TextTransforms = Literal["filter_markdown", "filter_emoji"]
 """A transform the core applies to the text it sends to the TTS."""
 
-
-# on_exit and the other callbacks are awaited by the core this long before it moves on;
-# on_user_turn_completed is awaited until it returns
-_HOOK_BOUND = DEFAULT_HOOK_BOUND
 
 # the session's pipeline callbacks (voice-session.md "Customizing the pipeline"): each receives
 # the call's `RunContext`, whose `agent` is the agent holding the call
@@ -142,22 +126,7 @@ def initialize(
     stt_context_options: NotGivenOr[STTContextOptions | None] = NOT_GIVEN,
     **options: Any,
 ) -> None:
-    """A voice session over the Rust core.
-
-    Args:
-        stt, vad, llm, tts: The providers, or a LiveKit Inference model string. ``vad``
-            defaults to ``inference.VAD(model="silero")``; ``vad=None`` opts out.
-        tools: Tools shared by every agent of the session.
-        context, thread: Read by tools through ``RunContext``.
-        video_sampler: How often camera frames reach the model; ``None`` sends every frame.
-        turn_detection, endpointing_opts: The session's turn completion and endpointing
-            policy, as ``update_options`` changes them.
-        options: The session options the core resolves: ``turn_handling``,
-            ``stt_context_options``, ``max_tool_steps``, ``use_tts_aligned_transcript``,
-            ``tts_text_transforms``, ``min_consecutive_speech_delay``, ``expressive``,
-            ``aec_warmup_duration``, ``ivr_detection``, ``user_away_timeout``,
-            ``transcription_timeout``, ``session_close_transcript_timeout``.
-    """
+    """``VoiceSession.__init__``: resolves the providers and options onto ``session``."""
     if unknown := options.keys() - _OPTION_KEYS:
         raise TypeError(f"unexpected VoiceSession options: {sorted(unknown)}")
     listening = dict(options.get("turn_handling") or {})
@@ -514,7 +483,7 @@ class SessionHost:
             video_sampler=(sampler.speaking_fps, sampler.silent_fps) if sampler else None,
             using_default_vad=session._adapter._using_default_vad(),
             turn_detector=session._turn_detector,
-            hook_bound=_HOOK_BOUND,
+            hook_bound=DEFAULT_HOOK_BOUND,
             max_unrecoverable_errors=session._conn_options.max_unrecoverable_errors,
             interruption_detector=session._adapter._interruption_detector(agent, model),
             stt_context=session._stt_context,

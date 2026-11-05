@@ -27,6 +27,8 @@ from .._generated.session_wire import (
     SessionErrorWire,
 )
 from .._generated.vad import VAD
+from .._generated.voice_session import UpdateAgentArgs
+from .._generated.voice_task_errors import VoiceTaskFailed as VoiceTaskFailed
 from ..llm import (
     ChatContext,
     ChatItem,
@@ -37,7 +39,7 @@ from ..types import (
     NOT_GIVEN,
     NotGivenOr,
 )
-from . import Agent, io
+from . import Agent, Output_T, io
 from ._session_bindings import (
     LLMNode as LLMNode,
     RecordingOptions as RecordingOptions,
@@ -84,9 +86,6 @@ if TYPE_CHECKING:
     from ..storage.context import ContextStore
     from .amd import AMD
     from .io import EndpointingOptions, InterruptionOptions, TurnDetectionMode
-from .._generated.voice_session import UpdateAgentArgs
-from .._generated.voice_task_errors import VoiceTaskFailed as VoiceTaskFailed
-from . import Output_T
 
 # The session and the state of the event its callbacks are handling.
 _delivered: contextvars.ContextVar[tuple[VoiceSession[Any], _SessionState]] = (

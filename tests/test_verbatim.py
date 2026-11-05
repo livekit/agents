@@ -9,7 +9,6 @@ import pytest
 
 from livekit.agents import Agent, InputRequired, RunContext, VoiceSession
 from livekit.agents.llm import FunctionToolCall, ToolResult
-from livekit.agents.llm.tool_context import ASK_IN_OWN_WORDS, DELIVERED
 
 from .fake_llm import FakeLLM, FakeLLMResponse
 
@@ -18,6 +17,10 @@ pytestmark = pytest.mark.unit
 QUESTION = "What email address should the confirmation go to?"
 PHRASED = "Sure! Where should I send the confirmation?"
 DISCLAIMER = "Calls are recorded for quality."
+ASKED = (
+    "Ask the person this, in your own words, as your whole reply, and add nothing else: " + QUESTION
+)
+DELIVERED = "delivered to the person as written: " + DISCLAIMER
 
 
 def respond(input: str, content: str = "", *calls: FunctionToolCall) -> FakeLLMResponse:
@@ -30,7 +33,7 @@ def agent_asking(*, verbatim: bool) -> Agent:
         llm=FakeLLM(
             fake_responses=[
                 respond("book me", "", FunctionToolCall(name="book", arguments="{}", call_id="b1")),
-                respond(ASK_IN_OWN_WORDS.format(question=QUESTION), PHRASED),
+                respond(ASKED, PHRASED),
             ]
         ),
     )
@@ -62,7 +65,7 @@ def agent_saying(*, reply_required: bool) -> Agent:
         llm=FakeLLM(
             fake_responses=[
                 respond("hi", "", FunctionToolCall(name="disclose", arguments="{}", call_id="d1")),
-                respond(DELIVERED.format(text=DISCLAIMER), "How can I help?"),
+                respond(DELIVERED, "How can I help?"),
             ]
         ),
     )
@@ -86,7 +89,7 @@ async def test_a_verbatim_result_leads_the_answer_and_the_model_continues() -> N
     assert result.status == "completed" and result.output == f"{DISCLAIMER}\n\nHow can I help?"
     assert result.verbatim == DISCLAIMER
     outputs = [i for i in result.new_messages() if i.type == "function_call_output"]
-    assert outputs[0].output == DELIVERED.format(text=DISCLAIMER)
+    assert outputs[0].output == DELIVERED
 
 
 async def test_a_call_question_keeps_its_verbatim_request() -> None:

@@ -238,18 +238,6 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
         self.emit("metrics_collected", metrics)
 
 
-RPC_CLEAR_BUFFER = "lk.clear_buffer"
-
-
-RPC_PLAYBACK_FINISHED = "lk.playback_finished"
-
-
-RPC_PLAYBACK_STARTED = "lk.playback_started"
-
-
-AUDIO_STREAM_TOPIC = "lk.audio_stream"
-
-
 # The agent's side: the session's audio sink, streaming to the avatar and paced by its reports.
 class DataStreamAudioOutput(_core.DataStreamAudioOutput):
     """Audio sink sending speech to a remote avatar worker."""

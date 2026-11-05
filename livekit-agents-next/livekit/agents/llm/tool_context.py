@@ -208,26 +208,6 @@ CONFIRM_DUPLICATE_PARAM = "lk_agents_confirm_duplicate"
 """Schema parameter added when ``@function_tool(on_duplicate='confirm')``."""
 
 
-ASK_IN_OWN_WORDS = (
-    "Ask the person this, in your own words, as your whole reply, and add nothing else: {question}"
-)
-
-
-"""How the agent facing the person is told to ask a question that is not verbatim."""
-
-
-DELIVERED = "delivered to the person as written: {text}"
-
-
-"""What the model reads as the output of a verbatim result it did not write."""
-
-
-WAITING_PREFIX = "waiting for the person's answer to: "
-
-
-"""How a call's output reads while it waits on the person; the answer replaces it."""
-
-
 _InfoT = TypeVar("_InfoT", FunctionToolInfo, RawFunctionToolInfo)
 
 

@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import functools
+import json
 import os
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Protocol, cast
+from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeAlias, Union, cast
+
+from livekit.agents._generated.simulation import SimulationVerdict as SimulationVerdict
+from livekit.protocol import agent_simulation as proto
 
 from . import _bindings, _core
 from ._generated.evals import (
@@ -23,13 +27,6 @@ if TYPE_CHECKING:
 
     from .inference import LLMModels
     from .inference.llm import ChatCompletionOptions
-import json
-from typing import TYPE_CHECKING, Any, Literal, TypeAlias, Union
-
-from livekit.agents._generated.simulation import SimulationVerdict as SimulationVerdict
-from livekit.protocol import agent_simulation as proto
-
-if TYPE_CHECKING:
     from .job import JobContext
 
 

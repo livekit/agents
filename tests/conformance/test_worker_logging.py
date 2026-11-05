@@ -14,7 +14,7 @@ import pytest
 from livekit.agents import JobContext, _core
 from livekit.agents._generated.worker_server import AcceptArguments, JobInfo, RunningJobInfo
 from livekit.agents.ipc import JobRunnerOptions
-from livekit.agents.ipc.child import _JobProc
+from livekit.agents.ipc.child import JobArgs, _JobProc
 from livekit.agents.job import JobExecutorType
 from livekit.protocol import agent, models
 
@@ -59,7 +59,15 @@ async def _run_job() -> None:
     async def entrypoint(ctx: JobContext) -> None:
         ctx.shutdown("done ✓")
 
-    runner = _JobProc(entrypoint, None, session_end_timeout=1, executor_type=JobExecutorType.THREAD)
+    runner = _JobProc(
+        JobArgs(
+            job_entrypoint_fnc=entrypoint,
+            session_end_fnc=None,
+            simulation_end_fnc=None,
+            session_end_timeout=1,
+        ),
+        JobExecutorType.THREAD,
+    )
     parent = Parent()
     supervisor = _core.JobSupervisor(
         parent,

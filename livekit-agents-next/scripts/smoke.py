@@ -601,7 +601,7 @@ async def job() -> None:
     shutdown it asks for runs the shutdown callback and tells the parent."""
     from livekit.agents._generated.worker_server import AcceptArguments, JobInfo, RunningJobInfo
     from livekit.agents.ipc import JobRunnerOptions, JobStatus
-    from livekit.agents.ipc.child import _JobProc
+    from livekit.agents.ipc.child import JobArgs, _JobProc
     from livekit.agents.job import JobContext, JobExecutorType
     from livekit.protocol import agent as agent_proto, models
 
@@ -630,10 +630,13 @@ async def job() -> None:
         ctx.shutdown("done")
 
     runner = _JobProc(
-        entrypoint,
-        None,
-        session_end_timeout=5.0,
-        executor_type=JobExecutorType.THREAD,
+        JobArgs(
+            job_entrypoint_fnc=entrypoint,
+            session_end_fnc=None,
+            simulation_end_fnc=None,
+            session_end_timeout=5.0,
+        ),
+        JobExecutorType.THREAD,
     )
 
     class Parent:

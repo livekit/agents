@@ -7,13 +7,14 @@ import functools
 import json
 import os
 import socket
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
 from .. import _core
 from .._generated.storage_class import (
+    ItemRow,
     LocalStorageOptions,
     TaskRecord,
     TaskState,
@@ -30,6 +31,7 @@ from .._generated.storage_errors import (
     VersionConflict as VersionConflict,
 )
 from .._generated.thread_reads import ThreadReads
+from .._proto import payload_to_item
 from ..llm import ChatContext
 from ..log import logger
 from .context import (
@@ -44,10 +46,6 @@ from .context import (
 
 if TYPE_CHECKING:
     from ..job import JobContext
-from collections.abc import Iterable
-
-from .._generated.storage_class import ItemRow
-from .._proto import payload_to_item
 
 
 class Storage:

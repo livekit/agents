@@ -4,25 +4,45 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import time
 import weakref
-from collections.abc import AsyncIterable, AsyncIterator, Callable
-from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar, cast
+from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterable, Sequence
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, Literal, Never, Protocol, TypeVar, cast
 
 from pydantic import BaseModel
 
 from livekit import rtc
 
 from . import _core
+from ._generated.api_errors import (
+    APIConnectionError as APIConnectionError,
+    APIError as APIError,
+    APIStatusError as APIStatusError,
+    APITimeoutError as APITimeoutError,
+    AssignmentTimeoutError as AssignmentTimeoutError,
+    CLIError as CLIError,
+    RedactedCause as RedactedCause,
+    StreamStateError as StreamStateError,
+    UnexpectedModelBehavior as UnexpectedModelBehavior,
+)
 from .log import logger
 
 if TYPE_CHECKING:
     from pydantic import SerializerFunctionWrapHandler
 
+    from . import llm
+    from ._generated import duplex, realtime_wire, rtc_wire
     from ._generated.a2a_auth import AgentThreadGrant
-    from ._generated.chat_items import ChatMessage, FunctionCall, FunctionCallOutput
+    from ._generated.chat_items import (
+        ChatMessage,
+        FunctionCall,
+        FunctionCallOutput,
+        MetricsMetadata,
+    )
     from ._generated.evals import EvaluationResult, EvaluationScore, JudgmentResult
     from ._generated.llm import ChatChunk
+    from ._generated.llm_fallback import AvailabilityChanged
     from ._generated.overlap import OverlappingSpeechEvent
     from ._generated.room_api import (
         AudioInputOptions,
@@ -35,37 +55,17 @@ if TYPE_CHECKING:
     from ._generated.session_events import ErrorEvent, FunctionToolsExecutedEvent
     from ._generated.storage_class import ThreadInfo
     from ._generated.stt import STT, SpeechData, SpeechEvent
-    from ._generated.usage import TokenUsage
-    from .types import APIConnectOptions, NotGivenOr
-    from .voice.agent_session import VoiceSession
-    from .voice.room_io import TextInputEvent
-import dataclasses
-from collections.abc import Iterable, Sequence
-from typing import TYPE_CHECKING, ClassVar, Generic, Never
-
-if TYPE_CHECKING:
-    from . import llm
-    from ._generated import duplex, realtime_wire, rtc_wire
-    from ._generated.chat_items import MetricsMetadata
-    from ._generated.llm_fallback import AvailabilityChanged
     from ._generated.tool_options import ProviderToolDeclaration, ToolSpec
     from ._generated.turn_events import EotPrediction
     from ._generated.types import ProviderId
+    from ._generated.usage import TokenUsage
     from .llm.chat_context import ChatItem
     from .llm.tool_context import Tool, Toolset
+    from .types import APIConnectOptions, NotGivenOr
     from .voice import io
+    from .voice.agent_session import VoiceSession
     from .voice.io import _StreamingTurnDetector
-from ._generated.api_errors import (
-    APIConnectionError as APIConnectionError,
-    APIError as APIError,
-    APIStatusError as APIStatusError,
-    APITimeoutError as APITimeoutError,
-    AssignmentTimeoutError as AssignmentTimeoutError,
-    CLIError as CLIError,
-    RedactedCause as RedactedCause,
-    StreamStateError as StreamStateError,
-    UnexpectedModelBehavior as UnexpectedModelBehavior,
-)
+    from .voice.room_io import TextInputEvent
 
 _T = TypeVar("_T")
 _FunctionToolsEventT = TypeVar("_FunctionToolsEventT", bound="FunctionToolsExecutedEvent")

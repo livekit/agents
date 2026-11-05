@@ -6,8 +6,10 @@ import contextvars
 import functools
 import inspect
 import weakref
-from collections.abc import Callable, Generator
+from collections.abc import AsyncIterator, Awaitable, Callable, Generator
 from contextlib import contextmanager
+from dataclasses import dataclass
+from types import TracebackType
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -20,6 +22,7 @@ from typing import (
     overload,
 )
 
+from pydantic import JsonValue as JsonValue
 from typing_extensions import TypeAliasType, TypedDict, TypeVar as TypeVarDefault, Unpack
 
 from livekit.agents._generated.run_events import (
@@ -29,12 +32,20 @@ from livekit.agents._generated.run_events import (
 )
 
 from .. import _core, llm
+from .._generated import agent_run as records, text_session as session_records
 from .._generated.agent_run import (
     EventExpectation,
     EventExpectationFunctionCall,
     EventExpectationFunctionCallOutput,
     EventExpectationMessage,
     RunInputRequirement,
+)
+from .._generated.run_stream_events import (
+    ProgressEvent,
+    TextDeltaEvent,
+    TextEndEvent,
+    ToolCallEvent,
+    ToolResultEvent,
 )
 from .._generated.storage_turn import PendingCall
 from .._generated.usage import Usage
@@ -45,20 +56,6 @@ if TYPE_CHECKING:
     from .._generated.session_wire import RunQuestion
     from . import Agent
     from .agent_session import VoiceSession
-from collections.abc import AsyncIterator, Awaitable
-from dataclasses import dataclass
-from types import TracebackType
-
-from pydantic import JsonValue as JsonValue
-
-from .._generated import agent_run as records, text_session as session_records
-from .._generated.run_stream_events import (
-    ProgressEvent,
-    TextDeltaEvent,
-    TextEndEvent,
-    ToolCallEvent,
-    ToolResultEvent,
-)
 
 Output_T = TypeVarDefault("Output_T", default=Any)
 

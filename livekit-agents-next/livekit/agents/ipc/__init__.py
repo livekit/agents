@@ -78,7 +78,7 @@ class JobLauncher:
             session_end_fnc=session_end_fnc,
             simulation_end_fnc=simulation_end_fnc,
             session_end_timeout=session_end_timeout,
-            preload_modules=preload_module_names(preload_modules),
+            preload_modules=tuple(preload_modules),
             user_arguments=user_arguments,
             env=tuple(env),
         )
@@ -182,7 +182,7 @@ class ProcPool(
             "session_end_fnc": session_end_fnc,
             "simulation_end_fnc": simulation_end_fnc,
             "session_end_timeout": session_end_timeout,
-            "preload_modules": preload_module_names(preload_modules),
+            "preload_modules": tuple(preload_modules),
             "env": env,
             "mp_ctx": mp_ctx,
             "loop": loop,

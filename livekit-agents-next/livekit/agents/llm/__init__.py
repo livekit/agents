@@ -156,15 +156,6 @@ __all__ = [
     "RemoteItemAddedEvent",
 ]
 
-# Cleanup docs of unexported modules
-_module = dir()
-NOT_IN_ALL = [m for m in _module if m not in __all__]
-
-__pdoc__ = {}
-
-for n in NOT_IN_ALL:
-    __pdoc__[n] = False
-
 
 class FallbackAdapter(_bindings.FallbackMembers[LLM], LLM[Literal["llm_availability_changed"]]):
     """Several LLMs behind one: a failed one is skipped until it recovers. The chain is the

@@ -3,48 +3,20 @@ and the translation of native events into Python SDK events."""
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import contextvars
 import inspect
+import logging
 import time
 from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from livekit import rtc
 
 from .. import _core, llm, stt, tts
 from .._bindings import chat_request, tool_specs
 from .._generated.agent_run import FunctionToolInfo
-from .._generated.voice_session import VoiceCommandOrigin, VoiceCommandOriginHook
-from ..llm import (
-    ChatContext,
-    StopResponse,
-)
-from ..llm.tool_context import tools_for_run
-from ..log import logger
-from ..types import (
-    NOT_GIVEN,
-    USERDATA_TIMED_TRANSCRIPT,
-    USERDATA_TTS_STARTED_TIME,
-    FlushSentinel,
-    TranscriptChunk,
-)
-from ..utils import is_given
-from . import Agent, ModelSettings, _BindingContextVar, _VoiceBinding
-from .agent_run import tool_infos
-from .events import (
-    FunctionToolsExecutedEvent,
-    RunContext,
-    UserTurnExceededEvent,
-)
-from .io import SpeechHandle
-
-if TYPE_CHECKING:
-    from .agent_session import UserTurnExceededHook, VoiceSession
-import asyncio
-import logging
-from typing import TYPE_CHECKING, Literal, cast
-
 from .._generated.amd import AMDPredictionEvent
 from .._generated.session_dispatch import IGNORED_EVENTS, PUBLIC_EVENTS
 from .._generated.session_wire import (
@@ -63,8 +35,24 @@ from .._generated.session_wire import (
     ToolCallStartedWire,
     ToolExecutionUpdatedWire,
 )
+from .._generated.voice_session import VoiceCommandOrigin, VoiceCommandOriginHook
 from ..job import get_job_context
-from .agent_run import run_error
+from ..llm import (
+    ChatContext,
+    StopResponse,
+)
+from ..llm.tool_context import tools_for_run
+from ..log import logger
+from ..types import (
+    NOT_GIVEN,
+    USERDATA_TIMED_TRANSCRIPT,
+    USERDATA_TTS_STARTED_TIME,
+    FlushSentinel,
+    TranscriptChunk,
+)
+from ..utils import is_given
+from . import Agent, ModelSettings, _BindingContextVar, _VoiceBinding
+from .agent_run import run_error, tool_infos
 from .events import (
     AgentEvent,
     CloseEvent,
@@ -72,17 +60,21 @@ from .events import (
     ConversationItemAddedEvent,
     ErrorEvent,
     EventTypes,
+    FunctionToolsExecutedEvent,
+    RunContext,
     SpeechCreatedEvent,
     ToolCallStarted,
     ToolExecutionUpdatedEvent,
     ToolUpdate,
+    UserTurnExceededEvent,
     event_dict,
 )
+from .io import SpeechHandle
 from .room_io import AudioProcessingError, TextInputEvent
 from .run_result import _VoiceRun
 
 if TYPE_CHECKING:
-    from .agent_session import VoiceSession
+    from .agent_session import UserTurnExceededHook, VoiceSession
 
 
 _NodeCallsVar: contextvars.ContextVar[Any] = contextvars.ContextVar("lk_node_calls")

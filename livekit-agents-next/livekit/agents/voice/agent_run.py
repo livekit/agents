@@ -5,17 +5,37 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
-from collections.abc import Awaitable, Callable, Sequence
+import copy
+import dataclasses
+import inspect
+import uuid
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Generic
+from typing import TYPE_CHECKING, Any, Generic, get_type_hints
+
+from pydantic import TypeAdapter, ValidationError
+from pydantic_core import PydanticSerializationError, to_jsonable_python
 
 from .. import _core, llm, telemetry, utils
 from .._bindings import UnexpectedModelBehavior
 from .._generated.agent_run import (
+    ArgumentIdentity,
+    ArgumentIdentityFingerprint,
+    ArgumentIdentityJson,
     FunctionToolInfo,
+    Invocation,
+    OutputCandidate,
+    OutputCandidateText,
+    OutputSpec,
+    OutputSpecStructured,
+    OutputSpecText,
     OutputText,
     OutputValidated,
+    PreparedArguments,
     ReadBack,
+    ReadBackAnswer,
+    ReadBackAnswerInputRequired,
+    ReadBackAnswerQuestion,
     RunError,
     RunErrorCancelled,
     RunErrorHost,
@@ -28,52 +48,6 @@ from .._generated.agent_run import (
     RunOutcomeNoOutput,
     RunRequest,
     RunSettled,
-)
-from .._generated.text_session import FrameId
-from .._generated.usage import Usage
-from ..llm import ChatContext, ChatItem, ChatMessage, FunctionTool, RawFunctionTool, ToolContext
-from ..llm.chat_context import _ReadOnlyChatContext
-from ..llm.tool_context import Toolset, tools_for_run
-from ..types import APIConnectOptions
-from . import _BindingContextVar
-from .events import Context_T, RunContext
-from .run_result import (
-    Output_T,
-    RunCompleted,
-    RunInputRequired,
-    RunNoOutput,
-    RunResult,
-    _SettledArgs,
-)
-
-if TYPE_CHECKING:
-    from ..storage import Thread
-    from ..storage.context import ContextStore
-    from ..text_session import _FrameContexts
-    from . import Agent, AgentRetries
-import copy
-import dataclasses
-import inspect
-import uuid
-from typing import TYPE_CHECKING, get_type_hints
-
-from pydantic import TypeAdapter, ValidationError
-from pydantic_core import PydanticSerializationError, to_jsonable_python
-
-from .._generated.agent_run import (
-    ArgumentIdentity,
-    ArgumentIdentityFingerprint,
-    ArgumentIdentityJson,
-    Invocation,
-    OutputCandidate,
-    OutputCandidateText,
-    OutputSpec,
-    OutputSpecStructured,
-    OutputSpecText,
-    PreparedArguments,
-    ReadBackAnswer,
-    ReadBackAnswerInputRequired,
-    ReadBackAnswerQuestion,
     SerializedOutput,
     ToolTemplate,
     ToolTemplateDuplicateConfirm,
@@ -85,6 +59,7 @@ from .._generated.agent_run import (
     ValidatedOutputFailed,
     ValidatedOutputRetry,
 )
+from .._generated.text_session import FrameId
 from .._generated.tool_report import (
     ToolOutcomeCancelled,
     ToolOutcomeInternal,
@@ -93,8 +68,18 @@ from .._generated.tool_report import (
     ToolOutcomeToolError,
     ToolReport,
 )
+from .._generated.usage import Usage
 from .._generated.voice_session import VoiceCommandOriginTool
-from ..llm import FunctionCall
+from ..llm import (
+    ChatContext,
+    ChatItem,
+    ChatMessage,
+    FunctionCall,
+    FunctionTool,
+    RawFunctionTool,
+    ToolContext,
+)
+from ..llm.chat_context import _ReadOnlyChatContext
 from ..llm.tool_context import (
     CONFIRM_DUPLICATE_PARAM,
     Completed,
@@ -103,6 +88,8 @@ from ..llm.tool_context import (
     ModelRetry,
     Tool,
     ToolError,
+    Toolset,
+    tools_for_run,
 )
 from ..llm.utils import (
     bind_function_arguments,
@@ -112,18 +99,27 @@ from ..llm.utils import (
     validated_arguments,
 )
 from ..log import logger
-from . import _VoiceBinding
+from ..types import APIConnectOptions
+from . import _BindingContextVar, _VoiceBinding
+from .events import Context_T, RunContext
 from .io import SpeechHandle
-from .run_result import _tool_body
-
-if TYPE_CHECKING:
-    from . import Agent
-    from .agent_session import VoiceSession
-from collections.abc import Mapping
-from typing import TYPE_CHECKING
+from .run_result import (
+    Output_T,
+    RunCompleted,
+    RunInputRequired,
+    RunNoOutput,
+    RunResult,
+    _SettledArgs,
+    _tool_body,
+)
 
 if TYPE_CHECKING:
     from ..llm.tool_context import Tool, ToolHandlingOptions, Toolset
+    from ..storage import Thread
+    from ..storage.context import ContextStore
+    from ..text_session import _FrameContexts
+    from . import Agent, AgentRetries
+    from .agent_session import VoiceSession
 
 
 @dataclass

@@ -3,37 +3,27 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import weakref
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
-from typing import TYPE_CHECKING, Any, Generic, Literal, Never
+from collections.abc import AsyncIterator, Awaitable, Callable, Generator, Sequence
+from typing import TYPE_CHECKING, Any, Generic, Literal, Never, Protocol, runtime_checkable
 
 from typing_extensions import TypeVar
 
 from livekit import rtc
-from livekit.agents._generated.playback_events import (
+
+from .. import _core, llm
+from .._generated import speech_defaults
+from .._generated.io_events import PlaybackSegment as PlaybackSegment
+from .._generated.language import LanguageCode
+from .._generated.playback_events import (
     PlaybackFinishedEvent as PlaybackFinishedEvent,
     PlaybackProgressedEvent as PlaybackProgressedEvent,
     PlaybackStartedEvent as PlaybackStartedEvent,
 )
-
-from .. import _core, llm, stt
-from .._generated.io_events import PlaybackSegment as PlaybackSegment
 from .._generated.rtc_wire import AudioOutputCapabilities as AudioOutputCapabilities
-from ..types import FlushSentinel, TranscriptChunk as TranscriptChunk
-
-if TYPE_CHECKING:
-    from . import ModelSettings
-    from .agent_session import VoiceSession
-import asyncio
-import contextlib
-import weakref
-from collections.abc import Generator, Sequence
-from typing import Protocol, runtime_checkable
-
-from livekit.agents._generated.turn_events import TurnDetectionEvent as TurnDetectionEvent
-
-from .._generated import speech_defaults
-from .._generated.language import LanguageCode
 from .._generated.turn import (
     EndpointingOptions,
     InterruptionOptions,
@@ -41,27 +31,16 @@ from .._generated.turn import (
     TurnHandlingOptions,
     UserTurnLimitOptions,
 )
+from .._generated.turn_events import TurnDetectionEvent as TurnDetectionEvent
 from ..log import logger
-from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
+from ..types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    APIConnectOptions,
+    TranscriptChunk as TranscriptChunk,
+)
 
-STTNode = Callable[
-    [AsyncIterable[rtc.AudioFrame], "ModelSettings"],
-    AsyncIterable[stt.SpeechEvent | str]
-    | None
-    | Awaitable[AsyncIterable[stt.SpeechEvent | str] | None],
-]
-LLMNode = Callable[
-    [llm.ChatContext, list[llm.Tool], "ModelSettings"],
-    AsyncIterable[llm.ChatChunk | str | FlushSentinel]
-    | str
-    | llm.ChatChunk
-    | None
-    | Awaitable[AsyncIterable[llm.ChatChunk | str | FlushSentinel] | str | llm.ChatChunk | None],
-]
-TTSNode = Callable[
-    [AsyncIterable[str], "ModelSettings"],
-    AsyncIterable[rtc.AudioFrame] | None | Awaitable[AsyncIterable[rtc.AudioFrame] | None],
-]
+if TYPE_CHECKING:
+    from .agent_session import VoiceSession
 
 
 class AudioInput:

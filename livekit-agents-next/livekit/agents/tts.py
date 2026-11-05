@@ -111,10 +111,6 @@ def split_expr_markup(text: str) -> tuple[str, list[ExpressiveTag]]:
     return _core.split_expr_markup(text)
 
 
-def strip_expr_markup(text: str) -> str:
-    return split_expr_markup(text)[0]
-
-
 def _into(output_emitter: AudioEmitter, *, stream: bool) -> Any:
     """What forwards a core synthesis's audio into ``output_emitter``, one segment if streamed."""
     started = not stream

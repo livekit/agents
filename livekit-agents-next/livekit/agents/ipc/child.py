@@ -22,7 +22,7 @@ import os
 import socket
 import sys
 import threading
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, TypeVar, cast
 
@@ -68,16 +68,7 @@ def job_main(args: JobArgs) -> None:
     # a process forked from the forkserver inherits its core: this one is a job process
     _core.init(_core.Role.Job)
     os.environ.update(args.env)
-    job_proc = _JobProc(
-        args.job_entrypoint_fnc,
-        args.session_end_fnc,
-        session_end_timeout=args.session_end_timeout,
-        executor_type=JobExecutorType.PROCESS,
-        user_arguments=args.user_arguments,
-        simulation_end_fnc=args.simulation_end_fnc,
-        preload_modules=args.preload_modules,
-        server_env=args.env,
-    )
+    job_proc = _JobProc(args, JobExecutorType.PROCESS)
     log_to_stdout(args.log_config, args.logger_levels, job_proc.log_fields)
     serve_parent(cast("socket.socket | PipeEnd", args.mp_cch), job_proc)
 
@@ -117,26 +108,10 @@ class _JobProc:
     shutdown in order and within its bounds (``_core.JobRun``); the ``_core_*`` methods are the
     steps it runs, each in the span it opened."""
 
-    def __init__(
-        self,
-        job_entrypoint_fnc: Callable[[JobContext], Any],
-        session_end_fnc: Callable[[JobContext], Awaitable[None]] | None,
-        *,
-        session_end_timeout: float,
-        executor_type: JobExecutorType,
-        user_arguments: Any | None = None,
-        simulation_end_fnc: Callable[[Any], Any] | None = None,
-        preload_modules: Sequence[str] = (),
-        server_env: Sequence[tuple[str, str]] = (),
-    ) -> None:
+    def __init__(self, args: JobArgs, executor_type: JobExecutorType) -> None:
+        self._args = args
         self._executor_type = executor_type
-        self._server_env = dict(server_env)
-        self._user_arguments = user_arguments
-        self._job_entrypoint_fnc = job_entrypoint_fnc
-        self._session_end_fnc = session_end_fnc
-        self._simulation_end_fnc = simulation_end_fnc
-        self._preload_modules = tuple(preload_modules)
-        self._session_end_timeout = session_end_timeout
+        self._server_env = dict(args.env)
         self._job_task: asyncio.Task[None] | None = None
         # stamped on the process's log lines
         self.log_fields: dict[str, Any] = {"pid": os.getpid()}
@@ -147,13 +122,13 @@ class _JobProc:
     def initialize(self, http_proxy: str | None) -> None:
         self._job_proc = JobProcess(
             executor_type=self._executor_type,
-            user_arguments=self._user_arguments,
+            user_arguments=self._args.user_arguments,
             http_proxy=http_proxy,
         )
         # the framework's warm-up; a no-op under a forkserver, which imported it already
         from . import _preload, load_preload_modules
 
-        load_preload_modules(self._preload_modules)
+        load_preload_modules(self._args.preload_modules)
         # after the preloads: an application installing its own tracer provider keeps it
         telemetry._install()
         _preload._step("the livekit-rtc runtime", _preload._rtc_runtime)
@@ -203,10 +178,12 @@ class _JobProc:
 
         self._run = _core.JobRun(
             fake_job=info.fake_job,
-            session_end_timeout=self._session_end_timeout,
+            session_end_timeout=self._args.session_end_timeout,
             redaction=info.job.enable_redaction,
             url=info.url,
-            session_end=callable_name(self._session_end_fnc) if self._session_end_fnc else None,
+            session_end=callable_name(self._args.session_end_fnc)
+            if self._args.session_end_fnc
+            else None,
             observability_url=os.environ.get("LIVEKIT_OBSERVABILITY_URL"),
             api_key=self._server_env.get("LIVEKIT_API_KEY") or "",
             api_secret=self._server_env.get("LIVEKIT_API_SECRET") or "",
@@ -220,7 +197,7 @@ class _JobProc:
             server_env=self._server_env,
         )
         # Reachable from the remote session port (via get_job_context) when a simulation finalizes.
-        self._job_ctx._simulation_end_fnc = self._simulation_end_fnc
+        self._job_ctx._simulation_end_fnc = self._args.simulation_end_fnc
 
         return self._run
 
@@ -262,7 +239,7 @@ class _JobProc:
     async def _core_start_entrypoint(self) -> asyncio.Task[None]:
         # the job's stalls, under its entrypoint's span (current here)
         self._loop_monitor.start(self._job_ctx.job.id)
-        return self._in_job(self._job_entrypoint_fnc(self._job_ctx), "job_user_entrypoint")
+        return self._in_job(self._args.job_entrypoint_fnc(self._job_ctx), "job_user_entrypoint")
 
     async def _core_wait(self, task: asyncio.Task[None]) -> None:
         await asyncio.shield(task)
@@ -282,8 +259,8 @@ class _JobProc:
             await self._in_job(self._job_ctx._snapshot_session(), "job_snapshot_session")
 
     async def _core_session_end(self) -> None:
-        assert self._session_end_fnc is not None
-        await self._in_job(self._session_end_fnc(self._job_ctx), "job_session_end")
+        assert self._args.session_end_fnc is not None
+        await self._in_job(self._args.session_end_fnc(self._job_ctx), "job_session_end")
 
     async def _core_session_report(self) -> SessionReport | None:
         ctx = self._job_ctx
@@ -308,17 +285,9 @@ async def _awaited(callback: Callable[..., Awaitable[None]], args: tuple[str, ..
 
 def thread_main(args: JobArgs) -> None:
     """A job thread's main: the job runs on a loop of the thread's own, logging as the worker."""
-    job_proc = _JobProc(
-        args.job_entrypoint_fnc,
-        args.session_end_fnc,
-        session_end_timeout=args.session_end_timeout,
-        executor_type=JobExecutorType.THREAD,
-        user_arguments=args.user_arguments,
-        simulation_end_fnc=args.simulation_end_fnc,
-        preload_modules=args.preload_modules,
-        server_env=args.env,
+    serve_parent(
+        cast("socket.socket | PipeEnd", args.mp_cch), _JobProc(args, JobExecutorType.THREAD)
     )
-    serve_parent(cast("socket.socket | PipeEnd", args.mp_cch), job_proc)
 
 
 def log_to_stdout(config: str | None, levels: dict[str, int], fields: dict[str, Any]) -> None:

@@ -19,8 +19,6 @@ from typing import TYPE_CHECKING, Literal, TypeAlias, overload
 
 from pydantic import TypeAdapter
 
-from livekit.protocol.agent_pb import agent_session as agent_pb
-
 from .. import _core
 from .._generated.chat_items import (
     AgentConfigUpdate,
@@ -41,7 +39,6 @@ from .._generated.provider_data import (
     GoogleFormatData,
     MistralFormatData,
 )
-from .._proto import encode_chat_item
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
@@ -363,9 +360,6 @@ class ChatContext:
         items = item_adapter.validate_python(data["items"])
         return cls(items)
 
-    def to_proto(self) -> agent_pb.ChatContext:
-        return agent_pb.ChatContext(items=[encode_chat_item(item) for item in self.items])
-
     @property
     def readonly(self) -> bool:
         return False
@@ -430,9 +424,3 @@ class _ReadOnlyChatContext(ChatContext):
     @property
     def readonly(self) -> bool:
         return True
-
-
-def to_xml(
-    tag_name: str, content: str | None = None, attrs: dict[str, object] | None = None
-) -> str:
-    return _core.to_xml(tag_name, content, [(k, str(v)) for k, v in (attrs or {}).items()])

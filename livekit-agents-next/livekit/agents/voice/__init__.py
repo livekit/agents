@@ -738,10 +738,6 @@ class _InstructionsView(str, Generic[Context_T]):
         return f
 
 
-if TYPE_CHECKING:
-    pass
-
-
 class _LocalAgentTool(FunctionTool[..., Awaitable[object]]):
     def __init__(
         self,
