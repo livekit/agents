@@ -39,12 +39,6 @@ class RTZRStatusError(RTZRAPIError):
         self.status_code = status_code
 
 
-class RTZRTimeoutError(RTZRAPIError):
-    """Exception raised when RTZR API request times out."""
-
-    pass
-
-
 DEFAULT_SAMPLE_RATE = 8000
 
 

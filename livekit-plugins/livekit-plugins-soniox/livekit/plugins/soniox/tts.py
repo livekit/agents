@@ -620,9 +620,6 @@ class _Connection:
     def num_active_streams(self) -> int:
         return len(self._streams)
 
-    def has_stream(self, stream_id: str) -> bool:
-        return stream_id in self._streams
-
     def _schedule_close(self, name: str) -> None:
         """Close in the background, holding on to the task.
 

@@ -175,12 +175,6 @@ def _get_1008_error_hint(error_message: str) -> str | None:
 
 
 @dataclass
-class InputTranscription:
-    item_id: str
-    transcript: str
-
-
-@dataclass
 class _RealtimeOptions:
     model: LiveAPIModels | str
     api_key: str | None

@@ -150,7 +150,6 @@ class SpeechStream(stt.RecognizeStream):
         self._language = language
 
         self._audio_queue: queue.Queue[bytes | None] = queue.Queue()
-        self._shutdown_event = threading.Event()
         self._recognition_thread: threading.Thread | None = None
 
         self._speaking = False

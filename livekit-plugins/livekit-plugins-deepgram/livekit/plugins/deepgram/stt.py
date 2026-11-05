@@ -925,23 +925,6 @@ def _word_text(word: object, *, use_punctuated_word: bool) -> str:
     return punctuated
 
 
-def live_transcription_to_speech_data(
-    language: str,
-    data: object,
-    *,
-    is_final: bool,
-    start_time_offset: float,
-    use_punctuated_word: bool = True,
-) -> list[stt.SpeechData]:
-    return _live_transcription_to_speech_data(
-        language,
-        TranscriptionResponse.model_validate(data),
-        is_final=is_final,
-        start_time_offset=start_time_offset,
-        use_punctuated_word=use_punctuated_word,
-    )
-
-
 def _live_transcription_to_speech_data(
     language: str,
     response: TranscriptionResponse | LiveTranscriptionResponse,

@@ -112,7 +112,6 @@ class AvatarSession(BaseAvatarSession):
         self._main_atask: asyncio.Task[None] | None = None
         self._audio_resampler: rtc.AudioResampler | None = None
         self._resampler_input_rate: int | None = None
-        self._session_data = None
         self._msg_ch = utils.aio.Chan[dict[str, JsonValue]]()
         self._audio_playing = False
         self._utterances: deque[_Utterance] = deque()

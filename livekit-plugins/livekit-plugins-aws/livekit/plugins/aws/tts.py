@@ -44,9 +44,7 @@ if TYPE_CHECKING:
     )
     from types_aiobotocore_polly.type_defs import SynthesizeSpeechInputTypeDef
 
-DEFAULT_SPEECH_ENGINE: TTSSpeechEngine = "generative"
 DEFAULT_VOICE = "Ruth"
-DEFAULT_TEXT_TYPE: TTSTextType = "text"
 
 
 @dataclass

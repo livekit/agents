@@ -24,7 +24,6 @@ from .models import TTSModels
 SIMPLISMART_BASE_URL = "https://api.simplismart.live/tts"
 QWEN_BASE_URL = "https://api.simplismart.live/v1/audio/speech"
 DEFAULT_ORPHEUS_MODEL = "canopylabs/orpheus-3b-0.1-ft"
-DEFAULT_QWEN_MODEL = "qwen-tts"
 DEFAULT_ORPHEUS_VOICE = "tara"
 DEFAULT_QWEN_VOICE = "Chelsie"
 

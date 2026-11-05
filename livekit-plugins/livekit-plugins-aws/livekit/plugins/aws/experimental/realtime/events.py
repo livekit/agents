@@ -12,8 +12,6 @@ from .types import TURN_DETECTION
 MEDIA_TYPE = Literal["text/plain", "audio/lpcm", "application/json"]
 TYPE = Literal["TEXT", "AUDIO", "TOOL"]
 ROLE = Literal["USER", "ASSISTANT", "TOOL", "SYSTEM"]
-GENERATION_STAGE = Literal["SPECULATIVE", "FINAL"]
-STOP_REASON = Literal["PARTIAL_TURN", "END_TURN", "INTERRUPTED"]
 SAMPLE_RATE_HERTZ = Literal[8_000, 16_000, 24_000]
 AUDIO_ENCODING = Literal["base64"]  # all audio data must be base64 encoded
 SAMPLE_SIZE_BITS = Literal[16]  # only supports 16-bit audio

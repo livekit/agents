@@ -117,8 +117,6 @@ class TTS(tts.TTS):
             streaming (bool, optional): If True, uses WebSocket streaming for real-time audio. If False, uses HTTP requests. Defaults to True.
         """  # noqa: E501
 
-        self._streaming = streaming
-
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=streaming),
             sample_rate=sample_rate,

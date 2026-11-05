@@ -59,7 +59,6 @@ CONVERSATION_HISTORY_PREFIX = (
     "The following is the conversation history:\n"
 )
 PHONIC_INPUT_FRAME_MS = 20
-WS_CLOSE_NORMAL = 1000
 TOOL_CALL_OUTPUT_TIMEOUT_MS = 60000
 
 
