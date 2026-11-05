@@ -139,7 +139,11 @@ impl Run {
             instructions: Some(setup.instructions.clone()),
             agent: OPENING_AGENT.into(),
             stt,
-            vad: setup.vad.then(|| fakes::FakeVad::new(registry.clone()) as Arc<VadLeg>),
+            vad: setup.vad.then(|| match setup.vad_stall_ms {
+                None => fakes::FakeVad::new(registry.clone()) as Arc<VadLeg>,
+                Some(ms) => fakes::FakeVad::plugin(registry.clone(), Duration::from_millis(ms))
+                    as Arc<VadLeg>,
+            }),
             llm,
             realtime: setup.realtime.map(|server| {
                 let vad = server.turn_detection.then_some(if server.semantic {

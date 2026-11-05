@@ -128,6 +128,9 @@ pub struct Setup {
     pub stt: bool,
     /// A voice-activity detector on the microphone leg: the second observer of the person.
     pub vad: bool,
+    /// The detector is a plugin's: its audio waits on the core's `Now` queue for a pump that
+    /// awaits each frame, and it takes none for this long after a stream opens (a stuck consumer).
+    pub vad_stall_ms: Option<u64>,
     /// An end-of-turn predictor on the microphone leg: the third observer of the person.
     pub eot: bool,
     /// The adaptive interruption detector: judges whether an overlap is a interruption.
@@ -464,6 +467,7 @@ impl Default for Setup {
         Setup {
             stt: false,
             vad: false,
+            vad_stall_ms: None,
             eot: false,
             interruption: false,
             dynamic_endpointing: false,

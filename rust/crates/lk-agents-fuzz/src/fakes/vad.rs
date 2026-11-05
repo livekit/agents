@@ -1,13 +1,18 @@
 //! Voice activity: a second observer of the microphone, alongside recognition. Every `stream()`
 //! the product opens is its own invocation; the audio the driver forwards is recorded, and the
 //! detections come only from the case, so the relation between the two is the case's to choose.
+//! A plugin's detector takes its audio as the core hands it to a plugin: through the `Now` queue
+//! and pump of `PluginInput`.
 use std::sync::Arc;
+use std::time::Duration;
 
 use lk_agents_abi::{
-    Ts, Vad, VadCapabilities, VadEvent, VadEventType, VadSink, VadSource,
+    AudioFrame, BoxFuture, Ts, Vad, VadCapabilities, VadEvent, VadEventType, VadSink, VadSource,
     errors::ProviderError,
-    utils::stream::{Closed, StreamOutput},
+    utils::stream::{Closed, Entry, StreamInput, StreamOutput},
 };
+use lk_agents_runtime::inference::vad::plugin::PluginInput;
+use lk_agents_runtime::net::clock::SimClock;
 use tokio::sync::{Notify, mpsc};
 
 use super::{Control, Forward, Registry, Slot};
@@ -21,11 +26,42 @@ const UPDATE_INTERVAL: f64 = 0.032;
 
 pub struct FakeVad {
     registry: Arc<Registry>,
+    /// A plugin's detector, and how long each of its streams takes no audio after it opens.
+    stall: Option<Duration>,
 }
 
 impl FakeVad {
     pub fn new(registry: Arc<Registry>) -> Arc<Self> {
-        Arc::new(FakeVad { registry })
+        Arc::new(FakeVad { registry, stall: None })
+    }
+
+    pub fn plugin(registry: Arc<Registry>, stall: Duration) -> Arc<Self> {
+        Arc::new(FakeVad { registry, stall: Some(stall) })
+    }
+}
+
+/// A plugin's input that takes nothing before `until`, then each entry at once.
+struct Stalled {
+    forward: Arc<Forward>,
+    until: tokio::time::Instant,
+}
+
+impl StreamInput<AudioFrame> for Stalled {
+    fn push(&self, frame: AudioFrame) -> Result<(), ProviderError> {
+        self.forward.push(frame)
+    }
+    fn flush(&self) -> Result<(), ProviderError> {
+        self.forward.flush()
+    }
+    fn end_input(&self) {
+        self.forward.end_input();
+    }
+    fn send(&self, entry: Entry<AudioFrame>) -> BoxFuture<'static, Result<(), ProviderError>> {
+        let (forward, until) = (self.forward.clone(), self.until);
+        Box::pin(async move {
+            tokio::time::sleep_until(until).await;
+            forward.send(entry).await
+        })
     }
 }
 
@@ -47,23 +83,28 @@ impl Vad for FakeVad {
 
     fn stream(
         &self,
-        _cx: &lk_agents_abi::telemetry::Cx,
+        cx: &lk_agents_abi::telemetry::Cx,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<lk_agents_abi::DuplexStream<VadSink, VadSource>, ProviderError>,
     > {
         let (sender, events) = mpsc::unbounded_channel();
         let ended = Arc::new(Notify::new());
-        let slot = self.registry.register(Kind::Vad, Detail::None, Control::Vad(sender));
-        let opened: lk_agents_abi::DuplexStream<VadSink, VadSource> =
-            lk_agents_abi::DuplexStream::new(
-                Box::new(Forward {
-                    slot,
-                    registry: self.registry.clone(),
-                    ended: Some(ended.clone()),
-                }),
-                Box::new(Detection { slot, registry: self.registry.clone(), events, ended }),
-            );
+        let detail = if self.stall.is_some() { Detail::PluginVad } else { Detail::None };
+        let slot = self.registry.register(Kind::Vad, detail, Control::Vad(sender));
+        let registry = self.registry.clone();
+        let forward = Forward { slot, registry: registry.clone(), ended: Some(ended.clone()) };
+        let detection: VadSource = Box::new(Detection { slot, registry, events, ended });
+        let opened = match self.stall {
+            None => lk_agents_abi::DuplexStream::new(Box::new(forward) as VadSink, detection),
+            Some(stall) => {
+                let until = tokio::time::Instant::now() + stall;
+                let input = Stalled { forward: Arc::new(forward), until };
+                let stream =
+                    lk_agents_abi::DuplexStream::new(Box::new(input) as VadSink, detection);
+                PluginInput::wrap(stream, cx, Arc::new(SimClock::new()))
+            }
+        };
         Box::pin(async move { Ok(opened) })
     }
 }

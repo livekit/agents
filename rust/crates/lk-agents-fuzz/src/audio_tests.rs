@@ -785,3 +785,128 @@ mod wordless_audio_say {
         assert!(!pushed.is_empty(), "the frames reached the output");
     }
 }
+
+mod pre_connect_behind_a_slow_connect {
+    //! Audio buffered before a slow recogniser connects: the pre-connect replay and the seconds
+    //! spoken while the session started reach the recogniser and the detector in full.
+    use lk_agents_fuzz::drive::{
+        Case, Outcome, PreConnect, RoomLegs, Run, Setup, finish, simulate,
+    };
+    use lk_agents_fuzz::fakes::{SAMPLE_RATE, SAMPLES_PER_CHUNK};
+    use lk_agents_fuzz::input::{Count, Input, Millis, Ref};
+    use lk_agents_fuzz::record::{Kind, Tag};
+
+    /// What one listening stream heard: microphone samples, replayed samples, and when it heard
+    /// its first.
+    #[derive(Debug, PartialEq)]
+    struct Heard {
+        mic: usize,
+        replay: usize,
+        first_ms: Option<u64>,
+    }
+
+    // Catches: the console's `realtime write backlog exceeded` on the listening side: seconds of
+    // audio queued behind a slow connect reach each consumer as one burst, which a bounded
+    // channel with fatal overflow turns into a failed session, or a bound drops from the replay.
+    #[test]
+    fn seconds_of_audio_behind_a_slow_connect_reach_every_consumer() {
+        let setup = Setup {
+            stt: true,
+            vad: true,
+            connect_ms: Some(3_000),
+            room_legs: Some(RoomLegs { pre_connect: Some(PreConnect::Sent) }),
+            ..Setup::default()
+        };
+        // Three seconds of speech once the microphone is read, while the recogniser connects,
+        // then a second to drain.
+        let mut inputs = vec![Input::Advance { ms: Millis(100) }];
+        for _ in 0..6 {
+            inputs.push(Input::MicFrames { mic: Ref::new(0), chunks: Count(50) });
+            inputs.push(Input::Advance { ms: Millis(500) });
+        }
+        inputs.push(Input::Advance { ms: Millis(1_000) });
+        let case = Case { setup: setup.clone(), inputs: inputs.clone(), ..Case::default() };
+        let (heard, outcome) = simulate(async move {
+            let mut run = Run::start(&setup, 0, Default::default()).await;
+            for input in &inputs {
+                run.apply(input).await;
+            }
+            let frames = run.record.inference_view().frames_heard();
+            let heard = |kind: Kind| {
+                let frames = frames.iter().filter(|heard| heard.kind == kind);
+                let tags = frames.clone().flat_map(|heard| heard.tags);
+                let mic = tags.clone().filter(|tag| matches!(tag, Tag::Mic { .. })).count();
+                let replay = tags.filter(|tag| matches!(tag, Tag::Unknown(0))).count();
+                let first_ms = frames.map(|heard| heard.at.at_ms).min();
+                Heard { mic, replay, first_ms }
+            };
+            let heard = [heard(Kind::Stt), heard(Kind::Vad)];
+            (heard, finish(run, Outcome { case, ..Outcome::default() }).await)
+        });
+        assert!(outcome.ok(), "{:#?}", outcome.failures);
+        for heard in heard {
+            assert_eq!(heard.mic, 300 * SAMPLES_PER_CHUNK, "every frame spoken: {heard:?}");
+            assert_eq!(heard.replay, SAMPLE_RATE as usize / 2, "the half second replayed");
+            assert!(heard.first_ms >= Some(3_000), "it waited for the connect: {heard:?}");
+        }
+    }
+}
+
+mod stalled_plugin_detector {
+    //! A plugin's detector that takes no audio for seconds: its queue keeps the pre-connect
+    //! replay in full and drops the rest to the newest audio, and nothing fails.
+    use lk_agents_fuzz::drive::{
+        Case, Outcome, PreConnect, RoomLegs, Run, Setup, finish, simulate,
+    };
+    use lk_agents_fuzz::fakes::{SAMPLE_RATE, SAMPLES_PER_CHUNK};
+    use lk_agents_fuzz::input::{Count, Input, Millis, Ref};
+    use lk_agents_fuzz::record::{Kind, Tag};
+
+    // Catches: a stuck consumer failing the session (the fatal 256-frame input of the plugin
+    // VAD base), its `Now` bound dropping the pre-connect head, or it starving the recogniser.
+    #[test]
+    fn a_stalled_plugin_detector_keeps_the_replay_and_resumes_on_current_audio() {
+        let setup = Setup {
+            stt: true,
+            vad: true,
+            vad_stall_ms: Some(3_000),
+            room_legs: Some(RoomLegs { pre_connect: Some(PreConnect::Sent) }),
+            ..Setup::default()
+        };
+        let mut inputs = vec![Input::Advance { ms: Millis(100) }];
+        for _ in 0..6 {
+            inputs.push(Input::MicFrames { mic: Ref::new(0), chunks: Count(50) });
+            inputs.push(Input::Advance { ms: Millis(500) });
+        }
+        inputs.push(Input::Advance { ms: Millis(1_000) });
+        let case = Case { setup: setup.clone(), inputs: inputs.clone(), ..Case::default() };
+        let (heard, outcome) = simulate(async move {
+            let mut run = Run::start(&setup, 0, Default::default()).await;
+            for input in &inputs {
+                run.apply(input).await;
+            }
+            let frames = run.record.inference_view().frames_heard();
+            let heard = |kind: Kind| {
+                let tags = frames.iter().filter(|heard| heard.kind == kind).flat_map(|h| h.tags);
+                let mic = tags.clone().filter(|tag| matches!(tag, Tag::Mic { .. })).count();
+                (mic, tags.filter(|tag| matches!(tag, Tag::Unknown(0))).count())
+            };
+            let heard = (heard(Kind::Stt), heard(Kind::Vad));
+            (heard, finish(run, Outcome { case, ..Outcome::default() }).await)
+        });
+        assert!(outcome.ok(), "{:#?}", outcome.failures);
+        let ((stt_mic, stt_replay), (vad_mic, vad_replay)) = heard;
+        let replay = SAMPLE_RATE as usize / 2;
+        assert_eq!(
+            (stt_mic, stt_replay),
+            (300 * SAMPLES_PER_CHUNK, replay),
+            "the recogniser heard all"
+        );
+        assert_eq!(vad_replay, replay, "the detector heard the whole replay");
+        // `Now(500ms)`: the newest half second, and the frame that tipped it over at most.
+        assert!(
+            vad_mic > 0 && vad_mic <= 51 * SAMPLES_PER_CHUNK,
+            "the detector resumed on current audio: {vad_mic} samples"
+        );
+    }
+}

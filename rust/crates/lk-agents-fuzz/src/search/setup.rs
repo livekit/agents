@@ -103,6 +103,7 @@ pub fn sample_setup(rng: &mut Rng) -> Setup {
         tools_refuse_cancel: false,
         stray: 0.0,
         storage_lost_at: None,
+        vad_stall_ms: None,
     };
     // `lk agent console` runs on the host's legs only.
     setup.console = setup.room_legs.is_none() && rng.u8(0..100) < 30;

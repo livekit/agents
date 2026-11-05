@@ -227,6 +227,8 @@ pub enum Detail {
     /// A recognition stream of AMD's own (`AMD(stt=..)`): fed through the detector's listening
     /// gate, not the session's input path.
     AmdStt,
+    /// A plugin's detector: its own `Now` queue keeps only current audio, past what it drops.
+    PluginVad,
     /// The person's camera track in the room, which leaves with them.
     RoomCamera,
 }
