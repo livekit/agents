@@ -108,6 +108,15 @@ class TestExtractAndStrip:
         assert clean == "hi A7"
         assert tags == [("emotion", "happy"), ("spell", "A7")]
 
+    def test_self_closing_tag_has_no_inner_text(self) -> None:
+        # a self-closing tag must not take the text up to a later closing tag of its name
+        clean, tags = extract_and_strip(
+            '<emotion value="happy"/> Glad. <emotion value="sad">sorry</emotion>',
+            xml_tags=["emotion"],
+        )
+        assert clean == "Glad. sorry"
+        assert tags == [("emotion", "happy"), ("emotion", "sorry")]
+
 
 # ===========================================================================
 # xAI dialect (mixed inline [..] + wrapping <..>)
