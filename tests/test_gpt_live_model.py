@@ -2240,6 +2240,12 @@ async def test_delegate_is_refused_only_while_a_function_call_is_open(
         await model.aclose()
 
 
+@pytest.mark.parametrize(("value", "expected"), [(False, None), (True, {}), ({}, {})])
+def test_delegation_recovery_is_off_only_when_false(value: object, expected: object) -> None:
+    model = GPTLiveModel(api_key="sk-test", delegation_recovery=value)  # type: ignore[arg-type]
+    assert model._opts.delegation_recovery == expected
+
+
 def test_decisions_delegation_requires_configuration() -> None:
     with pytest.raises(ValueError, match="decisions_options"):
         GPTLiveModel(api_key="sk-test", delegation="decisions")

@@ -302,7 +302,11 @@ class GPTLiveModel(llm.DuplexModel):
             decisions=decisions,
             triggers=triggers if is_given(triggers) else None,
             delegation_recovery=(
-                {} if delegation_recovery is True else delegation_recovery or None
+                None
+                if delegation_recovery is False
+                else {}
+                if delegation_recovery is True
+                else delegation_recovery
             ),
             service_tier=service_tier if is_given(service_tier) else None,
             api_key=api_key,

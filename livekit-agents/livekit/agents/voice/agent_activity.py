@@ -2403,7 +2403,8 @@ class AgentActivity(RecognitionHooks):
         check = llm.DelegationCheck(
             chat_ctx=self._agent.chat_ctx.copy(),
             tools=self._rt_session.tools.flatten(),
-            instructions=str(self._agent.instructions),
+            # the instructions as the realtime model has them, audio and dynamic sections included
+            instructions=self._render_realtime_instructions(self._agent.instructions),
         )
         try:
             verdict = await self._delegation_opts["detector"](check)

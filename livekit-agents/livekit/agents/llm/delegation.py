@@ -10,7 +10,13 @@ from ..types import APIConnectOptions
 from .chat_context import ChatContext, ChatMessage
 from .decisions import DecisionModel, Probability, ProbabilityResult, _format_transcript
 from .llm import LLM
-from .tool_context import Tool, function_tool, is_function_tool, is_raw_function_tool
+from .tool_context import (
+    ProviderTool,
+    Tool,
+    function_tool,
+    is_function_tool,
+    is_raw_function_tool,
+)
 
 if TYPE_CHECKING:
     from ..inference.llm import LLMModels
@@ -107,6 +113,8 @@ class DelegationDetector:
                 tools.append(f"- {tool.info.name}: {tool.info.description or ''}")
             elif is_raw_function_tool(tool):
                 tools.append(f"- {tool.info.name}: {tool.info.raw_schema.get('description', '')}")
+            elif isinstance(tool, ProviderTool):
+                tools.append(f"- {tool.id}: a tool the provider hosts")
         parts = ["## Backend tools", "\n".join(tools) or "(none)"]
         if check.instructions:
             parts += ["## The voice agent's instructions", check.instructions]
