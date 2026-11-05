@@ -180,6 +180,9 @@ select = [
 ignore = ["E501"]
 
 [tool.ruff.lint.per-file-ignores]
+# A public module star-imports the names the ABI places in it (`_generated/public_<module>.py`) and
+# lists them in its `__all__`; mypy and pyright resolve every name, so pyflakes' star guess is noise.
+"livekit-agents-next/livekit/agents/**/*.py" = ["F405"]
 # The CLI is mid-refactor in the owner's session; its one `asyncio.TimeoutError` goes with it.
 "livekit-agents-next/livekit/agents/cli.py" = ["UP041"]
 

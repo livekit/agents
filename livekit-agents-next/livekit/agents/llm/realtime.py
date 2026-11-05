@@ -6,6 +6,7 @@ from livekit import rtc
 
 from .. import _core
 from .._generated.chat_items import MetricsMetadata
+from .._generated.public_llm_realtime import *  # noqa: F403
 from .._generated.realtime import (
     EventTypes,
     RealtimeCapabilities,
@@ -13,19 +14,7 @@ from .._generated.realtime import (
     RealtimeModelError,
     RealtimeSession,
 )
-from .._generated.realtime_availability import (
-    RealtimeAvailabilityChangedEvent as RealtimeAvailabilityChangedEvent,
-)
-from .._generated.realtime_errors import RealtimeError as RealtimeError
-from .._generated.realtime_wire import (
-    GenerationCreatedEvent as GenerationCreatedEvent,
-    InputSpeechStartedEvent as InputSpeechStartedEvent,
-    InputSpeechStoppedEvent as InputSpeechStoppedEvent,
-    InputTranscriptionCompleted as InputTranscriptionCompleted,
-    MessageGeneration as MessageGeneration,
-    RealtimeSessionReconnectedEvent as RealtimeSessionReconnectedEvent,
-    RemoteItemAddedEvent as RemoteItemAddedEvent,
-)
+from .._generated.realtime_availability import RealtimeAvailabilityChangedEvent
 
 if TYPE_CHECKING:
     from .._generated.llm_fallback import AvailabilityChanged
@@ -151,4 +140,5 @@ __all__ = [
     "RealtimeSession",
     "RealtimeSessionReconnectedEvent",
     "RemoteItemAddedEvent",
+    "RealtimeAvailabilityChangedEvent",
 ]

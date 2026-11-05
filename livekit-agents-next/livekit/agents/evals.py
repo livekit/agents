@@ -6,19 +6,20 @@ import os
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeAlias, Union, cast
 
-from livekit.agents._generated.simulation import SimulationVerdict as SimulationVerdict
 from livekit.protocol import agent_simulation as proto
 
 from . import _bindings, _core
 from ._generated.evals import (
-    EvaluationResult as EvaluationResult,
+    EvaluationResult,
     IntentJudgment,
     JudgeOutcome,
     JudgeOutcomeFailed,
     JudgeSpecBuiltIn,
     JudgeSpecHost,
-    JudgmentResult as JudgmentResult,
+    JudgmentResult,
 )
+from ._generated.public_evals import *  # noqa: F403
+from ._generated.simulation import SimulationVerdict
 from .llm import LLM, ChatContext, Tool, function_tool
 from .log import logger
 

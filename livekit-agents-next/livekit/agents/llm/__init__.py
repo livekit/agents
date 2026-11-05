@@ -6,20 +6,11 @@ import asyncio
 from dataclasses import replace
 from typing import Literal
 
-from livekit.agents._generated.llm_availability import (
-    AvailabilityChangedEvent as AvailabilityChangedEvent,
-)
-
 from .. import _bindings, _core
-from .._generated.llm import (
-    LLM,
-    ChatChunk,
-    ChoiceDelta,
-    FunctionToolCall,
-    LLMError,
-    LLMStream,
-)
+from .._generated.llm import LLM, LLMStream
+from .._generated.llm_availability import AvailabilityChangedEvent
 from .._generated.llm_fallback import AvailabilityChanged
+from .._generated.public_llm import *  # noqa: F403
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given
 from . import utils
@@ -57,7 +48,6 @@ from .realtime import (
     RealtimeCapabilities,
     RealtimeError,
     RealtimeModel,
-    RealtimeModelError,
     RealtimeModelFallbackAdapter,
     RealtimeSession,
     RealtimeSessionReconnectedEvent,
@@ -154,6 +144,7 @@ __all__ = [
     "RealtimeSessionReconnectedEvent",
     "LLMError",
     "RemoteItemAddedEvent",
+    "CollectedResponse",
 ]
 
 

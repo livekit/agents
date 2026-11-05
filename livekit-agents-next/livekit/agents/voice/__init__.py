@@ -29,11 +29,11 @@ from typing_extensions import ParamSpec, TypeVar
 from .. import _core, llm, stt, tts
 from .._generated.agent_authoring import (
     DEFAULT_AGENT_NAME as DEFAULT_AGENT_NAME,
-    AgentRetries as AgentRetries,
+    AgentRetries,
     CallbackKind,
-    ModelSettings as ModelSettings,
 )
 from .._generated.agent_run import AgentDefinition
+from .._generated.public_voice import *  # noqa: F403
 from .._generated.text_session import LocalAgentTool
 from .._generated.vad import VAD
 from ..inference.llm import llm_from_model_string

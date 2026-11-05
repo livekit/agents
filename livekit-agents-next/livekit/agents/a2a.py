@@ -42,6 +42,7 @@ from ._generated.a2a_metadata import (
     RPC_PATH,
 )
 from ._generated.a2a_remote import RemoteEventInputRequired, RemoteEventOutcome
+from ._generated.public_a2a import *  # noqa: F403
 from ._generated.storage_options import Policy, TurnOptions
 from ._generated.tool_report import ToolOutcomeInputRequired, ToolReport
 from .job import _server_credentials

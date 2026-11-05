@@ -23,37 +23,21 @@ from typing import (
 from pydantic import Field, JsonValue
 from typing_extensions import ParamSpec, TypeVar
 
-from livekit.agents._generated.function_tools import (
+from .. import _core
+from .._generated.function_tools import (
     FunctionToolInfo as FunctionToolInfo,
     InputRequired as InputRequired,
     RawFunctionToolInfo as RawFunctionToolInfo,
 )
-from livekit.agents._generated.tool_outcomes import (
-    Failed as Failed,
-    Rejected as Rejected,
-    ToolResult as ToolResult,
-    Working as Working,
-)
-
-from .. import _core
+from .._generated.public_llm_tool_context import *  # noqa: F403
 from .._generated.tool_context import (
     CONFIRM_DUPLICATE_DESCRIPTION,
     RawFunctionDescription as RawFunctionDescription,
 )
-from .._generated.tool_errors import (
-    ModelRetry as ModelRetry,
-    StopResponse as StopResponse,
-    ToolError as ToolError,
-)
 from .._generated.tool_flags import ToolFlag as ToolFlag
-from .._generated.tool_options import Function as Function, NamedToolChoice as NamedToolChoice
-from .._generated.tool_templates import (
-    AsyncToolOptions as AsyncToolOptions,
-    DuplicatePromptArgs as DuplicatePromptArgs,
-    ReplyPromptArgs as ReplyPromptArgs,
-    ToolHandlingOptions as ToolHandlingOptions,
-    UpdatePromptArgs as UpdatePromptArgs,
-)
+from .._generated.tool_options import NamedToolChoice as NamedToolChoice
+from .._generated.tool_outcomes import Failed as Failed, Rejected as Rejected, Working as Working
+from .._generated.tool_templates import ToolHandlingOptions as ToolHandlingOptions
 
 if TYPE_CHECKING:
     from ..voice.events import RunContext

@@ -1326,7 +1326,10 @@ Generated files carry a first-line marker and are never edited manually.
 `--check` rejects drift. Handwritten Python contains public API behavior,
 user callback invocation, host SDK integration or process launch/bootstrap.
 Modules that only forward or re-export are generated, with public names
-re-exported by their owning package's `__init__`.
+re-exported by their owning package's `__init__`. A declaration's `path = "livekit.agents.x"`
+is its public module: `_generated/public_x.py` re-exports every name placed there, and `x`
+star-imports it, holding no import list of those names; its literal `__all__` lists them, which
+mypy requires.
 
 ### Module registration
 

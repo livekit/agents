@@ -11,6 +11,7 @@ mod bases;
 mod class_stub;
 mod decl;
 mod exceptions;
+mod exports;
 mod facade;
 mod forward;
 mod implementations;
@@ -128,6 +129,7 @@ fn generate(root: &Path, python_packages: &[&str]) -> Result<Outputs, String> {
     let mut models = records::python(&declared)?;
     models.extend(exceptions::python(&declared));
     models.extend(native_enums::flags(&declared));
+    models.extend(exports::emit(&declared)?);
     let bases = bases::read(root, &declared)?;
     let with_bases = python::emit(&declared, &bases)?;
     let (core_pyi, core_names) = surface::emit(class_stubs.iter())?;
@@ -192,9 +194,9 @@ fn sync(root: &Path, outputs: &Outputs, check: bool) -> Result<usize, String> {
 /// The generated package's `__init__.py`, so the directory is never a namespace package.
 const INIT: &str = "# GENERATED DIRECTORY -- every file here is written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`).\n\
 #\n\
-# Nothing re-exports from this package. The frozen public paths do the re-exporting\n\
-# (`voice/events.py` does `from .._generated.events import ...`), because moving a\n\
-# name here would move it in the public API too.\n";
+# Nothing re-exports from this package. Each public module star-imports its\n\
+# `public_<module>.py`: the names the ABI places there with `path = \"..\"`, which its\n\
+# `__all__` lists, so a name's public path is its declaration's.\n";
 
 /// Generated Rust is formatted as the workspace's `cargo fmt` would format it.
 fn rustfmt(root: &Path, text: &str) -> Result<String, String> {

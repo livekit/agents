@@ -162,6 +162,18 @@ pub fn resolve(schema: &Entry) -> Result<Family, String> {
     Ok(Family { module, path, classes: resolved })
 }
 
+impl Family {
+    pub fn module(&self) -> &str {
+        &self.module
+    }
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+    pub fn class_names(&self) -> impl Iterator<Item = &str> {
+        self.classes.iter().map(|class| class.name.as_str())
+    }
+}
+
 pub fn python(decls: &Declarations) -> Vec<Out> {
     decls.exception_families.iter().map(emit).collect()
 }

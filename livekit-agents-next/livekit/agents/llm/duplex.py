@@ -10,15 +10,13 @@ from typing import TYPE_CHECKING, Generic, Literal, Never, Protocol
 from typing_extensions import TypeVar
 
 from livekit import rtc
-from livekit.agents._generated.duplex import (
-    DuplexAudioFrame as DuplexAudioFrame,
-    DuplexCapabilities as DuplexCapabilities,
-    DuplexInputGap as DuplexInputGap,
-    DuplexInputMute as DuplexInputMute,
-    DuplexOutputTranscriptDelta as DuplexOutputTranscriptDelta,
-)
 
 from .. import _core
+from .._generated.duplex import (
+    DuplexAudioFrame as DuplexAudioFrame,
+    DuplexCapabilities as DuplexCapabilities,
+)
+from .._generated.public_llm_duplex import *  # noqa: F403
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
 from .chat_context import ChatContext, ChatItem

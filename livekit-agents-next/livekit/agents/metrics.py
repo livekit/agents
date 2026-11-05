@@ -6,19 +6,8 @@ from __future__ import annotations
 import logging
 
 from . import _core
-from ._generated.metrics import (
-    AgentMetrics,
-    AvatarMetrics,
-    EOTInferenceMetrics,
-    EOUMetrics,
-    InterruptionMetrics,
-    LLMMetrics,
-    Metadata,
-    RealtimeModelMetrics,
-    STTMetrics,
-    TTSMetrics,
-    VADMetrics,
-)
+from ._generated.metrics import AgentMetrics
+from ._generated.public_metrics import *  # noqa: F403
 from .log import logger as default_logger
 
 __all__ = [

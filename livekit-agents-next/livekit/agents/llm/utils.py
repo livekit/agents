@@ -20,18 +20,17 @@ from pydantic_core import PydanticSerializationError, PydanticUndefined, to_json
 from typing_extensions import TypeVar
 
 from livekit import rtc
-from livekit.agents._generated.chat_diff import (
-    DiffOps as DiffOps,
-)
 
 from .. import _core
+from .._generated.chat_diff import DiffOps
 from .._generated.llm import SerializedImage
 from .._generated.provider_data import (
-    AnthropicFormatData as AnthropicFormatData,
-    BedrockFormatData as BedrockFormatData,
-    GoogleFormatData as GoogleFormatData,
-    MistralFormatData as MistralFormatData,
+    AnthropicFormatData,
+    BedrockFormatData,
+    GoogleFormatData,
+    MistralFormatData,
 )
+from .._generated.public_llm_utils import *  # noqa: F403
 from .._generated.tool_report import (
     ToolOutcomeCompleted,
     ToolOutcomeFailed,
@@ -600,4 +599,6 @@ __all__ = [
     "MistralFormatData",
     "to_chat_ctx",
     "to_fnc_ctx",
+    "DiffOps",
+    "SerializedImage",
 ]

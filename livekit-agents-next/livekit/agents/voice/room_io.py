@@ -14,24 +14,11 @@ from dataclasses import asdict
 from typing import TYPE_CHECKING, TypeAlias, TypedDict, cast
 
 from livekit import rtc
-from livekit.agents._generated.audio_errors import (
-    AudioProcessingError as AudioProcessingError,
-)
-from livekit.agents._generated.room_api import (
-    AudioInputOptions as AudioInputOptions,
-    AudioOutputOptions as AudioOutputOptions,
-    RoomOptions as RoomOptions,
-    TextOutputOptions as TextOutputOptions,
-    VideoInputOptions as VideoInputOptions,
-)
-from livekit.agents._generated.room_input_events import (
-    NoiseCancellationParams as NoiseCancellationParams,
-    TextInputEvent as TextInputEvent,
-)
 
 from .. import _core
 from .._generated import rtc_wire
-from .._generated.room_api import TextInputOptions as TextInputOptions
+from .._generated.public_voice_room_io import *  # noqa: F403
+from .._generated.room_input_events import NoiseCancellationParams, TextInputEvent
 from ..types import ATTRIBUTE_PUBLISH_ON_BEHALF
 
 if TYPE_CHECKING:
@@ -47,6 +34,7 @@ __all__ = [
     "TextOutputOptions",
     "VideoInputOptions",
     "AudioProcessingError",
+    "NoiseCancellationParams",
 ]
 
 TextInputCallback = Callable[["VoiceSession", TextInputEvent], Coroutine[None, None, None] | None]

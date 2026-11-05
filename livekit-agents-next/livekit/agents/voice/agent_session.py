@@ -19,8 +19,8 @@ from typing import TYPE_CHECKING, Any, Generic, cast, overload
 from livekit import rtc
 
 from .. import _core, llm, stt, tts
-from .._generated.expressive import ExpressiveOptions, NonverbalOptions, SpeechSteeringOptions
-from .._generated.keyterms import KeytermDetectionOptions, STTContextOptions
+from .._generated.keyterms import STTContextOptions
+from .._generated.public_voice_agent_session import *  # noqa: F403
 from .._generated.session_commands import SessionCommands
 from .._generated.session_wire import (
     HostWire,
@@ -28,7 +28,7 @@ from .._generated.session_wire import (
 )
 from .._generated.vad import VAD
 from .._generated.voice_session import UpdateAgentArgs
-from .._generated.voice_task_errors import VoiceTaskFailed as VoiceTaskFailed
+from .._generated.voice_task_errors import VoiceTaskFailed
 from ..llm import (
     ChatContext,
     ChatItem,
@@ -558,4 +558,7 @@ __all__ = [
     "KeytermDetectionOptions",
     "STTContextOptions",
     "TextTransforms",
+    "DetectionLlm",
+    "ResolvedKeytermDetection",
+    "VoiceTaskFailed",
 ]

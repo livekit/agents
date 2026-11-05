@@ -19,20 +19,14 @@ from .._generated import speech_defaults
 from .._generated.io_events import PlaybackSegment as PlaybackSegment
 from .._generated.language import LanguageCode
 from .._generated.playback_events import (
-    PlaybackFinishedEvent as PlaybackFinishedEvent,
-    PlaybackProgressedEvent as PlaybackProgressedEvent,
-    PlaybackStartedEvent as PlaybackStartedEvent,
+    PlaybackFinishedEvent,
+    PlaybackProgressedEvent,
+    PlaybackStartedEvent,
 )
-from .._generated.rtc_wire import AudioOutputCapabilities as AudioOutputCapabilities
+from .._generated.public_voice_io import *  # noqa: F403
+from .._generated.rtc_wire import AudioOutputCapabilities
 from .._generated.speech_view import SpeechView
-from .._generated.turn import (
-    EndpointingOptions,
-    InterruptionOptions,
-    PreemptiveGenerationOptions,
-    TurnHandlingOptions,
-    UserTurnLimitOptions,
-)
-from .._generated.turn_events import TurnDetectionEvent as TurnDetectionEvent
+from .._generated.turn_events import TurnDetectionEvent
 from ..log import logger
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -602,4 +596,9 @@ __all__ = [
     "TurnDetectionMode",
     "TurnHandlingOptions",
     "UserTurnLimitOptions",
+    "TurnDetectionEvent",
+    "PlaybackFinishedEvent",
+    "PlaybackStartedEvent",
+    "PlaybackProgressedEvent",
+    "AudioOutputCapabilities",
 ]

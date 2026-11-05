@@ -13,13 +13,9 @@ import json
 from collections.abc import Awaitable, Callable
 from typing import Any, Protocol, Self, cast
 
-from livekit.agents._generated.toolset_events import (
-    SearchItem as SearchItem,
-    ToolCalledEvent as ToolCalledEvent,
-    ToolCompletedEvent as ToolCompletedEvent,
-)
-
 from .. import _core
+from .._generated.public_beta import *  # noqa: F403
+from .._generated.toolset_events import SearchItem, ToolCalledEvent, ToolCompletedEvent
 from .._generated.workflow_prompts import END_CALL_DESCRIPTION
 from ..job import get_job_context
 from ..llm import ToolFlag, Toolset, function_tool

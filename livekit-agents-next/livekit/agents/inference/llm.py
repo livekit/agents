@@ -4,25 +4,11 @@ import dataclasses
 import functools
 from typing import TYPE_CHECKING, Any, cast, get_args
 
-from livekit.agents._generated.llm_provider_options import (
-    ChatCompletionOptions as ChatCompletionOptions,
-)
-
 from .. import _core, llm
 from .._bindings import APIConnectionError, APIStatusError, APITimeoutError
-from .._generated.inference_llm import (
-    DeepSeekModels as DeepSeekModels,
-    GoogleModels as GoogleModels,
-    KimiModels as KimiModels,
-    LLMModels as LLMModels,
-    OpenAIModels as OpenAIModels,
-    OpenAIRealtimeModels as OpenAIRealtimeModels,
-    RealtimeModels as RealtimeModels,
-    ReasoningEffort as ReasoningEffort,
-    XAIModels as XAIModels,
-    XAIRealtimeModels as XAIRealtimeModels,
-    ZAIModels as ZAIModels,
-)
+from .._generated.inference_llm import LLMModels, RealtimeModels, ReasoningEffort
+from .._generated.llm_provider_options import ChatCompletionOptions
+from .._generated.public_inference_llm import *  # noqa: F403
 from ..llm import ToolChoice, utils as llm_utils
 from ..llm.chat_context import ChatContext
 from ..llm.tool_context import Tool
@@ -58,6 +44,7 @@ __all__ = [
     "RealtimeModels",
     "OpenAIRealtimeModels",
     "XAIRealtimeModels",
+    "ReasoningEffort",
 ]
 
 _REALTIME_MODEL_IDS: frozenset[str] = frozenset(

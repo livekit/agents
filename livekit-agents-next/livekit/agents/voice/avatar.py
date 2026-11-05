@@ -21,10 +21,11 @@ from typing_extensions import TypeVar
 from livekit import rtc
 
 from .. import _core, utils
-from .._generated.avatar import AudioSegmentEnd as AudioSegmentEnd
+from .._generated.avatar import AudioSegmentEnd
 from .._generated.avatar_options import AvatarOptions
 from .._generated.avatar_queue import QueueEffects
 from .._generated.io_events import AvatarPlaybackSegment
+from .._generated.public_voice_avatar import *  # noqa: F403
 from ..job import get_job_context
 from ..metrics import AvatarMetrics
 from ..types import NOT_GIVEN, NotGivenOr

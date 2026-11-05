@@ -188,7 +188,7 @@ pub struct AvailabilityChangedEvent {
     dataclass
 ))]
 pub struct RealtimeAvailabilityChangedEvent {
-    #[host(annotation = "livekit.agents.llm.realtime.RealtimeModel")]
+    #[host(annotation = ".realtime.RealtimeModel")]
     pub realtime_model: crate::HostRef,
     pub available: bool,
 }

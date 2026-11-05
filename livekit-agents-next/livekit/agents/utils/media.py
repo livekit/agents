@@ -8,12 +8,10 @@ from collections.abc import AsyncGenerator, AsyncIterator
 import aiofiles
 
 from livekit import rtc
-from livekit.agents._generated.image_options import (
-    EncodeOptions as EncodeOptions,
-    ResizeOptions as ResizeOptions,
-)
 
 from .. import _core
+from .._generated.image_options import EncodeOptions
+from .._generated.public_utils_media import *  # noqa: F403
 from ..log import logger
 from .aio import cancel_and_wait
 

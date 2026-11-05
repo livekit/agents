@@ -25,12 +25,6 @@ from typing import (
 from pydantic import JsonValue as JsonValue
 from typing_extensions import TypeAliasType, TypedDict, TypeVar as TypeVarDefault, Unpack
 
-from livekit.agents._generated.run_events import (
-    ChatMessageEvent as ChatMessageEvent,
-    FunctionCallEvent as FunctionCallEvent,
-    FunctionCallOutputEvent as FunctionCallOutputEvent,
-)
-
 from .. import _core, llm
 from .._generated import agent_run as records, text_session as session_records
 from .._generated.agent_run import (
@@ -40,6 +34,8 @@ from .._generated.agent_run import (
     EventExpectationMessage,
     RunInputRequirement,
 )
+from .._generated.public_voice_run_result import *  # noqa: F403
+from .._generated.run_events import ChatMessageEvent, FunctionCallEvent, FunctionCallOutputEvent
 from .._generated.run_stream_events import (
     ProgressEvent,
     TextDeltaEvent,
@@ -748,4 +744,7 @@ __all__ = [
     "TextEndEvent",
     "ToolCallEvent",
     "ToolResultEvent",
+    "ChatMessageEvent",
+    "FunctionCallEvent",
+    "FunctionCallOutputEvent",
 ]

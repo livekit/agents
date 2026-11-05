@@ -13,32 +13,25 @@ from pydantic import (
 from typing_extensions import TypeVar
 
 from livekit.agents._generated.session_events import (
-    CloseEvent as CloseEvent,
-    ConversationItemAddedEvent as ConversationItemAddedEvent,
-    ErrorEvent as ErrorEvent,
-    FunctionToolsExecutedEvent as FunctionToolsExecutedEvent,
-    SpeechCreatedEvent as SpeechCreatedEvent,
-    ToolCallStarted as ToolCallStarted,
-    ToolExecutionUpdatedEvent as ToolExecutionUpdatedEvent,
     ToolUpdate as ToolUpdate,
     _TypeDiscriminator as _TypeDiscriminator,
 )
 
 from .._generated.events import (
     AgentFalseInterruptionEvent,
-    AgentState,
     AgentStateChangedEvent,
-    CloseReason,
-    ToolCallEnded,
-    ToolCallUpdated,
-    ToolEndStatus,
-    ToolReplyStatus,
-    ToolReplyUpdated,
     UserInputTranscribedEvent,
-    UserState,
     UserStateChangedEvent,
     UserTranscriptionTimeoutEvent,
-    UserTurnExceededEvent,
+)
+from .._generated.public_voice_events import *  # noqa: F403
+from .._generated.session_events import (
+    CloseEvent,
+    ConversationItemAddedEvent,
+    ErrorEvent,
+    FunctionToolsExecutedEvent,
+    SpeechCreatedEvent,
+    ToolExecutionUpdatedEvent,
 )
 from .._generated.tool_report import ToolOutcomeUpdate, ToolReport
 from .._generated.voice_session import VoiceCommandOrigin, VoiceCommandOriginTool
@@ -82,6 +75,7 @@ __all__ = [
     "UserStateChangedEvent",
     "UserTranscriptionTimeoutEvent",
     "UserTurnExceededEvent",
+    "EotPredictionEvent",
 ]
 
 # The public events whose fields hold host objects: written here, not generated, since no core

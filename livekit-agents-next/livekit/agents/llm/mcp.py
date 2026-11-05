@@ -16,6 +16,7 @@ from pydantic import JsonValue
 
 from .. import _core
 from .._generated.mcp import MCP_IDLE_CLOSE_SECONDS, MCPToolOptions, ResolvedToolOptions
+from .._generated.public_llm_mcp import *  # noqa: F403
 from ..voice.events import RunContext
 from .tool_context import AsyncToolset, RawFunctionTool, Toolset, function_tool
 

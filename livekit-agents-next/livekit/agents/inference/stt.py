@@ -4,34 +4,16 @@ import dataclasses
 import functools
 from typing import Any
 
-from livekit.agents._generated.stt_provider_options import (
-    AssemblyaiOptions as AssemblyaiOptions,
-    CartesiaOptions as CartesiaOptions,
-    DeepgramFluxOptions as DeepgramFluxOptions,
-    DeepgramOptions as DeepgramOptions,
-    GoogleOptions as GoogleOptions,
-    InworldOptions as InworldOptions,
-    SpeechmaticsOptions as SpeechmaticsOptions,
-    XaiOptions as XaiOptions,
-)
-
 from .. import _bindings, _core, stt
 from .._generated import vad as vad_mod
 from .._generated.inference_stt import (
-    AssemblyAIModels as AssemblyAIModels,
-    CartesiaModels as CartesiaModels,
-    DeepgramFluxModels as DeepgramFluxModels,
-    DeepgramModels as DeepgramModels,
     FallbackModel as FallbackModel,
-    GoogleModels as GoogleModels,
-    InworldModels as InworldModels,
-    SpeechmaticsModels as SpeechmaticsModels,
-    STTEncoding as STTEncoding,
-    STTLanguages as STTLanguages,
-    STTModels as STTModels,
-    XaiModels as XaiModels,
+    STTEncoding,
+    STTLanguages,
+    STTModels,
 )
 from .._generated.language import LanguageCode
+from .._generated.public_inference_stt import *  # noqa: F403
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given
@@ -63,6 +45,7 @@ __all__ = [
     "SpeechmaticsOptions",
     "XaiModels",
     "XaiOptions",
+    "AutoModels",
 ]
 
 DEFAULT_SAMPLE_RATE = 16000

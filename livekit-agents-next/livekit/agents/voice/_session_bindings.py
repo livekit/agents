@@ -13,12 +13,13 @@ from google.protobuf.json_format import MessageToDict
 from typing_extensions import TypeVar
 
 from livekit import rtc
-from livekit.agents._generated.recording_options import RecordingOptions as RecordingOptions
 
 from .. import _bindings, _core, inference, llm, stt, tts
 from .._bindings import TurnDetector, realtime_model, tool_specs
 from .._generated.connect import SessionConnectOptions as SessionConnectOptions
 from .._generated.keyterms import STTContextOptions
+from .._generated.public_voice__session_bindings import *  # noqa: F403
+from .._generated.recording_options import RecordingOptions as RecordingOptions
 from .._generated.remote_session_wire import STATE_OPTION_FIELDS
 from .._generated.session_options import SessionKwargs
 from .._generated.session_owner import ProviderBindings

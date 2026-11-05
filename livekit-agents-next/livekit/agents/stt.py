@@ -7,22 +7,12 @@ from dataclasses import replace
 from typing import Any, Literal, Protocol, runtime_checkable
 
 from livekit import rtc
-from livekit.agents._generated.stt_availability import (
-    AvailabilityChangedEvent as AvailabilityChangedEvent,
-)
 
 from . import _bindings, _core
 from ._generated.llm_fallback import AvailabilityChanged
-from ._generated.stt import (
-    STT,
-    RecognitionUsage,
-    RecognizeStream,
-    SpeechData,
-    SpeechEvent,
-    SpeechEventType,
-    STTCapabilities,
-    STTError,
-)
+from ._generated.public_stt import *  # noqa: F403
+from ._generated.stt import STT, RecognizeStream, SpeechEvent, STTCapabilities
+from ._generated.stt_availability import AvailabilityChangedEvent
 from ._generated.vad import VAD
 from .types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 

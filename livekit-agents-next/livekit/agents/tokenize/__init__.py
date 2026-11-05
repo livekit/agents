@@ -4,11 +4,9 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Callable
 from typing import Any, overload
 
-from livekit.agents._generated.tokenizer import (
-    TokenData as TokenData,
-)
-
 from .. import _core
+from .._generated.public_tokenize import *  # noqa: F403
+from .._generated.tokenizer import TokenData
 from ..utils import aio, shortuuid
 
 __all__ = [

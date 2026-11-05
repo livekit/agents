@@ -3,11 +3,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from livekit import rtc
-from livekit.agents._generated.avatar_options import (
-    LemonSliceOptions as LemonSliceOptions,
-)
 
 from .. import _core
+from .._generated.avatar_options import LemonSliceOptions as LemonSliceOptions
+from .._generated.public_inference_avatar import *  # noqa: F403
 from ..job import _server_setting, get_job_context
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,

@@ -3,28 +3,10 @@ from __future__ import annotations
 import functools
 from typing import Any
 
-from livekit.agents._generated.tts_provider_options import (
-    CartesiaOptions as CartesiaOptions,
-    DeepgramOptions as DeepgramOptions,
-    FishAudioOptions as FishAudioOptions,
-    InworldOptions as InworldOptions,
-    RimeOptions as RimeOptions,
-    XaiOptions as XaiOptions,
-)
-
 from .. import _core, tts
-from .._generated.inference_tts import (
-    CartesiaModels as CartesiaModels,
-    DeepgramModels as DeepgramModels,
-    FallbackModel as FallbackModel,
-    FishAudioModels as FishAudioModels,
-    InworldModels as InworldModels,
-    RimeModels as RimeModels,
-    TTSEncoding as TTSEncoding,
-    TTSModels as TTSModels,
-    XaiModels as XaiModels,
-)
+from .._generated.inference_tts import FallbackModel as FallbackModel, TTSEncoding, TTSModels
 from .._generated.language import LanguageCode
+from .._generated.public_inference_tts import *  # noqa: F403
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given, shortuuid
 from . import Credentials, get_inference_headers

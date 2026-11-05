@@ -19,13 +19,9 @@ from multiprocessing.process import BaseProcess
 from types import ModuleType
 from typing import Any, Literal, Protocol, cast
 
-from livekit.agents._generated.worker_ipc import (
-    JobRunnerOptions as JobRunnerOptions,
-    JobStatus as JobStatus,
-)
-
 from .. import _core, utils
-from .._generated.worker_ipc import JobCompletion
+from .._generated.public_ipc import *  # noqa: F403
+from .._generated.worker_ipc import JobCompletion, JobRunnerOptions
 from .._generated.worker_server import RunningJobInfo
 from ..job import JobContext
 from ..log import logger

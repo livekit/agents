@@ -21,16 +21,12 @@ from pydantic import TypeAdapter
 
 from .. import _core
 from .._generated.chat_items import (
-    AgentConfigUpdate,
-    AgentHandoff,
-    AudioContent,
     ChatContent,
     ChatItem,
     ChatMessage,
     ChatRole,
     FunctionCall,
     FunctionCallOutput,
-    ImageContent,
     MetricsReport,
 )
 from .._generated.provider_data import (
@@ -39,6 +35,7 @@ from .._generated.provider_data import (
     GoogleFormatData,
     MistralFormatData,
 )
+from .._generated.public_llm_chat_context import *  # noqa: F403
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
@@ -65,6 +62,10 @@ __all__ = [
     "FunctionCall",
     "FunctionCallOutput",
     "ImageContent",
+    "InferenceDetail",
+    "ImageSource",
+    "MetricsMetadata",
+    "MetricsReport",
 ]
 
 ProviderFormat: TypeAlias = Literal[

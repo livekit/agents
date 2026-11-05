@@ -12,14 +12,9 @@ from pydantic import AfterValidator
 
 import livekit.rtc as rtc
 from livekit import api
-from livekit.agents._generated.workflows import (
-    DtmfEvent as DtmfEvent,
-    GetDtmfResult as GetDtmfResult,
-    GetEmailResult as GetEmailResult,
-    WarmTransferResult as WarmTransferResult,
-)
 
 from .. import _core, llm, stt, tts, utils
+from .._generated.public_beta_workflows import *  # noqa: F403
 from .._generated.vad import VAD
 from .._generated.voice_session import DtmfTaskOptions, UpdateAgentArgs
 from .._generated.workflow_prompts import (
@@ -27,8 +22,12 @@ from .._generated.workflow_prompts import (
     ASK_EMAIL_INSTRUCTIONS,
 )
 from .._generated.workflows import (
+    DtmfEvent,
+    GetDtmfResult,
+    GetEmailResult,
     IoEnableState,
     SipParticipantRequest,
+    WarmTransferResult,
     WorkflowInstructions as WorkflowInstructions,
 )
 from ..job import JobContext, _server_credentials, get_job_context

@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from inspect import get_annotations
 
-from livekit.agents.llm.realtime import RealtimeModel
+from .realtime import RealtimeModel
 
 
 @dataclass

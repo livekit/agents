@@ -9,22 +9,19 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Literal
 
 from livekit import rtc
-from livekit.agents._generated.tts_availability import (
-    AvailabilityChangedEvent as AvailabilityChangedEvent,
-)
 
 from . import _bindings, _core, tokenize, utils
 from ._generated.llm_fallback import AvailabilityChanged
+from ._generated.public_tts import *  # noqa: F403
 from ._generated.tts import (
     TTS,
     ChunkedStream,
     ExpressiveTag,
-    MarkupInfo,
     SynthesizedAudio,
     SynthesizeStream,
     TTSCapabilities,
-    TTSError,
 )
+from ._generated.tts_availability import AvailabilityChangedEvent
 from .tokenize import SentenceStream, TokenData
 from .types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -51,6 +48,7 @@ __all__ = [
     "AudioEmitter",
     "TTSError",
     "SentenceStreamPacer",
+    "ExpressiveTag",
 ]
 
 
