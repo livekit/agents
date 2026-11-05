@@ -83,6 +83,44 @@ def test_preload_import_failure_preserves_module_and_cause(
         sys.modules.pop("preload_first", None)
 
 
+def test_preload_resolves_plugin_lazy_exports(
+    launch: types.ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # a job's first `plugin.LLM` must import nothing on its event loop
+    lazy = (
+        "import importlib\n"
+        "def __getattr__(name):\n"
+        "    if name not in _EXPORTS:\n"
+        "        raise AttributeError(name)\n"
+        "    value = importlib.import_module(f'.{_EXPORTS[name]}', __name__)\n"
+        "    return getattr(value, name, value)\n"
+    )
+    package = tmp_path / "lazy_plugin"
+    (package / "realtime").mkdir(parents=True)
+    (package / "__init__.py").write_text(
+        "_EXPORTS = {'LLM': 'llm', 'realtime': 'realtime', 'Extra': 'extra'}\n"
+        "__all__ = list(_EXPORTS)\n" + lazy
+    )
+    (package / "llm.py").write_text("class LLM: ...\n")
+    (package / "extra.py").write_text("import a_missing_optional_dependency\n")
+    (package / "realtime" / "__init__.py").write_text(
+        "_EXPORTS = {'RealtimeModel': 'model'}\n__all__ = list(_EXPORTS)\n" + lazy
+    )
+    (package / "realtime" / "model.py").write_text("class RealtimeModel: ...\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    from livekit.agents import Plugin
+
+    plugin = types.SimpleNamespace(package="lazy_plugin")
+    monkeypatch.setattr(Plugin, "registered_plugins", [plugin])
+    try:
+        launch.load_preload_modules([])
+        assert {"lazy_plugin.llm", "lazy_plugin.realtime.model"} <= set(sys.modules)
+        assert "lazy_plugin.extra" not in sys.modules
+    finally:
+        for name in [m for m in sys.modules if m.split(".")[0] == "lazy_plugin"]:
+            del sys.modules[name]
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="Windows uses spawn")
 def test_running_forkserver_refuses_different_preloads_before_mutating_environment(
     launch: types.ModuleType, monkeypatch: pytest.MonkeyPatch

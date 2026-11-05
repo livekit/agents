@@ -16,6 +16,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from multiprocessing.context import BaseContext
 from multiprocessing.process import BaseProcess
+from types import ModuleType
 from typing import Any, Literal, Protocol, cast
 
 from livekit.agents._generated.worker_ipc import (
@@ -255,13 +256,31 @@ def preload_module_names(modules: Sequence[str]) -> tuple[str, ...]:
 
 
 def load_preload_modules(modules: Sequence[str]) -> None:
-    """Import in order and retain the failing module and original cause."""
+    """Import in order and retain the failing module and original cause, then every registered
+    plugin's lazy exports, so a job's first use of a plugin imports nothing on its loop."""
     for module in modules:
         try:
             importlib.import_module(module)
         except Exception as error:
             # multiprocessing's forkserver ignores ImportError from its preload list.
             raise RuntimeError(f"preload module {module!r} failed: {error}") from error
+    from ..worker import Plugin
+
+    for plugin in Plugin.registered_plugins:
+        _load_exports(importlib.import_module(plugin.package))
+
+
+def _load_exports(module: ModuleType) -> None:
+    """Resolves ``module.__all__`` and, below it, its own subpackages' exports. An export whose
+    optional dependency is missing stays unresolved: it fails only where it is used."""
+    for name in getattr(module, "__all__", ()):
+        try:
+            value = getattr(module, name)
+        except ImportError as error:
+            logger.debug("plugin export not preloaded", extra={"export": name, "error": error})
+            continue
+        if isinstance(value, ModuleType) and value.__name__.startswith(module.__name__ + "."):
+            _load_exports(value)
 
 
 def configure_forkserver(context: BaseContext, modules: Sequence[str]) -> None:
