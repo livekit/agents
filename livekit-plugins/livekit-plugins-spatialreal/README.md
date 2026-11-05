@@ -1,6 +1,6 @@
 # SpatialReal plugin for LiveKit Agents
 
-Support for the [SpatialReal](https://spatialreal.com/) virtual avatar.
+Support for the [SpatialReal](https://www.spatialreal.ai/) virtual avatar.
 
 The agent's speech is sent to SpatialReal, which joins the room and publishes the avatar's audio and
 animation; the SpatialReal client SDK renders the avatar on the viewer's own device.
