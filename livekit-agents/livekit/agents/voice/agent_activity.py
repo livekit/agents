@@ -177,7 +177,7 @@ class _OnEnterData:
     agent: Agent
 
 
-_OnEnterContextVar = contextvars.ContextVar["_OnEnterData"]("agents_activity_on_enter")
+_OnEnterContextVar = contextvars.ContextVar["_OnEnterData | None"]("agents_activity_on_enter")
 
 
 @dataclass
@@ -1221,6 +1221,17 @@ class AgentActivity(RecognitionHooks):
     async def _start_session(self, *, reuse_resources: _ReusableResources | None = None) -> None:
         assert self._lock.locked(), "_start_session should only be used when locked."
 
+        # session-long tasks must not inherit the on_enter marker of whoever started this activity
+        tk = _OnEnterContextVar.set(None)
+        try:
+            await self._start_session_impl(reuse_resources=reuse_resources)
+        finally:
+            _OnEnterContextVar.reset(tk)
+
+    async def _start_session_impl(
+        self, *, reuse_resources: _ReusableResources | None = None
+    ) -> None:
+        """Hook up the models and start the scheduling and audio-recognition tasks."""
         if isinstance(self.llm, llm.LLM):
             self.llm.on("metrics_collected", self._on_metrics_collected)
             self.llm.on("error", self._on_error)
@@ -2812,8 +2823,8 @@ class AgentActivity(RecognitionHooks):
         # When the audio recognition detects the end of a user turn:
         #  - check if realtime model server-side turn detection is enabled
         #  - check if there is no current generation happening
-        #  - cancel the current generation if it allows interruptions (otherwise skip this current
-        #  turn)
+        #  - cancel the current generation if it allows interruptions (otherwise skip the reply
+        #  but keep the user message)
         #  - generate a reply to the user input
 
         # interrupt all background speeches and wait for them to finish to update the chat context
@@ -2855,6 +2866,15 @@ class AgentActivity(RecognitionHooks):
                     "skipping reply to user input, current speech generation cannot be interrupted",
                     extra={"lk.pii.user_input": info.new_transcript},
                 )
+                # only the reply is skipped: if the user audio was kept, keep the message too
+                # (realtime models add their own transcript, the STT copy would duplicate it)
+                if (
+                    info.new_transcript != ""
+                    and not self._session.options.interruption["discard_audio_if_uninterruptible"]
+                    and not isinstance(self.llm, llm.RealtimeModel)
+                ):
+                    self._agent._chat_ctx.items.append(user_message)
+                    self._session._conversation_item_added(user_message)
                 return
             await self._cancel_speech_pause(self._cancel_speech_pause_task)
 

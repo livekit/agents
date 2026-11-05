@@ -715,7 +715,7 @@ async def test_normal_turn_deduplicates_partials_final_and_end_then_evicts_state
         {"type": "transcript", "transcript": "hel"},
         {"type": "transcript", "turnId": 1, "transcript": "hel"},
         {"type": "transcript", "turnId": 1, "transcript": "hello"},
-        {"type": "speechEnd", "turnId": 1},
+        {"type": "speechEnd", "turnId": 1, "audioProcessedMs": 1500},
         {"type": "speechEnd", "turnId": 1},
         {"type": "speechComplete", "turnId": 1, "transcript": "hello there"},
         {"type": "speechComplete", "turnId": 1, "transcript": "duplicate"},
@@ -740,6 +740,10 @@ async def test_normal_turn_deduplicates_partials_final_and_end_then_evicts_state
     assert list(stream._completed_turn_order) == ["1"]
     final = _speech_events(collected)[-2]
     assert final.alternatives[0].language == ""
+    endpoint = _speech_events(collected)[-1]
+    # audioProcessedMs is the processing position, not an acoustic boundary.
+    assert endpoint.alternatives == []
+    assert endpoint.speech_end_time is None
     await provider.aclose()
 
 
