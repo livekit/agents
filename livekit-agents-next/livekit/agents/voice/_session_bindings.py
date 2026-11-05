@@ -24,7 +24,6 @@ from .._generated.session_options import SessionKwargs
 from .._generated.session_owner import ProviderBindings
 from .._generated.session_wire import DEFAULT_HOOK_BOUND, DEFAULT_SILENT_FPS, DEFAULT_SPEAKING_FPS
 from .._generated.vad import VAD
-from .._generated.voice_session import UpdateAgentArgs
 from ..inference.llm import llm_from_model_string
 from ..llm import (
     LLM,
@@ -221,8 +220,6 @@ def initialize(
     session._amd = None
     # the native options own the providers from here: `session.stt`, `tts` and `vad` read them
     session._options.update_providers({"stt": stt_model, "tts": tts_model, "vad": vad_model})
-    # `update_agent(chat_ctx=)` before `start()`: the history the session starts on
-    session._start_chat_ctx = None
     session._input = io.AgentInput(session)
     session._output = io.AgentOutput(session)
     # what a job's session report reads
@@ -407,20 +404,6 @@ class SessionAdapter:
         models = {k: v for k, v in options.items() if k in _MODELS}
         return models, cast("UpdateKwargs", {k: v for k, v in options.items() if k not in _MODELS})
 
-    def update_agent(self, agent: Agent, *, chat_ctx: ChatContext | None = None) -> None:
-        """Hand the conversation to ``agent``; the session and its history stay. ``chat_ctx`` is
-        the context ``agent`` works on instead of the conversation carried forward."""
-        session = self.session
-        frame = None
-        if session._core is not None:
-            fields = self._frame(agent)
-            if chat_ctx is not None:
-                fields["chat_ctx"] = chat_ctx.items
-            frame = UpdateAgentArgs(**fields)
-        session._owner.update_agent(agent, frame)
-        if session._core is None and chat_ctx is not None:
-            session._start_chat_ctx = chat_ctx.copy()
-
     async def _start_ivr_detection(self, transcript: str | None = None) -> None:
         """Start IVR detection: the DTMF tool joins the session's tools and the core's navigator
         runs, counting ``transcript`` (AMD's greeting) as heard."""
@@ -562,8 +545,6 @@ class SessionHost:
             room = None
         elif not is_given(room):
             room = job_ctx.room if job_ctx is not None else None
-        if chat_ctx is None:
-            chat_ctx = session._start_chat_ctx
         options = room_options if is_given(room_options) else RoomOptions()
         session._audio_input_options = options.get_audio_input_options()
         text_input = options.get_text_input_options()
@@ -614,8 +595,8 @@ class SessionHost:
             dynamic_instructions=frame["dynamic_instructions"],
             agent=frame["agent"],
             agent_host=frame["agent_host"],
-            # the native owner starts a stored call on its lane's history instead
-            chat_ctx=chat_ctx.items if chat_ctx is not None else [],
+            # without one, `update_agent(chat_ctx=)`'s; a stored call starts on its lane's history
+            chat_ctx=chat_ctx.items if chat_ctx is not None else None,
             stt=frame["stt"],
             vad=_bindings.core_leg(session.vad),
             llm=None if isinstance(model, llm.RealtimeModel) else model,

@@ -546,3 +546,21 @@ async def test_say_speaks_a_str_a_stream_of_words_or_pre_synthesized_audio() -> 
             session.say(words(), audio=frames())
         said = [item.text_content for item in session.history.items if item.type == "message"]
     assert said == ["One moment.", "Your booking is confirmed.", "Goodbye."]
+
+
+@pytest.mark.parametrize("own_history", [False, True])
+async def test_a_history_given_before_start_opens_the_session_unless_start_names_its_own(
+    own_history: bool,
+) -> None:
+    before = ChatContext.empty()
+    before.add_message(role="user", content="I called yesterday about my booking.")
+    at_start = ChatContext.empty()
+    at_start.add_message(role="user", content="This is a new call.")
+    agent = Agent(instructions="Help with bookings.", name="bookings")
+    async with VoiceSession(vad=None, turn_detection="manual") as session:
+        session.update_agent(agent, chat_ctx=before)
+        before.add_message(role="user", content="Added after the handoff.")
+        await session.start(agent, chat_ctx=at_start if own_history else None)
+        said = [item.text_content for item in session.history.items if item.type == "message"]
+    expected = "This is a new call." if own_history else "I called yesterday about my booking."
+    assert said == [expected]

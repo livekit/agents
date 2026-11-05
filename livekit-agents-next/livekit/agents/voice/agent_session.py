@@ -108,7 +108,6 @@ class VoiceSession(SessionCommands, rtc.EventEmitter[EventTypes], Generic[Contex
     _turn_detection_mode: str | None
     _interruption_mode: Literal["adaptive", "vad"] | None
     _video_sampler: VoiceActivityVideoSampler | None
-    _start_chat_ctx: ChatContext | None
     _input: io.AgentInput
     _output: io.AgentOutput
     _event_retention: _core._core_EventRetention
@@ -411,8 +410,11 @@ class VoiceSession(SessionCommands, rtc.EventEmitter[EventTypes], Generic[Contex
 
     def update_agent(self, agent: Agent, *, chat_ctx: ChatContext | None = None) -> None:
         """Hand the conversation to ``agent``; the session and its history stay. ``chat_ctx`` is
-        the context ``agent`` works on instead of the conversation carried forward."""
-        self._adapter.update_agent(agent, chat_ctx=chat_ctx)
+        the context ``agent`` works on instead of the conversation carried forward; before
+        ``start()``, the history the session starts on unless ``start()`` names its own."""
+        frame = UpdateAgentArgs(**self._frame(agent)) if self._core is not None else None
+        items = chat_ctx.items if chat_ctx is not None else None
+        self._owner.update_agent(agent, frame, chat_ctx=items)
 
     def _agent_chat_ctx(self) -> ChatContext:
         """The driving agent's own context, as the core keeps it."""

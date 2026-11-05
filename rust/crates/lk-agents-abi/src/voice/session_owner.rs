@@ -122,11 +122,15 @@ pub trait SessionOwner: Send + Sync + Sized + 'static {
         facade(module = "session_commands", class = "SessionCommands", target = "_owner")
     )]
     fn keyterms(&self) -> Vec<String>;
+    /// `update_agent(agent, chat_ctx=)`. Before `start()`, `agent` drives once the session
+    /// starts, on `chat_ctx` unless `start()` names its own; after, `frame` is the handoff and
+    /// `chat_ctx` the context `agent` works on instead of the conversation carried forward.
     #[host(call)]
     fn update_agent(
         &self,
         agent: crate::HostRef,
         frame: Option<super::session::UpdateAgentArgs>,
+        #[host(kw, default = None)] chat_ctx: Option<Vec<crate::ChatItem>>,
     ) -> Result<(), super::session::SessionRefused>;
     #[host(call)]
     fn update_options(

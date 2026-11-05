@@ -853,7 +853,17 @@ class _core_SessionOwner:
     @property
     def keyterms(self) -> list[str]:
         """No keyterms are applied before a voice driver exists."""
-    def update_agent(self, agent: object, frame: UpdateAgentArgs | None) -> None: ...
+    def update_agent(
+        self,
+        agent: object,
+        frame: UpdateAgentArgs | None,
+        *,
+        chat_ctx: Sequence[ChatItem] | None = None,
+    ) -> None:
+        """`update_agent(agent, chat_ctx=)`. Before `start()`, `agent` drives once the session
+        starts, on `chat_ctx` unless `start()` names its own; after, `frame` is the handoff and
+        `chat_ctx` the context `agent` works on instead of the conversation carried forward.
+        """
     def update_options(
         self,
         update: UpdateKwargs,

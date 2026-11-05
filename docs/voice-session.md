@@ -41,7 +41,10 @@ again when left empty.
 
 `session.start(agent, chat_ctx=)` and `session.update_agent(agent, chat_ctx=)`
 are the two places to supply a different history. An explicit agent switch
-retains the current history when no replacement is supplied.
+retains the current history when no replacement is supplied. Before `start()`,
+`update_agent(agent, chat_ctx=)` selects the agent the session starts with and
+the history it opens on, as the context read at that call; `start(chat_ctx=)`
+takes precedence over it.
 
 In a tool on a call, `ctx.live_session` is the call (`say()`,
 `generate_reply()`), and `ctx.thread` is the durable thread, the same

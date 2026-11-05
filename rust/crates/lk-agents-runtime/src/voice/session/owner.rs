@@ -61,6 +61,9 @@ struct Inner {
     closed: watch::Sender<bool>,
     recording: OnceCell<Result<(), RecordingFailure>>,
     selection: Mutex<Selection>,
+    /// `update_agent(chat_ctx=)` before `start()`: the history a session started without one
+    /// opens on.
+    start_history: Mutex<Option<Vec<lk_agents_abi::ChatItem>>>,
 }
 
 #[derive(Clone)]
@@ -155,6 +158,9 @@ impl Inner {
             recorder.ready().await.map_err(|error| HostError::new(error.to_string()))?;
         }
         let mut args = bindings.args;
+        if args.chat_ctx.is_none() {
+            args.chat_ctx = self.start_history.lock().take();
+        }
         if let Some(hooks) = args.hooks.clone() {
             // The first agent's activity starts here: its toolsets are set up inside it.
             let activity = telemetry::reserve::<telemetry::StartAgentActivity>(&starting);
@@ -257,6 +263,7 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
             closed: watch::channel(false).0,
             recording: OnceCell::new(),
             selection: Mutex::new(Selection::default()),
+            start_history: Mutex::new(None),
         }))
     }
 
@@ -348,13 +355,20 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
         &self,
         agent: lk_agents_abi::HostRef,
         frame: Option<lk_agents_abi::voice::session::UpdateAgentArgs>,
+        chat_ctx: Option<Vec<lk_agents_abi::ChatItem>>,
     ) -> Result<(), SessionRefused> {
         let Some(session) = self.0.session.get() else {
+            if chat_ctx.is_some() {
+                *self.0.start_history.lock() = chat_ctx;
+            }
             self.0.select(Some(agent));
             return Ok(());
         };
         let spawner = (self.0.env.spawner)().map_err(|_| SessionRefused::Closed)?;
-        let frame = frame.ok_or(SessionRefused::NotStarted)?;
+        let mut frame = frame.ok_or(SessionRefused::NotStarted)?;
+        if chat_ctx.is_some() {
+            frame.chat_ctx = chat_ctx;
+        }
         let installed = session.update_agent(frame)?;
         let id = self.0.select(Some(agent));
         let inner = self.0.clone();

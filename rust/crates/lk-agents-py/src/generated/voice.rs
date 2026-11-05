@@ -4010,12 +4010,16 @@ impl CoreSessionOwner {
         ::pyo3::PyResult::Ok(out)
     }
 
-    #[pyo3(signature = (agent, frame))]
+    /// `update_agent(agent, chat_ctx=)`. Before `start()`, `agent` drives once the session
+    /// starts, on `chat_ctx` unless `start()` names its own; after, `frame` is the handoff and
+    /// `chat_ctx` the context `agent` works on instead of the conversation carried forward.
+    #[pyo3(signature = (agent, frame, *, chat_ctx = None))]
     fn update_agent(
         &self,
         py: Python<'_>,
         agent: Bound<'_, PyAny>,
         frame: Option<Bound<'_, PyAny>>,
+        chat_ctx: Option<Bound<'_, PyAny>>,
     ) -> PyResult<()> {
         crate::py_calls::check_pid()?;
         let agent = crate::py_objects::object_ref_from_py(agent.as_any())?;
@@ -4024,7 +4028,19 @@ impl CoreSessionOwner {
                 crate::generated::records::voice_session::update_agent_args_from_py(v.as_any())
             })
             .transpose()?;
-        py.detach(|| <CoreSessionOwnerImpl as ::lk_agents_abi::voice::session_owner::SessionOwner>::update_agent(&self.0, agent, frame)).map_err(|e: ::lk_agents_abi::voice::session::SessionRefused| <::lk_agents_abi::voice::session::SessionRefused as crate::py_errors::HostException>::to_py_err(&e))?;
+        let chat_ctx = chat_ctx
+            .map(|v| {
+                v.try_iter().and_then(|items| {
+                    items
+                        .map(|item| {
+                            let item = item?;
+                            crate::generated::records::chat_items::chat_item_from_py(item.as_any())
+                        })
+                        .collect::<PyResult<Vec<_>>>()
+                })
+            })
+            .transpose()?;
+        py.detach(|| <CoreSessionOwnerImpl as ::lk_agents_abi::voice::session_owner::SessionOwner>::update_agent(&self.0, agent, frame, chat_ctx)).map_err(|e: ::lk_agents_abi::voice::session::SessionRefused| <::lk_agents_abi::voice::session::SessionRefused as crate::py_errors::HostException>::to_py_err(&e))?;
         Ok(())
     }
 
