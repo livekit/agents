@@ -21,9 +21,3 @@ async def decorated_results() -> None:
 
 async def heterogeneous_cleanup(number: asyncio.Future[int], text: asyncio.Future[str]) -> None:
     await aio.cancel_and_wait(number, text)
-
-
-async def task_results() -> None:
-    tasks = aio.TaskSet()
-    assert_type(tasks.create_task(fetch_value("key")), asyncio.Task[int])
-    assert_type(tasks.tasks, set[asyncio.Task[object]])

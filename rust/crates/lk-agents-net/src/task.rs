@@ -136,7 +136,7 @@ impl Spawner for TokioSpawner {
     }
 }
 
-/// Named [`OwnedTask`]s and a way to wait for them to be gone (`utils.aio.TaskSet`). Each task
+/// Named [`OwnedTask`]s and a way to wait for them to be gone. Each task
 /// holds the set until it ends, so dropping the owner's handle cancels nothing: `close`,
 /// `cancel_all` and `drain` do.
 #[derive(Default)]

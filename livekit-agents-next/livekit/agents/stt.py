@@ -230,10 +230,6 @@ class StreamAdapter(STT):
         return self._native
 
     @property
-    def wrapped_stt(self) -> STT:
-        return self._stt
-
-    @property
     def model(self) -> str:
         return self._stt.model
 

@@ -549,7 +549,7 @@ mod tests {
         assert!(AudioTrackFeature::try_from(7).is_err());
     }
 
-    // Catches: the `close_on_disconnect` set drifting from `DEFAULT_CLOSE_ON_DISCONNECT_REASONS`.
+    // Catches: a change to which disconnect reasons close the session by default.
     #[test]
     fn only_three_reasons_close_the_session() {
         let closing: Vec<_> =

@@ -49,13 +49,6 @@ __all__ = [
     "AudioProcessingError",
 ]
 
-DEFAULT_CLOSE_ON_DISCONNECT_REASONS: list[rtc.DisconnectReason.ValueType] = [
-    rtc.DisconnectReason.CLIENT_INITIATED,
-    rtc.DisconnectReason.ROOM_DELETED,
-    rtc.DisconnectReason.USER_REJECTED,
-]
-
-
 TextInputCallback = Callable[["VoiceSession", TextInputEvent], Coroutine[None, None, None] | None]
 
 

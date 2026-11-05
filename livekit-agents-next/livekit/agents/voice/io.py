@@ -425,8 +425,6 @@ class AgentOutput:
         self._session._running.set_io_enabled("transcription", enabled)
 
 
-DEFAULT_INPUT_DETAILS = InputDetails(modality=speech_defaults.DEFAULT_INPUT_MODALITY)
-
 InterruptionSource = Literal["audio_activity", "user_turn", "programmatic"]
 """Why a speech was interrupted, as the reference's ``agent_turn`` trace names it."""
 
@@ -468,11 +466,6 @@ class SpeechHandle:
     @property
     def num_steps(self) -> int:
         return self._core.num_steps
-
-    @property
-    def input_details(self) -> InputDetails:
-        """How the input this speech answers arrived: the core runs every speech as audio."""
-        return DEFAULT_INPUT_DETAILS
 
     @property
     def scheduled(self) -> bool:
