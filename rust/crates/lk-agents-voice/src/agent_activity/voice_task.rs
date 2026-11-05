@@ -205,6 +205,7 @@ impl VoiceDriver {
                 tool_choice: None,
                 chat_ctx: None,
                 toolset: None,
+                tool_names: None,
                 on_enter: true,
                 call: None,
             };

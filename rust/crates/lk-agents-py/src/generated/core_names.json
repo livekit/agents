@@ -237,7 +237,6 @@
     "receive_dtmf",
     "remove_instructions",
     "replace_words",
-    "reply_tool_indices",
     "resolve_interruption_detector",
     "resolve_keyterm_detection",
     "resolve_mcp_tool_options",

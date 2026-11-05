@@ -310,7 +310,6 @@ from ._generated._core_voice import (
     normalize_phone_number as normalize_phone_number,
     plan_session_start as plan_session_start,
     receive_dtmf as receive_dtmf,
-    reply_tool_indices as reply_tool_indices,
     resolve_interruption_detector as resolve_interruption_detector,
     rt_server_turn_detection as rt_server_turn_detection,
     rtc_wire_names as rtc_wire_names,

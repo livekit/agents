@@ -502,16 +502,11 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         allow_interruptions: Option<bool>,
         tool_choice: Option<lk_agents_abi::ToolChoice>,
         chat_ctx: Option<Vec<ChatItem>>,
-        tools: Option<Vec<ToolSpec>>,
-        tools_host: Option<HostRef>,
-        voice_agent: Option<Arc<dyn lk_agents_abi::agent::AgentFrame>>,
+        tools: Option<Vec<String>>,
         on_enter: bool,
         origin: Option<VoiceCommandOrigin>,
     ) -> Result<Speech, CommandRefused> {
         let origin = origin_of(origin);
-        // An empty toolset would tell the model about no tool at all; `None` keeps the agent's.
-        let toolset =
-            tools.map(|specs| Arc::new(Toolset { specs, host: tools_host, agent: voice_agent }));
         let (speech, call, reply) = self.speech_call(allow_interruptions)?;
         self.send_awaited(
             origin,
@@ -521,7 +516,8 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
                 allow_interruptions,
                 tool_choice,
                 chat_ctx: chat_ctx.map(lk_agents_abi::ChatContext::new),
-                toolset,
+                toolset: None,
+                tool_names: tools,
                 on_enter,
                 call: Some(call),
             },

@@ -3119,8 +3119,9 @@ impl VoiceSession {
     }
 
     /// `AgentSession.generate_reply()`: reply now, with no end of turn behind it. The overrides
-    /// apply to this reply only; `tools=`, `tools_host=` and `voice_agent=` go together.
-    #[pyo3(signature = (*, user_input = None, instructions = None, allow_interruptions = None, tool_choice = None, chat_ctx = None, tools = None, tools_host = None, voice_agent = None, on_enter = false, origin = None))]
+    /// apply to this reply only; `tools` narrows the driving agent's tools to these names (its
+    /// provider-owned tools stay), refused on a realtime model as `chat_ctx` is.
+    #[pyo3(signature = (*, user_input = None, instructions = None, allow_interruptions = None, tool_choice = None, chat_ctx = None, tools = None, on_enter = false, origin = None))]
     fn generate_reply(
         &self,
         py: Python<'_>,
@@ -3129,9 +3130,7 @@ impl VoiceSession {
         allow_interruptions: ::std::option::Option<bool>,
         tool_choice: Option<Bound<'_, PyAny>>,
         chat_ctx: Option<Bound<'_, PyAny>>,
-        tools: Option<Bound<'_, PyAny>>,
-        tools_host: Option<Bound<'_, PyAny>>,
-        voice_agent: Option<Bound<'_, PyAny>>,
+        tools: ::std::option::Option<::std::vec::Vec<::std::string::String>>,
         on_enter: bool,
         origin: Option<Bound<'_, PyAny>>,
     ) -> PyResult<super::voice::SpeechHandle> {
@@ -3156,39 +3155,12 @@ impl VoiceSession {
                 })
             })
             .transpose()?;
-        let tools = tools
-            .map(|v| {
-                v.try_iter().and_then(|items| {
-                    items
-                        .map(|item| {
-                            let item = item?;
-                            crate::generated::records::tool_options::tool_spec_from_py(
-                                item.as_any(),
-                            )
-                        })
-                        .collect::<PyResult<Vec<_>>>()
-                })
-            })
-            .transpose()?;
-        let tools_host =
-            tools_host.map(|v| crate::py_objects::object_ref_from_py(v.as_any())).transpose()?;
-        let voice_agent = voice_agent
-            .map(|v| {
-                crate::py_objects::native::<dyn ::lk_agents_abi::agent::AgentFrame>(v.as_any())
-                    .ok_or_else(|| {
-                        ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                            "voice_agent",
-                            ": expected an agent's voice frame (`_core.VoiceAgent`)"
-                        ))
-                    })
-            })
-            .transpose()?;
         let origin = origin
             .map(|v| {
                 crate::generated::records::voice_session::voice_command_origin_from_py(v.as_any())
             })
             .transpose()?;
-        let out = py.detach(|| <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::generate_reply(&self.0, user_input, instructions, allow_interruptions, tool_choice, chat_ctx, tools, tools_host, voice_agent, on_enter, origin)).map_err(|e: ::lk_agents_abi::voice::session::CommandRefused| <::lk_agents_abi::voice::session::CommandRefused as crate::py_errors::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::generate_reply(&self.0, user_input, instructions, allow_interruptions, tool_choice, chat_ctx, tools, on_enter, origin)).map_err(|e: ::lk_agents_abi::voice::session::CommandRefused| <::lk_agents_abi::voice::session::CommandRefused as crate::py_errors::HostException>::to_py_err(&e))?;
         ::pyo3::PyResult::Ok(super::voice::SpeechHandle(out))
     }
 
@@ -3707,28 +3679,6 @@ impl VoiceSession {
 // Declared in rust/crates/lk-agents-abi/src/voice/session_effects.rs.
 type SessionStartImpl =
     <crate::generated::implementations::Selected as super::Implementations>::SessionStart;
-type SessionStartReplyToolIndicesOutput = ::std::vec::Vec<usize>;
-
-/// Retain requested local tools and every provider-owned tool, in declaration order.
-#[pyfunction]
-#[pyo3(signature = (tools, names))]
-pub fn reply_tool_indices(
-    py: Python<'_>,
-    tools: Bound<'_, PyAny>,
-    names: ::std::vec::Vec<::std::string::String>,
-) -> PyResult<SessionStartReplyToolIndicesOutput> {
-    crate::py_calls::check_pid()?;
-    let tools = tools.try_iter().and_then(|items| {
-        items
-            .map(|item| {
-                let item = item?;
-                crate::generated::records::tool_options::tool_spec_from_py(item.as_any())
-            })
-            .collect::<PyResult<Vec<_>>>()
-    })?;
-    let out = py.detach(|| <SessionStartImpl as ::lk_agents_abi::voice::session_effects::SessionStart>::reply_tool_indices(tools, names));
-    ::pyo3::PyResult::Ok(out)
-}
 
 #[pyfunction]
 #[pyo3(signature = (vad_supplied, detector_supplied, realtime))]

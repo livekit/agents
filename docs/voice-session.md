@@ -50,7 +50,7 @@ object a text handler gets. Outside a call `ctx.live_session` is `None`.
 | Member | What |
 |---|---|
 | `start(agent, room=, room_options=, chat_ctx=)` | attach the session to the room (the job's when left out) with `agent` speaking; `room_options` is a `RoomOptions` of `audio_input` (`AudioInputOptions`), `audio_output` (`AudioOutputOptions`), `video_input` (`VideoInputOptions`), `text_input` (`TextInputOptions`, whose callback receives a `TextInputEvent`) and `text_output` (`TextOutputOptions`), each `True`/`False` or its options |
-| `say(text)`, `generate_reply(instructions=, user_input=)` | speak fixed words, or reply through the model; each returns the speech's `SpeechHandle` |
+| `say(text)`, `generate_reply(instructions=, user_input=, tools=)` | speak fixed words, or reply through the model; each returns the speech's `SpeechHandle`. `tools=` (names) offers only those of the driving agent's tools for that reply, plus its provider-owned tools; a realtime model refuses it |
 | `interrupt()` | stop the current speech |
 | `set_participant(identity)` | listen to another room participant (their audio, transcript and keypad); `None` listens to no one. By default the session links the first participant who joins, or `RoomOptions(participant_identity=)` |
 | `update_agent(agent)`, `update_options(...)`, `override_options(...)` | see [updating a live session](#updating-a-live-session) |

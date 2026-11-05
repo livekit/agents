@@ -448,3 +448,40 @@ async def test_stop_response_from_the_turn_hook_skips_the_reply() -> None:
         replies = [i for i in session.history.items if i.type == "message" and i.role != "user"]
     assert replies == [], replies
     assert _synthesized(session.tts) == 0  # type: ignore[arg-type]
+
+
+async def test_generate_reply_tools_narrows_the_agents_tools_for_that_reply() -> None:
+    from livekit.agents import function_tool
+
+    @function_tool
+    async def lookup_booking() -> str:
+        """Look up the caller's booking."""
+        return "booked"
+
+    @function_tool
+    async def cancel_booking() -> str:
+        """Cancel the caller's booking."""
+        return "cancelled"
+
+    offered: list[list[str]] = []
+    session = VoiceSession(
+        vad=None,
+        llm=FakeLLM(),
+        tts=FakeTTS(fake_audio_duration=0.1),
+        turn_handling={"turn_detection": None},
+    )
+    session.output.audio = FakeAudioOutput()
+
+    @session.llm_node
+    async def node(
+        ctx: RunContext, chat_ctx: ChatContext, tools: list, settings: ModelSettings
+    ) -> str:
+        offered.append(sorted(tool.info.name for tool in tools))
+        return "One moment."
+
+    agent = Agent(instructions="Help.", name="desk", tools=[lookup_booking, cancel_booking])
+    async with session:
+        await session.start(agent)
+        await asyncio.wait_for(session.generate_reply(tools=["lookup_booking"]), timeout=5)
+        await asyncio.wait_for(session.generate_reply(), timeout=5)
+    assert offered == [["lookup_booking"], ["cancel_booking", "lookup_booking"]]

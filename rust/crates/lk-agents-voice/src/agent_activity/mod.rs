@@ -259,6 +259,12 @@ impl AgentActivity {
 
     /// What a request planned now is offered: the agent's toolset, then session additions whose
     /// names the agent lacks (a provider refuses duplicates).
+    /// `generate_reply(tools=)`: the agent's toolset offering only `names` and every
+    /// provider-owned tool, in declaration order; host objects and runner unchanged.
+    pub(crate) fn reply_toolset(&self, names: &[String]) -> Arc<crate::tool_executor::Toolset> {
+        Arc::new(self.toolset.narrowed(names))
+    }
+
     pub(crate) fn advertised_toolset(
         &self,
         session_tools: &crate::tool_executor::Toolset,

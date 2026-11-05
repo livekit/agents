@@ -114,9 +114,9 @@ impl VoiceDriver {
         match cmd {
             // A realtime session answers on its own socket. These arms must come *before* the
             // pipeline arms: a guarded arm after its unguarded twin is dead code.
-            SpeechCommand::GenerateReply { chat_ctx, toolset, call, .. }
+            SpeechCommand::GenerateReply { chat_ctx, toolset, tool_names, call, .. }
                 if self.activity.rt_session.is_some()
-                    && (chat_ctx.is_some() || toolset.is_some()) =>
+                    && (chat_ctx.is_some() || toolset.is_some() || tool_names.is_some()) =>
             {
                 self.refuse_realtime_reply_overrides(call)
             }
@@ -188,9 +188,12 @@ impl VoiceDriver {
                 tool_choice,
                 chat_ctx,
                 toolset,
+                tool_names,
                 on_enter,
                 call,
             } => {
+                let toolset =
+                    toolset.or_else(|| tool_names.map(|names| self.activity.reply_toolset(&names)));
                 self.generate_reply_speech(
                     now,
                     user_input,

@@ -342,6 +342,9 @@ pub enum SpeechCommand {
         chat_ctx: Option<ChatContext>,
         /// Whole, because specs, host objects and runner must agree.
         toolset: Option<Arc<Toolset>>,
+        /// `generate_reply(tools=)`: the agent's toolset narrowed to these names, its provider
+        /// tools kept, for this reply only.
+        tool_names: Option<Vec<String>>,
         on_enter: bool,
         call: Option<SpeechCall>,
     },

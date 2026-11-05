@@ -549,6 +549,38 @@ pub struct Toolset {
 }
 
 impl Toolset {
+    /// Only the local tools named in `names` and every provider-owned tool, in declaration order.
+    pub fn narrowed(&self, names: &[String]) -> Toolset {
+        let mut toolset = self.clone();
+        toolset.specs.retain(|tool| tool.provider_tool.is_some() || names.contains(&tool.name));
+        toolset
+    }
+}
+
+#[cfg(test)]
+mod narrowed_tests {
+    #[test]
+    fn narrowing_local_tools_keeps_provider_tools_and_declaration_order() {
+        let tool = |name: &str, provider| lk_agents_abi::ToolSpec {
+            name: name.into(),
+            description: String::new(),
+            json_schema: serde_json::Value::Null,
+            flags: Default::default(),
+            provider_tool: provider,
+        };
+        let provider = lk_agents_abi::llm::types::ProviderToolDeclaration {
+            provider: None,
+            payload: serde_json::Value::Null,
+        };
+        let tools = vec![tool("first", None), tool("hosted", Some(provider)), tool("last", None)];
+        let toolset = super::Toolset { specs: tools, host: None, agent: None };
+        let names = |t: super::Toolset| t.specs.into_iter().map(|s| s.name).collect::<Vec<_>>();
+        assert_eq!(names(toolset.narrowed(&["last".into()])), ["hosted", "last"]);
+        assert_eq!(names(toolset.narrowed(&[])), ["hosted"]);
+    }
+}
+
+impl Toolset {
     /// A session advertising a tool with nothing to run it is refused at its start, not at the
     /// first call.
     pub fn refuse_unrunnable(&self) -> Result<(), crate::agent_session::DriverError> {

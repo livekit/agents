@@ -553,7 +553,8 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
     fn push_video(&self, content: crate::ChatContent) -> Result<bool, NotAnImage>;
 
     /// `AgentSession.generate_reply()`: reply now, with no end of turn behind it. The overrides
-    /// apply to this reply only; `tools=`, `tools_host=` and `voice_agent=` go together.
+    /// apply to this reply only; `tools` narrows the driving agent's tools to these names (its
+    /// provider-owned tools stay), refused on a realtime model as `chat_ctx` is.
     #[host(call)]
     #[allow(clippy::too_many_arguments)]
     fn generate_reply(
@@ -563,9 +564,7 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
         #[host(default = None)] allow_interruptions: Option<bool>,
         #[host(default = None)] tool_choice: Option<crate::ToolChoice>,
         #[host(default = None)] chat_ctx: Option<Vec<ChatItem>>,
-        #[host(default = None)] tools: Option<Vec<ToolSpec>>,
-        #[host(default = None)] tools_host: Option<HostRef>,
-        #[host(default = None)] voice_agent: Option<Arc<dyn crate::agent::AgentFrame>>,
+        #[host(default = None)] tools: Option<Vec<String>>,
         // Decided by the host: the reference tests a `ContextVar` plus agent/session identity.
         #[host(default = false)] on_enter: bool,
         #[host(default = None)] origin: Option<VoiceCommandOrigin>,

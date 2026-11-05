@@ -470,16 +470,6 @@ class SessionAdapter:
     ) -> SpeechHandle:
         """Reply now. ``tools`` narrows the offered tools to these names for this reply."""
         session = self.session
-        toolset: dict[str, Any] = {}
-        if is_given(tools):
-            pool = self._pool(session.current_agent)
-            specs = tool_specs(pool)
-            specs = [specs[index] for index in _core.reply_tool_indices(specs, tools)]
-            toolset = {
-                "tools": specs,
-                "tools_host": pool,
-                "voice_agent": self._voice_agent(session.current_agent),
-            }
         core = session._running.generate_reply(
             user_input=user_input if is_given(user_input) else None,
             instructions=instructions if is_given(instructions) else None,
@@ -488,8 +478,8 @@ class SessionAdapter:
             chat_ctx=chat_ctx.items if is_given(chat_ctx) else None,
             on_enter=isinstance(_origin(), VoiceCommandOriginHook)
             and _hook_name.get(None) == "on_enter",
+            tools=list(tools) if is_given(tools) else None,
             origin=_origin(),
-            **toolset,
         )
         return SpeechHandle(core)
 

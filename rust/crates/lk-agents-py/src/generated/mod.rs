@@ -463,7 +463,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<voice::CoreVoiceRun>()?;
     m.add_class::<voice::SessionOptions>()?;
     m.add_class::<voice::VoiceSession>()?;
-    m.add_function(wrap_pyfunction!(voice::reply_tool_indices, m)?)?;
     m.add_function(wrap_pyfunction!(voice::default_session_models, m)?)?;
     m.add_function(wrap_pyfunction!(voice::user_turn_exceeded_reply, m)?)?;
     m.add_function(wrap_pyfunction!(voice::plan_session_start, m)?)?;

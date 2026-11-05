@@ -55,9 +55,6 @@ pub struct StartPlan {
 /// How a job's session starts, decided before its loop opens.
 #[crate::host(functions)]
 pub trait SessionStart {
-    /// Retain requested local tools and every provider-owned tool, in declaration order.
-    #[host(function)]
-    fn reply_tool_indices(tools: Vec<crate::ToolSpec>, names: Vec<String>) -> Vec<usize>;
     #[host(function)]
     fn default_session_models(
         vad_supplied: bool,
