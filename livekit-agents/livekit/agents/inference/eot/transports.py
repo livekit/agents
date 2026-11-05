@@ -100,8 +100,7 @@ class _CloudTransport:
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._session_id: str | None = None
         self._num_retries = 0
-        # the user turn length so far, counted since the last flush, as the local transport
-        # counts it; sent with each inference_start
+        # the user turn length so far, since the last flush; sent with each inference_start
         self._turn_samples = 0
 
         self._send_ch: aio.Chan[ClientMessage] | None = None
@@ -129,7 +128,6 @@ class _CloudTransport:
                     break
 
         self._send_message(ClientMessage(eot_input_chat_context=context))
-        # the gateway adds the audio that reaches it after this message
         turn_samples = min(self._turn_samples, _MAX_UINT32)
         self._send_message(
             ClientMessage(
