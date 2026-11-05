@@ -6,10 +6,9 @@ import asyncio
 from dataclasses import replace
 from typing import Literal
 
-from .. import _bindings, _core
+from .. import _bindings
 from .._generated.llm import LLM, LLMStream
-from .._generated.llm_availability import AvailabilityChangedEvent
-from .._generated.llm_fallback import AvailabilityChanged
+from .._generated.provider_hosts import FallbackLlmHost
 from .._generated.public_llm import *  # noqa: F403
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given
@@ -148,7 +147,9 @@ __all__ = [
 ]
 
 
-class FallbackAdapter(_bindings.FallbackMembers[LLM], LLM[Literal["llm_availability_changed"]]):
+class FallbackAdapter(
+    FallbackLlmHost, _bindings.FallbackMembers[LLM], LLM[Literal["llm_availability_changed"]]
+):
     """Several LLMs behind one: a failed one is skipped until it recovers. The chain is the
     core's (``_core.FallbackLlm``)."""
 
@@ -180,30 +181,6 @@ class FallbackAdapter(_bindings.FallbackMembers[LLM], LLM[Literal["llm_availabil
         self._max_retry_per_llm = max_retry_per_llm
         self._retry_interval = retry_interval
         self._sticky = sticky
-
-    @property
-    def _native(self) -> _core.FallbackLlm:
-        # one per running loop: its members are called on the loop the chain was built on
-        return _bindings.on_loop(
-            self,
-            lambda: _core.FallbackLlm(
-                [_bindings.core_leg(t) for t in self._members],
-                on_availability=self,
-                attempt_timeout=self._attempt_timeout,
-                max_retry_per_llm=self._max_retry_per_llm,
-                retry_interval=self._retry_interval,
-                sticky=self._sticky,
-            ),
-        )
-
-    def _core_leg(self) -> FallbackAdapter | _core.FallbackLlm:
-        return self if type(self).chat is not FallbackAdapter.chat else self._native
-
-    def _core_availability_changed(self, ev: AvailabilityChanged) -> None:
-        self.emit(
-            "llm_availability_changed",
-            AvailabilityChangedEvent(llm=self._members[ev.index], available=ev.available),
-        )
 
     def chat(
         self,

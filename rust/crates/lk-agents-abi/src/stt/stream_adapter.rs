@@ -22,8 +22,16 @@ pub trait SttStreamAdapter: Send + Sync + Sized + 'static {
     #[host(source(item = SpeechEvent, class = "SttAdapterStream"))]
     type Events: StreamOutput<SpeechEvent> + 'static;
 
-    /// The wrapped STT and VAD; each stream binds its own recognition policy.
+    /// The wrapped STT and VAD; each stream binds its own recognition policy. `StreamAdapter`'s
+    /// mixin builds it from the adapter's attributes, one per loop.
     #[host(new)]
+    #[host(facade(
+        module = "provider_hosts",
+        class = "SttStreamAdapterHost",
+        target = "_native",
+        legs(stream, recognize),
+        resolve(stt = ".._bindings.core_leg", vad = ".._bindings.core_leg")
+    ))]
     fn new(env: &Self::Env, stt: Arc<dyn Stt>, vad: Arc<dyn Vad>) -> Self;
 
     /// `_recognize_impl`: the wrapped STT's batch path.

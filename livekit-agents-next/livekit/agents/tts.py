@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from livekit import rtc
 
 from . import _bindings, _core, tokenize, utils
-from ._generated.llm_fallback import AvailabilityChanged
+from ._generated.provider_hosts import FallbackTtsHost
 from ._generated.public_tts import *  # noqa: F403
 from ._generated.tts import (
     TTS,
@@ -21,7 +21,6 @@ from ._generated.tts import (
     SynthesizeStream,
     TTSCapabilities,
 )
-from ._generated.tts_availability import AvailabilityChangedEvent
 from .tokenize import SentenceStream, TokenData
 from .types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -134,7 +133,9 @@ async def _drain_native(native: Any, output_emitter: AudioEmitter, *, stream: bo
         out(audio)
 
 
-class FallbackAdapter(_bindings.FallbackMembers[TTS], TTS[Literal["tts_availability_changed"]]):
+class FallbackAdapter(
+    FallbackTtsHost, _bindings.FallbackMembers[TTS], TTS[Literal["tts_availability_changed"]]
+):
     """Several TTS behind one: a failed one is skipped until it recovers."""
 
     _kind = "TTS"
@@ -169,35 +170,6 @@ class FallbackAdapter(_bindings.FallbackMembers[TTS], TTS[Literal["tts_availabil
             capabilities=_core.tts_fallback_capabilities([t.capabilities for t in tts]),
             sample_rate=sample_rate,
             num_channels=tts[0].num_channels,
-        )
-
-    @property
-    def _native(self) -> _core.FallbackTts:
-        # one per running loop: its members are called on the loop the chain was built on; a
-        # member without a duplex path streams through the core's sentence adapter
-        return _bindings.on_loop(
-            self,
-            lambda: _core.FallbackTts(
-                [_bindings.core_leg(t) for t in self._members],
-                max_retry_per_tts=self._max_retry_per_tts,
-                attempt_timeout=self._attempt_timeout,
-                sample_rate=self.sample_rate,
-                on_availability=self,
-            ),
-        )
-
-    def _core_leg(self) -> Any:
-        if (
-            type(self).synthesize is not FallbackAdapter.synthesize
-            or type(self).stream is not FallbackAdapter.stream
-        ):
-            return self
-        return self._native
-
-    def _core_availability_changed(self, ev: AvailabilityChanged) -> None:
-        self.emit(
-            "tts_availability_changed",
-            AvailabilityChangedEvent(tts=self._members[ev.index], available=ev.available),
         )
 
     def synthesize(

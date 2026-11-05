@@ -121,6 +121,19 @@ def core_leg(provider: _Provider | None) -> Any:
     return None if provider is None else provider._core_leg()
 
 
+def core_legs(providers: Sequence[_Provider]) -> list[Any]:
+    """``core_leg`` of each provider, in order."""
+    return [provider._core_leg() for provider in providers]
+
+
+def overrides(provider: object, host: type, *names: str) -> bool:
+    """Whether ``provider``'s class replaces one of ``names`` as the class that mixes in the
+    generated ``host`` (the class just before it in the MRO) defines them."""
+    mro = type(provider).__mro__
+    owner = mro[mro.index(host) - 1]
+    return any(getattr(type(provider), name) is not getattr(owner, name) for name in names)
+
+
 class AttemptHost(Protocol):
     """What ``ProviderAttempts`` runs for one provider request (docs/models.md "Provider
     attempts"). ``LLMStream``, ``ChunkedStream``, ``SynthesizeStream`` and ``RecognizeStream``

@@ -745,7 +745,10 @@ agent references and settles the view when the native handoff answers.
 
 `#[host(facade(...))]` on ABI methods generates explicit Python forwarding
 signatures, including keyword defaults, Future-returning calls and readable
-views. Required native arguments cannot be omitted by a facade. Python keeps
+views. Required native arguments cannot be omitted by a facade. A facade on a class's
+constructor is the host mixin that builds it from the host object's attributes, once per running
+loop, hands it to the core as the provider unless a subclass replaces a declared method, and
+emits a fallback chain's availability event: the fallback adapters' mixins are generated. Python keeps
 handwritten methods where SDK object conversion or callback binding is needed;
 configuration types and VoiceTask authoring are separate from the session class.
 
@@ -1329,7 +1332,10 @@ Generated files carry a first-line marker and are never edited manually.
 `--check` rejects drift. Handwritten Python contains public API behavior,
 user callback invocation, host SDK integration or process launch/bootstrap.
 Modules that only forward or re-export are generated, with public names
-re-exported by their owning package's `__init__`.
+re-exported by their owning package's `__init__`. A declaration's `path = "livekit.agents.x"`
+is its public module: `_generated/public_x.py` re-exports every name placed there, and `x`
+star-imports it, holding no import list of those names; its literal `__all__` lists them, which
+mypy requires.
 
 ### Module registration
 

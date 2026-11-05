@@ -34,10 +34,23 @@ pub trait FallbackLlm: Send + Sync + Sized + 'static {
     #[host(source(item = crate::LlmChunk, class = "FallbackLlmChunks"))]
     type Chunks: crate::StreamOutput<crate::LlmChunk> + 'static;
 
+    /// `llm.FallbackAdapter`'s mixin builds it from the adapter's attributes, one per loop.
     #[host(new)]
+    #[host(facade(
+        module = "provider_hosts",
+        class = "FallbackLlmHost",
+        target = "_native",
+        legs(chat),
+        resolve(members = ".._bindings.core_legs"),
+        availability(
+            observer = "on_availability",
+            event = "llm_availability_changed",
+            record = ".llm_availability.AvailabilityChangedEvent"
+        )
+    ))]
     fn new(
         env: &Self::Env,
-        llms: Vec<std::sync::Arc<dyn crate::Llm>>,
+        members: Vec<std::sync::Arc<dyn crate::Llm>>,
         #[host(kw, default = 5.0)] attempt_timeout: f64,
         #[host(default = 0)] max_retry_per_llm: u32,
         #[host(default = 0.5)] retry_interval: f64,
@@ -74,10 +87,24 @@ pub trait FallbackTts: Send + Sync + Sized + 'static {
 
     #[host(class(name = "TtsStream"))]
     type Stream;
+    /// `tts.FallbackAdapter`'s mixin builds it from the adapter's attributes, one per loop.
     #[host(new)]
+    #[host(facade(
+        module = "provider_hosts",
+        class = "FallbackTtsHost",
+        target = "_native",
+        legs(synthesize, stream),
+        resolve(members = ".._bindings.core_legs"),
+        annotation(sample_rate = "int"),
+        availability(
+            observer = "on_availability",
+            event = "tts_availability_changed",
+            record = ".tts_availability.AvailabilityChangedEvent"
+        )
+    ))]
     fn new(
         env: &Self::Env,
-        ttss: Vec<std::sync::Arc<dyn crate::Tts>>,
+        members: Vec<std::sync::Arc<dyn crate::Tts>>,
         #[host(kw, default = 2)] max_retry_per_tts: u32,
         #[host(default = None)] attempt_timeout: Option<f64>,
         #[host(default = None)] sample_rate: Option<u32>,

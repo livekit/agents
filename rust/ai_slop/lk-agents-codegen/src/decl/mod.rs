@@ -710,6 +710,18 @@ pub struct Facade {
     pub annotations: Vec<(String, String)>,
     /// A parameter's host function (`module.fn`) applied to a given value before it is sent.
     pub resolve: Vec<(String, String)>,
+    /// On a constructor: the provider methods whose override keeps the host object as the leg.
+    pub legs: Vec<String>,
+    /// On a constructor: the host class observes its chain and emits its availability event.
+    pub availability: Option<Availability>,
+}
+
+/// `availability(observer = "p", event = "..", record = "module.Name")` of a constructor facade.
+#[derive(Debug, Clone)]
+pub struct Availability {
+    pub observer: String,
+    pub event: String,
+    pub record: String,
 }
 
 /// How the host calls a method: declared, then checked against the signature.

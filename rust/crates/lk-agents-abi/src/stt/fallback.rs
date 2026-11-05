@@ -21,12 +21,25 @@ pub trait FallbackStt: Send + Sync + Sized + 'static {
     #[host(source(item = SpeechEvent, class = "FallbackRecognizeStream"))]
     type Events: StreamOutput<SpeechEvent> + 'static;
 
-    /// `stts` in order, each already streaming (the host wraps a recognize-only entry in its
-    /// `StreamAdapter`); the keywords are `FallbackAdapter.__init__`'s.
+    /// `members` in order, each already streaming (the host wraps a recognize-only entry in its
+    /// `StreamAdapter`); the keywords are `FallbackAdapter.__init__`'s, whose mixin builds it from
+    /// the adapter's attributes, one per loop.
     #[host(new)]
+    #[host(facade(
+        module = "provider_hosts",
+        class = "FallbackSttHost",
+        target = "_native",
+        legs(stream, recognize, _recognize_impl),
+        resolve(members = ".._bindings.core_legs"),
+        availability(
+            observer = "on_availability",
+            event = "stt_availability_changed",
+            record = ".stt_availability.AvailabilityChangedEvent"
+        )
+    ))]
     fn new(
         env: &Self::Env,
-        stts: Vec<Arc<dyn Stt>>,
+        members: Vec<Arc<dyn Stt>>,
         #[host(kw, default = 10.0)] attempt_timeout: f64,
         #[host(default = 1)] max_retry_per_stt: u32,
         #[host(default = 5.0)] retry_interval: f64,

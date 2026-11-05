@@ -183,6 +183,8 @@ pub(super) fn facade(entries: &[Entry], at: &str) -> Result<Option<Facade>, Stri
                     "returns",
                     "annotation",
                     "resolve",
+                    "legs",
+                    "availability",
                 ],
             )?;
             let per_parameter = |key| {
@@ -212,6 +214,22 @@ pub(super) fn facade(entries: &[Entry], at: &str) -> Result<Option<Facade>, Stri
                 returns: voc::text(at, &entry.nested, "returns")?,
                 annotations: per_parameter("annotation")?,
                 resolve: per_parameter("resolve")?,
+                legs: voc::find(&entry.nested, "legs")
+                    .map_or(Vec::new(), |legs| legs.nested.iter().map(|l| l.key.clone()).collect()),
+                availability: voc::find(&entry.nested, "availability")
+                    .map(|a| {
+                        voc::only(at, &a.nested, &["observer", "event", "record"])?;
+                        let field = |name| {
+                            voc::text(at, &a.nested, name)?
+                                .ok_or_else(|| format!("{at}: facade availability requires {name}"))
+                        };
+                        Ok::<_, String>(Availability {
+                            observer: field("observer")?,
+                            event: field("event")?,
+                            record: field("record")?,
+                        })
+                    })
+                    .transpose()?,
             })
         })
         .transpose()

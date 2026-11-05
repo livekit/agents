@@ -4,15 +4,14 @@ declarations) and the adapters, whose fallback chain is the core's (``_core.Fall
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Any, Literal, Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
 from livekit import rtc
 
 from . import _bindings, _core
-from ._generated.llm_fallback import AvailabilityChanged
+from ._generated.provider_hosts import FallbackSttHost, SttStreamAdapterHost
 from ._generated.public_stt import *  # noqa: F403
 from ._generated.stt import STT, RecognizeStream, SpeechEvent, STTCapabilities
-from ._generated.stt_availability import AvailabilityChangedEvent
 from ._generated.vad import VAD
 from .types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 
@@ -41,7 +40,9 @@ class SpeakerContext(Protocol):
     def to_instructions(self) -> str: ...
 
 
-class FallbackAdapter(_bindings.FallbackMembers[STT], STT[Literal["stt_availability_changed"]]):
+class FallbackAdapter(
+    FallbackSttHost, _bindings.FallbackMembers[STT], STT[Literal["stt_availability_changed"]]
+):
     """Several STT behind one: a failed one is skipped until it recovers."""
 
     _kind = "STT"
@@ -89,35 +90,6 @@ class FallbackAdapter(_bindings.FallbackMembers[STT], STT[Literal["stt_availabil
         # the chain's own merge, read before any chain is built
         super().__init__(
             capabilities=_core.stt_fallback_capabilities([t.capabilities for t in stt])
-        )
-
-    @property
-    def _native(self) -> _core.FallbackStt:
-        # one per running loop: its members are called on the loop the chain was built on
-        return _bindings.on_loop(
-            self,
-            lambda: _core.FallbackStt(
-                [_bindings.core_leg(t) for t in self._members],
-                attempt_timeout=self._attempt_timeout,
-                max_retry_per_stt=self._max_retry_per_stt,
-                retry_interval=self._retry_interval,
-                on_availability=self,
-            ),
-        )
-
-    def _core_leg(self) -> Any:
-        if (
-            type(self).stream is not FallbackAdapter.stream
-            or type(self).recognize is not FallbackAdapter.recognize
-            or type(self)._recognize_impl is not FallbackAdapter._recognize_impl
-        ):
-            return self
-        return self._native
-
-    def _core_availability_changed(self, ev: AvailabilityChanged) -> None:
-        self.emit(
-            "stt_availability_changed",
-            AvailabilityChangedEvent(stt=self._members[ev.index], available=ev.available),
         )
 
     def _update_session_keyterms(self, keyterms: list[str]) -> None:
@@ -184,7 +156,7 @@ class StreamAdapterWrapper(RecognizeStream):
         )
 
 
-class StreamAdapter(STT):
+class StreamAdapter(SttStreamAdapterHost, STT):
     """A recognize-only STT as a streaming one: the VAD cuts the audio into utterances, each
     recognized on its own (``_core.SttStreamAdapter``)."""
 
@@ -200,24 +172,6 @@ class StreamAdapter(STT):
         )
         self._vad = vad
         self._stt = stt
-
-    @property
-    def _native(self) -> _core.SttStreamAdapter:
-        # one per running loop, as the fallback chain's
-        return _bindings.on_loop(
-            self,
-            lambda: _core.SttStreamAdapter(
-                _bindings.core_leg(self._stt), _bindings.core_leg(self._vad)
-            ),
-        )
-
-    def _core_leg(self) -> Any:
-        if (
-            type(self).stream is not StreamAdapter.stream
-            or type(self).recognize is not StreamAdapter.recognize
-        ):
-            return self
-        return self._native
 
     @property
     def model(self) -> str:

@@ -13,6 +13,7 @@ mod decl;
 mod exceptions;
 mod exports;
 mod facade;
+mod facade_native;
 mod forward;
 mod implementations;
 mod imports;
@@ -136,6 +137,7 @@ fn generate(root: &Path, python_packages: &[&str]) -> Result<Outputs, String> {
     o.add(PathBuf::from(CORE_NAMES), &core_names.text);
     let mut forward = forward::emit(&declared)?;
     forward.extend(facade::emit(&declared)?);
+    forward.extend(facade_native::emit(&declared)?);
     for package in python_packages {
         let python_root = Path::new(package).join(PYTHON_GENERATED);
         o.dirs.push(python_root.clone());

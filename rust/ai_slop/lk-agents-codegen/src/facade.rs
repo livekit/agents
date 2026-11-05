@@ -7,7 +7,9 @@ pub fn emit(declarations: &Declarations) -> Result<Vec<Out>, String> {
     let mut groups = std::collections::BTreeMap::<(String, String), Vec<_>>::new();
     for class in &declarations.classes {
         for method in &class.methods {
-            if let Some(facade) = &method.facade {
+            // A constructor's facade is the host mixin `facade_native` writes.
+            if let Some(facade) = method.facade.as_ref().filter(|_| method.kind != MethodKind::New)
+            {
                 groups
                     .entry((facade.module.clone(), facade.class.clone()))
                     .or_default()
