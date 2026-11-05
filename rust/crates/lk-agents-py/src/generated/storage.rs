@@ -1339,7 +1339,7 @@ impl crate::py_errors::HostException for ::lk_agents_abi::storage::StorageError 
         #[allow(unreachable_patterns)]
         match self {
             Self::Rejected { running_task_id } => crate::py_errors::host_exception_with(
-                "livekit.agents.storage.errors",
+                "livekit.agents.storage",
                 "RunRejected",
                 ::std::string::ToString::to_string(self),
                 |kwargs| {
@@ -1356,32 +1356,32 @@ impl crate::py_errors::HostException for ::lk_agents_abi::storage::StorageError 
                 },
             ),
             Self::LeaseLost(..) => crate::py_errors::host_exception(
-                "livekit.agents.storage.errors",
+                "livekit.agents.storage",
                 "LeaseLost",
                 ::std::string::ToString::to_string(self),
             ),
             Self::Unavailable(..) => crate::py_errors::host_exception(
-                "livekit.agents.storage.errors",
+                "livekit.agents.storage",
                 "StorageUnavailable",
                 ::std::string::ToString::to_string(self),
             ),
             Self::NotFound(..) => crate::py_errors::host_exception(
-                "livekit.agents.storage.errors",
+                "livekit.agents.storage",
                 "ThreadNotFound",
                 ::std::string::ToString::to_string(self),
             ),
             Self::VersionConflict { .. } => crate::py_errors::host_exception(
-                "livekit.agents.storage.errors",
+                "livekit.agents.storage",
                 "VersionConflict",
                 ::std::string::ToString::to_string(self),
             ),
             Self::NotSerializable(..) => crate::py_errors::host_exception(
-                "livekit.agents.storage.errors",
+                "livekit.agents.storage",
                 "NotSerializable",
                 ::std::string::ToString::to_string(self),
             ),
             Self::TooLarge { .. } => crate::py_errors::host_exception(
-                "livekit.agents.storage.errors",
+                "livekit.agents.storage",
                 "TooLarge",
                 ::std::string::ToString::to_string(self),
             ),
@@ -1394,7 +1394,7 @@ impl crate::py_errors::HostException for ::lk_agents_abi::storage::StorageError 
                 ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
             }
             _ => crate::py_errors::host_exception(
-                "livekit.agents.storage.errors",
+                "livekit.agents.storage",
                 "StorageError",
                 ::std::string::ToString::to_string(self),
             ),

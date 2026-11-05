@@ -82,8 +82,8 @@ from .voice_task import VoiceTask as VoiceTask, VoiceTaskFailed as VoiceTaskFail
 
 if TYPE_CHECKING:
     from .._core import VoiceSession as _NativeSession
-    from ..storage.context_store import ContextStore
-    from ..storage.resolve import Thread
+    from ..storage import Thread
+    from ..storage.context import ContextStore
     from .amd import AMD
     from .turn import EndpointingOptions, InterruptionOptions, TurnDetectionMode
 

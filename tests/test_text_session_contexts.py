@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import pytest
 
 from livekit.agents import Agent, RunContext, TextSession, TextSessionState, persisted
-from livekit.agents.storage.context_store import ContextStore
+from livekit.agents.storage.session import ContextStore
 from livekit.agents.voice.agent_run import RunHooks, reset_run_hooks, set_run_hooks
 
 from .test_text_session import Reply, Script, call

@@ -51,8 +51,8 @@ from .speech_handle import SpeechHandle
 if TYPE_CHECKING:
     from .._generated.agent_run import Invocation
     from .._generated.usage import Usage
-    from ..storage.context_store import ContextStore
-    from ..storage.resolve import Thread
+    from ..storage import Thread
+    from ..storage.context import ContextStore
     from .agent import Agent
     from .agent_run import _TextRun
     from .agent_session import VoiceSession

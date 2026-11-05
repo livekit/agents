@@ -18,10 +18,10 @@ from livekit.agents._generated.a2a_metadata import INTERRUPTED, INTERRUPTION_REA
 from livekit.agents._generated.storage_class import ItemRow
 from livekit.agents._generated.storage_options import TurnOptions
 from livekit.agents._generated.storage_turn import HandlerOutput, TurnContext
+from livekit.agents._proto import item_to_payload, payload_to_item
 from livekit.agents.llm import ChatMessage
 from livekit.agents.storage import Storage
-from livekit.agents.storage._protocol import item_to_payload, payload_to_item
-from livekit.agents.storage.context import _TurnStream
+from livekit.agents.storage.session import _TurnStream
 
 pytestmark = pytest.mark.unit
 

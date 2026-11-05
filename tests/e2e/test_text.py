@@ -20,8 +20,7 @@ from livekit.agents._generated.a2a_metadata import (
     MERGED_INTO,
     REASON,
 )
-from livekit.agents.storage import AgentDBStorage, ThreadNotFound
-from livekit.agents.storage.resolve import Thread
+from livekit.agents.storage import AgentDBStorage, Thread, ThreadNotFound
 
 from .drivers import Workers, answer
 from .resources import REQUEST_SECONDS, RecordingService, finish_cleanup

@@ -10,10 +10,10 @@ import pytest
 from a2a.types import a2a_pb2 as pb
 
 from livekit.agents import Agent, InputRequired, RunContext, RunResult
+from livekit.agents._proto import payload_to_item
 from livekit.agents.a2a import A2ASessionContext
 from livekit.agents.llm import FunctionToolCall
 from livekit.agents.storage import Storage
-from livekit.agents.storage._protocol import payload_to_item
 
 from .fake_llm import FakeLLM, FakeLLMResponse
 from .test_a2a_server import http_client, make_server, payloads, send, stock_client, user_message

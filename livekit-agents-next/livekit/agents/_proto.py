@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Literal, Protocol, TypeVar
+from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar
 
+from google.protobuf import json_format
 from google.protobuf.message import Message
 from google.protobuf.timestamp_pb2 import Timestamp
 from pydantic import JsonValue, TypeAdapter
@@ -206,3 +207,12 @@ def _decode_fields(msg: Message) -> dict[str, object]:
         fd.name: v.ToNanoseconds() / 1e9 if isinstance(v, Timestamp) else v
         for fd, v in msg.ListFields()
     }
+
+
+def item_to_payload(item: ChatItem) -> dict[str, Any]:
+    """A chat item as ``_core`` holds it: ``livekit.agent.ChatContext.ChatItem`` protobuf JSON."""
+    return json_format.MessageToDict(encode_chat_item(item))
+
+
+def payload_to_item(payload: dict[str, Any]) -> ChatItem:
+    return decode_chat_item(json_format.ParseDict(payload, _pb.ChatContext.ChatItem()))

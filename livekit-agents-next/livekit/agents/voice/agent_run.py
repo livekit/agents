@@ -54,8 +54,8 @@ from .run_result import (
 )
 
 if TYPE_CHECKING:
-    from ..storage.context_store import ContextStore
-    from ..storage.resolve import Thread
+    from ..storage import Thread
+    from ..storage.context import ContextStore
     from ..text_session import _FrameContexts
     from .agent import Agent, AgentRetries
 
@@ -181,9 +181,8 @@ class _TextRun(Generic[Context_T]):
         store: ContextStore | None = None,
     ) -> None:
         """Hydrate Python handles after the native request owner has acquired its resources."""
-        from ..storage.backends import _StorageHandle
-        from ..storage.context_store import ContextStore
-        from ..storage.resolve import Thread
+        from ..storage import Thread, _StorageHandle
+        from ..storage.context import ContextStore
 
         self.thread = self.thread or thread
         if self.thread is None and (namespace := resources.namespace) is not None:
@@ -321,7 +320,7 @@ def run_error(error: RunError) -> BaseException:
 def tool_infos(tools: ToolContext) -> list[FunctionToolInfo]:
     """The core's ``FunctionToolInfo`` of each function tool."""
     from .._core_view import tool_specs
-    from ..a2a.remote import _ExpertTool
+    from ..a2a import _ExpertTool
 
     specs = {spec["name"]: spec for spec in tool_specs(list(tools.function_tools.values()))}
     infos = []

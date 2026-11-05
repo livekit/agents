@@ -13,7 +13,7 @@ from . import _core, llm, utils
 from ._generated import text_session as records
 from ._generated.agent_run import RunSettled
 from ._generated.text_session import TextSessionState
-from .storage.context_store import ContextStore
+from .storage.context import ContextStore
 from .types import DEFAULT_API_CONNECT_OPTIONS
 from .voice.agent import Agent, AgentRetries, _BindingContextVar
 from .voice.agent_run import _TextRun, door_hooks, run_error, run_resources, settled_result

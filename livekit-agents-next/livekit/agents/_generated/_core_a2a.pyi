@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Self
 
-from livekit.agents.storage.context import _TurnHost
+from livekit.agents.storage.session import _TurnHost
 
 from .._core import Storage, Thread
 from .a2a_auth import AgentThreadGrant, AuthOperation, Principal

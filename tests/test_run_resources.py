@@ -9,9 +9,8 @@ import pytest
 
 from livekit.agents import Agent, RunContext, TextSession, persisted
 from livekit.agents.llm import Toolset
-from livekit.agents.storage import SQLiteStorage
-from livekit.agents.storage.context_store import ContextStore
-from livekit.agents.storage.resolve import Thread
+from livekit.agents.storage import SQLiteStorage, Thread
+from livekit.agents.storage.session import ContextStore
 from livekit.agents.voice.agent_run import RunHooks, reset_run_hooks, set_run_hooks
 
 from .fake_llm import FakeLLM, FakeLLMResponse

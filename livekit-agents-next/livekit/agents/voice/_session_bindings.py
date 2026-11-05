@@ -52,7 +52,7 @@ from .speech_handle import SpeechHandle
 if TYPE_CHECKING:
     from .._core import VoiceAgent as _NativeAgent
     from .._generated.session_options import SessionLegs, UpdateKwargs
-    from ..storage.resolve import Thread
+    from ..storage import Thread
     from .agent_session import VoiceSession
     from .turn import EndpointingOptions, TurnDetectionMode
 

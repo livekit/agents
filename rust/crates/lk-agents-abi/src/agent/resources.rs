@@ -25,7 +25,7 @@ pub enum ResourceError {
 
 /// Releases only language objects cached by an owned context adapter. Native code has already
 /// ended its activation; this callback performs no storage or framework lifetime decisions.
-#[crate::host(proxy(host = "livekit.agents.storage.context_store.ContextStore"))]
+#[crate::host(proxy(host = "livekit.agents.storage.context.ContextStore"))]
 pub trait ContextHydration: Send + Sync {
     #[host(call, name = "_core_release_hydration")]
     fn release(&self) -> Result<(), HostError>;

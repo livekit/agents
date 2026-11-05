@@ -5,42 +5,42 @@ from __future__ import annotations
 
 class StorageError(RuntimeError):
     "A session storage failure."
-    __module__ = "livekit.agents.storage.errors"
+    __module__ = "livekit.agents.storage"
 
 
 class ThreadNotFound(StorageError):
     "An unknown, deleted or expired thread."
-    __module__ = "livekit.agents.storage.errors"
+    __module__ = "livekit.agents.storage"
 
 
 class VersionConflict(StorageError):
     "A fenced commit matched no row: the lane moved past the loaded version."
-    __module__ = "livekit.agents.storage.errors"
+    __module__ = "livekit.agents.storage"
 
 
 class NotSerializable(StorageError):
     "A field could not be serialized; the message names it."
-    __module__ = "livekit.agents.storage.errors"
+    __module__ = "livekit.agents.storage"
 
 
 class TooLarge(StorageError):
     "A value exceeded its size limit; the message names what and the limit."
-    __module__ = "livekit.agents.storage.errors"
+    __module__ = "livekit.agents.storage"
 
 
 class StorageUnavailable(StorageError):
     "Retryable: the database is unavailable, busy or answered with invalid data."
-    __module__ = "livekit.agents.storage.errors"
+    __module__ = "livekit.agents.storage"
 
 
 class LeaseLost(StorageError):
     "The run's lane lease was taken, released or could not be renewed in time."
-    __module__ = "livekit.agents.storage.errors"
+    __module__ = "livekit.agents.storage"
 
 
 class RunRejected(StorageError):
     "The lane refused the run while another turn runs."
-    __module__ = "livekit.agents.storage.errors"
+    __module__ = "livekit.agents.storage"
     running_task_id: str | None
 
     def __init__(self, message: str, *, running_task_id: str | None = None) -> None:

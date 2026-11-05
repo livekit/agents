@@ -7,7 +7,7 @@ from pydantic import BaseModel
 
 from livekit.agents import persisted
 from livekit.agents.storage import Storage, VersionConflict
-from livekit.agents.storage.context_store import ContextStore
+from livekit.agents.storage.session import ContextStore
 
 pytestmark = pytest.mark.unit
 

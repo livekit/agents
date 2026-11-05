@@ -10,11 +10,10 @@ import pytest
 
 from livekit.agents import Agent, RunContext, StopResponse, VoiceSession, persisted
 from livekit.agents._generated.storage_class import ItemRow
+from livekit.agents._proto import item_to_payload
 from livekit.agents.llm import ChatContext, ChatMessage, FunctionToolCall, LLMStream
-from livekit.agents.storage import Storage
-from livekit.agents.storage._protocol import item_to_payload
-from livekit.agents.storage.context_store import ContextStore
-from livekit.agents.storage.resolve import Thread
+from livekit.agents.storage import Storage, Thread
+from livekit.agents.storage.session import ContextStore
 
 from .fake_llm import FakeLLM, FakeLLMResponse
 from .storage_fixture import new_session

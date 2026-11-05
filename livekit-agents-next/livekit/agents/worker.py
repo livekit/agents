@@ -32,15 +32,15 @@ from .job import (
 )
 from .log import logger
 from .simulation import SimulationContext
-from .storage.context import _Handler
-from .storage.resolve import _CallThreadEntrypoint
+from .storage import _CallThreadEntrypoint
+from .storage.session import _Handler
 from .types import NOT_GIVEN, NotGivenOr
 from .utils import http_context, is_given
 from .version import __version__
 
 if TYPE_CHECKING:
-    from .a2a.endpoint import A2AEndpoint, A2ASessionOptions
-    from .storage.backends import Storage
+    from .a2a import A2AEndpoint, A2ASessionOptions
+    from .storage import Storage
 
 
 Entrypoint = Callable[[JobContext], Awaitable[None]]
@@ -154,7 +154,7 @@ class AgentHandler:
             @server.a2a_session(endpoint="scheduling", description="Book or move an appointment.")
             async def scheduling(ctx: A2ASessionContext) -> str: ...
         """
-        from .a2a.endpoint import A2AEndpoint
+        from .a2a import A2AEndpoint
 
         def decorator(handler: _Handler) -> A2AEndpoint:
             ep = A2AEndpoint(
@@ -265,7 +265,7 @@ class AgentServer(AgentHandler):
         """Serve what a module defined: ``AgentHandler``s and the doors of ``rtc_session`` and
         ``a2a_session``, the one voice door of the worker and text doors under ``/<endpoint>``.
         Returns them."""
-        from .a2a.endpoint import A2AEndpoint
+        from .a2a import A2AEndpoint
 
         served = len(self.doors)
         super().add(*doors)
@@ -296,7 +296,7 @@ class AgentServer(AgentHandler):
         """
         _core.init(_core.Role.Worker)
         telemetry._install()
-        from .a2a.remote import _referenced
+        from .a2a import _referenced
 
         if unserved := sorted({e.name for e in _referenced if e._config is None}):
             logger.warning(

@@ -61,7 +61,7 @@ if TYPE_CHECKING:
     from livekit.api.access_token import Claims
 
     from .simulation import SimulationContext
-    from .storage.resolve import Thread
+    from .storage import Thread
     from .voice.agent_session import RecordingOptions, VoiceSession
 
 

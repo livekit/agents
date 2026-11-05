@@ -10,7 +10,7 @@ import pytest
 
 from livekit.agents import Agent, RunContext, _core, persisted
 from livekit.agents.llm import FunctionToolCall, Toolset
-from livekit.agents.storage.context_store import ContextStore
+from livekit.agents.storage.session import ContextStore
 
 from .fake_llm import FakeLLM, FakeLLMResponse
 

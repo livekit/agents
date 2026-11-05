@@ -1533,7 +1533,7 @@ impl ::lk_agents_abi::agent::HostInstructions for HostInstructionsProxy {
 
 // Declared in rust/crates/lk-agents-abi/src/agent/resources.rs.
 
-/// [`::lk_agents_abi::agent::resources::ContextHydration`] over a host `livekit.agents.storage.context_store.ContextStore`.
+/// [`::lk_agents_abi::agent::resources::ContextHydration`] over a host `livekit.agents.storage.context.ContextStore`.
 #[derive(Clone)]
 pub struct ContextHydrationProxy {
     host: ::std::sync::Arc<Py<PyAny>>,

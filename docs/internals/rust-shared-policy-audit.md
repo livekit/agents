@@ -125,7 +125,7 @@ Current code needs this distinction stated explicitly:
   contracts. Moving question orchestration out does not move approval, retry-budget, or output
   validation policy into voice or reintroduce voice `StepDecision`.
 
-Source: [live remote adapter](../../livekit-agents-next/livekit/agents/a2a/remote.py),
+Source: [live remote adapter](../../livekit-agents-next/livekit/agents/a2a.py),
 [expert update dispatch](../../rust/crates/lk-agents-voice/src/agent_activity/experts.rs),
 [frontend inbox](../../rust/crates/lk-agents-voice/src/experts.rs), and
 [sequential-question test](../../rust/crates/lk-agents-voice/src/experts_tests.rs).

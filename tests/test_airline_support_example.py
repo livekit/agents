@@ -14,7 +14,7 @@ from pydantic import BaseModel
 
 from livekit.agents import Agent, InputRequired
 from livekit.agents.llm import ChatContext, FunctionToolCall, LLMStream, Tool
-from livekit.agents.storage.context_store import ContextStore
+from livekit.agents.storage.session import ContextStore
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 from .fake_llm import FakeLLM, FakeLLMResponse, FakeLLMStream

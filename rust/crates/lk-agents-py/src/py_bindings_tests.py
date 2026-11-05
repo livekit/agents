@@ -853,7 +853,7 @@ def test_realtime_bridge_wraps_the_declared_host_contract_without_member_probes(
 def test_generated_grant_preserves_sequence_authoring_and_frozen_public_identity() -> None:
     from dataclasses import FrozenInstanceError
 
-    from livekit.agents.a2a.auth import AgentThreadGrant, Credentials, Principal
+    from livekit.agents.a2a import AgentThreadGrant, Credentials, Principal
 
     original = ["AT_existing"]
     grant = AgentThreadGrant(thread_ids=original, read=True)
@@ -861,7 +861,7 @@ def test_generated_grant_preserves_sequence_authoring_and_frozen_public_identity
     assert grant.thread_ids == ["AT_existing"]
     assert AgentThreadGrant(thread_ids=("AT_existing",)).thread_ids == ["AT_existing"]
     assert AgentThreadGrant().thread_ids == []
-    assert AgentThreadGrant.__module__ == Principal.__module__ == "livekit.agents.a2a.auth"
+    assert AgentThreadGrant.__module__ == Principal.__module__ == "livekit.agents.a2a"
     with pytest.raises(FrozenInstanceError):
         grant.scope = "changed"
 

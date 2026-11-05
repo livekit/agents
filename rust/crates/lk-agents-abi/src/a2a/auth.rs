@@ -8,7 +8,7 @@ use serde_json::{Map, Value};
 #[crate::host(record(
     module = "a2a_auth",
     name = "AgentThreadGrant",
-    path = "livekit.agents.a2a.auth",
+    path = "livekit.agents.a2a",
     dataclass,
     frozen,
     kw_only,
@@ -85,7 +85,7 @@ pub enum PrincipalKind {
 #[crate::host(record(
     module = "a2a_auth",
     name = "Principal",
-    path = "livekit.agents.a2a.auth",
+    path = "livekit.agents.a2a",
     emit,
     extract
 ))]
@@ -102,10 +102,10 @@ pub struct AuthPrincipal {
 #[crate::host(error(kind = "RuntimeError"))]
 pub enum AuthError {
     #[error("{0}")]
-    #[host(kind = "livekit.agents.a2a.auth.Unauthorized")]
+    #[host(kind = "livekit.agents.a2a.Unauthorized")]
     Unauthorized(String),
     #[error("{0}")]
-    #[host(kind = "livekit.agents.a2a.auth.Forbidden")]
+    #[host(kind = "livekit.agents.a2a.Forbidden")]
     Forbidden(String),
 }
 

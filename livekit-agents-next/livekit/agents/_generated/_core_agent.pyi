@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from typing import Any, Self
 
 from livekit.agents.llm import LLM, Toolset
-from livekit.agents.storage.context_store import ContextStore
+from livekit.agents.storage.context import ContextStore
 from livekit.agents.voice.agent_host import AgentCallbacks
 
 from .._core import Storage, _core_ContextActivation

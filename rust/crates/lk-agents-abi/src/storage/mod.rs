@@ -21,7 +21,7 @@ pub use rows::*;
 /// `Unavailable` is the one retryable error. The host raises the classes of
 /// `livekit.agents.storage`: a cancelled turn is the `asyncio.CancelledError` the host raised, an
 /// invalid argument a `ValueError`, and a failure with no class of its own a plain `StorageError`.
-#[crate::host(error(kind = "livekit.agents.storage.errors.StorageError"))]
+#[crate::host(error(kind = "livekit.agents.storage.StorageError"))]
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum StorageError {
     /// A write sent and never answered: it may or may not have committed. Resolved by the run's
@@ -31,32 +31,32 @@ pub enum StorageError {
     /// The lane refused the run: another holder has it (`reject`, or a waiter whose wait ran
     /// out). The running task, when the journal names it.
     #[error("the lane is held by another run")]
-    #[host(kind = "livekit.agents.storage.errors.RunRejected", kwargs)]
+    #[host(kind = "livekit.agents.storage.RunRejected", kwargs)]
     Rejected { running_task_id: Option<String> },
     /// The run's lease was taken, released or could not be renewed before it could lapse.
     #[error("lease lost: {0}")]
-    #[host(kind = "livekit.agents.storage.errors.LeaseLost")]
+    #[host(kind = "livekit.agents.storage.LeaseLost")]
     LeaseLost(String),
     /// Retryable: a connection lost mid-request, a severed or unreachable database, a busy lock,
     /// an answer that did not decode.
     #[error("storage unavailable: {0}")]
-    #[host(kind = "livekit.agents.storage.errors.StorageUnavailable")]
+    #[host(kind = "livekit.agents.storage.StorageUnavailable")]
     Unavailable(String),
     /// An unknown, deleted or expired thread, or a stream, task or database that is not there.
     #[error("not found: {0}")]
-    #[host(kind = "livekit.agents.storage.errors.ThreadNotFound")]
+    #[host(kind = "livekit.agents.storage.ThreadNotFound")]
     NotFound(String),
     /// A fenced write that matched no row: the lane moved past the version the run loaded, or
     /// the lease token is no longer the lane's.
     #[error("version conflict on lane {lane}: expected version {expected}")]
-    #[host(kind = "livekit.agents.storage.errors.VersionConflict")]
+    #[host(kind = "livekit.agents.storage.VersionConflict")]
     VersionConflict { lane: String, expected: i64 },
     /// A field that could not be serialized; the second string says why.
     #[error("field {0} is not serializable: {1}")]
-    #[host(kind = "livekit.agents.storage.errors.NotSerializable")]
+    #[host(kind = "livekit.agents.storage.NotSerializable")]
     NotSerializable(String, String),
     #[error("{what} exceeds the limit of {limit} bytes")]
-    #[host(kind = "livekit.agents.storage.errors.TooLarge")]
+    #[host(kind = "livekit.agents.storage.TooLarge")]
     TooLarge { what: String, limit: usize },
     /// A refused token on either plane.
     #[error("unauthorized: {0}")]
@@ -290,7 +290,7 @@ pub struct ThreadTask {
 }
 
 // Public exceptions and the native-to-host mappings above share this boundary declaration.
-#[crate::host(exceptions(module = "storage_errors", path = "livekit.agents.storage.errors", classes(
+#[crate::host(exceptions(module = "storage_errors", path = "livekit.agents.storage", classes(
     StorageError(base = "RuntimeError", doc = "A session storage failure."),
     ThreadNotFound(base = "StorageError", doc = "An unknown, deleted or expired thread."),
     VersionConflict(base = "StorageError", doc = "A fenced commit matched no row: the lane moved past the loaded version."),

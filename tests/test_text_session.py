@@ -29,7 +29,7 @@ from livekit.agents.llm import (
     FunctionToolCall,
     LLMStream,
 )
-from livekit.agents.storage.context_store import ContextStore
+from livekit.agents.storage.session import ContextStore
 
 pytestmark = pytest.mark.unit
 

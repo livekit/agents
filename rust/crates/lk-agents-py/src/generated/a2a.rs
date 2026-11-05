@@ -830,7 +830,7 @@ pub fn normalize_handler_output<'py>(
 
 // Declared in rust/crates/lk-agents-abi/src/a2a/turn.rs.
 
-/// [`::lk_agents_abi::a2a::turn::TurnHost`] over a host `livekit.agents.storage.context._TurnHost`.
+/// [`::lk_agents_abi::a2a::turn::TurnHost`] over a host `livekit.agents.storage.session._TurnHost`.
 #[derive(Clone)]
 pub struct TurnHostProxy {
     host: ::std::sync::Arc<Py<PyAny>>,
@@ -938,12 +938,12 @@ impl crate::py_errors::HostException for ::lk_agents_abi::a2a::auth::AuthError {
         #[allow(unreachable_patterns)]
         match self {
             Self::Unauthorized(..) => crate::py_errors::host_exception(
-                "livekit.agents.a2a.auth",
+                "livekit.agents.a2a",
                 "Unauthorized",
                 ::std::string::ToString::to_string(self),
             ),
             Self::Forbidden(..) => crate::py_errors::host_exception(
-                "livekit.agents.a2a.auth",
+                "livekit.agents.a2a",
                 "Forbidden",
                 ::std::string::ToString::to_string(self),
             ),

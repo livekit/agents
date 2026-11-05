@@ -1,368 +1,297 @@
-"""What an ``a2a_session`` handler receives, and the host the Rust turn drives.
-
-``_core.Turn`` runs the policies and the commit. It opens the handler through
-``_TurnHost._core_handle`` on the ``TurnContext`` and reads the turn's events back: each
-checkpoint the run reaches, which ``_core`` answers ``continue`` or ``yield``, then the
-``HandlerOutput``. The handler's progress and tokens go straight to the door's live response.
-"""
+"""Host type validation and hydration for the runtime's persisted context scopes."""
 
 from __future__ import annotations
 
-import asyncio
-import contextvars
-from collections.abc import AsyncIterable, Awaitable, Callable
-from typing import cast
-
-from pydantic_core import to_jsonable_python
-
-from .. import _core
-from .._generated.a2a_client import Message
-from .._generated.storage_class import TaskRecord
-from .._generated.storage_handler import (
-    HandlerOutcome,
-    HandlerOutcomeCompleted,
-    HandlerOutcomeFailed,
-    HandlerOutcomeInputRequired,
-    HandlerOutcomeRejected,
-    HandlerOutcomeValue,
-    HandlerOutcomeWorking,
-    HandlerRun,
+from collections.abc import AsyncIterator, Callable, Sequence
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from dataclasses import _MISSING_TYPE, MISSING, dataclass, field, fields, is_dataclass
+from typing import (
+    Protocol,
+    Self,
+    TypeAlias,
+    TypeVar,
+    get_args,
+    get_type_hints,
+    overload,
+    runtime_checkable,
 )
-from .._generated.storage_turn import (
-    Checkpoint,
-    HandlerOutput,
-    Output,
-    ToolExecution,
-    TurnContext,
-    TurnEvent,
-)
-from ..llm import ChatContext, ChatMessage, InputRequired
-from ..llm.tool_context import Completed, Failed, Rejected, Working
-from ..log import logger
-from ..utils import aio
-from ..voice.agent_run import RunHooks, reset_run_hooks, set_run_hooks
-from ..voice.run_result import RunCompleted, RunInputRequired, RunNoOutput, RunResult
-from ._protocol import history_of, payload_to_item
-from .context_store import ContextStore
-from .errors import StorageError
-from .resolve import Thread
 
-_Handler = Callable[["A2ASessionContext"], Awaitable[object]]
-"""The developer's handler: the context in, the answer out (docs/server.md)."""
+from pydantic import JsonValue, TypeAdapter
 
-_UpdateHook = Callable[[str, str], Awaitable[None]]
-"""``(task_id, text)``: a progress message to the door's live response."""
+from .._core import _core_AppTransaction, _core_ContextActivation
+from .._generated.storage_context import AppStatement, ContextField, ContextScope, ContextScopeWrite
+from .._generated.storage_errors import NotSerializable
 
-_TokenHook = Callable[[str, str], Awaitable[None]]
-"""``(task_id, delta)``: one streamed token to the door's live response."""
+T = TypeVar("T")
+_FIELD_MARKER = "livekit.persisted"
 
 
-class A2ASessionContext:
-    """What an ``@server.a2a_session`` handler receives: the turn as loaded, and the ways to
-    report back. ``message`` is the batch as one user message, ``messages`` each message with its
-    channel and time; ``message_history`` the lane's history; ``store`` supports explicit
-    context persistence; ``caller_history`` a delegating caller's conversation when it
-    sent one (plan 7.5)."""
-
-    def __init__(
-        self,
-        turn: TurnContext,
-        checkpoint: Callable[[], Awaitable[bool]],
-        *,
-        store: ContextStore,
-        thread: Thread,
-        on_update: _UpdateHook | None,
-        on_token: _TokenHook | None,
-    ) -> None:
-        self.message = cast(ChatMessage, payload_to_item(turn.message))
-        self.messages: list[Message] = list(turn.batch)
-        self.message_history: ChatContext = history_of(turn.history)
-        self.store = store
-        self.thread = thread
-        self.task_id = turn.task_id
-        self.tasks: list[TaskRecord] = list(turn.tasks)
-        self.caller_history: ChatContext | None = (
-            ChatContext.from_dict(turn.caller_history) if turn.caller_history is not None else None
-        )
-        self._events: list[ToolExecution] = []
-        """What the turn appends to the journal (docs/internals/storage.md#journal): each ``update`` here, the
-        tool calls from the runs' results."""
-        self._interrupted = False
-        self._checkpoint = checkpoint
-        self._on_update = on_update
-        self._on_token = on_token
-
-    async def update(self, text: str) -> None:
-        """A ``working`` status frame to the client: progress, as the person hears it."""
-        self._events.append(ToolExecution(phase="update", text=text))
-        if self._on_update is not None:
-            await self._on_update(self.task_id, text)
-
-    async def _token(self, delta: str) -> None:
-        """One piece of the reply as the model writes it, shown before the turn ends."""
-        if self._on_token is not None:
-            await self._on_token(self.task_id, delta)
-
-    async def stream(self, source: AsyncIterable[str]) -> str:
-        """Forward tokens as they arrive, after a checkpoint before the first one."""
-        if await self._checkpoint():
-            self._interrupted = True
-            return ""
-
-        parts: list[str] = []
-        async for text in source:
-            parts.append(text)
-            if self._on_token is not None:
-                await self._on_token(self.task_id, text)
-
-        return "".join(parts)
+@overload
+def persisted(*, default_factory: Callable[[], T]) -> T: ...
 
 
-class _TurnHost:
-    """What ``_core.Turn`` drives for one door: the handler, its progress and tokens to the
-    door's wire hooks."""
+@overload
+def persisted(*, default: T) -> T: ...
+
+
+def persisted(
+    *,
+    default: object = MISSING,
+    default_factory: Callable[[], object] | _MISSING_TYPE = MISSING,
+) -> object:
+    """Mark a dataclass field for explicit context loading and saving."""
+    metadata = {_FIELD_MARKER: True}
+    if default_factory is MISSING:
+        return field(default=default, metadata=metadata)
+    if default is not MISSING:
+        raise ValueError("cannot specify both default and default_factory")
+    return field(default_factory=default_factory, metadata=metadata)
+
+
+@dataclass
+class _LoadedContext:
+    context: object
+    revision: int
+    names: set[str]
+
+
+@dataclass
+class _HydratedScope:
+    loaded: dict[int, _LoadedContext] = field(default_factory=dict)
+    values: dict[str, object] = field(default_factory=dict)
+    revision: int | None = None
+
+
+SqlValue: TypeAlias = str | int | float | bool | None
+"""A bound parameter; SQLite stores a boolean as ``0`` or ``1``."""
+
+Row: TypeAlias = tuple[str | int | float | None, ...]
+"""One result row: its column values in select order."""
+
+
+class Transaction:
+    """Application SQL in one transaction (docs/context.md#application-records-and-transactions).
+
+    Reads observe committed records. Writes are staged and applied together when the
+    transaction ends, so read before the first write: a read after one is refused.
+    """
+
+    def __init__(self, core: _core_AppTransaction) -> None:
+        self._core = core
+
+    async def execute(self, sql: str, params: Sequence[SqlValue] = ()) -> None:
+        """Runs one statement when the transaction commits."""
+        await self._core.execute(sql, list(params))
+
+    async def fetch(self, sql: str, params: Sequence[SqlValue] = ()) -> list[Row]:
+        """The rows of one read."""
+        return [tuple(row) for row in await self._core.fetch(sql, list(params))]
+
+    async def fetch_one(self, sql: str, params: Sequence[SqlValue] = ()) -> Row | None:
+        """The first row of one read, ``None`` when it has none."""
+        rows = await self.fetch(sql, params)
+        return rows[0] if rows else None
+
+
+class ContextStore:
+    """A runtime-supplied store; application values remain host objects after validation."""
 
     def __init__(
         self,
-        handler: _Handler,
+        state: object | None = None,
         *,
-        thread: Thread,
-        on_update: _UpdateHook | None = None,
-        on_token: _TokenHook | None = None,
+        read_only: bool = False,
+        scopes: Sequence[ContextScope] = (),
+        scope_id: str = "root",
+        activation: _core_ContextActivation | None = None,
     ) -> None:
-        self._handler = handler
-        self._thread = thread
-        self._on_update = on_update
-        self._on_token = on_token
+        self._activation = activation or _core_ContextActivation(list(scopes), state, read_only)
+        self._scope_id = scope_id
+        self._hydration: dict[str, _HydratedScope] = {scope_id: _HydratedScope()}
+        self._objects = self._hydration[scope_id]
+        self._owns_activation = True
+        self._disposed = False
 
-    async def _core_handle(self, ctx: TurnContext) -> _TurnStream:
-        """The handler opened on one turn, as the stream of its events."""
+    def _for_scope(self, scope_id: str) -> ContextStore:
+        """Select the scope recorded by the runtime without allocating a replacement identity."""
+        self._ensure_open()
+        view = ContextStore(scope_id=scope_id, activation=self._activation)
+        view._hydration = self._hydration
+        view._objects = self._hydration.setdefault(scope_id, _HydratedScope())
+        view._owns_activation = False
+        return view
 
-        async def update(task_id: str, text: str) -> None:
-            await stream.progress(task_id, text)
-            if self._on_update is not None:
-                await self._on_update(task_id, text)
+    async def load_context(self, context: T) -> T:
+        """Check saved contracts, then restore marked fields without touching runtime services."""
+        self._ensure_open()
+        adapters = _field_adapters(context)
+        declarations = [
+            ContextField(name=name, schema=adapter.json_schema(), value=None)
+            for name, adapter in adapters.items()
+        ]
+        values = await self._activation.load(self._scope_id, _identity(context), declarations)
+        restored: dict[str, object] = {}
+        for name, adapter in adapters.items():
+            if values.revision == self._objects.revision and name in self._objects.values:
+                restored[name] = self._objects.values[name]
+            else:
+                value = values.fields[name] if name in values.fields else getattr(context, name)
+                restored[name] = adapter.validate_python(value)
+        # A failed validator must not leave a partially hydrated application object.
+        self._objects.loaded[id(context)] = _LoadedContext(context, values.revision, set(adapters))
+        self._publish(restored, values.revision, restored=True)
+        return context
 
-        async def token(task_id: str, delta: str) -> None:
-            await stream.token(task_id, delta)
-            if self._on_token is not None:
-                await self._on_token(task_id, delta)
-
-        stream = _TurnStream(lambda checkpoint: self._run(ctx, checkpoint, update, token))
-        return stream
-
-    async def _run(
-        self,
-        ctx: TurnContext,
-        checkpoint: Callable[[], Awaitable[bool]],
-        on_update: _UpdateHook,
-        on_token: _TokenHook,
-    ) -> HandlerOutput:
-        """The developer's handler on one turn, the run hooks installed around it."""
-        thread = self._thread
-        if thread.id != ctx.thread_id:
-            thread = Thread(thread._storage, ctx.thread_id, agent_name=ctx.lane)
-        activation = await thread._storage.threads._core_turn_store(
-            ctx.thread_id,
-            ctx.lane,
-            ctx.context_scopes,
-            routing_state=ctx.state,
-            read_only=ctx.read_only,
-        )
-        context = A2ASessionContext(
-            ctx,
-            checkpoint,
-            store=ContextStore(activation=activation, scope_id=ctx.context_scope_id),
-            thread=thread,
-            on_update=on_update,
-            on_token=on_token,
-        )
-        results: list[RunResult[object]] = []
-        hooks = RunHooks(
-            checkpoint=checkpoint,
-            on_result=results.append,
-            on_update=context.update,
-            on_token=context._token,
-            thread=thread,
-            task_id=ctx.task_id,
-            store=context.store,
-            answer_tool=ctx.answer_tool,
-            delegated=bool(ctx.batch) and all(m.channel == "delegation" for m in ctx.batch),
-        )
-
-        token = set_run_hooks(hooks)
-        try:
-            output = await self._handler(context)
-        except StorageError:
-            raise
-        except Exception as e:
-            logger.exception(
-                "the a2a_session handler raised; the task fails",
-                extra={"lane": ctx.lane, "taskId": ctx.task_id},
-            )
-            return self._output(
-                context,
-                None,
-                results,
-                interrupted=hooks.interrupted,
-                error=f"{type(e).__name__}: {e}",
-            )
-        finally:
-            reset_run_hooks(token)
-            context.store._close()
-
-        return self._output(context, output, results, interrupted=hooks.interrupted)
-
-    def _output(
-        self,
-        ctx: A2ASessionContext,
-        output: object,
-        results: list[RunResult[object]],
-        *,
-        interrupted: bool,
-        error: str | None = None,
-    ) -> HandlerOutput:
-        """The answer, new history, explicitly saved fields and any pending question."""
-        return _core.normalize_handler_output(
-            HandlerOutput(
-                output=None,
-                new_items=[],
-                state=None,
-                scope_writes=ctx.store._scope_writes,
-                app_writes=ctx.store._statements,
-                usage=[],
-                input_required=None,
-                pending_call=None,
-                interrupted=ctx._interrupted or interrupted,
-                metadata={},
-                tool_executions=list(ctx._events),
-                error=error,
-                status=None,
-            ),
-            _handler_outcome(output),
-            [
-                HandlerRun(
-                    items=result.new_messages(),
-                    usage=result.usage,
-                    verbatim=result.verbatim,
-                    question=result.question if isinstance(result, RunInputRequired) else None,
-                    pending_call=result._pending_call,
-                )
-                for result in results
-            ],
-        )
-
-
-class _TurnStream:
-    """One turn's events to ``_core``: ``{"kind": "checkpoint"}`` each time the run reaches one,
-    answered through ``_core_push`` (``"continue"`` or ``"yield"``), then ``{"kind": "output"}``
-    with the ``HandlerOutput``. The run starts on the first ``__anext__``; ``aclose`` cancels it."""
-
-    def __init__(
-        self, run: Callable[[Callable[[], Awaitable[bool]]], Awaitable[HandlerOutput]]
-    ) -> None:
-        self._run = run
-        self._events = aio.Chan[TurnEvent](maxsize=64)
-        self._error: BaseException | None = None
-        self._closed = False
-        self._verdict: asyncio.Future[str] | None = None
-        self._task: asyncio.Task[None] | None = None
-        # the handler runs in the context the turn opened it in (its request's span current)
-        self._context = contextvars.copy_context()
-
-    def __aiter__(self) -> _TurnStream:
-        return self
-
-    async def __anext__(self) -> TurnEvent:
-        if self._closed:
-            raise StopAsyncIteration
-        if self._task is None:
-            self._task = asyncio.get_running_loop().create_task(
-                self._drive(), context=self._context
-            )
-        try:
-            event = await self._events.__anext__()
-        except StopAsyncIteration:
-            self._closed = True
-            error, self._error = self._error, None
-            if error is not None:
-                raise error from None
-            raise
-        except asyncio.CancelledError:
-            await self.aclose()
-            raise
-        if self._closed:
-            raise StopAsyncIteration
-        return event
-
-    def _core_push(self, verdict: str) -> None:
-        if self._verdict is not None and not self._verdict.done():
-            self._verdict.set_result(verdict)
-
-    async def aclose(self) -> None:
-        self._closed = True
-        self._events.close()
-        if self._task is not None and not self._task.done():
-            if not self._task.cancelling():
-                self._task.cancel()
+    async def save_context(self, context: object) -> None:
+        """Validate all marked fields, then stage or durably commit through the runtime owner."""
+        self._ensure_open()
+        loaded = self._objects.loaded.get(id(context))
+        if loaded is None or loaded.context is not context:
+            raise ValueError("load_context must be called before save_context")
+        declarations: list[ContextField] = []
+        validated: dict[str, object] = {}
+        for name, adapter in _field_adapters(context).items():
             try:
-                await asyncio.shield(self._task)
-            except asyncio.CancelledError:
-                caller = asyncio.current_task()
-                if caller is not None and caller.cancelling():
-                    raise
-
-    async def progress(self, task_id: str, text: str) -> None:
-        from .._generated.storage_turn import Progress
-
-        await self._events.send(Progress(task_id=task_id, text=text))
-
-    async def token(self, task_id: str, delta: str) -> None:
-        from .._generated.storage_turn import Token
-
-        await self._events.send(Token(task_id=task_id, delta=delta))
-
-    async def _checkpoint(self) -> bool:
-        self._verdict = asyncio.get_running_loop().create_future()
-        await self._events.send(Checkpoint())
-        return await self._verdict == "yield"
-
-    async def _drive(self) -> None:
-        try:
-            output = await self._run(self._checkpoint)
-            await self._events.send(Output(output=output))
-        except asyncio.CancelledError as e:
-            if not self._closed:
-                self._error = e
-            raise
-        except Exception as e:
-            # a storage error the handler met; its own errors are already the output's
-            self._error = e
-        finally:
-            self._events.close()
-
-
-def _handler_outcome(output: object) -> HandlerOutcome:
-    """Classify Python return types; Rust owns their transport meaning."""
-    if isinstance(output, RunInputRequired):
-        return HandlerOutcomeInputRequired(question=output.question)
-    if isinstance(output, RunCompleted):
-        return HandlerOutcomeValue(value=to_jsonable_python(output.output))
-    if isinstance(output, RunNoOutput):
-        return HandlerOutcomeValue(value=None)
-    if isinstance(output, Completed):
-        return HandlerOutcomeCompleted(
-            value=to_jsonable_python(output.value), verbatim=output.verbatim
+                value = adapter.validate_python(getattr(context, name))
+                encoded = adapter.dump_python(value, mode="json")
+                declarations.append(
+                    ContextField(name=name, schema=adapter.json_schema(), value=encoded)
+                )
+                validated[name] = value
+            except Exception as exc:
+                raise NotSerializable(f"persisted field `{name}`: {exc}") from exc
+        values = await self._activation.save(
+            self._scope_id, _identity(context), loaded.revision, declarations
         )
-    if isinstance(output, Failed):
-        return HandlerOutcomeFailed(error=output.error)
-    if isinstance(output, Rejected):
-        return HandlerOutcomeRejected(reason=output.reason)
-    if isinstance(output, Working):
-        return HandlerOutcomeWorking(message=output.message)
-    if isinstance(output, InputRequired):
-        return HandlerOutcomeInputRequired(question=output.question)
-    return HandlerOutcomeValue(value=to_jsonable_python(output))
+        self._publish(validated, values.revision)
+
+    def transaction(self) -> AbstractAsyncContextManager[Transaction]:
+        """A transaction whose writes commit or roll back with the managed turn, like a nested
+        savepoint; outside a managed turn it commits when the block exits."""
+        return self._transaction(independent=False)
+
+    def independent_transaction(self) -> AbstractAsyncContextManager[Transaction]:
+        """A transaction whose writes commit when the block exits, whatever the turn does
+        next."""
+        return self._transaction(independent=True)
+
+    @asynccontextmanager
+    async def _transaction(self, *, independent: bool) -> AsyncIterator[Transaction]:
+        self._ensure_open()
+        core = await self._activation.transaction(independent)
+        try:
+            yield Transaction(core)
+        except BaseException:
+            core.rollback()
+            raise
+        await core.commit()
+
+    def _publish(self, values: dict[str, object], revision: int, *, restored: bool = False) -> None:
+        if revision != self._objects.revision:
+            self._objects.values.clear()
+        self._objects.values.update(values)
+        self._objects.revision = revision
+        for loaded in self._objects.loaded.values():
+            if not restored or loaded.names <= values.keys():
+                loaded.revision = revision
+            for name in loaded.names & values.keys():
+                setattr(loaded.context, name, values[name])
+
+    @property
+    def _scope_writes(self) -> list[ContextScopeWrite]:
+        return self._activation.writes
+
+    @property
+    def _statements(self) -> list[AppStatement]:
+        return self._activation.statements
+
+    @property
+    def _closed(self) -> bool:
+        return self._disposed or self._activation.closed
+
+    def _core_release_hydration(self) -> None:
+        self._disposed = True
+        for scope in self._hydration.values():
+            scope.loaded.clear()
+            scope.values.clear()
+
+    def _close(self) -> None:
+        self._disposed = True
+        if self._owns_activation:
+            self._activation.close()
+            self._core_release_hydration()
+
+    def _ensure_open(self) -> None:
+        if self._closed:
+            raise RuntimeError("the context store's activation has ended")
 
 
-__all__ = ["A2ASessionContext"]
+def _identity(context: object) -> str:
+    return f"{type(context).__module__}.{type(context).__qualname__}"
+
+
+def _field_adapters(context: object) -> dict[str, TypeAdapter[object] | _RecordAdapter]:
+    if not is_dataclass(context) or isinstance(context, type):
+        raise TypeError("context persistence requires a dataclass instance")
+    hints = get_type_hints(type(context), include_extras=True)
+    return {
+        item.name: _field_adapter(hints[item.name])
+        for item in fields(context)
+        if item.metadata.get(_FIELD_MARKER, False)
+    }
+
+
+async def load_context(context: T, *, store: ContextStore) -> T:
+    """Restore marked fields using an explicitly supplied store."""
+    return await store.load_context(context)
+
+
+async def save_context(context: object, *, store: ContextStore) -> None:
+    """Save marked fields using an explicitly supplied store."""
+    await store.save_context(context)
+
+
+@runtime_checkable
+class _PersistedRecord(Protocol):
+    def _to_json(self) -> str: ...
+
+    @classmethod
+    def _from_json(cls, data: str) -> Self: ...
+
+
+@dataclass(frozen=True)
+class _RecordAdapter:
+    record: type[_PersistedRecord]
+    optional: bool
+
+    def json_schema(self) -> dict[str, JsonValue]:
+        schema: dict[str, JsonValue] = {
+            "type": "string",
+            "format": f"livekit.record:{self.record.__module__}.{self.record.__qualname__}",
+        }
+        return {"anyOf": [schema, {"type": "null"}]} if self.optional else schema
+
+    def validate_python(self, value: object) -> _PersistedRecord | None:
+        if value is None and self.optional:
+            return None
+        if isinstance(value, self.record):
+            return value
+        if isinstance(value, str):
+            return self.record._from_json(value)
+        raise TypeError(f"expected {self.record.__qualname__} or its saved JSON")
+
+    def dump_python(self, value: object, *, mode: str) -> JsonValue:
+        record = self.validate_python(value)
+        return None if record is None else record._to_json()
+
+
+def _field_adapter(annotation: object) -> TypeAdapter[object] | _RecordAdapter:
+    candidates = get_args(annotation) or (annotation,)
+    records = [
+        item for item in candidates if isinstance(item, type) and issubclass(item, _PersistedRecord)
+    ]
+    if records:
+        if len(records) != 1 or any(item not in (records[0], type(None)) for item in candidates):
+            raise TypeError("a persisted record field must name one record, optionally None")
+        return _RecordAdapter(records[0], type(None) in candidates)
+    return TypeAdapter(annotation)

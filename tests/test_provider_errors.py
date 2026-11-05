@@ -174,7 +174,7 @@ def test_generated_exception_classes_keep_public_identity_and_pickle_state() -> 
 
     from livekit.agents import APIStatusError
     from livekit.agents._exceptions import AssignmentTimeoutError, StreamStateError
-    from livekit.agents.storage.errors import RunRejected, StorageError, ThreadNotFound
+    from livekit.agents.storage import RunRejected, StorageError, ThreadNotFound
 
     errors = [
         APIError("failure", body={"detail": 1}, retryable=False),
@@ -195,7 +195,7 @@ def test_generated_exception_classes_keep_public_identity_and_pickle_state() -> 
         assert str(restored) == str(error)
         assert repr(restored) == repr(error)
         expected_module = (
-            "livekit.agents.storage.errors"
+            "livekit.agents.storage"
             if isinstance(error, StorageError)
             else "livekit.agents._exceptions"
         )

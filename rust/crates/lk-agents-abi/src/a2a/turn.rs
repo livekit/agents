@@ -107,7 +107,7 @@ pub type TurnStream = crate::DuplexStream<
     Box<dyn crate::StreamOutput<TurnEvent>>,
 >;
 
-#[crate::host(proxy(host = "livekit.agents.storage.context._TurnHost"))]
+#[crate::host(proxy(host = "livekit.agents.storage.session._TurnHost"))]
 pub trait TurnHost: Send + Sync {
     #[host(await, name = "_core_handle")]
     fn handle<'a>(

@@ -84,9 +84,8 @@ class SessionHost:
             hosting = hosting or plan.hosting
             job_ctx.init_recording(session._recording_options)
 
-        from ..storage.backends import _StorageHandle
-        from ..storage.context_store import ContextStore
-        from ..storage.resolve import Thread
+        from ..storage import Thread, _StorageHandle
+        from ..storage.context import ContextStore
 
         storage = session._owner.storage
         assert storage is not None

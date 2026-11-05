@@ -30,18 +30,18 @@ from livekit.agents._generated.a2a_metadata import (
 )
 from livekit.agents._generated.storage_class import ThreadInfo
 from livekit.agents.a2a import (
+    AGENT_CARD_PATH,
+    EXTENSION_URI,
+    A2AEndpoint,
     A2ASessionContext,
     AgentThreadGrant,
     Credentials,
     TextPart,
     Unauthorized,
+    as_dict,
 )
-from livekit.agents.a2a._extension import EXTENSION_URI, as_dict
-from livekit.agents.a2a.endpoint import AGENT_CARD_PATH, A2AEndpoint
 from livekit.agents.llm import ChatItem, FunctionToolCall
-from livekit.agents.storage import Storage
-from livekit.agents.storage.errors import StorageUnavailable
-from livekit.agents.storage.resolve import Thread
+from livekit.agents.storage import Storage, StorageUnavailable, Thread
 
 from .fake_llm import FakeLLM, FakeLLMResponse
 
@@ -141,7 +141,7 @@ def user_message(
     if context_id:
         msg.context_id = context_id
     if metadata:
-        from livekit.agents.a2a._extension import struct
+        from livekit.agents.a2a import struct
 
         msg.metadata.CopyFrom(struct(metadata))
     return msg

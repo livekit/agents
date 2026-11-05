@@ -21,8 +21,7 @@ from livekit.agents import (
 )
 from livekit.agents.a2a import A2ASessionContext
 from livekit.agents.llm import ChatContext, FunctionToolCall, Tool, Toolset
-from livekit.agents.storage import Storage
-from livekit.agents.storage.resolve import Thread
+from livekit.agents.storage import Storage, Thread
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from livekit.agents.voice.agent_session import ExpressiveOptions
 from livekit.agents.voice.run_result import _mock_session_tools
@@ -477,7 +476,7 @@ async def test_live_session_context_reaches_tools_and_is_explicitly_saved(
     row = await db.lane_info(agent.name)
     db.close()
     assert row is not None
-    from livekit.agents.storage.context_store import ContextStore
+    from livekit.agents.storage.session import ContextStore
 
     restored = AppContext(settings=deps)
     activation = await storage.threads._core_context_store(sid, agent.name)

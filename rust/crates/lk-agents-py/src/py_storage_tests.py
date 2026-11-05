@@ -9,9 +9,8 @@ from pathlib import Path
 import pytest
 
 from livekit.agents._generated.storage_turn import Checkpoint, HandlerOutput, Output
-from livekit.agents.storage import SQLiteStorage
-from livekit.agents.storage.context import _TurnStream
-from livekit.agents.storage.errors import ThreadNotFound
+from livekit.agents.storage import SQLiteStorage, ThreadNotFound
+from livekit.agents.storage.session import _TurnStream
 
 pytestmark = pytest.mark.unit
 

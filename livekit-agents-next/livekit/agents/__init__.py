@@ -70,7 +70,7 @@ from .llm.tool_context import (
     function_tool,
 )
 from .simulation import SimulationContext, SimulationVerdict
-from .storage.context_store import load_context, persisted, save_context
+from .storage.context import load_context, persisted, save_context
 from .text_session import TextSession, TextSessionRoutingError, TextSessionState, TextSessionTurn
 from .types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -142,7 +142,7 @@ from .worker import (
 )
 
 if typing.TYPE_CHECKING:
-    from .a2a.endpoint import a2a_session  # noqa: F401
+    from .a2a import a2a_session  # noqa: F401
     from .llm import mcp  # noqa: F401
 
 
@@ -154,7 +154,7 @@ def __getattr__(name: str) -> object:
 
     if name == "a2a_session":
         # the text door, loaded on first use like the rest of the A2A stack
-        from .a2a.endpoint import a2a_session
+        from .a2a import a2a_session
 
         return a2a_session
 

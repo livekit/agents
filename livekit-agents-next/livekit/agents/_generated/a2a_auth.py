@@ -80,5 +80,5 @@ class Principal:
 
 
 AgentThreadGrant.__annotations__ = get_annotations(AgentThreadGrant, eval_str=True)
-AgentThreadGrant.__module__ = "livekit.agents.a2a.auth"
-Principal.__module__ = "livekit.agents.a2a.auth"
+AgentThreadGrant.__module__ = "livekit.agents.a2a"
+Principal.__module__ = "livekit.agents.a2a"
