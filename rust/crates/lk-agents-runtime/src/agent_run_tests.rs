@@ -29,35 +29,6 @@ use tokio::sync::Notify;
 
 use super::*;
 
-mod checkpoints {
-    //! A host-observed waiter stops the native runner after an already completed tool.
-
-    use super::*;
-
-    #[tokio::test(start_paused = true)]
-    async fn a_waiter_preserves_the_tool_result_and_prevents_the_next_model() {
-        let mut setup = setup(
-            vec![Reply::Call("find_slot", json!({"day": "Monday"})), Reply::Text("never sent")],
-            Body::YieldAfterTool,
-            OutputSpec::Text { validated: false },
-            Arc::new(Registry::default()),
-        );
-        let updates = drain(&mut setup.updates).await;
-        let settled = finished(&updates).expect("a managed yield settles successfully");
-        assert!(settled.result.interrupted);
-        assert_eq!(settled.result.usage.requests, 1);
-        assert_eq!(settled.result.usage.tool_calls, 1);
-        assert!(settled.result.new_messages.iter().any(|item| matches!(item,
-            lk_agents_abi::ChatItem::FunctionCallOutput(output) if output.output == "9:00 is free"
-        )));
-        assert!(
-            !updates
-                .iter()
-                .any(|update| matches!(update, RunUpdate::Stream(StreamEvent::TextDelta { .. })))
-        );
-    }
-}
-
 /// Counts host values released, so a test sees nothing the host handed over is kept.
 #[derive(Default)]
 struct Registry {
@@ -157,7 +128,6 @@ impl Llm for ScriptedLlm {
 #[derive(Clone, Copy, PartialEq)]
 enum Body {
     Returns,
-    YieldAfterTool,
     /// Runs until cancelled, then reports the cancellation.
     UntilCancelled,
     /// Ignores cancellation: never settles.
@@ -227,10 +197,7 @@ impl AgentCallbacks for FakeHost {
         _cx: &lk_agents_abi::telemetry::Cx,
         _invocation: &'a Invocation,
     ) -> lk_agents_abi::BoxFuture<'a, Result<bool, HostError>> {
-        Box::pin(async move {
-            Ok(self.body == Body::YieldAfterTool
-                && self.seen.lock().iter().any(|(callback, _)| *callback == "run"))
-        })
+        Box::pin(async { Ok(false) })
     }
 
     fn render_instructions<'a>(
@@ -286,7 +253,7 @@ impl AgentCallbacks for FakeHost {
         Box::pin(async move {
             self.saw("run", invocation, span);
             match self.body {
-                Body::Returns | Body::YieldAfterTool => {}
+                Body::Returns => {}
                 Body::UntilCancelled => {
                     self.cancel.notified().await;
                     return Ok((ToolOutcome::Cancelled.into(), Default::default()));
@@ -549,7 +516,7 @@ async fn each_callback_runs_under_its_own_invocation_and_everything_is_released(
     let [run] = named("agent_run").try_into().unwrap();
     let [tool] = named("function_tool").try_into().unwrap();
     assert_eq!(tool.parent, Some(run.context.span_id));
-    // With message capture, the tool's description, as 1.8.10 recorded it.
+    // With message capture, the tool's description.
     let description = tool.attributes.iter().find(|(k, _)| k == "gen_ai.tool.description");
     assert_eq!(
         description.map(|(_, v)| v),

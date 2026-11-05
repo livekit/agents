@@ -43,8 +43,8 @@ impl AgentRun {
                 });
             }
         }
-        // Keep the singular compatibility projection in model order, while retaining every
-        // correlated input requirement independently. No unselected question is answered.
+        // The run's single question is the first in model order; every input requirement is
+        // retained independently. No unselected question is answered.
         let mut terminal: Option<Terminal> = None;
         let mut terminal_call = None;
         let mut input_requirements = Vec::new();
@@ -63,12 +63,6 @@ impl AgentRun {
             let this = match outcome {
                 _ if accepted.is_some_and(|(call, _)| call == id) => Some(Terminal::Output),
                 ToolOutcome::InputRequired { question, verbatim, tool } => {
-                    // False distinguishes retained-but-unselected requests from legacy history
-                    // which predates explicit correlation metadata.
-                    item.extra.insert(
-                        crate::request::INPUT_REQUESTED_KEY.into(),
-                        serde_json::Value::Bool(false),
-                    );
                     let requirement = input_requirement(&self.input.invocation_id, &item, outcome)
                         .expect("an InputRequired outcome retains its call identity");
                     if terminal.is_none() {

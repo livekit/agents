@@ -34,13 +34,5 @@ prost.workspace = true
 pbjson-types.workspace = true
 
 [[test]]
-name = "amd_turns"
-path = "src/amd_tests.rs"
-
-[[test]]
-name = "ivr_loops"
-path = "src/ivr_tests.rs"
-
-[[test]]
-name = "transcript_pacing"
-path = "src/transcript_tests.rs"
+name = "voice"
+path = "src/voice_tests.rs"

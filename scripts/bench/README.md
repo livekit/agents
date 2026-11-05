@@ -8,8 +8,8 @@ Failed workloads preserve the previous output file.
 # Real image encoding, cold decoder construction, WAV resampling and Python-thread progress
 PYTHONPATH=livekit-agents-next:. uv run --no-sync python scripts/bench/media.py --output media.json
 # Real native images, 32 Ogg streams and ten-second recording bursts (run from rust/)
-cargo test -p lk-agents-runtime --test media_measurements --features media-images,media-ffmpeg \
-  -- --ignored --nocapture
+cargo test -p lk-agents-runtime --test runtime --features media-images,media-ffmpeg \
+  -- media:: --ignored --nocapture
 ```
 
 Keep captures outside the repository; compare runs on equivalent hardware and CPU quotas.

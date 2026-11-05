@@ -1,10 +1,204 @@
-//! Lossless reporting at the shared run boundary, independently of question presentation.
+//! Questions and approval across invocations: what the run asks, what it retains when several
+//! calls wait on the person, and which answer grants an approved repeat.
 
-use super::tests::{Driver, string_tool, text_agent};
-use lk_agents_abi::ChatItem;
-use lk_agents_abi::agent::run::RunOutcome;
-use lk_agents_abi::llm::tool_executor::ToolOutcome;
-use serde_json::json;
+use super::*;
+use lk_agents_abi::llm::tool_executor::Approval;
+
+use crate::approval;
+use lk_agents_abi::agent::ReadBack;
+
+fn cancel_tool() -> FunctionToolInfo {
+    let mut t = tool(
+        "cancel_appointment",
+        "Cancel the patient's appointment on a date.\n\nArgs:\n    date: the date",
+        json!({
+            "type": "object",
+            "properties": {"date": {"type": "string"}, "notify": {"type": "boolean", "default": true}},
+            "required": ["date"],
+        }),
+    );
+    t.needs_approval = Some(ReadBack::Default);
+    t
+}
+
+/// One invocation on `history`: the model calls the tool with `arguments`; the host validates
+/// them as `validated`. Returns the driver once the run settled or the body was launched.
+fn turn(history: Vec<ChatItem>, message: &str, arguments: Value, validated: Value) -> Driver {
+    let mut d = Driver::new(text_agent(vec![cancel_tool()]), message, history);
+    d.reply("", &[("cancel_appointment", arguments)]);
+    let (call, _) = *d.prepares().last().unwrap();
+    d.prepared(call, validated);
+    d
+}
+
+fn question(d: &Driver) -> String {
+    match &d.result().outcome {
+        RunOutcome::InputRequired { question, verbatim: true, .. } => question.clone(),
+        other => panic!("expected a verbatim question, got {other:?}"),
+    }
+}
+
+// Catches: a history-only continuation unable to grant (the waiting output never replaced by the
+// answer); approval decided on raw model JSON instead of the validated arguments (a defaulted
+// parameter spelled differently must not ask again); an answer granting twice; the history losing
+// the person's words or the model not told the call has not run.
+#[test]
+fn approval_binds_the_validated_arguments_and_each_answer_is_consumed_once() {
+    let validated = json!({"date": "Monday", "notify": true});
+    let first =
+        turn(vec![], "cancel monday", json!({"date": "Monday", "notify": true}), validated.clone());
+    assert!(first.executes().is_empty(), "the body ran before approval");
+    assert_eq!(
+        question(&first),
+        "Please confirm: Cancel the patient's appointment on a date (date='Monday', notify=True). Yes or no?"
+    );
+    let history = first.result().all_messages.clone();
+    let ChatItem::FunctionCall(asked) = &history[1] else { panic!() };
+    assert_eq!(approval::mark(asked), Some(Approval::Asked));
+
+    // The person answers; the model repeats the call with strict mode's `null` for the default.
+    let mut second = Driver::new(text_agent(vec![cancel_tool()]), "yes", history);
+    let (_, ctx, _) = second.request();
+    let outputs: Vec<_> = ctx
+        .items
+        .iter()
+        .filter_map(|i| match i {
+            ChatItem::FunctionCallOutput(o) => Some(o.output.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(outputs, [approval::answered_text("cancel_appointment", "yes")]);
+    second.reply("", &[("cancel_appointment", json!({"date": "Monday", "notify": null}))]);
+    let (call, arguments) = second.prepares()[0].clone();
+    assert_eq!(arguments["notify"], json!(true), "the schema default replaces the null sentinel");
+    second.prepared(call, validated.clone());
+    let (_, _, granted) = second.executes().pop().expect("the approved repeat runs");
+    assert_eq!(approval::mark(&granted), Some(Approval::Granted));
+    second.run_tools(|_| value("cancelled"));
+    second.reply("Done, it is cancelled.", &[]);
+    let history = second.result().all_messages.clone();
+    let stored: Vec<_> = transcript(&history).into_iter().filter(|(k, _)| k == "output").collect();
+    assert_eq!(stored, pairs(&[("output", "yes"), ("output", "cancelled")]));
+
+    // A later identical call asks again: the answer was consumed.
+    let third = turn(history, "cancel monday again", json!({"date": "Monday"}), validated);
+    assert!(third.executes().is_empty());
+    assert!(question(&third).starts_with("Please confirm:"));
+}
+
+// Catches: approval surviving a change the application's validator made to the arguments (the
+// identity is the validated value, not the model's JSON).
+#[test]
+fn changed_validated_arguments_need_a_fresh_approval() {
+    let first = turn(
+        vec![],
+        "cancel monday",
+        json!({"date": "Monday"}),
+        json!({"date": "2026-11-02", "notify": true}),
+    );
+    let history = first.result().all_messages.clone();
+    let mut second = Driver::new(text_agent(vec![cancel_tool()]), "yes", history);
+    second.reply("", &[("cancel_appointment", json!({"date": "Monday"}))]);
+    let (call, _) = second.prepares()[0].clone();
+    // Validated a week later: a different date to approve.
+    second.prepared(call, json!({"date": "2026-11-09", "notify": true}));
+    assert!(second.executes().is_empty());
+    assert!(question(&second).contains("date='2026-11-09'"));
+}
+
+// Catches: two identical repeats in one step both running on one answer (the grant is decided
+// in model order, whichever preparation finishes first).
+#[test]
+fn one_answer_grants_one_repeat_within_a_step() {
+    let validated = json!({"date": "Monday", "notify": true});
+    let first = turn(vec![], "cancel", json!({"date": "Monday"}), validated.clone());
+    let mut d =
+        Driver::new(text_agent(vec![cancel_tool()]), "yes", first.result().all_messages.clone());
+    d.reply(
+        "",
+        &[
+            ("cancel_appointment", json!({"date": "Monday"})),
+            ("cancel_appointment", json!({"date": "Monday"})),
+        ],
+    );
+    let calls = d.prepares();
+    d.prepared(calls[1].0, validated.clone());
+    assert!(d.executes().is_empty(), "the second waits for the first's decision");
+    d.prepared(calls[0].0, validated);
+    let executed: Vec<CallId> = d.executes().iter().map(|(c, ..)| *c).collect();
+    assert_eq!(executed, [calls[0].0]);
+    d.run_tools(|_| value("cancelled"));
+    assert!(matches!(&d.result().outcome, RunOutcome::InputRequired { verbatim: true, .. }));
+}
+
+// Catches: a read-back function's missing-detail question marked as a read-back (a later answer
+// would then grant), or its prepared arguments leaked.
+#[test]
+fn a_read_back_function_may_ask_for_a_missing_detail_first() {
+    let mut t = cancel_tool();
+    t.needs_approval = Some(ReadBack::Function);
+    let mut d = Driver::new(text_agent(vec![t]), "cancel", vec![]);
+    d.reply("", &[("cancel_appointment", json!({"date": "Monday"}))]);
+    let (call, _) = d.prepares()[0].clone();
+    d.prepared(call, json!({"date": "Monday", "notify": true}));
+    let prepared = d.effects.iter().find_map(|e| match e {
+        AgentRunEffect::ReadBackRender { prepared, .. } => Some(*prepared),
+        _ => None,
+    });
+    let answer = ReadBackAnswer::InputRequired { question: "Which email?".into(), verbatim: false };
+    d.send(AgentRunEvent::ReadBackRendered { call, result: Ok(answer) });
+    assert!(
+        d.effects.contains(&AgentRunEffect::ToolArgumentsRelease { prepared: prepared.unwrap() })
+    );
+    d.reply("Which email should the confirmation go to?", &[]);
+    let ChatItem::FunctionCall(c) = &d.result().all_messages[1] else { panic!() };
+    assert_eq!(approval::mark(c), None);
+}
+
+// Framework validation feedback must not spend the person's approval as a new human reply.
+#[test]
+fn approval_survives_output_validation_feedback_in_the_answering_invocation() {
+    let validated = json!({"date": "Monday", "notify": true});
+    let first = turn(vec![], "cancel", json!({"date": "Monday"}), validated.clone());
+    let mut definition = text_agent(vec![cancel_tool()]);
+    definition.output = OutputSpec::Text { validated: true };
+    let mut second = Driver::new(definition, "yes", first.result().all_messages.clone());
+    second.reply("Done", &[]);
+    second.send(AgentRunEvent::OutputValidated {
+        validation: second.validation(),
+        verdict: OutputVerdict::Retry("Run the requested tool first".into()),
+    });
+    second.reply("", &[("cancel_appointment", json!({"date":"Monday"}))]);
+    let (call, _) = second.prepares()[0].clone();
+    second.prepared(call, validated);
+    assert_eq!(second.executes().len(), 1, "validation feedback does not answer a read-back");
+}
+
+// Catches: an A2A continuation never granting the repeat, because the door wrote the person's
+// answer over the waiting output before the run started and the run counted only the answers it
+// wrote itself; or because stored history read the JSON identity back as the arguments object.
+#[test]
+fn a_read_back_the_transport_answered_grants_the_repeat() {
+    let validated = json!({"date": "Monday", "notify": true});
+    let first = turn(vec![], "cancel", json!({"date": "Monday"}), validated.clone());
+    let mut history = first.result().all_messages.clone();
+    for item in &mut history {
+        match item {
+            ChatItem::FunctionCallOutput(o) => o.output = "yes".into(),
+            ChatItem::FunctionCall(c) => {
+                let stored = c.extra[approval::APPROVAL_IDENTITY_KEY].as_str().unwrap();
+                let read_back = serde_json::from_str(stored).unwrap();
+                c.extra.insert(approval::APPROVAL_IDENTITY_KEY.into(), read_back);
+            }
+            _ => {}
+        }
+    }
+    let mut second = Driver::new(text_agent(vec![cancel_tool()]), "yes", history);
+    second.reply("", &[("cancel_appointment", json!({"date": "Monday"}))]);
+    let (call, _) = second.prepares()[0].clone();
+    second.prepared(call, validated);
+    assert_eq!(second.executes().len(), 1, "the approved repeat runs");
+}
 
 #[test]
 fn standalone_result_retains_all_correlated_requests_after_core_is_dropped() {
@@ -107,42 +301,6 @@ fn history_only_continuation_answers_the_presented_call_without_answering_other_
     );
 }
 
-#[test]
-fn retry_failure_envelope_retains_a_siblings_input_requirement_without_becoming_success() {
-    let mut definition = text_agent(vec![string_tool("retry", "day"), string_tool("ask", "city")]);
-    definition.retries.tools = 0;
-    let mut driver = Driver::new(definition, "book", Vec::new());
-    driver.reply("", &[("retry", json!({"day":"Monday"})), ("ask", json!({"city":"?"}))]);
-    driver.run_tools(|name| {
-        if name == "retry" {
-            ToolOutcome::ModelRetry("try again".into())
-        } else {
-            ToolOutcome::InputRequired {
-                question: "Which city?".into(),
-                verbatim: true,
-                tool: Some("answer_city".into()),
-            }
-        }
-    });
-    let failure = driver
-        .effects
-        .iter()
-        .find_map(|effect| match effect {
-            crate::agent_run::AgentRunEffect::Finished { result, input_requirements } => {
-                Some((result.as_ref(), input_requirements))
-            }
-            _ => None,
-        })
-        .unwrap();
-    assert!(
-        matches!(failure.0, Err(lk_agents_abi::agent::run::RunError::ToolRetriesExceeded { tool, .. }) if tool == "retry")
-    );
-    assert_eq!(failure.1.len(), 1);
-    assert_eq!(failure.1[0].question, "Which city?");
-    assert_eq!(failure.1[0].call.name, "ask");
-    assert_eq!(failure.1[0].call.answer_tool.as_deref(), Some("answer_city"));
-}
-
 fn approval_tools() -> Vec<lk_agents_abi::agent::FunctionToolInfo> {
     ["delete_first", "delete_second"]
         .into_iter()
@@ -155,10 +313,6 @@ fn approval_tools() -> Vec<lk_agents_abi::agent::FunctionToolInfo> {
 }
 
 fn repeat_approval(history: Vec<ChatItem>, name: &str, target: &str) -> Driver {
-    use super::AgentRunEvent;
-    use super::tests::chunk;
-    use lk_agents_abi::FunctionToolCall;
-
     let mut driver = Driver::new(text_agent(approval_tools()), "yes", history);
     let (request, _, _) = driver.request();
     driver.send(AgentRunEvent::LlmChunk {
@@ -176,7 +330,7 @@ fn repeat_approval(history: Vec<ChatItem>, name: &str, target: &str) -> Driver {
     });
     driver.send(AgentRunEvent::LlmEnded { request });
     for (call, arguments) in driver.prepares() {
-        driver.prepared(call, serde_json::Value::Object(arguments));
+        driver.prepared(call, Value::Object(arguments));
     }
     driver
 }
@@ -233,35 +387,9 @@ fn an_unselected_read_back_cannot_grant_even_if_a_transport_rewrites_its_output(
     assert!(repeated.executes().is_empty());
 }
 
-#[test]
-fn a_single_legacy_read_back_still_accepts_direct_and_transport_answers() {
-    for transport_answered in [false, true] {
-        let mut first = Driver::new(text_agent(approval_tools()), "consider it", Vec::new());
-        first.reply("", &[("delete_first", json!({"target":"one"}))]);
-        first.run_tools(|_| panic!("an unapproved body must not run"));
-        let mut history = first.result().all_messages.clone();
-        for item in &mut history {
-            match item {
-                ChatItem::FunctionCall(call) => {
-                    call.extra.remove(crate::request::INPUT_REQUESTED_KEY);
-                }
-                ChatItem::FunctionCallOutput(output) if transport_answered => {
-                    output.output = "yes".into();
-                }
-                _ => {}
-            }
-        }
-        let repeated = repeat_approval(history, "delete_first", "one");
-        assert_eq!(repeated.executes().len(), 1, "legacy single-call correlation is unambiguous");
-    }
-}
-
 fn a_reported_question_with_a_pending_sibling(
     streaming: bool,
-) -> (Driver, super::RequestId, super::CallId, String) {
-    use super::{AgentRunEvent, tests::chunk};
-    use lk_agents_abi::FunctionToolCall;
-
+) -> (Driver, RequestId, CallId, String) {
     let mut driver = Driver::new(
         text_agent(vec![string_tool("hotel", "city"), string_tool("lookup", "job")]),
         "do both",
@@ -300,11 +428,11 @@ fn a_reported_question_with_a_pending_sibling(
     (driver, request, calls[1].0, question_call)
 }
 
-fn assert_reported_question(effects: &[super::AgentRunEffect], call_id: &str) {
+fn assert_reported_question(effects: &[AgentRunEffect], call_id: &str) {
     let (result, requirements) = effects
         .iter()
         .find_map(|effect| match effect {
-            super::AgentRunEffect::Finished { result, input_requirements } => {
+            AgentRunEffect::Finished { result, input_requirements } => {
                 Some((result, input_requirements))
             }
             _ => None,
@@ -323,11 +451,9 @@ fn assert_reported_question(effects: &[super::AgentRunEffect], call_id: &str) {
 
 #[test]
 fn cancellation_retains_a_reported_question_before_its_sibling_settles() {
-    use super::AgentRunEvent;
-
     let (mut driver, _, sibling, call_id) = a_reported_question_with_a_pending_sibling(false);
     driver.send(AgentRunEvent::Cancel);
-    driver.send(AgentRunEvent::Cancel); // Repeated cancellation must not duplicate the metadata.
+    driver.send(AgentRunEvent::Cancel); // A repeated cancellation must not duplicate the question.
     let effects =
         driver.send(AgentRunEvent::ToolSettled { call: sibling, outcome: ToolOutcome::Cancelled });
     assert_reported_question(&effects, &call_id);
@@ -335,8 +461,6 @@ fn cancellation_retains_a_reported_question_before_its_sibling_settles() {
 
 #[test]
 fn model_failure_retains_a_reported_question_before_the_stream_ends() {
-    use super::AgentRunEvent;
-
     let (mut driver, request, sibling, call_id) = a_reported_question_with_a_pending_sibling(true);
     driver.send(AgentRunEvent::LlmFailed { request, error: "provider failed".into() });
     let effects =

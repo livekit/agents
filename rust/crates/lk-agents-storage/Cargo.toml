@@ -60,37 +60,5 @@ httparse = "1"
 tokio-tungstenite = { version = "0.30", default-features = false }
 
 [[test]]
-name = "cloud_tasks"
-path = "src/backends/agentdb/tasks_tests.rs"
-
-[[test]]
-name = "http"
-path = "src/http/http_tests.rs"
-
-[[test]]
-name = "context"
-path = "src/context_tests.rs"
-
-[[test]]
-name = "lease"
-path = "src/thread/lease_tests.rs"
-
-[[test]]
-name = "lifecycle"
-path = "src/backends/lifecycle_tests.rs"
-
-[[test]]
-name = "process"
-path = "src/backends/process_tests.rs"
-
-[[test]]
-name = "runs"
-path = "src/thread/runs_tests.rs"
-
-[[test]]
-name = "schema"
-path = "src/thread/schema_tests.rs"
-
-[[test]]
-name = "voice"
-path = "src/voice_tests.rs"
+name = "storage"
+path = "src/storage_tests.rs"

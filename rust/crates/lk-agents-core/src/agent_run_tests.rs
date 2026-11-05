@@ -1,975 +1,17 @@
 //! `AgentRun` driven directly, event by event, with no executor: each test plays the runtime's
 //! part and asserts the effects and the settled result.
 //!
-//! Shared drivers and approval/checkpoint/coordinator contracts live here. Larger flow and
-//! lifecycle suites use the sibling `agent_run_flow_tests.rs` and `agent_run_lifecycle_tests.rs`.
+//! The shared driver, model steps, tools, outputs and managed checkpoints live here; questions,
+//! coordinated (voice) runs and cancellation have sibling files.
+
+#[path = "agent_run_cancellation_tests.rs"]
+mod cancellation;
+#[path = "agent_run_questions_tests.rs"]
+mod questions;
+#[path = "agent_run_voice_tests.rs"]
+mod voice;
 
 use lk_agents_abi::agent::ToolTemplate;
-
-mod approval {
-    //! The approval gate across invocations: a history-only continuation, as `agent.run()` sees it.
-
-    use lk_agents_abi::llm::tool_executor::Approval;
-
-    use super::*;
-    use crate::approval;
-    use lk_agents_abi::agent::ReadBack;
-
-    fn cancel_tool() -> FunctionToolInfo {
-        let mut t = tool(
-            "cancel_appointment",
-            "Cancel the patient's appointment on a date.\n\nArgs:\n    date: the date",
-            json!({
-                "type": "object",
-                "properties": {"date": {"type": "string"}, "notify": {"type": "boolean", "default": true}},
-                "required": ["date"],
-            }),
-        );
-        t.needs_approval = Some(ReadBack::Default);
-        t
-    }
-
-    /// One invocation on `history`: the model calls the tool with `arguments`; the host validates
-    /// them as `validated`. Returns the driver once the run settled or the body was launched.
-    fn turn(history: Vec<ChatItem>, message: &str, arguments: Value, validated: Value) -> Driver {
-        let mut d = Driver::new(text_agent(vec![cancel_tool()]), message, history);
-        d.reply("", &[("cancel_appointment", arguments)]);
-        let (call, _) = *d.prepares().last().unwrap();
-        d.prepared(call, validated);
-        d
-    }
-
-    fn question(d: &Driver) -> String {
-        match &d.result().outcome {
-            RunOutcome::InputRequired { question, verbatim: true, .. } => question.clone(),
-            other => panic!("expected a verbatim question, got {other:?}"),
-        }
-    }
-
-    // Catches (c7 defect 1): a history-only continuation unable to grant (the waiting
-    // output never replaced by the answer); approval decided on raw model JSON instead of the
-    // validated arguments (a defaulted parameter spelled differently must not ask again); an
-    // answer granting twice; the
-    // history losing the person's words or the model not told the call has not run.
-    #[test]
-    fn approval_binds_the_validated_arguments_and_each_answer_is_consumed_once() {
-        let validated = json!({"date": "Monday", "notify": true});
-        let first = turn(
-            vec![],
-            "cancel monday",
-            json!({"date": "Monday", "notify": true}),
-            validated.clone(),
-        );
-        assert!(first.executes().is_empty(), "the body ran before approval");
-        assert_eq!(
-            question(&first),
-            "Please confirm: Cancel the patient's appointment on a date (date='Monday', notify=True). Yes or no?"
-        );
-        let history = first.result().all_messages.clone();
-        let ChatItem::FunctionCall(asked) = &history[1] else { panic!() };
-        assert_eq!(approval::mark(asked), Some(Approval::Asked));
-
-        // The person answers; the model repeats the call with strict mode's `null` for the default.
-        let mut second = Driver::new(text_agent(vec![cancel_tool()]), "yes", history);
-        let (_, ctx, _) = second.request();
-        let outputs: Vec<_> = ctx
-            .items
-            .iter()
-            .filter_map(|i| match i {
-                ChatItem::FunctionCallOutput(o) => Some(o.output.clone()),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(outputs, [approval::answered_text("cancel_appointment", "yes")]);
-        second.reply("", &[("cancel_appointment", json!({"date": "Monday", "notify": null}))]);
-        let (call, arguments) = second.prepares()[0].clone();
-        assert_eq!(
-            arguments["notify"],
-            json!(true),
-            "the schema default replaces the null sentinel"
-        );
-        second.prepared(call, validated.clone());
-        let (_, _, granted) = second.executes().pop().expect("the approved repeat runs");
-        assert_eq!(approval::mark(&granted), Some(Approval::Granted));
-        second.run_tools(|_| value("cancelled"));
-        second.reply("Done, it is cancelled.", &[]);
-        let history = second.result().all_messages.clone();
-        let stored: Vec<_> =
-            transcript(&history).into_iter().filter(|(k, _)| k == "output").collect();
-        assert_eq!(stored, pairs(&[("output", "yes"), ("output", "cancelled")]));
-
-        // A later identical call asks again: the answer was consumed.
-        let third = turn(history, "cancel monday again", json!({"date": "Monday"}), validated);
-        assert!(third.executes().is_empty());
-        assert!(question(&third).starts_with("Please confirm:"));
-    }
-
-    // Catches: approval surviving a change the application's validator made to the arguments (the
-    // identity is the validated value, not the model's JSON).
-    #[test]
-    fn changed_validated_arguments_need_a_fresh_approval() {
-        let first = turn(
-            vec![],
-            "cancel monday",
-            json!({"date": "Monday"}),
-            json!({"date": "2026-11-02", "notify": true}),
-        );
-        let history = first.result().all_messages.clone();
-        let mut second = Driver::new(text_agent(vec![cancel_tool()]), "yes", history);
-        second.reply("", &[("cancel_appointment", json!({"date": "Monday"}))]);
-        let (call, _) = second.prepares()[0].clone();
-        // Validated a week later: a different date to approve.
-        second.prepared(call, json!({"date": "2026-11-09", "notify": true}));
-        assert!(second.executes().is_empty());
-        assert!(question(&second).contains("date='2026-11-09'"));
-    }
-
-    // Catches: two identical repeats in one step both running on one answer (the grant is decided
-    // in model order, whichever preparation finishes first).
-    #[test]
-    fn one_answer_grants_one_repeat_within_a_step() {
-        let validated = json!({"date": "Monday", "notify": true});
-        let first = turn(vec![], "cancel", json!({"date": "Monday"}), validated.clone());
-        let mut d = Driver::new(
-            text_agent(vec![cancel_tool()]),
-            "yes",
-            first.result().all_messages.clone(),
-        );
-        d.reply(
-            "",
-            &[
-                ("cancel_appointment", json!({"date": "Monday"})),
-                ("cancel_appointment", json!({"date": "Monday"})),
-            ],
-        );
-        let calls = d.prepares();
-        d.prepared(calls[1].0, validated.clone());
-        assert!(d.executes().is_empty(), "the second waits for the first's decision");
-        d.prepared(calls[0].0, validated);
-        let executed: Vec<CallId> = d.executes().iter().map(|(c, ..)| *c).collect();
-        assert_eq!(executed, [calls[0].0]);
-        d.run_tools(|_| value("cancelled"));
-        assert!(matches!(&d.result().outcome, RunOutcome::InputRequired { verbatim: true, .. }));
-    }
-
-    // Catches: a read-back function's missing-detail question marked as a read-back (a later answer
-    // would then grant), or its prepared arguments leaked.
-    #[test]
-    fn a_read_back_function_may_ask_for_a_missing_detail_first() {
-        let mut t = cancel_tool();
-        t.needs_approval = Some(ReadBack::Function);
-        let mut d = Driver::new(text_agent(vec![t]), "cancel", vec![]);
-        d.reply("", &[("cancel_appointment", json!({"date": "Monday"}))]);
-        let (call, _) = d.prepares()[0].clone();
-        d.prepared(call, json!({"date": "Monday", "notify": true}));
-        let prepared = d.effects.iter().find_map(|e| match e {
-            AgentRunEffect::ReadBackRender { prepared, .. } => Some(*prepared),
-            _ => None,
-        });
-        let answer =
-            ReadBackAnswer::InputRequired { question: "Which email?".into(), verbatim: false };
-        d.send(AgentRunEvent::ReadBackRendered { call, result: Ok(answer) });
-        assert!(
-            d.effects
-                .contains(&AgentRunEffect::ToolArgumentsRelease { prepared: prepared.unwrap() })
-        );
-        d.reply("Which email should the confirmation go to?", &[]);
-        let ChatItem::FunctionCall(c) = &d.result().all_messages[1] else { panic!() };
-        assert_eq!(approval::mark(c), None);
-    }
-
-    // Framework validation feedback must not spend the person's approval as a new human reply.
-    #[test]
-    fn approval_survives_output_validation_feedback_in_the_answering_invocation() {
-        let validated = json!({"date": "Monday", "notify": true});
-        let first = turn(vec![], "cancel", json!({"date": "Monday"}), validated.clone());
-        let mut definition = text_agent(vec![cancel_tool()]);
-        definition.output = OutputSpec::Text { validated: true };
-        let mut second = Driver::new(definition, "yes", first.result().all_messages.clone());
-        second.reply("Done", &[]);
-        let validation = second
-            .effects
-            .iter()
-            .find_map(|e| match e {
-                AgentRunEffect::ValidateOutput { validation, .. } => Some(*validation),
-                _ => None,
-            })
-            .unwrap();
-        second.send(AgentRunEvent::OutputValidated {
-            validation,
-            verdict: OutputVerdict::Retry("Run the requested tool first".into()),
-        });
-        second.reply("", &[("cancel_appointment", json!({"date":"Monday"}))]);
-        let (call, _) = second.prepares()[0].clone();
-        second.prepared(call, validated);
-        assert_eq!(second.executes().len(), 1, "validation feedback does not answer a read-back");
-    }
-
-    // Catches: an A2A continuation never granting the repeat, because the door wrote the person's
-    // answer over the waiting output before the run started and the run counted only the answers it
-    // wrote itself; or because stored history read the JSON identity back as the arguments object.
-    #[test]
-    fn a_read_back_the_transport_answered_grants_the_repeat() {
-        let validated = json!({"date": "Monday", "notify": true});
-        let first = turn(vec![], "cancel", json!({"date": "Monday"}), validated.clone());
-        let mut history = first.result().all_messages.clone();
-        for item in &mut history {
-            match item {
-                ChatItem::FunctionCallOutput(o) => o.output = "yes".into(),
-                ChatItem::FunctionCall(c) => {
-                    let stored = c.extra[approval::APPROVAL_IDENTITY_KEY].as_str().unwrap();
-                    let read_back = serde_json::from_str(stored).unwrap();
-                    c.extra.insert(approval::APPROVAL_IDENTITY_KEY.into(), read_back);
-                }
-                _ => {}
-            }
-        }
-        let mut second = Driver::new(text_agent(vec![cancel_tool()]), "yes", history);
-        second.reply("", &[("cancel_appointment", json!({"date": "Monday"}))]);
-        let (call, _) = second.prepares()[0].clone();
-        second.prepared(call, validated);
-        assert_eq!(second.executes().len(), 1, "the approved repeat runs");
-    }
-}
-mod checkpoints {
-    //! Managed checkpoints settle before model admission and accepted answer delivery.
-
-    use super::*;
-
-    fn managed(tools: Vec<FunctionToolInfo>) -> Driver {
-        let input = RunInput {
-            invocation_id: "managed".into(),
-            opening: Opening::Message(Box::new(user("message", "Find a room"))),
-            history: Vec::new(),
-            answer_tool: None,
-            delegated: false,
-            mode: crate::tool_outcome::Mode::Text,
-            llm: Some(LlmRef { id: LLM, provider: ProviderId::of_label("fake") }),
-            wall: WallAnchor { wall: 1_700_000_000.0, at: Ts::ZERO },
-            cleanup_timeout: Duration::from_secs(5),
-        };
-        let mut driver = Driver {
-            run: AgentRun::new(text_agent(tools), input).unwrap().with_checkpoints(),
-            now: Ts::ZERO,
-            effects: Vec::new(),
-            settled: Vec::new(),
-        };
-        driver.send(AgentRunEvent::Start);
-        driver
-    }
-
-    fn checkpoint(driver: &Driver) -> CheckpointId {
-        driver
-            .effects
-            .iter()
-            .rev()
-            .find_map(|effect| match effect {
-                AgentRunEffect::HostCheckpoint { checkpoint, .. } => Some(*checkpoint),
-                _ => None,
-            })
-            .expect("a managed checkpoint")
-    }
-
-    fn verdict(driver: &mut Driver, yielded: bool) -> Vec<AgentRunEffect> {
-        driver.send(AgentRunEvent::HostCheckpointDone {
-            checkpoint: checkpoint(driver),
-            result: Ok(yielded),
-            tools: None,
-        })
-    }
-
-    #[test]
-    fn a_waiter_after_a_tool_preserves_its_result_without_starting_the_next_model() {
-        let mut driver = managed(vec![string_tool("lookup", "room")]);
-        assert_eq!(driver.requests(), 0);
-        let first = checkpoint(&driver);
-        assert!(
-            driver
-                .send(AgentRunEvent::HostCheckpointDone {
-                    checkpoint: CheckpointId(first.0 + 1),
-                    result: Ok(false),
-                    tools: None,
-                })
-                .is_empty(),
-            "a stale verdict cannot launch a request"
-        );
-        verdict(&mut driver, false);
-        driver.reply("", &[("lookup", json!({"room":"suite"}))]);
-        driver.run_tools(|_| value("suite found"));
-        assert_eq!(driver.requests(), 1, "the next model still waits for admission");
-        let effects = verdict(&mut driver, true);
-        let result = driver.result();
-        assert!(result.interrupted);
-        assert_eq!(result.usage.requests, 1);
-        assert_eq!(result.usage.tool_calls, 1);
-        assert_eq!(result.outcome, RunOutcome::NoOutput);
-        assert!(result.new_messages.iter().any(|item| matches!(item,
-            ChatItem::FunctionCallOutput(output) if output.output == "suite found"
-        )));
-        assert!(!effects.iter().any(|effect| matches!(
-            effect,
-            AgentRunEffect::LlmRequestStart { .. }
-                | AgentRunEffect::Emit(StreamEvent::TextDelta { .. })
-        )));
-    }
-
-    #[test]
-    fn the_accepted_result_waits_for_its_delivery_verdict() {
-        let mut driver = managed(Vec::new());
-        verdict(&mut driver, false);
-        driver.reply("the answer", &[]);
-        assert!(driver.finished().is_none());
-        verdict(&mut driver, true);
-        assert!(driver.result().interrupted);
-        assert!(driver.result().new_messages.iter().any(|item| matches!(item,
-            ChatItem::Message(message) if message.raw_text_content().as_deref() == Some("the answer")
-        )));
-
-        let mut continued = managed(Vec::new());
-        verdict(&mut continued, false);
-        continued.reply("the accepted answer", &[]);
-        verdict(&mut continued, false);
-        assert!(!continued.result().interrupted);
-        assert_eq!(
-            continued.result().outcome,
-            RunOutcome::Completed { output: Output::Text("the accepted answer".into()) }
-        );
-    }
-
-    #[test]
-    fn cancellation_waits_for_a_pending_checkpoint_callback_to_settle() {
-        let mut driver = managed(Vec::new());
-        let pending = checkpoint(&driver);
-        let effects = driver.send(AgentRunEvent::Cancel);
-        assert!(effects.contains(&AgentRunEffect::HostCheckpointCancel { checkpoint: pending }));
-        assert!(driver.finished().is_none());
-        verdict(&mut driver, false);
-        assert!(matches!(driver.finished(), Some(Err(RunError::Cancelled))));
-        assert_eq!(driver.requests(), 0);
-        assert!(
-            driver
-                .send(AgentRunEvent::HostCheckpointDone {
-                    checkpoint: pending,
-                    result: Ok(false),
-                    tools: None
-                })
-                .is_empty()
-        );
-    }
-
-    #[test]
-    fn discovered_tools_replace_the_previous_steps_tools_before_request_and_execution() {
-        let mut driver = managed(vec![string_tool("search", "query")]);
-        verdict(&mut driver, false);
-        driver.reply("", &[("search", json!({"query":"room"}))]);
-        driver.run_tools(|_| value("found book"));
-        let pending = checkpoint(&driver);
-        driver.send(AgentRunEvent::HostCheckpointDone {
-            checkpoint: pending,
-            result: Ok(false),
-            tools: Some(vec![string_tool("book", "room")]),
-        });
-        let (_, _, offered) = driver.request();
-        assert_eq!(offered.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["book"]);
-        driver.reply("", &[("book", json!({"room":"suite"}))]);
-        driver.run_tools(|_| value("booked"));
-        verdict(&mut driver, false);
-        driver.reply("Reserved.", &[]);
-        verdict(&mut driver, false);
-        assert!(driver.result().new_messages.iter().any(|item| matches!(item,
-            ChatItem::FunctionCallOutput(output) if output.output == "booked" && !output.is_error
-        )));
-    }
-
-    #[test]
-    fn an_invalid_discovery_fails_before_the_model_request() {
-        let mut driver = managed(Vec::new());
-        let tool = string_tool("book", "room");
-        driver.send(AgentRunEvent::HostCheckpointDone {
-            checkpoint: checkpoint(&driver),
-            result: Ok(false),
-            tools: Some(vec![tool.clone(), tool]),
-        });
-        assert_eq!(driver.requests(), 0);
-        assert!(
-            matches!(driver.finished(), Some(Err(RunError::Host(error))) if error.contains("book"))
-        );
-    }
-}
-mod coordinated {
-    //! A coordinated invocation (VoiceSession): the coordinator plans every request and decides each
-    //! settled step's continuation.
-
-    use super::*;
-
-    fn coordinated(agent: AgentDefinition) -> Driver {
-        Driver::with_input(agent, coordinated_input())
-    }
-
-    fn coordinated_input() -> RunInput {
-        RunInput {
-            invocation_id: "reply_1".into(),
-            opening: Opening::Coordinated { approval_answers: Default::default() },
-            history: vec![user("msg_1", "Book me Monday").into()],
-            answer_tool: None,
-            delegated: false,
-            mode: crate::tool_outcome::Mode::Voice,
-            llm: Some(LlmRef { id: LLM, provider: ProviderId::of_label("fake") }),
-            wall: WallAnchor { wall: 1_700_000_000.0, at: Ts::ZERO },
-            cleanup_timeout: Duration::from_secs(5),
-        }
-    }
-
-    struct Plan {
-        request: RequestId,
-        message_id: String,
-        pending: Vec<ChatItem>,
-        tools_forbidden: bool,
-    }
-
-    impl Driver {
-        fn plans(&self) -> Vec<Plan> {
-            (self.effects.iter())
-                .filter_map(|e| match e {
-                    AgentRunEffect::PlanRequest {
-                        request,
-                        message_id,
-                        pending,
-                        tools_forbidden,
-                        ..
-                    } => Some(Plan {
-                        request: *request,
-                        message_id: message_id.clone(),
-                        pending: pending.clone(),
-                        tools_forbidden: *tools_forbidden,
-                    }),
-                    _ => None,
-                })
-                .collect()
-        }
-
-        fn respond(&mut self, request: RequestId, text: &str, calls: &[(&str, Value)]) {
-            let calls = (calls.iter().enumerate())
-                .map(|(i, (name, arguments))| FunctionToolCall {
-                    name: (*name).into(),
-                    arguments: arguments.to_string(),
-                    call_id: format!("call_{}_{i}", request.0),
-                    extra: None,
-                })
-                .collect();
-            let text = (!text.is_empty()).then_some(text);
-            self.send(AgentRunEvent::LlmChunk { request, chunk: chunk(text, calls, None) });
-            self.send(AgentRunEvent::LlmEnded { request });
-        }
-
-        fn step_settled(&self) -> (StepId, Vec<ChatItem>, bool) {
-            (self.effects.iter().rev())
-                .find_map(|e| match e {
-                    AgentRunEffect::HandleToolResults { step, items, continues, .. } => {
-                        Some((*step, items.clone(), *continues))
-                    }
-                    _ => None,
-                })
-                .expect("a settled step")
-        }
-    }
-
-    // Catches: a coordinated run planning its own request (rendering instructions, pushing a
-    // message), the next step requested before the coordinator's verdict, the step's items missing
-    // from the next plan, or a forbidding verdict not reaching the next request.
-    #[test]
-    fn the_coordinator_plans_each_step_and_decides_its_continuation() {
-        let mut d = coordinated(text_agent(vec![string_tool("find_slot", "day")]));
-        assert!(d.effects.iter().all(|e| !matches!(e, AgentRunEffect::LlmRequestStart { .. })));
-        let [first] = &d.plans()[..] else { panic!("one plan: {:?}", d.effects) };
-        assert!(first.pending.is_empty());
-        assert!(!first.tools_forbidden);
-        let (request, message_id) = (first.request, first.message_id.clone());
-
-        d.respond(request, "Let me look.", &[("find_slot", json!({"day": "Monday"}))]);
-        d.run_tools(|_| value("9:00 is free"));
-        let (step, items, continues) = d.step_settled();
-        assert!(continues);
-        assert_eq!(
-            transcript(&items),
-            pairs(&[("call", r#"find_slot({"day":"Monday"})"#), ("output", "9:00 is free")])
-        );
-        assert_eq!(d.plans().len(), 1, "no step before the verdict");
-
-        d.send(AgentRunEvent::ToolResultsHandled {
-            step,
-            continuation: AgentRunContinuation::Continue { tools_forbidden: true },
-            reply_required: Default::default(),
-        });
-        let plans = d.plans();
-        let second = &plans[1];
-        assert!(second.tools_forbidden);
-        assert_eq!(second.pending[0].id(), message_id);
-        assert_eq!(
-            transcript(&second.pending),
-            pairs(&[
-                ("assistant", "Let me look."),
-                ("call", r#"find_slot({"day":"Monday"})"#),
-                ("output", "9:00 is free"),
-            ])
-        );
-
-        d.respond(second.request, "Monday 9:00 is free.", &[]);
-        assert_eq!(
-            d.result().outcome,
-            RunOutcome::Completed { output: Output::Text("Monday 9:00 is free.".into()) }
-        );
-    }
-
-    // Catches: an interrupted reply requesting another step or settling as a plain completion, or
-    // an ending verdict leaving the run open.
-    #[test]
-    fn an_interrupted_or_ended_step_ends_the_run_without_another_request() {
-        for (verdict, interrupted) in
-            [(AgentRunContinuation::Interrupted, true), (AgentRunContinuation::Stop, false)]
-        {
-            let mut d = coordinated(text_agent(vec![string_tool("find_slot", "day")]));
-            let request = d.plans()[0].request;
-            d.respond(request, "", &[("find_slot", json!({"day": "Monday"}))]);
-            d.run_tools(|_| value("9:00 is free"));
-            let (step, ..) = d.step_settled();
-            d.send(AgentRunEvent::ToolResultsHandled {
-                step,
-                continuation: verdict,
-                reply_required: Default::default(),
-            });
-            assert_eq!(d.plans().len(), 1);
-            let result = d.result();
-            assert_eq!(result.outcome, RunOutcome::NoOutput);
-            assert_eq!(result.interrupted, interrupted);
-        }
-    }
-
-    // Catches: a coordinator's interruption discarding an output the run already accepted.
-    #[test]
-    fn an_accepted_output_survives_an_interrupting_verdict() {
-        let mut d = coordinated(agent(
-            vec![],
-            OutputSpec::Structured { schema: json!({"type": "integer"}) },
-        ));
-        let request = d.plans()[0].request;
-        d.respond(request, "", &[("final_result", json!({"result": 4}))]);
-        let validation = (d.effects.iter())
-            .find_map(|e| match e {
-                AgentRunEffect::ValidateOutput { validation, .. } => Some(*validation),
-                _ => None,
-            })
-            .expect("the candidate is validated");
-        d.send(AgentRunEvent::OutputValidated {
-            validation,
-            verdict: OutputVerdict::Accepted { text: None },
-        });
-        let (step, _, continues) = d.step_settled();
-        assert!(!continues);
-        d.send(AgentRunEvent::ToolResultsHandled {
-            step,
-            continuation: AgentRunContinuation::Interrupted,
-            reply_required: Default::default(),
-        });
-        assert_eq!(
-            d.result().outcome,
-            RunOutcome::Completed { output: Output::Validated(validation) }
-        );
-    }
-
-    #[test]
-    fn terminal_tool_selection_and_canonical_items_follow_model_order_not_completion_order() {
-        for reversed in [false, true] {
-            let tools = vec![string_tool("flight", "day"), string_tool("hotel", "city")];
-            let mut d = coordinated(text_agent(tools));
-            let request = d.plans()[0].request;
-            d.respond(
-                request,
-                "",
-                &[("flight", json!({"day": "?"})), ("hotel", json!({"city": "?"}))],
-            );
-            for (call, arguments) in d.prepares() {
-                d.prepared(call, Value::Object(arguments));
-            }
-            let mut calls = d.executes();
-            let selected = calls[0].2.call_id.clone();
-            if reversed {
-                calls.reverse();
-            }
-            for (call, _, item) in calls {
-                d.send(AgentRunEvent::ToolSettled {
-                    call,
-                    outcome: ToolOutcome::InputRequired {
-                        question: format!("{}?", item.name),
-                        verbatim: true,
-                        tool: Some(item.name),
-                    },
-                });
-            }
-            let (step, items, continues) = d.step_settled();
-            assert!(!continues);
-            let selected_effect = d.effects.iter().rev().find_map(|effect| match effect {
-                AgentRunEffect::HandleToolResults { terminal_call, .. } => terminal_call.as_deref(),
-                _ => None,
-            });
-            assert_eq!(selected_effect, Some(selected.as_str()));
-            assert!(matches!(
-                items.as_slice(),
-                [
-                    ChatItem::FunctionCall(_),
-                    ChatItem::FunctionCall(_),
-                    ChatItem::FunctionCallOutput(_),
-                    ChatItem::FunctionCallOutput(_)
-                ]
-            ));
-            let ChatItem::FunctionCallOutput(second) = &items[3] else { unreachable!() };
-            assert!(!second.reply_required, "waiting on a human does not request a model reply");
-            assert_eq!(second.output, "waiting for the person's answer to: hotel?");
-            let requirements = d
-                .effects
-                .iter()
-                .rev()
-                .find_map(|effect| match effect {
-                    AgentRunEffect::HandleToolResults { input_requirements, .. } => {
-                        Some(input_requirements)
-                    }
-                    _ => None,
-                })
-                .unwrap();
-            assert_eq!(requirements.len(), 2);
-            assert_eq!(requirements[0].call.call_id, selected);
-            assert_eq!(requirements[1].question, "hotel?");
-            d.send(AgentRunEvent::ToolResultsHandled {
-                step,
-                continuation: AgentRunContinuation::Continue { tools_forbidden: false },
-                reply_required: Default::default(),
-            });
-            assert_eq!(
-                d.result().outcome,
-                RunOutcome::InputRequired {
-                    question: "flight?".into(),
-                    verbatim: true,
-                    answer_tool: Some("flight".into()),
-                }
-            );
-            assert_eq!(d.result().pending_call.as_ref().unwrap().call_id, selected);
-            assert_eq!(d.result().input_requirements.len(), 2);
-        }
-    }
-
-    #[test]
-    fn retry_budget_failure_has_no_selected_terminal_delivery_and_cannot_be_reopened() {
-        let mut definition =
-            text_agent(vec![string_tool("retry", "day"), string_tool("ask", "city")]);
-        definition.retries.tools = 0;
-        let mut d = coordinated(definition);
-        let request = d.plans()[0].request;
-        d.respond(
-            request,
-            "",
-            &[("retry", json!({"day": "Monday"})), ("ask", json!({"city": "?"}))],
-        );
-        d.run_tools(|name| {
-            if name == "retry" {
-                ToolOutcome::ModelRetry("try again".into())
-            } else {
-                ToolOutcome::InputRequired {
-                    question: "city?".into(),
-                    verbatim: true,
-                    tool: Some("ask".into()),
-                }
-            }
-        });
-        let (step, items, _) = d.step_settled();
-        assert!(d.effects.iter().any(|effect| matches!(
-            effect,
-            AgentRunEffect::HandleToolResults { terminal_call: None, .. }
-        )));
-        assert!(items.iter().all(|item| !matches!(item,
-            ChatItem::FunctionCall(call) if call.extra.get(crate::request::INPUT_REQUESTED_KEY).and_then(Value::as_bool) == Some(true)
-        )), "a failed batch has no compatibility-selected question to answer");
-        let mut failed_history = items.clone();
-        assert!(
-            crate::request::answer_pending_input(&mut failed_history, "unrelated").is_empty(),
-            "failed-batch metadata must not fall back to legacy single-question routing"
-        );
-        let edits = items
-            .iter()
-            .filter_map(|item| match item {
-                ChatItem::FunctionCallOutput(output) => Some((output.call_id.clone(), true)),
-                _ => None,
-            })
-            .collect();
-        d.send(AgentRunEvent::ToolResultsHandled {
-            step,
-            continuation: AgentRunContinuation::Continue { tools_forbidden: false },
-            reply_required: edits,
-        });
-        assert!(
-            matches!(d.finished(), Some(Err(RunError::ToolRetriesExceeded { tool, .. })) if tool == "retry")
-        );
-        assert_eq!(d.plans().len(), 1);
-        let requirements = d
-            .effects
-            .iter()
-            .find_map(|effect| match effect {
-                AgentRunEffect::Finished { input_requirements, .. } => Some(input_requirements),
-                _ => None,
-            })
-            .unwrap();
-        assert_eq!(requirements.len(), 1);
-        assert_eq!(requirements[0].question, "city?");
-    }
-
-    #[test]
-    fn coordinator_reply_edits_update_canonical_history_and_can_end_an_ordinary_step() {
-        let mut d = coordinated(text_agent(vec![string_tool("find_slot", "day")]));
-        let request = d.plans()[0].request;
-        d.respond(request, "", &[("find_slot", json!({"day": "Monday"}))]);
-        d.run_tools(|_| value("9:00 is free"));
-        let (step, items, _) = d.step_settled();
-        let ChatItem::FunctionCallOutput(output) = &items[1] else { panic!() };
-        d.send(AgentRunEvent::ToolResultsHandled {
-            step: StepId(step.0 + 100),
-            continuation: AgentRunContinuation::Stop,
-            reply_required: [(output.call_id.clone(), false)].into(),
-        });
-        assert!(d.finished().is_none(), "a stale coordinator response cannot settle this step");
-        d.send(AgentRunEvent::ToolResultsHandled {
-            step,
-            continuation: AgentRunContinuation::Continue { tools_forbidden: false },
-            reply_required: [(output.call_id.clone(), false), ("unknown_call".into(), true)].into(),
-        });
-        assert_eq!(d.result().outcome, RunOutcome::NoOutput);
-        let edited = d
-            .result()
-            .all_messages
-            .iter()
-            .find_map(|item| match item {
-                ChatItem::FunctionCallOutput(item) if item.id == output.id => Some(item),
-                _ => None,
-            })
-            .unwrap();
-        assert!(!edited.reply_required);
-        assert_eq!(d.plans().len(), 1, "a suppressed ordinary reply must not request another step");
-    }
-
-    #[test]
-    fn a_host_can_request_an_ordinary_reply_without_reviving_an_explicit_stop() {
-        for explicit_stop in [false, true] {
-            let mut d = coordinated(text_agent(vec![string_tool("find_slot", "day")]));
-            let request = d.plans()[0].request;
-            d.respond(request, "", &[("find_slot", json!({"day": "Monday"}))]);
-            d.run_tools(|_| {
-                if explicit_stop {
-                    ToolOutcome::StopResponse
-                } else {
-                    ToolOutcome::Value {
-                        text: "done".into(),
-                        reply_required: false,
-                        verbatim: false,
-                        more: None,
-                    }
-                }
-            });
-            let (step, items, continues) = d.step_settled();
-            assert!(!continues);
-            let ChatItem::FunctionCallOutput(output) = &items[1] else { panic!() };
-            d.send(AgentRunEvent::ToolResultsHandled {
-                step,
-                continuation: AgentRunContinuation::Continue { tools_forbidden: true },
-                reply_required: [(output.call_id.clone(), true)].into(),
-            });
-            if explicit_stop {
-                assert_eq!(d.result().outcome, RunOutcome::NoOutput);
-                assert_eq!(d.plans().len(), 1);
-            } else {
-                let plans = d.plans();
-                assert_eq!(plans.len(), 2);
-                assert!(plans[1].tools_forbidden);
-                assert!(plans[1].pending.iter().any(|item| matches!(item, ChatItem::FunctionCallOutput(item) if item.id == output.id && item.reply_required)));
-            }
-        }
-    }
-
-    // Catches: a coordinated run refusing to start without a model of its own (a realtime session's
-    // coordinator streams from its server), or a call's first update leaving its step unsettled.
-    #[test]
-    fn a_call_detaching_with_its_first_update_settles_its_step() {
-        let mut input = coordinated_input();
-        input.llm = None;
-        let mut d = Driver::with_input(text_agent(vec![string_tool("find_slot", "day")]), input);
-        let request = d.plans()[0].request;
-        d.respond(request, "", &[("find_slot", json!({"day": "Monday"}))]);
-        d.run_tools(|_| ToolOutcome::Update {
-            message: "Still looking.".into(),
-            raw: "looking".into(),
-        });
-        let (_, items, continues) = d.step_settled();
-        assert!(continues);
-        assert_eq!(transcript(&items)[1], ("output".to_owned(), "Still looking.".to_owned()));
-    }
-
-    // Catches: a coordinator unable to find a call it fed by the model's id, or a call that settled
-    // with the step (a validated `final_result`) unreadable before the verdict.
-    #[test]
-    fn a_settled_steps_calls_stay_readable_until_the_verdict() {
-        let mut d = coordinated(agent(
-            vec![],
-            OutputSpec::Structured { schema: json!({"type": "integer"}) },
-        ));
-        let request = d.plans()[0].request;
-        d.respond(request, "", &[("final_result", json!({"result": 4}))]);
-        let call = d.run.step_call_id(&format!("call_{}_0", request.0)).expect("the call");
-        assert!(matches!(d.run.step_call(call), Some((_, None))), "validating");
-        let validation = (d.effects.iter())
-            .find_map(|e| match e {
-                AgentRunEffect::ValidateOutput { validation, .. } => Some(*validation),
-                _ => None,
-            })
-            .expect("the candidate is validated");
-        d.send(AgentRunEvent::OutputValidated {
-            validation,
-            verdict: OutputVerdict::Accepted { text: None },
-        });
-        d.step_settled();
-        let (item, settled) = d.run.step_call(call).expect("readable until the verdict");
-        assert_eq!(item.name, "final_result");
-        assert!(settled.is_some());
-    }
-
-    // Catches: a coordinator's call recorded under an id of the run's own, so the coordinator's
-    // record and the run's next plan hold the call twice.
-    #[test]
-    fn a_call_the_coordinator_made_keeps_its_item() {
-        let mut d = coordinated(text_agent(vec![string_tool("find_slot", "day")]));
-        let request = d.plans()[0].request;
-        let call = lk_agents_abi::FunctionCall {
-            id: "voice_item_7".into(),
-            call_id: "call_a".into(),
-            arguments: json!({"day": "Monday"}).to_string(),
-            name: "find_slot".into(),
-            created_at: std::time::UNIX_EPOCH,
-            extra: Default::default(),
-            group_id: None,
-        };
-        d.send(AgentRunEvent::CallMade { request, call });
-        d.send(AgentRunEvent::LlmEnded { request });
-        d.run_tools(|_| value("9:00 is free"));
-        let (_, items, _) = d.step_settled();
-        assert_eq!(items[0].id(), "voice_item_7");
-        assert_eq!(items[1].id(), "voice_item_7_out");
-    }
-
-    fn approval_tool() -> FunctionToolInfo {
-        let mut t = string_tool("transfer", "to");
-        t.needs_approval = Some(lk_agents_abi::agent::ReadBack::Default);
-        t
-    }
-
-    /// A `transfer` call to `to` whose read-back was put to the person.
-    fn asked(call_id: &str, to: &str) -> ChatItem {
-        let identity = lk_agents_abi::agent::ArgumentIdentity::Json(json!({"to": to}));
-        let mut call = lk_agents_abi::FunctionCall {
-            id: format!("item_{call_id}"),
-            call_id: call_id.into(),
-            arguments: json!({"to": to}).to_string(),
-            name: "transfer".into(),
-            created_at: std::time::UNIX_EPOCH,
-            extra: Default::default(),
-            group_id: None,
-        };
-        let canonical = crate::approval::canonical(&identity);
-        crate::approval::set_mark(
-            &mut call,
-            lk_agents_abi::llm::tool_executor::Approval::Asked,
-            &canonical,
-        );
-        ChatItem::FunctionCall(call)
-    }
-
-    /// The model repeats `transfer(to)` on the first step; whether its body runs.
-    fn repeat_runs(d: &mut Driver, to: &str) -> bool {
-        let request = d.plans()[0].request;
-        d.respond(request, "", &[("transfer", json!({"to": to}))]);
-        let (call, arguments) = d.prepares()[0].clone();
-        d.prepared(call, Value::Object(arguments));
-        !d.executes().is_empty()
-    }
-
-    // Catches: a coordinated step granting only with the answers it opened with, though the person
-    // answered before it called (the session commits the answer after the reply exists).
-    #[test]
-    fn a_step_that_has_not_called_reads_the_latest_answers() {
-        let mut input = coordinated_input();
-        input.history.push(asked("asked_1", "billing"));
-        let mut d = Driver::with_input(text_agent(vec![approval_tool()]), input);
-        d.send(AgentRunEvent::Answered { approval_answers: ["asked_1".to_owned()].into() });
-        assert!(repeat_runs(&mut d, "billing"));
-    }
-
-    // Catches: a read-back another reply put after this run opened ignored, so an answer to the
-    // earlier question grants a call though the person was asked something else last.
-    #[test]
-    fn a_read_back_recorded_by_another_reply_is_the_latest_question() {
-        let mut input = coordinated_input();
-        input.history.push(asked("asked_1", "billing"));
-        input.opening = Opening::Coordinated { approval_answers: ["asked_1".to_owned()].into() };
-        let mut d = Driver::with_input(text_agent(vec![approval_tool()]), input);
-        d.send(AgentRunEvent::Recorded { item: Box::new(asked("asked_2", "sales")) });
-        assert!(!repeat_runs(&mut d, "billing"));
-    }
-
-    // Catches: an answer the person moved on from still granting a later call of a step that had
-    // started calling before they spoke again.
-    #[test]
-    fn speaking_again_revokes_the_answers_a_calling_step_read() {
-        let mut input = coordinated_input();
-        input.history.push(asked("asked_1", "billing"));
-        input.opening = Opening::Coordinated { approval_answers: ["asked_1".to_owned()].into() };
-        let mut d = Driver::with_input(
-            text_agent(vec![approval_tool(), string_tool("lookup", "q")]),
-            input,
-        );
-        let request = d.plans()[0].request;
-        d.send(AgentRunEvent::LlmChunk {
-            request,
-            chunk: chunk(
-                None,
-                vec![FunctionToolCall {
-                    name: "lookup".into(),
-                    arguments: json!({"q": "x"}).to_string(),
-                    call_id: "c0".into(),
-                    extra: None,
-                }],
-                None,
-            ),
-        });
-        d.send(AgentRunEvent::Answered { approval_answers: Default::default() });
-        d.send(AgentRunEvent::LlmChunk {
-            request,
-            chunk: chunk(
-                None,
-                vec![FunctionToolCall {
-                    name: "transfer".into(),
-                    arguments: json!({"to": "billing"}).to_string(),
-                    call_id: "c1".into(),
-                    extra: None,
-                }],
-                None,
-            ),
-        });
-        for (call, arguments) in d.prepares() {
-            d.prepared(call, Value::Object(arguments));
-        }
-        assert!(d.executes().iter().all(|(_, _, c)| c.name != "transfer"));
-    }
-}
-#[path = "agent_run_flow_tests.rs"]
-mod flow;
-#[path = "agent_run_lifecycle_tests.rs"]
-mod lifecycle;
-
 use std::time::Duration;
 
 use lk_agents_abi::llm::provider_format::tools::{DuplicateMode, DuplicateScope};
@@ -1032,6 +74,21 @@ pub(super) fn user(id: &str, text: &str) -> ChatMessage {
     ChatMessage::text(id, Role::User, text, std::time::UNIX_EPOCH)
 }
 
+/// A text-mode invocation opening with `opening` on `history`.
+pub(super) fn input(opening: Opening, history: Vec<ChatItem>) -> RunInput {
+    RunInput {
+        invocation_id: "run_1".into(),
+        opening,
+        history,
+        answer_tool: None,
+        delegated: false,
+        mode: crate::tool_outcome::Mode::Text,
+        llm: Some(LlmRef { id: LLM, provider: ProviderId::of_label("fake") }),
+        wall: WallAnchor { wall: 1_700_000_000.0, at: Ts::ZERO },
+        cleanup_timeout: Duration::from_secs(5),
+    }
+}
+
 /// The runtime's side of one invocation: it delivers events at a supplied instant and keeps every
 /// effect the run returned.
 pub(super) struct Driver {
@@ -1046,27 +103,16 @@ impl Driver {
     pub(super) fn new(agent: AgentDefinition, message: &str, history: Vec<ChatItem>) -> Driver {
         Driver::with_input(
             agent,
-            RunInput {
-                invocation_id: "run_1".into(),
-                opening: Opening::Message(Box::new(user("msg_1", message))),
-                history,
-                answer_tool: None,
-                delegated: false,
-                mode: crate::tool_outcome::Mode::Text,
-                llm: Some(LlmRef { id: LLM, provider: ProviderId::of_label("fake") }),
-                wall: WallAnchor { wall: 1_700_000_000.0, at: Ts::ZERO },
-                cleanup_timeout: Duration::from_secs(5),
-            },
+            input(Opening::Message(Box::new(user("msg_1", message))), history),
         )
     }
 
     pub(super) fn with_input(agent: AgentDefinition, input: RunInput) -> Driver {
-        let mut driver = Driver {
-            run: AgentRun::new(agent, input).unwrap(),
-            now: Ts::ZERO,
-            effects: Vec::new(),
-            settled: Vec::new(),
-        };
+        Driver::start(AgentRun::new(agent, input).unwrap())
+    }
+
+    pub(super) fn start(run: AgentRun) -> Driver {
+        let mut driver = Driver { run, now: Ts::ZERO, effects: Vec::new(), settled: Vec::new() };
         driver.send(AgentRunEvent::Start);
         driver
     }
@@ -1098,6 +144,16 @@ impl Driver {
                 _ => None,
             })
             .expect("a model request")
+    }
+
+    /// The latest output candidate put to validation.
+    pub(super) fn validation(&self) -> ValidationId {
+        (self.effects.iter().rev())
+            .find_map(|e| match e {
+                AgentRunEffect::ValidateOutput { validation, .. } => Some(*validation),
+                _ => None,
+            })
+            .expect("an output candidate")
     }
 
     pub(super) fn requests(&self) -> usize {
@@ -1238,4 +294,584 @@ pub(super) fn transcript(items: &[ChatItem]) -> Vec<(String, String)> {
 
 pub(super) fn pairs(rows: &[(&str, &str)]) -> Vec<(String, String)> {
     rows.iter().map(|(a, b)| ((*a).to_owned(), (*b).to_owned())).collect()
+}
+
+// Catches: a tool result not reaching the next request, the incoming message missing from
+// `new_messages`, instructions leaking into `all_messages`, or usage counted per run instead of
+// per request.
+#[test]
+fn a_tool_runs_and_the_model_continues_from_its_output() {
+    let mut d =
+        Driver::new(text_agent(vec![string_tool("find_slot", "day")]), "Book me Monday", vec![]);
+    let (_, ctx, tools) = d.request();
+    assert_eq!(
+        transcript(&ctx.items),
+        pairs(&[("system", "Book appointments."), ("user", "Book me Monday")])
+    );
+    assert_eq!(tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["find_slot"]);
+
+    d.reply("Let me look.", &[("find_slot", json!({"day": "Monday"}))]);
+    d.run_tools(|_| value("9:00 is free"));
+    let (_, ctx, _) = d.request();
+    assert_eq!(
+        transcript(&ctx.items)[2..],
+        pairs(&[
+            ("assistant", "Let me look."),
+            ("call", r#"find_slot({"day":"Monday"})"#),
+            ("output", "9:00 is free"),
+        ])
+    );
+
+    d.reply("Monday 9:00 is free.", &[]);
+    let result = d.result();
+    assert_eq!(
+        result.outcome,
+        RunOutcome::Completed { output: Output::Text("Monday 9:00 is free.".into()) }
+    );
+    assert_eq!(transcript(&result.new_messages)[0], ("user".into(), "Book me Monday".into()));
+    assert_eq!(result.new_messages.len(), 5);
+    assert_eq!(result.all_messages, result.new_messages);
+    let usage = &result.usage;
+    assert_eq!(
+        (usage.requests, usage.input_tokens(), usage.output_tokens(), usage.tool_calls),
+        (2, 20, 6, 1)
+    );
+    assert!(usage.settled && usage.complete, "{usage:?}");
+}
+
+// Catches: text withheld until the response ends (no incremental output), or a step's text
+// stream not closed before its tools run.
+#[test]
+fn text_streams_as_it_arrives_before_the_model_ends() {
+    let mut d = Driver::new(text_agent(vec![]), "hi", vec![]);
+    let (request, _, _) = d.request();
+    let fx = d.send(AgentRunEvent::LlmChunk { request, chunk: chunk(Some("Hel"), vec![], None) });
+    assert!(
+        matches!(&fx[..], [AgentRunEffect::Emit(StreamEvent::TextDelta { delta, .. })] if delta == "Hel")
+    );
+    assert!(d.finished().is_none());
+    d.send(AgentRunEvent::LlmChunk { request, chunk: chunk(Some("lo"), vec![], None) });
+    let fx = d.send(AgentRunEvent::LlmEnded { request });
+    assert!(matches!(
+        &fx[0],
+        AgentRunEffect::Emit(StreamEvent::TextEnd { interrupted: false, .. })
+    ));
+    assert_eq!(d.result().outcome, RunOutcome::Completed { output: Output::Text("Hello".into()) });
+}
+
+// Catches: identical inputs producing different ids, effects or history (ambient time, entropy
+// or iteration order in a decision).
+#[test]
+fn identical_inputs_replay_identically() {
+    let play = || {
+        let mut d = Driver::new(
+            text_agent(vec![string_tool("a", "x"), string_tool("b", "y")]),
+            "go",
+            vec![],
+        );
+        d.reply("", &[("b", json!({"y": "2"})), ("a", json!({"x": "1"}))]);
+        d.run_tools(value);
+        d.reply("done", &[]);
+        d.effects
+    };
+    assert_eq!(play(), play());
+}
+
+// Catches: a direct run ignoring `ToolResult(reply_required=False)` and asking the
+// model again.
+#[test]
+fn a_tool_that_asks_for_no_reply_ends_the_turn() {
+    let mut d =
+        Driver::new(text_agent(vec![string_tool("send_dtmf", "digits")]), "press 1", vec![]);
+    d.reply("", &[("send_dtmf", json!({"digits": "1"}))]);
+    d.run_tools(|_| ToolOutcome::Value {
+        text: "sent".into(),
+        reply_required: false,
+        verbatim: false,
+        more: None,
+    });
+    assert_eq!(d.requests(), 1);
+    assert_eq!(d.result().outcome, RunOutcome::NoOutput);
+}
+
+// Catches: a tool returning `None` ending the turn; `None` is a value the model reads and goes
+// on from (tools.md), unlike an explicit no-reply result.
+#[test]
+fn none_return_continues() {
+    let mut d = Driver::new(text_agent(vec![string_tool("log_visit", "note")]), "log it", vec![]);
+    d.reply("", &[("log_visit", json!({"note": "seen"}))]);
+    d.run_tools(|_| ToolOutcome::Nothing);
+    assert_eq!(d.requests(), 2);
+    d.reply("Logged.", &[]);
+    assert_eq!(
+        d.result().outcome,
+        RunOutcome::Completed { output: Output::Text("Logged.".into()) }
+    );
+}
+
+// Catches: `StopResponse` continuing the loop, or a verbatim result losing its delivered text or
+// its exact words on the result.
+#[test]
+fn stop_response_and_verbatim_results_end_or_lead_the_turn() {
+    let mut d = Driver::new(text_agent(vec![string_tool("stop", "x")]), "stop", vec![]);
+    d.reply("", &[("stop", json!({"x": "1"}))]);
+    d.run_tools(|_| ToolOutcome::StopResponse);
+    assert_eq!((d.requests(), &d.result().outcome), (1, &RunOutcome::NoOutput));
+
+    let mut d = Driver::new(text_agent(vec![string_tool("code", "x")]), "my code?", vec![]);
+    d.reply("", &[("code", json!({"x": "1"}))]);
+    d.run_tools(|_| ToolOutcome::Value {
+        text: "Your code is 1234.".into(),
+        reply_required: true,
+        verbatim: true,
+        more: None,
+    });
+    let (_, ctx, _) = d.request();
+    assert_eq!(
+        ctx.items.last().map(|i| transcript(std::slice::from_ref(i))[0].1.clone()).unwrap(),
+        "delivered to the person as written: Your code is 1234."
+    );
+    d.reply("Anything else?", &[]);
+    let result = d.result();
+    assert_eq!(
+        result.outcome,
+        RunOutcome::Completed {
+            output: Output::Text("Your code is 1234.\n\nAnything else?".into())
+        }
+    );
+    assert_eq!(result.verbatim.as_deref(), Some("Your code is 1234."));
+}
+
+// Catches: `ModelRetry` treated as an internal error, or retried without a budget.
+#[test]
+fn model_retry_is_feedback_within_the_tool_retry_budget() {
+    let mut d = Driver::new(text_agent(vec![string_tool("book", "day")]), "book", vec![]);
+    d.reply("", &[("book", json!({"day": "someday"}))]);
+    d.run_tools(|_| ToolOutcome::ModelRetry("use a weekday".into()));
+    let (_, ctx, _) = d.request();
+    let ChatItem::FunctionCallOutput(output) = ctx.items.last().unwrap() else { panic!() };
+    assert_eq!((output.output.as_str(), output.is_error), ("use a weekday", true));
+
+    d.reply("", &[("book", json!({"day": "never"}))]);
+    d.run_tools(|_| ToolOutcome::ModelRetry("use a weekday".into()));
+    assert_eq!(
+        d.finished(),
+        Some(&Err(RunError::ToolRetriesExceeded { tool: "book".into(), retries: 1 }))
+    );
+}
+
+// Catches: invalid arguments running the body, or an unknown tool failing the run instead of
+// telling the model.
+#[test]
+fn invalid_arguments_and_unknown_tools_are_feedback_and_never_run_a_body() {
+    let mut d = Driver::new(text_agent(vec![string_tool("book", "day")]), "book", vec![]);
+    d.reply("", &[("book", json!({"day": 5})), ("cancel", json!({}))]);
+    let (call, _) = d.prepares()[0].clone();
+    d.send(AgentRunEvent::ToolPrepareFailed {
+        call,
+        failure: PrepareFailure::Refused("day: Input should be a valid string".into()),
+    });
+    assert!(d.executes().is_empty());
+    let (_, ctx, _) = d.request();
+    let outputs: Vec<_> =
+        transcript(&ctx.items).into_iter().filter(|(k, _)| k == "output").collect();
+    assert_eq!(
+        outputs,
+        pairs(&[
+            ("output", "day: Input should be a valid string"),
+            ("output", "unknown tool `cancel`")
+        ])
+    );
+}
+
+// Catches: a non-object output schema offered unwrapped, its value not unwrapped, an accepted
+// candidate not settling the run, or a rejected one not fed back.
+#[test]
+fn structured_output_is_accepted_through_final_result() {
+    let mut d = Driver::new(
+        agent(vec![], OutputSpec::Structured { schema: json!({"type": "integer"}) }),
+        "count",
+        vec![],
+    );
+    let (_, _, tools) = d.request();
+    assert_eq!(tools[0].name, "final_result");
+    assert_eq!(tools[0].json_schema["properties"]["result"], json!({"type": "integer"}));
+
+    d.reply("", &[("final_result", json!({"result": 3}))]);
+    let validation = d.validation();
+    assert!(d.effects.contains(&AgentRunEffect::ValidateOutput {
+        validation,
+        candidate: OutputCandidate::Value(json!(3))
+    }));
+    d.send(AgentRunEvent::OutputValidated {
+        validation,
+        verdict: OutputVerdict::Retry("must be even".into()),
+    });
+    let (_, ctx, _) = d.request();
+    assert_eq!(transcript(&ctx.items).last().unwrap().1, "invalid final_result: must be even");
+
+    d.reply("", &[("final_result", json!({"result": 4}))]);
+    let validation = d.validation();
+    d.send(AgentRunEvent::OutputValidated {
+        validation,
+        verdict: OutputVerdict::Accepted { text: None },
+    });
+    assert_eq!(d.result().outcome, RunOutcome::Completed { output: Output::Validated(validation) });
+}
+
+// Catches: an output validator's replacement value discarded.
+#[test]
+fn a_validator_replacement_is_the_accepted_output() {
+    let mut d = Driver::new(agent(vec![], OutputSpec::Text { validated: true }), "hi", vec![]);
+    d.reply("hello", &[]);
+    d.send(AgentRunEvent::OutputValidated {
+        validation: d.validation(),
+        verdict: OutputVerdict::Accepted { text: Some("Hello!".into()) },
+    });
+    assert_eq!(d.result().outcome, RunOutcome::Completed { output: Output::Text("Hello!".into()) });
+}
+
+// Catches: conversational text where a typed output is expected settling as output, or a
+// question being worded twice.
+#[test]
+fn text_where_a_typed_output_is_expected_asks_the_person() {
+    let mut d = Driver::new(
+        agent(vec![], OutputSpec::Structured { schema: json!({"type": "object"}) }),
+        "book",
+        vec![],
+    );
+    d.reply("Which day works for you?", &[]);
+    assert_eq!(d.requests(), 1);
+    assert_eq!(
+        d.result().outcome,
+        RunOutcome::InputRequired {
+            question: "Which day works for you?".into(),
+            verbatim: false,
+            answer_tool: None
+        }
+    );
+}
+
+// Catches: the facing agent passing a tool's question on unworded, a delegated run wording it,
+// or the worded question missing from the history.
+#[test]
+fn a_tool_question_is_worded_by_the_facing_agent_only() {
+    let ask = |_: &str| ToolOutcome::InputRequired {
+        question: "photo of the damage".into(),
+        verbatim: false,
+        tool: None,
+    };
+    let mut d = Driver::new(text_agent(vec![string_tool("photo", "x")]), "claim", vec![]);
+    d.reply("", &[("photo", json!({"x": "1"}))]);
+    d.run_tools(ask);
+    let (_, ctx, tools) = d.request();
+    assert!(tools.is_empty());
+    assert!(
+        transcript(&ctx.items).last().unwrap().1.ends_with("nothing else: photo of the damage")
+    );
+    d.reply("Could you send a photo of the damage?", &[]);
+    let result = d.result();
+    assert_eq!(
+        result.outcome,
+        RunOutcome::InputRequired {
+            question: "Could you send a photo of the damage?".into(),
+            verbatim: false,
+            answer_tool: None
+        }
+    );
+    assert_eq!(
+        transcript(&result.all_messages).last().unwrap().1,
+        "Could you send a photo of the damage?"
+    );
+
+    let mut input = Driver::new(text_agent(vec![]), "x", vec![]).run.input.clone();
+    input.delegated = true;
+    input.opening = Opening::Message(Box::new(user("m", "claim")));
+    let mut d = Driver::with_input(text_agent(vec![string_tool("photo", "x")]), input);
+    d.reply("", &[("photo", json!({"x": "1"}))]);
+    d.run_tools(ask);
+    assert_eq!(d.requests(), 1);
+    assert!(
+        matches!(&d.result().outcome, RunOutcome::InputRequired { question, .. } if question == "photo of the damage")
+    );
+}
+
+// Catches: `InputRequired(tool=)`'s answer going to the model instead of the named tool, or the
+// waiting placeholder left in the history once answered.
+#[test]
+fn an_answer_for_a_named_tool_is_handed_to_it_without_a_model_turn() {
+    let tools =
+        || vec![string_tool("ask_expert", "question"), string_tool("reply_expert", "answer")];
+    let mut d = Driver::new(text_agent(tools()), "is it covered?", vec![]);
+    d.reply("", &[("ask_expert", json!({"question": "covered?"}))]);
+    d.run_tools(|_| ToolOutcome::InputRequired {
+        question: "Which policy?".into(),
+        verbatim: true,
+        tool: Some("reply_expert".into()),
+    });
+    let first = d.result().clone();
+    let RunOutcome::InputRequired { answer_tool, .. } = &first.outcome else { panic!() };
+    assert_eq!(answer_tool.as_deref(), Some("reply_expert"));
+
+    let mut input = d.run.input.clone();
+    input.history = first.all_messages.clone();
+    input.opening = Opening::Message(Box::new(user("msg_2", "Gold plan")));
+    input.answer_tool = answer_tool.clone();
+    let mut d = Driver::with_input(text_agent(tools()), input);
+    assert_eq!(d.requests(), 0);
+    assert_eq!(d.prepares()[0].1, Map::from_iter([("answer".to_owned(), json!("Gold plan"))]));
+    d.run_tools(|_| value("covered"));
+    let (_, ctx, _) = d.request();
+    let outputs: Vec<_> =
+        transcript(&ctx.items).into_iter().filter(|(k, _)| k == "output").collect();
+    assert_eq!(outputs, pairs(&[("output", "Gold plan"), ("output", "covered")]));
+}
+
+// Catches: an implicit loop cap ending a long, finite model/tool sequence.
+#[test]
+fn a_long_finite_tool_sequence_completes_without_a_loop_cap() {
+    let mut d = Driver::new(text_agent(vec![string_tool("step", "n")]), "go", vec![]);
+    for n in 0..40 {
+        d.reply("", &[("step", json!({"n": n.to_string()}))]);
+        d.run_tools(|_| value("ok"));
+    }
+    d.reply("done", &[]);
+    assert_eq!(d.result().usage.requests, 41);
+}
+
+// Catches: dynamic instructions not rendered before each request, or rendered ones entering the
+// history.
+#[test]
+fn dynamic_instructions_are_rendered_before_every_request() {
+    let mut a = text_agent(vec![string_tool("t", "x")]);
+    a.dynamic_instructions = true;
+    let mut d = Driver::new(a, "hi", vec![]);
+    for (n, rendered) in ["Patient: none.", "Patient: Ada."].into_iter().enumerate() {
+        let render = d.effects.iter().rev().find_map(|e| match e {
+            AgentRunEffect::RenderInstructions { render } => Some(*render),
+            _ => None,
+        });
+        assert_eq!(d.requests(), n);
+        d.send(AgentRunEvent::InstructionsRendered {
+            render: render.unwrap(),
+            result: Ok(rendered.into()),
+        });
+        let (_, ctx, _) = d.request();
+        assert_eq!(transcript(&ctx.items)[0].1, format!("Book appointments.\n\n{rendered}"));
+        if n == 0 {
+            d.reply("", &[("t", json!({"x": "1"}))]);
+            d.run_tools(|_| value("ok"));
+        }
+    }
+    d.reply("hello", &[]);
+    assert!(d.result().all_messages.iter().all(|i| !i.is_instruction()));
+}
+
+// A host tool's retained remote-task identity must survive into the history the next run loads.
+#[test]
+fn tool_metadata_is_recorded_with_its_original_call() {
+    let mut driver =
+        Driver::new(text_agent(vec![string_tool("expert", "request")]), "Help", vec![]);
+    driver.reply("", &[("expert", json!({"request": "Check coverage"}))]);
+    let (call, arguments) = driver.prepares()[0].clone();
+    driver.prepared(call, Value::Object(arguments));
+    driver.send(AgentRunEvent::ToolCallUpdated {
+        call,
+        extra: [("lk.delegation.task_id".into(), json!("remote-task"))].into_iter().collect(),
+    });
+    driver.send(AgentRunEvent::ToolSettled {
+        call,
+        outcome: ToolOutcome::InputRequired {
+            question: "Which payer?".into(),
+            verbatim: false,
+            tool: None,
+        },
+    });
+    driver.reply("Which payer?", &[]);
+    let call = driver
+        .result()
+        .new_messages
+        .iter()
+        .find_map(|item| match item {
+            ChatItem::FunctionCall(call) => Some(call),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(call.extra["lk.delegation.task_id"], "remote-task");
+}
+
+// Catches: a tool's own cancellation (a remote task cancelled) not cancelling the caller's run.
+#[test]
+fn an_unsolicited_tool_cancellation_cancels_the_run() {
+    let mut driver =
+        Driver::new(text_agent(vec![string_tool("expert", "request")]), "Help", vec![]);
+    driver.reply("", &[("expert", json!({"request": "Check coverage"}))]);
+    driver.run_tools(|_| ToolOutcome::Cancelled);
+    assert_eq!(driver.finished(), Some(&Err(RunError::Cancelled)));
+    assert_eq!(driver.requests(), 1);
+}
+
+// Catches: a failed validator leaving the run waiting on, or cancelling, its own settled callback.
+#[test]
+fn a_failed_text_validator_does_not_wait_for_its_own_already_received_result() {
+    let mut d = Driver::new(agent(vec![], OutputSpec::Text { validated: true }), "hi", vec![]);
+    d.reply("hello", &[]);
+    let effects = d.send(AgentRunEvent::OutputValidated {
+        validation: d.validation(),
+        verdict: OutputVerdict::Failed("validator failed".into()),
+    });
+    assert_eq!(d.finished(), Some(&Err(RunError::Host("validator failed".into()))));
+    assert!(d.run.wake_at().is_none(), "the failed callback is no longer cleanup owed");
+    assert!(
+        !effects.iter().any(|effect| matches!(effect, AgentRunEffect::OutputValidateCancel { .. }))
+    );
+}
+
+mod checkpoints {
+    //! Managed checkpoints settle before model admission and accepted answer delivery.
+
+    use super::*;
+
+    fn managed(tools: Vec<FunctionToolInfo>) -> Driver {
+        let input = input(Opening::Message(Box::new(user("message", "Find a room"))), Vec::new());
+        Driver::start(AgentRun::new(text_agent(tools), input).unwrap().with_checkpoints())
+    }
+
+    fn checkpoint(driver: &Driver) -> CheckpointId {
+        driver
+            .effects
+            .iter()
+            .rev()
+            .find_map(|effect| match effect {
+                AgentRunEffect::HostCheckpoint { checkpoint, .. } => Some(*checkpoint),
+                _ => None,
+            })
+            .expect("a managed checkpoint")
+    }
+
+    fn verdict(driver: &mut Driver, yielded: bool) -> Vec<AgentRunEffect> {
+        driver.send(AgentRunEvent::HostCheckpointDone {
+            checkpoint: checkpoint(driver),
+            result: Ok(yielded),
+            tools: None,
+        })
+    }
+
+    #[test]
+    fn a_waiter_after_a_tool_preserves_its_result_without_starting_the_next_model() {
+        let mut driver = managed(vec![string_tool("lookup", "room")]);
+        assert_eq!(driver.requests(), 0);
+        let first = checkpoint(&driver);
+        assert!(
+            driver
+                .send(AgentRunEvent::HostCheckpointDone {
+                    checkpoint: CheckpointId(first.0 + 1),
+                    result: Ok(false),
+                    tools: None,
+                })
+                .is_empty(),
+            "a stale verdict cannot launch a request"
+        );
+        verdict(&mut driver, false);
+        driver.reply("", &[("lookup", json!({"room":"suite"}))]);
+        driver.run_tools(|_| value("suite found"));
+        assert_eq!(driver.requests(), 1, "the next model still waits for admission");
+        let effects = verdict(&mut driver, true);
+        let result = driver.result();
+        assert!(result.interrupted);
+        assert_eq!(result.usage.requests, 1);
+        assert_eq!(result.usage.tool_calls, 1);
+        assert_eq!(result.outcome, RunOutcome::NoOutput);
+        assert!(result.new_messages.iter().any(|item| matches!(item,
+            ChatItem::FunctionCallOutput(output) if output.output == "suite found"
+        )));
+        assert!(!effects.iter().any(|effect| matches!(
+            effect,
+            AgentRunEffect::LlmRequestStart { .. }
+                | AgentRunEffect::Emit(StreamEvent::TextDelta { .. })
+        )));
+    }
+
+    #[test]
+    fn the_accepted_result_waits_for_its_delivery_verdict() {
+        let mut driver = managed(Vec::new());
+        verdict(&mut driver, false);
+        driver.reply("the answer", &[]);
+        assert!(driver.finished().is_none());
+        verdict(&mut driver, true);
+        assert!(driver.result().interrupted);
+        assert!(driver.result().new_messages.iter().any(|item| matches!(item,
+            ChatItem::Message(message) if message.raw_text_content().as_deref() == Some("the answer")
+        )));
+
+        let mut continued = managed(Vec::new());
+        verdict(&mut continued, false);
+        continued.reply("the accepted answer", &[]);
+        verdict(&mut continued, false);
+        assert!(!continued.result().interrupted);
+        assert_eq!(
+            continued.result().outcome,
+            RunOutcome::Completed { output: Output::Text("the accepted answer".into()) }
+        );
+    }
+
+    #[test]
+    fn cancellation_waits_for_a_pending_checkpoint_callback_to_settle() {
+        let mut driver = managed(Vec::new());
+        let pending = checkpoint(&driver);
+        let effects = driver.send(AgentRunEvent::Cancel);
+        assert!(effects.contains(&AgentRunEffect::HostCheckpointCancel { checkpoint: pending }));
+        assert!(driver.finished().is_none());
+        verdict(&mut driver, false);
+        assert!(matches!(driver.finished(), Some(Err(RunError::Cancelled))));
+        assert_eq!(driver.requests(), 0);
+        assert!(
+            driver
+                .send(AgentRunEvent::HostCheckpointDone {
+                    checkpoint: pending,
+                    result: Ok(false),
+                    tools: None
+                })
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn discovered_tools_replace_the_previous_steps_tools_before_request_and_execution() {
+        let mut driver = managed(vec![string_tool("search", "query")]);
+        verdict(&mut driver, false);
+        driver.reply("", &[("search", json!({"query":"room"}))]);
+        driver.run_tools(|_| value("found book"));
+        let pending = checkpoint(&driver);
+        driver.send(AgentRunEvent::HostCheckpointDone {
+            checkpoint: pending,
+            result: Ok(false),
+            tools: Some(vec![string_tool("book", "room")]),
+        });
+        let (_, _, offered) = driver.request();
+        assert_eq!(offered.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["book"]);
+        driver.reply("", &[("book", json!({"room":"suite"}))]);
+        driver.run_tools(|_| value("booked"));
+        verdict(&mut driver, false);
+        driver.reply("Reserved.", &[]);
+        verdict(&mut driver, false);
+        assert!(driver.result().new_messages.iter().any(|item| matches!(item,
+            ChatItem::FunctionCallOutput(output) if output.output == "booked" && !output.is_error
+        )));
+    }
+
+    #[test]
+    fn an_invalid_discovery_fails_before_the_model_request() {
+        let mut driver = managed(Vec::new());
+        let tool = string_tool("book", "room");
+        driver.send(AgentRunEvent::HostCheckpointDone {
+            checkpoint: checkpoint(&driver),
+            result: Ok(false),
+            tools: Some(vec![tool.clone(), tool]),
+        });
+        assert_eq!(driver.requests(), 0);
+        assert!(
+            matches!(driver.finished(), Some(Err(RunError::Host(error))) if error.contains("book"))
+        );
+    }
 }

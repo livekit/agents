@@ -24,14 +24,12 @@ esac
 cd "$(dirname "$0")"
 args=(
     --locked -p lk-agents-storage -p lk-agents-runtime --lib
-    --test lifecycle --test runs --test lease --test process --test schema --test memory
-    --test context --test voice --test a2a_turns --test a2a_door
-    --test a2a_attachment_boundary
+    --test storage --test runtime
     --no-tests fail
 )
 if [[ $backend == agentdb ]]; then
     args+=(--run-ignored only -E 'test(agentdb::)')
 else
-    args+=(-E 'kind(test) | package(lk-agents-storage) | test(storage::) | test(a2a_) | test(agent_run::) | test(sse::)')
+    args+=(-E 'package(lk-agents-storage) | test(storage::) | test(a2a_) | test(agent_run::) | test(sse::)')
 fi
 exec cargo nextest run "${args[@]}"

@@ -124,7 +124,7 @@ fn process_worker() {
 
 fn spawn(backend: Backend, fixture: &Fixture, control: &Path, role: &str) -> TestResult<Process> {
     let mut command = Command::new(std::env::current_exe()?);
-    command.args(["--exact", "process_worker", "--ignored", "--nocapture"]);
+    command.args(["--exact", &test_name("process_worker"), "--ignored", "--nocapture"]);
     for (name, value) in [
         (
             "BACKEND",
@@ -227,4 +227,10 @@ async fn sqlite_delete_invalidates_another_process_open_handle() -> TestResult<(
     assert_eq!(wait(&mut worker, &control.0.join("deleted")).await?, Outcome::Deleted);
     fixture.cleanup(&[]).await;
     Ok(())
+}
+
+/// `name`'s full path in this integration binary, for re-running it alone in a child process.
+fn test_name(name: &str) -> String {
+    let module = module_path!().split_once("::").map_or("", |(_, module)| module);
+    if module.is_empty() { name.to_owned() } else { format!("{module}::{name}") }
 }

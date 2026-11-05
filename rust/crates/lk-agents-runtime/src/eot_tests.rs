@@ -170,7 +170,7 @@ fn cloud_fallback_does_not_deadlock_a_host_audio_push() {
 
 fn run_child(test: &str, flag: &str, mode: &str) {
     let mut child = std::process::Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", test, "--nocapture"])
+        .args(["--exact", &test_name(test), "--nocapture"])
         .env(flag, mode)
         .spawn()
         .unwrap();
@@ -323,4 +323,10 @@ fn saturated_model_construction_defaults_then_retries_on_the_next_prediction() {
         assert_eq!(constructions.load(std::sync::atomic::Ordering::SeqCst), 1);
         stream.aclose().await;
     });
+}
+
+/// `name`'s full path in this integration binary, for re-running it alone in a child process.
+fn test_name(name: &str) -> String {
+    let module = module_path!().split_once("::").map_or("", |(_, module)| module);
+    if module.is_empty() { name.to_owned() } else { format!("{module}::{name}") }
 }

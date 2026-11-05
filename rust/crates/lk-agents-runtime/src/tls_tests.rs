@@ -48,7 +48,7 @@ fn every_transport_uses_the_configured_ca_and_reuses_the_trust_configuration() {
     for mode in ["file", "directory", "empty", "malformed", "missing"] {
         let mut command = Command::new(std::env::current_exe().unwrap());
         command
-            .args(["--ignored", "--exact", "trust_probe", "--nocapture"])
+            .args(["--ignored", "--exact", &test_name("trust_probe"), "--nocapture"])
             .env("TLS_TEST_DIRECTORY", &directory)
             .env("TLS_TEST_MODE", mode)
             .env_remove("SSL_CERT_FILE")
@@ -246,4 +246,10 @@ async fn http_server(
         stream.shutdown().await.unwrap();
     });
     (url, server)
+}
+
+/// `name`'s full path in this integration binary, for re-running it alone in a child process.
+fn test_name(name: &str) -> String {
+    let module = module_path!().split_once("::").map_or("", |(_, module)| module);
+    if module.is_empty() { name.to_owned() } else { format!("{module}::{name}") }
 }

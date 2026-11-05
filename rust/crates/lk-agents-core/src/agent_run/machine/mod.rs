@@ -52,10 +52,6 @@ pub use coordinated::{AgentRunContinuation, Opening};
 pub use text_session::DelegationCheckpoint;
 
 #[cfg(test)]
-#[path = "../../agent_run_input_tests.rs"]
-mod input_tests;
-
-#[cfg(test)]
 #[path = "../../agent_run_tests.rs"]
 mod tests;
 

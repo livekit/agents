@@ -55,8 +55,8 @@ lk-agents-inference = { path = "../lk-agents-inference", features = ["testkit"] 
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros", "net", "io-util", "test-util"] }
 
 [[test]]
-name = "tls"
-path = "src/tls_tests.rs"
+name = "runtime"
+path = "src/runtime_tests.rs"
 
 [features]
 media-ffmpeg = ["lk-agents-media/ffmpeg", "lk-agents-inference/ffmpeg"]
@@ -65,39 +65,3 @@ media-blingfire = ["lk-agents-media/blingfire"]
 # Test-only: what a deterministic simulation installs on a session (`VoiceSession::probe`) and
 # reads back from it. Enabled by the fuzzer.
 dst = []
-
-[[test]]
-name = "a2a_attachment_boundary"
-path = "src/a2a/attachments_tests.rs"
-
-[[test]]
-name = "a2a_door"
-path = "src/a2a/door_tests.rs"
-
-[[test]]
-name = "a2a_turns"
-path = "src/a2a/turns_tests.rs"
-
-[[test]]
-name = "eot"
-path = "src/eot_tests.rs"
-
-[[test]]
-name = "images"
-path = "src/images_tests.rs"
-
-[[test]]
-name = "mcp_lifecycle"
-path = "src/mcp/lifecycle_tests.rs"
-
-[[test]]
-name = "media_measurements"
-path = "src/media_tests.rs"
-
-[[test]]
-name = "tts_gateway_live"
-path = "src/tts_live_tests.rs"
-
-[[test]]
-name = "tts_speech_text"
-path = "src/tts_tests.rs"

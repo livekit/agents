@@ -34,13 +34,5 @@ thiserror.workspace = true
 lk-agents-abi = { path = "../lk-agents-abi", features = ["serde", "testkit"] }
 
 [[test]]
-name = "a2a_attachment_boundary"
-path = "src/a2a/attachments_tests.rs"
-
-[[test]]
-name = "a2a_channel_precedence"
-path = "src/a2a/channels_tests.rs"
-
-[[test]]
-name = "a2a_client_metadata"
-path = "src/a2a/metadata_tests.rs"
+name = "a2a"
+path = "src/a2a_tests.rs"

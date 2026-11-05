@@ -241,7 +241,7 @@ async def main(args: argparse.Namespace) -> int:
             "gil_probe": "Python thread ticks during the workload; counts do not measure GIL hold time",
             "cold_constructor": "first decoder and recorder construction after package import in this process",
             "native_load": "real image encoding and WAV decode/resampling, without provider fakes",
-            "native_adapter_suite": "media_measurements Rust test covers 32 Ogg streams and ten-second recording bursts",
+            "native_adapter_suite": "the runtime media:: Rust test covers 32 Ogg streams and ten-second recording bursts",
         },
     }
     temporary = args.output.with_suffix(args.output.suffix + ".tmp")

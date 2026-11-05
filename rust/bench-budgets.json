@@ -189,7 +189,7 @@
     },
     "media": {
       "commands": {
-        "native": "cargo test -p lk-agents-runtime --test media_measurements --features media-images,media-ffmpeg -- --ignored --nocapture",
+        "native": "cargo test -p lk-agents-runtime --test runtime --features media-images,media-ffmpeg -- media:: --ignored --nocapture",
         "python": "PYTHONPATH=livekit-agents-next:. uv run --no-sync python scripts/bench/media.py --output media-python.json"
       },
       "workload": {
