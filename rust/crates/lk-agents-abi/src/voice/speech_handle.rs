@@ -115,11 +115,7 @@ pub trait SpeechHandle: Send + Sync + Sized + 'static {
 
 // Public data contracts. Python behavior remains in its adapters.
 
-#[crate::host(record(
-    module = "speech_details",
-    path = "livekit.agents.voice.io",
-    dataclass
-))]
+#[crate::host(record(module = "speech_details", path = "livekit.agents.voice.io", dataclass))]
 pub struct InputDetails {
     #[host(annotation = "typing.Literal['text', 'audio']")]
     pub modality: String,

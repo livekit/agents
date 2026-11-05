@@ -67,7 +67,10 @@ fn a_dropped_span_ends_cancelled_under_its_parent() {
     let root = tracer.root();
     {
         let span = start(&root, job());
-        let child = start(span.cx(), JobShutdown { reason: "done".into(), cause: ShutdownCause::SessionClosed });
+        let child = start(
+            span.cx(),
+            JobShutdown { reason: "done".into(), cause: ShutdownCause::SessionClosed },
+        );
         drop(child);
         event(&span, EntrypointStarted);
     }
@@ -136,7 +139,8 @@ fn spans_continue_foreign_contexts() {
         assert_eq!((span.context.trace_id, span.parent), (42, Some(9)));
     }
     let under = tracer.root().under::<JobEntrypoint>(foreign);
-    let shutdown = start(&under, JobShutdown { reason: "r".into(), cause: ShutdownCause::Application });
+    let shutdown =
+        start(&under, JobShutdown { reason: "r".into(), cause: ShutdownCause::Application });
     end(start(shutdown.cx(), OnSessionEnd { callback: "cb".into() }), ());
     let _ = JudgeEvaluationEnd { verdict: None, explanation: None };
 }
