@@ -44,11 +44,7 @@ impl lk_agents_abi::voice::nodes::AgentNodes for AgentNodes {
     type Env = ProcessEnv;
 
     fn new(env: &ProcessEnv, host: Arc<dyn SessionNodes>) -> Self {
-        AgentNodes {
-            host,
-            clock: Arc::clone(&env.clock),
-            spawner: env.spawner,
-        }
+        AgentNodes { host, clock: Arc::clone(&env.clock), spawner: env.spawner }
     }
 }
 
@@ -90,11 +86,8 @@ impl NodeFactory for AgentNodes {
         let cx = cx.clone();
         Box::pin(async move {
             let (sink, input) = channel();
-            let calls = Arc::new(NodeCalls {
-                expressive,
-                step: Some(cx.clone()),
-                ..NodeCalls::default()
-            });
+            let calls =
+                Arc::new(NodeCalls { expressive, step: Some(cx.clone()), ..NodeCalls::default() });
             let out = self.host.tts(&cx, Box::new(input), calls.clone()).await?;
             let request_id = node_id("tts_node_");
             let relay = calls.clone();

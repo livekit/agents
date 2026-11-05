@@ -4,7 +4,7 @@ use super::super::HostAgents;
 use super::settle;
 use crate::voice::VoiceRuntimeEvent;
 use lk_agents_abi::errors::HostError;
-use lk_agents_abi::telemetry::record::{SpanContext};
+use lk_agents_abi::telemetry::record::SpanContext;
 use lk_agents_abi::voice::session_effects::{FillerReply, SessionHooks};
 use lk_agents_voice::agent_activity::scheduling::SpeechId;
 use lk_agents_voice::agent_session::{Command, HookCall, HookId, HookOutcome};

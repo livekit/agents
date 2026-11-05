@@ -10,7 +10,7 @@ use crate::telemetry::{
     self, AmdDetection, Holding, SessionTelemetry, Trace, UserTurnSpan, participant_attrs,
 };
 use lk_agents_abi::Ts;
-use lk_agents_abi::telemetry::decl::{Content, Seconds, SpanDecl, SpanContext};
+use lk_agents_abi::telemetry::decl::{Content, Seconds, SpanContext, SpanDecl};
 use lk_agents_abi::telemetry::errors::SpanError;
 use lk_agents_abi::telemetry::spans::common::{GenAiOperation, ParticipantAttrs};
 use lk_agents_abi::telemetry::spans::session::{

@@ -96,7 +96,10 @@ fn end_records_the_exception_and_its_attributes() {
     let ok: Result<AgentRunEnd, ApiError> = Ok(AgentRunEnd { status: RunStatus::Completed });
     end(start(&cx, run()), ok);
     let error = ApiError::timeout(None);
-    end(start(&cx, run()), Failed { end: AgentRunEnd { status: RunStatus::Failed }, error: &error });
+    end(
+        start(&cx, run()),
+        Failed { end: AgentRunEnd { status: RunStatus::Failed }, error: &error },
+    );
 
     let spans = sink.spans();
     let [failed, ended, both] = spans.as_slice() else { panic!("{spans:?}") };

@@ -100,27 +100,27 @@ impl JudgeRunner for Judges {
         match &judged {
             Ok(judgment) => {
                 telemetry::end(
-                span,
-                telemetry::JudgeEvaluationEnd {
-                    verdict: Some(if judgment.success {
-                        telemetry::JudgeVerdict::Pass
-                    } else {
-                        telemetry::JudgeVerdict::Fail
-                    }),
-                    explanation: cx
-                        .capture_content()
-                        .then(|| telemetry::GenAiContent(judgment.reason.clone())),
-                },
-            );
+                    span,
+                    telemetry::JudgeEvaluationEnd {
+                        verdict: Some(if judgment.success {
+                            telemetry::JudgeVerdict::Pass
+                        } else {
+                            telemetry::JudgeVerdict::Fail
+                        }),
+                        explanation: cx
+                            .capture_content()
+                            .then(|| telemetry::GenAiContent(judgment.reason.clone())),
+                    },
+                );
             }
             Err(error) => {
                 telemetry::end(
-                span,
-                telemetry::Failure {
-                    kind: telemetry::ErrorType::JudgeError,
-                    message: error.to_string(),
-                },
-            );
+                    span,
+                    telemetry::Failure {
+                        kind: telemetry::ErrorType::JudgeError,
+                        message: error.to_string(),
+                    },
+                );
             }
         }
         judged

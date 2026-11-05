@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use lk_agents_abi::telemetry::decl::json;
 use lk_agents_abi::telemetry::record::{
-    EventRecord, JobKey, Key, KeyValues, Record, SpanKind, SpanRecord, SpanContext, Status,
+    EventRecord, JobKey, Key, KeyValues, Record, SpanContext, SpanKind, SpanRecord, Status,
 };
 use parking_lot::Mutex;
 use serde_json::Value;

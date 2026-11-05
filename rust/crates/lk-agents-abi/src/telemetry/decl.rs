@@ -3,7 +3,7 @@
 //! attribute (`spans`, `instruments`, `report::records`); `lk-agents-codegen` reads them into the
 //! registry, the consumer schema and the Python constants.
 
-pub use super::record::{InstrumentKind, KeyValues, Number, SpanKind, SpanContext, Value};
+pub use super::record::{InstrumentKind, KeyValues, Number, SpanContext, SpanKind, Value};
 pub use lk_agents_host_derive::{Attrs, SpanValue, event, metric, record, span};
 
 use super::record::Key;

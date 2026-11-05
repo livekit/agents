@@ -125,8 +125,7 @@ impl Llm for FakeLlm {
 
 fn llm_chain(entries: Vec<Arc<dyn Llm>>) -> FallbackLlm {
     let (clock, spawner, obs) = parts();
-    FallbackLlm::new(entries, ChainPolicy::llm_defaults(), clock, spawner, obs)
-        .expect("entries")
+    FallbackLlm::new(entries, ChainPolicy::llm_defaults(), clock, spawner, obs).expect("entries")
 }
 
 // Catches: `sticky` going back to a recovered primary instead of the entry that served

@@ -10,7 +10,8 @@ use super::proto::common::v1::{KeyValue, any_value::Value as Any};
 use super::proto::metrics::v1 as proto_metrics;
 use lk_agents_abi::telemetry::policy::REDACTED_EXCEPTION;
 use lk_agents_abi::telemetry::record::{
-    EventRecord, InstrumentKind, JobKey, KeyValues, LogRecord, Measurement, Number, Record, SpanKind, SpanRecord, SpanContext, Status, Value,
+    EventRecord, InstrumentKind, JobKey, KeyValues, LogRecord, Measurement, Number, Record,
+    SpanContext, SpanKind, SpanRecord, Status, Value,
 };
 use prost::Message as _;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};

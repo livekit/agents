@@ -8,8 +8,8 @@ use crate::agent_session::{HookKind, VoiceDriver};
 use crate::audio_recognition::{EouDetected, TurnDetectionMode};
 use crate::events::SessionEvent;
 use crate::telemetry::{
-    self, AgentTurnSpan, Arriving, Endpointing, EouSource, Holding, HookSpan, Reply, SpanContext, Stt,
-    Under,
+    self, AgentTurnSpan, Arriving, Endpointing, EouSource, Holding, HookSpan, Reply, SpanContext,
+    Stt, Under,
 };
 use lk_agents_abi::llm::chat_context::CopyOptions;
 use lk_agents_abi::telemetry::errors::SpanError;
@@ -193,7 +193,11 @@ impl super::AgentActivity {
 impl VoiceDriver {
     /// A speech's first generation: its turn opens, or continues the discarded preemptive
     /// generation's. The runtime's work for it nests under the returned span.
-    pub(crate) fn agent_turn_started(&mut self, speech: SpeechId, reply: Reply) -> Option<SpanContext> {
+    pub(crate) fn agent_turn_started(
+        &mut self,
+        speech: SpeechId,
+        reply: Reply,
+    ) -> Option<SpanContext> {
         let scheduler = &mut self.activity.speech_scheduler;
         if let Some(turn) = scheduler.agent_turn(speech) {
             return turn.context(&self.telemetry);

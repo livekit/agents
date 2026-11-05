@@ -62,9 +62,8 @@ fn a_request_carries_only_a_valid_caller_trace() {
     let mut client = Client::new("https://example.test/agent/".into(), None).unwrap();
     client.accept_card(&card()).unwrap();
     let parent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
-    let request = |caller| {
-        client.send(message("m"), None, None, "send".into()).unwrap().traced(caller)
-    };
+    let request =
+        |caller| client.send(message("m"), None, None, "send".into()).unwrap().traced(caller);
     let caller = lk_agents_abi::telemetry::record::SpanContext::parse_traceparent(parent);
     assert!(request(caller).headers.contains(&("traceparent".into(), parent.into())));
     assert!(request(None).headers.iter().all(|(k, _)| k != "traceparent"));

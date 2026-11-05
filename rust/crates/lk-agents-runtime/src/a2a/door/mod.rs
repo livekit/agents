@@ -213,7 +213,8 @@ impl Inner {
         let frame = match request.call {
             Call::Send { message, history_length, streaming } => {
                 // The request continues its caller's trace.
-                let parent = traceparent.as_deref().and_then(telemetry::SpanContext::parse_traceparent);
+                let parent =
+                    traceparent.as_deref().and_then(telemetry::SpanContext::parse_traceparent);
                 let span = telemetry::start(
                     &self.tracer.root().continuing(parent),
                     telemetry::A2aRequest {

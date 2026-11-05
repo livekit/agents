@@ -6,7 +6,8 @@ use crate::voice::session::{DriverBuilder, Timebase};
 use lk_agents_abi::metrics::base::AgentMetrics;
 use lk_agents_abi::telemetry::decl::Value;
 use lk_agents_abi::telemetry::record::{
-    JobKey, Measurement, Record, RecordSink, SpanRecord, SpanContext};
+    JobKey, Measurement, Record, RecordSink, SpanContext, SpanRecord,
+};
 use lk_agents_voice::events::SessionEvent;
 use parking_lot::Mutex;
 

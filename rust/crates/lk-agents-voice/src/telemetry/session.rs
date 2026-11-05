@@ -4,7 +4,7 @@
 
 use crate::agent_activity::scheduling::SpeechId;
 use crate::audio_recognition::TurnId;
-use lk_agents_abi::telemetry::decl::{Seconds, SpanDecl, SpanContext};
+use lk_agents_abi::telemetry::decl::{Seconds, SpanContext, SpanDecl};
 use lk_agents_abi::telemetry::errors::SpanError;
 use lk_agents_abi::telemetry::spans::session::{
     AgentSessionEnd, Amd, DrainAgentActivity, OnEnter, OnExit, StartAgentActivity, UpdateAgent,

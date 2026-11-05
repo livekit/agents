@@ -145,11 +145,7 @@ fn roles_carry_their_declarations() {
     parent_of::<External, TestParent>();
     has_event::<TestSpan, TestEvent>();
     assert_eq!(<TestEvent as EventDecl>::NAME, "test_event");
-    let turn = SpanContext {
-        trace_id: 1,
-        span_id: 2,
-        sampled: true,
-    };
+    let turn = SpanContext { trace_id: 1, span_id: 2, sampled: true };
     let mut item = JsonObject::new();
     item.insert("message".into(), serde_json::json!({"role": "user", "n": 2, "x": null}));
     let record = TestRecord { item: KvList(item), turn: Some(turn) };

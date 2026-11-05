@@ -9,9 +9,7 @@
 use std::collections::BTreeMap;
 
 use lk_agents_abi::telemetry::decl::{Parent, SpanDecl};
-use lk_agents_abi::telemetry::record::{
-    Key, Record, SpanRecord, SpanContext, Status, Value,
-};
+use lk_agents_abi::telemetry::record::{Key, Record, SpanContext, SpanRecord, Status, Value};
 use lk_agents_abi::telemetry::spans::{SPANS, agent_turn, session};
 use lk_agents_voice::events::SessionEvent;
 use lk_agents_voice::trace::{PlayoutStep, Step, ToolStep};
@@ -280,10 +278,7 @@ fn never_closed() -> Recording {
 
 /// The session was dropped without its close and its spans with it: only a turn got out.
 fn dropped_without_close() -> Recording {
-    Authored::new()
-        .session(ended(vec![span(2, Some(1), "user_turn", 1)]))
-        .driver_finished()
-        .done()
+    Authored::new().session(ended(vec![span(2, Some(1), "user_turn", 1)])).driver_finished().done()
 }
 
 /// An interrupted turn with no cause.
@@ -297,7 +292,8 @@ fn interrupted_without_cause() -> Recording {
 fn cut_while_heard_without_position() -> Recording {
     let mut turn = span(2, Some(1), "agent_turn", 6);
     turn.attributes.push((Key::Borrowed("lk.interrupted"), Value::Bool(true)));
-    turn.attributes.push((Key::Borrowed("lk.interruption.source"), Value::String("user_turn".into())));
+    turn.attributes
+        .push((Key::Borrowed("lk.interruption.source"), Value::String("user_turn".into())));
     Authored::new()
         .session(ended(vec![span(3, Some(2), "agent_speaking", 5), turn, session_root(9)]))
         .done()

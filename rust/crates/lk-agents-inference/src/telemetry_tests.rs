@@ -2,8 +2,7 @@ use std::sync::Arc;
 
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::telemetry::decl::Value;
-use lk_agents_abi::telemetry::record::{
-    Measurement, Record, RecordSink, SpanRecord, SpanContext};
+use lk_agents_abi::telemetry::record::{Measurement, Record, RecordSink, SpanContext, SpanRecord};
 use lk_agents_abi::{
     ChatContext, ChatMessage, ChatRequest, ChoiceDelta, Closed, Llm, LlmChunk, LlmStream, Role,
     StreamOutput, Ts, VirtualClock,
@@ -213,8 +212,7 @@ impl Llm for Node {
 fn a_registered_node_makes_its_own_request() {
     let (records, cx) = traced(true);
     let req = request();
-    let mut trace =
-        LlmTrace::start(&cx, &Node(Script { label: "openai.LLM", serves: true }), &req);
+    let mut trace = LlmTrace::start(&cx, &Node(Script { label: "openai.LLM", serves: true }), &req);
     let attempt = trace.attempt();
     assert!(attempt.is_none());
     trace.observe(&chunk("hi"));

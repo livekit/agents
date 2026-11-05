@@ -370,7 +370,11 @@ struct LlmNodeTrace {
 }
 
 impl LlmNodeTrace {
-    fn start(shared: &SessionShared, turn: Option<telemetry::SpanContext>, req: &ChatRequest) -> Self {
+    fn start(
+        shared: &SessionShared,
+        turn: Option<telemetry::SpanContext>,
+        req: &ChatRequest,
+    ) -> Self {
         let span = turn.map(|turn| {
             let (provider, function): (Vec<_>, Vec<_>) =
                 req.tools.iter().partition(|tool| tool.provider_tool.is_some());

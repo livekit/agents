@@ -504,7 +504,8 @@ async fn a_truncated_remote_stream_reports_failure_after_progress_and_never_a_fi
     let peer = Peer::start(Scenario::Truncated).await;
     let clock = Arc::new(RealClock::new());
     let client = client(&peer, &clock);
-    let reply = client.send(message("truncated", "Work"), None, None, None, &Cx::NONE).await.unwrap();
+    let reply =
+        client.send(message("truncated", "Work"), None, None, None, &Cx::NONE).await.unwrap();
     let mut progress = false;
     let failure = tokio::time::timeout(LIMIT, async {
         loop {
@@ -640,8 +641,10 @@ async fn an_unconsumed_input_question_is_canceled_even_after_the_remote_stream_e
     let peer = Peer::start(Scenario::FastQuestion).await;
     let clock = Arc::new(RealClock::new());
     let client = client(&peer, &clock);
-    let reply =
-        client.send(message("abandoned-question", "Work"), None, None, None, &Cx::NONE).await.unwrap();
+    let reply = client
+        .send(message("abandoned-question", "Work"), None, None, None, &Cx::NONE)
+        .await
+        .unwrap();
     assert!(matches!(
         reply.pull().await.unwrap(),
         Pulled::Item(TaskUpdate { state: TaskState::Submitted, .. })

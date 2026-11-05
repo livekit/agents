@@ -16,7 +16,7 @@ use super::proto::resource::v1::Resource;
 use super::proto::trace::v1 as trace;
 use lk_agents_abi::telemetry::decl::{Attrs, Content};
 use lk_agents_abi::telemetry::record::{
-    FRAMEWORK, Key, KeyValues, LogRecord, Record, SpanKind, SpanRecord, SpanContext, Status, Value,
+    FRAMEWORK, Key, KeyValues, LogRecord, Record, SpanContext, SpanKind, SpanRecord, Status, Value,
 };
 use lk_agents_abi::telemetry::semconv::otel::SERVICE_NAME;
 use lk_agents_abi::telemetry::spans::common::{JobIdentity as Stamp, SdkResource, SessionFlags};

@@ -573,7 +573,7 @@ mod recording {
 
 mod telemetry {
     use lk_agents_abi::invoke::CallContext;
-    use lk_agents_abi::telemetry::record::{SpanContext};
+    use lk_agents_abi::telemetry::record::SpanContext;
     use pyo3::prelude::*;
     use pyo3::types::PyTuple;
 

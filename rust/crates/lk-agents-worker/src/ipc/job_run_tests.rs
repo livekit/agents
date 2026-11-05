@@ -5,7 +5,7 @@ use super::*;
 use lk_agents_abi::BoxFuture;
 use lk_agents_abi::errors::RefRegistry;
 use lk_agents_abi::telemetry::policy::UPLOAD_TIMEOUT_SECONDS;
-use lk_agents_abi::telemetry::record::{Record, RecordSink, SpanRecord, SpanContext, Status};
+use lk_agents_abi::telemetry::record::{Record, RecordSink, SpanContext, SpanRecord, Status};
 use lk_agents_abi::worker::ipc_host::JobRun as _;
 use lk_agents_abi::worker::job::StartJobFields;
 use lk_agents_net::telemetry::Tracer;

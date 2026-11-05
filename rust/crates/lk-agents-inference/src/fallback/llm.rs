@@ -167,14 +167,18 @@ impl FallbackLlm {
         spawner: Arc<dyn Spawner>,
         observer: Arc<dyn ChainObserver>,
     ) -> Result<Self, NoBackends> {
-        let entries = llms.into_iter().map(|llm| LlmBackend::new(llm, Arc::clone(&clock))).collect();
+        let entries =
+            llms.into_iter().map(|llm| LlmBackend::new(llm, Arc::clone(&clock))).collect();
         let chain = FallbackChain::new(entries, policy, clock, spawner, observer)?;
         Ok(FallbackLlm { chain: Arc::new(chain) })
     }
 
     /// The adapter's span for one request, under the caller's context; its entries' requests
     /// open under it.
-    fn adapter_span(&self, cx: &telemetry::Cx) -> telemetry::ScopedSpan<telemetry::LlmFallbackAdapter> {
+    fn adapter_span(
+        &self,
+        cx: &telemetry::Cx,
+    ) -> telemetry::ScopedSpan<telemetry::LlmFallbackAdapter> {
         let id = self.active().id();
         telemetry::start(
             cx,

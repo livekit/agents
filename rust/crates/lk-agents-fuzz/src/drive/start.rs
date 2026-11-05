@@ -245,11 +245,8 @@ impl Run {
         };
         let spans = Arc::new(SpanJournal { host: host.clone(), stamps: stamps.clone() });
         let tracer = lk_agents_runtime::net::telemetry::Tracer::new(spans, time.clock(), 1);
-        let session_room = Arc::new(FixedRoom {
-            rtc: Some(room.clone()),
-            time: time.clone(),
-            pool: None,
-        });
+        let session_room =
+            Arc::new(FixedRoom { rtc: Some(room.clone()), time: time.clone(), pool: None });
         let api = Arc::new(
             VoiceSession::new(&scheduled(tasks.clone(), tracer), session_room, args, Some(options))
                 .expect("the configured voice fixture is valid"),

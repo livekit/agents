@@ -7,10 +7,10 @@ use lk_agents_abi::voice::amd::{
     SIP_CALL_STATUS_ACTIVE, SIP_CALL_STATUS_ATTR, TRACK_PUBLICATION_TIMEOUT,
 };
 use lk_agents_abi::voice::rtc::RtcRoom;
-use lk_agents_core::metrics::provider::LlmMetricState;
 use lk_agents_abi::{
     AudioFrame, FunctionToolCall, HostRef, Llm, SpeechEvent, StreamInput, Stt, TimerSet, Ts,
 };
+use lk_agents_core::metrics::provider::LlmMetricState;
 use lk_agents_net::task::TaskSet;
 use lk_agents_voice::agent_session::{
     AmdSpan, Command, IvrCommand, SpeechCommand, SystemTap, TurnCommand, VoiceCommandOrigin,
@@ -917,11 +917,7 @@ mod tests {
         let records = Arc::new(Records::default());
         let clock = Arc::new(lk_agents_abi::VirtualClock::new());
         let tracer = telemetry::Tracer::new(records.clone(), clock.clone(), 3);
-        let amd = telemetry::SpanContext {
-            trace_id: 1,
-            span_id: 2,
-            sampled: true,
-        };
+        let amd = telemetry::SpanContext { trace_id: 1, span_id: 2, sampled: true };
         let cx = tracer.root().under::<telemetry::Amd>(amd);
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let (_cancel, cancelled) = tokio::sync::watch::channel(false);

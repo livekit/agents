@@ -33,9 +33,7 @@ pub(crate) use lk_agents_abi::telemetry::spans::inference::{
 pub(crate) use lk_agents_abi::telemetry::spans::text::{
     JudgeEvaluation, JudgeEvaluationEnd, JudgeVerdict,
 };
-pub(crate) use lk_agents_net::telemetry::{
-    Cx, ErrorType, Failed, Failure, ScopedSpan, end, start,
-};
+pub(crate) use lk_agents_net::telemetry::{Cx, ErrorType, Failed, Failure, ScopedSpan, end, start};
 
 /// `llm.FallbackAdapter`'s label: an LLM that records its own `llm_fallback_adapter` spans.
 pub const FALLBACK_LLM_LABEL: &str = "llm.FallbackAdapter";
@@ -280,24 +278,24 @@ impl LlmTrace {
             .flatten();
         let positive = |n: Option<u64>| n.filter(|n| *n > 0);
         let end = LlmRequestEnd {
-                metrics: summary,
-                usage: GenAiUsage {
-                    input_tokens: usage.input_tokens,
-                    output_tokens: usage.output_tokens,
-                    cache_read_input_tokens: positive(usage.cache_read_tokens),
-                    cache_write_input_tokens: positive(usage.cache_write_tokens),
-                    reasoning_output_tokens: positive(usage.output_reasoning_tokens),
-                },
-                response_id: self.response_id.take(),
-                response_model: Some(self.id.model.clone()),
-                finish_reasons: vec![finish],
-                time_to_first_chunk: Measured(
-                    self.first_chunk.map(|at| Seconds(seconds(self.started, at))),
-                ),
-                output_messages: output,
-                completion_start_time: self
-                    .first_chunk
-                    .map(|at| Json(UtcInstant { unix_seconds: at as f64 / 1e9 })),
+            metrics: summary,
+            usage: GenAiUsage {
+                input_tokens: usage.input_tokens,
+                output_tokens: usage.output_tokens,
+                cache_read_input_tokens: positive(usage.cache_read_tokens),
+                cache_write_input_tokens: positive(usage.cache_write_tokens),
+                reasoning_output_tokens: positive(usage.output_reasoning_tokens),
+            },
+            response_id: self.response_id.take(),
+            response_model: Some(self.id.model.clone()),
+            finish_reasons: vec![finish],
+            time_to_first_chunk: Measured(
+                self.first_chunk.map(|at| Seconds(seconds(self.started, at))),
+            ),
+            output_messages: output,
+            completion_start_time: self
+                .first_chunk
+                .map(|at| Json(UtcInstant { unix_seconds: at as f64 / 1e9 })),
         };
         if let Some(error) = &self.failure {
             lk_agents_net::telemetry::end(span, Failed { end, error });
@@ -348,8 +346,11 @@ impl TtsRequestSpan {
 
     /// Ends the span: with `end` unless it failed, with `failure` when it did.
     fn end(self, end: Option<TtsRequestEnd>, failure: Option<&ProviderError>) {
-        fn finish<D>(span: ScopedSpan<D>, end: Option<TtsRequestEnd>, failure: Option<&ProviderError>)
-        where
+        fn finish<D>(
+            span: ScopedSpan<D>,
+            end: Option<TtsRequestEnd>,
+            failure: Option<&ProviderError>,
+        ) where
             D: lk_agents_abi::telemetry::decl::SpanDecl<End = TtsRequestEnd>,
             TtsRequestEnd: lk_agents_net::telemetry::SpanEnd<D>,
         {

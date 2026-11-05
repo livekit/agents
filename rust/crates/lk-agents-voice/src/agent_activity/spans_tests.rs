@@ -13,7 +13,7 @@ use crate::telemetry::{
 use crate::trace::InterruptCause;
 use lk_agents_abi::Ts;
 use lk_agents_abi::telemetry::decl::SpanDecl;
-use lk_agents_abi::telemetry::record::{Number, Record, SpanRecord, SpanContext, Status, Value};
+use lk_agents_abi::telemetry::record::{Number, Record, SpanContext, SpanRecord, Status, Value};
 use lk_agents_abi::telemetry::spans::agent_turn::ChatContextDict;
 use lk_agents_abi::telemetry::spans::session::OnEnter;
 use lk_agents_abi::telemetry::spans::user_turn::{SttEventType, UserTurnOrigin, UserTurnOutcome};

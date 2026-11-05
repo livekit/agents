@@ -11,8 +11,9 @@ use lk_agents_abi::telemetry::decl::{
 };
 use lk_agents_abi::telemetry::errors::ErrorType;
 use lk_agents_abi::telemetry::record::{
-    EventRecord, FRAMEWORK, JobKey, Key, KeyValues, Measurement, Number, Record, SpanKind,
-    SpanRecord, SpanContext, Status};
+    EventRecord, FRAMEWORK, JobKey, Key, KeyValues, Measurement, Number, Record, SpanContext,
+    SpanKind, SpanRecord, Status,
+};
 use lk_agents_abi::telemetry::spans::common::{EverySpan, Exception};
 use lk_agents_abi::telemetry::spans::session::AgentSession;
 use std::collections::BTreeMap;

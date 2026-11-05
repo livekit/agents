@@ -145,8 +145,7 @@ impl Inner {
         let mut args = bindings.args;
         if let Some(hooks) = args.hooks.clone() {
             // The first agent's activity starts here: its toolsets are set up inside it.
-            let starting =
-                trace.clone().under::<telemetry::SessionStart>(opening.start.context);
+            let starting = trace.clone().under::<telemetry::SessionStart>(opening.start.context);
             let activity = telemetry::reserve::<telemetry::StartAgentActivity>(&starting);
             opening.activity = Some(activity);
             let span = starting.under::<telemetry::StartAgentActivity>(activity.context);
