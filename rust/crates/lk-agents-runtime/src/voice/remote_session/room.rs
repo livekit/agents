@@ -47,6 +47,19 @@ impl RoomTransport {
 }
 
 impl Inner {
+    /// One message's bytes. The stream is closed whatever the read gave.
+    async fn read_message(&self, mut stream: ByteStream) -> Result<Vec<u8>, HostError> {
+        let read = read_bounded(&mut stream).await;
+        let deadline = self.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
+        match (read, stream.close(deadline).await) {
+            (read, Closed::Clean) => read,
+            (read, cleanup) => Err(HostError::new(format!(
+                "{}room session stream cleanup failed: {cleanup:?}",
+                read.err().map(|error| format!("{error}; ")).unwrap_or_default()
+            ))),
+        }
+    }
+
     fn closed(&self) -> bool {
         self.state.lock().closed
     }
@@ -112,39 +125,10 @@ impl SessionTransport for RoomTransport {
         Box::pin(async move {
             let mut incoming = self.0.incoming.lock().await;
             let Some(streams) = incoming.as_mut() else { return Ok(None) };
-            while let Some(mut stream) =
+            while let Some(stream) =
                 streams.next().await.map_err(|error| HostError::new(error.to_string()))?
             {
-                let read = async {
-                    let mut data = Vec::new();
-                    while let Some(chunk) = stream
-                        .chunks
-                        .next()
-                        .await
-                        .map_err(|error| HostError::new(error.to_string()))?
-                    {
-                        if chunk.len() > super::MAX_MESSAGE_SIZE.saturating_sub(data.len()) {
-                            return Err(HostError::new(
-                                "room session message exceeds its byte limit",
-                            ));
-                        }
-                        data.extend_from_slice(&chunk);
-                    }
-                    Ok(data)
-                }
-                .await;
-                let deadline = self.0.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
-                let closed = stream.close(deadline).await;
-                let data = match (read, closed) {
-                    (Ok(data), Closed::Clean) => data,
-                    (Err(error), Closed::Clean) => return Err(error),
-                    (read, cleanup) => {
-                        return Err(HostError::new(format!(
-                            "{}room session stream cleanup failed: {cleanup:?}",
-                            read.err().map(|error| format!("{error}; ")).unwrap_or_default()
-                        )));
-                    }
-                };
+                let data = self.0.read_message(stream).await?;
                 match proto::AgentSessionMessage::decode(data.as_slice()) {
                     Ok(msg) => return Ok(Some(msg)),
                     Err(e) => {
@@ -187,6 +171,20 @@ impl SessionTransport for RoomTransport {
             }
         })
     }
+}
+
+/// A stream's chunks, refused past the message size limit.
+async fn read_bounded(stream: &mut ByteStream) -> Result<Vec<u8>, HostError> {
+    let mut data = Vec::new();
+    while let Some(chunk) =
+        stream.chunks.next().await.map_err(|error| HostError::new(error.to_string()))?
+    {
+        if chunk.len() > super::MAX_MESSAGE_SIZE.saturating_sub(data.len()) {
+            return Err(HostError::new("room session message exceeds its byte limit"));
+        }
+        data.extend_from_slice(&chunk);
+    }
+    Ok(data)
 }
 
 /// `utils.shortuuid("AS_")`.

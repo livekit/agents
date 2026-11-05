@@ -34,120 +34,143 @@ struct Failed {
     heard: Option<Heard>,
 }
 
-/// `perform_tts_inference`, retried: opens are retried until a frame arrives; a later failure, or a
-/// spent budget, loses the voice.
-#[allow(clippy::too_many_arguments)]
-pub(super) async fn perform_tts_inference(
-    shared: &Arc<SessionShared>,
-    handle: &Arc<SpeechHandle>,
-    acc: &mut TurnAccumulator,
-    tts: &dyn Tts,
-    expressive: bool,
-    segment: usize,
-    first: Visible,
-    rx: &mut mpsc::UnboundedReceiver<SpeechSegmentEvent>,
-    text_out: Option<&TextLeg<'_>>,
-    mut aligned: Option<&mut Aligned<'_>>,
-    playback: &mut SynthesisPlayout<'_>,
-    node: &mut TtsNodeTrace,
-) -> Result<Heard, Box<Lost>> {
-    let mut state =
-        SynthesisAttempt::new(&shared.conn.tts.unwrap_or_default(), first, shared.time.now());
-    // The segment's `tts_request`, one `tts_request_run` per open. A registered `tts_node` runs
-    // under the node span and makes its own request, if any.
-    let mut trace = telemetry::TtsTrace::start(node.cx(shared), tts, true);
-    loop {
-        if let Some(lost) = state.before_open(handle.interrupted(), *shared.closing.borrow()) {
-            return Err(Box::new(lost));
-        }
-        // The driver's TTS always streams (`tts_leg` adapts one that does not). A duplex open's
-        // `Err` is a failed attempt, never a downgrade. What the words leg already closed is fed at
-        // the open, so a preemptive generation's whole segment goes in at authorization; a live
-        // segment streams the rest.
-        if !state.input_done {
-            state.input_done = take_text(rx, &mut state.opening, text_out, false).await;
-        }
-        let id = tts.id();
-        shared.report(GenEvent::RequestStarted {
-            speech: handle.id(),
-            kind: lk_agents_core::usage::ModelKind::Tts,
-            provider: id.provider,
-            model: id.model,
-        });
-        let attempt = trace.attempt();
-        // An adapter's own requests open under this attempt.
-        let context = attempt.as_ref().map_or(trace.cx(), |a| a.cx()).clone();
-        let (error, produced) = match tts.stream(&context, expressive).await {
-            Err(error) => {
-                trace.end_attempt(attempt, Some(&error));
-                (DriverError::Provider(error), false)
-            }
-            Ok(stream) => {
-                let (sink, mut source) = stream.split();
-                report_retries(shared, handle, &mut source);
-                let aligned = aligned.as_deref_mut();
-                let tts_data = SynthesisMetrics::new(
-                    tts.id(),
-                    segment,
-                    shared.time.wall_secs(),
-                    shared.time.wall_secs(),
-                );
-                let streaming = Streaming {
-                    shared,
-                    handle,
-                    acc,
-                    sink: &sink,
-                    source,
-                    rx,
-                    text_out,
-                    transforms: None,
-                    state: StreamingTts::new(state.opening.clone(), state.input_done),
-                    text_buffer: SynthesisText::new(state.opening.text.clone()),
-                    tts_data,
-                    aligned,
-                };
-                let mut done = Synthesized::default();
-                match synthesize(shared, handle, streaming, playback, &mut done).await {
-                    (Ok(heard), _) => {
-                        node.first_audio(done.metrics.as_ref().and_then(|m| m.ttfb));
-                        if let Some(id) = done.metrics.as_ref().map(|m| m.request_id.clone()) {
-                            trace.request_id(id);
-                        }
-                        trace.end_attempt(attempt, None);
-                        trace.end(done.text, done.metrics.as_ref());
-                        return Ok(heard);
-                    }
-                    (Err(failed), done) => {
-                        let provider = match &failed.error {
-                            DriverError::Provider(error) => Some(error.clone()),
-                            _ => None,
-                        };
-                        trace.end_attempt(attempt, provider.as_ref());
-                        state.stream_failed(failed.words, done, failed.synchronized, failed.heard);
-                        (failed.error, failed.produced)
-                    }
-                }
-            }
-        };
-        let error = match state.failed(error, produced) {
-            AttemptFailure::Retry(error) => error,
-            AttemptFailure::Stop(lost) => {
-                fail(&mut trace, &lost);
+/// `perform_tts_inference` for one segment: the borrows its synthesis and playout share.
+pub(super) struct TtsInference<'a, 'b, 'p> {
+    pub(super) shared: &'a Arc<SessionShared>,
+    pub(super) handle: &'a Arc<SpeechHandle>,
+    pub(super) acc: &'a mut TurnAccumulator,
+    pub(super) tts: &'a dyn Tts,
+    /// The reply carries expressive markup; each synthesis is opened with it.
+    pub(super) expressive: bool,
+    /// The segment's index in the step.
+    pub(super) segment: usize,
+    pub(super) rx: &'a mut mpsc::UnboundedReceiver<SpeechSegmentEvent>,
+    pub(super) text_out: Option<&'a TextLeg<'a>>,
+    pub(super) aligned: Option<&'a mut Aligned<'b>>,
+    pub(super) playback: &'a mut SynthesisPlayout<'p>,
+    pub(super) node: &'a mut TtsNodeTrace,
+}
+
+impl TtsInference<'_, '_, '_> {
+    /// Retried: opens are retried until a frame arrives; a later failure, or a spent budget, loses
+    /// the voice.
+    pub(super) async fn run(mut self, first: Visible) -> Result<Heard, Box<Lost>> {
+        let (shared, handle, tts) = (self.shared, self.handle, self.tts);
+        let mut state =
+            SynthesisAttempt::new(&shared.conn.tts.unwrap_or_default(), first, shared.time.now());
+        // The segment's `tts_request`, one `tts_request_run` per open. A registered `tts_node`
+        // runs under the node span and makes its own request, if any.
+        let mut trace = telemetry::TtsTrace::start(self.node.cx(shared), tts, true);
+        loop {
+            if let Some(lost) = state.before_open(handle.interrupted(), *shared.closing.borrow()) {
                 return Err(Box::new(lost));
             }
-        };
-        let failed = |e, r| tts.failed(e, r);
-        let outcome =
-            match retry(shared, handle, &mut state.retry, ProviderKind::Tts, &error, &failed).await
-            {
+            // The driver's TTS always streams (`tts_leg` adapts one that does not). A duplex
+            // open's `Err` is a failed attempt, never a downgrade. What the words leg already
+            // closed is fed at the open, so a preemptive generation's whole segment goes in at
+            // authorization; a live segment streams the rest.
+            if !state.input_done {
+                let opening = &mut state.opening;
+                state.input_done = take_text(self.rx, opening, self.text_out, false).await;
+            }
+            let id = tts.id();
+            shared.report(GenEvent::RequestStarted {
+                speech: handle.id(),
+                kind: lk_agents_core::usage::ModelKind::Tts,
+                provider: id.provider,
+                model: id.model,
+            });
+            let attempt = trace.attempt();
+            let (error, produced) = match self.attempt(&mut state, &mut trace, attempt).await {
+                Ok((heard, done)) => {
+                    trace.end(done.text, done.metrics.as_ref());
+                    return Ok(heard);
+                }
+                Err(failed) => failed,
+            };
+            let error = match state.failed(error, produced) {
+                AttemptFailure::Retry(error) => error,
+                AttemptFailure::Stop(lost) => {
+                    fail(&mut trace, &lost);
+                    return Err(Box::new(lost));
+                }
+            };
+            let failed = |e, r| tts.failed(e, r);
+            let retried =
+                retry(shared, handle, &mut state.retry, ProviderKind::Tts, &error, &failed).await;
+            let outcome = match retried {
                 Retried::Again => RetryOutcome::Again,
                 Retried::Interrupted => RetryOutcome::Interrupted,
                 Retried::GiveUp => RetryOutcome::Exhausted,
             };
-        if let Some(lost) = state.after_retry(outcome) {
-            fail(&mut trace, &lost);
-            return Err(Box::new(lost));
+            if let Some(lost) = state.after_retry(outcome) {
+                fail(&mut trace, &lost);
+                return Err(Box::new(lost));
+            }
         }
+    }
+
+    /// One open and its synthesis, its `tts_request_run` ended either way. On success, what it
+    /// fed and measured; on failure, the error and whether audio came first.
+    async fn attempt(
+        &mut self,
+        state: &mut SynthesisAttempt,
+        trace: &mut telemetry::TtsTrace,
+        attempt: Option<telemetry::ScopedSpan<telemetry::TtsRequestRun>>,
+    ) -> Result<(Heard, Synthesized), (DriverError, bool)> {
+        let (shared, handle) = (self.shared, self.handle);
+        // An adapter's own requests open under this attempt.
+        let context = attempt.as_ref().map_or(trace.cx(), |a| a.cx()).clone();
+        let stream = match self.tts.stream(&context, self.expressive).await {
+            Ok(stream) => stream,
+            Err(error) => {
+                trace.end_attempt(attempt, Some(&error));
+                return Err((DriverError::Provider(error), false));
+            }
+        };
+        let (sink, mut source) = stream.split();
+        report_retries(shared, handle, &mut source);
+        let tts_data = SynthesisMetrics::new(
+            self.tts.id(),
+            self.segment,
+            shared.time.wall_secs(),
+            shared.time.wall_secs(),
+        );
+        let streaming = Streaming {
+            shared,
+            handle,
+            acc: self.acc,
+            sink: &sink,
+            source,
+            rx: self.rx,
+            text_out: self.text_out,
+            transforms: None,
+            state: StreamingTts::new(state.opening.clone(), state.input_done),
+            text_buffer: SynthesisText::new(state.opening.text.clone()),
+            tts_data,
+            aligned: self.aligned.as_deref_mut(),
+        };
+        let mut done = Synthesized::default();
+        let (synthesized, text_ended) =
+            synthesize(shared, handle, streaming, self.playback, &mut done).await;
+        let failed = match synthesized {
+            Ok(heard) => {
+                self.node.first_audio(done.metrics.as_ref().and_then(|m| m.ttfb));
+                if let Some(id) = done.metrics.as_ref().map(|m| m.request_id.clone()) {
+                    trace.request_id(id);
+                }
+                trace.end_attempt(attempt, None);
+                return Ok((heard, done));
+            }
+            Err(failed) => failed,
+        };
+        let provider = match &failed.error {
+            DriverError::Provider(error) => Some(error.clone()),
+            _ => None,
+        };
+        trace.end_attempt(attempt, provider.as_ref());
+        state.stream_failed(failed.words, text_ended, failed.synchronized, failed.heard);
+        Err((failed.error, failed.produced))
     }
 }
 
@@ -347,43 +370,19 @@ impl Segment for Streaming<'_, '_> {
             Read::Provider => {}
         }
         let Streaming { sink, source, rx, text_out, transforms, state, text_buffer, .. } = self;
-        let chunk = {
-            let mut pending = Box::pin(source.next());
-            loop {
-                if state.input_done {
-                    break pending.await;
-                }
-                tokio::select! {
-                    biased;
-                    event = rx.recv() => {
-                        let chunk = match event {
-                            Some(SpeechSegmentEvent::Chunk(chunk)) => Some(chunk),
-                            Some(SpeechSegmentEvent::End) | None => None,
-                        };
-                        let mut effects: std::collections::VecDeque<_> = state.text(chunk).into();
-                        while let Some(effect) = effects.pop_front() {
-                            match effect {
-                                StreamingTtsEffect::Capture(chunk) => {
-                                    capture(*text_out, &chunk.text).await;
-                                    text_buffer.append(&chunk.text);
-                                    effects.push_front(state.captured(chunk));
-                                }
-                                StreamingTtsEffect::Push(raw) => {
-                                    if let Err(error) = push_text(sink, transforms, &raw) {
-                                        state.push_failed(error);
-                                    }
-                                }
-                                StreamingTtsEffect::EndInput => end_input(sink, transforms),
-                                StreamingTtsEffect::FlushText => {
-                                    if let Some(out) = text_out { out.flush(); }
-                                }
-                            }
-                        }
-                    },
-                    got = &mut pending => break got,
-                }
+        let mut pending = Box::pin(source.next());
+        let chunk = loop {
+            if state.input_done {
+                break (&mut pending).await;
             }
+            let event = tokio::select! {
+                biased;
+                event = rx.recv() => event,
+                got = &mut pending => break got,
+            };
+            feed_text(event, state, (*sink, transforms), *text_out, text_buffer).await;
         };
+        drop(pending);
         take_tts_calls(&mut self.tts_data, self.shared, self.handle, &mut self.source, false);
         let chunk = match chunk {
             Ok(Some(chunk)) => chunk,
@@ -415,6 +414,80 @@ impl Segment for Streaming<'_, '_> {
         match self.aligned.as_deref() {
             Some(a) => a.state.words.clone(),
             None => self.state.words.text.clone(),
+        }
+    }
+}
+
+impl Streaming<'_, '_> {
+    /// Synthesised frames queued for playout, each with its transcript so far, until the source
+    /// ends, the speech is interrupted or playout stops. A permit is taken before each read, so a
+    /// full queue holds the synthesiser back.
+    async fn produce_into(
+        &mut self,
+        tx: &mpsc::UnboundedSender<SynthesisEvent>,
+        permits: &Arc<tokio::sync::Semaphore>,
+        stopped: &tokio::sync::Notify,
+        handle: &SpeechHandle,
+    ) {
+        loop {
+            let next = async {
+                let permit = permits.clone().acquire_owned().await.expect("buffer is open");
+                (self.next().await, permit)
+            };
+            let (result, permit) = tokio::select! {
+                biased;
+                () = handle.wait_for_interrupted() => break,
+                () = stopped.notified() => break,
+                v = next => v,
+            };
+            let ended = matches!(result, Ok(Next::End) | Err(_));
+            let event = SynthesisEvent::Audio(result, self.text_snapshot(), permit);
+            if tx.send(event).is_err() || ended {
+                break;
+            }
+        }
+    }
+
+    fn text_snapshot(&mut self) -> SynthesisTextSnapshot {
+        match self.aligned.as_deref() {
+            Some(aligned) => self.text_buffer.aligned_snapshot(&aligned.state.words),
+            None => self.text_buffer.snapshot(),
+        }
+    }
+}
+
+/// One text event of the segment fed to the synthesiser: its effects run in order, a capture's
+/// follow-up first.
+async fn feed_text(
+    event: Option<SpeechSegmentEvent>,
+    state: &mut StreamingTts,
+    (sink, transforms): (&lk_agents_abi::TtsSink, &mut Option<Pipeline>),
+    text_out: Option<&TextLeg<'_>>,
+    text_buffer: &SynthesisText,
+) {
+    let chunk = match event {
+        Some(SpeechSegmentEvent::Chunk(chunk)) => Some(chunk),
+        Some(SpeechSegmentEvent::End) | None => None,
+    };
+    let mut effects: std::collections::VecDeque<_> = state.text(chunk).into();
+    while let Some(effect) = effects.pop_front() {
+        match effect {
+            StreamingTtsEffect::Capture(chunk) => {
+                capture(text_out, &chunk.text).await;
+                text_buffer.append(&chunk.text);
+                effects.push_front(state.captured(chunk));
+            }
+            StreamingTtsEffect::Push(raw) => {
+                if let Err(error) = push_text(sink, transforms, &raw) {
+                    state.push_failed(error);
+                }
+            }
+            StreamingTtsEffect::EndInput => end_input(sink, transforms),
+            StreamingTtsEffect::FlushText => {
+                if let Some(out) = text_out {
+                    out.flush();
+                }
+            }
         }
     }
 }
@@ -525,71 +598,60 @@ impl SynthesisPlayout<'_> {
     ) -> Result<Heard, Box<SourceFailed>> {
         let permits = Arc::new(tokio::sync::Semaphore::new(MAX_BUFFERED_TTS_FRAMES));
         let stopped = tokio::sync::Notify::new();
-        let tx = &self.tx;
-        let produce = async {
-            loop {
-                let next = async {
-                    let permit = permits.clone().acquire_owned().await.expect("buffer is open");
-                    (segment.next().await, permit)
-                };
-                let (result, permit) = tokio::select! {
-                    biased;
-                    () = handle.wait_for_interrupted() => break,
-                    () = stopped.notified() => break,
-                    v = next => v,
-                };
-                let ended = matches!(result, Ok(Next::End) | Err(_));
-                let text = match segment.aligned.as_deref() {
-                    Some(aligned) => segment.text_buffer.aligned_snapshot(&aligned.state.words),
-                    None => segment.text_buffer.snapshot(),
-                };
-                let event = SynthesisEvent::Audio(result, text, permit);
-                if tx.send(event).is_err() || ended {
-                    break;
-                }
-            }
-        };
+        // A second sender of the same queue: the playout's own keeps it open either way.
+        let tx = self.tx.clone();
+        let produce = segment.produce_into(&tx, &permits, &stopped, handle);
         let consume = async {
-            let mut started_at = None;
-            let admission = if self.gate.wait(shared, handle).await {
-                self.binding.activate().await
-            } else {
-                Ok(false)
-            };
-            let result = match admission {
-                Err(error) => Err(Box::new(SourceFailed::from(error))),
-                Ok(true) => {
-                    let audio = self.binding.audio();
-                    let leg = TextLeg::new(self.binding.text(), None, shared, handle.id());
-                    let mut buffered = SynthesizedSegment {
-                        rx: &mut self.rx,
-                        text: None,
-                        leg: &leg,
-                        started_at: None,
-                    };
-                    // Activated with no audio output: the words start the turn speaking as they
-                    // show, and the synthesised audio is dropped unheard.
-                    if audio.is_none() {
-                        shared.report(GenEvent::FirstFrame { speech: handle.id() });
-                        buffered.started_at = Some(shared.time.wall_secs());
-                    }
-                    let result =
-                        perform_audio_forwarding(shared, handle, audio.as_deref(), &mut buffered)
-                            .await;
-                    started_at = buffered.started_at;
-                    result
-                }
-                Ok(false) => Ok(unheard()),
-            };
-            // A failed output stops synthesis too; the caller still ends input and closes the source.
+            let played = self.play(shared, handle).await;
+            // A failed output stops synthesis too; the caller still ends input and closes the
+            // source.
             stopped.notify_one();
-            (result, started_at)
+            played
         };
         let (_, (result, started_at)) = tokio::join!(produce, consume);
         if let Some(at) = started_at {
             segment.started_speaking(at);
         }
         result
+    }
+
+    /// The synthesised audio played once authorized and activated, with when it started
+    /// speaking.
+    async fn play(
+        &mut self,
+        shared: &Arc<SessionShared>,
+        handle: &SpeechHandle,
+    ) -> (Result<Heard, Box<SourceFailed>>, Option<f64>) {
+        let admission = if self.gate.wait(shared, handle).await {
+            self.binding.activate().await
+        } else {
+            Ok(false)
+        };
+        match admission {
+            Err(error) => (Err(Box::new(SourceFailed::from(error))), None),
+            Ok(true) => self.forward_activated(shared, handle).await,
+            Ok(false) => (Ok(unheard()), None),
+        }
+    }
+
+    async fn forward_activated(
+        &mut self,
+        shared: &Arc<SessionShared>,
+        handle: &SpeechHandle,
+    ) -> (Result<Heard, Box<SourceFailed>>, Option<f64>) {
+        let audio = self.binding.audio();
+        let leg = TextLeg::new(self.binding.text(), None, shared, handle.id());
+        let mut buffered =
+            SynthesizedSegment { rx: &mut self.rx, text: None, leg: &leg, started_at: None };
+        // Activated with no audio output: the words start the turn speaking as they show, and the
+        // synthesised audio is dropped unheard.
+        if audio.is_none() {
+            shared.report(GenEvent::FirstFrame { speech: handle.id() });
+            buffered.started_at = Some(shared.time.wall_secs());
+        }
+        let result =
+            perform_audio_forwarding(shared, handle, audio.as_deref(), &mut buffered).await;
+        (result, buffered.started_at)
     }
 
     /// A failed synthesis can leave text without audio. It still belongs behind authorization.

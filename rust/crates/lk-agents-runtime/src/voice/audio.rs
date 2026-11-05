@@ -93,28 +93,7 @@ pub fn spawn_drain<T: Into<crate::voice::VoiceRuntimeEvent> + Send + 'static>(
     (channel, sink): (AudioChannel, ResourceId),
 ) {
     tasks.spawn(spawner, "leg drain", async move {
-        let mut error = None;
-        let cause = loop {
-            // `biased` so an arrived item is delivered before a simultaneous close.
-            let next = tokio::select! {
-                biased;
-                item = source.next() => Some(item),
-                _ = &mut closing => None,
-            };
-            match next {
-                Some(Ok(Some(item))) => {
-                    if queue.send(item).is_err() {
-                        break ChannelEndCause::Closing; // the loop is gone
-                    }
-                }
-                Some(Ok(None)) => break ChannelEndCause::SourceEnded,
-                Some(Err(e)) => {
-                    error = Some(e);
-                    break ChannelEndCause::Error;
-                }
-                None => break ChannelEndCause::Closing,
-            }
-        };
+        let (cause, error) = forward_items(&mut *source, &mut closing, &queue).await;
         // Always, bounded on the session clock (dropping doesn't cancel a host stream).
         let deadline = time.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
         let closed = source.close(deadline).await;
@@ -122,6 +101,32 @@ pub fn spawn_drain<T: Into<crate::voice::VoiceRuntimeEvent> + Send + 'static>(
         let _ =
             queue.send(ChannelEnd { leg, cause, sink: Some(sink), closed: Some(closed), error });
     });
+}
+
+/// Forwards the source's items to the loop until it ends, fails, the loop is gone or the session
+/// closes.
+async fn forward_items<T: Into<crate::voice::VoiceRuntimeEvent> + Send + 'static>(
+    source: &mut dyn StreamOutput<T>,
+    closing: &mut lk_agents_abi::BoxFuture<'static, ()>,
+    queue: &Tx,
+) -> (ChannelEndCause, Option<lk_agents_abi::errors::ProviderError>) {
+    loop {
+        // `biased` so an arrived item is delivered before a simultaneous close.
+        let next = tokio::select! {
+            biased;
+            item = source.next() => item,
+            _ = &mut *closing => return (ChannelEndCause::Closing, None),
+        };
+        match next {
+            Ok(Some(item)) => {
+                if queue.send(item).is_err() {
+                    return (ChannelEndCause::Closing, None); // the loop is gone
+                }
+            }
+            Ok(None) => return (ChannelEndCause::SourceEnded, None),
+            Err(e) => return (ChannelEndCause::Error, Some(e)),
+        }
+    }
 }
 
 /// A stream's retried failures, sent to the session loop.

@@ -36,58 +36,62 @@ pub(super) async fn produce_segments(
     speeches: &crate::voice::SpeechTasks,
 ) -> (Result<LlmGenerationData, DriverError>, ToolStep) {
     let mut tools = ToolStep::new(speeches.clone());
-    // A closed receiver means the voice gave up; dropping the chunk is right.
-    let one_segment = |text: String| {
-        if !text.is_empty() {
-            let _ = tx.send(SpeechSegmentEvent::Chunk(Visible::of(&text)));
-            let _ = tx.send(SpeechSegmentEvent::End);
-        }
-    };
     match &ctx.plan.source {
         ReplySource::Llm | ReplySource::Realtime => {
-            let data = perform_llm_inference(shared, handle, ctx, &tx, &mut tools).await;
+            let inference = LlmInference { shared, handle, ctx, tx: &tx, tools: &mut tools };
+            let data = inference.run().await;
             return (data, tools);
         }
-        ReplySource::Text(text) => one_segment(text.clone()),
-        // The caller's frames are the segment, with words or without (`_tts_task` forwards
-        // `audio` whatever the text).
-        ReplySource::Audio { text, .. } => {
-            let _ = tx.send(SpeechSegmentEvent::Chunk(Visible::of(text)));
-            let _ = tx.send(SpeechSegmentEvent::End);
-        }
-        // Taken off the host's handle: a second read finds `None`. Read until
-        // the voice gives up or the speech is interrupted (`_tts_task` cancels its forwarding).
-        ReplySource::TextStream => {
-            if let Some(mut rx) = handle.take_text_stream() {
-                loop {
-                    let stopped = async {
-                        tokio::select! {
-                            biased;
-                            () = handle.wait_for_interrupted() => {}
-                            () = tx.closed() => {}
-                        }
-                    };
-                    let Some(chunk) = until_stopped(stopped, rx.recv()).await.flatten() else {
-                        break;
-                    };
-                    one_segment(chunk);
-                }
+        ReplySource::Text(text) => {
+            if !text.is_empty() {
+                send_segment(&tx, text);
             }
         }
+        // The caller's frames are the segment, with words or without (`_tts_task` forwards
+        // `audio` whatever the text).
+        ReplySource::Audio { text, .. } => send_segment(&tx, text),
+        ReplySource::TextStream => forward_text_stream(handle, &tx).await,
     }
     (Ok(LlmGenerationData::new(shared.time.wall_secs(), String::new(), None)), tools)
 }
 
-/// `perform_llm_inference`, retried per the request's budget while nothing has been produced.
-async fn perform_llm_inference(
-    shared: &Arc<SessionShared>,
+/// One whole segment. A closed receiver means the voice gave up; dropping the chunk is right.
+fn send_segment(tx: &mpsc::UnboundedSender<SpeechSegmentEvent>, text: &str) {
+    let _ = tx.send(SpeechSegmentEvent::Chunk(Visible::of(text)));
+    let _ = tx.send(SpeechSegmentEvent::End);
+}
+
+/// The host's text stream, each chunk a segment. Taken off the host's handle: a second read finds
+/// `None`. Read until the voice gives up or the speech is interrupted (`_tts_task` cancels its
+/// forwarding).
+async fn forward_text_stream(
+    handle: &SpeechHandle,
+    tx: &mpsc::UnboundedSender<SpeechSegmentEvent>,
+) {
+    let Some(mut rx) = handle.take_text_stream() else { return };
+    loop {
+        let stopped = async {
+            tokio::select! {
+                biased;
+                () = handle.wait_for_interrupted() => {}
+                () = tx.closed() => {}
+            }
+        };
+        let Some(chunk) = until_stopped(stopped, rx.recv()).await.flatten() else {
+            break;
+        };
+        if !chunk.is_empty() {
+            send_segment(tx, &chunk);
+        }
+    }
+}
+
+/// The step's request with the agent's instructions rendered for it.
+async fn chat_request(
+    shared: &SessionShared,
     handle: &Arc<SpeechHandle>,
     ctx: &ReplyExecution,
-    tx: &mpsc::UnboundedSender<SpeechSegmentEvent>,
-    tools: &mut ToolStep,
-) -> Result<LlmGenerationData, DriverError> {
-    // Held for the step: a mid-reply handoff must not move the model under a request on the wire.
-    let llm = ctx.resources.llm.clone().ok_or(DriverError::Missing("llm"))?;
+) -> ChatRequest {
     let mut chat_ctx = ctx.plan.request.chat_ctx.clone();
     // Rendered per request, so a tool's state change reaches the step after it.
     if let Some(dynamic) = &ctx.resources.dynamic_instructions {
@@ -99,7 +103,7 @@ async fn perform_llm_inference(
             }
         }
     }
-    let req = ChatRequest {
+    ChatRequest {
         chat_ctx,
         tool_choice: ctx.plan.tool_choice.clone(),
         tools_host: ctx
@@ -112,16 +116,86 @@ async fn perform_llm_inference(
         tools: ctx.plan.request.tools.clone(),
         conn_options: shared.conn.llm.unwrap_or_default(),
         ..ChatRequest::default()
-    };
-    let (speech, step) = (handle.id(), ctx.plan.step);
-    // The engine owns the budget; the request carries the same options.
-    let mut attempts = Attempts::retrying(&req.conn_options, shared.time.now());
-    // The step's `llm_node`, one `llm_request` in it, its attempts each an `llm_request_run`. A
-    // registered `llm_node` runs under the node span and makes its own request, if any.
-    let node = LlmNodeTrace::start(shared, ctx.span, &req);
-    let mut trace = telemetry::LlmTrace::start(node.cx(shared), llm.as_ref(), &req);
-    loop {
-        let attempt = trace.attempt();
+    }
+}
+
+/// `perform_llm_inference`: one step's words and tool calls from the model, retried per the
+/// request's budget while nothing has been produced.
+struct LlmInference<'a> {
+    shared: &'a Arc<SessionShared>,
+    handle: &'a Arc<SpeechHandle>,
+    ctx: &'a ReplyExecution,
+    tx: &'a mpsc::UnboundedSender<SpeechSegmentEvent>,
+    tools: &'a mut ToolStep,
+}
+
+impl LlmInference<'_> {
+    async fn run(mut self) -> Result<LlmGenerationData, DriverError> {
+        let (shared, handle) = (self.shared, self.handle);
+        // Held for the step: a mid-reply handoff must not move the model under a request on the
+        // wire.
+        let llm = self.ctx.resources.llm.clone().ok_or(DriverError::Missing("llm"))?;
+        let req = chat_request(shared, handle, self.ctx).await;
+        // The engine owns the budget; the request carries the same options.
+        let mut attempts = Attempts::retrying(&req.conn_options, shared.time.now());
+        // The step's `llm_node`, one `llm_request` in it, its attempts each an `llm_request_run`.
+        // A registered `llm_node` runs under the node span and makes its own request, if any.
+        let node = LlmNodeTrace::start(shared, self.ctx.span, &req);
+        let mut trace = telemetry::LlmTrace::start(node.cx(shared), llm.as_ref(), &req);
+        loop {
+            let attempt = trace.attempt();
+            let mut data = self.announce_request(&req, llm.as_ref());
+            // One `LlmRequestFinished` per `ChatRequested`, a request that never became a stream
+            // included.
+            let (error, data) = match llm.chat(trace.cx(), &req).await {
+                Err(error) => {
+                    trace.end_attempt(attempt, Some(&error));
+                    self.request_finished(Some(&error));
+                    (error, None)
+                }
+                Ok(mut stream) => {
+                    let ended = self.read_stream(&mut stream, &mut data, &mut trace).await;
+                    trace.end_attempt(attempt, ended.as_ref().err().map(|(error, _)| error));
+                    let ended = self.settle_attempt(stream, &data, ended).await;
+                    let Err((error, produced)) = ended else {
+                        node.end(&trace, llm.as_ref(), None);
+                        trace.end(handle.interrupted(), Some(handle.speech_id()));
+                        return Ok(data);
+                    };
+                    if produced {
+                        attempts.delivered();
+                    }
+                    (error, Some(data))
+                }
+            };
+            let failed = |e, r| llm.failed(e, r);
+            match retry(shared, handle, &mut attempts, ProviderKind::Llm, &error, &failed).await {
+                Retried::Again => continue,
+                // What an interrupted retry reports: this stream's metrics, or none if it never
+                // opened.
+                Retried::Interrupted => {
+                    node.end(&trace, llm.as_ref(), None);
+                    trace.end(true, Some(handle.speech_id()));
+                    let empty =
+                        || LlmGenerationData::new(shared.time.wall_secs(), String::new(), None);
+                    return Ok(data.unwrap_or_else(empty));
+                }
+                Retried::GiveUp => {
+                    trace.fail(&error);
+                    node.end(&trace, llm.as_ref(), Some(&error));
+                    return Err(DriverError::from(error));
+                }
+            }
+        }
+    }
+
+    /// Journals the request and reports its start: the attempt's data, starting now.
+    fn announce_request(
+        &self,
+        req: &ChatRequest,
+        llm: &dyn lk_agents_abi::Llm,
+    ) -> LlmGenerationData {
+        let (shared, speech, step) = (self.shared, self.handle.id(), self.ctx.plan.step);
         shared.trace(GenerationStep::ChatRequested {
             speech,
             step,
@@ -130,7 +204,7 @@ async fn perform_llm_inference(
                 req.chat_ctx.items
             )),
             tools: req.tools.iter().map(|t| t.name.clone()).collect(),
-            instructions_hash: ctx.plan.request.instructions_hash,
+            instructions_hash: self.ctx.plan.request.instructions_hash,
             ctx_ids: req.chat_ctx.items.iter().map(|it| it.id().to_owned()).collect(),
             tool_choice: req.tool_choice.clone(),
         });
@@ -143,117 +217,70 @@ async fn perform_llm_inference(
             provider: id.provider,
             model: id.model,
         });
-        // One `LlmRequestFinished` per `ChatRequested`, a request that never became a stream included.
-        let (error, data) = match llm.chat(trace.cx(), &req).await {
-            Err(error) => {
-                trace.end_attempt(attempt, Some(&error));
-                let class = Some(FailureClass::of(&error));
-                shared.report(GenEvent::LlmRequestFinished { speech, step, error: class });
-                (error, None)
-            }
-            Ok(mut stream) => {
-                let mut data = LlmGenerationData::new(started_at, label, metadata);
-                // A retried attempt produced nothing, so it dispatched no call.
-                let ended = read_llm_stream(
-                    shared,
-                    handle,
-                    ctx,
-                    &mut stream,
-                    tx,
-                    tools,
-                    &mut data,
-                    &mut trace,
-                )
-                .await;
-                trace.end_attempt(attempt, ended.as_ref().err().map(|(error, _)| error));
-                let class = ended.as_ref().err().map(|(error, _)| FailureClass::of(error));
-                shared.report(GenEvent::LlmRequestFinished { speech, step, error: class });
-                report_llm_metrics(&data, ended.is_err(), shared, handle);
-                // Always, on every path: dropping does not cancel a host stream, and `close`
-                // consumes it.
-                let _ = stream
-                    .close(shared.time.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT))
-                    .await;
-                match ended {
-                    Ok(()) => {
-                        node.end(&trace, llm.as_ref(), None);
-                        trace.end(handle.interrupted(), Some(handle.speech_id()));
-                        return Ok(data);
-                    }
-                    Err((error, produced)) => {
-                        if produced {
-                            attempts.delivered();
-                        }
-                        (error, Some(data))
-                    }
-                }
-            }
-        };
-        let failed = |e, r| llm.failed(e, r);
-        match retry(shared, handle, &mut attempts, ProviderKind::Llm, &error, &failed).await {
-            Retried::Again => continue,
-            // What an interrupted retry reports: this stream's metrics, or none if it never opened.
-            Retried::Interrupted => {
-                node.end(&trace, llm.as_ref(), None);
-                trace.end(true, Some(handle.speech_id()));
-                let empty = || LlmGenerationData::new(shared.time.wall_secs(), String::new(), None);
-                return Ok(data.unwrap_or_else(empty));
-            }
-            Retried::GiveUp => {
-                trace.fail(&error);
-                node.end(&trace, llm.as_ref(), Some(&error));
-                return Err(DriverError::from(error));
-            }
-        }
+        LlmGenerationData::new(started_at, label, metadata)
     }
-}
 
-/// Tool calls are dispatched on arrival. `Err` carries whether output came first, which forbids a
-/// retry.
-#[allow(clippy::too_many_arguments)]
-async fn read_llm_stream(
-    shared: &Arc<SessionShared>,
-    handle: &Arc<SpeechHandle>,
-    ctx: &ReplyExecution,
-    stream: &mut LlmStream,
-    tx: &mpsc::UnboundedSender<SpeechSegmentEvent>,
-    tools: &mut ToolStep,
-    data: &mut LlmGenerationData,
-    trace: &mut telemetry::LlmTrace,
-) -> Result<(), (ProviderError, bool)> {
-    let ended = loop {
-        let next = match before_read(handle.interrupted(), tx.is_closed(), stream.cancel_safe()) {
-            LlmRead::End => break Ok(()),
-            LlmRead::CancellableProvider => {
-                let polled = until_stopped(tx.closed(), until_interrupted(handle, stream.next()))
-                    .await
-                    .flatten();
-                match polled {
-                    Some(next) => next,
-                    None => break Ok(()),
+    fn request_finished(&self, error: Option<&ProviderError>) {
+        let (speech, step) = (self.handle.id(), self.ctx.plan.step);
+        let error = error.map(FailureClass::of);
+        self.shared.report(GenEvent::LlmRequestFinished { speech, step, error });
+    }
+
+    /// A read attempt reported and its stream closed. A retried attempt produced nothing, so it
+    /// dispatched no call.
+    async fn settle_attempt(
+        &self,
+        stream: LlmStream,
+        data: &LlmGenerationData,
+        ended: Result<(), (ProviderError, bool)>,
+    ) -> Result<(), (ProviderError, bool)> {
+        self.request_finished(ended.as_ref().err().map(|(error, _)| error));
+        report_llm_metrics(data, ended.is_err(), self.shared, self.handle);
+        // Always, on every path: dropping does not cancel a host stream, and `close` consumes it.
+        let deadline = self.shared.time.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
+        let _ = stream.close(deadline).await;
+        ended
+    }
+
+    /// Tool calls are dispatched on arrival. `Err` carries whether output came first, which
+    /// forbids a retry.
+    async fn read_stream(
+        &mut self,
+        stream: &mut LlmStream,
+        data: &mut LlmGenerationData,
+        trace: &mut telemetry::LlmTrace,
+    ) -> Result<(), (ProviderError, bool)> {
+        let (shared, handle, tx) = (self.shared, self.handle, self.tx);
+        let ended = loop {
+            let read = before_read(handle.interrupted(), tx.is_closed(), stream.cancel_safe());
+            let next = match read {
+                LlmRead::End => break Ok(()),
+                LlmRead::CancellableProvider => {
+                    let polled =
+                        until_stopped(tx.closed(), until_interrupted(handle, stream.next())).await;
+                    let Some(next) = polled.flatten() else { break Ok(()) };
+                    next
                 }
+                LlmRead::Provider => stream.next().await,
+            };
+            let chunk = match next {
+                Ok(None) => break Ok(()),
+                Err(error) => break Err((error, data.produced)),
+                Ok(Some(chunk)) => chunk,
+            };
+            trace.observe(&chunk);
+            for raw in chunk.delta.iter().flat_map(|delta| &delta.tool_calls) {
+                self.tools.dispatch(shared, handle, self.ctx, mint_call(shared, raw));
             }
-            LlmRead::Provider => stream.next().await,
-        };
-        let chunk = match next {
-            Ok(None) => break Ok(()),
-            Err(error) => break Err((error, data.produced)),
-            Ok(Some(chunk)) => chunk,
-        };
-        trace.observe(&chunk);
-        if let Some(delta) = &chunk.delta {
-            for raw in &delta.tool_calls {
-                tools.dispatch(shared, handle, ctx, mint_call(shared, raw));
+            for effect in data.chunk(&chunk, shared.time.wall_secs()) {
+                let _ = tx.send(effect);
             }
-        }
-        for effect in data.chunk(&chunk, shared.time.wall_secs()) {
+        };
+        for effect in data.finish_stream() {
             let _ = tx.send(effect);
         }
-    };
-    for effect in data.finish_stream() {
-        let _ = tx.send(effect);
+        ended
     }
-    ended
 }
 
 fn report_llm_metrics(

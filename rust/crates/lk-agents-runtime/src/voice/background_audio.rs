@@ -116,6 +116,31 @@ struct PublishedOutput {
     pump: tokio::sync::oneshot::Receiver<()>,
 }
 
+impl PublishedOutput {
+    /// Stops the pump, closes the source and unpublishes the track.
+    async fn retire(self) {
+        let _ = self.stop.send(true);
+        let _ = self.pump.await;
+        let _ = self.source.close(&telemetry::Cx::NONE).await;
+        // The SDK can replace the publication on reconnect; resolve the current SID.
+        let publications = match self.participant.track_publications() {
+            Ok(publications) => publications,
+            Err(error) => {
+                log::error!(target: "livekit.agents", "background audio publication lookup failed: {error}");
+                return;
+            }
+        };
+        let Some(publication) = publications.into_iter().find(|p| p.name() == TRACK_NAME) else {
+            return;
+        };
+        if let Err(error) =
+            self.participant.unpublish_track(&telemetry::Cx::NONE, publication.sid()).await
+        {
+            log::error!(target: "livekit.agents", "background audio publication cleanup failed: {error}");
+        }
+    }
+}
+
 /// `_core.BackgroundAudioPlayer`: the mixer and the published track, under `background_audio.py`.
 impl BackgroundAudioPlayer {
     pub fn new(
@@ -274,19 +299,7 @@ impl BackgroundAudioPlayer {
         let _ = spawn_owned((&self.tasks, self.spawner.as_ref()), async move {
             let mut output = this.output.lock().await;
             if let Some(output) = output.take() {
-                let _ = output.stop.send(true);
-                let _ = output.pump.await;
-                let _ = output.source.close(&telemetry::Cx::NONE).await;
-                // The SDK can replace the publication on reconnect; resolve the current SID.
-                match output.participant.track_publications() {
-                    Ok(publications) => {
-                        if let Some(publication) = publications.into_iter().find(|p| p.name() == TRACK_NAME)
-                            && let Err(error) = output.participant.unpublish_track(&telemetry::Cx::NONE, publication.sid()).await {
-                                log::error!(target: "livekit.agents", "background audio publication cleanup failed: {error}");
-                            }
-                    }
-                    Err(error) => log::error!(target: "livekit.agents", "background audio publication lookup failed: {error}"),
-                }
+                output.retire().await;
             }
             drop(output);
             this.stop_sounds().await;
@@ -373,81 +386,7 @@ impl MixerState {
                 }
                 continue;
             }
-            while self.mixer.wants_more(id) {
-                let Some(source) = self.sources.get_mut(&id) else {
-                    break;
-                };
-                let frame = match &mut source.input {
-                    Input::File(file) => match lk_agents_abi::timeout(
-                        clock,
-                        timeout,
-                        file.next(self.mixer.sample_rate(), self.mixer.num_channels()),
-                    )
-                    .await
-                    {
-                        Ok(Some(Ok(pcm))) => {
-                            Some((pcm, self.mixer.sample_rate(), self.mixer.num_channels()))
-                        }
-                        Err(_) => {
-                            self.mixer.note_timeout(id);
-                            break;
-                        }
-                        other => {
-                            if let Ok(Some(Err(err))) = other {
-                                log::error!("background audio decode failed: {err}");
-                            }
-                            None
-                        }
-                    },
-                    Input::Stream(stream) => {
-                        if source.pending.is_none() {
-                            let stream = stream.clone();
-                            source.pending =
-                                Some(Box::pin(
-                                    async move { stream.next(&telemetry::Cx::NONE).await },
-                                ));
-                        }
-                        match lk_agents_abi::timeout(
-                            clock,
-                            timeout,
-                            source.pending.as_mut().unwrap(),
-                        )
-                        .await
-                        {
-                            Ok(result) => {
-                                source.pending = None;
-                                match result {
-                                    Ok(Some(frame)) => Some((
-                                        lk_agents_media::pcm_samples(&frame.data),
-                                        frame.sample_rate,
-                                        frame.num_channels,
-                                    )),
-                                    Ok(None) => None,
-                                    Err(err) => {
-                                        log::error!("background audio stream failed: {err}");
-                                        None
-                                    }
-                                }
-                            }
-                            Err(_) => {
-                                self.mixer.note_timeout(id);
-                                break;
-                            }
-                        }
-                    }
-                    Input::Closed => None,
-                };
-                let Some((pcm, rate, channels)) = frame else {
-                    self.mixer.mark_exhausted(id);
-                    break;
-                };
-                let (pcm, last) = source.process(pcm, rate, channels);
-                self.mixer.push(id, &pcm);
-                if last {
-                    self.mixer.mark_exhausted(id);
-                    break;
-                }
-            }
+            self.fill(id, timeout, clock).await;
         }
         let block = self.mixer.mix();
         for id in self.mixer.drain_removals() {
@@ -457,9 +396,80 @@ impl MixerState {
         }
         block
     }
+
+    /// Feeds stream `id` until the mixer has enough, its source times out or it ends.
+    async fn fill(&mut self, id: StreamId, timeout: Duration, clock: &dyn Clock) {
+        let (rate, channels) = (self.mixer.sample_rate(), self.mixer.num_channels());
+        while self.mixer.wants_more(id) {
+            let Some(source) = self.sources.get_mut(&id) else {
+                break;
+            };
+            let (pcm, rate, channels) = match source.next_pcm(rate, channels, timeout, clock).await
+            {
+                Fetched::Pcm(pcm, rate, channels) => (pcm, rate, channels),
+                Fetched::TimedOut => {
+                    self.mixer.note_timeout(id);
+                    break;
+                }
+                Fetched::Ended => {
+                    self.mixer.mark_exhausted(id);
+                    break;
+                }
+            };
+            let (pcm, last) = source.process(pcm, rate, channels);
+            self.mixer.push(id, &pcm);
+            if last {
+                self.mixer.mark_exhausted(id);
+                break;
+            }
+        }
+    }
+}
+
+/// One read from a sound's input, bounded by the stream timeout.
+enum Fetched {
+    Pcm(Vec<i16>, u32, u16),
+    Ended,
+    TimedOut,
 }
 
 impl Source {
+    /// The next PCM block, at the mixer's format for a file and at the frame's own for a stream.
+    async fn next_pcm(
+        &mut self,
+        rate: u32,
+        channels: u16,
+        timeout: Duration,
+        clock: &dyn Clock,
+    ) -> Fetched {
+        let stream = match &mut self.input {
+            Input::File(file) => return file.next_within(rate, channels, timeout, clock).await,
+            Input::Stream(stream) => stream,
+            Input::Closed => return Fetched::Ended,
+        };
+        // A read that times out stays pending for the next round, so no frame is lost.
+        let pending = self.pending.get_or_insert_with(|| {
+            let stream = stream.clone();
+            Box::pin(async move { stream.next(&telemetry::Cx::NONE).await })
+        });
+        let Ok(result) = lk_agents_abi::timeout(clock, timeout, pending).await else {
+            return Fetched::TimedOut;
+        };
+        self.pending = None;
+        match result {
+            Ok(Some(frame)) => Fetched::Pcm(
+                lk_agents_media::pcm_samples(&frame.data),
+                frame.sample_rate,
+                frame.num_channels,
+            ),
+            Ok(None) => Fetched::Ended,
+            Err(err) => {
+                log::error!("background audio stream failed: {err}");
+                Fetched::Ended
+            }
+        }
+    }
+
     fn process(&mut self, pcm: Vec<i16>, rate: u32, channels: u16) -> (Vec<i16>, bool) {
         let step = self.playback.on_frame(
             pcm.len() / usize::from(channels.max(1)),
@@ -516,6 +526,25 @@ struct FileInput {
 }
 
 impl FileInput {
+    /// The next decoded block within `timeout`. A decode failure ends the sound.
+    async fn next_within(
+        &mut self,
+        rate: u32,
+        channels: u16,
+        timeout: Duration,
+        clock: &dyn Clock,
+    ) -> Fetched {
+        match lk_agents_abi::timeout(clock, timeout, self.next(rate, channels)).await {
+            Ok(Some(Ok(pcm))) => Fetched::Pcm(pcm, rate, channels),
+            Err(_) => Fetched::TimedOut,
+            Ok(Some(Err(err))) => {
+                log::error!("background audio decode failed: {err}");
+                Fetched::Ended
+            }
+            Ok(None) => Fetched::Ended,
+        }
+    }
+
     async fn next(
         &mut self,
         sample_rate: u32,

@@ -356,40 +356,43 @@ impl Generation<'_> {
             self.unvoice().await;
             return None;
         }
-        let got = {
-            let mut pending = Box::pin(v.source.next());
-            loop {
-                if v.input_done {
-                    break pending.await;
+        // Created once and only borrowed by the select, so an event never drops the read.
+        let mut pending = Box::pin(v.source.next());
+        let got = loop {
+            if v.input_done {
+                break (&mut pending).await;
+            }
+            let ev = tokio::select! {
+                biased;
+                ev = self.events.recv() => ev,
+                got = &mut pending => break got,
+            };
+            match ev {
+                Some(Event::TextDelta(d)) => {
+                    self.state.synthesized_text(&d.delta);
+                    if !self.handle.interrupted()
+                        && let Some(leg) = &self.leg
+                    {
+                        leg.capture(&d.delta).await;
+                    }
+                    if let Err(e) = super::tts::push_text(&v.sink, &mut v.transforms, &d.delta) {
+                        break Err(e);
+                    }
                 }
-                tokio::select! {
-                    biased;
-                    ev = self.events.recv() => match ev {
-                        Some(Event::TextDelta(d)) => {
-                            self.state.synthesized_text(&d.delta);
-                            if !self.handle.interrupted() && let Some(leg) = &self.leg {
-                                leg.capture(&d.delta).await;
-                            }
-                            if let Err(e) = super::tts::push_text(&v.sink, &mut v.transforms, &d.delta) {
-                                break Err(e);
-                            }
-                        }
-                        // Its text is all in; the boundary is the audio's end.
-                        Some(Event::MessageDone(m)) => {
-                            super::tts::end_input(&v.sink, &mut v.transforms);
-                            v.input_done = true;
-                            self.backlog.push_back(Event::MessageDone(m));
-                        }
-                        Some(ev) => self.backlog.push_back(ev),
-                        None => {
-                            super::tts::end_input(&v.sink, &mut v.transforms);
-                            v.input_done = true;
-                        }
-                    },
-                    got = &mut pending => break got,
+                // Its text is all in; the boundary is the audio's end.
+                Some(Event::MessageDone(m)) => {
+                    super::tts::end_input(&v.sink, &mut v.transforms);
+                    v.input_done = true;
+                    self.backlog.push_back(Event::MessageDone(m));
+                }
+                Some(ev) => self.backlog.push_back(ev),
+                None => {
+                    super::tts::end_input(&v.sink, &mut v.transforms);
+                    v.input_done = true;
                 }
             }
         };
+        drop(pending);
         match got {
             Ok(Some(chunk)) => {
                 v.ended = chunk.is_final && v.input_done;

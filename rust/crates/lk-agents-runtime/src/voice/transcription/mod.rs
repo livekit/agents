@@ -105,6 +105,19 @@ impl Synchronizer {
         self.apply(TranscriptSyncEvent::AttachmentChanged { audio, text }, None);
     }
 
+    /// The close's wait: give the forwarder until the decided deadline to send its words.
+    async fn wait_for_forwarded_words(&self) {
+        for wait in self.decide(TranscriptSyncEvent::WaitStarted(self.clock.now())) {
+            let TranscriptSyncEffect::WaitUntil(at) = wait else {
+                unreachable!("close only waits on its forwarded words");
+            };
+            let left = at.saturating_duration_since(self.clock.now());
+            let forwarded = self.forwarder_done.wait_for(|set| *set);
+            let _ = lk_agents_abi::timeout(&*self.clock, left, forwarded).await;
+            self.apply(TranscriptSyncEvent::WaitFinished, None);
+        }
+    }
+
     /// The forwarder: the only task and the only place the text sink is awaited.
     async fn forward(
         next: Option<Arc<dyn TextOutput>>,
@@ -277,13 +290,14 @@ impl SyncedTextOutput {
         for effect in self.sync.decide(TranscriptSyncEvent::Capture { text: text.clone(), aligned })
         {
             match effect {
-                TranscriptSyncEffect::Capture { text, aligned } => {
+                TranscriptSyncEffect::Capture { text, aligned: true } => {
                     if let Some(next) = &self.next {
-                        if aligned {
-                            next.capture_timed(&telemetry::Cx::NONE, &text).await?;
-                        } else {
-                            next.capture_text(&telemetry::Cx::NONE, &text.text).await?;
-                        }
+                        next.capture_timed(&telemetry::Cx::NONE, &text).await?;
+                    }
+                }
+                TranscriptSyncEffect::Capture { text, aligned: false } => {
+                    if let Some(next) = &self.next {
+                        next.capture_text(&telemetry::Cx::NONE, &text.text).await?;
                     }
                 }
                 effect => {
@@ -432,23 +446,7 @@ impl TranscriptSynchronizer {
                 TranscriptSyncEffect::CloseSender => {
                     self.sync.tx.lock().take();
                 }
-                TranscriptSyncEffect::BeginWait => {
-                    for wait in
-                        self.sync.decide(TranscriptSyncEvent::WaitStarted(self.sync.clock.now()))
-                    {
-                        let TranscriptSyncEffect::WaitUntil(at) = wait else {
-                            unreachable!("close only waits on its forwarded words");
-                        };
-                        let left = at.saturating_duration_since(self.sync.clock.now());
-                        let _ = lk_agents_abi::timeout(
-                            &*self.sync.clock,
-                            left,
-                            self.sync.forwarder_done.wait_for(|set| *set),
-                        )
-                        .await;
-                        self.sync.apply(TranscriptSyncEvent::WaitFinished, None);
-                    }
-                }
+                TranscriptSyncEffect::BeginWait => self.sync.wait_for_forwarded_words().await,
                 effect => {
                     self.sync.perform(effect, None);
                 }

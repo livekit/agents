@@ -769,6 +769,10 @@ impl VoiceSession {
         }
     }
 
+    /// The toolset scope of the whole session (`ToolsetScopes.acquire`'s zero), for an update
+    /// without an agent.
+    const SESSION_TOOLSET_SCOPE: u64 = 0;
+
     /// `update`'s toolsets set up first, in call order: the turn is taken now. Then the command
     /// `wrap` makes of it is sent as `origin`.
     fn send_frame(
@@ -786,7 +790,11 @@ impl VoiceSession {
         let pending = self.resources.pending(update.resources().collect());
         let (api, calls, session) =
             self.running(|r| Ok((r.api.clone(), Arc::clone(&r.calls), r.peer.session.clone())))?;
-        let scope = update.toolset.agent.as_ref().map_or(0, |agent| agent.toolset_scope());
+        let scope = update
+            .toolset
+            .agent
+            .as_ref()
+            .map_or(Self::SESSION_TOOLSET_SCOPE, |agent| agent.toolset_scope());
         // The turn is queued for now, in call order: the lock's waiter list is entered by this
         // first poll (a tokio lock takes the real waker at the next one). Only the lock is polled
         // here; the setup's host bridge runs in the task, with its own waker.
@@ -812,19 +820,8 @@ impl VoiceSession {
             let span = session.under::<telemetry::StartAgentActivity>(activity.context);
             let span = telemetry::start(&span, telemetry::SetupToolsets);
             let scopes = hooks.toolset_scopes().clone();
-            let setup = async {
-                let activation = scopes.acquire(scope, hooks.toolset_resources(&tools)?).await?;
-                match hooks.tool_infos(&tools) {
-                    Ok(infos) => Ok((activation, infos)),
-                    Err(error) => {
-                        if let Err(close) = scopes.discard(activation).await {
-                            log::warn!("the refused agent toolsets could not close: {close}");
-                        }
-                        Err(error)
-                    }
-                }
-            };
-            let set_up = setup.await;
+            let set_up =
+                Self::set_up_toolsets(scopes.as_ref(), hooks.as_ref(), &tools, scope).await;
             telemetry::end(span, set_up.as_ref().map(|_| ()));
             let (activation, set_up) = match set_up {
                 Ok(ready) => ready,
@@ -841,15 +838,39 @@ impl VoiceSession {
                 drop(handoff_turn);
                 pending.submitted();
             } else {
-                if let Err(error) = scopes.discard(activation).await {
-                    log::warn!("the refused agent toolsets could not close: {error}");
-                }
+                Self::discard_refused(scopes.as_ref(), activation).await;
             }
         };
         self.tasks
             .try_spawn(self.spawner.as_ref(), "handoff", handoff)
             .map(|_| ())
             .ok_or(SessionRefused::LoopEnded)
+    }
+
+    /// The arriving agent's toolsets activated and described; discarded if they can't be.
+    async fn set_up_toolsets(
+        scopes: &dyn lk_agents_abi::llm::toolsets::ScopesPort,
+        hooks: &dyn SessionHooks,
+        tools: &HostRef,
+        scope: u64,
+    ) -> Result<(u64, Vec<lk_agents_abi::agent::FunctionToolInfo>), HostError> {
+        let activation = scopes.acquire(scope, hooks.toolset_resources(tools)?).await?;
+        match hooks.tool_infos(tools) {
+            Ok(infos) => Ok((activation, infos)),
+            Err(error) => {
+                Self::discard_refused(scopes, activation).await;
+                Err(error)
+            }
+        }
+    }
+
+    async fn discard_refused(
+        scopes: &dyn lk_agents_abi::llm::toolsets::ScopesPort,
+        activation: u64,
+    ) {
+        if let Err(error) = scopes.discard(activation).await {
+            log::warn!("the refused agent toolsets could not close: {error}");
+        }
     }
 
     fn speak(

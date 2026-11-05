@@ -631,24 +631,7 @@ fn spawn_tap_drain(
                 peer.remove_audio_tap(tap);
                 return;
             };
-            let cause = loop {
-                let next = tokio::select! {
-                    biased;
-                    _ = closing.wait_for(|c| *c) => None,
-                    () = tx.closed() => None,
-                    item = source.next() => Some(item),
-                };
-                match next {
-                    Some(Ok(Some(ev))) => {
-                        if tx.send(Msg::Transcript(ev)).is_err() {
-                            break ChannelEndCause::Closing;
-                        }
-                    }
-                    Some(Ok(None)) => break ChannelEndCause::SourceEnded,
-                    Some(Err(_)) => break ChannelEndCause::Error,
-                    None => break ChannelEndCause::Closing,
-                }
-            };
+            let cause = forward_transcripts(source, &mut closing, &tx).await;
             peer.remove_audio_tap(tap);
             let closed = opened.close().await;
             peer.journal(Step::Input(InputStep::ChannelEnded { leg: TAP, cause }));
@@ -657,6 +640,32 @@ fn spawn_tap_drain(
             }
         })
         .is_some()
+}
+
+/// Forwards the tap's transcripts to the system until the session closes, the system is gone or
+/// the source ends.
+async fn forward_transcripts(
+    source: &mut lk_agents_abi::SttSource,
+    closing: &mut tokio::sync::watch::Receiver<bool>,
+    tx: &tokio::sync::mpsc::UnboundedSender<Msg>,
+) -> ChannelEndCause {
+    loop {
+        let next = tokio::select! {
+            biased;
+            _ = closing.wait_for(|c| *c) => return ChannelEndCause::Closing,
+            () = tx.closed() => return ChannelEndCause::Closing,
+            item = source.next() => item,
+        };
+        match next {
+            Ok(Some(ev)) => {
+                if tx.send(Msg::Transcript(ev)).is_err() {
+                    return ChannelEndCause::Closing;
+                }
+            }
+            Ok(None) => return ChannelEndCause::SourceEnded,
+            Err(_) => return ChannelEndCause::Error,
+        }
+    }
 }
 
 /// The classification task, an `llm_request` under the detector's `amd` span. A cancelled run

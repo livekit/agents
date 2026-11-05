@@ -212,37 +212,14 @@ async fn complete(
         let attempt = trace.attempt();
         let (error, produced) = match llm.chat(trace.cx(), &req).await {
             Err(error) => (error, false),
-            Ok(mut stream) => {
-                let mut produced = false;
-                let ended = loop {
-                    let next = tokio::select! {
-                        biased;
-                        () = tx.closed() => break None,
-                        next = stream.next() => next,
-                    };
-                    match next {
-                        Ok(Some(chunk)) => {
-                            trace.observe(&chunk);
-                            produced |= chunk.has_response();
-                            if tx.send(Ok(chunk)).await.is_err() {
-                                break None;
-                            }
-                        }
-                        Ok(None) => break Some(Ok(())),
-                        Err(error) => break Some(Err(error)),
-                    }
-                };
-                let _ = stream.close(clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT)).await;
-                match ended {
-                    Some(Err(error)) => (error, produced),
-                    // `None`: the node stopped reading, which cuts the request.
-                    ended => {
-                        trace.end_attempt(attempt, None);
-                        trace.end(ended.is_none(), None);
-                        return;
-                    }
+            Ok(stream) => match forward_chunks(stream, &tx, &mut trace, clock.as_ref()).await {
+                Err(failed) => failed,
+                Ok(end) => {
+                    trace.end_attempt(attempt, None);
+                    trace.end(matches!(end, CompletionEnd::Cut), None);
+                    return;
                 }
-            }
+            },
         };
         trace.end_attempt(attempt, Some(&error));
         if produced {
@@ -271,6 +248,45 @@ async fn complete(
             () = clock.wait_until(at) => attempts.wake(at, None, &mut steps),
         }
     }
+}
+
+/// How an attempt's stream ended without failing.
+enum CompletionEnd {
+    /// The provider finished its completion.
+    Finished,
+    /// The node stopped reading, which cuts the request.
+    Cut,
+}
+
+/// One attempt's chunks handed to the node, then the stream closed. On failure, the error with
+/// whether the attempt produced output.
+async fn forward_chunks(
+    mut stream: lk_agents_abi::LlmStream,
+    tx: &mpsc::Sender<Result<LlmChunk, ProviderError>>,
+    trace: &mut telemetry::LlmTrace,
+    clock: &dyn Clock,
+) -> Result<CompletionEnd, (ProviderError, bool)> {
+    let mut produced = false;
+    let ended = loop {
+        let next = tokio::select! {
+            biased;
+            () = tx.closed() => break Ok(CompletionEnd::Cut),
+            next = stream.next() => next,
+        };
+        match next {
+            Ok(Some(chunk)) => {
+                trace.observe(&chunk);
+                produced |= chunk.has_response();
+                if tx.send(Ok(chunk)).await.is_err() {
+                    break Ok(CompletionEnd::Cut);
+                }
+            }
+            Ok(None) => break Ok(CompletionEnd::Finished),
+            Err(error) => break Err((error, produced)),
+        }
+    };
+    let _ = stream.close(clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT)).await;
+    ended
 }
 
 /// What a default node's request records as its stream runs.
@@ -362,7 +378,7 @@ where
         }
     };
     let pump = async move {
-        let (opened, mut input, clock, map, request) = open.await;
+        let (opened, input, clock, map, request) = open.await;
         let (sink, mut source) = match opened {
             Ok(stream) => stream.split(),
             Err(e) => {
@@ -373,44 +389,12 @@ where
         };
         // Locked only between awaits, by the feed and the drain of this one task.
         let request = Mutex::new(request);
-        let feed_clock = Arc::clone(&clock);
-        let feed = async {
-            while let Ok(Some(item)) = input.next().await {
-                request.lock().fed(&item);
-                if sink.push(item).is_err() {
-                    break;
-                }
-            }
-            sink.end_input();
-            input.close(feed_clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT)).await;
-            // fed: what remains is the provider's
-            std::future::pending::<()>().await
-        };
-        let drain = async {
-            loop {
-                let item = match source.next().await {
-                    Ok(Some(item)) => {
-                        request.lock().produced(&item);
-                        Ok(map(item))
-                    }
-                    Ok(None) => return Some(None),
-                    Err(e) => Err(e),
-                };
-                let failed = item.as_ref().err().cloned();
-                if tx.send(item).await.is_err() {
-                    return None;
-                }
-                if failed.is_some() {
-                    return Some(failed);
-                }
-            }
-        };
         // `None`: the reader went first.
         let ended = tokio::select! {
             biased;
             () = tx.closed() => None,
-            ended = drain => ended,
-            () = feed => None,
+            ended = drain_provider(&mut *source, &tx, &request, &map) => ended,
+            () = feed_provider(input, &*sink, &request, clock.as_ref()) => None,
         };
         source.close(clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT)).await;
         let failed = ended.as_ref().and_then(Option::as_ref);
@@ -419,4 +403,50 @@ where
     // Detached: the returned output owns the pump; dropping it closes `tx`, which ends the pump.
     spawner.spawn_detached(pump);
     NodeOutput(tokio::sync::Mutex::new(rx))
+}
+
+/// The caller's input pushed to the provider, then its input ended and closed. Never completes:
+/// once fed, what remains is the provider's.
+async fn feed_provider<I, O, R: Request<I, O>>(
+    mut input: Box<dyn StreamOutput<I>>,
+    sink: &dyn lk_agents_abi::StreamInput<I>,
+    request: &Mutex<R>,
+    clock: &dyn Clock,
+) {
+    while let Ok(Some(item)) = input.next().await {
+        request.lock().fed(&item);
+        if sink.push(item).is_err() {
+            break;
+        }
+    }
+    sink.end_input();
+    input.close(clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT)).await;
+    std::future::pending::<()>().await
+}
+
+/// The provider's output handed to the reader. `None` once the reader is gone, else
+/// `Some(failed)` with the error that ended it, if any.
+async fn drain_provider<I, O, T, R: Request<I, O>>(
+    source: &mut dyn lk_agents_abi::ProviderStream<O>,
+    tx: &mpsc::Sender<Result<T, ProviderError>>,
+    request: &Mutex<R>,
+    map: &impl Fn(O) -> T,
+) -> Option<Option<ProviderError>> {
+    loop {
+        let item = match source.next().await {
+            Ok(Some(item)) => {
+                request.lock().produced(&item);
+                Ok(map(item))
+            }
+            Ok(None) => return Some(None),
+            Err(e) => Err(e),
+        };
+        let failed = item.as_ref().err().cloned();
+        if tx.send(item).await.is_err() {
+            return None;
+        }
+        if failed.is_some() {
+            return Some(failed);
+        }
+    }
 }

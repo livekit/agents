@@ -6,7 +6,7 @@ use super::llm::extend;
 use super::playout::{
     Next, Segment, end_unvoiced, first_frame, perform_audio_forwarding, silent, unheard,
 };
-use super::tts::{Aligned, SynthesisEvent, SynthesisPlayout, perform_tts_inference};
+use super::tts::{Aligned, SynthesisEvent, SynthesisPlayout, TtsInference};
 use crate::telemetry;
 use crate::voice::nodes::OutputNodes;
 use crate::voice::session::SessionShared;
@@ -25,7 +25,9 @@ use lk_agents_voice::generation::machine::forward::{SegmentPlan, SegmentRoute, V
 use lk_agents_voice::generation::machine::preparation::{
     GenerationPreparation, GenerationPreparationEvent, PlaybackAuthorization,
 };
-use lk_agents_voice::generation::machine::tts::{SynthesisLoss, SynthesisLossEvent};
+use lk_agents_voice::generation::machine::tts::{
+    AlignedTranscript, SynthesisLoss, SynthesisLossEvent,
+};
 use lk_agents_voice::generation::{GenEvent, ReplySource};
 use lk_agents_voice::trace::PlayoutStep;
 use lk_agents_voice::transcription::Heard;
@@ -259,80 +261,48 @@ impl Pump<'_> {
         );
         let mut playback =
             SynthesisPlayout { tx: tx.clone(), rx, gate: &mut *self.gate, binding: &mut binding };
-        let segment = async {
-            Ok(match (opened.route, &mut self.voice, audio_out.as_deref()) {
-                (SegmentRoute::Synthesis, Voice::Tts(tts), Some(_)) => {
-                    let tts = Arc::clone(tts);
-                    let rx = &mut self.rx;
-                    let synthesized = perform_tts_inference(
-                        shared,
-                        self.handle,
-                        self.acc,
-                        tts.as_ref(),
-                        self.expressive,
-                        *idx,
-                        first,
-                        rx,
-                        deltas,
-                        aligned.as_mut(),
-                        &mut playback,
-                        self.node,
-                    )
-                    .await;
-                    match synthesized {
-                        Ok(heard) => {
-                            *idx += 1;
-                            heard
-                        }
-                        Err(lost) => {
-                            let mut state = SynthesisLoss::default();
-                            let mut effects: std::collections::VecDeque<_> = state
-                                .handle(SynthesisLossEvent::Failed {
-                                    lost,
-                                    aligned: aligned.as_ref().map(|a| a.state.clone()),
-                                })
-                                .into();
-                            loop {
-                                match effects
-                                    .pop_front()
-                                    .expect("synthesis loss settles after draining")
-                                {
-                                    SynthesisLossEffect::Fail(error) => return Err(error),
-                                    SynthesisLossEffect::ReleaseVoice => self.voice = Voice::Silent,
-                                    SynthesisLossEffect::CutShort => self.acc.cut_short(),
-                                    SynthesisLossEffect::Capture(text) => {
-                                        capture(text_out, &text).await
-                                    }
-                                    SynthesisLossEffect::Drain { opening, forward_text } => {
-                                        let text = if forward_text { text_out } else { None };
-                                        let drained = drain_segment_text(rx, opening, text).await;
-                                        effects.extend(
-                                            state.handle(SynthesisLossEvent::Drained(drained)),
-                                        );
-                                    }
-                                    SynthesisLossEffect::Heard(heard) => break heard,
-                                }
-                            }
-                        }
+        let segment = match (opened.route, &mut self.voice, audio_out.as_deref()) {
+            (SegmentRoute::Synthesis, Voice::Tts(tts), Some(_)) => {
+                let tts = Arc::clone(tts);
+                let inference = TtsInference {
+                    shared,
+                    handle: self.handle,
+                    acc: self.acc,
+                    tts: tts.as_ref(),
+                    expressive: self.expressive,
+                    segment: *idx,
+                    rx: &mut self.rx,
+                    text_out: deltas,
+                    aligned: aligned.as_mut(),
+                    playback: &mut playback,
+                    node: self.node,
+                };
+                match inference.run(first).await {
+                    // Only a heard synthesis moves to the next segment's index.
+                    Ok(heard) => {
+                        *idx += 1;
+                        Ok(heard)
+                    }
+                    Err(lost) => {
+                        let aligned = aligned.as_ref().map(|a| a.state.clone());
+                        let turn = (&mut self.voice, &mut *self.acc);
+                        recover_lost_voice(lost, aligned, &mut self.rx, text_out, turn).await
                     }
                 }
-                (SegmentRoute::CallerFrames, Voice::Frames(frames), Some(out)) => {
-                    let words = drain_segment_text(&mut self.rx, first, text_out).await;
-                    let mut segment = Frames { shared, acc: self.acc, rx: frames };
-                    let mut heard =
-                        perform_audio_forwarding(shared, self.handle, Some(out), &mut segment)
-                            .await
-                            .map_err(|failed| failed.error)?;
-                    heard.text = words.text;
-                    heard
-                }
-                (SegmentRoute::Text, _, _) => {
-                    silent(drain_segment_text(&mut self.rx, first, text_out).await.text, true)
-                }
-                _ => unreachable!("segment plan matches its bound ports"),
-            })
-        }
-        .await;
+            }
+            (SegmentRoute::CallerFrames, Voice::Frames(frames), Some(out)) => {
+                let words = drain_segment_text(&mut self.rx, first, text_out).await;
+                let mut segment = Frames { shared, acc: self.acc, rx: frames };
+                perform_audio_forwarding(shared, self.handle, Some(out), &mut segment)
+                    .await
+                    .map(|heard| Heard { text: words.text, ..heard })
+                    .map_err(|failed| failed.error)
+            }
+            (SegmentRoute::Text, _, _) => {
+                Ok(silent(drain_segment_text(&mut self.rx, first, text_out).await.text, true))
+            }
+            _ => unreachable!("segment plan matches its bound ports"),
+        };
         // Backstop flush for a segment whose loop broke before its `End`, or failed: its words
         // must not stay open in a synchroniser. Once-only.
         if let Some(out) = text_out {
@@ -357,22 +327,60 @@ impl Pump<'_> {
         // off) included. The activated binding decides it.
         let leg_state = text_out.map(|leg| *leg.state());
         let ended = plan(playback.binding);
-        // Its words settle below first: a `transcription_node` emits them later, or never when the
-        // speech is cut.
-        let delivered = match playback.binding.text() {
-            Some(text) => {
-                let result = finish_text(text.as_ref(), self.handle, false).await;
-                playback.binding.text_drained();
-                result?
-            }
-            None => true,
-        };
-        if ended.end_unvoiced(&heard, leg_state, delivered) {
-            let audio = playback.binding.audio().expect("bound audio output");
-            end_unvoiced(shared, self.handle.id(), audio.as_ref());
-        }
-        Ok(heard)
+        settle_segment(shared, self.handle, playback.binding, (ended, leg_state), heard).await
     }
+}
+
+/// The voice was lost mid-segment: the loss machine releases it, cuts the turn short and drains
+/// the segment's words, or fails the reply.
+async fn recover_lost_voice(
+    lost: Box<super::tts::Lost>,
+    aligned: Option<AlignedTranscript>,
+    rx: &mut mpsc::UnboundedReceiver<SpeechSegmentEvent>,
+    text_out: Option<&TextLeg<'_>>,
+    (voice, acc): (&mut Voice, &mut TurnAccumulator),
+) -> Result<Heard, DriverError> {
+    let mut state = SynthesisLoss::default();
+    let mut effects: std::collections::VecDeque<_> =
+        state.handle(SynthesisLossEvent::Failed { lost, aligned }).into();
+    loop {
+        match effects.pop_front().expect("synthesis loss settles after draining") {
+            SynthesisLossEffect::Fail(error) => return Err(error),
+            SynthesisLossEffect::ReleaseVoice => *voice = Voice::Silent,
+            SynthesisLossEffect::CutShort => acc.cut_short(),
+            SynthesisLossEffect::Capture(text) => capture(text_out, &text).await,
+            SynthesisLossEffect::Drain { opening, forward_text } => {
+                let text = if forward_text { text_out } else { None };
+                let drained = drain_segment_text(rx, opening, text).await;
+                effects.extend(state.handle(SynthesisLossEvent::Drained(drained)));
+            }
+            SynthesisLossEffect::Heard(heard) => return Ok(heard),
+        }
+    }
+}
+
+/// The segment's words settle first: a `transcription_node` emits them later, or never when the
+/// speech is cut. Then a segment whose words went out with no audio ends its audio leg unvoiced.
+async fn settle_segment(
+    shared: &Arc<SessionShared>,
+    handle: &SpeechHandle,
+    binding: &mut super::output::OutputBinding,
+    (ended, leg_state): (SegmentPlan, Option<TextLegState>),
+    heard: Heard,
+) -> Result<Heard, DriverError> {
+    let delivered = match binding.text() {
+        Some(text) => {
+            let result = finish_text(text.as_ref(), handle, false).await;
+            binding.text_drained();
+            result?
+        }
+        None => true,
+    };
+    if ended.end_unvoiced(&heard, leg_state, delivered) {
+        let audio = binding.audio().expect("bound audio output");
+        end_unvoiced(shared, handle.id(), audio.as_ref());
+    }
+    Ok(heard)
 }
 
 /// The first-frame fan-out still fires; no TTS metrics.
