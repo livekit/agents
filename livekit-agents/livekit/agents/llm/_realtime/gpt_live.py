@@ -30,6 +30,7 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given, resolve_env_int
 
 from . import gpt_live_types as types
+from .gpt_live_types import DecisionEventEnvelope as DecisionEventEnvelope
 
 SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
@@ -59,7 +60,7 @@ _ASK_BARE = f"Reply to the caller now. {_SPEAK_NOW}"
 
 # session.closed carries the final usage; the service drains first
 _SESSION_CLOSE_TIMEOUT = 5.0
-_CLOSING_EVENTS = frozenset({"session.usage.updated", "session.closed"})
+_CLOSING_EVENTS = frozenset({"session.usage.updated", "session.closed", "decision.event"})
 _FATAL_ERROR_CODES = frozenset(
     {
         "insufficient_quota",
@@ -97,6 +98,21 @@ class ResponsesDelegationOptions(TypedDict, total=False):
     service_tier: types.ServiceTier
     max_output_tokens: int
     """Upper bound on the tokens one backend response may generate; at least 16."""
+
+
+class DecisionsOptions(TypedDict, total=False):
+    """Decisions model and question definitions, using the upstream Decisions schema."""
+
+    model: str
+    questions: list[dict[str, Any]]
+
+
+class DecisionsTrigger(TypedDict):
+    """Evaluate questions when a transcript event occurs."""
+
+    type: Literal["decisions"]
+    event_type: str
+    decisions: DecisionsOptions
 
 
 @dataclass
@@ -140,6 +156,8 @@ class _LiveOptions:
     voice: str | dict[str, Any]
     delegation: types.DelegationTarget
     responses: ResponsesDelegationOptions
+    decisions: DecisionsOptions
+    triggers: list[DecisionsTrigger] | None
     service_tier: types.ServiceTier | None
     api_key: str | None
     base_url: str
@@ -159,6 +177,8 @@ class GPTLiveModel(llm.DuplexModel):
         voice: GPTLiveVoices | str | dict[str, Any] = DEFAULT_VOICE,
         delegation: types.DelegationTarget = "responses",
         responses_options: NotGivenOr[ResponsesDelegationOptions] = NOT_GIVEN,
+        decisions_options: NotGivenOr[DecisionsOptions] = NOT_GIVEN,
+        triggers: NotGivenOr[list[DecisionsTrigger]] = NOT_GIVEN,
         service_tier: NotGivenOr[types.ServiceTier] = NOT_GIVEN,
         api_key: str | None = None,
         base_url: NotGivenOr[str] = NOT_GIVEN,
@@ -178,8 +198,10 @@ class GPTLiveModel(llm.DuplexModel):
             delegation: Where delegated work goes, fixed for the life of the session.
                 ``responses`` runs it on a backend model, so ``@function_tool`` works as usual;
                 ``client`` hands it to the application as a ``delegation_created`` event, which
-                no framework tool can answer.
+                no framework tool can answer; ``decisions`` evaluates configured questions.
             responses_options: The backend Responses model, under ``delegation="responses"``.
+            decisions_options: Model and questions for ``delegation="decisions"``.
+            triggers: Decisions configurations evaluated on transcript events, in any mode.
             service_tier: Processing tier the session runs under, sent as the
                 ``OpenAI-Service-Tier`` header on the connection, for example ``ultrafast``.
                 Unset leaves the header off, and the account's default applies.
@@ -208,6 +230,15 @@ class GPTLiveModel(llm.DuplexModel):
         responses = (
             responses_options if is_given(responses_options) else ResponsesDelegationOptions()
         )
+        decisions = decisions_options if is_given(decisions_options) else DecisionsOptions()
+        if delegation == "decisions" and not decisions.get("model"):
+            raise ValueError("decisions delegation requires decisions_options['model']")
+        if is_given(decisions_options) and delegation != "decisions":
+            raise ValueError(
+                "decisions_options requires delegation='decisions'; use triggers otherwise"
+            )
+        if is_given(responses_options) and delegation != "responses":
+            raise ValueError("responses_options requires delegation='responses'")
         is_azure = azure_deployment is not None or entra_token is not None
         if not is_azure:
             api_key = api_key or os.environ.get("OPENAI_API_KEY")
@@ -256,6 +287,8 @@ class GPTLiveModel(llm.DuplexModel):
             voice=voice,
             delegation=delegation,
             responses=responses,
+            decisions=decisions,
+            triggers=triggers if is_given(triggers) else None,
             service_tier=service_tier if is_given(service_tier) else None,
             api_key=api_key,
             base_url=resolved_base_url,
@@ -280,6 +313,8 @@ class GPTLiveModel(llm.DuplexModel):
         voice: GPTLiveVoices | str | dict[str, Any] = DEFAULT_VOICE,
         delegation: types.DelegationTarget = "responses",
         responses_options: NotGivenOr[ResponsesDelegationOptions] = NOT_GIVEN,
+        decisions_options: NotGivenOr[DecisionsOptions] = NOT_GIVEN,
+        triggers: NotGivenOr[list[DecisionsTrigger]] = NOT_GIVEN,
         service_tier: NotGivenOr[types.ServiceTier] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
@@ -333,6 +368,8 @@ class GPTLiveModel(llm.DuplexModel):
             voice=voice,
             delegation=delegation,
             responses_options=responses_options,
+            decisions_options=decisions_options,
+            triggers=triggers,
             service_tier=service_tier,
             api_key=api_key,
             base_url=endpoint if endpoint is not None else NOT_GIVEN,
@@ -377,15 +414,21 @@ class GPTLiveModel(llm.DuplexModel):
 
 class GPTLiveSession(
     llm.DuplexSession[
-        Literal["openai_server_event_received", "openai_client_event_queued", "delegation_created"]
+        Literal[
+            "openai_server_event_received",
+            "openai_client_event_queued",
+            "delegation_created",
+            "decision_event",
+        ]
     ]
 ):
     """A session for the OpenAI GPT-Live API (WebSocket), reached with ``Agent.duplex_session``.
 
-    Exposes three extra events:
+    Exposes these extra events:
     - openai_server_event_received: raw server events
     - openai_client_event_queued: raw client events sent to the server
     - delegation_created: a :class:`GPTLiveDelegation`, under client delegation
+    - decision_event: a :class:`types.DecisionEventEnvelope` with answers and usage
 
     The ``append_*`` methods queue context and return without waiting. Their ``*.appended``
     events arrive at the estimated context-injection end; they do not mean speech has finished.
@@ -443,6 +486,10 @@ class GPTLiveSession(
     def _build_delegation(self) -> types.Delegation:
         if self._opts.delegation == "client":
             return types.Delegation(type="client")
+        if self._opts.delegation == "decisions":
+            return types.Delegation(
+                type="decisions", decisions=types.DecisionsConfig(**self._opts.decisions)
+            )
         opts = self._opts.responses
         return types.Delegation(
             type="responses",
@@ -498,6 +545,16 @@ class GPTLiveSession(
                     output=types.AudioOutput(voice=self._opts.voice),
                 ),
                 delegation=self._build_delegation(),
+                triggers=[
+                    types.DecisionsTrigger(
+                        type=trigger["type"],
+                        event_type=trigger["event_type"],
+                        decisions=types.DecisionsConfig(**trigger["decisions"]),
+                    )
+                    for trigger in self._opts.triggers
+                ]
+                if self._opts.triggers is not None
+                else None,
             ),
         )
 
@@ -740,6 +797,8 @@ class GPTLiveSession(
             self._handle_transcript_delta("user", types.TranscriptDeltaEvent.construct(**event))
         elif etype == "session.delegation.created":
             self._handle_delegation_created(types.SessionDelegationCreatedEvent.construct(**event))
+        elif etype == "decision.event":
+            self.emit("decision_event", types.DecisionEventEnvelope.construct(**event))
         elif etype == "response.event":
             self._handle_response_event(types.ResponseEventEnvelope.construct(**event))
         elif etype == "session.usage.updated":
@@ -1085,6 +1144,19 @@ class GPTLiveSession(
                     types.InputAudioAppendEvent(audio=base64.b64encode(nf.data).decode("utf-8"))
                 )
 
+    def create_decision(self) -> str:
+        """Evaluate the Decisions delegation's questions and return the command event id.
+
+        Requires ``delegation="decisions"``; transcript triggers configure automatic
+        evaluations only. Results arrive through ``decision_event``. The command id does not correlate
+        with upstream decision event ids.
+        """
+        if self._opts.delegation != "decisions":
+            raise ValueError("manual evaluation requires Decisions delegation")
+        event_id = utils.shortuuid("decision_")
+        self.send_event(types.DecisionCreateEvent(event_id=event_id))
+        return event_id
+
     def append_instructions(self, text: str, *, delegation_id: str | None = None) -> None:
         """Add a standing rule to the model's instructions, capped at 500 tokens."""
         self._append(types.InstructionsAppendEvent, text, delegation_id)
@@ -1147,11 +1219,11 @@ class GPTLiveSession(
 
     async def _update_tools(self, tools: list[llm.Tool]) -> None:
         self._tools = llm.ToolContext(tools)
-        if self._opts.delegation == "client":
+        if self._opts.delegation != "responses":
             if tools:
                 # dropping them silently leaves an agent whose tools simply never run
                 raise llm.RealtimeError(
-                    "gpt-live client delegation has no tool channel, so the model can never call "
+                    f"gpt-live {self._opts.delegation} delegation has no tool channel, so the model can never call "
                     f"{sorted(tool.id for tool in self._tools.flatten())}. Leave the agent's tools "
                     "empty and answer delegation_created with append_commentary, or pass "
                     'delegation="responses" to run tools on the backend model.'
