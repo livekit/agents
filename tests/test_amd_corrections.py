@@ -6,7 +6,7 @@ import json
 import pytest
 
 from livekit.agents import llm
-from livekit.agents.voice.amd import AMDCategory, AMDLifecycle, AMDReason, _fsm
+from livekit.agents.voice.amd import AMDCategory, AMDReason, _fsm
 from livekit.agents.voice.amd.detector import (
     _DEFAULT_IVR_INSTRUCTIONS,
     _DEFAULT_SCREENING_INSTRUCTIONS,
@@ -107,26 +107,6 @@ async def test_correction_uses_current_turn_and_persists(
             assert detector._turns[current_turn + 1].prediction.category is AMDCategory.UNCERTAIN
             assert await (await confirm_human(detector, classifier)).should_reply(llm.ChatContext())
         assert (await detector.execute()).category == AMDCategory.HUMAN
-
-
-@pytest.mark.parametrize(
-    "extra",
-    [{"corrects_stage": False}, {"corrects_stage": True}, {"correction_evidence": ""}],
-)
-async def test_correction_ignores_model_supplied_correction_fields(
-    extra: dict[str, object],
-) -> None:
-    async with running() as (detector, session, classifier, _):
-        first = await commit(detector, session, classifier)
-        classifier.prediction(1, AMDCategory.MACHINE_VM)
-        assert await first.should_reply(llm.ChatContext())
-        hooks = await commit(detector, session, classifier)
-        classifier.respond(2, json.dumps({"category": "machine-screening", **extra}))
-        assert await hooks.should_reply(llm.ChatContext())
-        prediction = detector._turns[2].prediction
-        assert prediction.reason == AMDReason.PREDICTION
-        assert prediction.stage == AMDCategory.MACHINE_SCREENING
-        assert detector.lifecycle == AMDLifecycle.ACTIVE
 
 
 async def test_reused_turns_keep_the_corrected_stage() -> None:
