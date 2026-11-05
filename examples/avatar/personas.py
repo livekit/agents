@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 
 @dataclass(frozen=True)
@@ -12,6 +13,9 @@ class Persona:
     system_prompt: str
     speaking_prompt: str
     idle_prompt: str
+    provider: Literal["lemonslice", "tavus"] = "lemonslice"
+    # tavus only; empty falls back to TAVUS_FACE_ID, then to the stock pal
+    face_id: str = ""
 
 
 PERSONAS: dict[str, Persona] = {
@@ -177,6 +181,21 @@ PERSONAS: dict[str, Persona] = {
         ),
         speaking_prompt="Charismatic, expressive delivery; sly tilts of the head while speaking.",
         idle_prompt="Alert fox poise, ears perked, occasional tail flick, sly little grin, bright watchful eyes.",
+    ),
+    "tavus": Persona(
+        id="tavus",
+        name="Tavus",
+        provider="tavus",
+        image_url="",
+        voice_id="",
+        system_prompt=(
+            "You're a warm, expressive assistant. "
+            "Your face can show emotion: whenever the mood of the conversation "
+            "changes, call set_emotion to match it, for example happiness when "
+            "something good happens or sadness when the user shares bad news."
+        ),
+        speaking_prompt="",
+        idle_prompt="",
     ),
 }
 

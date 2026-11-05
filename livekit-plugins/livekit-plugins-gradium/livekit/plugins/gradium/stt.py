@@ -21,6 +21,7 @@ import dataclasses
 import json
 import os
 import weakref
+from collections import deque
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -64,6 +65,9 @@ class STTOptions:
     # When set, we flush the stt state on the first time the VAD triggers
     # in order to recover the text currently being processed as soon as possible.
     vad_flush: bool = True
+    # When set, a VAD inactivity probability below this threshold signals the start of
+    # speech before any text is transcribed, which allows a faster barge-in.
+    vad_start_threshold: float | None = None
 
 
 class STT(stt.STT):
@@ -80,6 +84,7 @@ class STT(stt.STT):
         vad_threshold: float = 0.9,
         vad_bucket: int | None = 2,
         vad_flush: bool = True,
+        vad_start_threshold: float | None = None,
         temperature: float | None = None,
         language: str = "en",
     ):
@@ -121,6 +126,7 @@ class STT(stt.STT):
             vad_threshold=vad_threshold,
             vad_bucket=vad_bucket,
             vad_flush=vad_flush,
+            vad_start_threshold=vad_start_threshold,
             temperature=temperature,
             language=LanguageCode(language),
         )
@@ -189,7 +195,63 @@ class STT(stt.STT):
             )
 
 
+class _PaddedTimeline:
+    """Maps provider timestamps back to caller audio time by removing synthetic padding.
+
+    Provider timestamps arrive in order, so padding that ends before a timestamp is
+    settled into a running total and later lookups only scan the padding still ahead.
+    """
+
+    def __init__(self, sample_rate: int) -> None:
+        self._sample_rate = sample_rate
+        self._sent_samples = 0
+        self._settled_padding = 0.0
+        # (provider start, duration) of padding a later timestamp may still precede
+        self._pending_padding: deque[tuple[float, float]] = deque()
+
+    def reset(self) -> None:
+        """Restart at provider time zero, for a new connection."""
+        self._sent_samples = 0
+        self._settled_padding = 0.0
+        self._pending_padding.clear()
+
+    def add_audio(self, samples: int) -> None:
+        """Advance the provider clock by ``samples`` of caller audio."""
+        self._sent_samples += samples
+
+    def add_padding(self, samples: int) -> None:
+        """Advance the provider clock by ``samples`` of synthetic silence.
+
+        The padding is recorded so that ``remove_padding`` can subtract it.
+        """
+        start = self._sent_samples / self._sample_rate
+        self._pending_padding.append((start, samples / self._sample_rate))
+        self._sent_samples += samples
+
+    def remove_padding(self, provider_time: float) -> float:
+        """Return the caller audio sent before ``provider_time``, in seconds."""
+        while self._pending_padding:
+            start, duration = self._pending_padding[0]
+            if start + duration > provider_time:
+                break
+            self._settled_padding += duration
+            self._pending_padding.popleft()
+
+        # a late boundary can precede padding that has already been sent
+        pending = sum(
+            min(max(provider_time - start, 0.0), duration)
+            for start, duration in self._pending_padding
+        )
+        return provider_time - self._settled_padding - pending
+
+
 class SpeechStream(stt.SpeechStream):
+    @dataclass
+    class _VADFlush(stt.SpeechStream._FlushSentinel):
+        """Request synthetic silence without advancing the caller's audio clock."""
+
+        samples_per_channel: int
+
     # Used to close websocket
     _CLOSE_MSG: str = json.dumps({"terminate_session": True})
 
@@ -245,6 +307,7 @@ class SpeechStream(stt.SpeechStream):
         """
 
         closing_ws = False
+        timeline = _PaddedTimeline(self._opts.sample_rate)
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             samples_per_buffer = 1920
@@ -256,9 +319,18 @@ class SpeechStream(stt.SpeechStream):
             )
 
             async for data in self._input_ch:
-                if isinstance(data, self._FlushSentinel):
+                if isinstance(data, self._VADFlush):
+                    zeros = AudioFrame.create(
+                        sample_rate=self._opts.sample_rate,
+                        num_channels=1,
+                        samples_per_channel=data.samples_per_channel,
+                    )
+                    timeline.add_padding(zeros.samples_per_channel)
+                    frames = audio_bstream.write(zeros.data.tobytes())
+                elif isinstance(data, self._FlushSentinel):
                     frames = audio_bstream.flush()
                 else:
+                    timeline.add_audio(data.samples_per_channel)
                     frames = audio_bstream.write(data.data.tobytes())
 
                 for frame in frames:
@@ -275,6 +347,7 @@ class SpeechStream(stt.SpeechStream):
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
             buffered_text: list[str] = []
+            speech_end = 0.0
             speaking = False
             remaining_vad_steps: int | None = None
             monitor = utils.aio.WebSocketMonitor(
@@ -310,6 +383,7 @@ class SpeechStream(stt.SpeechStream):
 
                     type_ = data.get("type", "")
                     if type_ == "text":
+                        speech_end = 0.0
                         if speaking is False:
                             speaking = True
                             start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
@@ -321,7 +395,8 @@ class SpeechStream(stt.SpeechStream):
                                 stt.SpeechData(
                                     text=data["text"],
                                     language=self._opts.language,
-                                    start_time=data["start_s"] + self.start_time_offset,
+                                    start_time=timeline.remove_padding(data["start_s"])
+                                    + self.start_time_offset,
                                 )
                             ],
                         )
@@ -329,9 +404,23 @@ class SpeechStream(stt.SpeechStream):
 
                     elif type_ == "step":
                         if not speaking:
+                            start_threshold = self._opts.vad_start_threshold
+                            vad_bucket = self._opts.vad_bucket
+                            # steps sent before any audio was processed carry a warm-up
+                            # estimate that reads as activity, ignore them
+                            if (
+                                vad_bucket is not None
+                                and start_threshold is not None
+                                and data.get("total_duration_s", 0.0) > 0
+                                and data["vad"][vad_bucket]["inactivity_prob"] < start_threshold
+                            ):
+                                speaking = True
+                                self._event_ch.send_nowait(
+                                    stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
+                                )
                             self._mark_provider_progress()
                             continue
-                        if vad_bucket := self._opts.vad_bucket:
+                        if (vad_bucket := self._opts.vad_bucket) is not None:
                             positive_vad = (
                                 data["vad"][vad_bucket]["inactivity_prob"]
                                 > self._opts.vad_threshold
@@ -340,13 +429,9 @@ class SpeechStream(stt.SpeechStream):
                                 if remaining_vad_steps is None:
                                     remaining_vad_steps = self.delay_in_tokens
                                     if self._opts.vad_flush:
-                                        samples_per_channel = self.frame_size * self.delay_in_tokens
-                                        zeros = AudioFrame.create(
-                                            sample_rate=self._opts.sample_rate,
-                                            num_channels=1,
-                                            samples_per_channel=samples_per_channel,
+                                        await self._input_ch.send(
+                                            self._VADFlush(self.frame_size * self.delay_in_tokens)
                                         )
-                                        await self._input_ch.send(zeros)
                                 else:
                                     remaining_vad_steps -= 1
                                     if remaining_vad_steps <= 0:
@@ -358,6 +443,10 @@ class SpeechStream(stt.SpeechStream):
                                                 stt.SpeechData(
                                                     text=" ".join(buffered_text),
                                                     language=self._opts.language,
+                                                    end_time=timeline.remove_padding(speech_end)
+                                                    + self.start_time_offset
+                                                    if speech_end > 0
+                                                    else 0.0,
                                                 )
                                             ],
                                         )
@@ -365,16 +454,22 @@ class SpeechStream(stt.SpeechStream):
 
                                         buffered_text = []
                                         self._event_ch.send_nowait(
-                                            stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+                                            stt.SpeechEvent(
+                                                type=stt.SpeechEventType.END_OF_SPEECH,
+                                                alternatives=event.alternatives
+                                                if speech_end > 0
+                                                else [],
+                                            )
                                         )
+                                        speech_end = 0.0
                             else:
                                 remaining_vad_steps = None
 
                     elif type_ == "ready":
                         self._ready_msg = data
                     elif type_ == "end_text":
-                        # This message provides the end timestamp of the previous word in the stop_s field.
-                        pass
+                        if speaking:
+                            speech_end = data.get("stop_s", 0.0)
                     else:
                         logger.warning(f"Unknown message type from Gradium {type_}")
 
@@ -389,6 +484,8 @@ class SpeechStream(stt.SpeechStream):
         while True:
             try:
                 ws = await self._connect_ws()
+                self._input_ch.restart_provider_clock()
+                timeline.reset()
                 tasks = [
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
