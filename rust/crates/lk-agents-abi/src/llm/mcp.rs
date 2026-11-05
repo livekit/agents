@@ -200,6 +200,63 @@ pub trait McpSession: Send + Sync + Sized + 'static {
     async fn close(&self);
 }
 
+/// What an `MCPToolset`'s lifecycle runs on the host: its listing and its idle close. Each
+/// runs in the context of the `setup()` or `aclose()` that started it.
+#[crate::host(proxy(host = "livekit.agents.llm.mcp.MCPToolset"))]
+pub trait McpToolsetHost: Send + Sync {
+    /// Connect the server when it is not, list its tools and make them the toolset's.
+    /// Cancelled when the toolset is closed while recovering.
+    #[host(await, name = "_core_list")]
+    fn list<'a>(
+        &'a self,
+        cx: &crate::telemetry::Cx,
+        #[host(context)] context: &'a crate::invoke::CallContext,
+        #[host(cancel)] cancel: std::sync::Arc<dyn crate::invoke::Cancellation>,
+    ) -> crate::BoxFuture<'a, Result<(), crate::errors::HostError>>;
+    /// Seconds until the server's session may try to connect again.
+    #[host(call, name = "_core_retry_in")]
+    fn retry_in(&self) -> Result<f64, crate::errors::HostError>;
+    /// The connection idled: drop the tools and close the server, which a later `setup()`
+    /// connects again.
+    #[host(await, name = "_core_close_idle")]
+    fn close_idle<'a>(
+        &'a self,
+        cx: &crate::telemetry::Cx,
+        #[host(context)] context: &'a crate::invoke::CallContext,
+    ) -> crate::BoxFuture<'a, Result<(), crate::errors::HostError>>;
+}
+
+/// An `MCPToolset`'s lifecycle (docs/tools.md "MCP servers"): one listing at a time; an
+/// unreachable server leaves the toolset without tools and is listed again in the background at
+/// the session's backoff until it answers; the connection closes `idle_close` seconds after the
+/// last run released the toolset unless a run sets it up again first. `host` is the toolset,
+/// held only while a recovery or an idle close is pending.
+#[crate::host(class(name = "_core_McpToolsetLifecycle"))]
+pub trait McpToolsetLifecycle: Send + Sync + Sized + 'static {
+    /// `server` names the server in logs.
+    #[host(new)]
+    fn new(server: String, idle_close: f64) -> Self;
+    /// Disarm a pending idle close, then list the tools unless they are listed or a recovery
+    /// is under way. A failed listing is logged and recovered in the background; a cancelled
+    /// setup cancels its listing.
+    #[host(await)]
+    async fn setup(
+        &self,
+        host: std::sync::Arc<dyn McpToolsetHost>,
+        #[host(context)] context: crate::invoke::CallContext,
+        cx: crate::telemetry::Cx,
+    );
+    /// The last run released the toolset: stop a recovery (its listing cancelled and settled)
+    /// and arm the idle close.
+    #[host(await)]
+    async fn release(
+        &self,
+        host: std::sync::Arc<dyn McpToolsetHost>,
+        #[host(context)] context: crate::invoke::CallContext,
+        cx: crate::telemetry::Cx,
+    );
+}
+
 /// Pure options and SDK result interpretation used by the Python authoring adapter.
 #[crate::host(functions)]
 pub trait McpTools {

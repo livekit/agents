@@ -100,6 +100,39 @@ async def test_the_connection_outlives_the_last_run_until_it_idles(
     assert list(toolset.tools) == []
 
 
+# Catches: a background retry outliving the toolset's last run, or its listing left running.
+@pytest.mark.asyncio
+async def test_the_last_release_stops_the_background_retry_and_cancels_its_listing() -> None:
+    class Hanging(Server):
+        hang = False
+        cancelled = 0
+        hanging = asyncio.Event()
+
+        async def list_tools(self, **kwargs: object) -> list[RawFunctionTool]:
+            self.listing.set()
+            if self.hang:
+                self.hanging.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    self.cancelled += 1
+                    raise
+            raise ConnectionError("server unreachable")
+
+    server = Hanging()
+    toolset = MCPToolset(id="mcp", mcp_server=server)
+    await toolset.setup()
+    server.hang = True
+    async with asyncio.timeout(5):
+        await server.hanging.wait()
+        await toolset.aclose()
+    assert server.cancelled == 1, "the pending listing is cancelled and settled by aclose()"
+    server.listing.clear()
+    await asyncio.sleep(0.05)
+    assert not server.listing.is_set(), "no retry after the last run"
+    assert list(toolset.tools) == []
+
+
 @pytest.mark.parametrize("bad", [-1.0, float("nan"), float("inf"), 1e300])
 @pytest.mark.parametrize("field", ["init_timeout", "read_timeout", "request_timeout"])
 def test_invalid_mcp_timeout_fails_at_construction(field: str, bad: float) -> None:

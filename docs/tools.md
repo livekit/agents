@@ -396,9 +396,13 @@ A lost connection, or a stdio server that exited, reconnects on the next listing
 While reconnecting keeps failing, attempts back off from one second to thirty and calls in
 between fail at once as a tool error the model can answer around. A server that cannot be
 reached at `setup()` leaves its `MCPToolset` without tools instead of failing the activation
-or the run; the toolset keeps retrying, and a later run or activation gets the tools once the
-server answers. Once listed, the tools stay available through a later outage. The connection
-stays open for a minute after the toolset's last run, so the next run reuses it.
+or the run; the toolset keeps listing again in the background at that backoff while it is in
+use, and a later run or activation gets the tools once the server answers. One listing runs at
+a time. Once listed, the tools stay available through a later outage. The connection stays
+open for a minute (`MCP_IDLE_CLOSE_SECONDS`) after the toolset's last run, so the next run
+reuses it; the last run's end stops a background retry, cancelling its listing. Once the
+minute passes the toolset drops its tools and closes the connection, and the next `setup()`
+connects and lists again.
 
 Credentials can come from the run, as a backend serving many users needs:
 

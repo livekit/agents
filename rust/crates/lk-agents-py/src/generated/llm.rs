@@ -1724,6 +1724,79 @@ impl McpSession {
 }
 
 // Declared in rust/crates/lk-agents-abi/src/llm/mcp.rs.
+type CoreMcpToolsetLifecycleImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::McpToolsetLifecycle;
+
+fn _extract_mcp_toolset_lifecycle_new_idle_close(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<McpToolsetLifecycleNewIdleCloseInput> {
+    crate::py_values::number_from_py::<f64>(obj.as_any(), "idle_close")
+}
+type McpToolsetLifecycleNewIdleCloseInput = f64;
+
+/// An `MCPToolset`'s lifecycle (docs/tools.md "MCP servers"): one listing at a time; an
+/// unreachable server leaves the toolset without tools and is listed again in the background at
+/// the session's backoff until it answers; the connection closes `idle_close` seconds after the
+/// last run released the toolset unless a run sets it up again first. `host` is the toolset,
+/// held only while a recovery or an idle close is pending.
+#[pyclass(frozen, name = "_core_McpToolsetLifecycle", module = "livekit.agents._core")]
+pub struct CoreMcpToolsetLifecycle(pub(crate) ::std::sync::Arc<CoreMcpToolsetLifecycleImpl>);
+
+#[pymethods]
+impl CoreMcpToolsetLifecycle {
+    /// `server` names the server in logs.
+    #[new]
+    #[pyo3(signature = (server, idle_close))]
+    fn new(
+        py: Python<'_>,
+        server: ::std::string::String,
+        #[pyo3(from_py_with = _extract_mcp_toolset_lifecycle_new_idle_close)]
+        idle_close: McpToolsetLifecycleNewIdleCloseInput,
+    ) -> PyResult<CoreMcpToolsetLifecycle> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| {
+            <CoreMcpToolsetLifecycleImpl as ::lk_agents_abi::llm::mcp::McpToolsetLifecycle>::new(
+                server, idle_close,
+            )
+        });
+        ::pyo3::PyResult::Ok(CoreMcpToolsetLifecycle(::std::sync::Arc::new(out)))
+    }
+
+    /// Disarm a pending idle close, then list the tools unless they are listed or a recovery
+    /// is under way. A failed listing is logged and recovered in the background; a cancelled
+    /// setup cancels its listing.
+    #[pyo3(signature = (host))]
+    fn setup<'py>(&self, py: Python<'py>, host: Bound<'_, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let host = crate::generated::llm::McpToolsetHostProxy::from_host(host.as_any())?;
+        let context = crate::py_calls::entered();
+        let cx = crate::py_calls::entry_cx();
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::py_calls::future_into_py(py, async move {
+            let () = <CoreMcpToolsetLifecycleImpl as ::lk_agents_abi::llm::mcp::McpToolsetLifecycle>::setup(&this, host, context, cx)
+                .await;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
+        })
+    }
+
+    /// The last run released the toolset: stop a recovery (its listing cancelled and settled)
+    /// and arm the idle close.
+    #[pyo3(signature = (host))]
+    fn release<'py>(&self, py: Python<'py>, host: Bound<'_, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let host = crate::generated::llm::McpToolsetHostProxy::from_host(host.as_any())?;
+        let context = crate::py_calls::entered();
+        let cx = crate::py_calls::entry_cx();
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::py_calls::future_into_py(py, async move {
+            let () = <CoreMcpToolsetLifecycleImpl as ::lk_agents_abi::llm::mcp::McpToolsetLifecycle>::release(&this, host, context, cx)
+                .await;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
+        })
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/llm/mcp.rs.
 type McpToolsImpl =
     <crate::generated::implementations::Selected as super::Implementations>::McpTools;
 
@@ -3569,6 +3642,170 @@ impl ::lk_agents_abi::llm::mcp::McpProgress for McpProgressProxy {
                 ];
                 Ok((
                     host.bind(py).getattr("_core_update")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
+            }),
+        );
+        ::std::boxed::Box::pin(async move {
+            let out = started.await;
+            ::pyo3::Python::attach(|py| {
+                let out = match out {
+                    Ok(out) => out,
+                    Err(e) => {
+                        return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
+                    }
+                };
+                let o = out.value.bind(py);
+                let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                Ok(())
+            })
+        })
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/llm/mcp.rs.
+
+/// [`::lk_agents_abi::llm::mcp::McpToolsetHost`] over a host `livekit.agents.llm.mcp.MCPToolset`.
+#[derive(Clone)]
+pub struct McpToolsetHostProxy {
+    host: ::std::sync::Arc<Py<PyAny>>,
+}
+
+impl McpToolsetHostProxy {
+    /// A registered native class as itself, any other host object behind this proxy.
+    pub fn from_host(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::mcp::McpToolsetHost>> {
+        if let Some(native) =
+            crate::py_objects::native::<dyn ::lk_agents_abi::llm::mcp::McpToolsetHost>(obj)
+        {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+    }
+
+    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    pub fn in_context(
+        obj: &Bound<'_, PyAny>,
+        context: &::lk_agents_abi::utils::host_ref::HostRef,
+    ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::llm::mcp::McpToolsetHost>> {
+        if let Some(native) =
+            crate::py_objects::native::<dyn ::lk_agents_abi::llm::mcp::McpToolsetHost>(obj)
+        {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
+    }
+
+    /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
+    pub fn owned(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::llm::mcp::McpToolsetHost>> {
+        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+    }
+
+    fn take(
+        obj: &Bound<'_, PyAny>,
+        context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
+    ) -> PyResult<Self> {
+        let _ = context;
+        Ok(McpToolsetHostProxy { host: ::std::sync::Arc::new(obj.clone().unbind()) })
+    }
+}
+
+impl ::lk_agents_abi::llm::mcp::McpToolsetHost for McpToolsetHostProxy {
+    fn list<'a>(
+        &'a self,
+        cx: &::lk_agents_abi::telemetry::Cx,
+        context: &::lk_agents_abi::invoke::CallContext,
+        cancel: ::std::sync::Arc<dyn ::lk_agents_abi::invoke::Cancellation>,
+    ) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
+    {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let started = ::lk_agents_runtime::host::call_cancellable(
+            &crate::py_calls::Entry,
+            "McpToolsetHost._core_list",
+            context,
+            &[],
+            cx,
+            cancel,
+            ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                Ok((
+                    host.bind(py).getattr("_core_list")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
+            }),
+        );
+        ::std::boxed::Box::pin(async move {
+            let out = started.await;
+            ::pyo3::Python::attach(|py| {
+                let out = match out {
+                    Ok(out) => out,
+                    Err(e) => {
+                        return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
+                    }
+                };
+                let o = out.value.bind(py);
+                let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                Ok(())
+            })
+        })
+    }
+
+    fn retry_in(&self) -> ::std::result::Result<f64, ::lk_agents_abi::errors::HostError> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let out = ::lk_agents_runtime::host::call_now(
+            &crate::py_calls::Entry,
+            ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                Ok((
+                    host.bind(py).getattr("_core_retry_in")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
+            }),
+        );
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.value.bind(py);
+            let out = (crate::py_values::number_from_py::<f64>(
+                o.as_any(),
+                "McpToolsetHost._core_retry_in",
+            ))
+            .map_err(|e| {
+                <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(
+                    py, &e,
+                )
+            })?;
+            Ok(out)
+        })
+    }
+
+    fn close_idle<'a>(
+        &'a self,
+        cx: &::lk_agents_abi::telemetry::Cx,
+        context: &::lk_agents_abi::invoke::CallContext,
+    ) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
+    {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let started = ::lk_agents_runtime::host::call(
+            &crate::py_calls::Entry,
+            "McpToolsetHost._core_close_idle",
+            context,
+            &[],
+            cx,
+            ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                Ok((
+                    host.bind(py).getattr("_core_close_idle")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))

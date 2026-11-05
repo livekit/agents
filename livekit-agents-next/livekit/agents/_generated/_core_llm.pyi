@@ -10,7 +10,7 @@ from typing import Any, Self
 
 from livekit.agents._bindings import Duplex, FallbackListener
 from livekit.agents.llm import LLM, Toolset
-from livekit.agents.llm.mcp import _Progress
+from livekit.agents.llm.mcp import MCPToolset, _Progress
 from livekit.agents.llm.realtime import RealtimeModel
 from livekit.agents.llm.tool_context import ToolChoice
 from livekit.agents.tts import TTS
@@ -325,6 +325,25 @@ class McpSession:
         host_context: object | None,
     ) -> object: ...
     async def close(self) -> None: ...
+
+class _core_McpToolsetLifecycle:
+    """An `MCPToolset`'s lifecycle (docs/tools.md "MCP servers"): one listing at a time; an
+    unreachable server leaves the toolset without tools and is listed again in the background at
+    the session's backoff until it answers; the connection closes `idle_close` seconds after the
+    last run released the toolset unless a run sets it up again first. `host` is the toolset,
+    held only while a recovery or an idle close is pending.
+    """
+    def __new__(cls, server: str, idle_close: float) -> Self:
+        """`server` names the server in logs."""
+    async def setup(self, host: MCPToolset) -> None:
+        """Disarm a pending idle close, then list the tools unless they are listed or a recovery
+        is under way. A failed listing is logged and recovered in the background; a cancelled
+        setup cancels its listing.
+        """
+    async def release(self, host: MCPToolset) -> None:
+        """The last run released the toolset: stop a recovery (its listing cancelled and settled)
+        and arm the idle close.
+        """
 
 def resolve_mcp_tool_options(config: MCPToolOptions | None) -> ResolvedToolOptions: ...
 

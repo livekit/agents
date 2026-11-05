@@ -51,6 +51,7 @@ impl super::Implementations for Selected {
     type ChoiceParser = ::lk_agents_runtime::inference::llm::parse::ChoiceParser;
     type CompletionWire = ::lk_agents_runtime::inference::llm::parse::CompletionWire;
     type McpSession = ::lk_agents_runtime::mcp::McpSession;
+    type McpToolsetLifecycle = ::lk_agents_runtime::mcp::McpToolsetLifecycle;
     type McpTools = ::lk_agents_runtime::mcp::McpTools;
     type LlmAlgorithms = ::lk_agents_runtime::inference::llm::algorithms::LlmAlgorithms;
     type HostRealtimeModel = ::lk_agents_runtime::inference::realtime::host::HostRealtimeModel;

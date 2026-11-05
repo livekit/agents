@@ -16,8 +16,6 @@ from pydantic import JsonValue
 
 from .. import _core
 from .._generated.mcp import MCP_IDLE_CLOSE_SECONDS, MCPToolOptions, ResolvedToolOptions
-from ..log import logger
-from ..utils import aio
 from ..voice.events import RunContext
 from .tool_context import AsyncToolset, RawFunctionTool, Toolset, function_tool
 
@@ -301,11 +299,8 @@ class MCPToolset(AsyncToolset):
         super().__init__(id=id)
         self._mcp_server = mcp_server
         self._tool_options = dict(tool_options or {})
-        self._listed = False
-        self._lock = asyncio.Lock()
-        self._recovery: asyncio.Task[None] | None = None
-        self._idle_close: asyncio.TimerHandle | None = None
-        self._closing: asyncio.Task[None] | None = None
+        # the listing's recovery and the idle close are the core's
+        self._lifecycle = _core._core_McpToolsetLifecycle(repr(mcp_server), MCP_IDLE_CLOSE_SECONDS)
         # per-run credentials: one toolset per credential set, and each call's
         self._by_credentials: dict[str, MCPToolset] = {}
         self._by_call: weakref.WeakKeyDictionary[object, MCPToolset] = weakref.WeakKeyDictionary()
@@ -335,58 +330,30 @@ class MCPToolset(AsyncToolset):
 
     async def setup(self) -> Self:
         """Fetch the server's tools, connecting it when it is not; without them while the server
-        cannot be reached."""
+        cannot be reached, which is listed again in the background at the session's backoff."""
         await super().setup()
-        async with self._lock:
-            if self._idle_close is not None:
-                self._idle_close.cancel()
-                self._idle_close = None
-            per_run = isinstance(self._mcp_server, MCPServerHTTP) and self._mcp_server._per_run
-            if self._listed or self._recovery is not None or per_run:
-                return self
-            try:
-                await self._list()
-            except Exception as error:
-                logger.warning(
-                    "MCP server unavailable, continuing without its tools",
-                    extra={"mcp_server": repr(self._mcp_server), "error": str(error)},
-                )
-                self._recovery = asyncio.create_task(self._recover())
-            return self
-
-    async def _list(self) -> None:
-        if not self._mcp_server.initialized:
-            await self._mcp_server.initialize()
-        self._tools = list(await self._mcp_server.list_tools(tool_options=self._tool_options))
-        self._listed = True
-
-    async def _recover(self) -> None:
-        """Retry the listing at the session's own backoff until the server answers."""
-        while True:
-            await asyncio.sleep(self._mcp_server._retry_in)
-            try:
-                await self._list()
-            except Exception:
-                continue
-            self._recovery = None
-            return
+        if not (isinstance(self._mcp_server, MCPServerHTTP) and self._mcp_server._per_run):
+            await self._lifecycle.setup(self)
+        return self
 
     async def aclose(self) -> None:
+        """Release the toolset: a recovery stops, and the connection closes after
+        ``MCP_IDLE_CLOSE_SECONDS`` unless a run sets the toolset up again first."""
         try:
             await super().aclose()
         finally:
-            if self._recovery is not None:
-                await aio.cancel_and_wait(self._recovery)
-                self._recovery = None
-            self._idle_close = asyncio.get_running_loop().call_later(
-                MCP_IDLE_CLOSE_SECONDS, self._close_idle
-            )
+            await self._lifecycle.release(self)
 
-    def _close_idle(self) -> None:
-        self._idle_close = None
-        self._listed = False
+    async def _core_list(self) -> None:
+        if not self._mcp_server.initialized:
+            await self._mcp_server.initialize()
+        self._tools = list(await self._mcp_server.list_tools(tool_options=self._tool_options))
+
+    def _core_retry_in(self) -> float:
+        return self._mcp_server._retry_in
+
+    async def _core_close_idle(self) -> None:
         self._tools = []
         if self._release is not None:
             self._release()
-        # Holds the close until it settles; a later setup reconnects.
-        self._closing = asyncio.create_task(self._mcp_server.aclose())
+        await self._mcp_server.aclose()

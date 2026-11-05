@@ -112,6 +112,7 @@
     "_core_Credentials",
     "_core_EventRetention",
     "_core_JudgeRunner",
+    "_core_McpToolsetLifecycle",
     "_core_NodeCalls",
     "_core_PacedSentences",
     "_core_QueueAudio",
