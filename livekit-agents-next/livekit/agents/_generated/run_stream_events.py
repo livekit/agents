@@ -90,8 +90,8 @@ StreamOutcome: TypeAlias = RunUpdate | TextSessionUpdate
 """Only terminal updates cross to the host's result hydration callbacks."""
 
 
-TextDeltaEvent.__module__ = "livekit.agents.voice.run_stream"
-TextEndEvent.__module__ = "livekit.agents.voice.run_stream"
-ToolCallEvent.__module__ = "livekit.agents.voice.run_stream"
-ToolResultEvent.__module__ = "livekit.agents.voice.run_stream"
-ProgressEvent.__module__ = "livekit.agents.voice.run_stream"
+TextDeltaEvent.__module__ = "livekit.agents.voice.run_result"
+TextEndEvent.__module__ = "livekit.agents.voice.run_result"
+ToolCallEvent.__module__ = "livekit.agents.voice.run_result"
+ToolResultEvent.__module__ = "livekit.agents.voice.run_result"
+ProgressEvent.__module__ = "livekit.agents.voice.run_result"

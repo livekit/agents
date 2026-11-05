@@ -710,7 +710,7 @@ pub struct SpeechCreatedEvent {
     /// The speech handle that was created
     #[host(
         hide_repr,
-        annotation = "typing.Annotated[livekit.agents.voice.speech_handle.SpeechHandle, pydantic.Field(exclude=True)]"
+        annotation = "typing.Annotated[livekit.agents.voice.io.SpeechHandle, pydantic.Field(exclude=True)]"
     )]
     pub speech_handle: crate::HostRef,
     #[host(default_factory = "time.time")]

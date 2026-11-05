@@ -92,7 +92,7 @@ pub struct PredictionEvent {
 
 // Public data contracts. Python behavior remains in its adapters.
 
-#[crate::host(record(module = "turn_events", path = "livekit.agents.voice.turn", dataclass))]
+#[crate::host(record(module = "turn_events", path = "livekit.agents.voice.io", dataclass))]
 pub struct TurnDetectionEvent {
     #[host(annotation = "typing.Literal['eot_prediction']")]
     pub r#type: String,

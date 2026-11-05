@@ -80,8 +80,8 @@ class ToolHandlingOptions(TypedDict, total=False):
     """
 
 
-UpdatePromptArgs.__module__ = "livekit.agents.voice.tool_executor"
-DuplicatePromptArgs.__module__ = "livekit.agents.voice.tool_executor"
-ReplyPromptArgs.__module__ = "livekit.agents.voice.tool_executor"
-AsyncToolOptions.__module__ = "livekit.agents.voice.tool_executor"
-ToolHandlingOptions.__module__ = "livekit.agents.voice.tool_executor"
+UpdatePromptArgs.__module__ = "livekit.agents.llm.tool_context"
+DuplicatePromptArgs.__module__ = "livekit.agents.llm.tool_context"
+ReplyPromptArgs.__module__ = "livekit.agents.llm.tool_context"
+AsyncToolOptions.__module__ = "livekit.agents.llm.tool_context"
+ToolHandlingOptions.__module__ = "livekit.agents.llm.tool_context"

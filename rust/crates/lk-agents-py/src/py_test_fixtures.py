@@ -313,7 +313,7 @@ def agent_host():
     import contextvars
 
     from livekit.agents._generated import agent_run as models, tool_report as reports
-    from livekit.agents.voice.agent_host import ToolArgumentError
+    from livekit.agents.voice.agent_run import ToolArgumentError
 
     var = contextvars.ContextVar("var", default="unset")
     loop = asyncio.new_event_loop()
@@ -445,7 +445,9 @@ def byte_stream_host():
         async def _core_stream_bytes(self, opts):
             return Writer(opts.topic)
 
-    return SimpleNamespace(pair=(loop, contextvars.copy_context()), participant=Participant(), sent=sent)
+    return SimpleNamespace(
+        pair=(loop, contextvars.copy_context()), participant=Participant(), sent=sent
+    )
 
 
 def notifications_reach_the_host_in_call_order_in_their_context(state):

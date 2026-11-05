@@ -1,4 +1,5 @@
-"""Python SDK capabilities and public-to-native voice-session argument adaptation."""
+"""Native voice-session construction: public configuration and callback signatures, their
+adaptation to native arguments, session startup and the remote session protocol."""
 
 from __future__ import annotations
 
@@ -8,19 +9,24 @@ import contextvars
 import dataclasses
 import weakref
 from collections import deque
-from collections.abc import AsyncIterable, AsyncIterator, Callable
-from typing import TYPE_CHECKING, Any, cast
+from collections.abc import AsyncIterable, AsyncIterator, Callable, Coroutine
+from typing import TYPE_CHECKING, Any, Literal, cast
+
+from typing_extensions import TypeVar
 
 from livekit import rtc
+from livekit.agents._generated.recording_options import RecordingOptions as RecordingOptions
 
 from .. import _bindings, _core, inference, llm, stt, tts
 from .._core_view import (
     TurnDetector,
     tool_specs,
 )
+from .._generated.connect import SessionConnectOptions as SessionConnectOptions
 from .._generated.keyterms import STTContextOptions
 from .._generated.session_options import SessionKwargs
 from .._generated.session_owner import ProviderBindings
+from .._generated.session_wire import DEFAULT_HOOK_BOUND, DEFAULT_SILENT_FPS, DEFAULT_SPEAKING_FPS
 from .._generated.vad import VAD
 from .._generated.voice_session import UpdateAgentArgs, VoiceCommandOriginHook
 from ..inference.llm import llm_from_model_string
@@ -33,28 +39,96 @@ from ..llm import (
 from ..log import logger
 from ..types import (
     NOT_GIVEN,
+    FlushSentinel,
     NotGivenOr,
+    TranscriptChunk,
 )
 from ..utils.misc import is_dev_mode, is_given, is_hosted, shortuuid
-from . import io
+from . import Agent, ModelSettings, _BindingContextVar, _VoiceBinding, io
 from ._session_callbacks import _DynamicInstructions, _hook_name, _origin, _SessionNodes
-from ._session_types import RecordingOptions, SessionConnectOptions, VoiceActivityVideoSampler
-from .agent import (
-    Agent,
-    _BindingContextVar,
-    _VoiceBinding,
-)
 from .events import (
     Context_T,
+    RunContext,
+    UserTurnExceededEvent,
 )
-from .speech_handle import SpeechHandle
+from .io import SpeechHandle
 
 if TYPE_CHECKING:
     from .._core import VoiceAgent as _NativeAgent
     from .._generated.session_options import SessionLegs, UpdateKwargs
     from ..storage import Thread
     from .agent_session import VoiceSession
-    from .turn import EndpointingOptions, TurnDetectionMode
+    from .io import EndpointingOptions, TurnDetectionMode
+import time
+from typing import TYPE_CHECKING
+
+from .._core_view import realtime_model
+from .._generated.voice_session import VoiceSessionArgs
+from ..job import get_job_context
+from .events import CloseReason
+from .room_io import Room as _RtcRoom, RoomOptions
+
+if TYPE_CHECKING:
+    from .agent_session import VoiceSession
+from typing import TYPE_CHECKING, ClassVar
+
+from google.protobuf.json_format import MessageToDict
+
+from .._generated.remote_session_wire import STATE_OPTION_FIELDS
+from .._generated.usage import Usage
+from ..version import __version__
+
+if TYPE_CHECKING:
+    from .agent_session import VoiceSession
+
+
+TextTransforms = Literal["filter_markdown", "filter_emoji"]
+"""A transform the core applies to the text it sends to the TTS."""
+
+
+# on_exit and the other callbacks are awaited by the core this long before it moves on;
+# on_user_turn_completed is awaited until it returns
+_HOOK_BOUND = DEFAULT_HOOK_BOUND
+
+# the session's pipeline callbacks (voice-session.md "Customizing the pipeline"): each receives
+# the call's `RunContext`, whose `agent` is the agent holding the call
+_C = TypeVar("_C")
+_Item = TypeVar("_Item")
+_Node = AsyncIterable[_Item] | Coroutine[Any, Any, AsyncIterable[_Item] | None]
+LLMNode = Callable[
+    [RunContext[_C], ChatContext, list[llm.Tool], ModelSettings],
+    AsyncIterable[llm.ChatChunk | str | FlushSentinel]
+    | Coroutine[Any, Any, AsyncIterable[llm.ChatChunk | str | FlushSentinel] | str | None],
+]
+STTNode = Callable[
+    [RunContext[_C], AsyncIterable[rtc.AudioFrame], ModelSettings], _Node[stt.SpeechEvent]
+]
+TTSNode = Callable[[RunContext[_C], AsyncIterable[str], ModelSettings], _Node[rtc.AudioFrame]]
+TranscriptionNode = Callable[
+    [RunContext[_C], AsyncIterable[TranscriptChunk], ModelSettings], _Node[str | TranscriptChunk]
+]
+UserTurnCompletedHook = Callable[
+    [RunContext[_C], ChatContext, llm.ChatMessage], Coroutine[Any, Any, None]
+]
+UserTurnExceededHook = Callable[[RunContext[_C], UserTurnExceededEvent], Coroutine[Any, Any, None]]
+
+
+class VoiceActivityVideoSampler:
+    """Sample the camera at ``speaking_fps`` while the user speaks, ``silent_fps`` otherwise."""
+
+    def __init__(
+        self, *, speaking_fps: float = DEFAULT_SPEAKING_FPS, silent_fps: float = DEFAULT_SILENT_FPS
+    ) -> None:
+        self.speaking_fps = speaking_fps
+        self.silent_fps = silent_fps
+
+
+_CallbackT = TypeVar("_CallbackT", bound=Callable[..., object])
+
+
+for _type in (RecordingOptions, VoiceActivityVideoSampler):
+    _type.__module__ = "livekit.agents.voice.agent_session"
+
 
 _OPTION_KEYS = (SessionKwargs.__required_keys__ | SessionKwargs.__optional_keys__) - {
     "conn_options"
@@ -248,7 +322,7 @@ class SessionAdapter:
         session's it lacks, its ``AgentCallbacks`` and the context they run in, whose binding is this
         session's."""
         session = self.session
-        from .agent_host import _voice_tools
+        from .agent_run import _voice_tools
 
         captured = contextvars.copy_context()
         binding = _VoiceBinding(session, agent, task=task)
@@ -536,3 +610,250 @@ def _detection_llm(stt_context: STTContextOptions | None) -> LLM | None:
     except Exception:  # noqa: BLE001 — never let detection setup break the session
         logger.warning("keyterm detection: could not create detection LLM %r; skipping", model)
         return None
+
+
+class SessionHost:
+    def __init__(
+        self,
+        session: VoiceSession[Any],
+        agent: Agent,
+        room: NotGivenOr[rtc.Room | None],
+        room_options: NotGivenOr[RoomOptions],
+        chat_ctx: ChatContext | None,
+    ) -> None:
+        self.session = session
+        self.agent = agent
+        self.room = room
+        self.room_options = room_options
+        self.chat_ctx = chat_ctx
+        thread = session._thread
+        self.storage = _core._core_SessionStorage(
+            thread._storage.threads if thread is not None else None,
+            thread.id if thread is not None else None,
+            thread._agent_name if thread is not None else agent.name,
+            agent.name,
+            chat_ctx.items if chat_ctx is not None else None,
+        )
+
+    async def prepare(self) -> _core._core_SessionBindings:
+        from ._session_callbacks import _AgentHooks
+
+        session, agent = self.session, self.agent
+        room, room_options, chat_ctx = self.room, self.room_options, self.chat_ctx
+        console = ConsoleCall.claim()
+        job_ctx = get_job_context(required=False)
+        if job_ctx is not None:
+            session._event_retention.claim(job_ctx.job.id)
+        if console is not None:
+            room = None
+        elif not is_given(room):
+            room = job_ctx.room if job_ctx is not None else None
+        if chat_ctx is not None:
+            session._chat_ctx = chat_ctx.copy()
+        options = room_options if is_given(room_options) else RoomOptions()
+        session._audio_input_options = options.get_audio_input_options()
+        text_input = options.get_text_input_options()
+        session._text_input_cb = text_input.text_input_cb if text_input is not None else None
+        # the job's session (on its room, or the console's) records and reports for the job and
+        # closes with it; the primary one, and the console's, serve the remote session protocol
+        in_job = job_ctx is not None and (console is not None or room is job_ctx.room)
+        hosting = console is not None
+        primary = False
+        if in_job:
+            assert job_ctx is not None
+            primary = job_ctx._claim_session(session)
+            plan = _core.plan_session_start(
+                job_default=job_ctx.job.enable_recording,
+                another_session_is_primary=not primary,
+            )
+            session._recording_options = cast(RecordingOptions, dataclasses.asdict(plan.recording))
+            hosting = hosting or plan.hosting
+            job_ctx.init_recording(session._recording_options)
+
+        from ..storage import Thread, _StorageHandle
+        from ..storage.context import ContextStore
+
+        storage = session._owner.storage
+        assert storage is not None
+        session._store = ContextStore(activation=storage.activation, scope_id=storage.scope_id)
+        if session._thread is None and (namespace := storage.namespace) is not None:
+            assert storage.thread_id is not None
+            session._thread = Thread(
+                _StorageHandle(namespace), storage.thread_id, agent_name=agent.name
+            )
+        if (saved := storage.history) is not None:
+            session._chat_ctx = ChatContext(list(saved))
+
+        hooks = _AgentHooks(session)
+        frame = session._frame(agent)
+        model = frame.get("llm", session._llm)
+        # an OpenAI-protocol model or a fallback chain runs in the core; any other one is a host
+        # realtime model
+        realtime = (
+            realtime_model(model, lambda: session._adapter._pool(session.current_agent))
+            if isinstance(model, llm.RealtimeModel)
+            else None
+        )
+        sampler = session._video_sampler
+        keyterm_llm = _detection_llm(session._stt_context)
+        session._room = room
+        args = VoiceSessionArgs(
+            instructions=frame["instructions"],
+            dynamic_instructions=frame["dynamic_instructions"],
+            agent=frame["agent"],
+            agent_host=frame["agent_host"],
+            chat_ctx=session._chat_ctx.items,
+            stt=frame["stt"],
+            vad=_bindings.core_leg(session._vad),
+            llm=None if isinstance(model, llm.RealtimeModel) else model,
+            realtime=realtime,
+            tts=frame["tts"],
+            host_audio_input=session._input.audio,
+            host_video_input=session._input.video,
+            host_audio_output=session._output.audio,
+            host_transcription_output=session._output.transcription,
+            on_event=session,
+            hooks=hooks,
+            session_toolsets=hooks._core_toolset_resources(session._tools),
+            tools_host=frame["tools_host"],
+            voice_agent=frame["voice_agent"],
+            room_io_config=options._to_core(),
+            video_sampler=(sampler.speaking_fps, sampler.silent_fps) if sampler else None,
+            using_default_vad=session._using_default_vad,
+            turn_detector=session._turn_detector,
+            hook_bound=_HOOK_BOUND,
+            max_unrecoverable_errors=session._conn_options.max_unrecoverable_errors,
+            interruption_detector=session._adapter._interruption_detector(agent, model),
+            stt_context=session._stt_context,
+            keyterm_llm=_bindings.core_leg(keyterm_llm) if keyterm_llm is not None else None,
+            keyterm_tools=[_record_keyterms] if keyterm_llm is not None else None,
+            **{node: frame[node] for node in _NODES if node in frame},
+            remote_session=RemoteSessionAccess(session) if hosting else None,
+            console=console,
+            # the core connects the job's room beside its opening
+            job=job_ctx if in_job and console is None else None,
+            # the job ends once its primary session closes
+            job_run=job_ctx._run if primary and job_ctx is not None else None,
+        )
+        session._started_at = time.time()
+        if in_job:
+            assert job_ctx is not None
+            if session._recording_options["audio"] or (console is not None and ConsoleCall.record):
+                session._recording_path = job_ctx.session_directory / "audio.ogg"
+                session._recorder = _core.SessionRecorder(str(session._recording_path))
+            job_ctx.add_shutdown_callback(lambda: session._aclose(CloseReason.JOB_SHUTDOWN))
+        rtc_room = _RtcRoom.of(room) if room is not None else None
+        return _core._core_SessionBindings(
+            room=_core._core_create_room_session(rtc_room), args=args, recorder=session._recorder
+        )
+
+    async def started(self) -> None:
+        if self.session.options["ivr_detection"]:
+            await self.session._start_ivr_detection()
+
+    async def closed(self) -> None:
+        session = self.session
+        if session._store is not None:
+            session._store._close()
+        audio_in = session._audio_input_options
+        if audio_in is not None and isinstance(audio_in.noise_cancellation, rtc.FrameProcessor):
+            audio_in.noise_cancellation._close()
+
+
+class ConsoleCall:
+    """The ``console`` subcommand's call: ``lk agent console`` owns the microphone, the speakers
+    and the TUI, and reaches the agent over one socket, which the first session started takes as
+    its audio and its remote session's transport."""
+
+    addr: ClassVar[str | None] = None
+    """The CLI's ``host:port`` while the subcommand runs."""
+    record: ClassVar[bool] = False
+
+    @classmethod
+    def claim(cls) -> _core.ConsoleIo | None:
+        if cls.addr is None:
+            return None
+        addr, cls.addr = cls.addr, None
+        return _core.ConsoleIo(addr)
+
+
+class RemoteSessionAccess:
+    """What a remote client asks of ``session`` that needs its objects."""
+
+    def __init__(self, session: VoiceSession[Any]) -> None:
+        self._session = session
+
+    async def _core_chat_history(self) -> list[llm.ChatItem]:
+        return self._session.history.items
+
+    async def _core_agent_info(self) -> tuple[str, str | None, list[str], list[llm.ChatItem]]:
+        agent = self._session.current_agent
+        tools = list(llm.ToolContext(agent.tools).function_tools)
+        return agent.name, agent._config.instructions, tools, self._session.history.items
+
+    async def _core_run_input(self, text: str) -> tuple[list[llm.ChatItem] | None, str | None]:
+        try:
+            await self._session.interrupt(force=True)
+            result = await self._session._run(user_input=text)
+        except Exception as e:
+            return None, str(e)
+        return result.new_messages(), None
+
+    async def _core_session_state(self) -> tuple[str, str, str, dict[str, str], float | None]:
+        options = self._session.options
+        return (
+            self._session.agent_state,
+            self._session.user_state,
+            self._session.current_agent.name,
+            {k: str(options.get(k)) for k in STATE_OPTION_FIELDS},
+            self._session._started_at,
+        )
+
+    async def _core_rtc_stats(self) -> tuple[list[Any], list[Any]] | None:
+        job_ctx = get_job_context(required=False)
+        if job_ctx is None or not job_ctx.room.isconnected():
+            return None
+        stats = await job_ctx.room.get_rtc_stats()
+        return (
+            [MessageToDict(s) for s in stats.publisher_stats],
+            [MessageToDict(s) for s in stats.subscriber_stats],
+        )
+
+    async def _core_session_usage(self) -> Usage:
+        return self._session.usage
+
+    def _core_framework_info(self) -> tuple[str, str]:
+        return "python", __version__
+
+    async def _core_update_io(self, update: tuple[bool | None, ...]) -> None:
+        audio_in, _, audio_out, _, transcription = update
+        if audio_in is not None:
+            self._session.input.set_audio_enabled(audio_in)
+        if audio_out is not None:
+            self._session.output.set_audio_enabled(audio_out)
+        if transcription is not None:
+            self._session.output.set_transcription_enabled(transcription)
+
+    async def _core_finalize_simulation(
+        self, provisional: tuple[bool, str]
+    ) -> tuple[tuple[bool, str] | None, str | None]:
+
+        from ..simulation import SimulationVerdict
+
+        job_ctx = get_job_context(required=False)
+        sim_ctx = job_ctx.simulation_context if job_ctx is not None else None
+        if job_ctx is None or sim_ctx is None:
+            return None, None
+        try:
+            success, reason = provisional
+            sim_ctx._begin_finalize(
+                simulator_verdict=SimulationVerdict(success=success, reason=reason),
+            )
+            if (fnc := job_ctx._simulation_end_fnc) is not None:
+                if asyncio.iscoroutine(out := fnc(sim_ctx)):
+                    await out
+        except Exception as e:
+            logger.exception("error while executing the on_simulation_end callback")
+            return None, str(e)
+        verdict = sim_ctx.user_verdict
+        return ((verdict.success, verdict.reason) if verdict else None), None

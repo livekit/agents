@@ -117,7 +117,7 @@ pub trait SpeechHandle: Send + Sync + Sized + 'static {
 
 #[crate::host(record(
     module = "speech_details",
-    path = "livekit.agents.voice.speech_handle",
+    path = "livekit.agents.voice.io",
     dataclass
 ))]
 pub struct InputDetails {

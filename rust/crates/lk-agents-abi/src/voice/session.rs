@@ -807,7 +807,7 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
 
 #[crate::host(exceptions(
     module = "voice_task_errors",
-    path = "livekit.agents.voice.voice_task",
+    path = "livekit.agents.voice.agent_session",
     classes(VoiceTaskFailed(
         base = "livekit.agents.llm.tool_context.ToolError",
         doc = "The live task failed; its reason is the model-visible tool error message."

@@ -377,7 +377,7 @@ class _DevServer:
 def _run_console(server: AgentServer, connect_addr: str, record: bool) -> None:
     """``console --connect-addr``: one call over the ``lk`` CLI's socket, run as a fake job in
     this process."""
-    from .voice.remote_session import ConsoleCall
+    from .voice._session_bindings import ConsoleCall
 
     setup_logging("DEBUG")
     ConsoleCall.addr, ConsoleCall.record = connect_addr, record

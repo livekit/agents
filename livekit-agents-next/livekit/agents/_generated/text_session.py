@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Literal, TypeAlias
 
 if TYPE_CHECKING:
     from livekit.agents.llm import LLM
-    from livekit.agents.voice.agent_host import AgentCallbacks
+    from livekit.agents.voice.agent_run import AgentCallbacks
 
     from .agent_run import AgentDefinition, RunError, RunInputRequirement, RunResult, StreamEvent
     from .chat_items import ChatItem, ChatMessage

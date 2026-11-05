@@ -659,7 +659,7 @@ def test_generated_session_events_validate_and_preserve_control_and_serializatio
         SpeechCreatedEvent,
         event_dict,
     )
-    from livekit.agents.voice.speech_handle import SpeechHandle
+    from livekit.agents.voice.io import SpeechHandle
 
     call = FunctionCall(call_id="call", name="example", arguments="{}")
     output = FunctionCallOutput(call_id="call", output="done", is_error=False)

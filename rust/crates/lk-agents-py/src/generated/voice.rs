@@ -10720,7 +10720,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionEvents for SessionEventsPro
 
 // Declared in rust/crates/lk-agents-abi/src/voice/session_owner.rs.
 
-/// [`::lk_agents_abi::voice::session_owner::SessionHost`] over a host `livekit.agents.voice._session_host.SessionHost`.
+/// [`::lk_agents_abi::voice::session_owner::SessionHost`] over a host `livekit.agents.voice._session_bindings.SessionHost`.
 #[derive(Clone)]
 pub struct SessionHostProxy {
     host: ::std::sync::Arc<Py<PyAny>>,

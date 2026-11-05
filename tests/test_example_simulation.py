@@ -10,8 +10,8 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
+from livekit.agents import voice as voice_agent
 from livekit.agents.storage.session import ContextStore
-from livekit.agents.voice import agent as voice_agent
 from livekit.agents.voice.agent_run import RunHooks, reset_run_hooks, set_run_hooks
 
 from .test_text_session import Reply, Script, call

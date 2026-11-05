@@ -105,7 +105,7 @@ pub struct PreparedArguments {
 
 /// Binding or validation of a call's arguments failed: feedback for the model. The host raises
 /// it; its message is the feedback.
-#[crate::host(error(raised = "livekit.agents.voice.agent_host.ToolArgumentError"))]
+#[crate::host(error(raised = "livekit.agents.voice.agent_run.ToolArgumentError"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolArgumentError {
     pub message: String,
@@ -182,10 +182,10 @@ pub enum ToolTemplate {
 }
 
 /// The application callbacks of one agent definition, run by the host object of
-/// `livekit.agents.voice.agent_host.AgentCallbacks` (its methods carry these names). Every call
+/// `livekit.agents.voice.agent_run.AgentCallbacks` (its methods carry these names). Every call
 /// carries its [`Invocation`] and runs in a copy of the host context it captured; the caller's
 /// context is never entered or changed.
-#[crate::host(proxy(host = "livekit.agents.voice.agent_host.AgentCallbacks"))]
+#[crate::host(proxy(host = "livekit.agents.voice.agent_run.AgentCallbacks"))]
 pub trait AgentCallbacks: Send + Sync {
     /// The surrounding managed turn's verdict; true yields before a model call or delivery.
     #[host(await)]

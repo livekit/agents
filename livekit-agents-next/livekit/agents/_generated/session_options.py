@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
     from livekit.agents._generated.expressive import ExpressiveOptions
     from livekit.agents.voice.agent_session import TextTransforms
-    from livekit.agents.voice.turn import TurnDetectionMode
+    from livekit.agents.voice.io import TurnDetectionMode
 
     from .connect import SessionConnectOptions
     from .turn import EndpointingOptions, InterruptionOptions, TurnHandlingOptions

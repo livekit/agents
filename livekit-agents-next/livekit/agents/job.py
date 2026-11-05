@@ -238,7 +238,7 @@ class JobContext:
             logger.exception("failed to snapshot the session report")
             return
 
-        from .voice.remote_session import ConsoleCall
+        from .voice._session_bindings import ConsoleCall
 
         if ConsoleCall.record:
             path = Path(

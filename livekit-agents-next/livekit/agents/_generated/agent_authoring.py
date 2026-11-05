@@ -52,9 +52,9 @@ class AgentConfiguration(TypedDict):
     retries: Retries
 
 
-AgentRetries.__module__ = "livekit.agents.voice.agent"
+AgentRetries.__module__ = "livekit.agents.voice"
 ModelSettings.__annotations__ = get_annotations(ModelSettings, eval_str=True)
-ModelSettings.__module__ = "livekit.agents.voice.agent"
+ModelSettings.__module__ = "livekit.agents.voice"
 
 
 DEFAULT_AGENT_NAME: Final = "default_agent"

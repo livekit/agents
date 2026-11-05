@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Literal, TypeAlias
 from typing_extensions import TypedDict
 
 if TYPE_CHECKING:
-    from livekit.agents.voice.turn import TurnDetectionMode
+    from livekit.agents.voice.io import TurnDetectionMode
 
     from .session_options import BackchannelBoundary
 
@@ -174,8 +174,8 @@ class TurnHandlingOptions(TypedDict, total=False):
     """User turn limit configuration. Use ``{"max_words": 50}`` to enable."""
 
 
-EndpointingOptions.__module__ = "livekit.agents.voice.turn"
-InterruptionOptions.__module__ = "livekit.agents.voice.turn"
-PreemptiveGenerationOptions.__module__ = "livekit.agents.voice.turn"
-UserTurnLimitOptions.__module__ = "livekit.agents.voice.turn"
-TurnHandlingOptions.__module__ = "livekit.agents.voice.turn"
+EndpointingOptions.__module__ = "livekit.agents.voice.io"
+InterruptionOptions.__module__ = "livekit.agents.voice.io"
+PreemptiveGenerationOptions.__module__ = "livekit.agents.voice.io"
+UserTurnLimitOptions.__module__ = "livekit.agents.voice.io"
+TurnHandlingOptions.__module__ = "livekit.agents.voice.io"

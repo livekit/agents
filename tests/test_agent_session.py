@@ -340,7 +340,7 @@ async def test_failed_start_releases_acquired_toolsets_and_preserves_the_excepti
 async def test_cancelled_start_waiter_can_rejoin_the_native_startup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from livekit.agents.voice._session_host import SessionHost
+    from livekit.agents.voice._session_bindings import SessionHost
 
     preparing, release = asyncio.Event(), asyncio.Event()
     prepare = SessionHost.prepare

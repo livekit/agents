@@ -33,7 +33,7 @@ from .llm.tool_context import (
 )
 from .types import NOT_GIVEN, NotGivenOr, TranscriptChunk
 from .voice import io
-from .voice.turn import _StreamingTurnDetector
+from .voice.io import _StreamingTurnDetector
 
 
 def duck(obj: Any, cls: type) -> Any:

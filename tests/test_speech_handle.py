@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from livekit.agents.voice.speech_handle import SpeechHandle
+from livekit.agents.voice.io import SpeechHandle
 
 pytestmark = pytest.mark.unit
 

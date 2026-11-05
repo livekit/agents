@@ -322,7 +322,7 @@ pub trait Tagger: Send + Sized + 'static {
 /// Which recording features are active; keys default to ``True`` when not specified.
 #[crate::host(record(
     module = "recording_options",
-    path = "livekit.agents.voice._session_types",
+    path = "livekit.agents.voice._session_bindings",
     typed_dict,
     name = "RecordingOptions"
 ))]

@@ -12,7 +12,7 @@ pub const DEFAULT_AGENT_NAME: &str = "default_agent";
 /// A partial retry budget; omitted keys inherit the agent's configured budget.
 #[crate::host(record(
     module = "agent_authoring",
-    path = "livekit.agents.voice.agent",
+    path = "livekit.agents.voice",
     typed_dict,
     extract
 ))]
@@ -24,7 +24,7 @@ pub struct AgentRetries {
 
 #[crate::host(record(
     module = "agent_authoring",
-    path = "livekit.agents.voice.agent",
+    path = "livekit.agents.voice",
     dataclass,
     extract
 ))]

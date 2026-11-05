@@ -58,6 +58,8 @@ from .llm.chat_context import (
     FunctionCallOutput,
 )
 from .llm.tool_context import (
+    AsyncToolOptions,
+    AsyncToolset,
     Completed,
     Failed,
     InputRequired,
@@ -65,7 +67,10 @@ from .llm.tool_context import (
     Rejected,
     StopResponse,
     ToolError,
+    ToolHandlingOptions,
     ToolResult,
+    Toolset,
+    UpdatePromptArgs,
     Working,
     function_tool,
 )
@@ -108,30 +113,24 @@ from .voice import (
     io,
     room_io,
 )
+from .voice.io import EndpointingOptions, InterruptionOptions, TurnHandlingOptions
 from .voice.run_result import (
     ChatMessageEvent,
     FunctionCallEvent,
     FunctionCallOutputEvent,
+    ProgressEvent,
     RunCompleted,
     RunEvent,
     RunInputRequired,
     RunNoOutput,
     RunResult,
-    mock_tools,
-)
-from .voice.run_stream import (
-    ProgressEvent,
     RunStream,
     StreamEvent,
     TextDeltaEvent,
     TextEndEvent,
     ToolCallEvent,
     ToolResultEvent,
-)
-from .voice.turn import (
-    EndpointingOptions,
-    InterruptionOptions,
-    TurnHandlingOptions,
+    mock_tools,
 )
 from .worker import (
     AgentHandler,
@@ -177,6 +176,11 @@ __all__ = [
     "JobContext",
     "get_job_context",
     "function_tool",
+    "Toolset",
+    "AsyncToolset",
+    "AsyncToolOptions",
+    "ToolHandlingOptions",
+    "UpdatePromptArgs",
     "ChatContext",
     "ChatItem",
     "room_io",

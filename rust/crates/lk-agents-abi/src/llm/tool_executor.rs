@@ -109,7 +109,7 @@ impl From<ToolOutcome> for ToolReport {
 /// Args for the ``update`` template.
 #[crate::host(record(
     module = "tool_templates",
-    path = "livekit.agents.voice.tool_executor",
+    path = "livekit.agents.llm.tool_context",
     typed_dict
 ))]
 pub struct UpdatePromptArgs {
@@ -124,7 +124,7 @@ pub struct UpdatePromptArgs {
 /// Args for the ``duplicate_reject`` / ``duplicate_confirm`` templates.
 #[crate::host(record(
     module = "tool_templates",
-    path = "livekit.agents.voice.tool_executor",
+    path = "livekit.agents.llm.tool_context",
     typed_dict
 ))]
 pub struct DuplicatePromptArgs {
@@ -139,7 +139,7 @@ pub struct DuplicatePromptArgs {
 /// Args for the ``reply_at_tail`` / ``reply_maybe_covered`` templates.
 #[crate::host(record(
     module = "tool_templates",
-    path = "livekit.agents.voice.tool_executor",
+    path = "livekit.agents.llm.tool_context",
     typed_dict
 ))]
 pub struct ReplyPromptArgs {
@@ -155,7 +155,7 @@ pub struct ReplyPromptArgs {
 ///
 #[crate::host(record(
     module = "tool_templates",
-    path = "livekit.agents.voice.tool_executor",
+    path = "livekit.agents.llm.tool_context",
     typed_dict
 ))]
 pub struct AsyncToolOptions {
@@ -191,7 +191,7 @@ pub struct AsyncToolOptions {
 ///
 #[crate::host(record(
     module = "tool_templates",
-    path = "livekit.agents.voice.tool_executor",
+    path = "livekit.agents.llm.tool_context",
     typed_dict
 ))]
 pub struct ToolHandlingOptions {

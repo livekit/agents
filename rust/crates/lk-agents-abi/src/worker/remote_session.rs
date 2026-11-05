@@ -146,7 +146,7 @@ pub enum WireEvent {
 /// `AgentSession` become (`voice/remote_session.py`'s `RemoteSessionAccess`). An `Err` is a host
 /// failure (answered `"internal error"`); a `(value, error)` row's error becomes the response's
 /// `error` verbatim. The rows are the host's tuples, so each crosses as it is.
-#[crate::host(proxy(host = "livekit.agents.voice.remote_session.RemoteSessionAccess"))]
+#[crate::host(proxy(host = "livekit.agents.voice._session_bindings.RemoteSessionAccess"))]
 pub trait SessionPort: Send + Sync {
     /// `session.history.items`.
     #[host(await, name = "_core_chat_history")]

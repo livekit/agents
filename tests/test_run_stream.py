@@ -11,7 +11,7 @@ from pydantic import JsonValue
 
 from livekit.agents import Agent, RunContext
 from livekit.agents.llm import Toolset
-from livekit.agents.voice.run_stream import TextDeltaEvent, ToolCallEvent, ToolResultEvent
+from livekit.agents.voice.run_result import TextDeltaEvent, ToolCallEvent, ToolResultEvent
 
 from .fake_llm import FakeLLM
 from .test_agent_run import call, respond
@@ -52,7 +52,7 @@ def test_generated_public_event_records_preserve_types_and_identity():
         arguments={"value": 3},
     )
     assert is_dataclass(event)
-    assert event.__class__.__module__ == "livekit.agents.voice.run_stream"
+    assert event.__class__.__module__ == "livekit.agents.voice.run_result"
     assert get_type_hints(ToolCallEvent)["arguments"] == dict[str, JsonValue]
     assert get_type_hints(ToolResultEvent)["output"] == JsonValue
     assert asdict(event)["type"] == "tool_call"

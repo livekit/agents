@@ -47,10 +47,16 @@ from .._generated.tool_errors import (
 )
 from .._generated.tool_flags import ToolFlag as ToolFlag
 from .._generated.tool_options import Function as Function, NamedToolChoice as NamedToolChoice
+from .._generated.tool_templates import (
+    AsyncToolOptions as AsyncToolOptions,
+    DuplicatePromptArgs as DuplicatePromptArgs,
+    ReplyPromptArgs as ReplyPromptArgs,
+    ToolHandlingOptions as ToolHandlingOptions,
+    UpdatePromptArgs as UpdatePromptArgs,
+)
 
 if TYPE_CHECKING:
     from ..voice.events import RunContext
-    from ..voice.tool_executor import ToolHandlingOptions
 
 
 TOOL_BEHAVIOR = Literal["UNSPECIFIED", "BLOCKING", "NON_BLOCKING"]

@@ -56,4 +56,4 @@ ThresholdOverride: TypeAlias = float | dict[str, float]
 
 
 TurnDetectionEvent.__annotations__ = get_annotations(TurnDetectionEvent, eval_str=True)
-TurnDetectionEvent.__module__ = "livekit.agents.voice.turn"
+TurnDetectionEvent.__module__ = "livekit.agents.voice.io"

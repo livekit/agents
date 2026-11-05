@@ -443,7 +443,7 @@ tool) or `"name_and_args"` (one with the same arguments). See
 
 What the model reads around these calls comes from templates set with
 `Agent(tool_handling={"async_options": {...}})`, a `ToolHandlingOptions` whose
-`async_options` is an `AsyncToolOptions` (from `livekit.agents.voice.tool_executor`).
+`async_options` is an `AsyncToolOptions` (both exported from `livekit.agents`).
 An `AsyncToolset(tool_handling=)` overrides them for its own tools; the most
 specific wins:
 

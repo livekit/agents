@@ -46,14 +46,14 @@ from ..inference.interruption import (
 from ..llm import (
     FunctionCall,
 )
-from .speech_handle import SpeechHandle
+from .io import SpeechHandle
 
 if TYPE_CHECKING:
     from .._generated.agent_run import Invocation
     from .._generated.usage import Usage
     from ..storage import Thread
     from ..storage.context import ContextStore
-    from .agent import Agent
+    from . import Agent
     from .agent_run import _TextRun
     from .agent_session import VoiceSession
 
@@ -162,7 +162,7 @@ class RunContext(Generic[Context_T]):
     def agent(self) -> Agent[Context_T, object]:
         """The agent this invocation runs; in a session's pipeline callback, the agent holding
         the call."""
-        from .agent import _BindingContextVar
+        from . import _BindingContextVar
 
         binding = _BindingContextVar.get(None)
         if binding is None:
@@ -303,9 +303,8 @@ class RunContext(Generic[Context_T]):
         On a call, the first update releases control to the model with ``message`` as the
         tool's interim return; later ones are coalesced into a deferred reply by the core.
         """
-        from .agent import _BindingContextVar, _VoiceBinding
-        from .agent_host import _template_tools
-        from .tool_executor import UPDATE_TEMPLATE, render_template
+        from . import _BindingContextVar, _VoiceBinding
+        from .agent_run import UPDATE_TEMPLATE, _template_tools, render_template
 
         raw = message
         fnc_call = self.function_call

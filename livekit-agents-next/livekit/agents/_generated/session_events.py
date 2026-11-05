@@ -31,8 +31,8 @@ from livekit.agents.inference.interruption import (
 from livekit.agents.llm import AgentHandoff, RealtimeModel, RealtimeModelError
 from livekit.agents.stt import STT, STTError
 from livekit.agents.tts import TTS, TTSError
+from livekit.agents.voice.io import SpeechHandle
 from livekit.agents.voice.room_io import AudioProcessingError
-from livekit.agents.voice.speech_handle import SpeechHandle
 
 from .. import _bindings
 from .chat_items import ChatMessage, FunctionCall, FunctionCallOutput

@@ -37,19 +37,11 @@ from ..types import (
     NOT_GIVEN,
     NotGivenOr,
 )
-from . import io
-from ._session_bindings import SessionAdapter, initialize
-from ._session_callbacks import (
-    DefaultPipeline as DefaultPipeline,
-    _AgentHooks as _AgentHooks,
-    _DynamicInstructions as _DynamicInstructions,
-    _live_binding as _live_binding,
-    _origin as _origin,
-    _SessionNodes as _SessionNodes,
-)
-from ._session_types import (
+from . import Agent, io
+from ._session_bindings import (
     LLMNode as LLMNode,
     RecordingOptions as RecordingOptions,
+    SessionAdapter,
     SessionConnectOptions as SessionConnectOptions,
     STTNode as STTNode,
     TextTransforms as TextTransforms,
@@ -59,9 +51,15 @@ from ._session_types import (
     UserTurnExceededHook as UserTurnExceededHook,
     VoiceActivityVideoSampler as VoiceActivityVideoSampler,
     _CallbackT,
+    initialize,
 )
-from .agent import (
-    Agent,
+from ._session_callbacks import (
+    DefaultPipeline as DefaultPipeline,
+    _AgentHooks as _AgentHooks,
+    _DynamicInstructions as _DynamicInstructions,
+    _live_binding as _live_binding,
+    _origin as _origin,
+    _SessionNodes as _SessionNodes,
 )
 from .events import (
     AgentEvent,
@@ -71,33 +69,23 @@ from .events import (
     EventTypes,
     UserState,
 )
+from .io import SpeechHandle
 from .room_io import (
     AudioInputOptions,
     RoomOptions,
     TextInputCallback,
 )
 from .run_result import _VoiceRun
-from .speech_handle import SpeechHandle
-from .voice_task import VoiceTask as VoiceTask, VoiceTaskFailed as VoiceTaskFailed
 
 if TYPE_CHECKING:
     from .._core import VoiceSession as _NativeSession
     from ..storage import Thread
     from ..storage.context import ContextStore
     from .amd import AMD
-    from .turn import EndpointingOptions, InterruptionOptions, TurnDetectionMode
-
-__all__ = [
-    "VoiceSession",
-    "ExpressiveOptions",
-    "NonverbalOptions",
-    "SessionConnectOptions",
-    "SpeechSteeringOptions",
-    "VoiceActivityVideoSampler",
-    "KeytermDetectionOptions",
-    "STTContextOptions",
-    "TextTransforms",
-]
+    from .io import EndpointingOptions, InterruptionOptions, TurnDetectionMode
+from .._generated.voice_session import UpdateAgentArgs
+from .._generated.voice_task_errors import VoiceTaskFailed as VoiceTaskFailed
+from . import Output_T
 
 
 class VoiceSession(SessionCommands, rtc.EventEmitter[EventTypes], Generic[Context_T]):
@@ -340,7 +328,7 @@ class VoiceSession(SessionCommands, rtc.EventEmitter[EventTypes], Generic[Contex
         from .._generated.session_owner import SessionJobInfo
         from ..job import get_job_context
         from ..telemetry import _activate
-        from ._session_host import SessionHost
+        from ._session_bindings import SessionHost
 
         host = SessionHost(self, agent, room, room_options, chat_ctx)
         ctx = get_job_context(required=False)
@@ -510,12 +498,12 @@ class VoiceSession(SessionCommands, rtc.EventEmitter[EventTypes], Generic[Contex
     # --- the core's events ---------------------------------------------------------------
 
     def _core_event(self, wire: HostWire) -> None:
-        from ._session_events import dispatch
+        from ._session_callbacks import dispatch
 
         dispatch(self, wire)
 
     def _core_error_message(self, wire: SessionErrorWire) -> str:
-        from ._session_events import _core_error_message
+        from ._session_callbacks import _core_error_message
 
         return _core_error_message(self, wire)
 
@@ -539,7 +527,7 @@ class VoiceSession(SessionCommands, rtc.EventEmitter[EventTypes], Generic[Contex
         return super().on(event, callback)
 
     def _report_event_snapshots(self) -> list[dict[str, Any]]:
-        from ._session_events import report_snapshots
+        from ._session_callbacks import report_snapshots
 
         return report_snapshots(self)
 
@@ -548,7 +536,53 @@ class VoiceSession(SessionCommands, rtc.EventEmitter[EventTypes], Generic[Contex
         return [copy.deepcopy(event) for event in self._report_event_snapshots()]
 
     def emit(self, event: EventTypes, arg: AgentEvent) -> None:  # type: ignore[override]
-        from ._session_events import record_snapshot
+        from ._session_callbacks import record_snapshot
 
         record_snapshot(self, arg)
         super().emit(event, arg)
+
+
+class VoiceTask(Generic[Output_T, Context_T]):
+    """One bounded live interaction run by ``agent`` on the active ``VoiceSession``.
+
+    Like ``TextSession``, a ``VoiceTask`` is not an ``Agent``: it runs one. Await ``run()``
+    inside a tool of the agent holding the call: ``agent`` takes the floor (its ``on_enter``,
+    or a first reply without one) and ``run()`` returns once one of its tools returns
+    ``Completed(value)``, validated against its ``output_type``, or raises ``VoiceTaskFailed``
+    once one returns ``Failed(reason)``. The waiting agent then gets the floor back without its
+    ``on_exit`` or ``on_enter``. Cancelling the await, or closing the session, ends the task.
+    """
+
+    def __init__(self, *, agent: Agent[Context_T, Output_T]) -> None:
+        self._agent = agent
+
+    @property
+    def agent(self) -> Agent[Context_T, Output_T]:
+        return self._agent
+
+    async def run(self) -> Output_T:
+        binding = _live_binding("VoiceTask.run()")
+        session, agent = binding.session, self._agent
+        reply = session._running.run_voice_task(
+            UpdateAgentArgs(**session._frame(agent, task=True)),
+            origin=binding.origin,
+            opens_with_reply=not agent._has_on_enter(),
+        )
+        output = cast(Output_T, await reply)
+        return output
+
+
+VoiceTask.__module__ = VoiceTaskFailed.__module__ = "livekit.agents.voice.agent_session"
+
+
+__all__ = [
+    "VoiceSession",
+    "ExpressiveOptions",
+    "NonverbalOptions",
+    "SessionConnectOptions",
+    "SpeechSteeringOptions",
+    "VoiceActivityVideoSampler",
+    "KeytermDetectionOptions",
+    "STTContextOptions",
+    "TextTransforms",
+]

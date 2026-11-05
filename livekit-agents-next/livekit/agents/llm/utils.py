@@ -122,7 +122,7 @@ async def serialize_image(image: ImageContent, *, use_cache: bool = True) -> Ser
 def tool_schema(tool: FunctionTool | RawFunctionTool) -> tuple[str, str, dict[str, object]]:
     """A tool's name, description and parameters' JSON schema: what every form of its schema
     (the providers', the tool search's) is built from."""
-    from ..voice.agent_tool import _LocalAgentTool
+    from ..voice import _LocalAgentTool
 
     if isinstance(tool, _LocalAgentTool):
         return tool.info.name, tool.info.description or "", tool.schema

@@ -48,7 +48,7 @@ pub enum StreamError {
 
 #[crate::host(record(
     module = "run_stream_events",
-    path = "livekit.agents.voice.run_stream",
+    path = "livekit.agents.voice.run_result",
     emit,
     constant(type = "text_delta")
 ))]
@@ -65,7 +65,7 @@ pub struct TextDeltaEvent {
 
 #[crate::host(record(
     module = "run_stream_events",
-    path = "livekit.agents.voice.run_stream",
+    path = "livekit.agents.voice.run_result",
     emit,
     constant(type = "text_end")
 ))]
@@ -82,7 +82,7 @@ pub struct TextEndEvent {
 
 #[crate::host(record(
     module = "run_stream_events",
-    path = "livekit.agents.voice.run_stream",
+    path = "livekit.agents.voice.run_result",
     emit,
     constant(type = "tool_call")
 ))]
@@ -101,7 +101,7 @@ pub struct ToolCallEvent {
 
 #[crate::host(record(
     module = "run_stream_events",
-    path = "livekit.agents.voice.run_stream",
+    path = "livekit.agents.voice.run_result",
     emit,
     constant(type = "tool_result")
 ))]
@@ -123,7 +123,7 @@ pub struct ToolResultEvent {
 
 #[crate::host(record(
     module = "run_stream_events",
-    path = "livekit.agents.voice.run_stream",
+    path = "livekit.agents.voice.run_result",
     emit,
     constant(type = "progress")
 ))]

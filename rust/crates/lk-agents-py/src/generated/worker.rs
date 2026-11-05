@@ -1736,7 +1736,7 @@ impl ::lk_agents_abi::worker::job::SessionJob for SessionJobProxy {
 
 // Declared in rust/crates/lk-agents-abi/src/worker/remote_session.rs.
 
-/// [`::lk_agents_abi::worker::remote_session::SessionPort`] over a host `livekit.agents.voice.remote_session.RemoteSessionAccess`.
+/// [`::lk_agents_abi::worker::remote_session::SessionPort`] over a host `livekit.agents.voice._session_bindings.RemoteSessionAccess`.
 #[derive(Clone)]
 pub struct SessionPortProxy {
     host: ::std::sync::Arc<Py<PyAny>>,

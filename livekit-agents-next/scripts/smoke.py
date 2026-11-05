@@ -522,7 +522,7 @@ async def console() -> None:
     acks the played audio, and the socket ends when the session closes."""
     import struct
 
-    from livekit.agents.voice.remote_session import ConsoleCall
+    from livekit.agents.voice._session_bindings import ConsoleCall
     from livekit.protocol.agent_pb import agent_session as pb
 
     print("== console")

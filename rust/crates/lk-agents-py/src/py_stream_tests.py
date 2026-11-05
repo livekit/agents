@@ -200,7 +200,7 @@ async def test_failed_stream_keeps_correlated_input_metadata_on_the_original_fai
 ) -> None:
     from livekit.agents._generated import agent_run as records, text_session as sessions
     from livekit.agents._generated.storage_turn import PendingCall
-    from livekit.agents.voice.run_stream import RunStream, _Started
+    from livekit.agents.voice.run_result import RunStream, _Started
 
     requirement = records.RunInputRequirement(
         invocation_id="run-1",

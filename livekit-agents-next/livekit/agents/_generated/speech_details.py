@@ -20,4 +20,4 @@ class InputDetails:
 
 
 InputDetails.__annotations__ = get_annotations(InputDetails, eval_str=True)
-InputDetails.__module__ = "livekit.agents.voice.speech_handle"
+InputDetails.__module__ = "livekit.agents.voice.io"

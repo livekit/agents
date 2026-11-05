@@ -59,7 +59,7 @@ pub trait SessionPreparation: Send + Sync + Sized + 'static {
 }
 
 /// Language-specific SDK adaptation. Resource ordering belongs to the native owner.
-#[crate::host(proxy(host = "livekit.agents.voice._session_host.SessionHost"))]
+#[crate::host(proxy(host = "livekit.agents.voice._session_bindings.SessionHost"))]
 pub trait SessionHost: Send + Sync {
     #[host(await, name = "prepare")]
     fn prepare(

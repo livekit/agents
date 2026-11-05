@@ -15,7 +15,7 @@ from livekit.agents.llm import LLM
 from livekit.agents.llm.tool_context import ToolChoice
 from livekit.agents.stt import STT
 from livekit.agents.tts import TTS
-from livekit.agents.voice._session_host import SessionHost
+from livekit.agents.voice._session_bindings import SessionHost
 from livekit.agents.voice.agent_session import _SessionNodes
 from livekit.agents.voice.avatar import AudioReceiver, VideoGenerator
 from livekit.agents.voice.io import AudioInput, AudioOutput, TextOutput, VideoInput

@@ -924,7 +924,7 @@ impl CoreStreamText {
 
 // Declared in rust/crates/lk-agents-abi/src/agent/mod.rs.
 
-/// [`::lk_agents_abi::agent::AgentCallbacks`] over a host `livekit.agents.voice.agent_host.AgentCallbacks`.
+/// [`::lk_agents_abi::agent::AgentCallbacks`] over a host `livekit.agents.voice.agent_run.AgentCallbacks`.
 #[derive(Clone)]
 pub struct AgentCallbacksProxy {
     host: ::std::sync::Arc<Py<PyAny>>,
@@ -1136,7 +1136,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
-                        if e.is_instance(py, &py.import("livekit.agents.voice.agent_host").and_then(|m| m.getattr("ToolArgumentError")).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?) {
+                        if e.is_instance(py, &py.import("livekit.agents.voice.agent_run").and_then(|m| m.getattr("ToolArgumentError")).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?) {
                         return Ok(Err(<::lk_agents_abi::agent::ToolArgumentError as ::std::convert::From<String>>::from(e.value(py).to_string())));
                     }
                         return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));

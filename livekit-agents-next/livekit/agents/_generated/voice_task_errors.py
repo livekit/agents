@@ -7,7 +7,7 @@ from livekit.agents.llm.tool_context import ToolError
 
 class VoiceTaskFailed(ToolError):
     "The live task failed; its reason is the model-visible tool error message."
-    __module__ = "livekit.agents.voice.voice_task"
+    __module__ = "livekit.agents.voice.agent_session"
 
 
 __all__ = [

@@ -109,7 +109,7 @@ async def test_session_report_access_stays_with_the_job_that_started_the_session
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from livekit.agents import Agent
-    from livekit.agents.voice import _session_host
+    from livekit.agents.voice import _session_bindings as _session_host
 
     from .fake_llm import FakeLLM
 
@@ -144,7 +144,7 @@ async def test_the_session_snapshot_is_taken_once_off_the_event_loop(
     import threading
 
     from livekit.agents import Agent
-    from livekit.agents.voice.remote_session import ConsoleCall
+    from livekit.agents.voice._session_bindings import ConsoleCall
 
     from .fake_llm import FakeLLM
 

@@ -22,4 +22,4 @@ class RecordingOptions(TypedDict, total=False):
     redaction: bool
 
 
-RecordingOptions.__module__ = "livekit.agents.voice._session_types"
+RecordingOptions.__module__ = "livekit.agents.voice._session_bindings"

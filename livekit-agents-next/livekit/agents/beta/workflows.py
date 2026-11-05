@@ -35,8 +35,7 @@ from ..job import JobContext, _server_credentials, get_job_context
 from ..llm.tool_context import Completed, ToolError, ToolFlag, function_tool
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
-from ..voice import room_io
-from ..voice.agent import Agent
+from ..voice import Agent, room_io
 from ..voice.agent_session import VoiceSession, VoiceTask, _live_binding
 from ..voice.background_audio import (
     AudioConfig,
@@ -49,7 +48,7 @@ from ..voice.events import RunContext
 from ..voice.room_io import Room
 
 if TYPE_CHECKING:
-    from ..voice.turn import TurnHandlingOptions
+    from ..voice.io import TurnHandlingOptions
 
 __all__ = [
     "DtmfEvent",

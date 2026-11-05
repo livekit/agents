@@ -34,9 +34,9 @@ if TYPE_CHECKING:
     from livekit.agents.llm import LLM, Toolset
     from livekit.agents.stt import STT
     from livekit.agents.tts import TTS
+    from livekit.agents.voice._session_bindings import RemoteSessionAccess
     from livekit.agents.voice.agent_session import VoiceSession, _AgentHooks, _DynamicInstructions
     from livekit.agents.voice.io import AudioInput, AudioOutput, TextOutput, VideoInput
-    from livekit.agents.voice.remote_session import RemoteSessionAccess
 
     from ..types import NotGivenOr
     from .agent_run import FunctionToolInfo

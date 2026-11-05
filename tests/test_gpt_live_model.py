@@ -909,7 +909,7 @@ async def test_delayed_context_receipts_do_not_block_commands_or_finish_speech(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from livekit.agents import Agent, VoiceSession
-    from livekit.agents.voice.speech_handle import SpeechHandle
+    from livekit.agents.voice.io import SpeechHandle
 
     from .fake_io import FakeAudioOutput
 

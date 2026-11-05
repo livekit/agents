@@ -178,7 +178,7 @@ pub struct SessionConnOptions {
 /// Of a detector object only whether it streams crosses.
 #[crate::host(codec(
     extract,
-    host = "livekit.agents.voice.turn.TurnDetectionMode | None",
+    host = "livekit.agents.voice.io.TurnDetectionMode | None",
     py = "py_values::turn_detection_kwarg"
 ))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -210,7 +210,7 @@ impl TurnDetectionKwarg {
 #[crate::host(record(
     module = "turn",
     name = "EndpointingOptions",
-    path = "livekit.agents.voice.turn",
+    path = "livekit.agents.voice.io",
     typed_dict,
     extract
 ))]
@@ -244,7 +244,7 @@ pub struct EndpointingKwargs {
 #[crate::host(record(
     module = "turn",
     name = "InterruptionOptions",
-    path = "livekit.agents.voice.turn",
+    path = "livekit.agents.voice.io",
     typed_dict,
     extract
 ))]
@@ -290,7 +290,7 @@ pub struct InterruptionKwargs {
 #[crate::host(record(
     module = "turn",
     name = "PreemptiveGenerationOptions",
-    path = "livekit.agents.voice.turn",
+    path = "livekit.agents.voice.io",
     typed_dict,
     extract
 ))]
@@ -328,7 +328,7 @@ pub struct PreemptiveKwargs {
 #[crate::host(record(
     module = "turn",
     name = "UserTurnLimitOptions",
-    path = "livekit.agents.voice.turn",
+    path = "livekit.agents.voice.io",
     typed_dict,
     extract
 ))]
@@ -365,7 +365,7 @@ pub struct UserTurnLimitKwargs {
 #[crate::host(record(
     module = "turn",
     name = "TurnHandlingOptions",
-    path = "livekit.agents.voice.turn",
+    path = "livekit.agents.voice.io",
     typed_dict,
     extract
 ))]

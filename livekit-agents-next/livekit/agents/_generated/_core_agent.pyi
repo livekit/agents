@@ -10,7 +10,7 @@ from typing import Any, Self
 
 from livekit.agents.llm import LLM, Toolset
 from livekit.agents.storage.context import ContextStore
-from livekit.agents.voice.agent_host import AgentCallbacks
+from livekit.agents.voice.agent_run import AgentCallbacks
 
 from .._core import Storage, _core_ContextActivation
 from .agent_authoring import AgentConfiguration, CallbackKind
