@@ -2049,10 +2049,6 @@ cerebras = [
 clova = [
     { name = "livekit-plugins-clova" },
 ]
-codecs = [
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
-    { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-]
 deepgram = [
     { name = "livekit-plugins-deepgram" },
 ]
@@ -2088,9 +2084,6 @@ groq = [
 ]
 hume = [
     { name = "livekit-plugins-hume" },
-]
-images = [
-    { name = "pillow" },
 ]
 inworld = [
     { name = "livekit-plugins-inworld" },
@@ -2307,9 +2300,7 @@ requires-dist = [
     { name = "livekit-plugins-xai", marker = "extra == 'xai'", editable = "livekit-plugins/livekit-plugins-xai" },
     { name = "livekit-protocol", editable = "../python-sdks/livekit-protocol" },
     { name = "numpy", specifier = ">=1.26.0" },
-    { name = "numpy", marker = "extra == 'codecs'", specifier = ">=1.26.0" },
     { name = "opentelemetry-api", specifier = ">=1.45,<1.46" },
-    { name = "pillow", marker = "extra == 'images'", specifier = ">=10.3.0" },
     { name = "prometheus-client", specifier = ">=0.22" },
     { name = "protobuf", specifier = ">=3" },
     { name = "psutil", specifier = ">=7.0" },
@@ -2317,7 +2308,7 @@ requires-dist = [
     { name = "starlette", specifier = ">=0.40" },
     { name = "typing-extensions", specifier = ">=4.12" },
 ]
-provides-extras = ["codecs", "images", "anam", "anthropic", "assemblyai", "asyncai", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "bland", "boson-avatar", "cambai", "cartesia", "cerebras", "clova", "deepgram", "elevenlabs", "fal", "fishaudio", "fireworksai", "gladia", "gnani", "google", "groq", "hume", "inworld", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "meta", "microsoft-ai", "minimax", "mistralai", "murf", "nabrah", "neuphonic", "nltk", "nvidia", "openai", "palabra", "perplexity", "protoface", "resemble", "respeecher", "rime", "runway", "rtzr", "sarvam", "silero", "simli", "smallestai", "simplismart", "slng", "soniox", "speechify", "speechmatics", "spatius", "spitch", "synthesia", "tavus", "trugen", "ultravox", "upliftai", "vakyam", "gradium", "xai", "phonic", "did"]
+provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "bland", "boson-avatar", "cambai", "cartesia", "cerebras", "clova", "deepgram", "elevenlabs", "fal", "fishaudio", "fireworksai", "gladia", "gnani", "google", "groq", "hume", "inworld", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "meta", "microsoft-ai", "minimax", "mistralai", "murf", "nabrah", "neuphonic", "nltk", "nvidia", "openai", "palabra", "perplexity", "protoface", "resemble", "respeecher", "rime", "runway", "rtzr", "sarvam", "silero", "simli", "smallestai", "simplismart", "slng", "soniox", "speechify", "speechmatics", "spatius", "spitch", "synthesia", "tavus", "trugen", "ultravox", "upliftai", "vakyam", "gradium", "xai", "phonic", "did"]
 
 [[package]]
 name = "livekit-api"
@@ -2592,7 +2583,7 @@ name = "livekit-plugins-cerebras"
 source = { editable = "livekit-plugins/livekit-plugins-cerebras" }
 dependencies = [
     { name = "httpx2" },
-    { name = "livekit-agents-next", extra = ["codecs", "openai"] },
+    { name = "livekit-agents-next", extra = ["openai"] },
     { name = "msgpack" },
     { name = "msgpack-types" },
     { name = "openai" },
@@ -2601,7 +2592,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "httpx2", specifier = ">=2.12,<3" },
-    { name = "livekit-agents-next", extras = ["codecs", "openai"], editable = "livekit-agents-next" },
+    { name = "livekit-agents-next", extras = ["openai"], editable = "livekit-agents-next" },
     { name = "msgpack", specifier = ">=1.0" },
     { name = "msgpack-types", specifier = ">=0.7.0" },
     { name = "openai", specifier = ">=3.19,<4" },
@@ -2621,14 +2612,14 @@ requires-dist = [{ name = "livekit-agents-next", editable = "livekit-agents-next
 name = "livekit-plugins-deepgram"
 source = { editable = "livekit-plugins/livekit-plugins-deepgram" }
 dependencies = [
-    { name = "livekit-agents-next", extra = ["codecs"] },
+    { name = "livekit-agents-next" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "livekit-agents-next", extras = ["codecs"], editable = "livekit-agents-next" },
+    { name = "livekit-agents-next", editable = "livekit-agents-next" },
     { name = "numpy", specifier = ">=1.26" },
 ]
 
@@ -2646,11 +2637,11 @@ requires-dist = [{ name = "livekit-agents-next", editable = "livekit-agents-next
 name = "livekit-plugins-elevenlabs"
 source = { editable = "livekit-plugins/livekit-plugins-elevenlabs" }
 dependencies = [
-    { name = "livekit-agents-next", extra = ["codecs"] },
+    { name = "livekit-agents-next" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "livekit-agents-next", extras = ["codecs"], editable = "livekit-agents-next" }]
+requires-dist = [{ name = "livekit-agents-next", editable = "livekit-agents-next" }]
 
 [[package]]
 name = "livekit-plugins-fal"
@@ -2680,13 +2671,13 @@ requires-dist = [{ name = "livekit-agents-next", editable = "livekit-agents-next
 name = "livekit-plugins-fishaudio"
 source = { editable = "livekit-plugins/livekit-plugins-fishaudio" }
 dependencies = [
-    { name = "livekit-agents-next", extra = ["codecs"] },
+    { name = "livekit-agents-next" },
     { name = "msgpack" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "livekit-agents-next", extras = ["codecs"], editable = "livekit-agents-next" },
+    { name = "livekit-agents-next", editable = "livekit-agents-next" },
     { name = "msgpack", specifier = ">=1.0" },
 ]
 
@@ -2695,7 +2686,7 @@ name = "livekit-plugins-gladia"
 source = { editable = "livekit-plugins/livekit-plugins-gladia" }
 dependencies = [
     { name = "aiohttp" },
-    { name = "livekit-agents-next", extra = ["codecs"] },
+    { name = "livekit-agents-next" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
 ]
@@ -2703,7 +2694,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.8.0" },
-    { name = "livekit-agents-next", extras = ["codecs"], editable = "livekit-agents-next" },
+    { name = "livekit-agents-next", editable = "livekit-agents-next" },
     { name = "numpy", specifier = ">=1.26" },
 ]
 
@@ -2711,13 +2702,13 @@ requires-dist = [
 name = "livekit-plugins-gnani"
 source = { editable = "livekit-plugins/livekit-plugins-gnani" }
 dependencies = [
-    { name = "livekit-agents-next", extra = ["codecs"] },
+    { name = "livekit-agents-next" },
     { name = "websockets" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "livekit-agents-next", extras = ["codecs"], editable = "livekit-agents-next" },
+    { name = "livekit-agents-next", editable = "livekit-agents-next" },
     { name = "websockets", specifier = ">=14.0,<16.0" },
 ]
 
@@ -2768,7 +2759,7 @@ dependencies = [
     { name = "aiohttp" },
     { name = "httpx2" },
     { name = "livekit" },
-    { name = "livekit-agents-next", extra = ["codecs", "openai"] },
+    { name = "livekit-agents-next", extra = ["openai"] },
 ]
 
 [package.metadata]
@@ -2776,7 +2767,7 @@ requires-dist = [
     { name = "aiohttp" },
     { name = "httpx2", specifier = ">=2.12,<3" },
     { name = "livekit" },
-    { name = "livekit-agents-next", extras = ["codecs", "openai"], editable = "livekit-agents-next" },
+    { name = "livekit-agents-next", extras = ["openai"], editable = "livekit-agents-next" },
 ]
 
 [[package]]
@@ -2940,11 +2931,11 @@ requires-dist = [{ name = "livekit-agents-next", editable = "livekit-agents-next
 name = "livekit-plugins-minimax-ai"
 source = { editable = "livekit-plugins/livekit-plugins-minimax" }
 dependencies = [
-    { name = "livekit-agents-next", extra = ["codecs"] },
+    { name = "livekit-agents-next" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "livekit-agents-next", extras = ["codecs"], editable = "livekit-agents-next" }]
+requires-dist = [{ name = "livekit-agents-next", editable = "livekit-agents-next" }]
 
 [[package]]
 name = "livekit-plugins-mistralai"
@@ -3018,14 +3009,14 @@ dependencies = [
 
 [package.optional-dependencies]
 personaplex = [
-    { name = "livekit-agents-next", extra = ["codecs"] },
+    { name = "livekit-agents-next" },
     { name = "sphn" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "livekit-agents-next", editable = "livekit-agents-next" },
-    { name = "livekit-agents-next", extras = ["codecs"], marker = "extra == 'personaplex'", editable = "livekit-agents-next" },
+    { name = "livekit-agents-next", marker = "extra == 'personaplex'", editable = "livekit-agents-next" },
     { name = "nvidia-riva-client" },
     { name = "sphn", marker = "extra == 'personaplex'", specifier = ">=0.2.0" },
 ]
@@ -3036,7 +3027,7 @@ name = "livekit-plugins-openai"
 source = { editable = "livekit-plugins/livekit-plugins-openai" }
 dependencies = [
     { name = "httpx2" },
-    { name = "livekit-agents-next", extra = ["codecs", "images"] },
+    { name = "livekit-agents-next" },
     { name = "openai" },
 ]
 
@@ -3049,7 +3040,7 @@ vertex = [
 requires-dist = [
     { name = "google-auth", marker = "extra == 'vertex'", specifier = ">=2.0.0" },
     { name = "httpx2", specifier = ">=2.12,<3" },
-    { name = "livekit-agents-next", extras = ["codecs", "images"], editable = "livekit-agents-next" },
+    { name = "livekit-agents-next", editable = "livekit-agents-next" },
     { name = "openai", specifier = ">=3.19,<4" },
 ]
 provides-extras = ["vertex"]
@@ -3138,14 +3129,14 @@ requires-dist = [
 name = "livekit-plugins-rime"
 source = { editable = "livekit-plugins/livekit-plugins-rime" }
 dependencies = [
-    { name = "livekit-agents-next", extra = ["codecs"] },
+    { name = "livekit-agents-next" },
     { name = "protobuf" },
     { name = "rime-api" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "livekit-agents-next", extras = ["codecs"], editable = "livekit-agents-next" },
+    { name = "livekit-agents-next", editable = "livekit-agents-next" },
     { name = "protobuf", specifier = ">=6.33.5" },
     { name = "rime-api", specifier = ">=0.0.1" },
 ]
@@ -3179,7 +3170,7 @@ name = "livekit-plugins-sarvam"
 source = { editable = "livekit-plugins/livekit-plugins-sarvam" }
 dependencies = [
     { name = "httpx2" },
-    { name = "livekit-agents-next", extra = ["codecs", "openai"] },
+    { name = "livekit-agents-next", extra = ["openai"] },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
 ]
@@ -3187,7 +3178,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "httpx2", specifier = ">=2.12,<3" },
-    { name = "livekit-agents-next", extras = ["codecs", "openai"], editable = "livekit-agents-next" },
+    { name = "livekit-agents-next", extras = ["openai"], editable = "livekit-agents-next" },
     { name = "numpy", specifier = ">=1.26" },
 ]
 
@@ -3215,14 +3206,14 @@ requires-dist = [{ name = "livekit-agents-next", editable = "livekit-agents-next
 name = "livekit-plugins-simplismart"
 source = { editable = "livekit-plugins/livekit-plugins-simplismart" }
 dependencies = [
-    { name = "livekit-agents-next", extra = ["codecs"] },
+    { name = "livekit-agents-next" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "livekit-agents-next", extras = ["codecs"], editable = "livekit-agents-next" },
+    { name = "livekit-agents-next", editable = "livekit-agents-next" },
     { name = "numpy", specifier = ">=1.26" },
 ]
 
@@ -3244,14 +3235,14 @@ requires-dist = [
 name = "livekit-plugins-smallestai"
 source = { editable = "livekit-plugins/livekit-plugins-smallestai" }
 dependencies = [
-    { name = "livekit-agents-next", extra = ["codecs"] },
+    { name = "livekit-agents-next" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "livekit-agents-next", extras = ["codecs"], editable = "livekit-agents-next" },
+    { name = "livekit-agents-next", editable = "livekit-agents-next" },
     { name = "numpy", specifier = ">=1.26" },
 ]
 
@@ -3284,14 +3275,14 @@ name = "livekit-plugins-speechify"
 source = { editable = "livekit-plugins/livekit-plugins-speechify" }
 dependencies = [
     { name = "httpx" },
-    { name = "livekit-agents-next", extra = ["codecs"] },
+    { name = "livekit-agents-next" },
     { name = "speechify-api" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "httpx", specifier = ">=0.28.1,<1" },
-    { name = "livekit-agents-next", extras = ["codecs"], editable = "livekit-agents-next" },
+    { name = "livekit-agents-next", editable = "livekit-agents-next" },
     { name = "speechify-api", specifier = ">=4.0.0" },
 ]
 
@@ -3313,13 +3304,13 @@ requires-dist = [
 name = "livekit-plugins-spitch"
 source = { editable = "livekit-plugins/livekit-plugins-spitch" }
 dependencies = [
-    { name = "livekit-agents-next", extra = ["codecs"] },
+    { name = "livekit-agents-next" },
     { name = "spitch" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "livekit-agents-next", extras = ["codecs"], editable = "livekit-agents-next" },
+    { name = "livekit-agents-next", editable = "livekit-agents-next" },
     { name = "spitch", specifier = ">=1.47.0" },
 ]
 
@@ -3373,17 +3364,17 @@ requires-dist = [{ name = "livekit-agents-next", editable = "livekit-agents-next
 name = "livekit-plugins-ultravox"
 source = { editable = "livekit-plugins/livekit-plugins-ultravox" }
 dependencies = [
-    { name = "livekit-agents-next", extra = ["codecs"] },
+    { name = "livekit-agents-next" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "livekit-agents-next", extras = ["codecs"], editable = "livekit-agents-next" }]
+requires-dist = [{ name = "livekit-agents-next", editable = "livekit-agents-next" }]
 
 [[package]]
 name = "livekit-plugins-upliftai"
 source = { editable = "livekit-plugins/livekit-plugins-upliftai" }
 dependencies = [
-    { name = "livekit-agents-next", extra = ["codecs"] },
+    { name = "livekit-agents-next" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "python-socketio", extra = ["asyncio-client"] },
@@ -3391,7 +3382,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "livekit-agents-next", extras = ["codecs"], editable = "livekit-agents-next" },
+    { name = "livekit-agents-next", editable = "livekit-agents-next" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "python-socketio", extras = ["asyncio-client"], specifier = ">=5.13" },
 ]
@@ -3400,13 +3391,13 @@ requires-dist = [
 name = "livekit-plugins-vakyam"
 source = { editable = "livekit-plugins/livekit-plugins-vakyam" }
 dependencies = [
-    { name = "livekit-agents-next", extra = ["codecs"] },
+    { name = "livekit-agents-next" },
     { name = "websockets" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "livekit-agents-next", extras = ["codecs"], editable = "livekit-agents-next" },
+    { name = "livekit-agents-next", editable = "livekit-agents-next" },
     { name = "websockets", specifier = ">=14.0,<16.0" },
 ]
 

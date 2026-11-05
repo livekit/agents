@@ -31,7 +31,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
-    "livekit-agents-next[codecs]>=1.8.6",
+    "livekit-agents-next>=1.8.6",
     "websockets>=14.0,<16.0",
 ]
 

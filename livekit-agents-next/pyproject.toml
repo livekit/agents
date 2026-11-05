@@ -53,8 +53,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-codecs = ["numpy>=1.26.0"]
-images = ["pillow>=10.3.0"]
 anam = ["livekit-plugins-anam>=1.8.6"]
 anthropic = ["livekit-plugins-anthropic>=1.8.6"]
 assemblyai = ["livekit-plugins-assemblyai>=1.8.6"]

@@ -22,7 +22,7 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "livekit-agents-next[codecs, openai]>=1.8.6",
+    "livekit-agents-next[openai]>=1.8.6",
     # SDK 3.x sends requests through httpx2, where _PayloadTransport re-encodes them.
     "openai>=3.19,<4",
     "httpx2>=2.12,<3",
