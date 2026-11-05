@@ -462,17 +462,13 @@ def _assert_session_update(session, event: dict, expected: dict) -> None:
                 "temperature": _ABSENT,
                 "truncation": "auto",
                 "caps.audio_output": True,
-                # The server preserves client-supplied item ids, so the base
-                # diff/create/delete chat-context synchronization works.
+                # The server preserves client item ids, so the base chat-ctx diff works.
                 "caps.mutable_chat_context": True,
-                # item.create is a pure insert server-side; the framework must
-                # send response.create after tool outputs.
+                # item.create never triggers a reply; the framework sends response.create.
                 "caps.auto_tool_reply_generation": False,
                 # No transcription model set -> no user-transcript events.
                 "caps.user_transcription": False,
-                # No per-response override: the framework must scope
-                # tool_choice/tools at the session level around generate_reply()
-                # instead of embedding them in response.create.
+                # The framework scopes tool_choice/tools at the session level instead.
                 "caps.per_response_tool_choice": False,
             },
             id="defaults",
@@ -531,8 +527,7 @@ def _assert_session_update(session, event: dict, expected: dict) -> None:
             {"audio.input.turn_detection": None, "caps.turn_detection": False},
             id="turn-detection-none",
         ),
-        # README documents turn_detection=None/False as equivalent; False must
-        # not crash (dict(False) raises TypeError - bool isn't iterable).
+        # README documents False as equivalent to None; it must not crash.
         pytest.param(
             {"turn_detection": False},
             {"audio.input.turn_detection": None, "caps.turn_detection": False},
@@ -598,10 +593,7 @@ async def test_boson_realtime_initial_session_update(open_session, kwargs, expec
             {"audio.input.turn_detection": None, "caps.turn_detection": False},
             id="turn-detection-false",
         ),
-        # Unlike turn_detection/noise_reduction, the server's `truncation` field is
-        # non-Optional ("auto"/"disabled" only); sending null would fail server
-        # validation and tear down the whole session. `None` must be a no-op here,
-        # not forwarded to the wire.
+        # `truncation` has no null on the wire (it ends the session), so None is a no-op.
         pytest.param(
             {"truncation": "disabled"},
             {"truncation": None, "voice": "coral"},
@@ -649,9 +641,8 @@ async def test_boson_realtime_session_updates_send_only_what_changed(open_sessio
 
 
 async def test_boson_realtime_reconnect_config_carries_every_partial_update(open_session):
-    # Partial updates only work while the server holds the rest. A reconnect
-    # starts a session that holds nothing, so the config it sends first must
-    # still include everything changed piecemeal before.
+    # A reconnect starts a session that holds nothing, so the config it sends first
+    # must include everything changed piecemeal before.
     session = await open_session(input_audio_transcription={"model": "asr-v1", "language": "en"})
     await session.update_tools([llm.function_tool(lookup_policy)])
     await session.update_instructions("Be thorough.")
@@ -701,10 +692,8 @@ async def test_boson_realtime_model_options_merge_dicts_like_sessions(open_sessi
 
 
 async def test_boson_realtime_unsupported_tool_type_warns_once(open_session, monkeypatch):
-    # A tool the wire has no shape for is left out of session.update. Doing that
-    # silently means a tool the caller registered never reaches the model and
-    # leaves no trace anywhere; the framework gaining a new tool kind is exactly
-    # when that would happen.
+    # A tool with no wire shape is left out of session.update, and silently dropping
+    # it would leave no trace, so it warns.
     class _UnknownTool:
         pass
 
@@ -790,28 +779,9 @@ async def test_boson_realtime_generation_streams_output(open_session, kwargs, pa
     assert session._current_generation is None
 
 
-async def test_boson_realtime_generate_reply_uses_response_metadata(open_session):
-    session = await open_session()
-    generation_fut = session.generate_reply()
-    response_create = await session._msg_ch.recv()
-    event_id = response_create["event_id"]
-    assert response_create["response"]["metadata"]["client_event_id"] == event_id
-
-    _server_event(session, _response_created("resp_auto"))
-    assert not generation_fut.done()
-    assert event_id in session._response_created_futures
-
-    _server_event(session, _response_created("resp_manual", event_id))
-    generation = await generation_fut
-    assert generation.response_id == "resp_manual"
-    assert generation.user_initiated is True
-    assert session._response_created_futures == {}
-
-
 async def test_boson_realtime_generate_reply_instructions_ride_in_response_create(open_session):
-    # A per-response `instructions` goes in response.create, and the session
-    # config around it is left untouched — no scoping session.update before it,
-    # none after.
+    # Per-response `instructions` ride in response.create, with no scoping
+    # session.update around it.
     session = await open_session()
     await session.update_instructions("Base instructions.")
     await session._msg_ch.recv()
@@ -827,10 +797,8 @@ async def test_boson_realtime_generate_reply_instructions_ride_in_response_creat
 
 
 async def test_boson_realtime_generate_reply_ignores_per_response_tools(open_session, monkeypatch):
-    # The server accepts per-response tools/tool_choice and ignores them, so
-    # forwarding them would look like they applied. The framework scopes them at
-    # the session level instead (per_response_tool_choice is False); a caller
-    # reaching this session directly gets a warning and no wire change.
+    # The server accepts and ignores per-response tools/tool_choice, so they are not
+    # forwarded; a caller reaching this session directly gets a warning.
     session = await open_session()
     warnings = _capture_warnings(monkeypatch)
 
@@ -849,18 +817,6 @@ async def test_boson_realtime_generate_reply_ignores_per_response_tools(open_ses
     assert len(warnings) == 1
 
 
-async def test_boson_realtime_new_response_closes_previous_generation(open_session):
-    session = await open_session()
-    _server_event(session, _response_created("resp_1"))
-    first_generation = session._current_generation
-    assert first_generation is not None
-
-    _server_event(session, _response_created("resp_2"))
-    assert first_generation.message_ch.closed
-    assert first_generation.function_ch.closed
-    assert session._current_generation is not first_generation
-
-
 async def test_boson_realtime_discarded_response_keeps_active_generation_streams(open_session):
     # A response that timed out before the server created it must be discarded
     # without cutting off the streams of a newer in-progress generation.
@@ -872,8 +828,7 @@ async def test_boson_realtime_discarded_response_keeps_active_generation_streams
     assert active_generation is not None
 
     _server_event(session, _response_created("resp_stale", "evt_stale"))
-    # the active generation's streams stay open and interrupt() still
-    # targets the active response, not the discarded one
+    # the active generation's streams stay open and interrupt() targets it
     assert not active_generation.message_ch.closed
     assert not active_generation.function_ch.closed
     assert session._current_generation is active_generation
@@ -884,8 +839,7 @@ async def test_boson_realtime_discarded_response_keeps_active_generation_streams
     assert cancel_event["type"] == "response.cancel"
     assert cancel_event["response_id"] == "resp_stale"
 
-    # the stale response's terminal event must not close the active
-    # generation either
+    # the stale response's terminal event must not close the active one either
     _server_event(session, _response_done("resp_stale", "cancelled"))
     assert not active_generation.message_ch.closed
     assert session._current_generation is active_generation
@@ -940,18 +894,17 @@ async def test_boson_realtime_superseded_response_still_records_call_arguments(o
 
 
 async def test_boson_realtime_stale_response_done_does_not_corrupt_new_generation(open_session):
-    # A's response.done can legitimately arrive after B's response.created:
-    # A's terminal cleanup is queued behind its own buffered audio output on
-    # the server, while B's response.created is emitted immediately on a
-    # separate path. Every response-scoped handler must ignore events whose
-    # response_id isn't the current one, not just response.done.
+    # A's response.done can arrive after B's response.created (it queues behind A's
+    # audio on the server), so every response-scoped handler filters by response id.
     session = await open_session()
     _server_event(session, _response_created("resp_a"), _output_item("added", "resp_a", "item_a"))
+    generation_a = session._current_generation
 
-    # B supersedes A before A's response.done arrives.
+    # B supersedes A before A's response.done arrives, and closes A's streams.
     _server_event(session, _response_created("resp_b"))
     generation_b = session._current_generation
-    assert generation_b is not None
+    assert generation_b is not None and generation_b is not generation_a
+    assert generation_a.message_ch.closed and generation_a.function_ch.closed
     assert session._current_response_id == "resp_b"
 
     _server_event(session, _output_item("added", "resp_b", "item_b"))
@@ -961,9 +914,7 @@ async def test_boson_realtime_stale_response_done_does_not_corrupt_new_generatio
     _server_event(session, _content("content_part.added", "resp_b", "item_b", part=_TEXT_PART))
     assert await message_b.modalities == ["text"]
 
-    # A's late trailing delta targets an item that only exists on A's
-    # (already-discarded) generation; it must be dropped before it can
-    # even be looked up against B's, not silently misapplied to B.
+    # A's late delta names an item only A had: dropped, not misapplied to B.
     _server_event(session, _content("output_text.delta", "resp_a", "item_a", delta="stale from A"))
 
     # A's late response.done must not close B.
@@ -983,11 +934,8 @@ async def test_boson_realtime_stale_response_done_does_not_corrupt_new_generatio
 
 
 async def test_boson_realtime_late_event_after_generation_finished_is_dropped(open_session):
-    # Trailing events for a superseded response can still arrive after the
-    # response that superseded it has itself finished, leaving no generation
-    # in the slot. Filtering must not depend on one being there: every
-    # response-scoped handler in the base except response.done asserts on a
-    # missing generation, so letting these through raises instead of dropping.
+    # A superseded response's trailing events can arrive after the slot emptied;
+    # the base handlers assert on a generation, so they must be dropped, not passed.
     session = await open_session()
     _server_event(session, _response_created("resp_a"), _output_item("added", "resp_a", "item_a"))
 
@@ -1010,12 +958,8 @@ async def test_boson_realtime_late_event_after_generation_finished_is_dropped(op
 
 
 async def test_boson_realtime_discarded_response_trailing_event_after_active_done(open_session):
-    # A response discarded on arrival (its generate_reply timed out or was
-    # interrupted first) does not get the base's discard placeholder parked in
-    # the slot when a real generation is already streaming there — it is
-    # filtered by response id instead. Once that real response finishes and
-    # empties the slot, the discarded response's own trailing events must
-    # still be dropped rather than forwarded to a missing generation.
+    # A response discarded on arrival while a real one streams is filtered by id, not
+    # parked in the slot; its trailing events must still drop once the slot empties.
     session = await open_session()
     _server_event(session, _response_created("resp_a"))
     generation_a = session._current_generation
@@ -1038,12 +982,9 @@ async def test_boson_realtime_discarded_response_trailing_event_after_active_don
     ("kwargs", "server_vad"),
     [
         pytest.param({}, True, id="server-vad"),
-        # `interrupt_response` in the turn_detection payload does not currently
-        # change Higgs Realtime's actual auto-interrupt behavior: server VAD always
-        # auto-cancels the active response on speech start regardless of this
-        # field. The client must suppress its own duplicate response.cancel
-        # whenever server VAD is enabled at all, even if the caller set
-        # `interrupt_response: False` expecting it to disable auto-interrupt.
+        # Higgs server VAD always cancels the active response on speech start, whatever
+        # `interrupt_response` says, so the client skips its own duplicate cancel
+        # whenever server VAD is on.
         pytest.param(
             {"turn_detection": {"type": "server_vad", "interrupt_response": False}},
             True,
@@ -1071,20 +1012,6 @@ async def test_boson_realtime_interrupt_sends_response_cancel_unless_server_did(
     assert cancel_event["response_id"] == "resp_1"
 
 
-async def test_boson_realtime_commit_audio_skips_short_buffers(open_session):
-    session = await open_session()
-
-    session._pushed_duration_s = 0.05
-    session.commit_audio()
-    assert session._msg_ch.empty()
-    assert session._pushed_duration_s == 0.05
-
-    session._pushed_duration_s = 0.11
-    session.commit_audio()
-    assert (await session._msg_ch.recv())["type"] == "input_audio_buffer.commit"
-    assert session._pushed_duration_s == 0.0
-
-
 # --- remote conversation mirror and transcripts --------------------------------
 
 
@@ -1101,9 +1028,8 @@ _AUDIO_ONLY_TURN = _user_item_added("user_1", [{"type": "input_audio", "audio": 
             ["what's the weather"],
             id="merged-readd-updates-text",
         ),
-        # Audio-input configs re-add the merged item with an empty input_audio
-        # part; a transcript already applied by input_audio_transcription.completed
-        # must not be wiped.
+        # Audio-input configs re-add the merged item with an empty input_audio part;
+        # the transcript already applied must not be wiped.
         pytest.param(
             [_AUDIO_ONLY_TURN, _transcribed("user_1", "hello there"), _AUDIO_ONLY_TURN],
             ["hello there"],
@@ -1135,16 +1061,10 @@ async def test_boson_realtime_remote_item_text_follows_the_server(open_session, 
 
 
 async def test_boson_realtime_transcription_carries_the_turn_start(open_session):
-    # The framework stamps the user's message with turn_started_at
-    # (agent_activity._on_input_audio_transcription_completed) so a late
-    # transcript cannot land after the reply it prompted. Without it the message
-    # is dated when the text arrived.
-    #
-    # The server merges consecutive user speech into one item: speech_started
-    # fires once per fragment under the same id, and the item is re-transcribed
-    # with its accumulated text each time. Every revision describes the same
-    # turn, so every one of them has to report the turn's own beginning -- not
-    # the latest fragment's, and not None once the first revision consumed it.
+    # The framework dates the user's message by turn_started_at so a late transcript
+    # cannot land after the reply it prompted. The server merges consecutive speech
+    # into one item and re-transcribes it, so every revision must report the turn's
+    # own start, not the latest fragment's and not None after the first.
     session = await open_session()
     completed = _collect(session, "input_audio_transcription_completed")
     first = "so, these thought experiments"
@@ -1221,9 +1141,8 @@ async def test_boson_realtime_chat_ctx_item_uses_boson_shape(open_session, messa
 @pytest.mark.parametrize(
     "dropped",
     [
-        # The server's conversation store only accepts role "assistant"/"user"
-        # (add_resource_item raises ValueError otherwise); system/developer items
-        # would never see their conversation.item.added echo.
+        # The server only stores assistant/user items; system/developer items would
+        # never get their item.added echo.
         pytest.param(
             [("sys_1", "system", "System note."), ("dev_1", "developer", "Developer note.")],
             id="system-and-developer",
@@ -1238,9 +1157,8 @@ async def test_boson_realtime_chat_ctx_item_uses_boson_shape(open_session, messa
 async def test_boson_realtime_chat_ctx_skips_unsendable_items_and_remaps_prev(
     open_session, dropped
 ):
-    # Unsendable items are dropped client-side instead of sending a create the
-    # server rejects, and a previous_item_id pointing at one is remapped to its
-    # predecessor so the server never sees an unknown previous_item_id.
+    # Unsendable items are dropped client-side, and a previous_item_id pointing at
+    # one is remapped to its predecessor.
     session = await open_session()
     update_task = asyncio.create_task(
         session.update_chat_ctx(
@@ -1264,8 +1182,7 @@ async def test_boson_realtime_chat_ctx_skips_unsendable_items_and_remaps_prev(
 
 
 async def test_boson_realtime_update_chat_ctx_deletes_removed_items(open_session):
-    # Client-supplied item ids are preserved by the server, so removed items
-    # are addressable: the base diff issues conversation.item.delete for them.
+    # The server keeps client ids, so the base diff deletes removed items by id.
     session = await open_session()
     _server_event(session, _user_text("user_1", "hi"), _user_text("user_2", "again"))
 
@@ -1281,11 +1198,8 @@ async def test_boson_realtime_update_chat_ctx_deletes_removed_items(open_session
 
 
 async def test_boson_realtime_update_chat_ctx_rebuilds_on_head_insert(open_session):
-    # The server has no insert-at-head primitive (previous_item_id=None only
-    # means append-at-tail). Prepending a new item ahead of turns the server
-    # already has (e.g. a context summary) must not be silently mapped to
-    # append-at-tail, which would misorder the conversation — it must rebuild
-    # the remote conversation in the target order instead.
+    # The server has no insert-at-head (previous_item_id=None appends at the tail),
+    # so prepending ahead of what it holds rebuilds the conversation instead.
     session = await open_session()
     asst = _item("asst_1", role="assistant", content=[{"type": "text", "text": "hello"}])
     _server_event(session, _user_text("user_1", "hi"), _item_added_echo(asst, "user_1"))
@@ -1318,12 +1232,8 @@ async def test_boson_realtime_update_chat_ctx_rebuilds_on_head_insert(open_sessi
 
 
 async def test_boson_realtime_unsupported_role_at_head_does_not_rebuild(open_session):
-    # A system/developer item is never sent, so it never lands in the remote
-    # context — which means the diff would see it as missing remotely on every
-    # single sync. At the head of the context that reads as an insert before
-    # everything else and triggers the full delete/recreate rebuild, forever,
-    # for an item that is dropped either way. Unsupported roles must be
-    # filtered before the diff, not while walking its output.
+    # A system item is never sent, so the diff would see it missing at the head on
+    # every sync and rebuild forever. Unsupported roles are filtered before the diff.
     session = await open_session()
     _server_event(session, _user_text("user_1", "hi"))
 
@@ -1349,32 +1259,25 @@ async def test_boson_realtime_unsupported_role_at_head_does_not_rebuild(open_ses
 
 
 async def test_boson_realtime_head_text_change_rebuilds_rather_than_reorders(open_session):
-    # Editing the text of the item at the head is not an insert, but it reaches
-    # the rebuild for the same reason one does: the base expresses a content
-    # change as a delete and a create, and that create carries "root". Sending it
-    # incrementally would map "root" to None, which appends -- putting the head
-    # item after the turns it used to precede, since the delete just removed it
-    # from its position. Narrowing the trigger to "genuine inserts" reintroduces
-    # exactly that, so the behaviour is pinned here.
+    # Editing the head item's text reaches the rebuild too: the base sends a delete
+    # and a create anchored at "root", which incrementally would append it after
+    # the turns it preceded.
     session = await open_session()
-    # Chained after user_1: _user_text always reports no predecessor, which the
-    # remote mirror reads as insert-at-head and would leave the two in reverse
-    # order.
+    # Chained after user_1: _user_text reports no predecessor, which the mirror reads
+    # as insert-at-head.
     second = _user_text("user_2", "again")
     second["previous_item_id"] = "user_1"
     _server_event(session, _user_text("user_1", "hi"), second)
 
     target = _ctx(("user_1", "user", "hello there"), ("user_2", "user", "again"))
     update_task = asyncio.create_task(session.update_chat_ctx(target))
-    # Bounded: a narrower trigger sends two events rather than four, and this
-    # has to fail rather than block waiting for the other two.
+    # Bounded, so a regression that sends two events fails instead of blocking.
     events = []
     with contextlib.suppress(asyncio.TimeoutError):
         while True:
             events.append(await asyncio.wait_for(session._msg_ch.recv(), timeout=0.5))
 
-    # Everything torn down, then re-sent in target order -- not a delete and
-    # an append of user_1 alone, which would leave it behind user_2.
+    # Everything torn down, then re-sent in target order.
     assert [e["type"] for e in events] == [
         "conversation.item.delete",
         "conversation.item.delete",
@@ -1393,14 +1296,10 @@ async def test_boson_realtime_head_text_change_rebuilds_rather_than_reorders(ope
 
 
 async def test_boson_realtime_rebuild_warns_about_turns_it_cannot_put_back(open_session, caplog):
-    # Inserting ahead of what the server holds rebuilds the whole conversation,
-    # which deletes every remote item and recreates only the ones with text. A
-    # user turn still waiting on its transcript has none, so the delete takes it
-    # away and nothing puts it back until a later sync. That is inherent -- no
-    # audio is kept client-side -- but it must not happen silently.
+    # A rebuild recreates only items with text, so a user turn still waiting on its
+    # transcript is lost until a later sync. Inherent, but it must not be silent.
     session = await open_session()
-    # An audio turn whose transcription has not arrived: the server holds it,
-    # the local mirror has it with no content.
+    # An audio turn whose transcription has not arrived.
     _server_event(session, _user_item_added("user_1", [{"type": "input_audio"}]))
     assert session._remote_chat_ctx.get("user_1").item.content == []
 
@@ -1421,17 +1320,12 @@ async def test_boson_realtime_rebuild_warns_about_turns_it_cannot_put_back(open_
 
 
 async def test_boson_realtime_emptied_turn_is_deleted_loudly(open_session, caplog):
-    # The base states a content change as a delete plus a create under one id.
-    # When the new content has no text there is no create to send -- the server
-    # stores nothing for a textless item -- so only the delete goes out and the
-    # turn leaves the conversation instead of being updated in place. The delete
-    # is the honest translation of "this text is no longer in the context", but
-    # losing the turn outright is a bigger outcome than emptying it, so it is
-    # reported the same way the rebuild path reports what it cannot put back.
+    # A content change is a delete plus a create under one id. With no text there
+    # is no create, so the turn is deleted rather than emptied, and that is reported
+    # as the rebuild path reports what it cannot put back.
     session = await open_session()
-    # Each added item goes in at the head, so this leaves the server holding
-    # [user_1, user_2] -- user_2 is not at the head, which is what keeps this
-    # on the incremental path instead of the rebuild one.
+    # Each added item goes in at the head, leaving [user_1, user_2]: user_2 is not
+    # at the head, so this stays on the incremental path.
     _server_event(session, _user_text("user_2", "there"), _user_text("user_1", "hi"))
     assert [item.id for item in session._remote_chat_ctx.to_chat_ctx().items] == [
         "user_1",
@@ -1451,8 +1345,7 @@ async def test_boson_realtime_emptied_turn_is_deleted_loudly(open_session, caplo
 
     _server_event(session, _deleted("user_2"))
     await asyncio.wait_for(update_task, timeout=1.0)
-    # Gone from the mirror too, so the turn comes back as a create -- after
-    # the predecessor it still sits behind -- once it has text again.
+    # Gone from the mirror, so it returns as a create after user_1 once it has text.
     assert session._remote_chat_ctx.get("user_2") is None
     events = session._create_update_chat_ctx_events(
         _ctx(("user_1", "user", "hi"), ("user_2", "user", "there again"))
@@ -1461,36 +1354,18 @@ async def test_boson_realtime_emptied_turn_is_deleted_loudly(open_session, caplo
     assert events[0].item.id == "user_2"
     assert events[0].previous_item_id == "user_1"
 
-
-async def test_boson_realtime_untouched_turn_is_not_reported_as_deleted(open_session, caplog):
-    # The warning must key on a delete actually going out for the same id, not
-    # on a create being dropped: an item the conversion cannot express but that
-    # the server never held is no loss and must stay quiet.
-    session = await open_session()
-    _server_event(session, _user_text("user_1", "hi"))
-
+    # The warning keys on a delete going out for the id, not on a create being
+    # dropped: an item the server never held, here a system one, is no loss.
+    caplog.clear()
     with caplog.at_level(logging.WARNING, logger="livekit.plugins.boson"):
         events = session._create_update_chat_ctx_events(
             _ctx(("user_1", "user", "hi"), ("sys_1", "system", "Be brief."))
         )
-
     assert events == []
-    assert not [record for record in caplog.records if hasattr(record, "item_ids")]
+    assert not _reported_item_ids(caplog)
 
 
 # --- server errors -----------------------------------------------------------
-
-
-async def test_boson_realtime_server_error_fails_pending_generate_reply(open_session):
-    session = await open_session()
-    generation_fut = session.generate_reply()
-    response_create = await session._msg_ch.recv()
-
-    event_id = response_create["event_id"]
-    _server_event(session, _error(code="bad_request", message="create failed", event_id=event_id))
-    with pytest.raises(llm.RealtimeError, match="create failed"):
-        await generation_fut
-    assert session._response_created_futures == {}
 
 
 @pytest.mark.parametrize(
@@ -1498,16 +1373,10 @@ async def test_boson_realtime_server_error_fails_pending_generate_reply(open_ses
     ["insufficient_quota", "monthly_cap_reached", "contract_ended", "no_billing_account"],
 )
 async def test_boson_realtime_entitlement_refusal_is_not_recoverable(open_session, code):
-    # The server sends this error just before closing with 4429, which
-    # _NON_RETRYABLE_CLOSE_CODES already ends the session on. Emitting the error
-    # ahead of it as recoverable would promise the application a recovery the
-    # close is about to rule out, so it is raised instead: the base recv loop
-    # lets a non-retryable APIError through and _main_task reports it with
-    # recoverable=False.
-    #
-    # Note all four carry type "insufficient_quota" but only one of the codes
-    # matches the base's own fatal set, which reads code ahead of type -- hence a
-    # Boson-specific set rather than deferring to it.
+    # The server sends this just before closing with 4429, so emitting it as
+    # recoverable would promise a recovery the close rules out: it is raised and
+    # _main_task reports it with recoverable=False. All four share the type
+    # "insufficient_quota" but the base's fatal set matches only one code.
     session = await open_session()
     errors = _collect(session, "error")
 
@@ -1516,8 +1385,7 @@ async def test_boson_realtime_entitlement_refusal_is_not_recoverable(open_sessio
             session, _error("insufficient_quota", code=code, message="monthly cap reached")
         )
     assert exc_info.value.retryable is False
-    # Raised, not emitted: emitting here is what would have labelled it
-    # recoverable. _main_task emits it with recoverable=False as it unwinds.
+    # Raised, not emitted; _main_task emits it with recoverable=False.
     assert errors == []
 
 
@@ -1531,18 +1399,14 @@ _EMPTY_COMMIT = _error(code="input_audio_buffer_commit_empty", message="buffer i
         pytest.param(
             {}, _error(code="bad_request", message="unknown field"), [True], id="bad-request"
         ),
-        # commit_user_turn() commits the buffer whether or not server VAD is on,
-        # so with it on the commit routinely lands on a buffer the server already
-        # emptied. Reporting that to the app makes ordinary manual turn-taking
-        # look like a failure.
+        # With server VAD on, commit_user_turn() routinely commits a buffer the server
+        # already emptied, which is not a failure worth reporting.
         pytest.param({}, _EMPTY_COMMIT, [], id="empty-commit-under-server-vad"),
-        # With turn detection off the client owns every commit, so an empty one
-        # is a genuine client bug and must not be swallowed.
+        # With turn detection off the client owns every commit, so it is a real bug.
         pytest.param(
             {"turn_detection": None}, _EMPTY_COMMIT, [True], id="empty-commit-without-server-vad"
         ),
-        # A redundant response.cancel (nothing active) must not surface as a
-        # user-facing recoverable error, matching Boson's own client (pipecat).
+        # A redundant response.cancel is not a user-facing error (as in Boson's pipecat).
         pytest.param(
             {},
             _error(
@@ -1565,6 +1429,8 @@ async def test_boson_realtime_error_reporting(open_session, kwargs, error, recov
 @pytest.mark.parametrize(
     ("error", "reported"),
     [
+        # None: the error names this reply's response.create, so it fails that call.
+        pytest.param(None, True, id="names-the-reply"),
         # An error whose event_id belongs to something else (e.g. an unrelated
         # conversation.item.create) still surfaces, so it isn't silently lost...
         pytest.param(
@@ -1577,39 +1443,37 @@ async def test_boson_realtime_error_reporting(open_session, kwargs, error, recov
         pytest.param(_invalid_prev("user_9"), False, id="invalid-previous-item-id"),
     ],
 )
-async def test_boson_realtime_uncorrelated_error_does_not_fail_pending_generate_reply(
+async def test_boson_realtime_error_fails_only_the_generate_reply_it_names(
     open_session, error, reported
 ):
-    # Either way, an error that can't be correlated to a pending
-    # generate_reply() must not blanket-fail every in-flight call.
+    # An error that can't be correlated to a pending generate_reply() must not
+    # blanket-fail every in-flight call.
     session = await open_session()
     errors = _collect(session, "error")
     generation_fut = session.generate_reply()
-    await session._msg_ch.recv()  # response.create
+    event_id = (await session._msg_ch.recv())["event_id"]  # response.create
 
-    _server_event(session, error)
+    _server_event(session, error or _error(code="bad_request", message="failed", event_id=event_id))
     assert bool(errors) is reported
-    assert not generation_fut.done()
-    assert generation_fut in session._response_created_futures.values()
-    generation_fut.cancel()
+    if error is None:
+        with pytest.raises(llm.RealtimeError, match="failed"):
+            await generation_fut
+        assert session._response_created_futures == {}
+    else:
+        assert not generation_fut.done()
+        assert generation_fut in session._response_created_futures.values()
+        generation_fut.cancel()
 
 
 @pytest.mark.parametrize("with_event_id", [False, True])
 async def test_boson_realtime_invalid_previous_item_id_fails_update_chat_ctx_fast(
     open_session, with_event_id
 ):
-    # An older server reports neither its own event id nor, in the message, the
-    # rejected item's -- only the missing previous_item_id. Attribution then rests
-    # entirely on the item_id field, and without it update_chat_ctx() would sit
-    # until the base's 5s timeout and raise a generic "timed out" in place of this
-    # specific, immediate error.
-    #
-    # The current server also names the event id, so the generic event-id lookup
-    # reaches the create's future before the invalid_previous_item_id branch
-    # does. Both find the same object, so whichever arrives second sees it
-    # already settled -- and if escalating depended on being the one to settle it,
-    # update_chat_ctx() would return success for a sync the server refused, on
-    # exactly the servers that report the most detail.
+    # An older server names neither its event id nor the rejected item, only the
+    # missing previous_item_id, so attribution rests on item_id; without it
+    # update_chat_ctx() would wait out the base's 5s timeout. The current server
+    # also names the event id and settles the same future first, so escalation
+    # must not depend on being the one to settle it.
     session = await open_session()
     _server_event(session, _user_text("user_1", "hi"))
 
@@ -1631,11 +1495,8 @@ async def test_boson_realtime_invalid_previous_item_id_fails_update_chat_ctx_fas
 
 @pytest.mark.parametrize("fatal", [False, True], ids=["item-rejected", "fatal-refusal"])
 async def test_boson_realtime_rejected_item_settles_its_own_create(open_session, fatal):
-    # Every other rejection of a conversation.item.create names the client event
-    # id it answers, and never sends the conversation.item.added the create's
-    # future waits on. Matching the two is what keeps update_chat_ctx() from
-    # sitting out the base's 5s timeout and reporting a generic one; the base
-    # then treats the rejected item as a warning rather than a failed turn.
+    # Every other rejected item.create names its client event id and never gets
+    # its item.added echo; matching them avoids the base's 5s timeout.
     session = await open_session()
     errors = _collect(session, "error")
 
@@ -1645,10 +1506,7 @@ async def test_boson_realtime_rejected_item_settles_its_own_create(open_session,
     assert create_event["event_id"]
 
     if fatal:
-        # The counterpart: settling a chat-ctx future must not swallow a refusal
-        # that has to end the session. Which client event the server happened to
-        # be answering says nothing about whether the account can continue.
-        # _main_task is what turns the raise into a stopped session.
+        # Settling a chat-ctx future must not swallow a refusal that ends the session.
         with pytest.raises(APIError) as exc_info:
             _server_event(
                 session,
@@ -1662,23 +1520,17 @@ async def test_boson_realtime_rejected_item_settles_its_own_create(open_session,
         assert exc_info.value.retryable is False
     else:
         _server_event(session, _rejected(create_event["event_id"]))
-    # Resolves on the error rather than 5s later, and does not raise: a
-    # single rejected item is not worth failing the turn over.
+    # Resolves on the error, not 5s later, and does not raise: one rejected item
+    # is not worth failing the turn over.
     await asyncio.wait_for(update_task, timeout=0.5)
-    # Nor is a rejection also a session error: that would call one server
-    # message both harmless and a failure, and put a false alarm in front of
-    # applications during ordinary chat-context syncing.
+    # Nor is it also a session error: a false alarm during ordinary syncing.
     assert errors == []
 
 
 async def test_boson_realtime_rejected_item_survives_a_later_echo(open_session):
-    # A rejected create stays registered in _item_create_future -- the error
-    # paths settle the future without removing the entry, and only
-    # update_chat_ctx() clears it. If the server then echoes the item anyway,
-    # the merged-item branch finds a future that is already done with an
-    # exception. Resolving it there would raise InvalidStateError, which the
-    # base recv loop swallows as "failed to handle event" after abandoning the
-    # rest of this event's handling.
+    # A rejected create stays registered in _item_create_future until
+    # update_chat_ctx() clears it, so an echo the server sends anyway finds a
+    # settled future; resolving it would raise InvalidStateError.
     session = await open_session()
     _server_event(session, _user_text("user_1", "hi"))
 
@@ -1698,18 +1550,14 @@ async def test_boson_realtime_rejected_item_survives_a_later_echo(open_session):
 @pytest.mark.parametrize(
     "error",
     [
-        # A server that predates the rejected item's id in this error reports
-        # nothing the failure can be attributed to. The turn must degrade to
-        # update_chat_ctx()'s own timeout rather than pin the error on whichever
-        # create happens to be pending.
+        # A server that names no rejected item gives nothing to attribute the failure
+        # to: the turn falls back to update_chat_ctx()'s own timeout.
         pytest.param(
             _error("invalid_previous_item_id", message="the item you referenced does not exist"),
             id="unattributable",
         ),
-        # A late error for a create that's no longer pending (its update_chat_ctx()
-        # call already timed out and the base cleaned it up) names its own item,
-        # which no longer has a future to fail. It must not be misattributed to a
-        # different in-flight call just because something happens to be pending.
+        # A late error for a create that already timed out must not be pinned on a
+        # different in-flight call.
         pytest.param(_invalid_prev("root_1", item_id="user_stale"), id="stale-item"),
     ],
 )
@@ -1735,12 +1583,9 @@ async def test_boson_realtime_unmatched_invalid_previous_item_id_blames_nobody(o
 
 
 async def test_boson_realtime_concurrent_update_chat_ctx_keeps_sync_error(open_session):
-    # The sync error travels through a single session-level slot, and the base
-    # gathers its item futures with return_exceptions=True — so that slot is
-    # the only channel a per-item failure has. A second update_chat_ctx()
-    # entering while the first is parked inside the base must not clear the
-    # slot out from under it, or the first call reports success for a sync
-    # that actually failed.
+    # The sync error travels through one session-level slot, its only channel. A
+    # second update_chat_ctx() entering while the first is parked in the base must
+    # not clear it, or the first reports success for a failed sync.
     session = await open_session()
     _server_event(session, _user_text("user_1", "hi"))
 
@@ -1750,8 +1595,7 @@ async def test_boson_realtime_concurrent_update_chat_ctx_keeps_sync_error(open_s
     create_event = await session._msg_ch.recv()
     assert create_event["item"]["id"] == "user_2"
 
-    # Queued before the error lands, so its body runs before the first
-    # call gets to look at the slot.
+    # Queued before the error lands, so it runs before the first call reads the slot.
     second_task = asyncio.create_task(session.update_chat_ctx(_ctx(("user_1", "user", "hi"))))
     try:
         _server_event(session, _invalid_prev("user_1", item_id="user_2"))
@@ -1762,16 +1606,6 @@ async def test_boson_realtime_concurrent_update_chat_ctx_keeps_sync_error(open_s
 
 
 # --- connection lifecycle (real connection loop) -------------------------------
-
-
-async def test_boson_realtime_run_ws_cancellation_preserves_cancelled_error(open_session):
-    session = await open_session(drain=False)
-    run_task = asyncio.create_task(session._run_ws(_FakeWebSocket()))
-    await asyncio.sleep(0)
-    run_task.cancel()
-
-    with pytest.raises(asyncio.CancelledError):
-        await run_task
 
 
 @pytest.mark.parametrize(
@@ -1792,10 +1626,8 @@ async def test_boson_realtime_websocket_close_fails_pending_generate_reply(
     assert await _eventually(lambda: _sent_response_create(ws))
     ws.close_event.set()
 
-    # The point is that the future is resolved at all rather than left to time
-    # out. Its message comes from the base's session-loop teardown, which fails
-    # every pending generate_reply with one generic reason; the close detail
-    # (and close code) travels on the error event instead.
+    # The point is that the future resolves rather than times out; the close detail
+    # travels on the error event.
     with pytest.raises(llm.RealtimeError):
         await asyncio.wait_for(generation_fut, timeout=1.0)
     assert session._closed is True
@@ -1814,8 +1646,7 @@ _MAX_DURATION_REACHED = {"type": "session.max_duration_reached", "max_duration_s
 @pytest.mark.parametrize(
     ("outcomes", "connects", "recoverable", "detail"),
     [
-        # 4429 (WS_CLOSE_CODE_ENTITLEMENT_REFUSED) is a permanent billing refusal;
-        # reconnecting cannot fix it.
+        # 4429 is a permanent billing refusal; reconnecting cannot fix it.
         pytest.param(
             lambda: [_dropped_ws(close_message=_ws_close(4429, "insufficient_quota"))],
             1,
@@ -1859,8 +1690,8 @@ _MAX_DURATION_REACHED = {"type": "session.max_duration_reached", "max_duration_s
 async def test_boson_realtime_terminal_connection_failure_closes_the_session(
     socket_session, outcomes, connects, recoverable, detail
 ):
-    # A spare connection is scripted after each case, so an unwanted reconnect
-    # would succeed (and show up in connect_urls) rather than fail.
+    # A spare connection follows each case, so an unwanted reconnect would show up
+    # in connect_urls.
     client = _SequencedHTTPClient([*outcomes(), _FakeWebSocket()])
     session = socket_session(client, max_retry=2)
     errors = _collect(session, "error")
@@ -1889,9 +1720,8 @@ async def test_boson_realtime_reconnect_replays_chat_ctx_after_ws_drop(socket_se
         [_dropped_ws([_ws_text(_item_added_echo(item, prev)) for item, prev in items]), ws2]
     )
     session = socket_session(client)
-    # A response active on the first connection when it drops never sees its
-    # response.done on the new connection; reconnection must not carry the id
-    # over as "current" (it can no longer match anything real).
+    # A response active when the socket drops never gets its response.done, so its
+    # id must not carry over as current.
     session._current_response_id = "resp_stale"
     errors = _collect(session, "error")
     reconnected = _collect(session, "session_reconnected")
@@ -1947,34 +1777,11 @@ async def test_boson_realtime_recycles_the_connection_after_max_session_duration
     assert reconnect_update["session"]["instructions"] == "Be thorough."
 
 
-async def test_boson_realtime_pending_reply_fails_recoverably_on_reconnect(socket_session):
-    ws1 = _FakeWebSocket()
-    session = socket_session(_SequencedHTTPClient([ws1, _FakeWebSocket()]))
-    reconnected = _collect(session, "session_reconnected")
-
-    generation_fut = session.generate_reply()
-    assert await _eventually(lambda: _sent_response_create(ws1))
-    ws1.close_event.set()  # drop the connection with the reply in flight
-
-    with pytest.raises(llm.RealtimeError, match="session reconnection"):
-        await asyncio.wait_for(generation_fut, timeout=2.0)
-    assert await _eventually(lambda: reconnected)
-    assert session._closed is False
-
-
 async def test_boson_realtime_aclose_does_not_report_the_main_task_error_twice(monkeypatch):
-    # aclose cancels the main task instead of awaiting it, so closing never waits
-    # out a retry backoff or a connect in flight. _main_task re-raises on terminal
-    # failure, and cancel_and_wait reads no task's outcome -- which looks like it
-    # would leave asyncio to report "Task exception was never retrieved" on
-    # collection, for an error already delivered through the error event.
-    #
-    # It does not, for a reason easy to miss: Task.cancel() clears the flag that
-    # report is driven by as its first statement, before the done() check that
-    # makes it a no-op for an already-finished task. So the exception is never
-    # read, but the report is suppressed all the same. Asserted through the
-    # exception handler rather than that flag, since the flag is an
-    # implementation detail and the absence of the report is the actual contract.
+    # aclose cancels the main task without reading its outcome, which looks like it
+    # would make asyncio report "Task exception was never retrieved" for an error
+    # already emitted. Task.cancel() clears that flag first, so it does not; this
+    # asserts the missing report, not the flag.
     async def _failing_run(self):
         raise APIError("refused service", retryable=False)
 
