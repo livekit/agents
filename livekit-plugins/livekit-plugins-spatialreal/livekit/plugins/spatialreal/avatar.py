@@ -70,7 +70,9 @@ AVATAR_AUDIO_ACTIVITY_THRESHOLD = 100
 # per req_id; remember recent completions so duplicates are dropped
 COMPLETED_REQ_ID_HISTORY = 32
 DEFAULT_RESUME_BUFFER_MAX_SECONDS = 180.0
-DEFAULT_SESSION_TTL = timedelta(hours=1)
+# Lifetime of the SpatialReal session. The server closes the session when it expires,
+# so it has to outlive the call; the server caps it at 24h, less five minutes for clock skew.
+DEFAULT_SESSION_TTL = timedelta(hours=24) - timedelta(minutes=5)
 # TTL of the LiveKit room-join token the egress worker uses to (re)join the room.
 # This is NOT the SpatialReal session lifetime — the egress worker keeps re-joining
 # the SFU across the whole session, including after a provider-WS reconnect, so the
@@ -771,6 +773,8 @@ class AvatarSession(BaseAvatarSession):
             exc_info=error,
             extra={"generation": generation},
         )
+        # recovery replaces the connection, so this audio is lost the same way as on a close
+        self._abandon_provider_playback(reason="provider_error")
         self._schedule_provider_recovery(
             reason=f"provider_error:{self._format_error_reason(error)}"
         )
@@ -786,13 +790,16 @@ class AvatarSession(BaseAvatarSession):
             "SpatialReal provider websocket closed unexpectedly",
             extra={"generation": generation},
         )
+        self._abandon_provider_playback(reason="provider_closed")
+        self._schedule_provider_recovery(reason="provider_closed")
+
+    def _abandon_provider_playback(self, *, reason: str) -> None:
         # a server-side hold dies with its connection; fall back to duration completion
         self._release_native_hold()
-        # Audio already handed to the closed connection was never played out. Finish those
+        # Audio already handed to the lost connection was never played out. Finish those
         # segments as interrupted — the same treatment a forwarding error gets — so the
         # framework is not told later that they played in full.
-        self._complete_all_segments(interrupted=True, reason="provider_closed")
-        self._schedule_provider_recovery(reason="provider_closed")
+        self._complete_all_segments(interrupted=True, reason=reason)
 
     def _schedule_provider_recovery(self, *, reason: str) -> asyncio.Task[bool] | None:
         if self._closing:
@@ -1716,10 +1723,16 @@ class AvatarSession(BaseAvatarSession):
         if self._closing or self._drop_frames_until_segment_end:
             return
         self._discard_requested = False
-        if self._server_playback_control:
+        if (
+            self._server_playback_control
+            and self._paused_segment is None
+            and self._current_observable_segment() is not None
+        ):
             # Native path: the server holds its send cursor and keeps ingesting,
             # so we must NOT set _pause_requested (which diverts/retains frames)
             # — audio keeps flowing to the same request untouched.
+            # With no audio sent yet (the reply is still in llm/tts) the server has
+            # nothing to hold, so the first frames are held here like the emulated path.
             self._spawn_background_task(
                 self._handle_pause_native(),
                 name="spatialreal_avatar_pause_native",
@@ -1739,7 +1752,8 @@ class AvatarSession(BaseAvatarSession):
         if self._discard_requested:
             logger.debug("Ignoring SpatialReal avatar resume after confirmed interruption")
             return
-        if self._server_playback_control:
+        if self._server_playback_control and self._paused_segment is None:
+            # frames held here (see _on_pause) are replayed by the emulated resume
             self._spawn_background_task(
                 self._handle_resume_native(),
                 name="spatialreal_avatar_resume_native",
