@@ -5,14 +5,20 @@
 
 type SetupOutcome = Result<(Option<String>, Option<f32>), String>;
 
+/// The most idle job processes a production server keeps when the count comes from its CPUs.
+const MAX_DISCOVERED_IDLE_PROCESSES: u32 = 4;
+
 pub mod host;
 use crate::ipc::telemetry;
 use crate::{DrainError, Worker, WorkerClient, WorkerCommand, WorkerHost, WorkerNotification};
 use futures_util::{FutureExt, StreamExt, future::BoxFuture, stream::FuturesUnordered};
 use host::ServerCallbacks;
+use lk_agents_abi::errors::HostError;
 use lk_agents_abi::logging::LogWriter;
 use lk_agents_abi::{OwnedTask, SpawnerExt, TaskError};
 use lk_agents_net::task::TokioSpawner;
+use std::future::Future;
+use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Duration;
@@ -331,97 +337,52 @@ impl ServerRuntime {
     ) {
         let (stop, _) = watch::channel(false);
         let mut resources = Resources::default();
-        let mut failure: Option<String> = None;
-        let mut drain_requested = false;
-        let started = {
-            let startup = self.start(&start, &stop, &mut resources);
-            tokio::pin!(startup);
-            loop {
-                tokio::select! {
-                    biased;
-                    changed = control.changed() => {
-                        if changed.is_err() { break None; }
-                        let request = control.borrow_and_update().clone();
-                        drain_requested |= request.drain.is_some();
-                        if request.close { break None; }
-                    }
-                    result = &mut startup => break Some(result),
-                }
-            }
-        };
-        let mut drain = None;
-        let mut started_notification = None;
-        let mut health: Option<Arc<ServerStatus>> = None;
-        let running = matches!(started, Some(Ok(_)));
+        let (started, drain_requested) =
+            Self::await_startup(self.start(&start, &stop, &mut resources), &mut control).await;
+        let mut running = RunningServer { drain_requested, ..RunningServer::default() };
         match started {
             Some(Ok(status)) => {
-                self.set_phase(ServerPhase::Running);
-                health = Some(status.clone());
-                if drain_requested {
-                    status.draining.store(true, Ordering::Release);
-                    self.set_phase(ServerPhase::Draining);
-                    let timeout = control.borrow().drain.flatten();
-                    drain = Some(self.drain_resources(resources.worker.clone(), timeout));
-                }
-                started_notification =
-                    Some((self.host.proxy.started(&telemetry::Cx::NONE), status));
+                running.started(&self, status, &control, &resources.worker);
+                running.run(&self, &mut control, &mut resources).await;
             }
-            Some(Err(error)) => failure = Some(error),
+            Some(Err(error)) => running.failure = Some(error),
             None => {}
         }
-        let mut drained = false;
-        if running {
-            loop {
-                tokio::select! {
-                    biased;
-                    changed = control.changed() => {
-                        if changed.is_err() { break; }
-                        let request = control.borrow_and_update().clone();
-                        if request.close { break; }
-                        if request.drain.is_some() && !drain_requested {
-                            drain_requested = true;
-                            if let Some(status) = &health {
-                                status.draining.store(true, Ordering::Release);
-                            }
-                            self.set_phase(ServerPhase::Draining);
-                            drain = Some(self.drain_resources(resources.worker.clone(), request.drain.flatten()));
-                        }
-                    }
-                    result = async { started_notification.as_mut().expect("notification pending").0.as_mut().await }, if started_notification.is_some() => {
-                        let (_, status) = started_notification.take().expect("notification pending");
-                        match result {
-                            Ok(()) => {
-                                status.heartbeat();
-                                status.started.store(true, Ordering::Release);
-                            }
-                            Err(error) => { failure = Some(error.to_string()); break; }
-                        }
-                    }
-                    result = pending_drain(&mut drain), if drain.is_some() => {
-                        drain = None;
-                        drained = true;
-                        Self::settle(&self.drain_outcome, result);
-                    }
-                    result = pending_worker(&mut resources.connection), if resources.connection.is_some() => {
-                        // The connection is gone: nothing of it is left to stop.
-                        resources.connection = None;
-                        resources.worker = None;
-                        failure = Some(match result.unwrap_or_else(|error| Err(error.to_string())) {
-                            Ok(()) => "worker connection stopped".into(),
-                            Err(error) => format!("{:?}: {error}", ServerResource::Worker),
-                        });
-                        break;
-                    }
+        let failure = running.close(&self);
+        stop.send_replace(true);
+        self.close_resources(resources, failure, cleanup_timeout).await;
+    }
+
+    /// Startup's result, or `None` when a close (or the end of control) comes first; and
+    /// whether a drain was requested meanwhile.
+    async fn await_startup(
+        startup: impl Future<Output = Result<Arc<ServerStatus>, String>>,
+        control: &mut watch::Receiver<Control>,
+    ) -> (Option<Result<Arc<ServerStatus>, String>>, bool) {
+        tokio::pin!(startup);
+        let mut drain_requested = false;
+        loop {
+            tokio::select! {
+                biased;
+                changed = control.changed() => {
+                    if changed.is_err() { return (None, drain_requested); }
+                    let request = control.borrow_and_update().clone();
+                    drain_requested |= request.drain.is_some();
+                    if request.close { return (None, drain_requested); }
                 }
+                result = &mut startup => return (Some(result), drain_requested),
             }
         }
-        self.set_phase(ServerPhase::Closing);
-        if drain_requested && !drained {
-            Self::settle(&self.drain_outcome, Err(DrainError::Closed));
-        }
-        drop(drain);
-        drop(started_notification);
-        stop.send_replace(true);
+    }
+
+    /// Stops every resource, reporting the outcome when all are closed or at the cleanup
+    /// deadline, whichever comes first.
+    async fn close_resources(
+        &self,
+        resources: Resources,
+        mut failure: Option<String>,
+        cleanup_timeout: Duration,
+    ) {
         let mut closing = resources.close(self.host.clone());
         let mut remaining: std::collections::BTreeSet<ServerResource> = [
             ServerResource::Host,
@@ -491,10 +452,81 @@ impl ServerRuntime {
             settings.load_threshold = DEFAULT_LOAD_THRESHOLD;
         }
         let host = self.host.configured(start.has_rtc, start.has_load_fnc && !settings.cloud());
-        let configured = settings.prometheus_multiproc_dir.clone();
-        let discover_cpus = settings.num_idle_processes.is_none();
         let blocking_io =
             self.blocking_io.clone().unwrap_or_else(lk_agents_net::blocking_io::blocking_io);
+        self.prepare_host(&mut settings, &blocking_io, resources).await?;
+        if !start.has_rtc {
+            settings.num_idle_processes = Some(crate::EnvOption::Fixed(0));
+        }
+        let status = Arc::new(ServerStatus::default());
+        let probe = Arc::new(host.clone());
+        let local = start.devmode || start.unregistered;
+        let logging = self.host.logging;
+        resources.health = self.open_health(&settings, local, &status, &probe, stop).await?;
+        resources.metrics = self.open_metrics(&settings, local, probe, stop).await?;
+        // Decided before the job processes start, which inherit it: they delegate too.
+        let cloud_routed = !start.unregistered
+            && (settings.cloud() || lk_agents_net::strings::is_cloud_url(&settings.ws_url));
+        if start.endpoints.is_empty() {
+            logging
+                .emit(log::Level::Info, "public listener off: no endpoints or HTTP routes".into());
+        } else if cloud_routed {
+            *start.serving.lock() = Serving::Cloud;
+            logging.emit(
+                log::Level::Info,
+                "public listener off: LiveKit Cloud routes the agent's endpoints".into(),
+            );
+        } else {
+            resources.public = Some(self.open_public(&settings, start, local, stop).await?);
+        }
+        settings.endpoints_url = settings
+            .delegation_url(&start.serving.lock(), "")
+            .map(|url| url.trim_end_matches('/').to_owned())
+            .unwrap_or_default();
+        if settings.multiprocessing_fallback {
+            self.host.logging.emit(
+                log::Level::Warn,
+                "the forkserver is used on Linux only, job processes are spawned".into(),
+            );
+        }
+        host.start(settings.clone(), start.devmode, start.has_rtc).await?;
+        if start.unregistered {
+            status.registered.store(true, Ordering::Release);
+            status.connected.store(true, Ordering::Release);
+        } else {
+            let (worker, handle) = new_worker(&settings, start, host, &blocking_io);
+            resources.worker = Some(handle.clone());
+            self.snapshot.send_modify(|snapshot| snapshot.worker = Some(handle.clone()));
+            let registration = Registration {
+                notifications: handle.subscribe(),
+                logging,
+                snapshots: self.snapshot.clone(),
+                status: status.clone(),
+                has_routes: !start.endpoints.is_empty(),
+                cloud_routed,
+            };
+            resources.connection =
+                Some(TokioSpawner::current().spawn(run_worker_connection(worker, registration)));
+        }
+        let reporter = LoadReporter {
+            host: self.host.clone(),
+            worker: resources.worker.clone(),
+            status: status.clone(),
+        };
+        resources.load = Some(TokioSpawner::current().spawn(reporter.run()));
+        Ok(status)
+    }
+
+    /// Logging set up and the Prometheus directory prepared on the blocking pool, and the idle
+    /// process count taken from the CPUs when it is not configured.
+    async fn prepare_host(
+        &self,
+        settings: &mut ServerSettings,
+        blocking_io: &lk_agents_net::blocking_io::BlockingIo,
+        resources: &mut Resources,
+    ) -> Result<(), String> {
+        let configured = settings.prometheus_multiproc_dir.clone();
+        let discover_cpus = settings.num_idle_processes.is_none();
         let admission_deadline =
             Duration::try_from_secs_f64(settings.initialize_process_timeout)
                 .map_err(|_| "initialization timeout must be finite and nonnegative")?;
@@ -522,163 +554,57 @@ impl ServerRuntime {
         let (directory, cpus) = setup.map_err(|error| error.to_string())??;
         settings.prometheus_multiproc_dir = directory;
         if let Some(cpus) = cpus {
-            settings.num_idle_processes =
-                Some(crate::EnvOption::Split { dev: 0, prod: (cpus.ceil() as u32).min(4) });
+            let prod = (cpus.ceil() as u32).min(MAX_DISCOVERED_IDLE_PROCESSES);
+            settings.num_idle_processes = Some(crate::EnvOption::Split { dev: 0, prod });
         }
-        if !start.has_rtc {
-            settings.num_idle_processes = Some(crate::EnvOption::Fixed(0));
-        }
-        let status = Arc::new(ServerStatus::default());
-        let probe = Arc::new(host.clone());
-        let local = start.devmode || start.unregistered;
+        Ok(())
+    }
+
+    /// The health listener, off when simulation runs share a host.
+    async fn open_health(
+        &self,
+        settings: &ServerSettings,
+        local: bool,
+        status: &Arc<ServerStatus>,
+        probe: &Arc<ServerCallbacks>,
+        stop: &watch::Sender<bool>,
+    ) -> Result<Option<OwnedTask<Result<(), String>>>, String> {
         let logging = self.host.logging;
         if settings.simulation {
             logging
                 .emit(log::Level::Info, "health listener off: simulation runs share a host".into());
-        } else {
-            let (listener, url) = bind(&settings.listeners.health(local)).await?;
-            self.snapshot.send_modify(|snapshot| {
-                snapshot.http_port = listener.local_addr().map_or(0, |a| a.port())
-            });
-            logging.emit(
-                log::Level::Info,
-                format!("health listener url={url} paths=/,/ready,/worker"),
-            );
-            resources.health = Some(TokioSpawner::current().spawn(serve_health(
-                listener,
-                Arc::new(settings.clone()),
-                status.clone(),
-                probe.clone(),
-                stop.subscribe(),
-            )));
+            return Ok(None);
         }
-        match settings.listeners.prometheus(local) {
-            Some(address) => {
-                let (listener, url) = bind(&address).await?;
-                logging.emit(log::Level::Info, format!("prometheus listener url={url}/metrics"));
-                resources.metrics = Some(TokioSpawner::current().spawn(serve_metrics(
-                    listener,
-                    probe,
-                    stop.subscribe(),
-                )));
-            }
-            None => {
-                logging.emit(log::Level::Info, "prometheus listener off: not configured".into())
-            }
-        }
-        // Decided before the job processes start, which inherit it: they delegate too.
-        let cloud_routed = !start.unregistered
-            && (settings.cloud() || lk_agents_net::strings::is_cloud_url(&settings.ws_url));
-        if start.endpoints.is_empty() {
-            logging
-                .emit(log::Level::Info, "public listener off: no endpoints or HTTP routes".into());
-        } else if cloud_routed {
-            *start.serving.lock() = Serving::Cloud;
-            logging.emit(
-                log::Level::Info,
-                "public listener off: LiveKit Cloud routes the agent's endpoints".into(),
-            );
-        } else {
-            resources.public = Some(self.open_public(&settings, start, local, stop).await?);
-        }
-        settings.endpoints_url = settings
-            .delegation_url(&start.serving.lock(), "")
-            .map(|url| url.trim_end_matches('/').to_owned())
-            .unwrap_or_default();
-        if settings.multiprocessing_fallback {
-            self.host.logging.emit(
-                log::Level::Warn,
-                "the forkserver is used on Linux only, job processes are spawned".into(),
-            );
-        }
-        host.start(settings.clone(), start.devmode, start.has_rtc).await?;
-        if !start.unregistered {
-            let (config, connection) = settings.worker(start.devmode, start.endpoints.clone());
-            let transport = match &start.transport {
-                crate::TransportConfig::WebSocket { heartbeat } => {
-                    crate::TransportConfig::WebSocket { heartbeat: *heartbeat }
-                }
-                crate::TransportConfig::WebTransport { insecure } => {
-                    crate::TransportConfig::WebTransport { insecure: *insecure }
-                }
-            };
-            let worker_host = Arc::new(host.clone());
-            let (mut worker, handle) =
-                Worker::new(config, connection, transport, worker_host, blocking_io.clone());
-            resources.worker = Some(handle.clone());
-            self.snapshot.send_modify(|snapshot| snapshot.worker = Some(handle.clone()));
-            let mut notifications = handle.subscribe();
-            let (snapshots, failed) = (self.snapshot.clone(), status.clone());
-            let registered = status.clone();
-            let routes = !start.endpoints.is_empty();
-            resources.connection = Some(TokioSpawner::current().spawn(async move {
-                let forward = async {
-                    while let Ok(event) = notifications.recv().await {
-                        match event {
-                            WorkerNotification::Registered(info) => {
-                                if routes && info.cloud != cloud_routed {
-                                    logging.emit(
-                                        log::Level::Warn,
-                                        format!(
-                                            "the server's edition (cloud={}) differs from its URL; \
-                                             endpoints are routed as cloud={cloud_routed}",
-                                            info.cloud
-                                        ),
-                                    );
-                                }
-                                snapshots
-                                    .send_modify(|snapshot| snapshot.worker_id = info.worker_id);
-                                registered.registered.store(true, Ordering::Release);
-                                registered.connected.store(true, Ordering::Release);
-                            }
-                            WorkerNotification::Stopped(_) => break,
-                            _ => {}
-                        }
-                    }
-                };
-                let run = worker.run();
-                tokio::pin!(run);
-                let result = tokio::select! {
-                    result = &mut run => result,
-                    () = forward => run.await,
-                }
-                .map_err(|error| error.to_string());
-                if result.is_err() {
-                    failed.failed.store(true, Ordering::Release);
-                }
-                result
-            }));
-        }
-        if start.unregistered {
-            status.registered.store(true, Ordering::Release);
-            status.connected.store(true, Ordering::Release);
-        }
-        let (host, worker) = (self.host.clone(), resources.worker.clone());
-        let returned = status.clone();
-        resources.load = Some(TokioSpawner::current().spawn(async move {
-            let mut interval = tokio::time::interval(crate::UPDATE_LOAD_INTERVAL);
-            loop {
-                interval.tick().await;
-                if let Some(worker) = &worker {
-                    let snapshot = worker.snapshot();
-                    status.set_load(snapshot.worker_load);
-                    status.connected.store(snapshot.registered, Ordering::Release);
-                    if let Some(target) = snapshot.target_idle_processes {
-                        host.proxy
-                            .idle_processes(&telemetry::Cx::NONE, target)
-                            .await
-                            .map_err(|error| error.to_string())?;
-                    }
-                }
-                // The host answering is its heartbeat: `/` reads it without waiting on the host.
-                host.proxy
-                    .worker_load(&telemetry::Cx::NONE, f64::from(status.load()))
-                    .await
-                    .map_err(|error| error.to_string())?;
-                status.heartbeat();
-            }
-        }));
-        Ok(returned)
+        let (listener, url) = bind(&settings.listeners.health(local)).await?;
+        self.snapshot.send_modify(|snapshot| {
+            snapshot.http_port = listener.local_addr().map_or(0, |a| a.port())
+        });
+        logging.emit(log::Level::Info, format!("health listener url={url} paths=/,/ready,/worker"));
+        Ok(Some(TokioSpawner::current().spawn(serve_health(
+            listener,
+            Arc::new(settings.clone()),
+            status.clone(),
+            probe.clone(),
+            stop.subscribe(),
+        ))))
+    }
+
+    /// The Prometheus listener, when one is configured.
+    async fn open_metrics(
+        &self,
+        settings: &ServerSettings,
+        local: bool,
+        probe: Arc<ServerCallbacks>,
+        stop: &watch::Sender<bool>,
+    ) -> Result<Option<OwnedTask<Result<(), String>>>, String> {
+        let logging = self.host.logging;
+        let Some(address) = settings.listeners.prometheus(local) else {
+            logging.emit(log::Level::Info, "prometheus listener off: not configured".into());
+            return Ok(None);
+        };
+        let (listener, url) = bind(&address).await?;
+        logging.emit(log::Level::Info, format!("prometheus listener url={url}/metrics"));
+        Ok(Some(TokioSpawner::current().spawn(serve_metrics(listener, probe, stop.subscribe()))))
     }
 
     /// The worker's own endpoints: the console's, unauthenticated and on loopback only, or a
@@ -752,6 +678,266 @@ impl ServerRuntime {
     }
 }
 
+/// The host's `started` call in flight, with the status it marks started.
+type StartedNotification<'a> = (BoxFuture<'a, Result<(), HostError>>, Arc<ServerStatus>);
+
+/// The started server's state until it closes: the drain in flight and the host's `started`
+/// notification, with its health status.
+#[derive(Default)]
+struct RunningServer<'a> {
+    failure: Option<String>,
+    drain_requested: bool,
+    drained: bool,
+    drain: Option<BoxFuture<'static, Result<(), DrainError>>>,
+    started_notification: Option<StartedNotification<'a>>,
+    health: Option<Arc<ServerStatus>>,
+}
+
+impl<'a> RunningServer<'a> {
+    fn started(
+        &mut self,
+        server: &'a ServerRuntime,
+        status: Arc<ServerStatus>,
+        control: &watch::Receiver<Control>,
+        worker: &Option<WorkerClient>,
+    ) {
+        server.set_phase(ServerPhase::Running);
+        self.health = Some(status.clone());
+        if self.drain_requested {
+            let timeout = control.borrow().drain.flatten();
+            self.begin_drain(server, worker, timeout);
+        }
+        self.started_notification = Some((server.host.proxy.started(&telemetry::Cx::NONE), status));
+    }
+
+    /// Runs until a close, the end of control, a failed `started` notification or the loss of
+    /// the worker connection.
+    async fn run(
+        &mut self,
+        server: &'a ServerRuntime,
+        control: &mut watch::Receiver<Control>,
+        resources: &mut Resources,
+    ) {
+        loop {
+            let flow = tokio::select! {
+                biased;
+                changed = control.changed() => match changed {
+                    Ok(()) => {
+                        let request = control.borrow_and_update().clone();
+                        self.on_control(server, request, &resources.worker)
+                    }
+                    Err(_) => ControlFlow::Break(()),
+                },
+                result = pending_notification(&mut self.started_notification), if self.started_notification.is_some() => {
+                    self.on_started_notified(result)
+                }
+                result = pending_drain(&mut self.drain), if self.drain.is_some() => {
+                    self.on_drained(server, result)
+                }
+                result = pending_worker(&mut resources.connection), if resources.connection.is_some() => {
+                    self.on_connection_lost(resources, result)
+                }
+            };
+            if flow.is_break() {
+                return;
+            }
+        }
+    }
+
+    fn on_control(
+        &mut self,
+        server: &ServerRuntime,
+        request: Control,
+        worker: &Option<WorkerClient>,
+    ) -> ControlFlow<()> {
+        if request.close {
+            return ControlFlow::Break(());
+        }
+        if request.drain.is_some() && !self.drain_requested {
+            self.begin_drain(server, worker, request.drain.flatten());
+        }
+        ControlFlow::Continue(())
+    }
+
+    fn begin_drain(
+        &mut self,
+        server: &ServerRuntime,
+        worker: &Option<WorkerClient>,
+        timeout: Option<Duration>,
+    ) {
+        self.drain_requested = true;
+        if let Some(status) = &self.health {
+            status.draining.store(true, Ordering::Release);
+        }
+        server.set_phase(ServerPhase::Draining);
+        self.drain = Some(server.drain_resources(worker.clone(), timeout));
+    }
+
+    fn on_started_notified(&mut self, result: Result<(), HostError>) -> ControlFlow<()> {
+        let (_, status) = self.started_notification.take().expect("notification pending");
+        if let Err(error) = result {
+            self.failure = Some(error.to_string());
+            return ControlFlow::Break(());
+        }
+        status.heartbeat();
+        status.started.store(true, Ordering::Release);
+        ControlFlow::Continue(())
+    }
+
+    fn on_drained(
+        &mut self,
+        server: &ServerRuntime,
+        result: Result<(), DrainError>,
+    ) -> ControlFlow<()> {
+        self.drain = None;
+        self.drained = true;
+        ServerRuntime::settle(&server.drain_outcome, result);
+        ControlFlow::Continue(())
+    }
+
+    fn on_connection_lost(
+        &mut self,
+        resources: &mut Resources,
+        result: Result<Result<(), String>, TaskError>,
+    ) -> ControlFlow<()> {
+        // The connection is gone: nothing of it is left to stop.
+        resources.connection = None;
+        resources.worker = None;
+        self.failure = Some(match result.unwrap_or_else(|error| Err(error.to_string())) {
+            Ok(()) => "worker connection stopped".into(),
+            Err(error) => format!("{:?}: {error}", ServerResource::Worker),
+        });
+        ControlFlow::Break(())
+    }
+
+    /// Enters Closing: an unfinished drain fails as closed, and the drain and the `started`
+    /// notification are dropped. Returns the failure that ended the run.
+    fn close(self, server: &ServerRuntime) -> Option<String> {
+        server.set_phase(ServerPhase::Closing);
+        if self.drain_requested && !self.drained {
+            ServerRuntime::settle(&server.drain_outcome, Err(DrainError::Closed));
+        }
+        drop(self.drain);
+        drop(self.started_notification);
+        self.failure
+    }
+}
+
+/// The worker connection over the configured transport, and its client.
+fn new_worker(
+    settings: &ServerSettings,
+    start: &ServerStart,
+    host: ServerCallbacks,
+    blocking_io: &lk_agents_net::blocking_io::BlockingIo,
+) -> (Worker, WorkerClient) {
+    let (config, connection) = settings.worker(start.devmode, start.endpoints.clone());
+    let transport = match &start.transport {
+        crate::TransportConfig::WebSocket { heartbeat } => {
+            crate::TransportConfig::WebSocket { heartbeat: *heartbeat }
+        }
+        crate::TransportConfig::WebTransport { insecure } => {
+            crate::TransportConfig::WebTransport { insecure: *insecure }
+        }
+    };
+    Worker::new(config, connection, transport, Arc::new(host), blocking_io.clone())
+}
+
+/// Mirrors the worker's registrations into the snapshot and the health status.
+struct Registration {
+    notifications: tokio::sync::broadcast::Receiver<WorkerNotification>,
+    logging: LogWriter,
+    snapshots: watch::Sender<ServerSnapshot>,
+    status: Arc<ServerStatus>,
+    has_routes: bool,
+    cloud_routed: bool,
+}
+
+impl Registration {
+    async fn forward(&mut self) {
+        while let Ok(event) = self.notifications.recv().await {
+            match event {
+                WorkerNotification::Registered(info) => self.registered(info),
+                WorkerNotification::Stopped(_) => break,
+                _ => {}
+            }
+        }
+    }
+
+    fn registered(&self, info: crate::RegisteredInfo) {
+        let cloud_routed = self.cloud_routed;
+        if self.has_routes && info.cloud != cloud_routed {
+            self.logging.emit(
+                log::Level::Warn,
+                format!(
+                    "the server's edition (cloud={}) differs from its URL; \
+                     endpoints are routed as cloud={cloud_routed}",
+                    info.cloud
+                ),
+            );
+        }
+        self.snapshots.send_modify(|snapshot| snapshot.worker_id = info.worker_id);
+        self.status.registered.store(true, Ordering::Release);
+        self.status.connected.store(true, Ordering::Release);
+    }
+}
+
+/// Runs the worker while forwarding its registrations; a failed run marks the server failed.
+async fn run_worker_connection(
+    mut worker: Worker,
+    mut registration: Registration,
+) -> Result<(), String> {
+    let run = worker.run();
+    tokio::pin!(run);
+    let result = tokio::select! {
+        result = &mut run => result,
+        () = registration.forward() => run.await,
+    }
+    .map_err(|error| error.to_string());
+    if result.is_err() {
+        registration.status.failed.store(true, Ordering::Release);
+    }
+    result
+}
+
+/// Reports the worker's load and idle process target to the host on every load interval.
+struct LoadReporter {
+    host: ServerCallbacks,
+    worker: Option<WorkerClient>,
+    status: Arc<ServerStatus>,
+}
+
+impl LoadReporter {
+    async fn run(self) -> Result<(), String> {
+        let mut interval = tokio::time::interval(crate::UPDATE_LOAD_INTERVAL);
+        loop {
+            interval.tick().await;
+            self.report_once().await?;
+        }
+    }
+
+    async fn report_once(&self) -> Result<(), String> {
+        let (host, status) = (&self.host, &self.status);
+        if let Some(worker) = &self.worker {
+            let snapshot = worker.snapshot();
+            status.set_load(snapshot.worker_load);
+            status.connected.store(snapshot.registered, Ordering::Release);
+            if let Some(target) = snapshot.target_idle_processes {
+                host.proxy
+                    .idle_processes(&telemetry::Cx::NONE, target)
+                    .await
+                    .map_err(|error| error.to_string())?;
+            }
+        }
+        // The host answering is its heartbeat: `/` reads it without waiting on the host.
+        host.proxy
+            .worker_load(&telemetry::Cx::NONE, f64::from(status.load()))
+            .await
+            .map_err(|error| error.to_string())?;
+        status.heartbeat();
+        Ok(())
+    }
+}
+
 /// A listener bound at `address`, and the URL it is reached at from this host.
 async fn bind(address: &Bind) -> Result<(tokio::net::TcpListener, String), String> {
     let (listener, port) =
@@ -790,6 +976,15 @@ async fn pending_drain(
 ) -> Result<(), DrainError> {
     match drain {
         Some(drain) => drain.await,
+        None => std::future::pending().await,
+    }
+}
+
+async fn pending_notification(
+    notification: &mut Option<StartedNotification<'_>>,
+) -> Result<(), HostError> {
+    match notification {
+        Some((started, _)) => started.await,
         None => std::future::pending().await,
     }
 }

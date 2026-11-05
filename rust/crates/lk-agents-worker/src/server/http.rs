@@ -81,42 +81,59 @@ impl HttpServer {
         if *stop.borrow_and_update() {
             return Ok(());
         }
-        let route = Arc::new(route);
-        let spawner = TokioSpawner::current();
         let mut connections = FuturesUnordered::<OwnedTask>::new();
-        let mut result = Ok(());
+        let accepted =
+            self.accept_until_stopped(&mut stop, Arc::new(route), &mut connections).await;
+        cancel_connections(connections, accepted).await
+    }
+
+    /// Accepts connections up to the cap until `stop`, a failed accept or a failed connection
+    /// task.
+    async fn accept_until_stopped<F, R>(
+        &self,
+        stop: &mut watch::Receiver<bool>,
+        route: Arc<F>,
+        connections: &mut FuturesUnordered<OwnedTask>,
+    ) -> Result<(), String>
+    where
+        F: Fn(Request<()>) -> R + Send + Sync + 'static,
+        R: Future<Output = Response> + Send + 'static,
+    {
+        let spawner = TokioSpawner::current();
         loop {
             tokio::select! {
                 biased;
                 changed = stop.changed() => {
-                    if changed.is_err() || *stop.borrow_and_update() { break; }
+                    if changed.is_err() || *stop.borrow_and_update() { return Ok(()); }
                 }
                 joined = connections.next(), if !connections.is_empty() => {
                     if let Some(Err(error)) = joined {
-                        result = Err(format!("HTTP connection task: {error}"));
-                        break;
+                        return Err(format!("HTTP connection task: {error}"));
                     }
                 }
                 accepted = self.listener.accept(), if connections.len() < MAX_CONNECTIONS => {
-                    match accepted {
-                        Ok((socket, _)) => {
-                            connections.push(spawner.spawn(serve_connection(socket, route.clone())));
-                        }
-                        Err(error) => { result = Err(error.to_string()); break; }
-                    }
+                    let (socket, _) = accepted.map_err(|error| error.to_string())?;
+                    connections.push(spawner.spawn(serve_connection(socket, route.clone())));
                 }
             }
         }
-        connections.iter().for_each(OwnedTask::cancel);
-        while let Some(joined) = connections.next().await {
-            if let Err(error) = joined
-                && !matches!(error, TaskError::Cancelled)
-            {
-                result = Err(format!("HTTP connection task: {error}"));
-            }
-        }
-        result
     }
+}
+
+/// Cancels and joins every connection; a join failure other than the cancel replaces `result`.
+async fn cancel_connections(
+    mut connections: FuturesUnordered<OwnedTask>,
+    mut result: Result<(), String>,
+) -> Result<(), String> {
+    connections.iter().for_each(OwnedTask::cancel);
+    while let Some(joined) = connections.next().await {
+        if let Err(error) = joined
+            && !matches!(error, TaskError::Cancelled)
+        {
+            result = Err(format!("HTTP connection task: {error}"));
+        }
+    }
+    result
 }
 
 fn valid_host(headers: &HeaderMap, version: Version) -> bool {
