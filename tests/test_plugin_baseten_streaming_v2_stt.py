@@ -11,6 +11,8 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any, Literal
 
 import aiohttp
@@ -32,6 +34,8 @@ _SAMPLE_RATE = 16000
 # drop_once: drop the first connection that way, then reply on the next.
 # drop_second_turn: the first connection answers its first flush, then drops on the next.
 # fail_then_drop: the first connection fails the turn on its first flush, then drops.
+# partial_then_drop: the first connection sends a partial on its first flush, then drops.
+# drop_on_audio: the first connection drops on its first audio, before any flush.
 # A flushed turn with no audio behind it gets an empty final, as from the real server.
 _Mode = Literal[
     "reply",
@@ -44,6 +48,8 @@ _Mode = Literal[
     "drop_once",
     "drop_second_turn",
     "fail_then_drop",
+    "partial_then_drop",
+    "drop_on_audio",
 ]
 
 _CLOSE_CODES = {"at_capacity": 1013, "invalid_event": 1008}
@@ -112,6 +118,9 @@ class _FakeStreamingV2Server:
                 self.audio_bytes += n
                 self.audio_per_connection[-1] += n
                 turn_audio += n
+                if self.mode == "drop_on_audio" and self.connections == 1:
+                    await ws.close(code=1001)
+                    break
                 continue
             self.control.append(kind)
             if kind == "close":
@@ -146,6 +155,9 @@ class _FakeStreamingV2Server:
                     },
                 }
             )
+            if self.mode == "partial_then_drop" and self.connections == 1:
+                await ws.close(code=1001)
+                break
             if self.mode == "failed":
                 await ws.send_json(
                     {
@@ -168,9 +180,9 @@ class _FakeStreamingV2Server:
         return ws
 
 
-async def _recognize(
-    server: _FakeStreamingV2Server, samples: int = 512, max_retry: int = 0, **stt_kwargs: Any
-) -> stt.SpeechEvent:
+@asynccontextmanager
+async def _serve(server: _FakeStreamingV2Server, **stt_kwargs: Any) -> AsyncIterator[STT]:
+    """Run `server` locally and yield a v2 `STT` pointed at it."""
     app = web.Application()
     app.router.add_get("/ws", server.handle)
     runner = web.AppRunner(app)
@@ -181,82 +193,67 @@ async def _recognize(
 
     try:
         async with aiohttp.ClientSession() as session:
-            baseten_stt = STT(
+            yield STT(
                 model="streaming-v2",
                 api_key="test-key",
                 model_endpoint=f"ws://127.0.0.1:{port}/ws",
                 http_session=session,
                 **stt_kwargs,
             )
-            frame = rtc.AudioFrame(
-                data=b"\x00\x00" * samples,
-                sample_rate=_SAMPLE_RATE,
-                num_channels=1,
-                samples_per_channel=samples,
-            )
-            return await asyncio.wait_for(
-                baseten_stt.recognize(
-                    [frame],
-                    conn_options=APIConnectOptions(
-                        max_retry=max_retry, retry_interval=0.01, timeout=5
-                    ),
-                ),
-                timeout=15,
-            )
     finally:
         await runner.cleanup()
+
+
+def _silence(samples: int) -> rtc.AudioFrame:
+    return rtc.AudioFrame(
+        data=b"\x00\x00" * samples,
+        sample_rate=_SAMPLE_RATE,
+        num_channels=1,
+        samples_per_channel=samples,
+    )
+
+
+async def _recognize(
+    server: _FakeStreamingV2Server, samples: int = 512, max_retry: int = 0, **stt_kwargs: Any
+) -> stt.SpeechEvent:
+    async with _serve(server, **stt_kwargs) as baseten_stt:
+        return await asyncio.wait_for(
+            baseten_stt.recognize(
+                [_silence(samples)],
+                conn_options=APIConnectOptions(max_retry=max_retry, retry_interval=0.01, timeout=5),
+            ),
+            timeout=15,
+        )
 
 
 async def _run_stream(
     server: _FakeStreamingV2Server,
     samples: int | list[int] = 512,
     max_retry: int = 0,
+    start_time_offset: float = 0.0,
     **stt_kwargs: Any,
 ) -> list[stt.SpeechEvent]:
     """Stream `samples` of silence, flushing between pieces when given a list."""
-    app = web.Application()
-    app.router.add_get("/ws", server.handle)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "127.0.0.1", 0)
-    await site.start()
-    port = site._server.sockets[0].getsockname()[1]  # type: ignore[union-attr]
+    async with _serve(server, **stt_kwargs) as baseten_stt:
+        stream = baseten_stt.stream(
+            conn_options=APIConnectOptions(max_retry=max_retry, retry_interval=0.01, timeout=5)
+        )
+        # as `Agent.stt_node` does, before the stream first connects
+        stream.start_time_offset = start_time_offset
+        pieces = samples if isinstance(samples, list) else [samples]
+        for i, n in enumerate(pieces):
+            if i:
+                stream.flush()
+            stream.push_frame(_silence(n))
+        stream.end_input()
 
-    try:
-        async with aiohttp.ClientSession() as session:
-            baseten_stt = STT(
-                model="streaming-v2",
-                api_key="test-key",
-                model_endpoint=f"ws://127.0.0.1:{port}/ws",
-                http_session=session,
-                **stt_kwargs,
-            )
-            stream = baseten_stt.stream(
-                conn_options=APIConnectOptions(max_retry=max_retry, retry_interval=0.01, timeout=5)
-            )
-            pieces = samples if isinstance(samples, list) else [samples]
-            for i, n in enumerate(pieces):
-                if i:
-                    stream.flush()
-                stream.push_frame(
-                    rtc.AudioFrame(
-                        data=b"\x00\x00" * n,
-                        sample_rate=_SAMPLE_RATE,
-                        num_channels=1,
-                        samples_per_channel=n,
-                    )
-                )
-            stream.end_input()
+        async def collect() -> list[stt.SpeechEvent]:
+            return [ev async for ev in stream]
 
-            async def collect() -> list[stt.SpeechEvent]:
-                return [ev async for ev in stream]
-
-            try:
-                return await asyncio.wait_for(collect(), timeout=15)
-            finally:
-                await stream.aclose()
-    finally:
-        await runner.cleanup()
+        try:
+            return await asyncio.wait_for(collect(), timeout=15)
+        finally:
+            await stream.aclose()
 
 
 def _types(events: list[stt.SpeechEvent]) -> list[stt.SpeechEventType]:
@@ -264,8 +261,11 @@ def _types(events: list[stt.SpeechEvent]) -> list[stt.SpeechEventType]:
 
 
 def _final_texts(events: list[stt.SpeechEvent]) -> list[str]:
+    """The finals that carry words; empty ones only answer a flush."""
     return [
-        ev.alternatives[0].text for ev in events if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT
+        ev.alternatives[0].text
+        for ev in events
+        if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT and ev.alternatives[0].text
     ]
 
 
@@ -299,7 +299,9 @@ async def test_options_reach_the_session_update() -> None:
     assert update["vad"] == {"threshold": 0.6, "silence_s": 0.4}
 
 
-async def test_client_flush_sends_no_vad_and_asks_livekit_to_flush() -> None:
+async def test_client_flush_sends_no_vad_and_asks_livekit_to_flush(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     server = _FakeStreamingV2Server()
     await _run_stream(
         server,
@@ -315,6 +317,8 @@ async def test_client_flush_sends_no_vad_and_asks_livekit_to_flush() -> None:
             "segmentation_mode": "client_flush",
         }
     ]
+    # dropped, but not quietly
+    assert any("vad_threshold" in r.getMessage() for r in caplog.records)
     assert STT(
         model="streaming-v2", api_key="k", model_id="m", segmentation_mode="client_flush"
     ).capabilities.manual_flush
@@ -338,6 +342,8 @@ async def test_end_input_flushes_once_then_closes_and_delivers_the_final() -> No
     # segments carry their own separators, so they join with ""
     assert final.text == "hello world"
     assert final.language == "en"
+    # the server sends no confidence, so none is made up
+    assert final.confidence == 0.0
     assert final.start_time == pytest.approx(0.5, abs=0.2)
     assert final.end_time == pytest.approx(2.5, abs=0.2)
 
@@ -348,9 +354,11 @@ async def test_failed_turn_closes_the_turn_and_keeps_the_session() -> None:
 
     assert server.control == ["input_audio_buffer.flush", "close"]
     assert _final_texts(events) == []
+    # an empty final, so a flush waiting on the turn is answered
     assert _types(events) == [
         stt.SpeechEventType.START_OF_SPEECH,
         stt.SpeechEventType.INTERIM_TRANSCRIPT,
+        stt.SpeechEventType.FINAL_TRANSCRIPT,
         stt.SpeechEventType.END_OF_SPEECH,
     ]
 
@@ -365,13 +373,15 @@ async def test_turn_cut_at_the_length_limit_does_not_end_speech() -> None:
     assert _types(events).count(stt.SpeechEventType.END_OF_SPEECH) == 1
 
 
-async def test_empty_final_does_not_end_a_turn_it_never_opened() -> None:
+async def test_empty_final_answers_the_flush_without_opening_a_turn() -> None:
     server = _FakeStreamingV2Server("empty")
     events = await _run_stream(server, enable_partial_transcripts=False)
 
-    # the fake still sends its partial; only the final is empty
-    assert _final_texts(events) == []
-    assert stt.SpeechEventType.FINAL_TRANSCRIPT not in _types(events)
+    # the framework waits on a final after its flush, but a turn with no words
+    # must not start or end speech (under turn_detection="stt" that would
+    # commit a turn for the agent to answer)
+    assert _types(events) == [stt.SpeechEventType.FINAL_TRANSCRIPT]
+    assert events[0].alternatives[0].text == ""
 
 
 async def test_partials_off_drops_partials_the_server_sends_anyway() -> None:
@@ -508,6 +518,74 @@ async def test_failed_turn_shorter_than_the_cap_is_not_replayed() -> None:
 
     assert server.audio_per_connection == [16000 * 2, 0]
     assert _final_texts(events) == []
+
+
+async def test_transcript_times_are_placed_in_the_session() -> None:
+    # Agent.stt_node starts this stream 40 s into the session. The framework
+    # adds the time to reconnect (at least 0.1 s) to the offset, but the
+    # replayed audio's own position already places the second turn, exactly
+    server = _FakeStreamingV2Server("drop_second_turn")
+    events = await _run_stream(
+        server,
+        samples=[48000, 16000],
+        max_retry=1,
+        start_time_offset=40.0,
+        segmentation_mode="client_flush",
+    )
+
+    finals = [
+        ev.alternatives[0] for ev in events if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT
+    ]
+    assert [f.start_time for f in finals[:2]] == [
+        pytest.approx(40.5, abs=0.01),
+        pytest.approx(43.5, abs=0.01),
+    ]
+
+
+async def test_reconnect_mid_turn_does_not_start_speech_again() -> None:
+    # the turn opened on the first socket is still open on the event channel;
+    # its replay continues it
+    server = _FakeStreamingV2Server("partial_then_drop")
+    events = await _run_stream(server, max_retry=1)
+
+    assert _types(events) == [
+        stt.SpeechEventType.START_OF_SPEECH,
+        stt.SpeechEventType.INTERIM_TRANSCRIPT,
+        stt.SpeechEventType.INTERIM_TRANSCRIPT,
+        stt.SpeechEventType.FINAL_TRANSCRIPT,
+        stt.SpeechEventType.END_OF_SPEECH,
+    ]
+
+
+async def test_audio_held_by_the_chunker_survives_a_reconnect() -> None:
+    # 2400 samples go in: one 1600-sample chunk is sent, and the socket drops on
+    # it with the other 800 still waiting in the chunker for the next frame
+    server = _FakeStreamingV2Server("drop_on_audio")
+    async with _serve(server) as baseten_stt:
+        stream = baseten_stt.stream(
+            conn_options=APIConnectOptions(max_retry=1, retry_interval=0.01, timeout=5)
+        )
+        stream.push_frame(_silence(2400))
+
+        async def reconnected() -> None:
+            while server.connections < 2:
+                await asyncio.sleep(0.01)
+
+        try:
+            await asyncio.wait_for(reconnected(), timeout=5)
+            stream.push_frame(_silence(800))
+            stream.end_input()
+            await asyncio.wait_for(_drain(stream), timeout=15)
+        finally:
+            await stream.aclose()
+
+    # the replayed chunk, then the held 800 with the new 800
+    assert server.audio_per_connection == [1600 * 2, (1600 + 1600) * 2]
+
+
+async def _drain(stream: stt.SpeechStream) -> None:
+    async for _ in stream:
+        pass
 
 
 def test_mulaw_is_rejected() -> None:

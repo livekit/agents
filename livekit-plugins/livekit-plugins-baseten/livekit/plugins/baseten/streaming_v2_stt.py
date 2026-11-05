@@ -183,6 +183,20 @@ class _StreamingV2Backend:
             vad_threshold=vad_threshold,
             vad_min_silence_duration_ms=vad_min_silence_duration_ms,
         )
+        self._warn_unused_vad()
+
+    def _warn_unused_vad(self) -> None:
+        # Under client_flush no silence ends a turn, so these are never sent.
+        if self._opts.segmentation_mode != "client_flush":
+            return
+        for name, value in (
+            ("vad_threshold", self._opts.vad_threshold),
+            ("vad_min_silence_duration_ms", self._opts.vad_min_silence_duration_ms),
+        ):
+            if value is not None:
+                logger.warning(
+                    "%s does not apply to segmentation_mode='client_flush' and was ignored", name
+                )
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -206,6 +220,8 @@ class _StreamingV2Backend:
             self._opts.vad_min_silence_duration_ms = vad_min_silence_duration_ms
         if is_given(partial_transcript_interval_s):
             self._opts.partial_transcript_interval_s = partial_transcript_interval_s
+        if is_given(vad_threshold) or is_given(vad_min_silence_duration_ms):
+            self._warn_unused_vad()
 
     def make_stream(
         self,
@@ -245,7 +261,11 @@ class _StreamingV2Backend:
         code = ""
         try:
             async for ev in stream:
-                if ev.type is stt_module.SpeechEventType.FINAL_TRANSCRIPT and ev.alternatives:
+                if (
+                    ev.type is stt_module.SpeechEventType.FINAL_TRANSCRIPT
+                    and ev.alternatives
+                    and ev.alternatives[0].text
+                ):
                     texts.append(ev.alternatives[0].text)
                     code = ev.alternatives[0].language or code
         finally:
@@ -293,6 +313,20 @@ class StreamingV2SpeechStream(stt_module.SpeechStream):
         self._pending_start = 0
         # The server's turn length cap, from `session.created`; None is no cap.
         self._max_turn_samples: int | None = None
+        # Per stream rather than per socket: audio the chunker holds has left
+        # the input channel but not been sent, so a reconnect must not drop it.
+        self._chunker = utils.audio.AudioByteStream(
+            sample_rate=SAMPLE_RATE,
+            num_channels=NUM_CHANNELS,
+            samples_per_channel=_SAMPLES_PER_CHUNK,
+        )
+        # Whether a turn is open on the event channel, which a reconnect does
+        # not close: the replay continues that turn.
+        self._speaking = False
+        # Where this stream starts in the session, as `Agent.stt_node` set it.
+        # Read once: the framework grows `start_time_offset` by wall time on a
+        # reconnect, which the replayed audio's own position already counts.
+        self._session_offset_s: float | None = None
 
     def _buffer(self, item: bytes | None) -> None:
         self._pending.append(item)
@@ -363,19 +397,18 @@ class StreamingV2SpeechStream(stt_module.SpeechStream):
         except Exception as e:
             raise APIConnectionError() from e
 
+        if self._session_offset_s is None:
+            self._session_offset_s = self.start_time_offset
+
         input_ended = asyncio.Event()
         # This socket's clock starts at the replayed audio, so its times are
-        # placed on the stream's timeline from here.
+        # placed on the stream's timeline, and that on the session's, from here.
         base = self._pending_start
-        base_s = base / SAMPLE_RATE
+        base_s = self._session_offset_s + base / SAMPLE_RATE
 
         async def _send() -> None:
-            # LiveKit resamples to SAMPLE_RATE for us; this only re-chunks.
-            chunker = utils.audio.AudioByteStream(
-                sample_rate=SAMPLE_RATE,
-                num_channels=NUM_CHANNELS,
-                samples_per_channel=_SAMPLES_PER_CHUNK,
-            )
+            # LiveKit resamples to SAMPLE_RATE for us; the chunker only re-chunks.
+            chunker = self._chunker
 
             async def send_item(item: bytes | None) -> None:
                 if item is None:
@@ -427,7 +460,6 @@ class StreamingV2SpeechStream(stt_module.SpeechStream):
                 input_ended.set()
 
         async def _recv() -> None:
-            speaking = False
             monitor = utils.aio.WebSocketMonitor(
                 ws, liveness_timeout=self._conn_options.liveness_timeout
             )
@@ -485,7 +517,8 @@ class StreamingV2SpeechStream(stt_module.SpeechStream):
 
                 if kind == "transcription.failed":
                     # One turn could not be decoded; the session goes on, so
-                    # close the turn its partials opened and keep reading.
+                    # answer its flush, close the turn its partials opened and
+                    # keep reading.
                     self._failed_turns += 1
                     # A failure says neither where its turn ended nor whether the
                     # cap ended it. Unless the cap is ruled out, its audio is kept:
@@ -501,11 +534,17 @@ class StreamingV2SpeechStream(stt_module.SpeechStream):
                         event.get("turn_id"),
                         event.get("message"),
                     )
-                    if speaking:
+                    self._event_ch.send_nowait(
+                        stt_module.SpeechEvent(
+                            type=stt_module.SpeechEventType.FINAL_TRANSCRIPT,
+                            alternatives=[self._speech_data({}, [], "", base_s)],
+                        )
+                    )
+                    if self._speaking:
                         self._event_ch.send_nowait(
                             stt_module.SpeechEvent(type=stt_module.SpeechEventType.END_OF_SPEECH)
                         )
-                        speaking = False
+                        self._speaking = False
                     continue
 
                 if kind not in ("transcription.delta", "transcription.done"):
@@ -540,13 +579,15 @@ class StreamingV2SpeechStream(stt_module.SpeechStream):
                 # speech behind it) would otherwise emit START/END_OF_SPEECH and,
                 # under turn_detection="stt", commit the user's turn so the agent
                 # answers silence.
-                if not speaking and text:
-                    speaking = True
+                if not self._speaking and text:
+                    self._speaking = True
                     self._event_ch.send_nowait(
                         stt_module.SpeechEvent(type=stt_module.SpeechEventType.START_OF_SPEECH)
                     )
 
-                if text:
+                # A final is sent even when empty: under client_flush it is how
+                # the framework learns its flush was answered.
+                if text or is_final:
                     self._event_ch.send_nowait(
                         stt_module.SpeechEvent(
                             type=stt_module.SpeechEventType.FINAL_TRANSCRIPT
@@ -558,11 +599,11 @@ class StreamingV2SpeechStream(stt_module.SpeechStream):
 
                 # A turn cut at the server's length limit is not the end of
                 # speech: the speaker carries straight on into the next turn.
-                if is_final and speaking and event.get("ended_by") != "max_turn_length":
+                if is_final and self._speaking and event.get("ended_by") != "max_turn_length":
                     self._event_ch.send_nowait(
                         stt_module.SpeechEvent(type=stt_module.SpeechEventType.END_OF_SPEECH)
                     )
-                    speaking = False
+                    self._speaking = False
 
         try:
             await ws.send_str(json.dumps(self._opts.session_update()))
@@ -592,8 +633,7 @@ class StreamingV2SpeechStream(stt_module.SpeechStream):
             language=LanguageCode(transcript.get("language") or ""),
             text=text,
             # Server times count the audio this socket was sent; `base_s` is
-            # where that audio starts on the stream's timeline, replay included.
+            # where that audio starts in the session, replay included.
             start_time=(float(segments[0].get("start", 0.0)) if segments else 0.0) + base_s,
             end_time=(float(segments[-1].get("end", 0.0)) if segments else 0.0) + base_s,
-            confidence=1.0,
         )
