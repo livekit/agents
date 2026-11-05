@@ -1,17 +1,21 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import multiprocessing as mp
 import os
 import subprocess
 import sys
 import textwrap
+import uuid
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 
-from livekit.agents import _hosted_logs
+from livekit.agents import JobProcess, _hosted_logs, ipc, job
 from livekit.agents._hosted_logs import (
     HOSTED_LOGS_ENABLED,
     HOSTED_LOGS_ENV,
@@ -22,6 +26,7 @@ from livekit.agents._hosted_logs import (
 )
 from livekit.agents.job import JobContext
 from livekit.agents.version import __version__
+from livekit.protocol import agent
 
 pytestmark = pytest.mark.unit
 
@@ -150,7 +155,7 @@ def test_the_first_decision_wins(hosted_env: Path) -> None:
     ],
 )
 def test_mark_process_done(hosted_env: Path, existing: str, done: str) -> None:
-    hand_off()
+    (hosted_env / "jobs").mkdir()
     (hosted_env / "jobs" / existing).touch()
     _hosted_logs.mark_process_done("AJ_1")
     assert _jobs(hosted_env) == [done]
@@ -499,3 +504,108 @@ async def test_job_files_are_marked_done_only_after_exit(
     executor._exitcode = exitcode
     await job_proc_executor.ProcJobExecutor._supervise_task(executor)
     assert done.called == marked
+
+
+async def _hosted_entrypoint(job_ctx: JobContext) -> None:
+    print("raw print", flush=True)
+    logging.getLogger("hosted-test").warning("hello", extra={"lk.pii.secret": "s"})
+    job_ctx.shutdown("done")
+
+
+def _hosted_job(*, redaction: bool) -> job.RunningJobInfo:
+    return job.RunningJobInfo(
+        job=agent.Job(
+            id=f"AJ_{uuid.uuid4().hex[:12]}", type=agent.JobType.JT_ROOM, enable_redaction=redaction
+        ),
+        url="fake_url",
+        token="fake_token",
+        accept_arguments=job.JobAcceptArguments(name="", identity="", metadata=""),
+        worker_id="fake_id",
+        fake_job=True,
+    )
+
+
+def _noop_initialize(proc: JobProcess) -> None:
+    pass
+
+
+def _job_lines(path: Path) -> tuple[list[dict[str, Any]], list[str]]:
+    records, raw = [], []
+    for line in path.read_text().splitlines():
+        try:
+            records.append(json.loads(line))
+        except json.JSONDecodeError:
+            raw.append(line)
+    return records, raw
+
+
+@pytest.mark.parametrize("redaction", [False, True])
+async def test_job_process_writes_its_file_end_to_end(hosted_env: Path, redaction: bool) -> None:
+    hand_off()
+    executor = ipc.job_proc_executor.ProcJobExecutor(
+        initialize_process_fnc=_noop_initialize,
+        job_entrypoint_fnc=_hosted_entrypoint,
+        session_end_fnc=None,
+        simulation_end_fnc=None,
+        initialize_timeout=20.0,
+        close_timeout=10.0,
+        session_end_timeout=300.0,
+        memory_warn_mb=0,
+        memory_limit_mb=0,
+        ping_interval=2.5,
+        ping_timeout=10.0,
+        high_ping_threshold=1.0,
+        inference_executor=None,
+        http_proxy=None,
+        mp_ctx=mp.get_context("spawn"),
+        loop=asyncio.get_running_loop(),
+    )
+    info = _hosted_job(redaction=redaction)
+    await executor.start()
+    await executor.initialize()
+    await executor.launch_job(info)
+    await asyncio.wait_for(executor.join(), timeout=30.0)
+    await executor.aclose()
+
+    path = hosted_env / "jobs" / f"job-{info.job.id}.export.done.log"
+    assert _jobs(hosted_env) == [path.name]
+    records, raw = _job_lines(path)
+    assert "raw print" in raw
+    hello = next(r for r in records if r["message"] == "hello")
+    assert hello["job_id"] == info.job.id
+    assert ("lk.pii.secret" in hello) is not redaction
+    assert hello.get("lk.redaction.enabled", False) is redaction
+
+
+async def test_thread_job_writes_its_file_end_to_end(
+    hosted_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hand_off()
+    monkeypatch.setattr(logging.getLogger(), "handlers", [])
+    _hosted_logs.install_thread_router()
+    executor = ipc.job_thread_executor.ThreadJobExecutor(
+        initialize_process_fnc=_noop_initialize,
+        job_entrypoint_fnc=_hosted_entrypoint,
+        session_end_fnc=None,
+        simulation_end_fnc=None,
+        inference_executor=None,
+        initialize_timeout=20.0,
+        close_timeout=10.0,
+        session_end_timeout=300.0,
+        ping_interval=2.5,
+        high_ping_threshold=1.0,
+        http_proxy=None,
+        loop=asyncio.get_running_loop(),
+    )
+    info = _hosted_job(redaction=False)
+    await executor.start()
+    await executor.initialize()
+    await executor.launch_job(info)
+    await asyncio.wait_for(executor.join(), timeout=30.0)
+    await asyncio.wait_for(executor.aclose(), timeout=30.0)
+
+    path = hosted_env / "jobs" / f"job-{info.job.id}.export.done.log"
+    assert _jobs(hosted_env) == [path.name]
+    records, _ = _job_lines(path)
+    hello = next(r for r in records if r["message"] == "hello")
+    assert hello["job_id"] == info.job.id

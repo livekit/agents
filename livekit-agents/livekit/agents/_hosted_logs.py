@@ -257,7 +257,7 @@ def redirect_job_output(
 def mark_process_done(job_id: str) -> None:
     """Add ``.done`` to a job's file after its process exits."""
     jobs_dir = _jobs_dir()
-    if not _handed_off or jobs_dir is None:
+    if jobs_dir is None:
         return
     for suffix in ["", *(f".{d.value}" for d in _LogsDecision)]:
         stem = f"job-{job_id}{suffix}"
