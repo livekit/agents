@@ -71,11 +71,39 @@ def _encoding_to_mimetype(encoding: TTSEncoding) -> str:
 
 @dataclass
 class VoiceSettings:
-    stability: float  # [0.0 - 1.0]
-    similarity_boost: float  # [0.0 - 1.0]
+    stability: NotGivenOr[float] = NOT_GIVEN  # [0.0 - 1.0]
+    similarity_boost: NotGivenOr[float] = NOT_GIVEN  # [0.0 - 1.0]
     style: NotGivenOr[float] = NOT_GIVEN  # [0.0 - 1.0]
     speed: NotGivenOr[float] = NOT_GIVEN  # [0.8 - 1.2]
     use_speaker_boost: NotGivenOr[bool] = NOT_GIVEN
+
+
+def _validate_voice_settings(settings: VoiceSettings) -> None:
+    if is_given(settings.stability):
+        if not isinstance(settings.stability, (int, float)) or isinstance(settings.stability, bool):
+            raise ValueError("stability must be a float or int")
+        if not 0.0 <= float(settings.stability) <= 1.0:
+            raise ValueError("stability must be between 0.0 and 1.0")
+    if is_given(settings.similarity_boost):
+        if not isinstance(settings.similarity_boost, (int, float)) or isinstance(
+            settings.similarity_boost, bool
+        ):
+            raise ValueError("similarity_boost must be a float or int")
+        if not 0.0 <= float(settings.similarity_boost) <= 1.0:
+            raise ValueError("similarity_boost must be between 0.0 and 1.0")
+    if is_given(settings.style):
+        if not isinstance(settings.style, (int, float)) or isinstance(settings.style, bool):
+            raise ValueError("style must be a float or int")
+        if not 0.0 <= float(settings.style) <= 1.0:
+            raise ValueError("style must be between 0.0 and 1.0")
+    if is_given(settings.speed):
+        if not isinstance(settings.speed, (int, float)) or isinstance(settings.speed, bool):
+            raise ValueError("speed must be a float or int")
+        if not 0.7 <= float(settings.speed) <= 1.2:
+            raise ValueError("speed must be between 0.7 and 1.2")
+    if is_given(settings.use_speaker_boost):
+        if not isinstance(settings.use_speaker_boost, bool):
+            raise ValueError("use_speaker_boost must be a bool")
 
 
 @dataclass
@@ -105,6 +133,7 @@ class TTS(tts.TTS):
         self,
         *,
         voice_id: str = DEFAULT_VOICE_ID,
+        voice: NotGivenOr[Voice | str] = NOT_GIVEN,
         voice_settings: NotGivenOr[VoiceSettings] = NOT_GIVEN,
         model: TTSModels | str = "eleven_turbo_v2_5",
         encoding: NotGivenOr[TTSEncoding] = NOT_GIVEN,
@@ -169,6 +198,15 @@ class TTS(tts.TTS):
             num_channels=1,
         )
 
+        if is_given(voice):
+            if isinstance(voice, Voice):
+                voice_id = voice.id
+            elif isinstance(voice, str):
+                voice_id = voice
+
+        if is_given(voice_settings):
+            _validate_voice_settings(voice_settings)
+
         elevenlabs_api_key = api_key if is_given(api_key) else os.environ.get("ELEVEN_API_KEY")
         if not elevenlabs_api_key:
             raise ValueError(
@@ -226,6 +264,14 @@ class TTS(tts.TTS):
         return self._opts.model
 
     @property
+    def voice_id(self) -> str:
+        return self._opts.voice_id
+
+    @property
+    def voice(self) -> str:
+        return self._opts.voice_id
+
+    @property
     def provider(self) -> str:
         return "ElevenLabs"
 
@@ -278,51 +324,122 @@ class TTS(tts.TTS):
         self,
         *,
         voice_id: NotGivenOr[str] = NOT_GIVEN,
-        voice_settings: NotGivenOr[VoiceSettings] = NOT_GIVEN,
+        voice: NotGivenOr[Voice | str] = NOT_GIVEN,
+        voice_settings: NotGivenOr[VoiceSettings | dict[str, Any] | None] = NOT_GIVEN,
         model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
-        language: NotGivenOr[str] = NOT_GIVEN,
+        language: NotGivenOr[str | None] = NOT_GIVEN,
         pronunciation_dictionary_locators: NotGivenOr[
-            list[PronunciationDictionaryLocator]
+            list[PronunciationDictionaryLocator] | None
         ] = NOT_GIVEN,
     ) -> None:
         """
         Args:
             voice_id (NotGivenOr[str]): Voice ID.
-            voice_settings (NotGivenOr[VoiceSettings]): Voice settings.
+            voice (NotGivenOr[Voice | str]): Voice ID or Voice object.
+            voice_settings (NotGivenOr[VoiceSettings | dict[str, Any] | None]): Voice settings.
             model (NotGivenOr[TTSModels | str]): TTS model to use.
-            language (NotGivenOr[str]): Language code for the TTS model.
-            pronunciation_dictionary_locators (NotGivenOr[list[PronunciationDictionaryLocator]]): List of pronunciation dictionary locators.
+            language (NotGivenOr[str | None]): Language code for the TTS model.
+            pronunciation_dictionary_locators (NotGivenOr[list[PronunciationDictionaryLocator] | None]): List of pronunciation dictionary locators.
         """
+        opts = replace(self._opts)
         changed = False
 
-        if is_given(model) and model != self._opts.model:
-            self._opts.model = model
+        if is_given(model) and model != opts.model:
+            opts.model = model
             changed = True
-            self._warn_if_dialogue_model_ignores_options()
 
-        if is_given(voice_id) and voice_id != self._opts.voice_id:
-            self._opts.voice_id = voice_id
+        v_id: NotGivenOr[str] = NOT_GIVEN
+        if is_given(voice):
+            if isinstance(voice, Voice):
+                v_id = voice.id
+            elif isinstance(voice, str):
+                v_id = voice
+        elif is_given(voice_id):
+            v_id = voice_id
+
+        if is_given(v_id) and v_id != opts.voice_id:
+            opts.voice_id = v_id
             changed = True
 
         if is_given(voice_settings):
-            self._opts.voice_settings = voice_settings
-            changed = True
+            if voice_settings is None:
+                if opts.voice_settings is not NOT_GIVEN:
+                    opts.voice_settings = NOT_GIVEN
+                    changed = True
+            else:
+                new_settings = (
+                    VoiceSettings(**voice_settings)
+                    if isinstance(voice_settings, dict)
+                    else voice_settings
+                )
+                _validate_voice_settings(new_settings)
+
+                if is_given(opts.voice_settings) and isinstance(opts.voice_settings, VoiceSettings):
+                    merged_settings = replace(
+                        opts.voice_settings,
+                        stability=(
+                            float(new_settings.stability)
+                            if is_given(new_settings.stability)
+                            else opts.voice_settings.stability
+                        ),
+                        similarity_boost=(
+                            float(new_settings.similarity_boost)
+                            if is_given(new_settings.similarity_boost)
+                            else opts.voice_settings.similarity_boost
+                        ),
+                        style=(
+                            float(new_settings.style)
+                            if is_given(new_settings.style)
+                            else opts.voice_settings.style
+                        ),
+                        speed=(
+                            float(new_settings.speed)
+                            if is_given(new_settings.speed)
+                            else opts.voice_settings.speed
+                        ),
+                        use_speaker_boost=(
+                            new_settings.use_speaker_boost
+                            if is_given(new_settings.use_speaker_boost)
+                            else opts.voice_settings.use_speaker_boost
+                        ),
+                    )
+                else:
+                    merged_settings = new_settings
+
+                if merged_settings != opts.voice_settings:
+                    opts.voice_settings = merged_settings
+                    changed = True
 
         if is_given(language):
-            language = LanguageCode(language)
-            if language != self._opts.language:
-                self._opts.language = language
-                changed = True
+            if not language:
+                if opts.language is not NOT_GIVEN:
+                    opts.language = NOT_GIVEN
+                    changed = True
+            else:
+                if not isinstance(language, str):
+                    raise ValueError("language must be a string")
+                lang = LanguageCode(language)
+                if lang != opts.language:
+                    opts.language = lang
+                    changed = True
 
         if is_given(pronunciation_dictionary_locators):
-            self._opts.pronunciation_dictionary_locators = pronunciation_dictionary_locators
-            changed = True
+            locators = (
+                NOT_GIVEN
+                if pronunciation_dictionary_locators is None
+                else pronunciation_dictionary_locators
+            )
+            if locators != opts.pronunciation_dictionary_locators:
+                opts.pronunciation_dictionary_locators = locators
+                changed = True
 
         if changed:
+            self._opts = opts
             self._opts_revision += 1
             if self.__current_connection:
                 self.__current_connection.mark_non_current()
                 self.__current_connection = None
+            self._warn_if_dialogue_model_ignores_options()
 
     async def _current_connection(self) -> tuple[_Connection | _DialogueConnection, float, bool]:
         """Get the current connection, creating one if needed.

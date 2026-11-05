@@ -95,8 +95,14 @@ class TTS(tts.TTS):
         if not api_key:
             raise ValueError("Deepgram API key required. Set DEEPGRAM_API_KEY or provide api_key.")
 
-        if speed is not None and not MIN_SPEED <= speed <= MAX_SPEED:
-            raise ValueError(f"speed must be between {MIN_SPEED} and {MAX_SPEED}, but got {speed}")
+        if speed is not None:
+            if not isinstance(speed, (int, float)) or isinstance(speed, bool):
+                raise ValueError("speed must be a float or int")
+            speed = float(speed)
+            if not MIN_SPEED <= speed <= MAX_SPEED:
+                raise ValueError(
+                    f"speed must be between {MIN_SPEED} and {MAX_SPEED}, but got {speed}"
+                )
 
         if not is_given(word_tokenizer):
             word_tokenizer = tokenize.basic.WordTokenizer(ignore_punctuation=False)
@@ -201,26 +207,60 @@ class TTS(tts.TTS):
             speed (float | None): Speaking rate, from 0.7 to 1.5; None leaves it out of the request.
                 See https://developers.deepgram.com/docs/tts-voice-controls
         """
-        if is_given(speed) and speed is not None and not MIN_SPEED <= speed <= MAX_SPEED:
-            raise ValueError(f"speed must be between {MIN_SPEED} and {MAX_SPEED}, but got {speed}")
+        opts = replace(self._opts)
 
-        connection_params_changed = False
         if is_given(model):
-            self._opts.model = model
-            connection_params_changed = True
+            if not model or not isinstance(model, str):
+                raise ValueError("model must be a non-empty string")
+            opts.model = model
+
         if is_given(encoding):
-            self._opts.encoding = encoding
-            connection_params_changed = True
+            if not encoding or not isinstance(encoding, str):
+                raise ValueError("encoding must be a non-empty string")
+            opts.encoding = encoding
+
         if is_given(sample_rate):
-            self._opts.sample_rate = sample_rate
-            self._sample_rate = sample_rate  # keep base class property in sync
-            connection_params_changed = True
+            if (
+                not isinstance(sample_rate, int)
+                or isinstance(sample_rate, bool)
+                or sample_rate <= 0
+            ):
+                raise ValueError(f"sample_rate must be a positive integer, but got {sample_rate}")
+            opts.sample_rate = sample_rate
+
         if is_given(bit_rate):
-            self._opts.bit_rate = bit_rate
-            connection_params_changed = True
+            if bit_rate is not None:
+                if not isinstance(bit_rate, int) or isinstance(bit_rate, bool) or bit_rate <= 0:
+                    raise ValueError(f"bit_rate must be a positive integer, but got {bit_rate}")
+                opts.bit_rate = bit_rate
+            else:
+                opts.bit_rate = None
+
         if is_given(speed):
-            self._opts.speed = speed
-            connection_params_changed = True
+            if speed is not None:
+                if not isinstance(speed, (int, float)) or isinstance(speed, bool):
+                    raise ValueError("speed must be a float or int")
+                speed_val = float(speed)
+                if not MIN_SPEED <= speed_val <= MAX_SPEED:
+                    raise ValueError(
+                        f"speed must be between {MIN_SPEED} and {MAX_SPEED}, but got {speed}"
+                    )
+                opts.speed = speed_val
+            else:
+                opts.speed = None
+
+        connection_params_changed = (
+            opts.model != self._opts.model
+            or opts.encoding != self._opts.encoding
+            or opts.sample_rate != self._opts.sample_rate
+            or opts.bit_rate != self._opts.bit_rate
+            or opts.speed != self._opts.speed
+        )
+
+        if opts.sample_rate != self._opts.sample_rate:
+            self._sample_rate = opts.sample_rate  # keep base class property in sync
+
+        self._opts = opts
 
         if connection_params_changed:
             # These params are baked into the WebSocket URL at connection time, so any
