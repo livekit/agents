@@ -220,45 +220,6 @@ impl<T: RemoteValue> RemoteHistory<T> {
     }
 }
 
-#[derive(Debug, Clone)]
-struct HostItem {
-    id: String,
-    value: lk_agents_abi::HostRef,
-}
-impl RemoteValue for HostItem {
-    fn id(&self) -> &str {
-        &self.id
-    }
-}
-
-/// The same ordering implementation, retaining a host item rather than a native ChatItem.
-pub struct HostRemoteChatContext(RemoteHistory<HostItem>);
-impl lk_agents_abi::llm::chat_context::RemoteChatContext for HostRemoteChatContext {
-    fn new() -> Self {
-        Self(RemoteHistory::new())
-    }
-    fn tail_id(&self) -> Option<String> {
-        self.0.tail_id().map(str::to_owned)
-    }
-    fn get(&self, item_id: String) -> Option<lk_agents_abi::HostRef> {
-        self.0.get(&item_id).map(|item| item.value.clone())
-    }
-    fn items(&self) -> Vec<lk_agents_abi::HostRef> {
-        self.0.items().map(|item| item.value.clone()).collect()
-    }
-    fn insert(
-        &mut self,
-        previous_item_id: Option<String>,
-        item_id: String,
-        item: lk_agents_abi::HostRef,
-    ) -> Result<(), RemoteError> {
-        self.0.insert(previous_item_id.as_deref(), HostItem { id: item_id, value: item })
-    }
-    fn delete(&mut self, item_id: String) -> Result<(), RemoteError> {
-        self.0.delete(&item_id).map(|_| ())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

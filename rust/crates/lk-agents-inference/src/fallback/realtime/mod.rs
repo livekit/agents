@@ -218,7 +218,7 @@ impl RealtimeFallbackModel {
 
 impl Realtime for RealtimeFallbackModel {
     fn label(&self) -> String {
-        "livekit.agents.llm.realtime_fallback_adapter.RealtimeModelFallbackAdapter".to_owned()
+        "livekit.agents.llm.realtime.RealtimeModelFallbackAdapter".to_owned()
     }
 
     fn capabilities(&self) -> RealtimeCapabilities {

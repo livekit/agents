@@ -43,7 +43,7 @@ if TYPE_CHECKING:
     from ._generated.storage_class import ThreadInfo
     from ._generated.stt import STT, SpeechData, SpeechEvent
     from ._generated.usage import TokenUsage, Usage
-    from .llm.fallback_adapter import FallbackAdapter as _LlmFallback
+    from .llm import FallbackAdapter as _LlmFallback
     from .stt import FallbackAdapter as _SttFallback
     from .tts import FallbackAdapter as _TtsFallback
     from .types import APIConnectOptions, NotGivenOr

@@ -637,40 +637,6 @@ pub enum RemoteError {
     UnknownItem(String),
 }
 
-/// Native acknowledgement order retaining the host's original, mutable item views.
-#[crate::host(class(name = "_core_RemoteChatContext", pid = false))]
-pub trait RemoteChatContext: Send + Sized + 'static {
-    #[host(new)]
-    fn new() -> Self;
-    #[host(getter)]
-    fn tail_id(&self) -> Option<String>;
-    #[host(call)]
-    fn get(&self, item_id: String) -> Option<crate::HostRef>;
-    #[host(call)]
-    fn items(&self) -> Vec<crate::HostRef>;
-    #[host(call)]
-    fn insert(
-        &mut self,
-        previous_item_id: Option<String>,
-        item_id: String,
-        item: crate::HostRef,
-    ) -> Result<(), RemoteError>;
-    #[host(call)]
-    fn delete(&mut self, item_id: String) -> Result<(), RemoteError>;
-}
-
-/// A host item view keeps the Python ChatItem identity; native code owns only its order.
-#[crate::host(record(
-    module = "remote_chat_context",
-    name = "_RemoteChatItem",
-    path = "livekit.agents.llm.remote_chat_context",
-    dataclass
-))]
-pub struct RemoteChatItemView {
-    #[host(annotation = "livekit.agents.llm.chat_context.ChatItem")]
-    pub item: crate::HostRef,
-}
-
 /// A conversation, ordered by [`ChatItem::created_at`]. Nothing assumes `items` is sorted.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ChatContext {

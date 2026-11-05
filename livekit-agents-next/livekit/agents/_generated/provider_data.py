@@ -34,10 +34,10 @@ class MistralFormatData:
 
 
 AnthropicFormatData.__annotations__ = get_annotations(AnthropicFormatData, eval_str=True)
-AnthropicFormatData.__module__ = "livekit.agents.llm._provider_format"
+AnthropicFormatData.__module__ = "livekit.agents.llm.utils"
 BedrockFormatData.__annotations__ = get_annotations(BedrockFormatData, eval_str=True)
-BedrockFormatData.__module__ = "livekit.agents.llm._provider_format"
+BedrockFormatData.__module__ = "livekit.agents.llm.utils"
 GoogleFormatData.__annotations__ = get_annotations(GoogleFormatData, eval_str=True)
-GoogleFormatData.__module__ = "livekit.agents.llm._provider_format"
+GoogleFormatData.__module__ = "livekit.agents.llm.utils"
 MistralFormatData.__annotations__ = get_annotations(MistralFormatData, eval_str=True)
-MistralFormatData.__module__ = "livekit.agents.llm._provider_format"
+MistralFormatData.__module__ = "livekit.agents.llm.utils"

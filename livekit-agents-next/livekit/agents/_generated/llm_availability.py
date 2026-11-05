@@ -22,4 +22,4 @@ class AvailabilityChangedEvent:
 
 
 AvailabilityChangedEvent.__annotations__ = get_annotations(AvailabilityChangedEvent, eval_str=True)
-AvailabilityChangedEvent.__module__ = "livekit.agents.llm.fallback_adapter"
+AvailabilityChangedEvent.__module__ = "livekit.agents.llm"

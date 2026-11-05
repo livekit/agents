@@ -164,7 +164,7 @@ pub trait TtsTokenLog: Send + Sync + Sized + 'static {
 
 #[crate::host(record(
     module = "llm_availability",
-    path = "livekit.agents.llm.fallback_adapter",
+    path = "livekit.agents.llm",
     dataclass
 ))]
 pub struct AvailabilityChangedEvent {
@@ -177,7 +177,7 @@ pub struct AvailabilityChangedEvent {
 
 #[crate::host(record(
     module = "realtime_availability",
-    path = "livekit.agents.llm.realtime_fallback_adapter",
+    path = "livekit.agents.llm.realtime",
     dataclass
 ))]
 pub struct RealtimeAvailabilityChangedEvent {

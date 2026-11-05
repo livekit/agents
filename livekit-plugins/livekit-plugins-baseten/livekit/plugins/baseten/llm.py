@@ -10,7 +10,7 @@ from openai.types.chat import completion_create_params
 
 from livekit.agents import llm
 from livekit.agents.llm import ChatContext, ToolChoice, utils as llm_utils
-from livekit.agents.llm._provider_format import convert_mid_conversation_instructions
+from livekit.agents.llm.utils import convert_mid_conversation_instructions
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,

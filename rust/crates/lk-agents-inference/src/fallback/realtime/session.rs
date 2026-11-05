@@ -219,7 +219,7 @@ impl FallbackSession {
                     Err(error) => {
                         st.events.push_back(Event::Error(RealtimeModelError {
                             timestamp: lk_agents_abi::Ts::ZERO,
-                            label: "livekit.agents.llm.realtime_fallback_adapter.RealtimeModelFallbackAdapter".to_owned(),
+                            label: "livekit.agents.llm.realtime.RealtimeModelFallbackAdapter".to_owned(),
                             message: error.to_string(),
                             recoverable: false,
                             req_id: None,

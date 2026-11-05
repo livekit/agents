@@ -35,11 +35,16 @@ from .._generated.chat_items import (
     ImageContent,
     MetricsReport,
 )
+from .._generated.provider_data import (
+    AnthropicFormatData,
+    BedrockFormatData,
+    GoogleFormatData,
+    MistralFormatData,
+)
 from .._proto import encode_chat_item
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils.misc import is_given
-from . import _provider_format
 
 if TYPE_CHECKING:
     from anthropic.types import MessageParam as AnthropicMessage
@@ -289,12 +294,12 @@ class ChatContext:
         *,
         inject_dummy_user_message: bool = True,
         thought_signatures: dict[str, bytes] | None = None,
-    ) -> tuple[list[GoogleMessage], _provider_format.GoogleFormatData]: ...
+    ) -> tuple[list[GoogleMessage], GoogleFormatData]: ...
 
     @overload
     async def to_provider_format(
         self, format: Literal["aws"], *, inject_dummy_user_message: bool = True
-    ) -> tuple[list[BedrockMessage], _provider_format.BedrockFormatData]: ...
+    ) -> tuple[list[BedrockMessage], BedrockFormatData]: ...
 
     @overload
     async def to_provider_format(
@@ -303,12 +308,12 @@ class ChatContext:
         *,
         inject_dummy_user_message: bool = True,
         inject_trailing_user_message: bool = False,
-    ) -> tuple[list[AnthropicMessage], _provider_format.AnthropicFormatData]: ...
+    ) -> tuple[list[AnthropicMessage], AnthropicFormatData]: ...
 
     @overload
     async def to_provider_format(
         self, format: Literal["mistralai"], *, inject_dummy_user_message: bool = True
-    ) -> tuple[list[MistralMessage], _provider_format.MistralFormatData]: ...
+    ) -> tuple[list[MistralMessage], MistralFormatData]: ...
 
     async def to_provider_format(
         self,
@@ -324,15 +329,13 @@ class ChatContext:
         | list[BedrockMessage]
         | list[AnthropicMessage]
         | list[MistralMessage],
-        _provider_format.GoogleFormatData
-        | _provider_format.BedrockFormatData
-        | _provider_format.AnthropicFormatData
-        | _provider_format.MistralFormatData
-        | None,
+        GoogleFormatData | BedrockFormatData | AnthropicFormatData | MistralFormatData | None,
     ]:
         """Convert history to the upstream SDK's request types for the selected provider."""
         # The native dialect writes the SDK wire schema; annotations preserve that contract.
-        messages, data = await _provider_format.to_chat_ctx(
+        from .utils import to_chat_ctx
+
+        messages, data = await to_chat_ctx(
             self,
             format,
             inject_dummy_user_message=inject_dummy_user_message,

@@ -32,8 +32,6 @@ impl super::Implementations for Selected {
     type InferenceAvatar = ::lk_agents_runtime::inference::avatar::gateway::GatewayAvatar;
     type InferenceTts = ::lk_agents_runtime::inference::tts::GatewayTts;
     type Logging = crate::py_logging::Logging;
-    type RemoteChatContext =
-        ::lk_agents_runtime::inference::realtime::remote::HostRemoteChatContext;
     type ChatContextPlans = ::lk_agents_runtime::cores::ChatPlans;
     type ChatContextDiffs = ::lk_agents_runtime::cores::ChatDiffs;
     type FixedGate = ::lk_agents_runtime::inference::duplex::GateClass<

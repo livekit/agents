@@ -47,11 +47,13 @@ from .._generated.tool_errors import (
 )
 from .._generated.tool_flags import ToolFlag as ToolFlag
 from .._generated.tool_options import Function as Function, NamedToolChoice as NamedToolChoice
-from . import _provider_format
 
 if TYPE_CHECKING:
     from ..voice.events import RunContext
     from ..voice.tool_executor import ToolHandlingOptions
+
+
+TOOL_BEHAVIOR = Literal["UNSPECIFIED", "BLOCKING", "NON_BLOCKING"]
 
 
 class Tool(ABC):
@@ -568,7 +570,7 @@ class ToolContext:
         self,
         format: Literal["google"],
         *,
-        tool_behavior: _provider_format.TOOL_BEHAVIOR | None = None,
+        tool_behavior: TOOL_BEHAVIOR | None = None,
         use_parameters_json_schema: bool = True,
     ) -> list[dict[str, object]]: ...
 
@@ -586,11 +588,13 @@ class ToolContext:
         *,
         strict: bool = True,
         provider_tool_type: type[ProviderTool] | None = None,
-        tool_behavior: _provider_format.TOOL_BEHAVIOR | None = None,
+        tool_behavior: TOOL_BEHAVIOR | None = None,
         use_parameters_json_schema: bool = True,
     ) -> list[dict[str, object]]:
         """Parse the function tools to a provider-specific schema."""
-        return _provider_format.to_fnc_ctx(
+        from .utils import to_fnc_ctx
+
+        return to_fnc_ctx(
             self,
             format,
             strict=strict,

@@ -91,7 +91,6 @@ from ._generated._core_llm import (
     OpenAIRealtimeModel as OpenAIRealtimeModel,
     RealtimeFallbackModel as RealtimeFallbackModel,
     TtsTokenLog as TtsTokenLog,
-    _core_RemoteChatContext as _core_RemoteChatContext,
     _core_ToolsetGroup as _core_ToolsetGroup,
     _core_ToolsetLifetime as _core_ToolsetLifetime,
     _core_ToolsetScopes as _core_ToolsetScopes,

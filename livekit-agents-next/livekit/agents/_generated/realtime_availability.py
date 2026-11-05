@@ -22,4 +22,4 @@ class RealtimeAvailabilityChangedEvent:
 
 
 RealtimeAvailabilityChangedEvent.__annotations__ = get_annotations(RealtimeAvailabilityChangedEvent, eval_str=True)
-RealtimeAvailabilityChangedEvent.__module__ = "livekit.agents.llm.realtime_fallback_adapter"
+RealtimeAvailabilityChangedEvent.__module__ = "livekit.agents.llm.realtime"

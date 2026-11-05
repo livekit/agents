@@ -113,7 +113,6 @@
     "_core_NodeCalls",
     "_core_ProviderAttempts",
     "_core_QueueAudio",
-    "_core_RemoteChatContext",
     "_core_RemoteInteraction",
     "_core_RoomRpcRouter",
     "_core_RoomSession",

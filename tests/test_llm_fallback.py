@@ -5,8 +5,15 @@ from typing import Any
 import pytest
 
 from livekit.agents import APIError
-from livekit.agents.llm import ChatChunk, ChatContext, ChoiceDelta, FallbackAdapter, LLMStream, Tool
-from livekit.agents.llm.fallback_adapter import AvailabilityChangedEvent
+from livekit.agents.llm import (
+    AvailabilityChangedEvent,
+    ChatChunk,
+    ChatContext,
+    ChoiceDelta,
+    FallbackAdapter,
+    LLMStream,
+    Tool,
+)
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 from .fake_llm import FakeLLM

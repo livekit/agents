@@ -5,8 +5,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from .. import _core
 from .._generated.realtime_options import OpenAIRealtimeConfig
 from ..llm import realtime as llm_realtime
-from ..llm._realtime import RealtimeModel as _RealtimeModel, RealtimeSession
-from ..llm._realtime_options import realtime_options
+from ..llm._realtime import RealtimeModel as _RealtimeModel, RealtimeSession, realtime_options
 from ..llm.tool_context import ToolChoice
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ._utils import (

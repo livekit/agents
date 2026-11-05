@@ -8,7 +8,7 @@ pub use image::{BYTES_TAG, ImageResolver, SerializedImage};
 
 #[crate::host(record(
     module = "provider_data",
-    path = "livekit.agents.llm._provider_format",
+    path = "livekit.agents.llm.utils",
     dataclass
 ))]
 pub struct AnthropicFormatData {
@@ -17,7 +17,7 @@ pub struct AnthropicFormatData {
 
 #[crate::host(record(
     module = "provider_data",
-    path = "livekit.agents.llm._provider_format",
+    path = "livekit.agents.llm.utils",
     dataclass
 ))]
 pub struct BedrockFormatData {
@@ -26,7 +26,7 @@ pub struct BedrockFormatData {
 
 #[crate::host(record(
     module = "provider_data",
-    path = "livekit.agents.llm._provider_format",
+    path = "livekit.agents.llm.utils",
     dataclass
 ))]
 pub struct GoogleFormatData {
@@ -35,7 +35,7 @@ pub struct GoogleFormatData {
 
 #[crate::host(record(
     module = "provider_data",
-    path = "livekit.agents.llm._provider_format",
+    path = "livekit.agents.llm.utils",
     dataclass
 ))]
 pub struct MistralFormatData {

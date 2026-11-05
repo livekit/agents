@@ -7,6 +7,7 @@ from collections.abc import Callable
 from typing import (
     TYPE_CHECKING,
     Any,
+    TypeAlias,
     cast,
     get_origin,
     get_type_hints,
@@ -25,6 +26,12 @@ from livekit.agents._generated.chat_diff import (
 
 from .. import _core
 from .._generated.llm import SerializedImage
+from .._generated.provider_data import (
+    AnthropicFormatData as AnthropicFormatData,
+    BedrockFormatData as BedrockFormatData,
+    GoogleFormatData as GoogleFormatData,
+    MistralFormatData as MistralFormatData,
+)
 from .._generated.tool_report import (
     ToolOutcomeCompleted,
     ToolOutcomeFailed,
@@ -41,8 +48,8 @@ from .._generated.tool_report import (
     ToolReport,
 )
 from ..log import logger
-from .chat_context import ChatContext, ImageContent
-from .tool_context import FunctionTool, RawFunctionTool, ToolError
+from .chat_context import ChatContext, ChatRole, ImageContent
+from .tool_context import TOOL_BEHAVIOR, FunctionTool, RawFunctionTool, ToolError
 
 if TYPE_CHECKING:
     from ..voice.events import RunContext
@@ -470,3 +477,127 @@ def tool_report(output: object, exception: BaseException | None = None) -> ToolR
     if text is None:
         return ToolReport(outcome=ToolOutcomeInvalid())
     return ToolReport(outcome=ToolOutcomeValue(text=text))
+
+
+if TYPE_CHECKING:
+    from anthropic.types import MessageParam as AnthropicMessage
+    from google.genai.types import ContentDict as GoogleMessage
+    from mistralai.client.models import InputEntriesTypedDict as MistralMessage
+    from openai.types.chat import ChatCompletionMessageParam as OpenAIMessage
+    from openai.types.responses import ResponseInputItemParam as OpenAIResponseItem
+    from types_aiobotocore_bedrock_runtime.type_defs import MessageTypeDef as BedrockMessage
+
+    ProviderMessages: TypeAlias = (
+        list[OpenAIMessage]
+        | list[OpenAIResponseItem]
+        | list[GoogleMessage]
+        | list[BedrockMessage]
+        | list[AnthropicMessage]
+        | list[MistralMessage]
+    )
+    from .tool_context import ProviderTool, ToolContext
+
+
+_DEFAULT_INLINE_INSTRUCTIONS_TEMPLATE = "<instructions>\n{content}\n</instructions>"
+
+
+def convert_mid_conversation_instructions(
+    chat_ctx: ChatContext,
+    *,
+    role: ChatRole = "user",
+    template: str = _DEFAULT_INLINE_INSTRUCTIONS_TEMPLATE,
+) -> ChatContext:
+    """Rewrite every system or developer message but a leading preamble as a ``role`` message
+    wrapped in ``template``, so it keeps its position; one without text is dropped."""
+
+    plan = _core.convert_mid_conversation_instructions(chat_ctx.items, role=role, template=template)
+    return ChatContext([chat_ctx.items[i] if new is None else new for i, new in plan])
+
+
+_DATA = {
+    "anthropic": AnthropicFormatData,
+    "aws": BedrockFormatData,
+    "google": GoogleFormatData,
+    "mistralai": MistralFormatData,
+}
+
+
+async def to_chat_ctx(
+    chat_ctx: ChatContext,
+    format: str,
+    *,
+    inject_dummy_user_message: bool = True,
+    inject_trailing_user_message: bool = False,
+    thought_signatures: dict[str, bytes] | None = None,
+) -> tuple[
+    ProviderMessages,
+    GoogleFormatData | BedrockFormatData | AnthropicFormatData | MistralFormatData | None,
+]:
+    from .chat_context import ImageContent
+
+    images = {
+        content.id: await serialize_image(content)
+        for item in chat_ctx.items
+        if item.type == "message"
+        for content in item.content
+        if isinstance(content, ImageContent)
+    }
+    messages, data = await _core.to_provider_format(
+        format,
+        chat_ctx.items,
+        images=images,
+        inject_dummy_user_message=inject_dummy_user_message,
+        inject_trailing_user_message=inject_trailing_user_message,
+        thought_signatures=thought_signatures,
+    )
+    cls = _DATA.get(format)
+    return cast("ProviderMessages", messages), cls(
+        **cast("dict[str, Any]", data)
+    ) if cls is not None else None
+
+
+def to_fnc_ctx(
+    tool_ctx: ToolContext,
+    format: str,
+    *,
+    strict: bool = True,
+    provider_tool_type: type[ProviderTool] | None = None,
+    tool_behavior: TOOL_BEHAVIOR | None = None,
+    use_parameters_json_schema: bool = True,
+) -> list[dict[str, Any]]:
+    from .tool_context import FunctionTool, RawFunctionTool
+
+    responses = format == "openai.responses"
+    specs: list[list[Any]] = []
+    for tool in tool_ctx.flatten() if responses else tool_ctx.function_tools.values():
+        if isinstance(tool, RawFunctionTool):
+            specs.append(["raw", tool.info.raw_schema, tool.info.name])
+        elif isinstance(tool, FunctionTool):
+            if strict and format in ("openai", "anthropic"):
+                specs.append(["strict", build_strict_openai_schema(tool)])
+                continue
+            fnc = build_legacy_openai_schema(tool, internally_tagged=format != "openai")
+            specs.append(["legacy", fnc])
+        elif responses and provider_tool_type and isinstance(tool, provider_tool_type):
+            if hasattr(tool, "to_dict"):
+                specs.append(["provider", tool.to_dict()])
+    return cast(
+        "list[dict[str, Any]]",
+        _core.to_fnc_ctx(
+            format,
+            specs,
+            tool_behavior=None if tool_behavior == "UNSPECIFIED" else tool_behavior,
+            use_parameters_json_schema=use_parameters_json_schema,
+        ),
+    )
+
+
+__all__ = [
+    "TOOL_BEHAVIOR",
+    "AnthropicFormatData",
+    "BedrockFormatData",
+    "GoogleFormatData",
+    "MistralFormatData",
+    "to_chat_ctx",
+    "to_fnc_ctx",
+]

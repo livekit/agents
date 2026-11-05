@@ -185,8 +185,7 @@ def test_duplex_adapter_exposes_the_engine_capabilities_without_opening_a_sessio
 ) -> None:
     from typing import Never
 
-    from livekit.agents.llm.duplex import DuplexCapabilities, DuplexModel
-    from livekit.agents.llm.duplex_adapter import DuplexRealtimeAdapter
+    from livekit.agents.llm.duplex import DuplexCapabilities, DuplexModel, DuplexRealtimeAdapter
 
     class Model(DuplexModel):
         def session(self) -> Never:
@@ -211,38 +210,6 @@ def test_duplex_adapter_exposes_the_engine_capabilities_without_opening_a_sessio
     assert caps.mutable_chat_context is mutable and caps.mutable_instructions is mutable
     assert caps.mutable_tools is mutable
     assert not caps.message_truncation and not caps.manual_function_calls and not caps.supports_say
-
-
-def test_remote_history_shares_native_order_without_copying_mutable_items() -> None:
-    from livekit.agents.llm import ChatMessage
-    from livekit.agents.llm.remote_chat_context import RemoteChatContext
-
-    history = RemoteChatContext()
-    first = ChatMessage(id="a", role="user", content=["first"])
-    middle = ChatMessage(id="b", role="assistant", content=["middle"])
-    last = ChatMessage(id="c", role="user", content=["last"])
-    history.insert(None, first)
-    history.insert("a", last)
-    history.insert("a", middle)
-    view = history.get("b")
-    assert view is not None and view.item is middle
-    middle.content.append("updated")
-    snapshot = history.to_chat_ctx()
-    assert [item.id for item in snapshot.items] == ["a", "b", "c"]
-    assert snapshot.items[1] is middle
-    with pytest.raises(ValueError, match="already exists"):
-        history.insert(None, ChatMessage(id="a", role="user", content=[]))
-    with pytest.raises(ValueError, match="not found"):
-        history.insert("missing", ChatMessage(id="d", role="user", content=[]))
-    assert history.get("d") is None and history.tail_id == "c"
-    history.delete("b")
-    assert history.get("b") is None and view.item is middle
-    history.delete("c")
-    assert history.tail_id == "a"
-    with pytest.raises(ValueError, match="not found"):
-        history.delete("missing")
-    history.delete("a")
-    assert history.tail_id is None and history.to_chat_ctx().items == []
 
 
 @pytest.mark.parametrize("kind", ["llm", "stt", "tts", "realtime_model"])
