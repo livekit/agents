@@ -336,7 +336,6 @@ class AvatarSession(BaseAvatarSession[Literal["avatar_disconnected"]]):
             extra={
                 "session_id": info.session_id,
                 "status": info.status,
-                "billing_mode": info.billing_mode,
                 "max_duration_seconds": info.max_duration_seconds,
             },
         )

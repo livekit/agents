@@ -367,7 +367,7 @@ async def test_start_mints_token_posts_session_and_routes_audio(fake: FakeAtmee)
 
     info = avatar.session_info
     assert info is not None and avatar.session_id == info.session_id == SESSION_ID
-    assert (info.status, info.billing_mode) == ("initializing", "metered")
+    assert info.status == "initializing" and info.max_duration_seconds == 3600
     [tail] = agent_session.audio_tails
     assert isinstance(tail, DataStreamAudioOutput) and tail.sample_rate == 16000
     assert tail._destination_identity == "atmee-avatar-agent"
