@@ -23221,6 +23221,487 @@ pub mod worker_endpoint {
 
     // Declared in rust/crates/lk-agents-abi/src/worker/http/mod.rs.
 
+    pub fn exchange_kind_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::worker::http::ExchangeKind,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let value = match value {
+            ::lk_agents_abi::worker::http::ExchangeKind::Http => "http",
+            ::lk_agents_abi::worker::http::ExchangeKind::Websocket => "websocket",
+        };
+        ::pyo3::PyResult::Ok(::pyo3::types::PyString::new(py, value).into_any())
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/worker/http/mod.rs.
+    static REQUEST_HEAD: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn request_head_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::worker::http::RequestHead,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ::lk_agents_abi::worker::http::RequestHead {
+            kind,
+            method,
+            http_version,
+            path,
+            raw_path,
+            query_string,
+            headers,
+            subprotocols,
+        } = value;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item(
+            "kind",
+            crate::generated::records::worker_endpoint::exchange_kind_to_py(py, kind)?,
+        )?;
+        kwargs.set_item("method", ::pyo3::IntoPyObjectExt::into_bound_py_any(method, py)?)?;
+        kwargs.set_item(
+            "http_version",
+            ::pyo3::IntoPyObjectExt::into_bound_py_any(http_version, py)?,
+        )?;
+        kwargs.set_item("path", ::pyo3::IntoPyObjectExt::into_bound_py_any(path, py)?)?;
+        kwargs.set_item("raw_path", ::pyo3::types::PyBytes::new(py, &raw_path).into_any())?;
+        kwargs
+            .set_item("query_string", ::pyo3::types::PyBytes::new(py, &query_string).into_any())?;
+        kwargs.set_item(
+            "headers",
+            ::pyo3::types::PyList::new(
+                py,
+                headers
+                    .into_iter()
+                    .map(|x| {
+                        ::pyo3::PyResult::Ok({
+                            let (x0, x1) = x;
+                            ::pyo3::types::PyTuple::new(
+                                py,
+                                [
+                                    ::pyo3::types::PyBytes::new(py, &x0).into_any(),
+                                    ::pyo3::types::PyBytes::new(py, &x1).into_any(),
+                                ],
+                            )?
+                            .into_any()
+                        })
+                    })
+                    .collect::<PyResult<Vec<_>>>()?,
+            )?
+            .into_any(),
+        )?;
+        kwargs.set_item(
+            "subprotocols",
+            ::pyo3::types::PyList::new(
+                py,
+                subprotocols
+                    .into_iter()
+                    .map(|x| ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py))
+                    .collect::<PyResult<Vec<_>>>()?,
+            )?
+            .into_any(),
+        )?;
+        crate::py_calls::call(
+            REQUEST_HEAD
+                .import(py, "livekit.agents._generated.worker_endpoint", "RequestHead")?
+                .as_any(),
+            (),
+            Some(&kwargs),
+        )
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/worker/http/mod.rs.
+    static EXCHANGE_EVENT_BODY: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static EXCHANGE_EVENT_DISCONNECTED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static EXCHANGE_EVENT_TEXT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static EXCHANGE_EVENT_BINARY: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static EXCHANGE_EVENT_CLOSED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn exchange_event_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::worker::http::ExchangeEvent,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        match value {
+            ::lk_agents_abi::worker::http::ExchangeEvent::Body { data, more } => {
+                let kwargs = ::pyo3::types::PyDict::new(py);
+                kwargs.set_item("data", ::pyo3::types::PyBytes::new(py, &data).into_any())?;
+                kwargs.set_item("more", ::pyo3::IntoPyObjectExt::into_bound_py_any(more, py)?)?;
+                crate::py_calls::call(
+                    EXCHANGE_EVENT_BODY
+                        .import(
+                            py,
+                            "livekit.agents._generated.worker_endpoint",
+                            "ExchangeEventBody",
+                        )?
+                        .as_any(),
+                    (),
+                    Some(&kwargs),
+                )
+            }
+            ::lk_agents_abi::worker::http::ExchangeEvent::Disconnected => crate::py_calls::call(
+                EXCHANGE_EVENT_DISCONNECTED
+                    .import(
+                        py,
+                        "livekit.agents._generated.worker_endpoint",
+                        "ExchangeEventDisconnected",
+                    )?
+                    .as_any(),
+                (),
+                None,
+            ),
+            ::lk_agents_abi::worker::http::ExchangeEvent::Text { text } => {
+                let kwargs = ::pyo3::types::PyDict::new(py);
+                kwargs.set_item("text", ::pyo3::IntoPyObjectExt::into_bound_py_any(text, py)?)?;
+                crate::py_calls::call(
+                    EXCHANGE_EVENT_TEXT
+                        .import(
+                            py,
+                            "livekit.agents._generated.worker_endpoint",
+                            "ExchangeEventText",
+                        )?
+                        .as_any(),
+                    (),
+                    Some(&kwargs),
+                )
+            }
+            ::lk_agents_abi::worker::http::ExchangeEvent::Binary { data } => {
+                let kwargs = ::pyo3::types::PyDict::new(py);
+                kwargs.set_item("data", ::pyo3::types::PyBytes::new(py, &data).into_any())?;
+                crate::py_calls::call(
+                    EXCHANGE_EVENT_BINARY
+                        .import(
+                            py,
+                            "livekit.agents._generated.worker_endpoint",
+                            "ExchangeEventBinary",
+                        )?
+                        .as_any(),
+                    (),
+                    Some(&kwargs),
+                )
+            }
+            ::lk_agents_abi::worker::http::ExchangeEvent::Closed { code } => {
+                let kwargs = ::pyo3::types::PyDict::new(py);
+                kwargs.set_item("code", ::pyo3::IntoPyObjectExt::into_bound_py_any(code, py)?)?;
+                crate::py_calls::call(
+                    EXCHANGE_EVENT_CLOSED
+                        .import(
+                            py,
+                            "livekit.agents._generated.worker_endpoint",
+                            "ExchangeEventClosed",
+                        )?
+                        .as_any(),
+                    (),
+                    Some(&kwargs),
+                )
+            }
+        }
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/worker/http/mod.rs.
+    static EXCHANGE_MESSAGE_START: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static EXCHANGE_MESSAGE_BODY: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static EXCHANGE_MESSAGE_ACCEPT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static EXCHANGE_MESSAGE_TEXT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static EXCHANGE_MESSAGE_BINARY: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static EXCHANGE_MESSAGE_CLOSE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn exchange_message_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::worker::http::ExchangeMessage> {
+        let py = obj.py();
+        if obj.is_instance(EXCHANGE_MESSAGE_START.import(
+            py,
+            "livekit.agents._generated.worker_endpoint",
+            "ExchangeMessageStart",
+        )?)? {
+            return Ok(::lk_agents_abi::worker::http::ExchangeMessage::Start {
+                status: crate::py_values::attr_with(obj, "ExchangeMessageStart", "status", |v| {
+                    crate::py_values::number_from_py::<u16>(v, "ExchangeMessageStart.status")
+                })?,
+                headers: crate::py_values::attr_with(
+                    obj,
+                    "ExchangeMessageStart",
+                    "headers",
+                    |v| {
+                        if v.is_instance_of::<::pyo3::types::PyList>()
+                            || v.is_instance_of::<::pyo3::types::PyTuple>()
+                        {
+                            v.try_iter()?
+                                .map(|item| {
+                                    let item = &item?;
+                                    (|| -> ::pyo3::PyResult<_> {
+                                        let tuple = item.cast::<::pyo3::types::PyTuple>()?;
+                                        if tuple.len() != 2 {
+                                            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                                                format!(
+                                                    "{}: expected a tuple of 2 items",
+                                                    "ExchangeMessageStart.headers"
+                                                ),
+                                            ));
+                                        }
+                                        let item_0 = tuple.get_item(0)?;
+                                        let item_1 = tuple.get_item(1)?;
+                                        Ok((
+                                            (if item_0.is_instance_of::<::pyo3::types::PyBytes>()
+                                                || item_0
+                                                    .is_instance_of::<::pyo3::types::PyByteArray>()
+                                                || item_0
+                                                    .is_instance_of::<::pyo3::types::PyMemoryView>()
+                                            {
+                                                crate::py_values::owned_bytes(
+                                                    item_0.as_any(),
+                                                    "ExchangeMessageStart.headers",
+                                                )
+                                            } else {
+                                                item_0.try_iter().and_then(|items| {
+                                                    items
+                                                        .map(|item| {
+                                                            let item = item?;
+                                                            crate::py_values::number_from_py::<u8>(
+                                                                item.as_any(),
+                                                                "ExchangeMessageStart.headers",
+                                                            )
+                                                        })
+                                                        .collect::<PyResult<Vec<_>>>()
+                                                })
+                                            })?,
+                                            (if item_1.is_instance_of::<::pyo3::types::PyBytes>()
+                                                || item_1
+                                                    .is_instance_of::<::pyo3::types::PyByteArray>()
+                                                || item_1
+                                                    .is_instance_of::<::pyo3::types::PyMemoryView>()
+                                            {
+                                                crate::py_values::owned_bytes(
+                                                    item_1.as_any(),
+                                                    "ExchangeMessageStart.headers",
+                                                )
+                                            } else {
+                                                item_1.try_iter().and_then(|items| {
+                                                    items
+                                                        .map(|item| {
+                                                            let item = item?;
+                                                            crate::py_values::number_from_py::<u8>(
+                                                                item.as_any(),
+                                                                "ExchangeMessageStart.headers",
+                                                            )
+                                                        })
+                                                        .collect::<PyResult<Vec<_>>>()
+                                                })
+                                            })?,
+                                        ))
+                                    })()
+                                })
+                                .collect::<PyResult<Vec<_>>>()
+                        } else {
+                            Err(::pyo3::exceptions::PyTypeError::new_err(
+                                "ExchangeMessageStart.headers: expected a list or tuple",
+                            ))
+                        }
+                    },
+                )?,
+            });
+        }
+        if obj.is_instance(EXCHANGE_MESSAGE_BODY.import(
+            py,
+            "livekit.agents._generated.worker_endpoint",
+            "ExchangeMessageBody",
+        )?)? {
+            return Ok(::lk_agents_abi::worker::http::ExchangeMessage::Body {
+                data: crate::py_values::attr_with(obj, "ExchangeMessageBody", "data", |v| {
+                    if v.is_instance_of::<::pyo3::types::PyBytes>()
+                        || v.is_instance_of::<::pyo3::types::PyByteArray>()
+                        || v.is_instance_of::<::pyo3::types::PyMemoryView>()
+                    {
+                        crate::py_values::owned_bytes(v.as_any(), "ExchangeMessageBody.data")
+                    } else {
+                        v.try_iter().and_then(|items| {
+                            items
+                                .map(|item| {
+                                    let item = item?;
+                                    crate::py_values::number_from_py::<u8>(
+                                        item.as_any(),
+                                        "ExchangeMessageBody.data",
+                                    )
+                                })
+                                .collect::<PyResult<Vec<_>>>()
+                        })
+                    }
+                })?,
+                more: crate::py_values::attr_with(obj, "ExchangeMessageBody", "more", |v| {
+                    v.extract::<bool>()
+                })?,
+            });
+        }
+        if obj.is_instance(EXCHANGE_MESSAGE_ACCEPT.import(
+            py,
+            "livekit.agents._generated.worker_endpoint",
+            "ExchangeMessageAccept",
+        )?)? {
+            return Ok(::lk_agents_abi::worker::http::ExchangeMessage::Accept {
+                subprotocol: crate::py_values::attr_with(
+                    obj,
+                    "ExchangeMessageAccept",
+                    "subprotocol",
+                    |v| {
+                        if v.is_none() {
+                            Ok(None)
+                        } else {
+                            (v.extract::<::std::string::String>()).map(Some)
+                        }
+                    },
+                )?,
+                headers: crate::py_values::attr_with(
+                    obj,
+                    "ExchangeMessageAccept",
+                    "headers",
+                    |v| {
+                        if v.is_instance_of::<::pyo3::types::PyList>()
+                            || v.is_instance_of::<::pyo3::types::PyTuple>()
+                        {
+                            v.try_iter()?
+                                .map(|item| {
+                                    let item = &item?;
+                                    (|| -> ::pyo3::PyResult<_> {
+                                        let tuple = item.cast::<::pyo3::types::PyTuple>()?;
+                                        if tuple.len() != 2 {
+                                            return Err(::pyo3::exceptions::PyTypeError::new_err(
+                                                format!(
+                                                    "{}: expected a tuple of 2 items",
+                                                    "ExchangeMessageAccept.headers"
+                                                ),
+                                            ));
+                                        }
+                                        let item_0 = tuple.get_item(0)?;
+                                        let item_1 = tuple.get_item(1)?;
+                                        Ok((
+                                            (if item_0.is_instance_of::<::pyo3::types::PyBytes>()
+                                                || item_0
+                                                    .is_instance_of::<::pyo3::types::PyByteArray>()
+                                                || item_0
+                                                    .is_instance_of::<::pyo3::types::PyMemoryView>()
+                                            {
+                                                crate::py_values::owned_bytes(
+                                                    item_0.as_any(),
+                                                    "ExchangeMessageAccept.headers",
+                                                )
+                                            } else {
+                                                item_0.try_iter().and_then(|items| {
+                                                    items
+                                                        .map(|item| {
+                                                            let item = item?;
+                                                            crate::py_values::number_from_py::<u8>(
+                                                                item.as_any(),
+                                                                "ExchangeMessageAccept.headers",
+                                                            )
+                                                        })
+                                                        .collect::<PyResult<Vec<_>>>()
+                                                })
+                                            })?,
+                                            (if item_1.is_instance_of::<::pyo3::types::PyBytes>()
+                                                || item_1
+                                                    .is_instance_of::<::pyo3::types::PyByteArray>()
+                                                || item_1
+                                                    .is_instance_of::<::pyo3::types::PyMemoryView>()
+                                            {
+                                                crate::py_values::owned_bytes(
+                                                    item_1.as_any(),
+                                                    "ExchangeMessageAccept.headers",
+                                                )
+                                            } else {
+                                                item_1.try_iter().and_then(|items| {
+                                                    items
+                                                        .map(|item| {
+                                                            let item = item?;
+                                                            crate::py_values::number_from_py::<u8>(
+                                                                item.as_any(),
+                                                                "ExchangeMessageAccept.headers",
+                                                            )
+                                                        })
+                                                        .collect::<PyResult<Vec<_>>>()
+                                                })
+                                            })?,
+                                        ))
+                                    })()
+                                })
+                                .collect::<PyResult<Vec<_>>>()
+                        } else {
+                            Err(::pyo3::exceptions::PyTypeError::new_err(
+                                "ExchangeMessageAccept.headers: expected a list or tuple",
+                            ))
+                        }
+                    },
+                )?,
+            });
+        }
+        if obj.is_instance(EXCHANGE_MESSAGE_TEXT.import(
+            py,
+            "livekit.agents._generated.worker_endpoint",
+            "ExchangeMessageText",
+        )?)? {
+            return Ok(::lk_agents_abi::worker::http::ExchangeMessage::Text {
+                text: crate::py_values::attr_with(obj, "ExchangeMessageText", "text", |v| {
+                    v.extract::<::std::string::String>()
+                })?,
+            });
+        }
+        if obj.is_instance(EXCHANGE_MESSAGE_BINARY.import(
+            py,
+            "livekit.agents._generated.worker_endpoint",
+            "ExchangeMessageBinary",
+        )?)? {
+            return Ok(::lk_agents_abi::worker::http::ExchangeMessage::Binary {
+                data: crate::py_values::attr_with(obj, "ExchangeMessageBinary", "data", |v| {
+                    if v.is_instance_of::<::pyo3::types::PyBytes>()
+                        || v.is_instance_of::<::pyo3::types::PyByteArray>()
+                        || v.is_instance_of::<::pyo3::types::PyMemoryView>()
+                    {
+                        crate::py_values::owned_bytes(v.as_any(), "ExchangeMessageBinary.data")
+                    } else {
+                        v.try_iter().and_then(|items| {
+                            items
+                                .map(|item| {
+                                    let item = item?;
+                                    crate::py_values::number_from_py::<u8>(
+                                        item.as_any(),
+                                        "ExchangeMessageBinary.data",
+                                    )
+                                })
+                                .collect::<PyResult<Vec<_>>>()
+                        })
+                    }
+                })?,
+            });
+        }
+        if obj.is_instance(EXCHANGE_MESSAGE_CLOSE.import(
+            py,
+            "livekit.agents._generated.worker_endpoint",
+            "ExchangeMessageClose",
+        )?)? {
+            return Ok(::lk_agents_abi::worker::http::ExchangeMessage::Close {
+                code: crate::py_values::attr_with(obj, "ExchangeMessageClose", "code", |v| {
+                    crate::py_values::number_from_py::<u16>(v, "ExchangeMessageClose.code")
+                })?,
+                reason: crate::py_values::attr_with(obj, "ExchangeMessageClose", "reason", |v| {
+                    v.extract::<::std::string::String>()
+                })?,
+            });
+        }
+        Err(super::not_a(
+            obj,
+            "ExchangeMessageStart | ExchangeMessageBody | ExchangeMessageAccept | ExchangeMessageText | ExchangeMessageBinary | ExchangeMessageClose",
+        ))
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/worker/http/mod.rs.
+
     pub fn endpoint_kind_from_py(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::lk_agents_abi::worker::http::EndpointKind> {

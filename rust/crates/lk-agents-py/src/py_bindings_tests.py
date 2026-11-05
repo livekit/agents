@@ -418,16 +418,16 @@ async def test_drain_distinguishes_deadlines_from_identical_host_error_text(
             pass
 
         async def _core_join_jobs(self) -> None:
-            pass
+            if host_failure:
+                raise RuntimeError("drain timed out")
+            await asyncio.Future()
 
         async def _core_close(self) -> None:
             pass
 
     class Endpoints:
-        async def _core_drain(self) -> None:
-            if host_failure:
-                raise RuntimeError("drain timed out")
-            await asyncio.Future()
+        async def _core_handle(self, exchange: object, request: object) -> None:
+            raise AssertionError("no request is served")
 
     host = Host()
     config = _core.ServerConfig(ServerOptions())

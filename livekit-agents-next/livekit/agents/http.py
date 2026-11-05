@@ -1,10 +1,9 @@
-"""``AgentServer.http``: the ASGI app behind an agent's HTTP endpoints, served on the endpoint data
-plane.
+"""``AgentServer.http``: the agent's HTTP routes, served as an ASGI application.
 
 Routes are served at ``/agents/{agent_name}/{deployment}/{path}``: through LiveKit Cloud, or the
 worker's public listener where nothing routes them (a self-hosted server, the console). The Rust
-worker accepts one stream per request, reads its metadata and hands the byte stream here. Python runs one ASGI call
-over it: an HTTP/1.1 exchange, or a WebSocket after an upgrade.
+worker owns each connection: it parses the request, enforces limits and deadlines, frames the
+response and closes WebSockets. Python only adapts each parsed exchange to one ASGI call.
 
 The handler sees the preamble through ``request.state.lk_request`` (:class:`EndpointRequest`):
 the request id, whether the caller holds the call permission, the manifest route that matched,
@@ -15,41 +14,39 @@ here; a thread grant reaches a public route as its bearer, for the handler to ve
 
 from __future__ import annotations
 
-import asyncio
 import logging
-from collections import deque
 from collections.abc import Awaitable, Callable, Iterable
 from functools import cached_property
-from http import HTTPStatus
-from typing import Literal, Protocol, TypeVar
-from urllib.parse import unquote
+from typing import TypeVar
 
-import h11
-import wsproto
-import wsproto.events as ws
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import Response
 from starlette.routing import BaseRoute, Mount, Route, WebSocketRoute
 from starlette.types import ASGIApp, Message, Scope
 from starlette.websockets import WebSocket
-from wsproto.frame_protocol import CloseReason
-from wsproto.utilities import RemoteProtocolError as WsProtocolError
 
 from . import _core
-from ._generated.http import _HttpServerLimits as _HttpServerLimits
 from ._generated.worker_endpoint import (
     EndpointOptions as EndpointOptions,
     EndpointRequest as EndpointRequest,
-)
-from ._generated.worker_reset_codes import (
-    HSR_ABORT as HSR_ABORT,
-    HSR_INTERNAL as HSR_INTERNAL,
-    HSR_PROTOCOL as HSR_PROTOCOL,
-    HSR_REFUSED as HSR_REFUSED,
-    HSR_TIMEOUT as HSR_TIMEOUT,
+    ExchangeEvent,
+    ExchangeEventBinary,
+    ExchangeEventBody,
+    ExchangeEventClosed,
+    ExchangeEventDisconnected,
+    ExchangeEventText,
+    ExchangeMessage,
+    ExchangeMessageAccept,
+    ExchangeMessageBinary,
+    ExchangeMessageBody,
+    ExchangeMessageClose,
+    ExchangeMessageStart,
+    ExchangeMessageText,
 )
 from ._generated.worker_server import EndpointRoute
+
+logger = logging.getLogger(__name__)
 
 _HttpEndpoint = Callable[[Request], Response | Awaitable[Response]]
 _HttpEndpointT = TypeVar("_HttpEndpointT", bound=_HttpEndpoint)
@@ -150,7 +147,7 @@ class AgentRoutes:
     def routes(self) -> list[BaseRoute]:
         return list(self._routes)
 
-    # --- what the worker needs --------------------------------------------------------------
+    # --- what the worker needs ----------------------------------------------------------------
 
     @cached_property
     def _server(self) -> _AsgiServer:
@@ -186,619 +183,100 @@ class AgentRoutes:
             )
         return manifest
 
-    async def close_websockets(
-        self, code: int = CloseReason.GOING_AWAY, reason: str = "worker draining"
-    ) -> None:
-        """Send every open WebSocket a close frame, so clients reconnect to another worker."""
-        await self._server.close_websockets(code, reason)
-
-
-async def serve_endpoint(
-    stream: ByteTransport,
-    request: EndpointRequest,
-    app: ASGIApp,
-    registry: AgentRoutes | None = None,
-) -> None:
-    """Serve one exchange stream (an ``ByteStream`` after its preamble, or any object with
-    its five methods) with ``app``. When supplied, ``registry`` must own ``app``
-    and keeps its WebSockets for draining."""
-    if registry is not None and app is not registry.app:
-        raise ValueError("registry must own the supplied ASGI app")
-    server = registry._server if registry is not None else _AsgiServer(app)
-    await server._core_handle(stream, request)
-
-
-class ByteTransport(Protocol):
-    """One exchange after its preamble: ``_core.ByteStream``, or a test's node."""
-
-    def read(self, max_bytes: int) -> Awaitable[bytes]: ...
-    def write(self, data: bytes) -> Awaitable[None]: ...
-    def finish(self) -> None: ...
-    def reset(self, code: int) -> None: ...
-    def stop(self, code: int) -> None: ...
-
-
-logger = logging.getLogger(__name__)
-_READ_SIZE = 64 << 10
-_COMPLETION_REASON_LIMIT = 256
-_Completion = Literal["internal", "timeout", "canceled"]
-_ScopeKind = Literal["http", "websocket"]
-
-
-def _scope(head: h11.Request, request: EndpointRequest, kind: _ScopeKind) -> Scope:
-    raw_path, _, query = head.target.partition(b"?")
-    return {
-        "type": kind,
-        "asgi": {"version": "3.0", "spec_version": "2.3"},
-        "http_version": head.http_version.decode("ascii"),
-        "scheme": request.scheme,
-        "path": unquote(raw_path.decode("latin-1")),
-        "raw_path": raw_path,
-        "query_string": query,
-        "root_path": "",
-        "headers": list(head.headers),
-        "client": None,  # The node supplies a host only, not a client socket address.
-        "server": None,
-        "state": {"lk_request": request},
-    }
-
-
-class _BoundedInbox:
-    """Own queued payloads, their capacity and notification of data or closure.
-
-    Receiving transfers a payload and releases its reservation without suspending.
-    Closing discards pending payloads; cancellation only interrupts notification waits.
-    """
-
-    def __init__(
-        self,
-        *,
-        max_items: int,
-        max_bytes: int,
-        reserve: Callable[[int], bool],
-        release: Callable[[int], None],
-    ) -> None:
-        if max_items < 0 or max_bytes < 0:
-            raise ValueError("inbox limits must be nonnegative")
-        self._max_items = max_items
-        self._max_bytes = max_bytes
-        self._reserve = reserve
-        self._release = release
-        self._items: deque[tuple[str | bytes, int]] = deque()
-        self._bytes = 0
-        self._closed = False
-        self._ready = asyncio.Event()
-
-    def __len__(self) -> int:
-        return len(self._items)
-
-    @property
-    def queued_bytes(self) -> int:
-        return self._bytes
-
-    @property
-    def closed(self) -> bool:
-        return self._closed
-
-    def try_put(self, payload: str | bytes) -> bool:
-        size = len(payload.encode()) if isinstance(payload, str) else len(payload)
-        if (
-            self._closed
-            or len(self._items) >= self._max_items
-            or self._bytes + size > self._max_bytes
-            or not self._reserve(size)
-        ):
-            return False
-        self._items.append((payload, size))
-        self._bytes += size
-        self._ready.set()
-        return True
-
-    async def receive(self) -> str | bytes | None:
-        while not self._closed:
-            if self._items:
-                payload, size = self._items.popleft()
-                self._bytes -= size
-                self._release(size)
-                return payload
-            self._ready.clear()
-            await self._ready.wait()
-        return None
-
-    async def wait_closed(self) -> None:
-        while not self._closed:
-            self._ready.clear()
-            await self._ready.wait()
-
-    def close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        self._release(self._bytes)
-        self._items.clear()
-        self._bytes = 0
-        self._ready.set()
-
 
 class _AsgiServer:
-    """Serve an ASGI app over worker streams and drain its open WebSocket connections."""
+    """Run the ASGI application once per exchange the worker serves."""
 
-    def __init__(self, app: ASGIApp, limits: _HttpServerLimits | None = None) -> None:
+    def __init__(self, app: ASGIApp) -> None:
         self._app = app
-        self.limits = limits or _HttpServerLimits()
-        self._capacity = _core._core_HttpServerCapacity(
-            self.limits.pending_handlers, self.limits.payload_bytes
-        )
-        self.websockets: set[_WebSocketConnection] = set()
 
-    @property
-    def handlers(self) -> int:
-        return self._capacity.handlers
-
-    @property
-    def payload_bytes(self) -> int:
-        return self._capacity.payload_bytes
-
-    def reserve(self, size: int) -> bool:
-        return self._capacity.reserve(size)
-
-    def release(self, size: int) -> None:
-        self._capacity.release(size)
-
-    async def _core_drain(self) -> None:
-        await self.close_websockets(CloseReason.GOING_AWAY, "worker draining")
-
-    async def close_websockets(self, code: int, reason: str) -> None:
-        await asyncio.gather(*(ex.close(code, reason) for ex in tuple(self.websockets)))
-
-    async def _core_handle(self, stream: ByteTransport, request: EndpointRequest) -> None:
-        reservation = self.limits.request_head_bytes + _READ_SIZE
-        if not self._capacity.admit(reservation):
-            stream.reset(HSR_REFUSED)
-            return
-        exchange: _HttpExchange | _WebSocketConnection | None = None
-        try:
-            # Bound even a complete head delivered in one read; h11's incomplete-event limit
-            # alone does not constrain complete requests.
-            raw = bytearray()
-            while (end := raw.find(b"\r\n\r\n")) < 0:
-                if len(raw) >= self.limits.request_head_bytes:
-                    raise h11.RemoteProtocolError("request head exceeds byte limit")
-                data = await stream.read(min(_READ_SIZE, self.limits.request_head_bytes - len(raw)))
-                if not data:
-                    raise h11.RemoteProtocolError("stream ended before request head")
-                raw.extend(data)
-            if end + 4 > self.limits.request_head_bytes:
-                raise h11.RemoteProtocolError("request head exceeds byte limit")
-            protocol = h11.Connection(
-                h11.SERVER, max_incomplete_event_size=self.limits.body_metadata_bytes
-            )
-            protocol.receive_data(bytes(raw))
-            head = protocol.next_event()
-            if not isinstance(head, h11.Request):
-                raise h11.RemoteProtocolError("expected an HTTP request")
-
-            def has_token(name: bytes, token: bytes) -> bool:
-                return any(
-                    token == part.strip().lower()
-                    for key, value in head.headers
-                    if key == name
-                    for part in value.split(b",")
-                )
-
-            upgrade = has_token(b"upgrade", b"websocket") and has_token(b"connection", b"upgrade")
-            if upgrade and head.method == b"GET":
-                parser_bytes = self.limits.websocket_message_bytes + _READ_SIZE
-                if not self.reserve(parser_bytes):
-                    stream.reset(HSR_REFUSED)
-                    return
-                reservation += parser_bytes
-                exchange = _WebSocketConnection(self, stream, head, bytes(raw[end + 4 :]))
-                self.websockets.add(exchange)
-                scope = _scope(head, request, "websocket")
-                scope["scheme"] = "wss" if request.scheme == "https" else "ws"
-                scope["subprotocols"] = exchange.subprotocols
-            else:
-                exchange = _HttpExchange(stream, protocol, head.method == b"HEAD")
-                scope = _scope(head, request, "http")
-                scope["method"] = head.method.decode("ascii")
-            await exchange.run(self._app, scope, request)
-        except asyncio.CancelledError:
-            if isinstance(exchange, _WebSocketConnection):
-                await exchange.close(CloseReason.GOING_AWAY, "worker stopped")
-            elif isinstance(exchange, _HttpExchange):
-                await exchange.fail("canceled", "worker stopped", HSR_ABORT)
-            else:
-                stream.reset(HSR_ABORT)
-            raise
-        except (h11.RemoteProtocolError, WsProtocolError):
-            stream.reset(HSR_PROTOCOL)
-        except Exception:
-            stream.reset(HSR_INTERNAL)
-            logger.exception("endpoint stream failed: %s", request.request_id)
-        finally:
-            try:
-                if isinstance(exchange, _WebSocketConnection):
-                    self.websockets.discard(exchange)
-                    await exchange.cleanup()
-            finally:
-                self._capacity.complete(reservation)
-
-
-class _HttpExchange:
-    def __init__(self, stream: ByteTransport, protocol: h11.Connection, is_head: bool) -> None:
-        self.stream = stream
-        self.protocol = protocol
-        self.is_head = is_head
-        self.read_lock = asyncio.Lock()
-        self.write_lock = asyncio.Lock()
-        self.started = asyncio.Event()
-        self.done = asyncio.Event()
-        self.request_done = False
-        self.chunked = False
-
-    async def receive(self) -> Message:
-        async with self.read_lock:
-            if self.request_done:
-                # The node's FIN ends the request body; it does not disconnect a response.
-                await self.done.wait()
-                return {"type": "http.disconnect"}
-            try:
-                while True:
-                    event = self.protocol.next_event()
-                    if isinstance(event, h11.Data):
-                        return {
-                            "type": "http.request",
-                            "body": bytes(event.data),
-                            "more_body": True,
-                        }
-                    if isinstance(event, h11.EndOfMessage):
-                        self.request_done = True
-                        return {"type": "http.request", "body": b"", "more_body": False}
-                    if event is h11.NEED_DATA:
-                        self.protocol.receive_data(await self.stream.read(_READ_SIZE))
-                    else:
-                        raise h11.RemoteProtocolError("incomplete request body")
-            except (h11.RemoteProtocolError, OSError, RuntimeError):
-                self.request_done = True
-                self.done.set()
-                self.stream.reset(HSR_PROTOCOL)
-                return {"type": "http.disconnect"}
-
-    async def _write(self, event: h11.Event) -> None:
-        data = self.protocol.send(event)
-        if data:
-            await self.stream.write(data)
-
-    async def send(self, message: Message) -> None:
-        async with self.write_lock:
-            if self.done.is_set():
-                raise RuntimeError("endpoint exchange is closed")
-            kind = message["type"]
-            if kind == "http.response.start":
-                headers = [(bytes(k), bytes(v)) for k, v in message.get("headers", [])]
-                self.chunked = (
-                    self.protocol.their_http_version == b"1.1"
-                    and not self.is_head
-                    and message["status"] not in (HTTPStatus.NO_CONTENT, HTTPStatus.NOT_MODIFIED)
-                    and not any(k.lower() == b"content-length" for k, _ in headers)
-                )
-                await self._write(h11.Response(status_code=message["status"], headers=headers))
-                self.started.set()
-            elif kind == "http.response.body":
-                await self._write(h11.Data(data=bytes(message.get("body", b""))))
-                if not message.get("more_body", False):
-                    await self._write(h11.EndOfMessage())
-                    self.stream.finish()
-                    self.stream.stop(HSR_ABORT)
-                    self.done.set()
-            elif kind != "http.response.trailers":
-                raise RuntimeError(f"unexpected ASGI message {kind!r} on an http scope")
-
-    async def fail(self, completion: _Completion, reason: str, code: int) -> None:
-        if self.done.is_set():
-            return
-        async with self.write_lock:
-            if not self.started.is_set():
-                self.stream.reset(code)
-            elif self.chunked and self.protocol.our_state is h11.SEND_BODY:
-                reason = "".join(c if ord(c) >= 32 and ord(c) != 127 else " " for c in reason)[
-                    :_COMPLETION_REASON_LIMIT
-                ]
-                await self._write(
-                    h11.EndOfMessage(
-                        headers=[
-                            (b"x-lk-completion", completion.encode()),
-                            (b"x-lk-error", reason.encode("utf-8")),
-                        ]
-                    )
-                )
-                self.stream.finish()
-            else:
-                self.stream.reset(HSR_ABORT)
-            self.done.set()
-
-    async def run(self, app: ASGIApp, scope: Scope, request: EndpointRequest) -> None:
-        async def call() -> None:
-            try:
-                await app(scope, self.receive, self.send)
-            except Exception as error:
-                logger.exception("endpoint application failed: %s", request.request_id)
-                await self.fail("internal", f"{type(error).__qualname__}: {error}", HSR_INTERNAL)
-            else:
-                await self.fail(
-                    "internal", "application returned with no complete response", HSR_INTERNAL
-                )
-            self.done.set()
-
-        task = asyncio.create_task(call())
-        head = asyncio.create_task(self.started.wait())
-        try:
-            if request.timeout_ms:
-                ready, _ = await asyncio.wait(
-                    (task, head),
-                    timeout=request.timeout_ms / 1000,
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-                if not ready:
-                    task.cancel()
-                    await self.fail("timeout", "no response head before the deadline", HSR_TIMEOUT)
-                    return
-            await task
-        finally:
-            head.cancel()
-            task.cancel()
-            await asyncio.gather(task, head, return_exceptions=True)
-
-
-class _WebSocketFrameLimiter:
-    """Reject an oversized declared frame before buffering its payload in wsproto."""
-
-    def __init__(self, limit: int) -> None:
-        self.limit = limit
-        self.header = bytearray()
-        self.left = 0
-
-    def feed(self, data: bytes) -> bool:
-        pos = 0
-        while pos < len(data):
-            if self.left:
-                size = min(self.left, len(data) - pos)
-                self.left -= size
-                pos += size
-                continue
-            self.header.append(data[pos])
-            pos += 1
-            if len(self.header) < 2:
-                continue
-            size = self.header[1] & 127
-            extra = 2 if size == 126 else 8 if size == 127 else 0
-            if len(self.header) < 2 + extra:
-                continue
-            length = int.from_bytes(self.header[2 : 2 + extra], "big") if extra else size
-            if length > self.limit:
-                return False
-            masked = bool(self.header[1] & 128)
-            if len(self.header) < 2 + extra + (4 if masked else 0):
-                continue
-            self.header.clear()
-            self.left = length
-        return True
-
-
-class _WebSocketConnection:
-    def __init__(
-        self, server: _AsgiServer, stream: ByteTransport, head: h11.Request, rest: bytes
-    ) -> None:
-        self.server = server
-        self.stream = stream
-        self.protocol = wsproto.WSConnection(wsproto.ConnectionType.SERVER)
-        self.protocol.initiate_upgrade_connection(list(head.headers), head.target)
-        request = next(self.protocol.events())
-        if not isinstance(request, ws.Request):
-            raise h11.RemoteProtocolError("invalid websocket handshake")
-        self.subprotocols = request.subprotocols
-        self.rest = rest
-        self.accepted = asyncio.Event()
-        self.code: int = CloseReason.ABNORMAL_CLOSURE
-        self.connect = True
-        self._close_task: asyncio.Task[None] | None = None
-        self.inbox = _BoundedInbox(
-            max_items=server.limits.websocket_inbox,
-            max_bytes=server.limits.websocket_inbox_bytes,
-            reserve=server.reserve,
-            release=server.release,
-        )
-        self.outbox_bytes = 0
-        self.write_lock = asyncio.Lock()
-        self.reader: asyncio.Task[None] | None = None
-        self.frame_limit = _WebSocketFrameLimiter(server.limits.websocket_frame_bytes)
-
-    @property
-    def closing(self) -> bool:
-        return self._close_task is not None or self.inbox.closed
-
-    async def receive(self) -> Message:
-        if self.connect:
-            self.connect = False
-            return {"type": "websocket.connect"}
-        payload = await self.inbox.receive()
-        if payload is None or self.closing:
-            await self.inbox.wait_closed()
-            return {"type": "websocket.disconnect", "code": self.code}
-        if isinstance(payload, str):
-            return {"type": "websocket.receive", "text": payload}
-        return {"type": "websocket.receive", "bytes": payload}
-
-    async def _write(self, event: ws.Event) -> None:
-        async with self.write_lock:
-            data = self.protocol.send(event)
-            if data:
-                await self.stream.write(data)
-
-    async def send(self, message: Message) -> None:
-        kind = message["type"]
-        if kind == "websocket.accept":
-            if self.accepted.is_set():
-                raise RuntimeError("websocket already accepted")
-            await self._write(
-                ws.AcceptConnection(
-                    subprotocol=message.get("subprotocol"),
-                    extra_headers=message.get("headers", []),
-                )
-            )
-            self.accepted.set()
-        elif kind == "websocket.send":
-            if not self.accepted.is_set():
-                raise RuntimeError("websocket.send before accept")
-            if self.closing:
-                return
-            event: ws.Event
-            if message.get("bytes") is not None:
-                data = bytes(message["bytes"])
-                size = len(data)
-                event = ws.BytesMessage(data=data)
-            else:
-                text = message.get("text", "")
-                size = len(text.encode())
-                event = ws.TextMessage(data=text)
-            limits = self.server.limits
-            if (
-                size > limits.websocket_message_bytes
-                or self.outbox_bytes + size > limits.websocket_outbox_bytes
-            ):
-                raise RuntimeError("websocket response capacity exhausted")
-            if not self.server.reserve(size):
-                raise RuntimeError("worker response capacity exhausted")
-            self.outbox_bytes += size
-            try:
-                await self._write(event)
-            finally:
-                self.outbox_bytes -= size
-                self.server.release(size)
-        elif kind == "websocket.close":
-            await self.close(
-                message.get("code", CloseReason.NORMAL_CLOSURE), message.get("reason", "")
-            )
-        elif kind == "websocket.http.response.start":
-            await self._write(
-                ws.RejectConnection(
-                    status_code=message["status"],
-                    headers=message.get("headers", []),
-                    has_body=True,
-                )
-            )
-        elif kind == "websocket.http.response.body":
-            await self._write(
-                ws.RejectData(
-                    data=bytes(message.get("body", b"")),
-                    body_finished=not message.get("more_body", False),
-                )
-            )
-            if not message.get("more_body", False):
-                self.stream.finish()
-                self.inbox.close()
+    async def _core_handle(self, exchange: _core.HttpExchange, request: EndpointRequest) -> None:
+        head = exchange.head
+        websocket = head.kind == "websocket"
+        scope: Scope = {
+            "type": head.kind,
+            "asgi": {"version": "3.0", "spec_version": "2.4"},
+            "http_version": head.http_version,
+            "scheme": {"http": "ws", "https": "wss"}[request.scheme]
+            if websocket
+            else request.scheme,
+            "path": head.path,
+            "raw_path": head.raw_path,
+            "query_string": head.query_string,
+            "root_path": "",
+            "headers": head.headers,
+            "client": None,  # The node supplies a host only, not a client socket address.
+            "server": None,
+            "state": {"lk_request": request},
+        }
+        if websocket:
+            scope["subprotocols"] = head.subprotocols
+            scope["extensions"] = {"websocket.http.response": {}}
         else:
-            raise RuntimeError(f"unexpected ASGI message {kind!r} on a websocket scope")
+            scope["method"] = head.method
+        connected = not websocket
 
-    async def close(self, code: int, reason: str) -> None:
-        if self.inbox.closed:
-            return
-        if self._close_task is None:
-            self._close_task = asyncio.create_task(self._finish_close(code, reason))
-        # A caller owns its wait, while the connection owns the close operation.
-        await asyncio.shield(self._close_task)
+        async def receive() -> Message:
+            nonlocal connected
+            if not connected:
+                connected = True
+                return {"type": "websocket.connect"}
+            return _event(await exchange.receive())
 
-    async def _finish_close(self, code: int, reason: str) -> None:
-        self.code = code
+        async def send(message: Message) -> None:
+            if (outgoing := _message(message)) is not None:
+                await exchange.send(outgoing)
+
         try:
-            async with asyncio.timeout(self.server.limits.close_flush_timeout):
-                if self.accepted.is_set():
-                    await self._write(ws.CloseConnection(code=code, reason=reason))
-                else:
-                    await self._write(ws.RejectConnection(status_code=HTTPStatus.FORBIDDEN))
-                self.stream.finish()
-        except asyncio.CancelledError:
-            self.stream.reset(HSR_ABORT)
+            await self._app(scope, receive, send)
+        except Exception:
+            logger.exception("endpoint application failed: %s", request.request_id)
             raise
-        except (TimeoutError, OSError, RuntimeError):
-            self.stream.reset(HSR_ABORT)
-        finally:
-            self.inbox.close()
 
-    async def _read(self) -> None:
-        text: list[str] = []
-        binary = bytearray()
-        size = 0
-        try:
-            await self.accepted.wait()
-            data, self.rest = self.rest, b""
-            while not self.closing:
-                if not data:
-                    data = await self.stream.read(_READ_SIZE)
-                    if not data:
-                        break
-                if not self.frame_limit.feed(data):
-                    await self.close(CloseReason.MESSAGE_TOO_BIG, "websocket frame limit exceeded")
-                    return
-                self.protocol.receive_data(data)
-                for event in self.protocol.events():
-                    if isinstance(event, ws.Ping):
-                        await self._write(event.response())
-                    elif isinstance(event, ws.CloseConnection):
-                        await self.close(event.code, event.reason or "")
-                        return
-                    elif isinstance(event, (ws.TextMessage, ws.BytesMessage)):
-                        piece = event.data.encode() if isinstance(event.data, str) else event.data
-                        size += len(piece)
-                        if size > self.server.limits.websocket_message_bytes:
-                            await self.close(
-                                CloseReason.MESSAGE_TOO_BIG, "websocket message limit exceeded"
-                            )
-                            return
-                        if isinstance(event, ws.TextMessage):
-                            text.append(event.data)
-                        else:
-                            binary.extend(event.data)
-                        if event.message_finished:
-                            payload = (
-                                "".join(text)
-                                if isinstance(event, ws.TextMessage)
-                                else bytes(binary)
-                            )
-                            if not self.inbox.try_put(payload):
-                                await self.close(
-                                    CloseReason.MESSAGE_TOO_BIG,
-                                    "websocket inbox capacity exhausted",
-                                )
-                                return
-                            text.clear()
-                            binary.clear()
-                            size = 0
-                data = b""
-        except Exception:
-            logger.exception("websocket reader failed")
-            await self.close(CloseReason.INTERNAL_ERROR, "websocket reader failed")
-        finally:
-            if not self.closing:
-                self.stream.finish()
-                self.inbox.close()
 
-    async def run(self, app: ASGIApp, scope: Scope, request: EndpointRequest) -> None:
-        self.reader = asyncio.create_task(self._read())
-        try:
-            await app(scope, self.receive, self.send)
-        except Exception:
-            logger.exception("websocket application failed: %s", request.request_id)
-            await self.close(CloseReason.INTERNAL_ERROR, "application failed")
-        else:
-            await self.close(CloseReason.NORMAL_CLOSURE, "")
+def _event(event: ExchangeEvent) -> Message:
+    match event:
+        case ExchangeEventBody(data=data, more=more):
+            return {"type": "http.request", "body": data, "more_body": more}
+        case ExchangeEventDisconnected():
+            return {"type": "http.disconnect"}
+        case ExchangeEventText(text=text):
+            return {"type": "websocket.receive", "text": text}
+        case ExchangeEventBinary(data=data):
+            return {"type": "websocket.receive", "bytes": data}
+        case ExchangeEventClosed(code=code):
+            return {"type": "websocket.disconnect", "code": code}
 
-    async def cleanup(self) -> None:
-        tasks = [task for task in (self.reader, self._close_task) if task is not None]
-        for task in tasks:
-            task.cancel()
-        try:
-            await asyncio.gather(*tasks, return_exceptions=True)
-        finally:
-            self.inbox.close()
+
+def _message(message: Message) -> ExchangeMessage | None:
+    """The exchange message for an ASGI message; ``None`` for one the worker has no use for."""
+    match message["type"]:
+        case "http.response.start" | "websocket.http.response.start":
+            return ExchangeMessageStart(
+                status=message["status"], headers=_headers(message.get("headers", ()))
+            )
+        case "http.response.body" | "websocket.http.response.body":
+            return ExchangeMessageBody(
+                data=bytes(message.get("body", b"")), more=message.get("more_body", False)
+            )
+        case "http.response.trailers":
+            return None
+        case "websocket.accept":
+            return ExchangeMessageAccept(
+                subprotocol=message.get("subprotocol"),
+                headers=_headers(message.get("headers", ())),
+            )
+        case "websocket.send":
+            if (data := message.get("bytes")) is not None:
+                return ExchangeMessageBinary(data=bytes(data))
+            return ExchangeMessageText(text=message.get("text") or "")
+        case "websocket.close":
+            return ExchangeMessageClose(
+                code=message.get("code", 1000), reason=message.get("reason") or ""
+            )
+        case kind:
+            raise RuntimeError(f"unexpected ASGI message {kind!r}")
+
+
+def _headers(headers: Iterable[tuple[bytes, bytes]]) -> list[tuple[bytes, bytes]]:
+    return [(bytes(name), bytes(value)) for name, value in headers]

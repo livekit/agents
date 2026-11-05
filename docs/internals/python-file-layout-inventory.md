@@ -584,7 +584,7 @@ These source classifications are not additive savings; the exact target contains
 | [_proto.py](../../livekit-agents-next/livekit/agents/_proto.py) | 208 | Retain | `_proto.py`. Retain the shared protobuf/JSON leaf; absorb storage item payload conversion. |
 | [cli.py](../../livekit-agents-next/livekit/agents/cli.py) | 406 | Retain | `cli.py`. Keep the Python process/asyncio launcher as one concrete lifecycle owner. |
 | [evals.py](../../livekit-agents-next/livekit/agents/evals.py) | 394 | Retain | `evals.py`. One evaluation API contains judges and simulation scenario/user verdict context. |
-| [http.py](../../livekit-agents-next/livekit/agents/http.py) | 804 | Retain | `http.py`. Keep complete ASGI HTTP/WebSocket transport; do not merge client HTTP session handling into server protocol state. |
+| [http.py](../../livekit-agents-next/livekit/agents/http.py) | 282 | Retain | `http.py`. Route authoring and the ASGI adapter over the worker's parsed exchanges; the worker owns HTTP and WebSocket protocol. |
 | [job.py](../../livekit-agents-next/livekit/agents/job.py) | 1124 | Retain | `job.py`. Keep job/resource owner. It refers to simulation context from evals without absorbing unrelated judge behavior. |
 | [log.py](../../livekit-agents-next/livekit/agents/log.py) | 108 | Retain | `log.py`. Keep import-time Python log levels/logger/filter setup independent of SDK exporter/provider loading. |
 | [metrics.py](../../livekit-agents-next/livekit/agents/metrics.py) | 45 | Retain | `metrics.py`. Retain the v1 public provider metric records and log_metrics API; OTel/Prometheus collection stays separate. |

@@ -218,8 +218,7 @@ pub trait Implementations: 'static {
     type RoomSession: ::lk_agents_abi::voice::room_owner::RoomSession;
     type RoomRuntime: ::lk_agents_abi::voice::room_owner::RoomRuntime<Room = Self::RoomSession>;
     type JoinTokens: ::lk_agents_abi::worker::JoinTokens;
-    type ByteStream: ::lk_agents_abi::worker::http::ByteStream;
-    type HttpServerCapacity: ::lk_agents_abi::worker::http::HttpServerCapacity;
+    type HttpExchange: ::lk_agents_abi::worker::http::HttpExchange;
     type ServerEnvironment: ::lk_agents_abi::worker::types::ServerEnvironment;
     type JobSupervisor: ::lk_agents_abi::worker::ipc_host::JobSupervisor;
     type IpcClient: ::lk_agents_abi::worker::ipc_host::IpcClient;
@@ -493,8 +492,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(voice::wait_for_agent, m)?)?;
     m.add_function(wrap_pyfunction!(voice::wait_for_track_publication, m)?)?;
     m.add_function(wrap_pyfunction!(worker::room_join_token, m)?)?;
-    m.add_class::<worker::ByteStream>()?;
-    m.add_class::<worker::CoreHttpServerCapacity>()?;
+    m.add_class::<worker::HttpExchange>()?;
     m.add_function(wrap_pyfunction!(worker::cpu_count, m)?)?;
     m.add_class::<worker::JobSupervisor>()?;
     m.add_class::<worker::IpcClient>()?;
@@ -597,15 +595,15 @@ impl NativeToHost for dyn ::lk_agents_abi::voice::speech_handle::Speech {
     }
 }
 
-impl NativeToHost for dyn ::lk_agents_abi::worker::http::ByteTransport {
+impl NativeToHost for dyn ::lk_agents_abi::worker::http::EndpointExchange {
     fn to_host<'py>(
         py: Python<'py>,
         native: ::std::sync::Arc<Self>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let native: ::std::sync::Arc<dyn ::std::any::Any + Send + Sync> = native;
-        match native.downcast::<<crate::generated::implementations::Selected as Implementations>::ByteStream>() {
-            Ok(native) => Ok(Py::new(py, worker::ByteStream(native))?.into_bound(py).into_any()),
-            Err(_) => Err(::pyo3::exceptions::PyTypeError::new_err("this `::lk_agents_abi::worker::http::ByteTransport` is no declared class")),
+        match native.downcast::<<crate::generated::implementations::Selected as Implementations>::HttpExchange>() {
+            Ok(native) => Ok(Py::new(py, worker::HttpExchange(native))?.into_bound(py).into_any()),
+            Err(_) => Err(::pyo3::exceptions::PyTypeError::new_err("this `::lk_agents_abi::worker::http::EndpointExchange` is no declared class")),
         }
     }
 }

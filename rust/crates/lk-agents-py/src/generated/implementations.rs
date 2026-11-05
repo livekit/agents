@@ -160,8 +160,7 @@ impl super::Implementations for Selected {
     type RoomSession = ::lk_agents_runtime::room_io::FixedRoom;
     type RoomRuntime = ::lk_agents_runtime::room_io::RoomFactory;
     type JoinTokens = ::lk_agents_runtime::net::token::JoinTokens;
-    type ByteStream = ::lk_agents_runtime::worker::http::HttpStream;
-    type HttpServerCapacity = ::lk_agents_runtime::net::http::ServerCapacity;
+    type HttpExchange = ::lk_agents_runtime::worker::http::Exchange;
     type ServerEnvironment = ::lk_agents_runtime::worker::server::Environment;
     type JobSupervisor = ::lk_agents_runtime::worker::ipc::JobSupervisor;
     type IpcClient = ::lk_agents_runtime::worker::ipc::ChildChannel;

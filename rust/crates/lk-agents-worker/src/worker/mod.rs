@@ -667,6 +667,7 @@ impl Worker {
         self.publish();
         let result = self.run_loop(&mut connection).await;
 
+        self.host.stop_endpoints().await;
         self.operations.clear();
         self.requests.clear();
         self.endpoints.clear();
@@ -918,6 +919,10 @@ pub trait WorkerHost: Send + Sync {
     async fn serve_endpoint(&self, request: IncomingRequest) {
         request.stream.refuse();
     }
+
+    /// The worker is stopping while its connection still carries the endpoint streams: end the
+    /// exchanges still running in a way their peer can read. Bounded by the host.
+    async fn stop_endpoints(&self) {}
 }
 
 pub(crate) fn job_info(job: &livekit_protocol::Job) -> JobInfo {

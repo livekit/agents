@@ -1712,6 +1712,7 @@ name = "lk-agents-worker"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "fastrand",
  "futures-util",
  "getrandom 0.3.4",
  "http-body-util",
@@ -1724,6 +1725,7 @@ dependencies = [
  "lk-agents-net",
  "log",
  "parking_lot",
+ "percent-encoding",
  "postcard",
  "prost",
  "rcgen",
@@ -1734,6 +1736,7 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "tokio-tungstenite 0.30.0",
+ "tokio-util",
  "url",
  "web-transport-quinn",
  "windows-sys 0.61.2",

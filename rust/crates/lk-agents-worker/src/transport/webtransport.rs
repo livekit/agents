@@ -593,7 +593,7 @@ mod tests {
     // answered with anything but HSR_PROTOCOL.
     #[tokio::test]
     async fn an_exchange_stream_yields_its_preamble_then_opaque_bytes_and_a_bad_one_is_reset() {
-        use lk_agents_abi::worker::http::ByteStream as _;
+        use crate::http::StreamEnd as _;
         use prost::Message as _;
         let (mut server, port) = loopback_server();
         let server_task = tokio::spawn(async move {
@@ -651,8 +651,8 @@ mod tests {
                         bytes.extend_from_slice(&chunk);
                     }
                     assert_eq!(bytes, b"\0opaque request\xff");
-                    stream.write(b"\xffopaque response\0".to_vec()).await.unwrap();
-                    stream.finish().unwrap();
+                    stream.write(b"\xffopaque response\0").await.unwrap();
+                    stream.finish();
                 }
                 Err(_) => request.reset(HttpStreamResetCode::HsrProtocol),
             }

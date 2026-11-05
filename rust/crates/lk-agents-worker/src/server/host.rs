@@ -13,6 +13,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::worker::http::{EndpointHandler, EndpointKind};
+
+use crate::http::{EndpointServer, HttpServerLimits};
 use lk_agents_abi::worker::ipc_host::WorkerError;
 use lk_agents_abi::worker::server_host::{
     EndpointRoute, ServerConfig, ServerConfiguration, ServerHost as Host, ServerRuntime,
@@ -119,7 +121,7 @@ impl ServerConfig for Configuration {
 }
 
 /// What serves the endpoint routes, once the server runs.
-pub(crate) type Mounted = Arc<OnceLock<Arc<dyn EndpointHandler>>>;
+pub(crate) type Mounted = Arc<OnceLock<Arc<EndpointServer>>>;
 
 /// The host server with what the runtime decides on its own.
 #[derive(Clone)]
@@ -176,12 +178,11 @@ impl ServerCallbacks {
         self.proxy.start(&telemetry::Cx::NONE, options).await.map_err(|error| error.to_string())
     }
 
-    /// Application-specific draining belongs to the host's endpoint server.
-    pub(crate) async fn drain_endpoints(&self) -> Result<(), HostError> {
+    /// Admit no new exchange, close WebSockets and wait for the exchanges in flight.
+    pub(crate) async fn drain_endpoints(&self) {
         if let Some(endpoints) = self.mounted.get() {
-            endpoints.drain(&telemetry::Cx::NONE).await?;
+            endpoints.drain().await;
         }
-        Ok(())
     }
 }
 
@@ -216,6 +217,12 @@ impl WorkerHost for ServerCallbacks {
 
     async fn serve_endpoint(&self, request: IncomingRequest) {
         crate::http::dispatch(request, self.mounted.get().map(Arc::as_ref)).await;
+    }
+
+    async fn stop_endpoints(&self) {
+        if let Some(endpoints) = self.mounted.get() {
+            endpoints.stop().await;
+        }
     }
 }
 
@@ -321,7 +328,8 @@ impl ServerRuntime for AgentServerRuntime {
         endpoints: Arc<dyn EndpointHandler>,
     ) -> Result<(), WorkerError> {
         let routes = routes.into_iter().map(manifest_entry).collect::<Vec<_>>();
-        let _ = self.mounted.set(endpoints);
+        let _ =
+            self.mounted.set(Arc::new(EndpointServer::new(endpoints, HttpServerLimits::default())));
         let start = ServerStart {
             settings: self.settings(),
             devmode,

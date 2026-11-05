@@ -1,123 +1,131 @@
-//! Language-neutral endpoint byte streams and their host-supplied consumer.
+//! Endpoint exchanges: the worker serves HTTP/1.1 and WebSocket on each endpoint stream and hands
+//! the binding one parsed exchange, which it adapts to its own application framework.
 
 use std::any::Any;
 use std::sync::Arc;
 
 use crate::errors::HostError;
 
-/// An exchange after its preamble, with independent reads and writes: the native
-/// `ByteStream`. No application protocol is interpreted by the worker.
-#[crate::host(native(refused = "expected a native ByteStream"))]
-pub trait ByteTransport: Any + Send + Sync {
-    /// Up to `max_bytes` of the peer's bytes; empty once the peer half-closed (FIN).
-    fn read(&self, max_bytes: usize) -> crate::BoxFuture<'_, Result<Vec<u8>, HostError>>;
-    /// All of `data`, waiting on flow control.
-    fn write(&self, data: Vec<u8>) -> crate::BoxFuture<'_, Result<(), HostError>>;
-    /// FIN: the response is complete.
-    fn finish(&self);
-    /// RESET_STREAM and STOP_SENDING.
-    fn reset(&self, code: livekit_protocol::agent_http::HttpStreamResetCode);
-    /// STOP_SENDING only.
-    fn stop(&self, code: livekit_protocol::agent_http::HttpStreamResetCode);
-}
+/// One parsed exchange, as the worker passes it to the binding's handler.
+#[crate::host(native(refused = "expected a native HttpExchange"))]
+pub trait EndpointExchange: Any + Send + Sync {}
 
-#[crate::host(class(name = "ByteStream", native = ByteTransport))]
-pub trait ByteStream: Send + Sync + Sized + 'static {
+/// One request and its response, or one WebSocket connection. The worker owns parsing, framing,
+/// limits, deadlines and closing; the binding reads events and sends messages.
+#[crate::host(class(name = "HttpExchange", native = EndpointExchange))]
+pub trait HttpExchange: Send + Sync + Sized + 'static {
+    #[host(getter)]
+    fn head(&self) -> RequestHead;
+
+    /// The next request event. After the request body ends it waits for the response to
+    /// complete, then reports `Disconnected`.
     #[host(await)]
-    async fn read(
-        &self,
-        #[host(default = 65536)] max_bytes: usize,
-    ) -> Result<Vec<u8>, crate::worker::ipc_host::WorkerError>;
+    async fn receive(&self) -> Result<ExchangeEvent, ExchangeError>;
 
     #[host(await)]
-    async fn write(&self, data: Vec<u8>) -> Result<(), crate::worker::ipc_host::WorkerError>;
-
-    /// Idempotent; a stream already reset raises.
-    #[host(call)]
-    fn finish(&self) -> Result<(), crate::worker::ipc_host::WorkerError>;
-
-    #[host(call)]
-    fn reset(&self, code: i32) -> Result<(), crate::worker::ipc_host::WorkerError>;
-
-    #[host(call)]
-    fn stop(&self, code: i32) -> Result<(), crate::worker::ipc_host::WorkerError>;
+    async fn send(&self, message: ExchangeMessage) -> Result<(), ExchangeError>;
 }
 
-/// Shared admission and payload reservations for a host's HTTP application server.
-#[crate::host(class(name = "_core_HttpServerCapacity", pid = false))]
-pub trait HttpServerCapacity: Send + Sized + 'static {
-    #[host(new)]
-    fn new(max_handlers: usize, max_bytes: usize) -> Self;
-    #[host(getter)]
-    fn handlers(&self) -> usize;
-    #[host(getter)]
-    fn payload_bytes(&self) -> usize;
-    /// Atomically acquire a handler slot and its initial read/head reservation.
-    #[host(call)]
-    fn admit(&mut self, bytes: usize) -> bool;
-    #[host(call)]
-    fn reserve(&mut self, bytes: usize) -> bool;
-    #[host(call)]
-    fn release(&mut self, bytes: usize) -> Result<(), CapacityError>;
-    /// Release the handler and its initial reservation after all connection cleanup settles.
-    #[host(call)]
-    fn complete(&mut self, bytes: usize) -> Result<(), CapacityError>;
+/// Whether the exchange is an HTTP request or a WebSocket upgrade.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[crate::host(record(module = "worker_endpoint", emit))]
+pub enum ExchangeKind {
+    #[default]
+    Http,
+    Websocket,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+/// The parsed request head. `path` is percent-decoded; `raw_path` and `query_string` are the
+/// bytes on the wire.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[crate::host(record(module = "worker_endpoint", emit))]
+pub struct RequestHead {
+    pub kind: ExchangeKind,
+    pub method: String,
+    pub http_version: String,
+    pub path: String,
+    pub raw_path: Vec<u8>,
+    pub query_string: Vec<u8>,
+    pub headers: Vec<(Vec<u8>, Vec<u8>)>,
+    /// The WebSocket subprotocols the client offered.
+    pub subprotocols: Vec<String>,
+}
+
+/// What `HttpExchange.receive` reports.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[crate::host(record(module = "worker_endpoint", emit))]
+pub enum ExchangeEvent {
+    /// A piece of the request body; `more` is false on the last one.
+    Body {
+        data: Vec<u8>,
+        more: bool,
+    },
+    /// The HTTP exchange ended: the response completed, or the client is gone.
+    Disconnected,
+    Text {
+        text: String,
+    },
+    Binary {
+        data: Vec<u8>,
+    },
+    /// The WebSocket connection closed, with its close code.
+    Closed {
+        code: u16,
+    },
+}
+
+/// What `HttpExchange.send` accepts. On a WebSocket exchange, `Start` and `Body` before `Accept`
+/// answer the upgrade with an HTTP response instead.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[crate::host(record(module = "worker_endpoint", extract))]
+pub enum ExchangeMessage {
+    Start {
+        status: u16,
+        headers: Vec<(Vec<u8>, Vec<u8>)>,
+    },
+    /// Response body bytes; `more: false` completes the response.
+    Body {
+        data: Vec<u8>,
+        more: bool,
+    },
+    Accept {
+        subprotocol: Option<String>,
+        headers: Vec<(Vec<u8>, Vec<u8>)>,
+    },
+    Text {
+        text: String,
+    },
+    Binary {
+        data: Vec<u8>,
+    },
+    Close {
+        code: u16,
+        reason: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[crate::host(error(kind = "RuntimeError"))]
-pub enum CapacityError {
-    #[error("unbalanced HTTP payload reservation")]
-    UnbalancedBytes,
-    #[error("unbalanced HTTP handler reservation")]
-    UnbalancedHandlers,
+pub enum ExchangeError {
+    /// The client is gone or the exchange already ended.
+    #[error("{0}")]
+    #[host(kind = "ConnectionError")]
+    Closed(String),
+    /// The application broke the exchange's protocol.
+    #[error("{0}")]
+    Protocol(String),
 }
 
-/// Resource limits of the host HTTP/ASGI adapter.
-#[crate::host(record(
-    module = "http",
-    name = "_HttpServerLimits",
-    path = "livekit.agents.http",
-    dataclass,
-    frozen
-))]
-pub struct HttpServerLimits {
-    #[host(default = 1048576)]
-    pub request_head_bytes: usize,
-    #[host(default = 65536)]
-    pub body_metadata_bytes: usize,
-    #[host(default = 1.0)]
-    pub close_flush_timeout: f64,
-    #[host(default = 1048576)]
-    pub websocket_frame_bytes: usize,
-    #[host(default = 4194304)]
-    pub websocket_message_bytes: usize,
-    #[host(default = 16)]
-    pub websocket_inbox: usize,
-    #[host(default = 8388608)]
-    pub websocket_inbox_bytes: usize,
-    #[host(default = 8388608)]
-    pub websocket_outbox_bytes: usize,
-    #[host(default = 256)]
-    pub pending_handlers: usize,
-    #[host(default = 536870912)]
-    pub payload_bytes: usize,
-}
-
-/// The binding supplies the application server. The worker only dispatches streams and asks
-/// the host to drain its endpoint resources; it does not parse application protocol bytes.
+/// The binding's application server: it adapts each exchange to its framework.
 #[crate::host(proxy(host = "livekit.agents.http._AsgiServer"))]
 pub trait EndpointHandler: Send + Sync {
     #[host(await, name = "_core_handle")]
     fn handle(
         &self,
         cx: &crate::telemetry::Cx,
-        stream: Arc<dyn ByteTransport>,
+        exchange: Arc<dyn EndpointExchange>,
         request: EndpointRequest,
     ) -> crate::BoxFuture<'_, Result<(), HostError>>;
-
-    #[host(await, name = "_core_drain")]
-    fn drain(&self, cx: &crate::telemetry::Cx) -> crate::BoxFuture<'_, Result<(), HostError>>;
 }
 
 /// The payload semantics declared in the Cloud route manifest and node preamble.
@@ -161,27 +169,3 @@ pub struct EndpointOptions {
     #[host(default = false)]
     pub public: bool,
 }
-
-use livekit_protocol::agent_http::HttpStreamResetCode as Code;
-
-#[crate::host(file(module = "worker_reset_codes"))]
-const _: () = ();
-
-#[crate::host(constant)]
-pub const HSR_ABORT: i32 = 0;
-#[crate::host(constant)]
-pub const HSR_REFUSED: i32 = 1;
-#[crate::host(constant)]
-pub const HSR_INTERNAL: i32 = 2;
-#[crate::host(constant)]
-pub const HSR_TIMEOUT: i32 = 3;
-#[crate::host(constant)]
-pub const HSR_PROTOCOL: i32 = 4;
-
-const _: () = assert!(
-    HSR_ABORT == Code::HsrAbort as i32
-        && HSR_REFUSED == Code::HsrRefused as i32
-        && HSR_INTERNAL == Code::HsrInternal as i32
-        && HSR_TIMEOUT == Code::HsrTimeout as i32
-        && HSR_PROTOCOL == Code::HsrProtocol as i32
-);

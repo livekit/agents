@@ -29,8 +29,12 @@ url = "2"
 hyper = { version = "1.12", features = ["http1", "server"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
-# The public listener reads only the request head; the host's application server parses the rest.
+# Endpoint exchanges: the request head (httparse), stream adapters (tokio-util), the path's
+# percent-decoding and WebSocket framing (tokio-tungstenite).
 httparse = "1.10"
+tokio-util = { version = "0.7", features = ["io"] }
+percent-encoding = "2"
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
 [target.'cfg(unix)'.dependencies]
 # Process signals and waits (`ipc/process.rs`), socket options (`ipc/ipc_channel.rs`).
 libc = "0.2"
@@ -41,6 +45,8 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Securit
 getrandom = "0.3"
 
 [dev-dependencies]
+# Seeded random requests and frames for the endpoint server's robustness tests.
+fastrand = "2"
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "macros", "time", "test-util"] }

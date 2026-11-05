@@ -731,8 +731,7 @@ impl ServerRuntime {
     ) -> BoxFuture<'static, Result<(), DrainError>> {
         let host = self.host.clone();
         async move {
-            let drain = async {
-                host.drain_endpoints().await.map_err(DrainError::Host)?;
+            let jobs = async {
                 match worker {
                     Some(worker) => worker.drain(timeout).await,
                     None => {
@@ -740,6 +739,8 @@ impl ServerRuntime {
                     }
                 }
             };
+            // Endpoint exchanges in flight finish beside the jobs, under the same deadline.
+            let drain = async { futures_util::future::join(host.drain_endpoints(), jobs).await.1 };
             match timeout {
                 Some(timeout) => {
                     tokio::time::timeout(timeout, drain).await.map_err(|_| DrainError::TimedOut)?

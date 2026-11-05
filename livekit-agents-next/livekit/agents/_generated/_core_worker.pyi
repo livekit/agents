@@ -14,6 +14,7 @@ from livekit.agents.ipc import JobExecutor, ProcPool as HostProcPool
 from livekit.agents.ipc.child import _JobProc
 from livekit.agents.worker import _ServerCallbacks
 
+from .worker_endpoint import ExchangeEvent, ExchangeMessage, RequestHead
 from .worker_ipc import StartJobFields
 from .worker_options import ServerOptions
 from .worker_server import EndpointRoute
@@ -31,27 +32,17 @@ def room_join_token(
     metadata; `agent` joins as an agent. `ttl` in seconds; the signer's default when `None`.
     """
 
-class ByteStream:
-    async def read(self, max_bytes: int = 65536) -> bytes: ...
-    async def write(self, data: bytes | bytearray | memoryview | list[int]) -> None: ...
-    def finish(self) -> None:
-        """Idempotent; a stream already reset raises."""
-    def reset(self, code: int) -> None: ...
-    def stop(self, code: int) -> None: ...
-
-class _core_HttpServerCapacity:
-    """Shared admission and payload reservations for a host's HTTP application server."""
-    def __new__(cls, max_handlers: int, max_bytes: int) -> Self: ...
+class HttpExchange:
+    """One request and its response, or one WebSocket connection. The worker owns parsing, framing,
+    limits, deadlines and closing; the binding reads events and sends messages.
+    """
     @property
-    def handlers(self) -> int: ...
-    @property
-    def payload_bytes(self) -> int: ...
-    def admit(self, bytes: int) -> bool:
-        """Atomically acquire a handler slot and its initial read/head reservation."""
-    def reserve(self, bytes: int) -> bool: ...
-    def release(self, bytes: int) -> None: ...
-    def complete(self, bytes: int) -> None:
-        """Release the handler and its initial reservation after all connection cleanup settles."""
+    def head(self) -> RequestHead: ...
+    async def receive(self) -> ExchangeEvent:
+        """The next request event. After the request body ends it waits for the response to
+        complete, then reports `Disconnected`.
+        """
+    async def send(self, message: ExchangeMessage) -> None: ...
 
 def cpu_count() -> float:
     """Logical CPUs, fractional under a cgroup quota. Reads, starts nothing."""

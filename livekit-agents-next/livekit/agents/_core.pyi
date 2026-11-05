@@ -323,14 +323,13 @@ from ._generated._core_voice import (
     wait_for_track_publication as wait_for_track_publication,
 )
 from ._generated._core_worker import (
-    ByteStream as ByteStream,
+    HttpExchange as HttpExchange,
     IpcClient as IpcClient,
     JobRun as JobRun,
     JobSupervisor as JobSupervisor,
     ProcPool as ProcPool,
     ServerConfig as ServerConfig,
     ServerRuntime as ServerRuntime,
-    _core_HttpServerCapacity as _core_HttpServerCapacity,
     cpu_count as cpu_count,
     init as init,
     ipc_pair as ipc_pair,

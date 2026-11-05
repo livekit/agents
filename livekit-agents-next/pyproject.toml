@@ -48,8 +48,6 @@ dependencies = [
     "aiofiles>=24",
     # Python serves ASGI over the worker's byte streams.
     "starlette>=0.40",
-    "h11>=0.16,<0.17",
-    "wsproto>=1.3,<2",
     # the text door, its client and the delegate speak A2A
     "a2a-sdk>=1.1.2,<2",
 ]

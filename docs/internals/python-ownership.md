@@ -200,7 +200,7 @@ Keep ASGI request/response adaptation and authored route/handler registration. C
 | [a2a/client.py](../../livekit-agents-next/livekit/agents/a2a/client.py) | 5 |
 | [a2a/endpoint.py](../../livekit-agents-next/livekit/agents/a2a/endpoint.py) | 292 |
 | [a2a/methods.py](../../livekit-agents-next/livekit/agents/a2a/methods.py) | 94 |
-| [http.py](../../livekit-agents-next/livekit/agents/http.py) | 804 |
+| [http.py](../../livekit-agents-next/livekit/agents/http.py) | 282 |
 
 ### Process and worker lifecycle
 

@@ -55,245 +55,65 @@ pub fn room_join_token(
 }
 
 // Declared in rust/crates/lk-agents-abi/src/worker/http/mod.rs.
-type ByteStreamImpl =
-    <crate::generated::implementations::Selected as super::Implementations>::ByteStream;
+type HttpExchangeImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::HttpExchange;
 
-fn _extract_byte_stream_read_max_bytes(
-    obj: &Bound<'_, PyAny>,
-) -> PyResult<ByteStreamReadMaxBytesInput> {
-    crate::py_values::number_from_py::<usize>(obj.as_any(), "max_bytes")
-}
-type ByteStreamReadMaxBytesInput = usize;
-
-fn _extract_byte_stream_write_data(obj: &Bound<'_, PyAny>) -> PyResult<ByteStreamWriteDataInput> {
-    if obj.is_instance_of::<::pyo3::types::PyBytes>()
-        || obj.is_instance_of::<::pyo3::types::PyByteArray>()
-        || obj.is_instance_of::<::pyo3::types::PyMemoryView>()
-    {
-        crate::py_values::owned_bytes(obj.as_any(), "data")
-    } else {
-        obj.try_iter().and_then(|items| {
-            items
-                .map(|item| {
-                    let item = item?;
-                    crate::py_values::number_from_py::<u8>(item.as_any(), "data")
-                })
-                .collect::<PyResult<Vec<_>>>()
-        })
-    }
-}
-type ByteStreamWriteDataInput = ::std::vec::Vec<u8>;
-
-fn _extract_byte_stream_reset_code(obj: &Bound<'_, PyAny>) -> PyResult<ByteStreamResetCodeInput> {
-    crate::py_values::number_from_py::<i32>(obj.as_any(), "code")
-}
-type ByteStreamResetCodeInput = i32;
-
-fn _extract_byte_stream_stop_code(obj: &Bound<'_, PyAny>) -> PyResult<ByteStreamStopCodeInput> {
-    crate::py_values::number_from_py::<i32>(obj.as_any(), "code")
-}
-type ByteStreamStopCodeInput = i32;
-
-#[pyclass(frozen, name = "ByteStream", module = "livekit.agents._core")]
-pub struct ByteStream(pub(crate) ::std::sync::Arc<ByteStreamImpl>);
+/// One request and its response, or one WebSocket connection. The worker owns parsing, framing,
+/// limits, deadlines and closing; the binding reads events and sends messages.
+#[pyclass(frozen, name = "HttpExchange", module = "livekit.agents._core")]
+pub struct HttpExchange(pub(crate) ::std::sync::Arc<HttpExchangeImpl>);
 
 #[pymethods]
-impl ByteStream {
-    #[pyo3(signature = (max_bytes = 65536))]
-    fn read<'py>(
-        &self,
-        py: Python<'py>,
-        #[pyo3(from_py_with = _extract_byte_stream_read_max_bytes)]
-        max_bytes: ByteStreamReadMaxBytesInput,
-    ) -> PyResult<Bound<'py, PyAny>> {
+impl HttpExchange {
+    #[getter]
+    fn head<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| {
+            <HttpExchangeImpl as ::lk_agents_abi::worker::http::HttpExchange>::head(&self.0)
+        });
+        crate::generated::records::worker_endpoint::request_head_to_py(py, out)
+    }
+
+    /// The next request event. After the request body ends it waits for the response to
+    /// complete, then reports `Disconnected`.
+    fn receive<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
-            let out = <ByteStreamImpl as ::lk_agents_abi::worker::http::ByteStream>::read(&this, max_bytes)
-                .await.map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::py_errors::HostException>::to_py_err(&e))?;
-            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
+            let out = <HttpExchangeImpl as ::lk_agents_abi::worker::http::HttpExchange>::receive(&this, )
+                .await.map_err(|e: ::lk_agents_abi::worker::http::ExchangeError| <::lk_agents_abi::worker::http::ExchangeError as crate::py_errors::HostException>::to_py_err(&e))?;
+            Python::attach(|py| {
+                ::pyo3::IntoPyObjectExt::into_py_any(
+                    crate::generated::records::worker_endpoint::exchange_event_to_py(py, out)?,
+                    py,
+                )
+            })
         })
     }
 
-    #[pyo3(signature = (data))]
-    fn write<'py>(
-        &self,
-        py: Python<'py>,
-        #[pyo3(from_py_with = _extract_byte_stream_write_data)] data: ByteStreamWriteDataInput,
-    ) -> PyResult<Bound<'py, PyAny>> {
+    #[pyo3(signature = (message))]
+    fn send<'py>(&self, py: Python<'py>, message: Bound<'_, PyAny>) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
+        let message =
+            crate::generated::records::worker_endpoint::exchange_message_from_py(message.as_any())?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
-            let () = <ByteStreamImpl as ::lk_agents_abi::worker::http::ByteStream>::write(&this, data)
-                .await.map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::py_errors::HostException>::to_py_err(&e))?;
+            let () = <HttpExchangeImpl as ::lk_agents_abi::worker::http::HttpExchange>::send(&this, message)
+                .await.map_err(|e: ::lk_agents_abi::worker::http::ExchangeError| <::lk_agents_abi::worker::http::ExchangeError as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
         })
     }
-
-    /// Idempotent; a stream already reset raises.
-    fn finish(&self, py: Python<'_>) -> PyResult<()> {
-        crate::py_calls::check_pid()?;
-        py.detach(|| <ByteStreamImpl as ::lk_agents_abi::worker::http::ByteStream>::finish(&self.0)).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::py_errors::HostException>::to_py_err(&e))?;
-        Ok(())
-    }
-
-    #[pyo3(signature = (code))]
-    fn reset(
-        &self,
-        py: Python<'_>,
-        #[pyo3(from_py_with = _extract_byte_stream_reset_code)] code: ByteStreamResetCodeInput,
-    ) -> PyResult<()> {
-        crate::py_calls::check_pid()?;
-        py.detach(|| <ByteStreamImpl as ::lk_agents_abi::worker::http::ByteStream>::reset(&self.0, code)).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::py_errors::HostException>::to_py_err(&e))?;
-        Ok(())
-    }
-
-    #[pyo3(signature = (code))]
-    fn stop(
-        &self,
-        py: Python<'_>,
-        #[pyo3(from_py_with = _extract_byte_stream_stop_code)] code: ByteStreamStopCodeInput,
-    ) -> PyResult<()> {
-        crate::py_calls::check_pid()?;
-        py.detach(|| <ByteStreamImpl as ::lk_agents_abi::worker::http::ByteStream>::stop(&self.0, code)).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::py_errors::HostException>::to_py_err(&e))?;
-        Ok(())
-    }
 }
 
-// Wherever the host passes a `::lk_agents_abi::worker::http::ByteTransport`, an instance of this class is itself.
+// Wherever the host passes a `::lk_agents_abi::worker::http::EndpointExchange`, an instance of this class is itself.
 inventory::submit! {
     crate::py_objects::HostNative {
-        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::worker::http::ByteTransport>(),
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::worker::http::EndpointExchange>(),
         read: |obj| {
-            let this = obj.cast::<ByteStream>().ok()?;
-            let native: ::std::sync::Arc<dyn ::lk_agents_abi::worker::http::ByteTransport> = this.get().0.clone();
+            let this = obj.cast::<HttpExchange>().ok()?;
+            let native: ::std::sync::Arc<dyn ::lk_agents_abi::worker::http::EndpointExchange> = this.get().0.clone();
             Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
         },
-    }
-}
-
-// Declared in rust/crates/lk-agents-abi/src/worker/http/mod.rs.
-type CoreHttpServerCapacityImpl =
-    <crate::generated::implementations::Selected as super::Implementations>::HttpServerCapacity;
-
-fn _extract_http_server_capacity_new_max_handlers(
-    obj: &Bound<'_, PyAny>,
-) -> PyResult<HttpServerCapacityNewMaxHandlersInput> {
-    crate::py_values::number_from_py::<usize>(obj.as_any(), "max_handlers")
-}
-type HttpServerCapacityNewMaxHandlersInput = usize;
-
-fn _extract_http_server_capacity_new_max_bytes(
-    obj: &Bound<'_, PyAny>,
-) -> PyResult<HttpServerCapacityNewMaxBytesInput> {
-    crate::py_values::number_from_py::<usize>(obj.as_any(), "max_bytes")
-}
-type HttpServerCapacityNewMaxBytesInput = usize;
-
-fn _extract_http_server_capacity_admit_bytes(
-    obj: &Bound<'_, PyAny>,
-) -> PyResult<HttpServerCapacityAdmitBytesInput> {
-    crate::py_values::number_from_py::<usize>(obj.as_any(), "bytes")
-}
-type HttpServerCapacityAdmitBytesInput = usize;
-
-fn _extract_http_server_capacity_reserve_bytes(
-    obj: &Bound<'_, PyAny>,
-) -> PyResult<HttpServerCapacityReserveBytesInput> {
-    crate::py_values::number_from_py::<usize>(obj.as_any(), "bytes")
-}
-type HttpServerCapacityReserveBytesInput = usize;
-
-fn _extract_http_server_capacity_release_bytes(
-    obj: &Bound<'_, PyAny>,
-) -> PyResult<HttpServerCapacityReleaseBytesInput> {
-    crate::py_values::number_from_py::<usize>(obj.as_any(), "bytes")
-}
-type HttpServerCapacityReleaseBytesInput = usize;
-
-fn _extract_http_server_capacity_complete_bytes(
-    obj: &Bound<'_, PyAny>,
-) -> PyResult<HttpServerCapacityCompleteBytesInput> {
-    crate::py_values::number_from_py::<usize>(obj.as_any(), "bytes")
-}
-type HttpServerCapacityCompleteBytesInput = usize;
-
-/// Shared admission and payload reservations for a host's HTTP application server.
-#[pyclass(name = "_core_HttpServerCapacity", module = "livekit.agents._core")]
-pub struct CoreHttpServerCapacity(pub(crate) CoreHttpServerCapacityImpl);
-
-#[pymethods]
-impl CoreHttpServerCapacity {
-    #[new]
-    #[pyo3(signature = (max_handlers, max_bytes))]
-    fn new(
-        py: Python<'_>,
-        #[pyo3(from_py_with = _extract_http_server_capacity_new_max_handlers)]
-        max_handlers: HttpServerCapacityNewMaxHandlersInput,
-        #[pyo3(from_py_with = _extract_http_server_capacity_new_max_bytes)]
-        max_bytes: HttpServerCapacityNewMaxBytesInput,
-    ) -> PyResult<CoreHttpServerCapacity> {
-        let out = py.detach(|| {
-            <CoreHttpServerCapacityImpl as ::lk_agents_abi::worker::http::HttpServerCapacity>::new(
-                max_handlers,
-                max_bytes,
-            )
-        });
-        ::pyo3::PyResult::Ok(CoreHttpServerCapacity(out))
-    }
-
-    #[getter]
-    fn handlers(&self) -> PyResult<usize> {
-        let out = <CoreHttpServerCapacityImpl as ::lk_agents_abi::worker::http::HttpServerCapacity>::handlers(&self.0);
-        ::pyo3::PyResult::Ok(out)
-    }
-
-    #[getter]
-    fn payload_bytes(&self) -> PyResult<usize> {
-        let out = <CoreHttpServerCapacityImpl as ::lk_agents_abi::worker::http::HttpServerCapacity>::payload_bytes(&self.0);
-        ::pyo3::PyResult::Ok(out)
-    }
-
-    /// Atomically acquire a handler slot and its initial read/head reservation.
-    #[pyo3(signature = (bytes))]
-    fn admit(
-        &mut self,
-        #[pyo3(from_py_with = _extract_http_server_capacity_admit_bytes)]
-        bytes: HttpServerCapacityAdmitBytesInput,
-    ) -> PyResult<bool> {
-        let out = <CoreHttpServerCapacityImpl as ::lk_agents_abi::worker::http::HttpServerCapacity>::admit(&mut self.0, bytes);
-        ::pyo3::PyResult::Ok(out)
-    }
-
-    #[pyo3(signature = (bytes))]
-    fn reserve(
-        &mut self,
-        #[pyo3(from_py_with = _extract_http_server_capacity_reserve_bytes)]
-        bytes: HttpServerCapacityReserveBytesInput,
-    ) -> PyResult<bool> {
-        let out = <CoreHttpServerCapacityImpl as ::lk_agents_abi::worker::http::HttpServerCapacity>::reserve(&mut self.0, bytes);
-        ::pyo3::PyResult::Ok(out)
-    }
-
-    #[pyo3(signature = (bytes))]
-    fn release(
-        &mut self,
-        #[pyo3(from_py_with = _extract_http_server_capacity_release_bytes)]
-        bytes: HttpServerCapacityReleaseBytesInput,
-    ) -> PyResult<()> {
-        <CoreHttpServerCapacityImpl as ::lk_agents_abi::worker::http::HttpServerCapacity>::release(&mut self.0, bytes).map_err(|e: ::lk_agents_abi::worker::http::CapacityError| <::lk_agents_abi::worker::http::CapacityError as crate::py_errors::HostException>::to_py_err(&e))?;
-        Ok(())
-    }
-
-    /// Release the handler and its initial reservation after all connection cleanup settles.
-    #[pyo3(signature = (bytes))]
-    fn complete(
-        &mut self,
-        #[pyo3(from_py_with = _extract_http_server_capacity_complete_bytes)]
-        bytes: HttpServerCapacityCompleteBytesInput,
-    ) -> PyResult<()> {
-        <CoreHttpServerCapacityImpl as ::lk_agents_abi::worker::http::HttpServerCapacity>::complete(&mut self.0, bytes).map_err(|e: ::lk_agents_abi::worker::http::CapacityError| <::lk_agents_abi::worker::http::CapacityError as crate::py_errors::HostException>::to_py_err(&e))?;
-        Ok(())
     }
 }
 
@@ -1573,12 +1393,12 @@ impl ::lk_agents_abi::worker::http::EndpointHandler for EndpointHandlerProxy {
     fn handle(
         &self,
         cx: &::lk_agents_abi::telemetry::Cx,
-        stream: ::std::sync::Arc<dyn ::lk_agents_abi::worker::http::ByteTransport>,
+        exchange: ::std::sync::Arc<dyn ::lk_agents_abi::worker::http::EndpointExchange>,
         request: ::lk_agents_abi::worker::http::EndpointRequest,
     ) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
     {
         let host = ::std::sync::Arc::clone(&self.host);
-        let stream_arg = stream;
+        let exchange_arg = exchange;
         let request_arg = request;
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
@@ -1587,41 +1407,8 @@ impl ::lk_agents_abi::worker::http::EndpointHandler for EndpointHandlerProxy {
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [<dyn ::lk_agents_abi::worker::http::ByteTransport as super::NativeToHost>::to_host(py, stream_arg)?, crate::generated::records::worker_endpoint::endpoint_request_to_py(py, request_arg)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [<dyn ::lk_agents_abi::worker::http::EndpointExchange as super::NativeToHost>::to_host(py, exchange_arg)?, crate::generated::records::worker_endpoint::endpoint_request_to_py(py, request_arg)?];
                 Ok((host.bind(py).getattr("_core_handle")?, ::pyo3::types::PyTuple::new(py, args)?))
-            }),
-        );
-        ::std::boxed::Box::pin(async move {
-            let out = started.await;
-            ::pyo3::Python::attach(|py| {
-                let out = match out {
-                    Ok(out) => out,
-                    Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
-                    }
-                };
-                let o = out.value.bind(py);
-                let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
-                Ok(())
-            })
-        })
-    }
-
-    fn drain(
-        &self,
-        cx: &::lk_agents_abi::telemetry::Cx,
-    ) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
-    {
-        let host = ::std::sync::Arc::clone(&self.host);
-        let started = ::lk_agents_runtime::host::call(
-            &crate::py_calls::Entry,
-            "EndpointHandler._core_drain",
-            &self.context,
-            &[],
-            cx,
-            ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((host.bind(py).getattr("_core_drain")?, ::pyo3::types::PyTuple::new(py, args)?))
             }),
         );
         ::std::boxed::Box::pin(async move {
@@ -3939,9 +3726,17 @@ impl crate::py_errors::HostException for ::lk_agents_abi::worker::TokenRefused {
     }
 }
 
-impl crate::py_errors::HostException for ::lk_agents_abi::worker::http::CapacityError {
+impl crate::py_errors::HostException for ::lk_agents_abi::worker::http::ExchangeError {
     fn to_py_err(&self) -> ::pyo3::PyErr {
-        ::pyo3::exceptions::PyRuntimeError::new_err(::std::string::ToString::to_string(self))
+        #[allow(unreachable_patterns)]
+        match self {
+            Self::Closed(..) => ::pyo3::exceptions::PyConnectionError::new_err(
+                ::std::string::ToString::to_string(self),
+            ),
+            _ => ::pyo3::exceptions::PyRuntimeError::new_err(::std::string::ToString::to_string(
+                self,
+            )),
+        }
     }
 }
 

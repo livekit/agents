@@ -354,23 +354,34 @@ On Cloud, the worker registers the route manifest and Cloud delivers each incomi
 request as metadata and a bidirectional byte stream after the node preamble. The public
 listener produces the same metadata and stream for each connection it accepts, so
 routes and endpoints run unchanged on either path.
-It does not parse HTTP, implement WebSocket framing or expose an ASGI contract.
-Each language binding supplies its application server. Python serves these
-streams through ASGI using h11 and wsproto, including request limits, response
-head deadlines, completion trailers and WebSocket draining.
 
-The worker handoff is in [`lk-agents-worker/src/http.rs`](../rust/crates/lk-agents-worker/src/http.rs),
-with its shared contract in [`lk-agents-abi/src/worker/http/mod.rs`](../rust/crates/lk-agents-abi/src/worker/http/mod.rs).
-Python route authoring and ASGI serving are together in
-[`livekit/agents/http.py`](../livekit-agents-next/livekit/agents/http.py).
-`AgentRoutes` defines the routes; its `_AsgiServer` owns the ASGI app, stream
-serving and draining. The server itself is passed to Rust's handler contract,
-without a separate adapter object.
+The worker serves every exchange itself, so each language binding gets the same robust
+server: it parses the request head and body (strict framing: no request smuggling through
+both `content-length` and `transfer-encoding`), caps concurrent connections, bounds the head
+and chunk metadata, times out a peer that stalls its body or stops reading, applies the
+node's response-head deadline, frames the response, reports a failure after the response
+head in `x-lk-completion` trailers, and treats a body the node reports cut short as a
+disconnect. For a WebSocket upgrade it answers the handshake, frames messages with size
+limits and a bounded inbox, answers pings and pings a quiet peer, and runs the close
+handshake.
 
-A bounded inbox owns queued WebSocket messages, their byte reservations and
-wakeups. Receiving transfers a message and releases its reservation without
-suspending; cancellation only interrupts the wait. Connection cleanup joins the
-reader and shared close operation before releasing the connection's capacity.
+Drain admits no new exchange (a node retries a refused stream on another worker), closes
+every open WebSocket with `1001` and lets the HTTP exchanges in flight finish beside the
+jobs. Stopping cancels what still runs: a started response ends with an `x-lk-completion:
+canceled` trailer, a WebSocket closes with `1001`.
+
+The binding only adapts each parsed exchange to its own framework. It receives an
+`HttpExchange`: the request head, then `receive()` for request events (body pieces,
+WebSocket messages, disconnects) and `send()` for response messages (start, body,
+WebSocket accept, messages and close). Python maps the exchange to one ASGI call, so routes
+are Starlette or FastAPI applications; another binding maps the same exchange to its own
+idiom.
+
+The server is in [`lk-agents-worker/src/http/`](../rust/crates/lk-agents-worker/src/http/mod.rs),
+with its binding contract in [`lk-agents-abi/src/worker/http/mod.rs`](../rust/crates/lk-agents-abi/src/worker/http/mod.rs).
+Python route authoring and the ASGI adapter are in
+[`livekit/agents/http.py`](../livekit-agents-next/livekit/agents/http.py):
+`AgentRoutes` defines the routes, and `_AsgiServer` runs the application once per exchange.
 
 ## Voice entrypoints
 
