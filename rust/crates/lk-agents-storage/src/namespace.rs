@@ -189,6 +189,13 @@ fn seconds(value: Option<f64>, default: Duration, name: &str) -> Result<Duration
     }
 }
 
+/// The `thread_id` a dispatch's metadata names, if any.
+fn call_thread_id(metadata: &str) -> Option<String> {
+    let metadata: serde_json::Value = serde_json::from_str(metadata).ok()?;
+    let id = metadata.get("thread_id")?.as_str()?;
+    (!id.is_empty()).then(|| id.to_owned())
+}
+
 /// Whole seconds for the wire; `0` sends none, the default.
 fn ttl(seconds: i64) -> Option<pbjson_types::Duration> {
     (seconds > 0).then_some(pbjson_types::Duration { seconds, nanos: 0 })
@@ -400,6 +407,13 @@ impl HostStorageClass for Namespace {
 
     async fn get_thread(&self, thread_id: String) -> Result<ThreadInfo, StorageError> {
         Ok(thread_info(self.storage().await?.get_thread(&thread_id).await?))
+    }
+
+    async fn _core_call_thread(&self, metadata: String) -> Result<ThreadInfo, StorageError> {
+        match call_thread_id(&metadata) {
+            Some(thread_id) => self.get_thread(thread_id).await,
+            None => self.create_thread(None, None, 0).await,
+        }
     }
 
     async fn list_threads(
@@ -707,6 +721,16 @@ impl host::handles::Run for RunHandle {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    // Catches: an empty or non-string id taken as named, or malformed metadata failing the call.
+    #[test]
+    fn only_a_nonempty_string_thread_id_names_the_calls_thread() {
+        assert_eq!(call_thread_id(r#"{"thread_id": "AT_1"}"#).as_deref(), Some("AT_1"));
+        for metadata in ["", "not json", "[1]", r#"{"thread_id": ""}"#, r#"{"thread_id": 1}"#, "{}"]
+        {
+            assert_eq!(call_thread_id(metadata), None, "{metadata}");
+        }
+    }
 
     #[tokio::test]
     async fn cloud_storage_starts_nothing_until_first_use_and_shares_its_backend() {

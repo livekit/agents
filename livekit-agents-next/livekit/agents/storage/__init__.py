@@ -4,7 +4,6 @@ the errors a door's user catches."""
 from __future__ import annotations
 
 import functools
-import json
 import os
 import socket
 from collections.abc import Awaitable, Callable
@@ -17,7 +16,6 @@ from .._generated.storage_class import (
     LocalStorageOptions,
     TaskRecord,
     TaskState,
-    ThreadInfo,
 )
 from .._generated.storage_errors import (
     LeaseLost as LeaseLost,
@@ -190,27 +188,6 @@ class SQLiteStorage(Storage):
         )
 
 
-@dataclass
-class _ResolvedThread:
-    thread: ThreadInfo
-    created: bool
-
-    @property
-    def id(self) -> str:
-        return self.thread.thread_id
-
-
-async def _resolve_thread(
-    threads: _core.Storage, *, context_id: str | None = None, scope: str = ""
-) -> _ResolvedThread:
-    """Exactly one thread for a request (plan 4.4): the one ``context_id`` names, else a new one
-    in ``scope``. A thread is the project's, not one agent's: any agent picks it up."""
-    if context_id:
-        return _ResolvedThread(thread=await threads.get_thread(context_id), created=False)
-
-    return _ResolvedThread(thread=await threads.create_thread(scope=scope), created=True)
-
-
 class Thread(ThreadReads):
     """``ctx.thread``: the durable thread (docs/threads.md). Each read opens the thread's
     database for the call; there is nothing to open or close."""
@@ -263,19 +240,12 @@ class _CallThreadEntrypoint:
 
     async def __call__(self, ctx: JobContext) -> None:
         try:
-            metadata = json.loads(ctx.job.metadata or "{}")
-        except ValueError:
-            metadata = None
-        thread_id = metadata.get("thread_id") if isinstance(metadata, dict) else None
-        if not isinstance(thread_id, str):
-            thread_id = None
-        try:
-            thread_id = (await _resolve_thread(self.storage.threads, context_id=thread_id)).id
-            ctx._thread = Thread(self.storage, thread_id, agent_name=ctx.job.agent_name)
+            thread = await self.storage.threads._core_call_thread(ctx.job.metadata)
+            ctx._thread = Thread(self.storage, thread.thread_id, agent_name=ctx.job.agent_name)
         except StorageError as e:
             logger.warning(
                 "the call's thread could not be resolved; the call is kept in memory",
-                extra={"threadId": thread_id, "error": str(e)},
+                extra={"error": str(e)},
             )
         await self.entrypoint(ctx)
 

@@ -28,7 +28,7 @@ from livekit.agents._generated.storage_options import TurnOptions
 from livekit.agents._generated.storage_turn import TurnResult
 from livekit.agents.llm import ChatItem, FunctionToolCall
 from livekit.agents.llm.utils import build_legacy_openai_schema
-from livekit.agents.storage import RunRejected, Storage, Thread, TooLarge, _resolve_thread
+from livekit.agents.storage import RunRejected, Storage, Thread, TooLarge
 from livekit.agents.storage.session import A2ASessionContext, _Handler, _TurnHost
 
 from .fake_llm import FakeLLM, FakeLLMResponse
@@ -768,10 +768,12 @@ async def test_session_resolution_follows_the_threads_service(
     thread_storage: Storage,
 ) -> None:
     threads = thread_storage.threads
-    fresh = await _resolve_thread(threads)
-    assert fresh.created and fresh.id.startswith("AT_")
-    by_id = await _resolve_thread(threads, context_id=fresh.id)
-    assert by_id.id == fresh.id and not by_id.created
+    fresh = await threads._core_call_thread("")
+    assert fresh.thread_id.startswith("AT_")
+    named = json.dumps({"thread_id": fresh.thread_id})
+    assert (await threads._core_call_thread(named)).thread_id == fresh.thread_id
+    other = await threads._core_call_thread('{"thread_id": ""}')
+    assert other.thread_id not in ("", fresh.thread_id)
 
 
 # -- a text during a call (plan 3.3.7) --
