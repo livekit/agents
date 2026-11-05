@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 
-use super::record::SpanContext;
+use super::record::{SpanContext, SpanKind};
 
 /// A span started through the host's OpenTelemetry API (an application span, or a framework span
 /// around host-only code). Ended once; recorded by the process's exporter.
@@ -15,8 +15,7 @@ pub trait HostSpan: Send + Sync + Sized + 'static {
     #[host(env)]
     type Env;
 
-    /// `parent`: the current span, `None` for a new trace. `kind`: the OpenTelemetry `SpanKind`
-    /// value. `ids`: a span the host already started (an SDK span the bridge forwards). `job`: the
+    /// `parent`: the current span, `None` for a new trace. `ids`: a span the host already started (an SDK span the bridge forwards). `job`: the
     /// job it belongs to.
     #[host(new)]
     #[allow(clippy::too_many_arguments, reason = "Preserve the public Python signature")]
@@ -25,7 +24,7 @@ pub trait HostSpan: Send + Sync + Sized + 'static {
         name: String,
         scope: String,
         #[host(kw, default = None)] parent: Option<SpanContext>,
-        #[host(kw, default = 0)] kind: i64,
+        #[host(kw, default = None)] kind: Option<SpanKind>,
         #[host(kw, default = None)] start_time: Option<u64>,
         #[host(kw, default = None)] ids: Option<SpanContext>,
         #[host(kw, default = None)] job: Option<String>,
@@ -50,9 +49,9 @@ pub trait HostSpan: Send + Sync + Sized + 'static {
         #[host(default = None)] timestamp: Option<u64>,
     );
 
-    /// `code`: the OpenTelemetry `StatusCode` value.
+    /// `description` is kept only with `Error`; `Ok` is final.
     #[host(call)]
-    fn set_status(&self, code: i64, #[host(default = None)] description: Option<String>);
+    fn set_status(&self, code: StatusCode, #[host(default = None)] description: Option<String>);
 
     #[host(call)]
     fn update_name(&self, name: String);
@@ -79,10 +78,8 @@ pub trait Telemetry {
         #[host(kw, default = None)] allow_pii: Option<bool>,
     ) -> Result<(), TelemetryConfigError>;
 
-    /// The export counters: `dropped`, `failed`, `conflicts`, `incomplete_cleanup`, `swept_spans`,
-    /// `abandoned_sessions`.
     #[host(function)]
-    fn _core_telemetry_diagnostics() -> BTreeMap<String, u64>;
+    fn _core_telemetry_diagnostics() -> TelemetryDiagnostics;
 
     /// Counts a configuration conflict the host found (a tracer provider it cannot bridge).
     #[host(function)]
@@ -106,6 +103,33 @@ pub trait Telemetry {
         #[host(kw, default = None)] job: Option<String>,
         #[host(kw, default = None)] task: Option<String>,
     );
+}
+
+/// OpenTelemetry's `StatusCode`.
+#[crate::host(native_enum(name = "StatusCode"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatusCode {
+    Unset,
+    Ok,
+    Error,
+}
+
+/// The process's export counters.
+#[crate::host(record(module = "telemetry", emit))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TelemetryDiagnostics {
+    /// Records refused by a full queue or a metric cardinality limit, or abandoned at a deadline.
+    pub dropped: u64,
+    /// Records in requests the endpoint refused or that failed in transport.
+    pub failed: u64,
+    /// Configuration that could not apply.
+    pub conflicts: u64,
+    /// Job closes and shutdowns that reached their deadline before every record was sent.
+    pub incomplete_cleanup: u64,
+    /// Spans a voice session's close ended because their owner never did (a framework bug).
+    pub swept_spans: u64,
+    /// Voice sessions dropped without their close; their open spans were ended and exported.
+    pub abandoned_sessions: u64,
 }
 
 /// A `configure` argument out of its domain.

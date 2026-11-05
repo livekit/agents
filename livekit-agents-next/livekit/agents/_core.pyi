@@ -136,6 +136,8 @@ from ._generated._core_metrics import (
 )
 from ._generated._core_native_enums import (
     Role as Role,
+    SpanKind as SpanKind,
+    StatusCode as StatusCode,
 )
 from ._generated._core_recorder import (
     SessionRecorder as SessionRecorder,

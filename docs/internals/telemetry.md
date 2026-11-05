@@ -20,7 +20,7 @@ everything to Rust.
    string literal.
 3. **Consumers see no accidental change.** LiveKit Cloud reads exact names,
    types, units, parents and record shapes. A change to any of them shows up as a
-   generated schema diff and a golden OTLP diff in review.
+   generated schema diff (`rust/otel/schema.json`) in review.
 4. **Telemetry is spelled `telemetry::`.** Outside the telemetry modules, every
    telemetry touchpoint is a path that starts with `telemetry::`: no telemetry
    item is imported under a short name. A reader who cares only about the logic
@@ -106,7 +106,7 @@ side is one module, `livekit/agents/telemetry.py`, of about 400 lines:
 | Provider | `_Span`, `_Tracer` and `_TracerProvider` implementing `opentelemetry-api` over the generated `_core.TelemetrySpan`, installed as the global provider when the application set none |
 | Bridge | One `SpanProcessor` for an application-installed SDK provider; imported only when `opentelemetry-sdk` is present |
 | Public functions | `configure`, `set_capture_content` and `diagnostics`, forwarding to `_core` |
-| Host hooks | `_install` and `_shutdown` (the process exporter; the global provider is adopted once per process), `_activate` and `_current` (HostInvoker's span activation and capture), `_LoopMonitor` (event loop stalls) |
+| Host hooks | `_install` and `_shutdown` (the process exporter; the global provider is adopted once per process), `_activate` and `_current` (HostInvoker's span activation in the copied context a host call runs in, and capture), `_LoopMonitor` (event loop stalls) |
 | Framework spans | `room_connect` and `wait_for_participant` around `JobContext`'s room calls, `rpc_call` and `rpc_handler` from an `rtc.RpcInterceptor`, named with the generated `semconv` constants |
 
 `opentelemetry-api` is the only OpenTelemetry dependency. Spans the framework
@@ -469,7 +469,7 @@ every record, as the `EverySpan` group and the identity stamp.
 | A span cannot drift from its entity | the entity owns it: moving or removing the entity moves the span |
 | A span ends once | `end` consumes it |
 | A span ends at all | `Drop` asserts it was ended (debug builds, so every test and the DST); the mistake fails at the line that dropped the entity |
-| Nothing ends silently at close | a session close removes each live entity through its own removal path with the `closed` outcome; nothing ends spans in bulk. `Trace::close` then sweeps whatever remains: a non-zero sweep fails the DST and is a warning plus `telemetry.diagnostics()["swept"]` in production |
+| Nothing ends silently at close | a session close removes each live entity through its own removal path with the `closed` outcome; nothing ends spans in bulk. `Trace::close` then sweeps whatever remains: a non-zero sweep fails the DST and is a warning plus `telemetry.diagnostics().swept_spans` in production |
 | A session's spans always reach the exporter | the session closes on every exit path before the job's final flush; DST rule `sessions_export_their_root` |
 | A child is opened only under a declared parent | `open_in` takes `&telemetry::ManualSpan<P>` with `P: ParentOf<D>`; `open` exists only for declarations whose parent is the session |
 | One clock | the runtime's injected clock, the voice core's `now` and the `Trace` anchor all come from the `ProcessEnv` clock, so a `ScopedSpan` nested under a sans-I/O span shares its timeline |
@@ -736,8 +736,8 @@ Rules:
 - One snapshot. Every output reads the same `SessionReport`; no output reads
   live session state, so the transcript, the records and the summary agree.
 - Projections are pure. `report::records` and `report::upload` take the report
-  and the recording options and return data; the DST and golden tests call them
-  directly.
+  and the recording options and return data; the DST and the report tests call
+  them directly.
 - Bounds are decided before I/O. An oversized transcript drops whole items from
   the oldest end and records the count in the summary; it never fails the upload
   or drops the audio.
@@ -751,7 +751,7 @@ Rules:
 | Output | Path | Reader |
 | --- | --- | --- |
 | Weaver registry | `rust/otel/registry/` and `rust/otel/manifest.yaml` | `weaver registry check` in CI |
-| Consumer schema | `rust/otel/schema.json` | Cloud consumers; the golden test |
+| Consumer schema | `rust/otel/schema.json` | Cloud consumers; review of every wire change |
 | Python constants | `livekit/agents/_generated/semconv.py` | the framework's Python code |
 
 The agents registry depends on three registries, each pinned by git ref in `rust/otel/manifest.yaml`:
@@ -783,8 +783,6 @@ A key moves to protocol only when a second producer emits it.
 | `rust/architecture/check.sh` (`cx-none`) | new work run under `Cx::NONE`: each use outside tests is counted per file and only shrinks |
 | `ScopedSpan` itself | GenAI message content recorded with capture off: every `GENAI_CONTENT` key is dropped at the span's end, whatever the emitter wrote |
 | `weaver registry check` (`Telemetry registry` workflow) | a `semconv` constant or declared reference that a pinned registry does not define; an invalid registry |
-| Golden OTLP | any wire change: a fixed fake session (pipeline and realtime voice turns, an interruption and a backchannel, a tool call, a handoff, AMD, a failed hook, a text run with a remote agent) exports OTLP JSON compared with `tests/telemetry/golden/` |
-| Dashboard rendering | the golden traces and logs are published under `rust/otel/golden/`; the session view's tests in `livekit/web` load them and assert the turns, stages, latencies, tokens, tool time, transcript and evaluations they render |
 | DST span rules | every recorded span, scoped or manual, ends exactly once, under a declared parent and within it unless `outlives_parent`; a failed manual span is never recorded as cancelled; nothing reaches the close sweep |
 | Conformance tests | an application span inside a tool parents under `function_tool`; a `RemoteAgent` call continues the trace; concurrent jobs keep their identity; Cloud disabled; queue saturation; bounded shutdown |
 
@@ -797,7 +795,7 @@ A key moves to protocol only when a second producer emits it.
 2. Open it at its one site: `#[telemetry::span(..)]` on the function, a
    `telemetry::start` in a block, or, in a sans-I/O machine, a `span` field on the
    entity that owns its lifetime, opened and ended through `self.telemetry`.
-3. Run `lk-agents-codegen --write`, review the schema and golden diffs, commit.
+3. Run `lk-agents-codegen --write`, review the schema diff, commit.
 
 **An attribute**: add a field to the span's start or end `Attrs` struct. Its key is new in this
 registry, a protocol shared key, or a GenAI key.
@@ -810,8 +808,7 @@ the report builder.
 
 **A span around Python-only framework code** (an RPC handler): start it with
 the OpenTelemetry API, using the generated `semconv` constants for its name and
-keys, and declare it in `telemetry/spans/` like any other span so the schema and golden
-cover it.
+keys, and declare it in `telemetry/spans/` like any other span so the schema covers it.
 
 **An application span** needs nothing from the framework:
 [telemetry.md](../telemetry.md#application-spans).

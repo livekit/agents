@@ -15,7 +15,7 @@ conventions live in the attributes, the span kind and the metrics.
 
 | Work | Span | `gen_ai.operation.name` | Attributes | Metrics |
 | --- | --- | --- | --- | --- |
-| LLM request | `llm_request` (kind `CLIENT`) | `chat` | `gen_ai.provider.name`, `gen_ai.request.model` and request parameters, `gen_ai.response.model`, `gen_ai.response.id`, `gen_ai.response.finish_reasons`, `gen_ai.usage.*`, `gen_ai.response.time_to_first_chunk`; with message capture `gen_ai.input.messages`, `gen_ai.output.messages`, `gen_ai.system_instructions`, `gen_ai.tool.definitions` | `gen_ai.client.token.usage`, `gen_ai.client.operation.duration` |
+| LLM request | `llm_request` (kind `CLIENT`) | `chat` | `gen_ai.provider.name`, `gen_ai.request.model` and request parameters, `gen_ai.response.model`, `gen_ai.response.id`, `gen_ai.response.finish_reasons`, `gen_ai.usage.*`, `gen_ai.response.time_to_first_chunk`; with message capture `gen_ai.input.messages`, `gen_ai.output.messages`, `gen_ai.system_instructions`, `gen_ai.tool.definitions` | `gen_ai.client.inference.usage.input_tokens`, `gen_ai.client.inference.usage.output_tokens`, `gen_ai.client.operation.duration` |
 | Realtime model turn | `realtime_inference` (kind `CLIENT`) | `generate_content` | as an LLM request, with audio and text token splits | as an LLM request |
 | Tool call | `function_tool` | `execute_tool` | `gen_ai.tool.name`, `gen_ai.tool.call.id`, `gen_ai.tool.type`, `gen_ai.tool.description`; with message capture `gen_ai.tool.call.arguments`, `gen_ai.tool.call.result` | `gen_ai.client.operation.duration` |
 | Agent turn | `agent_turn` | `invoke_agent` | `gen_ai.agent.name`, `gen_ai.conversation.id` | `gen_ai.client.operation.duration` |
@@ -194,7 +194,7 @@ Events, each with its own timestamp and no attributes: `job_received`,
 
 | Span | Parent | Keys |
 | --- | --- | --- |
-| `job_shutdown` | `job_entrypoint` | `lk.shutdown.reason` (string), `lk.shutdown.user_initiated` (bool) |
+| `job_shutdown` | `job_entrypoint` | `lk.shutdown.reason` (string, the first reason given), `lk.shutdown.cause` (`application`, `simulation_completed`, `session_closed`, `room_disconnected`, `entrypoint_crashed`, `process_shutdown`; the application's end wins over the session close it causes) |
 | `on_session_end` | `job_shutdown` | `lk.callback.name` (string); only when a callback is registered |
 | `session_end_upload` | `job_shutdown` | none |
 | `room_disconnect` | `job_shutdown` | none |
@@ -355,7 +355,8 @@ and `model_name`, the `G` labels `gen_ai.operation.name`, `gen_ai.provider.name`
 | `lk.agents.duplex.output_lag` | histogram | s | `M` | each frame of a duplex model's output the session takes |
 | `lk.agents.audio.dropped` | counter | s | `policy` (`catch_up`, `now`), `consumer` (`room_input`, `realtime`, `stt`, `vad`, `interruption`, `end_of_turn`, `stt_node`, `recording`, `duplex`) | each drop of an audio input channel |
 | `lk.agents.audio.catch_up_time` | histogram | s | `consumer` (`vad`, `interruption`, `end_of_turn`, `recording`, `duplex`) | each consumer that drained a pre-connect head |
-| `gen_ai.client.token.usage` | histogram | `{token}` | `G`, `gen_ai.token.type` (`input`, `output`) | each LLM and realtime response |
+| `gen_ai.client.inference.usage.input_tokens` | counter | `{token}` | `G`, `gen_ai.token.modality` (`text`, `image`, `audio`, `unknown`) | each LLM response, one per reported modality; the rest, or `0` with no usage, under `unknown` |
+| `gen_ai.client.inference.usage.output_tokens` | counter | `{token}` | `G`, `gen_ai.token.modality` | as above |
 | `gen_ai.client.operation.duration` | histogram | s | `G` | each LLM and realtime response |
 | `gen_ai.client.operation.time_to_first_chunk` | histogram | s | `G` | when measured |
 | `gen_ai.execute_tool.duration` | histogram | s | `gen_ai.operation.name`, `gen_ai.tool.name`, `error.type` | each tool call |

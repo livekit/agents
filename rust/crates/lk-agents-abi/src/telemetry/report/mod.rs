@@ -5,7 +5,7 @@
 
 use std::collections::BTreeSet;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::decl::SpanValue;
 use serde_json::Value;
@@ -202,8 +202,7 @@ pub struct SessionSummary {
     pub room: String,
     pub audio_recording_path: Option<String>,
     pub audio_recording_started_at: Option<f64>,
-    /// The interruption, endpointing, tool-step and recording settings.
-    pub options: Option<Value>,
+    pub options: Option<SummaryOptions>,
     pub timestamp: f64,
     /// The `Usage` model's entries, absent fields omitted, as the summary record carries them.
     pub usage: Option<Vec<Value>>,
@@ -218,6 +217,79 @@ pub struct SessionSummary {
     /// Chat items left out of the uploaded transcript to keep it within its bounds.
     #[serde(skip_serializing_if = "is_zero")]
     pub omitted_chat_items: u64,
+}
+
+/// 1.8.10's summary options: the interruption, endpointing, tool-step and recording settings,
+/// read from the report's resolved options. A setting the options lack, or hold in another
+/// shape, is `null`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(from = "ResolvedOptions")]
+pub struct SummaryOptions {
+    pub allow_interruptions: Value,
+    pub discard_audio_if_uninterruptible: Value,
+    pub min_interruption_duration: Value,
+    pub min_interruption_words: Value,
+    pub min_endpointing_delay: Value,
+    pub max_endpointing_delay: Value,
+    pub max_tool_steps: Value,
+    pub user_away_timeout: Value,
+    pub min_consecutive_speech_delay: Value,
+    pub preemptive_generation: Value,
+    pub recording_options: Value,
+}
+
+/// The part of [`SessionReport::options`] the summary reads.
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct ResolvedOptions {
+    interruption: InterruptionOptions,
+    endpointing: EndpointingOptions,
+    max_tool_steps: Value,
+    user_away_timeout: Value,
+    min_consecutive_speech_delay: Value,
+    preemptive_generation: Value,
+    recording_options: Value,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct InterruptionOptions {
+    enabled: Value,
+    discard_audio_if_uninterruptible: Value,
+    min_duration: Value,
+    min_words: Value,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct EndpointingOptions {
+    min_delay: Value,
+    max_delay: Value,
+}
+
+impl From<ResolvedOptions> for SummaryOptions {
+    fn from(o: ResolvedOptions) -> Self {
+        SummaryOptions {
+            allow_interruptions: o.interruption.enabled,
+            discard_audio_if_uninterruptible: o.interruption.discard_audio_if_uninterruptible,
+            min_interruption_duration: o.interruption.min_duration,
+            min_interruption_words: o.interruption.min_words,
+            min_endpointing_delay: o.endpointing.min_delay,
+            max_endpointing_delay: o.endpointing.max_delay,
+            max_tool_steps: o.max_tool_steps,
+            user_away_timeout: o.user_away_timeout,
+            min_consecutive_speech_delay: o.min_consecutive_speech_delay,
+            preemptive_generation: o.preemptive_generation,
+            recording_options: o.recording_options,
+        }
+    }
+}
+
+impl SummaryOptions {
+    /// The summary of `options`; options that are not an object summarize to all `null`.
+    pub fn of(options: &Value) -> Self {
+        SummaryOptions::deserialize(options).unwrap_or_default()
+    }
 }
 
 fn is_zero(n: &u64) -> bool {

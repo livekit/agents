@@ -57,37 +57,6 @@
       ]
     },
     {
-      "id": "metric.gen_ai.client.token.usage",
-      "type": "metric",
-      "metric_name": "gen_ai.client.token.usage",
-      "instrument": "histogram",
-      "unit": "{token}",
-      "stability": "development",
-      "brief": "Input and output tokens of each LLM and realtime response. Deprecated upstream; declared as emitted.",
-      "attributes": [
-        {
-          "ref": "gen_ai.operation.name",
-          "requirement_level": "required"
-        },
-        {
-          "ref": "gen_ai.provider.name",
-          "requirement_level": "required"
-        },
-        {
-          "ref": "gen_ai.request.model",
-          "requirement_level": "required"
-        },
-        {
-          "ref": "gen_ai.response.model",
-          "requirement_level": "recommended"
-        },
-        {
-          "ref": "gen_ai.token.type",
-          "requirement_level": "required"
-        }
-      ]
-    },
-    {
       "id": "metric.lk.agents.audio.catch_up_time",
       "type": "metric",
       "metric_name": "lk.agents.audio.catch_up_time",

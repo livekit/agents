@@ -14,7 +14,7 @@ use lk_agents_abi::FunctionCall;
 use lk_agents_abi::llm::tool_executor::ToolOutcome;
 use lk_agents_abi::metrics::base::AgentMetrics;
 use lk_agents_abi::telemetry::decl::{BoolString, GenAiContent, Label, json};
-use lk_agents_abi::telemetry::host::TelemetryConfigError;
+use lk_agents_abi::telemetry::host::{TelemetryConfigError, TelemetryDiagnostics};
 use lk_agents_abi::telemetry::instruments::EventLoopBlockedDuration;
 use lk_agents_abi::telemetry::instruments::{
     ConnectionAcquireTime, ExecuteToolDuration, InterruptionNumRequests, LlmInputAudioTokens,
@@ -238,17 +238,17 @@ impl lk_agents_abi::telemetry::host::Telemetry for Telemetry {
         Ok(())
     }
 
-    fn _core_telemetry_diagnostics() -> BTreeMap<String, u64> {
+    fn _core_telemetry_diagnostics() -> TelemetryDiagnostics {
         let d = PROCESS.slot.get().map(|e| e.diagnostics()).unwrap_or_default();
         let read = |counter: &AtomicU64| counter.load(Ordering::Relaxed);
-        BTreeMap::from([
-            ("dropped".to_owned(), d.dropped),
-            ("failed".to_owned(), d.failed),
-            ("conflicts".to_owned(), d.conflicts + read(&PROCESS.conflicts)),
-            ("incomplete_cleanup".to_owned(), d.incomplete_cleanup),
-            ("swept_spans".to_owned(), read(&PROCESS.swept_spans)),
-            ("abandoned_sessions".to_owned(), read(&PROCESS.abandoned_sessions)),
-        ])
+        TelemetryDiagnostics {
+            dropped: d.dropped,
+            failed: d.failed,
+            conflicts: d.conflicts + read(&PROCESS.conflicts),
+            incomplete_cleanup: d.incomplete_cleanup,
+            swept_spans: read(&PROCESS.swept_spans),
+            abandoned_sessions: read(&PROCESS.abandoned_sessions),
+        }
     }
 
     fn _core_telemetry_conflict() {

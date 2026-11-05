@@ -402,8 +402,11 @@ pub trait JobRun: Send + Sync + Sized + 'static {
     /// Opens the job's root span for the job the parent handed over, before its run starts.
     #[host(call)]
     fn start_trace(&self, fields: StartJobFields);
+    /// The application ends the job.
     #[host(call)]
-    fn shutdown(&self, reason: String, user_initiated: bool);
+    fn shutdown(&self, reason: String);
+    #[host(call)]
+    fn room_disconnected(&self);
     #[host(call)]
     fn connected(&self);
     /// Awaits `connect()` once: a call while it runs waits for it, a call after it connected

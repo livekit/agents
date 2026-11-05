@@ -14,11 +14,6 @@ use pyo3::prelude::*;
 type TelemetrySpanImpl =
     <crate::generated::implementations::Selected as super::Implementations>::HostSpan;
 
-fn _extract_host_span_new_kind(obj: &Bound<'_, PyAny>) -> PyResult<HostSpanNewKindInput> {
-    crate::py_values::number_from_py::<i64>(obj.as_any(), "kind")
-}
-type HostSpanNewKindInput = i64;
-
 fn _extract_host_span_new_start_time(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<HostSpanNewStartTimeInput> {
@@ -41,13 +36,6 @@ fn _extract_host_span_add_event_timestamp(
 }
 type HostSpanAddEventTimestampInput = ::std::option::Option<u64>;
 
-fn _extract_host_span_set_status_code(
-    obj: &Bound<'_, PyAny>,
-) -> PyResult<HostSpanSetStatusCodeInput> {
-    crate::py_values::number_from_py::<i64>(obj.as_any(), "code")
-}
-type HostSpanSetStatusCodeInput = i64;
-
 fn _extract_host_span_end_end_time(obj: &Bound<'_, PyAny>) -> PyResult<HostSpanEndEndTimeInput> {
     if obj.is_none() {
         Ok(None)
@@ -64,17 +52,16 @@ pub struct TelemetrySpan(pub(crate) ::std::sync::Arc<TelemetrySpanImpl>);
 
 #[pymethods]
 impl TelemetrySpan {
-    /// `parent`: the current span, `None` for a new trace. `kind`: the OpenTelemetry `SpanKind`
-    /// value. `ids`: a span the host already started (an SDK span the bridge forwards). `job`: the
+    /// `parent`: the current span, `None` for a new trace. `ids`: a span the host already started (an SDK span the bridge forwards). `job`: the
     /// job it belongs to.
     #[new]
-    #[pyo3(signature = (name, scope, *, parent = None, kind = 0, start_time = None, ids = None, job = None))]
+    #[pyo3(signature = (name, scope, *, parent = None, kind = None, start_time = None, ids = None, job = None))]
     fn new(
         py: Python<'_>,
         name: ::std::string::String,
         scope: ::std::string::String,
         parent: Option<Bound<'_, PyAny>>,
-        #[pyo3(from_py_with = _extract_host_span_new_kind)] kind: HostSpanNewKindInput,
+        kind: Option<Bound<'_, PyAny>>,
         #[pyo3(from_py_with = _extract_host_span_new_start_time)]
         start_time: HostSpanNewStartTimeInput,
         ids: Option<Bound<'_, PyAny>>,
@@ -84,6 +71,9 @@ impl TelemetrySpan {
         let env = crate::process::env();
         let parent = parent
             .map(|v| crate::generated::records::telemetry::span_context_from_py(v.as_any()))
+            .transpose()?;
+        let kind = kind
+            .map(|v| crate::generated::native_enums::span_kind_from_py(v.as_any()))
             .transpose()?;
         let ids = ids
             .map(|v| crate::generated::records::telemetry::span_context_from_py(v.as_any()))
@@ -164,15 +154,16 @@ impl TelemetrySpan {
         Ok(())
     }
 
-    /// `code`: the OpenTelemetry `StatusCode` value.
+    /// `description` is kept only with `Error`; `Ok` is final.
     #[pyo3(signature = (code, description = None))]
     fn set_status(
         &self,
         py: Python<'_>,
-        #[pyo3(from_py_with = _extract_host_span_set_status_code)] code: HostSpanSetStatusCodeInput,
+        code: Bound<'_, PyAny>,
         description: ::std::option::Option<::std::string::String>,
     ) -> PyResult<()> {
         crate::py_calls::check_pid()?;
+        let code = crate::generated::native_enums::status_code_from_py(code.as_any())?;
         py.detach(|| {
             <TelemetrySpanImpl as ::lk_agents_abi::telemetry::host::HostSpan>::set_status(
                 &self.0,
@@ -214,8 +205,6 @@ impl TelemetrySpan {
 // Declared in rust/crates/lk-agents-abi/src/telemetry/host.rs.
 type TelemetryImpl =
     <crate::generated::implementations::Selected as super::Implementations>::Telemetry;
-type TelemetryCoreTelemetryDiagnosticsOutput =
-    ::std::collections::BTreeMap<::std::string::String, u64>;
 
 fn _extract_telemetry_core_event_loop_blocked_duration(
     obj: &Bound<'_, PyAny>,
@@ -267,16 +256,12 @@ pub fn _core_telemetry_configure(
     Ok(())
 }
 
-/// The export counters: `dropped`, `failed`, `conflicts`, `incomplete_cleanup`, `swept_spans`,
-/// `abandoned_sessions`.
 #[pyfunction]
-pub fn _core_telemetry_diagnostics(
-    py: Python<'_>,
-) -> PyResult<TelemetryCoreTelemetryDiagnosticsOutput> {
+pub fn _core_telemetry_diagnostics<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
     let out = py.detach(
         <TelemetryImpl as ::lk_agents_abi::telemetry::host::Telemetry>::_core_telemetry_diagnostics,
     );
-    ::pyo3::PyResult::Ok(out)
+    crate::generated::records::telemetry::telemetry_diagnostics_to_py(py, out)
 }
 
 /// Counts a configuration conflict the host found (a tracer provider it cannot bridge).

@@ -164,7 +164,9 @@ class JobRun:
         """
     def start_trace(self, fields: StartJobFields) -> None:
         """Opens the job's root span for the job the parent handed over, before its run starts."""
-    def shutdown(self, reason: str, user_initiated: bool) -> None: ...
+    def shutdown(self, reason: str) -> None:
+        """The application ends the job."""
+    def room_disconnected(self) -> None: ...
     def connected(self) -> None: ...
     async def connect(self, connect: Callable[[], Awaitable[object]]) -> None:
         """Awaits `connect()` once: a call while it runs waits for it, a call after it connected

@@ -41,9 +41,9 @@ mod tests;
 struct State {
     /// The first reason the job ends with.
     shutdown: Option<String>,
+    /// What ended the job: the first cause, unless the application ended it too.
+    cause: Option<telemetry::ShutdownCause>,
     connected: bool,
-    /// Whether any end was the user's, whichever reason came first.
-    user_shutdown: bool,
     /// `add_participant_entrypoint`'s, in order, each with the participant kinds it runs for.
     entrypoints: Vec<Entrypoint>,
     /// The participant entrypoints running, by participant and entrypoint, each its run's number.
@@ -114,14 +114,14 @@ struct Inner {
 
 impl JobExecution for JobRun {
     fn session_closed(&self, reason: String) {
-        self.inner.end(reason, false);
+        self.inner.end(reason, telemetry::ShutdownCause::SessionClosed);
     }
 }
 
 impl JobRun {
     /// The job ends with `reason`; the first reason given is the one kept.
-    pub(crate) fn end(&self, reason: String, user_initiated: bool) {
-        self.inner.end(reason, user_initiated);
+    pub(crate) fn end(&self, reason: String, cause: telemetry::ShutdownCause) {
+        self.inner.end(reason, cause);
     }
 
     pub(crate) fn report_to(&self, parent: Arc<Channel<ToParent, ToChild>>) {
@@ -134,20 +134,16 @@ fn cancelled(error: &HostError) -> bool {
 }
 
 impl Inner {
-    fn end(&self, reason: String, user_initiated: bool) {
+    fn end(&self, reason: String, cause: telemetry::ShutdownCause) {
         let mut st = self.state.lock();
-        st.user_shutdown |= user_initiated;
+        // The session's close can reach the job before the application's own `shutdown`.
+        if st.cause.is_none() || cause == telemetry::ShutdownCause::Application {
+            st.cause = Some(cause);
+        }
         if st.shutdown.is_none() {
             st.shutdown = Some(reason);
             self.ended.send_replace(true);
         }
-    }
-
-    /// The first reason, and whether any end was the user's: the session's close can reach the
-    /// job before the user's own `shutdown`.
-    fn shutdown(&self) -> (String, bool) {
-        let st = self.state.lock();
-        (st.shutdown.clone().unwrap_or_default(), st.user_shutdown)
     }
 
     fn host(&self) -> Option<&Arc<dyn JobProcess>> {
@@ -270,13 +266,13 @@ impl Inner {
                             self.log(Level::Error, "unhandled exception while running the job task", Some(e), Vec::new());
                             // A crash before ctx.connect() resolves nothing else: the shutdown
                             // still runs, so the cleanup can flush the crash logs.
-                            self.end("job crashed".into(), false);
+                            self.end("job crashed".into(), telemetry::ShutdownCause::EntrypointCrashed);
                         }
                         Ok(()) => {
                             telemetry::event(root, telemetry::EntrypointReturned);
                             let unfinished = {
                                 let st = self.state.lock();
-                                !st.connected && !st.user_shutdown && !self.fake
+                                !st.connected && st.cause != Some(telemetry::ShutdownCause::Application) && !self.fake
                             };
                             if unfinished {
                                 self.log(Level::Warning, "The job task completed without establishing a connection or performing a proper shutdown. Ensure that job_ctx.connect()/job_ctx.shutdown() is called and the job is correctly finalized.", None, Vec::new());
@@ -288,7 +284,7 @@ impl Inner {
                     warned = true;
                     let unconnected = {
                         let st = self.state.lock();
-                        !st.connected && !st.user_shutdown
+                        !st.connected && st.cause != Some(telemetry::ShutdownCause::Application)
                     };
                     if unconnected {
                         self.log(Level::Warning, "The room connection was not established within 10 seconds after calling job_entry. This might mean that job_ctx.connect() was never invoked, or that no VoiceSession with an active RoomIO has been started.", None, Vec::new());
@@ -297,11 +293,13 @@ impl Inner {
                 _ = ended.wait_for(|e| *e) => break,
             }
         }
-        let (reason, user_initiated) = self.shutdown();
-        let shutdown = telemetry::start(
-            job,
-            telemetry::JobShutdown { reason: reason.clone(), user_initiated },
-        );
+        let (reason, cause) = {
+            let st = self.state.lock();
+            let cause = st.cause.unwrap_or(telemetry::ShutdownCause::ProcessShutdown);
+            (st.shutdown.clone().unwrap_or_default(), cause)
+        };
+        let shutdown =
+            telemetry::start(job, telemetry::JobShutdown { reason: reason.clone(), cause });
 
         // The entrypoint returns, or is cancelled.
         if !entry_done
@@ -362,7 +360,7 @@ impl Inner {
         }
         let extra = vec![
             ("reason", ExtraValue::Str(reason.clone())),
-            ("user_initiated", ExtraValue::Bool(user_initiated)),
+            ("user_initiated", ExtraValue::Bool(cause == telemetry::ShutdownCause::Application)),
         ];
         self.log(Level::Debug, "shutting down job task", None, extra);
         if let Some(parent) = self.parent.get() {
@@ -487,8 +485,12 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
     }
 
     /// The host's `observability_url`, else the server's when it is LiveKit Cloud's.
-    fn shutdown(&self, reason: String, user_initiated: bool) {
-        self.inner.end(reason, user_initiated);
+    fn shutdown(&self, reason: String) {
+        self.inner.end(reason, telemetry::ShutdownCause::Application);
+    }
+
+    fn room_disconnected(&self) {
+        self.inner.end("room disconnected".into(), telemetry::ShutdownCause::RoomDisconnected);
     }
 
     fn connected(&self) {
@@ -588,7 +590,8 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
                 None,
                 Vec::new(),
             );
-            self.inner.end("simulation completed".into(), true);
+            self.inner
+                .end("simulation completed".into(), telemetry::ShutdownCause::SimulationCompleted);
         }
     }
 

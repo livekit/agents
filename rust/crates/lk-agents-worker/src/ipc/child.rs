@@ -109,7 +109,7 @@ impl ChildChannel {
                 };
                 let reason =
                     if reason.is_empty() { "parent process shutdown".into() } else { reason };
-                run.end(reason, false);
+                run.end(reason, telemetry::ShutdownCause::ProcessShutdown);
                 Ok(true)
             }
             ToChild::Hello(_) => Ok(true),

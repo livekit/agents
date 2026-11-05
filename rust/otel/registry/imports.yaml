@@ -4,6 +4,8 @@
   "file_format": "definition/2",
   "imports": {
     "metrics": [
+      "gen_ai.client.inference.usage.input_tokens",
+      "gen_ai.client.inference.usage.output_tokens",
       "gen_ai.execute_tool.duration",
       "gen_ai.invoke_agent.duration"
     ]

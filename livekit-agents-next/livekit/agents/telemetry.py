@@ -18,7 +18,7 @@ from livekit import rtc
 
 from . import _core
 from ._generated import semconv
-from ._generated.telemetry import SpanContext as _SpanContext
+from ._generated.telemetry import SpanContext as _SpanContext, TelemetryDiagnostics
 
 __all__ = ["configure", "diagnostics", "set_capture_content"]
 
@@ -45,10 +45,9 @@ def set_capture_content(enabled: bool) -> None:
     _core._core_set_capture_content(enabled)
 
 
-def diagnostics() -> dict[str, int]:
-    """The process's export counters: dropped, failed, conflicts, incomplete_cleanup,
-    swept_spans, abandoned_sessions."""
-    return dict(_core._core_telemetry_diagnostics())
+def diagnostics() -> TelemetryDiagnostics:
+    """The process's export counters."""
+    return _core._core_telemetry_diagnostics()
 
 
 async def _shutdown() -> None:
@@ -111,14 +110,18 @@ class _LoopMonitor:
         self._arm(loop)
 
 
-def _activate(trace_id: int, span_id: int, sampled: bool) -> otel_context.Context:
-    """Makes a framework span current in the running context (HostInvoker's host calls); returns
-    the context it attached."""
-    flags = TraceFlags(TraceFlags.SAMPLED if sampled else TraceFlags.DEFAULT)
-    span = NonRecordingSpan(SpanContext(trace_id, span_id, is_remote=False, trace_flags=flags))
-    context = trace.set_span_in_context(span)
-    otel_context.attach(context)
-    return context
+def _context(span: _SpanContext) -> otel_context.Context:
+    """A context whose current span is the framework span ``span``."""
+    flags = TraceFlags(TraceFlags.SAMPLED if span.sampled else TraceFlags.DEFAULT)
+    ids = SpanContext(span.trace_id, span.span_id, is_remote=False, trace_flags=flags)
+    return trace.set_span_in_context(NonRecordingSpan(ids))
+
+
+def _activate(trace_id: int, span_id: int, sampled: bool) -> None:
+    """Makes a framework span current in the copied context one host call runs in
+    (HostInvoker). Nothing detaches it: the copy ends with the call."""
+    span = _SpanContext(trace_id=trace_id, span_id=span_id, sampled=sampled)
+    otel_context.attach(_context(span))
 
 
 def _current() -> _SpanContext | None:
@@ -177,9 +180,9 @@ class _Span(trace.Span):
 
     def set_status(self, status: Status | trace.StatusCode, description: str | None = None) -> None:
         if isinstance(status, Status):
-            self._core.set_status(status.status_code.value, status.description)
+            self._core.set_status(_STATUS[status.status_code], status.description)
         else:
-            self._core.set_status(status.value, description)
+            self._core.set_status(_STATUS[status], description)
 
     def record_exception(
         self,
@@ -195,6 +198,20 @@ class _Span(trace.Span):
             semconv.EXCEPTION_STACKTRACE: stack,
         }
         self.add_event(semconv.EVENT_EXCEPTION, {**event, **(attributes or {})}, timestamp)
+
+
+_KINDS = {
+    SpanKind.INTERNAL: _core.SpanKind.Internal,
+    SpanKind.SERVER: _core.SpanKind.Server,
+    SpanKind.CLIENT: _core.SpanKind.Client,
+    SpanKind.PRODUCER: _core.SpanKind.Producer,
+    SpanKind.CONSUMER: _core.SpanKind.Consumer,
+}
+_STATUS = {
+    trace.StatusCode.UNSET: _core.StatusCode.Unset,
+    trace.StatusCode.OK: _core.StatusCode.Ok,
+    trace.StatusCode.ERROR: _core.StatusCode.Error,
+}
 
 
 class _Tracer(trace.Tracer):
@@ -216,7 +233,7 @@ class _Tracer(trace.Tracer):
             name,
             self._scope,
             parent=_parent(trace.get_current_span(context).get_span_context()),
-            kind=kind.value,
+            kind=_KINDS[kind],
             start_time=start_time,
             job=_job_id(),
         )
@@ -270,7 +287,7 @@ def _bridge() -> Any:
                 span.name,
                 span.instrumentation_scope.name if span.instrumentation_scope else "",
                 parent=_parent(span.parent),
-                kind=span.kind.value,
+                kind=_KINDS[span.kind],
                 start_time=span.start_time,
                 ids=_parent(ctx),
                 job=_job_id(),
@@ -280,7 +297,7 @@ def _bridge() -> Any:
             for event in span.events:
                 attrs = {k: _value(v) for k, v in (event.attributes or {}).items()}
                 core.add_event(event.name, attrs, event.timestamp)
-            core.set_status(span.status.status_code.value, span.status.description)
+            core.set_status(_STATUS[span.status.status_code], span.status.description)
             core.end(span.end_time)
 
     return Bridge()

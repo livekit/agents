@@ -4,12 +4,12 @@
 use lk_agents_abi::livekit_protocol::agent as proto;
 use lk_agents_abi::telemetry::report::{
     ErrorCounts, RecordingHeader, RecordingOptions, SESSION_SUMMARY_BYTES, SessionReport,
-    SessionSummary,
+    SessionSummary, SummaryOptions,
 };
 use lk_agents_abi::voice::events::CloseReason;
 use lk_agents_abi::{ChatItem, Role, ToDictHost, ToDictOptions};
 use serde::Deserialize;
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 /// The uploaded transcript's bounds: whole items beyond them are dropped from the oldest end.
 pub const TRANSCRIPT_BYTES: usize = 2 * 1024 * 1024;
@@ -100,7 +100,7 @@ fn session_summary(report: &SessionReport, omitted_chat_items: u64) -> String {
         room: report.room.clone(),
         audio_recording_path: report.audio_recording_path.clone(),
         audio_recording_started_at: report.audio_recording_started_at,
-        options: Some(summary_options(&report.options)),
+        options: Some(SummaryOptions::of(&report.options)),
         timestamp: report.timestamp,
         usage: (!report.usage.models.is_empty()).then(|| usage(&report.usage.models)),
         sdk_version: report.sdk_version.clone(),
@@ -146,30 +146,6 @@ fn usage(models: &[lk_agents_abi::usage::ModelUsage]) -> Vec<Value> {
             v
         })
         .collect()
-}
-
-/// 1.8.10's summary options: the interruption, endpointing, tool-step and recording settings.
-fn summary_options(options: &Value) -> Value {
-    let at = |path: &[&str]| {
-        path.iter().try_fold(options, |v, k| v.get(k)).cloned().unwrap_or(Value::Null)
-    };
-    let fields = [
-        ("allow_interruptions", at(&["interruption", "enabled"])),
-        (
-            "discard_audio_if_uninterruptible",
-            at(&["interruption", "discard_audio_if_uninterruptible"]),
-        ),
-        ("min_interruption_duration", at(&["interruption", "min_duration"])),
-        ("min_interruption_words", at(&["interruption", "min_words"])),
-        ("min_endpointing_delay", at(&["endpointing", "min_delay"])),
-        ("max_endpointing_delay", at(&["endpointing", "max_delay"])),
-        ("max_tool_steps", at(&["max_tool_steps"])),
-        ("user_away_timeout", at(&["user_away_timeout"])),
-        ("min_consecutive_speech_delay", at(&["min_consecutive_speech_delay"])),
-        ("preemptive_generation", at(&["preemptive_generation"])),
-        ("recording_options", at(&["recording_options"])),
-    ];
-    Value::Object(fields.into_iter().map(|(k, v)| (k.to_owned(), v)).collect::<Map<_, _>>())
 }
 
 /// What the summary reads of a report event.

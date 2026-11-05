@@ -87,12 +87,29 @@ pub struct EntrypointCancelled;
 #[span(name = "job_shutdown", parent = JobEntrypoint)]
 #[derive(Attrs)]
 pub struct JobShutdown {
-    /// Why the job shut down.
+    /// Why the job shut down: the first reason given.
     #[attr("lk.shutdown.reason")]
     pub reason: String,
-    /// The application asked for the shutdown.
-    #[attr("lk.shutdown.user_initiated")]
-    pub user_initiated: bool,
+    /// What ended the job.
+    #[attr("lk.shutdown.cause")]
+    pub cause: ShutdownCause,
+}
+
+/// What ended a job. The application's own end wins over the session close it causes.
+#[derive(SpanValue, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShutdownCause {
+    /// `JobContext.shutdown()`.
+    Application,
+    /// The simulator disconnected.
+    SimulationCompleted,
+    /// The job's primary session closed.
+    SessionClosed,
+    /// The room disconnected.
+    RoomDisconnected,
+    /// The entrypoint raised.
+    EntrypointCrashed,
+    /// The worker shut the job's process down.
+    ProcessShutdown,
 }
 
 /// The application's `on_session_end` callback, when one is registered.

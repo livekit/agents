@@ -201,7 +201,7 @@ async fn report_preparation_and_upload_share_one_budget_and_shutdown_always_cont
             false,
             "done".into(),
         );
-        run.shutdown("test".into(), true);
+        run.shutdown("test".into());
         let running = tokio::spawn({
             let host = host.clone();
             async move { run.run(host, CallContext::default()).await }
@@ -253,7 +253,7 @@ async fn report_preparation_and_upload_share_one_budget_and_shutdown_always_cont
 }
 
 #[tokio::test]
-async fn a_shutdown_stays_user_initiated_when_the_session_closed_first() {
+async fn the_application_ends_the_job_even_when_its_session_closed_first() {
     use lk_agents_abi::worker::ipc_host::{JobExecution, JobRun as _};
     let run = JobRun::new(
         &ProcessEnv::current_runtime(),
@@ -269,6 +269,8 @@ async fn a_shutdown_stays_user_initiated_when_the_session_closed_first() {
     )
     .unwrap();
     run.session_closed("user_initiated".into());
-    run.end("shutdown".into(), true);
-    assert_eq!(run.inner.shutdown(), ("user_initiated".to_owned(), true));
+    run.end("shutdown".into(), telemetry::ShutdownCause::Application);
+    let st = run.inner.state.lock();
+    assert_eq!(st.shutdown.as_deref(), Some("user_initiated"));
+    assert_eq!(st.cause, Some(telemetry::ShutdownCause::Application));
 }

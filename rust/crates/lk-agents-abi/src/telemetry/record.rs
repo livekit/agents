@@ -104,6 +104,8 @@ impl SpanContext {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct JobKey(pub String);
 
+/// OpenTelemetry's `SpanKind`; the host's spans name theirs as `_core.SpanKind`.
+#[crate::host(native_enum(name = "SpanKind"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SpanKind {
     #[default]

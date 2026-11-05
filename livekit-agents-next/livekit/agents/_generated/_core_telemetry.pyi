@@ -8,7 +8,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Self
 
-from .telemetry import EvaluationRecord, Outcome, ReportTag, SpanContext
+from livekit.agents._core import SpanKind, StatusCode
+
+from .telemetry import EvaluationRecord, Outcome, ReportTag, SpanContext, TelemetryDiagnostics
 
 class TelemetrySpan:
     """A span started through the host's OpenTelemetry API (an application span, or a framework span
@@ -20,13 +22,12 @@ class TelemetrySpan:
         scope: str,
         *,
         parent: SpanContext | None = None,
-        kind: int = 0,
+        kind: SpanKind | None = None,
         start_time: int | None = None,
         ids: SpanContext | None = None,
         job: str | None = None,
     ) -> Self:
-        """`parent`: the current span, `None` for a new trace. `kind`: the OpenTelemetry `SpanKind`
-        value. `ids`: a span the host already started (an SDK span the bridge forwards). `job`: the
+        """`parent`: the current span, `None` for a new trace. `ids`: a span the host already started (an SDK span the bridge forwards). `job`: the
         job it belongs to.
         """
     @property
@@ -41,8 +42,8 @@ class TelemetrySpan:
         attributes: Mapping[str, object] | None = None,
         timestamp: int | None = None,
     ) -> None: ...
-    def set_status(self, code: int, description: str | None = None) -> None:
-        """`code`: the OpenTelemetry `StatusCode` value."""
+    def set_status(self, code: StatusCode, description: str | None = None) -> None:
+        """`description` is kept only with `Error`; `Ok` is final."""
     def update_name(self, name: str) -> None: ...
     def end(self, end_time: int | None = None) -> None:
         """Ends the span; later calls do nothing."""
@@ -61,10 +62,7 @@ def _core_telemetry_configure(
 ) -> None:
     """Replaces the application endpoint; arguments override the environment."""
 
-def _core_telemetry_diagnostics() -> dict[str, int]:
-    """The export counters: `dropped`, `failed`, `conflicts`, `incomplete_cleanup`, `swept_spans`,
-    `abandoned_sessions`.
-    """
+def _core_telemetry_diagnostics() -> TelemetryDiagnostics: ...
 
 def _core_telemetry_conflict() -> None:
     """Counts a configuration conflict the host found (a tracer provider it cannot bridge)."""

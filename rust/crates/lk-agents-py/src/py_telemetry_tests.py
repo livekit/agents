@@ -75,11 +75,12 @@ def test_the_bridge_forwards_an_sdk_span_with_its_ids() -> None:
 
 
 def test_diagnostics_count() -> None:
-    assert set(telemetry.diagnostics()) == {
-        "dropped",
-        "failed",
-        "conflicts",
-        "incomplete_cleanup",
-        "swept_spans",
-        "abandoned_sessions",
-    }
+    d = telemetry.diagnostics()
+    assert min(
+        d.dropped,
+        d.failed,
+        d.conflicts,
+        d.incomplete_cleanup,
+        d.swept_spans,
+        d.abandoned_sessions,
+    ) >= 0

@@ -845,16 +845,55 @@
           "brief": "The room input filters participants by identity or kind."
         },
         {
+          "id": "lk.shutdown.cause",
+          "type": {
+            "members": [
+              {
+                "id": "application",
+                "value": "application",
+                "brief": "application",
+                "stability": "development"
+              },
+              {
+                "id": "simulation_completed",
+                "value": "simulation_completed",
+                "brief": "simulation_completed",
+                "stability": "development"
+              },
+              {
+                "id": "session_closed",
+                "value": "session_closed",
+                "brief": "session_closed",
+                "stability": "development"
+              },
+              {
+                "id": "room_disconnected",
+                "value": "room_disconnected",
+                "brief": "room_disconnected",
+                "stability": "development"
+              },
+              {
+                "id": "entrypoint_crashed",
+                "value": "entrypoint_crashed",
+                "brief": "entrypoint_crashed",
+                "stability": "development"
+              },
+              {
+                "id": "process_shutdown",
+                "value": "process_shutdown",
+                "brief": "process_shutdown",
+                "stability": "development"
+              }
+            ]
+          },
+          "stability": "development",
+          "brief": "What ended the job."
+        },
+        {
           "id": "lk.shutdown.reason",
           "type": "string",
           "stability": "development",
-          "brief": "Why the job shut down."
-        },
-        {
-          "id": "lk.shutdown.user_initiated",
-          "type": "boolean",
-          "stability": "development",
-          "brief": "The application asked for the shutdown."
+          "brief": "Why the job shut down: the first reason given."
         }
       ]
     },
@@ -1778,7 +1817,7 @@
           "requirement_level": "recommended"
         },
         {
-          "ref": "gen_ai.token.type",
+          "ref": "gen_ai.token.modality",
           "requirement_level": "recommended"
         },
         {

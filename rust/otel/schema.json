@@ -828,9 +828,17 @@
           "required": true
         },
         {
-          "key": "lk.shutdown.user_initiated",
-          "type": "boolean",
-          "required": true
+          "key": "lk.shutdown.cause",
+          "type": "string",
+          "required": true,
+          "members": [
+            "application",
+            "simulation_completed",
+            "session_closed",
+            "room_disconnected",
+            "entrypoint_crashed",
+            "process_shutdown"
+          ]
         }
       ],
       "end": [],
@@ -3997,6 +4005,122 @@
   ],
   "metrics": [
     {
+      "name": "gen_ai.client.inference.usage.input_tokens",
+      "brief": "Input tokens of each LLM response, one measurement per modality.",
+      "kind": "counter",
+      "unit": "{token}",
+      "registry": "otel",
+      "labels": [
+        {
+          "key": "gen_ai.operation.name",
+          "type": "string",
+          "required": true,
+          "registry": "otel",
+          "members": [
+            "chat",
+            "generate_content",
+            "execute_tool",
+            "invoke_agent",
+            "invoke_workflow",
+            "create_agent"
+          ],
+          "label": true
+        },
+        {
+          "key": "gen_ai.provider.name",
+          "type": "string",
+          "required": true,
+          "registry": "otel",
+          "label": true
+        },
+        {
+          "key": "gen_ai.request.model",
+          "type": "string",
+          "required": true,
+          "registry": "otel",
+          "label": true
+        },
+        {
+          "key": "gen_ai.response.model",
+          "type": "string",
+          "required": false,
+          "registry": "otel",
+          "label": true
+        },
+        {
+          "key": "gen_ai.token.modality",
+          "type": "string",
+          "required": true,
+          "registry": "otel",
+          "members": [
+            "text",
+            "image",
+            "audio",
+            "unknown"
+          ],
+          "label": true
+        }
+      ]
+    },
+    {
+      "name": "gen_ai.client.inference.usage.output_tokens",
+      "brief": "Output tokens of each LLM response, one measurement per modality.",
+      "kind": "counter",
+      "unit": "{token}",
+      "registry": "otel",
+      "labels": [
+        {
+          "key": "gen_ai.operation.name",
+          "type": "string",
+          "required": true,
+          "registry": "otel",
+          "members": [
+            "chat",
+            "generate_content",
+            "execute_tool",
+            "invoke_agent",
+            "invoke_workflow",
+            "create_agent"
+          ],
+          "label": true
+        },
+        {
+          "key": "gen_ai.provider.name",
+          "type": "string",
+          "required": true,
+          "registry": "otel",
+          "label": true
+        },
+        {
+          "key": "gen_ai.request.model",
+          "type": "string",
+          "required": true,
+          "registry": "otel",
+          "label": true
+        },
+        {
+          "key": "gen_ai.response.model",
+          "type": "string",
+          "required": false,
+          "registry": "otel",
+          "label": true
+        },
+        {
+          "key": "gen_ai.token.modality",
+          "type": "string",
+          "required": true,
+          "registry": "otel",
+          "members": [
+            "text",
+            "image",
+            "audio",
+            "unknown"
+          ],
+          "label": true
+        }
+      ]
+    },
+    {
       "name": "gen_ai.client.operation.duration",
       "brief": "Duration of each LLM and realtime response. Declared here: weaver cannot import it from the GenAI registry while semconv v1.44.0 keeps an excluded deprecated copy.",
       "kind": "histogram",
@@ -4116,78 +4240,6 @@
         20.48,
         40.96,
         81.92
-      ]
-    },
-    {
-      "name": "gen_ai.client.token.usage",
-      "brief": "Input and output tokens of each LLM and realtime response. Deprecated upstream; declared as emitted.",
-      "kind": "histogram",
-      "unit": "{token}",
-      "registry": "agents",
-      "labels": [
-        {
-          "key": "gen_ai.operation.name",
-          "type": "string",
-          "required": true,
-          "registry": "otel",
-          "members": [
-            "chat",
-            "generate_content",
-            "execute_tool",
-            "invoke_agent",
-            "invoke_workflow",
-            "create_agent"
-          ],
-          "label": true
-        },
-        {
-          "key": "gen_ai.provider.name",
-          "type": "string",
-          "required": true,
-          "registry": "otel",
-          "label": true
-        },
-        {
-          "key": "gen_ai.request.model",
-          "type": "string",
-          "required": true,
-          "registry": "otel",
-          "label": true
-        },
-        {
-          "key": "gen_ai.response.model",
-          "type": "string",
-          "required": false,
-          "registry": "otel",
-          "label": true
-        },
-        {
-          "key": "gen_ai.token.type",
-          "type": "string",
-          "required": true,
-          "registry": "otel",
-          "members": [
-            "input",
-            "output"
-          ],
-          "label": true
-        }
-      ],
-      "bounds": [
-        1.0,
-        4.0,
-        16.0,
-        64.0,
-        256.0,
-        1024.0,
-        4096.0,
-        16384.0,
-        65536.0,
-        262144.0,
-        1048576.0,
-        4194304.0,
-        16777216.0,
-        67108864.0
       ]
     },
     {

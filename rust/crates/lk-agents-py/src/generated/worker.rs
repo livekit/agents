@@ -736,20 +736,20 @@ impl JobRun {
         Ok(())
     }
 
-    #[pyo3(signature = (reason, user_initiated))]
-    fn shutdown(
-        &self,
-        py: Python<'_>,
-        reason: ::std::string::String,
-        user_initiated: bool,
-    ) -> PyResult<()> {
+    /// The application ends the job.
+    #[pyo3(signature = (reason))]
+    fn shutdown(&self, py: Python<'_>, reason: ::std::string::String) -> PyResult<()> {
         crate::py_calls::check_pid()?;
         py.detach(|| {
-            <JobRunImpl as ::lk_agents_abi::worker::ipc_host::JobRun>::shutdown(
-                &self.0,
-                reason,
-                user_initiated,
-            )
+            <JobRunImpl as ::lk_agents_abi::worker::ipc_host::JobRun>::shutdown(&self.0, reason)
+        });
+        Ok(())
+    }
+
+    fn room_disconnected(&self, py: Python<'_>) -> PyResult<()> {
+        crate::py_calls::check_pid()?;
+        py.detach(|| {
+            <JobRunImpl as ::lk_agents_abi::worker::ipc_host::JobRun>::room_disconnected(&self.0)
         });
         Ok(())
     }

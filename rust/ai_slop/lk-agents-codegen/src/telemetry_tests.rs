@@ -357,6 +357,12 @@ const NODE_REQUEST_KEYS: [(&str, &str); 4] = [
     ("tts_node", "gen_ai.request.model"),
     ("tts_node", "gen_ai.provider.name"),
 ];
+/// 1.8.10 keys replaced on purpose: `lk.shutdown.cause` names what ended the job, the
+/// application among them.
+const RETIRED_KEYS: [(&str, &str); 1] = [("job_shutdown", "lk.shutdown.user_initiated")];
+/// 1.8.10 metrics the GenAI registry removed (upstream #374): the
+/// `gen_ai.client.inference.usage.{input,output}_tokens` counters replace them.
+const RETIRED_METRICS: [&str; 1] = ["gen_ai.client.token.usage"];
 /// Log attributes Python's logging handler added in 1.8.10; report records do not carry them.
 const LOGGING_HANDLER: [&str; 1] = ["logger.name"];
 
@@ -404,6 +410,7 @@ fn declarations_cover_the_1_8_10_wire() {
             if stamped.contains(&key.as_str())
                 || LOGGING_HANDLER.contains(&key.as_str())
                 || NODE_REQUEST_KEYS.contains(&(at, key.as_str()))
+                || RETIRED_KEYS.contains(&(at, key.as_str()))
             {
                 continue;
             }
@@ -455,6 +462,9 @@ fn declarations_cover_the_1_8_10_wire() {
         }
     }
     for (name, metric) in baseline["metrics"].as_object().expect("metrics") {
+        if RETIRED_METRICS.contains(&name.as_str()) {
+            continue;
+        }
         let Some(d) = r.metrics.iter().find(|m| &m.name == name) else {
             missing.push(format!("metric {name} is not declared"));
             continue;

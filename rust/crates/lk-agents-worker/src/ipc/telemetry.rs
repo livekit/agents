@@ -25,7 +25,7 @@ pub(crate) use lk_agents_abi::telemetry::policy::{
 pub(crate) use lk_agents_abi::telemetry::report::RecordingOptions;
 pub(crate) use lk_agents_abi::telemetry::spans::job::{
     EntrypointCancelled, EntrypointReturned, JobEntrypoint, JobShutdown, OnSessionEnd,
-    RoomDisconnect, SessionEndUpload, ShutdownCallback,
+    RoomDisconnect, SessionEndUpload, ShutdownCallback, ShutdownCause,
 };
 pub(crate) use lk_agents_net::telemetry::otlp::CloudRecording;
 pub(crate) use lk_agents_net::telemetry::session_report::{self, ReportOutputs};
@@ -147,10 +147,9 @@ pub(crate) fn start_job(
     }
     lk_agents_net::telemetry::event_at(&span, EntrypointStarted, nanos(started));
     // `JobState.started_at`: unix nanoseconds.
-    if let Some(at) = job.state.as_ref().and_then(|s| u64::try_from(s.started_at).ok()) {
-        if at > 0 {
-            lk_agents_net::telemetry::event_at(&span, JobStartedOnServer, at);
-        }
+    let started_on_server = job.state.as_ref().and_then(|s| u64::try_from(s.started_at).ok());
+    if let Some(at) = started_on_server.filter(|at| *at > 0) {
+        lk_agents_net::telemetry::event_at(&span, JobStartedOnServer, at);
     }
     JobTrace { job: Job { key, simulation: simulation(&job) }, span }
 }

@@ -211,7 +211,7 @@ class _JobProc:
             api_key=self._server_env.get("LIVEKIT_API_KEY") or "",
             api_secret=self._server_env.get("LIVEKIT_API_SECRET") or "",
         )
-        self._room.on("disconnected", lambda *_: self._run.shutdown("room disconnected", False))
+        self._room.on("disconnected", lambda *_: self._run.room_disconnected())
         self._job_ctx = JobContext(
             proc=self._job_proc,
             info=info,

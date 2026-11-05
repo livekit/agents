@@ -327,7 +327,9 @@ class VoiceSession(SessionCommands, rtc.EventEmitter[EventTypes], Generic[Contex
         one) with ``agent`` driving."""
         from .._generated.session_owner import SessionJobInfo
         from ..job import get_job_context
-        from ..telemetry import _activate
+        from opentelemetry import context as otel_context
+
+        from ..telemetry import _context
         from ._session_bindings import SessionHost
 
         host = SessionHost(self, agent, room, room_options, chat_ctx)
@@ -344,9 +346,11 @@ class VoiceSession(SessionCommands, rtc.EventEmitter[EventTypes], Generic[Contex
         )
         await self._owner.start(host.storage, host, job=job)
         # the session's span is the caller's current span from here: the entrypoint's own spans
-        # and the job's RPC handlers nest under it
+        # and the job's RPC handlers nest under it. It stays attached for the rest of the
+        # entrypoint, which outlives the session's start; the job's context ends with the job.
         if (span := self._owner.span) is not None:
-            self._root_span_context = _activate(span.trace_id, span.span_id, span.sampled)
+            self._root_span_context = _context(span)
+            otel_context.attach(self._root_span_context)
 
     async def _start_ivr_detection(self, transcript: str | None = None) -> None:
         await self._adapter._start_ivr_detection(transcript)

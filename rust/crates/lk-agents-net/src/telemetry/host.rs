@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 
 use lk_agents_abi::telemetry::decl::json;
+use lk_agents_abi::telemetry::host::StatusCode;
 use lk_agents_abi::telemetry::record::{
     EventRecord, JobKey, Key, KeyValues, Record, SpanContext, SpanKind, SpanRecord, Status,
 };
@@ -43,7 +44,7 @@ impl lk_agents_abi::telemetry::host::HostSpan for HostSpan {
         name: String,
         scope: String,
         parent: Option<SpanContext>,
-        kind: i64,
+        kind: Option<SpanKind>,
         start_time: Option<u64>,
         ids: Option<SpanContext>,
         job: Option<String>,
@@ -54,18 +55,10 @@ impl lk_agents_abi::telemetry::host::HostSpan for HostSpan {
             Some(ids) => ids,
             None => tracer.root().continuing(parent).child_context(),
         };
-        // OpenTelemetry's SpanKind values; the API has no other.
-        let kind = match kind {
-            1 => SpanKind::Server,
-            2 => SpanKind::Client,
-            3 => SpanKind::Producer,
-            4 => SpanKind::Consumer,
-            _ => SpanKind::Internal,
-        };
         let open = Open {
             name,
             scope,
-            kind,
+            kind: kind.unwrap_or_default(),
             parent: parent.map(|p| p.span_id),
             start: start_time.unwrap_or_else(|| tracer.now_nanos()),
             attributes: KeyValues::new(),
@@ -110,18 +103,14 @@ impl lk_agents_abi::telemetry::host::HostSpan for HostSpan {
         }
     }
 
-    fn set_status(&self, code: i64, description: Option<String>) {
-        // OpenTelemetry's StatusCode: UNSET, OK, ERROR. OK is final.
-        if let Some(open) = self.open.lock().as_mut() {
-            if open.status == Status::Ok {
-                return;
-            }
-            open.status = match code {
-                1 => Status::Ok,
-                2 => Status::Error(description.unwrap_or_default()),
-                _ => Status::Unset,
-            };
-        }
+    fn set_status(&self, code: StatusCode, description: Option<String>) {
+        let mut open = self.open.lock();
+        let Some(open) = open.as_mut().filter(|o| o.status != Status::Ok) else { return };
+        open.status = match code {
+            StatusCode::Ok => Status::Ok,
+            StatusCode::Error => Status::Error(description.unwrap_or_default()),
+            StatusCode::Unset => Status::Unset,
+        };
     }
 
     fn update_name(&self, name: String) {

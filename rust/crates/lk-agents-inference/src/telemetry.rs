@@ -11,7 +11,8 @@ use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::metrics::base::{LlmMetrics, Metadata, TtsMetrics};
 use lk_agents_abi::telemetry::decl::{Content, Json, Label, Measured, Seconds};
 use lk_agents_abi::telemetry::instruments::{
-    GenAiLabels, GenAiOperationDuration, GenAiTokenUsage, ModelLabels, TokenType,
+    GenAiInputTokens, GenAiLabels, GenAiOperationDuration, GenAiOutputTokens, ModelLabels,
+    TokenModality,
 };
 use lk_agents_abi::telemetry::spans::agent_turn::ResponseFunctionCall;
 use lk_agents_abi::telemetry::spans::common::GenAiOperation;
@@ -256,14 +257,16 @@ impl LlmTrace {
             &GenAiOperationDuration { operation: labels() },
             seconds(self.started, now),
         );
-        for (token_type, count) in
-            [(TokenType::Input, usage.input_tokens), (TokenType::Output, usage.output_tokens)]
-        {
-            lk_agents_net::telemetry::measure(
-                cx,
-                &GenAiTokenUsage { operation: labels(), token_type },
-                count,
-            );
+        let input = [usage.input_text_tokens, usage.input_image_tokens, usage.input_audio_tokens];
+        for (modality, count) in by_modality(usage.input_tokens, input) {
+            let labels = GenAiInputTokens { operation: labels(), modality };
+            lk_agents_net::telemetry::measure(cx, &labels, count);
+        }
+        let output =
+            [usage.output_text_tokens, usage.output_image_tokens, usage.output_audio_tokens];
+        for (modality, count) in by_modality(usage.output_tokens, output) {
+            let labels = GenAiOutputTokens { operation: labels(), modality };
+            lk_agents_net::telemetry::measure(cx, &labels, count);
         }
         let summary = metrics.as_ref().map(|m| Json(LlmMetricsSummary::from(m)));
         let finish = gen_ai::finish_reason(!self.calls.is_empty(), interrupted);
@@ -470,6 +473,20 @@ impl Drop for TtsTrace {
             span.end(None, self.failure.as_ref());
         }
     }
+}
+
+/// `total` tokens split as the GenAI registry asks: each reported modality, the rest (or a `0`
+/// when no usage arrived) under `unknown`.
+fn by_modality(
+    total: u64,
+    [text, image, audio]: [Option<u64>; 3],
+) -> impl Iterator<Item = (TokenModality, u64)> {
+    let known =
+        [(TokenModality::Text, text), (TokenModality::Image, image), (TokenModality::Audio, audio)];
+    let sum: u64 = known.iter().filter_map(|(_, n)| *n).sum();
+    let rest =
+        (sum == 0 || sum < total).then(|| (TokenModality::Unknown, total.saturating_sub(sum)));
+    known.into_iter().filter_map(|(m, n)| n.filter(|n| *n > 0).map(|n| (m, n))).chain(rest)
 }
 
 #[cfg(test)]

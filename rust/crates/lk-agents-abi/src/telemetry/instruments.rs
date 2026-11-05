@@ -310,27 +310,33 @@ pub enum AudioConsumer {
     Duplex,
 }
 
-/// Input and output tokens of each LLM and realtime response. Deprecated upstream; declared as
-/// emitted.
-#[metric(
-    name = "gen_ai.client.token.usage",
-    kind = Histogram,
-    unit = "{token}",
-    bounds = TOKEN_BOUNDS
-)]
+/// Input tokens of each LLM response, one measurement per modality.
+#[metric(name = otel::GEN_AI_CLIENT_INFERENCE_USAGE_INPUT_TOKENS, kind = Counter, unit = "{token}")]
 #[derive(Attrs)]
-pub struct GenAiTokenUsage {
+pub struct GenAiInputTokens {
     #[attrs]
     pub operation: GenAiLabels,
-    /// `input` or `output`. Deprecated upstream; declared as emitted.
-    #[attr(otel::GEN_AI_TOKEN_TYPE)]
-    pub token_type: TokenType,
+    #[attr(otel::GEN_AI_TOKEN_MODALITY)]
+    pub modality: TokenModality,
+}
+
+/// Output tokens of each LLM response, one measurement per modality.
+#[metric(name = otel::GEN_AI_CLIENT_INFERENCE_USAGE_OUTPUT_TOKENS, kind = Counter, unit = "{token}")]
+#[derive(Attrs)]
+pub struct GenAiOutputTokens {
+    #[attrs]
+    pub operation: GenAiLabels,
+    #[attr(otel::GEN_AI_TOKEN_MODALITY)]
+    pub modality: TokenModality,
 }
 
 #[derive(super::decl::SpanValue, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TokenType {
-    Input,
-    Output,
+pub enum TokenModality {
+    Text,
+    Image,
+    Audio,
+    /// Tokens the provider did not break down by modality.
+    Unknown,
 }
 
 /// Duration of each LLM and realtime response. Declared here: weaver cannot import it from the

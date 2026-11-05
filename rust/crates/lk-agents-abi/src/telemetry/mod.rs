@@ -101,12 +101,15 @@ pub mod semconv {
         pub const GEN_AI_USAGE_IMAGE_CACHE_READ_INPUT_TOKENS: &str =
             "gen_ai.usage.image.cache_read.input_tokens";
         pub const GEN_AI_WORKFLOW_NAME: &str = "gen_ai.workflow.name";
-        /// `input` or `output` on `gen_ai.client.token.usage`. Deprecated upstream; as emitted.
-        pub const GEN_AI_TOKEN_TYPE: &str = "gen_ai.token.type";
+        pub const GEN_AI_TOKEN_MODALITY: &str = "gen_ai.token.modality";
 
         /// Metrics imported from the GenAI registry.
         pub const GEN_AI_EXECUTE_TOOL_DURATION: &str = "gen_ai.execute_tool.duration";
         pub const GEN_AI_INVOKE_AGENT_DURATION: &str = "gen_ai.invoke_agent.duration";
+        pub const GEN_AI_CLIENT_INFERENCE_USAGE_INPUT_TOKENS: &str =
+            "gen_ai.client.inference.usage.input_tokens";
+        pub const GEN_AI_CLIENT_INFERENCE_USAGE_OUTPUT_TOKENS: &str =
+            "gen_ai.client.inference.usage.output_tokens";
     }
 }
 

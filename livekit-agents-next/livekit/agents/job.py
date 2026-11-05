@@ -725,7 +725,7 @@ class JobContext:
         )
 
     def shutdown(self, reason: str = "user requested") -> None:
-        self._run.shutdown(reason or "user requested", True)
+        self._run.shutdown(reason or "user requested")
 
     def add_participant_entrypoint(
         self,
