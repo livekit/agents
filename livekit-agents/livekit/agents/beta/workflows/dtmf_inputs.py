@@ -32,7 +32,8 @@ class GetDtmfResult:
 class GetDtmfTask(AgentTask[GetDtmfResult]):
     """A task to collect DTMF inputs from the user.
 
-    Return a string of DTMF inputs if collected successfully, otherwise None.
+    Completes with a ``GetDtmfResult`` whose ``user_input`` holds the collected digits,
+    or fails with a ``ToolError`` if they can't be collected.
     """
 
     def __init__(

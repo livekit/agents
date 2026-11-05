@@ -176,7 +176,7 @@ class APIConnectOptions:
         """
         Return the interval for the given number of retries.
 
-        The first retry is immediate, and then uses specified retry_interval
+        The first retry waits 0.1 seconds, and then uses specified retry_interval
         """
         if num_retries == 0:
             return 0.1

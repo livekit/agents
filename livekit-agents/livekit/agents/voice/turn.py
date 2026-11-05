@@ -122,10 +122,12 @@ class EndpointingOptions(TypedDict, total=False):
     """Endpointing mode. ``"fixed"`` for fixed delay, ``"dynamic"`` for dynamic delay. Defaults to ``"fixed"``."""
     min_delay: float
     """Minimum time (s) since last detected speech before declaring the
-    user's turn complete. Defaults to ``0.5``."""
+    user's turn complete. Defaults to ``0.5``, or ``0.3`` with a streaming
+    turn detector such as the default ``inference.TurnDetector``."""
     max_delay: float
     """Maximum time (s) the agent waits before terminating the turn.
-    Defaults to ``3.0``."""
+    Defaults to ``3.0``, or ``2.5`` with a streaming turn detector such as the
+    default ``inference.TurnDetector``."""
     alpha: float
     """Exponential moving average coefficient for dynamic endpointing.
     The higher the value, the more weight is given to the history.
@@ -277,7 +279,9 @@ class TurnHandlingOptions(TypedDict, total=False):
     """Strategy for deciding when the user has finished speaking.
     Absent means the session auto-selects."""
     endpointing: EndpointingOptions
-    """Endpointing configuration. Defaults to ``{"min_delay": 0.5, "max_delay": 3.0}``."""
+    """Endpointing configuration. Defaults to ``{"min_delay": 0.5, "max_delay": 3.0}``,
+    or ``{"min_delay": 0.3, "max_delay": 2.5}`` with a streaming turn detector such as
+    the default ``inference.TurnDetector``."""
     interruption: InterruptionOptions
     """Interruption handling configuration. Use ``{"enabled": False}`` to disable."""
     preemptive_generation: PreemptiveGenerationOptions

@@ -492,10 +492,15 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             keyterms_options (KeytermsOptions, optional): Deprecated, use ``stt_context_options``
                 instead. Its ``keyterms``/``keyterm_detection`` keys map onto the new option.
             max_endpointing_delay (float): Maximum time-in-seconds the agent
-                will wait before terminating the turn. Default ``3.0`` s.
-            max_tool_steps (int): Maximum consecutive tool calls per LLM turn.
-                Not enforced for realtime models that generate the tool reply
-                server-side. Default ``3``.
+                will wait before terminating the turn. Default ``3.0`` s, or ``2.5`` s
+                with a streaming turn detector such as the default
+                ``inference.TurnDetector``.
+            max_tool_steps (int): Maximum number of follow-up LLM generations
+                in one turn that may call tools. With the default, up to four
+                generations can call tools; the next is generated with
+                ``tool_choice="none"`` so the model answers in text. Not enforced
+                for realtime models that generate the tool reply server-side.
+                Default ``3``.
             video_sampler (_VideoSampler, optional): Uses
                 :class:`VoiceActivityVideoSampler` when *NOT_GIVEN*; that sampler
                 captures video at ~1 fps while the user is speaking and ~0.3 fps
