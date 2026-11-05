@@ -289,6 +289,7 @@ from ._generated._core_voice import (
     _core_RoomSession as _core_RoomSession,
     _core_SessionBindings as _core_SessionBindings,
     _core_SessionOwner as _core_SessionOwner,
+    _core_SessionState as _core_SessionState,
     _core_SessionStorage as _core_SessionStorage,
     _core_VoiceRun as _core_VoiceRun,
     amd_constants as amd_constants,

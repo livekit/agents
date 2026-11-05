@@ -227,8 +227,8 @@ def initialize(
     session._options.update_providers(
         {"stt": session._stt, "tts": session._tts, "vad": session._vad}
     )
-    # an `update_agent` the core has not answered yet: the agent the session is handing to
-    session._chat_ctx = ChatContext.empty()
+    # `update_agent(chat_ctx=)` before `start()`: the history the session starts on
+    session._start_chat_ctx = None
     session._agent_state = "initializing"
     session._user_state = "listening"
     session._input = io.AgentInput(session)
@@ -430,7 +430,7 @@ class SessionAdapter:
             frame = UpdateAgentArgs(**fields)
         session._owner.update_agent(agent, frame)
         if session._core is None and chat_ctx is not None:
-            session._chat_ctx = chat_ctx.copy()
+            session._start_chat_ctx = chat_ctx.copy()
 
     def say(
         self,
@@ -644,8 +644,8 @@ class SessionHost:
             room = None
         elif not is_given(room):
             room = job_ctx.room if job_ctx is not None else None
-        if chat_ctx is not None:
-            session._chat_ctx = chat_ctx.copy()
+        if chat_ctx is None:
+            chat_ctx = session._start_chat_ctx
         options = room_options if is_given(room_options) else RoomOptions()
         session._audio_input_options = options.get_audio_input_options()
         text_input = options.get_text_input_options()
@@ -677,8 +677,6 @@ class SessionHost:
             session._thread = Thread(
                 _StorageHandle(namespace), storage.thread_id, agent_name=agent.name
             )
-        if (saved := storage.history) is not None:
-            session._chat_ctx = ChatContext(list(saved))
 
         hooks = _AgentHooks(session)
         frame = session._frame(agent)
@@ -698,7 +696,8 @@ class SessionHost:
             dynamic_instructions=frame["dynamic_instructions"],
             agent=frame["agent"],
             agent_host=frame["agent_host"],
-            chat_ctx=session._chat_ctx.items,
+            # the native owner starts a stored call on its lane's history instead
+            chat_ctx=chat_ctx.items if chat_ctx is not None else [],
             stt=frame["stt"],
             vad=_bindings.core_leg(session._vad),
             llm=None if isinstance(model, llm.RealtimeModel) else model,

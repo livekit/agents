@@ -122,6 +122,7 @@
     "_core_RunStream",
     "_core_SessionBindings",
     "_core_SessionOwner",
+    "_core_SessionState",
     "_core_SessionStorage",
     "_core_StreamEvents",
     "_core_StreamText",

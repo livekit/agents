@@ -196,12 +196,14 @@ pub trait Implementations: 'static {
             Speech = Self::SpeechHandle,
         >;
     type SessionStart: ::lk_agents_abi::voice::session_effects::SessionStart;
+    type SessionState: ::lk_agents_abi::voice::session_effects::SessionState;
     type InterruptionGateFunctions: ::lk_agents_abi::voice::session_options::InterruptionGateFunctions;
     type SessionPreparation: ::lk_agents_abi::voice::session_owner::SessionPreparation;
     type SessionOwner: ::lk_agents_abi::voice::session_owner::SessionOwner<
             Options = Self::SessionOptions,
             Storage = Self::SessionStorage,
             Session = Self::VoiceSession,
+            State = Self::SessionState,
         >;
     type SessionStorage: ::lk_agents_abi::voice::session_storage::SessionStorage<
             Namespace = Self::Storage,
@@ -463,6 +465,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(voice::default_session_models, m)?)?;
     m.add_function(wrap_pyfunction!(voice::user_turn_exceeded_reply, m)?)?;
     m.add_function(wrap_pyfunction!(voice::plan_session_start, m)?)?;
+    m.add_class::<voice::CoreSessionState>()?;
     m.add_function(wrap_pyfunction!(voice::rt_server_turn_detection, m)?)?;
     m.add_function(wrap_pyfunction!(voice::resolve_interruption_detector, m)?)?;
     m.add_class::<voice::CoreSessionBindings>()?;
@@ -579,6 +582,19 @@ impl NativeToHost for dyn ::lk_agents_abi::voice::rtc::TextStreamIngress {
         match native.downcast::<<crate::generated::implementations::Selected as Implementations>::TextStreamSender>() {
             Ok(native) => Ok(Py::new(py, voice::TextStreamSender(native))?.into_bound(py).into_any()),
             Err(_) => Err(::pyo3::exceptions::PyTypeError::new_err("this `::lk_agents_abi::voice::rtc::TextStreamIngress` is no declared class")),
+        }
+    }
+}
+
+impl NativeToHost for dyn ::lk_agents_abi::voice::session_effects::DeliveredState {
+    fn to_host<'py>(
+        py: Python<'py>,
+        native: ::std::sync::Arc<Self>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let native: ::std::sync::Arc<dyn ::std::any::Any + Send + Sync> = native;
+        match native.downcast::<<crate::generated::implementations::Selected as Implementations>::SessionState>() {
+            Ok(native) => Ok(Py::new(py, voice::CoreSessionState(native))?.into_bound(py).into_any()),
+            Err(_) => Err(::pyo3::exceptions::PyTypeError::new_err("this `::lk_agents_abi::voice::session_effects::DeliveredState` is no declared class")),
         }
     }
 }

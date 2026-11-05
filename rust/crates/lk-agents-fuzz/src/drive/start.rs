@@ -527,7 +527,19 @@ pub(super) const GUEST: &str = "guest";
 struct WireSink;
 
 impl SessionEvents for WireSink {
-    fn event(&self, _wire: lk_agents_abi::voice::events::HostWire) {}
+    fn event(
+        &self,
+        _wire: lk_agents_abi::voice::events::HostWire,
+        _state: std::sync::Arc<dyn lk_agents_abi::voice::session_effects::DeliveredState>,
+    ) {
+    }
+
+    fn history_items(
+        &self,
+        _items: Vec<lk_agents_abi::ChatItem>,
+    ) -> Result<Vec<lk_agents_abi::HostRef>, lk_agents_abi::errors::HostError> {
+        Ok(Vec::new())
+    }
 }
 
 pub(super) fn turn_detection(mode: TurnMode) -> Option<TurnDetection> {

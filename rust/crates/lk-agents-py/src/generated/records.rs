@@ -13375,10 +13375,21 @@ pub mod session_wire {
         py: Python<'py>,
         value: ::lk_agents_abi::voice::events::ItemAddedWire,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let ::lk_agents_abi::voice::events::ItemAddedWire { item, agent, visibility, run } = value;
+        let ::lk_agents_abi::voice::events::ItemAddedWire {
+            item: _,
+            host_item,
+            agent,
+            visibility,
+            run,
+        } = value;
         let kwargs = ::pyo3::types::PyDict::new(py);
-        kwargs
-            .set_item("item", crate::generated::records::chat_items::chat_item_to_py(py, item)?)?;
+        kwargs.set_item(
+            "host_item",
+            match host_item {
+                None => py.None().into_bound(py),
+                Some(x) => crate::py_objects::object_ref_to_py(py, x)?,
+            },
+        )?;
         kwargs.set_item("agent", ::pyo3::IntoPyObjectExt::into_bound_py_any(agent, py)?)?;
         kwargs
             .set_item("visibility", ::pyo3::IntoPyObjectExt::into_bound_py_any(visibility, py)?)?;
@@ -13886,19 +13897,8 @@ pub mod session_wire {
         py: Python<'py>,
         value: ::lk_agents_abi::voice::events::HistoryReloadedWire,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let ::lk_agents_abi::voice::events::HistoryReloadedWire { items } = value;
+        let ::lk_agents_abi::voice::events::HistoryReloadedWire { items: _ } = value;
         let kwargs = ::pyo3::types::PyDict::new(py);
-        kwargs.set_item(
-            "items",
-            ::pyo3::types::PyList::new(
-                py,
-                items
-                    .into_iter()
-                    .map(|x| crate::generated::records::chat_items::chat_item_to_py(py, x))
-                    .collect::<PyResult<Vec<_>>>()?,
-            )?
-            .into_any(),
-        )?;
         crate::py_calls::call(
             HISTORY_RELOADED_WIRE
                 .import(py, "livekit.agents._generated.session_wire", "HistoryReloadedWire")?

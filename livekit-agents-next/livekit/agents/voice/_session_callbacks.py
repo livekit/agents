@@ -50,7 +50,6 @@ from .._generated.session_dispatch import IGNORED_EVENTS, MIRRORED_STATES, PUBLI
 from .._generated.session_wire import (
     CloseWire,
     DeleteRoomRequested,
-    HistoryReloadedWire,
     HostWire,
     ItemAddedWire,
     MetricsCollectedWire,
@@ -420,18 +419,10 @@ def _on_speech_done(self: VoiceSession[Any], wire: SpeechDoneWire) -> None:
         handle._mark_done()
 
 
-def _on_history_reloaded(self: VoiceSession[Any], wire: HistoryReloadedWire) -> None:
-    self._chat_ctx = ChatContext(list(wire.items))
-
-
 def _on_item_added(self: VoiceSession[Any], wire: ItemAddedWire) -> None:
-    item = wire.item
-    # an output told again changed in place (an answered question's)
-    idx = self._chat_ctx.index_by_id(item.id) if item.type == "function_call_output" else None
-    if idx is not None:
-        self._chat_ctx.items[idx] = item
-    else:
-        self._chat_ctx.insert(item)
+    # the history's own object: the event, the run and `session.history` share it
+    if (item := wire.host_item) is None:
+        return
     if (run := _wire_run(wire.run)) is not None and item.type != "agent_handoff":
         run._item_added(item)
     if item.type in ("message", "agent_handoff"):
@@ -584,7 +575,6 @@ def _wire_run(run: object | None) -> _VoiceRun | None:
 
 # The `HostWire` members with host behaviour, by record class.
 _HANDLERS: dict[type, Callable[[VoiceSession[Any], Any], None]] = {
-    HistoryReloadedWire: _on_history_reloaded,
     SpeechCreatedWire: _on_speech_created,
     SpeechDoneWire: _on_speech_done,
     ItemAddedWire: _on_item_added,

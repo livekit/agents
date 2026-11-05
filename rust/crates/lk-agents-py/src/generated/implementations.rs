@@ -146,6 +146,7 @@ impl super::Implementations for Selected {
     type SessionOptions = ::lk_agents_runtime::voice::SessionOptions;
     type VoiceSession = ::lk_agents_runtime::voice::VoiceSession;
     type SessionStart = ::lk_agents_runtime::voice::SessionStartPlans;
+    type SessionState = ::lk_agents_runtime::voice::session::delivered::SessionState;
     type InterruptionGateFunctions = ::lk_agents_runtime::voice::InterruptionGateRules;
     type SessionPreparation = ::lk_agents_runtime::voice::session::owner::Prepared;
     type SessionOwner = ::lk_agents_runtime::voice::session::owner::SessionOwner;

@@ -19,12 +19,18 @@ pub(super) struct HostDrain {
     /// The session's context under its `agent_session`: what a hook runs under without a span
     /// of its own.
     pub(super) session: telemetry::Cx,
+    /// What the host has been delivered, starting from the session's first history.
+    pub(super) delivered: super::delivered::Delivered,
+    pub(super) history: Vec<lk_agents_abi::ChatItem>,
 }
 
 impl HostDrain {
     pub(super) async fn run(self, mut runner: SessionRunner) {
         let mut answering = Vec::new();
         let mut forwarded = 0;
+        if let Some(events) = &self.events {
+            self.delivered.open(events.as_ref(), &self.history);
+        }
         while let Some(ev) = runner.next_host_event().await {
             match ev {
                 VoiceHostEvent::Hook(call) => {
@@ -91,7 +97,11 @@ impl HostDrain {
         }
     }
 
-    fn deliver(&self, wire: HostWire) {
+    fn deliver(&self, mut wire: HostWire) {
+        let state = match &self.events {
+            Some(events) => self.delivered.apply(events.as_ref(), &mut wire),
+            None => self.delivered.latest(),
+        };
         let closed = match &wire {
             HostWire::Close(close) => Some(close.reason.to_string()),
             _ => None,
@@ -109,7 +119,7 @@ impl HostDrain {
             (None, ..) => {}
         }
         if let Some(events) = &self.events {
-            events.event(wire);
+            events.event(wire, state);
         }
         if let (Some(run), Some(reason)) = (&self.job_run, closed) {
             run.session_closed(reason);

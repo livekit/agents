@@ -82,6 +82,8 @@ pub trait SessionOwner: Send + Sync + Sized + 'static {
     type Storage: Send + Sync + 'static;
     #[host(class(name = "VoiceSession"))]
     type Session: Send + Sync + 'static;
+    #[host(class(name = "_core_SessionState"))]
+    type State: Send + Sync + 'static;
 
     #[host(new)]
     fn new(env: &Self::Env, options: Self::Options) -> Self;
@@ -105,6 +107,9 @@ pub trait SessionOwner: Send + Sync + Sized + 'static {
     fn storage(&self) -> Option<Arc<Self::Storage>>;
     #[host(getter)]
     fn current_agent(&self) -> Option<crate::HostRef>;
+    /// The latest state the host's events delivered; before `start()`, an empty history.
+    #[host(getter)]
+    fn state(&self) -> Arc<Self::State>;
     /// Empty before startup; the final snapshot remains readable after close.
     #[host(
         getter,

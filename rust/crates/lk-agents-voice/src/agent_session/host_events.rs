@@ -255,6 +255,7 @@ impl SessionEvent {
             SessionEvent::ConversationItemAdded { item, agent, visibility, run, .. } => {
                 HostWire::ItemAdded(w::ItemAddedWire {
                     item: (**item).clone(),
+                    host_item: None,
                     agent: agent.clone(),
                     visibility: visibility.as_str().to_owned(),
                     run: run.as_ref().and_then(|r| r.host.clone()),

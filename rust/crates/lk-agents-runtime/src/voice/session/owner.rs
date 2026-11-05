@@ -11,7 +11,7 @@ use lk_agents_abi::voice::events::{HostWire, SessionErrorWire};
 use lk_agents_abi::voice::session::{
     CommandRefused, SessionOptions as _, SessionRefused, UnknownCloseReason, VoiceSession as _,
 };
-use lk_agents_abi::voice::session_effects::SessionEvents;
+use lk_agents_abi::voice::session_effects::{DeliveredState, SessionEvents};
 use lk_agents_abi::voice::session_options::{ResolvedSessionOptions, SessionLegs, UpdateKwargs};
 use lk_agents_abi::voice::session_owner::SessionOwner as _;
 use lk_agents_abi::voice::session_owner::{
@@ -106,7 +106,7 @@ struct Events {
 }
 
 impl SessionEvents for Events {
-    fn event(&self, wire: HostWire) {
+    fn event(&self, wire: HostWire, state: Arc<dyn DeliveredState>) {
         if let HostWire::Close(close) = &wire
             && let Some(owner) = self.owner.upgrade()
             && let Err(error) = SessionOwner(owner).shutdown(close.reason.to_string(), false)
@@ -114,7 +114,17 @@ impl SessionEvents for Events {
             log::warn!("the session owner could not begin cleanup: {error}");
         }
         if let Some(host) = &self.host {
-            host.event(wire);
+            host.event(wire, state);
+        }
+    }
+
+    fn history_items(
+        &self,
+        items: Vec<lk_agents_abi::ChatItem>,
+    ) -> Result<Vec<lk_agents_abi::HostRef>, HostError> {
+        match &self.host {
+            Some(host) => host.history_items(items),
+            None => Ok(Vec::new()),
         }
     }
 
@@ -231,6 +241,7 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
     type Options = SessionOptions;
     type Storage = SessionStorage;
     type Session = VoiceSession;
+    type State = super::delivered::SessionState;
 
     fn new(env: &ProcessEnv, options: SessionOptions) -> Self {
         Self(Arc::new(Inner {
@@ -319,6 +330,10 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
     fn current_agent(&self) -> Option<lk_agents_abi::HostRef> {
         let pending = self.0.selection.lock().pending.clone();
         pending.or_else(|| self.0.session.get().and_then(|session| session.current_agent()))
+    }
+
+    fn state(&self) -> Arc<super::delivered::SessionState> {
+        self.0.session.get().map(|session| session.delivered()).unwrap_or_default()
     }
 
     fn usage(&self) -> lk_agents_abi::usage::Usage {

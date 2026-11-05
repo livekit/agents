@@ -26,6 +26,7 @@ from .events import (
 
 if TYPE_CHECKING:
     from livekit.agents._core import SpeechHandle
+    from livekit.agents.llm import ChatItem
     from livekit.agents.llm.tool_context import ToolChoice
 
     from .agent_run import RunError, RunInputRequirement
@@ -118,8 +119,10 @@ class EndOfSpeechEvent:
 class ItemAddedWire:
     """`conversation_item_added`'s payload."""
 
-    item: ChatItem
-    """The item, as its `llm.ChatItem` model."""
+    host_item: ChatItem | None
+    """The item as the session's history holds it: the host's `llm.ChatItem`, the same object
+    `session.history` returns. `None` only for a host that made no object for it.
+    """
     agent: str
     """Which agent's frame produced it, as the opaque id the host gave the core."""
     visibility: str
@@ -286,7 +289,7 @@ class SessionErrorWire:
 
 @dataclass(kw_only=True, slots=True)
 class HistoryReloadedWire:
-    items: list[ChatItem]
+    pass
 
 
 @dataclass(kw_only=True, slots=True)

@@ -15,6 +15,7 @@ from .events import (
 )
 from .session_wire import (
     BackchannelConfirmedWire,
+    HistoryReloadedWire,
     OverlapInterruptionEvent,
     ParticipantLinked,
     ParticipantUnlinked,
@@ -41,6 +42,7 @@ MIRRORED_STATES: dict[type, str] = {
 # `HostWire` members the host receives and does not act on.
 IGNORED_EVENTS: frozenset[type] = frozenset(
     {
+        HistoryReloadedWire,
         UserTurnCompletedWire,
         _AgentBackchannelOpportunityEvent,
         PreemptiveGenerationEvent,

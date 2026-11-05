@@ -783,6 +783,14 @@ def plan_session_start(*, job_default: bool, another_session_is_primary: bool) -
     remote session protocol; `another_session_is_primary` is the job's claim already taken.
     """
 
+class _core_SessionState:
+    """`_core_SessionState`: one delivered state, as the host reads it."""
+    @property
+    def history(self) -> list[object]:
+        """`session.history`'s items, in history order: the host's own objects, the same ones each
+        later state and every event naming the item hand back.
+        """
+
 def rt_server_turn_detection(
     *,
     caps_turn_detection: bool,
@@ -846,6 +854,9 @@ class _core_SessionOwner:
     def storage(self) -> _core_SessionStorage | None: ...
     @property
     def current_agent(self) -> object | None: ...
+    @property
+    def state(self) -> _core_SessionState:
+        """The latest state the host's events delivered; before `start()`, an empty history."""
     @property
     def usage(self) -> Usage:
         """Empty before startup; the final snapshot remains readable after close."""

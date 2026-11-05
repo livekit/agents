@@ -234,6 +234,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
             },
             resources,
             conn,
+            delivered: Default::default(),
         })
     }
 

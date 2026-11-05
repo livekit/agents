@@ -54,7 +54,7 @@ object a text handler gets. Outside a call `ctx.live_session` is `None`.
 | `interrupt()` | stop the current speech |
 | `set_participant(identity)` | listen to another room participant (their audio, transcript and keypad); `None` listens to no one. By default the session links the first participant who joins, or `RoomOptions(participant_identity=)` |
 | `update_agent(agent)`, `update_options(...)`, `override_options(...)` | see [updating a live session](#updating-a-live-session) |
-| `history` | the call's conversation, a `ChatContext`; empty on a new thread |
+| `history` | the call's conversation, a new `ChatContext` over the session's items on each read; empty on a new thread and before `start()`; see [reading the session from a callback](#reading-the-session-from-a-callback) |
 | `current_agent` | the agent speaking now |
 | `usage` | latest immutable `Usage` snapshot; retained after shutdown; see [usage and metrics](usage.md) |
 | `on(event, callback)` | subscribe to a session event, below |
@@ -78,6 +78,20 @@ object a text handler gets. Outside a call `ctx.live_session` is `None`.
 Every event type is exported from `livekit.agents.voice.events`, the common ones also from
 `livekit.agents`, with `AgentEvent` (their union), `EventTypes` (the event names) and the
 `AgentState` and `UserState` literals.
+
+### Reading the session from a callback
+
+The session's history is held by the native session and read, never copied, by
+`session.history`. Each event reaches its callbacks with the session state it
+belongs to. Inside an event callback, and in any task the callback starts,
+`session.history` is the history as of that event: it ends with the items that
+event delivered and omits items added after it, even when the callback reads it
+later. Anywhere else it is the latest history the session's events have
+delivered. The items are the session's own objects: the item of a
+`"conversation_item_added"` event, a run's items and every later
+`session.history` are the same Python objects. Each read returns a new
+`ChatContext`, so editing it does not change the session; use
+`update_agent(agent, chat_ctx=)` or `Agent.update_chat_ctx()` to supply a different history.
 
 Usage is read through `session.usage`, without an update event. Intermediate
 snapshots contain measurements received so far; after awaiting `aclose()`, the

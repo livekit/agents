@@ -143,7 +143,8 @@ def test_a_processor_failure_is_an_error_event_whose_source_is_the_processor(
             error=RuntimeError(failure.message),
             speech_id=None,
             processor_failure=failure,
-        )
+        ),
+        sessions[0]._owner.state,
     )
     [event] = errors[0]
     [logged] = [r for r in caplog.records if r.getMessage() == "session error"]

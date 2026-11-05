@@ -413,8 +413,13 @@ pub struct EndOfSpeechEvent {
 #[crate::host(record(module = "session_wire", emit))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct ItemAddedWire {
-    /// The item, as its `llm.ChatItem` model.
+    /// The item; the host reads `host_item`.
+    #[host(skip)]
     pub item: crate::ChatItem,
+    /// The item as the session's history holds it: the host's `llm.ChatItem`, the same object
+    /// `session.history` returns. `None` only for a host that made no object for it.
+    #[host(annotation = "livekit.agents.llm.ChatItem | None")]
+    pub host_item: Option<crate::HostRef>,
     /// Which agent's frame produced it, as the opaque id the host gave the core.
     pub agent: String,
     /// Which host projections take the item: `"both"` (`chat_ctx` and `session.history`) or
@@ -648,6 +653,8 @@ impl OverlappingSpeechEvent {
 #[crate::host(record(module = "session_wire", emit))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct HistoryReloadedWire {
+    /// The host reads the reloaded history from the event's state.
+    #[host(skip)]
     pub items: Vec<crate::ChatItem>,
 }
 
@@ -660,6 +667,7 @@ pub struct HistoryReloadedWire {
 /// `_generated/session_dispatch.py`; the rest have host behaviour.
 #[crate::host(record(module = "session_wire", emit, transparent, dispatch = "session_dispatch"))]
 pub enum HostWire {
+    #[host(ignored)]
     HistoryReloaded(HistoryReloadedWire),
     #[host(event)]
     UserTranscript(UserInputTranscribed),

@@ -5,6 +5,7 @@
 mod builder;
 pub(super) mod calls;
 mod class;
+pub mod delivered;
 mod host_drain;
 mod options;
 pub mod owner;
@@ -91,6 +92,8 @@ pub struct VoiceSession {
     conn: SessionConnOptions,
     /// The session's report as its loop closed.
     report: FinalReport,
+    /// What the host's events have delivered so far.
+    delivered: delivered::Delivered,
 }
 
 /// What a deterministic simulation needs from a session it drives, installed before `start()`.
@@ -227,6 +230,11 @@ type Leg<T> = Maybe<Option<Arc<T>>>;
 impl VoiceSession {
     pub fn time(&self) -> &Timebase {
         &self.time
+    }
+
+    /// The latest state the host's events delivered.
+    pub fn delivered(&self) -> Arc<delivered::SessionState> {
+        self.delivered.latest()
     }
 
     /// The scheduler supplied when the session was assembled.
@@ -398,11 +406,15 @@ impl VoiceSession {
     ) -> Result<BoxFuture<'static, Result<(), StartFailed>>, OpenRefused> {
         let job = self.host.job.clone();
         // The room connects under `session_start`, reserved before the driver opens it.
-        let (startup, session) = match &mut *self.stage.lock() {
-            Stage::Ready(ready) => (ready.builder.startup(), ready.builder.in_session()),
+        let (startup, session, history) = match &mut *self.stage.lock() {
+            Stage::Ready(ready) => (
+                ready.builder.startup(),
+                ready.builder.in_session(),
+                ready.builder.chat_ctx.clone().unwrap_or_default(),
+            ),
             _ => {
                 let none = telemetry::Cx::NONE;
-                (none.clone(), none)
+                (none.clone(), none, Vec::new())
             }
         };
         let remote = self.host.remote.clone().map(|config| {
@@ -419,6 +431,8 @@ impl VoiceSession {
             spawner: Arc::clone(&self.spawner),
             tasks: Arc::clone(&self.tasks),
             session,
+            delivered: self.delivered.clone(),
+            history,
         };
         let opening =
             self.open(executor, remote.clone(), move |runner| Box::pin(drain.run(runner)))?;

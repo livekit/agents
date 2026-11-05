@@ -3747,6 +3747,46 @@ pub fn plan_session_start<'py>(
     crate::generated::records::session_wire::start_plan_to_py(py, out)
 }
 
+// Declared in rust/crates/lk-agents-abi/src/voice/session_effects.rs.
+type CoreSessionStateImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::SessionState;
+
+/// `CoreSessionState`: one delivered state, as the host reads it.
+#[pyclass(frozen, name = "_core_SessionState", module = "livekit.agents._core")]
+pub struct CoreSessionState(pub(crate) ::std::sync::Arc<CoreSessionStateImpl>);
+
+#[pymethods]
+impl CoreSessionState {
+    /// `session.history`'s items, in history order: the host's own objects, the same ones each
+    /// later state and every event naming the item hand back.
+    #[getter]
+    fn history<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| <CoreSessionStateImpl as ::lk_agents_abi::voice::session_effects::SessionState>::history(&self.0));
+        ::pyo3::PyResult::Ok(
+            ::pyo3::types::PyList::new(
+                py,
+                out.into_iter()
+                    .map(|x| crate::py_objects::object_ref_to_py(py, x))
+                    .collect::<PyResult<Vec<_>>>()?,
+            )?
+            .into_any(),
+        )
+    }
+}
+
+// Wherever the host passes a `::lk_agents_abi::voice::session_effects::DeliveredState`, an instance of this class is itself.
+inventory::submit! {
+    crate::py_objects::HostNative {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::voice::session_effects::DeliveredState>(),
+        read: |obj| {
+            let this = obj.cast::<CoreSessionState>().ok()?;
+            let native: ::std::sync::Arc<dyn ::lk_agents_abi::voice::session_effects::DeliveredState> = this.get().0.clone();
+            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        },
+    }
+}
+
 // Declared in rust/crates/lk-agents-abi/src/voice/session_options.rs.
 type InterruptionGateFunctionsImpl = <crate::generated::implementations::Selected as super::Implementations>::InterruptionGateFunctions;
 
@@ -3973,6 +4013,18 @@ impl CoreSessionOwner {
         crate::py_calls::check_pid()?;
         let out = py.detach(|| <CoreSessionOwnerImpl as ::lk_agents_abi::voice::session_owner::SessionOwner>::current_agent(&self.0));
         out.map(|value| crate::py_objects::object_ref_to_py(py, value)).transpose()
+    }
+
+    /// The latest state the host's events delivered; before `start()`, an empty history.
+    #[getter]
+    fn state(&self, py: Python<'_>) -> PyResult<super::voice::CoreSessionState> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| {
+            <CoreSessionOwnerImpl as ::lk_agents_abi::voice::session_owner::SessionOwner>::state(
+                &self.0,
+            )
+        });
+        ::pyo3::PyResult::Ok(super::voice::CoreSessionState(out))
     }
 
     /// Empty before startup; the final snapshot remains readable after close.
@@ -10818,9 +10870,14 @@ impl SessionEventsProxy {
 }
 
 impl ::lk_agents_abi::voice::session_effects::SessionEvents for SessionEventsProxy {
-    fn event(&self, wire: ::lk_agents_abi::voice::events::HostWire) {
+    fn event(
+        &self,
+        wire: ::lk_agents_abi::voice::events::HostWire,
+        state: ::std::sync::Arc<dyn ::lk_agents_abi::voice::session_effects::DeliveredState>,
+    ) {
         let host = ::std::sync::Arc::clone(&self.host);
         let wire_arg = wire;
+        let state_arg = state;
         ::lk_agents_runtime::host::notify(
             &self.notifier,
             "SessionEvents._core_event",
@@ -10828,8 +10885,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionEvents for SessionEventsPro
             &[],
             false,
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
-                    [crate::generated::records::session_wire::host_wire_to_py(py, wire_arg)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [crate::generated::records::session_wire::host_wire_to_py(py, wire_arg)?, <dyn ::lk_agents_abi::voice::session_effects::DeliveredState as super::NativeToHost>::to_host(py, state_arg)?];
                 Ok((
                     host.bind(py).getattr("_core_event")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
@@ -10837,6 +10893,58 @@ impl ::lk_agents_abi::voice::session_effects::SessionEvents for SessionEventsPro
                 ))
             }),
         );
+    }
+
+    fn history_items(
+        &self,
+        items: ::std::vec::Vec<::lk_agents_abi::ChatItem>,
+    ) -> ::std::result::Result<
+        ::std::vec::Vec<::lk_agents_abi::HostRef>,
+        ::lk_agents_abi::errors::HostError,
+    > {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let items_arg = items;
+        let out = ::lk_agents_runtime::host::call_now(
+            &crate::py_calls::Entry,
+            ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::types::PyList::new(
+                    py,
+                    items_arg
+                        .into_iter()
+                        .map(|x| crate::generated::records::chat_items::chat_item_to_py(py, x))
+                        .collect::<PyResult<Vec<_>>>()?,
+                )?
+                .into_any()];
+                Ok((
+                    host.bind(py).getattr("_core_history_items")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
+            }),
+        );
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.value.bind(py);
+            let out = (o.try_iter().and_then(|items| {
+                items
+                    .map(|item| {
+                        let item = item?;
+                        crate::py_objects::object_ref_from_py(item.as_any())
+                    })
+                    .collect::<PyResult<Vec<_>>>()
+            }))
+            .map_err(|e| {
+                <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(
+                    py, &e,
+                )
+            })?;
+            Ok(out)
+        })
     }
 
     fn error_message(

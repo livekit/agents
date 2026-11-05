@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
 import copy
 import weakref
 from collections import deque
@@ -30,6 +31,7 @@ from .._generated.session_wire import (
 from .._generated.vad import VAD
 from ..llm import (
     ChatContext,
+    ChatItem,
 )
 from ..stt import STT
 from ..tts import TTS
@@ -78,7 +80,7 @@ from .room_io import (
 from .run_result import _VoiceRun
 
 if TYPE_CHECKING:
-    from .._core import VoiceSession as _NativeSession
+    from .._core import VoiceSession as _NativeSession, _core_SessionState as _SessionState
     from ..storage import Thread
     from ..storage.context import ContextStore
     from .amd import AMD
@@ -86,6 +88,11 @@ if TYPE_CHECKING:
 from .._generated.voice_session import UpdateAgentArgs
 from .._generated.voice_task_errors import VoiceTaskFailed as VoiceTaskFailed
 from . import Output_T
+
+# The session and the state of the event its callbacks are handling.
+_delivered: contextvars.ContextVar[tuple[VoiceSession[Any], _SessionState]] = (
+    contextvars.ContextVar("lk_session_delivered")
+)
 
 
 class VoiceSession(SessionCommands, rtc.EventEmitter[EventTypes], Generic[Context_T]):
@@ -106,7 +113,7 @@ class VoiceSession(SessionCommands, rtc.EventEmitter[EventTypes], Generic[Contex
     _turn_detection_mode: str | None
     _interruption_mode: Literal["adaptive", "vad"] | None
     _video_sampler: VoiceActivityVideoSampler | None
-    _chat_ctx: ChatContext
+    _start_chat_ctx: ChatContext | None
     _input: io.AgentInput
     _output: io.AgentOutput
     _event_retention: _core._core_EventRetention
@@ -238,7 +245,20 @@ class VoiceSession(SessionCommands, rtc.EventEmitter[EventTypes], Generic[Contex
 
     @property
     def history(self) -> ChatContext:
-        return self._chat_ctx
+        """The call's conversation: a new ``ChatContext`` over the session's own item objects,
+        which every event and run naming an item hand back too. Inside an event callback, and
+        the tasks it starts, it is the history as of that event, without the items added after
+        it; anywhere else it is the latest the session's events delivered. Before ``start()``
+        it is empty. Editing the returned context does not change the session."""
+        return ChatContext(cast(list[ChatItem], self._state.history))
+
+    @property
+    def _state(self) -> _SessionState:
+        """The session as the event being handled left it, else as the last delivered one."""
+        delivered = _delivered.get(None)
+        if delivered is not None and delivered[0] is self:
+            return delivered[1]
+        return self._owner.state
 
     @property
     def amd(self) -> AMD | None:
@@ -325,10 +345,10 @@ class VoiceSession(SessionCommands, rtc.EventEmitter[EventTypes], Generic[Contex
     ) -> None:
         """Start the session on ``room`` (the job's room by default, an offline room without
         one) with ``agent`` driving."""
-        from .._generated.session_owner import SessionJobInfo
-        from ..job import get_job_context
         from opentelemetry import context as otel_context
 
+        from .._generated.session_owner import SessionJobInfo
+        from ..job import get_job_context
         from ..telemetry import _context
         from ._session_bindings import SessionHost
 
@@ -501,10 +521,19 @@ class VoiceSession(SessionCommands, rtc.EventEmitter[EventTypes], Generic[Contex
 
     # --- the core's events ---------------------------------------------------------------
 
-    def _core_event(self, wire: HostWire) -> None:
+    def _core_event(self, wire: HostWire, state: _SessionState) -> None:
         from ._session_callbacks import dispatch
 
-        dispatch(self, wire)
+        # the event's callbacks, and the tasks they start, read the session as of the event
+        token = _delivered.set((self, state))
+        try:
+            dispatch(self, wire)
+        finally:
+            _delivered.reset(token)
+
+    def _core_history_items(self, items: list[ChatItem]) -> list[ChatItem]:
+        """The objects the history holds for ``items``: these, as the binding made them."""
+        return items
 
     def _core_error_message(self, wire: SessionErrorWire) -> str:
         from ._session_callbacks import _core_error_message

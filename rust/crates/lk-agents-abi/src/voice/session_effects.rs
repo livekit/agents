@@ -169,12 +169,34 @@ pub trait SessionHooks: Send + Sync {
     fn hook_failed(&self, hook: &str, error: Option<crate::errors::CapturedError>);
 }
 
+/// The session as its delivered events left it, a value that never changes: each event reaches
+/// the host with the one it belongs to, so a callback reads the session as of its event.
+#[crate::host(native(refused = "expected a native session state"))]
+pub trait DeliveredState: std::any::Any + Send + Sync {}
+
+/// `_core_SessionState`: one delivered state, as the host reads it.
+#[crate::host(class(name = "_core_SessionState", native = DeliveredState))]
+pub trait SessionState: Send + Sync + Sized + 'static {
+    /// `session.history`'s items, in history order: the host's own objects, the same ones each
+    /// later state and every event naming the item hand back.
+    #[host(getter)]
+    fn history(&self) -> Vec<crate::HostRef>;
+}
+
 /// Where a host session's events go: one notification per event, delivered in driver order on
 /// the host loop.
 #[crate::host(proxy(host = "livekit.agents.voice.agent_session.VoiceSession"))]
 pub trait SessionEvents: Send + Sync {
+    /// `wire`, with the session's state as of it.
     #[host(notify, name = "_core_event")]
-    fn event(&self, wire: crate::voice::events::HostWire);
+    fn event(&self, wire: crate::voice::events::HostWire, state: Arc<dyn DeliveredState>);
+
+    /// The host's objects for history items about to be delivered: the history holds these.
+    #[host(call, name = "_core_history_items")]
+    fn history_items(
+        &self,
+        items: Vec<crate::ChatItem>,
+    ) -> Result<Vec<crate::HostRef>, crate::errors::HostError>;
 
     /// `str()` of the error record `error` is emitted with: the message the remote session sends.
     #[host(call, name = "_core_error_message")]
