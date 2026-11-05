@@ -719,6 +719,7 @@ mod tests {
             "#[host(read_once, getter = \"info.stream_id\")] fn id(&self) -> String;",
             "#[host(await, name = \"rtc.aclose\")] async fn close(&self, cx: &Cx, #[host(kw)] reason: String, code: u32) -> Result<(), HostError>;",
             "#[host(await, function = \"livekit.agents._bindings.next_frame\")] async fn next(&self, cx: &Cx) -> Result<Option<String>, HostError>;",
+            "#[host(await, getter = \"session.usage\")] async fn usage(&self, cx: &Cx) -> Result<u32, HostError>;",
         )))
         .expect("targets resolve");
         let p = &decls.proxies[0];
@@ -745,6 +746,13 @@ mod tests {
             "{}",
             emitted[3]
         );
+        // Awaited, the read runs on the host's loop through HostInvoker.
+        assert!(
+            emitted[4].contains("::lk_agents_runtime::host::call(")
+                && emitted[4].contains("[host.bind(py).getattr(\"session\")?, ::pyo3::types::PyString::new(py, \"usage\").into_any()]"),
+            "{}",
+            emitted[4]
+        );
         let whole = super::proxy(p).expect("emits");
         assert!(
             whole.contains("let v = obj.getattr(\"info\")?.getattr(\"stream_id\")?;"),
@@ -752,8 +760,8 @@ mod tests {
         );
         for (body, want) in [
             (
-                "#[host(await, getter = \"x\")] async fn f(&self, cx: &Cx) -> Result<u32, HostError>;",
-                "a getter is read by `call` or `read_once`",
+                "#[host(notify, getter = \"x\")] fn f(&self);",
+                "a getter is read by `call`, `read_once` or `await`",
             ),
             (
                 "#[host(call, name = \"a\", getter = \"b\")] fn f(&self) -> Result<u32, HostError>;",

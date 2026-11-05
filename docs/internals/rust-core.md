@@ -1274,7 +1274,8 @@ rename another binding.
 
 A proxy addresses the host object's own surface; no handwritten view renames it. A method
 declares what it reaches: `name = "a.b"` calls the method along that attribute path,
-`getter = "a.b"` (with `call` or `read_once`) reads the attribute instead, and
+`getter = "a.b"` (with `call` or `read_once` in place, with `await` on the host's loop) reads the
+attribute instead, and
 `function = "module.name"` calls a module function with the host object first, for glue that
 does more than rename. A `#[host(kw)]` parameter, and every one after it, is passed by keyword.
 A proxy can target an SDK class directly (`proxy(host = "livekit.rtc.ByteStreamWriter")`), and

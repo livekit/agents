@@ -72,7 +72,6 @@ from typing import TYPE_CHECKING, ClassVar
 from google.protobuf.json_format import MessageToDict
 
 from .._generated.remote_session_wire import STATE_OPTION_FIELDS
-from .._generated.usage import Usage
 from ..version import __version__
 
 if TYPE_CHECKING:
@@ -775,35 +774,33 @@ class ConsoleCall:
 
 
 class RemoteSessionAccess:
-    """What a remote client asks of ``session`` that needs its objects."""
+    """What a remote client asks of ``session`` that needs its objects. The core reads the
+    session's history and usage directly; the methods here flatten or act on the session."""
 
     def __init__(self, session: VoiceSession[Any]) -> None:
-        self._session = session
-
-    async def _core_chat_history(self) -> list[llm.ChatItem]:
-        return self._session.history.items
+        self.session = session
 
     async def _core_agent_info(self) -> tuple[str, str | None, list[str], list[llm.ChatItem]]:
-        agent = self._session.current_agent
+        agent = self.session.current_agent
         tools = list(llm.ToolContext(agent.tools).function_tools)
-        return agent.name, agent._config.instructions, tools, self._session.history.items
+        return agent.name, agent._config.instructions, tools, self.session.history.items
 
     async def _core_run_input(self, text: str) -> tuple[list[llm.ChatItem] | None, str | None]:
         try:
-            await self._session.interrupt(force=True)
-            result = await self._session._run(user_input=text)
+            await self.session.interrupt(force=True)
+            result = await self.session._run(user_input=text)
         except Exception as e:
             return None, str(e)
         return result.new_messages(), None
 
     async def _core_session_state(self) -> tuple[str, str, str, dict[str, str], float | None]:
-        options = self._session.options
+        options = self.session.options
         return (
-            self._session.agent_state,
-            self._session.user_state,
-            self._session.current_agent.name,
+            self.session.agent_state,
+            self.session.user_state,
+            self.session.current_agent.name,
             {k: str(options.get(k)) for k in STATE_OPTION_FIELDS},
-            self._session._started_at,
+            self.session._started_at,
         )
 
     async def _core_rtc_stats(self) -> tuple[list[Any], list[Any]] | None:
@@ -816,20 +813,17 @@ class RemoteSessionAccess:
             [MessageToDict(s) for s in stats.subscriber_stats],
         )
 
-    async def _core_session_usage(self) -> Usage:
-        return self._session.usage
-
     def _core_framework_info(self) -> tuple[str, str]:
         return "python", __version__
 
     async def _core_update_io(self, update: tuple[bool | None, ...]) -> None:
         audio_in, _, audio_out, _, transcription = update
         if audio_in is not None:
-            self._session.input.set_audio_enabled(audio_in)
+            self.session.input.set_audio_enabled(audio_in)
         if audio_out is not None:
-            self._session.output.set_audio_enabled(audio_out)
+            self.session.output.set_audio_enabled(audio_out)
         if transcription is not None:
-            self._session.output.set_transcription_enabled(transcription)
+            self.session.output.set_transcription_enabled(transcription)
 
     async def _core_finalize_simulation(
         self, provisional: tuple[bool, str]

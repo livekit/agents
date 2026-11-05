@@ -483,7 +483,8 @@ impl Resolver<'_> {
 }
 
 /// What the call reaches: `name = "a.b"` (a method along an attribute path, the Rust name by
-/// default), `getter = "a.b"` (an attribute read, by `call` or `read_once`) or
+/// default), `getter = "a.b"` (an attribute read: in place by `call` or `read_once`, on the host's
+/// loop by `await`) or
 /// `function = "module.name"` (a module function taking the host object first). At most one.
 fn target(
     at: &str,
@@ -513,11 +514,11 @@ fn target(
     };
     let target = match key {
         "name" => Target::Method(path(key, &text)?),
-        "getter" if matches!(kind, ProxyCall::Call | ProxyCall::ReadOnce) => {
+        "getter" if matches!(kind, ProxyCall::Call | ProxyCall::ReadOnce | ProxyCall::Await) => {
             Target::Attribute(path(key, &text)?)
         }
         "getter" => {
-            return Err(format!("{at}: a getter is read by `call` or `read_once`"));
+            return Err(format!("{at}: a getter is read by `call`, `read_once` or `await`"));
         }
         _ if kind == ProxyCall::Bind => {
             return Err(format!("{at}: a bind makes no host call"));

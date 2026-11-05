@@ -1620,14 +1620,17 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
-            "SessionPort._core_chat_history",
+            "SessionPort.session.history.items",
             &self.context,
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
+                    host.bind(py).getattr("session")?.getattr("history")?,
+                    ::pyo3::types::PyString::new(py, "items").into_any(),
+                ];
                 Ok((
-                    host.bind(py).getattr("_core_chat_history")?,
+                    py.import("builtins")?.getattr("getattr")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -1847,14 +1850,17 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
-            "SessionPort._core_session_usage",
+            "SessionPort.session.usage",
             &self.context,
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
+                    host.bind(py).getattr("session")?,
+                    ::pyo3::types::PyString::new(py, "usage").into_any(),
+                ];
                 Ok((
-                    host.bind(py).getattr("_core_session_usage")?,
+                    py.import("builtins")?.getattr("getattr")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
