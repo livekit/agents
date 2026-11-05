@@ -1,5 +1,5 @@
-"""A text simulation runs on_user_turn_completed for each simulated user turn, as a live call
-does. The simulator drives each turn through ``run_input`` on the session host."""
+"""Every text user turn runs on_user_turn_completed, as a spoken turn does: ``run()`` (which the
+simulator drives through ``run_input`` on the session host) and the default text input callback."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import pytest
 from livekit.agents import Agent, AgentSession, StopResponse
 from livekit.agents.llm import ChatContext, ChatMessage
 from livekit.agents.voice.remote_session import RemoteSession, SessionHost
+from livekit.agents.voice.room_io.types import TextInputEvent, _default_text_input_cb
 
 from .fake_llm import FakeLLM, FakeLLMResponse
 from .test_run_input_errors import PairedTransport
@@ -58,13 +59,7 @@ async def _run_input(agent: Agent, text: str) -> list[str]:
     return [item.message.content[0].text for item in resp.items if item.HasField("message")]
 
 
-@pytest.fixture
-def text_simulation(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(AgentSession, "_text_only", property(lambda self: True))
-
-
-@pytest.mark.usefixtures("text_simulation")
-async def test_hook_edits_reach_the_llm_in_a_text_simulation() -> None:
+async def test_hook_edits_reach_the_llm() -> None:
     agent = HookAgent(edit_to="edited")
     replies = await _run_input(agent, "hello there")
 
@@ -72,8 +67,7 @@ async def test_hook_edits_reach_the_llm_in_a_text_simulation() -> None:
     assert replies == ["edited"]
 
 
-@pytest.mark.usefixtures("text_simulation")
-async def test_stop_response_is_a_silent_turn_in_a_text_simulation() -> None:
+async def test_stop_response_is_a_silent_turn() -> None:
     agent = HookAgent(stop=True)
     replies = await _run_input(agent, "hello there")
 
@@ -81,12 +75,20 @@ async def test_stop_response_is_a_silent_turn_in_a_text_simulation() -> None:
     assert replies == []
 
 
-async def test_run_input_outside_a_text_simulation_skips_the_hook() -> None:
+async def test_default_text_input_runs_the_hook() -> None:
     agent = HookAgent(edit_to="edited")
-    replies = await _run_input(agent, "hello there")
+    session = AgentSession()
+    await session.start(agent=agent)
+    try:
+        await _default_text_input_cb(session, TextInputEvent(text="hello there"))
+        await asyncio.wait_for(session.wait_for_idle(), timeout=10.0)
+    finally:
+        await session.aclose()
 
-    assert agent.turns == []
-    assert replies == ["unedited"]
+    assert agent.turns == ["hello there"]
+    assert [m.text_content for m in agent.chat_ctx.messages() if m.role == "assistant"] == [
+        "edited"
+    ]
 
 
 class NoLLMAgent(Agent):
@@ -97,7 +99,6 @@ class NoLLMAgent(Agent):
         pass
 
 
-@pytest.mark.usefixtures("text_simulation")
 async def test_a_reply_that_cannot_start_fails_the_run() -> None:
     session = AgentSession()
     await session.start(agent=NoLLMAgent())
@@ -134,7 +135,6 @@ class HandoffAgent(Agent):
             await asyncio.sleep(0.5)
 
 
-@pytest.mark.usefixtures("text_simulation")
 @pytest.mark.parametrize("wait", [True, False])
 async def test_no_reply_after_the_hook_hands_off(wait: bool) -> None:
     # the turn's reply was built from the old agent's context: neither agent may answer it
