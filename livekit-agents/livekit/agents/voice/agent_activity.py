@@ -349,6 +349,8 @@ class AgentActivity(RecognitionHooks):
         # one awaited inline AgentTask may pause this activity at a time
         self._inline_task_lock = asyncio.Lock()
         self._tool_choice: llm.ToolChoice | None = None
+        # the realtime session holds an ask's tool_choice instead of _tool_choice until restored
+        self._rt_tool_choice_overridden = False
 
         self._started = False
         self._closed = False
@@ -4272,7 +4274,6 @@ class AgentActivity(RecognitionHooks):
             tool_ctx._exclude(on_enter_ignored)
             turn_tools = tool_ctx.flatten()
 
-        ori_tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN
         ori_tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN
         try:
             if not (
@@ -4284,7 +4285,7 @@ class AgentActivity(RecognitionHooks):
                     is_given(model_settings.tool_choice)
                     and model_settings.tool_choice != self._tool_choice
                 ):
-                    ori_tool_choice = self._tool_choice
+                    self._rt_tool_choice_overridden = True
                     self._rt_session.update_options(tool_choice=model_settings.tool_choice)
 
                 if is_given(turn_tools):
@@ -4330,17 +4331,23 @@ class AgentActivity(RecognitionHooks):
             )
         finally:
             # reset tool_choice and tools
-            if is_given(ori_tool_choice):
-                try:
-                    self._rt_session.update_options(tool_choice=ori_tool_choice)
-                except Exception:
-                    logger.exception("failed to reset tool_choice")
+            self._restore_rt_tool_choice()
 
             if is_given(ori_tools):
                 try:
                     await self._rt_session.update_tools(ori_tools)
                 except Exception:
                     logger.exception("failed to reset tools")
+
+    def _restore_rt_tool_choice(self) -> None:
+        """Put the activity's tool_choice back on the realtime session after an ask overrode it."""
+        if not self._rt_tool_choice_overridden or self._rt_session is None:
+            return
+        self._rt_tool_choice_overridden = False
+        try:
+            self._rt_session.update_options(tool_choice=self._tool_choice)
+        except Exception:
+            logger.exception("failed to reset tool_choice")
 
     @utils.log_exceptions(logger=logger)
     async def _realtime_generation_task(
@@ -4934,6 +4941,11 @@ class AgentActivity(RecognitionHooks):
 
                     task = asyncio.create_task(_wait_for_auto_tool_reply())
                     run_state._watch_handle(task)
+
+                # a model that replies to tool output itself does so under the session's
+                # tool_choice, so an ask's forced one must not outlive the call that answered it
+                if self._rt_session.capabilities.auto_tool_reply_generation:
+                    self._restore_rt_tool_choice()
 
                 try:
                     async with self._rt_chat_ctx_lock:

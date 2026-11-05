@@ -331,6 +331,8 @@ class _DuplexRealtimeSession(RealtimeSession):
         # user_initiated has to be settled before a burst's event goes out, or the framework
         # schedules it as a turn of the model's own as well
         self._pending_reply: asyncio.Future[GenerationCreatedEvent] | None = None
+        # the tool_choice the framework last set; one that forces a call makes a lone call a reply
+        self._tool_choice: ToolChoice | None = None
         # the conversation as the framework sees it: the adapter names every message, so this is
         # what a context update diffs against, and only what is new reaches the model
         self._chat_ctx = ChatContext.empty()
@@ -421,7 +423,9 @@ class _DuplexRealtimeSession(RealtimeSession):
             )
             self._emit_as_text(len(self._fragments))
 
-    def _open_burst(self, *, kind: Literal["speech", "text", "tool"] = "speech") -> _Burst:
+    def _open_burst(
+        self, *, kind: Literal["speech", "text", "tool"] = "speech", resolves_reply: bool = False
+    ) -> _Burst:
         burst = _Burst(
             id=shortuuid("item_"),
             message_ch=aio.Chan(),
@@ -438,8 +442,13 @@ class _DuplexRealtimeSession(RealtimeSession):
             response_id=burst.id,
         )
         # the model answers on the one stream it has, so speech opening is the reply asked for; a
-        # call on its own is not, nor is text for sound already played: the speech that follows is
-        if kind == "speech" and self._pending_reply is not None and not self._pending_reply.done():
+        # call on its own is not unless the ask forced one, nor is text for sound already played:
+        # the speech that follows is
+        if (
+            (kind == "speech" or resolves_reply)
+            and self._pending_reply is not None
+            and not self._pending_reply.done()
+        ):
             ev.user_initiated = True
             self._pending_reply.set_result(ev)
         self.emit("generation_created", ev)
@@ -527,7 +536,13 @@ class _DuplexRealtimeSession(RealtimeSession):
         if self._burst is not None:
             self._burst.function_ch.send_nowait(call)
             return
-        burst = self._open_burst(kind="tool")
+        # under a tool_choice that forces a call, the call is the reply: the speech it leads to
+        # needs the tool's result, which would otherwise queue behind the ask it answers
+        tool_choice = self._tool_choice
+        forced = (tool_choice == "required" and call.name in self._duplex.tools.function_tools) or (
+            isinstance(tool_choice, dict) and tool_choice["function"]["name"] == call.name
+        )
+        burst = self._open_burst(kind="tool", resolves_reply=forced)
         burst.function_ch.send_nowait(call)
         burst.close()
 
@@ -607,6 +622,8 @@ class _DuplexRealtimeSession(RealtimeSession):
         await self._duplex._update_tools(tools)
 
     def update_options(self, *, tool_choice: NotGivenOr[ToolChoice | None] = NOT_GIVEN) -> None:
+        if is_given(tool_choice):
+            self._tool_choice = tool_choice
         self._duplex._update_options(tool_choice=tool_choice)
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:

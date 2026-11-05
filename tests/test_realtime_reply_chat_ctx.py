@@ -50,6 +50,8 @@ class _FakeActivity(SimpleNamespace):
             tools=[],
             _on_enter_ignored_tools=lambda tool_ctx: [],
             _tool_choice=None,
+            _rt_tool_choice_overridden=False,
+            _restore_rt_tool_choice=lambda: None,
             _agent=SimpleNamespace(_chat_ctx=llm.ChatContext.empty()),
             _session=SimpleNamespace(
                 _conversation_item_added=lambda msg: None,
