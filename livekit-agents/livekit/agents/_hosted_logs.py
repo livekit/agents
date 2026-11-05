@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+import enum
 import json
 import logging
 import os
@@ -17,8 +18,6 @@ HOSTED_LOGS_ENV = "LIVEKIT_HOSTED_LOGS"
 HOSTED_LOGS_ENABLED = "true"
 HOSTED_LOGS_HANDOFF_FILE_ENV = "LIVEKIT_HOSTED_LOGS_HANDOFF_FILE"
 HOSTED_LOGS_JOBS_DIR_ENV = "LIVEKIT_HOSTED_LOGS_JOBS_DIR"
-
-_DECISION_SUFFIXES = ("", ".export", ".export.redact", ".private")
 
 _handed_off = False
 
@@ -71,11 +70,19 @@ def logs_handed_off() -> bool:
     return _handed_off
 
 
-def _decision(*, logs: bool, redaction: bool) -> str:
-    """The file name decision: ``private`` (not collected), ``export`` or ``export.redact``."""
+class _LogsDecision(str, enum.Enum):
+    """The session's logs decision, as named in ``job-<id>.<decision>.log``."""
+
+    PRIVATE = "private"
+    EXPORT = "export"
+    REDACT = "redact"
+
+
+def _decision(*, logs: bool, redaction: bool) -> _LogsDecision:
+    """``PRIVATE`` (not collected) when logs are off, else ``REDACT`` or ``EXPORT``."""
     if not logs:
-        return "private"
-    return "export.redact" if redaction else "export"
+        return _LogsDecision.PRIVATE
+    return _LogsDecision.REDACT if redaction else _LogsDecision.EXPORT
 
 
 class JobOutput(Protocol):
@@ -118,7 +125,7 @@ class _ProcessOutput:
         self._decided = True
         new_path = os.path.join(
             os.path.dirname(self._path),
-            f"job-{self._job_id}.{_decision(logs=logs, redaction=redaction)}.log",
+            f"job-{self._job_id}.{_decision(logs=logs, redaction=redaction).value}.log",
         )
         try:
             os.rename(self._path, new_path)
@@ -199,7 +206,7 @@ def mark_process_done(job_id: str) -> None:
     jobs_dir = _jobs_dir()
     if not _handed_off or jobs_dir is None:
         return
-    for suffix in _DECISION_SUFFIXES:
+    for suffix in ["", *(f".{d.value}" for d in _LogsDecision)]:
         stem = f"job-{job_id}{suffix}"
         with contextlib.suppress(OSError):
             os.rename(
@@ -232,7 +239,7 @@ class _ThreadJobOutput:
                 return
             self._decided = True
             renamed = self._rename(
-                f"job-{self._job_id}.{_decision(logs=logs, redaction=redaction)}"
+                f"job-{self._job_id}.{_decision(logs=logs, redaction=redaction).value}"
             )
         if not renamed:
             self._warn_rename_failed()

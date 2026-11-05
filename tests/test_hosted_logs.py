@@ -113,7 +113,7 @@ def test_job_process_keeps_inherited_output_without_a_hand_off(hosted_env: Path)
     ("logs", "redaction", "name"),
     [
         (True, False, "job-AJ_1.export.log"),
-        (True, True, "job-AJ_1.export.redact.log"),
+        (True, True, "job-AJ_1.redact.log"),
         (False, False, "job-AJ_1.private.log"),
         (False, True, "job-AJ_1.private.log"),
     ],
@@ -143,7 +143,7 @@ def test_the_first_decision_wins(hosted_env: Path) -> None:
     [
         ("job-AJ_1.log", "job-AJ_1.done.log"),
         ("job-AJ_1.export.log", "job-AJ_1.export.done.log"),
-        ("job-AJ_1.export.redact.log", "job-AJ_1.export.redact.done.log"),
+        ("job-AJ_1.redact.log", "job-AJ_1.redact.done.log"),
         ("job-AJ_1.private.log", "job-AJ_1.private.done.log"),
     ],
 )
