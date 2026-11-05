@@ -1,6 +1,5 @@
 {
   "nesting:rust/crates/lk-agents-core/src/llm/provider_format/aws.rs:to_chat_ctx": 5,
-  "nesting:rust/crates/lk-agents-net/src/telemetry/otlp/destination.rs:impl State::record": 5,
   "nesting:rust/crates/lk-agents-voice/src/keyterm_detection/machine.rs:record_keyterms_spec": 5,
   "nesting:rust/crates/lk-agents-voice/src/workflows/warm_transfer.rs:transfer_tools": 5,
   "nesting:rust/crates/lk-agents-worker/src/http/exchange.rs:impl Request::next": 5

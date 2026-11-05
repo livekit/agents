@@ -264,23 +264,7 @@ impl State {
         };
         let cloud = self.cloud_action(job, &record);
         let identity = job.and_then(|k| self.jobs.get(k)).map(|j| j.identity.clone());
-        if let Some(app) = &mut self.app {
-            let limits = self.limits;
-            match &record {
-                Record::Span(span) if app.config.traces_endpoint.is_some() => {
-                    if app.usage.admit(&limits, bytes) {
-                        app.spans.push_back((AppSpan { span: span.clone(), job: identity }, bytes));
-                        admitted.batch_ready |= app.spans.len() >= BATCH_RECORDS;
-                    } else {
-                        admitted.dropped += 1;
-                    }
-                }
-                Record::Measurement(m) if app.config.metrics_endpoint.is_some() => {
-                    admitted.dropped += u64::from(!app.metrics.record(m));
-                }
-                _ => {}
-            }
-        }
+        self.record_app(&record, identity, bytes, &mut admitted);
         let (Some(action), Some(key)) = (cloud, job) else { return admitted };
         let Some(job) = self.jobs.get_mut(key) else {
             admitted.dropped += 1;
@@ -317,6 +301,30 @@ impl State {
             _ => {}
         }
         admitted
+    }
+
+    fn record_app(
+        &mut self,
+        record: &Record,
+        identity: Option<Arc<JobIdentity>>,
+        bytes: usize,
+        admitted: &mut Admitted,
+    ) {
+        let Some(app) = &mut self.app else { return };
+        match record {
+            Record::Span(span) if app.config.traces_endpoint.is_some() => {
+                if app.usage.admit(&self.limits, bytes) {
+                    app.spans.push_back((AppSpan { span: span.clone(), job: identity }, bytes));
+                    admitted.batch_ready |= app.spans.len() >= BATCH_RECORDS;
+                } else {
+                    admitted.dropped += 1;
+                }
+            }
+            Record::Measurement(m) if app.config.metrics_endpoint.is_some() => {
+                admitted.dropped += u64::from(!app.metrics.record(m));
+            }
+            _ => {}
+        }
     }
 
     /// The Cloud admission of a record: `None` when Cloud never sees it. An undecided job's
