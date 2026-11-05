@@ -118,6 +118,7 @@ class RealtimeModel(_RealtimeModel):
         resolved_api_key, resolved_api_secret = resolve_credentials(api_key, api_secret)
 
         is_xai = model.startswith("xai/")
+        is_google = model.startswith("google/")
         resolved_voice = voice if is_given(voice) else "eve" if is_xai else DEFAULT_VOICE
         resolved_transcription = input_audio_transcription
         resolved_turn_detection = turn_detection
@@ -153,6 +154,9 @@ class RealtimeModel(_RealtimeModel):
         self._opts.api_version = None
         if is_xai:
             self._capabilities.can_disable_turn_detection = can_disable_turn_detection
+        if is_google:
+            # Gemini Live via Inference cancels response.create before function_call_output (#7915)
+            self._capabilities.generate_reply_during_tool_call = False
         self._inference_opts = _InferenceOptions(
             provider=provider,
             api_key=resolved_api_key,

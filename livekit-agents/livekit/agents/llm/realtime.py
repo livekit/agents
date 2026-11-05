@@ -91,6 +91,14 @@ class RealtimeCapabilities:
     When used through a RealtimeModel, add_to_chat_ctx=False is ignored and the
     message is still added to the chat context.
     """
+    generate_reply_during_tool_call: bool = True
+    """Whether ``generate_reply()`` issued inside a function tool may send
+    ``response.create`` before the pending ``function_call_output``.
+
+    OpenAI Realtime accepts that order; Gemini Live cancels it (``turn_detected``)
+    and can truncate prior assistant history. Set ``False`` for those providers so
+    the SDK defers the reply until tool outputs have been pushed.
+    """
 
 
 class RealtimeError(Exception):
