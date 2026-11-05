@@ -76,6 +76,10 @@ struct Process {
     app: Mutex<Option<AppConfig>>,
     /// Configuration conflicts the host found (a tracer provider it cannot bridge).
     conflicts: AtomicU64,
+    /// Spans a voice session's close ended because their owner never did (a framework bug).
+    swept_spans: AtomicU64,
+    /// Voice sessions dropped without their close; their open spans were ended and exported.
+    abandoned_sessions: AtomicU64,
     /// The rate limit on the process's `event_loop_blocked` spans.
     blocked: Blocked,
     /// The voice sessions running, which a stall of their job's loop is folded into.
@@ -122,6 +126,8 @@ static PROCESS: LazyLock<Process> = LazyLock::new(|| {
         tracer,
         app: Mutex::new(None),
         conflicts: AtomicU64::new(0),
+        swept_spans: AtomicU64::new(0),
+        abandoned_sessions: AtomicU64::new(0),
         blocked: Blocked::default(),
         sessions: Mutex::new(BTreeMap::new()),
     }
@@ -129,6 +135,12 @@ static PROCESS: LazyLock<Process> = LazyLock::new(|| {
 
 fn seed() -> u64 {
     lk_agents_net::telemetry::random_seed()
+}
+
+/// A voice session ended: the spans its close swept and whether it was dropped without it.
+pub(crate) fn session_ended(swept: u32, abandoned: bool) {
+    PROCESS.swept_spans.fetch_add(u64::from(swept), Ordering::Relaxed);
+    PROCESS.abandoned_sessions.fetch_add(u64::from(abandoned), Ordering::Relaxed);
 }
 
 /// The process tracer.
@@ -227,14 +239,14 @@ impl lk_agents_abi::telemetry::host::Telemetry for Telemetry {
 
     fn _core_telemetry_diagnostics() -> BTreeMap<String, u64> {
         let d = PROCESS.slot.get().map(|e| e.diagnostics()).unwrap_or_default();
-        let host_conflicts = PROCESS.conflicts.load(Ordering::Relaxed);
+        let read = |counter: &AtomicU64| counter.load(Ordering::Relaxed);
         BTreeMap::from([
             ("dropped".to_owned(), d.dropped),
             ("failed".to_owned(), d.failed),
-            ("conflicts".to_owned(), d.conflicts + host_conflicts),
+            ("conflicts".to_owned(), d.conflicts + read(&PROCESS.conflicts)),
             ("incomplete_cleanup".to_owned(), d.incomplete_cleanup),
-            ("swept_spans".to_owned(), d.swept_spans),
-            ("abandoned_sessions".to_owned(), d.abandoned_sessions),
+            ("swept_spans".to_owned(), read(&PROCESS.swept_spans)),
+            ("abandoned_sessions".to_owned(), read(&PROCESS.abandoned_sessions)),
         ])
     }
 

@@ -622,9 +622,7 @@ impl Drop for VoiceRuntime {
         self.driver.release_all_providers();
         // The spans end here only when the session never closed; either way they go out below.
         let abandoned = self.driver.abandon_spans();
-        if let Some(exporter) = self.shared.tracer.exporter() {
-            exporter.session_ended(self.driver.spans_swept(), abandoned);
-        }
+        telemetry::session_ended(self.driver.spans_swept(), abandoned);
         let effects = self.driver.take_outbox();
         self.perform_voice(effects);
         self.calls.clear();

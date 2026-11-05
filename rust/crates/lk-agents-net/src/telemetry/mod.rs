@@ -46,17 +46,18 @@ use lk_agents_core::telemetry::span::{IdSource, seeded_ids};
 pub struct Tracer(Arc<Inner>);
 
 struct Inner {
-    sink: Arc<dyn RecordSink>,
-    exporter: Option<Arc<ExporterSlot>>,
+    sink: Sink,
     clock: Arc<dyn Clock>,
     ids: Mutex<IdSource>,
     capture_content: AtomicBool,
 }
 
-struct Discard;
-
-impl RecordSink for Discard {
-    fn record(&self, _: Record) {}
+/// Where a tracer's records go: the process's exporter once installed, or a sink of its own (a
+/// test's, the DST's), or nowhere.
+enum Sink {
+    Process(Arc<ExporterSlot>),
+    Other(Arc<dyn RecordSink>),
+    Discard,
 }
 
 /// The process's exporter once the host installed telemetry: what the process tracer records
@@ -96,34 +97,30 @@ impl RecordSink for ExporterSlot {
 
 impl Tracer {
     pub fn new(sink: Arc<dyn RecordSink>, clock: Arc<dyn Clock>, seed: u64) -> Self {
-        Tracer::build(sink, None, clock, seed)
+        Tracer::build(Sink::Other(sink), clock, seed)
     }
 
     /// The process's tracer, recording to the exporter `slot` installs.
     pub fn process(slot: Arc<ExporterSlot>, clock: Arc<dyn Clock>, seed: u64) -> Self {
-        Tracer::build(slot.clone(), Some(slot), clock, seed)
+        Tracer::build(Sink::Process(slot), clock, seed)
     }
 
-    fn build(
-        sink: Arc<dyn RecordSink>,
-        exporter: Option<Arc<ExporterSlot>>,
-        clock: Arc<dyn Clock>,
-        seed: u64,
-    ) -> Self {
-        let capture_content = AtomicBool::new(true);
+    fn build(sink: Sink, clock: Arc<dyn Clock>, seed: u64) -> Self {
         Tracer(Arc::new(Inner {
             sink,
-            exporter,
             clock,
             ids: Mutex::new(seeded_ids(seed)),
-            capture_content,
+            capture_content: AtomicBool::new(true),
         }))
     }
 
     /// The process exporter, for its job registry and configuration; `None` before installation
     /// or for a tracer without one.
     pub fn exporter(&self) -> Option<Arc<Exporter>> {
-        self.0.exporter.as_ref()?.get()
+        match &self.0.sink {
+            Sink::Process(slot) => slot.get(),
+            Sink::Other(_) | Sink::Discard => None,
+        }
     }
 
     /// A forked child's ids diverge from its parent's.
@@ -143,7 +140,7 @@ impl Tracer {
 
     /// Records nothing: a Rust caller with no exporter.
     pub fn disabled(clock: Arc<dyn Clock>) -> Self {
-        Tracer::new(Arc::new(Discard), clock, 1)
+        Tracer::build(Sink::Discard, clock, 1)
     }
 
     /// A context with no current span, outside any job.
@@ -153,7 +150,7 @@ impl Tracer {
 
     /// Hands a record produced elsewhere (a voice core span) to the sink.
     pub fn record(&self, record: Record) {
-        self.0.sink.record(record);
+        self.0.record(record);
     }
 
     /// Wall-clock nanoseconds from the injected clock.
@@ -164,7 +161,11 @@ impl Tracer {
 
 impl Recorder for Inner {
     fn record(&self, record: Record) {
-        self.sink.record(record);
+        match &self.sink {
+            Sink::Process(slot) => slot.record(record),
+            Sink::Other(sink) => sink.record(record),
+            Sink::Discard => {}
+        }
     }
 
     fn now_nanos(&self) -> u64 {

@@ -134,6 +134,8 @@ fn span(record: &SpanRecord) -> trace::Span {
         SpanKind::Internal => trace::span::SpanKind::Internal,
         SpanKind::Client => trace::span::SpanKind::Client,
         SpanKind::Server => trace::span::SpanKind::Server,
+        SpanKind::Producer => trace::span::SpanKind::Producer,
+        SpanKind::Consumer => trace::span::SpanKind::Consumer,
     };
     let status = match &record.status {
         Status::Unset => None,

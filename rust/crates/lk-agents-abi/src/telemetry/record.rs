@@ -110,6 +110,9 @@ pub enum SpanKind {
     Internal,
     Client,
     Server,
+    /// Only a host span is a producer or a consumer: no declaration is one.
+    Producer,
+    Consumer,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]

@@ -167,8 +167,7 @@ fn an_undeclared_parent_fails_the_debug_assertion() {
 #[test]
 fn ids_follow_the_seed() {
     let ids = |seed| {
-        let tracer = Tracer::disabled(Arc::new(VirtualClock::new()));
-        let tracer = Tracer::new(tracer.0.sink.clone(), tracer.0.clock.clone(), seed);
+        let tracer = Tracer::build(super::Sink::Discard, Arc::new(VirtualClock::new()), seed);
         let span = start(&tracer.root(), job());
         span.cx().span().unwrap()
     };

@@ -54,10 +54,12 @@ impl lk_agents_abi::telemetry::host::HostSpan for HostSpan {
             Some(ids) => ids,
             None => tracer.root().continuing(parent).child_context(),
         };
-        // OpenTelemetry's SpanKind: INTERNAL, SERVER, CLIENT, PRODUCER, CONSUMER.
+        // OpenTelemetry's SpanKind values; the API has no other.
         let kind = match kind {
             1 => SpanKind::Server,
             2 => SpanKind::Client,
+            3 => SpanKind::Producer,
+            4 => SpanKind::Consumer,
             _ => SpanKind::Internal,
         };
         let open = Open {
