@@ -130,6 +130,7 @@ pub trait Implementations: 'static {
     type HostSpan: ::lk_agents_abi::telemetry::host::HostSpan;
     type Telemetry: ::lk_agents_abi::telemetry::host::Telemetry;
     type LoopWatch: ::lk_agents_abi::telemetry::host::LoopWatch;
+    type SessionReportFunctions: ::lk_agents_abi::telemetry::report::SessionReportFunctions;
     type Tagger: ::lk_agents_abi::telemetry::report::Tagger;
     type TextSessionRunner: ::lk_agents_abi::text_session::TextSessionRunner<
             Stream = Self::RunStream,
@@ -382,6 +383,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(telemetry::_core_set_capture_content, m)?)?;
     m.add_function(wrap_pyfunction!(telemetry::_core_telemetry_shutdown, m)?)?;
     m.add_class::<telemetry::CoreLoopWatch>()?;
+    m.add_function(wrap_pyfunction!(telemetry::session_report_json, m)?)?;
     m.add_class::<telemetry::Tagger>()?;
     m.add_class::<text_session::TextSessionRunner>()?;
     m.add_class::<text_session::TextSessionUpdates>()?;
@@ -527,7 +529,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<voice::NodeTranscript>()?;
     m.add_function(wrap_pyfunction!(text_session::_core_persist_text_session_state, m)?)?;
     m.add_function(wrap_pyfunction!(text_session::_core_restore_text_session_state, m)?)?;
-    m.add("TELEMETRY_MAX_DEPTH", ::lk_agents_abi::telemetry::policy::MAX_DEPTH)?;
     m.add_function(wrap_pyfunction!(voice::rtc_wire_names, m)?)?;
     m.add_function(wrap_pyfunction!(voice::video_queue_frames, m)?)?;
     m.add(

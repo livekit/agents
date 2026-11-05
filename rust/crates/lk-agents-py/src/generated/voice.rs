@@ -4417,6 +4417,78 @@ impl CoreSessionOwner {
         ::pyo3::PyResult::Ok(out)
     }
 
+    /// The session's report for `job` as of now: `history` is the conversation as the caller
+    /// sees it, without item turns; `events` are the report's events. Its options are the resolved
+    /// options for `legs` with the recording options under `recording_options`.
+    #[pyo3(signature = (job, legs, events, history))]
+    fn report<'py>(
+        &self,
+        py: Python<'py>,
+        job: Bound<'_, PyAny>,
+        legs: Bound<'_, PyAny>,
+        events: Bound<'_, PyAny>,
+        history: Bound<'_, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let job = crate::generated::records::telemetry::report_job_from_py(job.as_any())?;
+        let legs = crate::generated::records::session_options::session_legs_from_py(legs.as_any())?;
+        let events = events.try_iter().and_then(|items| {
+            items
+                .map(|item| {
+                    let item = item?;
+                    crate::py_values::value_from_py(item.as_any(), "events")
+                })
+                .collect::<PyResult<Vec<_>>>()
+        })?;
+        let history = history.try_iter().and_then(|items| {
+            items
+                .map(|item| {
+                    let item = item?;
+                    crate::generated::records::chat_items::chat_item_from_py(item.as_any())
+                })
+                .collect::<PyResult<Vec<_>>>()
+        })?;
+        let out = py.detach(|| {
+            <CoreSessionOwnerImpl as ::lk_agents_abi::voice::session_owner::SessionOwner>::report(
+                &self.0, job, legs, events, history,
+            )
+        });
+        crate::generated::records::telemetry::session_report_to_py(py, out)
+    }
+
+    /// The report once the session closed: its history, item turns and usage are the voice
+    /// loop's as it closed (empty for a session that never ran).
+    #[pyo3(signature = (job, legs, events))]
+    fn final_report<'py>(
+        &self,
+        py: Python<'py>,
+        job: Bound<'_, PyAny>,
+        legs: Bound<'_, PyAny>,
+        events: Bound<'_, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let job = crate::generated::records::telemetry::report_job_from_py(job.as_any())?;
+        let legs = crate::generated::records::session_options::session_legs_from_py(legs.as_any())?;
+        let events = events.try_iter().and_then(|items| {
+            items
+                .map(|item| {
+                    let item = item?;
+                    crate::py_values::value_from_py(item.as_any(), "events")
+                })
+                .collect::<PyResult<Vec<_>>>()
+        })?;
+        let call = py.detach(|| <CoreSessionOwnerImpl as ::lk_agents_abi::voice::session_owner::SessionOwner>::final_report(&self.0, job, legs, events)).map_err(|e: ::lk_agents_abi::voice::session::SessionRefused| <::lk_agents_abi::voice::session::SessionRefused as crate::py_errors::HostException>::to_py_err(&e))?;
+        crate::py_calls::future_into_py(py, async move {
+            let out = call.await;
+            Python::attach(|py| {
+                ::pyo3::IntoPyObjectExt::into_py_any(
+                    crate::generated::records::telemetry::session_report_to_py(py, out)?,
+                    py,
+                )
+            })
+        })
+    }
+
     /// Whether the job `job_id` may read the session's report: the job the session first started
     /// in, or any job for a session started outside one.
     #[pyo3(signature = (job_id))]

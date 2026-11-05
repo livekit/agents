@@ -17880,6 +17880,40 @@ pub mod telemetry {
             Some(&kwargs),
         )
     }
+
+    // Declared in rust/crates/lk-agents-abi/src/telemetry/report/mod.rs.
+    static REPORT_JOB: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn report_job_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::telemetry::report::ReportJob> {
+        let py = obj.py();
+        if !obj.is_instance(REPORT_JOB.import(
+            py,
+            "livekit.agents._generated.telemetry",
+            "ReportJob",
+        )?)? {
+            return Err(super::not_a(obj, "ReportJob"));
+        }
+        Ok(::lk_agents_abi::telemetry::report::ReportJob {
+            job_id: crate::py_values::attr_with(obj, "ReportJob", "job_id", |v| {
+                v.extract::<::std::string::String>()
+            })?,
+            room_id: crate::py_values::attr_with(obj, "ReportJob", "room_id", |v| {
+                v.extract::<::std::string::String>()
+            })?,
+            room: crate::py_values::attr_with(obj, "ReportJob", "room", |v| {
+                v.extract::<::std::string::String>()
+            })?,
+            agent_name: crate::py_values::attr_with(obj, "ReportJob", "agent_name", |v| {
+                v.extract::<::std::string::String>()
+            })?,
+            sdk_version: crate::py_values::attr_with(obj, "ReportJob", "sdk_version", |v| {
+                v.extract::<::std::string::String>()
+            })?,
+        })
+    }
 }
 
 pub mod text_session {

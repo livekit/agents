@@ -57,7 +57,7 @@ from .session_owner import SessionJobInfo
 from .session_wire import DefaultModelPlan, ExceededTurnReply, RunQuestion, VoiceRunOutput
 from .stream_info import StreamInfo
 from .stt import SpeechEvent
-from .telemetry import RecordingOptions, SessionReport, SpanContext
+from .telemetry import RecordingOptions, ReportJob, SessionReport, SpanContext
 from .tool_options import ToolSpec
 from .tool_report import ToolReport
 from .transcript import TranscriptChunk
@@ -963,6 +963,26 @@ class _core_SessionOwner:
     @property
     def recording_started_at(self) -> float | None:
         """When the audio recording's first frame was written."""
+    def report(
+        self,
+        job: ReportJob,
+        legs: SessionLegs,
+        events: Sequence[object],
+        history: Sequence[ChatItem],
+    ) -> SessionReport:
+        """The session's report for `job` as of now: `history` is the conversation as the caller
+        sees it, without item turns; `events` are the report's events. Its options are the resolved
+        options for `legs` with the recording options under `recording_options`.
+        """
+    async def final_report(
+        self,
+        job: ReportJob,
+        legs: SessionLegs,
+        events: Sequence[object],
+    ) -> SessionReport:
+        """The report once the session closed: its history, item turns and usage are the voice
+        loop's as it closed (empty for a session that never ran).
+        """
     def allows_report(self, job_id: str) -> bool:
         """Whether the job `job_id` may read the session's report: the job the session first started
         in, or any job for a session started outside one.

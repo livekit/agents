@@ -349,6 +349,25 @@ impl CoreLoopWatch {
 }
 
 // Declared in rust/crates/lk-agents-abi/src/telemetry/report/mod.rs.
+type SessionReportFunctionsImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::SessionReportFunctions;
+
+/// The console's ``session_report.json``: the report's identity, events, options, timestamp,
+/// audio recording, chat history (with timestamps) and usage (without absent fields), as
+/// Python's ``json.dumps`` writes it.
+#[pyfunction]
+#[pyo3(signature = (report))]
+pub fn session_report_json(
+    py: Python<'_>,
+    report: Bound<'_, PyAny>,
+) -> PyResult<::std::string::String> {
+    crate::py_calls::check_pid()?;
+    let report = crate::generated::records::telemetry::session_report_from_py(report.as_any())?;
+    let out = py.detach(|| <SessionReportFunctionsImpl as ::lk_agents_abi::telemetry::report::SessionReportFunctions>::session_report_json(report)).map_err(|e: ::lk_agents_abi::ToDictError| <::lk_agents_abi::ToDictError as crate::py_errors::HostException>::to_py_err(&e))?;
+    ::pyo3::PyResult::Ok(out)
+}
+
+// Declared in rust/crates/lk-agents-abi/src/telemetry/report/mod.rs.
 type TaggerImpl = <crate::generated::implementations::Selected as super::Implementations>::Tagger;
 type TaggerOutcomeReasonOutput = ::std::option::Option<::std::string::String>;
 
@@ -514,6 +533,21 @@ impl Tagger {
             instructions,
         );
         Ok(())
+    }
+
+    /// ``report`` with the session's tags, evaluations and outcome as of now.
+    #[pyo3(signature = (report))]
+    fn _core_stamp<'py>(
+        &self,
+        py: Python<'py>,
+        report: Bound<'_, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let report = crate::generated::records::telemetry::session_report_from_py(report.as_any())?;
+        let out = <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::_core_stamp(
+            &self.0, report,
+        );
+        crate::generated::records::telemetry::session_report_to_py(py, out)
     }
 }
 

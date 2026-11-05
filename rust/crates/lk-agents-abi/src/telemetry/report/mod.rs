@@ -20,7 +20,7 @@ pub mod records;
 ///
 /// `redaction = False` never disables project-level redaction; it only declines to ask for it.
 #[crate::host(record(module = "telemetry", extract, emit))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct RecordingOptions {
     #[host(default = true)]
     pub audio: bool,
@@ -175,6 +175,27 @@ pub struct SessionReport {
     #[host(default = None)]
     pub audio_recording_started_at: Option<f64>,
     pub sdk_version: String,
+}
+
+/// The job a session report is made for, and the SDK that made it.
+#[crate::host(record(module = "telemetry", extract))]
+#[derive(Debug, Clone, Default)]
+pub struct ReportJob {
+    pub job_id: String,
+    pub room_id: String,
+    pub room: String,
+    pub agent_name: String,
+    pub sdk_version: String,
+}
+
+/// The session report as files read it.
+#[crate::host(functions)]
+pub trait SessionReportFunctions {
+    /// The console's ``session_report.json``: the report's identity, events, options, timestamp,
+    /// audio recording, chat history (with timestamps) and usage (without absent fields), as
+    /// Python's ``json.dumps`` writes it.
+    #[host(function)]
+    fn session_report_json(report: SessionReport) -> Result<String, crate::ToDictError>;
 }
 
 /// The recording upload's `MetricsRecordingHeader`.
@@ -387,6 +408,10 @@ pub trait Tagger: Send + Sized + 'static {
         reasoning: String,
         instructions: String,
     );
+
+    /// ``report`` with the session's tags, evaluations and outcome as of now.
+    #[host(call)]
+    fn _core_stamp(&self, report: SessionReport) -> SessionReport;
 }
 
 // Public data contracts. Python behavior remains in its adapters.

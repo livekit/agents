@@ -171,7 +171,6 @@ from ._generated._core_stt import (
     SttStreamAdapter as SttStreamAdapter,
 )
 from ._generated._core_telemetry import (
-    TELEMETRY_MAX_DEPTH as TELEMETRY_MAX_DEPTH,
     Tagger as Tagger,
     TelemetrySpan as TelemetrySpan,
     _core_LoopWatch as _core_LoopWatch,
@@ -181,6 +180,7 @@ from ._generated._core_telemetry import (
     _core_telemetry_diagnostics as _core_telemetry_diagnostics,
     _core_telemetry_install as _core_telemetry_install,
     _core_telemetry_shutdown as _core_telemetry_shutdown,
+    session_report_json as session_report_json,
 )
 from ._generated._core_text_session import (
     TextSessionRunner as TextSessionRunner,

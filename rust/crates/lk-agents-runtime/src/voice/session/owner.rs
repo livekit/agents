@@ -60,6 +60,37 @@ impl SessionOwner {
     pub(crate) fn avatars(&self) -> &crate::avatar::lifecycle::Avatars {
         &self.0.avatars
     }
+
+    /// `session`'s history, item turns and usage reported for `job`, with what the owner holds of
+    /// the session now.
+    fn assemble(
+        &self,
+        job: lk_agents_abi::telemetry::report::ReportJob,
+        legs: SessionLegs,
+        events: Vec<serde_json::Value>,
+        session: telemetry::SessionReport,
+    ) -> telemetry::SessionReport {
+        let timestamp = lk_agents_abi::unix_secs(self.0.env.clock.wall());
+        let recording_started_at = self.recording_started_at();
+        telemetry::SessionReport {
+            job_id: job.job_id,
+            room_id: job.room_id,
+            room: job.room,
+            agent_name: job.agent_name,
+            options: lk_agents_core::telemetry::report::options(
+                &self.resolved_options(legs),
+                &self.recording_options(),
+            ),
+            events,
+            started_at: self.started_at(),
+            timestamp,
+            duration: recording_started_at.map(|at| timestamp - at),
+            audio_recording_path: self.recording_path(),
+            audio_recording_started_at: recording_started_at,
+            sdk_version: job.sdk_version,
+            ..session
+        }
+    }
 }
 
 /// The report's event retention, through its declared operations.
@@ -649,6 +680,38 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
 
     fn recording_started_at(&self) -> Option<f64> {
         self.0.audio.get().and_then(|(_, recorder)| recorder.started_at())
+    }
+
+    fn report(
+        &self,
+        job: lk_agents_abi::telemetry::report::ReportJob,
+        legs: SessionLegs,
+        events: Vec<serde_json::Value>,
+        history: Vec<lk_agents_abi::ChatItem>,
+    ) -> telemetry::SessionReport {
+        let session = telemetry::SessionReport {
+            chat_history: history,
+            usage: self.usage(),
+            ..telemetry::SessionReport::default()
+        };
+        self.assemble(job, legs, events, session)
+    }
+
+    fn final_report(
+        &self,
+        job: lk_agents_abi::telemetry::report::ReportJob,
+        legs: SessionLegs,
+        events: Vec<serde_json::Value>,
+    ) -> Result<BoxFuture<'static, telemetry::SessionReport>, SessionRefused> {
+        let read = self.0.session.get().map(|session| session.report()).transpose()?;
+        let owner = SessionOwner(self.0.clone());
+        Ok(Box::pin(async move {
+            let session = match read {
+                Some(read) => read.await,
+                None => telemetry::SessionReport::default(),
+            };
+            owner.assemble(job, legs, events, session)
+        }))
     }
 
     fn allows_report(&self, job_id: String) -> bool {

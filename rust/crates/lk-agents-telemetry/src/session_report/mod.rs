@@ -73,6 +73,15 @@ pub async fn export(
     Ok(())
 }
 
+/// The session report's files.
+pub struct ReportFiles;
+
+impl lk_agents_abi::telemetry::report::SessionReportFunctions for ReportFiles {
+    fn session_report_json(report: SessionReport) -> Result<String, lk_agents_abi::ToDictError> {
+        report::console_json(&report)
+    }
+}
+
 /// Recordings in flight; further uploads wait, within their own deadline.
 const UPLOADS: usize = 2;
 

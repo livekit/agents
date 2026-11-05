@@ -250,6 +250,29 @@ pub trait SessionOwner: Send + Sync + Sized + 'static {
     /// When the audio recording's first frame was written.
     #[host(getter)]
     fn recording_started_at(&self) -> Option<f64>;
+    /// The session's report for `job` as of now: `history` is the conversation as the caller
+    /// sees it, without item turns; `events` are the report's events. Its options are the resolved
+    /// options for `legs` with the recording options under `recording_options`.
+    #[host(call)]
+    fn report(
+        &self,
+        job: crate::telemetry::report::ReportJob,
+        legs: super::session_options::SessionLegs,
+        events: Vec<serde_json::Value>,
+        history: Vec<crate::ChatItem>,
+    ) -> crate::telemetry::report::SessionReport;
+    /// The report once the session closed: its history, item turns and usage are the voice
+    /// loop's as it closed (empty for a session that never ran).
+    #[host(await)]
+    fn final_report(
+        &self,
+        job: crate::telemetry::report::ReportJob,
+        legs: super::session_options::SessionLegs,
+        events: Vec<serde_json::Value>,
+    ) -> Result<
+        BoxFuture<'static, crate::telemetry::report::SessionReport>,
+        super::session::SessionRefused,
+    >;
     /// Whether the job `job_id` may read the session's report: the job the session first started
     /// in, or any job for a session started outside one.
     #[host(call)]

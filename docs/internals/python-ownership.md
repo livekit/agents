@@ -217,7 +217,7 @@ Worker/runtime own registration, leases, job state, process supervision, shutdow
 
 ### Telemetry host integration
 
-Rust owns spans, metrics, report records, export and the session report upload ([telemetry internals](telemetry.md)). Python keeps one module: the OpenTelemetry API provider over the native span, the bridge for an application's SDK provider, `configure`, `set_capture_content` and `diagnostics`, the event loop monitor and the framework's spans around Python-only code (`room_connect`, `wait_for_participant`, `rpc_call`, `rpc_handler`). The worker's Prometheus process metrics are `ipc/prometheus.py`.
+Rust owns spans, metrics, report records, export and the session report: its assembly from the session owner, the console's `session_report.json` and the upload ([telemetry internals](telemetry.md)); `JobContext` passes only the job's identity, the report's events and the caller's history. Python keeps one module: the OpenTelemetry API provider over the native span, the bridge for an application's SDK provider, `configure`, `set_capture_content` and `diagnostics`, the event loop monitor and the framework's spans around Python-only code (`room_connect`, `wait_for_participant`, `rpc_call`, `rpc_handler`). The worker's Prometheus process metrics are `ipc/prometheus.py`.
 
 | File | Lines |
 | --- | ---: |

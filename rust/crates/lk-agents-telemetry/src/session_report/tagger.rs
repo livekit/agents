@@ -7,7 +7,7 @@ use std::time::SystemTime;
 
 use lk_agents_abi::Clock;
 use lk_agents_abi::telemetry::report::{
-    EvaluationRecord, Outcome, ReportTag, TAG_FAIL, TAG_SUCCESS,
+    EvaluationRecord, Outcome, ReportOutcome, ReportTag, SessionReport, TAG_FAIL, TAG_SUCCESS,
 };
 use serde_json::Value;
 
@@ -118,6 +118,16 @@ impl lk_agents_abi::telemetry::report::Tagger for Tagger {
         self.add(tag.clone(), None);
         self.evaluations.push(EvaluationRecord { name, tag, verdict, reasoning, instructions });
     }
+
+    fn _core_stamp(&self, report: SessionReport) -> SessionReport {
+        let reason = self.outcome_reason();
+        SessionReport {
+            tags: self.entries(),
+            evaluations: self.evaluations(),
+            outcome: self.outcome().map(|outcome| ReportOutcome { outcome, reason }),
+            ..report
+        }
+    }
 }
 
 #[cfg(test)]
@@ -163,5 +173,23 @@ mod tests {
         assert_eq!(tagger.outcome(), Some(Outcome::Fail));
         tagger.remove("lk.fail".into());
         assert_eq!(tagger.outcome(), None);
+    }
+
+    // Catches: a stamped report keeping stale tags, or an outcome without its reason.
+    #[test]
+    fn a_stamped_report_carries_the_tags_evaluations_and_outcome_now() {
+        let mut tagger = Tagger::with_clock(Arc::new(VirtualClock::new()));
+        tagger.add("k:v".into(), Some(json!({"a": 1})));
+        tagger._core_record_judgment("tone".into(), "pass".into(), "ok".into(), "be nice".into());
+        let report = SessionReport { job_id: "AJ_1".into(), ..SessionReport::default() };
+        let stamped = tagger._core_stamp(report.clone());
+        assert_eq!(stamped.job_id, "AJ_1");
+        let names: Vec<String> = stamped.tags.into_iter().map(|t| t.name).collect();
+        assert_eq!(names, ["k:v", "lk.judge.tone:pass"]);
+        assert_eq!(stamped.evaluations.len(), 1);
+        assert!(stamped.outcome.is_none());
+        tagger.fail(Some("hung up".into()));
+        let outcome = tagger._core_stamp(report).outcome.unwrap();
+        assert_eq!((outcome.outcome, outcome.reason.as_deref()), (Outcome::Fail, Some("hung up")));
     }
 }

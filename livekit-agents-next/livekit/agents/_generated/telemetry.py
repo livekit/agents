@@ -129,3 +129,14 @@ class SessionReport:
     audio_recording_started_at: float | None = None
     """When the audio recording started, in unix seconds."""
     sdk_version: str
+
+
+@dataclass(kw_only=True, slots=True)
+class ReportJob:
+    """The job a session report is made for, and the SDK that made it."""
+
+    job_id: str
+    room_id: str
+    room: str
+    agent_name: str
+    sdk_version: str

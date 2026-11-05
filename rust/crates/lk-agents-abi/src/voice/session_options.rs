@@ -528,7 +528,7 @@ impl SessionLegs {
 
 /// The resolved `endpointing` group, seconds as `f64`.
 #[crate::host(record(module = "session_options", typed_dict, emit))]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct ResolvedEndpointing {
     pub mode: String,
     pub min_delay: f64,
@@ -538,10 +538,11 @@ pub struct ResolvedEndpointing {
 
 /// The resolved `interruption` group. `mode` is absent when the session picks.
 #[crate::host(record(module = "session_options", typed_dict, emit))]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct ResolvedInterruption {
     pub enabled: bool,
     #[host(default = None)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
     pub discard_audio_if_uninterruptible: bool,
     pub min_duration: f64,
@@ -553,7 +554,7 @@ pub struct ResolvedInterruption {
 
 /// The resolved `preemptive_generation` group.
 #[crate::host(record(module = "session_options", typed_dict, emit))]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct ResolvedPreemptiveGeneration {
     pub enabled: bool,
     pub preemptive_tts: bool,
@@ -563,7 +564,7 @@ pub struct ResolvedPreemptiveGeneration {
 
 /// The resolved `user_turn_limit` group.
 #[crate::host(record(module = "session_options", typed_dict, emit))]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct ResolvedUserTurnLimit {
     pub max_words: Option<u32>,
     pub max_duration: Option<f64>,
@@ -571,15 +572,19 @@ pub struct ResolvedUserTurnLimit {
 
 /// The session layer's sparse endpointing (`AgentSessionOptions.endpointing_overrides`).
 #[crate::host(record(module = "session_options", typed_dict, emit))]
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
 pub struct EndpointingOverrides {
     #[host(default = None)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
     #[host(default = None)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub min_delay: Option<f64>,
     #[host(default = None)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_delay: Option<f64>,
     #[host(default = None)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub alpha: Option<f64>,
 }
 
@@ -587,7 +592,7 @@ pub struct EndpointingOverrides {
 /// `session.options`, seconds as `f64`. Built only by `resolved_session_options`, whose exhaustive
 /// destructure keeps it complete.
 #[crate::host(record(module = "session_options", typed_dict, emit))]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct ResolvedSessionOptions {
     pub endpointing: ResolvedEndpointing,
     pub interruption: ResolvedInterruption,

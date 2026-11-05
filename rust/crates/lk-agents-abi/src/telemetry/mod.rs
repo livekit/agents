@@ -5,10 +5,6 @@
 
 /// Telemetry limits; the decisions are `lk_agents_core::telemetry::policy`'s.
 pub mod policy {
-    /// Nested host values deeper than this are refused.
-    #[crate::host(export(name = "TELEMETRY_MAX_DEPTH"))]
-    pub const MAX_DEPTH: usize = 4;
-
     /// The bound on a job's final telemetry flush.
     pub const SHUTDOWN_TIMEOUT_SECONDS: f64 = 10.0;
 

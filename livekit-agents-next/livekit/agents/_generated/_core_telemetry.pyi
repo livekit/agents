@@ -10,7 +10,14 @@ from typing import Self
 
 from livekit.agents._core import SpanKind, StatusCode
 
-from .telemetry import EvaluationRecord, Outcome, ReportTag, SpanContext, TelemetryDiagnostics
+from .telemetry import (
+    EvaluationRecord,
+    Outcome,
+    ReportTag,
+    SessionReport,
+    SpanContext,
+    TelemetryDiagnostics,
+)
 
 class TelemetrySpan:
     """A span started through the host's OpenTelemetry API (an application span, or a framework span
@@ -93,6 +100,12 @@ class _core_LoopWatch:
     def close(self) -> None:
         """The loop is done; a stall in progress is recorded."""
 
+def session_report_json(report: SessionReport) -> str:
+    """The console's ``session_report.json``: the report's identity, events, options, timestamp,
+    audio recording, chat history (with timestamps) and usage (without absent fields), as
+    Python's ``json.dumps`` writes it.
+    """
+
 class Tagger:
     """Tag sessions with metadata for observability.
 
@@ -153,5 +166,5 @@ class Tagger:
         instructions: str,
     ) -> None:
         """One judgment of a judge group's result: its ``lk.judge.<name>:<verdict>`` tag and record."""
-
-TELEMETRY_MAX_DEPTH: int
+    def _core_stamp(self, report: SessionReport) -> SessionReport:
+        """``report`` with the session's tags, evaluations and outcome as of now."""

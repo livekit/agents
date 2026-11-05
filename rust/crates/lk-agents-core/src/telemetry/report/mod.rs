@@ -7,6 +7,7 @@
 //! `chat_history` scope's session summary and chat items, the `evaluations` scope's evaluations,
 //! tags and outcome.
 
+mod json;
 mod upload;
 
 use lk_agents_abi::ChatItem;
@@ -21,6 +22,7 @@ use lk_agents_abi::telemetry::report::{
 };
 use serde_json::Value as Json;
 
+pub use json::{console_json, options};
 pub use upload::{RecordingUpload, TRANSCRIPT_BYTES, TRANSCRIPT_ITEMS, upload};
 
 /// Whether the session's event retention may keep an event of `kind`: every report event, but

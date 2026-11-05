@@ -748,11 +748,12 @@ lk-agents-worker     job end: the session closes and is snapshotted, on_session_
 
 | Crate | Owns | Does not |
 | --- | --- | --- |
-| `lk-agents-abi` | `SessionReport` (the read-only value and its generated Python view), `RecordingOptions`, the record and upload wire declarations (`ChatItemLog`, `SessionReportLog`, `EvaluationLog`, `TagLog`, `OutcomeLog`, `RecordingHeader`, `SessionSummary`) | behavior |
-| `lk-agents-voice` | `VoiceSession::report`: chat history, events, usage, options, start time and recording path, read from the session's own state | encoding, I/O |
-| `lk-agents-core` | `report::Tagger` (tags, evaluations, outcome); `report::records` and `report::upload`: pure projections into OTLP log records, the `chat_history.json` bytes, the header and the session summary, with their bounds | I/O, host calls |
+| `lk-agents-abi` | `SessionReport` (the read-only value and its generated Python view), `ReportJob` (the job's identity and SDK version the host passes), `RecordingOptions`, the record and upload wire declarations (`ChatItemLog`, `SessionReportLog`, `EvaluationLog`, `TagLog`, `OutcomeLog`, `RecordingHeader`, `SessionSummary`) | behavior |
+| `lk-agents-voice` | `VoiceDriver::report`: chat history, item turns and usage, read from the session's own state | encoding, I/O |
+| `lk-agents-runtime` | the session owner's `report` (now, over the caller's history) and `final_report` (the voice loop's final snapshot): the job's identity, the events, the options, start time, timestamp and recording | decisions about shape |
+| `lk-agents-core` | `report::options` (the resolved session options with the recording options under `recording_options`) and `report::console_json` (the console's `session_report.json`, written as Python's `json.dumps` writes it); `report::records` and `report::upload`: pure projections into OTLP log records, the `chat_history.json` bytes, the header and the session summary, with their bounds | I/O, host calls |
 | `lk-agents-worker` | the job-end sequence: snapshot, `on_session_end`, then the outputs under one deadline, inside the `job_shutdown` span (`on_session_end`, `session_end_upload`) | decisions about content or shape |
-| `lk-agents-telemetry` | the OTLP exporter; `session_report::export`: the records, the job's flush, then `recording::upload`: reading the audio file, the multipart request, auth, retries with `RetryInfo`, the recording-disabled response | report content |
+| `lk-agents-telemetry` | the OTLP exporter; the `Tagger` (tags, evaluations, outcome, stamped onto a report as of the call); `session_report::export`: the records, the job's flush, then `recording::upload`: reading the audio file, the multipart request, auth, retries with `RetryInfo`, the recording-disabled response | report content |
 | `lk-agents-py` | the generated `SessionReport` and `Tagger` classes | anything else |
 
 `SessionReport` fields: `job_id`, `room_id`, `room`, `agent_name`, `options`,

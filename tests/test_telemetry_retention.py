@@ -118,13 +118,11 @@ async def test_session_report_access_stays_with_the_job_that_started_the_session
         await session.aclose()
 
 
-async def test_the_session_snapshot_is_taken_once_off_the_event_loop(
+async def test_the_session_snapshot_is_taken_once(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    import asyncio
     import json
-    import threading
 
     from livekit.agents import Agent
     from livekit.agents.voice._session_bindings import ConsoleCall
@@ -137,35 +135,12 @@ async def test_the_session_snapshot_is_taken_once_off_the_event_loop(
     await session.generate_reply(user_input="recorded message")
     owner = _job_context("report-worker", agent_name="desk")
     owner._core_claim_primary(session)
-    entered, release = threading.Event(), threading.Event()
-    loop_thread = threading.get_ident()
-    threads: list[int] = []
-    make_report = JobContext._build_session_report
-
-    def prepare(self, current, core, events):
-        threads.append(threading.get_ident())
-        entered.set()
-        release.wait(2)
-        return make_report(self, current, core, events)
-
-    monkeypatch.setattr(JobContext, "_build_session_report", prepare)
     monkeypatch.setattr(ConsoleCall, "record", True)
     monkeypatch.chdir(tmp_path)
-    snapshot = asyncio.create_task(owner._snapshot_session())
-    try:
-        async with asyncio.timeout(3):
-            while not entered.is_set() and not snapshot.done():
-                await asyncio.sleep(0)
-        assert entered.is_set()
-        for _ in range(3):
-            await asyncio.sleep(0)
-        assert not snapshot.done(), "the loop must progress while the snapshot is taken"
-    finally:
-        release.set()
-        async with asyncio.timeout(3):
-            await snapshot
-        await session.aclose()
-    assert threads and all(thread != loop_thread for thread in threads)
+    await session.aclose()
+    await owner._snapshot_session()
+    snapshot = owner._session_report
+    assert snapshot is not None
 
     # Every later report reads the snapshot; the tagger is read at each call.
     session.history.add_message(role="user", content="after the session closed")
@@ -176,11 +151,20 @@ async def test_the_session_snapshot_is_taken_once_off_the_event_loop(
     assert (report.job_id, report.agent_name) == ("report-worker", "desk")
     assert [tag.name for tag in report.tags] == ["lk.success"]
     assert report.outcome is not None and report.outcome.reason == "booked"
+    assert report.options["recording_options"] == {
+        "audio": False,
+        "traces": False,
+        "logs": False,
+        "transcript": False,
+        "redaction": False,
+    }
     await owner._snapshot_session()
-    assert len(threads) == 1, "the session is snapshotted once"
+    assert owner._session_report is snapshot, "the session is snapshotted once"
 
     [artifact] = list(tmp_path.glob("console-recordings/*/session_report.json"))
-    console = json.loads(artifact.read_text())
+    text = artifact.read_text()
+    console = json.loads(text)
+    assert text == json.dumps(console), "written as json.dumps writes it"
     assert console["job_id"] == "report-worker"
     items = console["chat_history"]["items"]
     assert ["recorded message"] in [i["content"] for i in items if i["type"] == "message"]

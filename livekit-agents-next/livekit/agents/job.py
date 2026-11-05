@@ -19,14 +19,11 @@ import contextvars
 import datetime
 import functools
 import inspect
-import json
 import logging
 import multiprocessing as mp
 import os
 import tempfile
-import time
-from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence, Set
-from dataclasses import asdict, replace
+from collections.abc import Awaitable, Callable, Coroutine
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast, overload
 
@@ -45,7 +42,7 @@ from livekit.protocol.sip import TransferSIPParticipantResponse
 
 from . import _core, telemetry
 from ._generated import semconv
-from ._generated.telemetry import ReportOutcome, SessionReport as SessionReport
+from ._generated.telemetry import ReportJob, SessionReport as SessionReport
 from ._generated.types import ATTRIBUTE_SIMULATOR_DISPATCH
 from .log import logger
 from .types import NotGivenOr
@@ -228,10 +225,8 @@ class JobContext:
         except Exception:
             logger.exception("failed to finish the session recording")
         try:
-            # the session's part is the core's snapshot as its loop closed
-            core = await session._running.report() if session._core is not None else None
-            self._session_report = await asyncio.to_thread(
-                self._build_session_report, session, core, session._report_event_snapshots()
+            self._session_report = await session._owner.final_report(
+                self._report_job, session._adapter._legs(), session._report_event_snapshots()
             )
         except Exception:
             logger.exception("failed to snapshot the session report")
@@ -323,49 +318,21 @@ class JobContext:
         session = self._report_session(session)
         report = self._session_report
         if report is None or session is not self._primary_agent_session:
-            report = self._build_session_report(session, None, session._recorded_events)
-        outcome = self._tagger.outcome
-        return replace(
-            report,
-            tags=self._tagger.entries(),
-            evaluations=self._tagger.evaluations,
-            outcome=(
-                ReportOutcome(outcome=outcome, reason=self._tagger.outcome_reason)
-                if outcome is not None
-                else None
-            ),
-        )
+            report = session._owner.report(
+                self._report_job,
+                session._adapter._legs(),
+                session._report_event_snapshots(),
+                list(session.history.items),
+            )
+        return self._tagger._core_stamp(report)
 
-    def _build_session_report(
-        self, session: VoiceSession, core: SessionReport | None, events: list[dict[str, Any]]
-    ) -> SessionReport:
-        """``core``: the session's history, item turns and usage from the core's snapshot; the
-        session's current state without one (a report made while it runs)."""
-
-        owner = session._owner
-        recording_started_at = owner.recording_started_at
-        timestamp = time.time()
-        options = {
-            **session.options,
-            "recording_options": asdict(owner.recording_options),
-        }
-        return SessionReport(
+    @functools.cached_property
+    def _report_job(self) -> ReportJob:
+        return ReportJob(
             job_id=self.job.id,
             room_id=self.job.room.sid,
             room=self.job.room.name,
             agent_name=self.job.agent_name,
-            options=_report_option(options),
-            events=[*events],
-            chat_history=core.chat_history if core is not None else list(session.history.items),
-            turns=core.turns if core is not None else {},
-            usage=core.usage if core is not None else session.usage,
-            started_at=owner.started_at,
-            timestamp=timestamp,
-            duration=(
-                timestamp - recording_started_at if recording_started_at is not None else None
-            ),
-            audio_recording_path=owner.recording_path,
-            audio_recording_started_at=recording_started_at,
             sdk_version=__version__,
         )
 
@@ -780,35 +747,6 @@ class JobContext:
         return api.TokenVerifier().verify(self._info.token, verify_signature=False)
 
 
-def _report_option(value: object, depth: int = 0) -> JsonValue:
-    """A session option as the report records it: an object by its class name, with the options
-    its ``describe_options()`` returns (a turn detector, a model). Secrets stay out of it."""
-    if depth > _core.TELEMETRY_MAX_DEPTH:
-        raise ValueError("session report options are nested too deep")
-    if value is None or isinstance(value, str | bool | int | float):
-        return value
-    if isinstance(value, Mapping):
-        if not all(isinstance(key, str) for key in value):
-            raise TypeError("session report option keys must be strings")
-        return {key: _report_option(item, depth + 1) for key, item in value.items()}
-    if isinstance(value, Sequence | Set) and not isinstance(value, bytes):
-        items = [_report_option(item, depth + 1) for item in value]
-        return sorted(items, key=str) if isinstance(value, Set) else items
-    cls = type(value)
-    name = f"{cls.__module__}.{cls.__name__}"
-    if (describe := getattr(value, "describe_options", None)) is None:
-        return name
-    options = _report_option(describe(), depth + 1)
-    if not isinstance(options, dict):
-        raise TypeError("describe_options() must return a mapping")
-    parts = [
-        f"{key}={item if isinstance(item, str | bool | int | float) else json.dumps(item, sort_keys=True)}"
-        for key, item in options.items()
-        if item is not None
-    ]
-    return f"{name}({', '.join(parts)})"
-
-
 def _apply_auto_subscribe_opts(room: rtc.Room, auto_subscribe: AutoSubscribe) -> None:
     if auto_subscribe not in (AutoSubscribe.AUDIO_ONLY, AutoSubscribe.VIDEO_ONLY):
         return
@@ -859,19 +797,5 @@ class JobProcess:
 
 
 def _write_console_report(report: SessionReport, path: Path) -> None:
-    """The console's ``session_report.json``."""
-    import json
-
-    data = {
-        **{
-            key: getattr(report, key)
-            for key in ("job_id", "room_id", "room", "events", "options", "timestamp")
-        },
-        "audio_recording_path": report.audio_recording_path,
-        "audio_recording_started_at": report.audio_recording_started_at,
-        "chat_history": _core.chat_ctx_to_dict(report.chat_history, exclude_timestamp=False),
-        "usage": report.usage.model_dump(exclude_none=True),
-        "sdk_version": report.sdk_version,
-    }
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, default=str))
+    path.write_text(_core.session_report_json(report))

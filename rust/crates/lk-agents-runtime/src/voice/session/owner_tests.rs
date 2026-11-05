@@ -189,6 +189,45 @@ async fn close_before_start_refuses_resource_acquisition() {
     assert_eq!(host.prepared.load(Ordering::SeqCst), 0);
 }
 
+// Catches: a report missing the job's identity, the resolved and recording options, the
+// caller's history or events; a session that never ran failing its final report.
+#[tokio::test]
+async fn the_report_is_the_jobs_with_the_sessions_options() {
+    let owner = owner();
+    let job = lk_agents_abi::telemetry::report::ReportJob {
+        job_id: "AJ_1".into(),
+        room_id: "RM_1".into(),
+        room: "lobby".into(),
+        agent_name: "desk".into(),
+        sdk_version: "2.0.0".into(),
+    };
+    let said = lk_agents_abi::ChatMessage::text(
+        "item_1",
+        lk_agents_abi::Role::User,
+        "hello",
+        std::time::UNIX_EPOCH,
+    );
+    let history = vec![lk_agents_abi::ChatItem::Message(said)];
+    let events = vec![serde_json::json!({"type": "close", "reason": "user_initiated"})];
+    let legs = SessionLegs::none();
+    let report = owner.report(job.clone(), legs, events.clone(), history.clone());
+    assert_eq!(
+        (report.job_id.as_str(), report.room_id.as_str(), report.room.as_str()),
+        ("AJ_1", "RM_1", "lobby")
+    );
+    assert_eq!((report.agent_name.as_str(), report.sdk_version.as_str()), ("desk", "2.0.0"));
+    assert_eq!((report.chat_history, report.events), (history, events.clone()));
+    assert!(report.turns.is_empty() && report.duration.is_none() && report.timestamp > 0.0);
+    let resolved = serde_json::to_value(owner.resolved_options(legs)).unwrap();
+    let options = report.options.as_object().unwrap();
+    assert_eq!(options.len(), resolved.as_object().unwrap().len() + 1);
+    assert_eq!(options["recording_options"]["audio"], false);
+    assert_eq!(options["endpointing"], resolved["endpointing"]);
+
+    let closed = owner.final_report(job, legs, events).unwrap().await;
+    assert!(closed.chat_history.is_empty() && closed.job_id == "AJ_1");
+}
+
 /// Holds no host payloads.
 struct Registry;
 
