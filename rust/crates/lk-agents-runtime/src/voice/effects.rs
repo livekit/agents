@@ -6,6 +6,7 @@ use crate::telemetry;
 use crate::voice::events::{Opened, StreamOpened};
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::resources::ResourceId;
+use lk_agents_abi::telemetry::record::SpanContext;
 use lk_agents_voice::agent_activity::realtime::RealtimeWake;
 use lk_agents_voice::agent_activity::scheduling::SpeechId;
 use lk_agents_voice::agent_session::effects::{StreamKind, VoiceEffect};
@@ -347,7 +348,7 @@ impl VoiceRuntime {
         llm: ResourceId,
         req: u64,
         request: lk_agents_abi::ChatRequest,
-        span: Option<telemetry::SpanContext>,
+        span: Option<SpanContext>,
     ) {
         let shared = Arc::clone(&self.shared);
         let Some(llm) = shared.resources.llm(llm) else {
@@ -393,7 +394,7 @@ impl VoiceRuntime {
         context: lk_agents_voice::generation::ReplyContext,
         (llm, tts): (Option<ResourceId>, Option<ResourceId>),
         stored: bool,
-        span: Option<telemetry::SpanContext>,
+        span: Option<SpanContext>,
     ) {
         let Some(handle) = self.shared.speeches.get(speech) else { return };
         // A realtime speech plays what the socket sends it, through its own player.

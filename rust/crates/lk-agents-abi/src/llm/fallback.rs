@@ -162,7 +162,11 @@ pub trait TtsTokenLog: Send + Sync + Sized + 'static {
 
 // Public data contracts. Python behavior remains in its adapters.
 
-#[crate::host(record(module = "llm_availability", path = "livekit.agents.llm", dataclass))]
+#[crate::host(record(
+    module = "llm_availability",
+    path = "livekit.agents.llm",
+    dataclass
+))]
 pub struct AvailabilityChangedEvent {
     #[host(annotation = ".llm.LLM")]
     pub llm: crate::HostRef,

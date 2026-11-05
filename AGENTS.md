@@ -334,6 +334,8 @@ STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
   with fatal overflow is not allowed for audio, and local pressure is never a non-retryable error.
 - Every git-tracked handwritten `.rs` file stays within 1,250 lines; files with the generated
   marker are skipped. Split by responsibility when moving code.
+- Production functions nest at most 4 braces below their body (`nesting-baseline.json` holds
+  the existing deeper ones and only shrinks).
 - Backend-local `#[host(interface(...))]` unit structs live beside their adapter in `lk-agents-py`; this metadata
   cannot introduce public native exports or provider calls and resolves through the shared binding
   model. Generated output is never a declaration-discovery input.

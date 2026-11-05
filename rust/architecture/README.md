@@ -65,6 +65,10 @@ From the repository root, `make -C rust check` runs this enforcement gate.
 - Git-tracked handwritten Rust files have a 1,250-line limit. A generated file's
   first line is exactly codegen's header, `//! GENERATED FILE -- DO NOT EDIT.` Existing oversized files have individual
   shrinking ceilings.
+- A handwritten production `fn` nests at most 4 braces below its body (nested fns and closures
+  count toward it; strings, chars and comments do not). Tests (`*_tests.rs`, `tests/`, `benches/`,
+  `examples/`, `#[test]`, `#[cfg(test)]` items) and `lk-agents-fuzz` are exempt. Existing deeper
+  functions, by file and enclosing items, have shrinking ceilings in `nesting-baseline.json`.
 - Clippy resolves banned methods, types and macros over all targets in default,
   Python and all-feature configurations. One handwritten `clippy.toml` in this
   directory defines the policy. The checker explicitly sets `CLIPPY_CONF_DIR`
@@ -115,7 +119,7 @@ with its own explicit `CLIPPY_CONF_DIR` and `-p` list. Do not apply the purity
 policy to `--workspace`: I/O packages intentionally use these APIs.
 
 Unittest and codegen tests include deliberately failing dependency, compiler,
-exemption, length, placement and history fixtures. Compiler counterexamples use
+exemption, length, nesting, placement and history fixtures. Compiler counterexamples use
 one example in the existing codegen package and lockfile. Empty, partial or failed
 compiler transcripts and source changes during collection fail validation.
 

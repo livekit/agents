@@ -61,7 +61,7 @@ fn merge_into_previous_array(prev: &mut Vec<Value>, next: Vec<Value>) {
     };
     let tail_start = prev.iter().rposition(Value::is_array).map(|i| i + 1).unwrap_or(0);
     let tail = prev.split_off(tail_start);
-    if tail.len().is_multiple_of(width) {
+    if tail.len() % width == 0 {
         prev.extend(tail.chunks(width).map(|c| Value::Array(c.to_vec())));
     } else {
         prev.extend(tail);

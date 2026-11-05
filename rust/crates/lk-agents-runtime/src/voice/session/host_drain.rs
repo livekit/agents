@@ -24,9 +24,7 @@ impl HostDrain {
         let mut forwarded = 0;
         while let Some(ev) = runner.next_host_event().await {
             match ev {
-                VoiceHostEvent::Hook(call) => {
-                    self.answer(call, runner.api().clone(), &mut answering).await
-                }
+                VoiceHostEvent::Hook(call) => self.answer(call, &runner, &mut answering).await,
                 ev => {
                     let speeches = Arc::clone(&runner.speeches);
                     let Some(wire) = ev.wire(self.anchor, &|id| speeches.object(id)) else {
@@ -51,7 +49,7 @@ impl HostDrain {
     async fn answer(
         &self,
         call: HookCall,
-        api: Tx,
+        runner: &SessionRunner,
         answering: &mut Vec<lk_agents_net::task::TaskId>,
     ) {
         if let (Some(remote), HookCall::FunctionToolsExecuted { event, .. }) = (&self.remote, &call)
@@ -63,7 +61,7 @@ impl HostDrain {
             Arc::clone(hooks),
             call,
             self.agents.clone(),
-            api,
+            runner.api().clone(),
             Arc::clone(&self.spawner),
             Arc::clone(&self.tasks),
         );

@@ -11,14 +11,14 @@ pub(crate) mod agent_turn;
 pub(crate) mod session;
 pub(crate) mod user_turn;
 
-pub(crate) use lk_agents_abi::telemetry::decl::{Content, Seconds, SpanDecl};
+use lk_agents_abi::telemetry::decl::Content;
 use std::borrow::Cow;
 
 use lk_agents_abi::telemetry::errors::ErrorType;
 pub(crate) use lk_agents_abi::telemetry::errors::SpanError;
 use lk_agents_abi::telemetry::record::JobKey;
+use lk_agents_abi::telemetry::spans::common::ParticipantAttrs;
 pub(crate) use lk_agents_abi::telemetry::spans::common::log_keys;
-pub(crate) use lk_agents_abi::telemetry::spans::common::{GenAiOperation, ParticipantAttrs};
 use lk_agents_abi::voice::room_io::ParticipantInfo;
 use lk_agents_abi::voice::rtc::DisconnectReason;
 use lk_agents_core::telemetry::span::IdSource;
@@ -33,14 +33,10 @@ pub(crate) use user_turn::{Endpointing, Stt, UserTurnSpan};
 pub(crate) use lk_agents_abi::telemetry::record::SpanContext;
 pub(crate) use lk_agents_abi::telemetry::report::SessionReport;
 pub(crate) use lk_agents_abi::telemetry::spans::session::{
-    AgentSession, AgentStateChanged, Amd, AmdVerdict, CloseReason, ConnectionStateChanged,
-    DrainAgentActivity, EventLoopBlockedEvent, KeytermDetection, KeytermDetectionEnd, OnEnter,
-    OnExit, ParticipantDisconnected, ParticipantLinked, PauseAgentActivity, ResumeAgentActivity,
-    SessionClose, SessionStart, StartAgentActivity, UpdateAgent, UserStateChanged,
+    AgentSession, KeytermDetection, KeytermDetectionEnd, SessionClose, SessionStart,
+    StartAgentActivity, UpdateAgent,
 };
-pub(crate) use lk_agents_abi::telemetry::spans::user_turn::{
-    SttEventType, UserTurnOrigin, UserTurnOutcome,
-};
+pub(crate) use lk_agents_abi::telemetry::spans::user_turn::{UserTurnOrigin, UserTurnOutcome};
 
 pub fn participant_attrs(p: &ParticipantInfo) -> ParticipantAttrs {
     ParticipantAttrs {

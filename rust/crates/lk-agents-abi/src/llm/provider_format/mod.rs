@@ -6,22 +6,38 @@ pub use image::{BYTES_TAG, ImageResolver, SerializedImage};
 
 // Public data contracts. Python behavior remains in its adapters.
 
-#[crate::host(record(module = "provider_data", path = "livekit.agents.llm.utils", dataclass))]
+#[crate::host(record(
+    module = "provider_data",
+    path = "livekit.agents.llm.utils",
+    dataclass
+))]
 pub struct AnthropicFormatData {
     pub system_messages: Option<Vec<String>>,
 }
 
-#[crate::host(record(module = "provider_data", path = "livekit.agents.llm.utils", dataclass))]
+#[crate::host(record(
+    module = "provider_data",
+    path = "livekit.agents.llm.utils",
+    dataclass
+))]
 pub struct BedrockFormatData {
     pub system_messages: Option<Vec<String>>,
 }
 
-#[crate::host(record(module = "provider_data", path = "livekit.agents.llm.utils", dataclass))]
+#[crate::host(record(
+    module = "provider_data",
+    path = "livekit.agents.llm.utils",
+    dataclass
+))]
 pub struct GoogleFormatData {
     pub system_messages: Option<Vec<String>>,
 }
 
-#[crate::host(record(module = "provider_data", path = "livekit.agents.llm.utils", dataclass))]
+#[crate::host(record(
+    module = "provider_data",
+    path = "livekit.agents.llm.utils",
+    dataclass
+))]
 pub struct MistralFormatData {
     pub instructions: Option<String>,
 }

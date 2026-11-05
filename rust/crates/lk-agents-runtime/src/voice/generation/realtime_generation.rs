@@ -326,7 +326,7 @@ impl Generation<'_> {
                 model: id.model,
             });
             let expressive = self.ctx.plan.request.expressive.is_some();
-            let error = match tts.stream(&self.ctx.turn_cx(self.shared), expressive).await {
+            let error = match tts.stream(&telemetry::Cx::NONE, expressive).await {
                 Ok(stream) => break stream.split(),
                 Err(error) => error,
             };

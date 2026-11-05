@@ -1,0 +1,22 @@
+{
+  "nesting:rust/crates/lk-agents-core/src/llm/provider_format/aws.rs:to_chat_ctx": 5,
+  "nesting:rust/crates/lk-agents-net/src/telemetry/otlp/destination.rs:impl State::record": 5,
+  "nesting:rust/crates/lk-agents-voice/src/agent_activity/spans.rs:impl VoiceDriver::hear_user_turn": 5,
+  "nesting:rust/crates/lk-agents-voice/src/agent_activity/spans.rs:impl VoiceDriver::hook_span": 5,
+  "nesting:rust/crates/lk-agents-voice/src/keyterm_detection/machine.rs:record_keyterms_spec": 5,
+  "nesting:rust/crates/lk-agents-voice/src/workflows/warm_transfer.rs:transfer_tools": 5,
+  "nesting:rust/crates/lk-agents-worker/src/http/exchange.rs:impl Request::next": 5,
+  "nesting:rust/crates/lk-agents-worker/src/ipc/child.rs:impl lk_agents_abi::worker::ipc_host::IpcClient for ChildChannel::serve": 5,
+  "nesting:rust/crates/lk-agents-worker/src/ipc/child.rs:watch_parent": 6,
+  "nesting:rust/crates/lk-agents-worker/src/ipc/ipc_channel.rs:read_frames": 5,
+  "nesting:rust/crates/lk-agents-worker/src/ipc/ipc_channel.rs:write_frames": 5,
+  "nesting:rust/crates/lk-agents-worker/src/ipc/job_run.rs:impl Inner::run_traced": 6,
+  "nesting:rust/crates/lk-agents-worker/src/ipc/pool.rs:impl ProcPool::aclose": 6,
+  "nesting:rust/crates/lk-agents-worker/src/ipc/pool.rs:impl ProcPool::acquire": 5,
+  "nesting:rust/crates/lk-agents-worker/src/ipc/pool.rs:impl ProcPool::join": 5,
+  "nesting:rust/crates/lk-agents-worker/src/ipc/pool.rs:impl ProcPool::launch_job": 5,
+  "nesting:rust/crates/lk-agents-worker/src/ipc/pool.rs:impl ProcPool::watch_exit": 5,
+  "nesting:rust/crates/lk-agents-worker/src/ipc/supervisor.rs:impl Driver::on_message": 5,
+  "nesting:rust/crates/lk-agents-worker/src/ipc/supervisor.rs:impl Driver::run": 5,
+  "nesting:rust/crates/lk-agents-worker/src/worker/mod.rs:impl Worker::run_loop": 5
+}
