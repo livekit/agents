@@ -43,7 +43,6 @@ Generate record conversion, callback dispatch, views and forwarding from ABI dec
 | --- | ---: |
 | [_core_view.py](../../livekit-agents-next/livekit/agents/_core_view.py) | 439 |
 | [_exceptions.py](../../livekit-agents-next/livekit/agents/_exceptions.py) | 97 |
-| [_proto.py](../../livekit-agents-next/livekit/agents/_proto.py) | 208 |
 | [a2a/_extension.py](../../livekit-agents-next/livekit/agents/a2a/_extension.py) | 97 |
 | [llm/_provider_format.py](../../livekit-agents-next/livekit/agents/llm/_provider_format.py) | 142 |
 | [llm/_realtime_options.py](../../livekit-agents-next/livekit/agents/llm/_realtime_options.py) | 45 |

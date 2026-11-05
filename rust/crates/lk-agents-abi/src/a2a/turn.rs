@@ -18,7 +18,7 @@ pub use crate::a2a::client::Message;
 pub struct TurnContext {
     pub thread_id: String,
     pub lane: String,
-    pub message: Map<String, Value>,
+    pub message: ChatItem,
     pub batch: Vec<Message>,
     pub history: Vec<ItemRow>,
     pub state: Option<Value>,
@@ -49,7 +49,7 @@ pub struct PendingCall {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct HandlerOutput {
     pub output: Option<Value>,
-    pub new_items: Vec<Value>,
+    pub new_items: Vec<ChatItem>,
     pub state: Option<Value>,
     pub scope_writes: Vec<ContextScopeWrite>,
     /// What the handler's managed transactions staged, applied in the turn's commit.

@@ -26,10 +26,9 @@ from livekit.agents._generated.a2a_metadata import (
 from livekit.agents._generated.storage_class import LaneRow, TaskRecord
 from livekit.agents._generated.storage_options import TurnOptions
 from livekit.agents._generated.storage_turn import TurnResult
-from livekit.agents._proto import item_to_payload, payload_to_item
-from livekit.agents.llm import ChatItem, ChatMessage, FunctionToolCall
+from livekit.agents.llm import ChatItem, FunctionToolCall
 from livekit.agents.llm.utils import build_legacy_openai_schema
-from livekit.agents.storage import RunRejected, Storage, Thread, TooLarge
+from livekit.agents.storage import RunRejected, Storage, Thread, TooLarge, _resolve_thread
 from livekit.agents.storage.session import A2ASessionContext, _Handler, _TurnHost
 
 from .fake_llm import FakeLLM, FakeLLMResponse
@@ -132,17 +131,6 @@ async def run_outcomes(storage: Storage, thread_id: str) -> list[str]:
 
 
 # -- the thin slice --
-
-
-def test_a_stored_items_extra_reads_back_exactly() -> None:
-    """Decision 117 (Q29): ``extra`` crosses the proto losslessly, so a string that looks like
-    JSON stays a string; a raw string an earlier row stored still reads as that string."""
-    extra = {"json_like": '{"a": 1}', "number_like": "42", "text": "é", "object": {"a": 1}}
-    message = ChatMessage(role="user", content=["hi"], extra=extra)
-    payload = item_to_payload(message)
-    assert payload_to_item(payload).extra == extra
-    payload["message"]["extra"] = {"text": "asked"}
-    assert payload_to_item(payload).extra == {"text": "asked"}
 
 
 async def test_two_workers_share_one_session(thread_storages: Workers) -> None:
@@ -780,12 +768,10 @@ async def test_session_resolution_follows_the_threads_service(
     thread_storage: Storage,
 ) -> None:
     threads = thread_storage.threads
-    fresh = await threads._core_call_thread("")
-    assert fresh.thread_id.startswith("AT_")
-    named = json.dumps({"thread_id": fresh.thread_id})
-    assert (await threads._core_call_thread(named)).thread_id == fresh.thread_id
-    other = await threads._core_call_thread('{"thread_id": ""}')
-    assert other.thread_id not in ("", fresh.thread_id)
+    fresh = await _resolve_thread(threads)
+    assert fresh.created and fresh.id.startswith("AT_")
+    by_id = await _resolve_thread(threads, context_id=fresh.id)
+    assert by_id.id == fresh.id and not by_id.created
 
 
 # -- a text during a call (plan 3.3.7) --
@@ -905,7 +891,7 @@ async def test_create_thread_creates_the_database(thread_storage: Storage) -> No
     assert second.output == "reply to: again"
     core = await storage._open(info.thread_id)
     items = await core.history("front")
-    assert [payload_to_item(i.payload).text_content for i in items] == [
+    assert [i.payload.text_content for i in items] == [
         "hi",
         "reply to: hi",
         "again",
@@ -976,7 +962,7 @@ async def test_the_thread_handle_pages_items_and_tasks(thread_storage: Storage) 
     after: str | None = None
     while True:
         items = await thread.list_items(agent="front", after=after, limit=3)
-        texts += [payload_to_item(i.item).text_content or "" for i in items.items]
+        texts += [i.item.text_content or "" for i in items.items]
         if not items.after:
             break
         after = items.after

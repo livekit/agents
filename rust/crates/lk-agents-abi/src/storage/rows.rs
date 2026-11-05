@@ -90,14 +90,14 @@ pub struct TaskInternal {
     pub answered: bool,
 }
 
-/// One history item of a lane; `payload` is the `ChatContext.ChatItem`.
+/// One history item of a lane.
 #[crate::host(record(module = "storage_class", extract, emit))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct ItemRow {
     pub id: String,
     /// The A2A `messageId` of the message this item came from, the idempotency key.
     pub message_id: Option<String>,
-    pub payload: Value,
+    pub payload: crate::llm::chat_context::ChatItem,
 }
 
 /// The A2A `Task` fields a task keeps, as v1 protobuf JSON.

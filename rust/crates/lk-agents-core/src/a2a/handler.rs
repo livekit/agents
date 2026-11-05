@@ -1,5 +1,6 @@
 //! Handler return normalization and run journal projection, shared by language hosts.
 
+use lk_agents_abi::ChatItem;
 use lk_agents_abi::a2a::{
     metadata::VERBATIM_KEY,
     turn::HandlerOutput,
@@ -9,7 +10,6 @@ use lk_agents_abi::storage::{
     StorageError, TaskState,
     journal::{ToolExecution, ToolPhase},
 };
-use lk_agents_abi::{ChatItem, llm::chat_context::protocol::encode_chat_item};
 use serde_json::Value;
 
 pub struct HandlerOutcomes;
@@ -74,10 +74,7 @@ impl lk_agents_abi::a2a::turn::HandlerOutcomes for HandlerOutcomes {
                         text: None,
                     });
                 }
-                output.new_items.push(
-                    serde_json::to_value(encode_chat_item(&item))
-                        .map_err(|error| StorageError::Invalid(error.to_string()))?,
-                );
+                output.new_items.push(item);
             }
         }
         events.append(&mut output.tool_executions);

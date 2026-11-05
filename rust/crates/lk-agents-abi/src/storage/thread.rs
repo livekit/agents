@@ -415,20 +415,21 @@ mod host {
         serde_json::to_value(v).unwrap_or_default()
     }
 
-    impl From<ItemRow> for host::ItemRow {
-        fn from(row: ItemRow) -> Self {
-            host::ItemRow { payload: json(&row.payload), id: row.id, message_id: row.message_id }
+    impl TryFrom<ItemRow> for host::ItemRow {
+        type Error = StorageError;
+
+        /// A stored item that is not a chat item is invalid data.
+        fn try_from(row: ItemRow) -> Result<Self, StorageError> {
+            let payload = crate::llm::chat_context::protocol::decode_chat_item(row.payload)
+                .map_err(|e| StorageError::Invalid(format!("item {}: {e}", row.id)))?;
+            Ok(host::ItemRow { id: row.id, message_id: row.message_id, payload })
         }
     }
 
-    impl TryFrom<host::ItemRow> for ItemRow {
-        type Error = StorageError;
-
-        /// A host item whose payload is not a `ChatItem` is an invalid argument.
-        fn try_from(row: host::ItemRow) -> Result<Self, StorageError> {
-            let payload = serde_json::from_value(row.payload)
-                .map_err(|e| StorageError::Invalid(format!("item {}: {e}", row.id)))?;
-            Ok(ItemRow { id: row.id, message_id: row.message_id, payload })
+    impl From<host::ItemRow> for ItemRow {
+        fn from(row: host::ItemRow) -> Self {
+            let payload = crate::llm::chat_context::protocol::encode_chat_item(&row.payload);
+            ItemRow { id: row.id, message_id: row.message_id, payload }
         }
     }
 

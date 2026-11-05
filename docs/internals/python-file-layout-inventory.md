@@ -581,7 +581,7 @@ These source classifications are not additive savings; the exact target contains
 | [_bindings.py](../../livekit-agents-next/livekit/agents/_bindings.py) | 642 | Retain | `_bindings.py`. One handwritten native-host adaptation owner: generated model method bodies, host proxy views, and exception formatting hooks. |
 | [_core_view.py](../../livekit-agents-next/livekit/agents/_core_view.py) | 439 | Merge | `_bindings.py`. Proxy views are handwritten native-host adaptations just like existing binding helpers; a separate 439-line file is not required. |
 | [_exceptions.py](../../livekit-agents-next/livekit/agents/_exceptions.py) | 97 | Merge | `_bindings.py`. Exception method bodies are generated-model hooks and fit the same binding-helper owner; public errors themselves remain authoritative generated classes reexported at root. |
-| [_proto.py](../../livekit-agents-next/livekit/agents/_proto.py) | 208 | Retain | `_proto.py`. Retain the shared protobuf/JSON leaf; absorb storage item payload conversion. |
+| `_proto.py` | 208 | Removed | Storage hands back typed chat items; the ABI protocol module encodes and decodes them. |
 | [cli.py](../../livekit-agents-next/livekit/agents/cli.py) | 406 | Retain | `cli.py`. Keep the Python process/asyncio launcher as one concrete lifecycle owner. |
 | [evals.py](../../livekit-agents-next/livekit/agents/evals.py) | 394 | Retain | `evals.py`. One evaluation API contains judges and simulation scenario/user verdict context. |
 | [http.py](../../livekit-agents-next/livekit/agents/http.py) | 282 | Retain | `http.py`. Route authoring and the ASGI adapter over the worker's parsed exchanges; the worker owns HTTP and WebSocket protocol. |

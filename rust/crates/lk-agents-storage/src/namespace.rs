@@ -189,13 +189,6 @@ fn seconds(value: Option<f64>, default: Duration, name: &str) -> Result<Duration
     }
 }
 
-/// The `thread_id` a dispatch's metadata names, if any.
-fn call_thread_id(metadata: &str) -> Option<String> {
-    let metadata: serde_json::Value = serde_json::from_str(metadata).ok()?;
-    let id = metadata.get("thread_id")?.as_str()?;
-    (!id.is_empty()).then(|| id.to_owned())
-}
-
 /// Whole seconds for the wire; `0` sends none, the default.
 fn ttl(seconds: i64) -> Option<pbjson_types::Duration> {
     (seconds > 0).then_some(pbjson_types::Duration { seconds, nanos: 0 })
@@ -230,10 +223,6 @@ fn thread_page(r: ListResponse) -> ThreadPage {
     }
 }
 
-fn json<T: serde::Serialize>(v: &T) -> Result<Value, StorageError> {
-    serde_json::to_value(v).map_err(|e| StorageError::Invalid(e.to_string()))
-}
-
 /// A thread handle's item page as the host record: the same shape Cloud's `GetThreadItems`
 /// answers.
 pub fn thread_item_page(page: ItemPage) -> Result<ThreadItemPage, StorageError> {
@@ -245,7 +234,7 @@ pub fn thread_item_page(page: ItemPage) -> Result<ThreadItemPage, StorageError> 
                 agent: p.lane,
                 seq: p.seq,
                 message_id: p.item.message_id.unwrap_or_default(),
-                item: json(&p.item.payload)?,
+                item: chat_item(p.item.payload)?,
             })
         })
         .collect::<Result<_, StorageError>>()?;
@@ -257,8 +246,15 @@ fn cloud_item(i: Item) -> Result<ThreadItem, StorageError> {
         agent: i.agent,
         seq: i.seq,
         message_id: i.message_id,
-        item: json(&i.item.unwrap_or_default())?,
+        item: chat_item(i.item.unwrap_or_default())?,
     })
+}
+
+fn chat_item(
+    item: lk_agents_abi::livekit_protocol::agent::chat_context::ChatItem,
+) -> Result<lk_agents_abi::ChatItem, StorageError> {
+    lk_agents_abi::llm::chat_context::protocol::decode_chat_item(item)
+        .map_err(StorageError::Invalid)
 }
 
 /// Preserve the framework's A2A state and the presence of an application label.
@@ -404,13 +400,6 @@ impl HostStorageClass for Namespace {
 
     async fn get_thread(&self, thread_id: String) -> Result<ThreadInfo, StorageError> {
         Ok(thread_info(self.storage().await?.get_thread(&thread_id).await?))
-    }
-
-    async fn _core_call_thread(&self, metadata: String) -> Result<ThreadInfo, StorageError> {
-        match call_thread_id(&metadata) {
-            Some(thread_id) => self.get_thread(thread_id).await,
-            None => self.create_thread(None, None, 0).await,
-        }
     }
 
     async fn list_threads(
@@ -578,7 +567,7 @@ impl host::handles::Thread for Thread {
         self.journal(after_id, limit).await
     }
     async fn history(&self, lane: String) -> Result<Vec<host::ItemRow>, StorageError> {
-        Ok(self.lane(&lane).history().await?.into_iter().map(Into::into).collect())
+        self.lane(&lane).history().await?.into_iter().map(TryInto::try_into).collect()
     }
     async fn tasks(&self, lane: String, limit: i64) -> Result<Vec<host::TaskRecord>, StorageError> {
         Ok(self.lane(&lane).tasks(None, limit).await?.into_iter().map(Into::into).collect())
@@ -683,8 +672,8 @@ impl host::handles::Run for RunHandle {
     fn closed(&self) -> bool {
         self.closed
     }
-    fn history(&self) -> Vec<host::ItemRow> {
-        self.history.iter().cloned().map(Into::into).collect()
+    fn history(&self) -> Result<Vec<host::ItemRow>, StorageError> {
+        self.history.iter().cloned().map(TryInto::try_into).collect()
     }
     fn state(&self) -> Option<Value> {
         self.state.clone()
@@ -698,7 +687,7 @@ impl host::handles::Run for RunHandle {
         state: Option<Value>,
         scope_writes: Option<Vec<ContextScopeWrite>>,
     ) -> Result<i64, StorageError> {
-        let history = history.into_iter().map(ItemRow::try_from).collect::<Result<_, _>>()?;
+        let history = history.into_iter().map(ItemRow::from).collect();
         let mut run = self.run.lock().await;
         run.history = history;
         run.scope_writes = scope_writes.unwrap_or_default();
@@ -718,16 +707,6 @@ impl host::handles::Run for RunHandle {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
-
-    // Catches: an empty or non-string id taken as named, or malformed metadata failing the call.
-    #[test]
-    fn only_a_nonempty_string_thread_id_names_the_calls_thread() {
-        assert_eq!(call_thread_id(r#"{"thread_id": "AT_1"}"#).as_deref(), Some("AT_1"));
-        for metadata in ["", "not json", "[1]", r#"{"thread_id": ""}"#, r#"{"thread_id": 1}"#, "{}"]
-        {
-            assert_eq!(call_thread_id(metadata), None, "{metadata}");
-        }
-    }
 
     #[tokio::test]
     async fn cloud_storage_starts_nothing_until_first_use_and_shares_its_backend() {

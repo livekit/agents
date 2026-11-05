@@ -190,7 +190,12 @@ mod tests {
         let ctx = lk_agents_abi::a2a::turn::TurnContext {
             thread_id: "AT_1".into(),
             lane: "desk".into(),
-            message: Default::default(),
+            message: lk_agents_abi::ChatItem::Message(lk_agents_abi::ChatMessage::text(
+                "message",
+                lk_agents_abi::Role::User,
+                "",
+                std::time::SystemTime::UNIX_EPOCH,
+            )),
             batch: Vec::new(),
             history: Vec::new(),
             state: None,

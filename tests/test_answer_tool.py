@@ -10,7 +10,6 @@ import pytest
 from a2a.types import a2a_pb2 as pb
 
 from livekit.agents import Agent, InputRequired, RunContext, RunResult
-from livekit.agents._proto import payload_to_item
 from livekit.agents.a2a import A2ASessionContext
 from livekit.agents.llm import FunctionToolCall
 from livekit.agents.storage import Storage
@@ -82,7 +81,7 @@ async def test_the_answer_goes_to_the_tool_that_asked(thread_storage: Storage) -
 
     db = await thread_storage._open(ctx_id)
     try:
-        history = [payload_to_item(row.payload) for row in await db.history("front-desk")]
+        history = [row.payload for row in await db.history("front-desk")]
     finally:
         db.close()
     calls = [i for i in history if i.type == "function_call" and i.name == "ask"]

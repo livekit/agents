@@ -202,11 +202,6 @@ pub trait Storage: Send + Sync + Sized + 'static {
         #[host(kw, default = None)] status: Option<TaskState>,
     ) -> Result<Vec<ThreadTask>, StorageError>;
 
-    /// A call's thread: the one the `thread_id` of the dispatch's JSON `metadata` names, else a
-    /// new one. Metadata that is not a JSON object, or names no nonempty string id, names none.
-    #[host(await)]
-    async fn _core_call_thread(&self, metadata: String) -> Result<ThreadInfo, StorageError>;
-
     /// The existing thread's handle, its writes under `holder`. Takes no lease.
     #[host(await)]
     async fn open(&self, thread_id: String, holder: String) -> Result<Self::Thread, StorageError>;
@@ -262,7 +257,7 @@ pub struct ThreadPage {
     pub before: String,
 }
 
-/// One chat item of a thread; `item` is the `ChatContext.ChatItem` as protobuf JSON.
+/// One chat item of a thread.
 #[crate::host(record(module = "storage_class", emit))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct ThreadItem {
@@ -270,7 +265,7 @@ pub struct ThreadItem {
     /// Position in the thread's history.
     pub seq: i64,
     pub message_id: String,
-    pub item: Value,
+    pub item: crate::llm::chat_context::ChatItem,
 }
 
 /// One page of `get_thread_items`, oldest first.

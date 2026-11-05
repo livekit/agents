@@ -18,7 +18,6 @@ from livekit.agents._generated.a2a_metadata import INTERRUPTED, INTERRUPTION_REA
 from livekit.agents._generated.storage_class import ItemRow
 from livekit.agents._generated.storage_options import TurnOptions
 from livekit.agents._generated.storage_turn import HandlerOutput, TurnContext
-from livekit.agents._proto import item_to_payload, payload_to_item
 from livekit.agents.llm import ChatMessage
 from livekit.agents.storage import Storage
 
@@ -31,12 +30,12 @@ def a2a(text: str, message_id: str) -> dict[str, Any]:
     return {"messageId": message_id, "role": "ROLE_USER", "parts": [{"text": text}]}
 
 
-def assistant_item(text: str) -> dict[str, Any]:
-    return item_to_payload(ChatMessage(role="assistant", content=[text]))
+def assistant_item(text: str) -> ChatMessage:
+    return ChatMessage(role="assistant", content=[text])
 
 
 def role_and_text(item: ItemRow) -> tuple[str, str]:
-    message = payload_to_item(item.payload)
+    message = item.payload
     assert isinstance(message, ChatMessage)
     return message.role, message.text_content or ""
 
@@ -124,7 +123,7 @@ async def test_one_message_through_the_rust_turn(thread_storage: Storage) -> Non
     assert ctx.thread_id == thread_id and ctx.lane == LANE
     assert ctx.task_id == result.task.task_id
     assert ctx.history == [] and ctx.state is None and ctx.caller_history is None
-    assert payload_to_item(ctx.message).model_dump(include={"role", "content"}) == {
+    assert ctx.message.model_dump(include={"role", "content"}) == {
         "role": "user",
         "content": ["hello"],
     }

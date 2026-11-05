@@ -10,7 +10,6 @@ import pytest
 
 from livekit.agents import Agent, RunContext, StopResponse, VoiceSession, persisted
 from livekit.agents._generated.storage_class import ItemRow
-from livekit.agents._proto import item_to_payload
 from livekit.agents.llm import ChatContext, ChatMessage, FunctionToolCall, LLMStream
 from livekit.agents.storage import Storage, Thread
 from livekit.agents.storage.session import ContextStore
@@ -40,9 +39,7 @@ async def replace_history(storage: Storage, thread_id: str, items: list[ChatMess
     core = await storage._open(thread_id)
     try:
         run = await core.open_run("desk", f"edit-{items[-1].id}", channel="sms")
-        await run.commit(
-            [ItemRow(id=item.id, message_id=None, payload=item_to_payload(item)) for item in items]
-        )
+        await run.commit([ItemRow(id=item.id, message_id=None, payload=item) for item in items])
     finally:
         core.close()
 

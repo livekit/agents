@@ -87,7 +87,7 @@ pub trait Run: Send + Sync + Sized + 'static {
     #[host(getter)]
     fn closed(&self) -> bool;
     #[host(getter)]
-    fn history(&self) -> Vec<ItemRow>;
+    fn history(&self) -> Result<Vec<ItemRow>, StorageError>;
     #[host(getter)]
     fn state(&self) -> Option<Value>;
     #[host(getter)]

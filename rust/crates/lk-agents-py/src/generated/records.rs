@@ -14478,7 +14478,8 @@ pub mod storage_class {
         kwargs.set_item("seq", ::pyo3::IntoPyObjectExt::into_bound_py_any(seq, py)?)?;
         kwargs
             .set_item("message_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(message_id, py)?)?;
-        kwargs.set_item("item", crate::py_values::value_to_py(py, &item)?)?;
+        kwargs
+            .set_item("item", crate::generated::records::chat_items::chat_item_to_py(py, item)?)?;
         crate::py_calls::call(
             THREAD_ITEM
                 .import(py, "livekit.agents._generated.storage_class", "ThreadItem")?
@@ -14681,7 +14682,7 @@ pub mod storage_class {
                 }
             })?,
             payload: crate::py_values::attr_with(obj, "ItemRow", "payload", |v| {
-                crate::py_values::value_from_py(v, "ItemRow.payload")
+                crate::generated::records::chat_items::chat_item_from_py(v)
             })?,
         })
     }
@@ -14700,7 +14701,10 @@ pub mod storage_class {
                 Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
             },
         )?;
-        kwargs.set_item("payload", crate::py_values::value_to_py(py, &payload)?)?;
+        kwargs.set_item(
+            "payload",
+            crate::generated::records::chat_items::chat_item_to_py(py, payload)?,
+        )?;
         crate::py_calls::call(
             ITEM_ROW.import(py, "livekit.agents._generated.storage_class", "ItemRow")?.as_any(),
             (),
@@ -15778,7 +15782,10 @@ pub mod storage_turn {
         let kwargs = ::pyo3::types::PyDict::new(py);
         kwargs.set_item("thread_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(thread_id, py)?)?;
         kwargs.set_item("lane", ::pyo3::IntoPyObjectExt::into_bound_py_any(lane, py)?)?;
-        kwargs.set_item("message", crate::py_values::extra_to_py(py, &message)?.into_any())?;
+        kwargs.set_item(
+            "message",
+            crate::generated::records::chat_items::chat_item_to_py(py, message)?,
+        )?;
         kwargs.set_item(
             "batch",
             ::pyo3::types::PyList::new(
@@ -15945,7 +15952,7 @@ pub mod storage_turn {
                     v.try_iter()?
                         .map(|item| {
                             let item = &item?;
-                            crate::py_values::value_from_py(item, "HandlerOutput.new_items")
+                            crate::generated::records::chat_items::chat_item_from_py(item)
                         })
                         .collect::<PyResult<Vec<_>>>()
                 } else {
@@ -16114,7 +16121,7 @@ pub mod storage_turn {
                 py,
                 new_items
                     .into_iter()
-                    .map(|x| crate::py_values::value_to_py(py, &x))
+                    .map(|x| crate::generated::records::chat_items::chat_item_to_py(py, x))
                     .collect::<PyResult<Vec<_>>>()?,
             )?
             .into_any(),

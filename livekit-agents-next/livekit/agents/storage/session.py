@@ -27,13 +27,12 @@ from .._generated.storage_handler import (
     HandlerRun,
 )
 from .._generated.storage_turn import HandlerOutput, ToolExecution, TurnContext
-from .._proto import payload_to_item
 from ..llm import ChatContext, ChatMessage, InputRequired
 from ..llm.tool_context import Completed, Failed, Rejected, Working
 from ..log import logger
 from ..voice.agent_run import RunHooks, reset_run_hooks, set_run_hooks
 from ..voice.run_result import RunCompleted, RunInputRequired, RunNoOutput, RunResult
-from . import StorageError, Thread, history_of
+from . import StorageError, Thread
 from .context import ContextStore
 
 _Handler = Callable[["A2ASessionContext"], Awaitable[object]]
@@ -55,9 +54,9 @@ class A2ASessionContext:
         store: ContextStore,
         thread: Thread,
     ) -> None:
-        self.message = cast(ChatMessage, payload_to_item(turn.message))
+        self.message = cast(ChatMessage, turn.message)
         self.messages: list[Message] = list(turn.batch)
-        self.message_history: ChatContext = history_of(turn.history)
+        self.message_history: ChatContext = ChatContext([row.payload for row in turn.history])
         self.store = store
         self.thread = thread
         self.task_id = turn.task_id

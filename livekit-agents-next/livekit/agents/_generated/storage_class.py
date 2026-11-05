@@ -11,7 +11,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, TypeAlias
+from typing import TYPE_CHECKING, Literal, TypeAlias
+
+if TYPE_CHECKING:
+    from .chat_items import ChatItem
 
 
 @dataclass(kw_only=True, slots=True)
@@ -50,13 +53,13 @@ class ThreadPage:
 
 @dataclass(kw_only=True, slots=True)
 class ThreadItem:
-    """One chat item of a thread; `item` is the `ChatContext.ChatItem` as protobuf JSON."""
+    """One chat item of a thread."""
 
     agent: str
     seq: int
     """Position in the thread's history."""
     message_id: str
-    item: object
+    item: ChatItem
 
 
 @dataclass(kw_only=True, slots=True)
@@ -108,12 +111,12 @@ class TaskInternal:
 
 @dataclass(kw_only=True, slots=True)
 class ItemRow:
-    """One history item of a lane; `payload` is the `ChatContext.ChatItem`."""
+    """One history item of a lane."""
 
     id: str
     message_id: str | None
     """The A2A `messageId` of the message this item came from, the idempotency key."""
-    payload: object
+    payload: ChatItem
 
 
 @dataclass(kw_only=True, slots=True)

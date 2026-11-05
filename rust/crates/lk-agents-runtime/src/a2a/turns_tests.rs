@@ -12,6 +12,7 @@ use lk_agents_abi::Clock;
 use lk_agents_abi::a2a::turn::HandlerPort;
 use lk_agents_abi::a2a::turn::TurnContext;
 use lk_agents_abi::errors::{HostError, ProviderError};
+use lk_agents_abi::llm::chat_context::protocol::{decode_chat_item, encode_chat_item};
 use lk_agents_core::a2a::{
     DebounceSpec, HandlerOutput, PendingCall, Policy, PolicySpec, TurnHost, TurnOptions, TurnResult,
 };
@@ -251,9 +252,32 @@ impl TurnHost for Fake {
                     retryable: false,
                     status_code: None,
                 }),
-                out = self.run(ctx.clone(), &mut checkpoints) => out.map(Into::into),
+                out = self.run(ctx.clone(), &mut checkpoints) => out.map(host_output),
             }
         })
+    }
+}
+
+/// The fake's output as the host returns it: chat items as records.
+fn host_output(out: HandlerOutput) -> lk_agents_abi::a2a::turn::HandlerOutput {
+    lk_agents_abi::a2a::turn::HandlerOutput {
+        output: out.output,
+        new_items: out
+            .new_items
+            .into_iter()
+            .map(|item| decode_chat_item(item).expect("chat item"))
+            .collect(),
+        state: out.state,
+        scope_writes: out.scope_writes,
+        app_writes: out.app_writes,
+        usage: vec![out.usage],
+        input_required: out.input_required,
+        pending_call: out.pending_call,
+        interrupted: out.interrupted,
+        metadata: out.metadata,
+        error: out.error,
+        tool_executions: out.tool_executions,
+        status: out.status,
     }
 }
 
@@ -278,18 +302,11 @@ impl Fake {
         let message_text = ctx.batch.last().map(batch_message_text).unwrap_or_default();
         self.calls.lock().push(Call {
             batch: ctx.batch.iter().map(batch_message_text).collect(),
-            history: ctx
-                .history
-                .iter()
-                .map(|i| text_of(&serde_json::from_value(i.payload.clone()).expect("chat item")))
+            history: ctx.history.iter().map(|i| text_of(&encode_chat_item(&i.payload))).collect(),
+            message: text_of(&encode_chat_item(&ctx.message))
+                .split('\n')
+                .map(str::to_owned)
                 .collect(),
-            message: text_of(
-                &serde_json::from_value(serde_json::Value::Object(ctx.message.clone()))
-                    .expect("chat item"),
-            )
-            .split('\n')
-            .map(str::to_owned)
-            .collect(),
         });
         match &self.behavior {
             Behavior::Echo => Ok(text(&format!("reply to: {message_text}"))),

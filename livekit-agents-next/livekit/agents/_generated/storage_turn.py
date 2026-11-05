@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Literal, TypeAlias
 
 if TYPE_CHECKING:
     from .a2a_client import Message
+    from .chat_items import ChatItem
     from .storage_class import ItemRow, TaskRecord, TaskState
     from .storage_context import AppStatement, ContextScope, ContextScopeWrite
     from .usage import Usage
@@ -24,7 +25,7 @@ if TYPE_CHECKING:
 class TurnContext:
     thread_id: str
     lane: str
-    message: dict[str, object]
+    message: ChatItem
     batch: list[Message]
     history: list[ItemRow]
     state: object | None
@@ -50,7 +51,7 @@ class PendingCall:
 @dataclass(kw_only=True, slots=True)
 class HandlerOutput:
     output: object | None
-    new_items: list[object]
+    new_items: list[ChatItem]
     state: object | None
     scope_writes: list[ContextScopeWrite]
     app_writes: list[AppStatement]

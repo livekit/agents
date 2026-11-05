@@ -2,6 +2,7 @@
 //! once here, before the runtime accepts handler output.
 
 use lk_agents_abi::a2a::turn as host;
+use lk_agents_abi::llm::chat_context::protocol;
 use lk_agents_abi::storage::StorageError;
 
 use crate::a2a::{HandlerOutput, Message, TurnContext, TurnResult};
@@ -24,24 +25,21 @@ impl TryFrom<TurnContext> for host::TurnContext {
     type Error = StorageError;
 
     fn try_from(ctx: TurnContext) -> Result<Self, Self::Error> {
-        fn object(
-            value: serde_json::Value,
-            field: &str,
-        ) -> Result<serde_json::Map<String, serde_json::Value>, StorageError> {
-            match value {
+        let message = protocol::decode_chat_item(ctx.message)
+            .map_err(|e| StorageError::Invalid(format!("message: {e}")))?;
+        let caller_history = ctx
+            .caller_history
+            .map(|value| match value {
                 serde_json::Value::Object(value) => Ok(value),
-                _ => Err(StorageError::Invalid(format!("{field} must be a chat context object"))),
-            }
-        }
-        let message = object(serde_json::to_value(ctx.message).expect("chat item"), "message")?;
-        let caller_history =
-            ctx.caller_history.map(|value| object(value, "caller_history")).transpose()?;
+                _ => Err(StorageError::Invalid("caller_history must be a chat context".into())),
+            })
+            .transpose()?;
         Ok(Self {
             thread_id: ctx.thread_id,
             lane: ctx.lane,
             message,
             batch: ctx.batch.into_iter().map(Into::into).collect(),
-            history: ctx.history.into_iter().map(Into::into).collect(),
+            history: ctx.history.into_iter().map(TryInto::try_into).collect::<Result<_, _>>()?,
             state: ctx.state,
             context_scope_id: ctx.context_scope_id,
             context_scopes: ctx.context_scopes,
@@ -59,17 +57,9 @@ impl TryFrom<host::HandlerOutput> for HandlerOutput {
     type Error = StorageError;
 
     fn try_from(output: host::HandlerOutput) -> Result<Self, Self::Error> {
-        let new_items = output
-            .new_items
-            .into_iter()
-            .map(|item| {
-                serde_json::from_value(item)
-                    .map_err(|e| StorageError::Invalid(format!("handler chat item: {e}")))
-            })
-            .collect::<Result<_, _>>()?;
         Ok(Self {
             output: output.output,
-            new_items,
+            new_items: output.new_items.iter().map(protocol::encode_chat_item).collect(),
             state: output.state,
             scope_writes: output.scope_writes,
             app_writes: output.app_writes,
@@ -93,30 +83,6 @@ impl From<TurnResult> for host::TurnResult {
             thread_id: result.thread_id,
             answered_by: result.answered_by,
             run_id: result.run_id,
-        }
-    }
-}
-
-impl From<HandlerOutput> for host::HandlerOutput {
-    fn from(output: HandlerOutput) -> Self {
-        Self {
-            output: output.output,
-            new_items: output
-                .new_items
-                .into_iter()
-                .map(|item| serde_json::to_value(item).expect("chat item"))
-                .collect(),
-            state: output.state,
-            scope_writes: output.scope_writes,
-            app_writes: output.app_writes,
-            usage: vec![output.usage],
-            input_required: output.input_required,
-            pending_call: output.pending_call,
-            interrupted: output.interrupted,
-            metadata: output.metadata,
-            error: output.error,
-            tool_executions: output.tool_executions,
-            status: output.status,
         }
     }
 }
