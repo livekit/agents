@@ -27,7 +27,20 @@ pytestmark = pytest.mark.e2e
 class Endpoint:
     base: str
     server: object
+    # a project token: the agentEndpoint call grant the node admits non-public routes with
+    token: str
+    # signed by the project, without the call grant
+    room_token: str
     closed: list[int] = field(default_factory=list)
+
+
+def seen_by_the_app(scope: Request | WebSocket) -> dict[str, object]:
+    """What reached the application: the node's verdict and the caller's token as sent."""
+    return {
+        "authorized": scope.state.lk_request.authorized,
+        "authorization": scope.headers.get("authorization"),
+        "query": scope.url.query,
+    }
 
 
 def add_routes(endpoint: Endpoint) -> None:
@@ -111,6 +124,17 @@ def add_routes(endpoint: Endpoint) -> None:
     async def refused(websocket: WebSocket) -> None:
         await websocket.close()
 
+    # non-public: the node admits only a caller holding the endpoint call grant
+    @http.get("/private")
+    async def private(request: Request) -> Response:
+        return JSONResponse(seen_by_the_app(request))
+
+    @http.websocket("/private-ws")
+    async def private_ws(websocket: WebSocket) -> None:
+        await websocket.accept()
+        await websocket.send_json(seen_by_the_app(websocket))
+        await websocket.close()
+
     paths = ("/hello", "/echo-size", "/stream", "/slow-stream", "/endless", "/late-boom")
     for path in (*paths, "/ws", "/push", "/refused"):
         http.configure_endpoint(path, public=True)
@@ -124,10 +148,12 @@ async def _entrypoint(ctx: object) -> None:
 async def endpoint(
     live_credentials: tuple[str, str, str], tmp_path: Path
 ) -> AsyncIterator[Endpoint]:
+    from livekit import api
     from livekit.agents import AgentServer
+    from livekit.agents.a2a import Credentials
     from livekit.agents.storage import SQLiteStorage
 
-    url, _, _ = live_credentials
+    url, key, secret = live_credentials
     name = "e2e-endpoints-" + uuid.uuid4().hex[:8]
     parts = urlsplit(url)
     scheme = "https" if parts.scheme in ("https", "wss") else "http"
@@ -137,7 +163,12 @@ async def endpoint(
         listeners={"health": {"port": 0}},
         num_idle_processes=0,
     )
-    endpoint = Endpoint(f"{scheme}://{parts.netloc}/agents/{name}/_", server)
+    endpoint = Endpoint(
+        f"{scheme}://{parts.netloc}/agents/{name}/_",
+        server,
+        token=Credentials(key, secret).project_token(),
+        room_token=api.AccessToken(key, secret).with_identity("caller").to_jwt(),
+    )
     add_routes(endpoint)
 
     # A server serves at least one door; a voice door adds no endpoint route.
@@ -295,3 +326,46 @@ async def test_stopping_mid_stream_is_never_a_clean_body(endpoint: Endpoint) -> 
             with pytest.raises(aiohttp.ClientPayloadError):
                 await response.read()
         await asyncio.wait_for(closing, REQUEST_SECONDS)
+
+
+async def test_the_node_authenticates_and_forwards_the_callers_token(endpoint: Endpoint) -> None:
+    base, token = endpoint.base, endpoint.token
+    bearer = {"Authorization": f"Bearer {token}"}
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(REQUEST_SECONDS)) as http:
+        async with http.get(f"{base}/private") as response:
+            assert response.status == 401, "a non-public route needs a token"
+        room = {"Authorization": f"Bearer {endpoint.room_token}"}
+        async with http.get(f"{base}/private", headers=room) as response:
+            assert response.status == 403, "a token without the call grant is refused"
+
+        async with http.get(f"{base}/private", headers=bearer) as response:
+            assert response.status == 200
+            assert await response.json() == {
+                "authorized": True,
+                "authorization": f"Bearer {token}",
+                "query": "",
+            }
+        async with http.get(f"{base}/private?access_token={token}&x=1") as response:
+            assert response.status == 200
+            assert await response.json() == {
+                "authorized": True,
+                "authorization": None,
+                "query": f"access_token={token}&x=1",
+            }
+
+        with pytest.raises(aiohttp.WSServerHandshakeError) as refused:
+            await http.ws_connect(f"{base}/private-ws")
+        assert refused.value.status == 401
+        async with http.ws_connect(f"{base}/private-ws", headers=bearer) as ws:
+            assert await ws.receive_json(timeout=REQUEST_SECONDS) == {
+                "authorized": True,
+                "authorization": f"Bearer {token}",
+                "query": "",
+            }
+        # a browser cannot set headers on an upgrade: its token rides in the query
+        async with http.ws_connect(f"{base}/private-ws?access_token={token}") as ws:
+            assert await ws.receive_json(timeout=REQUEST_SECONDS) == {
+                "authorized": True,
+                "authorization": None,
+                "query": f"access_token={token}",
+            }
