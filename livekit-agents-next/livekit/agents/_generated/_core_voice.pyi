@@ -454,6 +454,10 @@ class SessionOptions:
         """Attach providers to the same override id used by turn settings, before or after start."""
     def release_providers(self, layer: int) -> dict[str, object | None]:
         """Release provider references and return the providers to restore. Idempotent."""
+    def provider(self, slot: str) -> object | None:
+        """`session.stt` / `tts` / `vad`: the host provider `slot` runs on now, the topmost held
+        override's, else the base's; `None` when the slot has none or it was removed.
+        """
     def resolved(self, legs: SessionLegs) -> ResolvedSessionOptions:
         """The resolved configuration over the host-supplied legs, as the dict `session.options` reads
         before `start()`.

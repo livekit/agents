@@ -116,6 +116,10 @@ impl lk_agents_abi::voice::session::SessionOptions for SessionOptions {
         changed
     }
 
+    fn provider(&self, slot: String) -> Option<HostRef> {
+        self.state().providers.effective(slot)
+    }
+
     fn resolved(&self, legs: SessionLegs) -> ResolvedSessionOptions {
         let layers = self.state().layers.clone();
         resolved_session_options(&layers.resolve(&legs), &layers.session)
@@ -160,6 +164,11 @@ impl ProviderRegistry {
     pub fn release(&mut self, layer: u64) -> (Providers, Vec<Option<HostRef>>) {
         let changed = self.layers.release(ProviderOverrideId(layer));
         self.collect(changed)
+    }
+
+    fn effective(&self, slot: String) -> Option<HostRef> {
+        let id = self.layers.effective(&ProviderSlot::from(slot))?;
+        self.objects.get(&id).cloned().flatten()
     }
 
     fn collect(

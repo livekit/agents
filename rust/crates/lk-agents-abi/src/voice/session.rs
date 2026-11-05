@@ -358,6 +358,11 @@ pub trait SessionOptions: Clone + Send + Sync + Sized + 'static {
     #[host(call)]
     fn release_providers(&self, layer: u64) -> std::collections::BTreeMap<String, Option<HostRef>>;
 
+    /// `session.stt` / `tts` / `vad`: the host provider `slot` runs on now, the topmost held
+    /// override's, else the base's; `None` when the slot has none or it was removed.
+    #[host(call)]
+    fn provider(&self, slot: String) -> Option<HostRef>;
+
     /// The resolved configuration over the host-supplied legs, as the dict `session.options` reads
     /// before `start()`.
     #[host(call)]

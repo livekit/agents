@@ -180,23 +180,20 @@ def initialize(
     )
     session._stt_context = stt_context_options if is_given(stt_context_options) else None
 
-    session._stt = inference.STT.from_model_string(stt) if isinstance(stt, str) else stt or None
+    stt_model = inference.STT.from_model_string(stt) if isinstance(stt, str) else stt or None
     session._llm = llm_from_model_string(llm) if isinstance(llm, str) else llm or None
-    session._tts = inference.TTS.from_model_string(tts) if isinstance(tts, str) else tts or None
+    tts_model = inference.TTS.from_model_string(tts) if isinstance(tts, str) else tts or None
     session._tools = tools if is_given(tools) else []
     turn_handling = options.get("turn_handling") or {}
     detection = turn_handling.get("turn_detection", NOT_GIVEN)
     defaults = _core.default_session_models(
         is_given(vad), is_given(detection), isinstance(session._llm, RealtimeModel)
     )
-    session._using_default_vad = defaults.vad_model is not None
-    session._vad = (
-        inference.VAD(model=defaults.vad_model)
-        if defaults.vad_model is not None
-        else vad
-        if is_given(vad)
-        else None
+    # the VAD the session made itself, while the session runs on it
+    session._default_vad = (
+        inference.VAD(model=defaults.vad_model) if defaults.vad_model is not None else None
     )
+    vad_model = session._default_vad or (vad if is_given(vad) else None)
     if not is_given(detection):
         detection = inference.TurnDetector() if defaults.turn_detector else None
     # the gateway detector's stream is the core's own detector; a plugin's is seen through a view
@@ -223,9 +220,8 @@ def initialize(
     session._owner = _core._core_SessionOwner(session._options)
     session._room = None
     session._amd = None
-    session._options.update_providers(
-        {"stt": session._stt, "tts": session._tts, "vad": session._vad}
-    )
+    # the native options own the providers from here: `session.stt`, `tts` and `vad` read them
+    session._options.update_providers({"stt": stt_model, "tts": tts_model, "vad": vad_model})
     # `update_agent(chat_ctx=)` before `start()`: the history the session starts on
     session._start_chat_ctx = None
     session._input = io.AgentInput(session)
@@ -269,8 +265,8 @@ class SessionAdapter:
     ) -> inference.AdaptiveInterruptionDetector | None:
         """The adaptive interruption detector, when the reference's gate builds one."""
         session = self.session
-        stt_caps = session._stt.capabilities if session._stt is not None else None
-        has_vad = session._vad is not None
+        stt_caps = session.stt.capabilities if session.stt is not None else None
+        has_vad = session.vad is not None
         realtime = isinstance(model, RealtimeModel)
         verdict = _core.resolve_interruption_detector(
             stt_aligned_transcript=bool(stt_caps.aligned_transcript) if stt_caps else None,
@@ -368,11 +364,11 @@ class SessionAdapter:
     def _legs(self) -> SessionLegs:
         session = self.session
         return {
-            "stt": session._stt is not None,
-            "vad": session._vad is not None,
-            "using_default_vad": session._using_default_vad,
+            "stt": session.stt is not None,
+            "vad": session.vad is not None,
+            "using_default_vad": self._using_default_vad(),
             "llm": isinstance(session._llm, llm.LLM),
-            "tts": session._tts is not None,
+            "tts": session.tts is not None,
             "realtime": isinstance(session._llm, llm.RealtimeModel),
             "detector": None,
             "adaptive_detector": False,
@@ -381,18 +377,17 @@ class SessionAdapter:
             "sink_can_pause": True,
         }
 
+    def _using_default_vad(self) -> bool:
+        session = self.session
+        return session._default_vad is not None and session.vad is session._default_vad
+
     def _install_models(self, models: dict[str, Any]) -> None:
+        """Bind the providers whose effective value changed (``models``, as the native options
+        returned them) to the running session, under the agent's nodes."""
         session = self.session
         stt_model: NotGivenOr[stt.STT | None] = models.get("stt", NOT_GIVEN)
         tts_model: NotGivenOr[tts.TTS | None] = models.get("tts", NOT_GIVEN)
         vad_model: NotGivenOr[VAD | None] = models.get("vad", NOT_GIVEN)
-        if is_given(stt_model):
-            session._stt = stt_model
-        if is_given(tts_model):
-            session._tts = tts_model
-        if is_given(vad_model):
-            session._vad = vad_model
-            session._using_default_vad = False
         # Plugin proxies capture the running host loop. Before startup, retain only SDK objects;
         # the startup adapter binds their effective values when the native owner asks for them.
         if models and session._core is not None:
@@ -694,7 +689,7 @@ class SessionHost:
             # the native owner starts a stored call on its lane's history instead
             chat_ctx=chat_ctx.items if chat_ctx is not None else [],
             stt=frame["stt"],
-            vad=_bindings.core_leg(session._vad),
+            vad=_bindings.core_leg(session.vad),
             llm=None if isinstance(model, llm.RealtimeModel) else model,
             realtime=realtime,
             tts=frame["tts"],
@@ -709,7 +704,7 @@ class SessionHost:
             voice_agent=frame["voice_agent"],
             room_io_config=options._to_core(),
             video_sampler=(sampler.speaking_fps, sampler.silent_fps) if sampler else None,
-            using_default_vad=session._using_default_vad,
+            using_default_vad=session._adapter._using_default_vad(),
             turn_detector=session._turn_detector,
             hook_bound=_HOOK_BOUND,
             max_unrecoverable_errors=session._conn_options.max_unrecoverable_errors,

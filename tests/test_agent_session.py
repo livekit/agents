@@ -61,6 +61,21 @@ async def test_agent_switch_preserves_session_listening_options() -> None:
         assert session.options["endpointing"]["min_delay"] == 0.3
 
 
+async def test_the_session_providers_are_the_native_effective_ones() -> None:
+    base, layer, replacement = FakeTTS(), FakeTTS(), FakeTTS()
+    session = VoiceSession(vad=None, tts=base, turn_detection="manual")
+    try:
+        async with session.override_options(tts=layer):
+            assert session.tts is layer, "a held layer's provider is the session's"
+            session.update_options(tts=replacement)
+            assert session.tts is layer, "a base change shows once the layer is released"
+        assert session.tts is replacement
+        session.update_options(tts=None)
+        assert session.tts is None
+    finally:
+        await session.aclose()
+
+
 async def test_temporary_options_restore_the_base_after_an_exception() -> None:
     session = VoiceSession(vad=None, turn_handling={"turn_detection": None})
     try:

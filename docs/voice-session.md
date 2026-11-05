@@ -56,6 +56,7 @@ object a text handler gets. Outside a call `ctx.live_session` is `None`.
 | `update_agent(agent)`, `update_options(...)`, `override_options(...)` | see [updating a live session](#updating-a-live-session) |
 | `history` | the call's conversation, a new `ChatContext` over the session's items on each read; empty on a new thread and before `start()`; see [reading the session from a callback](#reading-the-session-from-a-callback) |
 | `current_agent` | the agent speaking now |
+| `stt`, `tts`, `vad` | the providers the session runs on now: a held `override_options` layer's, else the base's (the constructor's, then `update_options`'); `None` when removed |
 | `agent_state`, `user_state` | the agent's and the person's state, `"initializing"` and `"listening"` until their first change; read as `history` is |
 | `usage` | latest immutable `Usage` snapshot; retained after shutdown; see [usage and metrics](usage.md) |
 | `on(event, callback)` | subscribe to a session event, below |

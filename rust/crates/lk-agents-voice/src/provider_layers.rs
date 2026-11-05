@@ -81,6 +81,12 @@ impl ProviderLayers {
             .collect()
     }
 
+    /// What `slot` runs on now: the topmost held layer's, else the base's.
+    pub fn effective(&self, slot: &ProviderSlot) -> Option<ProviderObjectId> {
+        let layers = self.layers.iter().rev().map(|(_, layer)| layer);
+        layers.chain([&self.base]).find_map(|layer| layer.get(slot)).copied()
+    }
+
     fn resolved(&self) -> Providers {
         let mut providers = self.base.clone();
         for (_, layer) in &self.layers {
@@ -123,6 +129,25 @@ mod tests {
         assert_eq!(layers.release(ProviderOverrideId(11)), providers(&[("tts", 5)]));
         assert!(layers.release(ProviderOverrideId(11)).is_empty());
         assert_eq!(layers.retained(), BTreeSet::from([5, 6].map(ProviderObjectId)));
+    }
+
+    // Catches: the effective provider read from the base under a held layer, or from the first
+    // layer instead of the topmost.
+    #[test]
+    fn the_effective_provider_is_the_topmost_layers_else_the_bases() {
+        let mut layers = ProviderLayers::default();
+        let tts = ProviderSlot::Tts;
+        assert_eq!(layers.effective(&tts), None);
+        layers.update(providers(&[("tts", 1), ("stt", 2)]));
+        layers.push(ProviderOverrideId(10), providers(&[("tts", 3)]));
+        layers.push(ProviderOverrideId(11), providers(&[("tts", 4)]));
+        layers.update(providers(&[("tts", 5)]));
+        assert_eq!(layers.effective(&tts), Some(ProviderObjectId(4)));
+        assert_eq!(layers.effective(&ProviderSlot::Stt), Some(ProviderObjectId(2)));
+        layers.release(ProviderOverrideId(11));
+        assert_eq!(layers.effective(&tts), Some(ProviderObjectId(3)));
+        layers.release(ProviderOverrideId(10));
+        assert_eq!(layers.effective(&tts), Some(ProviderObjectId(5)));
     }
 
     #[test]

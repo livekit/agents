@@ -16,7 +16,7 @@ from livekit.agents.voice.avatar import DataStreamAudioOutput
 pytestmark = pytest.mark.unit
 
 
-def test_provider_updates_preserve_omitted_legs_and_bind_only_supplied_nodes(
+def test_provider_updates_bind_only_the_changed_legs_and_their_nodes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from types import SimpleNamespace
@@ -26,12 +26,7 @@ def test_provider_updates_preserve_omitted_legs_and_bind_only_supplied_nodes(
 
     installed = []
     stt_node, tts_node = object(), object()
-    original_stt, original_tts, original_vad = object(), object(), object()
     session = SimpleNamespace(
-        _stt=original_stt,
-        _tts=original_tts,
-        _vad=original_vad,
-        _using_default_vad=True,
         _core=object(),
         current_agent=object(),
         _owner=SimpleNamespace(install_providers=installed.append),
@@ -50,16 +45,12 @@ def test_provider_updates_preserve_omitted_legs_and_bind_only_supplied_nodes(
 
     adapter._install_models({"stt": None})
     first = installed.pop()
-    assert session._stt is None and session._tts is original_tts
-    assert session._vad is original_vad and session._using_default_vad
     assert first.stt is None and first.tts is NOT_GIVEN and first.vad is NOT_GIVEN
     assert first.stt_node is stt_node and first.tts_node is None
 
     speaker, detector = Provider(), Provider()
     adapter._install_models({"tts": speaker, "vad": detector})
     second = installed.pop()
-    assert session._stt is None and session._tts is speaker and session._vad is detector
-    assert not session._using_default_vad
     assert second.stt is NOT_GIVEN and second.tts is speaker.native
     assert second.vad is detector.native
     assert second.stt_node is None and second.tts_node is tts_node
@@ -68,7 +59,7 @@ def test_provider_updates_preserve_omitted_legs_and_bind_only_supplied_nodes(
     session._core = None
     microphone = Provider()
     adapter._install_models({"stt": microphone})
-    assert session._stt is microphone and microphone.resolutions == 0
+    assert microphone.resolutions == 0, "a session not running binds nothing"
     assert installed == []
 
 

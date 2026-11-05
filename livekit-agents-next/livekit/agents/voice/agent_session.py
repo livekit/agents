@@ -102,12 +102,9 @@ class VoiceSession(SessionCommands, rtc.EventEmitter[EventTypes], Generic[Contex
     _options: _core.SessionOptions
     _owner: _core._core_SessionOwner
     _stt_context: STTContextOptions | None
-    _stt: stt.STT | None
     _llm: llm.LLM | llm.RealtimeModel | None
-    _tts: tts.TTS | None
-    _vad: VAD | None
     _tools: list[llm.Tool | llm.Toolset]
-    _using_default_vad: bool
+    _default_vad: VAD | None
     _turn_detector: Any
     _turn_detection_mode: str | None
     _interruption_mode: Literal["adaptive", "vad"] | None
@@ -204,7 +201,9 @@ class VoiceSession(SessionCommands, rtc.EventEmitter[EventTypes], Generic[Contex
 
     @property
     def stt(self) -> stt.STT | None:
-        return self._stt
+        """The STT the session listens with now: an ``override_options`` layer's while one holds
+        it, else the base's (the constructor's or ``update_options``')."""
+        return cast("stt.STT | None", self._options.provider("stt"))
 
     @property
     def llm(self) -> llm.LLM | llm.RealtimeModel | None:
@@ -212,11 +211,13 @@ class VoiceSession(SessionCommands, rtc.EventEmitter[EventTypes], Generic[Contex
 
     @property
     def tts(self) -> tts.TTS | None:
-        return self._tts
+        """The TTS the session speaks with now, as ``stt`` is resolved."""
+        return cast("tts.TTS | None", self._options.provider("tts"))
 
     @property
     def vad(self) -> VAD | None:
-        return self._vad
+        """The VAD the session runs now, as ``stt`` is resolved."""
+        return cast("VAD | None", self._options.provider("vad"))
 
     @property
     def tools(self) -> list[llm.Tool | llm.Toolset]:

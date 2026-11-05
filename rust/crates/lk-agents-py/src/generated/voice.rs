@@ -2475,6 +2475,23 @@ impl SessionOptions {
         })
     }
 
+    /// `session.stt` / `tts` / `vad`: the host provider `slot` runs on now, the topmost held
+    /// override's, else the base's; `None` when the slot has none or it was removed.
+    #[pyo3(signature = (slot))]
+    fn provider<'py>(
+        &self,
+        py: Python<'py>,
+        slot: ::std::string::String,
+    ) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| {
+            <SessionOptionsImpl as ::lk_agents_abi::voice::session::SessionOptions>::provider(
+                &self.0, slot,
+            )
+        });
+        out.map(|value| crate::py_objects::object_ref_to_py(py, value)).transpose()
+    }
+
     /// The resolved configuration over the host-supplied legs, as the dict `session.options` reads
     /// before `start()`.
     #[pyo3(signature = (legs))]
