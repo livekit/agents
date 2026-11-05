@@ -3,6 +3,8 @@ does. The simulator drives each turn through ``run_input`` on the session host."
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from livekit.agents import Agent, AgentSession, StopResponse
@@ -85,3 +87,65 @@ async def test_run_input_outside_a_text_simulation_skips_the_hook() -> None:
 
     assert agent.turns == []
     assert replies == ["unedited"]
+
+
+class NoLLMAgent(Agent):
+    def __init__(self) -> None:
+        super().__init__(instructions="test agent")
+
+    async def on_user_turn_completed(self, turn_ctx: ChatContext, new_message: ChatMessage) -> None:
+        pass
+
+
+@pytest.mark.usefixtures("text_simulation")
+async def test_a_reply_that_cannot_start_fails_the_run() -> None:
+    session = AgentSession()
+    await session.start(agent=NoLLMAgent())
+    try:
+        with pytest.raises(RuntimeError, match="without an LLM"):
+            await asyncio.wait_for(session.run(user_input="hello there"), timeout=10.0)
+    finally:
+        await session.aclose()
+
+
+class RecordingLLM(FakeLLM):
+    def __init__(self, owner: str, asked: list[str]) -> None:
+        super().__init__()
+        self._owner = owner
+        self._asked = asked
+
+    def chat(self, **kwargs):  # type: ignore[no-untyped-def]
+        self._asked.append(self._owner)
+        return super().chat(**kwargs)
+
+
+class HandoffAgent(Agent):
+    """Hands off from the hook. With ``wait``, the hook stays busy until the handoff lands;
+    without it, the reply is decided while the transition is still pending."""
+
+    def __init__(self, next_agent: Agent, asked: list[str], *, wait: bool) -> None:
+        super().__init__(instructions="test agent", llm=RecordingLLM("old", asked))
+        self._next_agent = next_agent
+        self._wait = wait
+
+    async def on_user_turn_completed(self, turn_ctx: ChatContext, new_message: ChatMessage) -> None:
+        self.session.update_agent(self._next_agent)
+        if self._wait:
+            await asyncio.sleep(0.5)
+
+
+@pytest.mark.usefixtures("text_simulation")
+@pytest.mark.parametrize("wait", [True, False])
+async def test_no_reply_after_the_hook_hands_off(wait: bool) -> None:
+    # the turn's reply was built from the old agent's context: neither agent may answer it
+    asked: list[str] = []
+    next_agent = Agent(instructions="next agent", llm=RecordingLLM("next", asked))
+    session = AgentSession()
+    await session.start(agent=HandoffAgent(next_agent, asked, wait=wait))
+    try:
+        await asyncio.wait_for(session.run(user_input="hello there"), timeout=10.0)
+    finally:
+        await session.aclose()
+
+    assert asked == []
+    assert session.current_agent is next_agent

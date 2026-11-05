@@ -885,14 +885,20 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             # a text simulation stands in for a live call, where every user turn
             # runs on_user_turn_completed
             run_state._watch_handle(
-                self._reply_to_completed_user_turn(user_input, input_modality=input_modality)
+                self._reply_to_completed_user_turn(
+                    run_state, user_input, input_modality=input_modality
+                )
             )
         else:
             self.generate_reply(user_input=user_input, input_modality=input_modality)
         return run_state
 
     def _reply_to_completed_user_turn(
-        self, user_input: str, *, input_modality: Literal["text", "audio"]
+        self,
+        run_state: RunResult[Any],
+        user_input: str,
+        *,
+        input_modality: Literal["text", "audio"],
     ) -> asyncio.Future[None]:
         """Run ``on_user_turn_completed`` for ``user_input``, then reply unless the hook dropped
         the turn."""
@@ -911,10 +917,29 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if hook_result is None:
                 return
 
+            if activity.scheduling_paused or activity._new_turns_blocked:
+                # as on a spoken turn: a handoff started from the hook drops this reply,
+                # whose context belongs to the agent being left
+                logger.warning(
+                    "skipping reply to user input, speech scheduling is paused",
+                    extra={"lk.pii.user_input": user_input},
+                )
+                return
+
             chat_ctx, _ = hook_result
-            self.generate_reply(
-                user_input=user_message, chat_ctx=chat_ctx, input_modality=input_modality
-            )
+            try:
+                handle = activity._generate_reply(
+                    user_message=user_message,
+                    chat_ctx=chat_ctx,
+                    input_details=InputDetails(modality=input_modality),
+                )
+            except Exception as e:
+                # the run only sees errors carried by speech handles; one that never
+                # started has to fail the run itself
+                if not run_state.done():
+                    run_state._done_fut.set_exception(e)
+                return
+            run_state._watch_handle(handle)
 
         return asyncio.ensure_future(_reply())
 
