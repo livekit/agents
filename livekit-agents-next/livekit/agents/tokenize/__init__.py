@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sys
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Callable
 from typing import Any, overload
@@ -298,9 +297,5 @@ class _CoreWordTokenizer(WordTokenizer):
         )
 
 
-# the tokenizers build on the definitions above, importable as ``livekit.agents.tokenize.basic``
-# and ``livekit.agents.tokenize.blingfire``
+# the tokenizers build on the definitions above: ``tokenize.basic`` and ``tokenize.blingfire``
 from .._generated import tokenize_basic as basic, tokenize_blingfire as blingfire  # noqa: E402
-
-sys.modules[f"{__name__}.basic"] = basic
-sys.modules[f"{__name__}.blingfire"] = blingfire

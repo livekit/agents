@@ -4,14 +4,16 @@ import asyncio
 
 import pytest
 
-from livekit.agents.tokenize.blingfire import SentenceTokenizer
+from livekit.agents.tokenize import blingfire
 
 pytestmark = pytest.mark.unit
 
 
 @pytest.mark.parametrize("streaming", [False, True])
 async def test_wrapping_markup_is_not_split_at_its_inner_sentence_boundary(streaming: bool) -> None:
-    tokenizer = SentenceTokenizer(min_sentence_len=1, stream_context_len=5, xml_aware=True)
+    tokenizer = blingfire.SentenceTokenizer(
+        min_sentence_len=1, stream_context_len=5, xml_aware=True
+    )
     text = "Read <spell>First sentence. Second sentence.</spell> now. Then continue."
     if streaming:
         stream = tokenizer.stream()
@@ -37,7 +39,9 @@ async def test_wrapping_markup_is_not_split_at_its_inner_sentence_boundary(strea
     ],
 )
 async def test_angle_brackets_in_prose_do_not_hold_streaming_until_flush(text: str) -> None:
-    tokenizer = SentenceTokenizer(min_sentence_len=1, stream_context_len=5, xml_aware=True)
+    tokenizer = blingfire.SentenceTokenizer(
+        min_sentence_len=1, stream_context_len=5, xml_aware=True
+    )
     stream = tokenizer.stream()
     try:
         stream.push_text(text)
@@ -48,7 +52,7 @@ async def test_angle_brackets_in_prose_do_not_hold_streaming_until_flush(text: s
 
 
 async def test_a_markup_only_sound_is_emitted_at_end_input() -> None:
-    tokenizer = SentenceTokenizer(min_sentence_len=1, xml_aware=True)
+    tokenizer = blingfire.SentenceTokenizer(min_sentence_len=1, xml_aware=True)
     stream = tokenizer.stream()
     try:
         stream.push_text('<expression value="laugh"/>')
