@@ -1115,7 +1115,7 @@ async def test_a_session_closed_before_it_started_sends_none_of_its_queued_audio
     await model.aclose()
 
 
-async def test_a_session_closed_as_it_starts_still_sends_only_the_newest_four_seconds(
+async def test_a_session_closed_as_it_starts_sends_its_backlog_and_closes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     ws = _connect_hook(monkeypatch, auto_start=False)
@@ -1130,7 +1130,7 @@ async def test_a_session_closed_as_it_starts_still_sends_only_the_newest_four_se
 
     session._handle_event({"type": "session.started", "session": {"id": "live_1"}})
     await asyncio.wait_for(session.aclose(), timeout=1)
-    assert _numbered_traffic(ws.sent) == ["session.start", *range(20, 60), "session.close"]
+    assert _numbered_traffic(ws.sent) == ["session.start", *range(60), "session.close"]
     await model.aclose()
 
 

@@ -443,7 +443,9 @@ class GPTLiveSession(
         with contextlib.suppress(utils.aio.channel.ChanClosed):
             self._msg_ch.send_nowait(event)
 
-    def _drain_trimmed_backlog(self) -> list[types.ClientEvent | dict[str, Any]]:
+    def _trim_queued_audio(self) -> None:
+        if self._msg_ch.closed:
+            return
         queued: list[types.ClientEvent | dict[str, Any]] = []
         while not self._msg_ch.empty():
             queued.append(self._msg_ch.recv_nowait())
@@ -452,7 +454,7 @@ class GPTLiveSession(
         kept_samples = dropped_samples = 0
         for event in reversed(queued):
             if isinstance(event, types.InputAudioAppendEvent):
-                samples = len(base64.b64decode(event.audio)) // (2 * NUM_CHANNELS)
+                samples = len(event.audio) * 3 // 4 // (2 * NUM_CHANNELS)
                 if dropped_samples or kept_samples + samples > _MAX_QUEUED_INPUT_AUDIO_SAMPLES:
                     dropped_samples += samples
                     continue
@@ -467,8 +469,8 @@ class GPTLiveSession(
                     "kept_s": kept_samples / SAMPLE_RATE,
                 },
             )
-        kept.reverse()
-        return kept
+        for event in reversed(kept):
+            self._msg_ch.send_nowait(event)
 
     def _build_delegation(self) -> types.Delegation:
         if self._opts.delegation == "client":
@@ -681,15 +683,7 @@ class GPTLiveSession(
                 await self._ws_send(
                     ws_conn, types.InputAudioMuteEvent(event_id=utils.shortuuid("mute_"))
                 )
-            backlog = self._drain_trimmed_backlog()
-            # on the channel, what a failed send leaves reaches the next session; a closed
-            # channel takes nothing back, and no session follows it
-            if self._msg_ch.closed:
-                for msg in backlog:
-                    await self._ws_send(ws_conn, msg)
-            else:
-                for msg in backlog:
-                    self._msg_ch.send_nowait(msg)
+            self._trim_queued_audio()
             async for msg in self._msg_ch:
                 await self._ws_send(ws_conn, msg)
 
