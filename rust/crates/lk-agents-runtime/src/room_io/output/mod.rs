@@ -15,6 +15,7 @@ use lk_agents_voice::room_io::machine::output::{
     CaptureAdmission, Playback, PlaybackReport, capture_chunks,
 };
 use parking_lot::Mutex;
+use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Notify;
@@ -22,6 +23,10 @@ use tokio::sync::Notify;
 pub mod transcription;
 
 const PROGRESS_TICK: Duration = Duration::from_millis(20);
+
+/// The first tasks `begin_start` starts: the pump, the playout watcher and the progress
+/// reporter, which the close stops before its terminal playback event.
+const PRODUCERS: usize = 3;
 
 struct State {
     playback: Playback,
@@ -278,64 +283,113 @@ impl Shared {
                 return;
             }
             let segment = self.lock().playback.segment();
-            loop {
-                self.wait_until(|s| s.playback.closed() || s.playback.drained()).await;
-                let src = {
-                    let st = self.lock();
-                    if st.playback.closed() {
-                        return;
-                    }
-                    st.source.clone()
-                };
-                let window = match src {
-                    Some(src) => {
-                        let Some(info) = self.source_result(
-                            src.as_ref(),
-                            src.wait_for_playout(&telemetry::Cx::NONE).await,
-                        ) else {
-                            break;
-                        };
-                        info
-                    }
-                    None => PlaybackInfo::default(),
-                };
-                if !self.lock().playback.settled(segment, window) {
-                    break;
-                }
-                // A pause holds the finish until the sink plays again or the pause becomes a cut.
-                self.wait_until(|s| s.playback.closed() || !s.playback.finish_held()).await;
-                let (drained, src) = {
-                    let st = self.lock();
-                    if st.playback.closed() {
-                        return;
-                    }
-                    (st.playback.drained(), st.source.clone())
-                };
-                if !drained {
-                    continue;
-                }
-                let queued = match src {
-                    Some(src) => {
-                        let Some(queued) = self.source_result(src.as_ref(), src.queued_duration())
-                        else {
-                            break;
-                        };
-                        queued
-                    }
-                    None => Duration::ZERO,
-                };
-                let now = self.clock.now();
-                let Some(reports) = self.lock().playback.finish(segment, queued, now) else {
-                    continue;
-                };
-                for report in reports {
-                    self.report(Some(report));
-                }
-                // Idle again: held captures may retry.
-                self.wake.notify_waiters();
-                break;
+            if self.finish_segment(segment).await.is_break() {
+                return;
             }
         }
+    }
+
+    /// Waits for the closed segment to drain and play out, then finishes it. A failed source
+    /// gives the segment up; `Break` once playback closed.
+    async fn finish_segment(&self, segment: Option<PlaybackSegment>) -> ControlFlow<()> {
+        loop {
+            self.wait_until(|s| s.playback.closed() || s.playback.drained()).await;
+            let src = {
+                let st = self.lock();
+                if st.playback.closed() {
+                    return ControlFlow::Break(());
+                }
+                st.source.clone()
+            };
+            let window = match src {
+                Some(src) => self
+                    .source_result(src.as_ref(), src.wait_for_playout(&telemetry::Cx::NONE).await),
+                None => Some(PlaybackInfo::default()),
+            };
+            let Some(window) = window else { return ControlFlow::Continue(()) };
+            if !self.lock().playback.settled(segment, window) {
+                return ControlFlow::Continue(());
+            }
+            // A pause holds the finish until the sink plays again or the pause becomes a cut.
+            self.wait_until(|s| s.playback.closed() || !s.playback.finish_held()).await;
+            let (drained, src) = {
+                let st = self.lock();
+                if st.playback.closed() {
+                    return ControlFlow::Break(());
+                }
+                (st.playback.drained(), st.source.clone())
+            };
+            if !drained {
+                continue;
+            }
+            let queued = match src {
+                Some(src) => self.source_result(src.as_ref(), src.queued_duration()),
+                None => Some(Duration::ZERO),
+            };
+            let Some(queued) = queued else { return ControlFlow::Continue(()) };
+            let now = self.clock.now();
+            let Some(reports) = self.lock().playback.finish(segment, queued, now) else {
+                continue;
+            };
+            for report in reports {
+                self.report(Some(report));
+            }
+            // Idle again: held captures may retry.
+            self.wake.notify_waiters();
+            return ControlFlow::Continue(());
+        }
+    }
+
+    /// The close's cleanup, once track creation settled: the source cleared, closed and its
+    /// publication retired, then the outcome recorded.
+    async fn retire(
+        self: Arc<Self>,
+        room: Arc<dyn RtcRoom>,
+        spawner: (Arc<TaskSet>, Arc<dyn Spawner>),
+        captured: bool,
+    ) {
+        self.wait_until(|s| !s.publication.creating()).await;
+        let (source, sid) = {
+            let mut state = self.lock();
+            (state.source.take(), state.publication.retire())
+        };
+        let outcome = match source {
+            Some(source) => self.release_source(source, sid, captured, room, spawner).await,
+            None => Closed::Clean,
+        };
+        {
+            let mut state = self.lock();
+            state.cleanup_finished = true;
+            state.cleanup_outcome =
+                Some(state.cleanup_outcome.unwrap_or(Closed::Clean).and(outcome));
+        }
+        self.wake.notify_waiters();
+    }
+
+    /// Clears what the source still queued when frames were captured, finishes the playback,
+    /// then unpublishes the track or closes the unpublished source.
+    async fn release_source(
+        &self,
+        source: Arc<dyn AudioSource>,
+        sid: Option<TrackSid>,
+        captured: bool,
+        room: Arc<dyn RtcRoom>,
+        spawner: (Arc<TaskSet>, Arc<dyn Spawner>),
+    ) -> Closed {
+        let mut outcome = Closed::Clean;
+        if captured {
+            match self.clear_source(source.as_ref(), false) {
+                Ok((run, _)) => self.report(run),
+                Err(error) => outcome = outcome.and(cleanup_outcome(Err(error), "audio queue")),
+            }
+            let report = self.lock().playback.close_finished();
+            self.report(report);
+        }
+        let released = match sid {
+            Some(sid) => retire_publication(room, source, sid, spawner).await,
+            None => cleanup_outcome(source.close(&telemetry::Cx::NONE).await, "audio source"),
+        };
+        outcome.and(released)
     }
 }
 
@@ -501,6 +555,16 @@ impl ParticipantAudioOutput {
         }
     }
 
+    /// Stops the frame and progress producers before the terminal playback event. Creation keeps
+    /// its separate obligation to deliver or retire the track, even if start() was cancelled.
+    fn stop_producers(&self) {
+        let mut started = self.started.lock();
+        let producers = started.len().min(PRODUCERS);
+        for task in started.drain(..producers) {
+            self.tasks.cancel(task);
+        }
+    }
+
     pub async fn aclose(&self) -> Closed {
         let requested_deadline = self.shared.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
         let (first, captured, deadline) = {
@@ -513,55 +577,10 @@ impl ParticipantAudioOutput {
         };
         self.shared.wake.notify_waiters();
         if first {
-            // Stop frame/progress producers before the terminal playback event. Creation keeps its
-            // separate obligation to deliver or retire the track, even if start() was cancelled.
-            {
-                let mut started = self.started.lock();
-                let workers = started.len().min(3);
-                for task in started.drain(..workers) {
-                    self.tasks.cancel(task);
-                }
-            }
-            let shared = self.shared.clone();
-            let room = self.room.clone();
+            self.stop_producers();
             let spawner = (self.tasks.clone(), self.spawner.clone());
-            self.tasks.spawn(self.spawner.as_ref(), "audio output cleanup", async move {
-                shared.wait_until(|s| !s.publication.creating()).await;
-                let (source, sid) = {
-                    let mut state = shared.lock();
-                    (state.source.take(), state.publication.retire())
-                };
-                let mut outcome = Closed::Clean;
-                if let Some(source) = source {
-                    if captured {
-                        match shared.clear_source(source.as_ref(), false) {
-                            Ok((run, _)) => shared.report(run),
-                            Err(error) => {
-                                outcome = outcome.and(cleanup_outcome(Err(error), "audio queue"))
-                            }
-                        }
-                    }
-                    if captured {
-                        let report = shared.lock().playback.close_finished();
-                        shared.report(report);
-                    }
-                    if let Some(sid) = sid {
-                        outcome = outcome.and(retire_publication(room, source, sid, spawner).await);
-                    } else {
-                        outcome = outcome.and(cleanup_outcome(
-                            source.close(&telemetry::Cx::NONE).await,
-                            "audio source",
-                        ));
-                    }
-                }
-                {
-                    let mut state = shared.lock();
-                    state.cleanup_finished = true;
-                    state.cleanup_outcome =
-                        Some(state.cleanup_outcome.unwrap_or(Closed::Clean).and(outcome));
-                }
-                shared.wake.notify_waiters();
-            });
+            let cleanup = self.shared.clone().retire(self.room.clone(), spawner, captured);
+            self.tasks.spawn(self.spawner.as_ref(), "audio output cleanup", cleanup);
         }
         let remaining = deadline.saturating_duration_since(self.shared.clock.now());
         let settled = timeout(

@@ -42,6 +42,25 @@ const CALLER_CANCELLED: &str = "cancelled by the caller";
 /// The cancellation reason of a request the session's close ended.
 const SESSION_CLOSED: &str = "session closed";
 
+/// Hands a tool call's progress message to the host's sink. The connection's cancel abandons
+/// the update; the call's next turn then reports the cancel.
+async fn forward_progress(
+    connection: &Connection,
+    sink: Option<&Arc<dyn McpProgress>>,
+    host_context: &Option<HostRef>,
+    update: ProgressNotificationParam,
+) -> Result<(), McpError> {
+    let (Some(sink), Some(message)) = (sink, progress_message(update.message.as_deref())) else {
+        return Ok(());
+    };
+    let invocation = McpInvocation { host_context: host_context.clone() };
+    tokio::select! {
+        _ = connection.cancel.cancelled() => {}
+        result = sink.update(&telemetry::Cx::NONE, &invocation, message) => result?,
+    }
+    Ok(())
+}
+
 #[derive(Clone, Default)]
 struct Progress(ProgressDispatcher);
 impl ClientHandler for Progress {
@@ -331,13 +350,7 @@ impl McpSessionPort for McpSession {
                     break result.map_err(|e| connection.error(e))?;
                 }
                 Some(update) = updates.next() => {
-                    if let (Some(sink), Some(message)) = (&progress, progress_message(update.message.as_deref())) {
-                        let invocation = McpInvocation { host_context: host_context.clone() };
-                        tokio::select! {
-                            _ = connection.cancel.cancelled() => continue,
-                            result = sink.update(&telemetry::Cx::NONE, &invocation, message) => result?,
-                        }
-                    }
+                    forward_progress(&connection, progress.as_ref(), &host_context, update).await?
                 }
             }
         };

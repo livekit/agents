@@ -3,7 +3,7 @@
 use crate::telemetry;
 use lk_agents_abi::utils::video::{MediaFrame, VideoFrame};
 use lk_agents_abi::voice::rtc::{AudioSource, RtcError, VideoSource};
-use lk_agents_abi::{Clock, OwnedTask, Spawner, SpawnerExt};
+use lk_agents_abi::{AudioFrame, Clock, OwnedTask, Spawner, SpawnerExt, Ts};
 use lk_agents_net::task::TaskSet;
 use lk_agents_voice::av_sync::FramePacer;
 use parking_lot::Mutex;
@@ -11,7 +11,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::{Notify, watch};
 
-type Outcome = Result<(), RtcError>;
+type Outcome<T = ()> = Result<T, RtcError>;
 
 struct Queued {
     frame: VideoFrame,
@@ -101,63 +101,123 @@ impl Inner {
             let changed = self.changed.notified();
             tokio::pin!(changed);
             changed.as_mut().enable();
-            let next = {
-                let mut state = self.state.lock();
-                if state.closed {
-                    return;
-                }
-                let next = state.queue.pop_front();
-                state.in_flight = next.is_some();
-                next.map(|frame| (frame, state.pacer.deadline(self.clock.now())))
-            };
+            let Some(next) = self.take_next() else { return };
             let Some((queued, deadline)) = next else {
                 changed.await;
                 continue;
             };
             self.changed.notify_waiters();
-            // A clear/reset wakes pacing; re-check the epoch before entering the SDK.
-            loop {
-                let changed = self.changed.notified();
-                tokio::pin!(changed);
-                changed.as_mut().enable();
-                let discard = {
-                    let s = self.state.lock();
-                    s.closed || s.epoch != queued.epoch
-                };
-                if discard {
-                    break;
-                }
-                tokio::select! {
-                    biased;
-                    _ = &mut changed => continue,
-                    _ = self.clock.wait_until(deadline) => {}
-                }
-                let result = self.video.capture(&queued.frame);
-                {
-                    let mut state = self.state.lock();
-                    match result {
-                        Ok(()) => {
-                            state.pacer.captured(self.clock.now());
-                            if let Some(timestamp) = queued.timestamp {
-                                state.last_video = timestamp;
-                            }
-                        }
-                        Err(error) => {
-                            state.failure = Some(error);
-                        }
-                    }
-                }
-                break;
-            }
-            let failed = {
-                let mut state = self.state.lock();
-                state.in_flight = false;
-                state.failure.is_some()
-            };
-            self.changed.notify_waiters();
-            if failed {
+            self.present(&queued, deadline).await;
+            if self.end_flight() {
                 return;
             }
+        }
+    }
+
+    /// Pops the next frame, in flight from here, with its pacing deadline; `None` once closed.
+    fn take_next(&self) -> Option<Option<(Queued, Ts)>> {
+        let mut state = self.state.lock();
+        if state.closed {
+            return None;
+        }
+        let next = state.queue.pop_front();
+        state.in_flight = next.is_some();
+        Some(next.map(|frame| (frame, state.pacer.deadline(self.clock.now()))))
+    }
+
+    /// Captures the frame at its deadline. A clear/reset wakes pacing; the epoch is re-checked
+    /// before entering the SDK.
+    async fn present(&self, queued: &Queued, deadline: Ts) {
+        loop {
+            let changed = self.changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            let discard = {
+                let s = self.state.lock();
+                s.closed || s.epoch != queued.epoch
+            };
+            if discard {
+                return;
+            }
+            tokio::select! {
+                biased;
+                _ = &mut changed => continue,
+                _ = self.clock.wait_until(deadline) => {}
+            }
+            let result = self.video.capture(&queued.frame);
+            self.record_capture(result, queued.timestamp);
+            return;
+        }
+    }
+
+    fn record_capture(&self, result: Outcome, timestamp: Option<f64>) {
+        let mut state = self.state.lock();
+        match result {
+            Ok(()) => {
+                state.pacer.captured(self.clock.now());
+                if let Some(timestamp) = timestamp {
+                    state.last_video = timestamp;
+                }
+            }
+            Err(error) => state.failure = Some(error),
+        }
+    }
+
+    /// Ends the frame's flight and wakes the waiters; whether a capture failed.
+    fn end_flight(&self) -> bool {
+        let failed = {
+            let mut state = self.state.lock();
+            state.in_flight = false;
+            state.failure.is_some()
+        };
+        self.changed.notify_waiters();
+        failed
+    }
+}
+
+impl AVSynchronizer {
+    /// The current epoch, unless the synchronizer failed or closed.
+    fn current_epoch(&self) -> Outcome<u64> {
+        let state = self.inner.state.lock();
+        Inner::check(&state)?;
+        Ok(state.epoch)
+    }
+
+    /// Captures the audio frame; its timestamp counts unless a clear came meanwhile.
+    async fn push_audio(&self, frame: &AudioFrame, timestamp: Option<f64>) -> Outcome {
+        let epoch = self.current_epoch()?;
+        self.inner.audio.capture(&telemetry::Cx::NONE, frame).await?;
+        let mut state = self.inner.state.lock();
+        Inner::check(&state)?;
+        if state.epoch == epoch
+            && let Some(timestamp) = timestamp
+        {
+            state.last_audio = timestamp;
+        }
+        Ok(())
+    }
+
+    /// Queues the video frame for pacing once there is room; a clear meanwhile drops it.
+    async fn push_video(&self, frame: VideoFrame, timestamp: Option<f64>) -> Outcome {
+        let epoch = self.current_epoch()?;
+        loop {
+            let changed = self.inner.changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            {
+                let mut state = self.inner.state.lock();
+                Inner::check(&state)?;
+                if state.epoch != epoch {
+                    return Ok(());
+                }
+                if state.queue.len() < self.inner.capacity {
+                    state.queue.push_back(Queued { frame, timestamp, epoch });
+                    drop(state);
+                    self.inner.changed.notify_waiters();
+                    return Ok(());
+                }
+            }
+            changed.await;
         }
     }
 }
@@ -165,48 +225,8 @@ impl Inner {
 impl lk_agents_abi::voice::rtc::media::AVSynchronizer for AVSynchronizer {
     async fn push(&self, frame: MediaFrame, timestamp: Option<f64>) -> Outcome {
         match frame {
-            MediaFrame::Audio(frame) => {
-                let epoch = {
-                    let state = self.inner.state.lock();
-                    Inner::check(&state)?;
-                    state.epoch
-                };
-                self.inner.audio.capture(&telemetry::Cx::NONE, &frame).await?;
-                let mut state = self.inner.state.lock();
-                Inner::check(&state)?;
-                if state.epoch == epoch
-                    && let Some(timestamp) = timestamp
-                {
-                    state.last_audio = timestamp;
-                }
-                Ok(())
-            }
-            MediaFrame::Video(frame) => {
-                let epoch = {
-                    let state = self.inner.state.lock();
-                    Inner::check(&state)?;
-                    state.epoch
-                };
-                loop {
-                    let changed = self.inner.changed.notified();
-                    tokio::pin!(changed);
-                    changed.as_mut().enable();
-                    {
-                        let mut state = self.inner.state.lock();
-                        Inner::check(&state)?;
-                        if state.epoch != epoch {
-                            return Ok(());
-                        }
-                        if state.queue.len() < self.inner.capacity {
-                            state.queue.push_back(Queued { frame, timestamp, epoch });
-                            drop(state);
-                            self.inner.changed.notify_waiters();
-                            return Ok(());
-                        }
-                    }
-                    changed.await;
-                }
-            }
+            MediaFrame::Audio(frame) => self.push_audio(&frame, timestamp).await,
+            MediaFrame::Video(frame) => self.push_video(frame, timestamp).await,
         }
     }
 

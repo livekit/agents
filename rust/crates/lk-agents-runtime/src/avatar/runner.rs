@@ -7,14 +7,14 @@ use lk_agents_abi::voice::avatar::{
 };
 use lk_agents_abi::voice::room_owner::SessionRoom;
 use lk_agents_abi::voice::rtc::{RoomEvent, RtcError, RtcRoom};
-use lk_agents_abi::{Clock, Spawner, SpawnerExt};
+use lk_agents_abi::{Clock, Spawner, SpawnerExt, StreamOutput};
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::task::TaskSet;
 use lk_agents_voice::avatar::effects::AvatarEffect;
 pub use lk_agents_voice::avatar::machine::runner::AvatarEvent;
 use lk_agents_voice::avatar::machine::runner::{AvatarIoOperation, CallId, RunnerCore};
 use parking_lot::Mutex;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 
@@ -80,6 +80,97 @@ impl AvatarIo {
 }
 type Answers = Arc<Mutex<HashMap<CallId, oneshot::Sender<Result<(), RunnerError>>>>>;
 
+/// The queue owner's loop: it takes the ready events in `order` and runs the core's effects.
+struct RunnerLoop<F> {
+    core: RunnerCore,
+    queue: mpsc::UnboundedReceiver<AvatarEvent>,
+    ready: VecDeque<AvatarEvent>,
+    order: F,
+    io: AvatarIo,
+    events: mpsc::UnboundedSender<AvatarEvent>,
+    answers: Answers,
+    io_tasks: Arc<TaskSet>,
+    spawner: Arc<dyn Spawner>,
+    clock: Arc<dyn Clock>,
+}
+
+impl<F: FnMut(&VecDeque<AvatarEvent>) -> usize> RunnerLoop<F> {
+    async fn run(mut self) {
+        while let Some(event) = self.next_event().await {
+            for effect in self.core.handle(event, self.clock.now()) {
+                match effect {
+                    AvatarEffect::Io(op) => self.perform_io(op),
+                    AvatarEffect::CancelIo => self.cancel_io(),
+                    AvatarEffect::Answer { call, result } => self.answer(call, result),
+                }
+            }
+        }
+    }
+
+    /// Waits for an event when none is ready, takes every queued one, and picks the next;
+    /// `None` once the queue closed.
+    async fn next_event(&mut self) -> Option<AvatarEvent> {
+        loop {
+            if self.ready.is_empty() {
+                self.ready.push_back(self.queue.recv().await?);
+            }
+            while let Ok(event) = self.queue.try_recv() {
+                self.ready.push_back(event);
+            }
+            let pick = (self.order)(&self.ready).min(self.ready.len() - 1);
+            if let Some(event) = self.ready.remove(pick) {
+                return Some(event);
+            }
+        }
+    }
+
+    fn perform_io(&self, op: AvatarIoOperation) {
+        let (io, events) = (self.io.clone(), self.events.clone());
+        self.io_tasks.spawn(&*self.spawner, "avatar runner op", async move {
+            let _ = events.send(io.perform(op).await);
+        });
+    }
+
+    fn cancel_io(&self) {
+        let (io_tasks, events, clock) =
+            (Arc::clone(&self.io_tasks), self.events.clone(), Arc::clone(&self.clock));
+        // Detached: it ends once the cancelled ops settled, and only reports to the loop, which
+        // ignores it once gone.
+        self.spawner.spawn_detached(async move {
+            io_tasks.cancel_and_wait(&*clock).await;
+            let _ = events.send(AvatarEvent::IoCancelled);
+        });
+    }
+
+    fn answer(&self, call: CallId, result: Result<(), RunnerError>) {
+        let tx = self.answers.lock().remove(&call);
+        if let Some(tx) = tx {
+            let _ = tx.send(result);
+        }
+    }
+}
+
+/// Reports the room's connection changes to the loop until the room's events end or fail.
+async fn forward_connection_changes(
+    mut room_events: Box<dyn StreamOutput<RoomEvent>>,
+    events: mpsc::UnboundedSender<AvatarEvent>,
+) {
+    loop {
+        let event = match room_events.next().await {
+            Ok(Some(RoomEvent::ConnectionStateChanged { state })) => {
+                AvatarEvent::Connection { connected: state.is_connected() }
+            }
+            Ok(Some(_)) => continue,
+            Ok(None) => return,
+            Err(error) => {
+                let _ = events.send(AvatarEvent::RoomFailed(error));
+                return;
+            }
+        };
+        let _ = events.send(event);
+    }
+}
+
 /// `AvatarRunner`: the queue owner of one [`RunnerCore`]. Host calls and the room become events,
 /// each effect runs as a task whose answer is the next event.
 pub struct Runner {
@@ -108,58 +199,24 @@ impl Runner {
         lazy_publish: bool,
         clock: Arc<dyn Clock>,
         spawner: Arc<dyn Spawner>,
-        mut order: impl FnMut(&std::collections::VecDeque<AvatarEvent>) -> usize + Send + 'static,
+        order: impl FnMut(&VecDeque<AvatarEvent>) -> usize + Send + 'static,
     ) -> Self {
-        let (events, mut queue) = mpsc::unbounded_channel();
+        let (events, queue) = mpsc::unbounded_channel();
         let answers: Answers = Arc::default();
         let io_tasks: Arc<TaskSet> = Arc::default();
-        let owner = {
-            let (events, answers, io_tasks, spawner) =
-                (events.clone(), Arc::clone(&answers), Arc::clone(&io_tasks), Arc::clone(&spawner));
-            spawner.clone().spawn(async move {
-                let mut core = RunnerCore::new(lazy_publish);
-                let mut ready = std::collections::VecDeque::new();
-                loop {
-                    if ready.is_empty() {
-                        match queue.recv().await {
-                            Some(event) => ready.push_back(event),
-                            None => return,
-                        }
-                    }
-                    while let Ok(event) = queue.try_recv() {
-                        ready.push_back(event);
-                    }
-                    let pick = order(&ready).min(ready.len() - 1);
-                    let Some(event) = ready.remove(pick) else { continue };
-                    for effect in core.handle(event, clock.now()) {
-                        match effect {
-                            AvatarEffect::Io(op) => {
-                                let (io, events) = (io.clone(), events.clone());
-                                io_tasks.spawn(&*spawner, "avatar runner op", async move {
-                                    let _ = events.send(io.perform(op).await);
-                                });
-                            }
-                            AvatarEffect::CancelIo => {
-                                let (io_tasks, events, clock) =
-                                    (Arc::clone(&io_tasks), events.clone(), Arc::clone(&clock));
-                                // Detached: it ends once the cancelled ops settled, and only
-                                // reports to the loop, which ignores it once gone.
-                                spawner.spawn_detached(async move {
-                                    io_tasks.cancel_and_wait(&*clock).await;
-                                    let _ = events.send(AvatarEvent::IoCancelled);
-                                });
-                            }
-                            AvatarEffect::Answer { call, result } => {
-                                let tx = answers.lock().remove(&call);
-                                if let Some(tx) = tx {
-                                    let _ = tx.send(result);
-                                }
-                            }
-                        }
-                    }
-                }
-            })
+        let owner = RunnerLoop {
+            core: RunnerCore::new(lazy_publish),
+            queue,
+            ready: VecDeque::new(),
+            order,
+            io,
+            events: events.clone(),
+            answers: Arc::clone(&answers),
+            io_tasks: Arc::clone(&io_tasks),
+            spawner: Arc::clone(&spawner),
+            clock,
         };
+        let owner = spawner.clone().spawn(owner.run());
         Runner {
             room,
             events,
@@ -240,25 +297,10 @@ impl Runner {
     /// `start()`, once the receiver has started (`await audio_recv.start()`).
     pub async fn start(&self) -> Result<(), RunnerError> {
         // subscribed before the state is read, so no change falls between the two
-        let mut room_events = self.room.events();
+        let room_events = self.room.events();
         let connected = self.room.connection_state()?.is_connected();
-        let events = self.events.clone();
-        self.io_tasks.spawn(&*self.spawner, "avatar room connection", async move {
-            loop {
-                match room_events.next().await {
-                    Ok(Some(RoomEvent::ConnectionStateChanged { state })) => {
-                        let _ = events
-                            .send(AvatarEvent::Connection { connected: state.is_connected() });
-                    }
-                    Ok(Some(_)) => {}
-                    Ok(None) => return,
-                    Err(error) => {
-                        let _ = events.send(AvatarEvent::RoomFailed(error));
-                        return;
-                    }
-                }
-            }
-        });
+        let forward = forward_connection_changes(room_events, self.events.clone());
+        self.io_tasks.spawn(&*self.spawner, "avatar room connection", forward);
         self.call(|call| AvatarEvent::Start { call, connected }).await
     }
 

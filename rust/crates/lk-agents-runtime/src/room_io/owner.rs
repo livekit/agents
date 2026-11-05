@@ -31,6 +31,7 @@ use lk_agents_voice::room_io::{accepted_kinds, outbound_sip, publishes_on_behalf
 use parking_lot::Mutex;
 use std::collections::BTreeMap;
 use std::future::Future;
+use std::ops::ControlFlow;
 use std::sync::Arc;
 use tokio::sync::{Notify, mpsc, watch};
 
@@ -272,14 +273,8 @@ impl RoomIo {
             self.consider(p.identity(), p.sid(), p.kind(), &p.attributes()?).await?;
         }
 
-        {
-            let mut state = self.view.subscribe();
-            let state =
-                state.wait_for(|state| state.linked.is_some() || state.ready.is_some()).await;
-            match state {
-                Ok(state) if state.linked.is_some() => {}
-                Ok(_) | Err(_) => return Ok(()),
-            }
+        if !self.wait_for_link().await {
+            return Ok(());
         }
 
         if let Some(agent_tr) = &self.agent_tr {
@@ -287,31 +282,35 @@ impl RoomIo {
             agent_tr.set_participant(Some(self.room.local().identity()?)).await?;
         }
         let startup = self.startup.lock().take().map(|startup| startup.cx);
-        let outcome = match &self.audio_output {
-            Some(out) => {
-                let span = startup.map(|cx| telemetry::start(&cx, telemetry::PublishAudioOutput));
-                let outcome = out.start().await;
-                match (span, &outcome) {
-                    (Some(span), Ok(())) => {
-                        let track_id = out.published().map(|sid| sid.as_str().to_owned());
-                        telemetry::end(
-                            span,
-                            telemetry::PublishAudioOutputEnd {
-                                track_id: track_id.unwrap_or_default(),
-                            },
-                        );
-                    }
-                    (Some(span), Err(error)) => {
-                        telemetry::end(span, error);
-                    }
-                    (None, _) => {}
-                }
-                outcome
-            }
-            None => Ok(()),
-        };
+        let outcome = self.publish_audio_output(startup).await;
         self.transition(|state| state.finish_start(outcome));
         Ok(())
+    }
+
+    /// Whether a participant was linked before the room settled its readiness otherwise.
+    async fn wait_for_link(&self) -> bool {
+        let mut state = self.view.subscribe();
+        let state = state.wait_for(|state| state.linked.is_some() || state.ready.is_some()).await;
+        matches!(state, Ok(state) if state.linked.is_some())
+    }
+
+    /// Publishes the agent's audio track, under startup's `publish_audio_output` span when the
+    /// session traces its start.
+    async fn publish_audio_output(&self, startup: Option<telemetry::Cx>) -> Result<()> {
+        let Some(out) = &self.audio_output else { return Ok(()) };
+        let span = startup.map(|cx| telemetry::start(&cx, telemetry::PublishAudioOutput));
+        let outcome = out.start().await;
+        let Some(span) = span else { return outcome };
+        match &outcome {
+            Ok(()) => {
+                let track_id = out.published().map(|sid| sid.as_str().to_owned());
+                let end =
+                    telemetry::PublishAudioOutputEnd { track_id: track_id.unwrap_or_default() };
+                telemetry::end(span, end);
+            }
+            Err(error) => telemetry::end(span, error),
+        }
+        outcome
     }
 
     async fn attach_participant(&self, identity: Option<ParticipantIdentity>) -> Result<()> {
@@ -346,18 +345,10 @@ impl RoomIo {
                 accepted_kinds(&self.config),
             )
         }) {
-            self.emit(RoomIoEvent::ParticipantInfo {
-                participant: ParticipantInfo {
-                    identity: candidate.clone(),
-                    sid: sid.to_owned(),
-                    kind,
-                },
-                local: false,
-            })?;
-            self.emit(RoomIoEvent::ParticipantLinked {
-                participant: ParticipantLinked { identity: candidate.clone() },
-                outbound_sip: outbound_sip(kind, attrs),
-            })?;
+            self.announce_participant(candidate, sid, kind)?;
+            let participant = ParticipantLinked { identity: candidate.clone() };
+            let outbound_sip = outbound_sip(kind, attrs);
+            self.emit(RoomIoEvent::ParticipantLinked { participant, outbound_sip })?;
             self.linked_at_startup(candidate, sid, kind);
             self.attach_participant(None).await?;
             self.attach_participant(Some(candidate.clone())).await?;
@@ -378,6 +369,34 @@ impl RoomIo {
                 return Ok(());
             }
         }
+        self.forward_to_inputs(event).await?;
+        match event {
+            RoomEvent::ConnectionStateChanged { state } => self.on_connection_state(*state),
+            RoomEvent::ParticipantConnected { participant } => {
+                let attrs = participant.attributes()?;
+                let (identity, sid, kind) =
+                    (participant.identity(), participant.sid(), participant.kind());
+                self.consider(identity, sid, kind, &attrs).await
+            }
+            RoomEvent::ParticipantDisconnected { participant, reason } => {
+                let (identity, sid) = (participant.identity(), participant.sid());
+                self.on_participant_disconnected(identity, sid, *reason).await
+            }
+            RoomEvent::Close { reason } => self.on_room_closed(*reason).await,
+            RoomEvent::TrackSubscribed { .. }
+            | RoomEvent::TrackUnsubscribed { .. }
+            | RoomEvent::TrackPublished { .. }
+            | RoomEvent::TrackUnpublished { .. }
+            | RoomEvent::LocalTrackPublished { .. }
+            | RoomEvent::ParticipantActive { .. }
+            | RoomEvent::ParticipantAttributesChanged { .. }
+            | RoomEvent::SipDtmf { participant: None, .. } => Ok(()),
+            RoomEvent::SipDtmf { participant: Some(who), digit } => self.on_key_press(who, digit),
+        }
+    }
+
+    /// The inputs and transcribers see each event before the session does.
+    async fn forward_to_inputs(self: &Arc<Self>, event: &RoomEvent) -> Result<()> {
         if let Some(input) = &self.audio_input {
             input.handle_event(event)?;
         }
@@ -390,67 +409,110 @@ impl RoomIo {
         if let Some(agent_tr) = &self.agent_tr {
             agent_tr.handle_event(event).await?;
         }
+        Ok(())
+    }
 
-        match event {
-            RoomEvent::ConnectionStateChanged { state } => {
-                self.emit(RoomIoEvent::ConnectionStateChanged(*state))?;
-                if *state == ConnectionState::Connected {
-                    self.connected.set(true);
-                    // Connected or reconnected: the agent's own identity for the session's spans.
-                    let local = self.room.local();
-                    self.emit(RoomIoEvent::ParticipantInfo {
-                        participant: ParticipantInfo {
-                            identity: local.identity()?,
-                            sid: local.sid()?,
-                            kind: local.kind()?,
-                        },
-                        local: true,
-                    })?;
-                }
-            }
-            RoomEvent::ParticipantConnected { participant } => {
-                let attrs = participant.attributes()?;
-                self.consider(
-                    participant.identity(),
-                    participant.sid(),
-                    participant.kind(),
-                    &attrs,
-                )
-                .await?;
-            }
-            RoomEvent::ParticipantDisconnected { participant, reason } => {
-                self.on_participant_disconnected(
-                    participant.identity(),
-                    participant.sid(),
-                    *reason,
-                )
-                .await?;
-            }
-            RoomEvent::Close { reason } => {
-                if let Some(identity) = self.linked_participant() {
-                    self.unset_participant().await?;
-                    self.emit(RoomIoEvent::ParticipantUnlinked(ParticipantUnlinked {
-                        identity,
-                        reason: *reason,
-                    }))?;
-                }
-                self.request_close();
-            }
-            RoomEvent::TrackSubscribed { .. }
-            | RoomEvent::TrackUnsubscribed { .. }
-            | RoomEvent::TrackPublished { .. }
-            | RoomEvent::TrackUnpublished { .. }
-            | RoomEvent::LocalTrackPublished { .. }
-            | RoomEvent::ParticipantActive { .. }
-            | RoomEvent::ParticipantAttributesChanged { .. }
-            | RoomEvent::SipDtmf { participant: None, .. } => {}
-            RoomEvent::SipDtmf { participant: Some(who), digit } => {
-                if self.state.lock().accepts_key_press(who) {
-                    self.emit(RoomIoEvent::KeyPressed(digit.clone()))?;
-                }
-            }
+    fn on_connection_state(&self, state: ConnectionState) -> Result<()> {
+        self.emit(RoomIoEvent::ConnectionStateChanged(state))?;
+        if state != ConnectionState::Connected {
+            return Ok(());
+        }
+        self.connected.set(true);
+        // Connected or reconnected: the agent's own identity for the session's spans.
+        let local = self.room.local();
+        let participant =
+            ParticipantInfo { identity: local.identity()?, sid: local.sid()?, kind: local.kind()? };
+        self.emit(RoomIoEvent::ParticipantInfo { participant, local: true })
+    }
+
+    async fn on_room_closed(self: &Arc<Self>, reason: DisconnectReason) -> Result<()> {
+        if let Some(identity) = self.linked_participant() {
+            self.unset_participant().await?;
+            self.emit(RoomIoEvent::ParticipantUnlinked(ParticipantUnlinked { identity, reason }))?;
+        }
+        self.request_close();
+        Ok(())
+    }
+
+    fn on_key_press(&self, who: &ParticipantIdentity, digit: &str) -> Result<()> {
+        if self.state.lock().accepts_key_press(who) {
+            self.emit(RoomIoEvent::KeyPressed(digit.to_owned()))?;
         }
         Ok(())
+    }
+
+    /// A remote participant's identity, for the session's spans.
+    fn announce_participant(
+        &self,
+        identity: &ParticipantIdentity,
+        sid: &str,
+        kind: ParticipantKind,
+    ) -> Result<()> {
+        let participant = ParticipantInfo { identity: identity.clone(), sid: sid.to_owned(), kind };
+        self.emit(RoomIoEvent::ParticipantInfo { participant, local: false })
+    }
+
+    /// A participant linked through `set_participant`: its info, when it is in the room, and the
+    /// end of startup's participant wait come before the link.
+    fn announce_relinked(
+        &self,
+        identity: &ParticipantIdentity,
+        participant: Option<&dyn RemoteParticipant>,
+    ) -> Result<()> {
+        let outbound_sip = match participant {
+            Some(p) => outbound_sip(p.kind(), &p.attributes()?),
+            None => false,
+        };
+        if let Some(p) = participant {
+            self.announce_participant(identity, p.sid(), p.kind())?;
+            self.linked_at_startup(identity, p.sid(), p.kind());
+        }
+        let participant = ParticipantLinked { identity: identity.clone() };
+        self.emit(RoomIoEvent::ParticipantLinked { participant, outbound_sip })
+    }
+
+    /// `set_participant`: links `identity`, or unlinks with `None`, and re-attaches the inputs.
+    async fn link_participant(&self, identity: Option<ParticipantIdentity>) -> Result<()> {
+        let participant = match &identity {
+            Some(identity) => self.room.participant(identity)?,
+            None => None,
+        };
+        let listed = participant.as_ref().map(|p| p.sid().to_owned());
+        let Some(relink) =
+            self.transition(|state| state.set_participant(identity.clone(), listed.as_deref()))
+        else {
+            return Ok(());
+        };
+        if relink.announce
+            && let Some(identity) = &identity
+        {
+            self.announce_relinked(identity, participant.as_deref())?;
+        }
+        if relink.detach {
+            self.attach_participant(None).await?;
+        }
+        match identity {
+            Some(identity) => self.attach_participant(Some(identity)).await,
+            None => Ok(()),
+        }
+    }
+
+    /// `_init_task`, unless the room stops first; a failed start fails the room.
+    async fn run_startup(self: Arc<Self>) {
+        let stopped = self.stopped.notified();
+        tokio::pin!(stopped);
+        stopped.as_mut().enable();
+        if self.is_closing() {
+            return;
+        }
+        let result = tokio::select! {
+            biased;
+            () = &mut stopped => return,
+            result = Arc::clone(&self).init() => result,
+        };
+        if let Err(error) = result {
+            self.fail(error);
+        }
     }
 
     async fn on_participant_disconnected(
@@ -748,47 +810,19 @@ impl room_owner::RoomIo for RoomIo {
         if !self.begin_work() {
             return;
         }
-        let Some((mut events, mut failures)) = self.events() else {
+        let Some((events, failures)) = self.events() else {
             self.finish_starting();
             return;
         };
-        let mut rtc_events = self.room.events();
-        let owner = self.clone();
-        self.spawn_reserved("room session events", async move {
-            loop {
-                let stopped = owner.stopped.notified();
-                tokio::pin!(stopped);
-                stopped.as_mut().enable();
-                if owner.is_closing() {
-                    // What the room said before the stop still reaches the session: the room's
-                    // `Close` stops this loop at the instant it is queued here (seed 19655).
-                    while let Ok(event) = events.try_recv() && listener(event) {}
-                    while let Ok(failure) = failures.try_recv()
-                        && listener(RoomIoEvent::InputProcessorFailed(failure))
-                    {}
-                    while let Some(Ok(Some(event))) = rtc_events.next().now_or_never()
-                        && rtc_listener(event)
-                    {}
-                    break;
-                }
-                tokio::select! {
-                    biased;
-                    () = &mut stopped => continue,
-                    event = events.recv() => { if event.is_none_or(|event| !listener(event)) { break; } },
-                    // Without an audio input nothing sends, and the arm is off.
-                    Some(failure) = failures.recv() => {
-                        if !listener(RoomIoEvent::InputProcessorFailed(failure)) { break; }
-                    },
-                    event = rtc_events.next() => match event {
-                        Ok(Some(event)) => { if !rtc_listener(event) { break; } },
-                        Ok(None) => break,
-                        Err(error) => { owner.fail(IoError::from(error)); break; },
-                    },
-                }
-            }
-            let deadline = owner.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
-            owner.record_cleanup(rtc_events.close(deadline).await);
-        });
+        let forwarder = SessionEventForwarder {
+            rtc_events: self.room.events(),
+            owner: self.clone(),
+            events,
+            failures,
+            listener,
+            rtc_listener,
+        };
+        self.spawn_reserved("room session events", forwarder.run());
     }
 
     fn audio_input(&self) -> Option<Arc<dyn AudioInput>> {
@@ -845,31 +879,17 @@ impl room_owner::RoomIo for RoomIo {
             self.register_text_input();
         }
         if self.begin_work() {
-            let this = self.clone();
             let events = self.room.events();
-            self.spawn_reserved("room events", async move {
-                this.read_events(events).await;
-            });
+            self.spawn_reserved("room events", Arc::clone(&self).read_events(events));
         }
         if self.begin_work() {
-            let this = self.clone();
-            self.spawn_reserved("room startup", async move {
-                let stopped = this.stopped.notified();
-                tokio::pin!(stopped);
-                stopped.as_mut().enable();
-                if this.is_closing() { return; }
-                tokio::select! {
-                    biased;
-                    () = &mut stopped => {},
-                    result = this.clone().init() => { if let Err(error) = result { this.fail(error); } },
-                }
-            });
+            self.spawn_reserved("room startup", Arc::clone(&self).run_startup());
         }
         if self.begin_work() {
-            let this = self.clone();
-            self.spawn_reserved("room participant attributes", async move {
-                this.write_agent_state().await;
-            });
+            self.spawn_reserved(
+                "room participant attributes",
+                Arc::clone(&self).write_agent_state(),
+            );
         }
     }
 
@@ -900,48 +920,7 @@ impl room_owner::RoomIo for RoomIo {
         &'a self,
         identity: Option<ParticipantIdentity>,
     ) -> BoxFuture<'a, Result<()>> {
-        Box::pin(async move {
-            let participant = match &identity {
-                Some(identity) => self.room.participant(identity)?,
-                None => None,
-            };
-            let listed = participant.as_ref().map(|p| p.sid().to_owned());
-            let Some(relink) =
-                self.transition(|state| state.set_participant(identity.clone(), listed.as_deref()))
-            else {
-                return Ok(());
-            };
-            if relink.announce
-                && let Some(identity) = &identity
-            {
-                let outbound_sip = match &participant {
-                    Some(p) => outbound_sip(p.kind(), &p.attributes()?),
-                    None => false,
-                };
-                if let Some(p) = &participant {
-                    self.emit(RoomIoEvent::ParticipantInfo {
-                        participant: ParticipantInfo {
-                            identity: identity.clone(),
-                            sid: p.sid().to_owned(),
-                            kind: p.kind(),
-                        },
-                        local: false,
-                    })?;
-                    self.linked_at_startup(identity, p.sid(), p.kind());
-                }
-                self.emit(RoomIoEvent::ParticipantLinked {
-                    participant: ParticipantLinked { identity: identity.clone() },
-                    outbound_sip,
-                })?;
-            }
-            if relink.detach {
-                self.attach_participant(None).await?;
-            }
-            match identity {
-                Some(identity) => self.attach_participant(Some(identity)).await,
-                None => Ok(()),
-            }
-        })
+        Box::pin(self.link_participant(identity))
     }
 
     fn unset_participant<'a>(&'a self) -> BoxFuture<'a, Result<()>> {
@@ -977,6 +956,90 @@ impl room_owner::RoomIo for RoomIo {
                 }
             }
         })
+    }
+}
+
+/// Hands the room's events and the session's own to the session's listeners until the room
+/// stops, a listener declines, or the room's events end.
+struct SessionEventForwarder {
+    owner: Arc<RoomIo>,
+    events: mpsc::Receiver<RoomIoEvent>,
+    failures: mpsc::Receiver<ProcessorFailure>,
+    rtc_events: lk_agents_abi::voice::rtc::Receiver<RoomEvent>,
+    listener: Arc<dyn Fn(RoomIoEvent) -> bool + Send + Sync>,
+    rtc_listener: Arc<dyn Fn(RoomEvent) -> bool + Send + Sync>,
+}
+
+impl SessionEventForwarder {
+    async fn run(mut self) {
+        let owner = Arc::clone(&self.owner);
+        loop {
+            let stopped = owner.stopped.notified();
+            tokio::pin!(stopped);
+            stopped.as_mut().enable();
+            if owner.is_closing() {
+                self.deliver_pending();
+                break;
+            }
+            let flow = tokio::select! {
+                biased;
+                () = &mut stopped => ControlFlow::Continue(()),
+                event = self.events.recv() => self.deliver(event),
+                // Without an audio input nothing sends, and the arm is off.
+                Some(failure) = self.failures.recv() => self.deliver_failure(failure),
+                event = self.rtc_events.next() => self.deliver_room(event),
+            };
+            if flow.is_break() {
+                break;
+            }
+        }
+        let deadline = owner.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
+        owner.record_cleanup(self.rtc_events.close(deadline).await);
+    }
+
+    /// What the room said before the stop still reaches the session: the room's `Close` stops
+    /// this loop at the instant it is queued here (seed 19655).
+    fn deliver_pending(&mut self) {
+        while let Ok(event) = self.events.try_recv()
+            && (self.listener)(event)
+        {}
+        while let Ok(failure) = self.failures.try_recv()
+            && (self.listener)(RoomIoEvent::InputProcessorFailed(failure))
+        {}
+        while let Some(Ok(Some(event))) = self.rtc_events.next().now_or_never()
+            && (self.rtc_listener)(event)
+        {}
+    }
+
+    fn deliver(&self, event: Option<RoomIoEvent>) -> ControlFlow<()> {
+        if event.is_none_or(|event| !(self.listener)(event)) {
+            return ControlFlow::Break(());
+        }
+        ControlFlow::Continue(())
+    }
+
+    fn deliver_failure(&self, failure: ProcessorFailure) -> ControlFlow<()> {
+        if (self.listener)(RoomIoEvent::InputProcessorFailed(failure)) {
+            ControlFlow::Continue(())
+        } else {
+            ControlFlow::Break(())
+        }
+    }
+
+    /// A room event for the session; a failed room fails the owner.
+    fn deliver_room(
+        &self,
+        event: std::result::Result<Option<RoomEvent>, lk_agents_abi::errors::ProviderError>,
+    ) -> ControlFlow<()> {
+        let event = match event {
+            Ok(Some(event)) => event,
+            Ok(None) => return ControlFlow::Break(()),
+            Err(error) => {
+                self.owner.fail(IoError::from(error));
+                return ControlFlow::Break(());
+            }
+        };
+        if (self.rtc_listener)(event) { ControlFlow::Continue(()) } else { ControlFlow::Break(()) }
     }
 }
 

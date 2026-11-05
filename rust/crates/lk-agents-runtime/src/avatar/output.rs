@@ -9,7 +9,8 @@ use lk_agents_abi::voice::io::{
     PlaybackTracker, Result,
 };
 use lk_agents_abi::voice::rtc::{
-    AudioOutputCapabilities, ByteStreamWriter, ParticipantIdentity, RtcRoom, StreamBytesOptions,
+    self, AudioOutputCapabilities, ByteStreamWriter, ParticipantIdentity, RoomEvent, RtcError,
+    RtcRoom, StreamBytesOptions,
 };
 use lk_agents_abi::{AudioFrame, Clock, Closed, Spawner, Ts};
 use lk_agents_net::task::{TaskId, TaskSet};
@@ -27,6 +28,17 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Notify;
 use tokio::sync::watch;
+
+/// Waits for the room's next event; its events ending is `Closed(closed)`.
+async fn next_room_event(
+    events: &mut rtc::Receiver<RoomEvent>,
+    closed: &'static str,
+) -> rtc::Result<()> {
+    match events.next().await? {
+        Some(_) => Ok(()),
+        None => Err(RtcError::Closed(closed)),
+    }
+}
 
 fn output_error(error: lk_agents_voice::avatar::machine::output::OutputError) -> IoError {
     use lk_agents_voice::avatar::machine::output::OutputError;
@@ -91,46 +103,42 @@ impl Inner {
     /// `_start_task`: the room connected, the RPC methods registered, the avatar in the room (and
     /// its track published, when asked).
     async fn start(self: Arc<Self>) {
-        let outcome: lk_agents_abi::voice::rtc::Result<()> = async {
-            let mut events = self.room.events();
-            while !self.room.connection_state()?.is_connected() {
-                if events.next().await?.is_none() {
-                    return Err(lk_agents_abi::voice::rtc::RtcError::Closed("room before connection"));
-                }
-            }
-            if self.segment.lock().core.is_closed() {
-                self.retire_routes();
-                return Err(lk_agents_abi::voice::rtc::RtcError::Closed("avatar output"));
-            }
-            let identity = ParticipantIdentity(self.destination.clone());
-            log::debug!(target: LOG, identity = self.destination.as_str(); "waiting for the remote participant");
-            while self.room.participant(&identity)?.is_none() {
-                if events.next().await?.is_none() {
-                    return Err(lk_agents_abi::voice::rtc::RtcError::Closed("room"));
-                }
-            }
-            if let Some(kind) = self.wait_remote_track {
-                log::debug!(target: LOG, identity = self.destination.as_str(), kind = kind; "waiting for the remote track");
-                loop {
-                    let published = match self.room.participant(&identity)? {
-                        Some(participant) => {
-                            participant.track_publications()?.iter().any(|track| track.kind() == kind)
-                        }
-                        None => false,
-                    };
-                    if published {
-                        break;
-                    }
-                    if events.next().await?.is_none() {
-                        return Err(lk_agents_abi::voice::rtc::RtcError::Closed("room"));
-                    }
-                }
-            }
-            log::debug!(target: LOG, identity = self.destination.as_str(); "remote participant ready");
-            Ok(())
-
-        }.await;
+        let outcome = self.wait_until_ready().await;
         self.started.send_replace(Some(outcome.map_err(|error| error.to_string())));
+    }
+
+    async fn wait_until_ready(self: &Arc<Self>) -> rtc::Result<()> {
+        let mut events = self.room.events();
+        while !self.room.connection_state()?.is_connected() {
+            next_room_event(&mut events, "room before connection").await?;
+        }
+        if self.segment.lock().core.is_closed() {
+            self.retire_routes();
+            return Err(RtcError::Closed("avatar output"));
+        }
+        let identity = ParticipantIdentity(self.destination.clone());
+        log::debug!(target: LOG, identity = self.destination.as_str(); "waiting for the remote participant");
+        while self.room.participant(&identity)?.is_none() {
+            next_room_event(&mut events, "room").await?;
+        }
+        if let Some(kind) = self.wait_remote_track {
+            log::debug!(target: LOG, identity = self.destination.as_str(), kind = kind; "waiting for the remote track");
+            while !self.remote_track_published(&identity, kind)? {
+                next_room_event(&mut events, "room").await?;
+            }
+        }
+        log::debug!(target: LOG, identity = self.destination.as_str(); "remote participant ready");
+        Ok(())
+    }
+
+    /// Whether `identity` is in the room with a track of `kind` published.
+    fn remote_track_published(
+        &self,
+        identity: &ParticipantIdentity,
+        kind: i32,
+    ) -> rtc::Result<bool> {
+        let Some(participant) = self.room.participant(identity)? else { return Ok(false) };
+        Ok(participant.track_publications()?.iter().any(|track| track.kind() == kind))
     }
 
     /// One frame into `segment`, opening its stream on the first.

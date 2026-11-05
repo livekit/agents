@@ -342,32 +342,11 @@ async fn pump<S: Send + 'static, Q: ReaderSink, A: Future<Output = Option<Q::Fra
     mut stream: Box<dyn StreamOutput<S>>,
     replay: impl Future<Output = bool>,
     end: impl FnOnce() -> Option<Q::Frame>,
-    mut admit: impl FnMut(S) -> A,
+    admit: impl FnMut(S) -> A,
 ) {
     let reading = async {
-        if !replay.await {
-            return;
-        }
-        loop {
-            match stream.next().await {
-                Ok(Some(item)) => {
-                    if let Some(frame) = admit(item).await
-                        && !readers.deliver(generation, Ok(frame))
-                    {
-                        return;
-                    }
-                }
-                Ok(None) => {
-                    if let Some(frame) = end() {
-                        readers.deliver(generation, Ok(frame));
-                    }
-                    return;
-                }
-                Err(error) => {
-                    readers.deliver(generation, Err(IoError::from(error)));
-                    return;
-                }
-            }
+        if replay.await {
+            read_into(readers, generation, &mut stream, end, admit).await;
         }
     };
     tokio::select! {
@@ -377,6 +356,36 @@ async fn pump<S: Send + 'static, Q: ReaderSink, A: Future<Output = Option<Q::Fra
     }
     let cleanup = stream.close(clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT)).await;
     readers.decide(|readers| readers.retired(generation, cleanup));
+}
+
+/// Delivers the stream's admitted items until it ends, fails or its reader is gone.
+async fn read_into<S, Q: ReaderSink, A: Future<Output = Option<Q::Frame>>>(
+    readers: &Readers<Q>,
+    generation: u64,
+    stream: &mut Box<dyn StreamOutput<S>>,
+    end: impl FnOnce() -> Option<Q::Frame>,
+    mut admit: impl FnMut(S) -> A,
+) {
+    loop {
+        let item = match stream.next().await {
+            Ok(Some(item)) => item,
+            Ok(None) => {
+                if let Some(frame) = end() {
+                    readers.deliver(generation, Ok(frame));
+                }
+                return;
+            }
+            Err(error) => {
+                readers.deliver(generation, Err(IoError::from(error)));
+                return;
+            }
+        };
+        if let Some(frame) = admit(item).await
+            && !readers.deliver(generation, Ok(frame))
+        {
+            return;
+        }
+    }
 }
 
 pub struct ParticipantVideoInput {
@@ -619,21 +628,20 @@ impl ParticipantAudioInput {
             );
         }
         for frame in frames {
-            match input_stream.process_audio(&telemetry::Cx::NONE, vec![frame]).await {
-                Ok(items) => {
-                    for item in items {
-                        if let Some(frame) = self.admit(spans, item).await
-                            && !self.readers.admitted(generation, |queue| {
-                                queue.head(frame);
-                                Duration::ZERO
-                            })
-                        {
-                            return false;
-                        }
-                    }
-                }
+            let items = match input_stream.process_audio(&telemetry::Cx::NONE, vec![frame]).await {
+                Ok(items) => items,
                 Err(error) => {
                     self.readers.deliver(generation, Err(error.into()));
+                    return false;
+                }
+            };
+            for item in items {
+                let Some(frame) = self.admit(spans, item).await else { continue };
+                let queued = self.readers.admitted(generation, |queue| {
+                    queue.head(frame);
+                    Duration::ZERO
+                });
+                if !queued {
                     return false;
                 }
             }

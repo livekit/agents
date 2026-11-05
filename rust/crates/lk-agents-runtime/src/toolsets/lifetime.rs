@@ -17,6 +17,15 @@ use tokio::sync::watch;
 
 type Outcome = Result<(), HostError>;
 type Reply = watch::Sender<Option<Outcome>>;
+/// The running operation: its epoch, its task and its cancellation.
+type Running = (u64, OwnedTask, Arc<Cancellation>);
+
+/// What a launched operation does to the toolset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Operation {
+    Setup,
+    Close,
+}
 
 struct TicketData {
     id: u64,
@@ -124,6 +133,20 @@ impl Lease for ResourceLease {
     }
 }
 
+/// Closes the successful framework-owned children of a failed setup, never the failed parent's
+/// authored close callback. This also settles child cleanup when setup was cancelled.
+async fn roll_back_children(hooks: &dyn ToolsetHooks) {
+    match hooks.children() {
+        Ok(Some(children)) => {
+            if let Err(error) = children.close().await {
+                log::warn!("toolset setup rollback: {error}");
+            }
+        }
+        Ok(None) => {}
+        Err(error) => log::warn!("toolset child lookup during rollback: {error}"),
+    }
+}
+
 fn cancelled() -> HostError {
     HostError::new("toolset initialization was cancelled")
 }
@@ -160,56 +183,65 @@ impl Inner {
     ) {
         for effect in effects {
             match effect {
-                ToolsetEffect::Setup(id) => {
-                    let data = self.state.lock().pending.get(&id).cloned();
-                    self.launch(
-                        data.map_or_else(|| hooks.clone(), |data| data.hooks.clone()),
-                        true,
-                    );
+                ToolsetEffect::Setup(id) => self.launch_setup(id, &hooks),
+                ToolsetEffect::CancelSetup => self.cancel_setup(),
+                ToolsetEffect::Grant(id) => self.answer_ticket(id, Ok(())),
+                ToolsetEffect::Fail(id) => {
+                    self.answer_ticket(id, Err(error.clone().unwrap_or_else(cancelled)))
                 }
-                ToolsetEffect::CancelSetup => {
-                    let cancel = {
-                        let state = self.state.lock();
-                        state
-                            .policy
-                            .cancelling_setup()
-                            .then(|| state.operation.as_ref().map(|(_, _, cancel)| cancel.clone()))
-                            .flatten()
-                    };
-                    if let Some(cancel) = cancel {
-                        cancel.cancel();
-                    }
-                }
-                ToolsetEffect::Grant(id) | ToolsetEffect::Fail(id) => {
-                    let data = self.state.lock().pending.remove(&id);
-                    if let Some(data) = data {
-                        data.ready.send_replace(Some(
-                            if matches!(effect, ToolsetEffect::Grant(_)) {
-                                Ok(())
-                            } else {
-                                Err(error.clone().unwrap_or_else(cancelled))
-                            },
-                        ));
-                    }
-                }
-                ToolsetEffect::Released(id) => {
-                    let (reply, pending) = {
-                        let mut state = self.state.lock();
-                        (state.releases.remove(&id), state.pending.remove(&id))
-                    };
-                    if let Some(pending) = pending {
-                        pending.ready.send_replace(Some(Err(cancelled())));
-                    }
-                    if let Some(reply) = reply {
-                        reply.send_replace(Some(error.clone().map_or(Ok(()), Err)));
-                    }
-                }
-                ToolsetEffect::Close => self.launch(hooks.clone(), false),
+                ToolsetEffect::Released(id) => self.answer_release(id, &error),
+                ToolsetEffect::Close => self.launch(hooks.clone(), Operation::Close),
             }
         }
     }
 
-    fn launch(self: &Arc<Self>, hooks: Arc<dyn ToolsetHooks>, setup: bool) {
+    /// Sets the toolset up with the waiting ticket's hooks, else with the caller's.
+    fn launch_setup(self: &Arc<Self>, id: u64, hooks: &Arc<dyn ToolsetHooks>) {
+        let data = self.state.lock().pending.get(&id).cloned();
+        self.launch(
+            data.map_or_else(|| hooks.clone(), |data| data.hooks.clone()),
+            Operation::Setup,
+        );
+    }
+
+    /// Cancels the running setup when the policy is cancelling it.
+    fn cancel_setup(&self) {
+        let cancel = {
+            let state = self.state.lock();
+            state
+                .policy
+                .cancelling_setup()
+                .then(|| state.operation.as_ref().map(|(_, _, cancel)| cancel.clone()))
+                .flatten()
+        };
+        if let Some(cancel) = cancel {
+            cancel.cancel();
+        }
+    }
+
+    /// Answers a waiting ticket's acquisition.
+    fn answer_ticket(&self, id: u64, outcome: Outcome) {
+        let data = self.state.lock().pending.remove(&id);
+        if let Some(data) = data {
+            data.ready.send_replace(Some(outcome));
+        }
+    }
+
+    /// Answers a release; a ticket still waiting is cancelled.
+    fn answer_release(&self, id: u64, error: &Option<HostError>) {
+        let (reply, pending) = {
+            let mut state = self.state.lock();
+            (state.releases.remove(&id), state.pending.remove(&id))
+        };
+        if let Some(pending) = pending {
+            pending.ready.send_replace(Some(Err(cancelled())));
+        }
+        if let Some(reply) = reply {
+            reply.send_replace(Some(error.clone().map_or(Ok(()), Err)));
+        }
+    }
+
+    fn launch(self: &Arc<Self>, hooks: Arc<dyn ToolsetHooks>, operation: Operation) {
         let epoch = {
             let mut state = self.state.lock();
             state.epoch += 1;
@@ -218,7 +250,7 @@ impl Inner {
         let spawner = match (self.env.spawner)() {
             Ok(spawner) => spawner,
             Err(error) => {
-                self.completed(epoch, setup, Err(HostError::new(error)), hooks);
+                self.completed(epoch, operation, Err(HostError::new(error)), hooks);
                 return;
             }
         };
@@ -229,50 +261,48 @@ impl Inner {
         let work_cancel = cancel.clone();
         let task = spawner.spawn_settled(
             async move {
-                let outcome = if setup {
-                    work_hooks.setup(&telemetry::Cx::NONE, work_cancel).await
-                } else {
-                    work_hooks.close(&telemetry::Cx::NONE).await
+                let outcome = match operation {
+                    Operation::Setup => work_hooks.setup(&telemetry::Cx::NONE, work_cancel).await,
+                    Operation::Close => work_hooks.close(&telemetry::Cx::NONE).await,
                 };
                 *work_result.lock() = Some(outcome);
             },
             move |_| async move {
                 let outcome = result.lock().take().unwrap_or_else(|| Err(cancelled()));
-                if setup && outcome.is_err() {
-                    // Close successful framework-owned children, never the failed parent's authored
-                    // close callback. This also settles child cleanup when setup was cancelled.
-                    match hooks.children() {
-                        Ok(Some(children)) => {
-                            if let Err(error) = children.close().await {
-                                log::warn!("toolset setup rollback: {error}");
-                            }
-                        }
-                        Ok(None) => {}
-                        Err(error) => log::warn!("toolset child lookup during rollback: {error}"),
-                    }
+                if operation == Operation::Setup && outcome.is_err() {
+                    roll_back_children(hooks.as_ref()).await;
                 }
-                inner.completed(epoch, setup, outcome, hooks);
+                inner.completed(epoch, operation, outcome, hooks);
             },
         );
-        let (retired, cancelling) = {
-            let mut state = self.state.lock();
-            if state.epoch == epoch {
-                let cancelling = setup && state.policy.cancelling_setup();
-                (state.operation.replace((epoch, task, cancel.clone())), cancelling)
-            } else {
-                (Some((epoch, task, cancel.clone())), false)
-            }
-        };
+        let (retired, cancelling) = self.adopt_operation(epoch, task, &cancel, operation);
         if cancelling {
             cancel.cancel();
         }
         drop(retired);
     }
 
+    /// Stores the operation's task unless a later one replaced it; returns what it retires (to
+    /// drop outside the lock) and whether a setup must be cancelled at once.
+    fn adopt_operation(
+        &self,
+        epoch: u64,
+        task: OwnedTask,
+        cancel: &Arc<Cancellation>,
+        operation: Operation,
+    ) -> (Option<Running>, bool) {
+        let mut state = self.state.lock();
+        if state.epoch != epoch {
+            return (Some((epoch, task, cancel.clone())), false);
+        }
+        let cancelling = operation == Operation::Setup && state.policy.cancelling_setup();
+        (state.operation.replace((epoch, task, cancel.clone())), cancelling)
+    }
+
     fn completed(
         self: &Arc<Self>,
         epoch: u64,
-        setup: bool,
+        operation: Operation,
         outcome: Outcome,
         hooks: Arc<dyn ToolsetHooks>,
     ) {
@@ -284,8 +314,10 @@ impl Inner {
             let retired = state.operation.take();
             // Invalidate a task completing before its handle was stored.
             state.epoch += 1;
-            let effects =
-                if setup { state.policy.opened(outcome.is_ok()) } else { state.policy.closed() };
+            let effects = match operation {
+                Operation::Setup => state.policy.opened(outcome.is_ok()),
+                Operation::Close => state.policy.closed(),
+            };
             (effects, retired)
         };
         drop(retired);

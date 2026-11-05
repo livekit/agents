@@ -8,9 +8,12 @@ use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 
 use lk_agents_abi::agent::Invocation;
-use lk_agents_abi::agent::run::{Output, RunError, RunOutcome, RunUpdate, ValidationId};
+use lk_agents_abi::agent::run::{
+    Output, RunError, RunInputRequirement, RunOutcome, RunUpdate, ValidationId,
+};
 use lk_agents_abi::text_session::{
-    TextSessionAgent, TextSessionError, TextSessionRequest, TextSessionSettled, TextSessionUpdate,
+    FrameId, TextSessionAgent, TextSessionError, TextSessionRequest, TextSessionSettled,
+    TextSessionTurn, TextSessionUpdate,
 };
 use lk_agents_abi::usage::Usage;
 use lk_agents_abi::{Clock, HostRef, WallAnchor};
@@ -29,6 +32,17 @@ const UPDATE_QUEUE: usize = 16;
 pub(super) struct Release {
     invocation_id: String,
     delivered: BTreeMap<String, String>,
+}
+
+/// What opens an invocation: the core's `InvocationStarted`.
+struct InvocationStart {
+    frame_id: FrameId,
+    agent_name: String,
+    invocation_id: String,
+    context_scope: String,
+    reads_context: bool,
+    execution_id: String,
+    history: Vec<lk_agents_abi::ChatItem>,
 }
 
 pub(super) struct Driver {
@@ -66,20 +80,13 @@ impl Driver {
             self.session.handle(TextSessionEvent::Start(message), self.clock.now()).into();
         loop {
             // Before the effects: the last ones may end the stream the host reads usage beside.
-            if self.session.usage_revision() != self.published {
-                self.published = self.session.usage_revision();
-                self.usage.send_replace(self.session.usage());
-            }
+            self.publish_usage();
             while let Some(effect) = effects.pop_front() {
                 self.execute(effect).await;
             }
-            if let Some(release) = self.releases.pop_front() {
-                if self.work.get(&release.invocation_id).is_some_and(|w| !w.idle()) {
-                    self.releases.push_front(release);
-                } else {
-                    effects.extend(self.release(release));
-                    continue;
-                }
+            if let Some(released) = self.take_release() {
+                effects.extend(released);
+                continue;
             }
             // Retain work after a core cleanup deadline: its callbacks and provider requests
             // remain owned until their real settlement, including late prepared resources.
@@ -91,27 +98,66 @@ impl Driver {
             let wake = self.session.wake_at();
             let event = tokio::select! {
                 biased;
-                () = crate::agent_run::wait(&*clock, wake) => TextSessionEvent::Wake,
-                _ = &mut cancelled, if !cancel_seen => { cancel_seen = true; TextSessionEvent::Cancel }
-                Some(release) = releases.recv() => { self.releases.push_back(release); continue; }
+                () = crate::agent_run::wait(&*clock, wake) => Some(TextSessionEvent::Wake),
+                _ = &mut cancelled, if !cancel_seen => {
+                    cancel_seen = true;
+                    Some(TextSessionEvent::Cancel)
+                }
+                Some(release) = releases.recv() => {
+                    self.releases.push_back(release);
+                    None
+                }
                 Some((invocation_id, operation, message)) = progress.recv() => {
-                    let Some(event) = self.work.get(&invocation_id).and_then(|w| w.progress(operation, message)) else { continue };
-                    TextSessionEvent::Run { invocation_id, event }
+                    self.progress_event(invocation_id, operation, message)
                 }
                 Some((invocation_id, report)) = events.recv() => {
-                    let Some(work) = self.work.get_mut(&invocation_id) else { continue };
-                    let (event, output) = work.report(report);
-                    match event {
-                        agent_run::AgentRunEvent::OutputValidated { validation, verdict } => {
-                            TextSessionEvent::OutputValidated { invocation_id, validation, verdict, output }
-                        }
-                        event => TextSessionEvent::Run { invocation_id, event },
-                    }
+                    self.report_event(invocation_id, report)
                 }
-                _ = settle_work(&mut self.work) => continue,
+                _ = settle_work(&mut self.work) => None,
             };
+            let Some(event) = event else { continue };
             effects.extend(self.session.handle(event, self.clock.now()));
         }
+    }
+
+    /// Republishes the turn's usage when it moved.
+    fn publish_usage(&mut self) {
+        if self.session.usage_revision() != self.published {
+            self.published = self.session.usage_revision();
+            self.usage.send_replace(self.session.usage());
+        }
+    }
+
+    /// The next release's effects; a release whose invocation still has work in flight waits.
+    fn take_release(&mut self) -> Option<Vec<TextSessionEffect>> {
+        let release = self.releases.pop_front()?;
+        if self.work.get(&release.invocation_id).is_some_and(|w| !w.idle()) {
+            self.releases.push_front(release);
+            return None;
+        }
+        Some(self.release(release))
+    }
+
+    /// A tool body's progress update, while its call is still live.
+    fn progress_event(
+        &self,
+        invocation_id: String,
+        operation: u64,
+        message: String,
+    ) -> Option<TextSessionEvent> {
+        let event = self.work.get(&invocation_id)?.progress(operation, message)?;
+        Some(TextSessionEvent::Run { invocation_id, event })
+    }
+
+    /// An invocation's report as the session's event; a validated output keeps its value.
+    fn report_event(&mut self, invocation_id: String, report: Report) -> Option<TextSessionEvent> {
+        let (event, output) = self.work.get_mut(&invocation_id)?.report(report);
+        Some(match event {
+            agent_run::AgentRunEvent::OutputValidated { validation, verdict } => {
+                TextSessionEvent::OutputValidated { invocation_id, validation, verdict, output }
+            }
+            event => TextSessionEvent::Run { invocation_id, event },
+        })
     }
 
     async fn execute(&mut self, effect: TextSessionEffect) {
@@ -124,47 +170,15 @@ impl Driver {
                 reads_context,
                 execution_id,
                 history,
-            } => {
-                let agent = &self.agents[&agent_name];
-                let span = telemetry::start(
-                    &self.cx,
-                    telemetry::AgentRun {
-                        operation: telemetry::GenAiOperation::InvokeAgent,
-                        agent_name: agent_name.clone(),
-                    },
-                );
-                let setup = RunSetup {
-                    tools_host: agent.tools_host.clone(),
-                    llm: agent.llm.clone(),
-                    host: agent.host.clone(),
-                    clock: self.clock.clone(),
-                    conn_options: self.request.conn_options,
-                    entry: Invocation {
-                        operation: 0,
-                        speech: None,
-                        invocation_id: invocation_id.clone(),
-                        agent_name,
-                        execution_id: Some(execution_id),
-                        frame_id: Some(frame_id.clone()),
-                        application_context: reads_context
-                            .then(|| self.request.contexts[&context_scope].clone()),
-                        context_scope: Some(context_scope),
-                        history,
-                        function_call: None,
-                        approval: None,
-                        host_context: Some(agent.host_context.clone()),
-                    },
-                };
-                self.work.insert(
-                    invocation_id.clone(),
-                    Execution::new(
-                        setup,
-                        self.runtime.clone(),
-                        Reporter { id: invocation_id, tx: self.events_tx.clone() },
-                        span,
-                    ),
-                );
-            }
+            } => self.start_invocation(InvocationStart {
+                frame_id,
+                agent_name,
+                invocation_id,
+                context_scope,
+                reads_context,
+                execution_id,
+                history,
+            }),
             TextSessionEffect::Run { invocation_id, effect } => {
                 if let Some(work) = self.work.get_mut(&invocation_id)
                     && let Some(RunUpdate::IncompleteCleanup(pending)) = work.execute(effect).await
@@ -199,30 +213,92 @@ impl Driver {
             }
             TextSessionEffect::RoutingRefused { .. } => {} // The core records the typed refusal in the original call.
             TextSessionEffect::Finished { invocation_id, result, input_requirements } => {
-                self.finished = true;
-                self.pending.clear();
-                self.releases.clear();
-                let update = match result {
-                    Ok(turn) => TextSessionUpdate::Finished(Box::new(TextSessionSettled {
-                        turn,
-                        output: self.output.take(),
-                    })),
-                    Err(error) => {
-                        let provider_error =
-                            if matches!(&error, TextSessionError::Run(RunError::Model(_))) {
-                                invocation_id
-                                    .as_deref()
-                                    .and_then(|id| self.work.get_mut(id))
-                                    .and_then(|work| work.failure.take())
-                            } else {
-                                None
-                            };
-                        TextSessionUpdate::Failed { error, input_requirements, provider_error }
-                    }
-                };
-                let _ = self.updates.send(update).await;
+                self.finish(invocation_id, result, input_requirements).await
             }
         }
+    }
+
+    /// Opens the invocation's `agent_run` span and its execution.
+    fn start_invocation(&mut self, start: InvocationStart) {
+        let InvocationStart {
+            frame_id,
+            agent_name,
+            invocation_id,
+            context_scope,
+            reads_context,
+            execution_id,
+            history,
+        } = start;
+        let agent = &self.agents[&agent_name];
+        let span = telemetry::start(
+            &self.cx,
+            telemetry::AgentRun {
+                operation: telemetry::GenAiOperation::InvokeAgent,
+                agent_name: agent_name.clone(),
+            },
+        );
+        let application_context =
+            reads_context.then(|| self.request.contexts[&context_scope].clone());
+        let entry = Invocation {
+            operation: 0,
+            speech: None,
+            invocation_id: invocation_id.clone(),
+            agent_name,
+            execution_id: Some(execution_id),
+            frame_id: Some(frame_id),
+            application_context,
+            context_scope: Some(context_scope),
+            history,
+            function_call: None,
+            approval: None,
+            host_context: Some(agent.host_context.clone()),
+        };
+        let setup = RunSetup {
+            tools_host: agent.tools_host.clone(),
+            llm: agent.llm.clone(),
+            host: agent.host.clone(),
+            clock: self.clock.clone(),
+            conn_options: self.request.conn_options,
+            entry,
+        };
+        let reporter = Reporter { id: invocation_id.clone(), tx: self.events_tx.clone() };
+        let execution = Execution::new(setup, self.runtime.clone(), reporter, span);
+        self.work.insert(invocation_id, execution);
+    }
+
+    /// The turn's end: pending releases are dropped before the update is sent.
+    async fn finish(
+        &mut self,
+        invocation_id: Option<String>,
+        result: Result<TextSessionTurn, TextSessionError>,
+        input_requirements: Vec<RunInputRequirement>,
+    ) {
+        self.finished = true;
+        self.pending.clear();
+        self.releases.clear();
+        let update = match result {
+            Ok(turn) => TextSessionUpdate::Finished(Box::new(TextSessionSettled {
+                turn,
+                output: self.output.take(),
+            })),
+            Err(error) => {
+                let provider_error = self.provider_failure(invocation_id.as_deref(), &error);
+                TextSessionUpdate::Failed { error, input_requirements, provider_error }
+            }
+        };
+        let _ = self.updates.send(update).await;
+    }
+
+    /// A model failure's original provider error, kept by the invocation that failed.
+    fn provider_failure(
+        &mut self,
+        invocation_id: Option<&str>,
+        error: &TextSessionError,
+    ) -> Option<lk_agents_abi::errors::ProviderError> {
+        if !matches!(error, TextSessionError::Run(RunError::Model(_))) {
+            return None;
+        }
+        self.work.get_mut(invocation_id?)?.failure.take()
     }
 
     fn release(&mut self, release: Release) -> Vec<TextSessionEffect> {

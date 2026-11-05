@@ -8,11 +8,11 @@ use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::utils::video::AudioReceiverFrame;
 use lk_agents_abi::voice::avatar::{self, AvatarAudioReceiver, ClearBufferListener};
 use lk_agents_abi::voice::io::AvatarPlaybackSegment;
-use lk_agents_abi::voice::rtc::{ParticipantIdentity, RtcRoom};
+use lk_agents_abi::voice::rtc::{ByteStream, ParticipantIdentity, Receiver, RoomEvent, RtcRoom};
 use lk_agents_abi::{BoxFuture, Clock, OwnedTask, Spawner, SpawnerExt};
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_voice::avatar::machine::receiver::{
-    PlaybackReport, ReceiverState, ReportStep, frame_size,
+    PlaybackReport, ReaderState, ReceiverState, ReportStep, frame_size,
 };
 use lk_agents_voice::avatar::{
     AUDIO_STREAM_TOPIC, LOG, RPC_CLEAR_BUFFER, Received, ReceiverEnd, STREAM_IDLE_TIMEOUT,
@@ -20,6 +20,16 @@ use lk_agents_voice::avatar::{
 use parking_lot::Mutex;
 use std::num::NonZeroU32;
 use std::sync::Arc;
+
+/// A room event read while waiting for the sender; the room's events ending fails the wait.
+fn room_still_open(
+    event: std::result::Result<Option<RoomEvent>, ProviderError>,
+) -> std::result::Result<(), ReceiverEnd> {
+    match event.map_err(|error| ReceiverEnd::Failed(error.to_string()))? {
+        Some(_) => Ok(()),
+        None => Err(ReceiverEnd::Failed("the room closed".into())),
+    }
+}
 
 struct RxInner {
     room: Arc<dyn RtcRoom>,
@@ -76,64 +86,173 @@ impl RxInner {
             let mut reader = self.state.lock().begin(&stream.info, self.frame_size);
             let outcome = match &mut reader {
                 Err(error) => Err(error.clone()),
-                Ok(reader) => async {
-                    loop {
-                        let superseded = self.superseded_wake.notified();
-                        tokio::pin!(superseded);
-                        superseded.as_mut().enable();
-                        let gave_up = self.state.lock().superseded();
-                        let idle_until = self.clock.now().saturating_add(STREAM_IDLE_TIMEOUT);
-                        let chunk = tokio::select! {
-                            biased;
-                            c = stream.chunks.next() => Some(c),
-                            () = async {}, if gave_up => None,
-                            () = &mut superseded => None,
-                            () = self.clock.wait_until(idle_until) => None,
-                        };
-                        match chunk {
-                            Some(Ok(Some(data))) => {
-                                let keep = self.state.lock().chunk(reader, &data);
-                                self.out_ready.notify_waiters();
-                                if !keep { break; }
-                            }
-                            Some(Ok(None)) => break,
-                            Some(Err(error)) => return Err(ReceiverEnd::BadStream(error.to_string())),
-                            None => {
-                                let (cleared, superseded) = {
-                                    let state = self.state.lock();
-                                    (state.cleared(), state.superseded())
-                                };
-                                if cleared {
-                                    log::debug!(target: LOG, stream_id = stream.info.id.as_str(); "audio stream ended early after clear_buffer");
-                                } else {
-                                    let reason = if superseded { "superseded by a newer stream".to_owned() }
-                                        else { format!("idle for {}s", STREAM_IDLE_TIMEOUT.as_secs()) };
-                                    log::warn!(target: LOG, stream_id = stream.info.id.as_str(); "audio stream ended before its trailer arrived ({reason})");
-                                }
-                                break;
-                            }
-                        }
-                    }
-                    self.state.lock().flush(reader);
-                    self.out_ready.notify_waiters();
-                    Ok(())
-                }.await,
+                Ok(reader) => self.read_stream(&mut stream, reader).await,
             };
-            let deadline = self.clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
-            let closed = stream.close(deadline).await;
-            let outcome = match (outcome, closed) {
-                (outcome, lk_agents_abi::Closed::Clean) => outcome,
-                (outcome, cleanup) => Err(ReceiverEnd::BadStream(format!(
-                    "{}stream cleanup failed: {cleanup:?}",
-                    outcome.err().map(|e| format!("{e}; ")).unwrap_or_default()
-                ))),
-            };
+            let outcome = self.close_stream(stream, outcome).await;
             let mut state = self.state.lock();
             state.finish(if outcome.is_ok() { reader.as_mut().ok() } else { None });
             drop(state);
             outcome?;
             self.out_ready.notify_waiters();
         }
+    }
+
+    /// Reads one stream's chunks into `reader` until its end, a clear, a newer stream or its idle
+    /// bound, then flushes the reader.
+    async fn read_stream(
+        &self,
+        stream: &mut ByteStream,
+        reader: &mut ReaderState,
+    ) -> std::result::Result<(), ReceiverEnd> {
+        loop {
+            match self.next_chunk(stream).await {
+                Some(Ok(Some(data))) => {
+                    let keep = self.state.lock().chunk(reader, &data);
+                    self.out_ready.notify_waiters();
+                    if !keep {
+                        break;
+                    }
+                }
+                Some(Ok(None)) => break,
+                Some(Err(error)) => return Err(ReceiverEnd::BadStream(error.to_string())),
+                None => {
+                    self.log_early_end(&stream.info.id);
+                    break;
+                }
+            }
+        }
+        self.state.lock().flush(reader);
+        self.out_ready.notify_waiters();
+        Ok(())
+    }
+
+    /// The stream's next chunk; `None` once a newer stream superseded it or it idled too long.
+    async fn next_chunk(
+        &self,
+        stream: &mut ByteStream,
+    ) -> Option<std::result::Result<Option<Vec<u8>>, ProviderError>> {
+        let superseded = self.superseded_wake.notified();
+        tokio::pin!(superseded);
+        superseded.as_mut().enable();
+        let gave_up = self.state.lock().superseded();
+        let idle_until = self.clock.now().saturating_add(STREAM_IDLE_TIMEOUT);
+        tokio::select! {
+            biased;
+            c = stream.chunks.next() => Some(c),
+            () = async {}, if gave_up => None,
+            () = &mut superseded => None,
+            () = self.clock.wait_until(idle_until) => None,
+        }
+    }
+
+    fn log_early_end(&self, stream_id: &str) {
+        let (cleared, superseded) = {
+            let state = self.state.lock();
+            (state.cleared(), state.superseded())
+        };
+        if cleared {
+            log::debug!(target: LOG, stream_id = stream_id; "audio stream ended early after clear_buffer");
+            return;
+        }
+        let reason = if superseded {
+            "superseded by a newer stream".to_owned()
+        } else {
+            format!("idle for {}s", STREAM_IDLE_TIMEOUT.as_secs())
+        };
+        log::warn!(target: LOG, stream_id = stream_id; "audio stream ended before its trailer arrived ({reason})");
+    }
+
+    /// Closes the stream within the host teardown bound; a failed cleanup fails the read too.
+    async fn close_stream(
+        &self,
+        stream: ByteStream,
+        outcome: std::result::Result<(), ReceiverEnd>,
+    ) -> std::result::Result<(), ReceiverEnd> {
+        let deadline = self.clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
+        match stream.close(deadline).await {
+            lk_agents_abi::Closed::Clean => outcome,
+            cleanup => Err(ReceiverEnd::BadStream(format!(
+                "{}stream cleanup failed: {cleanup:?}",
+                outcome.err().map(|e| format!("{e}; ")).unwrap_or_default()
+            ))),
+        }
+    }
+
+    /// Waits until the agent whose streams this receiver plays is in the room.
+    async fn choose_sender(
+        &self,
+        events: &mut Receiver<RoomEvent>,
+    ) -> std::result::Result<String, ReceiverEnd> {
+        loop {
+            let stopped = self.out_ready.notified();
+            tokio::pin!(stopped);
+            stopped.as_mut().enable();
+            self.state.lock().check_open()?;
+            let participants = self
+                .room
+                .remote_participants()
+                .map_err(|error| ReceiverEnd::Failed(error.to_string()))?;
+            let chosen = self.state.lock().choose_sender(
+                self.sender_identity.as_deref(),
+                participants.iter().map(|p| (p.identity().0.as_str(), p.kind())),
+            )?;
+            if let Some(chosen) = chosen {
+                return Ok(chosen);
+            }
+            tokio::select! {
+                biased;
+                () = &mut stopped => {}
+                event = events.next() => room_still_open(event)?,
+            }
+        }
+    }
+
+    /// Queues the chosen sender's streams for [`Self::recv`]; a foreign stream is closed.
+    async fn admit_streams(self: Arc<Self>, mut streams: Receiver<ByteStream>) {
+        loop {
+            let stream = match streams.next().await {
+                Ok(Some(stream)) => stream,
+                Ok(None) => return,
+                Err(error) => {
+                    self.end(ReceiverEnd::BadStream(error.to_string()));
+                    return;
+                }
+            };
+            if !self.admit(stream).await {
+                return;
+            }
+        }
+    }
+
+    /// Queues `stream` when its sender is admitted, else closes it; `false` ends the pump.
+    async fn admit(&self, stream: ByteStream) -> bool {
+        let admitted = self.state.lock().admits(&stream.sender.0);
+        if !admitted {
+            let deadline = self.clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
+            if stream.close(deadline).await != lk_agents_abi::Closed::Clean {
+                self.end(ReceiverEnd::Failed("foreign stream cleanup failed".into()));
+                return false;
+            }
+            return true;
+        }
+        self.streams.lock().push_back(stream);
+        if self.state.lock().stream_admitted() {
+            self.superseded_wake.notify_waiters();
+        }
+        self.streams_ready.notify_waiters();
+        true
+    }
+
+    /// Plays the streams and sends the reports until either ends; the receiver ends with the
+    /// first failure.
+    async fn serve(self: Arc<Self>) {
+        let recv = Arc::clone(&self).recv();
+        let send = Arc::clone(&self).send();
+        let result = tokio::try_join!(recv, send);
+        self.end(match result {
+            Ok(_) => ReceiverEnd::Closed,
+            Err(e) => e,
+        });
     }
 
     /// `_send_task`: the playback reports, in order, each retried by its attempt policy.
@@ -241,33 +360,24 @@ impl DataStreamAudioReceiver {
         let inner = &self.inner;
         inner.state.lock().check_open()?;
         let mut events = inner.room.events();
-        let remote = loop {
-            let stopped = inner.out_ready.notified();
-            tokio::pin!(stopped);
-            stopped.as_mut().enable();
-            inner.state.lock().check_open()?;
-            let participants = inner
-                .room
-                .remote_participants()
-                .map_err(|error| ReceiverEnd::Failed(error.to_string()))?;
-            let chosen = inner.state.lock().choose_sender(
-                inner.sender_identity.as_deref(),
-                participants.iter().map(|p| (p.identity().0.as_str(), p.kind())),
-            )?;
-            if let Some(chosen) = chosen {
-                break chosen;
-            }
-            tokio::select! {
-                biased;
-                () = &mut stopped => {}
-                event = events.next() => {
-                    if event.map_err(|error| ReceiverEnd::Failed(error.to_string()))?.is_none() {
-                        return Err(ReceiverEnd::Failed("the room closed".into()));
-                    }
-                }
-            }
-        };
+        let remote = inner.choose_sender(&mut events).await?;
+        let streams = self.register_clear_buffer(remote).await?;
+        let pump = Arc::clone(inner).admit_streams(streams);
+        let main = Arc::clone(inner).serve();
+        let mut execution = self.execution.lock();
+        inner.state.lock().check_open()?;
+        execution.tasks.push(self.spawner.spawn(pump));
+        execution.tasks.push(self.spawner.spawn(main));
+        Ok(())
+    }
 
+    /// Registers the `clear_buffer` RPC and the audio streams, then routes `remote`'s calls to
+    /// this receiver; a receiver stopped meanwhile undoes the stream registration.
+    async fn register_clear_buffer(
+        &self,
+        remote: String,
+    ) -> std::result::Result<Receiver<ByteStream>, ReceiverEnd> {
+        let inner = &self.inner;
         // Each receiver retains its registration. The room adapter owns the shared router.
         let receiver = Arc::downgrade(inner);
         let callback = RpcHandler::new(move |_, _| {
@@ -282,7 +392,7 @@ impl DataStreamAudioReceiver {
             .register_rpc_method(RPC_CLEAR_BUFFER.to_owned(), handler)
             .map_err(|e| ReceiverEnd::Failed(e.to_string()))?;
 
-        let mut streams = crate::rtc::events::byte_streams(inner.room.as_ref(), AUDIO_STREAM_TOPIC)
+        let streams = crate::rtc::events::byte_streams(inner.room.as_ref(), AUDIO_STREAM_TOPIC)
             .map_err(|e| ReceiverEnd::Failed(e.to_string()))?;
         let admitted = {
             let mut execution = self.execution.lock();
@@ -302,53 +412,7 @@ impl DataStreamAudioReceiver {
             let _ = streams.close(deadline).await;
             return Err(error);
         }
-        let pump = {
-            let inner = Arc::clone(inner);
-            async move {
-                loop {
-                    let stream = match streams.next().await {
-                        Ok(Some(stream)) => stream,
-                        Ok(None) => return,
-                        Err(error) => {
-                            inner.end(ReceiverEnd::BadStream(error.to_string()));
-                            return;
-                        }
-                    };
-                    let admitted = inner.state.lock().admits(&stream.sender.0);
-                    if !admitted {
-                        let deadline =
-                            inner.clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
-                        if stream.close(deadline).await != lk_agents_abi::Closed::Clean {
-                            inner.end(ReceiverEnd::Failed("foreign stream cleanup failed".into()));
-                            return;
-                        }
-                        continue;
-                    }
-                    inner.streams.lock().push_back(stream);
-                    if inner.state.lock().stream_admitted() {
-                        inner.superseded_wake.notify_waiters();
-                    }
-                    inner.streams_ready.notify_waiters();
-                }
-            }
-        };
-        let main = {
-            let inner = Arc::clone(inner);
-            async move {
-                let recv = Arc::clone(&inner).recv();
-                let send = Arc::clone(&inner).send();
-                let result = tokio::try_join!(recv, send);
-                inner.end(match result {
-                    Ok(_) => ReceiverEnd::Closed,
-                    Err(e) => e,
-                });
-            }
-        };
-        let mut execution = self.execution.lock();
-        inner.state.lock().check_open()?;
-        execution.tasks.push(self.spawner.spawn(pump));
-        execution.tasks.push(self.spawner.spawn(main));
-        Ok(())
+        Ok(streams)
     }
 
     pub fn notify_playback_finished(

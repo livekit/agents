@@ -553,19 +553,7 @@ async fn process<E: OggOpusEncoder, W: Write>(
     let mut input = Some(input);
     let mut timeline = Timeline::default();
     loop {
-        let next = match &mut input {
-            Some(audio) => {
-                let head = audio.head();
-                drops.catching_up(head, clock.now());
-                tokio::select! {
-                    biased;
-                    item = audio.recv() => Next::Input(item, head.received),
-                    item = rx.recv() => Next::Command(item),
-                }
-            }
-            None => Next::Command(rx.recv().await),
-        };
-        match next {
+        match next(&mut input, &mut rx, drops, &clock).await {
             Next::Input(None, _) => input = None,
             Next::Input(Some(item), before) => {
                 shared.check_failure()?;
@@ -574,38 +562,79 @@ async fn process<E: OggOpusEncoder, W: Write>(
             }
             Next::Command(None) => return Err(RecordingFailure::Closed),
             Next::Command(Some(item)) => {
-                if item.data {
-                    shared.commands.fetch_sub(1, Ordering::AcqRel);
-                    shared.queued_bytes.fetch_sub(item.bytes, Ordering::AcqRel);
-                }
-                shared.check_failure()?;
-                match item.command {
-                    Command::Record(command) => {
-                        if matches!(command, RecordingCommand::FinishRecording(_)) {
-                            timeline.settle(file, &mut between)?;
-                        }
-                        if file.apply(command, &mut between)? {
-                            return Ok(file.summary().clone());
-                        }
-                    }
-                    Command::Flush(now, reply) => {
-                        file.hold_input(timeline.held_from());
-                        let outcome =
-                            file.apply(RecordingCommand::Flush(now), &mut between).map(drop);
-                        if let Some(reply) = reply {
-                            let _ = reply.send(outcome.clone().map(|()| file.summary().clone()));
-                        }
-                        outcome?;
-                    }
-                    Command::Abandon => return Err(RecordingFailure::Closed),
+                if let Some(summary) =
+                    apply_command(file, &mut timeline, shared, item, &mut between)?
+                {
+                    return Ok(summary);
                 }
             }
         }
-        let retained = file.retained_bytes();
-        shared.summary.send_replace(file.summary().clone());
-        shared.retained_bytes.store(retained, Ordering::Release);
-        shared.limits.check_retained(retained)?;
+        publish_progress(file, shared)?;
     }
+}
+
+/// The next microphone item, ahead of the next command; only commands once the audio ended.
+#[cfg(any(test, feature = "media-ffmpeg"))]
+async fn next(
+    input: &mut Option<AudioReceiver<f64>>,
+    rx: &mut mpsc::Receiver<Queued>,
+    drops: &AudioDrops,
+    clock: &dyn Clock,
+) -> Next {
+    let Some(audio) = input else { return Next::Command(rx.recv().await) };
+    let head = audio.head();
+    drops.catching_up(head, clock.now());
+    tokio::select! {
+        biased;
+        item = audio.recv() => Next::Input(item, head.received),
+        item = rx.recv() => Next::Command(item),
+    }
+}
+
+/// Applies one queued command to the file; the summary once the recording finished.
+#[cfg(any(test, feature = "media-ffmpeg"))]
+fn apply_command<E: OggOpusEncoder, W: Write>(
+    file: &mut RecordingFile<E, W>,
+    timeline: &mut Timeline,
+    shared: &Shared,
+    item: Queued,
+    between: lk_agents_media::recorder::BetweenBlocks<'_>,
+) -> Result<Option<RecordingSummary>, RecordingFailure> {
+    if item.data {
+        shared.commands.fetch_sub(1, Ordering::AcqRel);
+        shared.queued_bytes.fetch_sub(item.bytes, Ordering::AcqRel);
+    }
+    shared.check_failure()?;
+    match item.command {
+        Command::Record(command) => {
+            if matches!(command, RecordingCommand::FinishRecording(_)) {
+                timeline.settle(file, between)?;
+            }
+            let finished = file.apply(command, between)?;
+            Ok(finished.then(|| file.summary().clone()))
+        }
+        Command::Flush(now, reply) => {
+            file.hold_input(timeline.held_from());
+            let outcome = file.apply(RecordingCommand::Flush(now), between).map(drop);
+            if let Some(reply) = reply {
+                let _ = reply.send(outcome.clone().map(|()| file.summary().clone()));
+            }
+            outcome.map(|()| None)
+        }
+        Command::Abandon => Err(RecordingFailure::Closed),
+    }
+}
+
+/// Publishes the file's summary and retained bytes, failing past the retention limit.
+#[cfg(any(test, feature = "media-ffmpeg"))]
+fn publish_progress<E: OggOpusEncoder, W: Write>(
+    file: &RecordingFile<E, W>,
+    shared: &Shared,
+) -> Result<(), RecordingFailure> {
+    let retained = file.retained_bytes();
+    shared.summary.send_replace(file.summary().clone());
+    shared.retained_bytes.store(retained, Ordering::Release);
+    shared.limits.check_retained(retained)
 }
 
 /// The microphone's timeline on the worker: where its next frame starts, and the pre-connect audio

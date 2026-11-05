@@ -23,7 +23,7 @@ use lk_agents_abi::telemetry::instruments::{
     TtsAudioDuration, TtsCharacters,
 };
 use lk_agents_abi::telemetry::record::Key;
-use lk_agents_abi::telemetry::spans::agent_turn::{FunctionTool, FunctionToolEnd};
+use lk_agents_abi::telemetry::spans::agent_turn::FunctionToolEnd;
 use lk_agents_abi::telemetry::spans::session::{BlockingSeverity, EventLoopBlocked};
 use lk_agents_net::telemetry::ExporterSlot;
 use lk_agents_net::telemetry::otlp::{AppConfig, Exporter, Limits, ProcessIdentity, SdkName};
@@ -38,7 +38,8 @@ pub(crate) use lk_agents_abi::telemetry::record::JobKey;
 pub(crate) use lk_agents_abi::telemetry::record::{Record, RecordSink, Value};
 pub(crate) use lk_agents_abi::telemetry::report::SessionReport;
 pub(crate) use lk_agents_abi::telemetry::spans::agent_turn::{
-    AgentTurn, LlmNode, LlmNodeEnd, RealtimeInference, RealtimeMetrics, TtsNode, TtsNodeEnd,
+    AgentTurn, FunctionTool, LlmNode, LlmNodeEnd, RealtimeInference, RealtimeMetrics, TtsNode,
+    TtsNodeEnd,
 };
 pub(crate) use lk_agents_abi::telemetry::spans::common::{GenAiOperation, OutputType, ToolType};
 pub(crate) use lk_agents_abi::telemetry::spans::inference::{

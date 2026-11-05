@@ -91,10 +91,10 @@ impl CleanupClient {
         &self,
         response: Response,
         limit: usize,
-        passive: bool,
+        role: StreamRole,
     ) -> BoxStream<'static, Result<Sse, SseError>> {
         let mut stream = lk_agents_net::sse::EventStream::new(response.exchange, limit);
-        stream.expect_response(!passive);
+        stream.expect_response(role == StreamRole::PostReply);
         let events = stream
             .into_stream()
             .map(|event| {
@@ -207,6 +207,90 @@ fn headers(
     Ok(headers)
 }
 
+fn message_kind(message: &ClientJsonRpcMessage) -> MessageKind {
+    match message {
+        ClientJsonRpcMessage::Request(request) => match request.request {
+            ClientRequest::DiscoverRequest(_) => MessageKind::Discover,
+            _ => MessageKind::Request,
+        },
+        _ => MessageKind::NoReply,
+    }
+}
+
+/// A refused POST: a refused discovery probe answers its request with the server's error, a
+/// JSON-RPC error body is the reply, anything else is unexpected.
+async fn rejected_reply(
+    response: Response,
+    rejected: Rejected,
+    message: &ClientJsonRpcMessage,
+    session_id: Option<String>,
+) -> Result<StreamableHttpPostResponse, Error> {
+    let status = response.status;
+    let body = response.body().await?;
+    let parsed = serde_json::from_slice::<ServerJsonRpcMessage>(&body);
+    match (rejected, parsed, message) {
+        (Rejected::DiscoveryProbe, parsed, ClientJsonRpcMessage::Request(request)) => {
+            let error = discovery_refusal(parsed, status, &body);
+            let reply = ServerJsonRpcMessage::error(error, Some(request.id.clone()));
+            Ok(StreamableHttpPostResponse::Json(reply, None))
+        }
+        (Rejected::JsonError, Ok(message @ ServerJsonRpcMessage::Error(_)), _) => {
+            Ok(StreamableHttpPostResponse::Json(message, session_id))
+        }
+        _ => Err(Error::UnexpectedServerResponse(
+            format!("HTTP {status}: {}", String::from_utf8_lossy(&body)).into(),
+        )),
+    }
+}
+
+/// The server's own error for a refused `server/discover`, else one naming the HTTP refusal.
+fn discovery_refusal(
+    parsed: serde_json::Result<ServerJsonRpcMessage>,
+    status: StatusCode,
+    body: &[u8],
+) -> ErrorData {
+    match parsed {
+        Ok(ServerJsonRpcMessage::Error(error)) => error.error,
+        _ => ErrorData::invalid_request(
+            format!(
+                "server/discover rejected with HTTP {status}: {}",
+                String::from_utf8_lossy(body)
+            ),
+            None,
+        ),
+    }
+}
+
+/// How many bytes of an unparsable JSON reply its error quotes.
+const UNPARSED_EXCERPT: usize = 256;
+
+/// A JSON reply; an unparsable one counts as accepted when the reply kind allows it.
+async fn json_reply(
+    response: Response,
+    unparsed_accepted: bool,
+    session_id: Option<String>,
+) -> Result<StreamableHttpPostResponse, Error> {
+    let body = response.body().await?;
+    match serde_json::from_slice(&body) {
+        Ok(message) => Ok(StreamableHttpPostResponse::Json(message, session_id)),
+        Err(_) if unparsed_accepted => Ok(StreamableHttpPostResponse::Accepted),
+        Err(error) => Err(Error::UnexpectedServerResponse(
+            format!(
+                "could not parse MCP response: {error}: {}",
+                String::from_utf8_lossy(&body[..body.len().min(UNPARSED_EXCERPT)])
+            )
+            .into(),
+        )),
+    }
+}
+
+/// What an SSE stream is: a POST's reply, which must respond, or the standalone GET stream.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StreamRole {
+    PostReply,
+    Standalone,
+}
+
 impl StreamableHttpClient for CleanupClient {
     type Error = ApiError;
 
@@ -238,13 +322,7 @@ impl StreamableHttpClient for CleanupClient {
         let reply = post_reply(PostResponse {
             status: response.status.as_u16(),
             has_session: session.is_some(),
-            message: match &message {
-                ClientJsonRpcMessage::Request(request) => match request.request {
-                    ClientRequest::DiscoverRequest(_) => MessageKind::Discover,
-                    _ => MessageKind::Request,
-                },
-                _ => MessageKind::NoReply,
-            },
+            message: message_kind(&message),
             content_type: response.header(reqwest::header::CONTENT_TYPE),
             content_length: response.header(reqwest::header::CONTENT_LENGTH),
             www_authenticate: response.challenge()?,
@@ -254,50 +332,14 @@ impl StreamableHttpClient for CleanupClient {
             PostReply::SessionExpired => Err(Error::SessionExpired),
             PostReply::Challenge(challenge) => Err(challenge_error(challenge)),
             PostReply::Rejected(rejected) => {
-                let status = response.status;
-                let body = response.body().await?;
-                let parsed = serde_json::from_slice::<ServerJsonRpcMessage>(&body);
-                match (rejected, parsed, &message) {
-                    (Rejected::DiscoveryProbe, parsed, ClientJsonRpcMessage::Request(request)) => {
-                        let error = match parsed {
-                            Ok(ServerJsonRpcMessage::Error(error)) => error.error,
-                            _ => ErrorData::invalid_request(
-                                format!(
-                                    "server/discover rejected with HTTP {status}: {}",
-                                    String::from_utf8_lossy(&body)
-                                ),
-                                None,
-                            ),
-                        };
-                        Ok(StreamableHttpPostResponse::Json(
-                            ServerJsonRpcMessage::error(error, Some(request.id.clone())),
-                            None,
-                        ))
-                    }
-                    (Rejected::JsonError, Ok(message @ ServerJsonRpcMessage::Error(_)), _) => {
-                        Ok(StreamableHttpPostResponse::Json(message, session_id))
-                    }
-                    _ => Err(Error::UnexpectedServerResponse(
-                        format!("HTTP {status}: {}", String::from_utf8_lossy(&body)).into(),
-                    )),
-                }
+                rejected_reply(response, rejected, &message, session_id).await
             }
             PostReply::Events => {
-                Ok(StreamableHttpPostResponse::Sse(self.events(response, limit, false), session_id))
+                let events = self.events(response, limit, StreamRole::PostReply);
+                Ok(StreamableHttpPostResponse::Sse(events, session_id))
             }
             PostReply::Json { unparsed_accepted } => {
-                let body = response.body().await?;
-                match serde_json::from_slice(&body) {
-                    Ok(message) => Ok(StreamableHttpPostResponse::Json(message, session_id)),
-                    Err(_) if unparsed_accepted => Ok(StreamableHttpPostResponse::Accepted),
-                    Err(error) => Err(Error::UnexpectedServerResponse(
-                        format!(
-                            "could not parse MCP response: {error}: {}",
-                            String::from_utf8_lossy(&body[..body.len().min(256)])
-                        )
-                        .into(),
-                    )),
-                }
+                json_reply(response, unparsed_accepted, session_id).await
             }
             PostReply::UnexpectedContentType => Err(Error::UnexpectedContentType(
                 response.header(reqwest::header::CONTENT_TYPE).map(str::to_owned),
@@ -354,7 +396,7 @@ impl StreamableHttpClient for CleanupClient {
         let response = self.request(Method::GET, &uri, Vec::new(), headers).await?;
         let content_type = response.header(reqwest::header::CONTENT_TYPE);
         match stream_reply(response.status.as_u16(), content_type, response.challenge()?) {
-            StreamReply::Events => Ok(self.events(response, limit, true)),
+            StreamReply::Events => Ok(self.events(response, limit, StreamRole::Standalone)),
             StreamReply::Unsupported => Err(Error::ServerDoesNotSupportSse),
             StreamReply::Failed(failure) => Err(response.failure(failure)),
             StreamReply::UnexpectedContentType => {
