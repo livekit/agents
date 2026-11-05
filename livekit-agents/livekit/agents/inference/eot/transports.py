@@ -17,6 +17,7 @@ from livekit.local_inference import EOT as _EOT, EOT_MAX_SAMPLES
 from livekit.protocol.agent_pb.agent_inference import (
     AUDIO_ENCODING_PCM_S16LE,
     ClientMessage,
+    EotInputChatContext,
     EotPrediction,
     InferenceStart,
     InputAudio,
@@ -25,6 +26,10 @@ from livekit.protocol.agent_pb.agent_inference import (
     SessionCreate,
     SessionFlush,
     SessionSettings,
+)
+from livekit.protocol.agent_pb.agent_session import (
+    ChatMessage as ProtoChatMessage,
+    ChatRole as ProtoChatRole,
 )
 
 from ... import utils
@@ -35,6 +40,7 @@ from ..._exceptions import (
     APITimeoutError,
     create_api_error_from_http,
 )
+from ...llm import ChatContext
 from ...log import logger
 from ...metrics import EOTInferenceMetrics
 from ...metrics.base import Metadata
@@ -108,7 +114,21 @@ class _CloudTransport:
     def attach(self, stream: _BaseStreamingTurnDetectorStream) -> None:
         self._stream_ref = weakref.ref(stream)
 
-    def run_inference(self, request_id: str) -> None:
+    def run_inference(self, request_id: str, *, chat_ctx: ChatContext | None = None) -> None:
+        context = EotInputChatContext()
+        if chat_ctx is not None:
+            for item in reversed(chat_ctx.items):
+                if item.type == "message" and item.role == "assistant":
+                    if text := item.text_content:
+                        context.messages.append(
+                            ProtoChatMessage(
+                                role=ProtoChatRole.ASSISTANT,
+                                content=[ProtoChatMessage.ChatContent(text=text)],
+                            )
+                        )
+                    break
+
+        self._send_message(ClientMessage(eot_input_chat_context=context))
         # the gateway adds the audio that reaches it after this message
         turn_samples = min(self._turn_samples, _MAX_UINT32)
         self._send_message(
@@ -417,7 +437,7 @@ class _LocalTransport:
     def attach(self, stream: _BaseStreamingTurnDetectorStream) -> None:
         self._stream_ref = weakref.ref(stream)
 
-    def run_inference(self, request_id: str) -> None:
+    def run_inference(self, request_id: str, *, chat_ctx: ChatContext | None = None) -> None:
         pcm = self._buf.read()
         # the turn covers at least the audio the model reads
         turn_samples = max(self._turn_samples, len(pcm))
