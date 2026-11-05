@@ -606,6 +606,7 @@ def synthesis_metadata_is_a_complete_conversion_and_reads_the_frame_once():
         delta_text = "hello"
         usage = None
         characters_count = 5
+        provider_request_ids = ["provider"]
         reads = 0
 
         @property
