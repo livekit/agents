@@ -161,7 +161,7 @@ class _LiveOptions:
     responses: ResponsesDelegationOptions
     decisions: DecisionsOptions
     triggers: list[DecisionsTrigger] | None
-    delegation_detection: llm.DelegationDetectionOptions | None
+    delegation_recovery: llm.DelegationDetectionOptions | None
     service_tier: types.ServiceTier | None
     api_key: str | None
     base_url: str
@@ -183,7 +183,7 @@ class GPTLiveModel(llm.DuplexModel):
         responses_options: NotGivenOr[ResponsesDelegationOptions] = NOT_GIVEN,
         decisions_options: NotGivenOr[DecisionsOptions] = NOT_GIVEN,
         triggers: NotGivenOr[list[DecisionsTrigger]] = NOT_GIVEN,
-        delegation_detection: bool | llm.DelegationDetectionOptions = False,
+        delegation_recovery: bool | llm.DelegationDetectionOptions = False,
         service_tier: NotGivenOr[types.ServiceTier] = NOT_GIVEN,
         api_key: str | None = None,
         base_url: NotGivenOr[str] = NOT_GIVEN,
@@ -207,7 +207,7 @@ class GPTLiveModel(llm.DuplexModel):
             responses_options: The backend Responses model, under ``delegation="responses"``.
             decisions_options: Model and questions for ``delegation="decisions"``.
             triggers: Decisions configurations evaluated on transcript events, in any mode.
-            delegation_detection: Delegate a turn the model should have and did not. After each
+            delegation_recovery: Delegate a turn the model should have and did not. After each
                 turn the model left undelegated, once it is quiet, a detector judges the turn and
                 starts the delegation itself. ``True`` uses :class:`~livekit.agents.llm.
                 DelegationDetector` on LiveKit Inference; a dict sets the detector or the grace
@@ -249,8 +249,8 @@ class GPTLiveModel(llm.DuplexModel):
             )
         if is_given(responses_options) and delegation != "responses":
             raise ValueError("responses_options requires delegation='responses'")
-        if delegation_detection and delegation == "decisions":
-            raise ValueError("delegation_detection requires delegation='responses' or 'client'")
+        if delegation_recovery and delegation == "decisions":
+            raise ValueError("delegation_recovery requires delegation='responses' or 'client'")
         is_azure = azure_deployment is not None or entra_token is not None
         if not is_azure:
             api_key = api_key or os.environ.get("OPENAI_API_KEY")
@@ -301,8 +301,8 @@ class GPTLiveModel(llm.DuplexModel):
             responses=responses,
             decisions=decisions,
             triggers=triggers if is_given(triggers) else None,
-            delegation_detection=(
-                {} if delegation_detection is True else delegation_detection or None
+            delegation_recovery=(
+                {} if delegation_recovery is True else delegation_recovery or None
             ),
             service_tier=service_tier if is_given(service_tier) else None,
             api_key=api_key,
@@ -330,7 +330,7 @@ class GPTLiveModel(llm.DuplexModel):
         responses_options: NotGivenOr[ResponsesDelegationOptions] = NOT_GIVEN,
         decisions_options: NotGivenOr[DecisionsOptions] = NOT_GIVEN,
         triggers: NotGivenOr[list[DecisionsTrigger]] = NOT_GIVEN,
-        delegation_detection: bool | llm.DelegationDetectionOptions = False,
+        delegation_recovery: bool | llm.DelegationDetectionOptions = False,
         service_tier: NotGivenOr[types.ServiceTier] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
@@ -349,7 +349,7 @@ class GPTLiveModel(llm.DuplexModel):
                 Mutually exclusive with ``azure_endpoint``.
             voice: Output voice, as in :class:`GPTLiveModel`.
             delegation: Where delegated work goes, as in :class:`GPTLiveModel`.
-            delegation_detection: As in :class:`GPTLiveModel`.
+            delegation_recovery: As in :class:`GPTLiveModel`.
             responses_options: The backend Responses model under ``delegation="responses"``.
                 Its ``model`` is required, and names a deployment in the same resource.
             service_tier: Processing tier, as in :class:`GPTLiveModel`.
@@ -387,7 +387,7 @@ class GPTLiveModel(llm.DuplexModel):
             responses_options=responses_options,
             decisions_options=decisions_options,
             triggers=triggers,
-            delegation_detection=delegation_detection,
+            delegation_recovery=delegation_recovery,
             service_tier=service_tier,
             api_key=api_key,
             base_url=endpoint if endpoint is not None else NOT_GIVEN,
@@ -1296,7 +1296,7 @@ class GPTLiveSession(
 
     @property
     def _delegation_detection(self) -> llm.DelegationDetectionOptions | None:
-        return self._opts.delegation_detection
+        return self._opts.delegation_recovery
 
     def mute_input(self) -> None:
         """Replace microphone input with silence; the model keeps generating and speaking.

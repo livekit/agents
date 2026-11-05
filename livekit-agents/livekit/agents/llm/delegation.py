@@ -17,15 +17,22 @@ if TYPE_CHECKING:
 
 DEFAULT_DETECTOR_MODEL = "google/gemma-4-31b-it"
 
+# how late a caller turn may start and still count as said over the agent's message: a turn
+# starts when its first words are transcribed, which trails the speech itself (not the grace period)
+_SPOKEN_OVER_SLACK = 1.0
+
 DEFAULT_PROMPT = (
     "A caller talks to a voice agent that cannot act on its own: only its backend can, through "
-    "the backend tools listed in the input, and the voice agent has to hand each such request to "
-    "the backend. Sometimes it forgets, and answers or promises the action itself. "
-    "True when the caller's last turn asks for something only the backend tools can do, or the "
-    "agent says it is doing, has done, or will check something that needs them, and no tool "
-    "call in the conversation has done it yet. False for small talk, a question the conversation "
-    "already answers, a request the agent is still collecting details for, or work a tool call "
-    "already did."
+    "the backend tools listed in the input, and the voice agent has to hand the backend each such "
+    "request and each answer to the backend's questions. Sometimes it forgets, and answers, "
+    "promises or goes quiet instead. True when the caller's last turn asks for something only the "
+    "backend tools can do; or answers a question the agent asked for such work with a yes, a no, a "
+    "choice or a detail, a bare 'okay', 'mm-hmm' or 'yep' given as that answer included, even said "
+    "while the agent was still speaking; or the agent says it is doing or has done something that "
+    "needs the tools; and no tool call has done it yet. False for thanks, small talk and other "
+    "turns that answer nothing, a question the conversation already answers, a request the agent "
+    "is still collecting details for, work a tool call already did, or a turn after which the "
+    "agent asks the caller a new question they have not answered yet."
 )
 
 
@@ -93,7 +100,7 @@ class DelegationDetector:
     def model(self) -> LLM | DecisionModel:
         return self._model
 
-    async def __call__(self, check: DelegationCheck) -> bool:
+    async def __call__(self, check: DelegationCheck) -> bool | str:
         tools: list[str] = []
         for tool in check.tools:
             if is_function_tool(tool):
@@ -103,10 +110,34 @@ class DelegationDetector:
         parts = ["## Backend tools", "\n".join(tools) or "(none)"]
         if check.instructions:
             parts += ["## The voice agent's instructions", check.instructions]
-        recent = ChatContext(items=check.chat_ctx.items[-self._max_items :])
-        parts += ["## Conversation", _format_transcript(recent, include_context_events=True)]
+        # the transcript keeps no overlap: a caller turn that started while an agent message was
+        # playing reads like an ordinary reply, so it is marked from the messages' playback times
+        messages = [m for m in check.chat_ctx.items if isinstance(m, ChatMessage)]
+        playing = [
+            (m.metrics["started_speaking_at"], m.metrics["stopped_speaking_at"])
+            for m in messages
+            if m.role == "assistant"
+            and "started_speaking_at" in m.metrics
+            and "stopped_speaking_at" in m.metrics
+        ]
+        spoken_over = {
+            m.id
+            for m in messages
+            if m.role == "user"
+            and any(
+                a <= m.metrics.get("started_speaking_at", m.created_at) <= b + _SPOKEN_OVER_SLACK
+                for a, b in playing
+            )
+        }
+        lines = []
+        for item in check.chat_ctx.items[-self._max_items :]:
+            line = _format_transcript(ChatContext(items=[item]), include_context_events=True)
+            if line and item.id in spoken_over:
+                line = line.replace("user:", "user (said while the agent was still speaking):", 1)
+            if line:
+                lines.append(line)
+        parts += ["## Conversation", "\n".join(lines)]
         input = "\n\n".join(parts)
-
         if isinstance(self._model, DecisionModel):
             response = await self._model.evaluate(
                 input=input, decisions={"delegate": Probability(self._prompt)}
@@ -115,37 +146,51 @@ class DelegationDetector:
             if not isinstance(result, ProbabilityResult):
                 logger.warning("delegation decision failed", extra={"errors": response.errors})
                 return False
-            return result.value >= 0.5
+            delegate = result.value >= 0.5
+        else:
 
-        @function_tool
-        async def report(delegate: bool) -> None:
-            """Report the verdict.
+            @function_tool
+            async def report(delegate: bool) -> None:
+                """Report the verdict.
 
-            Args:
-                delegate: Whether the turn needs the backend now.
-            """
+                Args:
+                    delegate: Whether the turn needs the backend now.
+                """
 
-        collected = await self._model.chat(
-            chat_ctx=ChatContext(
-                items=[
-                    ChatMessage(
-                        role="system",
-                        content=[f"{self._prompt}\nJudge only from the input, then call report."],
-                    ),
-                    ChatMessage(role="user", content=[input]),
-                ]
-            ),
-            tools=[report],
-            tool_choice="required",
-            # a verdict that arrives late is worth nothing, so a failure is not retried
-            conn_options=APIConnectOptions(max_retry=0),
-        ).collect()
-        call = next((c for c in collected.tool_calls if c.name == "report"), None)
-        try:
-            args = json.loads(call.arguments) if call is not None else None
-        except json.JSONDecodeError:
-            args = None
-        if not isinstance(args, dict):
-            logger.warning("delegation detector did not report a verdict")
+            collected = await self._model.chat(
+                chat_ctx=ChatContext(
+                    items=[
+                        ChatMessage(
+                            role="system",
+                            content=[
+                                f"{self._prompt}\nJudge only from the input, then call report."
+                            ],
+                        ),
+                        ChatMessage(role="user", content=[input]),
+                    ]
+                ),
+                tools=[report],
+                tool_choice="required",
+                # a verdict that arrives late is worth nothing, so a failure is not retried
+                conn_options=APIConnectOptions(max_retry=0),
+            ).collect()
+            call = next((c for c in collected.tool_calls if c.name == "report"), None)
+            try:
+                args = json.loads(call.arguments) if call is not None else None
+            except json.JSONDecodeError:
+                args = None
+            if not isinstance(args, dict):
+                logger.warning("delegation detector did not report a verdict")
+                return False
+            delegate = args.get("delegate") is True
+
+        if not delegate:
             return False
-        return args.get("delegate") is True
+        # a reply said over the agent goes with a note, so the delegated work can confirm it first
+        last = next((m for m in reversed(messages) if m.role == "user"), None)
+        if last is not None and last.id in spoken_over:
+            return (
+                f'The caller said "{last.text_content}" while the agent was still speaking, so they '
+                "may not have heard all of it."
+            )
+        return True
