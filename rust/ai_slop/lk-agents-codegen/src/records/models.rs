@@ -252,9 +252,29 @@ fn dispatch(r: &RecordDecl, decls: &Declarations) -> Result<Out, String> {
     };
     let mut imports = Imports::default();
     let (mut events, mut ignored) = (String::new(), String::new());
+    // every public event, by model: `(model, event name)` in declaration order
+    let mut public: Vec<(String, String)> = Vec::new();
+    let event_of = |at: &str, module: &str, name: &str| {
+        decls
+            .records
+            .iter()
+            .find(|x| x.module == module && x.name == name)
+            .and_then(|x| x.constants.iter().find(|(key, _)| key == "type"))
+            .map(|(_, value)| value.clone())
+            .ok_or_else(|| format!("{at}: an event's model names it with constant(type = \"..\")"))
+    };
     for v in variants {
-        let Some(route) = &v.route else { continue };
         let at = format!("{}: {}::{}", r.source, r.rust, v.rust_name);
+        if let Some(model) = &v.emits {
+            let record = decls
+                .records
+                .iter()
+                .find(|x| &x.name == model)
+                .ok_or_else(|| format!("{at}: emits names no declared record `{model}`"))?;
+            imports.add(&format!(".{}", record.module), model);
+            public.push((model.clone(), event_of(&at, &record.module, model)?));
+        }
+        let Some(route) = &v.route else { continue };
         let VariantShape::Tuple(Some(field)) = &v.shape else {
             return Err(format!("{at}: a routed member is a declared record"));
         };
@@ -268,16 +288,9 @@ fn dispatch(r: &RecordDecl, decls: &Declarations) -> Result<Out, String> {
         match route {
             Route::Ignored => ignored.push_str(&format!("        {name},\n")),
             Route::Event => {
-                let event = decls
-                    .records
-                    .iter()
-                    .find(|x| &x.module == module && &x.name == name)
-                    .and_then(|x| x.constants.iter().find(|(key, _)| key == "type"))
-                    .map(|(_, value)| value)
-                    .ok_or_else(|| {
-                        format!("{at}: an event's model names it with constant(type = \"..\")")
-                    })?;
+                let event = event_of(&at, module, name)?;
                 events.push_str(&format!("    {name}: {event:?},\n"));
+                public.push((name.clone(), event));
             }
         }
     }
@@ -289,11 +302,20 @@ fn dispatch(r: &RecordDecl, decls: &Declarations) -> Result<Out, String> {
         "" => "frozenset()".to_owned(),
         _ => format!("frozenset(\n    {{\n{ignored}    }}\n)"),
     };
+    if public.is_empty() {
+        return Err(format!("{}: a dispatched record emits public events", r.source));
+    }
+    imports.add("typing", "Annotated");
+    imports.add("typing", "Literal");
+    imports.add("pydantic", "Field");
+    let names: String = public.iter().map(|(_, event)| format!("    {event:?},\n")).collect();
+    let models =
+        public.iter().map(|(model, _)| model.as_str()).collect::<Vec<_>>().join("\n    | ");
     let union = &r.name;
     Ok(Out {
         path: format!("{}.py", r.dispatch.as_deref().expect("dispatched")),
         text: format!(
-            "# GENERATED FILE -- DO NOT EDIT.\n#\n# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[host(record)]`\n# declarations in:\n#     {source}\n\n{imports}\n# `{union}` members the host emits as public session events: {{model class: event name}}.\nPUBLIC_EVENTS: dict[type, str] = {events}\n\n# `{union}` members the host receives and does not act on.\nIGNORED_EVENTS: frozenset[type] = {set}\n",
+            "# GENERATED FILE -- DO NOT EDIT.\n#\n# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[host(record)]`\n# declarations in:\n#     {source}\n\n{imports}\n# `{union}` members the host emits as public session events: {{model class: event name}}.\nPUBLIC_EVENTS: dict[type, str] = {events}\n\n# `{union}` members the host receives and does not act on.\nIGNORED_EVENTS: frozenset[type] = {set}\n\n# Every public session event's name: the routed members' and those the host's behaviour emits.\nEventTypes = Literal[\n{names}]\n\n# Every public session event, told apart by its `type`.\nAgentEvent = Annotated[\n    {models},\n    Field(discriminator=\"type\"),\n]\n",
             source = r.source,
             imports = imports.render(&[]),
             events = map(&events),

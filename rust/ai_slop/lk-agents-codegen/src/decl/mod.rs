@@ -324,6 +324,8 @@ pub struct Variant {
     pub host_type: Option<(String, String)>,
     /// A dispatched record's member: how the host routes its value.
     pub route: Option<Route>,
+    /// A dispatched record's member: the public event model its host behaviour emits.
+    pub emits: Option<String>,
 }
 
 /// `#[host(event)]`: emitted as the public event its model's `type` names; `#[host(ignored)]`:

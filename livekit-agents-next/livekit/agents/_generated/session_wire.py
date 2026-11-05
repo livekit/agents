@@ -382,8 +382,9 @@ HostWire: TypeAlias = (
 """Every event the session hands its host, as the record the host reads, routed by its class.
 
 `#[host(event)]` members are emitted as public session events and `#[host(ignored)]` ones are
-dropped, both via
-`_generated/session_dispatch.py`; the rest have host behaviour.
+dropped, both via `_generated/session_dispatch.py`; the rest have host behaviour.
+`#[host(emits = "Model")]` names the public event that behaviour emits, so the generated
+`EventTypes` and `AgentEvent` list every public session event.
 """
 
 

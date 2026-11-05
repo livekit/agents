@@ -292,8 +292,8 @@ fn an_omitted_field_is_computed_from_the_record_read() {
 }
 
 // Catches: a dispatched member routed by anything but its model class, an event emitted under a
-// name its model does not carry, an ignored member lost, or a route outside a
-// dispatched record accepted.
+// name its model does not carry, an ignored member lost, an event the host's behaviour emits
+// missing from `EventTypes` and `AgentEvent`, or a route outside a dispatched record accepted.
 #[test]
 fn a_dispatched_record_routes_its_members_by_model_class() {
     let source = r#"
@@ -303,12 +303,15 @@ fn a_dispatched_record_routes_its_members_by_model_class() {
         pub struct TurnCompleted { pub text: String }
         #[crate::host(record(module = "events", emit, constant(type = "speech_done")))]
         pub struct SpeechDone { pub id: String }
+        #[crate::host(record(module = "events", emit, constant(type = "close")))]
+        pub struct Closed { pub reason: String }
         #[crate::host(record(module = "events", emit, transparent, dispatch = "session_dispatch"))]
         pub enum HostWire {
             #[host(event)]
             State(AgentStateChanged),
             #[host(ignored)]
             Turn(TurnCompleted),
+            #[host(emits = "Closed")]
             Done(SpeechDone),
         }"#;
     let decls = read(source).expect("resolves");
@@ -316,13 +319,18 @@ fn a_dispatched_record_routes_its_members_by_model_class() {
     let dispatch =
         &models.iter().find(|o| o.path == "session_dispatch.py").expect("dispatch module").text;
     for want in [
-        "from .events import AgentStateChanged, TurnCompleted\n",
+        "from .events import AgentStateChanged, Closed, TurnCompleted\n",
+        "EventTypes = Literal[\n    \"agent_state_changed\",\n    \"close\",\n]\n",
+        "AgentEvent = Annotated[\n    AgentStateChanged\n    | Closed,\n    Field(discriminator=\"type\"),\n]\n",
         "PUBLIC_EVENTS: dict[type, str] = {\n    AgentStateChanged: \"agent_state_changed\",\n}\n",
         "IGNORED_EVENTS: frozenset[type] = frozenset(\n    {\n        TurnCompleted,\n    }\n)\n",
     ] {
         assert!(dispatch.contains(want), "{want}\n{dispatch}");
     }
     assert!(!dispatch.contains("SpeechDone"), "{dispatch}");
+    let unknown = source.replace("emits = \"Closed\"", "emits = \"Missing\"");
+    let error = crate::records::python(&read(&unknown).expect("resolves")).err().expect("refused");
+    assert!(error.contains("emits names no declared record `Missing`"), "{error}");
     let untyped = source.replace(", constant(type = \"agent_state_changed\")", "");
     let error = crate::records::python(&read(&untyped).expect("resolves")).err().expect("refused");
     assert!(error.contains("HostWire::State: an event's model names it"), "{error}");

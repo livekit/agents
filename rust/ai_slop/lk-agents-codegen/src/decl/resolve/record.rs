@@ -438,6 +438,7 @@ impl Resolver<'_> {
         let at = format!("{}::{}", self.at, v.ident);
         let mut entries = voc::read(&v.attrs).map_err(|e| format!("{at}: {e}"))?;
         let route = route(&at, &mut entries, dispatched)?;
+        let emits = emits(&at, &mut entries, dispatched)?;
         let shape = match &v.fields {
             _ if native(v) => {
                 voc::only(&at, &entries, &["native"])?;
@@ -528,6 +529,7 @@ impl Resolver<'_> {
             shape,
             host_type,
             route,
+            emits,
         })
     }
 
@@ -750,6 +752,22 @@ fn route(at: &str, entries: &mut Vec<Entry>, dispatched: bool) -> Result<Option<
         "event" => Route::Event,
         _ => Route::Ignored,
     }))
+}
+
+/// A dispatched member's `emits = "Model"`, taken out of `entries`: the public session event
+/// model the host's behaviour for this member emits.
+fn emits(at: &str, entries: &mut Vec<Entry>, dispatched: bool) -> Result<Option<String>, String> {
+    let Some(index) = entries.iter().position(|e| e.key == "emits") else {
+        return Ok(None);
+    };
+    let entry = entries.remove(index);
+    if !dispatched {
+        return Err(format!("{at}: `emits` names the event of a dispatched record's member"));
+    }
+    match (&entry.value, entry.nested.is_empty()) {
+        (Some(Value::Text(model)), true) => Ok(Some(model.clone())),
+        _ => Err(format!("{at}: emits = \"Model\" names a record's model")),
+    }
 }
 
 /// `record(module = "..", name = "..", extract, emit)`: its module, host name and directions.

@@ -4,6 +4,10 @@
 # declarations in:
 #     rust/crates/lk-agents-abi/src/voice/events.rs
 
+from typing import Annotated, Literal
+
+from pydantic import Field
+
 from .events import (
     AgentFalseInterruptionEvent,
     AgentStateChangedEvent,
@@ -13,8 +17,18 @@ from .events import (
     UserTurnExceededEvent,
     _AgentBackchannelOpportunityEvent,
 )
+from .overlap import OverlappingSpeechEvent
+from .session_events import (
+    CloseEvent,
+    ConversationItemAddedEvent,
+    ErrorEvent,
+    FunctionToolsExecutedEvent,
+    SpeechCreatedEvent,
+    ToolExecutionUpdatedEvent,
+)
 from .session_wire import (
     BackchannelConfirmedWire,
+    FunctionToolsExecutedWire,
     HistoryReloadedWire,
     OverlapInterruptionEvent,
     ParticipantLinked,
@@ -38,6 +52,7 @@ PUBLIC_EVENTS: dict[type, str] = {
 IGNORED_EVENTS: frozenset[type] = frozenset(
     {
         HistoryReloadedWire,
+        FunctionToolsExecutedWire,
         UserTurnCompletedWire,
         _AgentBackchannelOpportunityEvent,
         PreemptiveGenerationEvent,
@@ -48,3 +63,38 @@ IGNORED_EVENTS: frozenset[type] = frozenset(
         ParticipantUnlinked,
     }
 )
+
+# Every public session event's name: the routed members' and those the host's behaviour emits.
+EventTypes = Literal[
+    "user_input_transcribed",
+    "speech_created",
+    "function_tools_executed",
+    "user_turn_exceeded",
+    "user_transcription_timeout",
+    "agent_state_changed",
+    "user_state_changed",
+    "agent_false_interruption",
+    "conversation_item_added",
+    "close",
+    "overlapping_speech",
+    "error",
+    "tool_execution_updated",
+]
+
+# Every public session event, told apart by its `type`.
+AgentEvent = Annotated[
+    UserInputTranscribedEvent
+    | SpeechCreatedEvent
+    | FunctionToolsExecutedEvent
+    | UserTurnExceededEvent
+    | UserTranscriptionTimeoutEvent
+    | AgentStateChangedEvent
+    | UserStateChangedEvent
+    | AgentFalseInterruptionEvent
+    | ConversationItemAddedEvent
+    | CloseEvent
+    | OverlappingSpeechEvent
+    | ErrorEvent
+    | ToolExecutionUpdatedEvent,
+    Field(discriminator="type"),
+]

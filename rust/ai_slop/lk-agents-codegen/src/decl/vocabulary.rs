@@ -74,8 +74,9 @@
 //! | transparent unit variant | `host_type = "module.Name"` | read and emit that existing marker class; without it the unit crosses as `None` |
 //! | record enum | `record(.., transparent)` | every variant is one value crossing as itself (`str \| Message`, `Policy \| dict[str, Policy] \| None`), told apart by its class (a model class, a literal record's `str`, else its Python type; a `float` takes an `int`); one unit variant may cross as `None` (a field of the record then takes `default = None`): the model is a union alias, no class per variant |
 //! | record struct | `record(.., nested_in = "Owner")` | its model is a class nested in the record struct `Owner`'s model of the same module, named `Owner.Name` (`RealtimeModelMetrics.InputTokenDetails`) |
-//! | record enum | `record(.., transparent, dispatch = "session_dispatch")` | the host routes its members by model class through `_generated/<dispatch>.py` (`PUBLIC_EVENTS`, `IGNORED_EVENTS`) |
+//! | record enum | `record(.., transparent, dispatch = "session_dispatch")` | the host routes its members by model class through `_generated/<dispatch>.py` (`PUBLIC_EVENTS`, `IGNORED_EVENTS`, and `EventTypes` and `AgentEvent`: every public event) |
 //! | dispatched variant | `event`, `ignored` | emitted as the public event its model's `type` constant names, or received and dropped; an unrouted member has host behaviour |
+//! | dispatched variant | `emits = "Model"` | the public event (that record's model and `type`) the host's behaviour for this member emits |
 //! | record | `#[python(property(name = "x", ret = "int", getter = "a.b"))]` | a model property answering the record's attribute along that path, with no host hook |
 //! | record | `#[python(property(name = "x", ret = "bool", core = "_core_fn"))]`, `method(.., core = ..)` | a view computed in Rust: `_core._core_fn(self, args..)`, the record crossing as its extracted value (the record declares `extract`) |
 //! | record struct | `record(.., default)` | Rust `Default` from the fields' `default = <literal>` (a `Maybe` field: not given): one list of defaults for both languages; the one Rust the record marker expands to |

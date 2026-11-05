@@ -4,12 +4,12 @@ import asyncio
 import inspect
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Annotated, Any, Generic, Literal
 
-from pydantic import (
-    Field,
-    TypeAdapter,
-)
+# The generated event models take this module's path, so their string annotations resolve
+# here: `Annotated`, `Literal` and `Field` stay bound.
+from typing import TYPE_CHECKING, Annotated as Annotated, Any, Generic, Literal as Literal
+
+from pydantic import Field as Field, TypeAdapter
 from typing_extensions import TypeVar
 
 from livekit.agents._generated.session_events import (
@@ -17,25 +17,10 @@ from livekit.agents._generated.session_events import (
     _TypeDiscriminator as _TypeDiscriminator,
 )
 
-from .._generated.events import (
-    AgentFalseInterruptionEvent,
-    AgentStateChangedEvent,
-    UserInputTranscribedEvent,
-    UserStateChangedEvent,
-    UserTranscriptionTimeoutEvent,
-)
 from .._generated.public_voice_events import *  # noqa: F403
-from .._generated.session_events import (
-    CloseEvent,
-    ConversationItemAddedEvent,
-    ErrorEvent,
-    FunctionToolsExecutedEvent,
-    SpeechCreatedEvent,
-    ToolExecutionUpdatedEvent,
-)
+from .._generated.session_dispatch import AgentEvent as AgentEvent, EventTypes as EventTypes
 from .._generated.tool_report import ToolOutcomeUpdate, ToolReport
 from .._generated.voice_session import VoiceCommandOrigin, VoiceCommandOriginTool
-from ..inference import OverlappingSpeechEvent
 from ..llm import (
     FunctionCall,
 )
@@ -76,26 +61,6 @@ __all__ = [
     "UserTranscriptionTimeoutEvent",
     "UserTurnExceededEvent",
     "EotPredictionEvent",
-]
-
-# The public events whose fields hold host objects: written here, not generated, since no core
-# record crosses as them.
-
-
-AgentEvent = Annotated[
-    UserInputTranscribedEvent
-    | UserTranscriptionTimeoutEvent
-    | UserStateChangedEvent
-    | AgentStateChangedEvent
-    | AgentFalseInterruptionEvent
-    | ConversationItemAddedEvent
-    | FunctionToolsExecutedEvent
-    | SpeechCreatedEvent
-    | ToolExecutionUpdatedEvent
-    | ErrorEvent
-    | CloseEvent
-    | OverlappingSpeechEvent,
-    Field(discriminator="type"),
 ]
 
 _AGENT_EVENT: TypeAdapter[AgentEvent] = TypeAdapter(AgentEvent)
@@ -340,20 +305,3 @@ class RunContext(Generic[Context_T]):
         self._call()._core.tool_update(
             invocation.invocation_id, invocation.operation, self.function_call.call_id, report
         )
-
-
-EventTypes = Literal[
-    "user_state_changed",
-    "agent_state_changed",
-    "user_input_transcribed",
-    "user_transcription_timeout",
-    "conversation_item_added",
-    "agent_false_interruption",
-    "overlapping_speech",
-    "function_tools_executed",
-    "speech_created",
-    "tool_execution_updated",
-    "error",
-    "close",
-    "debug_message",
-]
