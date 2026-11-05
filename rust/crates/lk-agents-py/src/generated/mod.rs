@@ -146,7 +146,7 @@ pub trait Implementations: 'static {
     type MarkupClass: ::lk_agents_abi::tts::markup::MarkupClass;
     type TranscriptStripper: ::lk_agents_abi::tts::markup::TranscriptStripper;
     type StreamAdapterFunctions: ::lk_agents_abi::StreamAdapterFunctions<Stream = Self::TtsStream>;
-    type SentencePacer: ::lk_agents_abi::tts::stream_pacer::SentencePacer;
+    type PacedSentences: ::lk_agents_abi::tts::stream_pacer::PacedSentences;
     type TtsStream: ::lk_agents_abi::tts::streams::TtsStream;
     type SynthesisChecks: ::lk_agents_abi::tts::streams::SynthesisChecks;
     type InferenceEot: ::lk_agents_abi::turn::inference::InferenceEot<Stream = Self::EotStream>;
@@ -398,7 +398,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<tts::Markup>()?;
     m.add_class::<tts::TranscriptMarkupStripper>()?;
     m.add_function(wrap_pyfunction!(tts::tts_adapter_stream, m)?)?;
-    m.add_class::<tts::SentencePacer>()?;
+    m.add_class::<tts::CorePacedSentences>()?;
     m.add_class::<tts::TtsStream>()?;
     m.add_function(wrap_pyfunction!(tts::validate_synthesis, m)?)?;
     m.add_class::<turn::InferenceEot>()?;

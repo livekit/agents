@@ -1,9 +1,10 @@
 //! The sentence adapter's contracts (`tts/stream_adapter.py`): the speech text it is composed
-//! with and its pre-split host entry. The adapter itself is `lk_agents_inference`'s.
+//! with and its host entry. The adapter itself is `lk_agents_inference`'s.
 
 use std::sync::Arc;
 
 use crate::errors::ProviderError;
+use crate::tts::stream_pacer::HostSentenceStream;
 use crate::tts::types::Tts;
 
 /// No default implementation on purpose: segmentation boundaries are audible, and the reference's
@@ -29,7 +30,7 @@ pub trait SentenceTextProcessor: Send {
 pub type TextProcessorFactory =
     Arc<dyn Fn(&str) -> Option<Box<dyn SentenceTextProcessor>> + Send + Sync>;
 
-/// `tts.StreamAdapter`'s pre-split host entry; runtime supplies the speech algorithms.
+/// `tts.StreamAdapter`'s stream: the native sentence adapter over a host TTS.
 #[crate::host(functions)]
 pub trait StreamAdapterFunctions {
     /// What the hosting process lends the class.
@@ -39,10 +40,19 @@ pub trait StreamAdapterFunctions {
     #[host(class(name = "TtsStream"))]
     type Stream;
 
+    /// `provider`'s synthesis of each sentence of the text pushed, one segment, each sentence
+    /// retried within `conn_options`. Under `expressive` the provider's markup is lowered
+    /// before each sentence. `sentences` is the host tokenizer's stream the text is split by
+    /// (blingfire's by default); `pacing` is `(min_remaining_audio, max_text_length)` to release
+    /// sentences as the audio plays out (`tts.SentenceStreamPacer`).
     #[host(function)]
     async fn tts_adapter_stream(
         env: &Self::Env,
+        cx: crate::telemetry::Cx,
         provider: Arc<dyn Tts>,
         conn_options: crate::ApiConnectOptions,
+        #[host(kw, default = false)] expressive: bool,
+        #[host(default = None)] sentences: Option<Arc<dyn HostSentenceStream>>,
+        #[host(default = None)] pacing: Option<(f64, usize)>,
     ) -> Result<Self::Stream, ProviderError>;
 }

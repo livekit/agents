@@ -199,9 +199,9 @@ from ._generated._core_tokenize import (
 )
 from ._generated._core_tts import (
     Markup as Markup,
-    SentencePacer as SentencePacer,
     TranscriptMarkupStripper as TranscriptMarkupStripper,
     TtsStream as TtsStream,
+    _core_PacedSentences as _core_PacedSentences,
     chat_message_text_content as chat_message_text_content,
     split_all_markup as split_all_markup,
     split_expr_markup as split_expr_markup,

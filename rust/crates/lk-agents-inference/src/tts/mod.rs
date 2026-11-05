@@ -38,6 +38,7 @@ use wire::FallbackModel;
 
 pub mod emitter;
 pub mod machine;
+pub mod pacing;
 mod pump;
 pub mod sentence_adapter;
 pub mod sentences;

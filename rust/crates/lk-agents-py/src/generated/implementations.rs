@@ -100,7 +100,7 @@ impl super::Implementations for Selected {
     type TranscriptStripper = ::lk_agents_runtime::cores::TranscriptMarkupStripper;
     type StreamAdapterFunctions =
         ::lk_agents_runtime::inference::tts::sentence_adapter::AdapterStreams;
-    type SentencePacer = ::lk_agents_runtime::inference::tts::sentence_adapter::SentencePacer;
+    type PacedSentences = ::lk_agents_runtime::inference::tts::pacing::PacedSentences;
     type TtsStream = ::lk_agents_runtime::inference::tts::stream::TtsStream;
     type SynthesisChecks = ::lk_agents_runtime::inference::tts::stream::SynthesisChecks;
     type InferenceEot = ::lk_agents_runtime::inference::eot::AudioEot;

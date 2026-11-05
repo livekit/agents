@@ -32,7 +32,12 @@ pub trait EmitterOutput: Send + Sync {
     fn closed(&self) -> Result<bool, HostError>;
 }
 
-#[crate::host(class(name = "AudioEmitter", module = "livekit.agents.tts", subclass))]
+#[crate::host(class(
+    name = "AudioEmitter",
+    module = "livekit.agents.tts",
+    subclass,
+    native = crate::tts::stream_pacer::PushedAudio
+))]
 pub trait AudioEmitter: Send + Sync + Sized + 'static {
     /// What the hosting process lends the class.
     #[host(env)]

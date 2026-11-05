@@ -481,6 +481,18 @@ impl AudioEmitter {
     }
 }
 
+// Wherever the host passes a `::lk_agents_abi::tts::stream_pacer::PushedAudio`, an instance of this class is itself.
+inventory::submit! {
+    crate::py_objects::HostNative {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::tts::stream_pacer::PushedAudio>(),
+        read: |obj| {
+            let this = obj.cast::<AudioEmitter>().ok()?;
+            let native: ::std::sync::Arc<dyn ::lk_agents_abi::tts::stream_pacer::PushedAudio> = this.get().0.clone();
+            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        },
+    }
+}
+
 // Declared in rust/crates/lk-agents-abi/src/media/codecs.rs.
 type AudioDecoderImpl =
     <crate::generated::implementations::Selected as super::Implementations>::AudioDecoder;

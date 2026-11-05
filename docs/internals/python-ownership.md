@@ -56,7 +56,7 @@ Generate record conversion, callback dispatch, views and forwarding from ABI dec
 
 ### Provider execution
 
-Native inference owns attempts, retry/fallback selection and stream admission. `ProviderAttempts` (lk-agents-inference `provider.rs`) executes a host provider's attempts too, standalone or in a session: it runs the host's one-attempt `_core_attempt`, its deadlines, retries and error events; Python implements `_run` and the SDK feed/drain tasks, with no retry loop of its own. Shared aio helpers retain unfinished cleanup; native close proceeds independently of stalled host input cleanup. Generated provider APIs remain supported.
+Native inference owns attempts, retry/fallback selection and stream admission. `ProviderAttempts` (lk-agents-inference `provider.rs`) executes a host provider's attempts too, standalone or in a session: it runs the host's one-attempt `_core_attempt`, its deadlines, retries and error events; Python implements `_run` and the SDK feed/drain tasks, with no retry loop of its own. The TTS sentence adapter (`tts_adapter_stream`) and `SentenceStreamPacer` (`_core_PacedSentences`) split, pace and synthesize natively, their timers and reads included; a custom tokenizer's `SentenceStream` is read through `_core_next`. Shared aio helpers retain unfinished cleanup; native close proceeds independently of stalled host input cleanup. Generated provider APIs remain supported.
 
 | File | Lines |
 | --- | ---: |

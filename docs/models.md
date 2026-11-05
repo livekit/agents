@@ -42,6 +42,25 @@ with `InterruptionDetectionError`. A realtime model's `inference_class` is an
 `AvailabilityChangedEvent` when a model goes down or comes back. `tts.StreamAdapter` and
 `stt.StreamAdapter` give a non-streaming TTS or STT a streaming interface.
 
+### Sentences and pacing
+
+`tts.StreamAdapter(tts=, sentence_tokenizer=, text_pacing=)` splits the text pushed into
+sentences and synthesizes each with the wrapped TTS's `synthesize()`, one after the other, as
+one segment whose last frame is final. The split is blingfire's (`retain_format`, XML-aware on
+an expressive stream) unless `sentence_tokenizer` is given: the framework then feeds the text
+to its `stream()` and synthesizes what that stream yields, and closes it with the synthesis.
+On an expressive stream the wrapped TTS's markup is normalized before the split and lowered in
+each sentence. Each sentence is retried on its own within `conn_options` while it has
+delivered no audio. Time to first audio is measured from the stream's first text.
+
+`text_pacing=True` (or a `SentenceStreamPacer`) holds sentences back: the first goes at once;
+each later batch waits until the synthesized audio stopped growing and at most
+`min_remaining_audio` seconds of it are left to play (from the first audio), then whole
+sentences are joined with a space up to `max_text_length` characters. A streaming plugin paces
+its own tokenizer stream with `pacer.wrap(sentence_stream, output_emitter)`: a
+`SentenceStream` whose text goes to `sentence_stream` and whose sentences are paced by the
+audio `output_emitter` pushed; closing it closes `sentence_stream` and ends a pending read.
+
 ## Connection options
 
 `APIConnectOptions` is immutable and exported from `livekit.agents`.

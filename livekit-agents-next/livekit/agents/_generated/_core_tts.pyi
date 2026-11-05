@@ -8,7 +8,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any, Self
 
-from livekit.agents.tts import TTS
+from livekit.agents.tokenize import SentenceStream
+from livekit.agents.tts import TTS, AudioEmitter
 
 from .connect import APIConnectOptions
 from .expressive import SpeechSteeringOptions
@@ -61,17 +62,40 @@ class TranscriptMarkupStripper:
     def tags(self) -> list[ExpressiveTag]: ...
     def expression_attribute(self) -> dict[str, str] | None: ...
 
-async def tts_adapter_stream(provider: TTS[Any], conn_options: APIConnectOptions) -> TtsStream: ...
-
-class SentencePacer:
-    """Paces a synthesis's sentences: the first at once, the rest in batches once the audio already
-    synthesized is nearly played.
+async def tts_adapter_stream(
+    provider: TTS[Any],
+    conn_options: APIConnectOptions,
+    *,
+    expressive: bool = False,
+    sentences: SentenceStream | None = None,
+    pacing: tuple[float, int] | None = None,
+) -> TtsStream:
+    """`provider`'s synthesis of each sentence of the text pushed, one segment, each sentence
+    retried within `conn_options`. Under `expressive` the provider's markup is lowered
+    before each sentence. `sentences` is the host tokenizer's stream the text is split by
+    (blingfire's by default); `pacing` is `(min_remaining_audio, max_text_length)` to release
+    sentences as the audio plays out (`tts.SentenceStreamPacer`).
     """
-    def __new__(cls, minimum_audio: float, maximum_text: int) -> Self: ...
-    def push(self, text: str) -> None: ...
-    def end(self) -> None: ...
-    def poll(self, now: float, audio: float) -> tuple[str | None, float, float | None]:
-        """Text to emit, remaining audio for diagnostics, and next wakeup (None means done)."""
+
+class _core_PacedSentences:
+    """`SentenceStreamPacer.wrap()`: a host sentence stream's sentences, paced by the audio its
+    emitter pushed. The first sentence goes at once; the next batch once the audio stopped
+    growing and less than `min_remaining_audio` seconds of it is left to play, at most
+    `max_text_length` characters of whole sentences joined by a space.
+    """
+    def __new__(
+        cls,
+        sentences: SentenceStream,
+        audio: AudioEmitter,
+        min_remaining_audio: float,
+        max_text_length: int,
+    ) -> Self: ...
+    async def next(self) -> str | None:
+        """The next batch, `None` once the input ended and every sentence went; the host stream's
+        failure is raised as it was.
+        """
+    async def aclose(self) -> None:
+        """Stop reading and close the host stream."""
 
 class TtsStream:
     """One synthesis, `SynthesizeStream`'s shape: text in through `push_text`, `flush` and

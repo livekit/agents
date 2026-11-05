@@ -405,6 +405,12 @@ fn decode_error(error: impl std::fmt::Display) -> EmitterError {
     EmitterError::Decode(error.to_string())
 }
 
+impl lk_agents_abi::tts::stream_pacer::PushedAudio for AudioEmitter {
+    fn pushed_duration(&self) -> f64 {
+        locked(&self.0.machine).pushed_duration(-1)
+    }
+}
+
 impl lk_agents_abi::media::emitter::AudioEmitter for AudioEmitter {
     type Env = ProcessEnv;
 

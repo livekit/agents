@@ -57,6 +57,14 @@ class SentenceStream(ABC):
     def __aiter__(self) -> AsyncIterator[TokenData]:
         return self
 
+    async def _core_next(self) -> str | None:
+        """The next sentence, ``None`` once the stream ended: how the core reads a stream it
+        paces or synthesizes (``tts.StreamAdapter``, ``SentenceStreamPacer.wrap()``)."""
+        try:
+            return (await self.__anext__()).token
+        except StopAsyncIteration:
+            return None
+
     def _check_not_closed(self) -> None:
         if self._event_ch.closed:
             cls = type(self)

@@ -1,13 +1,10 @@
 """Text to speech: the base classes a provider subclasses (generated from the core's
 declarations), the expressive markup helpers over the core's per-provider tables
 (``_core.Markup``), and the adapters, whose engines are the core's (``_core.FallbackTts``,
-``_core.tts_adapter_stream``, ``_core.SentencePacer``)."""
+``_core.tts_adapter_stream``, ``_core._core_PacedSentences``)."""
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
-import time
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -28,7 +25,6 @@ from ._generated.tts import (
     TTSCapabilities,
     TTSError,
 )
-from .log import logger
 from .tokenize import SentenceStream, TokenData
 from .types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -258,22 +254,18 @@ class FallbackSynthesizeStream(SynthesizeStream):
         native = await self._tts._native.stream(
             conn_options=self._conn_options, expressive=self._expressive
         )
-        await _duplex(self, native, output_emitter, self.input, lambda text: text)
+        await _duplex(self, native, output_emitter, self.input)
 
 
 async def _duplex(
-    stream: SynthesizeStream,
-    native: Any,
-    output_emitter: AudioEmitter,
-    texts: Any,
-    lower: Any,
+    stream: SynthesizeStream, native: Any, output_emitter: AudioEmitter, texts: Any
 ) -> None:
     """Text from ``texts`` into a core ``TtsStream``, its audio into ``output_emitter``."""
 
     def feed(text: Any) -> None:
         if isinstance(text, SynthesizeStream.Flush):
             native.flush()
-        elif text := lower(text):
+        elif text:
             stream.mark_started()
             native.push_text(text)
 
@@ -335,6 +327,12 @@ class StreamAdapter(TTS):
 
 
 class StreamAdapterWrapper(SynthesizeStream):
+    """``StreamAdapter``'s stream: the core's sentence adapter (``_core.tts_adapter_stream``)
+    splits the text into sentences (by the adapter's ``sentence_tokenizer`` when it has one),
+    paces them when ``text_pacing`` is on, lowers the wrapped TTS's markup when expressive, and
+    synthesizes each one with the wrapped TTS, retried on its own within ``conn_options``.
+    Its time to first audio is measured from the first text pushed."""
+
     _tts: StreamAdapter
 
     def __init__(self, *, tts: StreamAdapter, conn_options: APIConnectOptions) -> None:
@@ -343,47 +341,27 @@ class StreamAdapterWrapper(SynthesizeStream):
         self._sentence_conn_options = conn_options
 
     async def _run(self, output_emitter: AudioEmitter) -> None:
-        markup = self._tts._wrapped_tts.markup
-        lowering = bool(markup._provider_key()) and self._expressive
-        # a marker must never be split across two sentences, so markup needs an xml-aware split
-        tokenizer = self._tts._sentence_tokenizer or tokenize.blingfire.SentenceTokenizer(
-            retain_format=True, xml_aware=lowering
-        )
-        sentences: SentenceStream = tokenizer.stream()
-        if self._tts._stream_pacer:
-            sentences = self._tts._stream_pacer.wrap(sentences, output_emitter)
         _initialize(output_emitter, self._tts, stream=True)
-        native = await _core.tts_adapter_stream(self._tts._wrapped_tts, self._sentence_conn_options)
-
-        async def _forward() -> None:
-            async for data in self.input:
-                if isinstance(data, self.Flush):
-                    sentences.flush()
-                else:
-                    sentences.push_text(markup.normalize(data) if lowering else data)
-            sentences.end_input()
-
-        def _lower(text: str) -> str:
-            text = text.strip()
-            return markup.convert(markup.normalize(text)).strip() if lowering and text else text
-
-        forward = asyncio.create_task(_forward())
-        try:
-            await _duplex(self, native, output_emitter, _tokens(sentences), _lower)
-        finally:
-            await utils.aio.cancel_and_wait(forward)
-            await sentences.aclose()
-
-
-async def _tokens(sentences: SentenceStream) -> Any:
-    async for ev in sentences:
-        yield ev.token
+        tokenizer, pacer = self._tts._sentence_tokenizer, self._tts._stream_pacer
+        native = await _core.tts_adapter_stream(
+            self._tts._wrapped_tts,
+            self._sentence_conn_options,
+            expressive=self._expressive,
+            sentences=tokenizer.stream() if tokenizer else None,
+            pacing=(pacer._min_remaining_audio, pacer._max_text_length) if pacer else None,
+        )
+        await _duplex(self, native, output_emitter, self.input)
 
 
 class SentenceStreamPacer:
     def __init__(self, *, min_remaining_audio: float = 5.0, max_text_length: int = 300) -> None:
         """Paces the text sent to a TTS: sentences are batched and sent when the audio left to
         play runs low, which wastes less on interruptions and gives the TTS more context.
+
+        The first sentence goes at once. Each later batch waits until the synthesized audio
+        stopped growing and at most ``min_remaining_audio`` seconds of it are left to play
+        (measured from the first audio pushed), then joins whole sentences with a space until
+        it reaches ``max_text_length`` characters.
 
         Args:
             min_remaining_audio: The audio left, in seconds, below which the next batch goes.
@@ -393,6 +371,9 @@ class SentenceStreamPacer:
         self._max_text_length = max_text_length
 
     def wrap(self, sent_stream: SentenceStream, audio_emitter: AudioEmitter) -> StreamPacerWrapper:
+        """``sent_stream``'s sentences, paced by the audio ``audio_emitter`` pushed. The core
+        reads ``sent_stream`` and runs the pacing (``_core._core_PacedSentences``); text pushed
+        to the wrapper goes to ``sent_stream``, and closing the wrapper closes it."""
         return StreamPacerWrapper(sent_stream, audio_emitter, pacer=self)
 
 
@@ -406,12 +387,9 @@ class StreamPacerWrapper(SentenceStream):
     ) -> None:
         super().__init__()
         self._sent_stream = sent_stream
-        self._audio_emitter = audio_emitter
-        self._pacer = _core.SentencePacer(pacer._min_remaining_audio, pacer._max_text_length)
-        self._wakeup = asyncio.Event()
-        self._recv_atask = asyncio.create_task(self._recv_task())
-        self._send_atask = asyncio.create_task(self._send_task())
-        self._send_atask.add_done_callback(lambda _: self._event_ch.close())
+        self._native = _core._core_PacedSentences(
+            sent_stream, audio_emitter, pacer._min_remaining_audio, pacer._max_text_length
+        )
 
     def push_text(self, text: str) -> None:
         self._sent_stream.push_text(text)
@@ -423,30 +401,10 @@ class StreamPacerWrapper(SentenceStream):
         self._sent_stream.end_input()
 
     async def aclose(self) -> None:
-        await self._sent_stream.aclose()
-        await utils.aio.cancel_and_wait(self._recv_atask, self._send_atask)
+        self._event_ch.close()
+        await self._native.aclose()
 
-    async def _recv_task(self) -> None:
-        try:
-            async for ev in self._sent_stream:
-                self._pacer.push(ev.token)
-                self._wakeup.set()
-        finally:
-            self._pacer.end()
-            self._wakeup.set()
-
-    async def _send_task(self) -> None:
-        while True:
-            self._wakeup.clear()
-            text, remaining, delay = self._pacer.poll(
-                time.time(), self._audio_emitter.pushed_duration()
-            )
-            if text:
-                self._event_ch.send_nowait(TokenData(token=text))
-                logger.debug(
-                    "sent text to tts", extra={"lk.pii.text": text, "remaining_audio": remaining}
-                )
-            if delay is None:
-                return
-            with contextlib.suppress(asyncio.TimeoutError):
-                await asyncio.wait_for(self._wakeup.wait(), delay)
+    async def __anext__(self) -> TokenData:
+        if self._event_ch.closed or (text := await self._native.next()) is None:
+            raise StopAsyncIteration
+        return TokenData(token=text)

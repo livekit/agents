@@ -244,6 +244,32 @@ async fn drain(mut source: TtsSource) -> Result<Vec<SynthesizedAudio>, ProviderE
 
 // ---------------------------------------------------------------- tests
 
+// Catches: a paced adapter sending every sentence at once, sending before the audio already
+// synthesized played out, or losing a held sentence.
+#[tokio::test(start_paused = true)]
+async fn a_paced_adapter_sends_the_first_sentence_then_batches_the_rest_as_audio_plays_out() {
+    let tts = FakeTts::new(2);
+    let adapter = StreamAdapter::new(
+        tts.clone(),
+        Arc::new(|_| Box::new(DotSplitter::default())),
+        lk_agents_core::tts::markup::text_processor_factory(),
+        Arc::new(lk_agents_net::clock::RealClock::new()),
+    )
+    // 0.02 s of audio per sentence; the next batch goes once at most 0.01 s of it remains.
+    .with_pacing(Some((0.01, 300)));
+    let (sink, source) =
+        adapter.stream(&lk_agents_abi::telemetry::Cx::NONE, false).await.unwrap().split();
+    sink.push("one. two. three.".into()).unwrap();
+    sink.end_input();
+    let started = tokio::time::Instant::now();
+    let out = drain(source).await.unwrap();
+    assert_eq!(tts.texts(), vec!["one.", "two.  three."]);
+    assert_eq!(out.len(), 4);
+    assert!(out.last().unwrap().is_final);
+    // The audio stopped growing (two checks 0.1 s apart) before the batch went.
+    assert!(started.elapsed() >= Duration::from_millis(200), "{:?}", started.elapsed());
+}
+
 // Catches: forwarding the inner `is_final` (or setting it per sentence): one TTS metric per
 // sentence and wrong TTFBs.
 #[tokio::test]

@@ -6,7 +6,6 @@
   "cx-none:rust/crates/lk-agents-inference/src/fallback/tts/mod.rs": 2,
   "cx-none:rust/crates/lk-agents-inference/src/stt/executor.rs": 1,
   "cx-none:rust/crates/lk-agents-inference/src/stt/stream_adapter.rs": 2,
-  "cx-none:rust/crates/lk-agents-inference/src/tts/sentence_adapter.rs": 1,
   "cx-none:rust/crates/lk-agents-inference/src/vad/mod.rs": 1,
   "cx-none:rust/crates/lk-agents-py/src/py_calls.rs": 1,
   "cx-none:rust/crates/lk-agents-runtime/src/a2a/mod.rs": 1,

@@ -1,7 +1,9 @@
 //! [`StreamAdapter`] (`tts/stream_adapter.py`): a non-streaming TTS as a duplex one. Frames pass
 //! through; `is_final` needs a one-frame hold, taken only once no further sentence can arrive.
-//! This owner also admits host-pre-split sentences and exposes observed-audio sentence pacing.
+//! Its sentences ([`Sentences`]) are split natively or by a host tokenizer's stream, and paced
+//! by the audio synthesized when asked.
 
+use super::pacing::{AdapterInput, HostSentences, Sentences, Split, trim_python_whitespace};
 use super::stream::TtsStream;
 use crate::telemetry;
 use lk_agents_abi::ApiConnectOptions;
@@ -10,8 +12,9 @@ use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::metrics::base::AgentMetrics;
 use lk_agents_abi::tts::stream_adapter::StreamAdapterFunctions;
 use lk_agents_abi::tts::stream_adapter::{
-    SentenceSplitter, SentenceTextProcessor, SplitterFactory, TextProcessorFactory,
+    SentenceTextProcessor, SplitterFactory, TextProcessorFactory,
 };
+use lk_agents_abi::tts::stream_pacer::HostSentenceStream;
 use lk_agents_abi::tts::types::{SynthesizedAudio, Tts, TtsCapabilities, TtsSink, TtsSource};
 use lk_agents_abi::types::identity::ProviderId;
 use lk_agents_abi::utils::clock::{Clock, Ts};
@@ -20,7 +23,6 @@ use lk_agents_core::metrics::provider::TtsMetricState;
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::strings::shortuuid;
 use parking_lot::Mutex;
-use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::mpsc;
@@ -36,6 +38,8 @@ pub struct StreamAdapter {
     /// Each sentence's retries (`ChunkedStream`'s own loop in the reference): a sentence failing
     /// after earlier ones were heard is synthesized again, not the whole reply lost.
     budget: lk_agents_abi::ApiConnectOptions,
+    /// `(min_remaining_audio, max_text_length)`: sentences released as the audio plays out.
+    pacing: Option<(f64, usize)>,
 }
 
 impl StreamAdapter {
@@ -50,12 +54,18 @@ impl StreamAdapter {
             max_retry: 0,
             ..lk_agents_abi::ApiConnectOptions::default()
         };
-        StreamAdapter { tts, splitter, text_processor, clock, budget }
+        StreamAdapter { tts, splitter, text_processor, clock, budget, pacing: None }
     }
 
     /// Each sentence retried within `budget`.
     pub fn with_budget(mut self, budget: lk_agents_abi::ApiConnectOptions) -> Self {
         self.budget = budget;
+        self
+    }
+
+    /// Its sentences paced by `(min_remaining_audio, max_text_length)`.
+    pub fn with_pacing(mut self, pacing: Option<(f64, usize)>) -> Self {
+        self.pacing = pacing;
         self
     }
 
@@ -156,52 +166,61 @@ impl Tts for StreamAdapter {
         Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError>,
     > {
         let cx = cx.clone();
-        Box::pin(async move {
-            self.budget
-                .validate()
-                .map_err(|error| ApiError::new(error.to_string()).with_retryable(false))?;
-            // Unbounded on purpose: text -> TTS may not drop, a lost token mangles speech.
-            let (tx, rx) = mpsc::unbounded_channel();
-            let lowering =
-                expressive.then(|| (self.text_processor)(&self.tts.markup_provider())).flatten();
-            let sink = AdapterSink { tx: Mutex::new(Some(tx)), closed: AtomicBool::new(false) };
-            let source = AdapterSource {
-                tts: self.tts.clone(),
-                cx,
-                budget: self.budget,
-                sentence: None,
-                sentence_audio: false,
-                report: None,
-                clock: Arc::clone(&self.clock),
-                rx,
-                splitter: (self.splitter)(lowering.is_some()),
-                lowering,
-                pending: VecDeque::new(),
-                current: None,
-                inner_closed: Closed::Clean,
-                input_done: false,
-                duration: 0.0,
-                pending_transcript: Vec::new(),
-                held: None,
-                ledger: Arc::new(Mutex::new(Ledger {
-                    clock: Arc::clone(&self.clock),
-                    call: None,
-                    calls: Vec::new(),
-                })),
-                request_id: shortuuid(""),
-                segment_id: shortuuid(""),
-            };
-            Ok(lk_agents_abi::DuplexStream::new(
-                Box::new(sink) as TtsSink,
-                Box::new(source) as TtsSource,
-            ))
-        })
+        Box::pin(async move { self.open(&cx, expressive, None) })
     }
 }
 
-enum AdapterInput {
-    Text(String),
-    Flush,
+impl StreamAdapter {
+    /// One stream, split natively, or by `sentences`, a host tokenizer's stream.
+    pub(crate) fn open(
+        &self,
+        cx: &telemetry::Cx,
+        expressive: bool,
+        sentences: Option<Arc<dyn HostSentenceStream>>,
+    ) -> Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError> {
+        self.budget
+            .validate()
+            .map_err(|error| ApiError::new(error.to_string()).with_retryable(false))?;
+        // Unbounded on purpose: text -> TTS may not drop, a lost token mangles speech.
+        let (tx, rx) = mpsc::unbounded_channel();
+        let processor =
+            || expressive.then(|| (self.text_processor)(&self.tts.markup_provider())).flatten();
+        let lowering = processor();
+        let split = match sentences {
+            Some(stream) => Split::Host(HostSentences::read(stream, cx)),
+            None => Split::Native((self.splitter)(lowering.is_some())),
+        };
+        let sentences =
+            Sentences::new(rx, split, processor(), self.pacing, Arc::clone(&self.clock));
+        let sink = AdapterSink { tx: Mutex::new(Some(tx)), closed: AtomicBool::new(false) };
+        let source = AdapterSource {
+            tts: self.tts.clone(),
+            cx: cx.clone(),
+            budget: self.budget,
+            sentence: None,
+            sentence_audio: false,
+            report: None,
+            clock: Arc::clone(&self.clock),
+            sentences,
+            lowering,
+            current: None,
+            inner_closed: Closed::Clean,
+            duration: 0.0,
+            pending_transcript: Vec::new(),
+            held: None,
+            ledger: Arc::new(Mutex::new(Ledger {
+                clock: Arc::clone(&self.clock),
+                call: None,
+                calls: Vec::new(),
+            })),
+            request_id: shortuuid(""),
+            segment_id: shortuuid(""),
+        };
+        Ok(lk_agents_abi::DuplexStream::new(
+            Box::new(sink) as TtsSink,
+            Box::new(source) as TtsSource,
+        ))
+    }
 }
 
 struct AdapterSink {
@@ -259,15 +278,12 @@ struct AdapterSource {
     /// Who hears of each retried sentence (the engine's error event and journal).
     report: Option<lk_agents_abi::utils::stream::RetryReport>,
     clock: Arc<dyn Clock>,
-    rx: mpsc::UnboundedReceiver<AdapterInput>,
-    splitter: Box<dyn SentenceSplitter>,
+    sentences: Sentences,
     /// The markup lowered before synthesis; `None` when expressive is off or there is no dialect.
     lowering: Option<Box<dyn SentenceTextProcessor>>,
-    pending: VecDeque<String>,
     current: Option<TtsSource>,
     /// Folded into `close`.
     inner_closed: Closed,
-    input_done: bool,
     /// The `start_time` stamped on each sentence's `TranscriptChunk`.
     duration: f64,
     /// Ride on the next frame sent (`tts/tts.py:1104`).
@@ -327,55 +343,6 @@ impl AdapterSource {
         }
     }
 
-    fn push_text(&mut self, text: &str) {
-        let sentences = match &self.lowering {
-            Some(markup) => self.splitter.push(&markup.normalize(text)),
-            None => self.splitter.push(text),
-        };
-        self.pending.extend(sentences);
-    }
-
-    /// Without awaiting. Stands in for the reference's concurrent `_forward_input`: otherwise the
-    /// adapter would learn input ended only after the last frame, and never mark it final.
-    fn drain_input(&mut self) {
-        loop {
-            match self.rx.try_recv() {
-                Ok(AdapterInput::Text(t)) => self.push_text(&t),
-                Ok(AdapterInput::Flush) => self.pending.extend(self.splitter.flush()),
-                Err(mpsc::error::TryRecvError::Empty) => return,
-                Err(mpsc::error::TryRecvError::Disconnected) => {
-                    if !self.input_done {
-                        self.input_done = true;
-                        self.pending.extend(self.splitter.flush());
-                    }
-                    return;
-                }
-            }
-        }
-    }
-
-    async fn next_sentence(&mut self) -> Option<String> {
-        loop {
-            self.drain_input();
-            if let Some(s) = self.pending.pop_front() {
-                return Some(s);
-            }
-            if self.input_done {
-                return None;
-            }
-            match self.rx.recv().await {
-                Some(AdapterInput::Text(t)) => self.push_text(&t),
-                Some(AdapterInput::Flush) => self.pending.extend(self.splitter.flush()),
-                None => {
-                    // Sender dropped. A sink dropped without `end_input` never flushed, so flush
-                    // again rather than lose the last half-sentence.
-                    self.input_done = true;
-                    self.pending.extend(self.splitter.flush());
-                }
-            }
-        }
-    }
-
     async fn raw_next(&mut self) -> Result<Option<SynthesizedAudio>, ProviderError> {
         loop {
             if self.current.is_some() {
@@ -384,7 +351,7 @@ impl AdapterSource {
                 }
                 continue;
             }
-            let Some(sentence) = self.next_sentence().await else { return Ok(None) };
+            let Some(sentence) = self.sentences.next(self.duration).await? else { return Ok(None) };
             // The transcript uses the unstripped token and precedes the empty check
             // (`stream_adapter.py:125`).
             self.pending_transcript.push(TranscriptChunk {
@@ -487,12 +454,12 @@ impl AdapterSource {
         Box::pin(self.open_sentence()).await
     }
 
-    /// The inner frame as this stream's: input drained first, then its duration counted, its ids
-    /// ours, and the pending transcript on it. A sentence boundary is not a segment boundary
-    /// (`tts/tts.py:1183`): the inner provider's ids and `is_final` are not ours.
+    /// The inner frame as this stream's: its duration counted, then input drained (and paced
+    /// against it), its ids ours, and the pending transcript on it. A sentence boundary is not a
+    /// segment boundary (`tts/tts.py:1183`): the inner provider's ids and `is_final` are not ours.
     fn stamp(&mut self, mut frame: SynthesizedAudio) -> SynthesizedAudio {
-        self.drain_input();
         self.duration += frame.frame.duration();
+        self.sentences.drain(self.duration);
         frame.is_final = false;
         frame.request_id.clone_from(&self.request_id);
         frame.segment_id.clone_from(&self.segment_id);
@@ -515,7 +482,7 @@ impl AdapterSource {
 
     /// A queued whitespace-only sentence is not audio. Once false it stays false.
     fn more_audio_coming(&self) -> bool {
-        !self.input_done || self.pending.iter().any(|s| !trim_python_whitespace(s).is_empty())
+        self.sentences.more_coming()
     }
 
     /// The held last frame, final. Alignment for trailing sentences that produced no audio rides
@@ -526,10 +493,6 @@ impl AdapterSource {
         last.timed_transcript.append(&mut self.pending_transcript);
         Some(last)
     }
-}
-
-fn trim_python_whitespace(text: &str) -> &str {
-    text.trim_matches(|c| lk_agents_abi::utils::strings::PYTHON_WHITESPACE.contains(&c))
 }
 
 impl StreamOutput<SynthesizedAudio> for AdapterSource {
@@ -562,7 +525,7 @@ impl StreamOutput<SynthesizedAudio> for AdapterSource {
                 Some(cur) => cur.close(deadline).await,
                 None => Closed::Clean,
             };
-            self.rx.close();
+            self.sentences.close(&self.cx, deadline).await;
             self.inner_closed.and(current)
         })
     }
@@ -589,135 +552,29 @@ impl StreamAdapterFunctions for AdapterStreams {
 
     async fn tts_adapter_stream(
         env: &ProcessEnv,
+        cx: telemetry::Cx,
         provider: Arc<dyn Tts>,
         conn_options: ApiConnectOptions,
+        expressive: bool,
+        sentences: Option<Arc<dyn HostSentenceStream>>,
+        pacing: Option<(f64, usize)>,
     ) -> Result<Self::Stream, ProviderError> {
         conn_options.validate().map_err(|error| {
             ProviderError::Local(ApiError { retryable: false, ..ApiError::new(error.to_string()) })
         })?;
         let provider = provider.with_conn_options(&conn_options).unwrap_or(provider);
+        let splitter: SplitterFactory =
+            Arc::new(|xml_aware| Box::new(super::sentences::sentence_splitter(None, xml_aware)));
         let (sink, source) = StreamAdapter::new(
             provider,
-            Arc::new(|_| Box::new(PreSplit)),
+            splitter,
             Arc::new(lk_agents_core::tts::markup::text_processor),
             env.clock.clone(),
         )
         .with_budget(conn_options)
-        // The host's adapter lowers the markup before each pre-split sentence.
-        .stream(&telemetry::Cx::NONE, false)
-        .await?
+        .with_pacing(pacing)
+        .open(&cx, expressive, sentences)?
         .split();
         Ok(TtsStream::new(Some(sink), source, env.clock.clone()))
-    }
-}
-
-/// Each push is already one sentence.
-struct PreSplit;
-
-impl SentenceSplitter for PreSplit {
-    fn push(&mut self, text: &str) -> Vec<String> {
-        vec![text.to_owned()]
-    }
-
-    fn flush(&mut self) -> Vec<String> {
-        Vec::new()
-    }
-}
-
-pub struct SentencePacer {
-    minimum_audio: f64,
-    maximum_text: usize,
-    sentences: VecDeque<String>,
-    audio_start: Option<f64>,
-    first: bool,
-    previous_audio: f64,
-    previous_check: f64,
-    generation_started: bool,
-    generation_stopped: bool,
-    ended: bool,
-}
-
-impl lk_agents_abi::tts::stream_pacer::SentencePacer for SentencePacer {
-    fn new(minimum_audio: f64, maximum_text: usize) -> Self {
-        Self {
-            minimum_audio,
-            maximum_text,
-            sentences: VecDeque::new(),
-            audio_start: None,
-            first: true,
-            previous_audio: 0.0,
-            previous_check: 0.0,
-            generation_started: false,
-            generation_stopped: false,
-            ended: false,
-        }
-    }
-    fn push(&mut self, text: String) {
-        self.sentences.push_back(text);
-    }
-    fn end(&mut self) {
-        self.ended = true;
-    }
-    fn poll(&mut self, now: f64, audio: f64) -> (Option<String>, f64, Option<f64>) {
-        if self.ended && self.sentences.is_empty() {
-            return (None, 0.0, None);
-        }
-        if audio > 0.0 && self.audio_start.is_none() {
-            self.audio_start = Some(now);
-        }
-        if now - self.previous_check >= 0.1 {
-            if self.previous_audio < audio {
-                self.generation_started = true;
-            } else if self.generation_started {
-                self.generation_stopped = true;
-            }
-            self.previous_audio = audio;
-            self.previous_check = now;
-        }
-        let remaining = self.audio_start.map_or(0.0, |start| start + audio - now);
-        let mut text = None;
-        if self.first || (self.generation_stopped && remaining <= self.minimum_audio) {
-            let mut batch = Vec::new();
-            let mut length = 0;
-            while let Some(sentence) = self.sentences.pop_front() {
-                length += sentence.chars().count();
-                batch.push(sentence);
-                if self.first || length >= self.maximum_text {
-                    break;
-                }
-            }
-            if !batch.is_empty() {
-                text = Some(batch.join(" "));
-                self.generation_started = false;
-                self.generation_stopped = false;
-                self.first = false;
-            }
-        }
-        let delay = if self.generation_started && !self.generation_stopped {
-            0.2
-        } else {
-            (remaining - self.minimum_audio).max(0.5)
-        };
-        (text, remaining, Some(delay))
-    }
-}
-
-#[cfg(test)]
-mod pacing_tests {
-    use lk_agents_abi::tts::stream_pacer::SentencePacer as _;
-
-    use super::*;
-    #[test]
-    fn first_sentence_is_immediate_then_wait_for_audio_and_batch() {
-        let mut p = SentencePacer::new(5.0, 4);
-        p.push("hello".into());
-        p.push("你好".into());
-        p.push("ab".into());
-        p.end();
-        assert_eq!(p.poll(100.0, 0.0).0.as_deref(), Some("hello"));
-        assert_eq!(p.poll(101.0, 10.0).0, None);
-        assert_eq!(p.poll(102.0, 10.0).0, None);
-        assert_eq!(p.poll(106.0, 10.0).0.as_deref(), Some("你好 ab"));
-        assert_eq!(p.poll(107.0, 10.0).2, None);
     }
 }
