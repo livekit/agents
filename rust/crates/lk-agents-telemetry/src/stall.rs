@@ -1,5 +1,5 @@
 //! Event-loop stalls (docs/internals/telemetry.md "Event-loop stalls"): each one's measurement,
-//! and its `event_loop_blocked` span within a rate limit.
+//! and its `event_loop_blocked` span (with the loop's stack) and warning line, within a rate limit.
 
 use lk_agents_abi::telemetry::decl::Seconds;
 use lk_agents_abi::telemetry::errors::{ErrorType, Failure};
@@ -19,7 +19,13 @@ const BLOCKED_SPANS_PER_MINUTE: usize = 30;
 pub struct Blocked(Mutex<(std::collections::VecDeque<u64>, u32)>);
 
 /// One stall: its measurement always, its span within the rate limit.
-pub fn event_loop_blocked(cx: &Cx, blocked: &Blocked, duration: f64, task: Option<String>) {
+pub fn event_loop_blocked(
+    cx: &Cx,
+    blocked: &Blocked,
+    duration: f64,
+    stack: Option<String>,
+    import: Option<String>,
+) {
     let severity =
         if duration >= BLOCKED_ERROR { BlockingSeverity::Error } else { BlockingSeverity::Warning };
     telemetry::measure(cx, &EventLoopBlockedDuration { severity }, duration);
@@ -36,18 +42,16 @@ pub fn event_loop_blocked(cx: &Cx, blocked: &Blocked, duration: f64, task: Optio
         sent.push_back(now);
         std::mem::take(suppressed)
     };
+    log_stall(duration, stack.as_deref(), import.as_deref());
     let start = now.saturating_sub((duration * 1e9) as u64);
     let span = telemetry::start_at(
         cx,
         EventLoopBlocked {
             duration: Seconds(duration),
             threshold: Seconds(BLOCKED_WARNING),
-            gc_time: None,
-            cpu_time: None,
             severity,
-            task,
-            stack: None,
-            import: None,
+            stack,
+            import,
             suppressed: (suppressed > 0).then_some(suppressed),
         },
         start,
@@ -58,4 +62,17 @@ pub fn event_loop_blocked(cx: &Cx, blocked: &Blocked, duration: f64, task: Optio
     } else {
         telemetry::end(span, ());
     }
+}
+
+/// The stall's warning line, with the stack's innermost frame: the code that blocked.
+fn log_stall(duration: f64, stack: Option<&str>, import: Option<&str>) {
+    let ms = (duration * 1e3).round();
+    let at = stack.and_then(|stack| stack.lines().next()).map(|frame| format!(" at {frame}"));
+    let importing = import.map(|file| format!(", importing {file}"));
+    log::warn!(
+        target: "livekit.agents",
+        "event loop blocked for {ms}ms{}{}",
+        at.unwrap_or_default(),
+        importing.unwrap_or_default()
+    );
 }

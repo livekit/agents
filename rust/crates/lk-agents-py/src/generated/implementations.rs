@@ -85,6 +85,7 @@ impl super::Implementations for Selected {
     type SttStreamAdapter = ::lk_agents_runtime::inference::stt::stream_adapter::StreamAdapter;
     type HostSpan = ::lk_agents_runtime::telemetry_export::host::HostSpan;
     type Telemetry = ::lk_agents_runtime::telemetry::Telemetry;
+    type LoopWatch = crate::py_stall::LoopWatch;
     type Tagger = ::lk_agents_runtime::telemetry_export::session_report::tagger::Tagger;
     type TextSessionRunner = ::lk_agents_runtime::text_session::Runner;
     type TokenizeFunctions = ::lk_agents_runtime::cores::SpeechTokenizer;

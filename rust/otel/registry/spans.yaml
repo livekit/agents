@@ -456,7 +456,7 @@
       "type": "span",
       "span_kind": "internal",
       "stability": "development",
-      "brief": "A synchronous stall of the event loop, under the blocked task's span. Error status at the `error` severity; at most 30 per minute.",
+      "brief": "A synchronous stall of the event loop (docs/internals/telemetry.md \"Event-loop stalls\"), under the job's first `agent_session`, else the span current when the loop's watch opened. Error status at the `error` severity; at most 30 per minute.",
       "attributes": [
         {
           "ref": "lk.blocking.duration",
@@ -467,20 +467,8 @@
           "requirement_level": "required"
         },
         {
-          "ref": "lk.blocking.gc_time",
-          "requirement_level": "recommended"
-        },
-        {
-          "ref": "lk.blocking.cpu_time",
-          "requirement_level": "recommended"
-        },
-        {
           "ref": "lk.blocking.severity",
           "requirement_level": "required"
-        },
-        {
-          "ref": "lk.blocking.task",
-          "requirement_level": "recommended"
         },
         {
           "ref": "lk.blocking.stack",

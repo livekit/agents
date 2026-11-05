@@ -1028,17 +1028,6 @@
           "brief": "Event-loop stalls detected in the session."
         },
         {
-          "id": "lk.blocking.cpu_time",
-          "type": "double",
-          "stability": "development",
-          "brief": "CPU seconds the stall consumed.",
-          "annotations": {
-            "livekit": {
-              "unit": "s"
-            }
-          }
-        },
-        {
           "id": "lk.blocking.duration",
           "type": "double",
           "stability": "development",
@@ -1050,21 +1039,10 @@
           }
         },
         {
-          "id": "lk.blocking.gc_time",
-          "type": "double",
-          "stability": "development",
-          "brief": "Seconds of the stall spent in garbage collection.",
-          "annotations": {
-            "livekit": {
-              "unit": "s"
-            }
-          }
-        },
-        {
           "id": "lk.blocking.import",
           "type": "string",
           "stability": "development",
-          "brief": "The module being imported during the stall."
+          "brief": "The file being imported during the stall."
         },
         {
           "id": "lk.blocking.max_duration",
@@ -1102,19 +1080,13 @@
           "id": "lk.blocking.stack",
           "type": "string",
           "stability": "development",
-          "brief": "The blocked task's stack."
+          "brief": "The loop thread's deepest frames during the stall, `function (file:line)`, one a line; absent where they cannot be read."
         },
         {
           "id": "lk.blocking.suppressed",
           "type": "int",
           "stability": "development",
           "brief": "Stalls not reported since the last report, over the rate limit."
-        },
-        {
-          "id": "lk.blocking.task",
-          "type": "string",
-          "stability": "development",
-          "brief": "The blocked task."
         },
         {
           "id": "lk.blocking.threshold",

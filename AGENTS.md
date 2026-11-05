@@ -339,6 +339,8 @@ STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
   marker are skipped. Split by responsibility when moving code.
 - Production functions nest at most 4 braces below their body (`nesting-baseline.json` holds
   the existing deeper ones and only shrinks).
+- Python-host machinery that needs no pyo3 lives beside the bindings in `lk-agents-py`: log
+  forwarding and the event-loop stall detector (py-spy over the process's own memory).
 - Backend-local `#[host(interface(...))]` unit structs live beside their adapter in `lk-agents-py`; this metadata
   cannot introduce public native exports or provider calls and resolves through the shared binding
   model. Generated output is never a declaration-discovery input.

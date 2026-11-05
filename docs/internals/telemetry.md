@@ -106,7 +106,7 @@ side is one module, `livekit/agents/telemetry.py`, of about 400 lines:
 | Provider | `_Span`, `_Tracer` and `_TracerProvider` implementing `opentelemetry-api` over the generated `_core.TelemetrySpan`, installed as the global provider when the application set none |
 | Bridge | One `SpanProcessor` for an application-installed SDK provider; imported only when `opentelemetry-sdk` is present |
 | Public functions | `configure`, `set_capture_content` and `diagnostics`, forwarding to `_core` |
-| Host hooks | `_install` and `_shutdown` (the process exporter; the global provider is adopted once per process), `_activate` and `_current` (HostInvoker's span activation in the copied context a host call runs in, and capture), `_LoopMonitor` (event loop stalls) |
+| Host hooks | `_install` and `_shutdown` (the process exporter; the global provider is adopted once per process), `_activate` and `_current` (HostInvoker's span activation in the copied context a host call runs in, and capture), `_LoopMonitor` (the event loop's heartbeat; see [Event-loop stalls](#event-loop-stalls)) |
 | Framework spans | `room_connect` and `wait_for_participant` around `JobContext`'s room calls, `rpc_call` and `rpc_handler` from an `rtc.RpcInterceptor`, named with the generated `semconv` constants |
 
 `opentelemetry-api` is the only OpenTelemetry dependency. Spans the framework
@@ -129,6 +129,35 @@ Everything else left Python:
 
 About 2,800 lines of Python telemetry, plus the telemetry parts of `job.py`,
 `ipc/child.py` and the voice bindings, became one module of about 400 lines.
+
+### Event-loop stalls
+
+A stalled asyncio loop is code that blocked it: every stall names that code. One detector, in
+Rust; Python only proves its loop is alive.
+
+- **Heartbeat.** `_LoopMonitor`'s 20 ms loop timer calls the job's watch `beat()`: one atomic
+  store of Rust's monotonic clock, no lock. The watch opens in the job process (never the
+  forkserver) with the loop's OS thread id, the span current at that point and the job, and
+  closes with the job, or unregisters when dropped.
+- **Detector.** One OS thread per process (not Tokio, so a busy runtime cannot delay it) wakes
+  every 20 ms and loads each watched loop's last beat. A beat 100 ms old is a stall. When its
+  own wake-up was as late, the whole process was paused (SIGSTOP, a throttled container, a
+  suspended machine), not the loop: it resets instead.
+- **Stack.** At detection, then every 100 ms (at most 5 samples), the detector reads the loop
+  thread's Python stack with py-spy over the process's own memory: no GIL, no `SYS_PTRACE`, and
+  a bad read is an error, never a crash. Only sampling takes a lock. The sampler is built at
+  the first stall; py-spy is compiled where it supports the target (`lk-agents-py`).
+- **Record.** The stall is recorded once, when the beat resumes, the watch closes, or the stall
+  reaches 30 s (a deadlocked loop is reported while still stuck): the
+  `lk.agents.event_loop.blocked_duration` histogram, the session's `lk.blocking.*` counts and a
+  rate-limited `event_loop_blocked` span whose `lk.blocking.stack` is the most frequent sample's
+  20 deepest frames and `lk.blocking.import` the file being imported, if any, and, within the same
+  limit, a `livekit.agents` warning naming the innermost frame (`event loop blocked for 395ms at
+  busy (app.py:42)`).
+- **Never fatal.** When py-spy cannot start (permission, seccomp, an unknown CPython layout)
+  one warning is logged and stacks are off for the process; a failed sample is skipped and a
+  panic in it is caught. Stalls are always recorded with their duration; nothing on the loop
+  waits for the detector.
 
 ### Metrics
 

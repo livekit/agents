@@ -358,8 +358,14 @@ const NODE_REQUEST_KEYS: [(&str, &str); 4] = [
     ("tts_node", "gen_ai.provider.name"),
 ];
 /// 1.8.10 keys replaced on purpose: `lk.shutdown.cause` names what ended the job, the
-/// application among them.
-const RETIRED_KEYS: [(&str, &str); 1] = [("job_shutdown", "lk.shutdown.user_initiated")];
+/// application among them; a stall's GC time, CPU time and asyncio task, which nothing measures
+/// (its `lk.blocking.stack` names the code instead).
+const RETIRED_KEYS: [(&str, &str); 4] = [
+    ("job_shutdown", "lk.shutdown.user_initiated"),
+    ("event_loop_blocked", "lk.blocking.gc_time"),
+    ("event_loop_blocked", "lk.blocking.cpu_time"),
+    ("event_loop_blocked", "lk.blocking.task"),
+];
 /// 1.8.10 metrics the GenAI registry removed (upstream #374): the
 /// `gen_ai.client.inference.usage.{input,output}_tokens` counters replace them.
 const RETIRED_METRICS: [&str; 1] = ["gen_ai.client.token.usage"];

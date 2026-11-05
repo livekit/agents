@@ -5,6 +5,7 @@ the framework's spans around Python-only code."""
 from __future__ import annotations
 
 import asyncio
+import threading
 import traceback
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
@@ -78,36 +79,32 @@ def _install() -> None:
 
 
 class _LoopMonitor:
-    """Measures the running loop's stalls: a tick due every ``_TICK`` seconds that runs late by
-    ``_THRESHOLD`` or more is a stall the core records (its measurement, and a rate-limited
-    ``event_loop_blocked`` span under the span current at ``start()``)."""
+    """Beats the running loop's stall watch every 20 ms; the core's detector records a beat
+    100 ms old as a stall, with the loop's stack (docs/internals/telemetry.md "Event-loop
+    stalls"). The watch's stalls go under the span current at ``start()``."""
 
     _TICK = 0.02
-    _THRESHOLD = 0.1
 
     def __init__(self) -> None:
         self._handle: asyncio.TimerHandle | None = None
-        self._parent: _SpanContext | None = None
-        self._job: str | None = None
+        self._watch: _core._core_LoopWatch | None = None
 
     def start(self, job: str | None) -> None:
-        self._parent = _current()
-        self._job = job
-        self._arm(asyncio.get_running_loop())
+        self._watch = _core._core_LoopWatch(threading.get_native_id(), parent=_current(), job=job)
+        self._tick(asyncio.get_running_loop())
 
     def stop(self) -> None:
         if self._handle is not None:
             self._handle.cancel()
             self._handle = None
+        if self._watch is not None:
+            self._watch.close()
+            self._watch = None
 
-    def _arm(self, loop: asyncio.AbstractEventLoop) -> None:
-        due = loop.time() + self._TICK
-        self._handle = loop.call_at(due, self._tick, loop, due)
-
-    def _tick(self, loop: asyncio.AbstractEventLoop, due: float) -> None:
-        if (late := loop.time() - due) >= self._THRESHOLD:
-            _core._core_event_loop_blocked(late, parent=self._parent, job=self._job)
-        self._arm(loop)
+    def _tick(self, loop: asyncio.AbstractEventLoop) -> None:
+        if self._watch is not None:
+            self._watch.beat()
+        self._handle = loop.call_later(self._TICK, self._tick, loop)
 
 
 def _context(span: _SpanContext) -> otel_context.Context:

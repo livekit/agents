@@ -206,13 +206,6 @@ impl TelemetrySpan {
 type TelemetryImpl =
     <crate::generated::implementations::Selected as super::Implementations>::Telemetry;
 
-fn _extract_telemetry_core_event_loop_blocked_duration(
-    obj: &Bound<'_, PyAny>,
-) -> PyResult<TelemetryCoreEventLoopBlockedDurationInput> {
-    crate::py_values::number_from_py::<f64>(obj.as_any(), "duration")
-}
-type TelemetryCoreEventLoopBlockedDurationInput = f64;
-
 /// Starts the process's exporter, stamping `sdk_version`, with the application endpoint from
 /// the `OTEL_EXPORTER_OTLP_*` environment. Later calls do nothing.
 #[pyfunction]
@@ -294,28 +287,65 @@ pub fn _core_telemetry_shutdown<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyA
     })
 }
 
-/// A stall of the host's event loop, `duration` seconds long, reported once it ended: its
-/// measurement, and an `event_loop_blocked` span under `parent`, at most 30 a minute. `task`:
-/// the task that was running.
-#[pyfunction]
-#[pyo3(signature = (duration, *, parent = None, job = None, task = None))]
-pub fn _core_event_loop_blocked(
-    py: Python<'_>,
-    #[pyo3(from_py_with = _extract_telemetry_core_event_loop_blocked_duration)]
-    duration: TelemetryCoreEventLoopBlockedDurationInput,
-    parent: Option<Bound<'_, PyAny>>,
-    job: ::std::option::Option<::std::string::String>,
-    task: ::std::option::Option<::std::string::String>,
-) -> PyResult<()> {
-    let parent = parent
-        .map(|v| crate::generated::records::telemetry::span_context_from_py(v.as_any()))
-        .transpose()?;
-    py.detach(|| {
-        <TelemetryImpl as ::lk_agents_abi::telemetry::host::Telemetry>::_core_event_loop_blocked(
-            duration, parent, job, task,
-        )
-    });
-    Ok(())
+// Declared in rust/crates/lk-agents-abi/src/telemetry/host.rs.
+type CoreLoopWatchImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::LoopWatch;
+
+fn _extract_loop_watch_new_os_thread(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<LoopWatchNewOsThreadInput> {
+    crate::py_values::number_from_py::<u64>(obj.as_any(), "os_thread")
+}
+type LoopWatchNewOsThreadInput = u64;
+
+/// One asyncio loop's stall watch (docs/internals/telemetry.md "Event-loop stalls"): the loop's
+/// own timer beats it every 20 ms; the process's detector records a beat 100 ms old as a stall,
+/// with the loop thread's stack where it can be read. Beats take no lock.
+#[pyclass(frozen, name = "_core_LoopWatch", module = "livekit.agents._core")]
+pub struct CoreLoopWatch(pub(crate) ::std::sync::Arc<CoreLoopWatchImpl>);
+
+#[pymethods]
+impl CoreLoopWatch {
+    /// Watches the loop running on OS thread `os_thread` (`threading.get_native_id()`); its
+    /// stalls go under `parent` and count on `job`'s sessions.
+    #[new]
+    #[pyo3(signature = (os_thread, *, parent = None, job = None))]
+    fn new(
+        py: Python<'_>,
+        #[pyo3(from_py_with = _extract_loop_watch_new_os_thread)]
+        os_thread: LoopWatchNewOsThreadInput,
+        parent: Option<Bound<'_, PyAny>>,
+        job: ::std::option::Option<::std::string::String>,
+    ) -> PyResult<CoreLoopWatch> {
+        crate::py_calls::check_pid()?;
+        let parent = parent
+            .map(|v| crate::generated::records::telemetry::span_context_from_py(v.as_any()))
+            .transpose()?;
+        let out = py.detach(|| {
+            <CoreLoopWatchImpl as ::lk_agents_abi::telemetry::host::LoopWatch>::new(
+                os_thread, parent, job,
+            )
+        });
+        ::pyo3::PyResult::Ok(CoreLoopWatch(::std::sync::Arc::new(out)))
+    }
+
+    /// The loop ran.
+    fn beat(&self, py: Python<'_>) -> PyResult<()> {
+        crate::py_calls::check_pid()?;
+        py.detach(|| {
+            <CoreLoopWatchImpl as ::lk_agents_abi::telemetry::host::LoopWatch>::beat(&self.0)
+        });
+        Ok(())
+    }
+
+    /// The loop is done; a stall in progress is recorded.
+    fn close(&self, py: Python<'_>) -> PyResult<()> {
+        crate::py_calls::check_pid()?;
+        py.detach(|| {
+            <CoreLoopWatchImpl as ::lk_agents_abi::telemetry::host::LoopWatch>::close(&self.0)
+        });
+        Ok(())
+    }
 }
 
 // Declared in rust/crates/lk-agents-abi/src/telemetry/report/mod.rs.

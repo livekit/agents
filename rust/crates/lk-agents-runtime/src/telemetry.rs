@@ -261,30 +261,43 @@ impl lk_agents_abi::telemetry::host::Telemetry for Telemetry {
     async fn _core_telemetry_shutdown() {
         shutdown().await;
     }
+}
 
-    fn _core_event_loop_blocked(
-        duration: f64,
-        parent: Option<SpanContext>,
-        job: Option<String>,
-        task: Option<String>,
-    ) {
-        let parent = parent.and_then(SpanContext::valid);
-        let job = job.map(JobKey);
-        // The job's sessions count it; its span goes under the first one's `agent_session`.
-        let sessions: Vec<_> = (PROCESS.sessions.lock().values())
-            .filter(|s| s.job == job)
-            .map(|s| (s.session, s.notify.clone()))
-            .collect();
-        let cx = PROCESS.tracer.root().continuing(parent).with_job(job);
-        let cx = match sessions.first() {
-            Some((session, _)) => cx.under::<AgentSession>(*session),
-            None => cx,
-        };
-        for (_, notify) in &sessions {
-            notify(Duration::from_secs_f64(duration.max(0.0)));
-        }
-        event_loop_blocked(&cx, &PROCESS.blocked, duration, task);
+/// One stall of a watched host event loop (`lk-agents-py`'s detector), recorded once.
+pub struct LoopStall {
+    pub duration: Duration,
+    /// The span current when the loop's watch opened.
+    pub parent: Option<SpanContext>,
+    pub job: Option<String>,
+    /// The loop thread's deepest frames, one a line, where they could be read.
+    pub stack: Option<String>,
+    /// The file being imported during the stall.
+    pub import: Option<String>,
+}
+
+/// Records `stall`: the job's sessions count it, and its span goes under the first one's
+/// `agent_session`, else under the watch's parent.
+pub fn loop_stalled(stall: LoopStall) {
+    let job = stall.job.map(JobKey);
+    let sessions: Vec<_> = (PROCESS.sessions.lock().values())
+        .filter(|s| s.job == job)
+        .map(|s| (s.session, s.notify.clone()))
+        .collect();
+    let cx = PROCESS.tracer.root().continuing(stall.parent).with_job(job);
+    let cx = match sessions.first() {
+        Some((session, _)) => cx.under::<AgentSession>(*session),
+        None => cx,
+    };
+    for (_, notify) in &sessions {
+        notify(stall.duration);
     }
+    event_loop_blocked(
+        &cx,
+        &PROCESS.blocked,
+        stall.duration.as_secs_f64(),
+        stall.stack,
+        stall.import,
+    );
 }
 
 /// One tool call's span, opened under `cx` (its `agent_turn` or `agent_run`).

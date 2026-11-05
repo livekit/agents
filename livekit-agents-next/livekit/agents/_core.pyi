@@ -174,7 +174,7 @@ from ._generated._core_telemetry import (
     TELEMETRY_MAX_DEPTH as TELEMETRY_MAX_DEPTH,
     Tagger as Tagger,
     TelemetrySpan as TelemetrySpan,
-    _core_event_loop_blocked as _core_event_loop_blocked,
+    _core_LoopWatch as _core_LoopWatch,
     _core_set_capture_content as _core_set_capture_content,
     _core_telemetry_configure as _core_telemetry_configure,
     _core_telemetry_conflict as _core_telemetry_conflict,

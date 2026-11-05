@@ -14,6 +14,7 @@ pub mod py_calls;
 pub mod py_errors;
 pub mod py_logging;
 pub mod py_objects;
+pub mod py_stall;
 pub mod py_streams;
 pub mod py_values;
 

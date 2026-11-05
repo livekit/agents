@@ -278,8 +278,9 @@ pub struct ResumeAgentActivity {
     pub agent_label: String,
 }
 
-/// A synchronous stall of the event loop, under the blocked task's span. Error status at the
-/// `error` severity; at most 30 per minute.
+/// A synchronous stall of the event loop (docs/internals/telemetry.md "Event-loop stalls"), under
+/// the job's first `agent_session`, else the span current when the loop's watch opened. Error
+/// status at the `error` severity; at most 30 per minute.
 #[span(name = "event_loop_blocked", parent = Current)]
 #[derive(Attrs)]
 pub struct EventLoopBlocked {
@@ -288,22 +289,14 @@ pub struct EventLoopBlocked {
     /// The stall duration that triggers a report, in seconds.
     #[attr("lk.blocking.threshold")]
     pub threshold: Seconds,
-    /// Seconds of the stall spent in garbage collection.
-    #[attr("lk.blocking.gc_time")]
-    pub gc_time: Option<Seconds>,
-    /// CPU seconds the stall consumed.
-    #[attr("lk.blocking.cpu_time")]
-    pub cpu_time: Option<Seconds>,
     /// How severe the stall was.
     #[attr("lk.blocking.severity")]
     pub severity: BlockingSeverity,
-    /// The blocked task.
-    #[attr("lk.blocking.task")]
-    pub task: Option<String>,
-    /// The blocked task's stack.
+    /// The loop thread's deepest frames during the stall, `function (file:line)`, one a line;
+    /// absent where they cannot be read.
     #[attr("lk.blocking.stack")]
     pub stack: Option<String>,
-    /// The module being imported during the stall.
+    /// The file being imported during the stall.
     #[attr("lk.blocking.import")]
     pub import: Option<String>,
     /// Stalls not reported since the last report, over the rate limit.

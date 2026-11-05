@@ -129,6 +129,7 @@ pub trait Implementations: 'static {
     type SttStreamAdapter: ::lk_agents_abi::stt::stream_adapter::SttStreamAdapter;
     type HostSpan: ::lk_agents_abi::telemetry::host::HostSpan;
     type Telemetry: ::lk_agents_abi::telemetry::host::Telemetry;
+    type LoopWatch: ::lk_agents_abi::telemetry::host::LoopWatch;
     type Tagger: ::lk_agents_abi::telemetry::report::Tagger;
     type TextSessionRunner: ::lk_agents_abi::text_session::TextSessionRunner<
             Stream = Self::RunStream,
@@ -380,7 +381,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(telemetry::_core_telemetry_conflict, m)?)?;
     m.add_function(wrap_pyfunction!(telemetry::_core_set_capture_content, m)?)?;
     m.add_function(wrap_pyfunction!(telemetry::_core_telemetry_shutdown, m)?)?;
-    m.add_function(wrap_pyfunction!(telemetry::_core_event_loop_blocked, m)?)?;
+    m.add_class::<telemetry::CoreLoopWatch>()?;
     m.add_class::<telemetry::Tagger>()?;
     m.add_class::<text_session::TextSessionRunner>()?;
     m.add_class::<text_session::TextSessionUpdates>()?;

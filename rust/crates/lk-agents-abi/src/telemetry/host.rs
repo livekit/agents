@@ -92,17 +92,29 @@ pub trait Telemetry {
     /// The process-exit flush: every destination's queue, bounded.
     #[host(function)]
     async fn _core_telemetry_shutdown();
+}
 
-    /// A stall of the host's event loop, `duration` seconds long, reported once it ended: its
-    /// measurement, and an `event_loop_blocked` span under `parent`, at most 30 a minute. `task`:
-    /// the task that was running.
-    #[host(function)]
-    fn _core_event_loop_blocked(
-        duration: f64,
+/// One asyncio loop's stall watch (docs/internals/telemetry.md "Event-loop stalls"): the loop's
+/// own timer beats it every 20 ms; the process's detector records a beat 100 ms old as a stall,
+/// with the loop thread's stack where it can be read. Beats take no lock.
+#[crate::host(class(name = "_core_LoopWatch"))]
+pub trait LoopWatch: Send + Sync + Sized + 'static {
+    /// Watches the loop running on OS thread `os_thread` (`threading.get_native_id()`); its
+    /// stalls go under `parent` and count on `job`'s sessions.
+    #[host(new)]
+    fn new(
+        os_thread: u64,
         #[host(kw, default = None)] parent: Option<SpanContext>,
         #[host(kw, default = None)] job: Option<String>,
-        #[host(kw, default = None)] task: Option<String>,
-    );
+    ) -> Self;
+
+    /// The loop ran.
+    #[host(call)]
+    fn beat(&self);
+
+    /// The loop is done; a stall in progress is recorded.
+    #[host(call)]
+    fn close(&self);
 }
 
 /// OpenTelemetry's `StatusCode`.

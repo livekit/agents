@@ -73,17 +73,25 @@ def _core_set_capture_content(enabled: bool) -> None:
 async def _core_telemetry_shutdown() -> None:
     """The process-exit flush: every destination's queue, bounded."""
 
-def _core_event_loop_blocked(
-    duration: float,
-    *,
-    parent: SpanContext | None = None,
-    job: str | None = None,
-    task: str | None = None,
-) -> None:
-    """A stall of the host's event loop, `duration` seconds long, reported once it ended: its
-    measurement, and an `event_loop_blocked` span under `parent`, at most 30 a minute. `task`:
-    the task that was running.
+class _core_LoopWatch:
+    """One asyncio loop's stall watch (docs/internals/telemetry.md "Event-loop stalls"): the loop's
+    own timer beats it every 20 ms; the process's detector records a beat 100 ms old as a stall,
+    with the loop thread's stack where it can be read. Beats take no lock.
     """
+    def __new__(
+        cls,
+        os_thread: int,
+        *,
+        parent: SpanContext | None = None,
+        job: str | None = None,
+    ) -> Self:
+        """Watches the loop running on OS thread `os_thread` (`threading.get_native_id()`); its
+        stalls go under `parent` and count on `job`'s sessions.
+        """
+    def beat(self) -> None:
+        """The loop ran."""
+    def close(self) -> None:
+        """The loop is done; a stall in progress is recorded."""
 
 class Tagger:
     """Tag sessions with metadata for observability.

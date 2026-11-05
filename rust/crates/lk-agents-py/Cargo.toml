@@ -45,6 +45,10 @@ base64.workspace = true
 # A host buffer's bytes shared, not copied (`py_values`).
 bytes = "1"
 
+
+# Event-loop stall stacks (py_stall.rs): reads this process's own Python stacks without the GIL.
+[target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))'.dependencies]
+py-spy = { version = "0.4.3", default-features = false }
 [build-dependencies]
 pyo3-build-config = "0.29"
 

@@ -169,14 +169,15 @@ fn event_loop_stalls_are_rate_limited() {
     let cx = tracer.root().continuing(Some(ENTRYPOINT));
     let blocked = crate::telemetry::Blocked::default();
     for _ in 0..32 {
-        crate::telemetry::event_loop_blocked(&cx, &blocked, 0.2, None);
+        crate::telemetry::event_loop_blocked(&cx, &blocked, 0.2, None, None);
     }
-    crate::telemetry::event_loop_blocked(&cx, &blocked, 0.6, None);
+    crate::telemetry::event_loop_blocked(&cx, &blocked, 0.6, Some("busy (app.py:7)".into()), None);
     let spans = records.spans();
     assert_eq!(spans.len(), 30, "30 a minute");
     assert!(spans.iter().all(|s| s.parent == Some(4)));
     let durations = records.measurements("lk.agents.event_loop.blocked_duration");
     assert_eq!(durations.len(), 33);
+    // the 33rd is over the rate limit: its stack rides no span
     assert_eq!(labels(&durations[32]), [("severity".to_owned(), Value::String("error".into()))]);
 }
 
@@ -293,7 +294,6 @@ async fn startup_runs_under_the_spans_start_reserved() {
 // Catches: a stall of the job's loop missing its sessions, or reaching another job's.
 #[test]
 fn a_stall_reaches_the_sessions_of_its_job() {
-    use lk_agents_abi::telemetry::host::Telemetry as _;
     let heard: Arc<Mutex<Vec<(&str, std::time::Duration)>>> = Arc::default();
     let watch = |name: &'static str, job: &str| {
         let heard = heard.clone();
@@ -304,20 +304,17 @@ fn a_stall_reaches_the_sessions_of_its_job() {
             Arc::new(move |d| heard.lock().push((name, d))),
         )
     };
+    let stall = || crate::telemetry::LoopStall {
+        duration: std::time::Duration::from_millis(250),
+        parent: None,
+        job: Some("AJ_stall".into()),
+        stack: None,
+        import: None,
+    };
     let (ours, theirs) = (watch("ours", "AJ_stall"), watch("theirs", "AJ_other"));
-    crate::telemetry::Telemetry::_core_event_loop_blocked(
-        0.25,
-        None,
-        Some("AJ_stall".into()),
-        None,
-    );
+    crate::telemetry::loop_stalled(stall());
     drop(ours);
-    crate::telemetry::Telemetry::_core_event_loop_blocked(
-        0.25,
-        None,
-        Some("AJ_stall".into()),
-        None,
-    );
+    crate::telemetry::loop_stalled(stall());
     drop(theirs);
     assert_eq!(*heard.lock(), [("ours", std::time::Duration::from_millis(250))]);
 }
