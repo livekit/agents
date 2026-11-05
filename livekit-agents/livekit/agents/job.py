@@ -903,6 +903,8 @@ class JobContext:
 
     def init_recording(self, options: RecordingOptions) -> None:
         redaction_enabled = self.job.enable_redaction or options.get("redaction", False)
+        if self._hosted_output is not None and not self._recording_initialized:
+            self._hosted_output.decide(logs=options.get("logs", True), redaction=redaction_enabled)
         if redaction_enabled and options.get("audio", True) and not options.get("transcript", True):
             raise ValueError("audio upload requires transcript upload when redaction is enabled")
 
@@ -912,8 +914,6 @@ class JobContext:
 
         self._recording_initialized = True
         self._redaction_enabled = redaction_enabled
-        if self._hosted_output is not None:
-            self._hosted_output.decide(logs=options.get("logs", True), redaction=redaction_enabled)
 
         needs_cloud = (
             options.get("traces", True)

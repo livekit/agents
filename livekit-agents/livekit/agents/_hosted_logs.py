@@ -5,11 +5,13 @@ from __future__ import annotations
 import contextlib
 import contextvars
 import enum
+import functools
 import json
 import logging
 import os
 import sys
 import threading
+from collections.abc import Callable
 from typing import Any, Protocol, TextIO
 
 from .version import __version__
@@ -18,6 +20,9 @@ HOSTED_LOGS_ENV = "LIVEKIT_HOSTED_LOGS"
 HOSTED_LOGS_ENABLED = "true"
 HOSTED_LOGS_HANDOFF_FILE_ENV = "LIVEKIT_HOSTED_LOGS_HANDOFF_FILE"
 HOSTED_LOGS_JOBS_DIR_ENV = "LIVEKIT_HOSTED_LOGS_JOBS_DIR"
+_HANDED_OFF_ENV = "LIVEKIT_HOSTED_LOGS_HANDED_OFF"
+
+_REDACTED_JOB_FIELDS = frozenset({"room"})
 
 _handed_off = False
 
@@ -52,6 +57,9 @@ def hand_off() -> None:
     jobs_dir = _jobs_dir()
     if path is None or jobs_dir is None:
         return
+    if os.environ.get(_HANDED_OFF_ENV) == "1":
+        _handed_off = True
+        return
     tmp = f"{path}.{os.getpid()}.tmp"
     try:
         os.makedirs(jobs_dir, exist_ok=True)
@@ -62,6 +70,7 @@ def hand_off() -> None:
         with contextlib.suppress(OSError):
             os.remove(tmp)
         return
+    os.environ[_HANDED_OFF_ENV] = "1"
     _handed_off = True
 
 
@@ -75,14 +84,11 @@ class _LogsDecision(str, enum.Enum):
 
     PRIVATE = "private"
     EXPORT = "export"
-    REDACT = "redact"
 
 
-def _decision(*, logs: bool, redaction: bool) -> _LogsDecision:
-    """``PRIVATE`` (not collected) when logs are off, else ``REDACT`` or ``EXPORT``."""
-    if not logs:
-        return _LogsDecision.PRIVATE
-    return _LogsDecision.REDACT if redaction else _LogsDecision.EXPORT
+def _decision(*, logs: bool) -> _LogsDecision:
+    """``EXPORT`` when the session allows logs, else ``PRIVATE`` (not collected)."""
+    return _LogsDecision.EXPORT if logs else _LogsDecision.PRIVATE
 
 
 class JobOutput(Protocol):
@@ -110,22 +116,53 @@ def _dup_onto_std(path: str) -> bool:
     return True
 
 
+@functools.cache
+def _telemetry() -> tuple[Callable[[str], bool], str, str]:
+    """The telemetry helpers, imported once on first use to avoid an import cycle."""
+    from .telemetry.pii import is_pii_attribute
+    from .telemetry.utils import REDACTED_EXCEPTION_MESSAGE
+    from .types import ATTRIBUTE_REDACTION_ENABLED
+
+    return is_pii_attribute, REDACTED_EXCEPTION_MESSAGE, ATTRIBUTE_REDACTION_ENABLED
+
+
+def _redact(record: logging.LogRecord) -> logging.LogRecord:
+    """A copy without PII fields, the room name or exception details, marked as redacted."""
+    is_pii_attribute, redacted_message, redaction_attribute = _telemetry()
+    copy = logging.makeLogRecord(
+        {
+            k: v
+            for k, v in record.__dict__.items()
+            if not is_pii_attribute(k) and k not in _REDACTED_JOB_FIELDS
+        }
+    )
+    if record.exc_info and record.exc_info[0] is not None:
+        copy.exc_info = None
+        copy.exc_text = f"{record.exc_info[0].__name__}: {redacted_message}"
+    elif record.exc_text:
+        copy.exc_text = redacted_message
+    copy.__dict__[redaction_attribute] = True
+    return copy
+
+
 class _ProcessOutput:
     """The log file of a job process, which writes to it through fd 1 and fd 2."""
 
-    def __init__(self, path: str, job_id: str, fields: dict[str, Any]) -> None:
+    def __init__(self, path: str, job_id: str, fields: dict[str, Any], *, redaction: bool) -> None:
         self._path = path
         self._job_id = job_id
         self._decided = False
+        self.redaction = redaction
         self.fields = fields
+        self.on_decided: Callable[[], None] | None = None
 
     def decide(self, *, logs: bool, redaction: bool) -> None:
         if self._decided:
             return
         self._decided = True
+        self.redaction = self.redaction or redaction
         new_path = os.path.join(
-            os.path.dirname(self._path),
-            f"job-{self._job_id}.{_decision(logs=logs, redaction=redaction).value}.log",
+            os.path.dirname(self._path), f"job-{self._job_id}.{_decision(logs=logs).value}.log"
         )
         try:
             os.rename(self._path, new_path)
@@ -133,34 +170,40 @@ class _ProcessOutput:
             if not _dup_onto_std(new_path):
                 _dup_onto_std(os.devnull)
         self._path = new_path
+        if self.on_decided is not None:
+            self.on_decided()
 
     def close(self) -> None:
         pass
 
 
-def _redacted(record: logging.LogRecord) -> logging.LogRecord:
-    """A copy without PII fields or exception details when redaction is on, else ``record``."""
-    from .telemetry import pii
-    from .telemetry.utils import REDACTED_EXCEPTION_MESSAGE, redaction_enabled
-
-    if not redaction_enabled():
-        return record
-    copy = logging.makeLogRecord(
-        {k: v for k, v in record.__dict__.items() if not pii.is_pii_attribute(k)}
-    )
-    if record.exc_info and record.exc_info[0] is not None:
-        copy.exc_info = None
-        copy.exc_text = f"{record.exc_info[0].__name__}: {REDACTED_EXCEPTION_MESSAGE}"
-    elif record.exc_text:
-        copy.exc_text = REDACTED_EXCEPTION_MESSAGE
-    return copy
-
-
 class _JobStreamHandler(logging.StreamHandler):
-    """Writes redacted records to stdout, which is the job file."""
+    """Writes records to stdout, which is the job file, holding them until the decision."""
+
+    def __init__(self, output: _ProcessOutput) -> None:
+        super().__init__(sys.stdout)
+        self._output = output
+        self._held: list[logging.LogRecord] | None = []
+        output.on_decided = self.write_held
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if self._held is not None:
+            self._held.append(record)
+            return
+        super().emit(record)
+
+    def write_held(self) -> None:
+        """Write the records held before the decision, redacted when the job requires it."""
+        self.acquire()
+        try:
+            held, self._held = self._held or [], None
+            for record in held:
+                super().emit(record)
+        finally:
+            self.release()
 
     def format(self, record: logging.LogRecord) -> str:
-        return super().format(_redacted(record))
+        return super().format(_redact(record) if self._output.redaction else record)
 
 
 class _JobFieldsFilter(logging.Filter):
@@ -175,25 +218,35 @@ class _JobFieldsFilter(logging.Filter):
         return True
 
 
-def redirect_job_output(job_id: str, fields: dict[str, Any]) -> JobOutput | None:
+def redirect_job_output(
+    job_id: str, fields: dict[str, Any], *, redaction: bool
+) -> JobOutput | None:
     """Send this job process's output and log records to the job's file."""
-    from .cli.log import JsonFormatter
+    from .cli.log import JsonFormatter, _configure_stdout_for_logging
     from .ipc.log_queue import LogQueueHandler
-    from .log import _add_global_log_fields
+    from .log import _add_global_log_fields, logger
 
     jobs_dir = _jobs_dir()
     if not _handed_off or jobs_dir is None:
         return None
     path = os.path.join(jobs_dir, f"job-{job_id}.log")
-    if not _dup_onto_std(path):
-        return None
-    output = _ProcessOutput(path, job_id, {**fields, "pid": os.getpid()})
-
-    handler = _JobStreamHandler(sys.stdout)
-    handler.addFilter(_JobFieldsFilter(output))
-    handler.setFormatter(JsonFormatter())
-    _add_global_log_fields(handler)
     root = logging.getLogger()
+    if not _dup_onto_std(path):
+        logger.warning(
+            "failed to open the hosted log file, dropping this job's output",
+            extra={"job_id": job_id},
+        )
+        _dup_onto_std(os.devnull)
+        for h in list(root.handlers):
+            if isinstance(h, LogQueueHandler):
+                root.removeHandler(h)
+        return None
+    output = _ProcessOutput(path, job_id, fields, redaction=redaction)
+
+    handler = _JobStreamHandler(output)
+    handler.addFilter(_JobFieldsFilter(output))
+    handler.setFormatter(JsonFormatter(ensure_ascii=_configure_stdout_for_logging()))
+    _add_global_log_fields(handler)
     for h in list(root.handlers):
         if isinstance(h, LogQueueHandler):
             root.removeHandler(h)
@@ -215,22 +268,31 @@ def mark_process_done(job_id: str) -> None:
 
 
 class _ThreadJobOutput:
-    """The log file of a thread job, written by the thread router."""
+    """The log file of a thread job, written by the thread router, held until the decision."""
 
-    def __init__(self, path: str, stream: TextIO, job_id: str, fields: dict[str, Any]) -> None:
+    def __init__(
+        self, path: str, stream: TextIO, job_id: str, fields: dict[str, Any], *, redaction: bool
+    ) -> None:
         self._path = path
         self._stream = stream
         self._job_id = job_id
         self._decided = False
         self._closed = False
         self._lock = threading.Lock()
+        self._held: list[logging.LogRecord] | None = []
+        self._router: _ThreadJobRouter | None = None
+        self.redaction = redaction
         self.fields = fields
 
-    def write(self, line: str) -> None:
+    def emit(self, record: logging.LogRecord, router: _ThreadJobRouter) -> None:
         with self._lock:
             if self._closed:
                 return
-            self._stream.write(line + "\n")
+            if self._held is not None:
+                self._router = router
+                self._held.append(record)
+                return
+            self._stream.write(router.line(record, self) + "\n")
             self._stream.flush()
 
     def decide(self, *, logs: bool, redaction: bool) -> None:
@@ -238,9 +300,16 @@ class _ThreadJobOutput:
             if self._decided or self._closed:
                 return
             self._decided = True
-            renamed = self._rename(
-                f"job-{self._job_id}.{_decision(logs=logs, redaction=redaction).value}"
-            )
+            self.redaction = self.redaction or redaction
+            held, self._held = self._held or [], None
+            renamed = self._rename(f"job-{self._job_id}.{_decision(logs=logs).value}")
+            if renamed and self._router is not None:
+                for record in held:
+                    try:
+                        self._stream.write(self._router.line(record, self) + "\n")
+                    except Exception:
+                        self._router.handleError(record)
+                self._stream.flush()
         if not renamed:
             self._warn_rename_failed()
 
@@ -250,6 +319,7 @@ class _ThreadJobOutput:
                 return
             renamed = self._rename(f"{os.path.basename(self._path)[: -len('.log')]}.done")
             self._closed = True
+            self._held = None
             with contextlib.suppress(OSError):
                 self._stream.close()
         if not renamed:
@@ -280,7 +350,7 @@ class _ThreadJobOutput:
             current_job_output.reset(token)
 
 
-def thread_job_output(job_id: str, fields: dict[str, Any]) -> JobOutput | None:
+def thread_job_output(job_id: str, fields: dict[str, Any], *, redaction: bool) -> JobOutput | None:
     """Open the log file of a thread job."""
     jobs_dir = _jobs_dir()
     if not _handed_off or jobs_dir is None:
@@ -290,7 +360,7 @@ def thread_job_output(job_id: str, fields: dict[str, Any]) -> JobOutput | None:
         stream = open(path, "a", encoding="utf-8")
     except OSError:
         return None
-    return _ThreadJobOutput(path, stream, job_id, fields)
+    return _ThreadJobOutput(path, stream, job_id, fields, redaction=redaction)
 
 
 def _add_job_fields(record: logging.LogRecord, output: JobOutput) -> None:
@@ -301,7 +371,7 @@ def _add_job_fields(record: logging.LogRecord, output: JobOutput) -> None:
 
 
 class _ThreadJobRouter(logging.Handler):
-    """Writes each record to the current thread job's file."""
+    """Sends each record to the current thread job's file."""
 
     def emit(self, record: logging.LogRecord) -> None:
         output = current_job_output.get()
@@ -309,9 +379,13 @@ class _ThreadJobRouter(logging.Handler):
             return
         try:
             _add_job_fields(record, output)
-            output.write(self.format(_redacted(record)))
+            output.emit(record, self)
         except Exception:
             self.handleError(record)
+
+    def line(self, record: logging.LogRecord, output: _ThreadJobOutput) -> str:
+        """The record as one JSON line, redacted when the job requires it."""
+        return self.format(_redact(record) if output.redaction else record)
 
 
 def _not_routed(record: logging.LogRecord) -> bool:
@@ -325,6 +399,8 @@ def install_thread_router() -> None:
     from .log import _add_global_log_fields
 
     root = logging.getLogger()
+    if any(isinstance(h, _ThreadJobRouter) for h in root.handlers):
+        return
     for handler in root.handlers:
         handler.addFilter(_not_routed)
     router = _ThreadJobRouter()

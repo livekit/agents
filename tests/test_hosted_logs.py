@@ -32,6 +32,7 @@ def hosted_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     monkeypatch.setenv(HOSTED_LOGS_HANDOFF_FILE_ENV, str(tmp_path / "sdk-handoff"))
     monkeypatch.setenv(HOSTED_LOGS_JOBS_DIR_ENV, str(tmp_path / "jobs"))
     monkeypatch.setattr(_hosted_logs, "_handed_off", False)
+    monkeypatch.delenv(_hosted_logs._HANDED_OFF_ENV, raising=False)
     return tmp_path
 
 
@@ -86,7 +87,7 @@ def test_job_process_output_goes_to_its_own_file(hosted_env: Path) -> None:
         import os, sys
         from livekit.agents import _hosted_logs
         print("prewarm", flush=True)
-        out = _hosted_logs.redirect_job_output("AJ_1", {})
+        out = _hosted_logs.redirect_job_output("AJ_1", {}, redaction=False)
         print("before session", flush=True)
         os.write(2, b"native\\n")
         out.decide(logs=True, redaction=False)
@@ -106,14 +107,14 @@ def test_job_process_output_goes_to_its_own_file(hosted_env: Path) -> None:
 
 
 def test_job_process_keeps_inherited_output_without_a_hand_off(hosted_env: Path) -> None:
-    assert _hosted_logs.redirect_job_output("AJ_1", {}) is None
+    assert _hosted_logs.redirect_job_output("AJ_1", {}, redaction=False) is None
 
 
 @pytest.mark.parametrize(
     ("logs", "redaction", "name"),
     [
         (True, False, "job-AJ_1.export.log"),
-        (True, True, "job-AJ_1.redact.log"),
+        (True, True, "job-AJ_1.export.log"),
         (False, False, "job-AJ_1.private.log"),
         (False, True, "job-AJ_1.private.log"),
     ],
@@ -124,7 +125,9 @@ def test_the_session_decides_the_file_name(
     hand_off()
     path = hosted_env / "jobs" / "job-AJ_1.log"
     path.touch()
-    _hosted_logs._ProcessOutput(str(path), "AJ_1", {}).decide(logs=logs, redaction=redaction)
+    _hosted_logs._ProcessOutput(str(path), "AJ_1", {}, redaction=False).decide(
+        logs=logs, redaction=redaction
+    )
     assert _jobs(hosted_env) == [name]
 
 
@@ -132,7 +135,7 @@ def test_the_first_decision_wins(hosted_env: Path) -> None:
     hand_off()
     path = hosted_env / "jobs" / "job-AJ_1.log"
     path.touch()
-    out = _hosted_logs._ProcessOutput(str(path), "AJ_1", {})
+    out = _hosted_logs._ProcessOutput(str(path), "AJ_1", {}, redaction=False)
     out.decide(logs=False, redaction=False)
     out.decide(logs=True, redaction=False)
     assert _jobs(hosted_env) == ["job-AJ_1.private.log"]
@@ -143,7 +146,6 @@ def test_the_first_decision_wins(hosted_env: Path) -> None:
     [
         ("job-AJ_1.log", "job-AJ_1.done.log"),
         ("job-AJ_1.export.log", "job-AJ_1.export.done.log"),
-        ("job-AJ_1.redact.log", "job-AJ_1.redact.done.log"),
         ("job-AJ_1.private.log", "job-AJ_1.private.done.log"),
     ],
 )
@@ -156,7 +158,9 @@ def test_mark_process_done(hosted_env: Path, existing: str, done: str) -> None:
 
 def test_thread_job_output_routes_job_records(hosted_env: Path) -> None:
     hand_off()
-    out = _hosted_logs.thread_job_output("AJ_1", {"job_id": "AJ_1", "room_id": "RM_1"})
+    out = _hosted_logs.thread_job_output(
+        "AJ_1", {"job_id": "AJ_1", "room_id": "RM_1"}, redaction=False
+    )
     assert out is not None
     router = _hosted_logs._ThreadJobRouter()
     router.setFormatter(logging.Formatter("%(message)s %(room_id)s"))
@@ -182,7 +186,7 @@ def test_thread_job_output_closes_and_warns_when_a_rename_fails(
     hosted_env: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     hand_off()
-    out = _hosted_logs.thread_job_output("AJ_1", {})
+    out = _hosted_logs.thread_job_output("AJ_1", {}, redaction=False)
     assert isinstance(out, _hosted_logs._ThreadJobOutput)
 
     def fail(src: str, dst: str) -> None:
@@ -195,7 +199,6 @@ def test_thread_job_output_closes_and_warns_when_a_rename_fails(
     finally:
         _hosted_logs.current_job_output.reset(token)
     assert out._stream.closed
-    out.write("dropped")
     assert "failed to rename the hosted log file" in caplog.text
     assert _jobs(hosted_env) == ["job-AJ_1.log"]
 
@@ -213,7 +216,7 @@ def test_install_thread_router_filters_every_root_handler(
 
 def test_thread_job_output_without_a_decision(hosted_env: Path) -> None:
     hand_off()
-    out = _hosted_logs.thread_job_output("AJ_1", {})
+    out = _hosted_logs.thread_job_output("AJ_1", {}, redaction=False)
     assert out is not None
     out.close()
     assert _jobs(hosted_env) == ["job-AJ_1.done.log"]
@@ -269,9 +272,12 @@ def test_job_process_log_lines_carry_the_job_fields(hosted_env: Path) -> None:
         logging.Handler.__init__(queue)
         queue.close = lambda: None
         root.addHandler(queue)
-        _hosted_logs.redirect_job_output("AJ_1", {"job_id": "AJ_1", "room_id": "RM_1"})
+        out = _hosted_logs.redirect_job_output(
+            "AJ_1", {"job_id": "AJ_1", "room_id": "RM_1"}, redaction=False
+        )
         assert queue not in root.handlers
         logging.getLogger("t").info("hello")
+        out.decide(logs=True, redaction=False)
         print(os.getpid(), file=open(os.environ["PID_FILE"], "w"))
         """
     )
@@ -279,7 +285,7 @@ def test_job_process_log_lines_carry_the_job_fields(hosted_env: Path) -> None:
     subprocess.run(
         [sys.executable, "-c", script], check=True, env={**os.environ, "PID_FILE": str(pid_file)}
     )
-    line = json.loads((hosted_env / "jobs" / "job-AJ_1.log").read_text())
+    line = json.loads((hosted_env / "jobs" / "job-AJ_1.export.log").read_text())
     assert (line["message"], line["job_id"], line["room_id"], line["pid"]) == (
         "hello",
         "AJ_1",
@@ -298,37 +304,198 @@ def _record_with_pii() -> logging.LogRecord:
     return record
 
 
-def test_job_files_redact_pii_when_redaction_is_on(
-    hosted_env: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def _route(out: _hosted_logs.JobOutput, record: logging.LogRecord) -> None:
     from livekit.agents.cli.log import JsonFormatter
-    from livekit.agents.telemetry import utils as telemetry_utils
 
-    monkeypatch.setattr(telemetry_utils, "redaction_enabled", lambda *_: True)
-    hand_off()
-    out = _hosted_logs.thread_job_output("AJ_1", {"job_id": "AJ_1"})
-    assert out is not None
     router = _hosted_logs._ThreadJobRouter()
     router.setFormatter(JsonFormatter())
-    record = _record_with_pii()
     token = _hosted_logs.current_job_output.set(out)
     try:
         router.handle(record)
     finally:
         _hosted_logs.current_job_output.reset(token)
+
+
+@pytest.mark.parametrize(("project", "session"), [(True, False), (False, True)])
+def test_thread_job_files_redact_pii_when_redaction_is_on(
+    hosted_env: Path, project: bool, session: bool
+) -> None:
+    hand_off()
+    out = _hosted_logs.thread_job_output(
+        "AJ_1", {"job_id": "AJ_1", "room": "alice-room"}, redaction=project
+    )
+    assert out is not None
+    record = _record_with_pii()
+    _route(out, record)
+    assert (hosted_env / "jobs" / "job-AJ_1.log").read_text() == ""
+    out.decide(logs=True, redaction=session)
     out.close()
 
-    line = json.loads((hosted_env / "jobs" / "job-AJ_1.done.log").read_text())
-    assert "lk.pii.transcript" not in line
+    line = json.loads((hosted_env / "jobs" / "job-AJ_1.export.done.log").read_text())
+    assert "lk.pii.transcript" not in line and "room" not in line
     assert line["exc_info"] == "ValueError: exception details redacted"
     assert "secret user text" not in json.dumps(line)
+    assert line["lk.redaction.enabled"] is True
     assert line["job_id"] == "AJ_1"
     assert record.__dict__["lk.pii.transcript"] == "hello my name is"
 
 
-def test_job_files_keep_pii_when_redaction_is_off(monkeypatch: pytest.MonkeyPatch) -> None:
-    from livekit.agents.telemetry import utils as telemetry_utils
+def test_thread_job_files_keep_pii_when_redaction_is_off(hosted_env: Path) -> None:
+    hand_off()
+    out = _hosted_logs.thread_job_output("AJ_1", {}, redaction=False)
+    assert out is not None
+    _route(out, _record_with_pii())
+    out.decide(logs=True, redaction=False)
+    out.close()
+    line = json.loads((hosted_env / "jobs" / "job-AJ_1.export.done.log").read_text())
+    assert line["lk.pii.transcript"] == "hello my name is"
+    assert "lk.redaction.enabled" not in line
 
-    monkeypatch.setattr(telemetry_utils, "redaction_enabled", lambda *_: False)
-    record = _record_with_pii()
-    assert _hosted_logs._redacted(record) is record
+
+def test_thread_job_records_without_a_decision_are_never_written(hosted_env: Path) -> None:
+    hand_off()
+    out = _hosted_logs.thread_job_output("AJ_1", {}, redaction=False)
+    assert out is not None
+    _route(out, _record_with_pii())
+    out.close()
+    assert (hosted_env / "jobs" / "job-AJ_1.done.log").read_text() == ""
+
+
+@pytest.mark.parametrize(("project", "session"), [(True, False), (False, True)])
+def test_job_process_redacts_every_thread(hosted_env: Path, project: bool, session: bool) -> None:
+    script = textwrap.dedent(
+        f"""
+        import logging, threading
+        from livekit.agents import _hosted_logs
+        logging.getLogger().setLevel(logging.INFO)
+        out = _hosted_logs.redirect_job_output(
+            "AJ_1", {{"job_id": "AJ_1", "room": "alice-room"}}, redaction={project}
+        )
+        log = lambda: logging.getLogger("t").info("x", extra={{"lk.pii.event": "secret"}})
+        log()
+        assert open("{hosted_env}/jobs/job-AJ_1.log").read() == ""
+        out.decide(logs=True, redaction={session})
+        t = threading.Thread(target=log)
+        t.start()
+        t.join()
+        """
+    )
+    subprocess.run([sys.executable, "-c", script], check=True)
+    lines = (hosted_env / "jobs" / "job-AJ_1.export.log").read_text().splitlines()
+    assert len(lines) == 2
+    for line in map(json.loads, lines):
+        assert "lk.pii.event" not in line and "room" not in line
+        assert line["lk.redaction.enabled"] is True
+        assert line["job_id"] == "AJ_1"
+
+
+def test_job_process_records_without_a_decision_are_never_written(hosted_env: Path) -> None:
+    script = textwrap.dedent(
+        """
+        import logging
+        from livekit.agents import _hosted_logs
+        logging.getLogger().setLevel(logging.INFO)
+        _hosted_logs.redirect_job_output("AJ_1", {}, redaction=False)
+        logging.getLogger("t").info("held")
+        print("raw", flush=True)
+        """
+    )
+    subprocess.run([sys.executable, "-c", script], check=True)
+    assert (hosted_env / "jobs" / "job-AJ_1.log").read_text() == "raw\n"
+
+
+def test_job_output_is_dropped_when_its_file_cannot_be_opened(hosted_env: Path) -> None:
+    script = textwrap.dedent(
+        """
+        import logging, os, shutil
+        from livekit.agents import _hosted_logs
+        from livekit.agents.ipc.log_queue import LogQueueHandler
+        root = logging.getLogger()
+        queue = LogQueueHandler.__new__(LogQueueHandler)
+        logging.Handler.__init__(queue)
+        queue.close = lambda: None
+        queue.emit = lambda record: None
+        root.addHandler(queue)
+        shutil.rmtree(os.environ["LIVEKIT_HOSTED_LOGS_JOBS_DIR"])
+        assert _hosted_logs.redirect_job_output("AJ_1", {}, redaction=False) is None
+        assert queue not in root.handlers
+        print("dropped", flush=True)
+        """
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script], check=True, capture_output=True, text=True
+    )
+    assert result.stdout == ""
+
+
+def test_process_output_falls_back_when_the_rename_fails(hosted_env: Path) -> None:
+    script = textwrap.dedent(
+        """
+        import os
+        from livekit.agents import _hosted_logs
+        out = _hosted_logs.redirect_job_output("AJ_1", {}, redaction=False)
+        print("before", flush=True)
+        def fail(src, dst):
+            raise OSError("busy")
+        os.rename = fail
+        out.decide(logs=True, redaction=False)
+        print("after", flush=True)
+        """
+    )
+    subprocess.run([sys.executable, "-c", script], check=True)
+    jobs = hosted_env / "jobs"
+    assert (jobs / "job-AJ_1.log").read_text() == "before\n"
+    assert (jobs / "job-AJ_1.export.log").read_text() == "after\n"
+
+
+def test_hand_off_sets_the_env_for_child_processes(hosted_env: Path) -> None:
+    hand_off()
+    assert os.environ[_hosted_logs._HANDED_OFF_ENV] == "1"
+
+
+def test_child_trusts_the_parent_hand_off(
+    hosted_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(_hosted_logs._HANDED_OFF_ENV, "1")
+    hand_off()
+    assert logs_handed_off()
+    assert not (hosted_env / "sdk-handoff").exists()
+
+
+def test_install_thread_router_runs_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    root = logging.getLogger()
+    monkeypatch.setattr(root, "handlers", [])
+    _hosted_logs.install_thread_router()
+    _hosted_logs.install_thread_router()
+    assert sum(isinstance(h, _hosted_logs._ThreadJobRouter) for h in root.handlers) == 1
+
+
+def test_init_recording_decides_before_rejecting_the_options() -> None:
+    ctx = MagicMock()
+    ctx._recording_initialized = False
+    ctx.job.enable_redaction = False
+    with pytest.raises(ValueError):
+        JobContext.init_recording(ctx, {"logs": False, "redaction": True, "transcript": False})
+    ctx._hosted_output.decide.assert_called_once_with(logs=False, redaction=True)
+
+
+@pytest.mark.parametrize(("exitcode", "marked"), [(0, True), (None, False)])
+async def test_job_files_are_marked_done_only_after_exit(
+    monkeypatch: pytest.MonkeyPatch, exitcode: int | None, marked: bool
+) -> None:
+    from livekit.agents.ipc import job_proc_executor
+    from livekit.agents.ipc.supervised_proc import SupervisedProc
+
+    async def supervise(self: object) -> None:
+        pass
+
+    monkeypatch.setattr(SupervisedProc, "_supervise_task", supervise)
+    monkeypatch.setattr(job_proc_executor.metrics, "job_ended", lambda: None)
+    done = MagicMock()
+    monkeypatch.setattr(job_proc_executor._hosted_logs, "mark_process_done", done)
+    executor = object.__new__(job_proc_executor.ProcJobExecutor)
+    executor._running_job = MagicMock()
+    executor._running_job.job.id = "AJ_1"
+    executor._exitcode = exitcode
+    await job_proc_executor.ProcJobExecutor._supervise_task(executor)
+    assert done.called == marked

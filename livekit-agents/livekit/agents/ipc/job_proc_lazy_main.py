@@ -290,9 +290,13 @@ class _JobProc:
             hosted_fields["agent_name"] = job.agent_name
         hosted_output: _hosted_logs.JobOutput | None
         if self._executor_type == JobExecutorType.THREAD:
-            hosted_output = _hosted_logs.thread_job_output(job.id, hosted_fields)
+            hosted_output = _hosted_logs.thread_job_output(
+                job.id, hosted_fields, redaction=job.enable_redaction
+            )
         else:
-            hosted_output = _hosted_logs.redirect_job_output(job.id, hosted_fields)
+            hosted_output = _hosted_logs.redirect_job_output(
+                job.id, hosted_fields, redaction=job.enable_redaction
+            )
 
         if msg.running_job.fake_job:
             from .mock_room import create_mock_room
