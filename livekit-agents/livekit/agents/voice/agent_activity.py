@@ -3632,9 +3632,16 @@ class AgentActivity(RecognitionHooks):
         # re-issues it and duplicates side effects. inject an in-progress placeholder so it
         # leaves the call alone. mutating chat_ctx directly (not a copy) keeps a custom
         # llm_node's edits; the placeholder is stripped again before chat_ctx is forwarded.
+        # only tools this agent has: it can't re-issue any other, and a placeholder for one
+        # (e.g. the tool awaiting this AgentTask) makes the model call it as unknown.
+        fnc_tools = tool_ctx.function_tools
         _inject_running_tool_calls(
             chat_ctx,
-            [task.ctx.function_call for task in _RunningTasks.get(self._session, {}).values()],
+            [
+                task.ctx.function_call
+                for task in _RunningTasks.get(self._session, {}).values()
+                if task.ctx.function_call.name in fnc_tools
+            ],
         )
 
         tasks: list[asyncio.Task[Any]] = []

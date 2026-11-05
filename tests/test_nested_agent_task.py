@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from typing import Any
 
 import pytest
 
 from livekit.agents import Agent, AgentSession, AgentTask, RunContext, function_tool
-from livekit.agents.llm import FunctionToolCall, ToolError
+from livekit.agents.llm import ChatContext, FunctionToolCall, ToolError
+from livekit.agents.voice.generation import _RUNNING_PLACEHOLDER_KEY
 
 from .fake_llm import FakeLLM, FakeLLMResponse
 
@@ -73,6 +75,43 @@ async def test_nested_agent_task_no_deadlock():
         # Now complete InnerTask by triggering the finish tool
         second_result = await asyncio.wait_for(sess.run(user_input="done"), timeout=5.0)
         assert second_result is not None
+
+
+@pytest.mark.asyncio
+async def test_awaited_task_is_not_shown_its_parent_tool_as_running() -> None:
+    """A task awaited inside a tool can't call that tool, so its LLM must not get an
+    in-progress pair for it: the model calls the tool anyway and gets "unknown function"
+    back, an extra LLM round before the task's first question (livekit/livekit#5139)."""
+    llm = _build_fake_llm()
+    seen: list[ChatContext] = []
+    chat = llm.chat
+
+    def _recording_chat(**kwargs: Any) -> Any:
+        seen.append(kwargs["chat_ctx"].copy())
+        return chat(**kwargs)
+
+    llm.chat = _recording_chat  # type: ignore[method-assign]
+
+    async with AgentSession(llm=llm) as sess:
+        await sess.start(RootAgent())
+        await asyncio.wait_for(sess.run(user_input="go"), timeout=5.0)
+
+    # OuterTask's on_enter reply runs while start_outer awaits it; InnerTask's while
+    # start_inner awaits it. Neither task has the tool that is awaiting it.
+    task_turns = {
+        ctx.items[-1].text_content: ctx
+        for ctx in seen
+        if ctx.items[-1].type == "message"
+        and ctx.items[-1].text_content in ("outer_greeting", "inner_greeting")
+    }
+    assert "outer_greeting" in task_turns
+    for greeting, ctx in task_turns.items():
+        running = [
+            item.name
+            for item in ctx.items
+            if item.type == "function_call" and item.extra.get(_RUNNING_PLACEHOLDER_KEY)
+        ]
+        assert running == [], f"{greeting} turn was shown {running} as running"
 
 
 class SimpleTask(AgentTask):
