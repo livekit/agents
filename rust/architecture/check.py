@@ -316,6 +316,18 @@ def blank(match: re.Match) -> str:
     return re.sub(r"[^\n]", " ", match.group(0))
 
 
+def item_name(header: str) -> tuple[str | None, str | None]:
+    """The keyword (`fn`, `mod`, ..) and name (`run`, `impl Trait for X`) of the item a brace
+    opens, from its blanked header."""
+    header = " ".join(ATTRIBUTE.sub(" ", header).split())
+    item = ITEM.match(header)
+    if not item:
+        return None, None
+    if item.group(4):
+        return None, " ".join(item.group(4).split())
+    return item.group(1), item.group(2) or item.group(3)
+
+
 def item_uses(text: str, pattern: re.Pattern) -> dict[str, int]:
     """`pattern`'s matches outside comments and strings, keyed by the enclosing named items
     (`impl Trait for X::method`) and the matched text, with their counts."""
@@ -342,13 +354,7 @@ def item_uses(text: str, pattern: re.Pattern) -> dict[str, int]:
             continue
         names = [name for name in stack if name]
         if event == "{":
-            header = " ".join(ATTRIBUTE.sub(" ", code[header_start:at]).split())
-            item = ITEM.match(header)
-            name = None
-            if item and item.group(4):
-                name = " ".join(item.group(4).split())
-            elif item:
-                name = item.group(2) or item.group(3)
+            _, name = item_name(code[header_start:at])
             stack.append(name)
             record(names + [name] if name else names, pending)
         else:
@@ -451,6 +457,77 @@ def length_violations(root: Path, paths: list[str]) -> dict[str, int]:
         lines = len(text.splitlines())
         if lines > 1250:
             violations[path] = lines
+    return violations
+
+
+# PLAN_NESTING.md: a handwritten production fn nests at most this many braces below its body.
+MAX_NESTING = 4
+# A test function, or an item compiled only for tests.
+TEST_ITEM = re.compile(r"#\[\s*(?:(?:\w+::)*test\b|cfg\(\s*(?:all\(\s*)?test\b)")
+BRACE_TOKENS = re.compile(r"[{}()\[\];]")
+
+
+def function_depths(text: str) -> dict[str, int]:
+    """Each fn's deepest brace below its body (nested fns and closures included), keyed by its
+    enclosing named items like `uses`; test items and their contents are skipped."""
+    code = NOT_CODE.sub(blank, text)
+    depths: dict[str, int] = {}
+    names: list[str | None] = []  # per open brace, the named item it opens
+    body = skip = None  # indexes in `names` of the open fn body and the open test item
+    header_start = brackets = 0
+    for match in BRACE_TOKENS.finditer(code):
+        token, at = match.group(), match.start()
+        if token in "([)]":
+            brackets += 1 if token in "([" else -1
+            continue
+        # A `;` inside brackets is an array length in a signature, not the end of an item.
+        if token == ";" and brackets:
+            continue
+        header, header_start = code[header_start:at], at + 1
+        if token == "}" and names:
+            names.pop()
+            body = None if body == len(names) else body
+            skip = None if skip == len(names) else skip
+        if token != "{":
+            continue
+        names.append(None)
+        if skip is not None:
+            continue
+        if body is not None:
+            function = "::".join(name for name in names[: body + 1] if name)
+            depths[function] = max(depths[function], len(names) - 1 - body)
+            continue
+        if TEST_ITEM.search(header):
+            skip = len(names) - 1
+            continue
+        keyword, names[-1] = item_name(header)
+        if keyword == "fn":
+            body = len(names) - 1
+            depths.setdefault("::".join(name for name in names if name), 0)
+    return depths
+
+
+def nesting_checked(path: str) -> bool:
+    """A production source: not the DST, a test, bench or example file."""
+    parts = Path(path).parts
+    if parts[:2] != ("rust", "crates") or len(parts) < 4 or parts[2] == "lk-agents-fuzz":
+        return False
+    stems = [part.removesuffix(".rs") for part in parts[3:]]
+    return not any(
+        stem in ("tests", "benches", "examples") or stem.endswith("_tests") for stem in stems
+    )
+
+
+def nesting_violations(root: Path, paths: list[str]) -> dict[str, int]:
+    """Every handwritten production fn nesting deeper than MAX_NESTING, by file and item."""
+    violations = {}
+    for path in filter(nesting_checked, paths):
+        text = (root / path).read_text()
+        if generated(text):
+            continue
+        for function, depth in function_depths(text).items():
+            if depth > MAX_NESTING:
+                violations[f"nesting:{path}:{function}"] = depth
     return violations
 
 
@@ -592,6 +669,7 @@ def check_boundaries(metadata: dict) -> int:
     print(f"dependencies: {len(actual)} existing identities; baseline {len(baseline)}")
     for name, actual in (
         ("lengths", length_violations(root, paths)),
+        ("nesting", nesting_violations(root, paths)),
         ("paths", path_violations(root, paths)),
         ("pyo3", pyo3_violations(metadata, root, paths)),
         ("host-calls", host_call_violations(root, paths)),

@@ -16,6 +16,7 @@ from check import (
     telemetry_spelling_violations,
     cx_none_violations,
     length_violations,
+    nesting_violations,
     path_violations,
     pyo3_violations,
     ratchet,
@@ -266,6 +267,77 @@ class LengthContracts(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaises(FileNotFoundError):
                 length_violations(Path(tmp), ["missing.rs"])
+
+
+class NestingContracts(unittest.TestCase):
+    DEEP = "fn deep() { a { b { c { d { e {} } } } } }\n"
+
+    def violations(self, files):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for path, text in files.items():
+                file = root / path
+                file.parent.mkdir(parents=True, exist_ok=True)
+                file.write_text(text)
+            return nesting_violations(root, list(files))
+
+    def test_five_levels_below_a_body_fail_four_pass(self):
+        src = "rust/crates/lk-agents-voice/src/speech.rs"
+        self.assertEqual(self.violations({src: self.DEEP}), {f"nesting:{src}:deep": 5})
+        self.assertEqual(self.violations({src: "fn ok() { a { b { c { d {} } } } }\n"}), {})
+
+    def test_items_name_the_function_and_nested_closures_count_toward_it(self):
+        src = "rust/crates/lk-agents-runtime/src/voice/io.rs"
+        text = (
+            "mod pump {\n"
+            "    impl Run for Pump {\n"
+            "        fn step(&self, buf: [u8; 4]) -> [u8; 4] {\n"
+            "            spawn(async move { loop { select! { x => { let f = || {\n"
+            "                if y { z } }; } } } });\n"
+            "        }\n"
+            "    }\n"
+            "}\n"
+        )
+        self.assertEqual(
+            self.violations({src: text}), {f"nesting:{src}:pump::impl Run for Pump::step": 6}
+        )
+
+    def test_braces_in_strings_chars_and_comments_do_not_count(self):
+        src = "rust/crates/lk-agents-core/src/run.rs"
+        text = (
+            'fn f() { a { b { let s = "{{{{"; let r = r#"{ {"#; let c = \'{\'; } } }\n'
+            "// { { { { {\n/* { { { { { */ }\n"
+        )
+        self.assertEqual(self.violations({src: text}), {})
+
+    def test_tests_generated_files_and_the_dst_are_exempt(self):
+        exempt = {
+            "rust/crates/lk-agents-voice/src/speech_tests.rs": self.DEEP,
+            "rust/crates/lk-agents-voice/tests/turns.rs": self.DEEP,
+            "rust/crates/lk-agents-media/benches/codec.rs": self.DEEP,
+            "rust/crates/lk-agents-net/examples/client.rs": self.DEEP,
+            "rust/crates/lk-agents-fuzz/src/voice.rs": self.DEEP,
+            "rust/crates/lk-agents-py/src/generated/llm.rs": (
+                "//! GENERATED FILE -- DO NOT EDIT.\n" + self.DEEP
+            ),
+            "rust/crates/lk-agents-core/src/lib.rs": (
+                "#[cfg(test)]\nmod tests { " + self.DEEP + "}\n"
+                "#[test]\nfn t() { a { b { c { d { e {} } } } } }\n"
+                '#[tokio::test(flavor = "current_thread")]\n'
+                "async fn u() { a { b { c { d { e {} } } } } }\n"
+                "#[cfg(all(test, unix))]\nfn v() { a { b { c { d { e {} } } } } }\n"
+            ),
+        }
+        self.assertEqual(self.violations(exempt), {})
+        # A production item after a test item, and one compiled for tests and a feature, count.
+        src = "rust/crates/lk-agents-core/src/lib.rs"
+        text = '#[test]\nfn t() {}\n#[cfg(any(test, feature = "x"))]\n' + self.DEEP
+        self.assertEqual(self.violations({src: text}), {f"nesting:{src}:deep": 5})
+
+    def test_new_deep_functions_and_deeper_existing_ones_fail(self):
+        self.assertTrue(ratchet({"nesting:a.rs:new": 5}, {"nesting:a.rs:old": 5}))
+        self.assertTrue(ratchet({"nesting:a.rs:old": 6}, {"nesting:a.rs:old": 5}))
+        self.assertFalse(ratchet({"nesting:a.rs:old": 5}, {"nesting:a.rs:old": 6}))
 
 
 class BaselineContracts(unittest.TestCase):
