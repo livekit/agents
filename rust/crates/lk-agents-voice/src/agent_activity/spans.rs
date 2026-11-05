@@ -7,22 +7,11 @@ use crate::agent_activity::scheduling::SpeechId;
 use crate::agent_session::{HookKind, VoiceDriver};
 use crate::audio_recognition::{EouDetected, TurnDetectionMode};
 use crate::events::SessionEvent;
-use crate::telemetry::{
-    self, AgentTurnSpan, Arriving, Endpointing, EouSource, Holding, HookSpan, Reply, SpanContext,
-    Stt, Under,
-};
+use crate::telemetry;
 use lk_agents_abi::llm::chat_context::CopyOptions;
-use lk_agents_abi::telemetry::errors::SpanError;
-use lk_agents_abi::telemetry::spans::common::GenAiOperation;
-use lk_agents_abi::telemetry::spans::session::{
-    DrainAgentActivity, OnEnter, OnExit, PauseAgentActivity, ResumeAgentActivity,
-    StartAgentActivity, UpdateAgent,
-};
-use lk_agents_abi::telemetry::spans::user_turn::{SttEventType, UserTurnOrigin, UserTurnOutcome};
 use lk_agents_abi::{ChatContext, ChatMessage, Role, ToDictOptions};
 use lk_agents_abi::{SpeechEventType, Ts};
 use lk_agents_core::llm::history::ChatContextExt;
-use lk_agents_core::telemetry::span::Reserved;
 
 /// `_EOU_MAX_HISTORY_TURNS`: the items an `eou_detection` span records.
 const EOU_HISTORY: usize = 6;
@@ -30,20 +19,23 @@ const EOU_HISTORY: usize = 6;
 impl VoiceDriver {
     /// The STT's plugin model and provider: `user_turn` records them as 1.8.10 does, and they
     /// label its measurements.
-    pub(crate) fn span_stt(&self) -> Stt {
+    pub(crate) fn span_stt(&self) -> telemetry::Stt {
         let id = self.stt_identity();
-        Stt { model: id.as_ref().map(|id| id.model.clone()), provider: id.map(|id| id.provider) }
+        telemetry::Stt {
+            model: id.as_ref().map(|id| id.model.clone()),
+            provider: id.map(|id| id.provider),
+        }
     }
 
-    fn span_endpointing(&self) -> Endpointing {
+    fn span_endpointing(&self) -> telemetry::Endpointing {
         let recognition = &self.activity.audio_recognition;
         let source = match recognition.turn_detection_mode() {
-            TurnDetectionMode::Vad => EouSource::Vad,
-            TurnDetectionMode::Stt => EouSource::Stt,
-            TurnDetectionMode::Manual => EouSource::Manual,
-            TurnDetectionMode::RealtimeLlm => EouSource::RealtimeLlm,
+            TurnDetectionMode::Vad => telemetry::EouSource::Vad,
+            TurnDetectionMode::Stt => telemetry::EouSource::Stt,
+            TurnDetectionMode::Manual => telemetry::EouSource::Manual,
+            TurnDetectionMode::RealtimeLlm => telemetry::EouSource::RealtimeLlm,
         };
-        Endpointing { source, delay: recognition.min_delay().as_secs_f64() }
+        telemetry::Endpointing { source, delay: recognition.min_delay().as_secs_f64() }
     }
 
     /// The heard user turn's evidence, as the session publishes the recognizer's facts: the turn
@@ -57,9 +49,9 @@ impl VoiceDriver {
         match ev {
             SessionEvent::StartOfSpeech(e) => {
                 let origin = match (e.from_vad, mode == TurnDetectionMode::RealtimeLlm) {
-                    (true, _) => UserTurnOrigin::Speech,
-                    (false, true) => UserTurnOrigin::ServerSpeech,
-                    (false, false) => UserTurnOrigin::Transcript,
+                    (true, _) => telemetry::UserTurnOrigin::Speech,
+                    (false, true) => telemetry::UserTurnOrigin::ServerSpeech,
+                    (false, false) => telemetry::UserTurnOrigin::Transcript,
                 };
                 self.hear_turn(e.at, origin);
                 let participant = self.session.room.linked_participant();
@@ -80,17 +72,22 @@ impl VoiceDriver {
                 }
                 let received = t.ev.created_at.unwrap_or(wall);
                 let kind = match t.ev.kind {
-                    SpeechEventType::FinalTranscript => SttEventType::FinalTranscript,
-                    SpeechEventType::PreflightTranscript => SttEventType::PreflightTranscript,
-                    _ => SttEventType::InterimTranscript,
+                    SpeechEventType::FinalTranscript => telemetry::SttEventType::FinalTranscript,
+                    SpeechEventType::PreflightTranscript => {
+                        telemetry::SttEventType::PreflightTranscript
+                    }
+                    _ => telemetry::SttEventType::InterimTranscript,
                 };
-                self.hear_turn(now, UserTurnOrigin::Transcript);
+                self.hear_turn(now, telemetry::UserTurnOrigin::Transcript);
                 if let Some(turn) = &mut self.activity.user_turn {
                     turn.transcript(received, kind, text, t.ev.request_id.as_str());
                     // A final heard after the speech re-arms the countdown (1.8.10's `stt`
                     // trigger).
                     if t.is_final && !speaking && mode != TurnDetectionMode::Manual {
-                        let stt = Endpointing { source: EouSource::Stt, ..endpointing };
+                        let stt = telemetry::Endpointing {
+                            source: telemetry::EouSource::Stt,
+                            ..endpointing
+                        };
                         turn.retriggered(&mut self.telemetry, stt);
                     }
                 }
@@ -102,7 +99,7 @@ impl VoiceDriver {
             }
             SessionEvent::UserTranscriptionTimeout(_) => {
                 if let Some(mut turn) = self.activity.user_turn.take() {
-                    let outcome = UserTurnOutcome::TranscriptionTimeout;
+                    let outcome = telemetry::UserTurnOutcome::TranscriptionTimeout;
                     turn.end(&mut self.telemetry, outcome);
                 }
             }
@@ -111,7 +108,7 @@ impl VoiceDriver {
     }
 
     /// Evidence at `at` opens the user turn being heard, when none is.
-    fn hear_turn(&mut self, at: Ts, origin: UserTurnOrigin) {
+    fn hear_turn(&mut self, at: Ts, origin: telemetry::UserTurnOrigin) {
         if self.activity.user_turn.is_none() {
             let stt = self.span_stt();
             let participant = self.session.room.linked_participant();
@@ -125,7 +122,7 @@ impl VoiceDriver {
     /// hook end `closed`.
     pub(crate) fn close_user_turns(&mut self) {
         let trace = &mut self.telemetry;
-        let closed = UserTurnOutcome::Closed;
+        let closed = telemetry::UserTurnOutcome::Closed;
         if let Some(mut turn) = self.activity.user_turn.take() {
             turn.end(trace, closed);
         }
@@ -175,7 +172,7 @@ impl VoiceDriver {
 
 impl super::AgentActivity {
     /// Speech `speech`'s turn, while its entry or the record of its running tools holds it.
-    pub(crate) fn agent_turn(&mut self, speech: SpeechId) -> Option<&mut AgentTurnSpan> {
+    pub(crate) fn agent_turn(&mut self, speech: SpeechId) -> Option<&mut telemetry::AgentTurnSpan> {
         if self.speech_scheduler.agent_turn(speech).is_some() {
             return self.speech_scheduler.agent_turn(speech);
         }
@@ -196,8 +193,8 @@ impl VoiceDriver {
     pub(crate) fn agent_turn_started(
         &mut self,
         speech: SpeechId,
-        reply: Reply,
-    ) -> Option<SpanContext> {
+        reply: telemetry::Reply,
+    ) -> Option<telemetry::SpanContext> {
         let scheduler = &mut self.activity.speech_scheduler;
         if let Some(turn) = scheduler.agent_turn(speech) {
             return turn.context(&self.telemetry);
@@ -207,7 +204,7 @@ impl VoiceDriver {
         let trace = &mut self.telemetry;
         let turn = match scheduler.take_handover() {
             Some(turn) => turn.adopt(trace, session, speech, reply, participant),
-            None => AgentTurnSpan::open(trace, session, speech, reply, participant),
+            None => telemetry::AgentTurnSpan::open(trace, session, speech, reply, participant),
         };
         let context = turn.context(trace);
         if let Some(stray) = scheduler.begin_agent_turn(speech, turn) {
@@ -220,7 +217,7 @@ impl VoiceDriver {
     }
 
     /// Speech `speech`'s turn, while its entry or the record of its running tools holds it.
-    pub(crate) fn agent_turn(&mut self, speech: SpeechId) -> Option<&mut AgentTurnSpan> {
+    pub(crate) fn agent_turn(&mut self, speech: SpeechId) -> Option<&mut telemetry::AgentTurnSpan> {
         self.activity.agent_turn(speech)
     }
 
@@ -259,7 +256,7 @@ impl VoiceDriver {
 
     /// The speech's entry was released with its turn: the turn ends now, or moves to the record of
     /// the tool calls it started that still run.
-    pub(crate) fn agent_turn_released(&mut self, turn: AgentTurnSpan) {
+    pub(crate) fn agent_turn_released(&mut self, turn: telemetry::AgentTurnSpan) {
         if turn.running_tools() {
             self.activity.tools.turns.push(turn);
         } else {
@@ -286,7 +283,7 @@ impl VoiceDriver {
         let trace = &mut self.telemetry;
         let mut turns = self.activity.speech_scheduler.take_agent_turns();
         turns.append(&mut self.activity.tools.turns);
-        turns.sort_by_key(AgentTurnSpan::speech);
+        turns.sort_by_key(telemetry::AgentTurnSpan::speech);
         for turn in turns {
             turn.end(trace);
         }
@@ -301,7 +298,7 @@ impl VoiceDriver {
     /// arriving agent's `on_enter` open as.
     pub(crate) fn arriving(&mut self, agent: &str, activation: Option<telemetry::Activation>) {
         if let Some(a) = activation {
-            self.activity.arriving = Some(Arriving {
+            self.activity.arriving = Some(telemetry::Arriving {
                 agent: agent.to_owned(),
                 update: Some(a.update),
                 activity: a.activity,
@@ -311,7 +308,7 @@ impl VoiceDriver {
 
     /// The activity an agent's input streams open under (`start_agent_activity`, as the
     /// reference's STT pump): the arriving agent's, reserved, else the running one's.
-    pub(crate) fn activity_span(&self) -> Option<SpanContext> {
+    pub(crate) fn activity_span(&self) -> Option<telemetry::SpanContext> {
         (self.activity.arriving.as_ref().map(|a| a.activity.context))
             .or(self.activity.running_activity)
     }
@@ -320,32 +317,36 @@ impl VoiceDriver {
     /// arriving agent's toolsets were set up.
     fn agent_update(
         &mut self,
-        reserved: Option<Reserved<UpdateAgent>>,
-        decl: UpdateAgent,
-    ) -> Option<&Holding<UpdateAgent>> {
+        reserved: Option<telemetry::Reserved<telemetry::UpdateAgent>>,
+        decl: telemetry::UpdateAgent,
+    ) -> Option<&telemetry::Holding<telemetry::UpdateAgent>> {
         if self.activity.update.is_none() {
             let root = self.session.span.as_ref()?;
             let span = match reserved {
                 Some(r) => self.telemetry.open_in_reserved(root, r, decl),
                 None => self.telemetry.open_in(root, decl),
             };
-            self.activity.update = Some(Holding { span, done: false });
+            self.activity.update = Some(telemetry::Holding { span, done: false });
         }
         self.activity.update.as_ref()
     }
 
     /// A lifecycle callback the host is asked to run: its span, in the span its activity runs in.
     /// `arriving` is the agent the switch in progress brings in, which an `on_exit` leaves for.
-    pub(crate) fn hook_span(&mut self, kind: HookKind, arriving: Option<&str>) -> Option<HookSpan> {
+    pub(crate) fn hook_span(
+        &mut self,
+        kind: HookKind,
+        arriving: Option<&str>,
+    ) -> Option<telemetry::HookSpan> {
         self.session.span.as_ref()?;
         let label = self.activity.agent.clone();
         let reserved_update = self.activity.arriving.as_ref().and_then(|a| a.update);
         match kind {
             HookKind::OnEnter => {
                 let llm = self.session.llm.as_ref().map(|l| &l.provider);
-                let decl = StartAgentActivity {
+                let decl = telemetry::StartAgentActivity {
                     agent_label: label.clone(),
-                    operation: GenAiOperation::CreateAgent,
+                    operation: telemetry::GenAiOperation::CreateAgent,
                     agent_name: label.clone(),
                     provider: llm.and_then(|l| {
                         lk_agents_core::telemetry::gen_ai::provider_name(&l.provider)
@@ -357,7 +358,7 @@ impl VoiceDriver {
                     .map(|a| a.activity);
                 let (under, activity) = match &self.session.starting {
                     Some(start) if self.activity.update.is_none() => (
-                        Under::Start,
+                        telemetry::Under::Start,
                         match reserved {
                             Some(r) => self.telemetry.open_in_reserved(&start.span, r, decl),
                             None => self.telemetry.open_in(&start.span, decl),
@@ -366,37 +367,40 @@ impl VoiceDriver {
                     _ => {
                         let previous = String::new();
                         let agent = label.clone();
-                        let update =
-                            UpdateAgent { previous_agent_label: previous, agent_label: agent };
+                        let update = telemetry::UpdateAgent {
+                            previous_agent_label: previous,
+                            agent_label: agent,
+                        };
                         self.agent_update(reserved_update, update)?;
                         let update = &self.activity.update.as_ref()?.span;
                         let activity = match reserved {
                             Some(r) => self.telemetry.open_in_reserved(update, r, decl),
                             None => self.telemetry.open_in(update, decl),
                         };
-                        (Under::Update, activity)
+                        (telemetry::Under::Update, activity)
                     }
                 };
                 self.activity.running_activity = self.telemetry.context(&activity);
-                let hook = self.telemetry.open_in(&activity, OnEnter { agent_label: label });
-                Some(HookSpan::Enter { under, activity, hook })
+                let hook =
+                    self.telemetry.open_in(&activity, telemetry::OnEnter { agent_label: label });
+                Some(telemetry::HookSpan::Enter { under, activity, hook })
             }
             HookKind::OnExit => {
-                let decl = DrainAgentActivity { agent_label: label.clone() };
+                let decl = telemetry::DrainAgentActivity { agent_label: label.clone() };
                 let (under, drain) = match &self.session.closing_span {
-                    Some(close) => (Under::Close, self.telemetry.open_in(close, decl)),
+                    Some(close) => (telemetry::Under::Close, self.telemetry.open_in(close, decl)),
                     None => {
-                        let update = UpdateAgent {
+                        let update = telemetry::UpdateAgent {
                             previous_agent_label: label.clone(),
                             agent_label: arriving.unwrap_or_default().to_owned(),
                         };
                         self.agent_update(reserved_update, update)?;
                         let update = &self.activity.update.as_ref()?.span;
-                        (Under::Update, self.telemetry.open_in(update, decl))
+                        (telemetry::Under::Update, self.telemetry.open_in(update, decl))
                     }
                 };
-                let hook = self.telemetry.open_in(&drain, OnExit { agent_label: label });
-                Some(HookSpan::Exit { under, drain, hook })
+                let hook = self.telemetry.open_in(&drain, telemetry::OnExit { agent_label: label });
+                Some(telemetry::HookSpan::Exit { under, drain, hook })
             }
             HookKind::OnUserTurnCompleted
             | HookKind::OnUserTurnExceeded
@@ -407,16 +411,20 @@ impl VoiceDriver {
 
     /// The callback returned, raised or timed out: its span ends, and the activity it ran in; the
     /// `session_start` or `update_agent` holding it ends once done and holding no other.
-    pub(crate) fn hook_span_ended(&mut self, span: HookSpan, failure: Option<&dyn SpanError>) {
-        let entered = matches!(span, HookSpan::Enter { .. });
+    pub(crate) fn hook_span_ended(
+        &mut self,
+        span: telemetry::HookSpan,
+        failure: Option<&dyn telemetry::SpanError>,
+    ) {
+        let entered = matches!(span, telemetry::HookSpan::Enter { .. });
         let under = span.end(&mut self.telemetry, failure);
         match (entered, under) {
-            (true, Under::Start) => {
+            (true, telemetry::Under::Start) => {
                 if let Some(start) = &mut self.session.starting {
                     start.done = true;
                 }
             }
-            (true, Under::Update) => {
+            (true, telemetry::Under::Update) => {
                 if let Some(update) = &mut self.activity.update {
                     update.done = true;
                 }
@@ -430,12 +438,12 @@ impl VoiceDriver {
     pub(crate) fn settle_holdings(&mut self) {
         let hooks = &self.activity.hooks;
         let busy = |under| hooks.running_under(under);
-        if self.session.starting.as_ref().is_some_and(|s| s.done && !busy(Under::Start))
+        if self.session.starting.as_ref().is_some_and(|s| s.done && !busy(telemetry::Under::Start))
             && let Some(start) = self.session.starting.take()
         {
             self.telemetry.end(start.span, ());
         }
-        if self.activity.update.as_ref().is_some_and(|u| u.done && !busy(Under::Update))
+        if self.activity.update.as_ref().is_some_and(|u| u.done && !busy(telemetry::Under::Update))
             && let Some(update) = self.activity.update.take()
         {
             self.telemetry.end(update.span, ());
@@ -446,13 +454,15 @@ impl VoiceDriver {
     /// `update_agent`, which ends with it, or [`VoiceDriver::agent_updated`] without one.
     pub(crate) fn agent_suspended(&mut self, previous: &str, next: &str) {
         let reserved = self.activity.arriving.as_ref().and_then(|a| a.update);
-        let decl =
-            UpdateAgent { previous_agent_label: previous.to_owned(), agent_label: next.to_owned() };
+        let decl = telemetry::UpdateAgent {
+            previous_agent_label: previous.to_owned(),
+            agent_label: next.to_owned(),
+        };
         if self.agent_update(reserved, decl).is_none() {
             return;
         }
         let Some(update) = &self.activity.update else { return };
-        let pause = PauseAgentActivity { agent_label: previous.to_owned() };
+        let pause = telemetry::PauseAgentActivity { agent_label: previous.to_owned() };
         let span = self.telemetry.open_in(&update.span, pause);
         self.telemetry.end(span, ());
     }
@@ -461,10 +471,12 @@ impl VoiceDriver {
     pub(crate) fn agent_resumed(&mut self, previous: &str, next: &str) {
         self.agent_updated();
         let Some(root) = self.session.span.as_ref() else { return };
-        let decl =
-            UpdateAgent { previous_agent_label: previous.to_owned(), agent_label: next.to_owned() };
+        let decl = telemetry::UpdateAgent {
+            previous_agent_label: previous.to_owned(),
+            agent_label: next.to_owned(),
+        };
         let update = self.telemetry.open_in(root, decl);
-        let resume = ResumeAgentActivity { agent_label: next.to_owned() };
+        let resume = telemetry::ResumeAgentActivity { agent_label: next.to_owned() };
         let span = self.telemetry.open_in(&update, resume);
         self.telemetry.end(span, ());
         self.telemetry.end(update, ());

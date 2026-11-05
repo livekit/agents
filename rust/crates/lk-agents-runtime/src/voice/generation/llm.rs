@@ -96,7 +96,7 @@ async fn chat_request(
     // Rendered per request, so a tool's state change reaches the step after it.
     if let Some(dynamic) = &ctx.resources.dynamic_instructions {
         let speech = handle.object();
-        match dynamic.render(&telemetry::Cx::NONE, speech).await {
+        match dynamic.render(&ctx.turn_cx(shared), speech).await {
             Ok(text) => lk_agents_voice::generation::append_instructions(&mut chat_ctx, &text),
             Err(e) => {
                 log::error!(target: "livekit.agents", "the agent's instructions functions failed; the static instructions are sent: {e}")

@@ -6,18 +6,8 @@
 use crate::agent::Source;
 use crate::agent_session::{AmdSpan, VoiceDriver};
 use crate::events::ErrorEvent;
-use crate::telemetry::{
-    self, AmdDetection, Holding, SessionTelemetry, Trace, UserTurnSpan, participant_attrs,
-};
+use crate::telemetry;
 use lk_agents_abi::Ts;
-use lk_agents_abi::telemetry::decl::{Content, Seconds, SpanContext, SpanDecl};
-use lk_agents_abi::telemetry::errors::SpanError;
-use lk_agents_abi::telemetry::spans::common::{GenAiOperation, ParticipantAttrs};
-use lk_agents_abi::telemetry::spans::session::{
-    AgentSession, AgentStateChanged, Amd, AmdVerdict, CloseReason, ConnectionStateChanged,
-    EventLoopBlockedEvent, ParticipantDisconnected, ParticipantLinked, SessionClose, SessionStart,
-    UserStateChanged,
-};
 use lk_agents_abi::voice::events::{AgentState, UserState};
 use lk_agents_abi::voice::room_io::ParticipantInfo;
 use lk_agents_abi::voice::rtc::{ConnectionState, DisconnectReason};
@@ -25,22 +15,29 @@ use lk_agents_core::tts::markup::ChatMessageExt;
 
 /// The session's trace: span ids from `telemetry.ids`, else seeded from the session id (tests,
 /// the DST); `gen_ai.conversation.id` the call's, else the session's own id.
-pub(crate) fn trace(session: &str, telemetry: &mut SessionTelemetry, now: super::Now) -> Trace {
-    let ids =
-        telemetry.ids.take().unwrap_or_else(|| telemetry::seeded_ids(telemetry::fnv(session)));
-    let conversation = telemetry.conversation.take().or_else(|| Some(session.to_owned()));
-    Trace::new(ids, now.at, now.wall, telemetry.job.take(), conversation)
+pub(crate) fn trace(
+    session: &str,
+    supplied: &mut telemetry::SessionTelemetry,
+    now: super::Now,
+) -> telemetry::Trace {
+    let ids = supplied.ids.take().unwrap_or_else(|| telemetry::seeded_ids(telemetry::fnv(session)));
+    let conversation = supplied.conversation.take().or_else(|| Some(session.to_owned()));
+    telemetry::Trace::new(ids, now.at, now.wall, supplied.job.take(), conversation)
 }
 
 impl VoiceDriver {
     /// `start()`, as the session is built: `agent_session` and `session_start` open, as `start()`
     /// reserved them.
-    pub(super) fn open_session_spans(&mut self, telemetry: SessionTelemetry, agent: &str) {
-        let SessionTelemetry { parent, job_ids, opening, .. } = telemetry;
-        let decl = AgentSession {
+    pub(super) fn open_session_spans(
+        &mut self,
+        telemetry: telemetry::SessionTelemetry,
+        agent: &str,
+    ) {
+        let telemetry::SessionTelemetry { parent, job_ids, opening, .. } = telemetry;
+        let decl = telemetry::AgentSession {
             agent_label: agent.to_owned(),
-            operation: GenAiOperation::InvokeWorkflow,
-            workflow: AgentSession::NAME.to_owned(),
+            operation: telemetry::GenAiOperation::InvokeWorkflow,
+            workflow: <telemetry::AgentSession as telemetry::SpanDecl>::NAME.to_owned(),
             dispatch_id: job_ids.dispatch_id,
             worker_id: job_ids.worker_id,
             agent_id: job_ids.agent_id,
@@ -54,22 +51,22 @@ impl VoiceDriver {
                     activity,
                 });
                 let root = trace.open_root(parent, Some(o.session), decl);
-                let start = trace.open_in_reserved(&root, o.start, SessionStart);
+                let start = trace.open_in_reserved(&root, o.start, telemetry::SessionStart);
                 (root, start)
             }
             None => {
                 let root = trace.open_root(parent, None, decl);
-                let start = trace.open_in(&root, SessionStart);
+                let start = trace.open_in(&root, telemetry::SessionStart);
                 (root, start)
             }
         };
-        self.session.starting = Some(Holding { span: start, done: false });
+        self.session.starting = Some(telemetry::Holding { span: start, done: false });
         self.session.span = Some(root);
     }
 
     /// `session_start`'s context while it is open: the room connection and the waits the runtime
     /// runs for it nest under it.
-    pub fn session_start_span(&self) -> Option<SpanContext> {
+    pub fn session_start_span(&self) -> Option<telemetry::SpanContext> {
         self.telemetry.context(&self.session.starting.as_ref()?.span)
     }
 
@@ -87,20 +84,20 @@ impl VoiceDriver {
         reason: lk_agents_abi::voice::events::CloseReason,
         drain: bool,
         error: Option<&ErrorEvent>,
-    ) -> Option<telemetry::ManualSpan<SessionClose>> {
+    ) -> Option<telemetry::ManualSpan<telemetry::SessionClose>> {
         use lk_agents_abi::voice::events::CloseReason as R;
         let root = self.session.span.as_ref()?;
         let reason = match reason {
-            R::Error => CloseReason::Error,
-            R::JobShutdown => CloseReason::JobShutdown,
-            R::ParticipantDisconnected => CloseReason::ParticipantDisconnected,
-            R::UserInitiated => CloseReason::UserInitiated,
-            R::TaskCompleted => CloseReason::TaskCompleted,
+            R::Error => telemetry::CloseReason::Error,
+            R::JobShutdown => telemetry::CloseReason::JobShutdown,
+            R::ParticipantDisconnected => telemetry::CloseReason::ParticipantDisconnected,
+            R::UserInitiated => telemetry::CloseReason::UserInitiated,
+            R::TaskCompleted => telemetry::CloseReason::TaskCompleted,
         };
-        let decl = SessionClose {
+        let decl = telemetry::SessionClose {
             reason,
             drain,
-            error: error.map(|e| e.error.exception_type().into_owned()),
+            error: error.map(|e| telemetry::SpanError::exception_type(&e.error).into_owned()),
         };
         Some(self.telemetry.open_in(root, decl))
     }
@@ -110,7 +107,10 @@ impl VoiceDriver {
         let seconds = duration.as_secs_f64();
         self.session.blocking.stalled(seconds);
         let Some(root) = &self.session.span else { return };
-        self.telemetry.event(root, EventLoopBlockedEvent { duration: Seconds(seconds) });
+        self.telemetry.event(
+            root,
+            telemetry::EventLoopBlockedEvent { duration: telemetry::Seconds(seconds) },
+        );
     }
 
     /// The AMD detector attached (`amd` opens, as the detector reserved it) or released its
@@ -120,20 +120,20 @@ impl VoiceDriver {
         let p = match ev {
             AmdSpan::Attached(reserved) => {
                 if self.session.amd.is_none() {
-                    let span = self.telemetry.open_in_reserved(root, *reserved, Amd);
-                    self.session.amd = Some(AmdDetection { span });
+                    let span = self.telemetry.open_in_reserved(root, *reserved, telemetry::Amd);
+                    self.session.amd = Some(telemetry::AmdDetection { span });
                 }
                 return;
             }
             AmdSpan::Verdict(p) => p,
         };
         let Some(amd) = self.session.amd.take() else { return };
-        let verdict = AmdVerdict {
+        let verdict = telemetry::AmdVerdict {
             category: p.category.into(),
             reason: p.reason.as_str().to_owned(),
-            speech_duration: Seconds(p.speech_duration.as_secs_f64()),
-            delay: Seconds(p.delay.as_secs_f64()),
-            transcript: Content(p.transcript.clone()),
+            speech_duration: telemetry::Seconds(p.speech_duration.as_secs_f64()),
+            delay: telemetry::Seconds(p.delay.as_secs_f64()),
+            transcript: telemetry::Content(p.transcript.clone()),
         };
         self.telemetry.end(amd.span, Some(verdict));
     }
@@ -141,7 +141,7 @@ impl VoiceDriver {
     /// The room's connection state changed: the session's event.
     pub(crate) fn connection_span_event(&mut self, state: ConnectionState) {
         let Some(root) = &self.session.span else { return };
-        self.telemetry.event(root, ConnectionStateChanged { state: state.into() });
+        self.telemetry.event(root, telemetry::ConnectionStateChanged { state: state.into() });
     }
 
     /// The linked participant joined or left (`reason`): the session's event, with the room's
@@ -154,14 +154,19 @@ impl VoiceDriver {
     ) {
         let Some(root) = &self.session.span else { return };
         let participant = known.as_ref().map_or_else(
-            || ParticipantAttrs { id: None, identity: Content(identity.to_owned()), kind: None },
-            participant_attrs,
+            || telemetry::ParticipantAttrs {
+                id: None,
+                identity: telemetry::Content(identity.to_owned()),
+                kind: None,
+            },
+            telemetry::participant_attrs,
         );
         match left {
-            None => self.telemetry.event(root, ParticipantLinked { participant }),
+            None => self.telemetry.event(root, telemetry::ParticipantLinked { participant }),
             Some(reason) => {
                 let reason = telemetry::disconnect_reason(reason);
-                self.telemetry.event(root, ParticipantDisconnected { participant, reason });
+                self.telemetry
+                    .event(root, telemetry::ParticipantDisconnected { participant, reason });
             }
         }
     }
@@ -169,7 +174,7 @@ impl VoiceDriver {
     /// The agent state changed: the session's event; leaving `speaking` ends `agent_speaking`.
     pub(crate) fn agent_state_span_event(&mut self, old: AgentState, new: AgentState) {
         if let Some(root) = &self.session.span {
-            let event = AgentStateChanged { old: old.into(), new: new.into() };
+            let event = telemetry::AgentStateChanged { old: old.into(), new: new.into() };
             self.telemetry.event(root, event);
         }
         if old == AgentState::Speaking {
@@ -181,7 +186,7 @@ impl VoiceDriver {
     pub(crate) fn user_state_span_event(&mut self, old: UserState, new: UserState, at: Ts) {
         let Some(root) = &self.session.span else { return };
         let at = at.min(self.telemetry.now());
-        let event = UserStateChanged { at, old: old.into(), new: new.into() };
+        let event = telemetry::UserStateChanged { at, old: old.into(), new: new.into() };
         self.telemetry.event(root, event);
     }
 
@@ -202,7 +207,7 @@ impl VoiceDriver {
             }
             (Source::UserInput { .. } | Source::UserTyped, Some(text)) => {
                 let participant = self.session.room.linked_participant();
-                UserTurnSpan::typed(&mut self.telemetry, participant, &text)
+                telemetry::UserTurnSpan::typed(&mut self.telemetry, participant, &text)
             }
             (Source::UserTurn { turn }, _) => turns.of_user_turn(*turn),
             (source, _) => source.speech().and_then(|s| turns.of_speech(s)),
