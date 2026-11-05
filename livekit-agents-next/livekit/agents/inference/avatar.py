@@ -20,8 +20,6 @@ from ..voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOu
 from . import Credentials, get_inference_headers
 
 if TYPE_CHECKING:
-    import aiohttp
-
     from ..voice import VoiceSession
 
 
@@ -69,7 +67,6 @@ class AvatarSession(BaseAvatarSession):
         base_url: NotGivenOr[str] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         api_secret: NotGivenOr[str] = NOT_GIVEN,
-        http_session: aiohttp.ClientSession | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
         """
@@ -95,7 +92,6 @@ class AvatarSession(BaseAvatarSession):
                 gateway (see ``get_default_inference_url``).
             api_key: Gateway API key (see the class docstring for resolution).
             api_secret: Gateway API secret (see the class docstring).
-            http_session: Unused; the core owns the connection.
             conn_options: Retry and phase limits of the create and terminate requests.
         """
         super().__init__()

@@ -408,9 +408,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                     if sent_any:
                         drained_confidently = await recv_task
                     else:
-                        await utils.aio.gracefully_cancel(recv_task)
+                        await utils.aio.cancel_and_wait(recv_task)
                 finally:
-                    await utils.aio.gracefully_cancel(send_task, recv_task)
+                    await utils.aio.cancel_and_wait(send_task, recv_task)
                     if self._opts.use_continuations and ctx_state["opened"]:
                         removed = False
                         if not ctx_state["finalized"]:

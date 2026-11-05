@@ -1031,7 +1031,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         except Exception as e:
             raise APIConnectionError(f"TTS stream failed: {e}") from e
         finally:
-            await utils.aio.gracefully_cancel(*tasks)
+            await utils.aio.cancel_and_wait(*tasks)
             output_emitter.end_input()
 
     async def _run_ws(
@@ -1233,7 +1233,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     )
                 finally:
                     input_sent_event.set()
-                    await utils.aio.gracefully_cancel(*tasks)
+                    await utils.aio.cancel_and_wait(*tasks)
                     self._send_task = None
                     self._recv_task = None
 

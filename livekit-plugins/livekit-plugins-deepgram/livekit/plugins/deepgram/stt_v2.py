@@ -569,13 +569,13 @@ class SpeechStreamv2(stt.RecognizeStream):
 
                     self._reconnect_event.clear()
                 finally:
-                    await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
+                    await utils.aio.cancel_and_wait(*tasks, wait_reconnect_task)
                     tasks_group.cancel()
                     tasks_group.exception()  # retrieve the exception
             finally:
                 self._ws = None
                 if self._reconfigure_atask is not None:
-                    await utils.aio.gracefully_cancel(self._reconfigure_atask)
+                    await utils.aio.cancel_and_wait(self._reconfigure_atask)
                     self._reconfigure_atask = None
                 if ws is not None:
                     await ws.close()

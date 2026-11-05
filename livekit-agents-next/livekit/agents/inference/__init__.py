@@ -7,11 +7,9 @@ import asyncio
 import os
 import platform
 from collections.abc import Mapping
-from concurrent.futures import Executor
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
-import aiohttp
 from pydantic import JsonValue
 
 from livekit import rtc
@@ -166,7 +164,6 @@ class VAD(vad.VAD):
         max_buffered_speech: float = 60.0,
         activation_threshold: float = 0.5,
         deactivation_threshold: NotGivenOr[float] = NOT_GIVEN,
-        executor: Executor | None = None,
     ) -> None:
         """
         Args:
@@ -178,7 +175,6 @@ class VAD(vad.VAD):
             activation_threshold: The probability above which a window is speech.
             deactivation_threshold: The probability below which speech ends;
                 ``activation_threshold - 0.15`` by default.
-            executor: Unused; the core runs the model.
         """
         super().__init__(capabilities=vad.VADCapabilities(update_interval=0.032))
         if model != "silero":
@@ -302,7 +298,6 @@ class TurnDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         sample_rate: int = DEFAULT_SAMPLE_RATE,
         local_fallback: bool = True,
-        http_session: aiohttp.ClientSession | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
         """
@@ -318,7 +313,6 @@ class TurnDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
             sample_rate: The rate the detector hears.
             local_fallback: Whether ``v1`` may degrade to the local ``v1-mini`` model when the
                 gateway fails; without it turns commit on the endpointing delay instead.
-            http_session: Unused; the core owns the connection.
             conn_options: The gateway's timeout and retries.
         """
         super().__init__()

@@ -331,7 +331,7 @@ class SpeechStream(stt.RecognizeStream):
                     if not input_ended:
                         self._reconnect_event.clear()
                 finally:
-                    await utils.aio.gracefully_cancel(process_input_task, wait_reconnect_task)
+                    await utils.aio.cancel_and_wait(process_input_task, wait_reconnect_task)
 
                 # close the push stream to flush finals for buffered audio before
                 # teardown, otherwise ending input truncates the transcript

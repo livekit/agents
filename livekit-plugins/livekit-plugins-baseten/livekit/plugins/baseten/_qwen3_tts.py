@@ -631,7 +631,7 @@ class Qwen3SynthesizeStream(tts_module.SynthesizeStream):
             try:
                 await asyncio.gather(send_task, self._drain(recv_task, state))
             finally:
-                await utils.aio.gracefully_cancel(send_task, recv_task)
+                await utils.aio.cancel_and_wait(send_task, recv_task)
 
             output_emitter.end_input()
             discard = False

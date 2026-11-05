@@ -393,7 +393,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         except Exception as e:
             raise APIConnectionError() from e
         finally:
-            await utils.aio.gracefully_cancel(*tasks)
+            await utils.aio.cancel_and_wait(*tasks)
 
     async def _run_ws(
         self, word_stream: tokenize.WordStream, output_emitter: tts.AudioEmitter
@@ -456,4 +456,4 @@ class SynthesizeStream(tts.SynthesizeStream):
                 await asyncio.gather(*tasks)
             finally:
                 input_sent_event.set()
-                await utils.aio.gracefully_cancel(*tasks)
+                await utils.aio.cancel_and_wait(*tasks)

@@ -366,7 +366,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 finally:
                     input_sent_event.set()
                     await sent_tokenizer_stream.aclose()
-                    await utils.aio.gracefully_cancel(*tasks)
+                    await utils.aio.cancel_and_wait(*tasks)
         except TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:

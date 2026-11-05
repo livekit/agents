@@ -607,7 +607,7 @@ class SpeechStream(stt.RecognizeStream):
 
                     self._reconnect_event.clear()
                 finally:
-                    await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task, group)
+                    await utils.aio.cancel_and_wait(*tasks, wait_reconnect_task, group)
             finally:
                 if ws is not None:
                     await ws.close()

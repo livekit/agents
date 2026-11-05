@@ -276,7 +276,7 @@ class _LegacyWebSocketSynthesizeStream(tts.SynthesizeStream):
                 finally:
                     input_sent_event.set()
                     await sent_stream.aclose()
-                    await utils.aio.gracefully_cancel(*tasks)
+                    await utils.aio.cancel_and_wait(*tasks)
         except TimeoutError as cause:
             raise APITimeoutError() from redacted_cause(cause)
         except aiohttp.ClientResponseError as error:

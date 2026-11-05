@@ -955,7 +955,7 @@ class SpeechStream(stt.RecognizeStream):
             except Exception:
                 logger.exception("an error occurred while streaming input to google STT")
             finally:
-                await utils.aio.gracefully_cancel(
+                await utils.aio.cancel_and_wait(
                     stop_task, *([frame_task] if frame_task is not None else [])
                 )
 
@@ -1095,7 +1095,7 @@ class SpeechStream(stt.RecognizeStream):
                             except TimeoutError:
                                 pass
 
-                        await utils.aio.gracefully_cancel(process_stream_task, wait_reconnect_task)
+                        await utils.aio.cancel_and_wait(process_stream_task, wait_reconnect_task)
             except DeadlineExceeded:
                 raise APITimeoutError() from None
             except GoogleAPICallError as e:

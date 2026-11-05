@@ -421,7 +421,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 try:
                     await asyncio.gather(*tasks)
                 finally:
-                    await utils.aio.gracefully_cancel(*tasks)
+                    await utils.aio.cancel_and_wait(*tasks)
         except TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:

@@ -910,7 +910,7 @@ class SpeechStream(stt.RecognizeStream):
                         self._reconnect_event.clear()
                         logger.info("Reconnecting Gladia session due to options change")
                     finally:
-                        await utils.aio.gracefully_cancel(send_task, recv_task, wait_reconnect_task)
+                        await utils.aio.cancel_and_wait(send_task, recv_task, wait_reconnect_task)
                         self._ws = None
             except APIStatusError as e:
                 if e.status_code == 429:

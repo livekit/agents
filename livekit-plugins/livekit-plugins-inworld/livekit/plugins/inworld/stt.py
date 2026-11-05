@@ -341,7 +341,7 @@ class SpeechStream(stt.RecognizeStream):
 
                     self._reconnect_event.clear()
                 finally:
-                    await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
+                    await utils.aio.cancel_and_wait(*tasks, wait_reconnect_task)
                     tasks_group.cancel()
                     tasks_group.exception()
 

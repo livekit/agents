@@ -239,7 +239,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             if active_call is not None:
                 active_call.cancel()
             token_q.put(None)
-            await utils.aio.gracefully_cancel(*tasks)
+            await utils.aio.cancel_and_wait(*tasks)
             if not done_fut.done():
                 logger.warning("NVIDIA synthesis cleanup incomplete; SDK worker retains ownership")
             await sent_tokenizer_stream.aclose()

@@ -190,9 +190,9 @@ async def test_google_stt_stream_cancel_waits_for_cleanup_if_cancelled_twice(mon
     cleanup_started = asyncio.Event()
     cleanup_release = asyncio.Event()
     cleanup_done = asyncio.Event()
-    original_gracefully_cancel = google_stt.utils.aio.gracefully_cancel
+    original_cancel_and_wait = google_stt.utils.aio.cancel_and_wait
 
-    async def delayed_input_cleanup(*tasks):
+    async def delayed_input_cleanup(*tasks, **kwargs):
         if any(
             isinstance(task, asyncio.Task) and task.get_coro().__qualname__ == "Chan.recv"
             for task in tasks
@@ -200,14 +200,13 @@ async def test_google_stt_stream_cancel_waits_for_cleanup_if_cancelled_twice(mon
             cleanup_started.set()
             try:
                 await cleanup_release.wait()
-                await original_gracefully_cancel(*tasks)
+                return await original_cancel_and_wait(*tasks, **kwargs)
             finally:
                 cleanup_done.set()
-            return
 
-        await original_gracefully_cancel(*tasks)
+        return await original_cancel_and_wait(*tasks, **kwargs)
 
-    monkeypatch.setattr(google_stt.utils.aio, "gracefully_cancel", delayed_input_cleanup)
+    monkeypatch.setattr(google_stt.utils.aio, "cancel_and_wait", delayed_input_cleanup)
 
     try:
         await asyncio.wait_for(client.call_ready.wait(), timeout=1)

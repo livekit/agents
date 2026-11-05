@@ -416,7 +416,7 @@ class TTS(tts.TTS):
 
     async def aclose(self) -> None:
         if self._prewarm_task:
-            await utils.aio.gracefully_cancel(self._prewarm_task)
+            await utils.aio.cancel_and_wait(self._prewarm_task)
             self._prewarm_task = None
 
         for stream in list(self._streams):
@@ -640,7 +640,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             # after close_context() isn't pushed into an emitter with no open segment
             connection.unregister_stream(self._context_id)
             output_emitter.end_segment()
-            await utils.aio.gracefully_cancel(input_t, stream_t)
+            await utils.aio.cancel_and_wait(input_t, stream_t)
             if not context_closed:
                 with contextlib.suppress(Exception):
                     connection.close_context(self._context_id)
@@ -1125,9 +1125,9 @@ class _Connection:
             await self._ws.close()
 
         if self._send_task:
-            await utils.aio.gracefully_cancel(self._send_task)
+            await utils.aio.cancel_and_wait(self._send_task)
         if self._recv_task:
-            await utils.aio.gracefully_cancel(self._recv_task)
+            await utils.aio.cancel_and_wait(self._recv_task)
 
         self._ws = None
 

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 
-import aiohttp
 from openai.types.beta.realtime.session import TurnDetection
 from openai.types.realtime import AudioTranscription, RealtimeReasoning
 from openai.types.realtime.realtime_audio_input_turn_detection import ServerVad
@@ -48,7 +47,6 @@ class RealtimeModel(openai.realtime.RealtimeModel):
         input_audio_transcription: NotGivenOr[AudioTranscription | None] = NOT_GIVEN,
         reasoning: NotGivenOr[RealtimeReasoning | None] = NOT_GIVEN,
         speed: NotGivenOr[float] = NOT_GIVEN,
-        http_session: aiohttp.ClientSession | None = None,
         max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
@@ -83,7 +81,6 @@ class RealtimeModel(openai.realtime.RealtimeModel):
             modalities=["audio", "text"],
             input_audio_transcription=resolved_transcription,
             turn_detection=resolved_turn_detection,
-            http_session=http_session,
             max_session_duration=resolved_max_session_duration,
             conn_options=conn_options,
             reasoning=reasoning,

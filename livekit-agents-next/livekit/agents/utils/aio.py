@@ -360,9 +360,6 @@ async def cancel_and_wait(
         waiter.cancel()
 
 
-gracefully_cancel = cancel_and_wait
-
-
 class ConnectionPool(Generic[T]):
     """Helper class to manage persistent connections like websockets.
 
@@ -544,7 +541,7 @@ class ConnectionPool(Generic[T]):
     async def aclose(self) -> None:
         """Close all connections, draining any pending connection closures."""
         if self._prewarm_task is not None and (task := self._prewarm_task()) is not None:
-            await gracefully_cancel(task)
+            await cancel_and_wait(task)
         # the retired connections too, rather than waiting for holders that may never return them
         self._state.close_all()
         await self._drain_to_close()
@@ -560,5 +557,4 @@ __all__ = [
     "await_cleanup",
     "pending_cleanup_count",
     "ChanEmpty",
-    "gracefully_cancel",
 ]

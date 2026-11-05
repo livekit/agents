@@ -529,7 +529,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 except asyncio.CancelledError as e:
                     turn_was_sent = input_sent.is_set()
                     input_sent.set()
-                    await utils.aio.gracefully_cancel(*tasks)
+                    await utils.aio.cancel_and_wait(*tasks)
                     if text_sent and not turn_was_sent:
                         # Cancellation interrupted the first write, so whether the
                         # server owns this context is unknowable. Do not reuse it.
@@ -582,7 +582,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     raise
                 finally:
                     input_sent.set()
-                    await utils.aio.gracefully_cancel(*tasks)
+                    await utils.aio.cancel_and_wait(*tasks)
             if cancelled is not None:
                 raise cancelled
         except TimeoutError:

@@ -364,7 +364,7 @@ class SpeechStream(stt.RecognizeStream):
                         with contextlib.suppress(asyncio.TimeoutError):
                             await asyncio.wait_for(asyncio.shield(recv_task), timeout=1.0)
                 finally:
-                    await utils.aio.gracefully_cancel(send_task, recv_task)
+                    await utils.aio.cancel_and_wait(send_task, recv_task)
 
         except websockets.exceptions.ConnectionClosed as e:
             raise APIConnectionError(f"Gnani STT WebSocket closed unexpectedly: {e}") from e

@@ -3,8 +3,6 @@ from __future__ import annotations
 import functools
 from typing import Any
 
-import aiohttp
-
 from livekit.agents._generated.tts_provider_options import (
     CartesiaOptions as CartesiaOptions,
     DeepgramOptions as DeepgramOptions,
@@ -72,7 +70,6 @@ class TTS(tts.TTS):
         base_url: NotGivenOr[str] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         api_secret: NotGivenOr[str] = NOT_GIVEN,
-        http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
@@ -88,7 +85,6 @@ class TTS(tts.TTS):
             base_url: The gateway URL; ``LIVEKIT_INFERENCE_URL`` or the cloud gateway by default.
             api_key: ``LIVEKIT_INFERENCE_API_KEY`` or ``LIVEKIT_API_KEY`` by default.
             api_secret: ``LIVEKIT_INFERENCE_API_SECRET`` or ``LIVEKIT_API_SECRET`` by default.
-            http_session: Unused; the core owns the connection.
             extra_kwargs: Provider options passed through to the gateway.
             fallback: Fallback models, names or ``FallbackModel`` entries, run by the gateway.
             conn_options: The connection timeout, and the retries the gateway runs server-side.

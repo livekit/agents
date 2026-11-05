@@ -1412,7 +1412,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             connection.close_context(context_id)
             raise APIConnectionError() from e
         finally:
-            await utils.aio.gracefully_cancel(*tasks)
+            await utils.aio.cancel_and_wait(*tasks)
             await sent_tokenizer_stream.aclose()
             output_emitter.end_input()
 

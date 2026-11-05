@@ -39,7 +39,6 @@ import sys
 import time
 from typing import Any
 
-import aiohttp
 import numpy as np
 
 from livekit import api, rtc
@@ -118,12 +117,11 @@ def run_agent(name: str) -> None:
 
 
 async def synthesize(lines: list[str]) -> list[list[rtc.AudioFrame]]:
-    async with aiohttp.ClientSession() as http:
-        tts = inference.TTS(TTS, http_session=http)
-        out = []
-        for line in lines:
-            out.append([audio.frame async for audio in tts.synthesize(line)])
-        return out
+    tts = inference.TTS(TTS)
+    out = []
+    for line in lines:
+        out.append([audio.frame async for audio in tts.synthesize(line)])
+    return out
 
 
 async def one_call(lkapi: api.LiveKitAPI, agent: str, speech: list[list[rtc.AudioFrame]]) -> dict:

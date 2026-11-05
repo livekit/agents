@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal
 
 from .. import _core
 from .._generated.realtime_options import OpenAIRealtimeConfig
@@ -14,9 +14,6 @@ from . import (
     get_inference_headers,
     resolve_credentials,
 )
-
-if TYPE_CHECKING:
-    import aiohttp
 
 __all__ = [
     "RealtimeModel",
@@ -46,7 +43,6 @@ class RealtimeModel(_RealtimeModel):
         tracing: NotGivenOr[Any] = NOT_GIVEN,
         truncation: NotGivenOr[Any] = NOT_GIVEN,
         reasoning: NotGivenOr[Any] = NOT_GIVEN,
-        http_session: aiohttp.ClientSession | None = None,
         max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:

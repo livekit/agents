@@ -442,7 +442,7 @@ class SpeechStream(stt.RecognizeStream):
             ) from None
         finally:
             if tasks:
-                await utils.aio.gracefully_cancel(*tasks)
+                await utils.aio.cancel_and_wait(*tasks)
             self._flush_usage()
             if ws is not None:
                 await _close_quietly(ws)

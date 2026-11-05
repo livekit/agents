@@ -1267,7 +1267,7 @@ class SpeechStream(stt.RecognizeStream):
                         if speech_started:
                             speech_started = False
                             self.send(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
-                        await utils.aio.gracefully_cancel(
+                        await utils.aio.cancel_and_wait(
                             *[
                                 task
                                 for task in (
@@ -1287,7 +1287,7 @@ class SpeechStream(stt.RecognizeStream):
 
                     if wait_switch in done and pending_failover is not None:
                         reason, exc, timeout_s = pending_failover
-                        await utils.aio.gracefully_cancel(
+                        await utils.aio.cancel_and_wait(
                             *[
                                 task
                                 for task in (
@@ -1319,7 +1319,7 @@ class SpeechStream(stt.RecognizeStream):
 
                     if recv in done:
                         input_exhausted = recv.result()
-                        await utils.aio.gracefully_cancel(
+                        await utils.aio.cancel_and_wait(
                             *[
                                 task
                                 for task in (
@@ -1345,7 +1345,7 @@ class SpeechStream(stt.RecognizeStream):
                         retry_connection = True
                         break
 
-                    await utils.aio.gracefully_cancel(
+                    await utils.aio.cancel_and_wait(
                         *[
                             task
                             for task in (
@@ -1381,7 +1381,7 @@ class SpeechStream(stt.RecognizeStream):
                 ]
                 if tasks:
                     with contextlib.suppress(Exception, asyncio.CancelledError):
-                        await utils.aio.gracefully_cancel(*tasks)
+                        await utils.aio.cancel_and_wait(*tasks)
                 raise
             except Exception as exc:
                 cancel_final_timeout()
@@ -1400,7 +1400,7 @@ class SpeechStream(stt.RecognizeStream):
                 ]
                 if tasks:
                     with contextlib.suppress(Exception):
-                        await utils.aio.gracefully_cancel(*tasks)
+                        await utils.aio.cancel_and_wait(*tasks)
                 if (
                     not is_non_retryable_client_error(exc)
                     and candidate_attempts < self._candidate_max_retry

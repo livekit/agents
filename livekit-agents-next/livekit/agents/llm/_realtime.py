@@ -8,21 +8,16 @@ class keeps the plugin's constructor and hands its arguments over as given.
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal
+
+from pydantic import BaseModel
 
 from .. import _core
-from .._generated.realtime_options import OpenAIRealtimeConfig
-from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+from .._generated.realtime_options import OpenAIRealtimeConfig, RealtimeOptions
+from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGiven, NotGivenOr
 from ..utils import is_given
 from . import realtime as llm_realtime
 from .tool_context import ToolChoice
-
-if TYPE_CHECKING:
-    import aiohttp
-from pydantic import BaseModel
-
-from .._generated.realtime_options import RealtimeOptions
-from ..types import NotGiven
 
 RealtimeModels = Literal[
     "gpt-realtime",
@@ -72,7 +67,6 @@ class RealtimeModel(llm_realtime.RealtimeModel):
         truncation: NotGivenOr[Any] = NOT_GIVEN,
         reasoning: NotGivenOr[Any] = NOT_GIVEN,
         api_key: str | None = None,
-        http_session: aiohttp.ClientSession | None = None,
         azure_deployment: str | None = None,
         entra_token: str | None = None,
         max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
@@ -96,7 +90,6 @@ class RealtimeModel(llm_realtime.RealtimeModel):
             truncation (RealtimeTruncation | None | NotGiven): Truncation configuration for OpenAI Realtime.
             reasoning (RealtimeReasoning | None | NotGiven): Reasoning config for reasoning-capable models (e.g. ``gpt-realtime-2``), e.g. ``RealtimeReasoning(effort="low")``.
             api_key (str | None): OpenAI API key. If None and not using Azure, read from OPENAI_API_KEY.
-            http_session (aiohttp.ClientSession | None): Unused; the core owns the connection.
             azure_deployment (str | None): Azure deployment name. Presence of any Azure-specific option enables Azure mode.
             entra_token (str | None): Azure Entra token auth (alternative to api_key).
             max_session_duration (float | None | NotGiven): Seconds before recycling the connection.
@@ -186,7 +179,6 @@ class RealtimeModel(llm_realtime.RealtimeModel):
         speed: NotGivenOr[float] = NOT_GIVEN,
         tracing: NotGivenOr[Any] = NOT_GIVEN,
         reasoning: NotGivenOr[Any] = NOT_GIVEN,
-        http_session: aiohttp.ClientSession | None = None,
         max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
     ) -> RealtimeModel:
         """
@@ -206,7 +198,6 @@ class RealtimeModel(llm_realtime.RealtimeModel):
             speed (float | NotGiven): Audio playback speed multiplier.
             tracing (Tracing | None | NotGiven): Tracing configuration for OpenAI Realtime.
             reasoning (RealtimeReasoning | None | NotGiven): Reasoning config for reasoning-capable models, e.g. ``RealtimeReasoning(effort="low")``.
-            http_session (aiohttp.ClientSession | None): Unused; the core owns the connection.
             max_session_duration (float | None | NotGiven): Seconds before recycling the connection.
 
         Raises:

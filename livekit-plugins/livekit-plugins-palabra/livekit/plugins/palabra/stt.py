@@ -356,7 +356,7 @@ class SpeechStream(stt.RecognizeStream):
             try:
                 await asyncio.gather(*tasks)
             finally:
-                await utils.aio.gracefully_cancel(*tasks)
+                await utils.aio.cancel_and_wait(*tasks)
         except TimeoutError:
             raise APITimeoutError() from None
         except AuthError as e:

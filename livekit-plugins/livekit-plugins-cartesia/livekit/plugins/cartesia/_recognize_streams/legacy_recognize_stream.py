@@ -292,7 +292,7 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
 
                     self._reconnect_event.clear()
                 finally:
-                    await utils.aio.gracefully_cancel(*tasks)
+                    await utils.aio.cancel_and_wait(*tasks)
                     send_recv_group.cancel()
                     send_recv_group.exception()  # retrieve the exception
             finally:

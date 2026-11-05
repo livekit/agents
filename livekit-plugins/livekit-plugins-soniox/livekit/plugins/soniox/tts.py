@@ -466,12 +466,12 @@ class SynthesizeStream(tts.SynthesizeStream):
                 raise failure
         finally:
             if next_task is not None:
-                await utils.aio.gracefully_cancel(next_task)
+                await utils.aio.cancel_and_wait(next_task)
             if active is not None:
                 active.connection.cancel_stream(active.stream_id)
                 active.connection.unregister_stream(active.stream_id)
             output_emitter.end_segment()
-            await utils.aio.gracefully_cancel(input_t)
+            await utils.aio.cancel_and_wait(input_t)
             await sent_stream.aclose()
 
     async def _open_stream(
@@ -931,4 +931,4 @@ class _Connection:
             if t is not None and t is not current
         ]
         if to_cancel:
-            await utils.aio.gracefully_cancel(*to_cancel)
+            await utils.aio.cancel_and_wait(*to_cancel)

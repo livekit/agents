@@ -317,9 +317,9 @@ async def _sentence_tokenized_input_events(
         finally:
             try:
                 if next_input_task is not None:
-                    await utils.aio.gracefully_cancel(next_input_task)
+                    await utils.aio.cancel_and_wait(next_input_task)
                 if forward_task is not None:
-                    await utils.aio.gracefully_cancel(forward_task)
+                    await utils.aio.cancel_and_wait(forward_task)
                 if sentence_stream is not None and not sentence_stream.closed:
                     await sentence_stream.aclose()
             finally:
@@ -331,4 +331,4 @@ async def _sentence_tokenized_input_events(
             yield event
         await input_task
     finally:
-        await utils.aio.gracefully_cancel(input_task)
+        await utils.aio.cancel_and_wait(input_task)

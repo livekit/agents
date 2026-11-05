@@ -479,7 +479,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         except Exception as exc:
             raise APIConnectionError(f"Vakyam TTS stream failed: {exc}") from exc
         finally:
-            await utils.aio.gracefully_cancel(*tasks)
+            await utils.aio.cancel_and_wait(*tasks)
             output_emitter.end_input()
 
     async def _run_segment(

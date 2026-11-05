@@ -363,7 +363,7 @@ class SpeechStream(stt.RecognizeStream):
                 await asyncio.gather(send_task, recv_task)
             finally:
                 watchdog_task.cancel()
-                await utils.aio.gracefully_cancel(send_task, recv_task, watchdog_task)
+                await utils.aio.cancel_and_wait(send_task, recv_task, watchdog_task)
                 if (
                     self._current_text()
                     or self._is_speaking

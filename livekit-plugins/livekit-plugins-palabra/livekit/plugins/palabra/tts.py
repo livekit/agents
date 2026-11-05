@@ -359,7 +359,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             try:
                 await asyncio.gather(*tasks)
             finally:
-                await utils.aio.gracefully_cancel(*tasks)
+                await utils.aio.cancel_and_wait(*tasks)
         except asyncio.CancelledError:
             if pending_gens:
                 with contextlib.suppress(Exception):

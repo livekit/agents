@@ -347,7 +347,6 @@ def run_agent(name: str) -> None:
 
 async def speech_frames(cache: Path) -> dict[str, list[Any]]:
     """Each caller line as 10 ms frames, synthesized once (LiveKit Inference) and kept as WAVs."""
-    import aiohttp
     import numpy as np
 
     from livekit import rtc
@@ -355,28 +354,27 @@ async def speech_frames(cache: Path) -> dict[str, list[Any]]:
 
     cache.mkdir(parents=True, exist_ok=True)
     out: dict[str, list[Any]] = {}
-    async with aiohttp.ClientSession() as http:
-        for key, text in LINES.items():
-            path = cache / f"{hashlib.sha1((TTS + text).encode()).hexdigest()[:12]}.wav"
-            if not path.exists():
-                tts = inference.TTS(TTS, http_session=http, sample_rate=SAMPLE_RATE)
-                frames = [a.frame async for a in tts.synthesize(text)]
-                pcm = b"".join(bytes(f.data) for f in frames)
-                with wave.open(str(path), "wb") as w:
-                    w.setnchannels(1)
-                    w.setsampwidth(2)
-                    w.setframerate(SAMPLE_RATE)
-                    w.writeframes(pcm)
-            with wave.open(str(path)) as w:
-                assert w.getframerate() == SAMPLE_RATE
-                pcm16 = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16)
-            if key == "hmm":  # soft, twice: voice activity for over a second, no words
-                pcm16 = (np.tile(pcm16, 2) * 0.5).astype(np.int16)
-            step = SAMPLE_RATE // 100
-            out[key] = [
-                rtc.AudioFrame(pcm16[i : i + step].tobytes(), SAMPLE_RATE, 1, step)
-                for i in range(0, len(pcm16) - step + 1, step)
-            ]
+    for key, text in LINES.items():
+        path = cache / f"{hashlib.sha1((TTS + text).encode()).hexdigest()[:12]}.wav"
+        if not path.exists():
+            tts = inference.TTS(TTS, sample_rate=SAMPLE_RATE)
+            frames = [a.frame async for a in tts.synthesize(text)]
+            pcm = b"".join(bytes(f.data) for f in frames)
+            with wave.open(str(path), "wb") as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(SAMPLE_RATE)
+                w.writeframes(pcm)
+        with wave.open(str(path)) as w:
+            assert w.getframerate() == SAMPLE_RATE
+            pcm16 = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16)
+        if key == "hmm":  # soft, twice: voice activity for over a second, no words
+            pcm16 = (np.tile(pcm16, 2) * 0.5).astype(np.int16)
+        step = SAMPLE_RATE // 100
+        out[key] = [
+            rtc.AudioFrame(pcm16[i : i + step].tobytes(), SAMPLE_RATE, 1, step)
+            for i in range(0, len(pcm16) - step + 1, step)
+        ]
     return out
 
 

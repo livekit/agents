@@ -242,7 +242,7 @@ class SpeechStream(stt.RecognizeStream):
         finally:
             self._state = _StreamState.CLOSED
             if self._idle_task and not self._idle_task.done():
-                await utils.aio.gracefully_cancel(self._idle_task)
+                await utils.aio.cancel_and_wait(self._idle_task)
             await self._await_recv_completion()
             await self._cleanup_connection()
 
@@ -306,7 +306,7 @@ class SpeechStream(stt.RecognizeStream):
             try:
                 await asyncio.wait_for(self._recv_task, timeout=_RECV_COMPLETION_TIMEOUT)
             except TimeoutError:
-                await utils.aio.gracefully_cancel(self._recv_task)
+                await utils.aio.cancel_and_wait(self._recv_task)
             finally:
                 self._recv_task = None
 

@@ -123,7 +123,6 @@ class BufferedTokenStream:
         min_token_len: int,
         min_ctx_len: int,
         max_token_len: int | None = None,
-        retain_format: bool = False,
         xml_aware: bool = False,
     ) -> None:
         """
@@ -132,7 +131,6 @@ class BufferedTokenStream:
             min_token_len: The shortest token emitted; shorter ones are batched.
             min_ctx_len: The text buffered before tokenizing.
             max_token_len: The longest token emitted.
-            retain_format: Unused; the tokenizer decides.
             xml_aware: Never split an XML tag across tokens; only when the input carries
                 markup, as a stray "<" in plain text holds streaming until flush.
         """

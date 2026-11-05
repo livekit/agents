@@ -408,7 +408,7 @@ class Qwen3SpeechStream(stt_module.RecognizeStream):
             try:
                 await asyncio.gather(send_task, recv_task)
             finally:
-                await utils.aio.gracefully_cancel(send_task, recv_task)
+                await utils.aio.cancel_and_wait(send_task, recv_task)
         except APIError:
             raise
         except Exception as e:

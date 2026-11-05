@@ -762,7 +762,7 @@ class SpeechStream(stt.RecognizeStream):
 
     async def aclose(self) -> None:
         if self._update_task is not None:
-            await utils.aio.gracefully_cancel(self._update_task)
+            await utils.aio.cancel_and_wait(self._update_task)
 
         await super().aclose()
 
@@ -1044,7 +1044,7 @@ class SpeechStream(stt.RecognizeStream):
                     self._reconnect_event.clear()
                 finally:
                     self._ws = None
-                    await utils.aio.gracefully_cancel(*tasks, wait_reconnect_task)
+                    await utils.aio.cancel_and_wait(*tasks, wait_reconnect_task)
                     tasks_group.cancel()
                     tasks_group.exception()  # retrieve the exception
                     if vad_stream is not None:

@@ -635,4 +635,4 @@ class SynthesizeStream(tts.SynthesizeStream):
             await asyncio.gather(*tasks)
         finally:
             await sent_stream.aclose()
-            await utils.aio.gracefully_cancel(*tasks)
+            await utils.aio.cancel_and_wait(*tasks)

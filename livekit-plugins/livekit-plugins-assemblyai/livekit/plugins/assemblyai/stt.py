@@ -827,7 +827,7 @@ class SpeechStream(stt.RecognizeStream):
             try:
                 await asyncio.gather(*tasks)
             finally:
-                await utils.aio.gracefully_cancel(config_task, *tasks)
+                await utils.aio.cancel_and_wait(config_task, *tasks)
         finally:
             if ws is not None:
                 await ws.close()

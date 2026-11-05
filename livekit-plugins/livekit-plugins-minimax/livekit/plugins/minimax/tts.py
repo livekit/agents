@@ -572,7 +572,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             finally:
                 await self._close_ws(ws)
                 await sentence_stream.aclose()
-                await utils.aio.gracefully_cancel(*tasks)
+                await utils.aio.cancel_and_wait(*tasks)
 
         except APIError:
             raise
