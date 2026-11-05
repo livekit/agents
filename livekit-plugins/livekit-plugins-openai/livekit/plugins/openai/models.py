@@ -21,6 +21,11 @@ TTSVoices = Literal[
 ]
 DalleModels = Literal["dall-e-2", "dall-e-3"]
 ChatModels = Literal[
+    "gpt-6.1-sol",
+    "gpt-6-astra",
+    "gpt-6-luna",
+    "gpt-6-sol",
+    "gpt-5.6",
     "gpt-5.6-luna",
     "gpt-5.6-sol",
     "gpt-5.6-terra",
@@ -279,6 +284,11 @@ SambaNovaChatModels = Literal[
 
 def _supports_reasoning_effort(model: ChatModels | str) -> bool:
     return model in [
+        "gpt-6.1-sol",
+        "gpt-6-astra",
+        "gpt-6-luna",
+        "gpt-6-sol",
+        "gpt-5.6",
         "gpt-5.6-luna",
         "gpt-5.6-sol",
         "gpt-5.6-terra",
@@ -291,6 +301,28 @@ def _supports_reasoning_effort(model: ChatModels | str) -> bool:
         "gpt-5-mini",
         "gpt-5-nano",
     ]
+
+
+# Lowest tier these accept is "none"; everything else in _supports_reasoning_effort falls back
+# to "minimal", which the gpt-5.6 family rejects outright.
+_REASONING_EFFORT_NONE_MODELS: frozenset[str] = frozenset(
+    {
+        "gpt-6-luna",
+        "gpt-6-sol",
+        "gpt-5.6",
+        "gpt-5.6-luna",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.5",
+        "gpt-5.4",
+        "gpt-5.4-mini",
+        "gpt-5.2",
+        "gpt-5.1",
+    }
+)
+
+# Lowest tier these accept is "low": they reject both "none" and "minimal".
+_REASONING_EFFORT_LOW_MODELS: frozenset[str] = frozenset({"gpt-6-astra", "gpt-6.1-sol"})
 
 
 @dataclass
