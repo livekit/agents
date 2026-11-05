@@ -2799,6 +2799,24 @@ class AgentActivity(RecognitionHooks):
         )
         return True
 
+    async def _typed_user_turn(self, user_message: llm.ChatMessage) -> None:
+        """A typed line standing in for a spoken turn: the hook a spoken turn runs, then
+        the reply, so an agent that hands work off from ``on_user_turn_completed`` acts
+        the same typed as on a call."""
+        chat_ctx = self._agent.chat_ctx.copy()
+        try:
+            await self._agent.on_user_turn_completed(chat_ctx, new_message=user_message)
+        except StopResponse:
+            return
+        except Exception:
+            # as on a spoken turn: a failing hook loses the reply, not the session
+            logger.exception("error occurred during on_user_turn_completed")
+            return
+
+        handle = self._generate_reply(user_message=user_message, chat_ctx=chat_ctx)
+        if (run_state := self._session._global_run_state) is not None and not run_state.done():
+            run_state._watch_handle(handle)
+
     @utils.log_exceptions(logger=logger)
     async def _user_turn_completed_task(
         self, old_task: asyncio.Task[None] | None, info: _EndOfTurnInfo

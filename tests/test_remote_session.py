@@ -371,7 +371,7 @@ async def test_run_input():
         def __await__(self):
             return asyncio.sleep(0).__await__()
 
-    mock_session.run = MagicMock(return_value=FakeRunResult())
+    mock_session._run_typed_user_turn = MagicMock(return_value=FakeRunResult())
 
     host = SessionHost(host_transport)
     host.register_session(mock_session)
@@ -414,7 +414,7 @@ async def test_aclose_flushes_the_response_of_an_inflight_request():
     release = asyncio.Event()
     mock_session = _make_mock_session()
     mock_session.interrupt = AsyncMock()
-    mock_session.run = MagicMock(return_value=_SlowRunResult(release))
+    mock_session._run_typed_user_turn = MagicMock(return_value=_SlowRunResult(release))
 
     host = SessionHost(host_transport)
     host.register_session(mock_session)
@@ -704,7 +704,7 @@ async def test_cancelled_requests_are_logged_by_type(
     never_finishes = asyncio.Event()
     mock_session = _make_mock_session()
     mock_session.interrupt = AsyncMock()
-    mock_session.run = MagicMock(return_value=_SlowRunResult(never_finishes))
+    mock_session._run_typed_user_turn = MagicMock(return_value=_SlowRunResult(never_finishes))
 
     host = SessionHost(host_transport)
     host.register_session(mock_session)

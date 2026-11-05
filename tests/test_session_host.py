@@ -866,7 +866,7 @@ class TestSessionHostWithoutSession:
         host = SessionHost(transport)
         session = TestSessionHostRequests()._make_mock_session()
         run: asyncio.Future[None] = asyncio.get_running_loop().create_future()
-        session.run = MagicMock(return_value=run)
+        session._run_typed_user_turn = MagicMock(return_value=run)
         session.interrupt = AsyncMock()
         host.register_session(session)
         await host.start()

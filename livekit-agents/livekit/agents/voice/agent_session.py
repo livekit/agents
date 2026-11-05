@@ -884,6 +884,32 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self.generate_reply(user_input=user_input, input_modality=input_modality)
         return run_state
 
+    def _run_typed_user_turn(self, text: str) -> RunResult[None]:
+        """Run a typed line as the user's spoken turn (`lk console` text mode, text
+        simulations).
+
+        Unlike :meth:`run`, which answers ``user_input`` directly, this emits the final
+        transcript and calls ``on_user_turn_completed`` before the reply, as a spoken turn
+        does.
+        """
+        if self._global_run_state is not None and not self._global_run_state.done():
+            raise RuntimeError("nested runs are not supported")
+        if self._activity is None:
+            raise RuntimeError("AgentSession isn't running")
+        activity = self._next_activity if self._activity.scheduling_paused else self._activity
+        if activity is None:
+            raise RuntimeError("AgentSession is closing, cannot run a user turn")
+
+        run_state: RunResult[None] = RunResult(user_input=text, output_type=None, session=self)
+        self._global_run_state = run_state
+        self._user_input_transcribed(UserInputTranscribedEvent(transcript=text, is_final=True))
+        turn = activity._create_speech_task(
+            activity._typed_user_turn(llm.ChatMessage(role="user", content=[text])),
+            name="AgentActivity._typed_user_turn",
+        )
+        run_state._watch_handle(turn)
+        return run_state
+
     @overload
     async def start(
         self,

@@ -826,7 +826,8 @@ class SessionHost:
                     pass
 
                 try:
-                    result: RunResult[None] = session.run(user_input=text)
+                    # the line stands in for a spoken turn, so it runs a spoken turn's hooks
+                    result: RunResult[None] = session._run_typed_user_turn(text)
                     await result
                     # an empty list is a turn the agent chose to stay silent on, not a
                     # failure: a tool may have told it to say nothing (a close-the-call
