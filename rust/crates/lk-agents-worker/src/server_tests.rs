@@ -112,10 +112,10 @@ fn delegation_follows_who_routes_the_endpoints() {
         s.delegation_url(&Serving::Cloud, "backend").unwrap(),
         "https://proj.livekit.cloud/agents/dentist/dev-123/backend"
     );
-    let local = Serving::Local { base: "http://127.0.0.1:5000/agents/dentist/default".into() };
+    let local = Serving::Local { base: "http://127.0.0.1:5000/agents/dentist/_".into() };
     assert_eq!(
         s.delegation_url(&local, "backend").unwrap(),
-        "http://127.0.0.1:5000/agents/dentist/default/backend"
+        "http://127.0.0.1:5000/agents/dentist/_/backend"
     );
     assert_eq!(
         s.endpoint_url(&local, "backend").as_deref(),
@@ -126,11 +126,11 @@ fn delegation_follows_who_routes_the_endpoints() {
     // a job process inherits what its server resolved
     let job = settings().with_env(env(&[(
         "LIVEKIT_AGENT_ENDPOINTS_URL",
-        "http://127.0.0.1:5000/agents/dentist/default",
+        "http://127.0.0.1:5000/agents/dentist/_",
     )]));
     assert_eq!(
         job.delegation_url(&Serving::Unknown, "backend").unwrap(),
-        "http://127.0.0.1:5000/agents/dentist/default/backend"
+        "http://127.0.0.1:5000/agents/dentist/_/backend"
     );
     assert!(job.child_env().iter().any(|(name, _)| *name == "LIVEKIT_AGENT_ENDPOINTS_URL"));
     s.worker_token = "hosted".into();

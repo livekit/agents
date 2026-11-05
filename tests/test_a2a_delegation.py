@@ -465,7 +465,7 @@ async def test_a_console_worker_delegates_to_its_own_endpoint_over_loopback(
                 break
             await asyncio.sleep(0.05)
         assert url.startswith("http://127.0.0.1:")
-        assert url.endswith("/agents/clinic/default/coverage_expert")
+        assert url.endswith("/agents/clinic/_/coverage_expert")
         await _call(RemoteAgent(text, conn_options=OPTIONS))
         assert received == ["Check"]
     finally:

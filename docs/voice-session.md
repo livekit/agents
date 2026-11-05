@@ -418,7 +418,7 @@ endpoint, named and described from that endpoint's card, and speaks the
 brain's progress while it waits.
 
 ```python
-back_office = RemoteAgent("http://127.0.0.1:7880/agents/dentist/default/backend")
+back_office = RemoteAgent("http://127.0.0.1:7880/agents/dentist/_/backend")
 voice = Agent(
     instructions="You are the practice's voice on the phone. Hand every request to the back office.",
     tools=[back_office.as_tool()],            # one tool, named from the card

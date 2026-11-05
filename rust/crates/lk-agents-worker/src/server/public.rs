@@ -153,7 +153,7 @@ mod tests {
 
     fn routes(proxy_headers: bool) -> PublicRoutes {
         PublicRoutes {
-            prefix: "/agents/dentist/default".into(),
+            prefix: "/agents/dentist/_".into(),
             routes: vec![
                 AgentEndpoint {
                     path: "/backend/{path:path}".into(),
@@ -188,7 +188,7 @@ mod tests {
 
     #[test]
     fn the_prefix_is_stripped_and_the_route_matched() {
-        let mut parsed = head("POST", "/agents/dentist/default/backend/a%20b", &[]);
+        let mut parsed = head("POST", "/agents/dentist/_/backend/a%20b", &[]);
         let request = routes(false).resolve(&mut parsed, "10.0.0.1").unwrap();
         assert_eq!(parsed.raw_path, b"/backend/a%20b");
         assert_eq!(parsed.path, "/backend/a b");
@@ -203,17 +203,17 @@ mod tests {
         let status =
             |method: &str, path: &str| routes.resolve(&mut head(method, path, &[]), "::1").err();
         assert_eq!(status("GET", "/backend/"), Some(404));
-        assert_eq!(status("GET", "/agents/other/default/backend/"), Some(404));
-        assert_eq!(status("GET", "/agents/dentist/defaultx/items/1"), Some(404));
-        assert_eq!(status("DELETE", "/agents/dentist/default/items/1"), Some(405));
-        assert_eq!(status("GET", "/agents/dentist/default/items/1"), None);
+        assert_eq!(status("GET", "/agents/other/_/backend/"), Some(404));
+        assert_eq!(status("GET", "/agents/dentist/_x/items/1"), Some(404));
+        assert_eq!(status("DELETE", "/agents/dentist/_/items/1"), Some(405));
+        assert_eq!(status("GET", "/agents/dentist/_/items/1"), None);
     }
 
     #[test]
     fn forwarded_headers_count_only_when_trusted() {
         let forwarded =
             [("x-forwarded-for", "203.0.113.9, 10.0.0.2"), ("x-forwarded-proto", "https")];
-        let path = "/agents/dentist/default/items/1";
+        let path = "/agents/dentist/_/items/1";
         let trusted = routes(true).resolve(&mut head("GET", path, &forwarded), "10.0.0.2").unwrap();
         assert_eq!(trusted.client_addr, "203.0.113.9");
         assert_eq!(trusted.scheme, HttpScheme::Https);

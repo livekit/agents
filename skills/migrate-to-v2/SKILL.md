@@ -255,7 +255,7 @@ from livekit.agents.a2a import A2ASessionContext, RemoteAgent
 from livekit.agents.beta import EndCallTool
 
 # /agents/<AgentServer agent_name>/<deployment>/<the backend door's endpoint>
-BACKEND = os.environ["LIVEKIT_URL"].replace("ws", "http", 1) + "/agents/shop/default/backend"
+BACKEND = os.environ["LIVEKIT_URL"].replace("ws", "http", 1) + "/agents/shop/_/backend"
 
 PERSONA = (
     "You are the front desk of ... <persona from 1.x>. You know nothing about the business "

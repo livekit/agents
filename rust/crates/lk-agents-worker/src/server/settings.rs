@@ -433,9 +433,9 @@ pub enum Serving {
 }
 
 impl ServerSettings {
-    /// `/agents/<agent>/<deployment>`; a worker registered without a deployment is `default`.
+    /// `/agents/<agent>/<deployment>`; a worker registered without a deployment is `_`.
     pub fn endpoint_prefix(&self) -> String {
-        let deployment = if self.deployment.is_empty() { "default" } else { &self.deployment };
+        let deployment = if self.deployment.is_empty() { "_" } else { &self.deployment };
         format!("/agents/{}/{deployment}", self.agent_name)
     }
 
@@ -477,7 +477,7 @@ impl ServerSettings {
 }
 
 /// `https://<project>/agents/<agent>/<deployment>`, where the text doors are reached (plan 7.2),
-/// when the URL and the agent are known; a worker registered without a deployment is `default`.
+/// when the URL and the agent are known; a worker registered without a deployment is `_`.
 pub fn endpoint_url_base(ws_url: &str, agent_name: &str, deployment: &str) -> Option<String> {
     if ws_url.is_empty() || agent_name.is_empty() {
         return None;
@@ -488,6 +488,6 @@ pub fn endpoint_url_base(ws_url: &str, agent_name: &str, deployment: &str) -> Op
         (None, Some(rest)) => format!("http://{rest}"),
         (None, None) => base.to_owned(),
     };
-    let deployment = if deployment.is_empty() { "default" } else { deployment };
+    let deployment = if deployment.is_empty() { "_" } else { deployment };
     Some(format!("{base}/agents/{agent_name}/{deployment}"))
 }

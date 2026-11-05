@@ -823,7 +823,7 @@ async fn a_door_route_is_served_by_its_door_and_everything_else_by_the_binding()
         doors: vec![Arc::new(Door)],
         settings: Arc::new(parking_lot::Mutex::new(settings)),
         serving: Arc::new(parking_lot::Mutex::new(crate::server::Serving::Local {
-            base: "http://127.0.0.1:1/agents/front/default".into(),
+            base: "http://127.0.0.1:1/agents/front/_".into(),
         })),
         host_context: None,
     };
@@ -844,7 +844,7 @@ async fn a_door_route_is_served_by_its_door_and_everything_else_by_the_binding()
     let (out, _) = exchange_with(&server, raw, request("/desk/{path:path}")).await;
     assert_eq!(
         String::from_utf8(parse(&out).body).unwrap(),
-        "/desk/{path:path} Some(\"/agents/front/default/desk\") \
+        "/desk/{path:path} Some(\"/agents/front/_/desk\") \
          Some((\"key\", \"secret\")) front"
     );
     for route in ["/other/{path:path}", "/desk", "/desk/{id}", "/desk/v1/{path:path}"] {

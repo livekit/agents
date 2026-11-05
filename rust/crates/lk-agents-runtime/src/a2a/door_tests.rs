@@ -532,8 +532,8 @@ async fn the_card_publishes_where_the_request_reached_the_endpoint(backend: Back
     };
     assert_eq!(url(None, HttpScheme::Http).await, "http://agents.test/desk/v1");
     assert_eq!(
-        url(Some("/agents/front/default/desk"), HttpScheme::Https).await,
-        "https://agents.test/agents/front/default/desk/v1"
+        url(Some("/agents/front/_/desk"), HttpScheme::Https).await,
+        "https://agents.test/agents/front/_/desk/v1"
     );
     assert_eq!(
         url(Some("https://acme.livekit.cloud/agents/front/prod/desk"), HttpScheme::Http).await,

@@ -59,7 +59,7 @@ async def workers(
             with socket.socket() as sock:
                 sock.bind(("127.0.0.1", 0))
                 port = sock.getsockname()[1]
-            url = f"http://127.0.0.1:{port}/agents/e2e/default"
+            url = f"http://127.0.0.1:{port}/agents/e2e/_"
             child = await stack.enter_async_context(
                 child_process(
                     sys.executable,

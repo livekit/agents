@@ -330,7 +330,7 @@ default and `LIVEKIT_AGENT_NAME_OVERRIDE` a launcher's force. The voice door,
 left empty.
 
 The endpoint is served at `/agents/<agent>/<deployment>/<endpoint>`, with
-`default` as the deployment of a worker registered without one. Where it is served
+`_` as the deployment of a worker registered without one. Where it is served
 follows the server the worker registers with: LiveKit Cloud when the worker is hosted there
 or its URL is a Cloud project's, decided before the job processes start so they delegate
 alike. The registration's edition is checked against it, and a mismatch is logged:
