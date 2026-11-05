@@ -126,7 +126,7 @@ class FunctionToolsExecutedEvent(BaseModel):
 
     @property
     def has_agent_handoff(self) -> bool:
-        return _bindings.function_tools_has_agent_handoff(self)
+        return self._handoff_required
 
 
 class ErrorEvent(BaseModel):

@@ -886,7 +886,7 @@ pub struct CloseEvent {
 #[python(property(
     name = "has_agent_handoff",
     ret = "bool",
-    hook = "function_tools_has_agent_handoff"
+    getter = "_handoff_required"
 ))]
 pub struct FunctionToolsExecutedEvent {
     pub function_calls: Vec<crate::FunctionCall>,

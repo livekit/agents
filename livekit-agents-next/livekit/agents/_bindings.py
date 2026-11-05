@@ -385,10 +385,6 @@ def function_tools_has_tool_reply(self: FunctionToolsExecutedEvent) -> bool:
     return any(out.reply_required for out in self.function_call_outputs)
 
 
-def function_tools_has_agent_handoff(self: FunctionToolsExecutedEvent) -> bool:
-    return self._handoff_required
-
-
 def verify_lists_length(self: _FunctionToolsEventT) -> _FunctionToolsEventT:
     if len(self.function_calls) != len(self.function_call_outputs):
         raise ValueError("The number of function_calls and function_call_outputs must match.")
