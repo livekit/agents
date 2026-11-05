@@ -1642,6 +1642,184 @@ impl ::lk_agents_abi::worker::job::SessionJob for SessionJobProxy {
             })
         })
     }
+
+    fn enable_recording(&self) -> ::std::result::Result<bool, ::lk_agents_abi::errors::HostError> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let out = ::lk_agents_runtime::host::call_now(
+            &crate::py_calls::Entry,
+            ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
+                    host.bind(py).getattr("job")?,
+                    ::pyo3::types::PyString::new(py, "enable_recording").into_any(),
+                ];
+                Ok((
+                    py.import("builtins")?.getattr("getattr")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
+            }),
+        );
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.value.bind(py);
+            let out = (o.extract::<bool>()).map_err(|e| {
+                <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(
+                    py, &e,
+                )
+            })?;
+            Ok(out)
+        })
+    }
+
+    fn claim_primary(
+        &self,
+        session: ::lk_agents_abi::HostRef,
+    ) -> ::std::result::Result<bool, ::lk_agents_abi::errors::HostError> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let session_arg = session;
+        let out = ::lk_agents_runtime::host::call_now(
+            &crate::py_calls::Entry,
+            ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
+                    [crate::py_objects::object_ref_to_py(py, session_arg)?];
+                Ok((
+                    host.bind(py).getattr("_core_claim_primary")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
+            }),
+        );
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.value.bind(py);
+            let out = (o.extract::<bool>()).map_err(|e| {
+                <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(
+                    py, &e,
+                )
+            })?;
+            Ok(out)
+        })
+    }
+
+    fn recording_dir(
+        &self,
+    ) -> ::std::result::Result<::std::string::String, ::lk_agents_abi::errors::HostError> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let out = ::lk_agents_runtime::host::call_now(
+            &crate::py_calls::Entry,
+            ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                Ok((
+                    host.bind(py).getattr("_core_recording_dir")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
+            }),
+        );
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.value.bind(py);
+            let out = (o.extract::<::std::string::String>()).map_err(|e| {
+                <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(
+                    py, &e,
+                )
+            })?;
+            Ok(out)
+        })
+    }
+
+    fn init_recording(
+        &self,
+        options: ::std::collections::BTreeMap<::std::string::String, bool>,
+    ) -> ::std::result::Result<(), ::lk_agents_abi::errors::HostError> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let options_arg = options;
+        let out = ::lk_agents_runtime::host::call_now(
+            &crate::py_calls::Entry,
+            ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
+                    [::pyo3::IntoPyObjectExt::into_bound_py_any(options_arg, py)?];
+                Ok((
+                    host.bind(py).getattr("init_recording")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
+            }),
+        );
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.value.bind(py);
+            let () = ({
+                let _ = o;
+                ::pyo3::PyResult::Ok(())
+            })
+            .map_err(|e| {
+                <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(
+                    py, &e,
+                )
+            })?;
+            Ok(())
+        })
+    }
+
+    fn on_shutdown(
+        &self,
+        session: ::lk_agents_abi::HostRef,
+    ) -> ::std::result::Result<(), ::lk_agents_abi::errors::HostError> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let session_arg = session;
+        let out = ::lk_agents_runtime::host::call_now(
+            &crate::py_calls::Entry,
+            ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
+                    [crate::py_objects::object_ref_to_py(py, session_arg)?];
+                Ok((
+                    host.bind(py).getattr("_core_on_shutdown")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
+            }),
+        );
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.value.bind(py);
+            let () = ({
+                let _ = o;
+                ::pyo3::PyResult::Ok(())
+            })
+            .map_err(|e| {
+                <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(
+                    py, &e,
+                )
+            })?;
+            Ok(())
+        })
+    }
 }
 
 // Declared in rust/crates/lk-agents-abi/src/worker/remote_session.rs.

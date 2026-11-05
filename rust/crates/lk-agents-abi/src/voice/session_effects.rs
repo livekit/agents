@@ -40,8 +40,7 @@ pub struct ExceededTurnReply {
     pub tool_choice: crate::ToolChoice,
 }
 
-/// The decision `start()` gets back.
-#[crate::host(record(module = "session_wire", emit))]
+/// A job's plan for a session it starts, as the session's owner decides it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StartPlan {
     pub recording: RecordingOptions,
@@ -64,13 +63,6 @@ pub trait SessionStart {
 
     #[host(function)]
     fn user_turn_exceeded_reply() -> ExceededTurnReply;
-    /// The job's recording and whether this session is its primary (records) and hosts the
-    /// remote session protocol; `another_session_is_primary` is the job's claim already taken.
-    #[host(function)]
-    fn plan_session_start(
-        #[host(kw)] job_default: bool,
-        another_session_is_primary: bool,
-    ) -> StartPlan;
 }
 
 /// What a filler's callable answered: nothing, its text to say, or anything else (a speech it

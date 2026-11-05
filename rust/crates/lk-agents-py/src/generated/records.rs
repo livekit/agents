@@ -14164,36 +14164,6 @@ pub mod session_wire {
         })?;
         Ok(dict.into_any())
     }
-
-    // Declared in rust/crates/lk-agents-abi/src/voice/session_effects.rs.
-    static START_PLAN: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn start_plan_to_py<'py>(
-        py: Python<'py>,
-        value: ::lk_agents_abi::voice::session_effects::StartPlan,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let ::lk_agents_abi::voice::session_effects::StartPlan {
-            recording,
-            is_primary,
-            hosting,
-            records,
-        } = value;
-        let kwargs = ::pyo3::types::PyDict::new(py);
-        kwargs.set_item(
-            "recording",
-            crate::generated::records::telemetry::recording_options_to_py(py, recording)?,
-        )?;
-        kwargs
-            .set_item("is_primary", ::pyo3::IntoPyObjectExt::into_bound_py_any(is_primary, py)?)?;
-        kwargs.set_item("hosting", ::pyo3::IntoPyObjectExt::into_bound_py_any(hosting, py)?)?;
-        kwargs.set_item("records", ::pyo3::IntoPyObjectExt::into_bound_py_any(records, py)?)?;
-        crate::py_calls::call(
-            START_PLAN.import(py, "livekit.agents._generated.session_wire", "StartPlan")?.as_any(),
-            (),
-            Some(&kwargs),
-        )
-    }
 }
 
 pub mod storage_class {

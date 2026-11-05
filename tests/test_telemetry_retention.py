@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from livekit import rtc
-from livekit.agents import VoiceSession, _core
+from livekit.agents import VoiceSession, _core, job as job_module
 from livekit.agents.job import (
     JobAcceptArguments,
     JobContext,
@@ -21,7 +21,6 @@ from livekit.agents.voice.events import (
     AgentStateChangedEvent,
     CloseEvent,
     CloseReason,
-    ErrorEvent,
     UserInputTranscribedEvent,
     event_dict,
 )
@@ -30,12 +29,12 @@ from livekit.protocol import agent as job_protocol
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
 
 
-def _job_context(job_id: str, agent_name: str = "") -> JobContext:
+def _job_context(job_id: str, agent_name: str = "", enable_recording: bool = False) -> JobContext:
     return JobContext(
         proc=JobProcess(executor_type=JobExecutorType.THREAD, user_arguments=None, http_proxy=None),
         info=RunningJobInfo(
             JobAcceptArguments("", "", ""),
-            job_protocol.Job(id=job_id, agent_name=agent_name),
+            job_protocol.Job(id=job_id, agent_name=agent_name, enable_recording=enable_recording),
             "",
             "",
             "",
@@ -77,32 +76,14 @@ def test_session_report_events_keep_every_snapshot_whatever_message_capture() ->
     )
 
 
-def test_large_events_enter_reports_and_a_redacted_session_keeps_no_content() -> None:
+# A redacted session keeping only its errors and close is the owner's (owner_tests.rs).
+def test_large_events_enter_reports() -> None:
     session = VoiceSession(turn_handling={"turn_detection": None})
     small = UserInputTranscribedEvent(transcript="captured with consent", is_final=True)
     session.emit("user_input_transcribed", small)
     large = UserInputTranscribedEvent(transcript="large" * 100_000, is_final=True)
     session.emit("user_input_transcribed", large)
     assert session._recorded_events == [event_dict(small, json=True), event_dict(large, json=True)]
-    session._recording_options["redaction"] = True
-    session.emit("user_input_transcribed", small)
-    assert session._recorded_events == []
-
-
-def test_errors_and_the_close_reason_are_retained_in_a_redacted_session() -> None:
-    from livekit.agents import llm
-
-    set_capture_content(False)
-    session = VoiceSession(turn_handling={"turn_detection": None})
-    session._recording_options["redaction"] = True
-    error = llm.LLMError(timestamp=0.0, label="llm", error=RuntimeError(), recoverable=True)
-    events = [
-        ErrorEvent(error=error, source=None),
-        CloseEvent(error=error, reason=CloseReason.ERROR),
-    ]
-    for event in events:
-        session.emit(event.type, event)
-    assert [event["type"] for event in session._recorded_events] == ["error", "close"]
 
 
 async def test_session_report_access_stays_with_the_job_that_started_the_session(
@@ -116,6 +97,7 @@ async def test_session_report_access_stays_with_the_job_that_started_the_session
     set_capture_content(True)
     owner, other = _job_context("owner"), _job_context("other")
     monkeypatch.setattr(_session_host, "get_job_context", lambda **_: owner)
+    monkeypatch.setattr(job_module, "get_job_context", lambda **_: owner)
     session = VoiceSession(llm=FakeLLM(), turn_handling={"turn_detection": None})
     try:
         await session.start(Agent(instructions="desk"), room=None)
@@ -128,6 +110,7 @@ async def test_session_report_access_stays_with_the_job_that_started_the_session
         [retained] = [e for e in report.events if e["type"] == "user_input_transcribed"]
         assert retained["transcript"] == "retained"
         monkeypatch.setattr(_session_host, "get_job_context", lambda **_: other)
+        monkeypatch.setattr(job_module, "get_job_context", lambda **_: other)
         await session.start(Agent(instructions="unused"))
         with pytest.raises(PermissionError, match="owning job"):
             other.make_session_report(session)
@@ -153,7 +136,7 @@ async def test_the_session_snapshot_is_taken_once_off_the_event_loop(
     # committed by the core, whose snapshot the report takes its history from
     await session.generate_reply(user_input="recorded message")
     owner = _job_context("report-worker", agent_name="desk")
-    owner._claim_session(session)
+    owner._core_claim_primary(session)
     entered, release = threading.Event(), threading.Event()
     loop_thread = threading.get_ident()
     threads: list[int] = []
@@ -201,3 +184,71 @@ async def test_the_session_snapshot_is_taken_once_off_the_event_loop(
     assert console["job_id"] == "report-worker"
     items = console["chat_history"]["items"]
     assert ["recorded message"] in [i["content"] for i in items if i["type"] == "message"]
+
+
+# Catches: a second session of the job taking the job's recording, an audio recording opened
+# outside the job's session directory, or a session of the job left open at its shutdown.
+async def test_the_jobs_first_session_records_what_the_job_records_and_every_one_closes_with_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livekit.agents import Agent
+    from livekit.agents.job import _JobContextVar
+
+    from .fake_llm import FakeLLM
+
+    ctx = _job_context("recorded", enable_recording=True)
+
+    async def connect(self: JobContext) -> None:
+        pass
+
+    closing: list[VoiceSession] = []
+    on_shutdown = JobContext._core_on_shutdown
+
+    def register(self: JobContext, session: VoiceSession) -> None:
+        closing.append(session)
+        on_shutdown(self, session)
+
+    monkeypatch.setattr(JobContext, "_core_connect", connect)
+    monkeypatch.setattr(JobContext, "_core_on_shutdown", register)
+    token = _JobContextVar.set(ctx)
+    first = VoiceSession(llm=FakeLLM(), turn_handling={"turn_detection": None})
+    second = VoiceSession(llm=FakeLLM(), turn_handling={"turn_detection": None})
+    try:
+        await first.start(Agent(instructions="desk"))
+        await second.start(Agent(instructions="back office"), room=ctx.room)
+        assert ctx._sessions == [first, second] and closing == [first, second]
+        assert first._owner.recording_options.audio and first._owner.started_at is not None
+        assert first._owner.recording_path == str(ctx.session_directory / "audio.ogg")
+        assert not second._owner.recording_options.audio
+        assert second._owner.recording_path is None
+        assert ctx.make_session_report().audio_recording_path == first._owner.recording_path
+    finally:
+        _JobContextVar.reset(token)
+        await first.aclose()
+        await second.aclose()
+
+
+# Catches: the job's shutdown closing its session through a Python wrapper of its own, or with a
+# reason other than the job's shutdown.
+async def test_the_jobs_shutdown_closes_the_session_natively_in_the_shutdowns_span() -> None:
+    from types import SimpleNamespace
+
+    registered: list[tuple[object, bool, bool]] = []
+
+    def add(callback: object, *, takes_reason: bool, framework: bool, name: str) -> None:
+        registered.append((callback, takes_reason, framework))
+
+    from livekit.agents import Agent
+
+    from .fake_llm import FakeLLM
+
+    session = VoiceSession(llm=FakeLLM(), turn_handling={"turn_detection": None})
+    closed: list[CloseEvent] = []
+    session.on("close", closed.append)
+    await session.start(Agent(instructions="desk"))
+    job = SimpleNamespace(_run=SimpleNamespace(add_shutdown_callback=add))
+    JobContext._core_on_shutdown(job, session)  # type: ignore[arg-type]
+    [(callback, takes_reason, framework)] = registered
+    assert (takes_reason, framework) == (False, True)
+    await callback()  # type: ignore[operator]
+    assert [event.reason for event in closed] == [CloseReason.JOB_SHUTDOWN]

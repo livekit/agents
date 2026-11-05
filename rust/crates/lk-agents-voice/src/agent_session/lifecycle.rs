@@ -66,8 +66,25 @@ impl SessionLifecycle {
     }
 }
 
-/// The session's start planning (`_core.plan_session_start`).
+/// The session's start planning.
 pub struct SessionStartPlans;
+
+impl SessionStartPlans {
+    /// The job's recording and whether this session is its primary (records) and hosts the
+    /// remote session protocol; `another_session_is_primary` is the job's claim already taken.
+    /// A second session in the job neither records nor hosts.
+    pub fn plan_session_start(job_default: bool, another_session_is_primary: bool) -> StartPlan {
+        let is_primary = !another_session_is_primary;
+        let recording =
+            if job_default && is_primary { RECORDING_ALL_ON } else { RECORDING_ALL_OFF };
+        StartPlan {
+            recording,
+            is_primary,
+            hosting: is_primary,
+            records: records_anything(&recording),
+        }
+    }
+}
 
 impl lk_agents_abi::voice::session_effects::SessionStart for SessionStartPlans {
     fn default_session_models(
@@ -87,19 +104,6 @@ impl lk_agents_abi::voice::session_effects::SessionStart for SessionStartPlans {
             instructions: "The user has been speaking too long without giving a chance to reply. Politely cut in with a short reply or notice. Keep it short since the user cannot interrupt it.".into(),
             allow_interruptions: false,
             tool_choice: lk_agents_abi::ToolChoice::Forbidden,
-        }
-    }
-    /// The job's recording setting, held by its primary session only: a second session in the
-    /// job neither records nor hosts.
-    fn plan_session_start(job_default: bool, another_session_is_primary: bool) -> StartPlan {
-        let is_primary = !another_session_is_primary;
-        let recording =
-            if job_default && is_primary { RECORDING_ALL_ON } else { RECORDING_ALL_OFF };
-        StartPlan {
-            recording,
-            is_primary,
-            hosting: is_primary,
-            records: records_anything(&recording),
         }
     }
 }

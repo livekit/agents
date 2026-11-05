@@ -235,7 +235,6 @@
     "normalize_phone_number",
     "parse_cli",
     "parse_function_arguments",
-    "plan_session_start",
     "receive_dtmf",
     "remove_instructions",
     "replace_words",

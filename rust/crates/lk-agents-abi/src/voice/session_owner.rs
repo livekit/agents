@@ -48,7 +48,9 @@ pub struct ProviderBindings {
 pub struct SessionBindings {
     pub room: Arc<dyn super::room_owner::SessionRoom>,
     pub args: super::session::VoiceSessionArgs,
-    pub recorder: Option<Arc<dyn crate::recorder::AudioRecorder>>,
+    /// `lk agent console --record`: the job's session records its audio whatever the job's
+    /// recording.
+    pub record_audio: bool,
 }
 
 /// Prepared capabilities cross back as a native object: proxy extraction happens on the
@@ -64,13 +66,18 @@ pub trait SessionPreparation: Send + Sync + Sized + 'static {
     fn new(
         room: Arc<dyn super::room_owner::SessionRoom>,
         args: super::session::VoiceSessionArgs,
-        recorder: Option<Arc<dyn crate::recorder::AudioRecorder>>,
+        #[host(kw, default = false)] record_audio: bool,
     ) -> Self;
 }
 
 /// Language-specific SDK adaptation. Resource ordering belongs to the native owner.
 #[crate::host(proxy(host = "livekit.agents.voice._session_bindings.SessionHost"))]
 pub trait SessionHost: Send + Sync {
+    /// The session, as its job holds it.
+    #[host(call, getter = "session")]
+    fn session(&self) -> Result<crate::HostRef, HostError>;
+    /// The room, the agent's frame and the host legs the session opens on. `args.job` is the
+    /// job the session runs for, given when it opens on the job's room or the console's.
     #[host(await, name = "prepare")]
     fn prepare(
         &self,
@@ -105,7 +112,11 @@ pub trait SessionOwner: Send + Sync + Sized + 'static {
     #[host(new)]
     fn new(env: &Self::Env, options: Self::Options) -> Self;
     /// `job`: the job the session runs in, whose trace its spans join under the span current at
-    /// the call.
+    /// the call, and which alone may read its report. Startup runs in order: the thread's storage
+    /// opens; the host prepares the room and legs; a session of the job (on its room, or the
+    /// console's) claims the job's primary session and sets the job's recording from its plan;
+    /// the start time is set; the job's session opens its audio recording and the job's shutdown
+    /// is made to close it; the recording is ready; the toolsets set up and the voice loop starts.
     #[host(await)]
     fn start(
         &self,
@@ -226,4 +237,28 @@ pub trait SessionOwner: Send + Sync + Sized + 'static {
     /// The recording's final result remains available to the job reporter.
     #[host(await)]
     async fn finish_recording(&self) -> Result<(), crate::recorder::RecordingFailure>;
+    /// When the session started (wall clock seconds), once its startup prepared it.
+    #[host(getter)]
+    fn started_at(&self) -> Option<f64>;
+    /// What the session records: its job's plan for it, nothing outside a job or before it starts.
+    #[host(getter)]
+    fn recording_options(&self) -> crate::telemetry::report::RecordingOptions;
+    /// The session's audio recording file (`audio.ogg` in the job's session directory), when it
+    /// records audio.
+    #[host(getter)]
+    fn recording_path(&self) -> Option<String>;
+    /// When the audio recording's first frame was written.
+    #[host(getter)]
+    fn recording_started_at(&self) -> Option<f64>;
+    /// Whether the job `job_id` may read the session's report: the job the session first started
+    /// in, or any job for a session started outside one.
+    #[host(call)]
+    fn allows_report(&self, job_id: String) -> bool;
+    /// Whether the session's report keeps an event of `kind`: a known kind, its content only when
+    /// the session's recording is not redacted.
+    #[host(call)]
+    fn accepts_event(&self, kind: String) -> bool;
+    /// An event of `kind` the report keeps is counted as retained; whether it was accepted.
+    #[host(call)]
+    fn admit_event(&self, kind: String) -> bool;
 }

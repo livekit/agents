@@ -3703,20 +3703,6 @@ pub fn user_turn_exceeded_reply<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyA
     crate::generated::records::session_wire::exceeded_turn_reply_to_py(py, out)
 }
 
-/// The job's recording and whether this session is its primary (records) and hosts the
-/// remote session protocol; `another_session_is_primary` is the job's claim already taken.
-#[pyfunction]
-#[pyo3(signature = (*, job_default, another_session_is_primary))]
-pub fn plan_session_start<'py>(
-    py: Python<'py>,
-    job_default: bool,
-    another_session_is_primary: bool,
-) -> PyResult<Bound<'py, PyAny>> {
-    crate::py_calls::check_pid()?;
-    let out = py.detach(|| <SessionStartImpl as ::lk_agents_abi::voice::session_effects::SessionStart>::plan_session_start(job_default, another_session_is_primary));
-    crate::generated::records::session_wire::start_plan_to_py(py, out)
-}
-
 // Declared in rust/crates/lk-agents-abi/src/voice/session_effects.rs.
 type CoreSessionStateImpl =
     <crate::generated::implementations::Selected as super::Implementations>::SessionState;
@@ -3835,12 +3821,12 @@ pub struct CoreSessionBindings(pub(crate) ::std::sync::Arc<CoreSessionBindingsIm
 #[pymethods]
 impl CoreSessionBindings {
     #[new]
-    #[pyo3(signature = (room, args, recorder))]
+    #[pyo3(signature = (room, args, *, record_audio = false))]
     fn new(
         py: Python<'_>,
         room: Bound<'_, PyAny>,
         args: Bound<'_, PyAny>,
-        recorder: Option<Bound<'_, PyAny>>,
+        record_audio: bool,
     ) -> PyResult<CoreSessionBindings> {
         crate::py_calls::check_pid()?;
         let room =
@@ -3855,20 +3841,7 @@ impl CoreSessionBindings {
             })?;
         let args =
             crate::generated::records::voice_session::voice_session_args_from_py(args.as_any())?;
-        let recorder = recorder
-            .map(|v| {
-                crate::py_objects::native::<dyn ::lk_agents_abi::recorder::AudioRecorder>(
-                    v.as_any(),
-                )
-                .ok_or_else(|| {
-                    ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                        "recorder",
-                        ": expected a native SessionRecorder"
-                    ))
-                })
-            })
-            .transpose()?;
-        let out = py.detach(|| <CoreSessionBindingsImpl as ::lk_agents_abi::voice::session_owner::SessionPreparation>::new(room, args, recorder));
+        let out = py.detach(|| <CoreSessionBindingsImpl as ::lk_agents_abi::voice::session_owner::SessionPreparation>::new(room, args, record_audio));
         ::pyo3::PyResult::Ok(CoreSessionBindings(::std::sync::Arc::new(out)))
     }
 }
@@ -3896,6 +3869,9 @@ fn _extract_session_owner_release_override_layer(
     crate::py_values::number_from_py::<u64>(obj.as_any(), "layer")
 }
 type SessionOwnerReleaseOverrideLayerInput = u64;
+type SessionOwnerStartedAtOutput = ::std::option::Option<f64>;
+type SessionOwnerRecordingPathOutput = ::std::option::Option<::std::string::String>;
+type SessionOwnerRecordingStartedAtOutput = ::std::option::Option<f64>;
 
 #[pyclass(frozen, name = "_core_SessionOwner", module = "livekit.agents._core")]
 pub struct CoreSessionOwner(pub(crate) ::std::sync::Arc<CoreSessionOwnerImpl>);
@@ -3920,7 +3896,11 @@ impl CoreSessionOwner {
     }
 
     /// `job`: the job the session runs in, whose trace its spans join under the span current at
-    /// the call.
+    /// the call, and which alone may read its report. Startup runs in order: the thread's storage
+    /// opens; the host prepares the room and legs; a session of the job (on its room, or the
+    /// console's) claims the job's primary session and sets the job's recording from its plan;
+    /// the start time is set; the job's session opens its audio recording and the job's shutdown
+    /// is made to close it; the recording is ready; the toolsets set up and the voice loop starts.
     #[pyo3(signature = (storage, host, *, job = None))]
     fn start<'py>(
         &self,
@@ -4304,6 +4284,68 @@ impl CoreSessionOwner {
                 .await.map_err(|e: ::lk_agents_abi::recorder::RecordingFailure| <::lk_agents_abi::recorder::RecordingFailure as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
         })
+    }
+
+    /// When the session started (wall clock seconds), once its startup prepared it.
+    #[getter]
+    fn started_at(&self, py: Python<'_>) -> PyResult<SessionOwnerStartedAtOutput> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| <CoreSessionOwnerImpl as ::lk_agents_abi::voice::session_owner::SessionOwner>::started_at(&self.0));
+        ::pyo3::PyResult::Ok(out)
+    }
+
+    /// What the session records: its job's plan for it, nothing outside a job or before it starts.
+    #[getter]
+    fn recording_options<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| <CoreSessionOwnerImpl as ::lk_agents_abi::voice::session_owner::SessionOwner>::recording_options(&self.0));
+        crate::generated::records::telemetry::recording_options_to_py(py, out)
+    }
+
+    /// The session's audio recording file (`audio.ogg` in the job's session directory), when it
+    /// records audio.
+    #[getter]
+    fn recording_path(&self, py: Python<'_>) -> PyResult<SessionOwnerRecordingPathOutput> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| <CoreSessionOwnerImpl as ::lk_agents_abi::voice::session_owner::SessionOwner>::recording_path(&self.0));
+        ::pyo3::PyResult::Ok(out)
+    }
+
+    /// When the audio recording's first frame was written.
+    #[getter]
+    fn recording_started_at(
+        &self,
+        py: Python<'_>,
+    ) -> PyResult<SessionOwnerRecordingStartedAtOutput> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| <CoreSessionOwnerImpl as ::lk_agents_abi::voice::session_owner::SessionOwner>::recording_started_at(&self.0));
+        ::pyo3::PyResult::Ok(out)
+    }
+
+    /// Whether the job `job_id` may read the session's report: the job the session first started
+    /// in, or any job for a session started outside one.
+    #[pyo3(signature = (job_id))]
+    fn allows_report(&self, py: Python<'_>, job_id: ::std::string::String) -> PyResult<bool> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| <CoreSessionOwnerImpl as ::lk_agents_abi::voice::session_owner::SessionOwner>::allows_report(&self.0, job_id));
+        ::pyo3::PyResult::Ok(out)
+    }
+
+    /// Whether the session's report keeps an event of `kind`: a known kind, its content only when
+    /// the session's recording is not redacted.
+    #[pyo3(signature = (kind))]
+    fn accepts_event(&self, py: Python<'_>, kind: ::std::string::String) -> PyResult<bool> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| <CoreSessionOwnerImpl as ::lk_agents_abi::voice::session_owner::SessionOwner>::accepts_event(&self.0, kind));
+        ::pyo3::PyResult::Ok(out)
+    }
+
+    /// An event of `kind` the report keeps is counted as retained; whether it was accepted.
+    #[pyo3(signature = (kind))]
+    fn admit_event(&self, py: Python<'_>, kind: ::std::string::String) -> PyResult<bool> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| <CoreSessionOwnerImpl as ::lk_agents_abi::voice::session_owner::SessionOwner>::admit_event(&self.0, kind));
+        ::pyo3::PyResult::Ok(out)
     }
 }
 
@@ -11138,6 +11180,39 @@ impl SessionHostProxy {
 }
 
 impl ::lk_agents_abi::voice::session_owner::SessionHost for SessionHostProxy {
+    fn session(
+        &self,
+    ) -> ::std::result::Result<::lk_agents_abi::HostRef, ::lk_agents_abi::errors::HostError> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let out = ::lk_agents_runtime::host::call_now(
+            &crate::py_calls::Entry,
+            ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] =
+                    [host.bind(py).clone(), ::pyo3::types::PyString::new(py, "session").into_any()];
+                Ok((
+                    py.import("builtins")?.getattr("getattr")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
+            }),
+        );
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.value.bind(py);
+            let out = (crate::py_objects::object_ref_from_py(o.as_any())).map_err(|e| {
+                <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(
+                    py, &e,
+                )
+            })?;
+            Ok(out)
+        })
+    }
+
     fn prepare(
         &self,
         cx: &::lk_agents_abi::telemetry::Cx,

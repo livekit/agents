@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
-import dataclasses
 from collections import deque
 from collections.abc import AsyncIterable, Callable, Coroutine
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -52,13 +51,11 @@ if TYPE_CHECKING:
     from ..storage import Thread
     from .agent_session import VoiceSession
     from .io import EndpointingOptions, TurnDetectionMode
-import time
 from typing import TYPE_CHECKING
 
 from .._bindings import realtime_model
 from .._generated.voice_session import VoiceSessionArgs
 from ..job import get_job_context
-from .events import CloseReason
 from .room_io import Room as _RtcRoom, RoomOptions
 
 if TYPE_CHECKING:
@@ -218,24 +215,13 @@ def initialize(
     session._options.update_providers({"stt": stt_model, "tts": tts_model, "vad": vad_model})
     session._input = io.AgentInput(session)
     session._output = io.AgentOutput(session)
-    # what a job's session report reads
-    session._started_at = None
+    # what a job's session report reads of the events
     session._event_snapshots = deque()
-    session._event_retention = _core._core_EventRetention()
-    session._recording_options = cast(
-        RecordingOptions,
-        dataclasses.asdict(
-            _core.plan_session_start(job_default=False, another_session_is_primary=False).recording
-        ),
-    )
     # the session's span once started, which the job's RPC handlers parent under
     session._root_span_context = None
     session._text_input_cb = None
-    # the session's audio recording, written by the core; finished once it closes
-    session._recorder = None
     # the pipeline callbacks registered on this session, by step name
     session._steps = {}
-    session._recording_path = None
     session._audio_input_options = None
     session._tasks = set()
 
@@ -463,8 +449,6 @@ class SessionHost:
         room, room_options, chat_ctx = self.room, self.room_options, self.chat_ctx
         console = ConsoleCall.claim()
         job_ctx = get_job_context(required=False)
-        if job_ctx is not None:
-            session._event_retention.claim(job_ctx.job.id)
         if console is not None:
             room = None
         elif not is_given(room):
@@ -473,21 +457,12 @@ class SessionHost:
         session._audio_input_options = options.get_audio_input_options()
         text_input = options.get_text_input_options()
         session._text_input_cb = text_input.text_input_cb if text_input is not None else None
-        # the job's session (on its room, or the console's) records and reports for the job and
-        # closes with it; the primary one, and the console's, serve the remote session protocol
-        in_job = job_ctx is not None and (console is not None or room is job_ctx.room)
-        hosting = console is not None
-        primary = False
-        if in_job:
-            assert job_ctx is not None
-            primary = job_ctx._claim_session(session)
-            plan = _core.plan_session_start(
-                job_default=job_ctx.job.enable_recording,
-                another_session_is_primary=not primary,
-            )
-            session._recording_options = cast(RecordingOptions, dataclasses.asdict(plan.recording))
-            hosting = hosting or plan.hosting
-            job_ctx.init_recording(session._recording_options)
+        # the job's session runs on its room, or the console's; the owner claims it for the job
+        job = (
+            job_ctx
+            if job_ctx is not None and (console is not None or room is job_ctx.room)
+            else None
+        )
 
         from ..storage import Thread, _StorageHandle
         from ..storage.context import ContextStore
@@ -546,23 +521,18 @@ class SessionHost:
             keyterm_llm=_bindings.core_leg(keyterm_llm) if keyterm_llm is not None else None,
             keyterm_tools=[_record_keyterms] if keyterm_llm is not None else None,
             **{node: frame[node] for node in _NODES if node in frame},
-            remote_session=RemoteSessionAccess(session) if hosting else None,
+            # served when the owner decides the session hosts it
+            remote_session=RemoteSessionAccess(session),
             console=console,
-            # the core connects the job's room beside its opening
-            job=job_ctx if in_job and console is None else None,
+            job=job,
             # the job ends once its primary session closes
-            job_run=job_ctx._run if primary and job_ctx is not None else None,
+            job_run=job._run if job is not None else None,
         )
-        session._started_at = time.time()
-        if in_job:
-            assert job_ctx is not None
-            if session._recording_options["audio"] or (console is not None and ConsoleCall.record):
-                session._recording_path = job_ctx.session_directory / "audio.ogg"
-                session._recorder = _core.SessionRecorder(str(session._recording_path))
-            job_ctx.add_shutdown_callback(lambda: session._aclose(CloseReason.JOB_SHUTDOWN))
         rtc_room = _RtcRoom.of(room) if room is not None else None
         return _core._core_SessionBindings(
-            room=_core._core_create_room_session(rtc_room), args=args, recorder=session._recorder
+            room=_core._core_create_room_session(rtc_room),
+            args=args,
+            record_audio=console is not None and ConsoleCall.record,
         )
 
     def bind_providers(self, providers: dict[str, Any]) -> ProviderBindings:
@@ -637,7 +607,7 @@ class RemoteSessionAccess:
             self.session.user_state,
             self.session.current_agent.name,
             {k: str(options.get(k)) for k in STATE_OPTION_FIELDS},
-            self.session._started_at,
+            self.session._owner.started_at,
         )
 
     async def _core_rtc_stats(self) -> tuple[list[Any], list[Any]] | None:

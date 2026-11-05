@@ -36,7 +36,6 @@ if TYPE_CHECKING:
     from .overlap import OverlappingSpeechEvent
     from .rtc_wire import ProcessorFailure
     from .stream_info import StreamInfo
-    from .telemetry import RecordingOptions
 
 
 # Record declarations:
@@ -332,18 +331,6 @@ class ExceededTurnReply(TypedDict):
     instructions: str
     allow_interruptions: bool
     tool_choice: ToolChoice
-
-
-@dataclass(kw_only=True, slots=True)
-class StartPlan:
-    """The decision `start()` gets back."""
-
-    recording: RecordingOptions
-    is_primary: bool
-    hosting: bool
-    """`is_primary and (session_host if given else True)`: a second session must never host."""
-    records: bool
-    """`records_anything` on the resolved options."""
 
 
 ToolUpdateWire: TypeAlias = ToolCallStartedWire | ToolCallUpdated | ToolCallEnded | ToolReplyUpdated

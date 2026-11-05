@@ -21,8 +21,9 @@ pub struct StartJobFields {
     pub traceparent: Option<String>,
 }
 
-/// The job a session runs in, as `start()` sequences it: the room connected beside the opening,
-/// before the remote session host starts on it.
+/// The job a session runs for (on the job's room, or the console's), as the session's owner
+/// sequences its start: the primary claim, the recording, the shutdown, and the room connected
+/// beside the opening, before the remote session host starts on it.
 #[crate::host(proxy(host = "livekit.agents.job.JobContext"))]
 pub trait SessionJob: Send + Sync {
     /// `JobContext.connect()`: the room connected, once however many callers; its `room_connect`
@@ -32,6 +33,25 @@ pub trait SessionJob: Send + Sync {
         &self,
         cx: &crate::telemetry::Cx,
     ) -> crate::BoxFuture<'_, Result<(), crate::errors::HostError>>;
+    /// Whether the job records its primary session by default.
+    #[host(call, getter = "job.enable_recording")]
+    fn enable_recording(&self) -> Result<bool, crate::errors::HostError>;
+    /// `session` started for the job: whether it is the job's primary session, the first one
+    /// claimed, which the job reports and whose close ends the job.
+    #[host(call, name = "_core_claim_primary")]
+    fn claim_primary(&self, session: crate::HostRef) -> Result<bool, crate::errors::HostError>;
+    /// The directory the job's session files are written to.
+    #[host(call, name = "_core_recording_dir")]
+    fn recording_dir(&self) -> Result<String, crate::errors::HostError>;
+    /// `JobContext.init_recording(options)`: the first call sets what the job records.
+    #[host(call, name = "init_recording")]
+    fn init_recording(
+        &self,
+        options: std::collections::BTreeMap<String, bool>,
+    ) -> Result<(), crate::errors::HostError>;
+    /// `session` closes as the job shuts down, in the shutdown's span.
+    #[host(call, name = "_core_on_shutdown")]
+    fn on_shutdown(&self, session: crate::HostRef) -> Result<(), crate::errors::HostError>;
 }
 
 // Public data contracts. Python behavior remains in its adapters.

@@ -586,16 +586,10 @@ _HANDLERS: dict[type, Callable[[VoiceSession[Any], Any], None]] = {
 
 
 def report_snapshots(self: VoiceSession[Any]) -> list[dict[str, Any]]:
-    return [
-        event
-        for event in self._event_snapshots
-        if self._event_retention.accepts(event["type"], self._recording_options["redaction"])
-    ]
+    return [event for event in self._event_snapshots if self._owner.accepts_event(event["type"])]
 
 
 def record_snapshot(self: VoiceSession[Any], arg: AgentEvent) -> None:
     # the event as the report records it: no live objects (a model client, an exception)
-    if self._event_retention.accepts(arg.type, self._recording_options["redaction"]):
-        snapshot = event_dict(arg, json=True)
-        self._event_retention.admit()
-        self._event_snapshots.append(snapshot)
+    if self._owner.admit_event(arg.type):
+        self._event_snapshots.append(event_dict(arg, json=True))

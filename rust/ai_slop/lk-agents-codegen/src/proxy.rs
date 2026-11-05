@@ -217,7 +217,12 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
         Target::Attribute(path) => {
             let (last, along) = path.split_last().expect("a path has a name");
             args.insert(0, format!("::pyo3::types::PyString::new(py, {last:?}).into_any()"));
-            args.insert(0, format!("host.bind(py){}", attributes(along)));
+            // An owned bound object: the host itself when the attribute is its own.
+            let owner = match along {
+                [] => "host.bind(py).clone()".to_owned(),
+                along => format!("host.bind(py){}", attributes(along)),
+            };
+            args.insert(0, owner);
             "py.import(\"builtins\")?.getattr(\"getattr\")?".to_owned()
         }
         Target::Function { module, name } => {
@@ -721,6 +726,7 @@ mod tests {
             "#[host(await, name = \"rtc.aclose\")] async fn close(&self, cx: &Cx, #[host(kw)] reason: String, code: u32) -> Result<(), HostError>;",
             "#[host(await, function = \"livekit.agents._bindings.next_frame\")] async fn next(&self, cx: &Cx) -> Result<Option<String>, HostError>;",
             "#[host(await, getter = \"session.usage\")] async fn usage(&self, cx: &Cx) -> Result<u32, HostError>;",
+            "#[host(call, getter = \"label\")] fn label(&self) -> Result<String, HostError>;",
         )))
         .expect("targets resolve");
         let p = &decls.proxies[0];
@@ -753,6 +759,14 @@ mod tests {
                 && emitted[4].contains("[host.bind(py).getattr(\"session\")?, ::pyo3::types::PyString::new(py, \"usage\").into_any()]"),
             "{}",
             emitted[4]
+        );
+        // The host's own attribute is read on the host itself.
+        assert!(
+            emitted[5].contains(
+                "[host.bind(py).clone(), ::pyo3::types::PyString::new(py, \"label\").into_any()]"
+            ),
+            "{}",
+            emitted[5]
         );
         let whole = super::proxy(p).expect("emits");
         assert!(

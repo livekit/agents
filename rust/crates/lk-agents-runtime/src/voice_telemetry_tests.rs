@@ -192,6 +192,30 @@ impl lk_agents_abi::worker::job::SessionJob for Job {
         self.0.lock().push(cx.span());
         Box::pin(async { Ok(()) })
     }
+    fn enable_recording(&self) -> Result<bool, lk_agents_abi::errors::HostError> {
+        unreachable!("only the session owner joins its job")
+    }
+    fn claim_primary(
+        &self,
+        _: lk_agents_abi::HostRef,
+    ) -> Result<bool, lk_agents_abi::errors::HostError> {
+        unreachable!("only the session owner joins its job")
+    }
+    fn recording_dir(&self) -> Result<String, lk_agents_abi::errors::HostError> {
+        unreachable!("only the session owner joins its job")
+    }
+    fn init_recording(
+        &self,
+        _: std::collections::BTreeMap<String, bool>,
+    ) -> Result<(), lk_agents_abi::errors::HostError> {
+        unreachable!("only the session owner joins its job")
+    }
+    fn on_shutdown(
+        &self,
+        _: lk_agents_abi::HostRef,
+    ) -> Result<(), lk_agents_abi::errors::HostError> {
+        unreachable!("only the session owner joins its job")
+    }
 }
 
 // Catches: the room connecting before `session_start` exists, so `room_connect` parents to the

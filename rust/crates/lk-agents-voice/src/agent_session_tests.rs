@@ -38,7 +38,6 @@ use crate::agent_activity::scheduling::SpeechId;
 use crate::agent_session::lifecycle::SessionStartPlans;
 use crate::events::SessionEvent;
 use lk_agents_abi::errors::ProviderError;
-use lk_agents_abi::voice::session_effects::SessionStart as _;
 use lk_agents_core::tts::markup::ChatMessageExt;
 use std::sync::Arc;
 

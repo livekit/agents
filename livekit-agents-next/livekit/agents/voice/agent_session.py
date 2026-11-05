@@ -14,7 +14,6 @@ import contextvars
 import copy
 from collections import deque
 from collections.abc import AsyncIterator, Callable, Sequence
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, Generic, cast, overload
 
 from livekit import rtc
@@ -110,18 +109,13 @@ class VoiceSession(SessionCommands, rtc.EventEmitter[EventTypes], Generic[Contex
     _video_sampler: VoiceActivityVideoSampler | None
     _input: io.AgentInput
     _output: io.AgentOutput
-    _event_retention: _core._core_EventRetention
-    _recording_options: RecordingOptions
     _store: ContextStore | None
     _room: rtc.Room | None
     _amd: AMD | None
-    _started_at: float | None
     _event_snapshots: deque[dict[str, Any]]
     _root_span_context: Any
     _text_input_cb: TextInputCallback | None
-    _recorder: _core.SessionRecorder | None
     _steps: dict[str, Callable[..., Any]]
-    _recording_path: Path | None
     _audio_input_options: AudioInputOptions | None
     _tasks: set[asyncio.Task[Any]]
 

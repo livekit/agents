@@ -2,9 +2,10 @@
 //! cancelling a host waiter does not abandon startup or finalization.
 
 use super::{SessionOptions, VoiceSession, options::Providers, storage::SessionStorage};
+use crate::recording::SessionRecorder;
 use crate::telemetry;
 use lk_agents_abi::errors::HostError;
-use lk_agents_abi::recorder::{AudioRecorder, RecordingFailure};
+use lk_agents_abi::recorder::{AudioRecorder, RecordingFailure, SessionRecorder as _};
 use lk_agents_abi::voice::events::CloseReason;
 use lk_agents_abi::voice::events::{HostWire, SessionErrorWire};
 use lk_agents_abi::voice::session::{
@@ -12,8 +13,8 @@ use lk_agents_abi::voice::session::{
 };
 use lk_agents_abi::voice::session_effects::{DeliveredState, SessionEvents};
 use lk_agents_abi::voice::session_options::{
-    EndpointingKwargs, Expressive, InterruptionKwargs, ResolvedSessionOptions, SessionLegs,
-    TextTransformSet, TurnDetectionKwarg, UpdateKwargs,
+    EndpointingKwargs, Expressive, InterruptionKwargs, RecordingOptions, ResolvedSessionOptions,
+    SessionLegs, TextTransformSet, TurnDetectionKwarg, UpdateKwargs,
 };
 use lk_agents_abi::voice::session_owner::SessionOwner as _;
 use lk_agents_abi::voice::session_owner::{
@@ -22,8 +23,10 @@ use lk_agents_abi::voice::session_owner::{
 use lk_agents_abi::voice::session_storage::SessionStorage as _;
 use lk_agents_abi::{BoxFuture, HostRef, Maybe};
 use lk_agents_net::{env::ProcessEnv, task::TaskSet};
-use lk_agents_voice::agent_activity::options::validate_session_update;
-use lk_agents_voice::agent_session::lifecycle::{CloseOwner, OwnerLifecycle, StartOwner};
+use lk_agents_voice::agent_activity::options::{RECORDING_ALL_OFF, validate_session_update};
+use lk_agents_voice::agent_session::lifecycle::{
+    CloseOwner, OwnerLifecycle, SessionStartPlans, StartOwner,
+};
 use parking_lot::Mutex;
 use std::sync::{Arc, OnceLock, Weak};
 use tokio::sync::{OnceCell, watch};
@@ -44,13 +47,16 @@ impl lk_agents_abi::voice::session_owner::SessionPreparation for Prepared {
     fn new(
         room: Arc<dyn lk_agents_abi::voice::room_owner::SessionRoom>,
         args: lk_agents_abi::voice::session::VoiceSessionArgs,
-        recorder: Option<Arc<dyn AudioRecorder>>,
+        record_audio: bool,
     ) -> Self {
-        Self(SessionBindings { room, args, recorder })
+        Self(SessionBindings { room, args, record_audio })
     }
 }
 
 pub struct SessionOwner(Arc<Inner>);
+
+/// The report's event retention, through its declared operations.
+type Retention = lk_agents_net::telemetry::session_report::EventRetention;
 
 struct Inner {
     env: ProcessEnv,
@@ -60,6 +66,12 @@ struct Inner {
     toolsets: OnceLock<Arc<dyn lk_agents_abi::llm::toolsets::ScopesPort>>,
     session: OnceLock<Arc<VoiceSession>>,
     recorder: OnceLock<Arc<dyn AudioRecorder>>,
+    /// What a job's report reads of the session, set as its startup prepares it.
+    started_at: OnceLock<f64>,
+    recording_options: OnceLock<RecordingOptions>,
+    audio: OnceLock<(String, Arc<SessionRecorder>)>,
+    /// The report's events: which are kept, and the job allowed to read them.
+    retention: Mutex<Retention>,
     tasks: Arc<TaskSet>,
     opened: watch::Sender<Option<Result<(), HostError>>>,
     closed: watch::Sender<bool>,
@@ -156,12 +168,11 @@ impl Inner {
         // Startup work runs under `session_start`, reserved before the driver opens it.
         let starting = trace.clone().under::<telemetry::SessionStart>(opening.start.context);
         let bindings = host.prepare(&starting).await?.bindings();
-        if let Some(recorder) = bindings.recorder {
-            // Retain it before waiting for readiness: even a failed open must be finalized.
-            let _ = self.recorder.set(recorder.clone());
+        let mut args = bindings.args;
+        self.join_job(host.as_ref(), &mut args, bindings.record_audio)?;
+        if let Some(recorder) = self.recorder.get() {
             recorder.ready().await.map_err(|error| HostError::new(error.to_string()))?;
         }
-        let mut args = bindings.args;
         if args.chat_ctx.is_none() {
             args.chat_ctx = self.start_history.lock().take();
         }
@@ -211,6 +222,55 @@ impl Inner {
         host.started(&in_session).await
     }
 
+    /// The session as `args.job`'s, prepared: the job's first session claimed is its primary one,
+    /// which records what the job records, serves the remote session protocol and ends the job as
+    /// it closes; a later one records nothing and serves no remote session. The console's call
+    /// serves it either way. The start time is set, the audio recorder opens on
+    /// `<recording_dir>/audio.ogg` when the session records audio, and the job's shutdown closes
+    /// the session, in that order.
+    fn join_job(
+        &self,
+        host: &dyn SessionHost,
+        args: &mut lk_agents_abi::voice::session::VoiceSessionArgs,
+        record_audio: bool,
+    ) -> Result<(), HostError> {
+        let job = args.job.clone();
+        let plan = match &job {
+            Some(job) => {
+                let primary = job.claim_primary(host.session()?)?;
+                let plan = SessionStartPlans::plan_session_start(job.enable_recording()?, !primary);
+                job.init_recording(recording_map(&plan.recording))?;
+                Some(plan)
+            }
+            None => None,
+        };
+        let recording = plan.as_ref().map_or(RECORDING_ALL_OFF, |plan| plan.recording);
+        let _ = self.recording_options.set(recording);
+        if args.console.is_none() && !plan.as_ref().is_some_and(|plan| plan.hosting) {
+            args.remote_session = None;
+        }
+        if !plan.as_ref().is_some_and(|plan| plan.is_primary) {
+            args.job_run = None;
+        }
+        if args.console.is_some() {
+            // The console's call has no job room to connect.
+            args.job = None;
+        }
+        let _ = self.started_at.set(lk_agents_abi::unix_secs(self.env.clock.wall()));
+        let Some(job) = job else { return Ok(()) };
+        if recording.audio || record_audio {
+            let dir = std::path::PathBuf::from(job.recording_dir()?);
+            let path = dir.join("audio.ogg").to_string_lossy().into_owned();
+            let recorder = SessionRecorder::new(&self.env, path.clone(), 48_000, None, 64_000)
+                .map_err(|error| HostError::new(error.to_string()))?;
+            let recorder = Arc::new(recorder);
+            // Retained before it is ready: even a failed open must be finalized.
+            let _ = self.recorder.set(recorder.clone());
+            let _ = self.audio.set((path, recorder));
+        }
+        job.on_shutdown(host.session()?)
+    }
+
     /// Bind the providers whose effective value changed to the running session; before it runs,
     /// the session opens on the options' providers instead.
     fn install(&self, changed: Providers) -> Result<(), OptionsRefused> {
@@ -256,6 +316,20 @@ impl Inner {
     }
 }
 
+fn recording_map(options: &RecordingOptions) -> std::collections::BTreeMap<String, bool> {
+    let RecordingOptions { audio, traces, logs, transcript, redaction } = *options;
+    [
+        ("audio", audio),
+        ("traces", traces),
+        ("logs", logs),
+        ("transcript", transcript),
+        ("redaction", redaction),
+    ]
+    .into_iter()
+    .map(|(key, value)| (key.to_owned(), value))
+    .collect()
+}
+
 fn providers(
     stt: Maybe<Option<HostRef>>,
     tts: Maybe<Option<HostRef>>,
@@ -294,6 +368,12 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
             toolsets: OnceLock::new(),
             session: OnceLock::new(),
             recorder: OnceLock::new(),
+            started_at: OnceLock::new(),
+            recording_options: OnceLock::new(),
+            audio: OnceLock::new(),
+            retention: Mutex::new(
+                <Retention as lk_agents_abi::telemetry::report::EventRetention>::new(env),
+            ),
             tasks: Arc::new(TaskSet::default()),
             opened: watch::channel(None).0,
             closed: watch::channel(false).0,
@@ -316,6 +396,13 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
             StartOwner::Closed => return Err(HostError::new("this VoiceSession is closed")),
             StartOwner::Join => {}
             StartOwner::Start => {
+                if let Some(job) = &job {
+                    // The report belongs to the job the session first started in.
+                    <Retention as lk_agents_abi::telemetry::report::EventRetention>::claim(
+                        &mut self.0.retention.lock(),
+                        job.id.clone(),
+                    );
+                }
                 let (job, job_ids) = match job {
                     Some(job) => (
                         Some(telemetry::JobKey(job.id)),
@@ -532,5 +619,49 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
 
     async fn finish_recording(&self) -> Result<(), RecordingFailure> {
         self.0.finish_recording().await
+    }
+
+    fn started_at(&self) -> Option<f64> {
+        self.0.started_at.get().copied()
+    }
+
+    fn recording_options(&self) -> RecordingOptions {
+        self.0.recording_options.get().copied().unwrap_or(RECORDING_ALL_OFF)
+    }
+
+    fn recording_path(&self) -> Option<String> {
+        self.0.audio.get().map(|(path, _)| path.clone())
+    }
+
+    fn recording_started_at(&self) -> Option<f64> {
+        self.0.audio.get().and_then(|(_, recorder)| recorder.started_at())
+    }
+
+    fn allows_report(&self, job_id: String) -> bool {
+        <Retention as lk_agents_abi::telemetry::report::EventRetention>::allows_read(
+            &self.0.retention.lock(),
+            job_id,
+        )
+    }
+
+    fn accepts_event(&self, kind: String) -> bool {
+        let redaction = self.recording_options().redaction;
+        <Retention as lk_agents_abi::telemetry::report::EventRetention>::accepts(
+            &self.0.retention.lock(),
+            kind,
+            redaction,
+        )
+    }
+
+    fn admit_event(&self, kind: String) -> bool {
+        let redaction = self.recording_options().redaction;
+        let mut retention = self.0.retention.lock();
+        let accepted = <Retention as lk_agents_abi::telemetry::report::EventRetention>::accepts(
+            &retention, kind, redaction,
+        );
+        if accepted {
+            <Retention as lk_agents_abi::telemetry::report::EventRetention>::admit(&mut retention);
+        }
+        accepted
     }
 }

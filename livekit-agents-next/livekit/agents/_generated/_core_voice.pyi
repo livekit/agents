@@ -52,16 +52,10 @@ from .session_options import (
     UpdateKwargs,
 )
 from .session_owner import SessionJobInfo
-from .session_wire import (
-    DefaultModelPlan,
-    ExceededTurnReply,
-    RunQuestion,
-    StartPlan,
-    VoiceRunOutput,
-)
+from .session_wire import DefaultModelPlan, ExceededTurnReply, RunQuestion, VoiceRunOutput
 from .stream_info import StreamInfo
 from .stt import SpeechEvent
-from .telemetry import SessionReport, SpanContext
+from .telemetry import RecordingOptions, SessionReport, SpanContext
 from .tool_options import ToolSpec
 from .tool_report import ToolReport
 from .transcript import TranscriptChunk
@@ -775,11 +769,6 @@ def default_session_models(
 
 def user_turn_exceeded_reply() -> ExceededTurnReply: ...
 
-def plan_session_start(*, job_default: bool, another_session_is_primary: bool) -> StartPlan:
-    """The job's recording and whether this session is its primary (records) and hosts the
-    remote session protocol; `another_session_is_primary` is the job's claim already taken.
-    """
-
 class _core_SessionState:
     """`_core_SessionState`: one delivered state (the history and the agent's and user's states), as
     the host reads it.
@@ -833,7 +822,8 @@ class _core_SessionBindings:
         cls,
         room: _core_RoomSession,
         args: VoiceSessionArgs,
-        recorder: SessionRecorder | None,
+        *,
+        record_audio: bool = False,
     ) -> Self: ...
 
 class _core_SessionOwner:
@@ -846,7 +836,11 @@ class _core_SessionOwner:
         job: SessionJobInfo | None = None,
     ) -> None:
         """`job`: the job the session runs in, whose trace its spans join under the span current at
-        the call.
+        the call, and which alone may read its report. Startup runs in order: the thread's storage
+        opens; the host prepares the room and legs; a session of the job (on its room, or the
+        console's) claims the job's primary session and sets the job's recording from its plan;
+        the start time is set; the job's session opens its audio recording and the job's shutdown
+        is made to close it; the recording is ready; the toolsets set up and the voice loop starts.
         """
     @property
     def session(self) -> VoiceSession | None: ...
@@ -925,6 +919,30 @@ class _core_SessionOwner:
     def shutdown(self, reason: str, drain: bool = False) -> None: ...
     async def finish_recording(self) -> None:
         """The recording's final result remains available to the job reporter."""
+    @property
+    def started_at(self) -> float | None:
+        """When the session started (wall clock seconds), once its startup prepared it."""
+    @property
+    def recording_options(self) -> RecordingOptions:
+        """What the session records: its job's plan for it, nothing outside a job or before it starts."""
+    @property
+    def recording_path(self) -> str | None:
+        """The session's audio recording file (`audio.ogg` in the job's session directory), when it
+        records audio.
+        """
+    @property
+    def recording_started_at(self) -> float | None:
+        """When the audio recording's first frame was written."""
+    def allows_report(self, job_id: str) -> bool:
+        """Whether the job `job_id` may read the session's report: the job the session first started
+        in, or any job for a session started outside one.
+        """
+    def accepts_event(self, kind: str) -> bool:
+        """Whether the session's report keeps an event of `kind`: a known kind, its content only when
+        the session's recording is not redacted.
+        """
+    def admit_event(self, kind: str) -> bool:
+        """An event of `kind` the report keeps is counted as retained; whether it was accepted."""
 
 class _core_SessionStorage:
     def __new__(

@@ -310,7 +310,6 @@ from ._generated._core_voice import (
     normalize_date_of_birth as normalize_date_of_birth,
     normalize_email_address as normalize_email_address,
     normalize_phone_number as normalize_phone_number,
-    plan_session_start as plan_session_start,
     receive_dtmf as receive_dtmf,
     resolve_interruption_detector as resolve_interruption_detector,
     rt_server_turn_detection as rt_server_turn_detection,

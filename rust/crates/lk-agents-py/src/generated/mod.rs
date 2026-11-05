@@ -469,7 +469,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<voice::VoiceSession>()?;
     m.add_function(wrap_pyfunction!(voice::default_session_models, m)?)?;
     m.add_function(wrap_pyfunction!(voice::user_turn_exceeded_reply, m)?)?;
-    m.add_function(wrap_pyfunction!(voice::plan_session_start, m)?)?;
     m.add_class::<voice::CoreSessionState>()?;
     m.add_function(wrap_pyfunction!(voice::rt_server_turn_detection, m)?)?;
     m.add_function(wrap_pyfunction!(voice::resolve_interruption_detector, m)?)?;

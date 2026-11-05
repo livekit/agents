@@ -26,7 +26,7 @@ import os
 import tempfile
 import time
 from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence, Set
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast, overload
 
@@ -264,11 +264,25 @@ class JobContext:
     def _primary_agent_session(self) -> VoiceSession | None:
         return self._sessions[0] if self._sessions else None
 
-    def _claim_session(self, session: VoiceSession) -> bool:
+    def _core_claim_primary(self, session: VoiceSession) -> bool:
         """A session started for the job: whether it is the job's primary one."""
         if session not in self._sessions:
             self._sessions.append(session)
         return self._sessions[0] is session
+
+    def _core_recording_dir(self) -> str:
+        return str(self._session_directory)
+
+    def _core_on_shutdown(self, session: VoiceSession) -> None:
+        from .voice.events import CloseReason
+
+        # the native close, run in the shutdown's span (a framework callback opens none of its own)
+        self._run.add_shutdown_callback(
+            functools.partial(session._owner.aclose, CloseReason.JOB_SHUTDOWN.value),
+            takes_reason=False,
+            framework=True,
+            name="VoiceSession.aclose",
+        )
 
     @property
     def session_directory(self) -> Path:
@@ -293,7 +307,7 @@ class JobContext:
         session = session or self._primary_agent_session
         if session is None:
             raise RuntimeError("Cannot prepare report, no VoiceSession was found")
-        if not session._event_retention.allows_read(self.job.id):
+        if not session._owner.allows_report(self.job.id):
             raise PermissionError("A session report is available only to its owning job")
         return session
 
@@ -322,9 +336,13 @@ class JobContext:
         """``core``: the session's history, item turns and usage from the core's snapshot; the
         session's current state without one (a report made while it runs)."""
 
-        recording_started_at = session._recorder.started_at if session._recorder else None
+        owner = session._owner
+        recording_started_at = owner.recording_started_at
         timestamp = time.time()
-        options = {**session.options, "recording_options": dict(session._recording_options)}
+        options = {
+            **session.options,
+            "recording_options": asdict(owner.recording_options),
+        }
         return SessionReport(
             job_id=self.job.id,
             room_id=self.job.room.sid,
@@ -335,14 +353,12 @@ class JobContext:
             chat_history=core.chat_history if core is not None else list(session.history.items),
             turns=core.turns if core is not None else {},
             usage=core.usage if core is not None else session.usage,
-            started_at=session._started_at,
+            started_at=owner.started_at,
             timestamp=timestamp,
             duration=(
                 timestamp - recording_started_at if recording_started_at is not None else None
             ),
-            audio_recording_path=(
-                str(session._recording_path.absolute()) if session._recording_path else None
-            ),
+            audio_recording_path=owner.recording_path,
             audio_recording_started_at=recording_started_at,
             sdk_version=__version__,
         )

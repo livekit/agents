@@ -193,6 +193,29 @@ quietly, or, when the block raised, adds a note to that error. Transfer,
 DTMF and `VoiceTask` interactions use the same mechanism; a task opens its
 overrides inside its own code and they are released when the task ends.
 
+## A job's sessions
+
+A session started on the job's room (the default room inside a job), or on
+`lk agent console`'s call, is the job's. Its start runs in this order: the
+thread's storage opens, the room and models are prepared, the session claims
+the job, the job's recording is set from the claim, the start time is taken,
+the audio recording opens, and the job's shutdown is made to close the session.
+A failure at any step fails `start()` and settles what was acquired.
+
+The first session claimed is the job's primary one: it records what the job
+records (`enable_recording`), serves the remote session protocol, is the one
+the job reports, and ends the job when it closes. A later session of the job
+records nothing, serves no remote session and does not end the job; the
+console's call serves the remote session either way, and `--record` records
+its audio. The audio recording is `audio.ogg` in the job's session directory,
+the report's `audio_recording_path`. Every session of the job closes as the
+job shuts down, with `CloseReason.JOB_SHUTDOWN`, in the shutdown's span.
+
+A session's report belongs to the job the session first started in; another
+job's `make_session_report(session)` raises `PermissionError`. A session on
+another room, or with `room=None`, still belongs to that job's report but
+neither claims, records nor closes with it.
+
 ## Custom I/O and recording
 
 Audio, video and text endpoints may be implemented in Rust, Python or Node.
