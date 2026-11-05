@@ -99,7 +99,7 @@ fn reject_resend_observes_the_original_task_after_a_lost_submit_race() {
     m.handle(A2aTaskEvent::Start, Duration::ZERO);
     assert!(matches!(
         step(&mut m, Completion::Task(None)),
-        Operation::Open { access: Access::Exclusive { wait: false, .. }, .. }
+        Operation::Open { access: Access::Exclusive(WhenHeld::Reject), .. }
     ));
     assert!(matches!(step(&mut m, opened(false, false)), Operation::Submit(_)));
     assert!(matches!(step(&mut m, Completion::Submitted(false)), Operation::CloseRun));
@@ -114,7 +114,7 @@ fn concurrent_handler_waits_for_a_conditional_task_claim() {
     step(&mut m, Completion::Submitted(true));
     assert!(matches!(
         step(&mut m, Completion::Done),
-        Operation::Open { access: Access::Concurrent, pickup: true, .. }
+        Operation::Open { access: Access::Concurrent, pickup: TaskPickup::Claim, .. }
     ));
     assert!(matches!(step(&mut m, opened(false, false)), Operation::CloseRun));
     assert!(matches!(step(&mut m, Completion::Done), Operation::ReadTask(_)));
@@ -324,7 +324,7 @@ fn a_submitted_task_whose_waiter_died_is_failed_once_the_wait_ran_out() {
         assert!(effects.is_empty(), "{effects:?}");
         now = m.wake_at().expect("polling");
         let next = operation(m.handle(A2aTaskEvent::Wake, now));
-        if let Operation::Open { access: Access::Exclusive { wait: false, .. }, .. } = next {
+        if let Operation::Open { access: Access::Exclusive(WhenHeld::Reject), .. } = next {
             reopened = true;
             break;
         }

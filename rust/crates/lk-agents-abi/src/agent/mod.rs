@@ -310,7 +310,7 @@ pub struct AgentDefinition {
 pub trait AgentFrame: Send + Sync {
     fn definition(&self) -> &AgentDefinition;
     fn toolset_scope(&self) -> u64 {
-        0
+        crate::llm::toolsets::SESSION_TOOLSET_SCOPE
     }
     fn host(&self) -> &Arc<dyn AgentCallbacks>;
     fn host_context(&self) -> &HostRef;

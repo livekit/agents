@@ -13,13 +13,21 @@ pub enum TtsSynthesisEvent {
     Start,
     Text(String),
     InputEnded,
-    InputSent { final_flush: bool, started_time: f64 },
+    InputSent { input: SentInput, started_time: f64 },
     Received(Incoming),
     Audio { session_id: Option<String>, data: Vec<u8> },
     Failed(ApiError),
     ServerEof,
     Cancel,
     Wake,
+}
+
+/// What went out on the socket.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SentInput {
+    Transcript,
+    /// The session flush that ends the input: the provider may complete after it.
+    FinalFlush,
 }
 
 pub struct TtsSynthesis {
@@ -109,7 +117,8 @@ impl TtsSynthesis {
                 self.input_ended = true;
                 vec![TtsSynthesisEffect::TtsFinalFlush]
             }
-            TtsSynthesisEvent::InputSent { final_flush, started_time } => {
+            TtsSynthesisEvent::InputSent { input, started_time } => {
+                let final_flush = input == SentInput::FinalFlush;
                 self.started_time.get_or_insert(started_time);
                 self.final_flush_sent |= final_flush;
                 if final_flush || self.response_deadline.is_none() {
@@ -242,7 +251,7 @@ mod tests {
             [TtsSynthesisEffect::TtsFinalFlush]
         ));
         core.handle(
-            TtsSynthesisEvent::InputSent { final_flush: true, started_time: 0.0 },
+            TtsSynthesisEvent::InputSent { input: SentInput::FinalFlush, started_time: 0.0 },
             Ts::ZERO,
         );
         let effects =
@@ -257,7 +266,7 @@ mod tests {
     fn heartbeats_cannot_settle_response_and_later_segments_rearm_the_deadline() {
         let mut core = synthesis();
         core.handle(
-            TtsSynthesisEvent::InputSent { final_flush: false, started_time: 0.0 },
+            TtsSynthesisEvent::InputSent { input: SentInput::Transcript, started_time: 0.0 },
             Ts::ZERO,
         );
         core.handle(
@@ -270,7 +279,7 @@ mod tests {
         ));
         let mut core = synthesis();
         core.handle(
-            TtsSynthesisEvent::InputSent { final_flush: false, started_time: 0.0 },
+            TtsSynthesisEvent::InputSent { input: SentInput::Transcript, started_time: 0.0 },
             Ts::ZERO,
         );
         core.handle(
@@ -278,7 +287,7 @@ mod tests {
             Ts::from_nanos(500_000_000),
         );
         core.handle(
-            TtsSynthesisEvent::InputSent { final_flush: false, started_time: 0.0 },
+            TtsSynthesisEvent::InputSent { input: SentInput::Transcript, started_time: 0.0 },
             Ts::from_nanos(1_000_000_000),
         );
         assert!(core.handle(TtsSynthesisEvent::Wake, Ts::from_nanos(1_500_000_000)).is_empty());
@@ -323,7 +332,7 @@ mod tests {
             Some(Ts::from_nanos(1_500_000_000)),
         );
         core.handle(
-            TtsSynthesisEvent::InputSent { final_flush: false, started_time: 0.0 },
+            TtsSynthesisEvent::InputSent { input: SentInput::Transcript, started_time: 0.0 },
             Ts::ZERO,
         );
         core.handle(
@@ -331,7 +340,7 @@ mod tests {
             Ts::from_nanos(500_000_000),
         );
         core.handle(
-            TtsSynthesisEvent::InputSent { final_flush: false, started_time: 1.0 },
+            TtsSynthesisEvent::InputSent { input: SentInput::Transcript, started_time: 1.0 },
             Ts::from_nanos(1_000_000_000),
         );
         assert!(

@@ -8,7 +8,7 @@ use serde_json::{Map, Value};
 use crate::sql::{BatchResult, Bind, FromCell, Row, SqlValue, Statement, Table, first_cell};
 use crate::thread::run::TaskState;
 use crate::thread::schema::*;
-use crate::{StorageError, TaskWrite, ThreadDbConnection};
+use crate::{StorageError, TaskPickup, TaskWrite, ThreadDbConnection};
 
 /// The largest `tasks/list` page A2A allows.
 const MAX_TASK_PAGE: i64 = 100;
@@ -167,8 +167,8 @@ pub struct Acquire<'a> {
     /// for a run with no row (a voice turn).
     pub task_id: &'a str,
     pub run_started: EventWrite,
-    /// Take `task_id`'s row to `working` under the lease, in the same batch.
-    pub pickup: bool,
+    /// What the batch does with `task_id`'s row under the lease.
+    pub pickup: TaskPickup,
     /// Load the lane's newest task rows, this many.
     pub tasks_limit: i64,
 }
@@ -218,7 +218,8 @@ pub(crate) async fn acquire(
         payload: SqlValue::json(&req.run_started.payload),
     });
     let committed = b.add(SelectCommittedRun { lane, run_id: req.run_id });
-    let pickup = req.pickup.then(|| b.add(PickupTaskHeld { lane, token, task_id: req.task_id }));
+    let pickup = (req.pickup == TaskPickup::Claim)
+        .then(|| b.add(PickupTaskHeld { lane, token, task_id: req.task_id }));
     let items = b.add(SelectItems { lane });
     let lane_row = b.add(SelectLane { lane });
     let tasks = b.add(SelectTasks { lane, limit: req.tasks_limit });

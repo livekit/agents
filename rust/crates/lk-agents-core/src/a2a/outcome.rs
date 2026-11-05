@@ -16,14 +16,12 @@ use lk_agents_abi::storage::journal::JournalEvent;
 use lk_agents_abi::storage::thread::TaskData;
 use lk_agents_abi::storage::thread::timestamp;
 use lk_agents_abi::storage::thread::{
-    ItemRow, RunOutcome, TaskPatch, TaskRow, WaitOptions, agent_message, wait_patch,
+    ItemRow, REASON_CLIENT_CANCEL, RunOutcome, TaskPatch, TaskRow, WaitOptions, agent_message,
+    wait_patch,
 };
 use lk_agents_abi::storage::{Ask, StorageError, TaskState};
 
-use crate::a2a::{
-    CLIENT_CANCEL_REASON, HandlerOutput, INTERRUPTION_NEW_MESSAGE, Message, TurnResult,
-    chat_message,
-};
+use crate::a2a::{HandlerOutput, INTERRUPTION_NEW_MESSAGE, Message, TurnResult, chat_message};
 
 /// One microsecond, in Unix seconds: how far apart items made in the same instant are ordered.
 pub(crate) const ITEM_ORDER_STEP: f64 = 1e-6;
@@ -381,7 +379,7 @@ impl Settlement {
             self.transitions.push(TaskTransition { task_id: answer, status, patch });
         }
         self.outcome = RunOutcome::Canceled;
-        self.reason = Some(CLIENT_CANCEL_REASON.into());
+        self.reason = Some(REASON_CLIENT_CANCEL.into());
         self
     }
 

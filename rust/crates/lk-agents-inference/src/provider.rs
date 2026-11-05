@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use lk_agents_abi::HostRef;
-use lk_agents_abi::errors::{ApiError, ApiErrorKind, HostError, ProviderError};
+use lk_agents_abi::errors::{ApiError, ApiErrorKind, CANCELLED_STATUS, HostError, ProviderError};
 use lk_agents_abi::invoke::CallContext;
 use lk_agents_net::task::Cancellation;
 use parking_lot::Mutex;
@@ -112,7 +112,7 @@ impl AttemptMachine {
             self.attempts.reset_retries();
         }
         if matches!(self.kind, RequestKind::Llm | RequestKind::TtsBatch | RequestKind::TtsStream)
-            && error.status_code == Some(499)
+            && error.status_code == Some(CANCELLED_STATUS)
         {
             self.cancel(now_ns);
             return Ok(RetryDecision::Stop);

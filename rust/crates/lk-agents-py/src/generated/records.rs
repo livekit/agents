@@ -6618,7 +6618,10 @@ pub mod events {
                 Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
             },
         )?;
-        kwargs.set_item("status", ::pyo3::IntoPyObjectExt::into_bound_py_any(status, py)?)?;
+        kwargs.set_item(
+            "status",
+            crate::generated::records::events::tool_end_status_to_py(py, status)?,
+        )?;
         crate::py_calls::call(
             TOOL_CALL_ENDED
                 .import(py, "livekit.agents._generated.events", "ToolCallEnded")?
@@ -6626,6 +6629,35 @@ pub mod events {
             (),
             Some(&kwargs),
         )
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+
+    pub fn tool_end_status_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::voice::events::ToolEndStatus,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let value = match value {
+            ::lk_agents_abi::voice::events::ToolEndStatus::Done => "done",
+            ::lk_agents_abi::voice::events::ToolEndStatus::Error => "error",
+            ::lk_agents_abi::voice::events::ToolEndStatus::Cancelled => "cancelled",
+        };
+        ::pyo3::PyResult::Ok(::pyo3::types::PyString::new(py, value).into_any())
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+
+    pub fn tool_reply_status_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::voice::events::ToolReplyStatus,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let value = match value {
+            ::lk_agents_abi::voice::events::ToolReplyStatus::Scheduled => "scheduled",
+            ::lk_agents_abi::voice::events::ToolReplyStatus::Completed => "completed",
+            ::lk_agents_abi::voice::events::ToolReplyStatus::Interrupted => "interrupted",
+            ::lk_agents_abi::voice::events::ToolReplyStatus::Skipped => "skipped",
+        };
+        ::pyo3::PyResult::Ok(::pyo3::types::PyString::new(py, value).into_any())
     }
 
     // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
@@ -6650,7 +6682,10 @@ pub mod events {
             )?
             .into_any(),
         )?;
-        kwargs.set_item("status", ::pyo3::IntoPyObjectExt::into_bound_py_any(status, py)?)?;
+        kwargs.set_item(
+            "status",
+            crate::generated::records::events::tool_reply_status_to_py(py, status)?,
+        )?;
         kwargs.set_item("speech_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(speech_id, py)?)?;
         crate::py_calls::call(
             TOOL_REPLY_UPDATED
@@ -13781,7 +13816,7 @@ pub mod session_wire {
             "leg",
             match leg {
                 None => py.None().into_bound(py),
-                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+                Some(x) => crate::generated::records::session_wire::metrics_leg_to_py(py, x)?,
             },
         )?;
         crate::py_calls::call(
@@ -13791,6 +13826,18 @@ pub mod session_wire {
             (),
             Some(&kwargs),
         )
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+
+    pub fn metrics_leg_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::voice::events::MetricsLeg,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let value = match value {
+            ::lk_agents_abi::voice::events::MetricsLeg::Vad => "vad",
+        };
+        ::pyo3::PyResult::Ok(::pyo3::types::PyString::new(py, value).into_any())
     }
 
     // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.

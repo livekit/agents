@@ -3,12 +3,12 @@
 
 use crate::agent::{Source, Visibility};
 use crate::agent_activity::realtime::{RealtimeReplyRole, Request};
-use crate::agent_activity::scheduling::{SpeechId, SpeechKind};
+use crate::agent_activity::scheduling::{SpeechId, SpeechKind, VoiceRunParticipation};
 use crate::agent_activity::speech::SpeechSpec;
 use crate::agent_session::closing::SESSION_CLOSING;
 use crate::agent_session::effects::{Timer, VoiceEffect};
 use crate::agent_session::{Answer, RequestId, VoiceCommandOrigin};
-use crate::agent_session::{FillerSource, HookCall, HookId, ToolUpdate, VoiceDriver};
+use crate::agent_session::{FillerSource, FillerStart, HookCall, HookId, ToolUpdate, VoiceDriver};
 use crate::events::{DiagnosticEvent, SessionEvent, ToolEndStatus, ToolLifecycle, ToolReplyStatus};
 use crate::filler_scheduler::{FillerAction, FillerId, FillerScheduler};
 use crate::generation::ReplySource;
@@ -23,7 +23,6 @@ use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::{ChatItem, FunctionCall, Ts};
 use lk_agents_core::agent_run::AgentRunEvent;
 use lk_agents_core::tool_calls::{Admission, admit};
-use std::time::Duration;
 
 /// `_FillerScheduler`'s log when its `say` raised: the filler ends there.
 const FILLER_STOPPED: &str =
@@ -546,9 +545,15 @@ impl VoiceDriver {
     /// `InputRequired` asked (`_apply_transition`), its call answered by the person's next
     /// message, the question the output of a run ending on the tool's speech.
     pub(crate) fn deliver_outcome(&mut self, now: Ts, speech: SpeechId, delivery: Delivery) {
+        // What the call's speech says or asks is part of a run only when the call's speech is.
+        let voice_run = if self.run_contains_speech(speech) {
+            VoiceRunParticipation::Joins
+        } else {
+            VoiceRunParticipation::Outside
+        };
         match delivery {
             Delivery::Say(text) => {
-                self.say_text(now, text, self.run_contains_speech(speech));
+                self.say_text(now, text, voice_run);
             }
             Delivery::Complete(value) => self.end_voice_task(now, speech, Ok(value)),
             Delivery::Fail(reason) => self.end_voice_task(now, speech, Err(reason)),
@@ -560,19 +565,14 @@ impl VoiceDriver {
                 };
                 self.session.runs.outputs.insert(speech, output.clone());
                 let asking = if ask.verbatim {
-                    self.say_text(now, ask.question.clone(), self.run_contains_speech(speech))
+                    self.say_text(now, ask.question.clone(), voice_run)
                 } else {
                     let instructions = format!(
                         "{}{}",
                         lk_agents_abi::llm::tool_executor::ASK_IN_OWN_WORDS,
                         ask.question
                     );
-                    self.reply_with_instructions(
-                        now,
-                        instructions,
-                        None,
-                        self.run_contains_speech(speech),
-                    )
+                    self.reply_with_instructions(now, instructions, None, voice_run)
                 };
                 // `InputRequired(tool=)`: the person's next turn is a call of that tool; asked in
                 // the agent's own words, once that reply is done.
@@ -605,7 +605,7 @@ impl VoiceDriver {
         &mut self,
         now: Ts,
         text: String,
-        participates_in_voice_run: bool,
+        voice_run: VoiceRunParticipation,
     ) -> Option<SpeechId> {
         let realtime = self.realtime_says();
         if self.session.tts.is_none() && self.session.outputs.plays_audio() && !realtime {
@@ -616,11 +616,11 @@ impl VoiceDriver {
         }
         if realtime {
             let request = Request::Say { text, add_to_chat_ctx: true };
-            return self.realtime_request(now, request, None, None, participates_in_voice_run);
+            return self.realtime_request(now, request, None, None, voice_run);
         }
         let interruptible = self.session.config.effective.turn.interruption.enabled();
         let spec = SpeechSpec {
-            participates_in_voice_run,
+            voice_run,
             ..SpeechSpec::new(SpeechKind::Say, ReplySource::Text(text), interruptible)
         };
         Some(self.start_speech(now, spec))
@@ -633,21 +633,20 @@ impl VoiceDriver {
         now: Ts,
         text: String,
         chat_ctx: Option<lk_agents_abi::ChatContext>,
-        participates_in_voice_run: bool,
+        voice_run: VoiceRunParticipation,
     ) -> Option<SpeechId> {
         if self.activity.rt_session.is_some() {
             let tool_choice = Some(lk_agents_abi::ToolChoice::Forbidden);
-            let role = if participates_in_voice_run {
-                RealtimeReplyRole::VoiceRun
-            } else {
-                RealtimeReplyRole::Internal
+            let role = match voice_run {
+                VoiceRunParticipation::Joins => RealtimeReplyRole::VoiceRun,
+                VoiceRunParticipation::Outside => RealtimeReplyRole::Internal,
             };
             return self.realtime_reply(now, None, Some(text), None, tool_choice, None, role);
         }
         let speech = self.start_speech(
             now,
             SpeechSpec {
-                participates_in_voice_run,
+                voice_run,
                 turn_instructions: Some(text),
                 tool_choice: Some(lk_agents_abi::ToolChoice::Forbidden),
                 chat_ctx,
@@ -732,7 +731,10 @@ impl VoiceDriver {
         });
         // The summary must not start another round of tool calls.
         let instructions = text.clone();
-        let Some(speech) = self.reply_with_instructions(now, text, chat_ctx, false) else { return };
+        let outside = VoiceRunParticipation::Outside;
+        let Some(speech) = self.reply_with_instructions(now, text, chat_ctx, outside) else {
+            return;
+        };
         self.tool_reply_scheduled(speech, update_ids, at_tail, instructions);
     }
 
@@ -761,21 +763,8 @@ impl VoiceDriver {
     }
 
     /// `SpeechCommand::FillerStart`: the scope opened. The dwell begins at the first idle instant.
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "Keep the operation’s existing explicit arguments"
-    )]
-    pub(crate) fn on_filler_start(
-        &mut self,
-        now: Ts,
-        id: FillerId,
-        call_id: String,
-        speech: SpeechId,
-        delay: Duration,
-        interval: Option<Duration>,
-        max_steps: Option<u32>,
-        source: FillerSource,
-    ) {
+    pub(crate) fn on_filler_start(&mut self, now: Ts, start: FillerStart) {
+        let FillerStart { id, call_id, speech, delay, interval, max_steps, source } = start;
         let fresh = !self.activity.tools.fillers.contains_key(&id)
             && self.activity.speech_scheduler.contains(speech);
         let sched = fresh.then(|| {
@@ -876,23 +865,21 @@ impl VoiceDriver {
             self.end_filler(id, FillerEnd::Refused);
             return;
         }
-        let participates_in_voice_run = self
-            .activity
-            .tools
-            .fillers
-            .get(&id)
+        let in_run = (self.activity.tools.fillers.get(&id))
             .is_some_and(|filler| self.run_contains_speech(filler.speech));
+        let voice_run =
+            if in_run { VoiceRunParticipation::Joins } else { VoiceRunParticipation::Outside };
         let (speech, interrupted) = match text {
             // Spoken by the model when it says and there is no TTS, as the host's `say()`.
             Some(text) if realtime => {
                 let request = Request::Say { text, add_to_chat_ctx: true };
-                (self.realtime_request(now, request, None, None, participates_in_voice_run), false)
+                (self.realtime_request(now, request, None, None, voice_run), false)
             }
             Some(text) => {
                 let speech = self.start_speech(
                     now,
                     SpeechSpec {
-                        participates_in_voice_run,
+                        voice_run,
                         ..SpeechSpec::new(
                             SpeechKind::Say,
                             ReplySource::Text(text),

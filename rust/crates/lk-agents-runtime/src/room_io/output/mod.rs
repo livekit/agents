@@ -12,7 +12,7 @@ use lk_agents_abi::{Closed, HOST_TEARDOWN_TIMEOUT, timeout};
 use lk_agents_net::task::{TaskId, TaskSet};
 use lk_agents_voice::room_io::machine::output::Publication;
 use lk_agents_voice::room_io::machine::output::{
-    CaptureAdmission, Playback, PlaybackReport, capture_chunks,
+    CaptureAdmission, ClearedAudio, Playback, PlaybackReport, capture_chunks,
 };
 use parking_lot::Mutex;
 use std::ops::ControlFlow;
@@ -54,18 +54,18 @@ impl Shared {
     }
 
     /// `clear_queue` on the source, closing the open run at what passed the speaker. A pause
-    /// (`park`) resumes the timeline past the re-fed discard, which is where this run ended; a cut
-    /// resumes where the source does. Returns what the cut discarded.
+    /// (`Parked`) resumes the timeline past the re-fed discard, which is where this run ended; a
+    /// cut resumes where the source does. Returns what the cut discarded.
     fn clear_source(
         &self,
         src: &dyn AudioSource,
-        park: bool,
+        audio: ClearedAudio,
     ) -> std::result::Result<(Option<PlaybackReport>, Duration), RtcError> {
         let before = src.playback_info()?;
         src.clear_queue()?;
         let after = src.playback_info()?;
         let now = self.clock.now();
-        Ok(self.lock().playback.cleared(before, after, now, park))
+        Ok(self.lock().playback.cleared(before, after, now, audio))
     }
 
     fn source_result<T>(
@@ -223,9 +223,8 @@ impl Shared {
             (st.playback.paused(), st.playback.cutting())
         };
         if paused {
-            let Some((report, discarded)) =
-                self.source_result(src.as_ref(), self.clear_source(src.as_ref(), true))
-            else {
+            let cleared = self.clear_source(src.as_ref(), ClearedAudio::Parked);
+            let Some((report, discarded)) = self.source_result(src.as_ref(), cleared) else {
                 return;
             };
             self.report(report);
@@ -378,7 +377,7 @@ impl Shared {
     ) -> Closed {
         let mut outcome = Closed::Clean;
         if captured {
-            match self.clear_source(source.as_ref(), false) {
+            match self.clear_source(source.as_ref(), ClearedAudio::Dropped) {
                 Ok((run, _)) => self.report(run),
                 Err(error) => outcome = outcome.and(cleanup_outcome(Err(error), "audio queue")),
             }
@@ -694,9 +693,10 @@ impl AudioOutput for ParticipantAudioOutput {
         };
         self.shared.wake.notify_waiters();
         if let Some(src) = src
-            && let Some((report, _)) = self
-                .shared
-                .source_result(src.as_ref(), self.shared.clear_source(src.as_ref(), false))
+            && let Some((report, _)) = self.shared.source_result(
+                src.as_ref(),
+                self.shared.clear_source(src.as_ref(), ClearedAudio::Dropped),
+            )
         {
             self.shared.report(report);
         }
@@ -711,9 +711,8 @@ impl AudioOutput for ParticipantAudioOutput {
             st.source.clone()
         };
         let Some(src) = src else { return };
-        let Some((report, discarded)) =
-            self.shared.source_result(src.as_ref(), self.shared.clear_source(src.as_ref(), true))
-        else {
+        let cleared = self.shared.clear_source(src.as_ref(), ClearedAudio::Parked);
+        let Some((report, discarded)) = self.shared.source_result(src.as_ref(), cleared) else {
             return;
         };
         self.shared.report(report);

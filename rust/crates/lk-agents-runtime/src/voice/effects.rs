@@ -8,7 +8,7 @@ use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_voice::agent_activity::realtime::RealtimeWake;
 use lk_agents_voice::agent_activity::scheduling::SpeechId;
-use lk_agents_voice::agent_session::effects::{StreamKind, VoiceEffect};
+use lk_agents_voice::agent_session::effects::{SpeechHistory, StreamKind, VoiceEffect};
 use lk_agents_voice::agent_session::{SystemTap, VoiceEvent, VoiceHostEvent};
 use lk_agents_voice::audio::AudioChannel;
 use lk_agents_voice::audio_recognition::InterruptionSignal;
@@ -207,8 +207,8 @@ impl VoiceRuntime {
                     stt.push_conversation_item(&role, &text);
                 }
             }
-            E::StartSpeech { speech, context, llm, tts, stored, span } => {
-                self.start_speech(speech, *context, (llm, tts), stored, span)
+            E::StartSpeech { speech, context, llm, tts, history, span } => {
+                self.start_speech(speech, *context, (llm, tts), history, span)
             }
             // The session's ended spans and measurements go to the exporter, never the host.
             E::Emit(SessionEvent::Telemetry(records)) => {
@@ -394,7 +394,7 @@ impl VoiceRuntime {
         speech: SpeechId,
         context: lk_agents_voice::generation::ReplyContext,
         (llm, tts): (Option<ResourceId>, Option<ResourceId>),
-        stored: bool,
+        history: SpeechHistory,
         span: Option<telemetry::SpanContext>,
     ) {
         let Some(handle) = self.shared.speeches.get(speech) else { return };
@@ -417,7 +417,7 @@ impl VoiceRuntime {
         };
         let shared = Arc::clone(&self.shared);
         let task = Arc::clone(&handle);
-        let storage = self.storage.clone().filter(|_| stored);
+        let storage = self.storage.clone().filter(|_| history == SpeechHistory::VoiceLane);
         let queue = self.reports.clone();
         let speeches = self.speeches.clone();
         self.speeches.spawn(handle.id(), "speech", async move {

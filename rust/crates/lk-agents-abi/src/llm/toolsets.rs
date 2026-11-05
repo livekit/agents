@@ -70,6 +70,9 @@ pub trait ScopesPort: Any + Send + Sync {
     fn release(&self, scope: Option<u64>) -> BoxFuture<'_, Result<(), HostError>>;
 }
 
+/// The toolset scope of the whole session; other scopes are stable host agent identities.
+pub const SESSION_TOOLSET_SCOPE: u64 = 0;
+
 #[crate::host(class(name = "_core_ToolsetScopes", native = ScopesPort))]
 pub trait ToolsetScopes: Send + Sync + Sized + 'static {
     #[host(env)]

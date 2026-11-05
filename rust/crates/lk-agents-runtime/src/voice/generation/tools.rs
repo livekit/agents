@@ -9,7 +9,8 @@ use lk_agents_core::tool_calls::PrepareFailure;
 use lk_agents_voice::agent_session::Answer;
 use lk_agents_voice::generation::{GenEvent, ReplySource};
 use lk_agents_voice::tool_executor::{
-    HostedTool, MadeCall, StepEnd, StepNext, ToolExecution, ToolGo, ToolOutcome, ToolReport, answer,
+    HostedTool, MadeCall, StepEnd, StepNext, ToolCompletion, ToolExecution, ToolGo, ToolOutcome,
+    ToolReport, answer,
 };
 use std::sync::Arc;
 
@@ -60,7 +61,7 @@ impl ToolStep {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let shared = Arc::clone(shared);
         let handle = Arc::clone(handle);
-        let task = ctx.plan.task;
+        let completion = ctx.plan.completion;
         let bodies = self.speeches.clone();
         let turn = ctx.span;
         self.speeches.spawn(speech, "tool call", async move {
@@ -77,7 +78,7 @@ impl ToolStep {
             });
             let host = host.map(|host| *host);
             let call = HostedCall { shared: &shared, speech, host, bodies, description, turn };
-            let (execution, outcome) = call.run(*item, *first, &handle, task).await;
+            let (execution, outcome) = call.run(*item, *first, &handle, completion).await;
             // Recorded as it arrives; the step answers the calls in the model's order.
             let message = execution.ended_message();
             let (call_id, end) = (execution.call.call_id.clone(), execution.end);
@@ -116,7 +117,7 @@ impl HostedCall<'_> {
         mut one: FunctionCall,
         first: ToolGo,
         handle: &SpeechHandle,
-        task: bool,
+        completion: ToolCompletion,
     ) -> (ToolExecution, ToolOutcome) {
         let wall = || self.shared.time.wall();
         let mut prepared = None;
@@ -154,7 +155,7 @@ impl HostedCall<'_> {
                     // The speech waits on the body until it answers or detaches: awaiting the
                     // speech from inside it is refused meanwhile.
                     handle.tool_blocking(&h.invocation, &one.call_id, &one.name);
-                    let report = run_body(self, h, &args, &one, task).await;
+                    let report = run_body(self, h, &args, &one, completion).await;
                     handle.tool_returned(&h.invocation, &one.call_id);
                     let outcome = report.outcome.clone();
                     return (answer(&one, report, wall()), outcome);
@@ -212,14 +213,14 @@ impl HostedCall<'_> {
 /// Runs the body on the prepared arguments, `call` carrying its approval marks. Resolves when the
 /// tool returns, raises, is cancelled, or releases the step with its first `ctx.update()`; a host
 /// that fails outside the tool's own error handling is answered as an internal error. Only a
-/// `VoiceTask`'s reply (`task`) ends a task: an ordinary tool's `Completed` is its call's output,
-/// whatever value the host handed with it.
+/// `VoiceTask`'s reply (`EndsTask`) ends a task: an ordinary tool's `Completed` is its call's
+/// output, whatever value the host handed with it.
 async fn run_body(
     site: &HostedCall<'_>,
     h: &HostedTool,
     prepared: &lk_agents_abi::HostRef,
     call: &FunctionCall,
-    task: bool,
+    completion: ToolCompletion,
 ) -> ToolReport {
     let (shared, speech) = (site.shared, site.speech);
     let description = site.description.as_deref();
@@ -246,7 +247,7 @@ async fn run_body(
         shared: shared.clone(),
         call: call.clone(),
         started,
-        task,
+        completion,
         _guard: guard,
     };
     site.bodies.spawn(speech, "host tool body", body.run(span, progress, tx));
@@ -275,7 +276,7 @@ struct ToolBody {
     shared: Arc<SessionShared>,
     call: FunctionCall,
     started: u64,
-    task: bool,
+    completion: ToolCompletion,
     /// Last, so it drops after everything else.
     _guard: BodyGuard,
 }
@@ -352,7 +353,7 @@ impl ToolBody {
         if tool_bodies.cancellation_requested(invocation) || *self.shared.closing.borrow() {
             return ToolOutcome::Cancelled.into();
         }
-        if lk_agents_voice::tool_executor::validates_completion(self.task, &report) {
+        if lk_agents_voice::tool_executor::validates_completion(self.completion, &report) {
             report = host
                 .validate_tool_completion(&self.cx, invocation, prepared, report)
                 .await
@@ -361,7 +362,7 @@ impl ToolBody {
                     ToolOutcome::Internal.into()
                 });
         }
-        let report = lk_agents_voice::tool_executor::completion(self.task, report);
+        let report = lk_agents_voice::tool_executor::completion(self.completion, report);
         if let Some(span) = span {
             crate::telemetry::end_function_tool(span, &self.call, self.started, &report.outcome);
         }

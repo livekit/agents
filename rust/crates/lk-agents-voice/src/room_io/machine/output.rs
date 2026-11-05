@@ -179,6 +179,15 @@ pub enum PlaybackReport {
     Finished { segment: PlaybackSegment, event: PlaybackFinished },
 }
 
+/// What becomes of the audio a cleared source queue discarded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClearedAudio {
+    /// A pause: re-fed on resume, so the timeline resumes past the discard.
+    Parked,
+    /// A cut: gone, so the timeline resumes where the source does.
+    Dropped,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CaptureAdmission {
     Accepted { wake: bool },
@@ -368,13 +377,16 @@ impl Playback {
         before: PlaybackInfo,
         after: PlaybackInfo,
         now: Ts,
-        park: bool,
+        audio: ClearedAudio,
     ) -> (Option<PlaybackReport>, Duration) {
         let (before, after) = (self.window_position(before), self.window_position(after));
         let discarded = after.saturating_sub(before);
-        let resumes_at = if park { before + discarded } else { after };
+        let resumes_at = match audio {
+            ClearedAudio::Parked => before + discarded,
+            ClearedAudio::Dropped => after,
+        };
         let run = self.ledger.report_run(before, now, Some(resumes_at));
-        if park {
+        if audio == ClearedAudio::Parked {
             self.ledger.refed += discarded;
         }
         (self.report(run), discarded)

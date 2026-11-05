@@ -11,6 +11,16 @@ use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::turn::detector::ReqId;
 use std::sync::Arc;
 
+/// Where a starting speech's history lives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpeechHistory {
+    /// The speech takes the voice lane: the store reloads the history before the model reads it
+    /// and watches the lease.
+    VoiceLane,
+    /// The session's history in memory, with no store.
+    InMemory,
+}
+
 /// What a step asks the runtime to do, in one ordered list, not per-kind fields: order within and
 /// across kinds is inherited from the reference, where these ran inline in exactly this order.
 /// Driver-owned deadlines and deferred domain callbacks never cross this runtime boundary.
@@ -58,9 +68,7 @@ pub enum VoiceEffect {
         context: Box<crate::generation::ReplyContext>,
         llm: Option<ResourceId>,
         tts: Option<ResourceId>,
-        /// The speech takes the voice lane: the store reloads the history before the model reads
-        /// it and watches the lease.
-        stored: bool,
+        history: SpeechHistory,
         /// `agent_turn`: the parent of the speech's nodes, realtime inference and tool calls.
         span: Option<lk_agents_abi::telemetry::record::SpanContext>,
     },

@@ -239,10 +239,11 @@ pub struct ToolCallEnded {
     #[host(default = None)]
     pub message: Option<String>,
     /// `"done"`, `"error"` or `"cancelled"`.
-    pub status: String,
+    pub status: ToolEndStatus,
 }
 
 /// How a tool call ended: [`ToolCallEnded::status`].
+#[crate::host(record(module = "events", emit))]
 #[crate::host(wire_strs)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolEndStatus {
@@ -252,6 +253,7 @@ pub enum ToolEndStatus {
 }
 
 /// Where the deferred tool reply is: [`ToolReplyUpdated::status`].
+#[crate::host(record(module = "events", emit))]
 #[crate::host(wire_strs)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolReplyStatus {
@@ -276,7 +278,7 @@ pub struct ToolReplyUpdated {
     /// ``ToolCallUpdated.id`` values this reply covers.
     pub update_ids: Vec<String>,
     /// `"scheduled"`, `"completed"`, `"interrupted"` or `"skipped"`.
-    pub status: String,
+    pub status: ToolReplyStatus,
     /// Id of the reply speech; ``speech_created`` carries its handle.
     pub speech_id: String,
 }
@@ -567,11 +569,17 @@ pub struct MetricsCollectedWire {
     pub speech_id: Option<String>,
     /// The session leg whose provider emits the record as its own `metrics_collected`: `"vad"`
     /// for the VAD's, which the session folds; `None` for one a provider metered itself.
-    pub leg: Option<String>,
+    pub leg: Option<MetricsLeg>,
 }
 
-/// [`MetricsCollectedWire::leg`] for a record of the session's VAD.
-pub const METRICS_LEG_VAD: &str = "vad";
+/// [`MetricsCollectedWire::leg`]: the session leg whose provider a record belongs to.
+#[crate::host(record(module = "session_wire", emit))]
+#[crate::host(wire_strs)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MetricsLeg {
+    /// The session's VAD.
+    Vad,
+}
 
 /// `overlapping_speech`'s wire payload: the interruption detector's verdict, as it reported it.
 #[crate::host(record(module = "session_wire", emit))]

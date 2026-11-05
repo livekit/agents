@@ -3,17 +3,19 @@
 
 use crate::agent::{Source, Visibility};
 use crate::agent_activity::realtime::RealtimeReplyRole;
-use crate::agent_activity::scheduling::{PreemptiveDiscard, SpeechId, SpeechKind};
-use crate::agent_session::effects::{GateCause, GateOp, Timer};
+use crate::agent_activity::scheduling::{
+    PreemptiveDiscard, SpeechId, SpeechKind, VoiceRunParticipation,
+};
+use crate::agent_session::effects::{GateCause, GateOp, SpeechHistory, Timer};
 use crate::agent_session::{
-    Answer, ClosePhase, IdleWaiter, SayText, SpeechCall, SpeechCommand, VoiceCommandOrigin,
-    VoiceDriver,
+    Answer, ClosePhase, GenerateReplyRequest, IdleWaiter, SayText, SpeechCall, SpeechCommand,
+    VoiceCommandOrigin, VoiceDriver,
 };
 use crate::audio_recognition::{EndOfTurnInfo, TurnEdits};
 use crate::events::SessionEvent;
 use crate::generation::{EndOfSpeech, TurnOutcome as GenTurnOutcome, end_of_speech};
 use crate::generation::{GenEvent, Providers, ReplyContext, ReplySource};
-use crate::tool_executor::Toolset;
+use crate::tool_executor::{ToolCompletion, Toolset};
 use crate::trace::{GenerationStep, InterruptStep, PlayoutStep, SpeechStep, ToolStep};
 use lk_agents_abi::ChatItem;
 use lk_agents_abi::voice::events::AgentState;
@@ -30,9 +32,7 @@ pub(crate) const SAY_SHAPE_REFUSED_ON_REALTIME: &str =
 pub(crate) const SAY_WITHOUT_TTS_REFUSED: &str = "trying to generate speech from text without a TTS model or a RealtimeSession that supports say(); add a TTS model to AgentSession to enable say()";
 
 pub(crate) struct SpeechSpec {
-    /// Only causally participating speech extends the explicit voice run. Internal expert and
-    /// filler presentation must opt out unless its parent speech belongs to that run.
-    pub(crate) participates_in_voice_run: bool,
+    pub(crate) voice_run: VoiceRunParticipation,
     pub(crate) new_message: Option<ChatMessage>,
     pub(crate) turn_instructions: Option<String>,
     pub(crate) source: ReplySource,
@@ -68,7 +68,7 @@ impl SpeechSpec {
     /// Added to the context, planned against the record and the agent's prompt and tools.
     pub(crate) fn new(kind: SpeechKind, source: ReplySource, allow_interruptions: bool) -> Self {
         SpeechSpec {
-            participates_in_voice_run: kind.user_initiated(),
+            voice_run: kind.voice_run(),
             new_message: None,
             turn_instructions: None,
             source,
@@ -112,34 +112,11 @@ impl VoiceDriver {
             return self.activity.handoff.held_speech.push(cmd);
         }
         match cmd {
-            // A realtime session answers on its own socket. These arms must come *before* the
-            // pipeline arms: a guarded arm after its unguarded twin is dead code.
-            SpeechCommand::GenerateReply { chat_ctx, toolset, tool_names, call, .. }
-                if self.activity.rt_session.is_some()
-                    && (chat_ctx.is_some() || toolset.is_some() || tool_names.is_some()) =>
-            {
-                self.refuse_realtime_reply_overrides(call)
-            }
-            SpeechCommand::GenerateReply {
-                user_input,
-                instructions,
-                allow_interruptions,
-                tool_choice,
-                call,
-                ..
-            } if self.activity.rt_session.is_some() => {
-                self.realtime_reply(
-                    now,
-                    user_input,
-                    instructions,
-                    allow_interruptions,
-                    tool_choice,
-                    call,
-                    RealtimeReplyRole::VoiceRun,
-                );
-            }
+            SpeechCommand::GenerateReply(request) => self.generate_reply(now, request),
             // The model speaks a `say` only with no TTS to (`AgentActivity.say`); with one, a
             // realtime session's `say` is synthesised like a pipeline's, audio and streams too.
+            // These arms must come *before* the pipeline arm: a guarded arm after its unguarded
+            // twin is dead code.
             SpeechCommand::Say {
                 text: SayText::Text(text),
                 allow_interruptions,
@@ -181,32 +158,6 @@ impl VoiceDriver {
             SpeechCommand::Say { text, allow_interruptions, add_to_chat_ctx, call } => {
                 self.say(now, text, allow_interruptions, add_to_chat_ctx, call)
             }
-            SpeechCommand::GenerateReply {
-                user_input,
-                instructions,
-                allow_interruptions,
-                tool_choice,
-                chat_ctx,
-                toolset,
-                tool_names,
-                on_enter,
-                call,
-            } => {
-                let toolset =
-                    toolset.or_else(|| tool_names.map(|names| self.activity.reply_toolset(&names)));
-                self.generate_reply_speech(
-                    now,
-                    user_input,
-                    instructions,
-                    allow_interruptions,
-                    tool_choice,
-                    chat_ctx,
-                    toolset,
-                    on_enter,
-                    call.as_ref().map(|c| c.speech),
-                );
-                self.answer_speech(call);
-            }
             // The AMD system's authorization hold: the scheduling task keeps its head.
             SpeechCommand::PauseAuthorization => {
                 self.record_trace(SpeechStep::AuthorizationPaused);
@@ -231,15 +182,7 @@ impl VoiceDriver {
             SpeechCommand::ToolUpdate { invocation_id, operation, call_id, update } => {
                 self.on_tool_update(now, invocation_id, operation, call_id, update)
             }
-            SpeechCommand::FillerStart {
-                id,
-                call_id,
-                speech,
-                delay,
-                interval,
-                max_steps,
-                source,
-            } => self.on_filler_start(now, id, call_id, speech, delay, interval, max_steps, source),
+            SpeechCommand::FillerStart(start) => self.on_filler_start(now, start),
             SpeechCommand::FillerStop { id } => {
                 self.end_filler(id, crate::trace::FillerEnd::Stopped)
             }
@@ -278,6 +221,52 @@ impl VoiceDriver {
                 host_speech: call.as_ref().map(|c| c.speech),
                 ..SpeechSpec::new(SpeechKind::Say, source, allow_interruptions)
             },
+        );
+        self.answer_speech(call);
+    }
+
+    /// The host's `generate_reply()`. A realtime session answers on its own socket and refuses a
+    /// per-reply context or toolset.
+    fn generate_reply(&mut self, now: Ts, request: GenerateReplyRequest) {
+        let GenerateReplyRequest {
+            user_input,
+            instructions,
+            allow_interruptions,
+            tool_choice,
+            chat_ctx,
+            toolset,
+            tool_names,
+            on_enter,
+            call,
+        } = request;
+        if self.activity.rt_session.is_some() {
+            if chat_ctx.is_some() || toolset.is_some() || tool_names.is_some() {
+                return self.refuse_realtime_reply_overrides(call);
+            }
+            let role = RealtimeReplyRole::VoiceRun;
+            self.realtime_reply(
+                now,
+                user_input,
+                instructions,
+                allow_interruptions,
+                tool_choice,
+                call,
+                role,
+            );
+            return;
+        }
+        let toolset =
+            toolset.or_else(|| tool_names.map(|names| self.activity.reply_toolset(&names)));
+        self.generate_reply_speech(
+            now,
+            user_input,
+            instructions,
+            allow_interruptions,
+            tool_choice,
+            chat_ctx,
+            toolset,
+            on_enter,
+            call.as_ref().map(|c| c.speech),
         );
         self.answer_speech(call);
     }
@@ -559,6 +548,11 @@ impl VoiceDriver {
             | (None, _) => None,
         };
 
+        let completion = if self.activity.voice_tasks.running() {
+            ToolCompletion::EndsTask
+        } else {
+            ToolCompletion::CallOutput
+        };
         let ctx = ReplyContext {
             preemptive_tts: self.session.config.effective.turn.preemptive.enabled()
                 && self.session.config.effective.turn.preemptive.preemptive_tts(),
@@ -577,7 +571,7 @@ impl VoiceDriver {
             message_id,
             speech: self.session.config.effective.speech,
             answering: spec.answering,
-            task: self.activity.voice_tasks.running(),
+            completion,
             step: 1,
         };
 
@@ -591,7 +585,7 @@ impl VoiceDriver {
             kind,
             spec.add_to_chat_ctx,
             spec.host_asked,
-            spec.participates_in_voice_run,
+            spec.voice_run,
         );
         if admitted
             && kind.scheduled()
@@ -617,12 +611,17 @@ impl VoiceDriver {
             {
                 turn.scheduled(now);
             }
+            let history = if self.session.storage.enabled {
+                SpeechHistory::VoiceLane
+            } else {
+                SpeechHistory::InMemory
+            };
             self.record_effect(crate::agent_session::effects::VoiceEffect::StartSpeech {
                 speech: id,
                 context: Box::new(ctx),
                 llm: self.session.llm.as_ref().map(|l| l.id),
                 tts: self.session.tts.as_ref().map(|t| t.id),
-                stored: self.session.storage.enabled,
+                history,
                 span,
             });
         }

@@ -4,7 +4,7 @@
 use crate::agent::{Source, Visibility};
 use crate::agent_activity::false_interruption::InterruptRefusal;
 use crate::agent_activity::options::TurnDetection;
-use crate::agent_activity::scheduling::{SpeechId, SpeechKind};
+use crate::agent_activity::scheduling::{SpeechId, SpeechKind, VoiceRunParticipation};
 use crate::agent_activity::speech::{SAY_SHAPE_REFUSED_ON_REALTIME, SpeechSpec};
 use crate::agent_session::effects::Timer;
 use crate::agent_session::{Close, ClosePhase, Closing, SpeechCall, VoiceDriver};
@@ -256,7 +256,7 @@ impl VoiceDriver {
         let server_segments =
             rt.capabilities.turn_detection && !self.activity.realtime_turn_detection_disabled;
         let request = Request::UserTurn { commit_audio: !server_segments };
-        self.realtime_request(now, request, None, None, false)
+        self.realtime_request(now, request, None, None, VoiceRunParticipation::Outside)
     }
 
     /// The speech announced for it, if the request has one and it was not refused.
@@ -266,17 +266,10 @@ impl VoiceDriver {
         request: Request,
         call: Option<SpeechCall>,
         allow_interruptions: Option<bool>,
-        participates_in_voice_run: bool,
+        voice_run: VoiceRunParticipation,
     ) -> Option<SpeechId> {
         let req_id = self.session.ids.mint("rt");
-        self.send_request(
-            now,
-            req_id,
-            request,
-            call,
-            allow_interruptions,
-            participates_in_voice_run,
-        )
+        self.send_request(now, req_id, request, call, allow_interruptions, voice_run)
     }
 
     fn send_request(
@@ -286,7 +279,7 @@ impl VoiceDriver {
         request: Request,
         call: Option<SpeechCall>,
         allow_interruptions: Option<bool>,
-        participates_in_voice_run: bool,
+        voice_run: VoiceRunParticipation,
     ) -> Option<SpeechId> {
         let t = &self.activity.realtime_state;
         if t.ended() {
@@ -349,19 +342,12 @@ impl VoiceDriver {
                     false,
                     allow,
                     add,
-                    participates_in_voice_run,
+                    voice_run,
                 ))
             }
             Request::GenerateReply { read_back, .. } => {
                 let asked = Some(call.take());
-                let speech = self.start_realtime_speech(
-                    now,
-                    asked,
-                    false,
-                    allow,
-                    true,
-                    participates_in_voice_run,
-                );
+                let speech = self.start_realtime_speech(now, asked, false, allow, true, voice_run);
                 if *read_back {
                     let ev = crate::workflows::dtmf::DtmfTaskEvent::ReadBack(Some(speech));
                     self.dtmf_step(ev);
@@ -369,7 +355,8 @@ impl VoiceDriver {
                 Some(speech)
             }
             Request::UserTurn { .. } => {
-                Some(self.start_realtime_speech(now, None, true, allow, true, false))
+                let outside = VoiceRunParticipation::Outside;
+                Some(self.start_realtime_speech(now, None, true, allow, true, outside))
             }
         };
         let t = &mut self.activity.realtime_state;
@@ -610,7 +597,7 @@ impl VoiceDriver {
                 turn,
                 allow_interruptions,
                 add_to_chat_ctx,
-                false,
+                VoiceRunParticipation::Outside,
             ),
         };
         self.activity.realtime_state.set_open_speech(&response_id, speech);
@@ -629,7 +616,7 @@ impl VoiceDriver {
         turn: bool,
         allow_interruptions: Option<bool>,
         add_to_chat_ctx: bool,
-        participates_in_voice_run: bool,
+        voice_run: VoiceRunParticipation,
     ) -> SpeechId {
         // `allow_interruptions=false` holds only when the client owns replies; a self-replying
         // server interrupts on onset, so the caller is told once.
@@ -651,7 +638,7 @@ impl VoiceDriver {
         // The same `start_speech` as every speech, fed by the player channel.
         let source = ReplySource::Realtime;
         let spec = SpeechSpec {
-            participates_in_voice_run,
+            voice_run,
             add_to_chat_ctx,
             host_asked: asked.is_some() || turn,
             host_speech: asked.as_ref().and_then(Option::as_ref).map(|c| c.speech),
@@ -782,7 +769,7 @@ impl VoiceDriver {
         if regenerate {
             let request =
                 Request::GenerateReply { instructions: None, tool_choice: None, read_back: false };
-            self.realtime_request(now, request, None, None, false);
+            self.realtime_request(now, request, None, None, VoiceRunParticipation::Outside);
         }
     }
 
@@ -831,7 +818,8 @@ impl VoiceDriver {
             let tool_choice =
                 if draining { Some(lk_agents_abi::ToolChoice::Forbidden) } else { tool_choice };
             let request = Request::ToolFollowUp { speech, step, tool_choice };
-            self.send_request(now, req_id, request, None, None, false);
+            let outside = VoiceRunParticipation::Outside;
+            self.send_request(now, req_id, request, None, None, outside);
         }
     }
 
@@ -941,7 +929,12 @@ impl VoiceDriver {
     ) -> Option<SpeechId> {
         self.activity.rt_session.as_ref()?;
         let read_back = role == RealtimeReplyRole::ReadBack;
-        let participates_in_voice_run = role != RealtimeReplyRole::Internal;
+        let voice_run = match role {
+            RealtimeReplyRole::VoiceRun | RealtimeReplyRole::ReadBack => {
+                VoiceRunParticipation::Joins
+            }
+            RealtimeReplyRole::Internal => VoiceRunParticipation::Outside,
+        };
         if let Some(text) = user_input {
             let wall = self.step.wall();
             let item = ChatMessage::text(self.session.ids.mint("item"), Role::User, &text, wall);
@@ -950,7 +943,7 @@ impl VoiceDriver {
             self.commit_item(item.into(), Source::UserTyped, Visibility::Both);
         }
         let request = Request::GenerateReply { instructions, tool_choice, read_back };
-        self.realtime_request(now, request, call, allow_interruptions, participates_in_voice_run)
+        self.realtime_request(now, request, call, allow_interruptions, voice_run)
     }
 
     /// A realtime session's context and tools live in its session config, not per response:
@@ -977,8 +970,8 @@ impl VoiceDriver {
         call: Option<SpeechCall>,
     ) {
         let request = Request::Say { text, add_to_chat_ctx };
-        let participates_in_voice_run = true;
-        self.realtime_request(now, request, call, allow_interruptions, participates_in_voice_run);
+        let voice_run = VoiceRunParticipation::Joins;
+        self.realtime_request(now, request, call, allow_interruptions, voice_run);
     }
 
     /// The model's wire carries a string: a streamed `say` is refused by name.

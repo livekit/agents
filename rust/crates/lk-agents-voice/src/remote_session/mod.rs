@@ -145,8 +145,9 @@ pub fn encode_wire(ev: WireEvent) -> Result<Option<proto::agent_session_event::E
             },
         }),
         WireEvent::ToolExecutionUpdated(ToolExecutionUpdatedWire { update }) => {
-            let Some(update) = encode_tool_update(update) else { return Ok(None) };
-            Event::ToolExecutionUpdated(pb::ToolExecutionUpdated { update: Some(update) })
+            Event::ToolExecutionUpdated(pb::ToolExecutionUpdated {
+                update: Some(encode_tool_update(update)),
+            })
         }
         WireEvent::AgentFalseInterruption(v) => {
             Event::AgentFalseInterruption(pb::AgentFalseInterruption { resumed: v.resumed })
@@ -154,13 +155,12 @@ pub fn encode_wire(ev: WireEvent) -> Result<Option<proto::agent_session_event::E
     }))
 }
 
-/// One tool-lifecycle update in its proto shape. `None` for a status no
-/// [`ToolEndStatus`] / [`ToolReplyStatus`] spells, which the reference drops.
+/// One tool-lifecycle update in its proto shape.
 fn encode_tool_update(
     update: ToolUpdateWire,
-) -> Option<proto::agent_session_event::tool_execution_updated::Update> {
+) -> proto::agent_session_event::tool_execution_updated::Update {
     use proto::agent_session_event::tool_execution_updated as teu;
-    Some(match update {
+    match update {
         ToolUpdateWire::Started(v) => teu::Update::Started(teu::Started {
             function_call: Some(proto::FunctionCall {
                 id: v.id,
@@ -178,17 +178,17 @@ fn encode_tool_update(
         }),
         // `message` unset means cancelled or an empty return.
         ToolUpdateWire::Ended(v) => teu::Update::Ended(teu::Ended {
-            status: encode_tool_end_status(ToolEndStatus::from_wire(&v.status)?) as i32,
+            status: encode_tool_end_status(v.status) as i32,
             id: v.id,
             call_id: v.call_id,
             message: v.message,
         }),
         ToolUpdateWire::ReplyUpdated(v) => teu::Update::ReplyUpdated(teu::ReplyUpdated {
-            status: encode_tool_reply_status(ToolReplyStatus::from_wire(&v.status)?) as i32,
+            status: encode_tool_reply_status(v.status) as i32,
             update_ids: v.update_ids,
             speech_id: v.speech_id,
         }),
-    })
+    }
 }
 
 fn encode_tool_end_status(s: ToolEndStatus) -> proto::ToolCallStatus {

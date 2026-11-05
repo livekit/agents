@@ -1,7 +1,7 @@
 //! Streaming synthesis decisions: feed ordering, completion and aligned captions.
 
 use crate::generation::effects::{
-    AlignedTranscriptEffect, StreamingTtsEffect, SynthesisLossEffect,
+    AlignedTranscriptEffect, DrainedText, StreamingTtsEffect, SynthesisLossEffect,
 };
 use crate::transcription::{Heard, Visible};
 use lk_agents_abi::errors::ProviderError;
@@ -348,7 +348,10 @@ impl SynthesisLoss {
         }
         if !lost.lost {
             self.pending = Some(LossText::Unheard);
-            return vec![SynthesisLossEffect::Drain { opening: lost.opening, forward_text: false }];
+            return vec![SynthesisLossEffect::Drain {
+                opening: lost.opening,
+                text: DrainedText::Discard,
+            }];
         }
         self.sink = lost.heard;
         let mut effects = vec![SynthesisLossEffect::ReleaseVoice, SynthesisLossEffect::CutShort];
@@ -358,7 +361,7 @@ impl SynthesisLoss {
                 self.pending = Some(LossText::Stamped(aligned.words));
                 effects.push(SynthesisLossEffect::Drain {
                     opening: lost.opening,
-                    forward_text: false,
+                    text: DrainedText::Discard,
                 });
             }
             aligned => {
@@ -367,8 +370,10 @@ impl SynthesisLoss {
                 }
                 let (played, synchronized) = (lost.played, lost.synchronized);
                 self.pending = Some(LossText::Generated { played, synchronized });
-                effects
-                    .push(SynthesisLossEffect::Drain { opening: lost.opening, forward_text: true });
+                effects.push(SynthesisLossEffect::Drain {
+                    opening: lost.opening,
+                    text: DrainedText::Forward,
+                });
             }
         }
         effects

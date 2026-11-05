@@ -1,6 +1,6 @@
 //! A cloned thread handle cannot replace an active run's lease.
 
-use lk_agents_storage::{CommitOptions, RunOptions};
+use lk_agents_storage::{CommitOptions, LaneAccess, LeaseAfterCommit, RunOptions, WhenHeld};
 use lk_agents_storage::{RunOutcome, StorageError};
 
 use lk_agents_storage::testing::Backend;
@@ -13,7 +13,10 @@ async fn cloned_handles_do_not_replace_an_active_runs_lease(backend: Backend) {
     let mut first = lane.open(RunOptions::new("first", "AST_first")).await.unwrap();
     let result = cloned
         .lane("front-desk")
-        .open(RunOptions { wait: false, ..RunOptions::new("second", "AST_second") })
+        .open(RunOptions {
+            access: LaneAccess::Exclusive(WhenHeld::Reject),
+            ..RunOptions::new("second", "AST_second")
+        })
         .await;
     let refused = match result {
         Err(StorageError::Rejected { .. }) => true,
@@ -50,7 +53,7 @@ async fn canceled_and_timed_out_acquires_withdraw_their_marks(backend: Backend) 
     let mut owner = lane.open(RunOptions::new("owner", "task")).await.unwrap();
     let result = lane
         .open(RunOptions {
-            interrupt: true,
+            access: LaneAccess::Exclusive(WhenHeld::Interrupt),
             wait_timeout: Duration::ZERO,
             ..RunOptions::new("timeout", "timeout-task")
         })
@@ -67,7 +70,10 @@ async fn canceled_and_timed_out_acquires_withdraw_their_marks(backend: Backend) 
     let waiting_lane = lane.clone();
     let waiting = tokio::spawn(async move {
         waiting_lane
-            .open(RunOptions { interrupt: true, ..RunOptions::new("canceled", "canceled-task") })
+            .open(RunOptions {
+                access: LaneAccess::Exclusive(WhenHeld::Interrupt),
+                ..RunOptions::new("canceled", "canceled-task")
+            })
             .await
     });
     tokio::time::timeout(Duration::from_secs(5), async {
@@ -97,7 +103,10 @@ async fn a_resumed_drain_keeps_another_waiters_mark(backend: Backend) {
     let mut owner = lane.open(RunOptions::new("first", "task1")).await.unwrap();
     let lease = owner.lease().unwrap().clone();
     assert!(lane.set_waiter("other-worker").await.unwrap());
-    owner.commit(CommitOptions { keep_lease: true, ..Default::default() }).await.unwrap();
+    owner
+        .commit(CommitOptions { lease: LeaseAfterCommit::Keep, ..Default::default() })
+        .await
+        .unwrap();
     let mut resumed = lane.resume(RunOptions::new("second", "task2"), lease).await.unwrap();
     assert_eq!(lane.checkpoint("task2").await.unwrap().0.as_deref(), Some("other-worker"));
     resumed.commit(CommitOptions::default()).await.unwrap();

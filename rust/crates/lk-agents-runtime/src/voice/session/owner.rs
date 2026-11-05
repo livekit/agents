@@ -5,6 +5,7 @@ use super::{SessionOptions, VoiceSession, options::Providers, storage::SessionSt
 use crate::recording::SessionRecorder;
 use crate::telemetry;
 use lk_agents_abi::errors::HostError;
+use lk_agents_abi::llm::toolsets::SESSION_TOOLSET_SCOPE;
 use lk_agents_abi::recorder::{AudioRecorder, RecordingFailure, SessionRecorder as _};
 use lk_agents_abi::voice::events::CloseReason;
 use lk_agents_abi::voice::events::{HostWire, SessionErrorWire};
@@ -201,7 +202,10 @@ impl Inner {
             let setup = async {
                 scopes.acquire(0, args.session_toolsets.take().unwrap_or_default()).await?;
                 if let Some(tools) = &args.tools_host {
-                    let scope = args.voice_agent.as_ref().map_or(0, |agent| agent.toolset_scope());
+                    let scope = args
+                        .voice_agent
+                        .as_ref()
+                        .map_or(SESSION_TOOLSET_SCOPE, |agent| agent.toolset_scope());
                     scopes.acquire(scope, hooks.toolset_resources(tools)?).await?;
                     args.tools = Some(hooks.tool_infos(tools)?);
                 }

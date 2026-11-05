@@ -35,6 +35,7 @@ pub const DEFAULT_TIMEOUT_MESSAGE: &str = "Request timed out.";
 /// The reference also lists 499; it is dropped here on purpose ([`ApiErrorKind::Cancelled`]).
 pub const TRANSIENT_CLIENT_STATUSES: [i64; 2] = [408, 429];
 
+/// The status of a request we closed ([`ApiErrorKind::Cancelled`]).
 pub const CANCELLED_STATUS: i64 = 499;
 
 /// The rule `APIStatusError.__init__` applies: is this status retryable? A non-transient 4xx is

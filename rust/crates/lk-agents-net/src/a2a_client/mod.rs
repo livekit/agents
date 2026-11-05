@@ -15,6 +15,7 @@ use std::sync::{Arc, Weak};
 use crate::transport::HttpRequest;
 use a2a::{AgentCard, JsonRpcId, Message};
 use lk_agents_abi::errors::{ApiError, ProviderError};
+use lk_agents_abi::storage::thread::REASON_CALLER_CANCELED;
 use lk_agents_abi::{ApiConnectOptions, Clock, Closed, HOST_TEARDOWN_TIMEOUT, StreamOutput, Ts};
 use lk_agents_core::a2a::client::{
     Client, ClientError, HttpMethod, ReplyState, Request, TaskUpdate,
@@ -33,8 +34,6 @@ use parking_lot::Mutex;
 
 const RESPONSE_LIMIT: usize = 8 * 1024 * 1024;
 const UPDATE_QUEUE: usize = 16;
-/// The reason sent when the caller's exit or a failed exchange cancels the remote task.
-const CALLER_CANCELED: &str = "caller-canceled";
 /// The media type of a streamed (SSE) reply.
 const EVENT_STREAM: &str = "text/event-stream";
 
@@ -389,7 +388,7 @@ impl Inner {
     }
 
     async fn cancel_owned(&self, task: &TaskRef) {
-        let cancellation = self.cancel_remote(task, Some(CALLER_CANCELED));
+        let cancellation = self.cancel_remote(task, Some(REASON_CALLER_CANCELED));
         tokio::pin!(cancellation);
         let result = match tokio::time::timeout(HOST_TEARDOWN_TIMEOUT, &mut cancellation).await {
             Ok(result) => result,
@@ -541,7 +540,9 @@ impl RemoteTask {
         }
         match self.await_identity(exchange).await {
             Some(task) if !self.terminal.load(Ordering::Acquire) => {
-                if let Err(error) = self.inner.cancel_remote(&task, Some(CALLER_CANCELED)).await {
+                if let Err(error) =
+                    self.inner.cancel_remote(&task, Some(REASON_CALLER_CANCELED)).await
+                {
                     self.inner.observe(CleanupObservation::CancelUncertain {
                         task,
                         error: error.to_string(),

@@ -1,5 +1,5 @@
 use super::effects::IvrEffect;
-use crate::agent_session::{IvrCommand, SpeechCommand, SystemTap};
+use crate::agent_session::{GenerateReplyRequest, IvrCommand, SpeechCommand, SystemTap};
 use crate::events::SessionEvent;
 use crate::trace::{CoreStep, DetectorStep, IvrLifecycle, Step, TimerName};
 use lk_agents_abi::Ts;
@@ -306,7 +306,7 @@ impl IvrSystem {
     /// awaits the handle, as in the reference.
     fn reply(&mut self, origin: IvrReplyOrigin, allow_interruptions: bool) {
         self.journal(Step::Detector(DetectorStep::IvrTriggered { origin }));
-        self.effects.push(IvrEffect::Reply(SpeechCommand::GenerateReply {
+        self.effects.push(IvrEffect::Reply(SpeechCommand::GenerateReply(GenerateReplyRequest {
             user_input: None,
             instructions: None,
             allow_interruptions: Some(allow_interruptions),
@@ -316,6 +316,6 @@ impl IvrSystem {
             tool_names: None,
             on_enter: false,
             call: None,
-        }));
+        })));
     }
 }

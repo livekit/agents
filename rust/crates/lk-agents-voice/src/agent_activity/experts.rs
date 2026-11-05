@@ -4,7 +4,7 @@
 //! which resolves the originating call in place. The person's reply goes back to the body.
 
 use crate::agent::{Source, Visibility};
-use crate::agent_activity::scheduling::{PreemptiveDiscard, SpeechKind};
+use crate::agent_activity::scheduling::{PreemptiveDiscard, SpeechKind, VoiceRunParticipation};
 use crate::agent_activity::speech::SpeechSpec;
 use crate::agent_session::effects::VoiceEffect;
 use crate::agent_session::{ToolUpdate, VoiceDriver};
@@ -90,6 +90,7 @@ impl VoiceDriver {
     /// so the next waits for the following idle instant. Runs after the deferred tool reply.
     pub(crate) fn try_present_experts(&mut self, now: Ts) {
         let tools = self.activity.expert_tools();
+        let outside = VoiceRunParticipation::Outside;
         loop {
             let free = self.activity.tools.reply.is_none()
                 && !self.session.closing_past_edge()
@@ -100,14 +101,14 @@ impl VoiceDriver {
             match presentation {
                 Presentation::Progress { text, .. } => {
                     let instructions = format!("{PRESENT_PROGRESS}{text}");
-                    self.reply_with_instructions(now, instructions, None, false);
+                    self.reply_with_instructions(now, instructions, None, outside);
                 }
                 Presentation::Question { question, verbatim: true, .. } => {
-                    self.say_text(now, question, false);
+                    self.say_text(now, question, outside);
                 }
                 Presentation::Question { question, verbatim: false, .. } => {
                     let instructions = format!("{ASK_IN_OWN_WORDS}{question}");
-                    self.reply_with_instructions(now, instructions, None, false);
+                    self.reply_with_instructions(now, instructions, None, outside);
                 }
                 Presentation::Outcome { call_id, outcome } => {
                     self.resolve_expert_call(now, &call_id, outcome)
@@ -149,7 +150,7 @@ impl VoiceDriver {
         self.replace_items([ChatItem::FunctionCallOutput(execution.output)]);
         self.publish_activity();
         if let Some(Delivery::Say(text)) = execution.delivery {
-            self.say_text(now, text, false);
+            self.say_text(now, text, VoiceRunParticipation::Outside);
         } else if reply_required {
             self.reply_with_full_history(now);
         }
@@ -163,7 +164,7 @@ impl VoiceDriver {
         }
         let interruptible = self.session.config.effective.turn.interruption.enabled();
         let spec = SpeechSpec {
-            participates_in_voice_run: false,
+            voice_run: VoiceRunParticipation::Outside,
             ..SpeechSpec::new(SpeechKind::GenerateReply, ReplySource::Llm, interruptible)
         };
         self.start_speech(now, spec);

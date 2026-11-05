@@ -3,6 +3,10 @@
 
 use super::*;
 use crate::effects::FallbackChainEffect;
+use lk_agents_abi::llm::fallback::{
+    REALTIME_FALLBACK_BACKLOG_EXCEEDED, REALTIME_FALLBACK_EVENT_BACKLOG_EXCEEDED,
+    REALTIME_FALLBACK_MODEL,
+};
 
 /// The generation in flight: its messages, and which settled their modalities.
 pub(super) struct OpenGeneration {
@@ -12,12 +16,6 @@ pub(super) struct OpenGeneration {
 
 /// The events a swap may queue for the consumer before the session fails instead.
 const EVENT_BACKLOG: usize = 256;
-
-/// The error code of a reply the held backlog refused during a swap.
-const BACKLOG_EXCEEDED_CODE: &str = "realtime_fallback_backlog_exceeded";
-
-/// The error code of a session failed because its event queue filled during a swap.
-const EVENT_BACKLOG_EXCEEDED_CODE: &str = "realtime_fallback_event_backlog_exceeded";
 
 /// Where `send` takes a command.
 enum Routed {
@@ -250,7 +248,7 @@ impl FallbackSession {
             }
             Err(error) => st.events.push_back(Event::Error(RealtimeModelError {
                 timestamp: lk_agents_abi::Ts::ZERO,
-                label: "livekit.agents.llm.realtime.RealtimeModelFallbackAdapter".to_owned(),
+                label: REALTIME_FALLBACK_LABEL.to_owned(),
                 message: error.to_string(),
                 recoverable: false,
                 req_id: None,
@@ -303,7 +301,7 @@ impl FallbackSession {
                     req_id: rejected.req_id().unwrap_or_default().to_owned(),
                     error: lk_agents_abi::llm::realtime::RealtimeError::with_code(
                         reason.to_string(),
-                        Some(BACKLOG_EXCEEDED_CODE.into()),
+                        Some(REALTIME_FALLBACK_BACKLOG_EXCEEDED.into()),
                     ),
                 },
             ));
@@ -314,11 +312,11 @@ impl FallbackSession {
         st.events.clear();
         st.events.push_back(Event::Error(RealtimeModelError {
             timestamp: lk_agents_abi::Ts::ZERO,
-            label: "RealtimeModelFallbackAdapter".into(),
+            label: REALTIME_FALLBACK_MODEL.into(),
             message: "realtime fallback event backlog exceeded".into(),
             recoverable: false,
             req_id: None,
-            code: Some(EVENT_BACKLOG_EXCEEDED_CODE.into()),
+            code: Some(REALTIME_FALLBACK_EVENT_BACKLOG_EXCEEDED.into()),
             provider_error: None,
         }));
         Routed::EventQueued

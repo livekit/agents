@@ -18,8 +18,8 @@ use lk_agents_abi::a2a_protocol as a2a;
 use lk_agents_abi::storage::StorageError;
 use lk_agents_abi::storage::TaskState;
 use lk_agents_abi::storage::thread::{
-    InboxRow, LanePoll, REASON_LEASE_TIMEOUT, REASON_STORAGE_UNAVAILABLE, REASON_WORKER_LOST,
-    RunOutcome, TaskData, TaskRow, TaskWrite,
+    InboxRow, LanePoll, REASON_LEASE_TIMEOUT, REASON_NOT_WRITTEN, REASON_STORAGE_UNAVAILABLE,
+    REASON_WORKER_LOST, RunOutcome, TaskData, TaskRow, TaskWrite,
 };
 use serde_json::Value;
 
@@ -30,6 +30,7 @@ use crate::a2a::{
 };
 use lk_agents_abi::storage::context::{AppStatement, ContextScopeWrite};
 use lk_agents_abi::storage::thread::ItemRow;
+use lk_agents_abi::storage::thread::{LeaseAfterCommit, TaskPickup, WhenHeld};
 use turn::{Step, Turning};
 
 /// One completion belongs to exactly one issued operation.
@@ -63,8 +64,8 @@ pub enum Operation {
         task_id: String,
         channel: Option<String>,
         access: Access,
-        /// Claim `task_id` (`submitted` to `working`) in the acquire.
-        pickup: bool,
+        /// What the acquire does with `task_id`'s row.
+        pickup: TaskPickup,
     },
     ReadTask(String),
     ReadInbox,
@@ -94,7 +95,7 @@ pub enum Operation {
     /// Commits the open run, reading `answer_task` back with the write.
     Commit {
         answer_task: Option<String>,
-        keep_lease: bool,
+        lease: LeaseAfterCommit,
         drained_id: Option<i64>,
     },
     /// Ends the open run without its writes: `run_ended` and the release.
@@ -121,9 +122,9 @@ pub enum Operation {
 pub enum Access {
     /// The `concurrent` policy: no lease, append-only.
     Concurrent,
-    /// Takes the lease, waiting for it up to the door's `wait_timeout` when `wait`; `interrupt`
-    /// marks this worker the lane's waiter meanwhile, so the holder yields.
-    Exclusive { wait: bool, interrupt: bool },
+    /// Takes the lease, doing `WhenHeld` while another holder has it; a wait lasts up to the
+    /// door's `wait_timeout`.
+    Exclusive(WhenHeld),
     /// Runs under the lease the receive or the last drain kept, else takes it without waiting.
     Kept,
 }
@@ -345,9 +346,6 @@ enum AfterAbandon {
 /// How long a lane poll pauses between tries.
 const LANE_POLL_PAUSE: Duration = Duration::from_secs(1);
 
-/// The reason of an answer whose row this worker did not write.
-const REASON_NOT_WRITTEN: &str = "not-written";
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum RunStep {
     Open,
@@ -564,19 +562,22 @@ impl TaskMachine {
             }
             Next::Open => {
                 self.phase = Phase::Run { path: Path::Main, step: RunStep::Open };
-                let access = match self.policy {
-                    Policy::Concurrent => Access::Concurrent,
-                    policy => Access::Exclusive {
-                        wait: policy != Policy::Reject,
-                        interrupt: policy == Policy::Interrupt,
-                    },
+                let (access, pickup) = match self.policy {
+                    Policy::Concurrent => (Access::Concurrent, TaskPickup::Claim),
+                    Policy::Reject => (Access::Exclusive(WhenHeld::Reject), TaskPickup::Leave),
+                    Policy::Interrupt => {
+                        (Access::Exclusive(WhenHeld::Interrupt), TaskPickup::Claim)
+                    }
+                    Policy::Queue | Policy::Batch => {
+                        (Access::Exclusive(WhenHeld::Wait), TaskPickup::Claim)
+                    }
                 };
                 Operation::Open {
                     run_id: self.task_id.clone(),
                     task_id: self.task_id.clone(),
                     channel: Some(self.message.channel.clone()),
                     access,
-                    pickup: self.policy != Policy::Reject,
+                    pickup,
                 }
             }
         }
@@ -626,8 +627,8 @@ impl TaskMachine {
             run_id: self.mint("recover"),
             task_id: self.task_id.clone(),
             channel: None,
-            access: Access::Exclusive { wait: false, interrupt: false },
-            pickup: false,
+            access: Access::Exclusive(WhenHeld::Reject),
+            pickup: TaskPickup::Leave,
         }
     }
 

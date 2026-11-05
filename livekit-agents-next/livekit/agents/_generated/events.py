@@ -125,9 +125,17 @@ class ToolCallEnded:
     call_id: str
     message: str | None = None
     """Result or error text; None when there is nothing to voice."""
-    status: str
+    status: ToolEndStatus
     """`"done"`, `"error"` or `"cancelled"`."""
     type: Literal["tool_call_ended"] = "tool_call_ended"
+
+
+ToolEndStatus: TypeAlias = Literal["done", "error", "cancelled"]
+"""How a tool call ended: [`ToolCallEnded::status`]."""
+
+
+ToolReplyStatus: TypeAlias = Literal["scheduled", "completed", "interrupted", "skipped"]
+"""Where the deferred tool reply is: [`ToolReplyUpdated::status`]."""
 
 
 @dataclass(kw_only=True, slots=True)
@@ -139,7 +147,7 @@ class ToolReplyUpdated:
 
     update_ids: list[str]
     """``ToolCallUpdated.id`` values this reply covers."""
-    status: str
+    status: ToolReplyStatus
     """`"scheduled"`, `"completed"`, `"interrupted"` or `"skipped"`."""
     speech_id: str
     """Id of the reply speech; ``speech_created`` carries its handle."""

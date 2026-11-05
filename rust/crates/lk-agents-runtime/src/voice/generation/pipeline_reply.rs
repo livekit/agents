@@ -307,7 +307,7 @@ fn follow_up(prev: &ReplyExecution, next: NextReply) -> ReplyExecution {
         message_id,
         speech: prev.plan.speech,
         answering: None,
-        task: prev.plan.task,
+        completion: prev.plan.completion,
         step: prev.plan.step + 1,
     };
     ReplyExecution { plan, resources: prev.resources.clone(), span: prev.span }

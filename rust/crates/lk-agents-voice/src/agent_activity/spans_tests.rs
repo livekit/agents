@@ -1,5 +1,5 @@
 use crate::agent::{Source, Visibility};
-use crate::agent_activity::scheduling::{SpeechId, SpeechKind};
+use crate::agent_activity::scheduling::{SpeechId, SpeechKind, VoiceRunParticipation};
 use crate::agent_session::room::RoomLinkConfig;
 use crate::agent_session::{AmdSpan, Close, HookKind, Now, SessionParts, VoiceDriver};
 use crate::audio_recognition::{
@@ -117,7 +117,7 @@ impl Session {
             SpeechKind::GenerateReply,
             true,
             false,
-            false,
+            VoiceRunParticipation::Outside,
         );
         assert!(admitted, "the speech is queued");
         self.d.agent_turn_started(speech, reply)

@@ -785,12 +785,22 @@ pub(crate) fn tool_ended(
     SessionEvent::ToolExecutionUpdated(ended)
 }
 
-pub fn validates_completion(task: bool, report: &ToolReport) -> bool {
-    task && matches!(report.outcome, ToolOutcome::Completed { .. })
+/// What a tool's `Completed` means for the reply that made the call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolCompletion {
+    /// Made while a `VoiceTask`'s agent held the floor: a validated `Completed` ends the task.
+    EndsTask,
+    /// An ordinary reply: `Completed` is the call's output, and no transition is taken.
+    CallOutput,
 }
 
-pub fn completion(task: bool, mut report: ToolReport) -> ToolReport {
-    if !task {
+pub fn validates_completion(completion: ToolCompletion, report: &ToolReport) -> bool {
+    completion == ToolCompletion::EndsTask
+        && matches!(report.outcome, ToolOutcome::Completed { .. })
+}
+
+pub fn completion(completion: ToolCompletion, mut report: ToolReport) -> ToolReport {
+    if completion == ToolCompletion::CallOutput {
         report.transition = None;
     }
     report

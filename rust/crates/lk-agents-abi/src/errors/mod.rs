@@ -7,8 +7,9 @@ mod provider;
 pub(crate) mod side_table;
 
 pub use api::{
-    ApiError, ApiErrorFunctions, ApiErrorKind, DEFAULT_CONNECTION_MESSAGE, DEFAULT_TIMEOUT_MESSAGE,
-    TRANSIENT_CLIENT_STATUSES, TimeoutPhase, http_error_message, http_reason, retryable_for_status,
+    ApiError, ApiErrorFunctions, ApiErrorKind, CANCELLED_STATUS, DEFAULT_CONNECTION_MESSAGE,
+    DEFAULT_TIMEOUT_MESSAGE, TRANSIENT_CLIENT_STATUSES, TimeoutPhase, http_error_message,
+    http_reason, retryable_for_status,
 };
 mod host;
 pub use host::{CapturedError, HostError, HostResult};

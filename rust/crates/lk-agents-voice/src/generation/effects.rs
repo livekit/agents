@@ -42,8 +42,17 @@ pub enum SynthesisLossEffect {
     ReleaseVoice,
     CutShort,
     Capture(String),
-    Drain { opening: Visible, forward_text: bool },
+    Drain { opening: Visible, text: DrainedText },
     Heard(Heard),
+}
+
+/// What happens to the model text drained after a synthesis loss.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DrainedText {
+    /// No accepted stamps stand for what was heard: the text goes on to the transcript.
+    Forward,
+    /// Nothing was lost, or the stamps already say what was heard.
+    Discard,
 }
 
 /// An accepted observation's publications.

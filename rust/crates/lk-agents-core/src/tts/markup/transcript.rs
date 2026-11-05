@@ -1,6 +1,7 @@
 //! The provider-agnostic transcript side: strip every dialect, surface the leading expression, hold
 //! a tag that straddles a chunk boundary.
 
+use lk_agents_abi::tts::markup::{EMOTION_TAG, MarkerKind};
 use lk_agents_abi::{ATTRIBUTE_TRANSCRIPTION_EXPRESSION, TranscriptChunk};
 
 use crate::tts::markup::expr::{ExpressiveTag, split_expr};
@@ -51,7 +52,9 @@ pub fn split_expr_markup(text: &str) -> (String, Vec<ExpressiveTag>) {
 
 /// `{"expression", "mood"}` from a segment's leading expression/emotion tag.
 pub fn expression_attribute(tags: &[ExpressiveTag]) -> Option<(&'static str, String)> {
-    let expression = tags.iter().find(|t| t.kind == "expression" || t.kind == "emotion")?;
+    let expression = tags.iter().find(|t| {
+        MarkerKind::from_wire(&t.kind) == Some(MarkerKind::Expression) || t.kind == EMOTION_TAG
+    })?;
     // `match_mood`'s fallback is `DEFAULT_MOOD`, so `"mood"` is never null on the wire
     let mood = match_mood(&expression.value, Some(DEFAULT_MOOD)).unwrap_or(DEFAULT_MOOD);
     let mut json = String::from("{\"expression\":");

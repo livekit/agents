@@ -603,8 +603,7 @@ pub struct ReplyContext {
     /// The step this context plays, as `num_steps` counts it: the reply counts its own steps and
     /// reports each back edge to the core.
     pub step: u32,
-    /// Made while a `VoiceTask`'s agent held the floor: a `Completed` from its tools ends the task.
-    pub task: bool,
+    pub completion: crate::tool_executor::ToolCompletion,
 }
 
 impl std::fmt::Debug for ReplyContext {

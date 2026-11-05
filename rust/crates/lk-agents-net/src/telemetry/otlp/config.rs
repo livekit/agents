@@ -4,6 +4,8 @@
 use lk_agents_abi::telemetry::record::{FRAMEWORK, KeyValues};
 use lk_agents_abi::telemetry::semconv::otel::SERVICE_NAME;
 
+use super::Signal;
+
 /// `lk.sdk.name`: the SDK a process runs, a closed set Agent Insights reads. The Python binding
 /// passes [`SdkName::Python`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,8 +118,8 @@ impl AppConfig {
 
     fn set_base(&mut self, endpoint: &str) {
         let base = endpoint.trim_end_matches('/');
-        self.traces_endpoint = Some(format!("{base}/v1/traces"));
-        self.metrics_endpoint = Some(format!("{base}/v1/metrics"));
+        self.traces_endpoint = Some(format!("{base}/v1/{}", Signal::Traces.path()));
+        self.metrics_endpoint = Some(format!("{base}/v1/{}", Signal::Metrics.path()));
     }
 
     /// From the standard `OTEL_*` variables; `None` when no endpoint is set.

@@ -12,6 +12,7 @@ use crate::agent_session::effects::VoiceEffect;
 use crate::agent_session::{ActivityCommand, AudioInputHandle, VoiceDriver};
 use crate::audio_recognition::AudioRecognition;
 use crate::trace::{GenerationStep, InputStep, PlayoutStep, ToolStep};
+use lk_agents_abi::llm::toolsets::SESSION_TOOLSET_SCOPE;
 use lk_agents_abi::{ChatItem, Modality, Ts};
 use lk_agents_core::tts::markup::ChatMessageExt;
 use std::collections::{BTreeMap, BTreeSet};
@@ -209,7 +210,7 @@ pub(crate) struct AgentActivity {
 
 impl AgentActivity {
     pub(crate) fn scope(&self) -> u64 {
-        self.toolset.agent.as_ref().map_or(0, |agent| agent.toolset_scope())
+        self.toolset.agent.as_ref().map_or(SESSION_TOOLSET_SCOPE, |agent| agent.toolset_scope())
     }
 
     /// Replace the activity's advertised tools and report the visible diff in deterministic order.

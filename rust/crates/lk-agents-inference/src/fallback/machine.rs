@@ -6,7 +6,9 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use lk_agents_abi::Ts;
-use lk_agents_abi::errors::{ApiError, ApiErrorKind, ProviderError, TimeoutPhase};
+use lk_agents_abi::errors::{
+    ApiError, ApiErrorKind, CANCELLED_STATUS, ProviderError, TimeoutPhase,
+};
 use lk_agents_abi::resources::ResourceId;
 
 use lk_agents_core::attempts::{AttemptStep, Attempts, RequestPolicy};
@@ -237,7 +239,7 @@ impl ChainRequest {
             self.phase = Phase::Finished;
             effects.push(FallbackChainEffect::Finished(Err(ApiError::status(
                 "fallback cancelled",
-                499,
+                CANCELLED_STATUS,
                 None,
                 None,
             )

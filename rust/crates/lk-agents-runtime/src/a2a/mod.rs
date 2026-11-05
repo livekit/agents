@@ -25,7 +25,10 @@ use lk_agents_net::task::{TaskSet, TokioSpawner};
 use lk_agents_storage::StorageError;
 use lk_agents_storage::thread::db::{Receive, ReceiveInput};
 use lk_agents_storage::thread::run::ItemRow;
-use lk_agents_storage::{CommitOptions, Lane, Lease, Run, RunOptions, Thread, shortuuid};
+use lk_agents_storage::{
+    CommitOptions, Lane, LaneAccess, Lease, LeaseAfterCommit, Run, RunOptions, Thread, WhenHeld,
+    shortuuid,
+};
 use serde_json::Value;
 use std::sync::Arc;
 
@@ -51,12 +54,12 @@ impl Call {
         access: Access,
         options: RunOptions,
     ) -> Result<Completion, StorageError> {
-        let (exclusive, wait, interrupt) = match access {
-            Access::Concurrent => (false, false, false),
-            Access::Exclusive { wait, interrupt } => (true, wait, interrupt),
-            Access::Kept => (true, false, false),
+        let lane_access = match access {
+            Access::Concurrent => LaneAccess::Concurrent,
+            Access::Exclusive(when_held) => LaneAccess::Exclusive(when_held),
+            Access::Kept => LaneAccess::Exclusive(WhenHeld::Reject),
         };
-        let options = RunOptions { exclusive, wait, interrupt, ..options };
+        let options = RunOptions { access: lane_access, ..options };
         let run = match (access, self.lease.take()) {
             (Access::Kept, Some(lease)) => self.lane.resume(options, lease).await?,
             _ => self.lane.open(options).await?,
@@ -95,13 +98,13 @@ impl Call {
         Ok(Completion::Checkpoint { holder, rows })
     }
 
-    /// Commits the open run; its lease stays on the call when `keep_lease`.
+    /// Commits the open run; a kept lease stays on the call.
     async fn commit(&mut self, options: CommitOptions) -> Result<Completion, StorageError> {
-        let keep_lease = options.keep_lease;
+        let lease = options.lease;
         let run = self.run()?;
         let committed = run.commit(options).await?;
         let run_id = run.run_id.clone();
-        if keep_lease {
+        if lease == LeaseAfterCommit::Keep {
             self.lease = run.lease().cloned();
         }
         self.run = None;
@@ -287,8 +290,8 @@ impl Turn {
                 Completion::Event(event)
             }
             Operation::Checkpoint(task_ids) => call.checkpoint(&task_ids).await?,
-            Operation::Commit { answer_task, keep_lease, drained_id } => {
-                call.commit(CommitOptions { answer_task, keep_lease, drained_id }).await?
+            Operation::Commit { answer_task, lease, drained_id } => {
+                call.commit(CommitOptions { answer_task, lease, drained_id }).await?
             }
             Operation::Abandon { outcome, reason } => {
                 self.close_handler(call).await;

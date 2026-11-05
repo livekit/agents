@@ -14,8 +14,8 @@ use crate::agent_activity::hooks::Exit;
 use crate::agent_activity::scheduling::SpeechId;
 use crate::agent_session::effects::{Timer, VoiceEffect};
 use crate::agent_session::{
-    ActivityCommand, Answer, Close, Command, DrainRefused, DtmfCommand, HandoffRefused,
-    IdleRefused, SpeechCommand, VoiceDriver,
+    ActivityCommand, Answer, Close, Command, DrainRefused, DtmfCommand, GenerateReplyRequest,
+    HandoffRefused, IdleRefused, SpeechCommand, VoiceDriver,
 };
 use crate::audio::AudioChannel;
 use crate::data_plane::{AudioInputRouterCommand, InputCensus};
@@ -356,7 +356,9 @@ impl VoiceDriver {
             Command::Speech(SpeechCommand::Say { call, .. }) => {
                 ("say", "a say() reached the session after it began closing: it never spoke", call)
             }
-            Command::Speech(SpeechCommand::GenerateReply { call, .. }) => (
+            Command::Speech(SpeechCommand::GenerateReply(GenerateReplyRequest {
+                call, ..
+            })) => (
                 "generate_reply",
                 "a generate_reply() reached the session after it began closing: it never replied",
                 call,

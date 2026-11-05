@@ -9,6 +9,7 @@ use a2a::{Message, Part, Role};
 use lk_agents_abi::a2a::metadata::KIND_KEY;
 use lk_agents_abi::llm::tool_executor::ToolOutcome;
 use lk_agents_abi::storage::TaskState;
+use lk_agents_abi::storage::thread::REASON_CALLER_CANCELED;
 use serde::{Deserialize, Serialize};
 
 use crate::a2a::caller_history::CallerHistory;
@@ -332,7 +333,7 @@ impl RemoteInteraction {
                 id: self.state.pending_task_id.clone()?,
                 context_id: self.state.context_id.clone()?,
             },
-            reason: "caller-canceled",
+            reason: REASON_CALLER_CANCELED,
         };
         self.state.cancellation_sent = true;
         Some(effect)

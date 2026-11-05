@@ -8,7 +8,7 @@ use super::stream::TtsStream;
 use crate::telemetry;
 use lk_agents_abi::ApiConnectOptions;
 use lk_agents_abi::TranscriptChunk;
-use lk_agents_abi::errors::{ApiError, ProviderError};
+use lk_agents_abi::errors::{ApiError, CANCELLED_STATUS, ProviderError};
 use lk_agents_abi::metrics::base::AgentMetrics;
 use lk_agents_abi::tts::stream_adapter::StreamAdapterFunctions;
 use lk_agents_abi::tts::stream_adapter::{
@@ -432,7 +432,7 @@ impl AdapterSource {
         let Some((_, retries)) = self.sentence.as_mut() else { return Err(error) };
         let eligible = error.api_kind().is_some()
             && error.retryable()
-            && error.status_code() != Some(499)
+            && error.status_code() != Some(CANCELLED_STATUS)
             && !self.sentence_audio;
         let policy = lk_agents_core::attempts::RequestPolicy::from_options(&self.budget);
         let Some(wait) = policy.retry_delay(*retries, eligible) else {

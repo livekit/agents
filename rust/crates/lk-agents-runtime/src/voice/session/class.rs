@@ -16,8 +16,8 @@ use lk_agents_voice::agent_activity::options::{
     AgentSessionOptions, DetectorKind, OverrideLayer, running_layer,
 };
 use lk_agents_voice::agent_session::{
-    ActivityCommand, AudioInputHandle, DrainRefused, FillerSource, HoldId, IoKind, IvrCommand,
-    TurnCommand,
+    ActivityCommand, AudioInputHandle, DrainRefused, FillerSource, FillerStart,
+    GenerateReplyRequest, HoldId, IoKind, IvrCommand, TurnCommand,
 };
 use lk_agents_voice::filler_scheduler::FillerId;
 
@@ -46,7 +46,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         let agents = HostAgents::default();
         agents.install(
             &args.agent,
-            args.voice_agent.as_ref().map_or(0, |agent| agent.toolset_scope()),
+            args.voice_agent.as_ref().map_or(SESSION_TOOLSET_SCOPE, |agent| agent.toolset_scope()),
             args.agent_host,
         );
         let time = match room.virtual_clock() {
@@ -510,7 +510,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         let (speech, call, reply) = self.speech_call(allow_interruptions)?;
         self.send_awaited(
             origin,
-            SpeechCommand::GenerateReply {
+            SpeechCommand::GenerateReply(GenerateReplyRequest {
                 user_input,
                 instructions,
                 allow_interruptions,
@@ -520,7 +520,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
                 tool_names: tools,
                 on_enter,
                 call: Some(call),
-            },
+            }),
             reply,
         )?;
         Ok(speech)
@@ -645,7 +645,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         };
         let id = self.last_filler.fetch_add(1, Ordering::Relaxed) + 1;
         let origin = origin_of(origin);
-        let cmd = SpeechCommand::FillerStart {
+        let cmd = SpeechCommand::FillerStart(FillerStart {
             id: FillerId(id),
             call_id,
             speech,
@@ -653,7 +653,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
             interval: interval.map(Duration::from_secs_f64),
             max_steps,
             source,
-        };
+        });
         self.send_from(origin, cmd)?;
         Ok(id)
     }

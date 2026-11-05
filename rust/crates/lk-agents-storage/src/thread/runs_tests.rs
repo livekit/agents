@@ -9,7 +9,7 @@ use lk_agents_storage::TaskWrite;
 use lk_agents_storage::testing::{Backend, Fixture};
 use lk_agents_storage::thread::run::{ItemRow, RunOutcome, TaskPatch, TaskState};
 use lk_agents_storage::thread::schema::TaskData;
-use lk_agents_storage::{CommitOptions, RunOptions, Thread};
+use lk_agents_storage::{CommitOptions, LaneAccess, RunOptions, TaskPickup, Thread, WhenHeld};
 
 use livekit_protocol::agent::chat_context::chat_item;
 use livekit_protocol::agent::chat_message::{ChatContent, chat_content::Payload};
@@ -57,7 +57,10 @@ async fn the_second_lane_waits_while_the_first_holds_and_gets_it_after_the_commi
     // A second holder: refused at once without the wait, and timed out with a short one.
     let lane2 = s2.lane(LANE);
     let refused = lane2
-        .open(RunOptions { wait: false, ..RunOptions::new("r2", "AST_2") })
+        .open(RunOptions {
+            access: LaneAccess::Exclusive(WhenHeld::Reject),
+            ..RunOptions::new("r2", "AST_2")
+        })
         .await
         .err()
         .expect("lease");
@@ -78,7 +81,7 @@ async fn the_second_lane_waits_while_the_first_holds_and_gets_it_after_the_commi
     let waiting = tokio::spawn(async move {
         let run = lane2
             .open(RunOptions {
-                interrupt: true,
+                access: LaneAccess::Exclusive(WhenHeld::Interrupt),
                 channel: Some("a2a".into()),
                 wait_timeout: Duration::from_secs(10),
                 ..RunOptions::new("r2", "AST_2")
@@ -186,8 +189,13 @@ async fn a_run_that_aborts_writes_run_ended_and_nothing_else(backend: Backend) {
     assert_eq!(runs[0].reason.as_deref(), Some("RuntimeError: boom"));
 
     // The lane is free at once, and the next run sees a clean lane.
-    let next =
-        lane.open(RunOptions { wait: false, ..RunOptions::new("r2", "AST_2") }).await.unwrap();
+    let next = lane
+        .open(RunOptions {
+            access: LaneAccess::Exclusive(WhenHeld::Reject),
+            ..RunOptions::new("r2", "AST_2")
+        })
+        .await
+        .unwrap();
     assert!(next.history.is_empty() && next.state.is_none());
     assert_eq!(next.version(), 0);
     drop(next);
@@ -215,8 +223,13 @@ async fn a_committed_run_id_yields_a_closed_run(backend: Backend) {
     assert_eq!(events.iter().filter(|e| e.r#type == "run_started").count(), 1, "not again");
     assert_eq!(events.iter().filter(|e| e.r#type == "run_ended").count(), 1);
     // Released: a third open takes the lane without waiting.
-    let free =
-        lane.open(RunOptions { wait: false, ..RunOptions::new("r2", "AST_2") }).await.unwrap();
+    let free = lane
+        .open(RunOptions {
+            access: LaneAccess::Exclusive(WhenHeld::Reject),
+            ..RunOptions::new("r2", "AST_2")
+        })
+        .await
+        .unwrap();
     assert!(!free.closed);
     drop(free);
     fx.cleanup(&[&s]).await;
@@ -233,7 +246,10 @@ async fn a_stale_commit_is_a_version_conflict(backend: Backend) {
     assert_eq!(s1.lane(LANE).info().await.unwrap().unwrap().lease_until, 0);
     let mut fresh = s2
         .lane(LANE)
-        .open(RunOptions { wait: false, ..RunOptions::new("r2", "AST_2") })
+        .open(RunOptions {
+            access: LaneAccess::Exclusive(WhenHeld::Reject),
+            ..RunOptions::new("r2", "AST_2")
+        })
         .await
         .unwrap();
     fresh.history.push(message("i1", ChatRole::User, "hi"));
@@ -257,7 +273,7 @@ async fn concurrent_runs_take_no_lease_and_append(backend: Backend) {
     let open = |s: &Thread, run_id: &str, task_id: &str| {
         let lane = s.lane(LANE);
         let opts = RunOptions {
-            exclusive: false,
+            access: LaneAccess::Concurrent,
             channel: Some("a2a".into()),
             ..RunOptions::new(run_id, task_id)
         };
@@ -391,7 +407,11 @@ async fn a_concurrent_write_keeps_a_row_canceled_mid_turn(backend: Backend) {
         .await
         .unwrap();
     lane.submit(&submitted("AST_1")).await.unwrap();
-    let opts = RunOptions { exclusive: false, pickup: true, ..RunOptions::new("r1", "AST_1") };
+    let opts = RunOptions {
+        access: LaneAccess::Concurrent,
+        pickup: TaskPickup::Claim,
+        ..RunOptions::new("r1", "AST_1")
+    };
     let mut run = lane.open(opts).await.unwrap();
     assert!(run.picked_up);
     s2.lane(LANE).cancel_task("AST_1", metadata("client")).await.unwrap();
@@ -417,7 +437,12 @@ async fn a_dropped_run_stops_renewing_and_its_lease_lapses(backend: Backend) {
     drop(run);
     tokio::time::sleep(Duration::from_millis(2600)).await;
     let lane2 = s2.lane(LANE);
-    let next = lane2.open(RunOptions { wait: false, ..RunOptions::new("r2", "AST_2") }).await;
+    let next = lane2
+        .open(RunOptions {
+            access: LaneAccess::Exclusive(WhenHeld::Reject),
+            ..RunOptions::new("r2", "AST_2")
+        })
+        .await;
     let next = next.expect("the dropped run's lease lapsed");
     drop(next);
     fx.cleanup(&[&s1, &s2]).await;
@@ -438,10 +463,18 @@ async fn waiters_take_the_lane_in_the_order_their_rows_were_submitted(backend: B
     for task_id in ["AST_first", "AST_second"] {
         assert!(lane.submit(&submitted(task_id)).await.unwrap());
     }
-    let second = || RunOptions { wait: false, pickup: true, ..RunOptions::new("r2", "AST_second") };
+    let second = || RunOptions {
+        access: LaneAccess::Exclusive(WhenHeld::Reject),
+        pickup: TaskPickup::Claim,
+        ..RunOptions::new("r2", "AST_second")
+    };
     let refused = lane.open(second()).await.err().expect("the older waiter goes first");
     assert!(matches!(refused, StorageError::Rejected { .. }), "{refused}");
-    let first = RunOptions { wait: false, pickup: true, ..RunOptions::new("r1", "AST_first") };
+    let first = RunOptions {
+        access: LaneAccess::Exclusive(WhenHeld::Reject),
+        pickup: TaskPickup::Claim,
+        ..RunOptions::new("r1", "AST_first")
+    };
     let mut run = lane.open(first).await.unwrap();
     assert!(run.picked_up);
     run.commit(CommitOptions::default()).await.unwrap();
@@ -510,8 +543,10 @@ async fn a_concurrent_run_refuses_to_edit_or_delete_loaded_history(backend: Back
     let mut first = lane.open(RunOptions::new("r0", "AST_0")).await.unwrap();
     first.history.push(message("i1", ChatRole::User, "hi"));
     first.commit(CommitOptions::default()).await.unwrap();
-    let concurrent =
-        |run_id: &str| RunOptions { exclusive: false, ..RunOptions::new(run_id, "AST_1") };
+    let concurrent = |run_id: &str| RunOptions {
+        access: LaneAccess::Concurrent,
+        ..RunOptions::new(run_id, "AST_1")
+    };
 
     let mut deleting = lane.open(concurrent("r1")).await.unwrap();
     deleting.history.clear();

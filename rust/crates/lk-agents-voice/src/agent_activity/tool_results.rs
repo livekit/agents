@@ -229,7 +229,7 @@ mod tests {
             SpeechKind::GenerateReply,
             true,
             true,
-            true,
+            crate::agent_activity::scheduling::VoiceRunParticipation::Joins,
         ));
         let call = FunctionCall {
             id: "flight-item".into(),

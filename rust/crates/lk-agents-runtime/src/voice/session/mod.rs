@@ -32,6 +32,7 @@ use crate::voice::nodes::OutputNodes;
 use crate::voice::resources::Resources;
 use crate::voice::speech_handle::{SayStream, SpeechHandle, Speeches};
 use lk_agents_abi::errors::HostError;
+use lk_agents_abi::llm::toolsets::SESSION_TOOLSET_SCOPE;
 use lk_agents_abi::voice::events::{CloseReason, HostWire};
 use lk_agents_abi::voice::room_owner::RoomIo;
 use lk_agents_abi::voice::session::{
@@ -788,10 +789,6 @@ impl VoiceSession {
         }
     }
 
-    /// The toolset scope of the whole session (`ToolsetScopes.acquire`'s zero), for an update
-    /// without an agent.
-    const SESSION_TOOLSET_SCOPE: u64 = 0;
-
     /// `update`'s toolsets set up first, in call order: the turn is taken now. Then the command
     /// `wrap` makes of it is sent as `origin`.
     fn send_frame(
@@ -813,7 +810,7 @@ impl VoiceSession {
             .toolset
             .agent
             .as_ref()
-            .map_or(Self::SESSION_TOOLSET_SCOPE, |agent| agent.toolset_scope());
+            .map_or(SESSION_TOOLSET_SCOPE, |agent| agent.toolset_scope());
         // The turn is queued for now, in call order: the lock's waiter list is entered by this
         // first poll (a tokio lock takes the real waker at the next one). Only the lock is polled
         // here; the setup's host bridge runs in the task, with its own waker.

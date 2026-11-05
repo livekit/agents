@@ -345,13 +345,13 @@ impl ToolLifecycle {
                     id: id.clone(),
                     call_id: call_id.clone(),
                     message: message.clone(),
-                    status: status.as_str().to_owned(),
+                    status: *status,
                 })
             }
             ToolLifecycle::Reply { update_ids, status, speech } => {
                 w::ToolUpdate::Reply(w::ToolReplyUpdated {
                     update_ids: update_ids.clone(),
-                    status: status.as_str().to_owned(),
+                    status: *status,
                     speech_id: speech.to_string(),
                 })
             }

@@ -18,7 +18,7 @@ use lk_agents_voice::agent_session::DriverError;
 use lk_agents_voice::generation::SpeechSegmentEvent;
 use lk_agents_voice::generation::TurnAccumulator;
 use lk_agents_voice::generation::effects::GenerationPreparationEffect;
-use lk_agents_voice::generation::effects::SynthesisLossEffect;
+use lk_agents_voice::generation::effects::{DrainedText, SynthesisLossEffect};
 use lk_agents_voice::generation::machine::forward::TextLegState;
 use lk_agents_voice::generation::machine::forward::TurnAccumulatorOutputEvent;
 use lk_agents_voice::generation::machine::forward::{SegmentPlan, SegmentRoute, VoiceKind};
@@ -349,8 +349,11 @@ async fn recover_lost_voice(
             SynthesisLossEffect::ReleaseVoice => *voice = Voice::Silent,
             SynthesisLossEffect::CutShort => acc.cut_short(),
             SynthesisLossEffect::Capture(text) => capture(text_out, &text).await,
-            SynthesisLossEffect::Drain { opening, forward_text } => {
-                let text = if forward_text { text_out } else { None };
+            SynthesisLossEffect::Drain { opening, text } => {
+                let text = match text {
+                    DrainedText::Forward => text_out,
+                    DrainedText::Discard => None,
+                };
                 let drained = drain_segment_text(rx, opening, text).await;
                 effects.extend(state.handle(SynthesisLossEvent::Drained(drained)));
             }

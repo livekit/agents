@@ -3,7 +3,9 @@
 //! `on_enter` once the task completes, fails, is cancelled, or the session closes.
 
 use crate::agent_activity::scheduling::SpeechId;
-use crate::agent_session::{AgentUpdate, Answer, RequestId, SpeechCommand, VoiceDriver};
+use crate::agent_session::{
+    AgentUpdate, Answer, GenerateReplyRequest, RequestId, SpeechCommand, VoiceDriver,
+};
 use crate::trace::{HandoffStep, InterruptCause};
 use lk_agents_abi::voice::session::VoiceTaskValue;
 use lk_agents_abi::{HostRef, Maybe, Ts};
@@ -198,7 +200,7 @@ impl VoiceDriver {
             self.agent_updated();
         }
         if opens_with_reply {
-            let reply = SpeechCommand::GenerateReply {
+            let reply = SpeechCommand::GenerateReply(GenerateReplyRequest {
                 user_input: None,
                 instructions: None,
                 allow_interruptions: None,
@@ -208,7 +210,7 @@ impl VoiceDriver {
                 tool_names: None,
                 on_enter: true,
                 call: None,
-            };
+            });
             self.on_speech(now, reply);
         } else {
             self.issue_on_enter(now);

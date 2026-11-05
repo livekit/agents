@@ -41,6 +41,25 @@ const SPAN_INTERVAL: Duration = Duration::from_secs(1);
 const METRIC_INTERVAL: Duration = Duration::from_secs(30);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// An OTLP signal, named by its path segment: Cloud's `<signal>/otlp/v0`, the standard
+/// `v1/<signal>`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Signal {
+    Traces,
+    Logs,
+    Metrics,
+}
+
+impl Signal {
+    pub(crate) const fn path(self) -> &'static str {
+        match self {
+            Signal::Traces => "traces",
+            Signal::Logs => "logs",
+            Signal::Metrics => "metrics",
+        }
+    }
+}
+
 /// What the exporter could not do, since the process started.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Diagnostics {
@@ -334,7 +353,7 @@ impl Shared {
                     Ok(body) => body,
                     Err(error) => return Outcome::Failed(error),
                 };
-                let path = format!("{signal}/otlp/v0");
+                let path = format!("{}/otlp/v0", signal.path());
                 match cloud.post(&path, |request| body.attach(request)).await {
                     Ok(answer) => Outcome::of(answer, &path),
                     Err(error) => Outcome::Failed(error.to_string()),
@@ -352,7 +371,7 @@ fn cloud_request(
     identity: &JobIdentity,
     recording: &CloudRecording,
     payload: Cloud,
-) -> (&'static str, Result<encode::Body, String>) {
+) -> (Signal, Result<encode::Body, String>) {
     let resource = encode::cloud_resource(process, identity);
     let stamp = encode::cloud_stamp(process, identity, recording);
     let policy = ContentPolicy::cloud(recording.redaction);
@@ -362,17 +381,17 @@ fn cloud_request(
                 policy.span(span);
                 encode::stamp(&mut span.attributes, &stamp);
             }
-            ("traces", encode::body(&encode::traces_request(resource, &spans), true))
+            (Signal::Traces, encode::body(&encode::traces_request(resource, &spans), true))
         }
         Cloud::Logs(mut logs) => {
             for log in &mut logs {
                 policy.log(log);
                 encode::stamp(&mut log.attributes, &stamp);
             }
-            ("logs", encode::body(&encode::logs_request(resource, &logs), true))
+            (Signal::Logs, encode::body(&encode::logs_request(resource, &logs), true))
         }
         Cloud::Metrics(metrics) => {
-            ("metrics", encode::body(&encode::metrics_request(resource, metrics), true))
+            (Signal::Metrics, encode::body(&encode::metrics_request(resource, metrics), true))
         }
     }
 }

@@ -305,8 +305,7 @@ impl SessionEvent {
                 HostWire::OverlappingSpeech(w::OverlappingSpeechWire { event: (**event).clone() })
             }
             SessionEvent::MetricsCollected { metrics, speech, .. } => {
-                let leg = matches!(**metrics, AgentMetrics::Vad(_))
-                    .then(|| w::METRICS_LEG_VAD.to_owned());
+                let leg = matches!(**metrics, AgentMetrics::Vad(_)).then_some(w::MetricsLeg::Vad);
                 HostWire::MetricsCollected(w::MetricsCollectedWire {
                     metrics: (**metrics).clone(),
                     speech_id: speech.map(speech_id),

@@ -116,6 +116,17 @@ pub enum RealtimeFallbackMember {
     Host(std::sync::Arc<dyn crate::llm::realtime::HostRealtime>),
 }
 
+/// The realtime fallback's `label`, which also labels the error of a swap that failed.
+pub const REALTIME_FALLBACK_LABEL: &str =
+    "livekit.agents.llm.realtime.RealtimeModelFallbackAdapter";
+/// The realtime fallback's `model` name, which labels the error of a full event queue.
+pub const REALTIME_FALLBACK_MODEL: &str = "RealtimeModelFallbackAdapter";
+/// The error code of a reply the held backlog refused during a swap.
+pub const REALTIME_FALLBACK_BACKLOG_EXCEEDED: &str = "realtime_fallback_backlog_exceeded";
+/// The error code of a session failed because its event queue filled during a swap.
+pub const REALTIME_FALLBACK_EVENT_BACKLOG_EXCEEDED: &str =
+    "realtime_fallback_event_backlog_exceeded";
+
 /// `llm.RealtimeModelFallbackAdapter`'s engine: the generated facade holds native resources; host
 /// provider objects use the shared bridge.
 #[crate::host(class(name = "RealtimeFallbackModel", native = crate::Realtime))]

@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use crate::fallback::chain::StreamTask;
-use lk_agents_abi::errors::{ApiError, ProviderError};
+use lk_agents_abi::errors::{ApiError, CANCELLED_STATUS, ProviderError};
 use lk_agents_abi::{Clock, Closed, HOST_TEARDOWN_TIMEOUT, StreamOutput, Ts};
 use tokio::sync::{mpsc, oneshot, watch};
 
@@ -34,13 +34,13 @@ pub(crate) async fn next_or_stop<T, S: StreamOutput<T> + ?Sized>(
     stop: &mut watch::Receiver<bool>,
 ) -> Result<Option<T>, ProviderError> {
     if *stop.borrow() {
-        return Err(ApiError::status("fallback cancelled", 499, None, None).into());
+        return Err(ApiError::status("fallback cancelled", CANCELLED_STATUS, None, None).into());
     }
     tokio::select! {
         biased;
         changed = stop.changed() => {
             let _ = changed;
-            Err(ApiError::status("fallback cancelled", 499, None, None).into())
+            Err(ApiError::status("fallback cancelled", CANCELLED_STATUS, None, None).into())
         }
         next = source.next() => next,
     }
@@ -70,7 +70,7 @@ pub(crate) async fn forward<T, B: Backend, S: StreamOutput<T> + ?Sized>(
         let visible = is_output(&item);
         if !send_or_stop(tx, Ok(item), stop).await {
             return Attempt::Failed {
-                error: ApiError::status("fallback cancelled", 499, None, None).into(),
+                error: ApiError::status("fallback cancelled", CANCELLED_STATUS, None, None).into(),
                 produced_output: produced,
             };
         }

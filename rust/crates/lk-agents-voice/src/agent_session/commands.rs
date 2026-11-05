@@ -328,25 +328,7 @@ pub enum SpeechCommand {
         add_to_chat_ctx: bool,
         call: Option<SpeechCall>,
     },
-    GenerateReply {
-        /// `None` replies to the context as it stands.
-        user_input: Option<String>,
-        /// An *extra* system message for this turn only.
-        instructions: Option<String>,
-        allow_interruptions: Option<bool>,
-        /// **`None` is `NOT_GIVEN`, not `"none"`**: the deferred tool-result reply passes `"none"`
-        /// so it cannot start another round.
-        tool_choice: Option<lk_agents_abi::ToolChoice>,
-        /// Planned against instead of the record (untouched).
-        chat_ctx: Option<ChatContext>,
-        /// Whole, because specs, host objects and runner must agree.
-        toolset: Option<Arc<Toolset>>,
-        /// `generate_reply(tools=)`: the agent's toolset narrowed to these names, its provider
-        /// tools kept, for this reply only.
-        tool_names: Option<Vec<String>>,
-        on_enter: bool,
-        call: Option<SpeechCall>,
-    },
+    GenerateReply(GenerateReplyRequest),
     /// A pending preemptive generation is dropped; the current speech is interrupted (a refusal is
     /// the whole answer); the socket is told once; the queue is walked in pop order up to the first
     /// refusal, each speech whole.
@@ -408,17 +390,7 @@ pub enum SpeechCommand {
         call_id: String,
         update: ToolUpdate,
     },
-    /// While the tool runs, say the source after `delay` idle, then every `interval`. A repeated
-    /// `id` is refused.
-    FillerStart {
-        id: FillerId,
-        call_id: String,
-        speech: SpeechId,
-        delay: std::time::Duration,
-        interval: Option<std::time::Duration>,
-        max_steps: Option<u32>,
-        source: FillerSource,
-    },
+    FillerStart(FillerStart),
     /// The dwell or cooldown in flight is dropped; a fire already made stays.
     FillerStop {
         id: FillerId,
@@ -428,6 +400,41 @@ pub enum SpeechCommand {
     PauseAuthorization,
     /// The head is authorized in this cycle.
     ResumeAuthorization,
+}
+
+/// `generate_reply(...)`: one reply, on a pipeline or a realtime session.
+#[derive(Debug)]
+pub struct GenerateReplyRequest {
+    /// `None` replies to the context as it stands.
+    pub user_input: Option<String>,
+    /// An *extra* system message for this turn only.
+    pub instructions: Option<String>,
+    pub allow_interruptions: Option<bool>,
+    /// **`None` is `NOT_GIVEN`, not `"none"`**: the deferred tool-result reply passes `"none"`
+    /// so it cannot start another round.
+    pub tool_choice: Option<lk_agents_abi::ToolChoice>,
+    /// Planned against instead of the record (untouched).
+    pub chat_ctx: Option<ChatContext>,
+    /// Whole, because specs, host objects and runner must agree.
+    pub toolset: Option<Arc<Toolset>>,
+    /// `generate_reply(tools=)`: the agent's toolset narrowed to these names, its provider
+    /// tools kept, for this reply only.
+    pub tool_names: Option<Vec<String>>,
+    pub on_enter: bool,
+    pub call: Option<SpeechCall>,
+}
+
+/// While the tool runs, say the source after `delay` idle, then every `interval`. A repeated
+/// `id` is refused.
+#[derive(Debug)]
+pub struct FillerStart {
+    pub id: FillerId,
+    pub call_id: String,
+    pub speech: SpeechId,
+    pub delay: std::time::Duration,
+    pub interval: Option<std::time::Duration>,
+    pub max_steps: Option<u32>,
+    pub source: FillerSource,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

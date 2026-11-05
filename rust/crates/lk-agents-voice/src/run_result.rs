@@ -478,7 +478,7 @@ mod tests {
         let unrelated = driver.start_speech(
             Ts::ZERO,
             SpeechSpec {
-                participates_in_voice_run: false,
+                voice_run: crate::agent_activity::scheduling::VoiceRunParticipation::Outside,
                 ..SpeechSpec::new(SpeechKind::Say, ReplySource::Text("incidental".into()), true)
             },
         );

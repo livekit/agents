@@ -668,12 +668,13 @@ impl SpeechKind {
         }
     }
 
-    /// `speech_created(user_initiated=..)`: the host asked for this one by name (`say`,
-    /// `generate_reply`), so an open run owns it.
-    pub const fn user_initiated(self) -> bool {
+    /// The host asked for this one by name (`say`, `generate_reply`), so an open run owns it.
+    pub const fn voice_run(self) -> VoiceRunParticipation {
         match self {
-            SpeechKind::Say | SpeechKind::GenerateReply => true,
-            SpeechKind::TurnReply | SpeechKind::Preemptive | SpeechKind::Realtime => false,
+            SpeechKind::Say | SpeechKind::GenerateReply => VoiceRunParticipation::Joins,
+            SpeechKind::TurnReply | SpeechKind::Preemptive | SpeechKind::Realtime => {
+                VoiceRunParticipation::Outside
+            }
         }
     }
 
@@ -687,6 +688,14 @@ impl SpeechKind {
             | SpeechKind::Realtime => true,
         }
     }
+}
+
+/// Whether a speech extends the explicit voice run open when it starts. Internal expert and
+/// filler presentation stays outside unless its parent speech belongs to that run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VoiceRunParticipation {
+    Joins,
+    Outside,
 }
 
 /// Either way the speech is force-interrupted.
@@ -790,7 +799,7 @@ impl VoiceDriver {
         kind: SpeechKind,
         add_to_chat_ctx: bool,
         host_asked: bool,
-        participates_in_voice_run: bool,
+        voice_run: VoiceRunParticipation,
     ) -> bool {
         // The reference announces every `say` and `_generate_reply` speech (turn replies and
         // preemptive generations included) as user-initiated; only a generation the realtime
@@ -825,7 +834,9 @@ impl VoiceDriver {
         }
         let s = &mut self.activity.speech_scheduler;
         s.admit(speech, state, kind, add_to_chat_ctx, status);
-        if participates_in_voice_run && let Some(run) = self.session.runs.current() {
+        if voice_run == VoiceRunParticipation::Joins
+            && let Some(run) = self.session.runs.current()
+        {
             s.attribute_run(speech, run.id);
             self.session.runs.participated();
         }

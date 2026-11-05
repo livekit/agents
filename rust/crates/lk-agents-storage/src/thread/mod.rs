@@ -2,7 +2,7 @@
 //! worker opens, executing the core's plans on a [`ThreadDbConnection`], [`Lane`] one agent's part
 //! of it, and [`Lane::open`] takes it for one [`Run`], which ends with
 //! [`Run::commit`] (one fenced write) or [`Run::abandon`] (`run_ended` and the release).
-//! `exclusive: false` is the `concurrent` policy: no lease, append-only.
+//! [`LaneAccess::Concurrent`] is the `concurrent` policy: no lease, append-only.
 
 pub mod db;
 pub mod lease;
@@ -25,7 +25,7 @@ use crate::thread::run::{
     SUBMIT_CHANNEL, TaskPatch, TaskState, WaitOptions,
 };
 use crate::thread::schema::*;
-use crate::{Fence, StorageError, TaskWrite};
+use crate::{Fence, LaneAccess, LeaseAfterCommit, StorageError, TaskPickup, TaskWrite, WhenHeld};
 use livekit_protocol::agent::chat_context::ChatItem;
 use lk_agents_abi::storage::context::{AppStatement, ContextScope, ContextScopeWrite};
 use lk_agents_abi::storage::journal::{JournalEvent, RunEnded, RunStarted};
@@ -425,9 +425,9 @@ impl Lane {
     }
 
     async fn open_with_holder(&self, opts: RunOptions, holder: &str) -> Result<Run, StorageError> {
-        let (lease, closed, state, items, tasks, picked_up, context_scopes) = match opts.exclusive {
-            true => {
-                let (a, acquired_at) = self.acquire(&opts, holder).await?;
+        let (lease, closed, state, items, tasks, picked_up, context_scopes) = match opts.access {
+            LaneAccess::Exclusive(when_held) => {
+                let (a, acquired_at) = self.acquire(&opts, when_held, holder).await?;
                 let lease = Lease::new(self.thread.clone(), a.fence.clone(), acquired_at);
                 if !a.already_committed {
                     lease.check()?;
@@ -444,11 +444,11 @@ impl Lane {
                     a.context_scopes,
                 )
             }
-            false => {
+            LaneAccess::Concurrent => {
                 // without a lease nothing is claimed: the run goes only while its row is still
                 // `submitted` (a client did not cancel it), and the row stays so, never an
                 // orphan for a lease holder to fail
-                let picked_up = opts.pickup
+                let picked_up = opts.pickup == TaskPickup::Claim
                     && self.task(&opts.task_id).await?.map(|r| r.status)
                         == Some(TaskState::Submitted);
                 let items = self.history().await?;
@@ -481,11 +481,11 @@ impl Lane {
         })
     }
 
-    /// The acquire, polled with backoff while another holder has the lane, as the lane's `waiter`
-    /// under `interrupt`.
+    /// The acquire, polled with backoff while another holder has the lane, as `when_held` says.
     async fn acquire(
         &self,
         opts: &RunOptions,
+        when_held: WhenHeld,
         holder: &str,
     ) -> Result<(Acquired, tokio::time::Instant), StorageError> {
         let epoch = tokio::time::Instant::now();
@@ -532,10 +532,10 @@ impl Lane {
             if let Some(acquired) = acquired {
                 return Ok((acquired, acquired_at));
             }
-            if !opts.wait {
+            if when_held == WhenHeld::Reject {
                 return Err(StorageError::Rejected { running_task_id: None });
             }
-            if opts.interrupt {
+            if when_held == WhenHeld::Interrupt {
                 // Arm cleanup before the write: cancellation can lose its acknowledgment.
                 if waiter.is_none() {
                     waiter = Some(crate::thread::lease::Waiter::new(
@@ -563,17 +563,12 @@ pub struct RunOptions {
     pub run_id: String,
     /// The A2A task this run serves.
     pub task_id: String,
-    /// `false` is the `concurrent` policy: no lease, append-only commit.
-    pub exclusive: bool,
-    /// Wait for a lease another holder has; `false` fails with [`StorageError::Rejected`].
-    pub wait: bool,
-    /// Record this worker as the lane's `waiter` while it waits, so the holder yields.
-    pub interrupt: bool,
+    pub access: LaneAccess,
     /// The request's channel, for the `run_started` event.
     pub channel: Option<String>,
     pub wait_timeout: Duration,
-    /// Take `task_id`'s row to `working` in the acquire batch (`Run::picked_up`).
-    pub pickup: bool,
+    /// What the acquire does with `task_id`'s row (`Run::picked_up`).
+    pub pickup: TaskPickup,
 }
 
 impl RunOptions {
@@ -581,12 +576,10 @@ impl RunOptions {
         Self {
             run_id: run_id.into(),
             task_id: task_id.into(),
-            exclusive: true,
-            wait: true,
-            interrupt: false,
+            access: LaneAccess::Exclusive(WhenHeld::Wait),
             channel: None,
             wait_timeout: LEASE_WAIT_TIMEOUT,
-            pickup: false,
+            pickup: TaskPickup::Leave,
         }
     }
 }
@@ -612,8 +605,7 @@ pub const RESOLVE_LATER: Duration = Duration::from_secs(3600);
 /// What [`Run::commit`] does besides writing the run.
 #[derive(Debug, Clone, Default)]
 pub struct CommitOptions {
-    /// Extend the lease instead of releasing it: the runner continues with pending inbox rows.
-    pub keep_lease: bool,
+    pub lease: LeaseAfterCommit,
     /// The last inbox row a drain consumed.
     pub drained_id: Option<i64>,
     /// The task the turn answers, read back with the commit.
@@ -652,7 +644,7 @@ pub struct Run {
     pub reason: Option<String>,
     finished: bool,
     /// The commit [`Run::commit`] could not resolve in its wait, and whether it kept the lease.
-    unresolved: Option<(Commit, bool)>,
+    unresolved: Option<(Commit, LeaseAfterCommit)>,
 }
 
 impl Run {
@@ -716,10 +708,10 @@ impl Run {
         if self.lease.is_none() {
             self.lane.thread.ensure_schema().await?;
         }
-        let keep = opts.keep_lease;
+        let lease = opts.lease;
         let commit = self.writes(opts)?;
-        match self.send(&commit, keep).await {
-            Err(StorageError::Uncertain(why)) => self.resolve_lost_ack(commit, keep, why).await,
+        match self.send(&commit, lease).await {
+            Err(StorageError::Uncertain(why)) => self.resolve_lost_ack(commit, lease, why).await,
             Err(StorageError::Invalid(why)) if !commit.app_writes.is_empty() => {
                 Err(self.refused_commit(&commit, why).await)
             }
@@ -732,13 +724,13 @@ impl Run {
     async fn resolve_lost_ack(
         &mut self,
         commit: Commit,
-        keep: bool,
+        lease: LeaseAfterCommit,
         why: String,
     ) -> Result<Committed, StorageError> {
         log::warn!(target: "livekit.agents", lane = self.lane.name(), runId = self.run_id.as_str(); "commit acknowledgment lost, resolving: {why}");
-        let resolved = self.resolve(&commit, keep, RESOLVE_WAIT).await;
+        let resolved = self.resolve(&commit, lease, RESOLVE_WAIT).await;
         if matches!(resolved, Err(StorageError::Uncertain(_))) {
-            self.unresolved = Some((commit, keep));
+            self.unresolved = Some((commit, lease));
         }
         resolved
     }
@@ -758,10 +750,14 @@ impl Run {
     }
 
     /// Sends the run's one write, fenced on its lease when it holds one.
-    async fn send(&self, commit: &Commit, keep: bool) -> Result<Committed, StorageError> {
+    async fn send(
+        &self,
+        commit: &Commit,
+        after: LeaseAfterCommit,
+    ) -> Result<Committed, StorageError> {
         let fenced = self.lease.as_ref().map(|lease| Fenced {
             fence: lease.fence(),
-            keep: keep.then(|| self.lane.thread.timing.secs()),
+            keep: (after == LeaseAfterCommit::Keep).then(|| self.lane.thread.timing.secs()),
         });
         db::commit(&*self.lane.thread.conn, self.lane.name(), commit, fenced).await
     }
@@ -773,7 +769,7 @@ impl Run {
     async fn resolve(
         &self,
         commit: &Commit,
-        keep: bool,
+        lease: LeaseAfterCommit,
         wait: Duration,
     ) -> Result<Committed, StorageError> {
         let fence = self.lease.as_ref().map(Lease::fence);
@@ -790,7 +786,7 @@ impl Run {
                         expected: fence.map_or(0, |f| f.version),
                     });
                 }
-                Ok(Resolution::NotApplied) => match self.send(commit, keep).await {
+                Ok(Resolution::NotApplied) => match self.send(commit, lease).await {
                     Err(StorageError::Uncertain(why) | StorageError::Unavailable(why)) => {
                         last = why
                     }
@@ -812,8 +808,8 @@ impl Run {
     /// Keeps resolving a commit [`Run::commit`] left uncertain, up to [`RESOLVE_LATER`]: the
     /// authoritative outcome, never a guess. `None` when nothing was left unresolved.
     pub async fn resolve_later(mut self) -> Option<Result<Committed, StorageError>> {
-        let (commit, keep) = self.unresolved.take()?;
-        Some(self.resolve(&commit, keep, RESOLVE_LATER).await)
+        let (commit, lease) = self.unresolved.take()?;
+        Some(self.resolve(&commit, lease, RESOLVE_LATER).await)
     }
 
     /// Leaving by error: `run_ended` with the outcome and the reason, and the release; nothing

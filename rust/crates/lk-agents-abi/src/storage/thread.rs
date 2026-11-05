@@ -176,6 +176,12 @@ pub const REASON_WORKER_LOST: &str = "worker-lost";
 pub const REASON_LEASE_TIMEOUT: &str = "lease-timeout";
 pub const REASON_THREAD_NOT_FOUND: &str = "thread-not-found";
 pub const REASON_STORAGE_UNAVAILABLE: &str = "storage-unavailable";
+/// An answer whose task row this worker did not write.
+pub const REASON_NOT_WRITTEN: &str = "not-written";
+/// A run a client canceled with `tasks/cancel`.
+pub const REASON_CLIENT_CANCEL: &str = "client-cancel";
+/// A remote task canceled because its caller exited or its exchange failed.
+pub const REASON_CALLER_CANCELED: &str = "caller-canceled";
 
 /// The channel of the append-only run that writes a task's `submitted` row before the lease.
 pub const SUBMIT_CHANNEL: &str = "submit";
@@ -204,6 +210,45 @@ impl RunOutcome {
             _ => return None,
         })
     }
+}
+
+/// How a run takes its lane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LaneAccess {
+    /// The `concurrent` policy: no lease, append-only commit.
+    Concurrent,
+    /// Takes the lease, doing `WhenHeld` while another holder has it.
+    Exclusive(WhenHeld),
+}
+
+/// What an exclusive run does while another holder has the lane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WhenHeld {
+    /// Fails with `StorageError::Rejected` at once.
+    Reject,
+    /// Waits for the release, up to the wait timeout.
+    Wait,
+    /// Waits as the lane's `waiter`, so the holder yields.
+    Interrupt,
+}
+
+/// What an acquire does with the run's task row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskPickup {
+    /// Takes a `submitted` row to `working` in the acquire.
+    Claim,
+    /// Leaves the row as it stands.
+    Leave,
+}
+
+/// What a commit does with the run's lease.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum LeaseAfterCommit {
+    /// Releases it with the write.
+    #[default]
+    Release,
+    /// Extends it: the runner continues with pending inbox rows.
+    Keep,
 }
 
 /// What a write changes; everything left `None` keeps the existing row's value.

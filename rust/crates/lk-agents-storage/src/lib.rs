@@ -20,7 +20,9 @@ pub mod voice;
 
 pub use backends::{Storage, ThreadDbConnection};
 pub use lk_agents_abi::storage::StorageError;
-pub use lk_agents_abi::storage::thread::{TaskWrite, timestamp};
+pub use lk_agents_abi::storage::thread::{
+    LaneAccess, LeaseAfterCommit, TaskPickup, TaskWrite, WhenHeld, timestamp,
+};
 pub use lk_agents_net::strings::shortuuid;
 pub use thread::db::{Commit, Committed, EventWrite, Fence, TaskQuery};
 pub use thread::lease::Lease;

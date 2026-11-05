@@ -13,6 +13,7 @@ use fancy_regex::Regex;
 use std::sync::LazyLock;
 
 pub use lk_agents_abi::tts::markup::ExpressiveTag;
+use lk_agents_abi::tts::markup::MarkerKind;
 
 // Every marker pattern captures the space before it as `pre`, so `dedup_removal_space` can drop it
 // when the marker vanishes from between two spaces.
@@ -96,29 +97,6 @@ fn convert_expr(provider: Provider, text: &str) -> String {
     sub_expr(&EXPR_CLOSE_RE, &text, |_| String::new())
 }
 
-/// The `type` of an `<expr>` marker; anything else is a hallucination.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum MarkerType {
-    Expression,
-    Sound,
-    Break,
-    Prosody,
-    Spell,
-}
-
-impl MarkerType {
-    fn of(m: &Captures) -> Option<Self> {
-        match attr(m, "type").as_str() {
-            "expression" => Some(Self::Expression),
-            "sound" => Some(Self::Sound),
-            "break" => Some(Self::Break),
-            "prosody" => Some(Self::Prosody),
-            "spell" => Some(Self::Spell),
-            _ => None,
-        }
-    }
-}
-
 /// The prosody label every provider with a stress control understands.
 const EMPHASIS: &str = "emphasis";
 
@@ -126,7 +104,7 @@ const EMPHASIS: &str = "emphasis";
 fn wrapping_marker(provider: Provider, m: &Captures) -> String {
     let label = py_strip(&attr(m, "label")).to_lowercase();
     let inner = &m["inner"];
-    if MarkerType::of(m) == Some(MarkerType::Spell) {
+    if MarkerKind::from_wire(&attr(m, "type")) == Some(MarkerKind::Spell) {
         return if provider == Provider::Cartesia {
             format!("<spell>{inner}</spell>")
         } else {
@@ -161,23 +139,23 @@ fn wrapping_marker(provider: Provider, m: &Captures) -> String {
 
 /// A self-closing marker in `provider`'s syntax. Gemini keeps its `expression` marker as is.
 fn point_marker(provider: Provider, m: &Captures) -> String {
-    let marker_type = MarkerType::of(m);
+    let marker_kind = MarkerKind::from_wire(&attr(m, "type"));
     let label = attr(m, "label");
-    if provider == Provider::Gemini && marker_type == Some(MarkerType::Expression) {
+    if provider == Provider::Gemini && marker_kind == Some(MarkerKind::Expression) {
         let pre = m.name("pre").map_or(0, |p| p.as_str().len());
         return m[0][pre..].to_string();
     }
-    match marker_type {
-        Some(MarkerType::Expression) => expression_marker(provider, &label),
-        Some(MarkerType::Sound) => sound_marker(provider, label),
-        Some(MarkerType::Break) if provider == Provider::Gemini => format!("<{GEMINI_PAUSE}>"),
-        Some(MarkerType::Break) => format!("<break time=\"{label}\"/>"),
+    match marker_kind {
+        Some(MarkerKind::Expression) => expression_marker(provider, &label),
+        Some(MarkerKind::Sound) => sound_marker(provider, label),
+        Some(MarkerKind::Break) if provider == Provider::Gemini => format!("<{GEMINI_PAUSE}>"),
+        Some(MarkerKind::Break) => format!("<break time=\"{label}\"/>"),
         // Cartesia prosody is a self-closing point control (speed/volume)
-        Some(MarkerType::Prosody) if provider == Provider::Cartesia => {
+        Some(MarkerKind::Prosody) if provider == Provider::Cartesia => {
             cartesia_prosody(&py_strip(&label).to_lowercase()).unwrap_or("").to_string()
         }
         // Fish's native form is a prefix marker: keep a self-closing one as-is.
-        Some(MarkerType::Prosody) if provider == Provider::FishAudio => {
+        Some(MarkerKind::Prosody) if provider == Provider::FishAudio => {
             let tone = py_strip(&label).to_lowercase();
             if FISHAUDIO_TONES.contains(&tone.as_str()) {
                 format!("[{tone}]")

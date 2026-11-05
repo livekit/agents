@@ -1,6 +1,6 @@
 //! Gateway I/O executor for the synchronous synthesis protocol.
 
-use super::machine::{TtsSynthesis, TtsSynthesisEvent};
+use super::machine::{SentInput, TtsSynthesis, TtsSynthesisEvent};
 use super::*;
 use crate::effects::TtsSynthesisEffect;
 use base64::Engine as _;
@@ -224,11 +224,11 @@ impl Pump {
         sender: &dyn WsSender,
         input: Outbound,
     ) -> Vec<TtsSynthesisEffect> {
-        let (text, final_flush) = match input {
+        let (text, sent) = match input {
             Outbound::Transcript(text) => {
-                (wire::input_transcript(&text, &self.opts).to_string(), false)
+                (wire::input_transcript(&text, &self.opts).to_string(), SentInput::Transcript)
             }
-            Outbound::FinalFlush => (wire::session_flush().to_string(), true),
+            Outbound::FinalFlush => (wire::session_flush().to_string(), SentInput::FinalFlush),
         };
         let clock = self.clock.as_ref();
         let total_deadline = core.total_deadline();
@@ -236,7 +236,7 @@ impl Pump {
             Self::send(sender, text, &self.opts, clock, total_deadline, &mut self.stopped).await;
         let event = match result {
             Ok(()) => TtsSynthesisEvent::InputSent {
-                final_flush,
+                input: sent,
                 started_time: lk_agents_abi::unix_secs(clock.wall()),
             },
             Err(error) => TtsSynthesisEvent::Failed(error),

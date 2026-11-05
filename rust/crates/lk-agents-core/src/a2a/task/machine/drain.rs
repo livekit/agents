@@ -6,7 +6,10 @@ use std::time::Duration;
 use lk_agents_abi::storage::TaskState;
 use lk_agents_abi::storage::thread::REASON_WORKER_LOST;
 
-use super::{Access, Completion, Finish, Operation, Path, Phase, RunStep, TaskMachine};
+use super::{
+    Access, Completion, Finish, LeaseAfterCommit, Operation, Path, Phase, RunStep, TaskMachine,
+    TaskPickup, WhenHeld,
+};
 use crate::a2a::Message;
 
 impl TaskMachine {
@@ -41,12 +44,8 @@ impl TaskMachine {
         self.batch.clear();
         self.task_ids.clear();
         self.phase = Phase::Run { path: Path::Drain, step: RunStep::Open };
-        let access = if self.leased {
-            Access::Kept
-        } else {
-            Access::Exclusive { wait: false, interrupt: false }
-        };
-        Ok(Some(Operation::Open { run_id, task_id, channel, access, pickup: false }))
+        let access = if self.leased { Access::Kept } else { Access::Exclusive(WhenHeld::Reject) };
+        Ok(Some(Operation::Open { run_id, task_id, channel, access, pickup: TaskPickup::Leave }))
     }
 
     /// The next inbox row to pick up; past the last, the batch's turn or the commit of nothing.
@@ -93,7 +92,7 @@ impl TaskMachine {
         self.phase = Phase::Run { path: Path::Drain, step: RunStep::Commit };
         Operation::Commit {
             answer_task: None,
-            keep_lease: true,
+            lease: LeaseAfterCommit::Keep,
             drained_id: self.rows.last().map(|r| r.id),
         }
     }

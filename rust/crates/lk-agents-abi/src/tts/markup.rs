@@ -35,6 +35,7 @@ impl Markup {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExpressiveTag {
     /// The markup tag name (``"emotion"``, ``"sound"``, ...) or the expr marker type.
+    // Open, so a string: any provider's native tag, or whatever type the model wrote.
     #[host(rename = "type")]
     pub kind: String,
     /// The payload: the ``value="..."`` attribute, the expr ``label``, or the tag's inner text.
@@ -46,6 +47,20 @@ impl ExpressiveTag {
         ExpressiveTag { kind: kind.into(), value: value.into() }
     }
 }
+
+/// The `type` of an `<expr/>` marker; any other type is a hallucination.
+#[crate::host(wire_strs)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MarkerKind {
+    Expression,
+    Sound,
+    Break,
+    Prosody,
+    Spell,
+}
+
+/// Cartesia's native tag that, like an `expression` marker, carries the delivery.
+pub const EMOTION_TAG: &str = "emotion";
 
 /// `AgentMood`: the closed set a delivery label normalizes to, in declaration order. The wire
 /// strings are the exact `AgentMood` literals, a wire contract (`lk.expression`).

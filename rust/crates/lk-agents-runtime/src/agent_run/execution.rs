@@ -3,6 +3,7 @@
 use super::*;
 use crate::host::HostInvoker;
 use crate::telemetry;
+use lk_agents_abi::a2a::turn::Verdict;
 use lk_agents_abi::agent::run::{RunInputRequirement, RunOutcome, RunResult};
 use lk_agents_abi::agent::{FunctionToolInfo, OutputCandidate, ToolArgumentError, ToolTemplate};
 use lk_agents_abi::errors::HostError;
@@ -426,16 +427,17 @@ async fn checkpoint_host(
     cx: &telemetry::Cx,
     inv: &Invocation,
     list_tools: bool,
-) -> (Result<bool, String>, Option<Vec<FunctionToolInfo>>) {
-    let yielded = match host.checkpoint(cx, inv).await {
-        Ok(yielded) => yielded,
+) -> (Result<Verdict, String>, Option<Vec<FunctionToolInfo>>) {
+    let verdict = match host.checkpoint(cx, inv).await {
+        Ok(true) => Verdict::Yield,
+        Ok(false) => Verdict::Continue,
         Err(error) => return (Err(error.to_string()), None),
     };
-    if !list_tools || yielded {
-        return (Ok(yielded), None);
+    if !list_tools || verdict == Verdict::Yield {
+        return (Ok(verdict), None);
     }
     match host.list_tools(cx, inv).await {
-        Ok(tools) => (Ok(yielded), Some(tools)),
+        Ok(tools) => (Ok(verdict), Some(tools)),
         Err(error) => (Err(error.to_string()), None),
     }
 }

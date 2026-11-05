@@ -23,7 +23,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use lk_agents_abi::errors::{ApiError, ProviderError, TimeoutPhase};
-use lk_agents_abi::llm::fallback::AvailabilityChanged;
+use lk_agents_abi::llm::fallback::{AvailabilityChanged, REALTIME_FALLBACK_LABEL};
 use lk_agents_abi::llm::realtime::{
     Event, GenerationDone, GenerationStatus, HostRealtime, MessageDone, MessageModalities,
     Modalities, RealtimeModelError,
@@ -219,7 +219,7 @@ impl RealtimeFallbackModel {
 
 impl Realtime for RealtimeFallbackModel {
     fn label(&self) -> String {
-        "livekit.agents.llm.realtime.RealtimeModelFallbackAdapter".to_owned()
+        REALTIME_FALLBACK_LABEL.to_owned()
     }
 
     fn capabilities(&self) -> RealtimeCapabilities {

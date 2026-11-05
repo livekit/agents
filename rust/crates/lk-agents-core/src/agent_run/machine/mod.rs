@@ -103,7 +103,7 @@ pub enum AgentRunEvent {
     Start,
     HostCheckpointDone {
         checkpoint: CheckpointId,
-        result: Result<bool, String>,
+        result: Result<lk_agents_abi::a2a::turn::Verdict, String>,
         tools: Option<Vec<lk_agents_abi::agent::FunctionToolInfo>>,
     },
     InstructionsRendered {

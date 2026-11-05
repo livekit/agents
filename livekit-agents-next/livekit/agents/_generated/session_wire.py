@@ -255,10 +255,14 @@ class MetricsCollectedWire:
     """The `AgentMetrics` record as the dict `TypeAdapter(AgentMetrics)` validates."""
     speech_id: str | None
     """`speech_{n}` of the speech the record belongs to; `None` for a leg that has none."""
-    leg: str | None
+    leg: MetricsLeg | None
     """The session leg whose provider emits the record as its own `metrics_collected`: `"vad"`
     for the VAD's, which the session folds; `None` for one a provider metered itself.
     """
+
+
+MetricsLeg: TypeAlias = Literal["vad"]
+"""[`MetricsCollectedWire::leg`]: the session leg whose provider a record belongs to."""
 
 
 @dataclass(kw_only=True, slots=True)
