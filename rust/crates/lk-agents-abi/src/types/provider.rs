@@ -41,8 +41,6 @@ pub trait ProviderAttempts: Send + Sync + Sized + 'static {
     #[host(call)]
     fn wake_at(&self) -> Option<u64>;
     #[host(call)]
-    fn capacity_exceeded(&mut self, input: bool, now_ns: u64) -> Result<(), ApiError>;
-    #[host(call)]
     fn expect_response(&mut self, now_ns: u64);
     #[host(call)]
     fn input_ended(&mut self, now_ns: u64);

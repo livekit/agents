@@ -4360,7 +4360,8 @@
           "required": true,
           "members": [
             "room_input",
-            "realtime"
+            "realtime",
+            "stt"
           ],
           "label": true
         }

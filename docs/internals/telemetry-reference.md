@@ -352,7 +352,7 @@ and `model_name`, the `G` labels `gen_ai.operation.name`, `gen_ai.provider.name`
 | `lk.agents.usage.tts_characters`, `interruption_num_requests` | counter | | `M` | when > 0 |
 | `lk.agents.connection.acquire_time` | histogram | s | `M`, `connection_reused` (`"true"`, `"false"`) | each WebSocket connection |
 | `lk.agents.event_loop.blocked_duration` | histogram | s | `severity` (`warning`, `error`) | each stall |
-| `lk.agents.audio.dropped` | counter | s | `policy` (`catch_up`, `now`), `consumer` (`room_input`, `realtime`) | each drop of an audio input channel |
+| `lk.agents.audio.dropped` | counter | s | `policy` (`catch_up`, `now`), `consumer` (`room_input`, `realtime`, `stt`) | each drop of an audio input channel |
 | `gen_ai.client.token.usage` | histogram | `{token}` | `G`, `gen_ai.token.type` (`input`, `output`) | each LLM and realtime response |
 | `gen_ai.client.operation.duration` | histogram | s | `G` | each LLM and realtime response |
 | `gen_ai.client.operation.time_to_first_chunk` | histogram | s | `G` | when measured |

@@ -161,13 +161,6 @@ fn _extract_provider_attempts_failure_now_ns(
 type ProviderAttemptsFailureNowNsInput = u64;
 type ProviderAttemptsWakeAtOutput = ::std::option::Option<u64>;
 
-fn _extract_provider_attempts_capacity_exceeded_now_ns(
-    obj: &Bound<'_, PyAny>,
-) -> PyResult<ProviderAttemptsCapacityExceededNowNsInput> {
-    crate::py_values::number_from_py::<u64>(obj.as_any(), "now_ns")
-}
-type ProviderAttemptsCapacityExceededNowNsInput = u64;
-
 fn _extract_provider_attempts_expect_response_now_ns(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<ProviderAttemptsExpectResponseNowNsInput> {
@@ -269,18 +262,6 @@ impl CoreProviderAttempts {
         crate::py_calls::check_pid()?;
         let out = <CoreProviderAttemptsImpl as ::lk_agents_abi::types::provider::ProviderAttempts>::wake_at(&self.0);
         ::pyo3::PyResult::Ok(out)
-    }
-
-    #[pyo3(signature = (input, now_ns))]
-    fn capacity_exceeded(
-        &mut self,
-        input: bool,
-        #[pyo3(from_py_with = _extract_provider_attempts_capacity_exceeded_now_ns)]
-        now_ns: ProviderAttemptsCapacityExceededNowNsInput,
-    ) -> PyResult<()> {
-        crate::py_calls::check_pid()?;
-        <CoreProviderAttemptsImpl as ::lk_agents_abi::types::provider::ProviderAttempts>::capacity_exceeded(&mut self.0, input, now_ns).map_err(|e: ::lk_agents_abi::errors::ApiError| <::lk_agents_abi::errors::ApiError as crate::py_errors::HostException>::to_py_err(&e))?;
-        Ok(())
     }
 
     #[pyo3(signature = (now_ns))]

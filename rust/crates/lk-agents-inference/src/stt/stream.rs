@@ -3,14 +3,6 @@
 
 use super::*;
 
-/// `end_input(&self)` cannot drop the sender, so end-of-input is an explicit message.
-#[derive(Debug, Clone, PartialEq)]
-pub(super) enum SinkCmd {
-    Frame(AudioFrame),
-    /// The `_FlushSentinel`: emit whatever the re-framer is holding, without ending the session.
-    Flush,
-}
-
 /// A keyterm change that arrived mid-utterance, deferred to `END_OF_SPEECH`: "the gateway may
 /// reconnect upstream when the keyterms change". One slot, latest wins.
 #[derive(Debug, Default)]
@@ -20,7 +12,7 @@ pub(super) struct DeferredExtra {
 }
 
 pub struct RecognitionInput {
-    pub(super) audio: mpsc::Sender<SinkCmd>,
+    pub(super) audio: AudioInput,
     pub(super) control: Arc<StreamControl>,
 }
 
@@ -38,9 +30,9 @@ impl lk_agents_abi::stt::inference::InferenceSttAudio for RecognitionInput {
 /// What reaches a live stream from its client: `session.update` frames and deferred keyterms.
 pub(super) struct StreamControl {
     pub(super) stop: tokio::sync::watch::Sender<bool>,
-    pub(super) ended: tokio::sync::watch::Sender<bool>,
     pub(super) failure: tokio::sync::watch::Sender<Option<ApiError>>,
-    pub(super) updates: mpsc::Sender<serde_json::Value>,
+    /// Unbounded: one update per option change or turn, sent ahead of queued audio.
+    pub(super) updates: mpsc::UnboundedSender<serde_json::Value>,
     pub(super) deferred: Arc<DeferredExtra>,
 }
 
@@ -56,18 +48,10 @@ impl StreamControl {
             // An explicit `extra` clears any deferred keyterm change (`_pending_extra = None`).
             *self.deferred.pending.lock() = None;
         }
-        if let Some(frame) = wire::session_update(model, language, extra)
-            && self.updates.try_send(frame).is_err()
-        {
-            self.fail_overflow();
+        if let Some(frame) = wire::session_update(model, language, extra) {
+            // A stream already gone has nothing to update.
+            let _ = self.updates.send(frame);
         }
-    }
-
-    fn fail_overflow(&self) {
-        self.failure.send_replace(Some(
-            ApiError::new("STT input queue capacity exceeded").with_retryable(false),
-        ));
-        self.stop.send_replace(true);
     }
 
     /// Now if the user is silent, at end of speech if not.
@@ -82,16 +66,23 @@ impl StreamControl {
 
 impl StreamInput<AudioFrame> for RecognitionInput {
     fn push(&self, item: AudioFrame) -> Result<(), ProviderError> {
-        self.send(SinkCmd::Frame(item))
+        if !*self.control.stop.borrow() && self.audio.push(item) {
+            return Ok(());
+        }
+        Err(self.closed_error())
     }
 
     fn flush(&self) -> Result<(), ProviderError> {
-        self.send(SinkCmd::Flush)
+        match self.audio.flush() {
+            Some(flushed) if !*self.control.stop.borrow() => {
+                flushed.map_err(|stuck| ApiError::new(stuck.to_string()).into())
+            }
+            _ => Err(self.closed_error()),
+        }
     }
 
     fn end_input(&self) {
-        // A stream that is already gone has already ended its input.
-        self.control.ended.send_replace(true);
+        self.audio.end();
     }
 }
 
@@ -103,18 +94,6 @@ impl RecognitionInput {
             .clone()
             .map(ProviderError::from)
             .unwrap_or_else(|| stream_closed(WHAT))
-    }
-
-    fn send(&self, cmd: SinkCmd) -> Result<(), ProviderError> {
-        if *self.control.ended.borrow() || *self.control.stop.borrow() {
-            return Err(self.closed_error());
-        }
-        self.audio.try_send(cmd).map_err(|error| {
-            if matches!(error, mpsc::error::TrySendError::Full(_)) {
-                self.control.fail_overflow();
-            }
-            self.closed_error()
-        })
     }
 }
 

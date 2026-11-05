@@ -4,7 +4,9 @@
 use super::*;
 use crate::effects::SttStreamEffect;
 use crate::telemetry;
+use gaps::Gaps;
 use lk_agents_abi::metrics::base::ConnectionAcquired;
+use lk_agents_media::media_queue::{self, Item};
 
 pub(super) struct SttStreamExecutor {
     pub(super) ws: Arc<dyn WsTransport>,
@@ -16,14 +18,13 @@ pub(super) struct SttStreamExecutor {
     /// Seconds added to every timestamp: the caller's, plus the time spent on failed attempts, so
     /// transcripts stay on one linear timeline across reconnects.
     pub(super) offset: f64,
-    pub(super) audio_rx: mpsc::Receiver<SinkCmd>,
-    pub(super) update_rx: mpsc::Receiver<serde_json::Value>,
+    pub(super) audio_rx: media_queue::Receiver<AudioFrame, Flush>,
+    pub(super) update_rx: mpsc::UnboundedReceiver<serde_json::Value>,
     pub(super) deferred: Arc<DeferredExtra>,
-    pub(super) update_tx: mpsc::Sender<serde_json::Value>,
+    pub(super) update_tx: mpsc::UnboundedSender<serde_json::Value>,
     pub(super) event_tx: mpsc::Sender<Result<SpeechEvent, ApiError>>,
     pub(super) failure: tokio::sync::watch::Sender<Option<ApiError>>,
     pub(super) stop: tokio::sync::watch::Receiver<bool>,
-    pub(super) ended: tokio::sync::watch::Receiver<bool>,
     pub(super) accepted: lk_agents_abi::Ts,
 }
 
@@ -185,11 +186,12 @@ impl SttStreamExecutor {
 
         // Wakes the settlement timer whenever the input or a message moves its deadline.
         let rearm = Arc::new(tokio::sync::Notify::new());
+        let gaps = Arc::new(Mutex::new(Gaps::starting(self.offset)));
         let send = Self::send_loop(
             sender.clone(),
             &mut self.audio_rx,
             &mut self.update_rx,
-            &mut self.ended,
+            gaps.clone(),
             vad_sink,
             self.opts.sample_rate,
             machine.clone(),
@@ -206,6 +208,7 @@ impl SttStreamExecutor {
                 clock: self.clock.clone(),
                 ack_deadline: self.opts.conn_options.read_deadline(self.clock.now()),
                 offset: self.offset,
+                gaps,
                 rearm: rearm.clone(),
                 connection: Some(connection),
             },
@@ -260,9 +263,9 @@ impl SttStreamExecutor {
     )]
     async fn send_loop(
         sender: Arc<dyn WsSender>,
-        audio_rx: &mut mpsc::Receiver<SinkCmd>,
-        update_rx: &mut mpsc::Receiver<serde_json::Value>,
-        ended: &mut tokio::sync::watch::Receiver<bool>,
+        audio_rx: &mut media_queue::Receiver<AudioFrame, Flush>,
+        update_rx: &mut mpsc::UnboundedReceiver<serde_json::Value>,
+        gaps: Arc<Mutex<Gaps>>,
         mut vad_sink: Option<crate::abi::VadSink>,
         sample_rate: u32,
         machine: Arc<Mutex<SttStream>>,
@@ -274,9 +277,6 @@ impl SttStreamExecutor {
         // `RecognizeStream.push_frame` resamples to the rate the gateway was told.
         let mut resampler = AudioResampler::new(sample_rate, Quality::High, OnChange::Drain);
 
-        if *ended.borrow() {
-            audio_rx.close();
-        }
         let mut ending = false;
         let mut vad_push_warned = false;
         let mut audio = String::new();
@@ -284,10 +284,6 @@ impl SttStreamExecutor {
             let item = tokio::select! {
                 // Biased so a pending `session.update` is not starved by continuous audio.
                 biased;
-                changed = ended.changed(), if !audio_rx.is_closed() => {
-                    if changed.is_err() || *ended.borrow() { audio_rx.close(); }
-                    continue;
-                }
                 Some(frame) = update_rx.recv() => {
                     // "failed to send session.update, ws may be closing" -- swallowed, as in the
                     // reference.
@@ -300,7 +296,8 @@ impl SttStreamExecutor {
             };
 
             let frames = match item {
-                Some(SinkCmd::Frame(frame)) => {
+                Some(Item::Media(frame)) => {
+                    gaps.lock().audio(lk_agents_abi::voice::rtc::frame_duration(&frame));
                     if let Some(sink) = vad_sink.as_mut()
                         && let Err(error) = sink.push(frame.clone())
                         && !vad_push_warned
@@ -334,7 +331,11 @@ impl SttStreamExecutor {
                     }
                     frames
                 }
-                Some(SinkCmd::Flush) => {
+                Some(Item::Gap(gap)) => {
+                    gaps.lock().gap(gap);
+                    continue;
+                }
+                Some(Item::Event(Flush)) => {
                     let tail = resampler
                         .flush()
                         .map_err(|error| ApiError::new(error.to_string()).with_retryable(false))?;
@@ -343,7 +344,7 @@ impl SttStreamExecutor {
                     frames.extend(bstream.flush());
                     frames
                 }
-                // `end_input()` or a dropped sink: both end the send half.
+                // `end_input()` or a dropped sink: the queue's end ends the send half.
                 None => {
                     ending = true;
                     let tail = resampler
@@ -407,6 +408,7 @@ impl SttStreamExecutor {
             clock,
             ack_deadline,
             offset,
+            gaps,
             rearm,
             mut connection,
         } = ctx;
@@ -460,7 +462,8 @@ impl SttStreamExecutor {
                                 if let Some(usage) = &mut event.recognition_usage {
                                     usage.connection = connection.take();
                                 }
-                                if event_tx.send(Ok(shifted(event, offset))).await.is_err() {
+                                let event = gaps.lock().shift(shifted(event, offset));
+                                if event_tx.send(Ok(event)).await.is_err() {
                                     return Ok(());
                                 }
                             }
@@ -470,10 +473,7 @@ impl SttStreamExecutor {
                                     && let Some(frame) =
                                         wire::session_update(None, None, Some(&extra))
                                 {
-                                    update_tx.try_send(frame).map_err(|_| {
-                                        ApiError::new("STT update queue capacity exceeded")
-                                            .with_retryable(false)
-                                    })?;
+                                    let _ = update_tx.send(frame);
                                 }
                             }
                             SttStreamEffect::Finished(result) => return result,
@@ -514,11 +514,13 @@ impl SttStreamExecutor {
 struct RecvCtx {
     event_tx: mpsc::Sender<Result<SpeechEvent, ApiError>>,
     deferred: Arc<DeferredExtra>,
-    update_tx: mpsc::Sender<serde_json::Value>,
+    update_tx: mpsc::UnboundedSender<serde_json::Value>,
     clock: Arc<dyn Clock>,
     /// `read_timeout` from the session-create frame: the acknowledgement is a response.
     ack_deadline: Option<lk_agents_abi::Ts>,
     offset: f64,
+    /// Where this attempt's input dropped audio: its transcripts move past each gap.
+    gaps: Arc<Mutex<Gaps>>,
     rearm: Arc<tokio::sync::Notify>,
     /// The connection, until the first usage report it delivers carries it.
     connection: Option<ConnectionAcquired>,

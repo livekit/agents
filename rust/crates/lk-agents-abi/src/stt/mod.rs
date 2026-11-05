@@ -7,6 +7,6 @@ pub mod stream_adapter;
 #[path = "stt.rs"]
 pub mod types;
 
-/// Audio held across recognition reconnects: 2 seconds of 20 ms frames, oldest dropped first.
-/// The retry wrapper and fallback chain use the same bound.
+/// Audio the fallback chain holds across reconnects: 2 seconds of 20 ms frames, oldest dropped
+/// first.
 pub const HELD_FRAMES: usize = 100;

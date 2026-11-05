@@ -275,6 +275,8 @@ pub enum AudioConsumer {
     RoomInput,
     /// A realtime model's input audio.
     Realtime,
+    /// A recognition stream's input audio.
+    Stt,
 }
 
 /// Input and output tokens of each LLM and realtime response. Deprecated upstream; declared as

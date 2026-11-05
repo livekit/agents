@@ -4,6 +4,8 @@
 //! input/output halves. Callers never manually pump accepted input.
 
 mod executor;
+pub(crate) mod gaps;
+pub(crate) mod input;
 pub mod machine;
 pub mod options;
 pub mod retrying;
@@ -23,6 +25,7 @@ use lk_agents_net::transport::{
 
 use base64::Engine as _;
 use executor::SttStreamExecutor;
+use input::{AudioInput, Flush};
 use lk_agents_abi::Spawner;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::{ApiConnectOptions, Clock, SpeechEvent};
@@ -32,7 +35,7 @@ use machine::{SttStream, SttStreamEvent};
 use options::FallbackModel;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
-use stream::{DeferredExtra, SinkCmd, StreamControl};
+use stream::{DeferredExtra, StreamControl};
 
 use parking_lot::Mutex;
 pub use stream::{RecognitionInput, RecognitionOutput};
@@ -42,7 +45,7 @@ use tokio::sync::mpsc;
 
 const WHAT: &str = "LiveKit Inference STT";
 
-/// A stream's input, event and update queues, in items.
+/// A stream's event queue, in items.
 pub(crate) const STREAM_QUEUE: usize = 50;
 
 /// Quiet period after audio EOF, or after a later interim, that completes an unacknowledged stream.
@@ -318,18 +321,15 @@ impl GatewayStt {
             .map_err(|error| ApiError::new(error.to_string()).with_retryable(false))?;
         let keyterms = self.shared.session_keyterms.lock().clone();
 
-        let (audio_tx, audio_rx) = mpsc::channel::<SinkCmd>(STREAM_QUEUE);
+        let (audio, audio_rx) = AudioInput::new();
         let (event_tx, event_rx) = mpsc::channel::<Result<SpeechEvent, ApiError>>(STREAM_QUEUE);
-        let (update_tx, update_rx) = mpsc::channel::<serde_json::Value>(STREAM_QUEUE);
+        let (update_tx, update_rx) = mpsc::unbounded_channel::<serde_json::Value>();
         let (stop, stop_rx) = tokio::sync::watch::channel(false);
-        let (ended, ended_rx) = tokio::sync::watch::channel(false);
         let (failure, failure_rx) = tokio::sync::watch::channel(None);
         let (done, done_rx) = tokio::sync::oneshot::channel();
         let control = Arc::new(StreamControl {
             stop: stop.clone(),
-            ended,
             failure,
-
             updates: update_tx.clone(),
             deferred: Arc::new(DeferredExtra::default()),
         });
@@ -350,7 +350,6 @@ impl GatewayStt {
             event_tx,
             failure: control.failure.clone(),
             stop: stop_rx,
-            ended: ended_rx,
             accepted: self.shared.clock.now(),
         };
         self.shared.tasks.spawn(self.shared.spawner.as_ref(), "stt stream", async move {
@@ -359,7 +358,7 @@ impl GatewayStt {
         });
 
         Ok(lk_agents_abi::DuplexStream::new(
-            RecognitionInput { audio: audio_tx, control },
+            RecognitionInput { audio, control },
             RecognitionOutput {
                 events: event_rx,
                 done: false,
@@ -530,7 +529,7 @@ impl Stt for GatewayStt {
     /// Always `Some`: gateway STT declares `streaming=True`.
     fn stream(
         &self,
-        _cx: &telemetry::Cx,
+        cx: &telemetry::Cx,
         language: Option<&lk_agents_abi::tokenize::language::LanguageCode>,
         start_time_offset: Option<f64>,
     ) -> lk_agents_abi::BoxFuture<
@@ -541,10 +540,12 @@ impl Stt for GatewayStt {
         >,
     > {
         let language = language.cloned();
+        let cx = cx.clone();
         Box::pin(async move {
             let offset = start_time_offset.unwrap_or(0.0);
             self.stream_native(language.as_ref().map(|l| l.as_str()), offset).map(|stream| {
                 let (sink, source) = stream.split();
+                sink.audio.observe(cx);
                 Some(lk_agents_abi::DuplexStream::new(
                     Box::new(sink) as crate::abi::SttSink,
                     Box::new(source) as crate::abi::SttSource,

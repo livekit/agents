@@ -4,23 +4,22 @@
 //! stream that survives the attempts.
 
 use crate::telemetry;
-use std::collections::VecDeque;
 use std::sync::Arc;
 
-use parking_lot::Mutex;
-use tokio::sync::Notify;
-
+use super::gaps::Gaps;
+use super::input::{AudioInput, Flush};
 use lk_agents_abi::errors::{ApiError, ProviderError};
-use lk_agents_abi::stt::HELD_FRAMES;
 use lk_agents_abi::stt::events::{SpeechEvent, SpeechEventType};
 use lk_agents_abi::stt::types::{Stt, SttCapabilities, SttSink, SttSource};
 use lk_agents_abi::tokenize::language::LanguageCode;
 use lk_agents_abi::types::identity::ProviderId;
 use lk_agents_abi::types::retry::{RequestKind, RetryDecision};
 use lk_agents_abi::utils::clock::Ts;
-use lk_agents_abi::utils::stream::{Closed, RetryReport, StreamInput, StreamOutput};
+use lk_agents_abi::utils::stream::{Closed, Entry, RetryReport, StreamInput, StreamOutput};
+use lk_agents_abi::voice::rtc::frame_duration;
 use lk_agents_abi::{ApiConnectOptions, AudioFrame, Clock, HOST_TEARDOWN_TIMEOUT, before};
 use lk_agents_core::attempts::{AttemptStep, Attempts, RequestPolicy};
+use lk_agents_media::media_queue::{Item, Receiver};
 
 pub struct RetryingStt {
     inner: Arc<dyn Stt>,
@@ -223,7 +222,10 @@ impl Stt for RetryingStt {
             let deadline = attempts.wake_at(None);
             wake_attempts(&mut attempts, self.clock.now(), &*self.inner)?;
             let offset = start_time_offset.unwrap_or(0.0);
-            let input = Arc::new(Input::default());
+            let (input, audio) = AudioInput::new();
+            input.observe(cx.clone());
+            let mut pump =
+                Pump { audio, sink: None, sending: None, ended: false, gaps: Gaps::default() };
             let opened = before(
                 &*self.clock,
                 deadline,
@@ -235,7 +237,7 @@ impl Stt for RetryingStt {
                 Ok(Ok(None)) => return Ok(None),
                 Ok(Ok(Some(stream))) => {
                     let (sink, source) = stream.split();
-                    input.install(sink);
+                    pump.install(sink, offset);
                     (Some(source), None)
                 }
                 Ok(Err(error)) => (None, Some(error)),
@@ -247,7 +249,7 @@ impl Stt for RetryingStt {
                 label: self.inner.label(),
                 language: language.clone(),
                 cx,
-                input: Arc::clone(&input),
+                pump,
                 current,
                 failed,
                 attempts,
@@ -293,134 +295,83 @@ impl RetryingStt {
     }
 }
 
-/// What the caller pushed, held while no attempt is open (the reference's `_input_ch`).
-#[derive(Clone)]
-enum Pushed {
-    Audio(AudioFrame),
-    Flush,
-}
-
-/// The attempt's sink is called with no lock held: a host STT's sink takes the GIL.
-#[derive(Default)]
-struct Input {
-    state: Mutex<InputState>,
-    failed: Notify,
-}
-
-#[derive(Default)]
-struct InputState {
+/// What the caller pushed, handed to the attempt serving one entry at a time, each awaited: a slow
+/// attempt, or none open, leaves the backlog in the queue, whose policy bounds it.
+struct Pump {
+    audio: Receiver<AudioFrame, Flush>,
     sink: Option<Arc<dyn StreamInput<AudioFrame>>>,
-    held: VecDeque<Pushed>,
+    sending: Option<lk_agents_abi::BoxFuture<'static, Result<(), ProviderError>>>,
     ended: bool,
-    failure: Option<ProviderError>,
+    gaps: Gaps,
 }
 
-fn deliver(sink: &dyn StreamInput<AudioFrame>, item: Pushed) -> Result<(), ProviderError> {
-    match item {
-        Pushed::Audio(frame) => sink.push(frame),
-        Pushed::Flush => sink.flush(),
-    }
-}
-
-impl Input {
-    /// The next attempt's sink: what arrived meanwhile first, then the end if it came. Installed
-    /// once nothing is held, so a concurrent `send` neither overtakes nor strands a held item.
-    fn install(&self, sink: SttSink) {
+impl Pump {
+    /// The next attempt's sink, its audio starting at `offset`; told at once if the input ended.
+    fn install(&mut self, sink: SttSink, offset: f64) {
         let sink: Arc<dyn StreamInput<AudioFrame>> = Arc::from(sink);
-        let ended = loop {
-            let item = {
-                let mut st = self.state.lock();
-                match st.held.pop_front() {
-                    Some(item) => item,
-                    None => {
-                        st.sink = Some(Arc::clone(&sink));
-                        break st.ended;
-                    }
+        self.sending = self.ended.then(|| sink.send(Entry::EndInput));
+        self.sink = Some(sink);
+        self.gaps = Gaps::starting(offset);
+    }
+
+    fn clear(&mut self) {
+        self.sink = None;
+        self.sending = None;
+    }
+
+    /// Feeds the attempt until its sink fails. Cancel-safe: an entry in flight stays in flight.
+    async fn run(&mut self) -> ProviderError {
+        loop {
+            if let Some(sending) = &mut self.sending {
+                let sent = sending.await;
+                self.sending = None;
+                if let Err(error) = sent {
+                    return error;
                 }
+            }
+            let Some(sink) = self.sink.clone() else { return std::future::pending().await };
+            let entry = match self.audio.recv().await {
+                Some(Item::Media(frame)) => {
+                    self.gaps.audio(frame_duration(&frame));
+                    Entry::Item(frame)
+                }
+                Some(Item::Gap(gap)) => {
+                    self.gaps.gap(gap);
+                    continue;
+                }
+                Some(Item::Event(Flush)) => Entry::Flush,
+                None if !self.ended => {
+                    self.ended = true;
+                    Entry::EndInput
+                }
+                None => return std::future::pending().await,
             };
-            if let Err(error) = deliver(sink.as_ref(), item.clone()) {
-                let mut st = self.state.lock();
-                st.held.push_front(item);
-                st.failure = Some(error);
-                self.failed.notify_one();
-                return;
-            }
-        };
-        if ended {
-            sink.end_input();
+            self.sending = Some(sink.send(entry));
         }
-    }
-
-    fn clear(&self) {
-        let mut st = self.state.lock();
-        st.sink = None;
-        st.failure = None;
-    }
-
-    async fn failure(&self) -> ProviderError {
-        loop {
-            let notified = self.failed.notified();
-            if let Some(error) = self.state.lock().failure.take() {
-                return error;
-            }
-            notified.await;
-        }
-    }
-
-    /// Held while no attempt takes it, a failed attempt's refusal included: the next one hears it.
-    /// Refused by an attempt a later one already replaced, it goes to that later one, so it is
-    /// not replayed behind what that attempt heard since.
-    fn send(&self, item: Pushed) -> Result<(), ProviderError> {
-        loop {
-            let sink = {
-                let mut st = self.state.lock();
-                let Some(sink) = st.sink.clone() else {
-                    Self::hold(&mut st, item);
-                    return Ok(());
-                };
-                sink
-            };
-            let Err(error) = deliver(sink.as_ref(), item.clone()) else { return Ok(()) };
-            let mut st = self.state.lock();
-            if st.sink.as_ref().is_some_and(|current| Arc::ptr_eq(current, &sink)) {
-                st.sink = None;
-                st.failure = Some(error);
-                self.failed.notify_one();
-                Self::hold(&mut st, item);
-                return Ok(());
-            }
-        }
-    }
-
-    fn hold(st: &mut InputState, item: Pushed) {
-        if st.held.len() == HELD_FRAMES {
-            st.held.pop_front();
-        }
-        st.held.push_back(item);
     }
 }
 
-struct InputSink(Arc<Input>);
+struct InputSink(AudioInput);
 
 impl StreamInput<AudioFrame> for InputSink {
     fn push(&self, item: AudioFrame) -> Result<(), ProviderError> {
-        self.0.send(Pushed::Audio(item))
+        if self.0.push(item) { Ok(()) } else { Err(input_closed()) }
     }
 
     fn flush(&self) -> Result<(), ProviderError> {
-        self.0.send(Pushed::Flush)
+        match self.0.flush() {
+            Some(flushed) => flushed.map_err(|stuck| ApiError::new(stuck.to_string()).into()),
+            None => Err(input_closed()),
+        }
     }
 
     fn end_input(&self) {
-        let sink = {
-            let mut st = self.0.state.lock();
-            st.ended = true;
-            st.sink.clone()
-        };
-        if let Some(sink) = sink {
-            sink.end_input();
-        }
+        self.0.end();
     }
+}
+
+fn input_closed() -> ProviderError {
+    ApiError::new("recognition input is closed").with_retryable(false).into()
 }
 
 struct RetrySource {
@@ -431,7 +382,7 @@ struct RetrySource {
     language: Option<LanguageCode>,
     /// The span every reconnect opens under.
     cx: telemetry::Cx,
-    input: Arc<Input>,
+    pump: Pump,
     current: Option<SttSource>,
     /// The open of the current attempt failed.
     failed: Option<ProviderError>,
@@ -447,7 +398,7 @@ struct RetrySource {
 
 impl RetrySource {
     async fn close_current(&mut self) {
-        self.input.clear();
+        self.pump.clear();
         if let Some(source) = self.current.take() {
             let deadline = self.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
             source.close(deadline).await;
@@ -461,7 +412,7 @@ impl RetrySource {
                 (Some(error), _) => error,
                 (None, Some(source)) => match tokio::select! {
                     biased;
-                    error = self.input.failure() => Err(error),
+                    error = self.pump.run() => Err(error),
                     event = source.next() => event,
                 } {
                     Ok(Some(event)) => {
@@ -469,7 +420,7 @@ impl RetrySource {
                             // a recognition succeeded: the budget restarts
                             self.attempts.reset_retries();
                         }
-                        return Ok(Some(event));
+                        return Ok(Some(self.pump.gaps.shift(event)));
                     }
                     Ok(None) => return Ok(None),
                     // The provider stopped its own stream: the recognition ends, unreported and
@@ -503,7 +454,7 @@ impl RetrySource {
             match self.stt.stream(&self.cx, self.language.as_ref(), Some(self.offset)).await {
                 Ok(Some(stream)) => {
                     let (sink, source) = stream.split();
-                    self.input.install(sink);
+                    self.pump.install(sink, self.offset);
                     self.current = Some(source);
                 }
                 Err(error) => self.failed = Some(error),
@@ -530,7 +481,7 @@ impl StreamOutput<SpeechEvent> for RetrySource {
     fn close(mut self: Box<Self>, deadline: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
         Box::pin(async move {
             self.attempts.cancel(self.clock.now(), &mut Vec::new());
-            self.input.clear();
+            self.pump.clear();
             match self.current.take() {
                 Some(source) => source.close(deadline).await,
                 None => Closed::Clean,

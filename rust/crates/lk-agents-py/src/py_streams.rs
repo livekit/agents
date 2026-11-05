@@ -45,6 +45,7 @@ use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::utils::clock::Clock;
 use lk_agents_abi::utils::clock::Ts;
 use lk_agents_abi::utils::host_ref::HostRef;
+use lk_agents_abi::utils::stream::Entry;
 use lk_agents_runtime::net::source::Pulled;
 use lk_agents_runtime::net::source::SharedStream;
 use parking_lot::Mutex;
@@ -276,12 +277,6 @@ struct SinkQueue<I> {
     ended: bool,
 }
 
-enum Entry<I> {
-    Item(I),
-    Flush,
-    EndInput,
-}
-
 impl<I: Send + 'static> HostSink<I> {
     fn admit(&self, entry: Entry<I>) -> Result<(), ProviderError> {
         let schedule = {
@@ -381,6 +376,45 @@ impl<I: Send + Sync + 'static> StreamInput<I> for HostSink<I> {
     /// A refused end is the failure the source reports.
     fn end_input(&self) {
         let _ = self.admit(Entry::EndInput);
+    }
+
+    /// Awaits the host's handling, an awaitable it returns included: an input that awaits room
+    /// holds the pump, so the backlog stays with the pump's queue.
+    fn send(
+        &self,
+        entry: Entry<I>,
+    ) -> lk_agents_abi::BoxFuture<'static, Result<(), ProviderError>> {
+        let shared = self.shared.clone();
+        Box::pin(async move {
+            if let Some(failed) = shared.failure.borrow().clone() {
+                return Err(failed);
+            }
+            if shared.stopped.load(Ordering::Acquire) {
+                return Err(lk_agents_abi::errors::ApiError::new("stream input is closed").into());
+            }
+            let started = Python::attach(|py| {
+                let (target, to_host) = (shared.target.clone_ref(py), shared.to_host);
+                start_in(py, shared.event_loop.bind(py), shared.ctx.bind(py), move |py| {
+                    let target = target.bind(py);
+                    match entry {
+                        Entry::Item(item) => {
+                            access::StreamInput::push(target)?.call1((to_host(py, item)?,))
+                        }
+                        Entry::Flush => access::StreamInput::flush(target)?.call0(),
+                        Entry::EndInput => access::StreamInput::end_input(target)?.call0(),
+                    }
+                })
+            });
+            let sent = match started {
+                Ok(mut started) => started.settled().await.map(drop),
+                Err(e) => Err(e),
+            };
+            sent.map_err(|e| {
+                let e = captured(e);
+                shared.failure.send_replace(Some(e.clone()));
+                e
+            })
+        })
     }
 }
 

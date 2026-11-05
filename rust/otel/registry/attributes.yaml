@@ -33,6 +33,12 @@
                 "value": "realtime",
                 "brief": "realtime",
                 "stability": "development"
+              },
+              {
+                "id": "stt",
+                "value": "stt",
+                "brief": "stt",
+                "stability": "development"
               }
             ]
           },

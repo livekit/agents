@@ -168,12 +168,6 @@ class AttemptLoop:
     def cleanup_timeout(self) -> float:
         return self._request.cleanup_timeout
 
-    def capacity_exceeded(self, *, input: bool) -> None:
-        try:
-            self._request.capacity_exceeded(input, _now_ns())
-        finally:
-            self._changed.set()
-
     def expect_response(self, *, final: bool = False) -> None:
         """A request was written and owes a response; ``final``: the last input was sent."""
         if final:

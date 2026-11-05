@@ -24,6 +24,9 @@ from .types import ProviderId
 
 TEvent = TypeVar("TEvent", default=Never, contravariant=True)
 
+# Events the reader may leave unread before the core's input waits for it.
+_EVENT_BACKLOG = 64
+
 
 class STT(
     ABC,
@@ -239,7 +242,8 @@ class RecognizeStream(ABC):
             maxsize=256, _on_receive=self._input_received, _on_eof=self._input_ended
         )
         """The audio ``_run`` reads, a ``Flush`` at the end of each segment."""
-        self._event_ch = aio.Chan[SpeechEvent](maxsize=64)
+        self._event_ch = aio.Chan[SpeechEvent](_on_receive=lambda _: self._event_read.set())
+        self._event_read = asyncio.Event()
         self._start_time = time.time()
         self._start_time_offset = 0.0
         self._context: BaseModel | None = None
@@ -248,7 +252,7 @@ class RecognizeStream(ABC):
         self._resampler: rtc.AudioResampler | None = None
         self._core_attempts = _bindings.AttemptLoop("stt_stream", conn_options, self._emit_error)
         self._task = asyncio.create_task(self._main_task())
-        self._task.add_done_callback(lambda _: self._event_ch.close())
+        self._task.add_done_callback(lambda _: self._close_events())
 
     @property
     def context(self) -> BaseModel | None:
@@ -309,14 +313,11 @@ class RecognizeStream(ABC):
     def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
         self._stt._emit_error(api_error, recoverable)
 
-    def _send_input(self, item: rtc.AudioFrame | RecognizeStream.Flush) -> None:
-        try:
-            self.input.send_nowait(item)
-        except aio.ChanFull:
-            self._core_attempts.capacity_exceeded(input=True)
+    def _close_events(self) -> None:
+        self._event_ch.close()
+        self._event_read.set()
 
-    def push_frame(self, frame: rtc.AudioFrame) -> None:
-        """Push audio to be recognized."""
+    def _resampled(self, frame: rtc.AudioFrame) -> list[rtc.AudioFrame]:
         self._check_not_closed()
         self._check_input_not_ended()
         if self._pushed_sr and self._pushed_sr != frame.sample_rate:
@@ -326,17 +327,23 @@ class RecognizeStream(ABC):
             self._resampler = rtc.AudioResampler(
                 frame.sample_rate, self._needed_sr, quality=rtc.AudioResamplerQuality.HIGH
             )
-        for f in self._resampler.push(frame) if self._resampler else [frame]:
-            self._send_input(f)
+        return self._resampler.push(frame) if self._resampler else [frame]
+
+    def _segment_end(self) -> list[rtc.AudioFrame | RecognizeStream.Flush]:
+        self._check_not_closed()
+        self._check_input_not_ended()
+        tail = self._resampler.flush() if self._resampler else []
+        return [*tail, self.Flush()]
+
+    def push_frame(self, frame: rtc.AudioFrame) -> None:
+        """Push audio to be recognized. Raises ``ChanFull`` while ``input`` holds 256 entries."""
+        for f in self._resampled(frame):
+            self.input.send_nowait(f)
 
     def flush(self) -> None:
         """Mark the end of the current segment."""
-        self._check_not_closed()
-        self._check_input_not_ended()
-        if self._resampler:
-            for frame in self._resampler.flush():
-                self._send_input(frame)
-        self._send_input(self.Flush())
+        for item in self._segment_end():
+            self.input.send_nowait(item)
 
     def end_input(self) -> None:
         """Mark the end of input: no more audio will be pushed."""
@@ -367,10 +374,7 @@ class RecognizeStream(ABC):
         stt = self._stt
         record, _ = _core.stt_stream_metrics(event, time.time(), stt.label, stt.model, stt.provider)
         _bindings.emit_metrics(self._stt, record)
-        try:
-            self._event_ch.send_nowait(event)
-        except aio.ChanFull:
-            self._core_attempts.capacity_exceeded(input=False)
+        self._event_ch.send_nowait(event)
 
     @property
     def closed(self) -> bool:
@@ -400,13 +404,20 @@ class RecognizeStream(ABC):
     ) -> None:
         await self.aclose()
 
-    def _core_push(self, frame: rtc.AudioFrame) -> None:
-        self.push_frame(frame)
+    async def _core_push(self, frame: rtc.AudioFrame) -> None:
+        # an unread backlog of events holds the input, so the core's queue keeps the audio
+        while self._event_ch.qsize() >= _EVENT_BACKLOG and not self._event_ch.closed:
+            self._event_read.clear()
+            await self._event_read.wait()
+        for f in self._resampled(frame):
+            await self.input.send(f)
 
-    def _core_flush(self) -> None:
+    async def _core_flush(self) -> None:
         if not self.input.closed:
-            self.flush()
+            for item in self._segment_end():
+                await self.input.send(item)
 
-    def _core_end_input(self) -> None:
+    async def _core_end_input(self) -> None:
         if not self.input.closed:
-            self.end_input()
+            await self._core_flush()
+            self.input.close()

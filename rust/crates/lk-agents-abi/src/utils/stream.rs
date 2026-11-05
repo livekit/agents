@@ -44,6 +44,28 @@ pub trait StreamInput<T>: Send + Sync {
 
     /// Finish input, including its final segment. Output remains open until it drains or closes.
     fn end_input(&self);
+
+    /// Hands `entry` over and resolves once the input took it, so a pump awaiting each keeps the
+    /// backlog itself and a full input never refuses. Not mixed with the calls above on one input.
+    fn send(&self, entry: Entry<T>) -> crate::BoxFuture<'static, Result<(), ProviderError>> {
+        let sent = match entry {
+            Entry::Item(item) => self.push(item),
+            Entry::Flush => self.flush(),
+            Entry::EndInput => {
+                self.end_input();
+                Ok(())
+            }
+        };
+        Box::pin(std::future::ready(sent))
+    }
+}
+
+/// One step of a [`StreamInput`], as a pump hands it over.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Entry<T> {
+    Item(T),
+    Flush,
+    EndInput,
 }
 
 /// `next` takes `&mut self`, so there is exactly one drain.
@@ -105,6 +127,10 @@ impl<T, S: StreamInput<T> + ?Sized> StreamInput<T> for Box<S> {
 
     fn end_input(&self) {
         S::end_input(self)
+    }
+
+    fn send(&self, entry: Entry<T>) -> crate::BoxFuture<'static, Result<(), ProviderError>> {
+        S::send(self, entry)
     }
 }
 

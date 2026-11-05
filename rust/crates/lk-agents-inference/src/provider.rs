@@ -127,15 +127,6 @@ impl Port for ProviderAttempts {
         self.attempts.wake_at(self.expecting).map(Ts::as_nanos)
     }
 
-    fn capacity_exceeded(&mut self, input: bool, now_ns: u64) -> Result<(), ApiError> {
-        let queue = if input { "input" } else { "event" };
-        let error = ApiError::new(format!("recognition {queue} queue capacity exceeded"))
-            .with_retryable(false);
-        self.error = Some(error.clone());
-        self.cancel(now_ns);
-        Err(error)
-    }
-
     fn expect_response(&mut self, now_ns: u64) {
         self.expecting.get_or_insert(Ts::from_nanos(now_ns));
     }

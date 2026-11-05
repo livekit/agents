@@ -12,7 +12,6 @@ from livekit.agents import (
     NOT_GIVEN,
     APIConnectionError,
     APIConnectOptions,
-    APIError,
     APITimeoutError,
     NotGivenOr,
     stt,
@@ -51,31 +50,41 @@ class Stream(stt.RecognizeStream):
             pass
 
 
-async def test_recognition_input_is_bounded_while_provider_is_stalled() -> None:
-    stream = Provider().stream(conn_options=APIConnectOptions(max_retry=0))
+class Stalled(stt.RecognizeStream):
+    async def _run(self) -> None:
+        await asyncio.Event().wait()
+
+
+async def test_a_full_input_holds_the_core_push_instead_of_failing() -> None:
+    stream = Stalled(stt=Provider(), conn_options=APIConnectOptions(max_retry=0))
     frame = silence_frame(duration=0.02, sample_rate=16000)
     try:
-        with pytest.raises(APIError, match="queue capacity exceeded") as overflow:
-            for _ in range(257):
-                stream.push_frame(frame)
-        assert not overflow.value.retryable
-        with pytest.raises(APIError, match="queue capacity exceeded"):
-            await anext(stream)
+        for _ in range(256):
+            await stream._core_push(frame)
+        held = asyncio.ensure_future(stream._core_push(frame))
+        await asyncio.sleep(0.01)
+        assert not held.done(), "a full input must hold the pump, not fail it"
+        stream.input.recv_nowait()
+        await asyncio.wait_for(held, 1)
+        assert not stream.closed
     finally:
         await stream.aclose()
 
 
-async def test_recognition_event_queue_refuses_unconsumed_transcripts() -> None:
-    stream = Provider().stream(conn_options=APIConnectOptions(max_retry=0))
-    event = stt.SpeechEvent(type=stt.SpeechEventType.FINAL_TRANSCRIPT, alternatives=[])
+async def test_an_unread_event_backlog_holds_the_input_instead_of_failing() -> None:
+    stream = Stalled(stt=Provider(), conn_options=APIConnectOptions(max_retry=0))
+    event = stt.SpeechEvent(type=stt.SpeechEventType.INTERIM_TRANSCRIPT, alternatives=[])
+    frame = silence_frame(duration=0.02, sample_rate=16000)
     try:
-        with pytest.raises(APIError, match="queue capacity exceeded") as overflow:
-            for _ in range(65):
-                stream.send(event)
-        assert not overflow.value.retryable
-        with pytest.raises(APIError, match="queue capacity exceeded"):
-            async for _ in stream:
-                pass
+        for _ in range(65):
+            stream.send(event)
+        held = asyncio.ensure_future(stream._core_push(frame))
+        await asyncio.sleep(0.01)
+        assert not held.done(), "an unread event backlog must hold the input"
+        await anext(stream)
+        await anext(stream)
+        await asyncio.wait_for(held, 1)
+        assert stream.input.qsize() == 1
     finally:
         await stream.aclose()
 
@@ -270,7 +279,7 @@ async def test_noise_start_and_end_without_words_do_not_require_a_final_transcri
         await stream.aclose()
 
 
-async def test_a_stalled_host_behind_the_retry_bridge_terminates_on_input_overflow() -> None:
+async def test_a_stalled_host_behind_the_retry_bridge_never_fails_on_a_burst() -> None:
     entered = asyncio.Event()
 
     class Stalled(Stream):
@@ -299,16 +308,12 @@ async def test_a_stalled_host_behind_the_retry_bridge_terminates_on_input_overfl
     frame = silence_frame(duration=0.02, sample_rate=16000)
     try:
         await asyncio.wait_for(entered.wait(), timeout=1)
+        # 12 s, past the host input and the core's 10 s queue: the oldest audio is dropped
         for _ in range(600):
-            if consuming.done():
-                break
-            try:
-                stream.push_frame(frame)
-            except APIError:
-                break
+            stream.push_frame(frame)
             await asyncio.sleep(0.001)
-        with pytest.raises(APIError):
-            await asyncio.wait_for(asyncio.shield(consuming), timeout=1)
+        await asyncio.sleep(0.1)
+        assert not consuming.done(), "a stalled host must not fail its stream"
     finally:
         consuming.cancel()
         await asyncio.gather(consuming, return_exceptions=True)

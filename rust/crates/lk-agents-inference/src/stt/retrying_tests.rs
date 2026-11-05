@@ -1,5 +1,6 @@
 use super::*;
 use lk_agents_abi::errors::{ApiError, TimeoutPhase};
+use parking_lot::Mutex;
 
 /// Each attempt's offset and the frames it heard; the first attempt fails when read.
 #[derive(Default)]
@@ -305,10 +306,8 @@ struct StalledInput {
 struct RefusingSink(Arc<StalledInput>);
 impl StreamInput<AudioFrame> for RefusingSink {
     fn push(&self, _: AudioFrame) -> Result<(), ProviderError> {
-        if self.0.accepted.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= 256 {
-            return Err(ApiError::new("recognition input queue capacity exceeded")
-                .with_retryable(false)
-                .into());
+        if self.0.accepted.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= 1 {
+            return Err(ApiError::new("recognition input refused").with_retryable(false).into());
         }
         Ok(())
     }
@@ -383,7 +382,7 @@ async fn a_live_sink_refusal_terminates_a_stalled_host_attempt_instead_of_losing
         stt.stream(&lk_agents_abi::telemetry::Cx::NONE, None, None).await.unwrap().unwrap().split();
     let waiting = tokio::spawn(async move { source.next().await });
     tokio::task::yield_now().await;
-    for _ in 0..257 {
+    for _ in 0..3 {
         sink.push(AudioFrame::new(vec![0; 640], 16_000, 1, 320)).unwrap();
     }
     sink.end_input();
@@ -391,7 +390,7 @@ async fn a_live_sink_refusal_terminates_a_stalled_host_attempt_instead_of_losing
     let error =
         result.expect("a refused live sink must wake its pending source").unwrap().unwrap_err();
     assert_eq!(error.api_kind(), Some(lk_agents_abi::errors::ApiErrorKind::Api));
-    assert!(error.message().contains("capacity exceeded"));
+    assert!(error.message().contains("refused"));
     assert!(closed.load(std::sync::atomic::Ordering::SeqCst));
 }
 
@@ -429,7 +428,7 @@ impl Stt for ReplayRefuses {
                 if self.opened.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
                     Box::new(Attempt::Fail)
                 } else {
-                    self.state.accepted.store(256, std::sync::atomic::Ordering::SeqCst);
+                    self.state.accepted.store(1, std::sync::atomic::Ordering::SeqCst);
                     Box::new(StalledSource(self.state.clone()))
                 };
             Ok(Some(lk_agents_abi::DuplexStream::new(
@@ -461,74 +460,162 @@ async fn a_refused_held_frame_terminates_the_reopened_attempt_instead_of_disappe
     let result = tokio::time::timeout(std::time::Duration::from_secs(1), waiting).await;
     let error = result.expect("refused replay must wake its pending source").unwrap().unwrap_err();
     assert_eq!(error.api_kind(), Some(lk_agents_abi::errors::ApiErrorKind::Api));
-    assert!(error.message().contains("capacity exceeded"));
+    assert!(error.message().contains("refused"));
     assert!(closed.load(std::sync::atomic::Ordering::SeqCst));
 }
 
-/// A sink calling back on each frame's sample rate, its identity in these tests.
-struct Hook<F>(F);
+/// A host attempt that takes each entry only when the test releases it, and whose transcripts
+/// the test scripts.
+struct Slow {
+    gate: Arc<tokio::sync::Semaphore>,
+    heard: Arc<Mutex<Vec<&'static str>>>,
+    events: Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<SpeechEvent>>>,
+}
 
-impl<F: Fn(u32) -> Result<(), ProviderError> + Send + Sync> StreamInput<AudioFrame> for Hook<F> {
-    fn push(&self, frame: AudioFrame) -> Result<(), ProviderError> {
-        (self.0)(frame.sample_rate)
+struct SlowSink(Arc<tokio::sync::Semaphore>, Arc<Mutex<Vec<&'static str>>>);
+
+impl StreamInput<AudioFrame> for SlowSink {
+    fn push(&self, _: AudioFrame) -> Result<(), ProviderError> {
+        unreachable!("the pump awaits each entry")
     }
     fn flush(&self) -> Result<(), ProviderError> {
-        Ok(())
+        unreachable!("the pump awaits each entry")
     }
     fn end_input(&self) {}
+    fn send(
+        &self,
+        entry: Entry<AudioFrame>,
+    ) -> lk_agents_abi::BoxFuture<'static, Result<(), ProviderError>> {
+        let (gate, heard) = (Arc::clone(&self.0), Arc::clone(&self.1));
+        Box::pin(async move {
+            gate.acquire().await.unwrap().forget();
+            heard.lock().push(match entry {
+                Entry::Item(_) => "audio",
+                Entry::Flush => "flush",
+                Entry::EndInput => "end",
+            });
+            Ok(())
+        })
+    }
 }
 
-fn frame(rate: u32) -> Pushed {
-    Pushed::Audio(AudioFrame::new(vec![0; 640], rate, 1, 320))
+struct Scripted(tokio::sync::mpsc::UnboundedReceiver<SpeechEvent>);
+
+impl StreamOutput<SpeechEvent> for Scripted {
+    fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<SpeechEvent>, ProviderError>> {
+        Box::pin(async move { Ok(self.0.recv().await) })
+    }
+    fn close(self: Box<Self>, _: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
+        Box::pin(async move { Closed::Clean })
+    }
 }
 
-// Catches: an attempt's sink called under the input's lock, so a sink that pushes again (a host
-// sink re-entering through the GIL) deadlocks, in the replay or live.
-#[test]
-fn a_sink_that_pushes_again_from_its_push_does_not_deadlock() {
-    let (done, finished) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let input = Arc::new(Input::default());
-        let heard = Arc::new(Mutex::new(Vec::new()));
-        let (weak, log) = (Arc::downgrade(&input), Arc::clone(&heard));
-        input.send(frame(1)).unwrap();
-        input.install(Box::new(Hook(move |rate| {
-            log.lock().push(rate);
-            match (rate % 2, weak.upgrade()) {
-                (1, Some(input)) => input.send(frame(rate + 1)),
-                _ => Ok(()),
-            }
-        })));
-        input.send(frame(3)).unwrap();
-        done.send(heard.lock().clone()).unwrap();
+impl lk_agents_abi::utils::stream::ProviderStream<SpeechEvent> for Scripted {}
+
+impl Stt for Slow {
+    fn label(&self) -> String {
+        "slow".into()
+    }
+    fn capabilities(&self) -> SttCapabilities {
+        SttCapabilities { streaming: true, ..Default::default() }
+    }
+    fn recognize(
+        &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+        _: &[AudioFrame],
+        _: Option<&LanguageCode>,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<SpeechEvent, ProviderError>> {
+        Box::pin(async move { unreachable!() })
+    }
+    fn stream(
+        &self,
+        _cx: &lk_agents_abi::telemetry::Cx,
+        _: Option<&LanguageCode>,
+        _: Option<f64>,
+    ) -> lk_agents_abi::BoxFuture<
+        '_,
+        Result<Option<lk_agents_abi::DuplexStream<SttSink, SttSource>>, ProviderError>,
+    > {
+        Box::pin(async move {
+            let events = self.events.lock().take().expect("one attempt");
+            Ok(Some(lk_agents_abi::DuplexStream::new(
+                Box::new(SlowSink(Arc::clone(&self.gate), Arc::clone(&self.heard))) as SttSink,
+                Box::new(Scripted(events)) as SttSource,
+            )))
+        })
+    }
+}
+
+fn transcript(start: f64, end: f64) -> SpeechEvent {
+    let mut event = SpeechEvent::new(SpeechEventType::FinalTranscript);
+    event.alternatives.push(lk_agents_abi::SpeechData {
+        start_time: start,
+        end_time: end,
+        words: Some(vec![lk_agents_abi::TranscriptChunk {
+            start_time: Some(start),
+            end_time: Some(end),
+            ..lk_agents_abi::TranscriptChunk::new("hi")
+        }]),
+        ..lk_agents_abi::SpeechData::new("en", "hi")
     });
-    let heard = finished.recv_timeout(std::time::Duration::from_secs(5)).expect("deadlocked");
-    assert_eq!(heard, [1, 2, 3, 4]);
+    event
 }
 
-// Catches: a frame refused by an attempt a later one already replaced held for the next failover,
-// so it is replayed after the frames the later attempt heard since, or never.
-#[test]
-fn a_frame_refused_by_a_replaced_attempt_goes_to_the_one_serving() {
-    let input = Arc::new(Input::default());
+// Catches: a slow host attempt failing the stream on a burst, its input reordered against a
+// flush, or the transcripts after a dropped stretch left behind call time.
+#[tokio::test(start_paused = true)]
+async fn a_slow_attempt_gets_a_gap_and_its_later_words_stay_on_call_time() {
+    let (script, events) = tokio::sync::mpsc::unbounded_channel();
+    let gate = Arc::new(tokio::sync::Semaphore::new(1));
     let heard = Arc::new(Mutex::new(Vec::new()));
-    let log = Arc::clone(&heard);
-    let next: Mutex<Option<SttSink>> = Mutex::new(Some(Box::new(Hook(move |rate| {
-        log.lock().push(rate);
-        Ok(())
-    }))));
-    let weak = Arc::downgrade(&input);
-    input.install(Box::new(Hook(move |_| {
-        // the attempt failed and the next one was installed before this refusal came back
-        let input = weak.upgrade().unwrap();
-        input.clear();
-        if let Some(sink) = next.lock().take() {
-            input.install(sink);
+    let slow = Slow {
+        gate: Arc::clone(&gate),
+        heard: Arc::clone(&heard),
+        events: Mutex::new(Some(events)),
+    };
+    let clock: Arc<dyn Clock> = Arc::new(lk_agents_net::clock::SimClock::new());
+    let stt = RetryingStt { inner: Arc::new(slow), options: ApiConnectOptions::default(), clock };
+    let (sink, mut source) =
+        stt.stream(&lk_agents_abi::telemetry::Cx::NONE, None, None).await.unwrap().unwrap().split();
+    let frame = || AudioFrame::new(vec![0; 3200], 16_000, 1, 1600);
+    let reader = tokio::spawn(async move {
+        let mut out = Vec::new();
+        while let Ok(Some(event)) = source.next().await {
+            out.push(event);
+            if out.len() == 2 {
+                break;
+            }
         }
-        Err(ApiError::new("closed").into())
-    })));
-    input.send(frame(1)).unwrap();
-    input.send(frame(2)).unwrap();
-    assert_eq!(*heard.lock(), [1, 2]);
-    assert!(input.state.lock().held.is_empty());
+        out
+    });
+    // The first 100 ms reaches the attempt; the next 11 s arrive while it takes nothing.
+    sink.push(frame()).unwrap();
+    tokio::task::yield_now().await;
+    for _ in 0..110 {
+        sink.push(frame()).unwrap();
+    }
+    sink.flush().unwrap();
+    sink.push(frame()).unwrap();
+    gate.add_permits(1000);
+    while heard.lock().len() < 103 {
+        tokio::task::yield_now().await;
+    }
+    let heard = heard.lock().clone();
+    assert_eq!(heard.len(), 103, "100 ms, 10 s kept, the flush and the frame after it");
+    assert_eq!(&heard[100..], ["audio", "flush", "audio"]);
+    script.send(transcript(0.02, 0.08)).unwrap();
+    script.send(transcript(3.0, 3.5)).unwrap();
+    let events = reader.await.unwrap();
+    let times: Vec<_> = events
+        .iter()
+        .map(|e| {
+            let alt = &e.alternatives[0];
+            let word = &alt.words.as_ref().unwrap()[0];
+            (alt.start_time, word.start_time.unwrap(), word.end_time.unwrap())
+        })
+        .collect();
+    assert_eq!(times[0], (0.02, 0.02, 0.08), "before the gap");
+    let (start, word_start, word_end) = times[1];
+    assert!((start - 4.0).abs() < 1e-9, "{times:?}");
+    assert!((word_start - 4.0).abs() < 1e-9 && (word_end - 4.5).abs() < 1e-9, "{times:?}");
 }

@@ -859,3 +859,51 @@ async fn a_session_failing_after_its_input_ended_is_not_retried() {
     assert!(!error.retryable());
     assert_eq!(ws.connect_count(), 1);
 }
+
+// Catches: a burst past the input's bound failing the stream, or a dropped stretch of audio
+// leaving later transcripts behind call time (or moving earlier ones).
+#[tokio::test]
+async fn a_burst_past_the_bound_drops_a_gap_and_later_words_stay_on_call_time() {
+    let ws = Arc::new(FakeWs::new(vec![text(json!({"type": "session.created"}))]).keep_open());
+    let stt = stt(ws.clone());
+    let (sink, mut source) = stt.stream_native(None, 0.0).unwrap().split();
+    for _ in 0..5 {
+        sink.push(frame(1600)).unwrap();
+    }
+    for _ in 0..50 {
+        tokio::task::yield_now().await;
+    }
+    // 11 s at once, before the stream takes any: the oldest second is dropped at 0.5 s.
+    for _ in 0..110 {
+        sink.push(frame(1600)).unwrap();
+    }
+    sink.flush().unwrap();
+    for _ in 0..200 {
+        tokio::task::yield_now().await;
+    }
+    for (text_, start) in [("before", 0.1), ("after", 3.0)] {
+        ws.feed(text(json!({
+            "type": "final_transcript",
+            "transcript": text_,
+            "start": start,
+            "duration": 0.3,
+            "words": [{"word": text_, "start": start, "end": start + 0.3}],
+        })));
+    }
+    let events = drain_until(&mut source, SpeechEventType::FinalTranscript).await;
+    let mut finals = events.into_iter().filter(|e| e.kind == SpeechEventType::FinalTranscript);
+    let mut more = drain_until(&mut source, SpeechEventType::FinalTranscript).await;
+    let before = finals.next().unwrap();
+    let after = more.pop().unwrap();
+    let word = |event: &SpeechEvent| {
+        let word = &event.alternatives[0].words.as_ref().unwrap()[0];
+        (word.start_time.unwrap(), word.end_time.unwrap())
+    };
+    let near = |a: f64, b: f64| (a - b).abs() < 1e-3;
+    let (start, end) = word(&before);
+    assert!(near(before.alternatives[0].start_time, 0.1), "{before:?}");
+    assert!(near(start, 0.1) && near(end, 0.4), "{before:?}");
+    let (start, end) = word(&after);
+    assert!(near(after.alternatives[0].start_time, 4.0), "{after:?}");
+    assert!(near(start, 4.0) && near(end, 4.3), "{after:?}");
+}
