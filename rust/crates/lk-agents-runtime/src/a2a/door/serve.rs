@@ -52,8 +52,9 @@ pub async fn serve<E: HttpExchange>(
 }
 
 /// The caller, in order: the console's listener vouches for everyone; a worker holding the
-/// project's credentials verifies the bearer, the node's verdict standing for a project
-/// credential it stripped; without credentials only the node's verdict admits, as the project.
+/// project's credentials verifies the bearer the node forwarded, the node's verdict standing for
+/// a request that carries none; without credentials only the node's verdict admits, as the
+/// project.
 fn caller(headers: &Headers, serving: &TextServing) -> Result<AuthPrincipal, AuthError> {
     let request = &serving.request;
     if request.unauthenticated {

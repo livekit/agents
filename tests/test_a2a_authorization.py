@@ -105,13 +105,16 @@ def test_selected_header_is_the_only_authentication_carrier(credentials: Credent
     )
 
 
-def test_endpoint_call_permission_is_independent_of_thread_access(credentials: Credentials) -> None:
+def test_a_project_token_grants_no_thread_and_a_thread_grant_calls_the_endpoint(
+    credentials: Credentials,
+) -> None:
     project = credentials.verify(credentials.project_token())
     assert project.endpoint_call and project.grant is None
     grant = credentials.verify(
         credentials.thread_grant_token(AgentThreadGrant(scope="user:42", read=True)),
     )
-    assert not grant.endpoint_call and grant.grant is not None
+    # the call lets a LiveKit node admit it to the endpoint, which authorizes the thread
+    assert grant.endpoint_call and grant.grant is not None
     assert grant.grant.can_read(thread())
     now = int(time.time())
     room_token = jwt.encode(

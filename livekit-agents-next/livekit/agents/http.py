@@ -8,8 +8,8 @@ response and closes WebSockets. Python only adapts each parsed exchange to one A
 The handler sees the preamble through ``request.state.lk_request`` (:class:`EndpointRequest`):
 the request id, whether the caller holds the call permission, the manifest route that matched,
 and whether the route is public (``configure_endpoint(path, public=True)``).
-The project credential never reaches the worker: the node strips it and asserts ``authorized``
-here; a thread grant reaches a public route as its bearer, for the handler to verify.
+The node verifies the caller's LiveKit token, asserts ``authorized`` here and forwards the token
+as sent, so a handler can verify what it grants.
 """
 
 from __future__ import annotations

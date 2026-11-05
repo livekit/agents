@@ -356,8 +356,8 @@ authenticates the caller, in this order:
 
 1. the console's listener (`lk agent console`) vouches for every caller;
 2. a worker holding the project's API key and secret verifies the bearer, from
-   `Authorization: Bearer` or `X-LiveKit-Thread-Grant`; with none, a request a Cloud node
-   authorized (the node strips the project credential it verified) is the project;
+   `Authorization: Bearer` or `X-LiveKit-Thread-Grant`, as a Cloud node forwards it; with
+   none, a request a node authorized is the project;
 3. a worker without credentials admits only what a node authorized, as the project.
 
 A refusal is `401` or `403` with a JSON `{"error": message}` body, the same for the card.

@@ -143,7 +143,10 @@ impl CredentialsApi for Credentials {
         identity: String,
         ttl_seconds: u64,
     ) -> Result<String, AuthError> {
+        // The endpoint call lets the token through a LiveKit node to the endpoint, which then
+        // authorizes the thread access itself.
         self.signer(&identity, ttl_seconds)?
+            .with_agent_endpoint_grants(AgentEndpointGrants { call: true, ..Default::default() })
             .with_agent_thread_grants(grant_to_wire(grant))
             .to_jwt()
             .map_err(unauthorized)
@@ -170,7 +173,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn endpoint_and_thread_permissions_stay_independent() {
+    fn a_project_token_grants_no_thread_and_a_thread_grant_also_calls_the_endpoint() {
         let credentials = Credentials::new("key".into(), "secret".into());
         let project = credentials.project_token("backend".into(), 3600).unwrap();
         let project = credentials.verify(project, "agent".into(), "prod".into()).unwrap();
@@ -184,7 +187,7 @@ mod tests {
             )
             .unwrap();
         let principal = credentials.verify(token, "agent".into(), "prod".into()).unwrap();
-        assert!(!principal.endpoint_call);
+        assert!(principal.endpoint_call, "a node admits it to the endpoint");
         assert_eq!(principal.grant.unwrap().scope, "user:42");
     }
 

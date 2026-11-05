@@ -139,6 +139,9 @@ pub trait Credentials: Send + Sync + Sized + 'static {
         #[host(default = 3600)] ttl_seconds: u64,
     ) -> Result<String, AuthError>;
 
+    /// A thread grant for a browser, a device or a delegating agent. It also carries
+    /// `agentEndpoint.call`, so a LiveKit node admits it to an endpoint, which authorizes the
+    /// thread access itself.
     #[host(call)]
     fn thread_grant_token(
         &self,

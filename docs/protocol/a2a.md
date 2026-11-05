@@ -215,7 +215,9 @@ refused 403. A token the project signed with neither grant, such as a room
 join token, is refused 403. A thread grant, minted by the application's
 backend for a browser or a device the way a room token is
 ([browser thread access](../clients.md#from-the-browser)), scopes everything
-to one scope, the subject the threads belong to:
+to one scope, the subject the threads belong to. `Credentials.thread_grant_token()`
+also gives it the `agentEndpoint` call grant, so a LiveKit node admits it to the
+endpoint, which authorizes the thread access:
 
 ```json
 {"agentThread": {"scope": "user:42",
@@ -247,10 +249,10 @@ permission to invoke an endpoint; it does not grant access to thread data.
 
 A thread of another scope is refused.
 
-Through LiveKit Cloud, the node verifies and strips bearer credentials,
-and passes the authorization verdict to the worker. A worker reached
-directly verifies the token itself, from an `Authorization: Bearer` or an
-`X-LiveKit-Thread-Grant` header. A browser streams with `fetch`, a
+Through LiveKit Cloud, the node admits a token carrying the `agentEndpoint`
+call grant, passes its verdict to the worker and forwards the token as sent.
+The worker verifies the token itself, from an `Authorization: Bearer` or an
+`X-LiveKit-Thread-Grant` header, so a thread grant's scope and flags reach it. A browser streams with `fetch`, a
 JSON-RPC `POST` carrying the bearer header.
 
 A refusal is an HTTP status with `{"error": "..."}`, not a JSON-RPC error:

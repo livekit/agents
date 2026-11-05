@@ -1630,6 +1630,7 @@ dependencies = [
  "futures-util",
  "libc",
  "livekit-protocol",
+ "livekit-token",
  "lk-agents-abi",
  "lk-agents-cli",
  "lk-agents-core",

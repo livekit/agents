@@ -90,6 +90,9 @@ impl CoreCredentials {
         ::pyo3::PyResult::Ok(out)
     }
 
+    /// A thread grant for a browser, a device or a delegating agent. It also carries
+    /// `agentEndpoint.call`, so a LiveKit node admits it to an endpoint, which authorizes the
+    /// thread access itself.
     #[pyo3(signature = (grant, *, identity = "".to_owned(), ttl_seconds = 3600))]
     fn thread_grant_token(
         &self,

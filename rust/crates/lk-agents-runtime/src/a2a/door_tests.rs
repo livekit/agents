@@ -470,8 +470,10 @@ async fn the_caller_is_authenticated_in_order(backend: Backend) {
     assert_eq!(get(serving(), vec![("X-LiveKit-Thread-Grant", grant)]).await.status, 200);
     let forged = other.project_token("caller".into(), 60).unwrap();
     assert_eq!(get(serving(), bearer(forged)).await.status, 401);
+    // signed by the project, with neither an endpoint call nor a thread grant
     let neither =
-        credentials().thread_grant_token(AuthGrant::default(), "nobody".into(), 60).unwrap();
+        livekit_token::AccessToken::with_api_key(KEY, SECRET).with_identity("nobody").to_jwt();
+    let neither = neither.unwrap();
     let forbidden = get(serving(), bearer(neither)).await;
     assert_eq!(forbidden.status, 403);
     assert!(forbidden.json()["error"].as_str().unwrap().contains("neither"));

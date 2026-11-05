@@ -41,7 +41,11 @@ class _core_Credentials:
         *,
         identity: str = "",
         ttl_seconds: int = 3600,
-    ) -> str: ...
+    ) -> str:
+        """A thread grant for a browser, a device or a delegating agent. It also carries
+        `agentEndpoint.call`, so a LiveKit node admits it to an endpoint, which authorizes the
+        thread access itself.
+        """
 
 def _core_auth_grant_allows(
     grant: AgentThreadGrant,

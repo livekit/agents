@@ -125,7 +125,7 @@ token = credentials.thread_grant_token(
 
 | Call | Returns |
 |---|---|
-| `thread_grant_token(grant, identity="", ttl_seconds=3600)` | a thread grant for a browser or a device |
+| `thread_grant_token(grant, identity="", ttl_seconds=3600)` | a thread grant for a browser, a device or a delegating agent; it also carries the endpoint call grant, so a LiveKit node admits it |
 | `project_token(identity="worker", ttl_seconds=3600)` | a project credential carrying the `agentEndpoint` call grant, which passes the node to any endpoint of any agent in the project |
 | `verify(token)` | the `Principal`: `kind` (`project` or `grant`), `grant`, `identity`, `claims`; raises `Unauthorized` |
 
