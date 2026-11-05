@@ -273,7 +273,7 @@ impl SessionExecutor for Executor {
                 opening.push(leg);
             }
             if let Some(vad) = vad {
-                let (sink, source) = vad.stream(&telemetry::Cx::NONE).await?.split();
+                let (sink, source) = vad.stream(&cx).await?.split();
                 let leg = OpeningLeg::new(
                     AudioChannel::Vad,
                     Arc::from(sink),

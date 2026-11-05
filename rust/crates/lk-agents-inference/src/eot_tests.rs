@@ -756,6 +756,50 @@ async fn audio_and_control_messages_go_out_in_the_shape_the_gateway_expects() {
     assert!(matches!(messages[3].message, Some(proto::client_message::Message::SessionFlush(_))));
 }
 
+// Catches: a socket that fell behind sending the backlog it built, or splicing the newest audio
+// onto stale audio the gateway still holds instead of starting its window over.
+#[tokio::test]
+async fn a_socket_that_fell_behind_restarts_the_gateway_on_the_newest_audio() {
+    let fixture = cloud_fixture(Arc::new(RecordingSink::default()));
+    let transport = fixture.transport.clone();
+    let sent = fixture.sent.clone();
+    let running = tokio::spawn(async move { transport.run().await });
+    until("the handshake", || fixture.transport.session_id().is_some()).await;
+
+    // Three seconds of 10 ms frames, each marked by its index, while the sender is not polled.
+    for n in 0..300 {
+        fixture.transport.push_frame(&pcm_frame(16_000, &[n; 160]));
+    }
+    fixture.transport.run_inference(&id("inference_abc_eot_1"));
+    until("the inference request", || {
+        client_messages(&sent)
+            .iter()
+            .any(|m| matches!(m.message, Some(proto::client_message::Message::InferenceStart(_))))
+    })
+    .await;
+    fixture.transport.detach();
+    drop(fixture.server);
+    let _ = within("the transport", running).await;
+
+    let messages = client_messages(&sent);
+    assert!(matches!(messages[1].message, Some(proto::client_message::Message::SessionFlush(_))));
+    let audio: Vec<i16> = messages[2..messages.len() - 1]
+        .iter()
+        .flat_map(|m| match &m.message {
+            Some(proto::client_message::Message::InputAudio(audio)) => audio
+                .audio
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|s| i16::from_le_bytes(*s))
+                .collect::<Vec<_>>(),
+            other => panic!("expected input_audio, got {other:?}"),
+        })
+        .collect();
+    assert!(audio.len() <= 8_000, "more than 500 ms was sent after the gap: {}", audio.len());
+    assert_eq!(audio.last(), Some(&299), "the newest audio is sent");
+}
+
 // Catches: an `https://` gateway URL, rewriting more than the scheme, losing the bearer token, or
 // minting it with the wrong grant, `sub`, `iss` or a TTL other than `ttl=600`.
 #[tokio::test]

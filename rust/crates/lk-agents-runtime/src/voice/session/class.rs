@@ -117,9 +117,10 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
             spawner.clone(),
         );
 
-        let interruption = args
-            .interruption_detector
-            .map(|source| Box::new(move |anchor| source.open(anchor)) as InterruptionPortFactory);
+        let interruption = args.interruption_detector.map(|source| {
+            Box::new(move |anchor, cx: &telemetry::Cx| source.open(anchor, cx))
+                as InterruptionPortFactory
+        });
         let nodes = Nodes { llm: args.llm_node, tts: None, stt: None };
         let llm = args.llm.map(|l| nodes.llm(llm_leg(l, conn.llm)));
         // Facts, not options: the legs the two leg-dependent defaults need.

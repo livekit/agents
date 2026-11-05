@@ -9,17 +9,23 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 use lk_agents_abi::errors::{ApiError, TimeoutPhase};
 use lk_agents_abi::{ApiConnectOptions, AudioFrame, Clock, Elapsed, EotInferenceMetrics};
+use lk_agents_media::media_queue::{self, Item, Policy, Sender};
+use lk_agents_net::audio_drops::AudioDrops;
+use lk_agents_net::telemetry;
 use lk_agents_net::transport::{
     TransportError, WsMessage, WsReceiver, WsSender, WsTransport, close_status,
 };
 use parking_lot::Mutex;
 use prost::Message as _;
-use tokio::sync::mpsc;
 
 use crate::eot::proto;
+use crate::eot::proto::client_message::Message;
 use crate::eot::session::TransportPrediction;
 use crate::eot::transport::{EotTransport, PredictionListener};
 use crate::eot::{EotRequestId, EotWarning};
+
+/// A prediction on old audio is a wrong one: past 500 ms of lag the gateway restarts on the newest.
+const INPUT_POLICY: Policy = Policy::Now(std::time::Duration::from_millis(500));
 
 /// `HEADER_SESSION_ID` (`_utils.py:21`): one per connection, and the request-id prefix.
 pub const HEADER_SESSION_ID: &str = "X-LiveKit-Session-ID";
@@ -64,7 +70,8 @@ fn duration_millis(d: Option<&pbjson_types::Duration>) -> i64 {
 
 #[derive(Default)]
 struct CloudState {
-    send: Option<mpsc::UnboundedSender<proto::ClientMessage>>,
+    /// The connection's queue: audio, and the control messages in order with it.
+    send: Option<Sender<AudioFrame, Message>>,
     session_id: Option<String>,
 }
 
@@ -74,6 +81,7 @@ pub struct CloudTransport {
     transport: Arc<dyn WsTransport>,
     state: Mutex<CloudState>,
     clock: Arc<dyn Clock>,
+    drops: AudioDrops,
 }
 
 impl CloudTransport {
@@ -83,7 +91,19 @@ impl CloudTransport {
         transport: Arc<dyn WsTransport>,
         clock: Arc<dyn Clock>,
     ) -> Self {
-        CloudTransport { opts, sink, transport, state: Mutex::new(CloudState::default()), clock }
+        CloudTransport {
+            opts,
+            sink,
+            transport,
+            state: Mutex::new(CloudState::default()),
+            clock,
+            drops: AudioDrops::new(telemetry::AudioConsumer::EndOfTurn, INPUT_POLICY),
+        }
+    }
+
+    /// Measures the audio the connection's queue drops under `cx`'s job.
+    pub fn observe(&self, cx: telemetry::Cx) {
+        self.drops.observe(cx);
     }
 
     #[cfg(test)]
@@ -92,11 +112,12 @@ impl CloudTransport {
         self
     }
 
-    /// `_send_message` (`transports.py:143`): dropped if there is no live connection.
-    fn send_message(&self, message: proto::client_message::Message) {
-        let state = self.state.lock();
-        if let Some(send) = state.send.as_ref() {
-            let _ = send.send(proto::ClientMessage { created_at: None, message: Some(message) });
+    /// `_send_message` (`transports.py:143`): dropped if there is no live connection. A socket that
+    /// stopped draining refuses it too; the prediction it carried times out, and the local model
+    /// takes over.
+    fn send_message(&self, message: Message) {
+        if let Some(send) = self.state.lock().send.as_ref() {
+            let _ = send.event(message);
         }
     }
 
@@ -211,7 +232,7 @@ impl CloudTransport {
         // Stamped here, which `HasField("created_at")` distinguishes (`transports.py:334`).
         let session_create = proto::ClientMessage {
             created_at: Some(now_timestamp()),
-            message: Some(proto::client_message::Message::SessionCreate(proto::SessionCreate {
+            message: Some(Message::SessionCreate(proto::SessionCreate {
                 settings: Some(proto::SessionSettings {
                     sample_rate: self.opts.sample_rate,
                     encoding: proto::AudioEncoding::PcmS16le as i32,
@@ -228,21 +249,30 @@ impl CloudTransport {
 
     async fn run_once(&self) -> Result<(), ApiError> {
         let (ws_sink, mut ws_stream) = self.connect().await?;
-        let (send, mut send_rx) = mpsc::unbounded_channel();
+        let (send, mut send_rx) = media_queue::audio(INPUT_POLICY);
         self.state.lock().send = Some(send);
 
         let closing = AtomicBool::new(false);
 
         let sender = async {
-            while let Some(mut msg) = send_rx.recv().await {
-                if msg.created_at.is_none() {
-                    msg.created_at = Some(now_timestamp());
-                }
-                let closes =
-                    matches!(msg.message, Some(proto::client_message::Message::SessionClose(_)));
-                if closes {
+            while let Some(item) = send_rx.recv().await {
+                let message = match item {
+                    Item::Media(frame) => Message::InputAudio(proto::InputAudio {
+                        audio: frame.data.to_vec(),
+                        created_at: Some(now_timestamp()),
+                        num_samples: frame.samples_per_channel,
+                    }),
+                    // The audio the gateway holds no longer leads up to now: start it over.
+                    Item::Gap(_) => Message::SessionFlush(proto::SessionFlush {}),
+                    Item::Event(message) => message,
+                };
+                if matches!(message, Message::SessionClose(_)) {
                     closing.store(true, Ordering::SeqCst);
                 }
+                let msg = proto::ClientMessage {
+                    created_at: Some(now_timestamp()),
+                    message: Some(message),
+                };
                 // A send failure while closing is not an error (`sender_task` swallows it).
                 if ws_sink.send_binary(msg.encode_to_vec()).await.is_err() {
                     return Ok(());
@@ -297,7 +327,7 @@ impl EotTransport for CloudTransport {
     }
 
     fn run_inference(&self, request_id: &EotRequestId) {
-        self.send_message(proto::client_message::Message::InferenceStart(proto::InferenceStart {
+        self.send_message(Message::InferenceStart(proto::InferenceStart {
             request_id: request_id.as_str().to_owned(),
         }));
     }
@@ -306,19 +336,18 @@ impl EotTransport for CloudTransport {
         if frame.data.is_empty() {
             return;
         }
-        self.send_message(proto::client_message::Message::InputAudio(proto::InputAudio {
-            audio: frame.data.to_vec(),
-            created_at: Some(now_timestamp()),
-            num_samples: frame.samples_per_channel,
-        }));
+        let dropped = self.state.lock().send.as_ref().map(|send| send.push(frame.clone()));
+        if let Some(dropped) = dropped {
+            self.drops.record(dropped);
+        }
     }
 
     fn flush(&self) {
-        self.send_message(proto::client_message::Message::SessionFlush(proto::SessionFlush {}));
+        self.send_message(Message::SessionFlush(proto::SessionFlush {}));
     }
 
     fn end_input(&self) {
-        self.send_message(proto::client_message::Message::SessionClose(proto::SessionClose {}));
+        self.send_message(Message::SessionClose(proto::SessionClose {}));
         self.state.lock().send = None;
     }
 

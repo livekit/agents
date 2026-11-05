@@ -55,7 +55,12 @@ pub trait InterruptionPort: Send + Sync {
     refused = "interruption_detector must be an `inference.AdaptiveInterruptionDetector`"
 ))]
 pub trait InterruptionSource: Send + Sync {
-    fn open(&self, anchor: crate::WallAnchor) -> Arc<dyn InterruptionPort>;
+    /// Audio drops are measured under `cx`'s job.
+    fn open(
+        &self,
+        anchor: crate::WallAnchor,
+        cx: &crate::telemetry::Cx,
+    ) -> Arc<dyn InterruptionPort>;
 }
 
 // Public data contracts. Python behavior remains in its adapters.

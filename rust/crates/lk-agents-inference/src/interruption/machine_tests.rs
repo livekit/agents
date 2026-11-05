@@ -551,3 +551,22 @@ fn agent_speech_start_re_arms_every_field_that_survives_a_turn() {
     assert_eq!(c.cache.iter().count(), 0);
     assert_eq!(c.window.len(), 0);
 }
+
+// Catches: a request built from audio on both sides of a gap, which the model never heard as one
+// sequence; or a gap that ends the overlap instead of restarting its window.
+#[test]
+fn a_gap_restarts_the_window_and_the_open_overlap_keeps_asking() {
+    let mut c = core();
+    c.on_input(InputEvent::AgentSpeechStarted, 0.0).unwrap();
+    start_overlap(&mut c, 0.0, 1.0);
+    let before = c.on_input(InputEvent::Audio(frame(DETECTION_INTERVAL_SAMPLES, 1)), 1.0).unwrap();
+    assert!(matches!(before, Some(InputOutcome::Infer(_))));
+
+    assert_eq!(c.on_input(InputEvent::Gap, 1.0).unwrap(), None);
+    assert_eq!(c.window.len(), 0);
+    let after = c.on_input(InputEvent::Audio(frame(DETECTION_INTERVAL_SAMPLES, 2)), 2.0).unwrap();
+    let Some(InputOutcome::Infer(samples)) = after else {
+        panic!("the overlap stopped asking after a gap: {after:?}");
+    };
+    assert!(!samples.is_empty() && samples.iter().all(|s| *s == 2), "pre-gap audio was sent");
+}

@@ -19,8 +19,12 @@ use lk_agents_abi::{
     Stt, SttCapabilities, SttSink, SttSource, SynthesizedAudio, TranscriptChunk, Ts, Tts,
     TtsCapabilities, TtsSink, TtsSource,
 };
+use lk_agents_media::media_queue::{self, Item, Policy};
+use lk_agents_net::audio_drops::AudioDrops;
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::task::TaskSet;
+use std::convert::Infallible;
+use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 
 /// The numbers in a node's chunk and request ids; nothing reads them but a trace.
@@ -118,7 +122,8 @@ impl NodeFactory for AgentNodes {
     > {
         let cx = cx.clone();
         Box::pin(async move {
-            let (sink, input) = channel();
+            let (sink, input) = audio_channel();
+            sink.drops.observe(cx.clone());
             let calls = Arc::new(NodeCalls::default());
             let out = self.host.stt(&cx, Box::new(input), calls.clone()).await?;
             let map = move |mut event: SpeechEvent| {
@@ -421,6 +426,79 @@ impl<I: Send + 'static> StreamOutput<I> for ChannelSource<I> {
 }
 
 impl<I: Send + 'static> lk_agents_abi::utils::stream::ProviderStream<I> for ChannelSource<I> {}
+
+/// A slow `stt_node` hears what was said, late: everything up to 10 s.
+const NODE_AUDIO_POLICY: Policy = Policy::CatchUp(Duration::from_secs(10));
+
+/// A `stt_node`'s audio: a media queue, never refusing for a node that falls behind. Node input
+/// has no segment marker, so nothing but audio travels in it.
+struct AudioSink {
+    /// `None` once the input ended.
+    audio: Mutex<Option<media_queue::Sender<AudioFrame, Infallible>>>,
+    drops: AudioDrops,
+}
+
+struct AudioSource(media_queue::Receiver<AudioFrame, Infallible>);
+
+fn audio_channel() -> (AudioSink, AudioSource) {
+    let (tx, rx) = media_queue::audio(NODE_AUDIO_POLICY);
+    let drops = AudioDrops::new(telemetry::AudioConsumer::SttNode, NODE_AUDIO_POLICY);
+    (AudioSink { audio: Mutex::new(Some(tx)), drops }, AudioSource(rx))
+}
+
+impl AudioSink {
+    fn closed() -> ProviderError {
+        lk_agents_abi::errors::ApiError::new("stream input is closed").into()
+    }
+}
+
+impl StreamInput<AudioFrame> for AudioSink {
+    fn push(&self, frame: AudioFrame) -> Result<(), ProviderError> {
+        let dropped = match self.audio.lock().as_ref() {
+            Some(audio) if !audio.is_closed() => audio.push(frame),
+            _ => return Err(Self::closed()),
+        };
+        self.drops.record(dropped);
+        Ok(())
+    }
+
+    fn flush(&self) -> Result<(), ProviderError> {
+        match self.audio.lock().as_ref() {
+            Some(audio) if !audio.is_closed() => Ok(()),
+            _ => Err(Self::closed()),
+        }
+    }
+
+    fn end_input(&self) {
+        drop(self.audio.lock().take());
+    }
+}
+
+impl StreamOutput<AudioFrame> for AudioSource {
+    /// A gap is skipped: the node has no timeline of its own to move past it.
+    fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<AudioFrame>, ProviderError>> {
+        Box::pin(async move {
+            loop {
+                match self.0.recv().await {
+                    Some(Item::Media(frame)) => return Ok(Some(frame)),
+                    Some(Item::Gap(_)) => {}
+                    Some(Item::Event(never)) => match never {},
+                    None => return Ok(None),
+                }
+            }
+        })
+    }
+
+    fn cancel_safe(&self) -> bool {
+        true
+    }
+
+    fn close(self: Box<Self>, _: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
+        Box::pin(async { Closed::Clean })
+    }
+}
+
+impl lk_agents_abi::utils::stream::ProviderStream<AudioFrame> for AudioSource {}
 
 /// A node's output, each item read as the core reads it; a `tts_node`'s metered by the calls of
 /// the default node it runs.
@@ -816,6 +894,26 @@ mod tests {
         let mut node =
             Mapped { source: Box::new(channel::<()>().1), map: |a| a, calls: Some(streamed) };
         assert!(node.take_call_metrics(true).is_none(), "a one-call stream: the node meters");
+    }
+
+    // Catches: a `stt_node` that reads slower than the call failing its input, or replaying more
+    // than its bound once it catches up.
+    #[tokio::test]
+    async fn a_slow_stt_node_keeps_the_newest_ten_seconds_and_never_refuses() {
+        let (sink, mut source) = audio_channel();
+        for n in 0..1200u16 {
+            sink.push(AudioFrame::new(n.to_le_bytes().repeat(160), 16_000, 1, 160)).unwrap();
+        }
+        sink.end_input();
+        let mut heard = Duration::ZERO;
+        let mut last = Vec::new();
+        while let Some(frame) = source.next().await.unwrap() {
+            heard += lk_agents_abi::voice::rtc::frame_duration(&frame);
+            last = frame.data.to_vec();
+        }
+        assert_eq!(heard, Duration::from_secs(10));
+        assert!(last.ends_with(&1199u16.to_le_bytes()), "the newest audio is kept");
+        assert!(sink.push(AudioFrame::new(vec![0; 320], 16_000, 1, 160)).is_err());
     }
 
     struct Below;

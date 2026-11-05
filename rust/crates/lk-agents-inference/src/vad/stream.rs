@@ -1,96 +1,71 @@
 //! Ordered VAD streams on admitted native workers. Construction, resampling, prediction and
-//! recurrent resets stay on the same worker; callers only enqueue bounded audio and pull events.
+//! recurrent resets stay on the same worker; callers only enqueue audio on a `Now` media queue and
+//! pull events. A gap in the queue resets the detector, as a flush does.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::time::Duration;
 
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::{AudioFrame, Clock, Closed, StreamInput, StreamOutput, Ts};
+use lk_agents_media::media_queue::{self, Item, Policy, Sender};
 use lk_agents_media::pool::{Job, JobClass, MediaPool};
-use tokio::sync::{Notify, mpsc, watch};
+use lk_agents_net::audio_drops::AudioDrops;
+use lk_agents_net::telemetry;
+use parking_lot::Mutex;
+use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
 use super::VadModelFactory;
 use super::machine::{VadMachine, VadOptions, VadOutput, VadPredict, VadResult};
 
-// At a 10 ms input cadence the item ceiling admits 2.56 s of pending audio. The byte ceiling
-// also bounds oversized producers; one full second of 48 kHz stereo fits a single push.
-const INPUT_CAPACITY: usize = 256;
-const MAX_FRAME_BYTES: usize = 192_000;
-const INPUT_BYTES: usize = 2 * 1024 * 1024;
+/// A decision on old audio is a wrong one: past 500 ms of lag the detector restarts on the newest.
+const INPUT_POLICY: Policy = Policy::Now(Duration::from_millis(500));
 const OUTPUT_CAPACITY: usize = 64;
 
 fn failed(message: impl Into<String>) -> ProviderError {
     ProviderError::Local(ApiError::new(message.into()))
 }
 
-enum Command {
-    Frame(AudioFrame),
-    Flush,
-}
-
-struct InputState {
-    ended: AtomicBool,
-    ending: Notify,
-    queued_bytes: AtomicUsize,
-}
+/// The `_FlushSentinel`, in order with the audio.
+struct Flush;
 
 struct Input {
-    sender: mpsc::Sender<Command>,
-    state: Arc<InputState>,
+    /// `None` once the input ended.
+    audio: Mutex<Option<Sender<AudioFrame, Flush>>>,
+    drops: AudioDrops,
     cancelled: CancellationToken,
 }
 
 impl Input {
-    fn send(&self, command: Command) -> Result<(), ProviderError> {
+    fn send<R>(
+        &self,
+        op: impl FnOnce(&Sender<AudioFrame, Flush>) -> R,
+    ) -> Result<R, ProviderError> {
         if self.cancelled.is_cancelled() {
             return Err(failed("the VAD stream is closed"));
         }
-        if self.state.ended.load(Ordering::Acquire) {
-            return Err(failed("the VAD input is closed"));
+        let audio = self.audio.lock();
+        let audio = audio.as_ref().ok_or_else(|| failed("the VAD input is closed"))?;
+        if audio.is_closed() {
+            return Err(failed("the VAD stream is closed"));
         }
-        let bytes = match &command {
-            Command::Frame(frame) => frame.data.len(),
-            Command::Flush => 0,
-        };
-        self.state
-            .queued_bytes
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |queued| {
-                queued.checked_add(bytes).filter(|&queued| queued <= INPUT_BYTES)
-            })
-            .map_err(|_| failed("VAD input byte capacity exhausted"))?;
-        if let Err(error) = self.sender.try_send(command) {
-            self.state.queued_bytes.fetch_sub(bytes, Ordering::AcqRel);
-            return Err(match error {
-                mpsc::error::TrySendError::Full(_) => failed("VAD input capacity exhausted"),
-                mpsc::error::TrySendError::Closed(_) => failed("the VAD stream is closed"),
-            });
-        }
-        Ok(())
+        Ok(op(audio))
     }
 }
 
 impl StreamInput<AudioFrame> for Input {
     fn push(&self, frame: AudioFrame) -> Result<(), ProviderError> {
-        if frame.data.len() > MAX_FRAME_BYTES {
-            return Err(failed("VAD input frame exceeds the 192000-byte limit"));
-        }
-        self.send(Command::Frame(frame))
+        let dropped = self.send(|audio| audio.push(frame))?;
+        self.drops.record(dropped);
+        Ok(())
     }
 
     fn flush(&self) -> Result<(), ProviderError> {
-        self.send(Command::Flush)
+        self.send(|audio| audio.event(Flush))?.map_err(|stuck| failed(stuck.to_string()))
     }
 
     fn end_input(&self) {
-        self.state.ended.store(true, Ordering::Release);
-        self.state.ending.notify_one();
-    }
-}
-
-impl Drop for Input {
-    fn drop(&mut self) {
-        self.end_input();
+        drop(self.audio.lock().take());
     }
 }
 
@@ -146,39 +121,33 @@ type DetectionStream =
     lk_agents_abi::DuplexStream<Box<dyn StreamInput<AudioFrame>>, Box<dyn StreamOutput<VadOutput>>>;
 
 /// One detection: input queued for, and events produced by, an admitted worker that owns the
-/// model from construction to settlement. `runtime` runs the worker's channel waits.
+/// model from construction to settlement. `runtime` runs the worker's channel waits; drops are
+/// measured under `cx`'s job.
 pub(super) fn open(
     mut options: watch::Receiver<VadOptions>,
     models: Arc<dyn VadModelFactory>,
     clock: Arc<dyn Clock>,
     media_pool: MediaPool,
     runtime: tokio::runtime::Handle,
+    cx: &telemetry::Cx,
 ) -> Result<DetectionStream, ProviderError> {
-    let (sender, mut input) = mpsc::channel(INPUT_CAPACITY);
+    let (audio, mut input) = media_queue::audio(INPUT_POLICY);
     let (output, events) = mpsc::channel(OUTPUT_CAPACITY);
-    let state = Arc::new(InputState {
-        ended: AtomicBool::new(false),
-        ending: Notify::new(),
-        queued_bytes: AtomicUsize::new(0),
-    });
-    let input_state = state.clone();
+    let drops = AudioDrops::new(telemetry::AudioConsumer::Vad, INPUT_POLICY);
+    drops.observe(cx.clone());
     let cancelled = CancellationToken::new();
     let stop = cancelled.clone();
-    // Only bounded channel descriptors precede admission; refusal constructs no model and
-    // retains no queued audio. The same worker owns the recurrent state until settlement.
+    // Only channel descriptors precede admission; refusal constructs no model and retains no
+    // queued audio. The same worker owns the recurrent state until settlement.
     let worker = media_pool
         .try_spawn(JobClass::VadModel, move || {
             let mut machine = VadMachine::new(*options.borrow_and_update());
             let mut model = models.create();
             runtime.block_on(async move {
                 loop {
-                    if input_state.ended.load(Ordering::Acquire) {
-                        input.close();
-                    }
                     let item = tokio::select! {
                         biased;
                         () = stop.cancelled() => return Ok(()),
-                        () = input_state.ending.notified() => { input.close(); continue; },
                         item = input.recv() => match item {
                             Some(item) => item,
                             None => return Ok(()),
@@ -188,20 +157,17 @@ pub(super) fn open(
                         machine.update_options(*options.borrow_and_update());
                     }
                     let mut next = match item {
-                        Command::Frame(frame) => {
-                            input_state.queued_bytes.fetch_sub(frame.data.len(), Ordering::AcqRel);
-                            match machine.push(frame) {
-                                Ok(next) => next,
-                                Err(error) => {
-                                    log::warn!(
-                                        target: "livekit.agents",
-                                        "dropping invalid VAD frame: {error}"
-                                    );
-                                    continue;
-                                }
+                        Item::Media(frame) => match machine.push(frame) {
+                            Ok(next) => next,
+                            Err(error) => {
+                                log::warn!(
+                                    target: "livekit.agents",
+                                    "dropping invalid VAD frame: {error}"
+                                );
+                                continue;
                             }
-                        }
-                        Command::Flush => {
+                        },
+                        Item::Gap(_) | Item::Event(Flush) => {
                             machine.reset();
                             model.reset();
                             None
@@ -233,7 +199,7 @@ pub(super) fn open(
         })
         .map_err(|error| failed(error.to_string()))?;
     Ok(lk_agents_abi::DuplexStream::new(
-        Box::new(Input { sender, state, cancelled: cancelled.clone() }),
+        Box::new(Input { audio: Mutex::new(Some(audio)), drops, cancelled: cancelled.clone() }),
         Box::new(Output { events, worker: Some(worker), cancelled, clock }),
     ))
 }

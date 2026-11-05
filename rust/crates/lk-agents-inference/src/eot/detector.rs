@@ -52,13 +52,16 @@ impl AudioEot {
         let thresholds = Arc::clone(&self.thresholds);
         let local_model = Arc::clone(&self.local_model);
         let clock = self.env.clock.clone();
+        // The host opens a stream without its job: drops count for the process.
+        let process = self.env.tracer.root();
         Arc::new(move |model| {
             if model == TurnDetectorModel::V1 {
-                let (cloud, clock) = (cloud.clone(), clock.clone());
+                let (cloud, clock, cx) = (cloud.clone(), clock.clone(), process.clone());
                 return MountedTransport::mount(model.as_str(), thresholds.clone(), move |sink| {
                     let socket = Arc::new(lk_agents_net::websocket::TungsteniteTransport);
-                    Arc::new(CloudTransport::new(cloud, sink, socket, clock))
-                        as Arc<dyn EotTransport>
+                    let transport = CloudTransport::new(cloud, sink, socket, clock);
+                    transport.observe(cx);
+                    Arc::new(transport) as Arc<dyn EotTransport>
                 });
             }
             let local = match crate::local_models::native() {

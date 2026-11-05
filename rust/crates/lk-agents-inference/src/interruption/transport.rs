@@ -14,14 +14,17 @@ use crate::interruption::options::InterruptionOptions;
 use crate::interruption::proto::{
     ClientMessage, ENCODING_S16LE, ServerMessage, SessionCreateSettings, frame_request,
 };
-use lk_agents_abi::ApiConnectOptions;
 use lk_agents_abi::Clock;
 use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::turn::detector::ReqId;
 use lk_agents_abi::types::retry::{RequestKind, RetryDecision};
+use lk_agents_abi::{ApiConnectOptions, AudioFrame};
 use lk_agents_abi::{OwnedTask, SpawnerExt, TaskError};
 use lk_agents_core::attempts::RequestPolicy;
+use lk_agents_media::media_queue::{self, Item, Policy, Sender};
+use lk_agents_net::audio_drops::AudioDrops;
 use lk_agents_net::task::TokioSpawner;
+use lk_agents_net::telemetry;
 use lk_agents_net::token::{INFERENCE_TOKEN_TTL, inference_bearer_with_ttl};
 use lk_agents_net::transport::{
     TransportError, WsMessage, WsReceiver, WsSender, WsTransport, close_status,
@@ -30,7 +33,7 @@ use parking_lot::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::{Duration, UNIX_EPOCH};
-use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, mpsc, watch};
+use tokio::sync::{Notify, mpsc, watch};
 
 /// One connection's two halves.
 struct Socket {
@@ -101,7 +104,7 @@ impl AdaptiveInterruptionDetector {
         let reconnect = Arc::new(Notify::new());
         self.streams.lock().push(Arc::downgrade(&reconnect));
 
-        let (input_tx, input_rx) = mpsc::channel(INPUT_CAPACITY);
+        let (queue, input_rx) = media_queue::audio(INPUT_POLICY);
         let (input_failure, _) = watch::channel(None);
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let closed = Arc::new(AtomicBool::new(false));
@@ -115,11 +118,11 @@ impl AdaptiveInterruptionDetector {
             closed: closed.clone(),
             input_failure: input_failure.clone(),
         };
-        let input_tx = InterruptionInput {
-            sender: input_tx,
-            bytes: Arc::new(Semaphore::new(INPUT_BYTES)),
+        let input_tx = InterruptionInput(Arc::new(InputShared {
+            queue: Mutex::new(Some(queue)),
+            drops: AudioDrops::new(telemetry::AudioConsumer::Interruption, INPUT_POLICY),
             failure: input_failure,
-        };
+        }));
         let task = TokioSpawner::current().spawn(main_task(ctx, input_rx));
         InterruptionStream { input_tx: Some(input_tx), event_rx, reconnect, closed, task }
     }
@@ -197,56 +200,52 @@ impl StreamContext {
     }
 }
 
-// Five seconds of 20 ms input plus control events; retained audio is also bounded by bytes.
-const INPUT_CAPACITY: usize = 256;
-const INPUT_BYTES: usize = 2 * 1024 * 1024;
+/// Only current audio: past 500 ms of lag the window restarts on the newest.
+const INPUT_POLICY: Policy = Policy::Now(Duration::from_millis(500));
 
-struct QueuedInput {
-    event: InputEvent,
-    _bytes: OwnedSemaphorePermit,
-}
+/// The input queue: audio, and the sentinels in order with it.
+type InputRx = media_queue::Receiver<AudioFrame, InputEvent>;
 
-/// The stream's synchronous input half. Saturation is terminal: silently losing a speech
-/// boundary or an audio frame would leave the detector deciding against a different sequence.
+/// The stream's synchronous input half. Audio the queue drops reaches the detector as a
+/// [`InputEvent::Gap`], which restarts its window; a sentinel is never dropped, so a detector
+/// that stops draining them fails the stream instead.
 #[derive(Clone)]
-pub struct InterruptionInput {
-    sender: mpsc::Sender<QueuedInput>,
-    bytes: Arc<Semaphore>,
+pub struct InterruptionInput(Arc<InputShared>);
+
+struct InputShared {
+    /// `None` once the input ended.
+    queue: Mutex<Option<Sender<AudioFrame, InputEvent>>>,
+    drops: AudioDrops,
     failure: watch::Sender<Option<ApiError>>,
 }
 
 impl InterruptionInput {
     pub fn send(&self, event: InputEvent) -> Result<(), StreamClosed> {
-        if self.failure.borrow().is_some() {
-            return Err(StreamClosed::CapacityExceeded);
+        let shared = &*self.0;
+        if shared.failure.borrow().is_some() {
+            return Err(StreamClosed::Stuck);
         }
-        if self.sender.is_closed() {
-            return Err(StreamClosed::InputEnded);
+        let queue = shared.queue.lock();
+        let queue = queue.as_ref().filter(|queue| !queue.is_closed());
+        let queue = queue.ok_or(StreamClosed::InputEnded)?;
+        match event {
+            InputEvent::Audio(frame) => shared.drops.record(queue.push(frame)),
+            event => queue.event(event).map_err(|stuck| {
+                shared.failure.send_replace(Some(ApiError::new(stuck.to_string())));
+                StreamClosed::Stuck
+            })?,
         }
-        let bytes = match &event {
-            InputEvent::Audio(frame) => frame.data.len(),
-            _ => 0,
-        };
-        let reservation = u32::try_from(bytes)
-            .ok()
-            .filter(|&bytes| bytes as usize <= INPUT_BYTES)
-            .and_then(|bytes| self.bytes.clone().try_acquire_many_owned(bytes).ok());
-        let Some(reservation) = reservation else {
-            return Err(self.overloaded());
-        };
-        self.sender.try_send(QueuedInput { event, _bytes: reservation }).map_err(
-            |error| match error {
-                mpsc::error::TrySendError::Full(_) => self.overloaded(),
-                mpsc::error::TrySendError::Closed(_) => StreamClosed::InputEnded,
-            },
-        )
+        Ok(())
     }
 
-    fn overloaded(&self) -> StreamClosed {
-        self.failure.send_replace(Some(
-            ApiError::new("interruption input queue capacity exceeded").with_retryable(false),
-        ));
-        StreamClosed::CapacityExceeded
+    /// Measures the audio the queue drops under `cx`'s job.
+    pub fn observe(&self, cx: telemetry::Cx) {
+        self.0.drops.observe(cx);
+    }
+
+    /// Ends the input for every clone: the detector drains what was queued, then closes.
+    fn end(&self) {
+        drop(self.0.queue.lock().take());
     }
 }
 
@@ -278,8 +277,8 @@ pub enum StreamClosed {
     Closed,
     #[error("livekit.agents.inference.interruption.InterruptionWebSocketStream input ended")]
     InputEnded,
-    #[error("interruption input queue capacity exceeded")]
-    CapacityExceeded,
+    #[error("interruption input stopped draining")]
+    Stuck,
 }
 
 impl From<StreamClosed> for lk_agents_abi::errors::ProviderError {
@@ -305,15 +304,17 @@ impl InterruptionStream {
     }
 
     /// A clone of the input sender, for pushing from another thread than the one reading
-    /// verdicts. A holder must drop it when it ends input, or the stream's task parks forever.
+    /// verdicts.
     pub fn sender(&self) -> Option<InterruptionInput> {
         self.input_tx.clone()
     }
 
-    /// Close input after all accepted events. The core's flush is a no-op, so EOF does not
-    /// consume another queue entry (including when the last accepted event filled the queue).
+    /// Close input after all accepted events, for this stream and every [`sender`](Self::sender)
+    /// clone. The core's flush is a no-op, so EOF does not take another queue entry.
     pub fn end_input(&mut self) -> Result<(), StreamClosed> {
-        self.input_tx = None;
+        if let Some(input) = self.input_tx.take() {
+            input.end();
+        }
         Ok(())
     }
 
@@ -342,13 +343,13 @@ impl InterruptionStream {
     /// `__anext__`'s tail (`inference/interruption.py:527`): once the events are exhausted, the
     /// task's exception belongs to the caller.
     pub async fn finish(mut self) -> Result<(), ApiError> {
-        self.input_tx = None;
+        let _ = self.end_input();
         join_task(self.task).await?
     }
 
     /// `aclose()` -- cancel immediately, without waiting for the gateway to close back.
     pub async fn aclose(mut self) -> Result<(), ApiError> {
-        self.input_tx = None;
+        let _ = self.end_input();
         self.task.cancel();
         join_task(self.task).await.map(|_| ())
     }
@@ -367,10 +368,7 @@ async fn join_task(
 }
 
 /// `_main_task` (`inference/interruption.py:462`): the retry ladder around [`run`].
-async fn main_task(
-    ctx: StreamContext,
-    input_rx: mpsc::Receiver<QueuedInput>,
-) -> Result<(), ApiError> {
+async fn main_task(ctx: StreamContext, input_rx: InputRx) -> Result<(), ApiError> {
     let result = main_task_inner(&ctx, input_rx).await;
     // `self._task.add_done_callback(lambda _: self._event_ch.close())` -- the consumer has to stop
     // waiting whether the task succeeded or failed.
@@ -378,10 +376,7 @@ async fn main_task(
     result
 }
 
-async fn main_task_inner(
-    ctx: &StreamContext,
-    mut input_rx: mpsc::Receiver<QueuedInput>,
-) -> Result<(), ApiError> {
+async fn main_task_inner(ctx: &StreamContext, mut input_rx: InputRx) -> Result<(), ApiError> {
     let policy = RequestPolicy::from_options(&ctx.config.conn_options);
     let mut num_retries = 0u32;
     loop {
@@ -414,10 +409,7 @@ async fn main_task_inner(
 
 /// `_run`'s outer `while True` (`inference/interruption.py:944`): connect, pump, and go round again
 /// if `update_options` asked for a reconnect.
-async fn run(
-    ctx: &StreamContext,
-    input_rx: &mut mpsc::Receiver<QueuedInput>,
-) -> Result<(), StreamError> {
+async fn run(ctx: &StreamContext, input_rx: &mut InputRx) -> Result<(), StreamError> {
     // The core outlives a reconnect, as in the reference: a mid-turn `update_options` keeps the
     // buffered agent audio.
     let core = {
@@ -435,7 +427,7 @@ async fn run(
 /// One connection's lifetime. `Ok(true)` means "reconnect", `Ok(false)` means "the input ended".
 async fn run_once(
     ctx: &StreamContext,
-    input_rx: &mut mpsc::Receiver<QueuedInput>,
+    input_rx: &mut InputRx,
     core: &Arc<Mutex<InterruptionMachine>>,
     socket: Socket,
 ) -> Result<bool, StreamError> {
@@ -505,8 +497,12 @@ async fn run_once(
             }
             _ = ctx.reconnect.notified() => break Ok(true),
             ev = input_rx.recv(), if input_open => match ev {
-                Some(queued) => {
-                    let ev = queued.event;
+                Some(item) => {
+                    let ev = match item {
+                        Item::Media(frame) => InputEvent::Audio(frame),
+                        Item::Gap(_) => InputEvent::Gap,
+                        Item::Event(ev) => ev,
+                    };
                     let wall = ctx.wall();
                     let outcome = {
                         let mut core = core.lock();
@@ -762,40 +758,36 @@ mod tests {
         )
     }
 
+    // Catches: a detector that cannot connect failing on the audio piling up meanwhile, or one
+    // whose sentinels stop draining still accepting them silently.
     #[tokio::test]
-    async fn stalled_input_refuses_overload_and_releases_the_detector_to_fallback() {
-        let audio_bytes = 16_000 * 3 * 2;
-        let cases = [
-            (InputEvent::Flush, INPUT_CAPACITY + 1),
-            (
-                InputEvent::Audio(lk_agents_abi::AudioFrame {
-                    data: vec![0; audio_bytes].into(),
-                    sample_rate: 16_000,
-                    num_channels: 1,
-                    samples_per_channel: 48_000,
-                }),
-                INPUT_BYTES / audio_bytes + 1,
-            ),
-        ];
-        for (input, count) in cases {
-            let detector = detector(Arc::new(FakeWs::hanging()));
-            let mut stream = detector.stream();
-            let refused = (0..count).any(|_| stream.push(input.clone()).is_err());
-            if !refused {
-                stream.aclose().await.unwrap();
-                panic!("a stalled interruption stream accepted unbounded input");
-            }
-            let event = lk_agents_abi::timeout(
-                &lk_agents_net::clock::RealClock::new(),
-                Duration::from_secs(1),
-                stream.recv_event(),
-            )
-            .await
-            .expect("queue failure must reach the caller without waiting for connect timeout");
-            assert!(matches!(event, Some(StreamEvent::Error(error))
-                if !error.recoverable && error.error.message.contains("capacity")));
-            assert!(stream.finish().await.is_err());
+    async fn a_stalled_stream_keeps_current_audio_and_fails_only_once_its_sentinels_pile_up() {
+        let detector = detector(Arc::new(FakeWs::hanging()));
+        let mut stream = detector.stream();
+        let audio = InputEvent::Audio(lk_agents_abi::AudioFrame {
+            data: vec![0; 3200].into(),
+            sample_rate: 16_000,
+            num_channels: 1,
+            samples_per_channel: 1600,
+        });
+        for _ in 0..100 {
+            stream.push(audio.clone()).expect("a stall drops old audio, it never refuses it");
         }
+        for _ in 0..media_queue::MAX_EVENTS {
+            stream.flush().unwrap();
+        }
+        assert_eq!(stream.flush(), Err(StreamClosed::Stuck));
+        assert_eq!(stream.push(audio), Err(StreamClosed::Stuck));
+        let event = lk_agents_abi::timeout(
+            &lk_agents_net::clock::RealClock::new(),
+            Duration::from_secs(1),
+            stream.recv_event(),
+        )
+        .await
+        .expect("a stuck input must reach the caller without waiting for connect timeout");
+        assert!(matches!(event, Some(StreamEvent::Error(error))
+            if !error.recoverable && error.error.message.contains("stopped draining")));
+        assert!(stream.finish().await.is_err());
     }
 
     #[tokio::test]
@@ -818,7 +810,7 @@ mod tests {
                 samples_per_channel: 1600,
             }))
             .unwrap();
-        for _ in 3..INPUT_CAPACITY {
+        for _ in 2..media_queue::MAX_EVENTS {
             stream.flush().unwrap();
         }
         stream.end_input().unwrap();

@@ -60,7 +60,11 @@ impl FakeInterruption {
 pub struct FakeInterruptionSource(pub Arc<Registry>);
 
 impl InterruptionSource for FakeInterruptionSource {
-    fn open(&self, _anchor: lk_agents_abi::WallAnchor) -> Arc<dyn InterruptionPort> {
+    fn open(
+        &self,
+        _anchor: lk_agents_abi::WallAnchor,
+        _cx: &lk_agents_abi::telemetry::Cx,
+    ) -> Arc<dyn InterruptionPort> {
         FakeInterruption::new(self.0.clone())
     }
 }

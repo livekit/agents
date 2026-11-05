@@ -50,6 +50,8 @@ pub enum InputEvent {
     },
     OverlapSpeechEnded(OverlapEnd),
     Audio(AudioFrame),
+    /// Audio the input dropped to stay current: the window restarts, so no request spans the gap.
+    Gap,
     /// `_FlushSentinel`. Ignored by `_forward_data`; `end_input()` pushes it before closing.
     Flush,
 }
@@ -327,6 +329,11 @@ impl InterruptionMachine {
                 }
             }
             InputEvent::Flush => Ok(None),
+            InputEvent::Gap => {
+                self.window.reset();
+                self.accumulated_samples = 0;
+                Ok(None)
+            }
             InputEvent::AgentSpeechStarted => {
                 self.reset_state();
                 self.speech += 1;

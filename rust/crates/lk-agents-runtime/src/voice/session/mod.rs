@@ -109,6 +109,7 @@ pub type HostEventProbe = Box<dyn FnMut(&VoiceHostEvent) + Send>;
 type InterruptionPortFactory = Box<
     dyn FnOnce(
             lk_agents_abi::WallAnchor,
+            &telemetry::Cx,
         )
             -> Arc<dyn lk_agents_voice::agent_activity::false_interruption::InterruptionPort>
         + Send,
@@ -297,7 +298,8 @@ impl VoiceSession {
             #[cfg(not(feature = "dst"))]
             let Ready { mut builder, nodes, interruption } = ready;
             if let Some(open_port) = interruption {
-                builder.interruption = Some(open_port(anchor));
+                let cx = builder.tracer.resume(&builder.trace);
+                builder.interruption = Some(open_port(anchor, &cx));
             }
 
             // The room's own IO first, under `session_start`; its events join the driver's queue,

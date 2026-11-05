@@ -39,6 +39,30 @@
                 "value": "stt",
                 "brief": "stt",
                 "stability": "development"
+              },
+              {
+                "id": "vad",
+                "value": "vad",
+                "brief": "vad",
+                "stability": "development"
+              },
+              {
+                "id": "interruption",
+                "value": "interruption",
+                "brief": "interruption",
+                "stability": "development"
+              },
+              {
+                "id": "end_of_turn",
+                "value": "end_of_turn",
+                "brief": "end_of_turn",
+                "stability": "development"
+              },
+              {
+                "id": "stt_node",
+                "value": "stt_node",
+                "brief": "stt_node",
+                "stability": "development"
               }
             ]
           },

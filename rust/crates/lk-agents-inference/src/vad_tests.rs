@@ -110,16 +110,24 @@ async fn as_the_sessions_vad_it_reports_speech() {
     assert_eq!(vad.capabilities().update_interval, 0.032);
     let (sink, mut source) = vad.stream(&lk_agents_abi::telemetry::Cx::NONE).await.unwrap().split();
     let frame = |level: i16| AudioFrame {
-        data: std::iter::repeat_n(level.to_le_bytes(), 160).flatten().collect::<Vec<u8>>().into(),
+        data: std::iter::repeat_n(level.to_le_bytes(), 512).flatten().collect::<Vec<u8>>().into(),
         sample_rate: 16000,
         num_channels: 1,
-        samples_per_channel: 160,
+        samples_per_channel: 512,
     };
-    for i in 0..200 {
-        sink.push(frame(if i < 100 { 1000 } else { 0 })).unwrap();
+    // One window per push, each pushed once the last was scored: the input never lags.
+    let mut kinds = Vec::new();
+    for i in 0..60 {
+        sink.push(frame(if i < 30 { 1000 } else { 0 })).unwrap();
+        loop {
+            let ev = source.next().await.unwrap().unwrap();
+            if ev.kind == VadEventType::InferenceDone {
+                break;
+            }
+            kinds.push(ev.kind);
+        }
     }
     sink.end_input();
-    let mut kinds = Vec::new();
     while let Ok(Some(ev)) = source.next().await {
         if ev.kind != VadEventType::InferenceDone {
             kinds.push(ev.kind);
@@ -260,56 +268,68 @@ async fn one_second_of_48khz_stereo_is_accepted_without_doubling_the_vad_timelin
     );
 }
 
-#[tokio::test]
-async fn oversized_frames_are_refused_without_ending_the_vad_stream() {
+/// Blocks its first prediction until released, then records the first sample of every window.
+struct StalledModel {
+    started: Option<tokio::sync::oneshot::Sender<()>>,
+    release: std::sync::mpsc::Receiver<()>,
+    windows: Arc<Mutex<Vec<i16>>>,
+}
+
+impl VadModel for StalledModel {
+    fn predict(&mut self, window: &[i16]) -> (f32, f64) {
+        if let Some(started) = self.started.take() {
+            started.send(()).unwrap();
+            self.release.recv_timeout(Duration::from_secs(2)).unwrap();
+        }
+        self.windows.lock().push(window[0]);
+        (0.0, 0.0)
+    }
+    fn reset(&mut self) {}
+}
+
+struct StalledFactory(Mutex<Option<StalledModel>>);
+
+impl VadModelFactory for StalledFactory {
+    fn create(&self) -> Box<dyn VadModel> {
+        Box::new(self.0.lock().take().unwrap())
+    }
+}
+
+// Catches: a stalled VAD failing its input, or replaying the backlog once it resumes instead of
+// deciding on the newest audio.
+#[tokio::test(flavor = "current_thread")]
+async fn a_stalled_vad_resumes_on_current_audio_within_its_lag() {
+    let (started, ready) = tokio::sync::oneshot::channel();
+    let (release, blocked) = std::sync::mpsc::channel();
+    let windows = Arc::new(Mutex::new(Vec::new()));
+    let factory = StalledFactory(Mutex::new(Some(StalledModel {
+        started: Some(started),
+        release: blocked,
+        windows: windows.clone(),
+    })));
     let vad = LocalVad::new(
         VadOptions::default(),
-        Arc::new(Factory),
+        Arc::new(factory),
         &lk_agents_inference::testkit::env(),
     );
     let (sink, mut source) = vad.stream_native().unwrap();
-    let error = sink.push(AudioFrame::new(vec![0; 192_002], 48_000, 2, 48_000)).unwrap_err();
-    assert!(error.to_string().contains("192000-byte limit"));
-    sink.push(AudioFrame::new(vec![0; 1024], 16_000, 1, 512)).unwrap();
-    sink.end_input();
-    let output = source.next().await.unwrap().unwrap();
-    assert_eq!(output.event.kind, VadEventType::InferenceDone);
-    assert!(source.next().await.unwrap().is_none());
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn saturated_vad_input_refuses_new_audio_and_still_accepts_close() {
-    use lk_agents_abi::{Closed, Ts};
-
-    for (bytes, admitted, refusal) in [
-        (1024, 256, "VAD input capacity exhausted"),
-        (192_000, 10, "VAD input byte capacity exhausted"),
-    ] {
-        let (started, ready) = tokio::sync::oneshot::channel();
-        let (release, blocked) = std::sync::mpsc::channel();
-        let (settled, done) = tokio::sync::oneshot::channel();
-        let factory = GatedFactory(Mutex::new(Some(GatedModel {
-            started: Some(started),
-            release: blocked,
-            settled: Some(settled),
-        })));
-        let vad = LocalVad::new(
-            VadOptions::default(),
-            Arc::new(factory),
-            &lk_agents_inference::testkit::env(),
-        );
-        let (sink, source) = vad.stream_native().unwrap();
-        sink.push(AudioFrame::new(vec![0; 1024], 16_000, 1, 512)).unwrap();
-        ready.await.unwrap();
-        let frame = AudioFrame::new(vec![0; bytes], 16_000, 1, (bytes / 2) as u32);
-        for _ in 0..admitted {
-            sink.push(frame.clone()).unwrap();
-        }
-        assert_eq!(sink.push(frame).unwrap_err().to_string(), refusal);
-        assert_eq!(Box::new(source).close(Ts::ZERO).await, Closed::TimedOut);
-        release.send(()).unwrap();
-        tokio::time::timeout(Duration::from_secs(2), done).await.unwrap().unwrap();
+    // One 32 ms window per frame, each frame marked by its index.
+    let frame = |n: i16| AudioFrame::new(n.to_le_bytes().repeat(512), 16_000, 1, 512);
+    sink.push(frame(0)).unwrap();
+    ready.await.unwrap();
+    for n in 1..=100 {
+        sink.push(frame(n)).expect("a stalled VAD drops old audio, it never refuses it");
     }
+    release.send(()).unwrap();
+    sink.end_input();
+    while source.next().await.expect("a stall is not a failure").is_some() {}
+
+    let windows = windows.lock();
+    let resumed = &windows[1..];
+    // 500 ms is under 16 windows of 32 ms.
+    assert!(resumed.len() <= 16, "the backlog was replayed: {resumed:?}");
+    assert!(resumed.iter().all(|n| *n > 100 - 16), "old audio after the stall: {resumed:?}");
+    assert_eq!(resumed.last(), Some(&100), "the newest audio is scored");
 }
 
 #[tokio::test]

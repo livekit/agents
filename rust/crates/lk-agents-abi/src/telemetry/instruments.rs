@@ -277,6 +277,14 @@ pub enum AudioConsumer {
     Realtime,
     /// A recognition stream's input audio.
     Stt,
+    /// A voice activity detector's input audio.
+    Vad,
+    /// The adaptive interruption detector's input audio.
+    Interruption,
+    /// The audio end-of-turn model's input audio.
+    EndOfTurn,
+    /// A custom `stt_node`'s input audio.
+    SttNode,
 }
 
 /// Input and output tokens of each LLM and realtime response. Deprecated upstream; declared as

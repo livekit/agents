@@ -381,7 +381,8 @@ impl VoiceRuntime {
             }
             VoiceEffect::OpenVadStream { open, vad } => {
                 let vad = self.shared.resources.vad(vad);
-                self.open_stream(open, StreamKind::Vad, vad.map(PendingOpen::Vad));
+                let cx = self.shared.trace.clone();
+                self.open_stream(open, StreamKind::Vad, vad.map(|vad| PendingOpen::Vad(vad, cx)));
             }
             VoiceEffect::ProviderPrewarm(id) => self.shared.resources.prewarm(id),
             VoiceEffect::ProviderRelease(id) => self.shared.resources.release(id),
@@ -610,7 +611,7 @@ impl VoiceRuntime {
                             "the new agent's STT does not stream",
                         ))),
                     },
-                    PendingOpen::Vad(vad) => vad.stream(&telemetry::Cx::NONE).await.map(|stream| {
+                    PendingOpen::Vad(vad, cx) => vad.stream(&cx).await.map(|stream| {
                         let (sink, source) = stream.split();
                         Opened::new(
                             AudioChannel::Vad,
@@ -641,5 +642,6 @@ impl VoiceRuntime {
 enum PendingOpen {
     /// The STT, and the activity its stream runs under.
     Stt(Arc<dyn lk_agents_abi::Stt>, telemetry::Cx),
-    Vad(Arc<dyn lk_agents_abi::Vad>),
+    /// The VAD, and the session its stream runs under.
+    Vad(Arc<dyn lk_agents_abi::Vad>, telemetry::Cx),
 }

@@ -176,7 +176,8 @@ async fn the_session_leg_reports_interruption_metrics_with_the_verdict() {
     let (port, gateway) = fake_gateway().await;
     let detector = detector(port);
     let clock = RealClock::new();
-    let leg = detector.open(WallAnchor { wall: 1_787_000_000.0, at: clock.now() });
+    let anchor = WallAnchor { wall: 1_787_000_000.0, at: clock.now() };
+    let leg = detector.open(anchor, &lk_agents_abi::telemetry::Cx::NONE);
     leg.signal(InterruptionSignal::AgentSpeechStarted);
     leg.audio().push(frame(SR as usize)).unwrap();
     leg.signal(InterruptionSignal::OverlapStarted {

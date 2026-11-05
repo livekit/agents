@@ -100,7 +100,7 @@ impl lk_agents_abi::turn::inference::InterruptionDetector for NativeInterruption
 }
 
 impl InterruptionSource for NativeInterruptionDetector {
-    fn open(&self, anchor: WallAnchor) -> Arc<dyn InterruptionPort> {
-        InterruptionLeg::open(&self.detector, anchor)
+    fn open(&self, anchor: WallAnchor, cx: &crate::telemetry::Cx) -> Arc<dyn InterruptionPort> {
+        InterruptionLeg::open(&self.detector, anchor, cx)
     }
 }

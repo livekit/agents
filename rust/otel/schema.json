@@ -4361,7 +4361,11 @@
           "members": [
             "room_input",
             "realtime",
-            "stt"
+            "stt",
+            "vad",
+            "interruption",
+            "end_of_turn",
+            "stt_node"
           ],
           "label": true
         }

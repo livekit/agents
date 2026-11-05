@@ -7,13 +7,15 @@ use lk_agents_abi::turn::detector::{LegEvent, ReqId};
 use lk_agents_abi::turn::interruption::{InterruptionPort, InterruptionSignal, OverlapVerdict};
 use lk_agents_abi::{AudioFrame, StreamInput, WallAnchor};
 
+use crate::telemetry;
+
 use super::{
     AdaptiveInterruptionDetector, InputEvent, InterruptionStream, MODEL, OverlapEnd, OverlapStart,
     OverlappingSpeechEvent, PROVIDER, StreamEvent, interruption_metrics,
 };
 
 pub struct InterruptionLeg {
-    /// The input half, cloned out of the stream: synchronous, bounded and explicit on overload.
+    /// The input half, cloned out of the stream: synchronous, and current under lag.
     input: super::transport::InterruptionInput,
     /// Held across an await by `next_event`, hence a `tokio` mutex.
     stream: tokio::sync::Mutex<InterruptionStream>,
@@ -22,19 +24,24 @@ pub struct InterruptionLeg {
 }
 
 impl InterruptionLeg {
-    /// **Must be called on the tokio runtime.**
-    pub fn open(detector: &AdaptiveInterruptionDetector, anchor: WallAnchor) -> Arc<Self> {
+    /// **Must be called on the tokio runtime.** Audio drops are measured under `cx`'s job.
+    pub fn open(
+        detector: &AdaptiveInterruptionDetector,
+        anchor: WallAnchor,
+        cx: &telemetry::Cx,
+    ) -> Arc<Self> {
         let stream = detector.stream();
         // Taken before the stream is parked behind the mutex, so pushes never wait on verdicts.
         let input = stream.sender().expect("a fresh stream still has its input half");
+        input.observe(cx.clone());
         Arc::new(InterruptionLeg { input, stream: tokio::sync::Mutex::new(stream), anchor })
     }
 }
 
 /// The detector as the session's source of interruption legs: one per session, opened at `start()`.
 impl lk_agents_abi::turn::interruption::InterruptionSource for AdaptiveInterruptionDetector {
-    fn open(&self, anchor: WallAnchor) -> Arc<dyn InterruptionPort> {
-        InterruptionLeg::open(self, anchor)
+    fn open(&self, anchor: WallAnchor, cx: &telemetry::Cx) -> Arc<dyn InterruptionPort> {
+        InterruptionLeg::open(self, anchor, cx)
     }
 }
 
@@ -240,7 +247,8 @@ mod tests {
         let config = ConnectionConfig { transport: transport.clone(), ..Default::default() };
         let clock = Arc::new(lk_agents_net::clock::RealClock::new());
         let detector = AdaptiveInterruptionDetector::new(opts, config, clock.clone());
-        let leg = InterruptionLeg::open(&detector, WallAnchor { wall: 1.0, at: clock.now() });
+        let anchor = WallAnchor { wall: 1.0, at: clock.now() };
+        let leg = InterruptionLeg::open(&detector, anchor, &crate::telemetry::Cx::NONE);
         leg.signal(S::AgentSpeechStarted);
         leg.signal_overlap(
             ReqId(47),

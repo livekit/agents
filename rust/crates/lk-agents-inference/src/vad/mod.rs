@@ -1,6 +1,6 @@
 //! `inference/vad.py`: the Silero VAD, its model from the linked native provider
 //! ([`crate::local_models`]) or else the host's `livekit.local_inference`. The decisions are in
-//! [`machine`]; [`stream`] runs each detection on an admitted media worker behind a bounded
+//! [`machine`]; [`stream`] runs each detection on an admitted media worker behind a
 //! `(Sink, Source)` pair. A native model needs no host call per audio frame.
 
 pub mod machine;
@@ -44,6 +44,11 @@ impl LocalVad {
 
     /// The pair for callers that need the audio and lag alongside the VAD event.
     pub fn stream_native(&self) -> Result<(VadInput, VadOutputSource), ProviderError> {
+        self.open(&telemetry::Cx::NONE)
+    }
+
+    /// Input drops are measured under `cx`'s job.
+    fn open(&self, cx: &telemetry::Cx) -> Result<(VadInput, VadOutputSource), ProviderError> {
         let unavailable = |error: String| {
             ProviderError::Local(ApiError::new(format!("VAD execution unavailable: {error}")))
         };
@@ -54,6 +59,7 @@ impl LocalVad {
             self.env.clock.clone(),
             lk_agents_media::pool::media_pool(),
             runtime,
+            cx,
         )?
         .split();
         Ok((VadInput { sink }, VadOutputSource { source }))
@@ -180,12 +186,12 @@ impl Vad for LocalVad {
 
     fn stream(
         &self,
-        _cx: &telemetry::Cx,
+        cx: &telemetry::Cx,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<lk_agents_abi::DuplexStream<VadSink, VadSource>, ProviderError>,
     > {
-        let opened = self.stream_native().map(|(sink, source)| {
+        let opened = self.open(cx).map(|(sink, source)| {
             lk_agents_abi::DuplexStream::new(
                 Box::new(sink) as VadSink,
                 Box::new(VadEventSource(source)) as VadSource,
@@ -222,7 +228,7 @@ impl StreamOutput<VadEvent> for VadEventSource {
 
 impl lk_agents_abi::utils::stream::ProviderStream<VadEvent> for VadEventSource {}
 
-/// The stream's bounded audio ingress.
+/// The stream's audio ingress, a `Now` media queue.
 pub struct VadInput {
     sink: Box<dyn StreamInput<AudioFrame>>,
 }
