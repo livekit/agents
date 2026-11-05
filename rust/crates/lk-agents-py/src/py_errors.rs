@@ -9,16 +9,16 @@ pub mod interfaces {
     ))]
     pub struct BaseException;
 
-    #[lk_agents_abi::host(interface(host = "livekit.agents._exceptions.APIError"))]
+    #[lk_agents_abi::host(interface(host = "livekit.agents._bindings.APIError"))]
     pub struct ApiError;
 
-    #[lk_agents_abi::host(interface(host = "livekit.agents._exceptions.APIStatusError"))]
+    #[lk_agents_abi::host(interface(host = "livekit.agents._bindings.APIStatusError"))]
     pub struct ApiStatusError;
 
-    #[lk_agents_abi::host(interface(host = "livekit.agents._exceptions.APIConnectionError"))]
+    #[lk_agents_abi::host(interface(host = "livekit.agents._bindings.APIConnectionError"))]
     pub struct ApiConnectionError;
 
-    #[lk_agents_abi::host(interface(host = "livekit.agents._exceptions.APITimeoutError"))]
+    #[lk_agents_abi::host(interface(host = "livekit.agents._bindings.APITimeoutError"))]
     pub struct ApiTimeoutError;
 }
 

@@ -34,7 +34,7 @@ class BuiltinAudioClip(enum.Enum):
     HOLD_MUSIC = "hold_music.ogg"
 
     def path(self) -> str:
-        file_path = files("livekit.agents.resources") / self.value
+        file_path = files("livekit.agents").joinpath("resources", self.value)
         return str(_resource_stack.enter_context(as_file(file_path)))
 
 

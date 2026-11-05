@@ -21,7 +21,7 @@ documentation, and examples.
 import typing
 
 from . import cli, inference, llm, metrics, stt, tokenize, tts, utils, voice
-from ._exceptions import (
+from ._bindings import (
     APIConnectionError,
     APIError,
     APIStatusError,
@@ -43,6 +43,7 @@ from ._generated.usage import (
     Usage,
 )
 from ._generated.vad import VAD, VADCapabilities, VADEvent, VADEventType, VADStream
+from .evals import SimulationContext, SimulationVerdict
 from .job import (
     JobContext,
     get_job_context,
@@ -74,7 +75,6 @@ from .llm.tool_context import (
     Working,
     function_tool,
 )
-from .simulation import SimulationContext, SimulationVerdict
 from .storage.context import load_context, persisted, save_context
 from .text_session import TextSession, TextSessionRoutingError, TextSessionState, TextSessionTurn
 from .types import (

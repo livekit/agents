@@ -18,10 +18,7 @@ from livekit import rtc
 from livekit.agents._generated.recording_options import RecordingOptions as RecordingOptions
 
 from .. import _bindings, _core, inference, llm, stt, tts
-from .._core_view import (
-    TurnDetector,
-    tool_specs,
-)
+from .._bindings import TurnDetector, tool_specs
 from .._generated.connect import SessionConnectOptions as SessionConnectOptions
 from .._generated.keyterms import STTContextOptions
 from .._generated.session_options import SessionKwargs
@@ -62,7 +59,7 @@ if TYPE_CHECKING:
 import time
 from typing import TYPE_CHECKING
 
-from .._core_view import realtime_model
+from .._bindings import realtime_model
 from .._generated.voice_session import VoiceSessionArgs
 from ..job import get_job_context
 from .events import CloseReason
@@ -838,7 +835,7 @@ class RemoteSessionAccess:
         self, provisional: tuple[bool, str]
     ) -> tuple[tuple[bool, str] | None, str | None]:
 
-        from ..simulation import SimulationVerdict
+        from ..evals import SimulationVerdict
 
         job_ctx = get_job_context(required=False)
         sim_ctx = job_ctx.simulation_context if job_ctx is not None else None

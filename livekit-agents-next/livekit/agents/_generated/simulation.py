@@ -22,4 +22,4 @@ class SimulationVerdict:
 
 
 SimulationVerdict.__annotations__ = get_annotations(SimulationVerdict, eval_str=True)
-SimulationVerdict.__module__ = "livekit.agents.simulation"
+SimulationVerdict.__module__ = "livekit.agents.evals"

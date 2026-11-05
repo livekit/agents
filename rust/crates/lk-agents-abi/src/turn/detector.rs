@@ -21,7 +21,7 @@ pub enum LegEvent<V> {
 
 /// A host `turn_detection` object is this trait through `_core_view.TurnDetector`, which speaks
 /// the detector's `stream()` behind the `_core_*` surface.
-#[crate::host(proxy(host = "livekit.agents._core_view.TurnDetector"))]
+#[crate::host(proxy(host = "livekit.agents._bindings.TurnDetector"))]
 pub trait EotDetector: Send + Sync + 'static {
     /// The detector's `model`/`provider`, as `EOUMetrics.metadata` names them.
     #[host(read_once, name = "_core_id")]
@@ -32,6 +32,14 @@ pub trait EotDetector: Send + Sync + 'static {
     /// One frame of the user's audio. Fire-and-forget, gated as the STT leg is.
     #[host(notify(lossy), name = "_core_push_audio")]
     fn push_audio(&self, frame: crate::AudioFrame);
+
+    /// Pre-connect audio: kept in full where `push_audio` would drop to stay current.
+    fn push_head(&self, frame: crate::AudioFrame) {
+        self.push_audio(frame);
+    }
+
+    /// Measures the stream's input under `cx`'s job: the host opens it before the session.
+    fn observe(&self, _cx: &crate::telemetry::Cx) {}
 
     /// `cancel_inference(timed_out=..)` (`audio_recognition.py:1592`); the detector reports a
     /// timeout and a superseding speech differently.

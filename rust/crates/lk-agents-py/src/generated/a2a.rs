@@ -962,7 +962,7 @@ impl crate::py_errors::HostException for ::lk_agents_abi::a2a::client::AgentClie
                 ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
             }
             Self::Overlap => crate::py_errors::host_exception(
-                "livekit.agents._exceptions",
+                "livekit.agents._bindings",
                 "StreamStateError",
                 ::std::string::ToString::to_string(self),
             ),

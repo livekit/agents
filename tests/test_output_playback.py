@@ -59,7 +59,7 @@ async def test_old_transport_report_cannot_settle_a_new_attachment_on_the_same_o
 
 
 async def test_native_audio_view_preserves_keys_through_admission_and_transport_reports() -> None:
-    from livekit.agents._core_view import _AudioOutput
+    from livekit.agents._bindings import _AudioOutput
 
     output = Output()
     view = _AudioOutput(output)

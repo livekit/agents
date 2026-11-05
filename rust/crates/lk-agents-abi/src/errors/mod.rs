@@ -20,7 +20,7 @@ pub use side_table::RefRegistry;
 
 // Constructors are part of the boundary contract, including plugin-authored exceptions. Only
 // cause traversal and status display/normalization require host behavior.
-#[crate::host(exceptions(module = "api_errors", path = "livekit.agents._exceptions", classes(
+#[crate::host(exceptions(module = "api_errors", path = "livekit.agents._bindings", classes(
     UnexpectedModelBehavior(base = "RuntimeError", doc = "The model exhausted its recovery attempts."),
     AssignmentTimeoutError(base = "Exception", doc = "The job was accepted but no assignment arrived in time."),
     APIError(base = "Exception", doc = "An API request failed.",

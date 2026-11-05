@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib.util
 import json
 import multiprocessing
 import os
@@ -18,14 +17,10 @@ _IPC = Path(__file__).resolve().parents[1] / "livekit-agents-next" / "livekit" /
 
 
 @pytest.fixture
-def launch(monkeypatch: pytest.MonkeyPatch) -> types.ModuleType:
-    # Exercise the OS launch adapter without importing unrelated provider bindings.
-    spec = importlib.util.spec_from_file_location("preload_launch", _IPC / "launch.py")
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    monkeypatch.setitem(sys.modules, spec.name, module)
-    spec.loader.exec_module(module)
-    return module
+def launch() -> types.ModuleType:
+    import livekit.agents.ipc
+
+    return livekit.agents.ipc
 
 
 @pytest.mark.parametrize("inspection_failure", [False, True])
@@ -52,8 +47,11 @@ def test_forkserver_refuses_to_freeze_an_unsafe_or_uninspectable_image(
         monkeypatch.setattr("builtins.open", disappeared)
         expected = "background threads"
 
+    # the bootstrap's preload phase is a no-op here: only its final image check runs
+    monkeypatch.setenv("LIVEKIT_AGENTS_FORKSERVER_PRELOAD_MODULES", "")
+    monkeypatch.setattr("livekit.agents.ipc.load_preload_modules", lambda _: None)
     with pytest.raises(RuntimeError, match=expected):
-        runpy.run_path(str(_IPC / "_preload_freeze.py"))
+        runpy.run_module("livekit.agents.ipc._preload_forkserver", run_name="__forkserver__")
     assert frozen == []
 
 

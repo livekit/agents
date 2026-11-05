@@ -16,7 +16,7 @@ from aiohttp._websocket.writer import WebSocketWriter
 from aiohttp.abc import AbstractStreamWriter
 from yarl import URL
 
-from .._exceptions import APITimeoutError
+from .._bindings import APITimeoutError
 from ..log import logger
 from ..types import APIConnectOptions
 

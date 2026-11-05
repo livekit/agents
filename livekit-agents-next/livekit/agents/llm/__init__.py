@@ -289,7 +289,7 @@ class FallbackLLMStream(LLMStream):
         self._extra_kwargs = extra_kwargs
 
     async def _run(self) -> None:
-        from .._core_view import tool_specs
+        from .._bindings import tool_specs
 
         native = await self._llm._native.chat(
             self._chat_ctx,

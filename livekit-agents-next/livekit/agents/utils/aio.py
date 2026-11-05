@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 from typing import Generic, Protocol, TypeVar, overload
 
 from .. import _core
-from .._exceptions import APITimeoutError
+from .._bindings import APITimeoutError
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 

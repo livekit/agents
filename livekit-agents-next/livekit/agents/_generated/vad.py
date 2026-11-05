@@ -17,7 +17,7 @@ from typing_extensions import TypeVar
 
 from livekit import rtc
 
-from .._exceptions import APIError
+from .._bindings import APIError
 from ..utils import aio
 from .chat_items import MetricsMetadata
 from .rtc_frames import AudioFrame

@@ -133,7 +133,7 @@ pub enum DuplexEvent {
 }
 
 /// A `DuplexRealtimeAdapter`'s model, as the engine opens sessions on it.
-#[crate::host(proxy(host = "livekit.agents._core_view.Duplex"))]
+#[crate::host(proxy(host = "livekit.agents._bindings.Duplex"))]
 pub trait DuplexHost: Send + Sync {
     #[host(call, name = "_core_label")]
     fn label(&self) -> Result<String, HostError>;
@@ -155,7 +155,7 @@ pub trait DuplexHost: Send + Sync {
 
 /// A plugin's `DuplexSession`: the engine applies the updates one after the other and pulls the
 /// output audio and the events.
-#[crate::host(proxy(host = "livekit.agents._core_view._DuplexSession"))]
+#[crate::host(proxy(host = "livekit.agents._bindings._DuplexSession"))]
 pub trait DuplexSession: Send + Sync {
     /// Queued on the host loop, in order.
     #[host(notify, name = "_core_push_audio")]

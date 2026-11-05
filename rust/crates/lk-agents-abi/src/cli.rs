@@ -31,7 +31,7 @@ pub enum CliParseResult {
 
 /// Invalid launcher configuration.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[crate::host(error(kind = "livekit.agents._exceptions.CLIError"))]
+#[crate::host(error(kind = "livekit.agents._bindings.CLIError"))]
 pub enum CliError {
     #[error("{0}")]
     Invalid(String),

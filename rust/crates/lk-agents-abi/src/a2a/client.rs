@@ -154,7 +154,7 @@ pub enum AgentClientError {
     #[error("{0}")]
     Protocol(String),
     #[error("another pull of this reply is still in flight")]
-    #[host(kind = "livekit.agents._exceptions.StreamStateError")]
+    #[host(kind = "livekit.agents._bindings.StreamStateError")]
     Overlap,
     #[error(transparent)]
     #[host(delegate)]

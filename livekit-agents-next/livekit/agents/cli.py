@@ -14,7 +14,7 @@ from collections.abc import Mapping
 from livekit.protocol import agent
 
 from . import _core
-from ._exceptions import CLIError
+from ._bindings import CLIError
 from ._generated.cli import (
     CliArgs,
     CliArgsConsole,

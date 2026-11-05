@@ -6075,7 +6075,7 @@ impl PlaybackListenerProxy {
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
     ) -> PyResult<Self> {
         let view = crate::py_calls::call(
-            &obj.py().import("livekit.agents._core_view")?.getattr("_AudioOutput")?,
+            &obj.py().import("livekit.agents._bindings")?.getattr("_AudioOutput")?,
             (obj,),
             None,
         )?;
@@ -6238,7 +6238,7 @@ impl AudioInputProxy {
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
     ) -> PyResult<Self> {
         let view = crate::py_calls::call(
-            &obj.py().import("livekit.agents._core_view")?.getattr("_AudioInput")?,
+            &obj.py().import("livekit.agents._bindings")?.getattr("_AudioInput")?,
             (obj,),
             None,
         )?;
@@ -6394,7 +6394,7 @@ impl VideoInputProxy {
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
     ) -> PyResult<Self> {
         let view = crate::py_calls::call(
-            &obj.py().import("livekit.agents._core_view")?.getattr("_VideoInput")?,
+            &obj.py().import("livekit.agents._bindings")?.getattr("_VideoInput")?,
             (obj,),
             None,
         )?;
@@ -6553,7 +6553,7 @@ impl AudioOutputProxy {
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
     ) -> PyResult<Self> {
         let view = crate::py_calls::call(
-            &obj.py().import("livekit.agents._core_view")?.getattr("_AudioOutput")?,
+            &obj.py().import("livekit.agents._bindings")?.getattr("_AudioOutput")?,
             (obj,),
             None,
         )?;
@@ -6857,7 +6857,7 @@ impl TextOutputProxy {
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
     ) -> PyResult<Self> {
         let view = crate::py_calls::call(
-            &obj.py().import("livekit.agents._core_view")?.getattr("_TextOutput")?,
+            &obj.py().import("livekit.agents._bindings")?.getattr("_TextOutput")?,
             (obj,),
             None,
         )?;

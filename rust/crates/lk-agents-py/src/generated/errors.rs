@@ -44,7 +44,7 @@ impl crate::py_errors::HostException for ::lk_agents_abi::errors::ApiError {
     fn to_py_err(&self) -> ::pyo3::PyErr {
         let err = match self.kind {
             <::lk_agents_abi::errors::ApiErrorKind>::Api => crate::py_errors::host_exception_with(
-                "livekit.agents._exceptions",
+                "livekit.agents._bindings",
                 "APIError",
                 ::std::string::ToString::to_string(self),
                 |kwargs| {
@@ -62,7 +62,7 @@ impl crate::py_errors::HostException for ::lk_agents_abi::errors::ApiError {
             ),
             <::lk_agents_abi::errors::ApiErrorKind>::Status => {
                 crate::py_errors::host_exception_with(
-                    "livekit.agents._exceptions",
+                    "livekit.agents._bindings",
                     "APIStatusError",
                     ::std::string::ToString::to_string(self),
                     |kwargs| {
@@ -97,7 +97,7 @@ impl crate::py_errors::HostException for ::lk_agents_abi::errors::ApiError {
             }
             <::lk_agents_abi::errors::ApiErrorKind>::Cancelled => {
                 crate::py_errors::host_exception_with(
-                    "livekit.agents._exceptions",
+                    "livekit.agents._bindings",
                     "APIStatusError",
                     ::std::string::ToString::to_string(self),
                     |kwargs| {
@@ -132,7 +132,7 @@ impl crate::py_errors::HostException for ::lk_agents_abi::errors::ApiError {
             }
             <::lk_agents_abi::errors::ApiErrorKind>::Connection => {
                 crate::py_errors::host_exception_with(
-                    "livekit.agents._exceptions",
+                    "livekit.agents._bindings",
                     "APIConnectionError",
                     ::std::string::ToString::to_string(self),
                     |kwargs| {
@@ -151,7 +151,7 @@ impl crate::py_errors::HostException for ::lk_agents_abi::errors::ApiError {
             }
             <::lk_agents_abi::errors::ApiErrorKind>::Timeout => {
                 crate::py_errors::host_exception_with(
-                    "livekit.agents._exceptions",
+                    "livekit.agents._bindings",
                     "APITimeoutError",
                     ::std::string::ToString::to_string(self),
                     |kwargs| {
@@ -209,7 +209,7 @@ impl crate::py_errors::HostException for ::lk_agents_abi::errors::PullError {
         #[allow(unreachable_patterns)]
         match self {
             Self::Overlap => crate::py_errors::host_exception(
-                "livekit.agents._exceptions",
+                "livekit.agents._bindings",
                 "StreamStateError",
                 ::std::string::ToString::to_string(self),
             ),

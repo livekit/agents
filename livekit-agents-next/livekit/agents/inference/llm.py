@@ -9,7 +9,7 @@ from livekit.agents._generated.llm_provider_options import (
 )
 
 from .. import _core, llm
-from .._exceptions import APIConnectionError, APIStatusError, APITimeoutError
+from .._bindings import APIConnectionError, APIStatusError, APITimeoutError
 from .._generated.inference_llm import (
     DeepSeekModels as DeepSeekModels,
     GoogleModels as GoogleModels,
@@ -211,7 +211,7 @@ class _GatewayStream(llm.LLMStream):
         self._request = request
 
     async def _run(self) -> None:
-        from .._core_view import tool_specs
+        from .._bindings import tool_specs
 
         native = self._native_llm.chat(
             self._chat_ctx.items,

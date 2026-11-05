@@ -358,7 +358,7 @@ impl ::lk_agents_abi::cli::DevServer for DevServerProxy {
 impl crate::py_errors::HostException for ::lk_agents_abi::cli::CliError {
     fn to_py_err(&self) -> ::pyo3::PyErr {
         crate::py_errors::host_exception(
-            "livekit.agents._exceptions",
+            "livekit.agents._bindings",
             "CLIError",
             ::std::string::ToString::to_string(self),
         )

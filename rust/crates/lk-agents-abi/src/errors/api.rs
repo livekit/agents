@@ -94,18 +94,18 @@ pub enum TimeoutPhase {
     by = kind,
     cause = cause,
     kinds(
-        Api(class = "livekit.agents._exceptions.APIError", kwargs(retryable)),
+        Api(class = "livekit.agents._bindings.APIError", kwargs(retryable)),
         Status(
-            class = "livekit.agents._exceptions.APIStatusError",
+            class = "livekit.agents._bindings.APIStatusError",
             kwargs(retryable, status_code, request_id)
         ),
         // The reference detects cancellation as `APIStatusError` with status 499.
         Cancelled(
-            class = "livekit.agents._exceptions.APIStatusError",
+            class = "livekit.agents._bindings.APIStatusError",
             kwargs(retryable, status_code, request_id)
         ),
-        Connection(class = "livekit.agents._exceptions.APIConnectionError", kwargs(retryable)),
-        Timeout(class = "livekit.agents._exceptions.APITimeoutError", kwargs(retryable, phase)),
+        Connection(class = "livekit.agents._bindings.APIConnectionError", kwargs(retryable)),
+        Timeout(class = "livekit.agents._bindings.APITimeoutError", kwargs(retryable, phase)),
     )
 ))]
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

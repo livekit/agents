@@ -22,8 +22,9 @@ from ._generated.worker_server import (
     ProcessStartOptions,
     RunningJobInfo as CoreRunningJobInfo,
 )
+from .evals import SimulationContext
 from .http import AgentRoutes
-from .ipc.launch import preload_module_names
+from .ipc import preload_module_names
 from .job import (
     JobAcceptArguments,
     JobContext,
@@ -31,7 +32,6 @@ from .job import (
     RunningJobInfo,
 )
 from .log import logger
-from .simulation import SimulationContext
 from .storage import _CallThreadEntrypoint
 from .storage.session import _Handler
 from .types import NOT_GIVEN, NotGivenOr
@@ -423,7 +423,7 @@ class _ServerCallbacks:
         if opts.multiprocessing_context == "forkserver":
             # the framework's warm-up runs once in the forkserver and is inherited via COW;
             # under `spawn` each job process imports it itself (see ipc._preload)
-            from .ipc.launch import configure_forkserver
+            from .ipc import configure_forkserver
 
             plugin_packages = [p.package for p in Plugin.registered_plugins]
             logger.info("preloading plugins", extra={"packages": plugin_packages})

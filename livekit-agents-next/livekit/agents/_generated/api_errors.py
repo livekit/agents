@@ -7,17 +7,17 @@ from typing import Literal
 
 class UnexpectedModelBehavior(RuntimeError):
     "The model exhausted its recovery attempts."
-    __module__ = "livekit.agents._exceptions"
+    __module__ = "livekit.agents._bindings"
 
 
 class AssignmentTimeoutError(Exception):
     "The job was accepted but no assignment arrived in time."
-    __module__ = "livekit.agents._exceptions"
+    __module__ = "livekit.agents._bindings"
 
 
 class APIError(Exception):
     "An API request failed."
-    __module__ = "livekit.agents._exceptions"
+    __module__ = "livekit.agents._bindings"
     message: str
     body: object | None
     retryable: bool = False
@@ -37,12 +37,12 @@ class APIError(Exception):
 
 class APIStatusError(APIError):
     "An API response has an error status code."
-    __module__ = "livekit.agents._exceptions"
+    __module__ = "livekit.agents._bindings"
     status_code: int
     request_id: str | None
 
     def __init__(self, message: str, *, status_code: int = -1, request_id: str | None = None, body: object | None = None, retryable: bool | None = None) -> None:
-        from livekit.agents._exceptions import _status_retryable
+        from livekit.agents._bindings import _status_retryable
 
         retryable = _status_retryable(status_code, retryable)
         super().__init__(message, body=body, retryable=retryable)
@@ -50,7 +50,7 @@ class APIStatusError(APIError):
         self.request_id = request_id
 
     def __str__(self) -> str:
-        from livekit.agents._exceptions import _status_error_str
+        from livekit.agents._bindings import _status_error_str
 
         return _status_error_str(self)
 
@@ -60,20 +60,20 @@ class APIStatusError(APIError):
 
 class APIConnectionError(APIError):
     "An API request failed due to a connection error."
-    __module__ = "livekit.agents._exceptions"
+    __module__ = "livekit.agents._bindings"
 
     def __init__(self, message: str = "Connection error.", *, retryable: bool = True) -> None:
         super().__init__(message, body=None, retryable=retryable)
 
     def __str__(self) -> str:
-        from livekit.agents._exceptions import _connection_error_str
+        from livekit.agents._bindings import _connection_error_str
 
         return _connection_error_str(self)
 
 
 class APITimeoutError(APIConnectionError):
     "An API request timed out; phase names the expired connection limit."
-    __module__ = "livekit.agents._exceptions"
+    __module__ = "livekit.agents._bindings"
     phase: Literal['pool', 'connect', 'read', 'write', 'total'] | None
 
     def __init__(self, message: str = "Request timed out.", *, retryable: bool = True, phase: Literal['pool', 'connect', 'read', 'write', 'total'] | None = None) -> None:
@@ -83,16 +83,16 @@ class APITimeoutError(APIConnectionError):
 
 class StreamStateError(RuntimeError):
     "A stream was pulled while another pull was still in flight."
-    __module__ = "livekit.agents._exceptions"
+    __module__ = "livekit.agents._bindings"
 
 
 class CLIError(Exception):
-    __module__ = "livekit.agents._exceptions"
+    __module__ = "livekit.agents._bindings"
 
 
 class RedactedCause(Exception):
     "A provider cause with its type and traceback, without sensitive message text."
-    __module__ = "livekit.agents._exceptions"
+    __module__ = "livekit.agents._bindings"
 
 
 __all__ = [

@@ -59,7 +59,7 @@ if TYPE_CHECKING:
     from livekit import api
     from livekit.api.access_token import Claims
 
-    from .simulation import SimulationContext
+    from .evals import SimulationContext
     from .storage import Thread
     from .voice.agent_session import RecordingOptions, VoiceSession
 
@@ -423,7 +423,7 @@ class JobContext:
 
         from livekit.protocol import agent_simulation as sim_pb
 
-        from .simulation import SimulationContext
+        from .evals import SimulationContext
 
         try:
             # ignore unknown fields so dispatches from newer servers still parse

@@ -23,22 +23,14 @@ if TYPE_CHECKING:
 
     from .inference import LLMModels
     from .inference.llm import ChatCompletionOptions
+import json
+from typing import TYPE_CHECKING, Any, Literal, TypeAlias, Union
 
-__all__ = [
-    "EvaluationResult",
-    "Evaluator",
-    "JudgeGroup",
-    "Judge",
-    "JudgmentResult",
-    "accuracy_judge",
-    "coherence_judge",
-    "conciseness_judge",
-    "handoff_judge",
-    "relevancy_judge",
-    "safety_judge",
-    "task_completion_judge",
-    "tool_use_judge",
-]
+from livekit.agents._generated.simulation import SimulationVerdict as SimulationVerdict
+from livekit.protocol import agent_simulation as proto
+
+if TYPE_CHECKING:
+    from .job import JobContext
 
 
 class Evaluator(Protocol):
@@ -377,3 +369,120 @@ def _judge_tools() -> list[Tool]:
 
     schemas = cast("list[dict[str, JsonValue]]", _core._core_judge_tool_schemas())
     return [function_tool(answer, raw_schema=s) for s in schemas]
+
+
+ScenarioUserdata: TypeAlias = dict[str, Union["ScenarioUserdata", Any]]
+"""A scenario's ``userdata``, decoded from its JSON string."""
+
+
+class SimulationContext:
+    """Passed to the ``on_simulation_end`` callback while running under a simulation.
+
+    Carries two verdicts, both recorded for the run:
+      - :attr:`simulator_verdict`: the simulator's verdict (its LLM judgment of the chat).
+      - :attr:`user_verdict`: your own veto, set via :meth:`fail` from richer checks
+        (e.g. comparing mock backend state against the benchmark target in
+        ``scenario.userdata``). The effective result is the AND of the two: your check
+        can fail a run the simulator passed, but it can never rescue one, so there is
+        no ``success()``; not calling :meth:`fail` leaves the simulator's verdict to stand.
+
+    Use :attr:`job_context` to reach the running session and the room.
+    """
+
+    def __init__(self, dispatch: proto.SimulationDispatch, job_ctx: JobContext) -> None:
+        self._dispatch = dispatch
+        self._scenario = dispatch.scenario
+        self._job_ctx = job_ctx
+        self._simulator_verdict: SimulationVerdict | None = None
+        self._user_verdict: SimulationVerdict | None = None
+
+    @property
+    def scenario(self) -> proto.Scenario:
+        return self._scenario
+
+    @property
+    def simulation_mode(self) -> Literal["text", "audio"]:
+        """How the simulated user interacts with the agent. Unspecified is treated as text,
+        since simulations predating the field were all text-only."""
+        if self._dispatch.mode == proto.SimulationMode.SIMULATION_MODE_AUDIO:
+            return "audio"
+        return "text"
+
+    @property
+    def simulation_run_id(self) -> str:
+        """The run this session belongs to, available as soon as the entrypoint runs."""
+        return self._dispatch.simulation_run_id
+
+    @property
+    def simulation_job_id(self) -> str:
+        """The run job (one scenario) behind this session, likewise available up front."""
+        return self._dispatch.job_id
+
+    @property
+    def simulator_verdict(self) -> SimulationVerdict:
+        """The simulator's verdict (its LLM judgment of the conversation). Read-only;
+        recorded alongside your :attr:`user_verdict`.
+
+        Only available once the simulation has ended, i.e. inside ``on_simulation_end``.
+        Raises :class:`RuntimeError` if accessed earlier (e.g. from the entrypoint).
+        """
+        if self._simulator_verdict is None:
+            raise RuntimeError(
+                "simulator_verdict is only available inside on_simulation_end "
+                "(after the simulation completes)"
+            )
+        return self._simulator_verdict
+
+    @property
+    def job_context(self) -> JobContext:
+        """The :class:`JobContext` for this run; use it to reach the running session
+        (``job_context.primary_session``), the room, and other job state."""
+        return self._job_ctx
+
+    def _begin_finalize(
+        self,
+        *,
+        simulator_verdict: SimulationVerdict,
+    ) -> None:
+        """Internal: populate the simulator verdict / run before on_simulation_end."""
+        self._simulator_verdict = simulator_verdict
+
+    def userdata(self) -> ScenarioUserdata:
+        """The scenario's ``userdata`` decoded from its JSON string (``{}`` if empty)."""
+        if not self._scenario.userdata:
+            return {}
+        data: ScenarioUserdata = json.loads(self._scenario.userdata)
+        return data
+
+    def fail(self, reason: str = "") -> None:
+        """Veto this run from your own checks (e.g. final DB state diverged).
+
+        The effective result is the AND of both verdicts, so this can only fail a run
+        the simulator passed, never rescue one. The simulator's verdict is still
+        reported. The last call wins if you call :meth:`fail` more than once.
+        """
+        self._user_verdict = SimulationVerdict(success=False, reason=reason)
+
+    @property
+    def user_verdict(self) -> SimulationVerdict | None:
+        """Your veto set via :meth:`fail`, or None if you didn't veto the run."""
+        return self._user_verdict
+
+
+__all__ = [
+    "EvaluationResult",
+    "Evaluator",
+    "JudgeGroup",
+    "Judge",
+    "JudgmentResult",
+    "accuracy_judge",
+    "coherence_judge",
+    "conciseness_judge",
+    "handoff_judge",
+    "relevancy_judge",
+    "safety_judge",
+    "task_completion_judge",
+    "tool_use_judge",
+    "SimulationContext",
+    "SimulationVerdict",
+]

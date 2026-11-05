@@ -31,12 +31,7 @@ import aiohttp
 from pydantic import TypeAdapter
 
 from livekit.agents import _bindings, tokenize, tts, utils
-from livekit.agents._exceptions import (
-    APIConnectionError,
-    APIError,
-    APIStatusError,
-    APITimeoutError,
-)
+from livekit.agents._bindings import APIConnectionError, APIError, APIStatusError, APITimeoutError
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,

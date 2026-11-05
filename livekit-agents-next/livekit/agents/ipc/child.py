@@ -43,7 +43,6 @@ from ..job import (
 )
 from ..log import logger
 from ..utils import aio, http_context, log_exceptions
-from .launch import load_preload_modules
 
 _T = TypeVar("_T")
 
@@ -152,7 +151,7 @@ class _JobProc:
             http_proxy=http_proxy,
         )
         # the framework's warm-up; a no-op under a forkserver, which imported it already
-        from . import _preload
+        from . import _preload, load_preload_modules
 
         load_preload_modules(self._preload_modules)
         # after the preloads: an application installing its own tracer provider keeps it

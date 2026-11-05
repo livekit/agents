@@ -501,7 +501,7 @@ pub fn resolve_keyterm_detection<'py>(
 
 // Declared in rust/crates/lk-agents-abi/src/turn/detector.rs.
 
-/// [`::lk_agents_abi::EotDetector`] over a host `livekit.agents._core_view.TurnDetector`.
+/// [`::lk_agents_abi::EotDetector`] over a host `livekit.agents._bindings.TurnDetector`.
 #[derive(Clone)]
 pub struct EotDetectorProxy {
     host: ::std::sync::Arc<Py<PyAny>>,

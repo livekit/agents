@@ -294,7 +294,7 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
     def _core_attach(self, tools: Callable[[], Sequence[Tool | Toolset]]) -> None:
         """Report this session's events to the framework, which offers it the tools ``tools``
         names."""
-        from .._core_view import forward_session_events
+        from .._bindings import forward_session_events
 
         self._core_tools = tools
         self._core_events: asyncio.Queue[wire.Event | None] = asyncio.Queue()
@@ -345,7 +345,7 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
         await self.update_chat_ctx(ctx)
 
     async def _core_update_tools(self, names: list[str]) -> None:
-        from .._core_view import offered_tools
+        from .._bindings import offered_tools
 
         await self.update_tools(offered_tools(self._core_tools(), names))
 

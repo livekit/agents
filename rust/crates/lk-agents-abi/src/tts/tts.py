@@ -15,7 +15,7 @@ from typing_extensions import TypeVar
 from livekit import rtc
 
 from .. import _bindings, _core
-from .._exceptions import APIError
+from .._bindings import APIError
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
     USERDATA_TIMED_TRANSCRIPT,

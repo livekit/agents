@@ -16,6 +16,7 @@ from ..types import NOT_GIVEN
 
 if TYPE_CHECKING:
     from livekit.agents import VAD
+    from livekit.agents._bindings import TurnDetector
     from livekit.agents._core import (
         AgentNodes,
         ConsoleIo,
@@ -28,7 +29,6 @@ if TYPE_CHECKING:
         VoiceAgent,
         _core_VoiceStore,
     )
-    from livekit.agents._core_view import TurnDetector
     from livekit.agents._generated.expressive import ExpressiveOptions
     from livekit.agents.job import JobContext
     from livekit.agents.llm import LLM, Toolset

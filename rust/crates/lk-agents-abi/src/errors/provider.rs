@@ -104,7 +104,7 @@ impl ProviderError {
 pub enum PullError {
     /// `StreamStateError`: another pull is in flight.
     #[error("another pull of this stream is still in flight")]
-    #[host(kind = "livekit.agents._exceptions.StreamStateError")]
+    #[host(kind = "livekit.agents._bindings.StreamStateError")]
     Overlap,
     #[error(transparent)]
     #[host(delegate)]

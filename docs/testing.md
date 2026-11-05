@@ -142,7 +142,7 @@ verdict and verify application outcomes.
 
 ```python
 from livekit.agents import AgentServer, JobContext
-from livekit.agents.simulation import SimulationContext
+from livekit.agents.evals import SimulationContext
 
 server = AgentServer()
 

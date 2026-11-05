@@ -167,43 +167,43 @@ impl BaseException {
     }
 }
 
-/// Python interface: `livekit.agents._exceptions.APIError`.
+/// Python interface: `livekit.agents._bindings.APIError`.
 pub use crate::py_errors::interfaces::ApiError;
 impl ApiError {
     pub fn import(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
         static CLASS: pyo3::sync::PyOnceLock<Py<pyo3::types::PyType>> =
             pyo3::sync::PyOnceLock::new();
-        Ok(CLASS.import(py, "livekit.agents._exceptions", "APIError")?.as_any().clone())
+        Ok(CLASS.import(py, "livekit.agents._bindings", "APIError")?.as_any().clone())
     }
 }
 
-/// Python interface: `livekit.agents._exceptions.APIStatusError`.
+/// Python interface: `livekit.agents._bindings.APIStatusError`.
 pub use crate::py_errors::interfaces::ApiStatusError;
 impl ApiStatusError {
     pub fn import(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
         static CLASS: pyo3::sync::PyOnceLock<Py<pyo3::types::PyType>> =
             pyo3::sync::PyOnceLock::new();
-        Ok(CLASS.import(py, "livekit.agents._exceptions", "APIStatusError")?.as_any().clone())
+        Ok(CLASS.import(py, "livekit.agents._bindings", "APIStatusError")?.as_any().clone())
     }
 }
 
-/// Python interface: `livekit.agents._exceptions.APIConnectionError`.
+/// Python interface: `livekit.agents._bindings.APIConnectionError`.
 pub use crate::py_errors::interfaces::ApiConnectionError;
 impl ApiConnectionError {
     pub fn import(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
         static CLASS: pyo3::sync::PyOnceLock<Py<pyo3::types::PyType>> =
             pyo3::sync::PyOnceLock::new();
-        Ok(CLASS.import(py, "livekit.agents._exceptions", "APIConnectionError")?.as_any().clone())
+        Ok(CLASS.import(py, "livekit.agents._bindings", "APIConnectionError")?.as_any().clone())
     }
 }
 
-/// Python interface: `livekit.agents._exceptions.APITimeoutError`.
+/// Python interface: `livekit.agents._bindings.APITimeoutError`.
 pub use crate::py_errors::interfaces::ApiTimeoutError;
 impl ApiTimeoutError {
     pub fn import(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
         static CLASS: pyo3::sync::PyOnceLock<Py<pyo3::types::PyType>> =
             pyo3::sync::PyOnceLock::new();
-        Ok(CLASS.import(py, "livekit.agents._exceptions", "APITimeoutError")?.as_any().clone())
+        Ok(CLASS.import(py, "livekit.agents._bindings", "APITimeoutError")?.as_any().clone())
     }
 }
 

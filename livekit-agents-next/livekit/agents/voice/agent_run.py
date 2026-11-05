@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Generic
 
 from .. import _core, llm, telemetry, utils
-from .._exceptions import UnexpectedModelBehavior
+from .._bindings import UnexpectedModelBehavior
 from .._generated.agent_run import (
     FunctionToolInfo,
     OutputText,
@@ -374,7 +374,7 @@ def run_error(error: RunError) -> BaseException:
                 f"exceeded maximum retries ({retries}) for output validation"
             )
         case RunErrorModel(message=message):
-            from .._exceptions import APIError
+            from .._bindings import APIError
 
             return APIError(f"the model request failed: {message}", retryable=False)
         case RunErrorHost(message=message):
@@ -385,7 +385,7 @@ def run_error(error: RunError) -> BaseException:
 
 def tool_infos(tools: ToolContext) -> list[FunctionToolInfo]:
     """The core's ``FunctionToolInfo`` of each function tool."""
-    from .._core_view import tool_specs
+    from .._bindings import tool_specs
     from ..a2a import _ExpertTool
 
     specs = {spec["name"]: spec for spec in tool_specs(list(tools.function_tools.values()))}

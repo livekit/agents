@@ -13,7 +13,7 @@ pub struct AvailabilityChanged {
 
 /// What a fallback chain reports to the adapter that built it (each host `FallbackAdapter`, the
 /// realtime one included): the adapter maps the index back to its instance.
-#[crate::host(proxy(host = "livekit.agents._core_view.FallbackListener"))]
+#[crate::host(proxy(host = "livekit.agents._bindings.FallbackListener"))]
 pub trait ChainObserver: Send + Sync {
     #[host(notify, name = "_core_availability_changed")]
     fn availability_changed(&self, ev: AvailabilityChanged);

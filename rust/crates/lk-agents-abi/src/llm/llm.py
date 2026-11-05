@@ -178,7 +178,7 @@ class LLM(
     async def _core_chat(
         self, req: _core.ChatRequest, conn: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> LLMStream:
-        from .._core_view import chat_request
+        from .._bindings import chat_request
 
         chat_ctx, tools = chat_request(req)
         out = self.chat(

@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from typing import Any, Self
 
 from livekit.agents import VAD
-from livekit.agents._core_view import FallbackListener
+from livekit.agents._bindings import FallbackListener
 from livekit.agents.stt import STT
 
 from .connect import APIConnectOptions

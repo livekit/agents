@@ -30,8 +30,7 @@ from typing import Any, Literal, TypeAlias
 import psutil
 
 from livekit.agents import JobContext, _core
-from livekit.agents.ipc import JobExecutor, ProcPool
-from livekit.agents.ipc.launch import configure_forkserver
+from livekit.agents.ipc import JobExecutor, ProcPool, configure_forkserver
 from livekit.agents.job import JobAcceptArguments, JobExecutorType, JobProcess, RunningJobInfo
 from livekit.protocol import agent
 from scripts.bench.metrics import LoopLag, distribution

@@ -509,7 +509,7 @@ def test_generated_connect_options_keep_frozen_replace_and_validation() -> None:
 async def test_generated_connect_options_total_deadline_keeps_timeout_classification() -> None:
     import asyncio
 
-    from livekit.agents._exceptions import APITimeoutError
+    from livekit.agents._bindings import APITimeoutError
     from livekit.agents.types import APIConnectOptions
 
     with pytest.raises(APITimeoutError) as failure:
@@ -789,7 +789,7 @@ async def test_refused_amd_handle_cannot_replace_or_close_the_attached_detector(
 def test_realtime_bridge_wraps_the_declared_host_contract_without_member_probes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from livekit.agents import _core_view
+    from livekit.agents import _bindings as _core_view
     from livekit.agents.llm._realtime import RealtimeModel as NativeRealtimeModel
 
     def tools():

@@ -2637,7 +2637,7 @@ impl ::lk_agents_abi::llm::duplex::AudioGate for AudioGateProxy {
 
 // Declared in rust/crates/lk-agents-abi/src/llm/duplex.rs.
 
-/// [`::lk_agents_abi::llm::duplex::DuplexHost`] over a host `livekit.agents._core_view.Duplex`.
+/// [`::lk_agents_abi::llm::duplex::DuplexHost`] over a host `livekit.agents._bindings.Duplex`.
 #[derive(Clone)]
 pub struct DuplexHostProxy {
     host: ::std::sync::Arc<Py<PyAny>>,
@@ -2843,7 +2843,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexHost for DuplexHostProxy {
 
 // Declared in rust/crates/lk-agents-abi/src/llm/duplex.rs.
 
-/// [`::lk_agents_abi::llm::duplex::DuplexSession`] over a host `livekit.agents._core_view._DuplexSession`.
+/// [`::lk_agents_abi::llm::duplex::DuplexSession`] over a host `livekit.agents._bindings._DuplexSession`.
 #[derive(Clone)]
 pub struct DuplexSessionProxy {
     host: ::std::sync::Arc<Py<PyAny>>,
@@ -3283,7 +3283,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
 
 // Declared in rust/crates/lk-agents-abi/src/llm/fallback.rs.
 
-/// [`::lk_agents_abi::llm::fallback::ChainObserver`] over a host `livekit.agents._core_view.FallbackListener`.
+/// [`::lk_agents_abi::llm::fallback::ChainObserver`] over a host `livekit.agents._bindings.FallbackListener`.
 #[derive(Clone)]
 pub struct ChainObserverProxy {
     host: ::std::sync::Arc<Py<PyAny>>,

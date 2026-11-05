@@ -16,8 +16,7 @@ from pathlib import Path
 import psutil
 import pytest
 
-from livekit.agents.ipc import JobExecutor
-from livekit.agents.ipc.launch import configure_forkserver
+from livekit.agents.ipc import JobExecutor, configure_forkserver
 from livekit.agents.job import JobAcceptArguments, JobContext, RunningJobInfo
 from livekit.protocol import agent
 from tests.conformance.ipc_processes import close_owned_executor, run_owned_process

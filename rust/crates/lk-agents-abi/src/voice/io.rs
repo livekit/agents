@@ -247,7 +247,7 @@ fn seconds(value: f64, path: &'static str) -> std::result::Result<Duration, Inva
 /// the leg's events as its own): `io.AudioOutput`'s `on_playback_*`, through its `_core_*` surface.
 #[crate::host(proxy(
     host = "livekit.agents.voice.io.AudioOutput",
-    view = "livekit.agents._core_view._AudioOutput"
+    view = "livekit.agents._bindings._AudioOutput"
 ))]
 pub trait PlaybackListener: Send + Sync {
     #[host(notify, name = "_core_on_playback_started")]
@@ -270,11 +270,19 @@ pub trait PlaybackListener: Send + Sync {
     );
 }
 
+/// A frame read from an [`AudioInput`].
+#[derive(Debug, Clone)]
+pub struct InputFrame {
+    pub frame: AudioFrame,
+    /// Pre-connect audio: every consumer hears it in full, however far behind it falls.
+    pub head: bool,
+}
+
 /// `io.AudioInput`: the source end of the audio-in chain. Exactly one reader: two tasks pulling
 /// one host-backed async iterator lose data.
 #[crate::host(proxy(
     host = "livekit.agents.voice.io.AudioInput",
-    view = "livekit.agents._core_view._AudioInput"
+    view = "livekit.agents._bindings._AudioInput"
 ))]
 pub trait AudioInput: Send + Sync {
     #[host(read_once, name = "_core_label")]
@@ -287,6 +295,13 @@ pub trait AudioInput: Send + Sync {
         cx: &crate::telemetry::Cx,
     ) -> crate::BoxFuture<'_, Result<Option<AudioFrame>>>;
 
+    /// [`next_frame`](Self::next_frame), marking the pre-connect audio a room input replays
+    /// ahead of its live frames.
+    fn next_input(&self, cx: &crate::telemetry::Cx) -> crate::BoxFuture<'_, Result<Option<InputFrame>>> {
+        let next = self.next_frame(cx);
+        Box::pin(async move { Ok(next.await?.map(|frame| InputFrame { frame, head: false })) })
+    }
+
     /// The chain was enabled; frames are dropped while detached, so a re-attach resumes mid-stream.
     #[host(notify, name = "_core_on_attached")]
     fn on_attached(&self) {}
@@ -297,7 +312,7 @@ pub trait AudioInput: Send + Sync {
 /// `io.VideoInput`: the source end of the video-in chain; one reader. Frames are side-table keys.
 #[crate::host(proxy(
     host = "livekit.agents.voice.io.VideoInput",
-    view = "livekit.agents._core_view._VideoInput"
+    view = "livekit.agents._bindings._VideoInput"
 ))]
 pub trait VideoInput: Send + Sync {
     #[host(read_once, name = "_core_label")]
@@ -321,7 +336,7 @@ pub trait VideoInput: Send + Sync {
 /// [`flush_segment`](Self::flush_segment); call [`AudioOutputExt::capture_frame`] and [`AudioOutputExt::flush`].
 #[crate::host(proxy(
     host = "livekit.agents.voice.io.AudioOutput",
-    view = "livekit.agents._core_view._AudioOutput"
+    view = "livekit.agents._bindings._AudioOutput"
 ))]
 pub trait AudioOutput: Send + Sync {
     #[host(read_once, name = "_core_label")]
@@ -438,7 +453,7 @@ impl<T: AudioOutput + ?Sized> AudioOutputExt for T {}
 /// `io.TextOutput`: one link in the transcript chain; `flush` is the whole protocol.
 #[crate::host(proxy(
     host = "livekit.agents.voice.io.TextOutput",
-    view = "livekit.agents._core_view._TextOutput"
+    view = "livekit.agents._bindings._TextOutput"
 ))]
 pub trait TextOutput: Send + Sync {
     #[host(read_once, name = "_core_label")]

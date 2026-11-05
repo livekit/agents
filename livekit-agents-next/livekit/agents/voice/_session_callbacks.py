@@ -13,10 +13,7 @@ from typing import TYPE_CHECKING, Any
 from livekit import rtc
 
 from .. import _core, llm, stt, tts
-from .._core_view import (
-    chat_request,
-    tool_specs,
-)
+from .._bindings import chat_request, tool_specs
 from .._generated.agent_run import FunctionToolInfo
 from .._generated.voice_session import VoiceCommandOrigin, VoiceCommandOriginHook
 from ..llm import (

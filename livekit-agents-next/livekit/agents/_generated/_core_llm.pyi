@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any, Self
 
-from livekit.agents._core_view import Duplex, FallbackListener
+from livekit.agents._bindings import Duplex, FallbackListener
 from livekit.agents.llm import LLM, Toolset
 from livekit.agents.llm.mcp import _Progress
 from livekit.agents.llm.realtime import RealtimeModel

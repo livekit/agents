@@ -28,9 +28,7 @@ from typing import Any
 
 import psutil
 
-from livekit.agents.ipc import JobExecutor
-
-PRELOAD = ["livekit.agents.ipc._preload", "livekit.agents.ipc._preload_freeze"]
+from livekit.agents.ipc import JobExecutor, configure_forkserver
 
 
 async def _entrypoint(ctx: Any) -> None:
@@ -85,7 +83,7 @@ def _forkserver_pid() -> list[int]:
 
 async def bench(method: str, cold: int, warm: int, burst: int) -> dict[str, Any]:
     if method == "forkserver":
-        mp.get_context(method).set_forkserver_preload(PRELOAD)
+        configure_forkserver(mp.get_context(method), [])
     # the first process also starts the forkserver: not counted
     first, _ = await _ready(method)
     await first.aclose()

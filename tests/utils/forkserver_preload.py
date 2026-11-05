@@ -6,7 +6,7 @@ import multiprocessing as mp
 import weakref
 from multiprocessing.connection import Connection
 
-from livekit.agents.ipc.launch import configure_forkserver
+from livekit.agents.ipc import configure_forkserver
 
 
 class _Cycle:
