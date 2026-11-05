@@ -56,6 +56,9 @@ pub mod semconv {
         pub const EXCEPTION_MESSAGE: &str = "exception.message";
         pub const EXCEPTION_STACKTRACE: &str = "exception.stacktrace";
         pub const RPC_METHOD: &str = "rpc.method";
+        pub const HTTP_REQUEST_METHOD: &str = "http.request.method";
+        pub const HTTP_ROUTE: &str = "http.route";
+        pub const HTTP_RESPONSE_STATUS_CODE: &str = "http.response.status_code";
 
         pub const GEN_AI_AGENT_NAME: &str = "gen_ai.agent.name";
         pub const GEN_AI_CONVERSATION_ID: &str = "gen_ai.conversation.id";

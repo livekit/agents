@@ -3,6 +3,7 @@
 
 pub mod agent_turn;
 pub mod common;
+pub mod endpoint;
 pub mod inference;
 pub mod job;
 pub mod session;
@@ -36,6 +37,7 @@ pub const SPANS: &[Declared] = &[
     Declared::of::<job::WaitForParticipant>(),
     Declared::of::<job::WaitForAudioTrack>(),
     Declared::of::<job::PublishAudioOutput>(),
+    Declared::of::<endpoint::HttpRequest>(),
     Declared::of::<text::A2aRequest>(),
     Declared::of::<text::AgentRun>(),
     Declared::of::<text::JudgeEvaluation>(),
@@ -65,11 +67,13 @@ pub const SPANS: &[Declared] = &[
 /// Text runs and evaluation judges.
 pub mod text {
     use super::common::GenAiOperation;
+    use super::endpoint::HttpRequest;
     use crate::telemetry::decl::{Attrs, Current, External, GenAiContent, SpanValue, span};
     use crate::telemetry::semconv::otel;
 
-    /// One A2A request; continues the caller's `traceparent`.
-    #[span(name = "a2a_request", parent = External, kind = Server)]
+    /// One A2A request: under the `http_request` the worker served it in, or continuing an
+    /// in-process caller's trace.
+    #[span(name = "a2a_request", parent = HttpRequest | External, kind = Server)]
     #[derive(Attrs)]
     pub struct A2aRequest {
         /// `invoke_agent`.

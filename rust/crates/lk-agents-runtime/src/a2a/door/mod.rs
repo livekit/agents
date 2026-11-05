@@ -125,22 +125,25 @@ impl TextEndpoint for Door {
 
     fn serve(
         &self,
+        cx: &telemetry::Cx,
         exchange: Arc<dyn EndpointExchange>,
         serving: TextServing,
     ) -> lk_agents_abi::BoxFuture<'_, Result<(), HostError>> {
+        let cx = cx.clone();
         Box::pin(async move {
             let exchange: Arc<dyn Any + Send + Sync> = exchange;
             let exchange = exchange
                 .downcast::<lk_agents_worker::http::Exchange>()
                 .map_err(|_| HostError::new("expected the worker's HTTP exchange"))?;
-            serve::serve(self, &*exchange, serving).await
+            serve::serve(self, &*exchange, serving, cx).await
         })
     }
 }
 
 impl Door {
     /// One JSON-RPC request; `body_size` is what the request carried, past a body cut at the
-    /// payload budget.
+    /// payload budget. Its `a2a_request` opens under `parent`, the exchange's `http_request`, or
+    /// at the door's root.
     #[allow(clippy::too_many_arguments, reason = "one request's exchange")]
     pub async fn dispatch(
         &self,
@@ -150,7 +153,7 @@ impl Door {
         _offset: Option<String>,
         body_size: Option<usize>,
         host_context: Option<lk_agents_abi::HostRef>,
-        traceparent: Option<String>,
+        parent: Option<telemetry::Cx>,
     ) -> Response {
         let body_size = body_size.unwrap_or(body.len()).max(body.len());
         let admission = self.admission.try_exchange(body_size);
@@ -180,7 +183,7 @@ impl Door {
             let _admission = admission;
             let id = request.id.clone();
             if let Err(error) =
-                inner.execute(request, principal, sender.clone(), host_context, traceparent).await
+                inner.execute(request, principal, sender.clone(), host_context, parent).await
             {
                 let _ = sender.try_send(match error {
                     DoorError::Storage(error) => Ok(rpc::storage_failure(id, &error)),
@@ -240,16 +243,14 @@ impl Inner {
         principal: AuthPrincipal,
         sender: Sender,
         host_context: Option<lk_agents_abi::HostRef>,
-        traceparent: Option<String>,
+        parent: Option<telemetry::Cx>,
     ) -> Result<(), DoorError> {
         let id = request.id;
         let frame = match request.call {
             Call::Send { message, history_length, streaming } => {
-                // The request continues its caller's trace.
-                let parent =
-                    traceparent.as_deref().and_then(telemetry::SpanContext::parse_traceparent);
+                let parent = parent.unwrap_or_else(|| self.tracer.root());
                 let span = telemetry::start(
-                    &self.tracer.root().continuing(parent),
+                    &parent,
                     telemetry::A2aRequest {
                         operation: telemetry::GenAiOperation::InvokeAgent,
                         agent_name: self.lane.clone(),

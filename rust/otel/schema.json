@@ -3,9 +3,10 @@
   "spans": [
     {
       "name": "a2a_request",
-      "brief": "One A2A request; continues the caller's `traceparent`.",
+      "brief": "One A2A request: under the `http_request` the worker served it in, or continuing an in-process caller's trace.",
       "kind": "server",
       "parents": [
+        "http_request",
         "<external>"
       ],
       "outlives_parent": null,
@@ -742,6 +743,54 @@
           "required": false,
           "registry": "otel",
           "content": "gen_ai"
+        }
+      ],
+      "events": []
+    },
+    {
+      "name": "http_request",
+      "brief": "One exchange the worker serves on an agent endpoint: an HTTP request and its response, or a WebSocket connection. Continues the caller's `traceparent`.",
+      "kind": "server",
+      "parents": [
+        "<external>"
+      ],
+      "outlives_parent": null,
+      "start": [
+        {
+          "key": "http.request.method",
+          "type": "string",
+          "required": true,
+          "registry": "otel"
+        },
+        {
+          "key": "http.route",
+          "type": "string",
+          "required": true,
+          "registry": "otel"
+        },
+        {
+          "key": "lk.endpoint.request_id",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "end": [
+        {
+          "key": "http.response.status_code",
+          "type": "int",
+          "required": false,
+          "registry": "otel"
+        },
+        {
+          "key": "lk.endpoint.completion",
+          "type": "string",
+          "required": false,
+          "members": [
+            "internal",
+            "canceled",
+            "timeout",
+            "protocol"
+          ]
         }
       ],
       "events": []

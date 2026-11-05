@@ -397,7 +397,7 @@ def _worker_main() -> None:
         options["job_executor_type"] = JobExecutorType(options["job_executor_type"])
     options.setdefault("num_idle_processes", 1)
     options.setdefault("multiprocessing_context", "spawn")
-    options.setdefault("port", 0)
+    options.setdefault("listeners", {"health": {"port": 0}})
 
     # the IPC options are private: set them where the CLI does
     server = AgentServer()

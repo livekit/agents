@@ -7,7 +7,7 @@
       "type": "span",
       "span_kind": "server",
       "stability": "development",
-      "brief": "One A2A request; continues the caller's `traceparent`.",
+      "brief": "One A2A request: under the `http_request` the worker served it in, or continuing an in-process caller's trace.",
       "attributes": [
         {
           "ref": "gen_ai.operation.name",
@@ -25,6 +25,7 @@
       "annotations": {
         "livekit": {
           "parents": [
+            "http_request",
             "<external>"
           ]
         }
@@ -572,6 +573,46 @@
             "lk.pii.function_tool.output",
             "lk.function_tool.is_error",
             "gen_ai.tool.call.result"
+          ]
+        }
+      }
+    },
+    {
+      "id": "span.http_request",
+      "type": "span",
+      "span_kind": "server",
+      "stability": "development",
+      "brief": "One exchange the worker serves on an agent endpoint: an HTTP request and its response, or a WebSocket connection. Continues the caller's `traceparent`.",
+      "attributes": [
+        {
+          "ref": "http.request.method",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "http.route",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "lk.endpoint.request_id",
+          "requirement_level": "required"
+        },
+        {
+          "ref": "http.response.status_code",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "lk.endpoint.completion",
+          "requirement_level": "recommended"
+        }
+      ],
+      "annotations": {
+        "livekit": {
+          "parents": [
+            "<external>"
+          ],
+          "end_attributes": [
+            "http.response.status_code",
+            "lk.endpoint.completion"
           ]
         }
       }

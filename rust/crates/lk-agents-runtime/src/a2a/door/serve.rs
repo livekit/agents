@@ -13,6 +13,7 @@ use lk_agents_net::a2a_auth::Credentials;
 use serde_json::json;
 
 use super::{Door, MAX_PAYLOAD_BYTES};
+use crate::telemetry;
 
 type Headers = Vec<(Vec<u8>, Vec<u8>)>;
 
@@ -27,6 +28,7 @@ pub async fn serve<E: HttpExchange>(
     door: &Door,
     exchange: &E,
     serving: TextServing,
+    cx: telemetry::Cx,
 ) -> Result<(), HostError> {
     let head = exchange.head();
     let path =
@@ -45,7 +47,7 @@ pub async fn serve<E: HttpExchange>(
     };
     match route {
         Route::Card => card(door, exchange, &head, &serving).await,
-        Route::Rpc => rpc(door, exchange, &head, principal, serving).await,
+        Route::Rpc => rpc(door, exchange, &head, principal, serving, cx).await,
     }
 }
 
@@ -112,6 +114,7 @@ async fn rpc<E: HttpExchange>(
     head: &RequestHead,
     principal: AuthPrincipal,
     serving: TextServing,
+    cx: telemetry::Cx,
 ) -> Result<(), HostError> {
     let mut body = Vec::new();
     let mut received = 0usize;
@@ -144,7 +147,7 @@ async fn rpc<E: HttpExchange>(
             header(&head.headers, "last-event-id"),
             Some(received),
             serving.host_context,
-            header(&head.headers, "traceparent"),
+            Some(cx),
         )
         .await;
     let first = match responses.next().await {

@@ -584,6 +584,52 @@
       ]
     },
     {
+      "id": "registry.livekit.agents.endpoint",
+      "type": "attribute_group",
+      "brief": "Attributes declared in `lk_agents_abi::telemetry::spans::endpoint`.",
+      "attributes": [
+        {
+          "id": "lk.endpoint.completion",
+          "type": {
+            "members": [
+              {
+                "id": "internal",
+                "value": "internal",
+                "brief": "internal",
+                "stability": "development"
+              },
+              {
+                "id": "canceled",
+                "value": "canceled",
+                "brief": "canceled",
+                "stability": "development"
+              },
+              {
+                "id": "timeout",
+                "value": "timeout",
+                "brief": "timeout",
+                "stability": "development"
+              },
+              {
+                "id": "protocol",
+                "value": "protocol",
+                "brief": "protocol",
+                "stability": "development"
+              }
+            ]
+          },
+          "stability": "development",
+          "brief": "Why the exchange did not complete, as its `x-lk-completion` names it."
+        },
+        {
+          "id": "lk.endpoint.request_id",
+          "type": "string",
+          "stability": "development",
+          "brief": "The node's id for the request, as its logs name it."
+        }
+      ]
+    },
+    {
       "id": "registry.livekit.agents.inference",
       "type": "attribute_group",
       "brief": "Attributes declared in `lk_agents_abi::telemetry::spans::inference`.",
@@ -1902,6 +1948,18 @@
         },
         {
           "ref": "gen_ai.workflow.name",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "http.request.method",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "http.response.status_code",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "http.route",
           "requirement_level": "recommended"
         },
         {

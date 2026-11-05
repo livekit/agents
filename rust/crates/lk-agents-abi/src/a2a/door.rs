@@ -60,8 +60,10 @@ pub trait TextEndpoint: Send + Sync {
     fn name(&self) -> &str;
 
     /// Answer one exchange: authenticate the caller, then serve the card or one JSON-RPC call.
+    /// `cx` is the exchange's `http_request` span.
     fn serve(
         &self,
+        cx: &crate::telemetry::Cx,
         exchange: Arc<dyn EndpointExchange>,
         serving: TextServing,
     ) -> crate::BoxFuture<'_, Result<(), HostError>>;

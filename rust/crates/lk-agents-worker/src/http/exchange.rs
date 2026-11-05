@@ -5,9 +5,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::ipc::telemetry;
 use lk_agents_abi::BoxFuture;
 use lk_agents_abi::errors::HostError;
-use lk_agents_abi::telemetry;
 use lk_agents_abi::worker::http::{
     EndpointExchange, EndpointRequest, ExchangeError, ExchangeEvent, ExchangeKind, ExchangeMessage,
     HttpExchange, RequestHead,
@@ -26,21 +26,24 @@ const REASON_LIMIT: usize = 256;
 const COMPLETION: &[u8] = b"x-lk-completion";
 const COMPLETION_ERROR: &[u8] = b"x-lk-error";
 
-/// How a response that already started ended, as its completion trailer names it.
-#[derive(Debug, Clone, Copy)]
-enum Completion {
-    /// The application failed.
-    Internal,
-    /// The worker stopped while the response streamed.
-    Canceled,
+/// The `x-lk-completion` token of an exchange that did not complete.
+fn completion_token(completion: telemetry::HttpCompletion) -> &'static [u8] {
+    match completion {
+        telemetry::HttpCompletion::Internal => b"internal",
+        telemetry::HttpCompletion::Canceled => b"canceled",
+        telemetry::HttpCompletion::Timeout => b"timeout",
+        telemetry::HttpCompletion::Protocol => b"protocol",
+    }
 }
 
-impl Completion {
-    fn token(self) -> &'static [u8] {
-        match self {
-            Completion::Internal => b"internal",
-            Completion::Canceled => b"canceled",
-        }
+/// The reset that reports `completion` before any response byte.
+fn reset_code(completion: telemetry::HttpCompletion) -> Code {
+    match completion {
+        telemetry::HttpCompletion::Internal => Code::HsrInternal,
+        // A cancelled request makes no claim about whether it was applied.
+        telemetry::HttpCompletion::Canceled => Code::HsrAbort,
+        telemetry::HttpCompletion::Timeout => Code::HsrTimeout,
+        telemetry::HttpCompletion::Protocol => Code::HsrProtocol,
     }
 }
 
@@ -175,7 +178,22 @@ pub(super) async fn serve(server: &EndpointServer, wire: Wire, origin: Origin) {
         (Err(error), Origin::Listener { .. }) => return refuse(write, end, error.status()).await,
     };
     let deadline = (request.timeout_ms > 0).then(|| Duration::from_millis(request.timeout_ms));
-    let response = Response::new(write, parsed.version_11, parsed.head_method);
+    // The exchange continues its caller's trace.
+    let traceparent = values(&parsed.head.headers, b"traceparent")
+        .next()
+        .and_then(|value| std::str::from_utf8(value).ok())
+        .and_then(telemetry::SpanContext::parse_traceparent);
+    let span = telemetry::start(
+        &server.tracer.root().continuing(traceparent),
+        telemetry::HttpRequest {
+            method: parsed.head.method.clone(),
+            route: request.route.clone(),
+            request_id: request.request_id.clone(),
+        },
+    );
+    let cx = span.cx().clone();
+    let outcome = Recorded::default();
+    let response = Response::new(write, parsed.version_11, parsed.head_method, outcome.clone());
     match parsed.websocket_key {
         None => {
             let request_side = Request {
@@ -191,20 +209,22 @@ pub(super) async fn serve(server: &EndpointServer, wire: Wire, origin: Origin) {
                 response: Mutex::new(response),
                 phase: watch::Sender::new(Phase::Waiting),
                 end,
+                outcome: outcome.clone(),
             };
             let exchange =
                 Arc::new(Exchange { head: parsed.head, kind: Kind::Http(Box::new(http)) });
             let native = exchange.clone() as Arc<dyn EndpointExchange>;
             // An A2A route is the worker's own: its door answers it.
             let handled = match server.text.as_ref().and_then(|text| text.route(&request)) {
-                Some((door, serving)) => door.serve(native, serving),
-                None => server.handler.handle(&telemetry::Cx::NONE, native, request),
+                Some((door, serving)) => door.serve(&cx, native, serving),
+                None => server.handler.handle(&cx, native, request),
             };
             let Kind::Http(http) = &exchange.kind else { unreachable!("built as HTTP") };
             http.run(handled, deadline, server.state.subscribe()).await;
         }
         Some(key) => {
-            let connection = Connection::new(read, response, end, &key, limits.clone());
+            let connection =
+                Connection::new(read, response, end, &key, limits.clone(), outcome.clone());
             let exchange =
                 Arc::new(Exchange { head: parsed.head, kind: Kind::WebSocket(connection) });
             let Some(_registered) = server.register(&exchange) else {
@@ -212,11 +232,8 @@ pub(super) async fn serve(server: &EndpointServer, wire: Wire, origin: Origin) {
                 exchange.end_refused();
                 return;
             };
-            let handled = server.handler.handle(
-                &telemetry::Cx::NONE,
-                exchange.clone() as Arc<dyn EndpointExchange>,
-                request,
-            );
+            let native = exchange.clone() as Arc<dyn EndpointExchange>;
+            let handled = server.handler.handle(&cx, native, request);
             let Kind::WebSocket(connection) = &exchange.kind else {
                 unreachable!("built as a WebSocket")
             };
@@ -226,11 +243,39 @@ pub(super) async fn serve(server: &EndpointServer, wire: Wire, origin: Origin) {
                 .await;
         }
     }
+    let Outcome { status, completion } = *outcome.lock();
+    telemetry::end(span, telemetry::HttpRequestEnd { status: status.map(u32::from), completion });
+}
+
+/// What an exchange's `http_request` span ends with.
+#[derive(Debug, Default, Clone, Copy)]
+pub(super) struct Outcome {
+    status: Option<u16>,
+    completion: Option<telemetry::HttpCompletion>,
+}
+
+/// The outcome its response and its exchange record as they happen.
+#[derive(Debug, Default, Clone)]
+pub(super) struct Recorded(Arc<parking_lot::Mutex<Outcome>>);
+
+impl Recorded {
+    fn lock(&self) -> parking_lot::MutexGuard<'_, Outcome> {
+        self.0.lock()
+    }
+
+    /// The first reason the exchange did not complete.
+    pub(super) fn failed(&self, completion: telemetry::HttpCompletion) {
+        self.lock().completion.get_or_insert(completion);
+    }
+
+    fn answered(&self, status: u16) {
+        self.lock().status = Some(status);
+    }
 }
 
 /// Answer a request the application never sees with a bodiless status.
 async fn refuse(write: WriteHalf, end: Arc<dyn StreamEnd>, status: u16) {
-    let mut response = Response::new(write, true, false);
+    let mut response = Response::new(write, true, false, Recorded::default());
     let headers = [(b"content-length".to_vec(), b"0".to_vec())];
     let answered = async {
         response.start(status, &headers).await?;
@@ -558,6 +603,7 @@ struct Http {
     response: Mutex<Response>,
     phase: watch::Sender<Phase>,
     end: Arc<dyn StreamEnd>,
+    outcome: Recorded,
 }
 
 impl Http {
@@ -585,12 +631,11 @@ impl Http {
             biased;
             () = stopped => {
                 drop(handled);
-                let completion = Completion::Canceled;
-                return self.fail(completion, "worker stopped", Code::HsrAbort).await;
+                return self.fail(telemetry::HttpCompletion::Canceled, "worker stopped").await;
             }
             () = head_missed => {
                 drop(handled);
-                return self.abort(Code::HsrTimeout);
+                return self.abort(telemetry::HttpCompletion::Timeout);
             }
             result = &mut handled => result,
         };
@@ -598,7 +643,7 @@ impl Http {
             Ok(()) => "application returned with no complete response".to_owned(),
             Err(error) => error.to_string(),
         };
-        self.fail(Completion::Internal, &reason, Code::HsrInternal).await;
+        self.fail(telemetry::HttpCompletion::Internal, &reason).await;
     }
 
     async fn receive(&self) -> Result<ExchangeEvent, ExchangeError> {
@@ -623,7 +668,7 @@ impl Http {
             }
             Err(BodyError::Malformed) => {
                 request.disconnected = true;
-                self.abort(Code::HsrProtocol);
+                self.abort(telemetry::HttpCompletion::Protocol);
                 Ok(ExchangeEvent::Disconnected)
             }
         }
@@ -657,22 +702,24 @@ impl Http {
     }
 
     /// End the exchange without its response; no-op once it ended.
-    fn abort(&self, code: Code) {
+    fn abort(&self, completion: telemetry::HttpCompletion) {
         if self.phase.send_replace(Phase::Done) != Phase::Done {
-            self.end.reset(code);
+            self.outcome.failed(completion);
+            self.end.reset(reset_code(completion));
         }
     }
 
-    async fn fail(&self, completion: Completion, reason: &str, code: Code) {
+    async fn fail(&self, completion: telemetry::HttpCompletion, reason: &str) {
         if *self.phase.borrow() == Phase::Done {
             return;
         }
+        self.outcome.failed(completion);
         let ended = self.response.lock().await.fail(completion, reason).await;
         if self.phase.send_replace(Phase::Done) == Phase::Done {
             return;
         }
         match ended {
-            Failure::Unstarted => self.end.reset(code),
+            Failure::Unstarted => self.end.reset(reset_code(completion)),
             Failure::Reported => {
                 self.end.finish();
                 self.end.stop(Code::HsrAbort);
@@ -720,11 +767,13 @@ pub(super) struct Response {
     state: State,
     /// A write was cancelled part-way, so the framing can no longer be trusted.
     interrupted: bool,
+    outcome: Recorded,
 }
 
 impl Response {
-    fn new(write: WriteHalf, version_11: bool, head_method: bool) -> Self {
-        Self { write, version_11, head_method, state: State::Waiting, interrupted: false }
+    fn new(write: WriteHalf, version_11: bool, head_method: bool, outcome: Recorded) -> Self {
+        let state = State::Waiting;
+        Self { write, version_11, head_method, state, interrupted: false, outcome }
     }
 
     async fn write_all(&mut self, parts: &[&[u8]]) -> Result<(), ExchangeError> {
@@ -788,6 +837,7 @@ impl Response {
         push_field(&mut out, b"connection", b"close");
         out.extend_from_slice(b"\r\n");
         self.write_all(&[&out]).await?;
+        self.outcome.answered(status);
         self.state = State::Body(framing);
         Ok(())
     }
@@ -838,7 +888,7 @@ impl Response {
         }
     }
 
-    async fn fail(&mut self, completion: Completion, reason: &str) -> Failure {
+    async fn fail(&mut self, completion: telemetry::HttpCompletion, reason: &str) -> Failure {
         let state = std::mem::replace(&mut self.state, State::Done);
         match state {
             State::Done => Failure::Ended,
@@ -850,7 +900,7 @@ impl Response {
                     .take(REASON_LIMIT)
                     .collect();
                 let mut out = b"0\r\n".to_vec();
-                push_field(&mut out, COMPLETION, completion.token());
+                push_field(&mut out, COMPLETION, completion_token(completion));
                 push_field(&mut out, COMPLETION_ERROR, reason.as_bytes());
                 out.extend_from_slice(b"\r\n");
                 match self.write_all(&[&out]).await {
@@ -891,6 +941,7 @@ impl Response {
         }
         out.extend_from_slice(b"\r\n");
         self.write_all(&[&out]).await?;
+        self.outcome.answered(101);
         self.state = State::Done;
         Ok(())
     }

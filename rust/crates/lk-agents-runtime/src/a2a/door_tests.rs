@@ -405,7 +405,9 @@ async fn exchange(
         body: parking_lot::Mutex::new(events),
         sent: Default::default(),
     };
-    serve(door, &exchange, serving).await.unwrap();
+    let clock = Arc::new(lk_agents_abi::VirtualClock::new());
+    let cx = lk_agents_net::telemetry::Tracer::disabled(clock).root();
+    serve(door, &exchange, serving, cx).await.unwrap();
     let mut answer = Answer { status: 0, headers: Vec::new(), body: Vec::new(), complete: false };
     for message in exchange.sent.into_inner() {
         match message {

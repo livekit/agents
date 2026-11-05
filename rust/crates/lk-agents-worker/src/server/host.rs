@@ -274,6 +274,8 @@ pub struct AgentServerRuntime {
     runtime: server::ServerRuntime,
     mounted: Mounted,
     spawner: TokioSpawner,
+    /// The process's span recording, for the endpoint server's `http_request` spans.
+    tracer: crate::ipc::telemetry::Tracer,
 }
 
 impl AgentServerRuntime {
@@ -304,6 +306,7 @@ impl ServerRuntime for AgentServerRuntime {
             runtime: server::ServerRuntime::new(host, None),
             mounted,
             spawner,
+            tracer: env.tracer.clone(),
         })
     }
 
@@ -338,7 +341,8 @@ impl ServerRuntime for AgentServerRuntime {
             serving: self.serving.clone(),
             host_context: context.host_context,
         };
-        let server = EndpointServer::new(endpoints, HttpServerLimits::default()).with_text(text);
+        let limits = HttpServerLimits::default();
+        let server = EndpointServer::new(endpoints, limits, self.tracer.clone()).with_text(text);
         let _ = self.mounted.set(Arc::new(server));
         let start = ServerStart {
             settings: self.settings(),

@@ -23,6 +23,9 @@ pub(crate) use lk_agents_abi::telemetry::policy::{
     SHUTDOWN_TIMEOUT_SECONDS, UPLOAD_TIMEOUT_SECONDS,
 };
 pub(crate) use lk_agents_abi::telemetry::report::RecordingOptions;
+pub(crate) use lk_agents_abi::telemetry::spans::endpoint::{
+    HttpCompletion, HttpRequest, HttpRequestEnd,
+};
 pub(crate) use lk_agents_abi::telemetry::spans::job::{
     EntrypointCancelled, EntrypointReturned, JobEntrypoint, JobShutdown, OnSessionEnd,
     RoomDisconnect, SessionEndUpload, ShutdownCallback, ShutdownCause,

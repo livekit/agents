@@ -14,12 +14,14 @@ use tokio::io::{BufReader, Join};
 use tokio::sync::{Mutex, mpsc, watch};
 use tokio::time::Instant;
 use tokio_tungstenite::WebSocketStream;
+use tokio_tungstenite::tungstenite::error::{CapacityError, ProtocolError};
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::protocol::{CloseFrame, Role, WebSocketConfig};
-use tokio_tungstenite::tungstenite::{Error as WsError, Message, error::CapacityError};
+use tokio_tungstenite::tungstenite::{Error as WsError, Message};
 
-use super::exchange::Response;
+use super::exchange::{Recorded, Response};
 use super::{HttpServerLimits, ReadHalf, ServerState, StreamEnd, WriteHalf};
+use crate::ipc::telemetry;
 use crate::transport::HttpStreamResetCode as Code;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -98,6 +100,8 @@ struct Tasks {
 
 struct Shared {
     end: Arc<dyn StreamEnd>,
+    /// What the exchange's span ends with.
+    outcome: Recorded,
     /// Bytes waiting in the inbox, bounded by `websocket_inbox_bytes`.
     queued: Arc<AtomicUsize>,
     limits: HttpServerLimits,
@@ -121,10 +125,12 @@ impl Connection {
         end: Arc<dyn StreamEnd>,
         key: &str,
         limits: HttpServerLimits,
+        outcome: Recorded,
     ) -> Self {
         let (inbox_tx, inbox) = mpsc::channel(limits.websocket_inbox.max(1));
         Self(Arc::new(Shared {
             end,
+            outcome,
             queued: Arc::default(),
             limits,
             accept: tokio_tungstenite::tungstenite::handshake::derive_accept_key(key.as_bytes()),
@@ -160,11 +166,13 @@ impl Connection {
             biased;
             () = stopped => {
                 drop(handled);
+                self.0.outcome.failed(telemetry::HttpCompletion::Canceled);
                 self.close(GOING_AWAY, "worker stopped").await;
                 return self.shutdown();
             }
             () = unanswered => {
                 drop(handled);
+                self.0.outcome.failed(telemetry::HttpCompletion::Timeout);
                 self.0.end.reset(Code::HsrTimeout);
                 *self.0.state.lock().await = State::Ended;
                 self.mark_closed(code(CloseCode::Abnormal));
@@ -174,7 +182,10 @@ impl Connection {
         };
         match result {
             Ok(()) => self.close(code(CloseCode::Normal), "").await,
-            Err(_) => self.close(code(CloseCode::Error), "application failed").await,
+            Err(_) => {
+                self.0.outcome.failed(telemetry::HttpCompletion::Internal);
+                self.close(code(CloseCode::Error), "application failed").await;
+            }
         }
         self.shutdown();
     }
@@ -457,6 +468,10 @@ impl Connection {
                 Some(Err(WsError::Utf8(_))) => {
                     let reason = "invalid UTF-8 in a text message";
                     break Ending::Failed(code(CloseCode::Invalid), reason);
+                }
+                // A peer gone without a close frame is not one that broke the protocol.
+                Some(Err(WsError::Protocol(ProtocolError::ResetWithoutClosingHandshake))) => {
+                    break Ending::Peer;
                 }
                 Some(Err(WsError::Protocol(_) | WsError::Capacity(_))) => {
                     break Ending::Failed(code(CloseCode::Protocol), "WebSocket protocol error");

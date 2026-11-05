@@ -116,12 +116,15 @@ def add_routes(endpoint: Endpoint) -> None:
         http.configure_endpoint(path, public=True)
 
 
+async def _entrypoint(ctx: object) -> None:
+    """The voice door's entrypoint; these journeys dispatch no job."""
+
+
 @pytest.fixture
 async def endpoint(
     live_credentials: tuple[str, str, str], tmp_path: Path
 ) -> AsyncIterator[Endpoint]:
-    from livekit.agents import AgentHandler, AgentServer
-    from livekit.agents.a2a import A2ASessionContext
+    from livekit.agents import AgentServer
     from livekit.agents.storage import SQLiteStorage
 
     url, _, _ = live_credentials
@@ -132,16 +135,13 @@ async def endpoint(
         agent_name=name,
         storage=SQLiteStorage(directory=tmp_path),
         listeners={"health": {"port": 0}},
+        num_idle_processes=0,
     )
     endpoint = Endpoint(f"{scheme}://{parts.netloc}/agents/{name}/_", server)
     add_routes(endpoint)
-    backend = AgentHandler(lane="backend")
 
-    @backend.a2a_session(endpoint="noop", description="Unused.")
-    async def noop(ctx: A2ASessionContext) -> str:  # noqa: ARG001
-        return ""
-
-    server.add(backend)
+    # A server serves at least one door; a voice door adds no endpoint route.
+    server.rtc_session()(_entrypoint)
     run = asyncio.create_task(server._run(devmode=False))
     try:
         async with aiohttp.ClientSession() as http:
@@ -268,9 +268,12 @@ async def test_drain_closes_open_websockets_with_going_away(endpoint: Endpoint) 
 
 
 async def wait_closed(endpoint: Endpoint, codes: list[int]) -> None:
-    async with asyncio.timeout(REQUEST_SECONDS):
-        while endpoint.closed[-len(codes) :] != codes:
-            await asyncio.sleep(0.05)
+    try:
+        async with asyncio.timeout(REQUEST_SECONDS):
+            while endpoint.closed[-len(codes) :] != codes:
+                await asyncio.sleep(0.05)
+    except TimeoutError:
+        raise AssertionError(f"the app saw closes {endpoint.closed}, not {codes}") from None
 
 
 async def test_drain_lets_a_streaming_response_finish(endpoint: Endpoint) -> None:

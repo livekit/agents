@@ -9,6 +9,8 @@ mod websocket;
 mod exchange_tests;
 #[cfg(test)]
 mod hostile_input_tests;
+#[cfg(test)]
+mod websocket_tests;
 
 use std::collections::HashMap;
 use std::io::Cursor;
@@ -17,6 +19,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
+use crate::ipc::telemetry;
 use crate::server::{ServerSettings, Serving};
 use crate::{StreamPreamble, WorkerHost};
 use hyper::body::Bytes;
@@ -189,6 +192,8 @@ impl TextDoors {
 /// and its open WebSockets.
 pub struct EndpointServer {
     handler: Arc<dyn EndpointHandler>,
+    /// Records each exchange's `http_request` span.
+    tracer: telemetry::Tracer,
     text: Option<TextDoors>,
     limits: HttpServerLimits,
     connections: Arc<Connections>,
@@ -225,10 +230,15 @@ impl Drop for Registered<'_> {
 }
 
 impl EndpointServer {
-    pub fn new(handler: Arc<dyn EndpointHandler>, limits: HttpServerLimits) -> Self {
+    pub fn new(
+        handler: Arc<dyn EndpointHandler>,
+        limits: HttpServerLimits,
+        tracer: telemetry::Tracer,
+    ) -> Self {
         let connections = Connections::new(limits.max_connections);
         let state = watch::Sender::new(ServerState::Serving);
-        Self { handler, text: None, limits, connections, state, websockets: Default::default() }
+        let websockets = Default::default();
+        Self { handler, tracer, text: None, limits, connections, state, websockets }
     }
 
     /// Serve `text` routes with their A2A doors instead of the binding's handler.
