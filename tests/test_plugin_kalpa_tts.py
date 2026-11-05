@@ -29,11 +29,13 @@ class FakeKalpa:
         delay: float = 0.0,
         ack_cancel: bool = True,
         error: dict | None = None,
+        max_chars: int | None = None,
     ):
         self.chunks = chunks
         self.delay = delay
         self.ack_cancel = ack_cancel
-        self.error = error  # sent instead of sessionCreated when fatal, else instead of audio
+        self.error = error  # sent instead of sessionCreated when fatal, else once instead of audio
+        self.max_chars = max_chars  # a reply's text past this is refused with a non-fatal error
         self.connections = 0
         self.received: list[dict] = []
         self.flushed: list[str] = []  # each flushed utterance's text
@@ -54,6 +56,18 @@ class FakeKalpa:
             event = msg.json()
             self.received.append(event)
             if event["type"] == "sendText":
+                if (
+                    self.max_chars is not None
+                    and len(text + event.get("text", "")) > self.max_chars
+                ):
+                    await ws.send_json(
+                        {
+                            "type": "error",
+                            "fatal": False,
+                            "error": {"type": "invalid_request", "message": "Too long."},
+                        }
+                    )
+                    continue
                 text += event.get("text", "")
                 if event.get("flush"):
                     self.flushed.append(text)
@@ -78,7 +92,8 @@ class FakeKalpa:
         await asyncio.sleep(self.delay)
         await ws.send_json({"type": "responseCreated", "response_id": "r", "sample_rate": 24000})
         if self.error:
-            await ws.send_json(self.error)
+            error, self.error = self.error, None
+            await ws.send_json({**error, "response_id": "r"})
             await ws.send_json({"type": "responseDone", "response_id": "r", "status": "cancelled"})
             return
         for _ in range(0 if silent else self.chunks):
@@ -208,6 +223,32 @@ async def test_errors_map_to_status(error: dict, status: int, retryable: bool) -
         with pytest.raises(APIStatusError) as exc:
             await _speak(tts, "Hello there.")
     assert (exc.value.status_code, exc.value.retryable) == (status, retryable)
+
+
+async def test_failed_response_retries_on_the_same_socket() -> None:
+    error = {"type": "overloaded", "message": "Busy."}
+    fake = FakeKalpa(error={"type": "error", "fatal": False, "error": error})
+    async with serve(fake) as tts:
+        stream = tts.stream(conn_options=APIConnectOptions(max_retry=1, timeout=2.0))
+        stream.push_text("Hello there.")
+        stream.end_input()
+        async with stream:
+            assert len([ev async for ev in stream]) > 0
+    assert fake.flushed == ["Hello there.", "Hello there."]
+    assert fake.connections == 1
+
+
+async def test_refused_text_cancels_the_reply_and_keeps_the_socket() -> None:
+    fake = FakeKalpa(max_chars=20)
+    async with serve(fake) as tts:
+        with pytest.raises(APIStatusError) as exc:
+            await _speak(tts, "A reply longer than the API accepts.")
+        await asyncio.sleep(0.2)
+        assert await _speak(tts, "Hello there.") > 0
+    assert (exc.value.status_code, exc.value.retryable) == (400, False)
+    assert {"type": "cancelResponse"} in fake.received
+    assert fake.flushed[-1] == "Hello there."  # the refused reply's flush may land first, blank
+    assert fake.connections == 1
 
 
 async def test_synthesize_streams_pcm_over_http() -> None:

@@ -2,7 +2,7 @@
 
 Support for text-to-speech with [Kalpa](https://kalpalabs.ai/) in LiveKit Agents.
 
-See the [Kalpa docs](https://docs.kalpalabs.ai/text-to-speech) for the API, models and voices.
+See the [Kalpa integration docs](https://docs.livekit.io/agents/models/tts/kalpa/) for more information, and the [Kalpa docs](https://docs.kalpalabs.ai/text-to-speech) for the API, models and voices.
 
 ## Installation
 

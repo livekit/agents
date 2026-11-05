@@ -318,6 +318,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         ws: aiohttp.ClientWebSocketResponse | None = None
         sent = False  # the server holds text or a response from this reply
         done = False  # the reply's response finished
+        rejected = False  # the server refused one of the reply's messages but kept the connection
         # the server must answer within the timeout of the flush, and of every event after it;
         # before the flush, audio may legitimately pause while the reply's text is still arriving
         deadline: float | None = None
@@ -339,7 +340,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             deadline = time.monotonic() + self._conn_options.timeout
 
         async def _recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal done, deadline
+            nonlocal done, rejected, deadline
+            error: dict[str, Any] | None = None
             while True:
                 timeout = self._conn_options.timeout
                 if deadline is not None:
@@ -353,13 +355,20 @@ class SynthesizeStream(tts.SynthesizeStream):
                 if deadline is not None:
                     deadline = time.monotonic() + self._conn_options.timeout
 
-                if event["type"] == "responseCreated":
+                if event["type"] == "error":  # non-fatal: the connection stays open
+                    if not event.get("response_id"):
+                        rejected = True  # a refused sendText: the reply's text is incomplete
+                        raise _status_error(event["error"])
+                    error = event["error"]  # the response failed; its responseDone follows
+                elif event["type"] == "responseCreated":
                     output_emitter._note_provider_request_id(event["response_id"])
                 elif event["type"] == "responseAudio":
                     output_emitter.push(base64.b64decode(event["pcm_b64"]))
                 elif event["type"] == "responseDone":
                     done = True
                     if event["status"] != "completed":
+                        if error:
+                            raise _status_error(error)
                         raise APIError(f"Kalpa response ended with status {event['status']}")
                     return
 
@@ -375,17 +384,17 @@ class SynthesizeStream(tts.SynthesizeStream):
                 await asyncio.gather(*tasks)
             finally:
                 await utils.aio.gracefully_cancel(*tasks)
-        except asyncio.CancelledError:
-            # the reply was interrupted: keep the socket for the next reply if it can be cleared
+        except BaseException as e:
             if ws is not None:
-                if sent and not done:
-                    self._tts._recycle(ws)
+                # an interrupted reply, or a non-fatal error, leaves the socket usable once the
+                # server holds nothing more of this reply
+                if isinstance(e, asyncio.CancelledError) or done or rejected:
+                    if sent and not done:
+                        self._tts._recycle(ws)
+                    else:
+                        pool.put(ws)
                 else:
-                    pool.put(ws)
-            raise
-        except BaseException:
-            if ws is not None:
-                self._tts._drop(ws)
+                    self._tts._drop(ws)
             raise
 
         pool.put(ws)
@@ -396,7 +405,7 @@ async def _receive_event(ws: aiohttp.ClientWebSocketResponse, timeout: float | N
     if msg.type != aiohttp.WSMsgType.TEXT:
         raise APIConnectionError(f"Kalpa connection closed (code {ws.close_code})")
     event = json.loads(msg.data)
-    if event["type"] == "error":
+    if event["type"] == "error" and event.get("fatal", True):
         raise _status_error(event["error"])
     return event
 
