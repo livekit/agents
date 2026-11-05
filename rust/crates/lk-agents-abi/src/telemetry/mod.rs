@@ -41,7 +41,6 @@ pub mod semconv {
         pub const LK_TRACK_ID: &str = "lk.track_id";
         pub const LK_PII_ROOM_NAME: &str = "lk.pii.room_name";
         pub const LK_PII_PARTICIPANT_IDENTITY: &str = "lk.pii.participant_identity";
-        pub const LK_PII_REMOTE_PARTICIPANT_IDENTITY: &str = "lk.pii.remote_participant_identity";
         pub const LK_SDK_NAME: &str = "lk.sdk.name";
         pub const LK_SDK_VERSION: &str = "lk.sdk.version";
         pub const LK_TRACK_SOURCE: &str = "lk.track_source";

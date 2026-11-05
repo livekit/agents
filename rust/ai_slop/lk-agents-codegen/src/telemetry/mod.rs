@@ -146,6 +146,8 @@ pub struct Registry {
     pub owned: Vec<Attr>,
     /// Every dependency key a declaration names.
     pub referenced: Vec<Attr>,
+    /// Every `semconv` attribute key, referenced once so the registry check resolves each.
+    pub semconv: Vec<String>,
 }
 
 /// An `Attrs` struct: where it is and its role.
@@ -212,6 +214,7 @@ impl Reader<'_> {
             groups: Vec::new(),
             owned: Vec::new(),
             referenced: Vec::new(),
+            semconv: Vec::new(),
         };
         let mut seen: BTreeMap<String, Attr> = BTreeMap::new();
         let mut note = |attrs: &[Attr], r: &mut Registry| -> Result<(), String> {
@@ -327,6 +330,8 @@ impl Reader<'_> {
                 }
             }
         }
+        let metrics: Vec<&String> = r.metrics.iter().map(|m| &m.name).collect();
+        r.semconv = self.semconv.keys().filter(|k| !metrics.contains(k)).cloned().collect();
         check(&r)?;
         let mut declared: Vec<String> = r.spans.iter().map(|s| s.name.clone()).collect();
         declared.sort();

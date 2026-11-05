@@ -750,21 +750,26 @@ Rules:
 
 | Output | Path | Reader |
 | --- | --- | --- |
-| Weaver registry | `rust/otel/registry/` and `rust/otel/manifest.yaml` | `weaver registry check`, protocol's live-check and combined docs |
+| Weaver registry | `rust/otel/registry/` and `rust/otel/manifest.yaml` | `weaver registry check` in CI |
 | Consumer schema | `rust/otel/schema.json` | Cloud consumers; the golden test |
 | Python constants | `livekit/agents/_generated/semconv.py` | the framework's Python code |
 
-The agents registry depends on two registries, each pinned by git ref:
+The agents registry depends on three registries, each pinned by git ref in `rust/otel/manifest.yaml`:
 
-| Registry | Owns |
-| --- | --- |
-| `livekit/protocol` `otel/model/shared` | correlation keys shared with the client SDKs: `lk.room_id`, `lk.job_id`, `lk.participant_id`, `lk.track_id`, `lk.pii.room_name`, `lk.pii.participant_identity`, `lk.pii.remote_participant_identity`, `lk.sdk.name`, `lk.sdk.version`, `lk.track_source`, `lk.disconnect_reason`; and the naming policies |
-| OpenTelemetry GenAI semantic conventions | `gen_ai.*` |
+| Registry | Pin | Owns |
+| --- | --- | --- |
+| `livekit/protocol` `otel/model/shared` | a commit: the head of protocol PR #1866; move it to the merge commit once that PR merges | correlation keys shared with the client SDKs: `lk.room_id`, `lk.job_id`, `lk.participant_id`, `lk.track_id`, `lk.pii.room_name`, `lk.pii.participant_identity`, `lk.sdk.name`, `lk.sdk.version`, `lk.track_source`, `lk.disconnect_reason`, `lk.agent_name` |
+| OpenTelemetry semantic conventions | `v1.44.0` | `error.type`, `service.name`, `exception.*`, `rpc.method` |
+| OpenTelemetry GenAI semantic conventions | a commit | `gen_ai.*` |
 
-Declarations use the generated constants for these keys; they are never
+Each of these keys is one constant in `lk_agents_abi::telemetry::semconv`, never
 redeclared here. Everything else, every agents span, attribute, event, metric
-and record, is owned here. Adding one needs no change outside this repository. CI runs
-`weaver registry check` with protocol's policies and `lk-agents-codegen --check`.
+and record, is owned here. Adding one needs no change outside this repository.
+The generated registry references every `semconv` constant (the
+`registry.livekit.agents.semconv` group), and the `Telemetry registry` workflow runs
+`weaver registry check -r rust/otel` against the pins: a mistyped constant, or a key
+a pinned registry no longer defines, fails CI. `lk-agents-codegen --check` keeps the
+registry in sync with the declarations.
 A key moves to protocol only when a second producer emits it.
 
 ## Verification
@@ -777,7 +782,7 @@ A key moves to protocol only when a second producer emits it.
 | Clippy | a panic (`unwrap`, `expect`, `panic!`) in a telemetry module: telemetry never fails the agent |
 | `rust/architecture/check.sh` (`cx-none`) | new work run under `Cx::NONE`: each use outside tests is counted per file and only shrinks |
 | `ScopedSpan` itself | GenAI message content recorded with capture off: every `GENAI_CONTENT` key is dropped at the span's end, whatever the emitter wrote |
-| `weaver registry check` | violations of protocol's naming policies |
+| `weaver registry check` (`Telemetry registry` workflow) | a `semconv` constant or declared reference that a pinned registry does not define; an invalid registry |
 | Golden OTLP | any wire change: a fixed fake session (pipeline and realtime voice turns, an interruption and a backchannel, a tool call, a handoff, AMD, a failed hook, a text run with a remote agent) exports OTLP JSON compared with `tests/telemetry/golden/` |
 | Dashboard rendering | the golden traces and logs are published under `rust/otel/golden/`; the session view's tests in `livekit/web` load them and assert the turns, stages, latencies, tokens, tool time, transcript and evaluations they render |
 | DST span rules | every recorded span, scoped or manual, ends exactly once, under a declared parent and within it unless `outlives_parent`; a failed manual span is never recorded as cancelled; nothing reaches the close sweep |

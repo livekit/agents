@@ -284,6 +284,14 @@ fn attributes_yaml(r: &Registry) -> String {
                 "attributes": owned.iter().map(|a| weaver_attr(a)).collect::<Vec<_>>(),
             })
         })
+        .chain([json!({
+            "id": "registry.livekit.agents.semconv",
+            "type": "attribute_group",
+            "brief": "Every dependency key `lk_agents_abi::telemetry::semconv` names.",
+            "attributes": r.semconv.iter()
+                .map(|k| json!({ "ref": k, "requirement_level": "recommended" }))
+                .collect::<Vec<_>>(),
+        })])
         .collect();
     yaml_file(json!({ "groups": groups }))
 }
