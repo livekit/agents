@@ -334,3 +334,21 @@ pub struct NamedToolFunctionWire {
 pub fn named_tool_choice_from_wire(value: NamedToolChoiceWire) -> ToolChoice {
     ToolChoice::Named(value.function.name)
 }
+
+/// Two different tools share a name in one run's tools (the agent's and the session's together).
+#[crate::host(error(kind = "ValueError"))]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "two tools are named `{0}`: a run's tools, the agent's and the session's together, have \
+     unique names"
+)]
+pub struct DuplicateToolName(pub String);
+
+/// The rule every run's tool set follows.
+#[crate::host(functions(pid = false))]
+pub trait ToolNameFunctions {
+    /// `names`, one per tool (the same tool listed twice is one tool): refuses the first name
+    /// two tools share.
+    #[host(function)]
+    fn check_tool_names(names: Vec<String>) -> Result<(), DuplicateToolName>;
+}

@@ -196,6 +196,9 @@ class Agent(Generic[Context_T, Output_T]):
     ``Agent(context_type=Ctx, output_type=X)`` is an ``Agent[Ctx, X]``. ``context_type`` exists
     only for the type checker.
 
+    ``tools`` are offered on every run, with a call's session tools; two different tools sharing
+    a name are refused with ``ValueError`` when the agent runs.
+
     ``retries`` sets the retry budgets of every run (``AgentRetries``); an int sets both.
     ``tool_handling`` sets the templates rendered around its tools' background calls on a voice
     session (``ToolHandlingOptions``); an ``AsyncToolset`` overrides them for its own tools.

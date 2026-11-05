@@ -487,6 +487,11 @@ class ChatRequest:
     @property
     def inference_class(self) -> str | None: ...
 
+def check_tool_names(names: Sequence[str]) -> None:
+    """`names`, one per tool (the same tool listed twice is one tool): refuses the first name
+    two tools share.
+    """
+
 class _core_ToolsetLifetime:
     def __new__(cls) -> Self: ...
 

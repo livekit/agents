@@ -98,6 +98,7 @@ pub trait Implementations: 'static {
     type OpenAIRealtimeModel: ::lk_agents_abi::llm::realtime::OpenAIRealtimeModel;
     type ChatContextDict: ::lk_agents_abi::llm::to_dict::ChatContextDict;
     type ChatRequestView: ::lk_agents_abi::llm::types::ChatRequestView;
+    type ToolNameFunctions: ::lk_agents_abi::llm::types::ToolNameFunctions;
     type ToolsetLifetime: ::lk_agents_abi::llm::toolsets::ToolsetLifetime;
     type ToolsetGroup: ::lk_agents_abi::llm::toolsets::ToolsetGroup;
     type ToolsetScopes: ::lk_agents_abi::llm::toolsets::ToolsetScopes;
@@ -341,6 +342,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<llm::OpenAIRealtimeModel>()?;
     m.add_function(wrap_pyfunction!(llm::chat_ctx_to_dict, m)?)?;
     m.add_class::<llm::ChatRequest>()?;
+    m.add_function(wrap_pyfunction!(llm::check_tool_names, m)?)?;
     m.add_class::<llm::CoreToolsetLifetime>()?;
     m.add_class::<llm::CoreToolsetGroup>()?;
     m.add_class::<llm::CoreToolsetScopes>()?;

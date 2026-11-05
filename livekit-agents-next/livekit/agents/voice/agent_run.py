@@ -771,16 +771,10 @@ async def _unexpected_value(ctx: RunContext[Any], value: Any) -> Any:
 
 
 def _voice_tools(binding: _VoiceBinding) -> ToolContext:
-    """A voice frame's tools: the agent's, then the session's it lacks (a session tool added
-    since the frame was installed, as IVR's DTMF tool)."""
+    """A voice frame's tools: the agent's and the session's (with a session tool added since the
+    frame was installed, as IVR's DTMF tool). Two tools sharing a name are refused."""
     agent_tools, session_tools = _call_tools(binding.agent, binding.session)
-    own = ToolContext(agent_tools)
-    extra = [
-        tool
-        for name, tool in ToolContext(session_tools).function_tools.items()
-        if own.get_function_tool(name) is None
-    ]
-    return ToolContext([*agent_tools, *extra])
+    return ToolContext([*agent_tools, *session_tools])
 
 
 def _call_tools(

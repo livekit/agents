@@ -35,7 +35,7 @@ again when left empty.
 | `aec_warmup_duration` | seconds after the agent first speaks during which the person cannot interrupt, while echo cancellation adapts; 3 by default, none on an outbound SIP call the agent dialed |
 | `expressive` | `True`, or an `ExpressiveOptions` (`speech_steering`: `SpeechSteeringOptions`, whose `nonverbal_sounds` takes `NonverbalOptions`; or a custom instructions template) |
 | `tts_text_transforms` | the `TextTransforms` applied before synthesis: `"filter_markdown"`, `"filter_emoji"` |
-| `tools` | tools and toolsets every agent of the call is offered, besides its own |
+| `tools` | tools and toolsets every agent of the call is offered, besides its own; a name an agent's tool already has is refused (`ValueError`) when that agent runs, see [tools](tools.md#tools-on-an-agent) |
 | `context` | the application object; marked fields require explicit loading and saving |
 | `thread` | the call's durable thread, `ctx.thread`; omitted, the history is kept in memory and not saved |
 

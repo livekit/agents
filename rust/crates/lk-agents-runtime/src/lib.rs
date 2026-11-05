@@ -11,7 +11,7 @@
 pub mod cores {
     pub use lk_agents_core::a2a::card::CardBuilder;
     pub use lk_agents_core::a2a::handler::HandlerOutcomes;
-    pub use lk_agents_core::agent_authoring::AgentConfig;
+    pub use lk_agents_core::agent_authoring::{AgentConfig, ToolNames};
     pub use lk_agents_core::attempts::ConnectOptionsRules;
     pub use lk_agents_core::llm::chat_dict::ChatDict;
     pub use lk_agents_core::llm::ctx_diff::ChatDiffs;

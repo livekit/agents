@@ -140,7 +140,8 @@ class VoiceSession(SessionCommands, rtc.EventEmitter[EventTypes], Generic[Contex
         Args:
             stt, vad, llm, tts: The providers, or a LiveKit Inference model string. ``vad``
                 defaults to ``inference.VAD(model="silero")``; ``vad=None`` opts out.
-            tools: Tools shared by every agent of the session.
+            tools: Tools shared by every agent of the session. A name an agent's own tool
+                also has is refused with ``ValueError`` when that agent runs.
             context, thread: Read by tools through ``RunContext``.
             video_sampler: How often camera frames reach the model; ``None`` sends every frame.
             turn_detection, endpointing_opts: The session's turn completion and endpointing

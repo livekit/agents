@@ -2495,6 +2495,22 @@ impl ChatRequest {
     }
 }
 
+// Declared in rust/crates/lk-agents-abi/src/llm/llm.rs.
+type ToolNameFunctionsImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::ToolNameFunctions;
+
+/// `names`, one per tool (the same tool listed twice is one tool): refuses the first name
+/// two tools share.
+#[pyfunction]
+#[pyo3(signature = (names))]
+pub fn check_tool_names(
+    py: Python<'_>,
+    names: ::std::vec::Vec<::std::string::String>,
+) -> PyResult<()> {
+    py.detach(|| <ToolNameFunctionsImpl as ::lk_agents_abi::llm::types::ToolNameFunctions>::check_tool_names(names)).map_err(|e: ::lk_agents_abi::llm::types::DuplicateToolName| <::lk_agents_abi::llm::types::DuplicateToolName as crate::py_errors::HostException>::to_py_err(&e))?;
+    Ok(())
+}
+
 // Declared in rust/crates/lk-agents-abi/src/llm/toolsets.rs.
 type CoreToolsetLifetimeImpl =
     <crate::generated::implementations::Selected as super::Implementations>::ToolsetLifetime;
@@ -5014,6 +5030,12 @@ impl crate::py_errors::HostException for ::lk_agents_abi::llm::schema::SchemaErr
 }
 
 impl crate::py_errors::HostException for ::lk_agents_abi::ToDictError {
+    fn to_py_err(&self) -> ::pyo3::PyErr {
+        ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
+    }
+}
+
+impl crate::py_errors::HostException for ::lk_agents_abi::llm::types::DuplicateToolName {
     fn to_py_err(&self) -> ::pyo3::PyErr {
         ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
     }

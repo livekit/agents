@@ -36,6 +36,11 @@ a module-level agent. `@function_tool` declares a reusable tool function;
   are. Anything else is recorded as an error output.
 - Reads per-run data from `ctx.context`, never from module
   globals that change.
+- Its name is unique among the run's tools: the agent's and, on a call, the
+  session's (`VoiceSession(tools=)`) together. Two different tools sharing a
+  name are refused with a `ValueError` (``two tools are named `x`: ...``)
+  when the agent runs; neither one shadows the other. The same tool listed
+  twice is one tool.
 
 `@function_tool(raw_schema={"name": ..., "description": ..., "parameters": {...}})`
 declares a tool from a JSON schema instead of a signature: the function

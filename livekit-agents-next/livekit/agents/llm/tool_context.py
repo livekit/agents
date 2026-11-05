@@ -484,7 +484,9 @@ class ToolContext:
         )
 
     def update_tools(self, tools: Sequence[Tool | Toolset]) -> None:
-        fnc_tools_map: dict[str, FunctionTool | RawFunctionTool] = {}
+        """Replace the tools. Raises ``ValueError`` when two different tools share a name; the
+        same tool listed twice is one tool."""
+        functions: dict[int, FunctionTool | RawFunctionTool] = {}
         provider_tools: list[ProviderTool] = []
         tool_sets: list[Toolset] = []
 
@@ -492,9 +494,7 @@ class ToolContext:
             if isinstance(tool, ProviderTool):
                 provider_tools.append(tool)
             elif isinstance(tool, (FunctionTool, RawFunctionTool)):
-                # the same instance twice is one tool
-                if fnc_tools_map.setdefault(tool.info.name, tool) is not tool:
-                    raise ValueError(f"duplicate function name: {tool.info.name}")
+                functions.setdefault(id(tool), tool)
             elif isinstance(tool, Toolset):
                 for t in tool.tools:
                     add_tool(t)
@@ -507,6 +507,8 @@ class ToolContext:
 
         for tool in itertools.chain(tools, find_function_tools(self)):
             add_tool(tool)
+        _core.check_tool_names([tool.info.name for tool in functions.values()])
+        fnc_tools_map = {tool.info.name: tool for tool in functions.values()}
 
         collisions = set(fnc_tools_map).intersection(tool.id for tool in provider_tools)
         if collisions:

@@ -59,6 +59,7 @@ impl super::Implementations for Selected {
     type OpenAIRealtimeModel = ::lk_agents_runtime::inference::realtime::openai::OpenAIRealtime;
     type ChatContextDict = ::lk_agents_runtime::cores::ChatDict;
     type ChatRequestView = ::lk_agents_abi::ChatRequest;
+    type ToolNameFunctions = ::lk_agents_runtime::cores::ToolNames;
     type ToolsetLifetime = ::lk_agents_runtime::toolsets::lifetime::Lifetime;
     type ToolsetGroup = ::lk_agents_runtime::toolsets::group::Group;
     type ToolsetScopes = ::lk_agents_runtime::toolsets::scopes::Scopes;

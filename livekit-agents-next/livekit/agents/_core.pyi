@@ -111,6 +111,7 @@ from ._generated._core_llm import (
     chat_ctx_merge_plan as chat_ctx_merge_plan,
     chat_ctx_to_dict as chat_ctx_to_dict,
     chat_ctx_truncate_plan as chat_ctx_truncate_plan,
+    check_tool_names as check_tool_names,
     compute_chat_ctx_diff as compute_chat_ctx_diff,
     convert_mid_conversation_instructions as convert_mid_conversation_instructions,
     duplex_realtime_capabilities as duplex_realtime_capabilities,

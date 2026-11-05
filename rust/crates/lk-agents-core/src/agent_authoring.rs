@@ -173,3 +173,35 @@ mod tests {
         assert_eq!(agent.configuration(None).unwrap().name, "desk");
     }
 }
+
+/// [`lk_agents_abi::llm::types::ToolNameFunctions`]: a run's tool names are unique.
+pub struct ToolNames;
+
+impl lk_agents_abi::llm::types::ToolNameFunctions for ToolNames {
+    fn check_tool_names(
+        names: Vec<String>,
+    ) -> Result<(), lk_agents_abi::llm::types::DuplicateToolName> {
+        let mut seen = std::collections::BTreeSet::new();
+        match names.into_iter().find(|name| !seen.insert(name.clone())) {
+            Some(name) => Err(lk_agents_abi::llm::types::DuplicateToolName(name)),
+            None => Ok(()),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tool_name_tests {
+    use super::ToolNames;
+    use lk_agents_abi::llm::types::{DuplicateToolName, ToolNameFunctions};
+
+    // Catches: a shared name accepted (one tool silently shadowing another), or distinct names
+    // refused.
+    #[test]
+    fn a_name_two_tools_share_is_refused() {
+        let names = |n: &[&str]| n.iter().map(|s| s.to_string()).collect();
+        assert_eq!(ToolNames::check_tool_names(names(&["check", "lookup"])), Ok(()));
+        let refused = ToolNames::check_tool_names(names(&["check", "lookup", "check"]));
+        assert_eq!(refused, Err(DuplicateToolName("check".to_owned())));
+        assert!(refused.unwrap_err().to_string().starts_with("two tools are named `check`"));
+    }
+}
