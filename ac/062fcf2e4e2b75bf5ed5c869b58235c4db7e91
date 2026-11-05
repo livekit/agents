@@ -1,0 +1,23 @@
+livekit-agents/livekit/agents/inference/eot/transports.py
+  s_9dc60d915e2121::t_2bb4dbdf743667 63-65,97-99,112-118,124-125,139,142
+livekit-agents/pyproject.toml
+  s_9dc60d915e2121::t_c3df6595671284 33
+tests/test_turn_detection_cloud_stream.py
+  s_9dc60d915e2121::t_60f5754bd78afb 105-132
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ac062fcf2e4e2b75bf5ed5c869b58235c4db7e91",
+  "prompts": {},
+  "sessions": {
+    "s_9dc60d915e2121": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3bb7b518-e716-431d-8b0e-9b5f73deb748",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
