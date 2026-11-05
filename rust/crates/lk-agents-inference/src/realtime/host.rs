@@ -294,6 +294,11 @@ impl RealtimeSession for HostRealtimeLeg {
         }
     }
 
+    /// The host session keeps no input policy: pre-connect audio is ordinary audio to it.
+    fn head(&self, frame: lk_agents_abi::AudioFrame) {
+        self.host.send(RealtimeCommand::PushAudio(lk_agents_abi::PushAudio { frame }));
+    }
+
     fn next_event(&self) -> lk_agents_abi::BoxFuture<'_, Option<Event>> {
         Box::pin(async move { self.events.lock().await.recv().await })
     }

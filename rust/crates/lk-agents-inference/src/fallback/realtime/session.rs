@@ -355,6 +355,18 @@ impl RealtimeSession for FallbackSession {
         }
     }
 
+    /// Where `send` would take its audio: the serving session, outside a swap.
+    fn head(&self, frame: lk_agents_abi::AudioFrame) {
+        let active = {
+            let st = self.lock();
+            if st.closed || st.swapping || st.fresh {
+                return;
+            }
+            Arc::clone(&st.active)
+        };
+        active.head(frame);
+    }
+
     fn next_event(&self) -> lk_agents_abi::BoxFuture<'_, Option<Event>> {
         Box::pin(async move {
             loop {

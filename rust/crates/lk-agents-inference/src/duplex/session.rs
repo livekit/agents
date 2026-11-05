@@ -276,6 +276,11 @@ impl RealtimeSession for DuplexSession {
         }
     }
 
+    /// The duplex input keeps no policy: pre-connect audio is ordinary audio to it.
+    fn head(&self, frame: lk_agents_abi::AudioFrame) {
+        self.send(RealtimeCommand::PushAudio(lk_agents_abi::PushAudio { frame }));
+    }
+
     fn next_event(&self) -> lk_agents_abi::BoxFuture<'_, Option<Event>> {
         Box::pin(async move {
             let mut events = self.events.lock().await;

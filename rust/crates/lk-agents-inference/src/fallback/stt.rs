@@ -50,12 +50,16 @@ pub struct InputTee {
 #[derive(Clone)]
 enum PreFrame {
     Audio(AudioFrame),
+    /// Pre-connect audio: replayed as head, never evicted and outside the bound.
+    Head(AudioFrame),
     Flush,
 }
 
 #[derive(Default)]
 struct Preroll {
     pending: std::collections::VecDeque<PreFrame>,
+    /// The `Head` entries in `pending`.
+    head: usize,
     dropped_frames: u64,
     ended: bool,
 }
@@ -93,11 +97,13 @@ impl InputTee {
                     }
                     break preroll.ended;
                 }
+                preroll.head = 0;
                 preroll.pending.drain(..).collect()
             };
             for item in pending {
                 let _ = match item {
                     PreFrame::Audio(f) => sink.push(f),
+                    PreFrame::Head(f) => sink.head(f),
                     PreFrame::Flush => sink.flush(),
                 };
             }
@@ -124,7 +130,9 @@ impl InputTee {
     /// Preserve utterance boundaries, accounting for each evicted audio frame. A full queue
     /// of boundaries refuses more input rather than growing or merging distinct utterances.
     fn buffer(preroll: &mut Preroll, item: PreFrame) -> Result<(), ProviderError> {
-        if preroll.pending.len() >= Self::PREROLL_FRAMES {
+        if matches!(item, PreFrame::Head(_)) {
+            preroll.head += 1;
+        } else if preroll.pending.len() - preroll.head >= Self::PREROLL_FRAMES {
             let Some(index) =
                 preroll.pending.iter().position(|item| matches!(item, PreFrame::Audio(_)))
             else {
@@ -176,6 +184,14 @@ impl StreamInput<AudioFrame> for TeeSink {
         let main = self.0.serving(PreFrame::Audio(item.clone()))?;
         self.0.fanout(main, |s| {
             let _ = s.push(item.clone());
+        });
+        Ok(())
+    }
+
+    fn head(&self, item: AudioFrame) -> Result<(), ProviderError> {
+        let main = self.0.serving(PreFrame::Head(item.clone()))?;
+        self.0.fanout(main, |s| {
+            let _ = s.head(item.clone());
         });
         Ok(())
     }
@@ -701,6 +717,10 @@ mod preroll_tests {
             self.0.got.lock().push(format!("push:{}", item.sample_rate));
             Ok(())
         }
+        fn head(&self, item: AudioFrame) -> Result<(), ProviderError> {
+            self.0.got.lock().push(format!("head:{}", item.sample_rate));
+            Ok(())
+        }
         fn flush(&self) -> Result<(), ProviderError> {
             self.0.got.lock().push("flush".to_owned());
             Ok(())
@@ -752,6 +772,28 @@ mod preroll_tests {
 
         assert_eq!(*rec.got.lock(), ["push:1", "push:2"]);
         assert!(rec.ended.load(Ordering::SeqCst), "the stream was never told the input had ended");
+    }
+
+    /// Catches: pre-connect audio buffered before the first stream opens replayed as live audio,
+    /// or evicted by the bound, so the serving stream drops the start of the first turn.
+    #[test]
+    fn pre_connect_audio_is_replayed_as_head_in_full() {
+        let tee = InputTee::new();
+        let sink = TeeSink(Arc::clone(&tee));
+        let head = InputTee::PREROLL_FRAMES as u32 + 10;
+        for i in 0..head {
+            sink.head(frame(i)).unwrap();
+        }
+        sink.push(frame(head)).unwrap();
+
+        let rec = Arc::new(Log::default());
+        tee.set_main(Box::new(Recorder(Arc::clone(&rec))));
+        sink.head(frame(head + 1)).unwrap();
+
+        let mut expected: Vec<String> = (0..head).map(|i| format!("head:{i}")).collect();
+        expected.extend([format!("push:{head}"), format!("head:{}", head + 1)]);
+        assert_eq!(*rec.got.lock(), expected);
+        assert_eq!(tee.dropped_preroll_frames(), 0);
     }
 
     /// Catches: an unbounded pre-roll.

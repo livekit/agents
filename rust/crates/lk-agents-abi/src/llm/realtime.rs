@@ -442,6 +442,10 @@ pub trait RealtimeSession: Send + Sync {
     /// Never blocks; a push after close is dropped, as the reference suppresses `ChanClosed`.
     fn send(&self, cmd: RealtimeCommand);
 
+    /// Pre-connect audio, replayed ahead of the live input: kept in full where `PushAudio` would
+    /// drop to keep the input current. A wrapper forwards it as head.
+    fn head(&self, frame: AudioFrame);
+
     /// `None` once the session has stopped. One consumer only.
     fn next_event(&self) -> crate::BoxFuture<'_, Option<Event>>;
 

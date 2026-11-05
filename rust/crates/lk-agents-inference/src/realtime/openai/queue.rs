@@ -193,6 +193,11 @@ impl Ingress {
         }
     }
 
+    /// Pre-connect audio, kept in full.
+    pub(super) fn head(&self, frame: lk_agents_abi::AudioFrame) {
+        self.input.head(frame);
+    }
+
     /// The pump stopped draining: the command is lost, reported as a recoverable error, and a
     /// reply it asked for fails instead of waiting forever.
     fn stuck(&self, stuck: media_queue::Stuck, reply: Option<String>) {
@@ -295,6 +300,37 @@ mod tests {
         assert!(receiver.next().await.is_some());
         assert!(receiver.next().await.is_some());
         assert!(receiver.next().await.is_none());
+    }
+
+    // Catches: pre-connect audio pushed as live audio, so the input policy drops the start of the
+    // first turn before the socket is up.
+    #[tokio::test]
+    async fn ingress_keeps_pre_connect_audio_in_full() {
+        let policy = media_queue::Policy::CatchUp(std::time::Duration::from_millis(100));
+        let (input, mut rx) = media_queue::audio(policy);
+        let (events, _receiver) = events();
+        let ingress = Ingress {
+            input,
+            drops: lk_agents_net::audio_drops::AudioDrops::new(
+                lk_agents_net::telemetry::AudioConsumer::Realtime,
+                policy,
+            ),
+            events,
+            clock: Arc::new(lk_agents_net::clock::RealClock::default()),
+            label: "model".into(),
+        };
+        let frame = || lk_agents_abi::AudioFrame::new(vec![0u8; 480], 24_000, 1, 240);
+        for _ in 0..30 {
+            ingress.head(frame());
+        }
+        drop(ingress);
+        let mut samples = 0;
+        while let Some(media_queue::Item::Media(frame)) = rx.recv().await {
+            samples += frame.samples_per_channel;
+        }
+        assert_eq!(samples, 30 * 240, "the head was cut by the input policy");
+        assert_eq!(rx.head().received, std::time::Duration::from_millis(300));
+        assert_eq!(rx.dropped(), 0);
     }
 
     #[tokio::test]

@@ -326,6 +326,11 @@ impl StreamInput<AudioFrame> for RealtimeAudioSink {
         Ok(())
     }
 
+    fn head(&self, frame: AudioFrame) -> Result<(), ProviderError> {
+        self.session.head(frame);
+        Ok(())
+    }
+
     fn flush(&self) -> Result<(), ProviderError> {
         Ok(())
     }
@@ -461,5 +466,48 @@ impl VoiceRuntime {
                 }
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Records the audio each way it arrives.
+    #[derive(Default)]
+    struct Heard(parking_lot::Mutex<Vec<&'static str>>);
+    impl RealtimeSession for Heard {
+        fn capabilities(&self) -> lk_agents_abi::llm::realtime::RealtimeCapabilities {
+            Default::default()
+        }
+        fn send(&self, cmd: RealtimeCommand) {
+            if let RealtimeCommand::PushAudio(_) = cmd {
+                self.0.lock().push("push");
+            }
+        }
+        fn head(&self, _: AudioFrame) {
+            self.0.lock().push("head");
+        }
+        fn next_event(&self) -> BoxFuture<'_, Option<lk_agents_abi::llm::realtime::Event>> {
+            Box::pin(std::future::pending())
+        }
+        fn chat_ctx(&self) -> BoxFuture<'_, lk_agents_abi::ChatContext> {
+            Box::pin(async { Default::default() })
+        }
+        fn aclose(&self) -> BoxFuture<'_, ()> {
+            Box::pin(async {})
+        }
+    }
+
+    // Catches: the realtime leg pushing pre-connect audio as live audio, so the session's input
+    // policy drops the start of the first turn.
+    #[test]
+    fn pre_connect_audio_reaches_the_session_as_head() {
+        let session = Arc::new(Heard::default());
+        let sink = RealtimeAudioSink { session: session.clone() };
+        let frame = || AudioFrame::new(vec![0u8; 960], 48_000, 1, 480);
+        sink.head(frame()).unwrap();
+        sink.push(frame()).unwrap();
+        assert_eq!(*session.0.lock(), ["head", "push"]);
     }
 }

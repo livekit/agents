@@ -19,6 +19,9 @@ impl RealtimeSession for Scripted {
         };
         self.sent.lock().push(label);
     }
+    fn head(&self, _: lk_agents_abi::AudioFrame) {
+        self.sent.lock().push("head".to_owned());
+    }
     fn next_event(&self) -> lk_agents_abi::BoxFuture<'_, Option<Event>> {
         Box::pin(async move {
             let next = self.events.lock().pop_front();
@@ -485,4 +488,23 @@ async fn attempt_timeout_skips_a_model_whose_open_hangs() {
         .expect("a hanging open held the swap past its attempt_timeout");
     assert!(matches!(swapped, Some(Event::SessionSwapped { .. })), "{swapped:?}");
     assert_eq!(model.active_index(), 2);
+}
+
+// Catches: the fallback session hearing pre-connect audio as live audio, so the serving model's
+// input policy drops the start of the first turn.
+#[tokio::test]
+async fn pre_connect_audio_reaches_the_serving_model_as_head() {
+    let primary = scripted(vec![]);
+    let model = RealtimeFallbackModel::new(
+        vec![ChainModel::Native(Arc::new(Model(Arc::clone(&primary))))],
+        10.0,
+        None,
+        true,
+        Arc::new(crate::fallback::IgnoreEvents),
+        Arc::new(lk_agents_net::clock::RealClock::default()),
+    )
+    .unwrap();
+    let session = model.session(false).await.unwrap();
+    session.head(lk_agents_abi::AudioFrame::new(vec![0u8; 960], 24_000, 1, 480));
+    assert_eq!(*primary.sent.lock(), ["head"]);
 }

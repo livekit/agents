@@ -39,8 +39,8 @@ enum InputEvent {
     Failed(IoError),
 }
 
-/// One kind of input's queue, as its readers drive it.
-trait Queue: Send + Sync + 'static {
+/// How a track reader hands its frames and events to the session's media queue.
+trait ReaderSink: Send + Sync + 'static {
     type Frame: Send + 'static;
     type Receiver: Send + 'static;
     /// Returns the audio the push dropped.
@@ -55,7 +55,7 @@ trait Queue: Send + Sync + 'static {
     fn head(receiver: &Self::Receiver) -> Duration;
 }
 
-impl Queue for AudioSender<InputEvent> {
+impl ReaderSink for AudioSender<InputEvent> {
     type Frame = AudioFrame;
     type Receiver = AudioReceiver<InputEvent>;
     fn push(&self, frame: AudioFrame) -> Duration {
@@ -80,7 +80,7 @@ impl Queue for AudioSender<InputEvent> {
     }
 }
 
-impl Queue for VideoSender<InputEvent> {
+impl ReaderSink for VideoSender<InputEvent> {
     type Frame = VideoFrameRef;
     type Receiver = VideoReceiver<InputEvent>;
     fn push(&self, frame: VideoFrameRef) -> Duration {
@@ -112,7 +112,7 @@ struct State<Q> {
 }
 
 /// The selection, the queue it admits frames into, and one wake for every reader.
-struct Readers<Q: Queue> {
+struct Readers<Q: ReaderSink> {
     state: Mutex<State<Q>>,
     queue: tokio::sync::Mutex<Q::Receiver>,
     changed: Notify,
@@ -120,7 +120,7 @@ struct Readers<Q: Queue> {
     drops: Option<AudioDrops>,
 }
 
-impl<Q: Queue> Readers<Q> {
+impl<Q: ReaderSink> Readers<Q> {
     fn new(
         sources: &'static [TrackSource],
         (tx, rx): (Q, Q::Receiver),
@@ -254,7 +254,7 @@ fn publications(participant: &dyn RemoteParticipant) -> Result<PublicationSnapsh
 
 /// One kind of input's SDK reader: opens the selected track and pumps it.
 trait Reader: Sized + Send + Sync + 'static {
-    type Queue: Queue;
+    type Queue: ReaderSink;
 
     fn readers(&self) -> &Readers<Self::Queue>;
     fn room(&self) -> &dyn RtcRoom;
@@ -335,7 +335,7 @@ fn route<R: Reader>(reader: &Arc<R>, event: &RoomEvent) -> Result<()> {
 
 /// Reads a stream until voice retires its reader or it ends, then retires the stream. `admit`
 /// turns a stream item into the frame it delivers, if any.
-async fn pump<S: Send + 'static, Q: Queue, A: Future<Output = Option<Q::Frame>>>(
+async fn pump<S: Send + 'static, Q: ReaderSink, A: Future<Output = Option<Q::Frame>>>(
     readers: &Readers<Q>,
     clock: &dyn Clock,
     generation: u64,

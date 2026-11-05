@@ -218,6 +218,10 @@ impl RealtimeSession for Session {
         self.socket.wake.notify_one();
     }
 
+    fn head(&self, frame: lk_agents_abi::AudioFrame) {
+        self.send(RealtimeCommand::PushAudio(lk_agents_abi::PushAudio { frame }));
+    }
+
     fn next_event(&self) -> BoxFuture<'_, Option<Event>> {
         Box::pin(self.socket.until(|st| match st.events.pop_front() {
             Some(event) => Some(Some(event)),

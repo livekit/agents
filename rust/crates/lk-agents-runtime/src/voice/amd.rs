@@ -136,6 +136,14 @@ impl StreamInput<AudioFrame> for GatedSink {
         }
     }
 
+    fn head(&self, item: AudioFrame) -> Result<(), ProviderError> {
+        if self.open.load(Ordering::Relaxed) && !self.ended.load(Ordering::Relaxed) {
+            self.inner.head(item)
+        } else {
+            Ok(())
+        }
+    }
+
     fn flush(&self) -> Result<(), ProviderError> {
         self.inner.flush()
     }
@@ -753,6 +761,40 @@ mod tests {
         fn end_input(&self) {
             self.0.fetch_add(1, Ordering::SeqCst);
         }
+    }
+
+    /// Records how each frame arrived.
+    #[derive(Default)]
+    struct Heard(parking_lot::Mutex<Vec<&'static str>>);
+    impl StreamInput<AudioFrame> for Heard {
+        fn push(&self, _: AudioFrame) -> Result<(), ProviderError> {
+            self.0.lock().push("push");
+            Ok(())
+        }
+        fn head(&self, _: AudioFrame) -> Result<(), ProviderError> {
+            self.0.lock().push("head");
+            Ok(())
+        }
+        fn flush(&self) -> Result<(), ProviderError> {
+            Ok(())
+        }
+        fn end_input(&self) {}
+    }
+
+    // Catches: the gate passing pre-connect audio on as live audio (the tap's policy then drops
+    // it), or letting it through while the gate is shut.
+    #[test]
+    fn the_gate_forwards_pre_connect_audio_as_head_only_while_listening() {
+        let heard = Arc::new(Heard::default());
+        let gate = Arc::new(AtomicBool::new(false));
+        let sink =
+            GatedSink { inner: heard.clone(), open: gate.clone(), ended: AtomicBool::new(false) };
+        let frame = || AudioFrame::new(vec![0u8; 960], 48_000, 1, 480);
+        sink.head(frame()).unwrap();
+        gate.store(true, Ordering::Relaxed);
+        sink.head(frame()).unwrap();
+        sink.push(frame()).unwrap();
+        assert_eq!(*heard.0.lock(), ["head", "push"]);
     }
 
     struct Source {

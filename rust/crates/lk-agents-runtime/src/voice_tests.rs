@@ -578,6 +578,7 @@ impl lk_agents_abi::RealtimeSession for RealtimeProbe {
         Default::default()
     }
     fn send(&self, _: lk_agents_abi::llm::realtime::RealtimeCommand) {}
+    fn head(&self, _: lk_agents_abi::AudioFrame) {}
     fn next_event(
         &self,
     ) -> lk_agents_abi::BoxFuture<'_, Option<lk_agents_abi::llm::realtime::Event>> {

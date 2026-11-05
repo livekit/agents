@@ -912,6 +912,10 @@ impl lk_agents_abi::RealtimeSession for OpenAIRealtimeSession {
         OpenAIRealtimeSession::send(self, cmd);
     }
 
+    fn head(&self, frame: lk_agents_abi::AudioFrame) {
+        self.commands.head(frame);
+    }
+
     fn next_event(&self) -> lk_agents_abi::BoxFuture<'_, Option<Event>> {
         Box::pin(async move { OpenAIRealtimeSession::next_event(self).await })
     }
