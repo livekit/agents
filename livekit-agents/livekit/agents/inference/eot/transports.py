@@ -154,7 +154,11 @@ class _CloudTransport:
         )
 
     def on_start_of_turn(self, elapsed: float) -> None:
-        """Count the turn from ``elapsed`` seconds before the frames pushed so far end."""
+        """Count the turn from its start, ``elapsed`` seconds before the frames pushed so far end.
+
+        Samples pushed since the last flush but before the turn start stop counting toward the
+        ``turn_samples`` sent with ``inference_start``; the audio already sent is unchanged.
+        """
         self._turn_samples = min(self._turn_samples, int(elapsed * self._opts.sample_rate))
 
     def flush(self) -> None:
@@ -465,7 +469,11 @@ class _LocalTransport:
         self._turn_samples += self._buf.push_frame(frame)
 
     def on_start_of_turn(self, elapsed: float) -> None:
-        """Count the turn from ``elapsed`` seconds before the frames pushed so far end."""
+        """Count the turn from its start, ``elapsed`` seconds before the frames pushed so far end.
+
+        Samples pushed since the last flush but before the turn start stop counting toward the
+        turn length passed to the model; the audio window keeps them.
+        """
         self._turn_samples = min(self._turn_samples, int(elapsed * DEFAULT_SAMPLE_RATE))
 
     def flush(self) -> None:

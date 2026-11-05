@@ -97,15 +97,22 @@ class _BaseStreamingTurnDetectorStream:
 
     @dataclass
     class _StartOfTurnSentinel:
-        """The user turn started ``elapsed`` seconds before the end of the frames queued
-        before it."""
+        """Queue event: the user turn started.
+
+        ``elapsed`` is the time in seconds from the turn start to the end of the frames queued
+        before this event. The transport counts the turn from that point.
+        """
 
         elapsed: float
 
     @dataclass
     class _InferenceSentinel:
-        """An inference request, run after the frames queued before it; ``chat_ctx`` holds
-        the items as of ``predict()``."""
+        """Queue event: run one inference request after the frames queued before it.
+
+        ``request_id`` identifies the request from ``predict()``; the drain loop skips it if a
+        newer request or a cancel replaced it. ``chat_ctx`` holds the chat context items as of
+        ``predict()``, or ``None`` when the caller passed none.
+        """
 
         request_id: str
         chat_ctx: ChatContext | None
