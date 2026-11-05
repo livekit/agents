@@ -541,6 +541,50 @@ async def test_a_run_sets_up_and_closes_its_toolsets_once() -> None:
     assert (toolset.setups, toolset.closes) == (2, 2)
 
 
+class OfferedToolsLLM(FakeLLM):
+    """A fake LLM that keeps the tool names of every request."""
+
+    def __init__(self, *, fake_responses: list[FakeLLMResponse] | None = None) -> None:
+        super().__init__(fake_responses=fake_responses)
+        self.offered: list[set[str]] = []
+
+    def chat(
+        self,
+        *,
+        chat_ctx: ChatContext,
+        tools: list[Tool] | None = None,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        **kwargs,
+    ):  # type: ignore[override]
+        self.offered.append({tool.info.name for tool in tools or []})  # type: ignore[attr-defined]
+        return super().chat(chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
+
+
+class TwoToolset(CountingToolset):
+    @function_tool
+    async def keep(self) -> str:
+        """Kept by the filter."""
+        return "kept"
+
+
+async def test_a_filtered_toolset_offers_its_kept_tools_and_leases_the_toolset() -> None:
+    """``Toolset.filtered()`` (tools.md "Toolsets") hides the rejected tools from the model and
+    sets up and closes the toolset it filters."""
+    toolset = TwoToolset()
+    llm = OfferedToolsLLM(
+        fake_responses=[FakeLLMResponse(input="go", content="done", ttft=0, duration=0)]
+    )
+    agent = Agent(
+        instructions="x",
+        llm=llm,
+        tools=[toolset.filtered(lambda t: t.info.name == "keep")],  # type: ignore[attr-defined]
+    )
+    result = await agent.run("go")
+    assert result.status == "completed"
+    assert llm.offered == [{"keep"}]
+    assert (toolset.setups, toolset.closes) == (1, 1)
+
+
 async def test_a_call_holds_its_session_toolsets_across_agent_changes() -> None:
     """``VoiceSession(tools=)`` toolsets live for the whole call (tools.md "Toolsets"): an agent
     change neither sets them up again nor closes them; an agent's own toolset connects per

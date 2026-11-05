@@ -175,6 +175,7 @@ pub trait McpSession: Send + Sync + Sized + 'static {
         env: &Self::Env,
         url: String,
         headers: Vec<(String, String)>,
+        auth: Option<String>,
     ) -> Result<(), McpError>;
     #[host(await)]
     async fn connect_stdio(

@@ -61,6 +61,7 @@ enum Target {
         env: ProcessEnv,
         url: String,
         headers: Vec<(String, String)>,
+        auth: Option<String>,
     },
     Stdio {
         command: String,
@@ -70,6 +71,23 @@ enum Target {
     },
     #[cfg(test)]
     Fake(Arc<dyn Fn() -> super::tests::FakeTransport + Send + Sync>),
+}
+
+impl Target {
+    /// The same server with the same credentials.
+    fn same_as(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Self::Http { url, headers, auth, .. },
+                Self::Http { url: other_url, headers: other_headers, auth: other_auth, .. },
+            ) => url == other_url && headers == other_headers && auth == other_auth,
+            (
+                Self::Stdio { command, args, env, cwd },
+                Self::Stdio { command: c, args: a, env: e, cwd: d },
+            ) => command == c && args == a && env == e && cwd == d,
+            _ => false,
+        }
+    }
 }
 
 struct Connection {
@@ -214,8 +232,9 @@ impl McpSessionPort for McpSession {
         env: &ProcessEnv,
         url: String,
         headers: Vec<(String, String)>,
+        auth: Option<String>,
     ) -> Result<(), McpError> {
-        self.connect_to(Target::Http { env: env.clone(), url, headers }).await
+        self.connect_to(Target::Http { env: env.clone(), url, headers, auth }).await
     }
     async fn connect_stdio(
         &self,
@@ -352,9 +371,11 @@ impl McpSessionPort for McpSession {
 impl McpSession {
     async fn connect_to(&self, target: Target) -> Result<(), McpError> {
         let _connecting = self.connecting.lock().await;
+        // New credentials replace the connection made with the old ones.
+        let same = self.target.lock().as_ref().is_some_and(|current| current.same_as(&target));
         *self.target.lock() = Some(target);
         *self.closed.lock() = false;
-        if self.connected() {
+        if same && self.connected() {
             return Ok(());
         }
         self.connect().await
@@ -397,11 +418,12 @@ impl McpSession {
         let receipt = Arc::new(TransportReceipt::default());
         let attempt = async {
             match target {
-                Target::Http { env, url, headers } => {
+                Target::Http { env, url, headers, auth } => {
                     let transport = connect_http(
                         &env,
                         url,
                         headers,
+                        auth,
                         self.init_timeout,
                         self.read_timeout,
                         receipt.clone(),

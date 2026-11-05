@@ -194,6 +194,7 @@ pub(super) fn connect_http(
     env: &ProcessEnv,
     url: String,
     headers: Vec<(String, String)>,
+    auth: Option<String>,
     timeout: Duration,
     read_timeout: Option<Duration>,
     receipt: Arc<TransportReceipt>,
@@ -220,8 +221,9 @@ pub(super) fn connect_http(
         clock: env.clock.clone(),
         receipt: receipt.clone(),
     };
-    Ok(StreamableHttpClientTransport::with_client(
-        client,
-        StreamableHttpClientTransportConfig::with_uri(url),
-    ))
+    let mut config = StreamableHttpClientTransportConfig::with_uri(url);
+    if let Some(token) = auth {
+        config = config.auth_header(token);
+    }
+    Ok(StreamableHttpClientTransport::with_client(client, config))
 }

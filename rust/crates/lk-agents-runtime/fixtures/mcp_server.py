@@ -62,6 +62,10 @@ def http():
 
     class Endpoint:
         async def __call__(self, scope, receive, send):
+            # the credentials the client sent, for the bearer-token check
+            for name, value in scope["headers"]:
+                if name == b"authorization":
+                    (events / "authorization").write_bytes(value)
             await manager.handle_request(scope, receive, send)
 
     app = Starlette(

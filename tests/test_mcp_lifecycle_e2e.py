@@ -4,6 +4,7 @@ import asyncio
 import sys
 from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -15,6 +16,7 @@ from livekit.agents.llm.mcp import (
     MCPToolset,
 )
 from livekit.agents.llm.tool_context import RawFunctionTool
+from livekit.agents.voice.events import RunContext
 
 pytestmark = pytest.mark.e2e
 
@@ -70,3 +72,20 @@ async def test_mcp_toolset_discovers_and_calls_real_server(server: MCPServer) ->
     assert server.initialized, "the connection stays open for the next run"
     await server.aclose()
     assert not server.initialized
+
+
+@pytest.mark.parametrize("server", ["http"], indirect=True)
+@pytest.mark.asyncio
+async def test_a_per_run_bearer_token_reaches_the_server(server: MCPServer, tmp_path: Path) -> None:
+    assert isinstance(server, MCPServerHTTP)
+    per_run = MCPServerHTTP(server.url, auth=lambda ctx: ctx.context)
+    ctx = RunContext[Any](function_call=None, run=type("Run", (), {"context": "secret"})())
+    toolset = MCPToolset(id="mcp", mcp_server=per_run).for_run(ctx)
+    try:
+        await toolset.setup()
+        assert [tool.info.name for tool in toolset.tools] == ["first", "second"]  # type: ignore[union-attr]
+    finally:
+        await toolset.aclose()
+        assert isinstance(toolset, MCPToolset)
+        await toolset._mcp_server.aclose()
+    assert (tmp_path / "authorization").read_text() == "Bearer secret"

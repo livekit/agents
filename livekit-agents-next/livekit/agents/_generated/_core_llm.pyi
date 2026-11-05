@@ -299,7 +299,12 @@ class McpSession:
     @property
     def retry_in(self) -> float:
         """Seconds until a failed session may reconnect; zero when it may now."""
-    async def connect_http(self, url: str, headers: Sequence[tuple[str, str]]) -> None: ...
+    async def connect_http(
+        self,
+        url: str,
+        headers: Sequence[tuple[str, str]],
+        auth: str | None,
+    ) -> None: ...
     async def connect_stdio(
         self,
         command: str,

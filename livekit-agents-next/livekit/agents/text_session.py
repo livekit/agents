@@ -86,23 +86,27 @@ class TextSession(Generic[Context_T, Output_T]):
             root_scope = (
                 hooks.store._scope_id if hooks is not None and hooks.store is not None else "root"
             )
-            agents = _agents(self._agent)
+            # each agent's run resolves its toolsets (Toolset.for_run) from the request's context
+            frames = [
+                _TextRun(
+                    agent,
+                    history=[],
+                    context=context,
+                    hooks=hooks,
+                    conn_options=DEFAULT_API_CONNECT_OPTIONS,
+                )
+                for agent in _agents(self._agent)
+            ]
             runs: dict[str, _TextRun[Any]] = {}
-            resources = run_resources(self._agent, hooks, agents)
+            resources = run_resources(self._agent, hooks, frames)
             contexts = _FrameContexts(self._context_factory)
             try:
                 await resources.open()
                 bindings = []
                 shared_thread = None
                 shared_store = None
-                for agent in agents:
-                    run = _TextRun(
-                        agent,
-                        history=[],
-                        context=context,
-                        hooks=hooks,
-                        conn_options=DEFAULT_API_CONNECT_OPTIONS,
-                    )
+                for run in frames:
+                    agent = run.agent
                     run.bind_resources(
                         resources,
                         thread=shared_thread,
@@ -112,7 +116,7 @@ class TextSession(Generic[Context_T, Output_T]):
                         shared_thread = run.thread
                         shared_store = run.store
                     run.frame_contexts = contexts
-                    run.tools = llm.ToolContext(agent.tools)
+                    run.tools = llm.ToolContext(run.agent_tools)
                     captured = contextvars.copy_context()
                     captured.run(_BindingContextVar.set, run)
                     runs[agent.name] = run

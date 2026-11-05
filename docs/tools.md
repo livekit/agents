@@ -378,9 +378,10 @@ member_services = Agent(..., tools=[Cards(), rewards])
 | Class | What |
 |---|---|
 | `Toolset(id=, tools=)` | a group of tools; a subclass adds its `@function_tool` methods |
+| `toolset.filtered(predicate)` | the toolset's tools for which `predicate(tool)` is true, as a toolset that sets up and closes with it: `rewards.filtered(lambda tool: tool.info.name != "close_account")` |
 | `AsyncToolset(id=, tools=, tool_handling=)` | on a call, background work from its tools survives a handoff when the toolset is passed to `VoiceSession(tools=)` |
 | `MCPToolset(id=, mcp_server=, tool_options=)` | an `AsyncToolset` of an MCP server's tools, `MCPServerHTTP(url)` or `MCPServerStdio(command, args)` |
-| `MCPServerHTTP(url, *, headers=, init_timeout=5, read_timeout=300, request_timeout=30)` | an MCP server over Streamable HTTP |
+| `MCPServerHTTP(url, *, headers=, auth=, init_timeout=5, read_timeout=300, request_timeout=30)` | an MCP server over Streamable HTTP; `headers` a dict and `auth` a bearer token, or either a function of the run's `RunContext` |
 | `MCPServerStdio(command, args, *, env=, cwd=, init_timeout=5, request_timeout=30)` | an MCP server run as a child process, restarted if it exits |
 | `MCPToolOptions(retries=, flags=, on_duplicate=, duplicate_scope=, report_progress=, timeout=)` | one MCP tool's options, keyed by tool name in `tool_options`; `report_progress` turns the server's progress into `ctx.update()`, `timeout` replaces `request_timeout` for that tool |
 
@@ -398,6 +399,22 @@ reached at `setup()` leaves its `MCPToolset` without tools instead of failing th
 or the run; the toolset keeps retrying, and a later run or activation gets the tools once the
 server answers. Once listed, the tools stay available through a later outage. The connection
 stays open for a minute after the toolset's last run, so the next run reuses it.
+
+Credentials can come from the run, as a backend serving many users needs:
+
+```python
+rewards = MCPToolset(
+    id="rewards",
+    mcp_server=MCPServerHTTP(url, auth=lambda ctx: ctx.context.rewards_token),
+)
+```
+
+Each run, and on a call each call, connects with its own credentials, resolved once from its
+`RunContext` (in a `TextSession`, the request's context). Runs whose credentials are equal share
+one connection; runs with different ones never do. A changed token, refreshed in the context
+during a call, reconnects before the next request, so a long call survives it. The functions
+must not block. This is `Toolset.for_run(ctx)`, which returns the toolset a run uses: the
+toolset itself unless, as here, its tools depend on the run.
 
 A toolset connects per run of the agent: `setup()` when the agent's
 activity starts, a call or a run, and `aclose()` when its last using activity

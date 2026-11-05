@@ -50,6 +50,7 @@ from .._generated.tool_options import Function as Function, NamedToolChoice as N
 from . import _provider_format
 
 if TYPE_CHECKING:
+    from ..voice.events import RunContext
     from ..voice.tool_executor import ToolHandlingOptions
 
 
@@ -110,6 +111,21 @@ class Toolset:
         """
         if self._children is not None:
             await self._children.aclose()
+
+    def for_run(self, ctx: RunContext[Any]) -> Toolset:
+        """The toolset one run or call uses: this one, unless its tools depend on the run, as an
+        MCP server's per-user credentials do. A run resolves it once, before setup."""
+        return self
+
+    def filtered(self, predicate: Callable[[Tool], bool]) -> Toolset:
+        """This toolset's tools for which ``predicate`` is true, nested toolsets filtered alike, as
+        a toolset that sets up and closes with this one.
+
+        Example::
+
+            rewards.filtered(lambda tool: tool.info.name in {"balance", "redeem"})
+        """
+        return _FilteredToolset(self, predicate)
 
     def _core_lifetime(self) -> _core._core_ToolsetLifetime:
         return self._lifetime
@@ -614,3 +630,45 @@ class AsyncToolset(Toolset):
     ) -> None:
         super().__init__(id=id, tools=tools)
         self._tool_handling = tool_handling
+
+
+class _FilteredToolset(AsyncToolset):
+    """A toolset's tools that pass a predicate. It keeps the toolset's structure and
+    ``tool_handling``, and leases the toolset itself."""
+
+    def __init__(self, inner: Toolset, predicate: Callable[[Tool], bool]) -> None:
+        handling = inner._tool_handling if isinstance(inner, AsyncToolset) else None
+        super().__init__(id=inner.id, tool_handling=handling)
+        self._inner = inner
+        self._predicate = predicate
+        self._views: dict[int, tuple[Toolset, _FilteredToolset]] = {}
+
+    @property
+    def tools(self) -> Sequence[Tool | Toolset]:
+        kept: list[Tool | Toolset] = []
+        for tool in self._inner.tools:
+            if isinstance(tool, Toolset):
+                cached = self._views.get(id(tool))
+                if cached is None or cached[0] is not tool:
+                    cached = self._views[id(tool)] = (tool, _FilteredToolset(tool, self._predicate))
+                kept.append(cached[1])
+            elif self._predicate(tool):
+                kept.append(tool)
+        return kept
+
+    def _toolset_dependencies(self) -> Sequence[Toolset]:
+        return [self._inner]
+
+    def for_run(self, ctx: RunContext[Any]) -> Toolset:
+        inner = self._inner.for_run(ctx)
+        if inner is self._inner:
+            return self
+        cached = self._views.get(id(inner))
+        if cached is None or cached[0] is not inner:
+            cached = self._views[id(inner)] = (inner, _FilteredToolset(inner, self._predicate))
+        return cached[1]
+
+
+def tools_for_run(tools: Sequence[Tool | Toolset], ctx: RunContext[Any]) -> list[Tool | Toolset]:
+    """``tools`` as the run or call of ``ctx`` uses them: each toolset's ``for_run``."""
+    return [tool.for_run(ctx) if isinstance(tool, Toolset) else tool for tool in tools]

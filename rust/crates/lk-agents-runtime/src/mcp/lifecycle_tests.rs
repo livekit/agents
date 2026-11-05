@@ -116,7 +116,7 @@ async fn mcp_real_server_lifecycle_http() -> Result {
     let session = Arc::new(McpSession::new(5.0, Some(30.0), Some(30.0))?);
     let result = async {
         let url = peer.receipt("url").await?;
-        session.connect_http(&ProcessEnv::current_runtime(), url, Vec::new()).await?;
+        session.connect_http(&ProcessEnv::current_runtime(), url, Vec::new(), None).await?;
         exercise(session.clone(), &peer).await
     }
     .await;

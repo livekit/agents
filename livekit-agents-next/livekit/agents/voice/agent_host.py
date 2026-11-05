@@ -75,6 +75,7 @@ from ..llm.tool_context import (
     Tool,
     ToolError,
     Toolset,
+    tools_for_run,
 )
 from ..llm.utils import (
     bind_function_arguments,
@@ -93,6 +94,7 @@ from .tool_executor import render_template
 if TYPE_CHECKING:
     from .agent import Agent
     from .agent_run import _TextRun
+    from .agent_session import VoiceSession
 
 
 class ToolArgumentError(Exception):
@@ -189,7 +191,7 @@ class AgentCallbacks:
 
         async with self._operation(invocation) as binding:
             assert not isinstance(binding, _VoiceBinding), "a voice frame carries its tools"
-            binding.tools.update_tools(self._agent.tools)
+            binding.tools.update_tools(binding.agent_tools)
             return tool_infos(binding.tools)
 
     async def prepare_tool(
@@ -465,20 +467,34 @@ async def _unexpected_value(ctx: RunContext[Any], value: Any) -> Any:
 def _voice_tools(binding: _VoiceBinding) -> ToolContext:
     """A voice frame's tools: the agent's, then the session's it lacks (a session tool added
     since the frame was installed, as IVR's DTMF tool)."""
-    own = ToolContext(binding.agent.tools)
+    agent_tools, session_tools = _call_tools(binding.agent, binding.session)
+    own = ToolContext(agent_tools)
     extra = [
         tool
-        for name, tool in ToolContext(binding.session._tools).function_tools.items()
+        for name, tool in ToolContext(session_tools).function_tools.items()
         if own.get_function_tool(name) is None
     ]
-    return ToolContext([*binding.agent.tools, *extra])
+    return ToolContext([*agent_tools, *extra])
+
+
+def _call_tools(
+    agent: Agent[Any, Any], session: VoiceSession[Any]
+) -> tuple[list[Tool | Toolset], list[Tool | Toolset]]:
+    """The agent's and the session's tools as the call uses them (``Toolset.for_run``)."""
+    ctx = RunContext[Any](function_call=None, session=session)
+    return tools_for_run(agent.tools, ctx), tools_for_run(session._tools, ctx)
 
 
 def _template_tools(agent: Agent[Any, Any], binding: object) -> list[Tool | Toolset]:
     """Where a tool's ``tool_handling`` override is looked up: the agent's tools, and on a call the
     session's (an ``AsyncToolset`` passed to ``VoiceSession(tools=)``)."""
     if isinstance(binding, _VoiceBinding):
-        return [*agent.tools, *binding.session._tools]
+        agent_tools, session_tools = _call_tools(agent, binding.session)
+        return [*agent_tools, *session_tools]
+    from .agent_run import _TextRun
+
+    if isinstance(binding, _TextRun):
+        return list(binding.agent_tools)
     return list(agent.tools)
 
 

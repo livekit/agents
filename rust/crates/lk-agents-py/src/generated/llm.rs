@@ -1587,19 +1587,20 @@ impl McpSession {
         ::pyo3::PyResult::Ok(out)
     }
 
-    #[pyo3(signature = (url, headers))]
+    #[pyo3(signature = (url, headers, auth))]
     fn connect_http<'py>(
         &self,
         py: Python<'py>,
         url: ::std::string::String,
         headers: ::std::vec::Vec<(::std::string::String, ::std::string::String)>,
+        auth: ::std::option::Option<::std::string::String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
         let env = crate::process::env();
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
             let () = <McpSessionImpl as ::lk_agents_abi::llm::mcp::McpSession>::connect_http(
-                &this, &env, url, headers,
+                &this, &env, url, headers, auth,
             )
             .await
             .map_err(|e: ::lk_agents_abi::llm::mcp::McpError| {

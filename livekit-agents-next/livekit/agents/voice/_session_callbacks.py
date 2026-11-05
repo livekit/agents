@@ -22,6 +22,7 @@ from ..llm import (
     ChatContext,
     StopResponse,
 )
+from ..llm.tool_context import tools_for_run
 from ..log import logger
 from ..types import (
     NOT_GIVEN,
@@ -107,7 +108,11 @@ class _AgentHooks:
         return self._toolsets
 
     def _core_toolset_resources(self, tools: Iterable[llm.Tool | llm.Toolset]) -> list[llm.Toolset]:
-        return [tool for tool in tools if isinstance(tool, llm.Toolset)]
+        return [tool for tool in self._for_call(tools) if isinstance(tool, llm.Toolset)]
+
+    def _for_call(self, tools: Iterable[llm.Tool | llm.Toolset]) -> list[llm.Tool | llm.Toolset]:
+        """``tools`` as this call uses them (``Toolset.for_run``)."""
+        return tools_for_run(list(tools), RunContext(function_call=None, session=self._session))
 
     async def _core_on_enter(self, agent: Agent) -> None:
         with _in_hook("on_enter", self._session, agent):
@@ -126,6 +131,7 @@ class _AgentHooks:
             await hook(RunContext(function_call=None, session=session), ev)
 
     def _core_tool_infos(self, tools: list[llm.Tool | llm.Toolset]) -> list[FunctionToolInfo]:
+        tools = self._for_call(tools)
         infos = {info.spec["name"]: info for info in tool_infos(llm.ToolContext(tools))}
         return [
             infos.get(spec["name"]) or FunctionToolInfo(spec=spec) for spec in tool_specs(tools)

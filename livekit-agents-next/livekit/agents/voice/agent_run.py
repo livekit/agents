@@ -40,10 +40,10 @@ from .._generated.text_session import FrameId
 from .._generated.usage import Usage
 from ..llm import ChatContext, ChatItem, ChatMessage, FunctionTool, RawFunctionTool, ToolContext
 from ..llm.chat_context import _ReadOnlyChatContext
-from ..llm.tool_context import Toolset
+from ..llm.tool_context import Toolset, tools_for_run
 from ..types import APIConnectOptions
 from .agent import _BindingContextVar
-from .events import Context_T
+from .events import Context_T, RunContext
 from .run_result import (
     Output_T,
     RunCompleted,
@@ -131,7 +131,9 @@ class _TextRun(Generic[Context_T]):
         self.thread = hooks.thread if hooks is not None else None
         self._store: ContextStore | None = None
         self.llm_conn_options = conn_options
-        self.tools = ToolContext(agent.tools)
+        # the agent's tools as this run uses them, resolved once (Toolset.for_run)
+        self.agent_tools = tools_for_run(agent.tools, RunContext(function_call=None, run=self))
+        self.tools = ToolContext(self.agent_tools)
         # the runner of this invocation, once started: where its tools report progress
         self.runner: _core.AgentRunner | _core.TextSessionRunner | None = None
         self._history = history
@@ -199,7 +201,7 @@ class _TextRun(Generic[Context_T]):
 
 
 def run_resources(
-    agent: Agent[Any, Any], hooks: RunHooks | None, agents: Sequence[Agent[Any, Any]]
+    agent: Agent[Any, Any], hooks: RunHooks | None, runs: Sequence[_TextRun[Any]]
 ) -> _core._core_RunResources:
     """Translate Python thread/store handles and authored toolsets to native capabilities."""
     thread = hooks.thread if hooks is not None else None
@@ -209,7 +211,7 @@ def run_resources(
         thread.id if thread is not None else None,
         store._activation if store is not None else None,
         agent.name,
-        [tool for configured in agents for tool in configured.tools if isinstance(tool, Toolset)],
+        [tool for run in runs for tool in run.agent_tools if isinstance(tool, Toolset)],
     )
 
 
@@ -238,11 +240,11 @@ async def start_run(
         hooks=hooks,
         conn_options=conn_options,
     )
-    resources = run_resources(agent, hooks, [agent])
+    resources = run_resources(agent, hooks, [run])
     try:
         await resources.open()
         run.bind_resources(resources)
-        run.tools = ToolContext(agent.tools)
+        run.tools = ToolContext(run.agent_tools)
         captured = contextvars.copy_context()
         captured.run(_BindingContextVar.set, run)
         runner = _core.AgentRunner(agent._definition(run.tools, retries), run.llm, agent._host)

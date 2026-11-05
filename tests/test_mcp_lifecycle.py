@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 import pytest
 
@@ -8,6 +9,7 @@ from livekit.agents import _core
 from livekit.agents.llm import mcp
 from livekit.agents.llm.mcp import MCPServer, MCPServerHTTP, MCPServerStdio, MCPToolset
 from livekit.agents.llm.tool_context import RawFunctionTool, function_tool
+from livekit.agents.voice.events import RunContext
 
 pytestmark = pytest.mark.unit
 
@@ -111,3 +113,71 @@ def test_invalid_mcp_timeout_fails_at_construction(field: str, bad: float) -> No
 def test_an_invalid_tool_timeout_fails_when_its_options_resolve() -> None:
     with pytest.raises(ValueError, match="timeout"):
         _core.resolve_mcp_tool_options(mcp.MCPToolOptions(timeout=-1.0))
+
+
+class Holder:
+    """A run or a call as ``RunContext`` reads it: its application context."""
+
+    def __init__(self, token: str) -> None:
+        self.context = type("Member", (), {"token": token})()
+
+
+def run_ctx(token: str) -> RunContext[Any]:
+    return RunContext(function_call=None, run=Holder(token))  # type: ignore[arg-type]
+
+
+def call_ctx(holder: Holder) -> RunContext[Any]:
+    return RunContext(function_call=None, session=holder)  # type: ignore[arg-type]
+
+
+def per_user() -> MCPToolset:
+    server = MCPServerHTTP("http://127.0.0.1:1/mcp", auth=lambda ctx: ctx.context.token)
+    return MCPToolset(id="mcp", mcp_server=server)
+
+
+# Catches: one user's MCP session, and the tools and data behind it, serving another user.
+def test_per_run_credentials_share_a_toolset_only_between_equal_credentials() -> None:
+    toolset = per_user()
+    alice, again, bob = (toolset.for_run(run_ctx(t)) for t in ("alice", "alice", "bob"))
+    assert alice is again
+    assert alice is not bob and alice is not toolset
+
+
+# Catches: a refreshed token mid-call swapping in a toolset whose tools were never set up.
+def test_a_call_keeps_its_toolset_when_its_token_changes() -> None:
+    toolset = per_user()
+    call = Holder("first")
+    kept = toolset.for_run(call_ctx(call))
+    call.context.token = "refreshed"
+    assert toolset.for_run(call_ctx(call)) is kept
+
+
+@pytest.mark.asyncio
+async def test_a_changed_token_reconnects_before_the_next_request() -> None:
+    connects: list[str | None] = []
+
+    class Session:
+        connected = True
+
+        async def connect_http(self, url: str, headers: object, auth: str | None) -> None:
+            connects.append(auth)
+
+    call = Holder("first")
+    child = per_user().for_run(call_ctx(call))
+    assert isinstance(child, MCPToolset)
+    server = child._mcp_server
+    assert isinstance(server, MCPServerHTTP)
+    server._session = Session()  # type: ignore[assignment]
+    await server.initialize()
+    await server._refresh()
+    call.context.token = "refreshed"
+    await server._refresh()
+    assert connects == ["first", "refreshed"]
+
+
+def test_a_filtered_per_run_toolset_filters_each_run() -> None:
+    toolset = per_user()
+    view = toolset.filtered(lambda tool: True)
+    child = view.for_run(run_ctx("alice"))
+    assert child is not view
+    assert child is view.for_run(run_ctx("alice"))
