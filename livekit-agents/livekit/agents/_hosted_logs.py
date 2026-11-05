@@ -1,3 +1,5 @@
+"""Hands log collection to LiveKit Cloud, with one output file per job."""
+
 from __future__ import annotations
 
 import contextlib
@@ -26,22 +28,26 @@ current_job_output: contextvars.ContextVar[JobOutput | None] = contextvars.Conte
 
 
 def _enabled() -> bool:
+    """Whether LiveKit Cloud collects this agent's logs."""
     return os.environ.get(HOSTED_LOGS_ENV) == HOSTED_LOGS_ENABLED
 
 
 def _handoff_file() -> str | None:
+    """The hand-off file path, or None when hosted logs are off."""
     if not _enabled():
         return None
     return os.environ.get(HOSTED_LOGS_HANDOFF_FILE_ENV) or None
 
 
 def _jobs_dir() -> str | None:
+    """The per-job log file directory, or None when hosted logs are off."""
     if not _enabled():
         return None
     return os.environ.get(HOSTED_LOGS_JOBS_DIR_ENV) or None
 
 
 def hand_off() -> None:
+    """Write the hand-off file, which tells LiveKit Cloud to collect logs and stops OTLP export."""
     global _handed_off
     path = _handoff_file()
     jobs_dir = _jobs_dir()
@@ -61,16 +67,20 @@ def hand_off() -> None:
 
 
 def logs_handed_off() -> bool:
+    """Whether this process handed log collection to LiveKit Cloud."""
     return _handed_off
 
 
 def _decision(*, logs: bool, redaction: bool) -> str:
+    """The file name decision: ``private`` (not collected), ``export`` or ``export.redact``."""
     if not logs:
         return "private"
     return "export.redact" if redaction else "export"
 
 
 class JobOutput(Protocol):
+    """A job's log file, renamed to record the session's logs decision."""
+
     fields: dict[str, Any]
 
     def decide(self, *, logs: bool, redaction: bool) -> None: ...
@@ -79,6 +89,7 @@ class JobOutput(Protocol):
 
 
 def _dup_onto_std(path: str) -> bool:
+    """Point fd 1 and fd 2 at ``path``; False if it can't be opened."""
     try:
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
     except OSError:
@@ -93,6 +104,8 @@ def _dup_onto_std(path: str) -> bool:
 
 
 class _ProcessOutput:
+    """The log file of a job process, which writes to it through fd 1 and fd 2."""
+
     def __init__(self, path: str, job_id: str, fields: dict[str, Any]) -> None:
         self._path = path
         self._job_id = job_id
@@ -119,6 +132,7 @@ class _ProcessOutput:
 
 
 def _redacted(record: logging.LogRecord) -> logging.LogRecord:
+    """A copy without PII fields or exception details when redaction is on, else ``record``."""
     from .telemetry import pii
     from .telemetry.utils import REDACTED_EXCEPTION_MESSAGE, redaction_enabled
 
@@ -136,11 +150,15 @@ def _redacted(record: logging.LogRecord) -> logging.LogRecord:
 
 
 class _JobStreamHandler(logging.StreamHandler):
+    """Writes redacted records to stdout, which is the job file."""
+
     def format(self, record: logging.LogRecord) -> str:
         return super().format(_redacted(record))
 
 
 class _JobFieldsFilter(logging.Filter):
+    """Adds the job fields to each record."""
+
     def __init__(self, output: JobOutput) -> None:
         super().__init__()
         self._output = output
@@ -151,6 +169,7 @@ class _JobFieldsFilter(logging.Filter):
 
 
 def redirect_job_output(job_id: str, fields: dict[str, Any]) -> JobOutput | None:
+    """Send this job process's output and log records to the job's file."""
     from .cli.log import JsonFormatter
     from .ipc.log_queue import LogQueueHandler
     from .log import _add_global_log_fields
@@ -176,6 +195,7 @@ def redirect_job_output(job_id: str, fields: dict[str, Any]) -> JobOutput | None
 
 
 def mark_process_done(job_id: str) -> None:
+    """Add ``.done`` to a job's file after its process exits."""
     jobs_dir = _jobs_dir()
     if not _handed_off or jobs_dir is None:
         return
@@ -188,6 +208,8 @@ def mark_process_done(job_id: str) -> None:
 
 
 class _ThreadJobOutput:
+    """The log file of a thread job, written by the thread router."""
+
     def __init__(self, path: str, stream: TextIO, job_id: str, fields: dict[str, Any]) -> None:
         self._path = path
         self._stream = stream
@@ -252,6 +274,7 @@ class _ThreadJobOutput:
 
 
 def thread_job_output(job_id: str, fields: dict[str, Any]) -> JobOutput | None:
+    """Open the log file of a thread job."""
     jobs_dir = _jobs_dir()
     if not _handed_off or jobs_dir is None:
         return None
@@ -264,12 +287,15 @@ def thread_job_output(job_id: str, fields: dict[str, Any]) -> JobOutput | None:
 
 
 def _add_job_fields(record: logging.LogRecord, output: JobOutput) -> None:
+    """Set the job fields that the record doesn't already have."""
     for key, value in output.fields.items():
         if not hasattr(record, key):
             setattr(record, key, value)
 
 
 class _ThreadJobRouter(logging.Handler):
+    """Writes each record to the current thread job's file."""
+
     def emit(self, record: logging.LogRecord) -> None:
         output = current_job_output.get()
         if not isinstance(output, _ThreadJobOutput):
@@ -282,10 +308,12 @@ class _ThreadJobRouter(logging.Handler):
 
 
 def _not_routed(record: logging.LogRecord) -> bool:
+    """Filter for other handlers: skip records that the thread router writes."""
     return not isinstance(current_job_output.get(), _ThreadJobOutput)
 
 
 def install_thread_router() -> None:
+    """Route thread job records to their files, and keep them out of other handlers."""
     from .cli.log import JsonFormatter
     from .log import _add_global_log_fields
 
