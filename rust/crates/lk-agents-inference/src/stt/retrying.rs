@@ -183,19 +183,18 @@ impl Stt for RetryingStt {
     /// Retried within `total_timeout`, which spans every attempt and wait.
     fn recognize(
         &self,
-        _cx: &telemetry::Cx,
+        cx: &telemetry::Cx,
         buffer: &[AudioFrame],
         language: Option<&LanguageCode>,
     ) -> lk_agents_abi::BoxFuture<'_, Result<SpeechEvent, ProviderError>> {
-        let buffer = buffer.to_vec();
-        let language = language.cloned();
+        let (cx, buffer, language) = (cx.clone(), buffer.to_vec(), language.cloned());
         Box::pin(async move {
             let mut attempts = attempts(&self.options, self.clock.now(), &*self.inner)?;
             let deadline = attempts.wake_at(None);
             match before(
                 &*self.clock,
                 deadline,
-                self.recognize_attempts(&buffer, language.as_ref(), &mut attempts),
+                self.recognize_attempts(&cx, &buffer, language.as_ref(), &mut attempts),
             )
             .await
             {
@@ -269,6 +268,7 @@ impl Stt for RetryingStt {
 impl RetryingStt {
     async fn recognize_attempts(
         &self,
+        cx: &telemetry::Cx,
         buffer: &[AudioFrame],
         language: Option<&LanguageCode>,
         attempts: &mut Attempts,
@@ -276,7 +276,7 @@ impl RetryingStt {
         let label = self.inner.label();
         loop {
             wake_attempts(attempts, self.clock.now(), &*self.inner)?;
-            let error = match self.inner.recognize(&telemetry::Cx::NONE, buffer, language).await {
+            let error = match self.inner.recognize(cx, buffer, language).await {
                 Ok(event) => return Ok(event),
                 Err(error) => error,
             };

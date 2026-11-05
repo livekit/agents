@@ -141,19 +141,21 @@ impl Tts for StreamAdapter {
     /// `stream_adapter.py:58`.
     fn synthesize<'a>(
         &'a self,
-        _cx: &telemetry::Cx,
+        cx: &telemetry::Cx,
         text: &'a str,
     ) -> lk_agents_abi::BoxFuture<'a, Result<TtsSource, ProviderError>> {
-        Box::pin(async move { self.tts.synthesize(&telemetry::Cx::NONE, text).await })
+        let cx = cx.clone();
+        Box::pin(async move { self.tts.synthesize(&cx, text).await })
     }
     fn stream(
         &self,
-        _cx: &telemetry::Cx,
+        cx: &telemetry::Cx,
         expressive: bool,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<lk_agents_abi::DuplexStream<TtsSink, TtsSource>, ProviderError>,
     > {
+        let cx = cx.clone();
         Box::pin(async move {
             self.budget
                 .validate()
@@ -165,6 +167,7 @@ impl Tts for StreamAdapter {
             let sink = AdapterSink { tx: Mutex::new(Some(tx)), closed: AtomicBool::new(false) };
             let source = AdapterSource {
                 tts: self.tts.clone(),
+                cx,
                 budget: self.budget,
                 sentence: None,
                 sentence_audio: false,
@@ -246,6 +249,8 @@ impl StreamInput<String> for AdapterSink {
 
 struct AdapterSource {
     tts: Arc<dyn Tts>,
+    /// What each sentence's synthesis runs under: the stream's caller.
+    cx: telemetry::Cx,
     budget: lk_agents_abi::ApiConnectOptions,
     /// The sentence being synthesized and its failed attempts: what a retry synthesizes again.
     sentence: Option<(String, u32)>,
@@ -435,7 +440,7 @@ impl AdapterSource {
         loop {
             let Some((text, _)) = self.sentence.clone() else { return Ok(()) };
             let start = lk_agents_abi::unix_secs(self.clock.wall());
-            match self.tts.synthesize(&telemetry::Cx::NONE, &text).await {
+            match self.tts.synthesize(&self.cx, &text).await {
                 Ok(source) => {
                     self.current = Some(source);
                     let id = self.tts.id();

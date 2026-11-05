@@ -142,33 +142,31 @@ impl Stt for StreamAdapter {
 
     fn recognize(
         &self,
-        _cx: &telemetry::Cx,
+        cx: &telemetry::Cx,
         buffer: &[AudioFrame],
         language: Option<&LanguageCode>,
     ) -> lk_agents_abi::BoxFuture<'_, Result<SpeechEvent, ProviderError>> {
-        let buffer = buffer.to_vec();
-        let language = language.cloned();
-        Box::pin(async move {
-            self.stt.recognize(&telemetry::Cx::NONE, &buffer, language.as_ref()).await
-        })
+        let (cx, buffer, language) = (cx.clone(), buffer.to_vec(), language.cloned());
+        Box::pin(async move { self.stt.recognize(&cx, &buffer, language.as_ref()).await })
     }
 
     fn stream(
         &self,
-        _cx: &telemetry::Cx,
+        cx: &telemetry::Cx,
         language: Option<&LanguageCode>,
         _start_time_offset: Option<f64>,
     ) -> lk_agents_abi::BoxFuture<
         '_,
         Result<Option<lk_agents_abi::DuplexStream<SttSink, SttSource>>, ProviderError>,
     > {
-        let language = language.cloned();
+        let (cx, language) = (cx.clone(), language.cloned());
         Box::pin(async move {
-            let opened = self.vad.stream(&telemetry::Cx::NONE).await.map(|stream| {
+            let opened = self.vad.stream(&cx).await.map(|stream| {
                 let (sink, vad) = stream.split();
                 let source = AdapterSource {
                     vad,
                     stt: Arc::clone(&self.stt),
+                    cx,
                     language: language.clone(),
                     utterance: None,
                     speech_end: None,
@@ -185,6 +183,8 @@ impl Stt for StreamAdapter {
 struct AdapterSource {
     vad: VadSource,
     stt: Arc<dyn Stt>,
+    /// What each utterance's recognition runs under: the stream's caller.
+    cx: telemetry::Cx,
     language: Option<LanguageCode>,
     /// The utterance the last end of speech closed, not yet recognized.
     utterance: Option<Vec<AudioFrame>>,
@@ -199,10 +199,8 @@ impl StreamOutput<SpeechEvent> for AdapterSource {
         Box::pin(async move {
             loop {
                 if let Some(frames) = self.utterance.take() {
-                    let event = self
-                        .stt
-                        .recognize(&telemetry::Cx::NONE, &frames, self.language.as_ref())
-                        .await?;
+                    let event =
+                        self.stt.recognize(&self.cx, &frames, self.language.as_ref()).await?;
                     if let Some(mut transcript) = recognized(event) {
                         transcript.speech_end_time = transcript.speech_end_time.or(self.speech_end);
                         return Ok(Some(transcript));

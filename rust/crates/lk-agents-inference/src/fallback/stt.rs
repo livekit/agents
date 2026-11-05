@@ -224,7 +224,7 @@ impl StreamInput<AudioFrame> for TeeSink {
 #[derive(Clone)]
 pub enum SttReq {
     /// `_recognize_impl`. `Arc` because recovery replays the same buffer (`stt:217-222`).
-    Batch { frames: Arc<[AudioFrame]>, language: Option<LanguageCode> },
+    Batch { frames: Arc<[AudioFrame]>, language: Option<LanguageCode>, cx: telemetry::Cx },
     /// `STT.stream`. `tee` is live; every leg opens under `cx`.
     Stream {
         language: Option<LanguageCode>,
@@ -293,9 +293,9 @@ impl Backend for SttBackend {
     ) -> Result<Self::Session, ProviderError> {
         let stt = self.inner.with_conn_options(conn).unwrap_or_else(|| self.inner.clone());
         match req {
-            SttReq::Batch { frames, language } => Ok(SttSession::Batch(
-                stt.recognize(&telemetry::Cx::NONE, frames, language.as_ref()).await?,
-            )),
+            SttReq::Batch { frames, language, cx } => {
+                Ok(SttSession::Batch(stt.recognize(cx, frames, language.as_ref()).await?))
+            }
             SttReq::Stream { language, tee, offset, cx } => {
                 let offset = offset.map(|o| o.at(self.clock.now()));
                 let (sink, source) = stt
@@ -318,9 +318,10 @@ impl Backend for SttBackend {
     ) -> Result<Recovery, ProviderError> {
         let stt = self.inner.with_conn_options(conn).unwrap_or_else(|| self.inner.clone());
         match (req, slot) {
-            (SttReq::Batch { frames, language }, _) => {
-                // `_try_recognize(recovering=True)`: one call, output discarded.
-                stt.recognize(&telemetry::Cx::NONE, frames, language.as_ref()).await?;
+            (SttReq::Batch { frames, language, cx }, _) => {
+                // `_try_recognize(recovering=True)`: one call, output discarded, in the job past
+                // the request it recovers for, under no span.
+                stt.recognize(&cx.clone().continuing(None), frames, language.as_ref()).await?;
                 Ok(Recovery::Recovered)
             }
             // A probe's timestamps are never read, and the reference leaves its offset at 0.
@@ -582,14 +583,13 @@ impl Stt for FallbackStt {
 
     fn recognize(
         &self,
-        _cx: &telemetry::Cx,
+        cx: &telemetry::Cx,
         buffer: &[lk_agents_abi::AudioFrame],
         language: Option<&LanguageCode>,
     ) -> lk_agents_abi::BoxFuture<'_, Result<SpeechEvent, ProviderError>> {
-        let buffer = buffer.to_vec();
-        let language = language.cloned();
+        let (cx, buffer, language) = (cx.clone(), buffer.to_vec(), language.cloned());
         Box::pin(async move {
-            let req = SttReq::Batch { frames: Arc::from(buffer), language: language.clone() };
+            let req = SttReq::Batch { frames: Arc::from(buffer), language: language.clone(), cx };
             let mut unused = ();
             let out = self
                 .chain
