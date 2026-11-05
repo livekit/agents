@@ -4,14 +4,16 @@ use crate::effects::RealtimeConnectionEffect;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
+use lk_agents_abi::AudioFrame;
 use lk_agents_abi::Clock;
 use lk_agents_abi::RealtimeCommand as Command;
 use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::llm::provider_format::ImageResolver;
 use lk_agents_abi::{ApiConnectOptions, ChatContext};
 use lk_agents_abi::{Spawner, SpawnerExt};
+use lk_agents_media::media_queue::{self, Item};
+use lk_agents_net::telemetry;
 use lk_agents_net::transport::{TransportError, WsMessage, WsTransport};
-use lk_agents_net::{leaky, telemetry};
 use tokio::sync::{Mutex, mpsc};
 
 use crate::headers::BoundIdentity;
@@ -219,7 +221,7 @@ pub fn warn_on_half_disabled_turn_taking(td: &lk_agents_abi::Maybe<Option<TurnDe
 }
 
 /// The session's input: a backlog keeps up to ten seconds of what the person said.
-const INPUT_POLICY: leaky::Policy = leaky::Policy::CatchUp { max: Duration::from_secs(10) };
+const INPUT_POLICY: media_queue::Policy = media_queue::Policy::CatchUp(Duration::from_secs(10));
 
 /// What a session's pump is told: the core's commands, the model's option changes, and the close.
 pub(crate) enum Cmd {
@@ -292,7 +294,7 @@ impl OpenAIRealtime {
                 self.clock.wall() - Duration::from_nanos(self.clock.now().as_nanos()),
             );
 
-        let (input, input_rx) = leaky::audio_channel(INPUT_POLICY);
+        let (input, input_rx) = media_queue::audio(INPUT_POLICY);
         let (ev_tx, ev_rx) = super::queue::events();
         let shared = Arc::new(Shared {
             machine: Mutex::new(machine),
@@ -307,6 +309,10 @@ impl OpenAIRealtime {
         });
         let commands = Arc::new(super::queue::Ingress {
             input,
+            drops: lk_agents_net::audio_drops::AudioDrops::new(
+                telemetry::AudioConsumer::Realtime,
+                INPUT_POLICY,
+            ),
             events: ev_tx.clone(),
             clock: self.clock.clone(),
             label: label.clone(),
@@ -467,14 +473,14 @@ struct Pump {
 impl Pump {
     /// `_main_task`: connect, run, and reconnect, retrying a failed connection on the connect
     /// options' budget, until a terminal error or a close.
-    async fn run(self, commands: leaky::Receiver<Cmd>) {
+    async fn run(self, commands: media_queue::Receiver<AudioFrame, Cmd>) {
         self.run_loop(commands).await;
         self.close().await;
         self.wait_for_retirement().await;
         self.events.finish();
     }
 
-    async fn run_loop(&self, mut commands: leaky::Receiver<Cmd>) {
+    async fn run_loop(&self, mut commands: media_queue::Receiver<AudioFrame, Cmd>) {
         use crate::realtime::machine::connection::RealtimeConnection;
         let mut connection = RealtimeConnection::new(&self.connect.conn, self.clock.now());
         let mut effects = connection.start(self.clock.now());
@@ -555,7 +561,7 @@ impl Pump {
     /// failure, retryable or not.
     async fn connect_and_run(
         &self,
-        commands: &mut leaky::Receiver<Cmd>,
+        commands: &mut media_queue::Receiver<AudioFrame, Cmd>,
         reconnecting: bool,
         connection: &mut crate::realtime::machine::connection::RealtimeConnection,
         generation: u64,
@@ -603,7 +609,7 @@ impl Pump {
 
     async fn run_ws(
         &self,
-        input: &mut leaky::Receiver<Cmd>,
+        input: &mut media_queue::Receiver<AudioFrame, Cmd>,
         sender: Arc<dyn lk_agents_net::transport::WsSender>,
         mut receiver: Box<dyn lk_agents_net::transport::WsReceiver>,
         initial: Step,
@@ -712,14 +718,14 @@ impl Pump {
                     self.shared.machine.lock().await.continue_context(self.clock.now())
                 },
                 // Input waits in its channel until the writer has nothing else queued: this task
-                // is the only sender, so the queue is still empty when the batch is taken.
-                items = async {
+                // is the only sender, so the queue is still empty when the item is taken.
+                item = async {
                     match outgoing.reserve_many(super::writer::WRITE_BACKLOG - 1).await {
                         Ok(empty) => drop(empty),
                         Err(_) => std::future::pending().await,
                     }
                     input.recv().await
-                }, if writable && !pages_pending => match self.apply(items).await {
+                }, if writable && !pages_pending => match self.apply(item).await {
                     Some(step) => step,
                     None => {
                         self.close().await;
@@ -741,30 +747,25 @@ impl Pump {
         }
     }
 
-    /// One drained input batch through the machine, in order; `None` on a close.
-    async fn apply(&self, items: Option<Vec<leaky::Item<Cmd>>>) -> Option<Step> {
+    /// One input item through the machine; `None` on a close.
+    async fn apply(&self, item: Option<Item<AudioFrame, Cmd>>) -> Option<Step> {
         let now = self.clock.now();
         let mut m = self.shared.machine.lock().await;
-        let mut step = Step::default();
-        for item in items? {
-            let next = match item {
-                leaky::Item::Audio(frame) => m.command(
-                    now,
-                    Command::PushAudio(lk_agents_abi::llm::realtime::PushAudio { frame }),
-                ),
-                // The model only hears less: nothing marks the gap on the wire.
-                leaky::Item::Gap(_) => continue,
-                leaky::Item::Control(Cmd::Core(command)) => m.command(now, command),
-                leaky::Item::Control(Cmd::Options(patch)) => {
-                    let next = m.update_options(*patch);
-                    *self.shared.caps.lock() = m.capabilities();
-                    next
-                }
-                leaky::Item::Control(Cmd::Close) => return None,
-            };
-            step.merge(next);
-        }
-        Some(step)
+        Some(match item? {
+            Item::Media(frame) => m.command(
+                now,
+                Command::PushAudio(lk_agents_abi::llm::realtime::PushAudio { frame }),
+            ),
+            // The model only hears less: nothing marks the gap on the wire.
+            Item::Gap(_) => Step::default(),
+            Item::Event(Cmd::Core(command)) => m.command(now, command),
+            Item::Event(Cmd::Options(patch)) => {
+                let next = m.update_options(*patch);
+                *self.shared.caps.lock() = m.capabilities();
+                next
+            }
+            Item::Event(Cmd::Close) => return None,
+        })
     }
 
     /// "connection closed unexpectedly": retryable, so the session reconnects.
@@ -924,7 +925,7 @@ impl lk_agents_abi::RealtimeSession for OpenAIRealtimeSession {
     }
 
     fn observe(&self, cx: telemetry::Cx) {
-        self.commands.input.observe(cx, telemetry::AudioConsumer::Realtime);
+        self.commands.drops.observe(cx);
     }
 }
 

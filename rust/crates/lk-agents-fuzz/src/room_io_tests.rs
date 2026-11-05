@@ -3,7 +3,7 @@
 //! pre-connect buffer's edges.
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::voice::io::{
-    AudioInput, AudioOutput, AudioOutputExt, PlaybackFinished, TextOutput,
+    AudioInput, AudioOutput, AudioOutputExt, PlaybackFinished, TextOutput, VideoInput,
 };
 use lk_agents_abi::voice::room_io::{
     AudioInputConfig, AudioOutputConfig, RoomIoConfig, TextInput, TextOutputConfig,
@@ -18,7 +18,7 @@ use lk_agents_abi::voice::rtc::{
 };
 use lk_agents_abi::{
     ATTRIBUTE_TRANSCRIPTION_FINAL, ATTRIBUTE_TRANSCRIPTION_TRACK_ID, AudioFrame, Closed,
-    HOST_TEARDOWN_TIMEOUT, StreamOutput, TOPIC_CHAT, Ts, VirtualClock,
+    HOST_TEARDOWN_TIMEOUT, MediaRef, RefRegistry, StreamOutput, TOPIC_CHAT, Ts, VirtualClock,
 };
 use lk_agents_fuzz::fakes::room::{
     FailingProcessors, FakeRemoteParticipant, FakeRoom, FakeRtc, FakeTrackPublication, Faults,
@@ -27,7 +27,7 @@ use lk_agents_fuzz::fakes::room::{
 use lk_agents_runtime::net::clock::RealClock;
 use lk_agents_runtime::net::task::TokioSpawner;
 use lk_agents_runtime::room_io::RoomIo;
-use lk_agents_runtime::room_io::input::ParticipantAudioInput;
+use lk_agents_runtime::room_io::input::{ParticipantAudioInput, ParticipantVideoInput};
 use lk_agents_runtime::room_io::output::ParticipantAudioOutput;
 use lk_agents_runtime::room_io::output::transcription::{
     ParticipantTranscriptionOutput, SegmentIds,
@@ -663,6 +663,52 @@ async fn track_replacement_releases_pending_preconnect_input() {
     );
     input.aclose().await;
     handler.aclose().await;
+}
+
+// Catches: frames the replaced track queued reaching the session after the change, even when
+// the new track has yet to deliver a frame that would push them out.
+#[tokio::test]
+async fn a_source_change_drops_the_old_tracks_queued_audio_and_video() {
+    let (room, clock) = fake_room("source-change");
+    let user = room.add_participant("user", ParticipantKind::Standard);
+    let old_mic = user.publish_microphone("TR_old_mic");
+    let old_cam = user.publish_track("TR_old_cam", TrackSource::Camera);
+    let audio = input(&room, clock.clone(), None);
+    let video = ParticipantVideoInput::new(room.clone(), Arc::new(TokioSpawner::current()), clock);
+    audio.set_participant(Some("user".into())).unwrap();
+    video.set_participant(Some("user".into())).unwrap();
+    yields(4).await;
+    let cx = lk_agents_abi::telemetry::Cx::NONE;
+    let tone = |tag: u8| AudioFrame::new(vec![tag; 960], 24_000, 1, 480);
+    let registry: Arc<dyn RefRegistry> = Arc::new(NoRefs);
+    let picture = |id: u64| VideoFrameRef {
+        media: MediaRef::new(id, &registry),
+        width: 2,
+        height: 2,
+        timestamp_us: 0,
+    };
+    old_mic.push_frame(tone(1));
+    old_cam.push_video_frame(picture(1));
+    assert_eq!(audio.next_frame(&cx).await.unwrap().unwrap().data.as_ref(), &[1; 960]);
+    assert_eq!(video.next_frame(&cx).await.unwrap().unwrap().media.id(), 1);
+    old_mic.push_frame(tone(2));
+    old_cam.push_video_frame(picture(2));
+    yields(4).await;
+    let new_mic = user.publish_microphone("TR_new_mic");
+    let new_cam = user.publish_track("TR_new_cam", TrackSource::Camera);
+    audio.handle_event(&subscribed(&user, new_mic.clone())).unwrap();
+    video.handle_event(&subscribed(&user, new_cam.clone())).unwrap();
+    yields(4).await;
+    pending(std::pin::pin!(audio.next_frame(&cx))).await;
+    pending(std::pin::pin!(video.next_frame(&cx))).await;
+    new_mic.push_frame(tone(3));
+    new_cam.push_video_frame(picture(3));
+    let heard = audio.next_frame(&cx).await.unwrap().unwrap();
+    let seen = video.next_frame(&cx).await.unwrap().unwrap();
+    audio.aclose().await;
+    video.aclose().await;
+    assert_eq!(heard.data.as_ref(), &[3; 960], "the old track's queued audio is dropped");
+    assert_eq!(seen.media.id(), 3, "the old track's queued video is dropped");
 }
 
 #[tokio::test]

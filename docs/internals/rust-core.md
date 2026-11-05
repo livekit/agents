@@ -1651,8 +1651,9 @@ The architecture checker selects this config explicitly with `CLIPPY_CONF_DIR`
 and runs Clippy only for `lk-agents-core`, `lk-agents-voice`, `lk-agents-abi`
 and `lk-agents-media`. Packages requiring a different policy use a separate
 Clippy invocation with their own config and explicit package list.
-Media's optional thread pool, added only for a measured
-need, is its one allowed spawn site. Storage, inference, worker and net are
+Media has two exempt modules: its optional thread pool, added only for a measured
+need, is its one allowed spawn site, and `media_queue` holds a lock and a waker
+(no thread, no spawn, no clock). Storage, inference, worker and net are
 unrestricted async crates. Banned constructs include task/thread spawns,
 `select!`/`join!`, ambient monotonic/wall clocks, random or UUID generation,
 environment/process reads, unbounded tokio/std/futures/crossbeam channels,

@@ -13,182 +13,73 @@ use lk_agents_abi::voice::rtc::{
     VideoFrameRef,
 };
 use lk_agents_abi::{AudioFrame, Clock, Closed, HOST_TEARDOWN_TIMEOUT, Spawner, StreamOutput, Ts};
-use lk_agents_net::leaky;
+use lk_agents_media::media_queue::{self, Item, Media};
+use lk_agents_net::audio_drops::AudioDrops;
 use lk_agents_net::task::TaskSet;
 use lk_agents_voice::room_io::machine::input::{
-    AUDIO_SOURCES, Admit, InputIdentity, Open, Owner, ParticipantInput, ProcessorSpans,
-    Publication, VIDEO_SOURCES, end_of_track, replayed_head,
+    AUDIO_SOURCES, Admit, Open, Owner, ParticipantInput, ProcessorSpans, Publication,
+    VIDEO_SOURCES, end_of_track, replayed_head,
 };
 use parking_lot::Mutex;
 use std::future::Future;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Notify;
 
 use super::pre_connect_audio::PreConnectAudioHandler;
 
-/// Where a reader's admitted frames wait for the session, tagged with what admitted them.
-trait Queue: Send + 'static {
-    type Frame: Send + 'static;
-    type Rx: Send + 'static;
+const AUDIO_POLICY: media_queue::Policy = media_queue::Policy::CatchUp(lk_agents_abi::AUDIO_QUEUE);
 
-    fn channel() -> (Self, Self::Rx)
-    where
-        Self: Sized;
-    /// `false` once the session's side is gone.
-    fn push(&mut self, identity: InputIdentity, item: Result<Self::Frame>) -> bool;
-    /// The next item `accepts` admits; `None` once the producers are gone and it is drained.
-    fn recv(
-        rx: &mut Self::Rx,
-        accepts: impl Fn(InputIdentity) -> bool + Send,
-    ) -> impl Future<Output = Result<Option<Self::Frame>>> + Send;
-}
-
-struct Delivery<T> {
-    identity: InputIdentity,
-    item: Result<T>,
-}
-
-/// Video keeps the newest few frames: each held frame pins a decoded host frame.
-struct VideoQueue(leaky::VideoSender<Delivery<VideoFrameRef>>);
-
-impl Queue for VideoQueue {
-    type Frame = VideoFrameRef;
-    type Rx = leaky::VideoReceiver<Delivery<VideoFrameRef>>;
-
-    fn channel() -> (Self, Self::Rx) {
-        let (tx, rx) = leaky::video_channel(lk_agents_abi::voice::rtc::VIDEO_QUEUE_FRAMES);
-        (VideoQueue(tx), rx)
-    }
-
-    fn push(&mut self, identity: InputIdentity, item: Result<VideoFrameRef>) -> bool {
-        self.0.push(Delivery { identity, item });
-        !self.0.is_closed()
-    }
-
-    async fn recv(
-        rx: &mut Self::Rx,
-        accepts: impl Fn(InputIdentity) -> bool + Send,
-    ) -> Result<Option<VideoFrameRef>> {
-        while let Some(frame) = rx.recv().await {
-            if accepts(frame.identity) {
-                return frame.item.map(Some);
-            }
-        }
-        Ok(None)
-    }
-}
-
-/// What a frame's admission changed, in order with the audio.
-enum Mark {
-    /// The frames that follow were admitted under this identity.
-    Admitted(InputIdentity),
+/// What travels in a reader's queue besides frames.
+enum InputEvent {
+    /// The selection or attachment changed: what was queued before no longer reaches the session.
+    SourceChanged,
     Failed(IoError),
 }
 
-/// Audio goes through a `leaky` channel; a new identity clears what the old one queued, which
-/// the session would refuse anyway.
-struct AudioQueue {
-    tx: leaky::Sender<Mark>,
-    admitted: Option<InputIdentity>,
-}
-
-struct AudioRx {
-    rx: leaky::Receiver<Mark>,
-    batch: std::collections::VecDeque<leaky::Item<Mark>>,
-    admitted: Option<InputIdentity>,
-}
-
-impl AudioQueue {
-    fn admit(&mut self, identity: InputIdentity) -> bool {
-        if self.admitted != Some(identity) {
-            self.tx.clear();
-            if self.tx.control(Mark::Admitted(identity)).is_err() {
-                return false;
-            }
-            self.admitted = Some(identity);
-        }
-        !self.tx.is_closed()
-    }
-
-    fn head(&mut self, identity: InputIdentity, frame: AudioFrame) -> bool {
-        let admitted = self.admit(identity);
-        self.tx.head(frame);
-        admitted
-    }
-}
-
-impl Queue for AudioQueue {
-    type Frame = AudioFrame;
-    type Rx = AudioRx;
-
-    fn channel() -> (Self, AudioRx) {
-        let policy = leaky::Policy::CatchUp { max: lk_agents_abi::AUDIO_QUEUE };
-        let (tx, rx) = leaky::audio_channel(policy);
-        let rx = AudioRx { rx, batch: Default::default(), admitted: None };
-        (AudioQueue { tx, admitted: None }, rx)
-    }
-
-    fn push(&mut self, identity: InputIdentity, item: Result<AudioFrame>) -> bool {
-        if !self.admit(identity) {
-            return false;
-        }
-        match item {
-            Ok(frame) => self.tx.push(frame),
-            Err(error) => return self.tx.control(Mark::Failed(error)).is_ok(),
-        }
-        true
-    }
-
-    async fn recv(
-        rx: &mut AudioRx,
-        accepts: impl Fn(InputIdentity) -> bool + Send,
-    ) -> Result<Option<AudioFrame>> {
-        loop {
-            while let Some(item) = rx.batch.pop_front() {
-                let accepted = rx.admitted.is_some_and(&accepts);
-                match item {
-                    leaky::Item::Audio(frame) if accepted => return Ok(Some(frame)),
-                    leaky::Item::Control(Mark::Failed(error)) if accepted => return Err(error),
-                    leaky::Item::Control(Mark::Admitted(identity)) => rx.admitted = Some(identity),
-                    _ => {}
-                }
-            }
-            match rx.rx.recv().await {
-                Some(batch) => rx.batch.extend(batch),
-                None => return Ok(None),
-            }
-        }
-    }
-}
-
-struct State<Q> {
+struct State<M> {
     readers: ParticipantInput,
-    queue: Option<Q>,
+    queue: Option<media_queue::Sender<M, InputEvent>>,
 }
 
 /// The selection, the queue it admits frames into, and one wake for every reader.
-struct Readers<Q: Queue> {
-    state: Mutex<State<Q>>,
-    queue: tokio::sync::Mutex<Q::Rx>,
+struct Readers<M> {
+    state: Mutex<State<M>>,
+    queue: tokio::sync::Mutex<media_queue::Receiver<M, InputEvent>>,
     changed: Notify,
+    /// Where an audio queue's drops are reported.
+    drops: Option<AudioDrops>,
 }
 
-impl<Q: Queue> Readers<Q> {
-    fn new(sources: &'static [lk_agents_abi::voice::rtc::TrackSource]) -> Self {
-        let (queue, rx) = Q::channel();
+impl<M: Media + Send + 'static> Readers<M> {
+    fn new(
+        sources: &'static [TrackSource],
+        (tx, rx): (media_queue::Sender<M, InputEvent>, media_queue::Receiver<M, InputEvent>),
+        drops: Option<AudioDrops>,
+    ) -> Self {
         Self {
-            state: Mutex::new(State {
-                readers: ParticipantInput::new(sources),
-                queue: Some(queue),
-            }),
+            state: Mutex::new(State { readers: ParticipantInput::new(sources), queue: Some(tx) }),
             queue: tokio::sync::Mutex::new(rx),
             changed: Notify::new(),
+            drops,
         }
     }
 
-    /// Applies a decision and wakes the readers it may have retired.
+    /// Applies a decision, flushes what a source change left queued, and wakes the readers it may
+    /// have retired.
     fn decide<R>(&self, decision: impl FnOnce(&mut ParticipantInput) -> R) -> R {
-        let outcome = decision(&mut self.state.lock().readers);
+        let outcome = {
+            let mut state = self.state.lock();
+            let source = state.readers.source();
+            let outcome = decision(&mut state.readers);
+            if state.readers.source() != source
+                && let Some(queue) = &state.queue
+            {
+                // A stuck flush still drops the old source's frames, and nothing reads the event.
+                let _ = queue.flush(InputEvent::SourceChanged);
+            }
+            outcome
+        };
         self.changed.notify_waiters();
         outcome
     }
@@ -198,24 +89,38 @@ impl<Q: Queue> Readers<Q> {
     }
 
     /// `false` stops the reader.
-    fn deliver(&self, generation: u64, item: Result<Q::Frame>) -> bool {
-        self.admitted(generation, |queue, identity| queue.push(identity, item))
+    fn deliver(&self, generation: u64, item: Result<M>) -> bool {
+        self.admitted(generation, |queue| match item {
+            Ok(frame) => queue.push(frame),
+            Err(error) => {
+                let _ = queue.event(InputEvent::Failed(error));
+                Duration::ZERO
+            }
+        })
     }
 
-    /// Hands a frame of the reader of `generation` to `deliver` as voice admits it.
+    /// Hands a frame of the reader of `generation` to `deliver` as voice admits it, and reports
+    /// the audio its push dropped. `false` stops the reader.
     fn admitted(
         &self,
         generation: u64,
-        deliver: impl FnOnce(&mut Q, InputIdentity) -> bool,
+        deliver: impl FnOnce(&media_queue::Sender<M, InputEvent>) -> Duration,
     ) -> bool {
-        let mut state = self.state.lock();
-        match state.readers.admit(generation) {
-            Admit::Stop => false,
-            Admit::Drop => true,
-            Admit::Deliver(identity) => {
-                state.queue.as_mut().is_some_and(|queue| deliver(queue, identity))
+        let (open, dropped) = {
+            let state = self.state.lock();
+            match (state.readers.admit(generation), &state.queue) {
+                (Admit::Stop, _) | (Admit::Deliver, None) => (false, Duration::ZERO),
+                (Admit::Drop, _) => (true, Duration::ZERO),
+                (Admit::Deliver, Some(queue)) => {
+                    let dropped = deliver(queue);
+                    (!queue.is_closed(), dropped)
+                }
             }
+        };
+        if let Some(drops) = &self.drops {
+            drops.record(dropped);
         }
+        open
     }
 
     /// Resolves once voice retires the reader of `generation`.
@@ -231,19 +136,23 @@ impl<Q: Queue> Readers<Q> {
         }
     }
 
-    async fn recv(&self) -> Result<Option<Q::Frame>> {
+    async fn recv(&self) -> Result<Option<M>> {
         let mut queue = self.queue.lock().await;
-        Q::recv(&mut queue, |identity| self.state.lock().readers.accepts(identity)).await
+        loop {
+            match queue.recv().await {
+                Some(Item::Media(frame)) => return Ok(Some(frame)),
+                Some(Item::Event(InputEvent::Failed(error))) => return Err(error),
+                Some(Item::Gap(_) | Item::Event(InputEvent::SourceChanged)) => {}
+                None => return Ok(None),
+            }
+        }
     }
 
     /// Readers keep retiring their streams after the waiter reaches the deadline.
     async fn close(&self, clock: &dyn Clock, deadline: Ts) -> Closed {
-        {
-            let mut state = self.state.lock();
-            state.readers.close();
-            state.queue.take();
-        }
-        self.changed.notify_waiters();
+        self.decide(ParticipantInput::close);
+        let queue = self.state.lock().queue.take();
+        drop(queue);
         let settled = async {
             loop {
                 let changed = self.changed.notified();
@@ -278,9 +187,9 @@ fn publications(participant: &dyn RemoteParticipant) -> Result<PublicationSnapsh
 
 /// One kind of input's SDK reader: opens the selected track and pumps it.
 trait Reader: Sized + Send + Sync + 'static {
-    type Queue: Queue;
+    type Frame: Media + Send + 'static;
 
-    fn readers(&self) -> &Readers<Self::Queue>;
+    fn readers(&self) -> &Readers<Self::Frame>;
     fn room(&self) -> &dyn RtcRoom;
     /// Opens the stream and spawns its reader, which reports `retired` when its stream is closed.
     fn open(
@@ -359,13 +268,13 @@ fn route<R: Reader>(reader: &Arc<R>, event: &RoomEvent) -> Result<()> {
 
 /// Reads a stream until voice retires its reader or it ends, then retires the stream. `admit`
 /// turns a stream item into the frame it delivers, if any.
-async fn pump<S: Send + 'static, Q: Queue, A: Future<Output = Option<Q::Frame>>>(
-    readers: &Readers<Q>,
+async fn pump<S: Send + 'static, M: Media + Send + 'static, A: Future<Output = Option<M>>>(
+    readers: &Readers<M>,
     clock: &dyn Clock,
     generation: u64,
     mut stream: Box<dyn StreamOutput<S>>,
     replay: impl Future<Output = bool>,
-    end: impl FnOnce() -> Option<Q::Frame>,
+    end: impl FnOnce() -> Option<M>,
     mut admit: impl FnMut(S) -> A,
 ) {
     let reading = async {
@@ -407,7 +316,7 @@ pub struct ParticipantVideoInput {
     room: Arc<dyn RtcRoom>,
     spawner: Arc<dyn Spawner>,
     clock: Arc<dyn Clock>,
-    readers: Readers<VideoQueue>,
+    readers: Readers<VideoFrameRef>,
     /// A track's pump, which ends once its generation is replaced or its stream ends.
     pumps: Arc<TaskSet>,
 }
@@ -422,7 +331,11 @@ impl ParticipantVideoInput {
             room,
             spawner,
             clock,
-            readers: Readers::new(VIDEO_SOURCES),
+            readers: Readers::new(
+                VIDEO_SOURCES,
+                media_queue::video(lk_agents_abi::voice::rtc::VIDEO_QUEUE_FRAMES),
+                None,
+            ),
             pumps: Arc::default(),
         })
     }
@@ -446,9 +359,9 @@ impl ParticipantVideoInput {
 }
 
 impl Reader for ParticipantVideoInput {
-    type Queue = VideoQueue;
+    type Frame = VideoFrameRef;
 
-    fn readers(&self) -> &Readers<VideoQueue> {
+    fn readers(&self) -> &Readers<VideoFrameRef> {
         &self.readers
     }
 
@@ -500,7 +413,7 @@ pub struct ParticipantAudioInput {
     pre_connect: Option<Arc<PreConnectAudioHandler>>,
     /// Where a processor's failing span is reported to the session.
     failures: tokio::sync::mpsc::Sender<ProcessorFailure>,
-    readers: Readers<AudioQueue>,
+    readers: Readers<AudioFrame>,
     /// A track's pump, which ends once its generation is replaced or its stream ends.
     pumps: Arc<TaskSet>,
     /// The session's `wait_for_audio_track`, until the first frame; with the subscription's time.
@@ -534,7 +447,11 @@ impl ParticipantAudioInput {
             config,
             pre_connect,
             failures,
-            readers: Readers::new(AUDIO_SOURCES),
+            readers: Readers::new(
+                AUDIO_SOURCES,
+                media_queue::audio(AUDIO_POLICY),
+                Some(AudioDrops::new(telemetry::AudioConsumer::RoomInput, AUDIO_POLICY)),
+            ),
             pumps: Arc::default(),
             first_frame: Mutex::new(None),
         })
@@ -548,8 +465,8 @@ impl ParticipantAudioInput {
 
     /// Reports the audio the input drops under `cx`'s job.
     pub fn observe(&self, cx: telemetry::Cx) {
-        if let Some(queue) = &self.readers.state.lock().queue {
-            queue.tx.observe(cx, telemetry::AudioConsumer::RoomInput);
+        if let Some(drops) = &self.readers.drops {
+            drops.observe(cx);
         }
     }
 
@@ -627,7 +544,7 @@ impl ParticipantAudioInput {
             }
         };
         if let Some((span, _)) = self.first_frame.lock().as_ref() {
-            let duration: std::time::Duration =
+            let duration: Duration =
                 frames.iter().map(lk_agents_abi::voice::rtc::frame_duration).sum();
             telemetry::event(
                 span,
@@ -639,7 +556,10 @@ impl ParticipantAudioInput {
                 Ok(items) => {
                     for item in items {
                         if let Some(frame) = self.admit(spans, item).await
-                            && !self.readers.admitted(generation, |queue, id| queue.head(id, frame))
+                            && !self.readers.admitted(generation, |queue| {
+                                queue.head(frame);
+                                Duration::ZERO
+                            })
                         {
                             return false;
                         }
@@ -662,9 +582,9 @@ impl ParticipantAudioInput {
 }
 
 impl Reader for ParticipantAudioInput {
-    type Queue = AudioQueue;
+    type Frame = AudioFrame;
 
-    fn readers(&self) -> &Readers<AudioQueue> {
+    fn readers(&self) -> &Readers<AudioFrame> {
         &self.readers
     }
 

@@ -2,8 +2,7 @@
 //!
 //! - [`clock`]: the process's clocks, on Tokio time.
 //! - [`http`]: HTTPS exchanges reporting transport observations, under `lk_agents_core::attempts`.
-//! - [`leaky`]: media into one consumer: audio dropping old audio past its policy, never a
-//!   control; video keeping the newest frames.
+//! - [`audio_drops`]: a media queue consumer's dropped audio, as the `audio_dropped` metric.
 //! - [`source`]: a native source as one host consumer pulls and closes it.
 //! - [`a2a_auth`]: endpoint and thread credentials over LiveKit tokens.
 //! - [`a2a_client`]: the delegation A2A client, executing `lk_agents_core::a2a`'s decisions.
@@ -22,12 +21,12 @@
 
 pub mod a2a_auth;
 pub mod a2a_client;
+pub mod audio_drops;
 pub mod blocking_io;
 pub mod clock;
 pub mod dns;
 pub mod env;
 pub mod http;
-pub mod leaky;
 pub mod source;
 pub mod sse;
 pub mod task;

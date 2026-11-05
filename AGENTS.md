@@ -325,8 +325,9 @@ STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
   uses `disallowed-methods`, `disallowed-types` and `disallowed-macros` to reject spawns,
   `select!`/`join!`, ambient clocks/entropy/environment/process reads,
   unbounded channels, locks, host-shared atomics and randomly ordered decision state.
-  Media's optional thread pool, added only for a measured need, is its one allowed spawn
-  site. Storage, inference, worker and net are unrestricted async crates.
+  Media has two exempt modules: its optional thread pool, added only for a measured need, is
+  its one allowed spawn site, and `media_queue` holds a lock and a waker (no thread, no spawn,
+  no clock). Storage, inference, worker and net are unrestricted async crates.
   Supply time and IDs as inputs; keep live resources and execution in runtime or the async I/O
   crates.
 - Every git-tracked handwritten `.rs` file stays within 1,250 lines; files with the generated

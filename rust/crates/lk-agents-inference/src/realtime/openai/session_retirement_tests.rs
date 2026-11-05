@@ -152,7 +152,7 @@ async fn reconnect_and_live_commands_survive_asynchronous_cleanup_backpressure()
         settled,
         media_pool.clone(),
     ));
-    let (commands, incoming) = leaky::audio_channel(INPUT_POLICY);
+    let (commands, incoming) = media_queue::audio(INPUT_POLICY);
     let running = tokio::spawn(pump.run(incoming));
     wait_for_wire(&ws, "session update", |frames| {
         frames.iter().any(|frame| frame["type"] == "session.update")
@@ -226,9 +226,7 @@ async fn reconnect_and_live_commands_survive_asynchronous_cleanup_backpressure()
             })
             .collect(),
     );
-    commands
-        .control(Cmd::Core(Command::UpdateChatCtx(UpdateChatCtx { chat_ctx: target })))
-        .unwrap();
+    commands.event(Cmd::Core(Command::UpdateChatCtx(UpdateChatCtx { chat_ctx: target }))).unwrap();
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let machine = shared.machine.lock().await;
@@ -243,7 +241,7 @@ async fn reconnect_and_live_commands_survive_asynchronous_cleanup_backpressure()
     .expect("an identical update did not finish preparation while cleanup was withheld");
 
     commands
-        .control(Cmd::Core(Command::GenerateReply(GenerateReply {
+        .event(Cmd::Core(Command::GenerateReply(GenerateReply {
             req_id: "live".into(),
             instructions: None,
             tool_choice: None,
@@ -278,7 +276,7 @@ async fn reconnect_and_live_commands_survive_asynchronous_cleanup_backpressure()
             if matches!(receiver.next().await, Some(Event::GenerationCreated(created)) if created.response_id == "control-response") { break; }
         }
     }).await.unwrap();
-    commands.control(Cmd::Core(Command::Interrupt(Interrupt { response_id: None }))).unwrap();
+    commands.event(Cmd::Core(Command::Interrupt(Interrupt { response_id: None }))).unwrap();
     wait_for_wire(&ws, "interrupt", |frames| {
         frames.iter().any(|frame| frame["type"] == "response.cancel")
     })
@@ -302,7 +300,7 @@ async fn reconnect_and_live_commands_survive_asynchronous_cleanup_backpressure()
     }
     assert_eq!(ws.connect_count(), 2, "ordinary cleanup forced another socket acquisition");
     drop(held);
-    commands.control(Cmd::Close).unwrap();
+    commands.event(Cmd::Close).unwrap();
     tokio::time::timeout(Duration::from_secs(5), running).await.unwrap().unwrap();
     cleanup.await.unwrap();
 }

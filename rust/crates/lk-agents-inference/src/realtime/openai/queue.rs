@@ -1,13 +1,14 @@
-//! Realtime ingress over a leaky audio channel, and bounded event delivery with one reserved terminal observation.
+//! Realtime ingress over a media queue, and bounded event delivery with one reserved terminal observation.
 
 use super::session::Cmd;
+use lk_agents_abi::AudioFrame;
 use lk_agents_abi::RealtimeCommand as Command;
 use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::llm::realtime::{
     Event, GenerateReply, GenerateReplyFailed, PushAudio, RealtimeError, RealtimeModelError, Say,
 };
 use lk_agents_abi::{Clock, Ts};
-use lk_agents_net::leaky;
+use lk_agents_media::media_queue;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::{mpsc, watch};
@@ -165,7 +166,8 @@ impl EventReceiver {
 pub(super) struct Ingress {
     /// Audio and every command, in one ordered queue: a commit, clear or reply is never
     /// reordered against the audio before it.
-    pub(super) input: leaky::Sender<Cmd>,
+    pub(super) input: media_queue::Sender<AudioFrame, Cmd>,
+    pub(super) drops: lk_agents_net::audio_drops::AudioDrops,
     pub(super) events: Delivery,
     pub(super) clock: Arc<dyn Clock>,
     pub(super) label: String,
@@ -173,27 +175,28 @@ pub(super) struct Ingress {
 
 impl Ingress {
     pub(super) fn send(&self, command: Cmd) {
-        let command = match command {
-            Cmd::Core(Command::PushAudio(PushAudio { frame })) => return self.input.push(frame),
-            Cmd::Core(Command::ClearAudio(clear)) => {
-                self.input.clear();
-                Cmd::Core(Command::ClearAudio(clear))
-            }
-            command => command,
-        };
+        if let Cmd::Core(Command::PushAudio(PushAudio { frame })) = command {
+            return self.drops.record(self.input.push(frame));
+        }
         let reply = match &command {
             Cmd::Core(Command::GenerateReply(GenerateReply { req_id, .. }))
             | Cmd::Core(Command::Say(Say { req_id, .. })) => Some(req_id.clone()),
             _ => None,
         };
-        if let Err(stuck) = self.input.control(command) {
+        let sent = match command {
+            Cmd::Core(Command::ClearAudio(clear)) => {
+                self.input.flush(Cmd::Core(Command::ClearAudio(clear)))
+            }
+            command => self.input.event(command),
+        };
+        if let Err(stuck) = sent {
             self.stuck(stuck, reply);
         }
     }
 
     /// The pump stopped draining: the command is lost, reported as a recoverable error, and a
     /// reply it asked for fails instead of waiting forever.
-    fn stuck(&self, stuck: leaky::Stuck, reply: Option<String>) {
+    fn stuck(&self, stuck: media_queue::Stuck, reply: Option<String>) {
         let now = self.clock.now();
         let error = ApiError::new(stuck.to_string()).with_retryable(true);
         let mut events = vec![Event::Error(RealtimeModelError {

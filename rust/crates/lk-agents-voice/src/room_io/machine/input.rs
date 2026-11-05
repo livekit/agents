@@ -1,8 +1,8 @@
 //! Which of the linked participant's tracks a media input reads, and which frames it admits.
 //!
 //! The executor reports the SDK's tracks and its readers' lifecycle; this decides which track to
-//! open, when a reader is obsolete, and whether a frame belongs to the current selection and
-//! attachment.
+//! open, when a reader is obsolete, and when the frames already queued no longer belong to the
+//! selection and attachment the session reads.
 
 use std::collections::BTreeSet;
 
@@ -16,7 +16,8 @@ pub const MAX_READERS: usize = 4;
 pub const AUDIO_SOURCES: &[TrackSource] = &[TrackSource::Microphone];
 pub const VIDEO_SOURCES: &[TrackSource] = &[TrackSource::Camera, TrackSource::Screenshare];
 
-/// A frame retains both the track selection and the attachment that admitted it.
+/// The track selection and attachment frames are admitted under: when it changes, the frames
+/// queued before it no longer reach the session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InputIdentity {
     pub selection: u64,
@@ -47,7 +48,7 @@ pub struct Open {
 /// What the executor does with a frame its reader produced.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Admit {
-    Deliver(InputIdentity),
+    Deliver,
     /// Detached: the frame is dropped, the reader keeps reading.
     Drop,
     /// The reader's selection is obsolete or the input is closed.
@@ -170,7 +171,7 @@ impl ParticipantInput {
         } else if !self.attached {
             Admit::Drop
         } else {
-            Admit::Deliver(InputIdentity { selection: generation, attachment: self.attachment })
+            Admit::Deliver
         }
     }
 
@@ -178,12 +179,9 @@ impl ParticipantInput {
         !self.closed && self.generation == generation && self.reading.is_some()
     }
 
-    /// Whether a queued frame still belongs to what the session reads.
-    pub fn accepts(&self, identity: InputIdentity) -> bool {
-        !self.closed
-            && self.attached
-            && self.generation == identity.selection
-            && self.attachment == identity.attachment
+    /// What admitted frames belong to; a change drops the frames queued before it.
+    pub fn source(&self) -> InputIdentity {
+        InputIdentity { selection: self.generation, attachment: self.attachment }
     }
 
     pub fn set_attached(&mut self, attached: bool) {
@@ -299,13 +297,14 @@ mod tests {
         let mut readers = ParticipantInput::new(AUDIO_SOURCES);
         readers.link(Some(user.clone()), None, &[]);
         let old = reading(&mut readers, &user, "old");
-        let Admit::Deliver(queued) = readers.admit(old) else { panic!() };
+        let queued = readers.source();
+        assert_eq!(readers.admit(old), Admit::Deliver);
         let new = reading(&mut readers, &user, "new");
-        assert!(!readers.accepts(queued));
+        assert_ne!(readers.source(), queued);
         assert_eq!(readers.admit(old), Admit::Stop);
         readers.retired(old, Closed::Clean);
         assert_eq!(readers.reading(), Some(&"new".into()));
-        assert!(matches!(readers.admit(new), Admit::Deliver(_)));
+        assert_eq!(readers.admit(new), Admit::Deliver);
     }
 
     #[test]
@@ -314,13 +313,12 @@ mod tests {
         let mut readers = ParticipantInput::new(AUDIO_SOURCES);
         readers.link(Some(user.clone()), None, &[]);
         let track = reading(&mut readers, &user, "mic");
-        let Admit::Deliver(previous) = readers.admit(track) else { panic!() };
+        let previous = readers.source();
         readers.set_attached(false);
         assert_eq!(readers.admit(track), Admit::Drop);
         readers.set_attached(true);
-        let Admit::Deliver(current) = readers.admit(track) else { panic!() };
-        assert!(!readers.accepts(previous));
-        assert!(readers.accepts(current));
+        assert_eq!(readers.admit(track), Admit::Deliver);
+        assert_ne!(readers.source(), previous);
     }
 
     #[test]
@@ -329,9 +327,9 @@ mod tests {
         let mut readers = ParticipantInput::new(AUDIO_SOURCES);
         readers.link(Some(user.clone()), None, &[]);
         let track = reading(&mut readers, &user, "mic");
-        let Admit::Deliver(accepted) = readers.admit(track) else { panic!() };
+        let accepted = readers.source();
         readers.ended(track);
-        assert!(readers.accepts(accepted));
+        assert_eq!(readers.source(), accepted);
         assert_eq!(readers.reading(), None);
     }
 

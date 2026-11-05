@@ -17,10 +17,13 @@ CARGO_RUNNER = os.environ.get("CARGO_RUNNER", "cargo")
 
 CORES = {f"lk-agents-{name}" for name in ("core", "voice", "media")}
 PURE = CORES | {"lk-agents-abi"}
-# Media's worker pool is its one threaded module (decisions 84, 85): outside the Clippy policy.
+# Outside the Clippy policy: media's worker pool, its one threaded module (decisions 84, 85), and
+# media_queue, a lock and a waker shared by a producer and a consumer (no thread, spawn or clock).
 UNRESTRICTED = (
     "rust/crates/lk-agents-media/src/pool.rs",
     "rust/crates/lk-agents-media/src/pool_tests.rs",
+    "rust/crates/lk-agents-media/src/media_queue.rs",
+    "rust/crates/lk-agents-media/src/media_queue_tests.rs",
 )
 # Async I/O crates (decisions 69, 77, 82): exempt from the purity bans; their edges are still
 # checked.

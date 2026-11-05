@@ -15,6 +15,7 @@ pub mod ffmpeg;
 pub mod filters;
 #[cfg(feature = "images")]
 pub mod images;
+pub mod media_queue;
 pub mod mime;
 pub mod mixer;
 pub mod pool;
