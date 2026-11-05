@@ -389,6 +389,9 @@ class JobContext:
                 logger.exception("failed to upload the session report to LiveKit Cloud")
 
     async def _on_cleanup(self) -> None:
+        if self._hosted_output is not None and not self._recording_initialized:
+            self._hosted_output.decide(logs=True, redaction=self.job.enable_redaction)
+
         # if session.start() was never reached and server wanted recording,
         # set up OTLP now and flush buffered crash logs
         if self._early_log_handler is not None and not self._recording_initialized:

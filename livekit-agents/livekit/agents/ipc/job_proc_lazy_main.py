@@ -75,17 +75,12 @@ def proc_main(args: ProcStartArgs) -> None:
     from .log_queue import LogQueueHandler
     from .proc_client import _ProcClient
 
-    hosted_output = _hosted_logs.redirect_process_output()
-
     root_logger = logging.getLogger()
     for name, level in args.logger_levels.items():
         logging.getLogger(name).setLevel(level)
 
-    log_handler: logging.Handler
-    if hosted_output is not None:
-        log_handler = _hosted_logs.process_output_log_handler()
-    else:
-        log_handler = LogQueueHandler(aio.duplex_unix._Duplex.open(args.log_cch))
+    log_cch = aio.duplex_unix._Duplex.open(args.log_cch)
+    log_handler = LogQueueHandler(log_cch)
     _add_global_log_fields(log_handler)
     root_logger.addHandler(log_handler)
 
@@ -119,7 +114,7 @@ def proc_main(args: ProcStartArgs) -> None:
         if threading.current_thread() == t:
             continue
 
-        if t == getattr(log_handler, "thread", None):
+        if t == log_handler.thread:
             continue
 
         if t.daemon:
@@ -297,9 +292,7 @@ class _JobProc:
         if self._executor_type == JobExecutorType.THREAD:
             hosted_output = _hosted_logs.thread_job_output(job.id, hosted_fields)
         else:
-            hosted_output = _hosted_logs.process_output()
-            if hosted_output is not None:
-                hosted_output.name_job(job.id, hosted_fields)
+            hosted_output = _hosted_logs.redirect_job_output(job.id, hosted_fields)
 
         if msg.running_job.fake_job:
             from .mock_room import create_mock_room

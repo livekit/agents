@@ -21,6 +21,7 @@ documentation, and examples.
 import typing
 
 from . import (
+    # Import this at the top, so hosted logs handoff as soon as possible
     _hosted_logs as _hosted_logs,
     cli,
     inference,

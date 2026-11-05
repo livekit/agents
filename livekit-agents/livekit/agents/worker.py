@@ -588,7 +588,6 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 self._load_fnc = _DefaultLoadCalc.get_load
 
             if self._job_executor_type == JobExecutorType.THREAD and _hosted_logs.logs_handed_off():
-                _hosted_logs.revoke_hand_off()
                 _hosted_logs.install_thread_router()
 
             if self.worker_info.cloud_agents:

@@ -222,11 +222,7 @@ class ColoredFormatter(logging.Formatter):
         return msg + self._esc_codes["esc_reset"]
 
 
-_stdout_handler: logging.Handler | None = None
-
-
 def setup_logging(log_level: str, devmode: bool, console: bool, compact: bool = False) -> None:
-    global _stdout_handler
     ensure_ascii = _configure_stdout_for_logging()
     root = logging.getLogger()
 
@@ -257,7 +253,6 @@ def setup_logging(log_level: str, devmode: bool, console: bool, compact: bool = 
 
     _add_global_log_fields(handler)
     root.addHandler(handler)
-    _stdout_handler = handler
     root.setLevel(log_level)
 
     _silence_noisy_loggers()

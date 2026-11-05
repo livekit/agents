@@ -137,10 +137,8 @@ class ProcJobExecutor(SupervisedProc):
             if self._running_job:
                 metrics.job_ended()
                 self._job_status = JobStatus.SUCCESS if self.exitcode == 0 else JobStatus.FAILED
-            if self.pid is not None:
-                _hosted_logs.mark_process_done(
-                    self.pid, self._running_job.job.id if self._running_job else None
-                )
+            if self._running_job and self.exitcode is not None:
+                _hosted_logs.mark_process_done(self._running_job.job.id)
 
     async def _do_inference_task(self, inf_req: proto.InferenceRequest) -> None:
         if self._inference_executor is None:
