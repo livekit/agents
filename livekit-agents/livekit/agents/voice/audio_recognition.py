@@ -310,6 +310,11 @@ class AudioRecognition:
         self._user_turn_committed = False  # true if user turn ended but EOU task not done
         # Preserve the provider's end boundary across commits so late finals can end a turn.
         self._stt_turn_ended = False
+        # set when the user resumes while an STT end of speech is still pending; the next
+        # FINAL_TRANSCRIPT clears it. While set, a VAD end of speech must not commit the
+        # turn: for final-first STTs (e.g. Deepgram Flux) it would commit the pre-resume
+        # transcript (#8302). EOS-first STTs keep the #7739 behavior once the final lands.
+        self._stt_awaiting_final_after_resume = False
 
         self._sample_rate: int | None = None
 
@@ -1066,6 +1071,7 @@ class AudioRecognition:
         self._vad_speech_started = False
         self._user_turn_committed = False
         self._stt_turn_ended = False
+        self._stt_awaiting_final_after_resume = False
         self._last_emitted_prediction = None
         if self._turn_detector_stream is not None:
             self._turn_detector_stream.flush(reason="clear_user_turn")
@@ -1277,6 +1283,7 @@ class AudioRecognition:
             language = ev.alternatives[0].language
             confidence = ev.alternatives[0].confidence
 
+            self._stt_awaiting_final_after_resume = False
             self._update_last_language(language, transcript)
 
             self._final_transcript_received.set()
@@ -1461,6 +1468,9 @@ class AudioRecognition:
             if self._end_of_turn_task is not None:
                 self._end_of_turn_task.cancel()
 
+            if self._user_turn_committed:
+                self._stt_awaiting_final_after_resume = True
+
     @utils.log_exceptions(logger=logger)
     async def _on_vad_event(self, ev: vad.VADEvent) -> None:
         if ev.type == vad.VADEventType.START_OF_SPEECH:
@@ -1486,6 +1496,9 @@ class AudioRecognition:
 
             if self._end_of_turn_task is not None:
                 self._end_of_turn_task.cancel()
+
+            if self._turn_detection_mode == "stt" and self._user_turn_committed:
+                self._stt_awaiting_final_after_resume = True
 
             if self._session.amd is not None:
                 self._session.amd._on_user_speech_started()
@@ -1530,7 +1543,9 @@ class AudioRecognition:
                 )
 
             if self._vad_base_turn_detection or (
-                self._turn_detection_mode == "stt" and self._user_turn_committed
+                self._turn_detection_mode == "stt"
+                and self._user_turn_committed
+                and not self._stt_awaiting_final_after_resume
             ):
                 chat_ctx = self._hooks.retrieve_chat_ctx().copy()
                 self._run_eou_detection(chat_ctx, trigger="vad")
