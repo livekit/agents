@@ -314,7 +314,7 @@ Choose playback behavior when you create the model:
 
 | Option | Behavior |
 | --- | --- |
-| `playback="auto"` (default) | Report measured completion for output identified by the installed wrapper. Use Prism estimates elsewhere. |
+| `playback="auto"` (default) | Use Prism estimates for normal completion. No output wrapper is required. |
 | `playback="estimated"` | Use Prism estimates for normal completion. |
 | `playback="discard"` | Discard audio before frame allocation and output buffering. Report zero played milliseconds at response end. |
 
@@ -324,44 +324,10 @@ an automatic TTS fallback. Explicit application `say()` calls are separate.
 Discard still uses server synthesis, audio transfer, and SDK parsing. It is not
 text-only server generation. Speed depends on the deployment and workload.
 
-For a caller-owned sink, install the wrapper before starting the agent:
-
-```python
-model = rime.realtime.RealtimeModel(context_mode="shared")
-session = AgentSession(llm=model)
-session.output.audio = model.wrap_audio_output(my_audio_sink)
-await session.start(Agent(instructions="Help the caller."))
-```
-
-For RoomIO, install it at the start of `on_enter`, before requesting an opening
-reply. LiveKit sets up RoomIO before it calls `on_enter`:
-
-```python
-class Assistant(Agent):
-    async def on_enter(self):
-        sink = self.session.output.audio
-        if sink is not None:
-            self.session.output.audio = model.wrap_audio_output(sink)
-        self.session.generate_reply(instructions="Greet the caller.")
-
-session = AgentSession(llm=model)
-await session.start(Assistant(instructions="Help the caller."), room=ctx.room)
-```
-
-The wrapper reads frame metadata before downstream resampling. Local protocol
-checks cover the normal AgentSession audio path, 24 kHz and 48 kHz sinks, multiple
-messages, and synchronous completion events. The RoomIO example is tested with
-real RoomIO and an RTC audio source, using local publication and subscription
-substitutes. Actual room transport and device playback need a deployment check. Custom audio nodes must preserve the frame metadata and sample sequence.
-Missing metadata, mixed output, discarded frames, replacement sinks, and missing
-completion events keep estimates in effect. Application TTS and `say()` audio
-cannot release a Prism response. A bare `playback_finished` listener cannot prove
-which response finished.
-
-After generation ends, an unconfirmed output releases its local hold after the
-generated audio duration plus `timeouts.request_s`. This cleanup never reports
-completion. Paused or delayed output can thus return to estimated completion.
-Late events after close cannot report to another provider session.
+Normal playback uses Prism's estimates. No application setup is required for
+RoomIO or caller-owned audio outputs. LiveKit still reports the played position
+when interrupting a reply through the standard message-truncation interface.
+Measured normal-completion reporting is not part of the public plugin API.
 
 Text passed to `generate_reply(user_input=...)` is inserted into history before
 a proactive reply request. It is not submitted through Prism's dedicated typed
@@ -401,15 +367,21 @@ native per-response tool selection. Rejecting these choices leaves the session o
 Use `agent.update_instructions()` and `agent.update_tools()` for agent settings.
 Updates wait for Prism acknowledgments. Handoff uses the normal LiveKit sequence;
 instructions, history, and tools are separate updates. There is no atomic handoff.
-Use `await model.update_options(voice="...")` for the voice or
-`await model.update_options(response_metadata={"step": "2"})` for response labels.
+Use `model.update_options(voice="...")` for the voice or
+`model.update_options(response_metadata={"step": "2"})` for response labels.
 For one explicit reply on a direct Prism `RealtimeSession`, call
 `await session.generate_reply(instructions="Check in", metadata={"step": "3"})`.
 The per-reply labels replace matching session labels. Replies that Prism starts from
 caller speech use session labels.
 When one call changes both settings and response labels, it sends two separate
 requests. If the label update fails, the earlier accepted settings remain applied.
-A successful return confirms that Prism acknowledged all updates in the call.
+`model.update_options()` and `RealtimeSession.update_options()` return immediately.
+Updates are queued in order; stored options change after acknowledgment. A later
+application reply waits for queued options. Provider-initiated speech uses the
+settings in effect when Prism starts it. Recoverable update refusals emit an
+`error` event and preserve the session and last accepted settings. Connection or
+session failures retain their fatal handling. Options set before the first
+session opens become its initial configuration.
 
 Tool fillers are optional. Pass
 `tool_fillers={"lookup": PrismFiller(type="text", text="Checking your order.")}`,
@@ -572,8 +544,9 @@ speech end reason. Standard LiveKit speech, transcription, and generation events
 remain available on the session.
 
 The SDK handles settings acknowledgments internally and does not expose them in
-this event stream. Await `model.update_options()` to confirm a settings update.
-There is no separate `session_updated` event.
+this event stream. Returning from `update_options()` does not confirm acceptance.
+There is no separate `session_updated` event. Update refusals use the standard
+`error` event.
 
 Read `ItemTruncated` and `ResponseEnded` from `event.payload`.
 `ResponseEnded.usage` has token counts when Prism reports them. Available retained
@@ -595,8 +568,10 @@ continue. Startup retries follow the connection policy above; these flags do not
 retry a failed reply. An admission timeout fails the reply
 without closing an otherwise valid session.
 
-Manual audio commit, disabling server turn detection, per-reply tools, and video
-are unsupported. Use a separate TTS model for `session.say()`.
+Manual audio commits, per-reply tools, and video inputs log a warning and are
+ignored. Disabling server turn detection, opening a second concurrent session,
+and invalid tool choices raise `llm.RealtimeError` without closing an active
+session. Use a separate TTS model for `session.say()`.
 Audio and output queues are bounded; overflow fails the session. The adapter
 retains up to 128 generations, evicting completed generations as new ones arrive.
 Truncation is available only for retained output references.

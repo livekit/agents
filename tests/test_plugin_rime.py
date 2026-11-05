@@ -80,7 +80,6 @@ if HAS_REALTIME_SDK:
         PrismError,
         PrismHistoryUpdateError,
         PrismModelError,
-        PrismUnsupported,
         realtime_model,
     )
     from livekit.plugins.rime.realtime._playback import Playback
@@ -3795,10 +3794,45 @@ class TestRealtime:
             errors = []
             session.on("error", errors.append)
             await session._update_session(instructions="test")
-            with pytest.raises(PrismUnsupported):
+            with pytest.raises(llm.RealtimeError):
                 session.update_options(tool_choice="required")
             assert errors == []
             await session.update_instructions("still usable")
+
+    async def test_unsupported_inputs_warn_and_keep_session_and_tools(self, caplog):
+        async with peer_model() as (peer, model, _):
+            session = model.session()
+            errors = []
+            session.on("error", errors.append)
+            await session.update_tools([lookup])
+            frame = rtc.VideoFrame(2, 2, rtc.VideoBufferType.RGBA, bytes(16))
+            session.push_video(frame)
+            session.commit_audio()
+            reply = session.generate_reply(tools=[])
+            response = await peer.start(await peer.next())
+            await reply
+            await peer.end(response)
+            await session.update_instructions("still usable")
+            assert len(peer.settings["tools"]) == 1
+            assert "lookup" in session.tools.function_tools
+            assert "ignoring frame" in caplog.text
+            assert "ignoring commit_audio" in caplog.text
+            assert "ignoring tools override" in caplog.text
+            assert not errors and peer.connections == 1
+
+    async def test_invalid_session_request_does_not_start_or_stop_a_connection(self):
+        async with peer_model() as (peer, model, _):
+            with pytest.raises(llm.RealtimeError, match="server turn detection"):
+                model.session(turn_detection_disabled=True)
+            assert model._session is None and peer.connections == 0
+            session = model.session()
+            await session.update_instructions("original")
+            with pytest.raises(llm.RealtimeError, match="previous Prism session"):
+                model.session()
+            assert model._session is session
+            await session.update_instructions("still usable")
+            assert peer.settings["instructions"] == "still usable"
+            assert peer.connections == 1
 
     @pytest.mark.parametrize("refused_at", [1, 2])
     async def test_rejected_imported_result_can_complete_its_accepted_call(self, refused_at):
@@ -4419,7 +4453,7 @@ class TestRealtime:
                     arguments="{}",
                 )
                 error = await asyncio.wait_for(errors.get(), 3)
-                assert isinstance(error.error, PrismUnsupported)
+                assert isinstance(error.error, llm.RealtimeError)
                 assert not error.recoverable
                 assert ran == []
 
@@ -4556,7 +4590,7 @@ class TestRealtime:
                     assert peer.settings["tools"][0]["function"]["name"] == "lookup"
                 else:
                     error = await asyncio.wait_for(errors.get(), 3)
-                    assert isinstance(error.error, PrismUnsupported)
+                    assert isinstance(error.error, llm.RealtimeError)
                     assert not error.recoverable
             finally:
                 pending.cancel()
@@ -4615,17 +4649,22 @@ class TestRealtime:
         async with peer_model(tool_fillers={"lookup": filler}) as (peer, model, _):
             session = model.session()
             await session.update_tools([])
-            await model.update_options(tool_fillers={"lookup": replacement})
+            model.update_options(tool_fillers={"lookup": replacement})
+            await model._session._wait_for_options()
             assert peer.settings["tools"] == []
             await session.update_tools([lookup])
             assert peer.settings["tools"][0]["prism_filler"]["text"] == "Looking it up."
             peer.refusals["session.update"] = ("invalid_session", "event")
-            with pytest.raises(PrismError):
-                await model.update_options(tool_fillers={})
+            errors = []
+            session.on("error", errors.append)
+            model.update_options(tool_fillers={})
+            await session._wait_for_options()
+            assert len(errors) == 1 and errors[0].recoverable
             await session.update_tools([])
             await session.update_tools([lookup])
             assert peer.settings["tools"][0]["prism_filler"]["text"] == "Looking it up."
-            await model.update_options(tool_fillers={})
+            model.update_options(tool_fillers={})
+            await model._session._wait_for_options()
             await session.update_tools([])
             await session.update_tools([lookup])
             assert peer.settings["tools"][0].get("prism_filler") is None
@@ -4638,10 +4677,12 @@ class TestRealtime:
             await session._update_session(instructions="Billing", tools=[lookup])
             assert peer.settings["instructions"] == "Billing"
             assert peer.updates[-1]["tools"][0]["function"]["name"] == "lookup"
-            await model.update_options(voice="new-voice")
+            model.update_options(voice="new-voice")
+            await model._session._wait_for_options()
             assert model._session._sdk.info.voice == "new-voice"
             assert model._session._sdk.info.interrupt_on_speech is True
-            await model.update_options(response_metadata={"step": "2"})
+            model.update_options(response_metadata={"step": "2"})
+            await model._session._wait_for_options()
             assert model._session._sdk.info.response_metadata == {"step": "2"}
             old_revision = model._session._sdk.info.settings_revision
             peer.refusals["session.update"] = ("invalid_session", "event")
@@ -4659,14 +4700,15 @@ class TestRealtime:
     @pytest.mark.parametrize(
         "options", [{"voice": "new-voice"}, {"response_metadata": {"step": "2"}}]
     )
-    async def test_model_update_options_waits_for_acknowledgment(self, options):
+    async def test_model_update_options_returns_before_acknowledgment(self, options):
         async with peer_model() as (peer, model, _):
             session = model.session()
             await session.update_instructions("Help")
             before = session._sdk.info
             peer.update_started.clear()
             peer.update_release.clear()
-            change = asyncio.create_task(model.update_options(**options))
+            assert model.update_options(**options) is None
+            change = session._options_task
             try:
                 await asyncio.wait_for(peer.update_started.wait(), 3)
                 assert not change.done()
@@ -4699,7 +4741,133 @@ class TestRealtime:
             assert "lookup" in session.tools.function_tools
             assert peer.settings["tools"][0]["function"]["name"] == "lookup"
 
-    @pytest.mark.parametrize("operation", ["settings", "history"])
+    async def test_queued_options_copy_inputs_and_settle_before_tools_and_reply(self):
+        async with peer_model() as (peer, model, _):
+            session = model.session()
+            await session.update_instructions("Help")
+            peer.update_started.clear()
+            peer.update_release.clear()
+            labels = {"step": "queued"}
+            fillers = {"lookup": r.PrismFiller(type="text", text="Checking.")}
+            model.update_options(voice="first")
+            await asyncio.wait_for(peer.update_started.wait(), 3)
+            session.update_options(voice="second", response_metadata=labels, tool_fillers=fillers)
+            labels["step"] = "mutated"
+            fillers.clear()
+            tools = asyncio.create_task(session.update_tools([lookup]))
+            reply = session.generate_reply()
+            try:
+                await asyncio.sleep(0.01)
+                assert not tools.done() and peer.requests.empty()
+                peer.update_release.set()
+                await asyncio.wait_for(tools, 3)
+                request = await peer.next()
+                assert session._sdk.info.voice == "second"
+                assert session._sdk.info.response_metadata == {"step": "queued"}
+                assert peer.settings["tools"][0]["prism_filler"]["text"] == "Checking."
+                voices = [u["voice"] for u in peer.updates if "voice" in u]
+                assert voices[-2:] == ["first", "second"]
+                response = await peer.start(request)
+                await reply
+                await peer.end(response)
+            finally:
+                peer.update_release.set()
+                tools.cancel()
+                reply.cancel()
+                await asyncio.gather(tools, reply, return_exceptions=True)
+
+    async def test_options_configure_initial_session_without_an_open_connection(self):
+        async with peer_model() as (peer, model, _):
+            labels = {"step": "initial"}
+            assert model.update_options(voice="initial", response_metadata=labels) is None
+            labels.clear()
+            session = model.session()
+            await session.update_instructions("Help")
+            assert session._sdk.info.voice == "initial"
+            assert session._sdk.info.response_metadata == {"step": "initial"}
+            assert peer.connections == 1
+
+    async def test_options_after_close_raise_without_changing_defaults(self):
+        async with peer_model(voice="original") as (peer, model, _):
+            session = model.session()
+            await session.update_instructions("Help")
+            await session.aclose()
+            with pytest.raises(llm.RealtimeError, match="not open"):
+                model.update_options(voice="ignored")
+            assert model._voice == "original" and peer.connections == 1
+
+    async def test_queued_options_continue_after_recoverable_refusal(self):
+        async with peer_model() as (peer, model, _):
+            session = model.session()
+            await session.update_instructions("Help")
+            errors = []
+            session.on("error", errors.append)
+            peer.refusals["session.update"] = ("invalid_session", "event")
+            model.update_options(voice="rejected")
+            model.update_options(voice="accepted")
+            await session._wait_for_options()
+            assert len(errors) == 1 and errors[0].recoverable
+            assert session._sdk.info.voice == model._voice == "accepted"
+            assert peer.connections == 1 and session._failure is None
+
+    async def test_queued_options_recover_after_local_sdk_resource_refusal(self, monkeypatch):
+        async with peer_model() as (peer, model, _):
+            session = model.session()
+            await session.update_instructions("Help")
+            errors = []
+            session.on("error", errors.append)
+            before = len(peer.updates)
+            with monkeypatch.context() as limit:
+                limit.setattr("rimelabs_sdk.realtime._session._LIMIT", 0)
+                model.update_options(voice="not submitted")
+                await session._wait_for_options()
+            assert len(peer.updates) == before
+            assert len(errors) == 1 and errors[0].recoverable
+            assert isinstance(errors[0].error, RimeResourceLimitError)
+            assert session._failure is None
+            model.update_options(voice="accepted")
+            await session._wait_for_options()
+            assert session._sdk.info.voice == model._voice == "accepted"
+            assert peer.connections == 1
+
+    async def test_queued_options_sdk_resource_failure_remains_fatal(self, monkeypatch):
+        async with peer_model() as (peer, model, _):
+            session = model.session()
+            await session.update_instructions("Help")
+            errors = []
+            session.on("error", errors.append)
+            peer.update_started.clear()
+            peer.update_release.clear()
+            model.update_options(voice="pending")
+            try:
+                await asyncio.wait_for(peer.update_started.wait(), 3)
+                # The update is already submitted. A provider response that exceeds
+                # the SDK's response limit terminates the SDK and its pending request.
+                with monkeypatch.context() as limit:
+                    limit.setattr("rimelabs_sdk.realtime._session._LIMIT", 0)
+                    await peer.start(response_id="resource-limit")
+                    await wait_until(lambda: any(not error.recoverable for error in errors))
+                    await wait_until(lambda: session._closed)
+                assert isinstance(session._failure, RimeResourceLimitError)
+                assert model._voice != "pending"
+                with pytest.raises(RimeResourceLimitError):
+                    model.update_options(voice="must not run")
+            finally:
+                peer.update_release.set()
+
+    async def test_queued_options_session_failure_remains_fatal(self):
+        async with peer_model() as (peer, model, _):
+            session = model.session()
+            await session.update_instructions("Help")
+            errors = []
+            session.on("error", errors.append)
+            peer.refusals["session.update"] = ("invalid_session", "session")
+            model.update_options(voice="rejected")
+            await wait_until(lambda: any(not error.recoverable for error in errors))
+            await wait_until(lambda: session._closed)
+            assert model._voice != "rejected"
+
+    @pytest.mark.parametrize("operation", ["settings", "history", "options"])
     async def test_session_shutdown_settles_an_update_waiting_for_acknowledgment(self, operation):
         async with peer_model() as (peer, model, _):
             session = model.session()
@@ -4707,6 +4875,10 @@ class TestRealtime:
             if operation == "settings":
                 started, release = peer.update_started, peer.update_release
                 update = session.update_tools([lookup])
+            elif operation == "options":
+                started, release = peer.update_started, peer.update_release
+                model.update_options(voice="pending")
+                update = session._options_task
             else:
                 started, release = peer.history_started, peer.history_release
                 target = session.chat_ctx
@@ -4714,7 +4886,7 @@ class TestRealtime:
                 update = session.update_chat_ctx(target)
             started.clear()
             release.clear()
-            change = asyncio.create_task(update)
+            change = asyncio.ensure_future(update)
             closing = None
             try:
                 await asyncio.wait_for(started.wait(), 3)
@@ -4745,11 +4917,13 @@ class TestRealtime:
                 if kind == "session.updated" and body["session"]["voice"] == "new-voice":
                     peer.refusals["session.update"] = ("invalid_session", "event")
 
-            with (
-                patch.object(peer, "emit", side_effect=refuse_next_update),
-                pytest.raises(PrismError, match="invalid_session"),
-            ):
-                await model.update_options(voice="new-voice", response_metadata={"step": "2"})
+            errors = []
+            session.on("error", errors.append)
+            with patch.object(peer, "emit", side_effect=refuse_next_update):
+                model.update_options(voice="new-voice", response_metadata={"step": "2"})
+                await session._wait_for_options()
+            assert len(errors) == 1 and errors[0].recoverable
+            assert errors[0].error.code == "invalid_session"
 
             assert (
                 model._session._sdk.info.voice
@@ -5265,7 +5439,8 @@ class TestRealtime:
                     assert model._session._sdk.info.truncation is None
                 else:
                     assert model._session._sdk.info.truncation == policy
-                await model.update_options(truncation=r.RetentionRatio(0.7))
+                model.update_options(truncation=r.RetentionRatio(0.7))
+                await model._session._wait_for_options()
                 assert model._session._sdk.info.truncation == r.RetentionRatio(0.7)
                 await fallback.restart_session()
                 assert model._session._sdk.info.truncation == r.RetentionRatio(0.7)
@@ -5277,10 +5452,14 @@ class TestRealtime:
             session = model.session()
             await session.update_instructions("test")
             peer.refusals["session.update"] = ("invalid_session", "event")
-            with pytest.raises(PrismError):
-                await model.update_options(truncation="disabled")
+            errors = []
+            session.on("error", errors.append)
+            model.update_options(truncation="disabled")
+            await session._wait_for_options()
+            assert len(errors) == 1 and errors[0].recoverable
             assert model._session._sdk.info.truncation == "auto"
-            await model.update_options(truncation="disabled")
+            model.update_options(truncation="disabled")
+            await model._session._wait_for_options()
             assert model._session._sdk.info.truncation == "disabled"
 
     async def test_initial_history_accepts_all_supported_types_without_executing_tools(self):
@@ -6383,7 +6562,7 @@ class TestRealtime:
 
         async with peer_model() as (peer, model, _):
             sink = ControlledOutput()
-            wrapper = model.wrap_audio_output(sink)
+            wrapper = model._wrap_audio_output(sink)
             forwarded = []
             wrapper.on("playback_finished", forwarded.append)
             provider = model.session()
@@ -6461,7 +6640,7 @@ class TestRealtime:
         async with peer_model() as (peer, model, _):
             async with AgentSession(llm=model) as session:
                 sink = ControlledOutput(sample_rate=sample_rate, synchronous=synchronous)
-                wrapper = model.wrap_audio_output(sink)
+                wrapper = model._wrap_audio_output(sink)
                 forwarded = []
                 wrapper.on("playback_finished", forwarded.append)
                 session.output.audio = wrapper
@@ -6931,7 +7110,7 @@ class TestRealtime:
         async with peer_model(timeouts=r.RealtimeTimeouts(request_s=0.05)) as (peer, model, _):
             provider = model.session()
             sink = ControlledOutput(synchronous=True)
-            wrapper = model.wrap_audio_output(sink)
+            wrapper = model._wrap_audio_output(sink)
             await provider.update_instructions("test")
             pending = provider.generate_reply()
             response = await peer.start(await peer.next())
@@ -7121,7 +7300,7 @@ class TestRealtime:
                     with pytest.raises(PrismHistoryUpdateError, match="directly"):
                         await other._clear_chat_ctx(agent)
 
-    async def test_roomio_wrapper_installs_before_opening_reply(self):
+    async def test_roomio_uses_estimates_without_a_wrapper(self):
         """Real RoomIO and RTC audio source; only room publication/subscription is local."""
         from types import SimpleNamespace
 
@@ -7172,17 +7351,15 @@ class TestRealtime:
 
                     class OpeningAgent(Agent):
                         async def on_enter(self):
-                            self.session.output.audio = model.wrap_audio_output(
-                                self.session.output.audio
-                            )
-                            self.session.generate_reply(instructions="Say hello")
+                            await self.session.generate_reply(instructions="Say hello")
 
                     await session.start(OpeningAgent(instructions="test"))
                     response = await peer.start(await peer.next())
                     await peer.message(response, seconds=0.02)
                     await peer.end(response)
-                    receipt = await asyncio.wait_for(peer.receipts.get(), 3)
-                    assert receipt["played_ms"] == pytest.approx(20)
+                    await wait_until(lambda: session.agent_state == "listening")
+                    assert peer.receipts.empty()
+                    assert not hasattr(model, "wrap_audio_output")
                 finally:
                     await room_io.aclose()
 
@@ -7307,7 +7484,7 @@ class TestRealtime:
     async def test_late_playback_cannot_release_fresh_provider_session(self):
         async with peer_model() as (peer, model, _):
             sink = ControlledOutput()
-            wrapper = model.wrap_audio_output(sink)
+            wrapper = model._wrap_audio_output(sink)
             provider = model.session()
             await provider.update_instructions("test")
             pending = provider.generate_reply()

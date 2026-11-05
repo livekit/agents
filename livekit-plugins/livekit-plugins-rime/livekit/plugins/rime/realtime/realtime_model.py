@@ -75,10 +75,6 @@ def _startup_retryable(error: Exception) -> bool:
     ) in {408, 429, 500, 502, 503, 504}
 
 
-class PrismUnsupported(llm.RealtimeError):
-    """An operation Prism cannot express. Also emitted as a fatal model error."""
-
-
 class PrismError(llm.RealtimeError):
     """A Prism refusal with its original fault and retry classification."""
 
@@ -166,7 +162,7 @@ class RealtimeModel(llm.RealtimeModel):
         self._session: RealtimeSession | None = None
         self._wrapped_output = False
 
-    def wrap_audio_output(self, output: AudioOutput) -> AudioOutput:
+    def _wrap_audio_output(self, output: AudioOutput) -> AudioOutput:
         """Install the returned sink through AgentSession.output.audio before playback."""
         self._wrapped_output = True
         return PrismAudioOutput(output)
@@ -235,7 +231,7 @@ class RealtimeModel(llm.RealtimeModel):
                     pass
             raise failure
 
-    async def update_options(
+    def update_options(
         self,
         *,
         voice: NotGivenOr[str] = NOT_GIVEN,
@@ -243,10 +239,22 @@ class RealtimeModel(llm.RealtimeModel):
         tool_fillers: NotGivenOr[Mapping[str, r.PrismFiller]] = NOT_GIVEN,
         truncation: NotGivenOr[r.Truncation] = NOT_GIVEN,
     ) -> None:
-        """Update provider settings on the live session; return after acknowledgment."""
+        """Queue settings on the live session, or configure the next initial session.
+
+        Live updates return immediately. Refusals are reported through error events;
+        stored settings change only after the provider acknowledges the update.
+        """
         if self._session is None:
-            raise llm.RealtimeError("Prism session is not open")
-        await self._session._update_model_options(
+            if is_given(voice):
+                self._voice = voice
+            if is_given(response_metadata):
+                self._response_metadata = dict(response_metadata)
+            if is_given(tool_fillers):
+                self._tool_fillers = dict(tool_fillers)
+            if is_given(truncation):
+                self._truncation = cast(r.Truncation, truncation)
+            return
+        self._session.update_options(
             voice=voice,
             response_metadata=response_metadata,
             tool_fillers=tool_fillers,
@@ -274,18 +282,16 @@ class RealtimeModel(llm.RealtimeModel):
         return "rime"
 
     def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
-        session = RealtimeSession(self)
         if turn_detection_disabled:
-            session._failure = PrismUnsupported("Prism requires server turn detection")
-        elif self._session is not None and (
+            raise llm.RealtimeError("Prism requires server turn detection")
+        if self._session is not None and (
             self._session._shutdown_task is None or not self._session._shutdown_task.done()
         ):
-            session._failure = PrismUnsupported(
+            raise llm.RealtimeError(
                 "Close the previous Prism session before opening a fresh conversation"
             )
-        else:
-            self._session = session
-        return session
+        self._session = RealtimeSession(self)
+        return self._session
 
     async def aclose(self) -> None:
         if self._session is not None:
@@ -353,6 +359,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
         self._audio_resampler: rtc.AudioResampler | None = None
         self._tasks: set[asyncio.Task[Any]] = set()
         self._settings_lock = asyncio.Lock()
+        self._options_task: asyncio.Task[None] | None = None
         self._tool_fillers = dict(model._tool_fillers)
         self._tool_choice: Literal["auto", "none"] = "auto"
         self._suppress_tools = False
@@ -490,18 +497,40 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
 
     async def _update_model_options(
         self,
+        previous: asyncio.Task[None] | None,
         *,
-        voice: NotGivenOr[str] = NOT_GIVEN,
-        response_metadata: NotGivenOr[Mapping[str, str]] = NOT_GIVEN,
-        tool_fillers: NotGivenOr[Mapping[str, r.PrismFiller]] = NOT_GIVEN,
-        truncation: NotGivenOr[r.Truncation] = NOT_GIVEN,
+        voice: NotGivenOr[str],
+        response_metadata: NotGivenOr[Mapping[str, str]],
+        tool_fillers: NotGivenOr[Mapping[str, r.PrismFiller]],
+        truncation: NotGivenOr[r.Truncation],
     ) -> None:
-        await self._apply_settings(
-            voice=voice,
-            response_metadata=response_metadata,
-            tool_fillers=tool_fillers,
-            truncation=truncation,
-        )
+        """Apply queued options in order and report recoverable refusals as events."""
+        if previous is not None:
+            await asyncio.shield(previous)
+        await asyncio.shield(self._initialized)
+        self._require()
+        try:
+            await self._settle_update(
+                self._send_settings(
+                    voice=voice,
+                    response_metadata=response_metadata,
+                    tool_fillers=tool_fillers,
+                    truncation=truncation,
+                )
+            )
+        except (PrismError, RimeInputError, RimeResourceLimitError) as error:
+            if self._failure is not None:
+                raise self._failure from None
+            if isinstance(error, PrismError) and error.scope != "event":
+                raise
+            # Local SDK admission limits leave the session usable. A terminal SDK
+            # failure is also delivered by the event reader, which closes the session.
+            self._emit_error(error, recoverable=True)
+
+    async def _wait_for_options(self) -> None:
+        """Wait for options queued before this operation without canceling them."""
+        if self._options_task is not None:
+            await asyncio.shield(self._options_task)
 
     async def _apply_settings(
         self,
@@ -515,6 +544,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
     ) -> None:
         # A cancelled caller still waits for acknowledgment so local settings cannot
         # contradict an update the server accepted. No update is replayed.
+        await self._wait_for_options()
         await asyncio.shield(self._initialized)
         self._require()
 
@@ -579,12 +609,35 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
             except r.RimeRealtimeError as error:
                 raise PrismError(error.fault) from error
 
-    def update_options(self, *, tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN) -> None:
-        if not is_given(tool_choice):
-            return
-        if tool_choice not in (None, "auto", "none"):
-            raise PrismUnsupported("Prism supports only tool_choice='auto' or 'none'")
-        self._tool_choice = "none" if tool_choice == "none" else "auto"
+    def update_options(
+        self,
+        *,
+        tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
+        voice: NotGivenOr[str] = NOT_GIVEN,
+        response_metadata: NotGivenOr[Mapping[str, str]] = NOT_GIVEN,
+        tool_fillers: NotGivenOr[Mapping[str, r.PrismFiller]] = NOT_GIVEN,
+        truncation: NotGivenOr[r.Truncation] = NOT_GIVEN,
+    ) -> None:
+        """Set tool choice and queue provider options without waiting for acknowledgment."""
+        if self._failure is not None or self._closed:
+            self._require()
+        if is_given(tool_choice):
+            if tool_choice not in (None, "auto", "none"):
+                raise llm.RealtimeError("Prism supports only tool_choice='auto' or 'none'")
+            self._tool_choice = "none" if tool_choice == "none" else "auto"
+        if any(is_given(value) for value in (voice, response_metadata, tool_fillers, truncation)):
+            # Copy caller-owned maps before scheduling an asynchronous operation.
+            self._options_task = self._spawn(
+                self._update_model_options(
+                    self._options_task,
+                    voice=voice,
+                    response_metadata=dict(response_metadata)
+                    if is_given(response_metadata)
+                    else NOT_GIVEN,
+                    tool_fillers=dict(tool_fillers) if is_given(tool_fillers) else NOT_GIVEN,
+                    truncation=truncation,
+                )
+            )
 
     async def _get_history(self) -> tuple[r.HistoryItem, ...]:
         """Read Prism's completed history without changing LiveKit's conversation record."""
@@ -746,10 +799,10 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
             await sdk.send_audio(chunk)
 
     def push_video(self, frame: rtc.VideoFrame) -> None:
-        raise self._unsupported("Prism does not accept video")
+        logger.warning("Prism does not accept video; ignoring frame")
 
     def commit_audio(self) -> None:
-        raise self._unsupported("Prism commits speech through server turn detection")
+        logger.warning("Prism commits speech through server turn detection; ignoring commit_audio")
 
     def clear_audio(self) -> None:
         if self._failure is not None or self._closed:
@@ -794,7 +847,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
         metadata: Mapping[str, str] | None = None,
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
         if is_given(tools):
-            raise self._unsupported("Prism does not support per-reply tools")
+            logger.warning("Prism does not support per-reply tools; ignoring tools override")
         self.update_options(tool_choice=tool_choice)
         parent, report = self._parent, self._report
         holds: list[r.ResponseHold] = []
@@ -835,6 +888,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
         disable_tools: bool,
         metadata: dict[str, str] | None,
     ) -> llm.GenerationCreatedEvent:
+        await self._wait_for_options()
         await asyncio.shield(self._initialized)
         # Do not hold the history lock during admission: a pending tool result
         # may need that lock before Prism can admit another reply.
@@ -1183,7 +1237,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
         elif isinstance(payload, r.ToolCall):
             generation = self._generations[payload.call.response_id]
             if generation.tools_disabled:
-                raise PrismUnsupported("Prism emitted a tool call during a tool-disabled reply")
+                raise llm.RealtimeError("Prism emitted a tool call during a tool-disabled reply")
             if generation.abandoned:
                 return
             call = self._history.record_tool_call(payload)
@@ -1279,11 +1333,6 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
         generation.messages.close()
         generation.functions.close()
 
-    def _unsupported(self, message: str) -> PrismUnsupported:
-        error = PrismUnsupported(message)
-        self._fatal(error)
-        return error
-
     def _emit_error(self, error: Exception, *, recoverable: bool) -> None:
         self.emit(
             "error",
@@ -1370,7 +1419,7 @@ def _tool(tool: llm.Tool, fillers: Mapping[str, r.PrismFiller] | None = None) ->
     elif isinstance(tool, llm.RawFunctionTool):
         function = tool.info.raw_schema
     else:
-        raise PrismUnsupported("Prism accepts function tools only")
+        raise llm.RealtimeError("Prism accepts function tools only")
     return r.ToolDefinition(
         name=function["name"],
         description=function.get("description", ""),
