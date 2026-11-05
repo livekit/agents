@@ -13,9 +13,10 @@ use lk_agents_abi::telemetry::spans::job::{
 };
 use lk_agents_abi::worker::job::StartJobFields;
 pub(crate) use lk_agents_net::telemetry::Tracer;
-pub(crate) use lk_agents_net::telemetry::otlp::CloudEndpoint;
-use lk_agents_net::telemetry::otlp::JobIdentity;
-pub(crate) use lk_agents_net::telemetry::otlp::Simulation;
+pub(crate) use lk_agents_telemetry::exporter;
+pub(crate) use lk_agents_telemetry::otlp::CloudEndpoint;
+use lk_agents_telemetry::otlp::JobIdentity;
+pub(crate) use lk_agents_telemetry::otlp::Simulation;
 use prost::Message as _;
 
 pub(crate) use lk_agents_abi::telemetry::decl::SpanDecl;
@@ -30,11 +31,11 @@ pub(crate) use lk_agents_abi::telemetry::spans::job::{
     EntrypointCancelled, EntrypointReturned, JobEntrypoint, JobShutdown, OnSessionEnd,
     RoomDisconnect, SessionEndUpload, ShutdownCallback, ShutdownCause,
 };
-pub(crate) use lk_agents_net::telemetry::otlp::CloudRecording;
-pub(crate) use lk_agents_net::telemetry::session_report::{self, ReportOutputs};
 pub(crate) use lk_agents_net::telemetry::{
     Cx, ScopedSpan, SpanContext, SpanEnd, end, event, start,
 };
+pub(crate) use lk_agents_telemetry::otlp::CloudRecording;
+pub(crate) use lk_agents_telemetry::session_report::{self, ReportOutputs};
 
 /// The job the exporter's registry knows, from its dispatch.
 pub(crate) struct Job {
@@ -96,7 +97,7 @@ pub(crate) fn start_job(
     let job = livekit_protocol::Job::decode(fields.job.as_slice()).unwrap_or_default();
     let room = job.room.clone().unwrap_or_default();
     let key = JobKey(job.id.clone());
-    if let Some(exporter) = tracer.exporter() {
+    if let Some(exporter) = exporter() {
         if let Some(cloud) = cloud {
             exporter.configure_cloud(cloud.clone());
         }

@@ -2,13 +2,10 @@
 //! [`Tracer`], the context [`Cx`] work runs in, and [`ScopedSpan`], ended when its scope exits.
 //! Callers spell every touchpoint `telemetry::`: [`start`], [`end`], [`event`], [`measure`],
 //! [`reserve`] and `#[telemetry::span]`.
-//! Ended spans and measurements reach the process's `RecordSink` (the OTLP exporter).
+//! Ended spans and measurements reach the tracer's `RecordSink`: in a process, the exporter
+//! `lk-agents-telemetry` installs.
 
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
-
-pub mod host;
-pub mod otlp;
-pub mod session_report;
 
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -24,9 +21,7 @@ use lk_agents_abi::telemetry::record::{
     EventRecord, FRAMEWORK, Key, Measurement, Record, RecordSink, SpanRecord, Status,
 };
 use lk_agents_abi::telemetry::spans::common::{EverySpan, Exception, GENAI_CONTENT};
-use parking_lot::{Mutex, RwLock};
-
-use otlp::Exporter;
+use parking_lot::Mutex;
 
 /// `#[telemetry::span(Decl { .. })]` on a function taking `cx: &telemetry::Cx`: the function is
 /// that one span.
@@ -52,57 +47,16 @@ struct Inner {
     capture_content: AtomicBool,
 }
 
-/// Where a tracer's records go: the process's exporter once installed, or a sink of its own (a
-/// test's, the DST's), or nowhere.
+/// Where a tracer's records go: its sink (the process's exporter slot, a test's, the DST's), or
+/// nowhere.
 enum Sink {
-    Process(Arc<ExporterSlot>),
-    Other(Arc<dyn RecordSink>),
+    To(Arc<dyn RecordSink>),
     Discard,
-}
-
-/// The process's exporter once the host installed telemetry: what the process tracer records
-/// to. Records before the installation are discarded.
-#[derive(Default)]
-pub struct ExporterSlot(RwLock<Option<Arc<Exporter>>>);
-
-impl ExporterSlot {
-    pub fn get(&self) -> Option<Arc<Exporter>> {
-        self.0.read().clone()
-    }
-
-    /// Installs the exporter `start` builds, unless one is installed.
-    pub fn install(&self, start: impl FnOnce() -> Exporter) -> Arc<Exporter> {
-        self.0.write().get_or_insert_with(|| Arc::new(start())).clone()
-    }
-
-    /// Removes the installed exporter, so a later install starts a new one.
-    pub fn take(&self) -> Option<Arc<Exporter>> {
-        self.0.write().take()
-    }
-
-    /// Abandons a fork-inherited exporter without dropping it: its task belongs to the parent's
-    /// runtime.
-    pub fn forget(&self) {
-        std::mem::forget(self.0.write().take());
-    }
-}
-
-impl RecordSink for ExporterSlot {
-    fn record(&self, record: Record) {
-        if let Some(exporter) = self.0.read().as_ref() {
-            exporter.record(record);
-        }
-    }
 }
 
 impl Tracer {
     pub fn new(sink: Arc<dyn RecordSink>, clock: Arc<dyn Clock>, seed: u64) -> Self {
-        Tracer::build(Sink::Other(sink), clock, seed)
-    }
-
-    /// The process's tracer, recording to the exporter `slot` installs.
-    pub fn process(slot: Arc<ExporterSlot>, clock: Arc<dyn Clock>, seed: u64) -> Self {
-        Tracer::build(Sink::Process(slot), clock, seed)
+        Tracer::build(Sink::To(sink), clock, seed)
     }
 
     fn build(sink: Sink, clock: Arc<dyn Clock>, seed: u64) -> Self {
@@ -112,15 +66,6 @@ impl Tracer {
             ids: Mutex::new(seeded_ids(seed)),
             capture_content: AtomicBool::new(true),
         }))
-    }
-
-    /// The process exporter, for its job registry and configuration; `None` before installation
-    /// or for a tracer without one.
-    pub fn exporter(&self) -> Option<Arc<Exporter>> {
-        match &self.0.sink {
-            Sink::Process(slot) => slot.get(),
-            Sink::Other(_) | Sink::Discard => None,
-        }
     }
 
     /// A forked child's ids diverge from its parent's.
@@ -162,8 +107,7 @@ impl Tracer {
 impl Recorder for Inner {
     fn record(&self, record: Record) {
         match &self.sink {
-            Sink::Process(slot) => slot.record(record),
-            Sink::Other(sink) => sink.record(record),
+            Sink::To(sink) => sink.record(record),
             Sink::Discard => {}
         }
     }

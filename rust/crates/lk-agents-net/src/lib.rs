@@ -6,9 +6,8 @@
 //! - [`source`]: a native source as one host consumer pulls and closes it.
 //! - [`a2a_auth`]: endpoint and thread credentials over LiveKit tokens.
 //! - [`a2a_client`]: the delegation A2A client, executing `lk_agents_core::a2a`'s decisions.
-//! - [`telemetry`]: the process tracer, the span context and the spans scoped to async work; the
-//!   OTLP exporter to LiveKit Cloud and the application's endpoint ([`telemetry::otlp`]); the
-//!   LiveKit Cloud session report's records and recording upload ([`telemetry::session_report`]).
+//! - [`telemetry`]: the tracer, the span context and the spans scoped to async work. Their export
+//!   and the session report are `lk-agents-telemetry`'s.
 //! - [`blocking_io`]: the process's blocking I/O pool.
 //! - [`room_service`]: LiveKit RoomService calls the framework makes in a job's room.
 //! - [`dns`]: name resolution and TCP connects on the blocking I/O pool.

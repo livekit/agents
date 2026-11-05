@@ -14,6 +14,8 @@ livekit-protocol.workspace = true
 prost.workspace = true
 lk-agents-abi = { path = "../lk-agents-abi", features = ["serde"] }
 lk-agents-net = { path = "../lk-agents-net" }
+# The process exporter a job registers with and the session report it uploads.
+lk-agents-telemetry = { path = "../lk-agents-telemetry" }
 serde_json = { workspace = true, features = ["preserve_order"] }
 # The job process channel (`ipc/ipc_channel.rs`): typed messages, postcard-encoded.
 serde.workspace = true

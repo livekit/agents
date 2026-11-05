@@ -59,9 +59,9 @@ everything to Rust.
 | --- | --- | --- | --- | --- |
 | Framework spans | `lk-agents-voice`, `lk-agents-runtime`, `lk-agents-inference`, `lk-agents-worker` | yes | yes | OTLP traces |
 | Application spans | Python OTel API, through the Rust-backed provider | yes | yes | OTLP traces |
-| Framework metrics | declared instruments, aggregated in `lk-agents-net` | yes | yes | OTLP metrics |
+| Framework metrics | declared instruments, aggregated in `lk-agents-telemetry` | yes | yes | OTLP metrics |
 | Report records | `lk_agents_core::telemetry::report` | yes | no | OTLP logs (`chat_history`, `evaluations`) |
-| Session report and recording | `lk_agents_core::telemetry::report`, uploaded by `lk-agents-net` | yes | no | report upload |
+| Session report and recording | `lk_agents_core::telemetry::report`, uploaded by `lk-agents-telemetry` | yes | no | report upload |
 | Process logs | `log` facade and Python `logging` | hosted agents, through the sidecar | no | stdout; never OTLP, so self-hosted agents' logs stay out of Cloud |
 
 ### Spans
@@ -134,7 +134,7 @@ About 2,800 lines of Python telemetry, plus the telemetry parts of `job.py`,
 
 Metrics are declared instruments (section [Metrics](#metrics-1)). A span end
 field can record a histogram measurement as it ends; usage counters are fed by
-the usage ledger. `lk-agents-net` aggregates measurements per destination and
+the usage ledger. `lk-agents-telemetry` aggregates measurements per destination and
 exports them on a fixed interval with delta temporality to Cloud and the
 temporality the user endpoint requests (cumulative by default).
 
@@ -389,9 +389,10 @@ kept by the code and passed to `end`; nothing records into an open span.
 (`lk-agents-runtime`'s and `lk-agents-inference`'s `telemetry.rs`,
 `lk-agents-worker`'s `ipc/telemetry.rs`) re-exports them with the declarations
 its logic names, so logic code imports only the module (`use crate::telemetry;`)
-and writes `telemetry::start(cx, telemetry::LlmNode { .. })`. In `lk-agents-net`
-the exporter (`telemetry::otlp`) and the session report upload
-(`telemetry::session_report`) are telemetry modules.
+and writes `telemetry::start(cx, telemetry::LlmNode { .. })`. The tracer records
+to the process's exporter slot in `lk-agents-telemetry`, which holds the
+exporter (`otlp`), the session report upload (`session_report`), the host span
+and stall recording; all of that crate is telemetry.
 
 Context travels only in `cx`. Nothing is entered into a thread-local, so the
 span stays correct across `.await` and concurrent tasks.
@@ -711,7 +712,7 @@ lk-agents-worker     job end: the session closes and is snapshotted, on_session_
       │                     report::upload(&SessionReport, &RecordingOptions, simulated)
       │                         -> Option<RecordingUpload>
       │
-      └──► lk-agents-net    session_report::export: the records to the exporter, the job's
+      └──► lk-agents-telemetry  session_report::export: the records to the exporter, the job's
                             flush, then recording::upload(RecordingUpload): the multipart request
 ```
 
@@ -721,7 +722,7 @@ lk-agents-worker     job end: the session closes and is snapshotted, on_session_
 | `lk-agents-voice` | `VoiceSession::report`: chat history, events, usage, options, start time and recording path, read from the session's own state | encoding, I/O |
 | `lk-agents-core` | `report::Tagger` (tags, evaluations, outcome); `report::records` and `report::upload`: pure projections into OTLP log records, the `chat_history.json` bytes, the header and the session summary, with their bounds | I/O, host calls |
 | `lk-agents-worker` | the job-end sequence: snapshot, `on_session_end`, then the outputs under one deadline, inside the `job_shutdown` span (`on_session_end`, `session_end_upload`) | decisions about content or shape |
-| `lk-agents-net` | the OTLP exporter; `session_report::export`: the records, the job's flush, then `recording::upload`: reading the audio file, the multipart request, auth, retries with `RetryInfo`, the recording-disabled response | report content |
+| `lk-agents-telemetry` | the OTLP exporter; `session_report::export`: the records, the job's flush, then `recording::upload`: reading the audio file, the multipart request, auth, retries with `RetryInfo`, the recording-disabled response | report content |
 | `lk-agents-py` | the generated `SessionReport` and `Tagger` classes | anything else |
 
 `SessionReport` fields: `job_id`, `room_id`, `room`, `agent_name`, `options`,

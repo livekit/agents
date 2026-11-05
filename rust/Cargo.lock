@@ -1576,19 +1576,14 @@ dependencies = [
  "a2a-lf",
  "async-trait",
  "bytes",
- "flate2",
  "futures-util",
  "livekit-api",
- "livekit-protocol",
  "livekit-token",
  "lk-agents-abi",
  "lk-agents-core",
  "lk-agents-media",
  "log",
  "parking_lot",
- "pbjson-types",
- "prost",
- "prost-build",
  "rand 0.9.5",
  "reqwest 0.13.4",
  "rustls",
@@ -1598,7 +1593,6 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "tokio-tungstenite 0.30.0",
- "tonic-types",
  "url",
 ]
 
@@ -1640,6 +1634,7 @@ dependencies = [
  "lk-agents-media",
  "lk-agents-net",
  "lk-agents-storage",
+ "lk-agents-telemetry",
  "lk-agents-voice",
  "lk-agents-worker",
  "log",
@@ -1694,6 +1689,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "lk-agents-telemetry"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "flate2",
+ "futures-util",
+ "livekit-protocol",
+ "livekit-token",
+ "lk-agents-abi",
+ "lk-agents-core",
+ "lk-agents-media",
+ "lk-agents-net",
+ "log",
+ "parking_lot",
+ "pbjson-types",
+ "prost",
+ "prost-build",
+ "rand 0.9.5",
+ "reqwest 0.13.4",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+ "tonic-types",
+]
+
+[[package]]
 name = "lk-agents-voice"
 version = "0.1.0"
 dependencies = [
@@ -1727,6 +1748,7 @@ dependencies = [
  "livekit-protocol",
  "lk-agents-abi",
  "lk-agents-net",
+ "lk-agents-telemetry",
  "log",
  "parking_lot",
  "percent-encoding",

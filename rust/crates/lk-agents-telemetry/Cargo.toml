@@ -1,0 +1,45 @@
+[package]
+name = "lk-agents-telemetry"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# Telemetry's export (docs/internals/telemetry.md "Destinations"): the OTLP exporter to LiveKit
+# Cloud and the application's endpoint, the Cloud session report and recording upload, the host
+# span and tagger classes and event-loop stall recording. Spans are declared in lk-agents-abi and
+# opened through lk-agents-net's span API; this crate sends what they record, over net's TLS.
+[lib]
+doctest = false
+
+[dependencies]
+lk-agents-abi = { path = "../lk-agents-abi" }
+# The content policy applied to exported spans, span id sources and report event rules.
+lk-agents-core = { path = "../lk-agents-core" }
+# The per-process HTTP client cell.
+lk-agents-media = { path = "../lk-agents-media" }
+# The tracer, TLS, the observability bearer, the blocking I/O pool and `ProcessEnv`.
+lk-agents-net = { path = "../lk-agents-net" }
+parking_lot.workspace = true
+tokio = { workspace = true, features = ["sync", "time"] }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "stream", "http2", "multipart"] }
+bytes = "1"
+rand = "0.9"
+serde_json = { workspace = true, features = ["preserve_order", "raw_value"] }
+log.workspace = true
+thiserror.workspace = true
+# The Cloud session report: its protobuf header and Google RPC retry records.
+livekit-protocol.workspace = true
+prost.workspace = true
+pbjson-types.workspace = true
+tonic-types = { version = "0.14", default-features = false }
+# The OTLP exporter's gzip. Its message types are checked in (`otlp/proto.rs`).
+flate2 = "1"
+
+[dev-dependencies]
+# Verifies the observability bearer the uploads send.
+livekit-token.workspace = true
+# Regenerates `otlp/proto.rs` (an ignored test); already in the lock through livekit-protocol.
+prost-build = "0.14"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros", "test-util", "net", "io-util"] }

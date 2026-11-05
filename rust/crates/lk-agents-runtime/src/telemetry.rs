@@ -15,7 +15,6 @@ use lk_agents_abi::llm::tool_executor::ToolOutcome;
 use lk_agents_abi::metrics::base::AgentMetrics;
 use lk_agents_abi::telemetry::decl::{BoolString, GenAiContent, Label, json};
 use lk_agents_abi::telemetry::host::{TelemetryConfigError, TelemetryDiagnostics};
-use lk_agents_abi::telemetry::instruments::EventLoopBlockedDuration;
 use lk_agents_abi::telemetry::instruments::{
     ConnectionAcquireTime, ExecuteToolDuration, InterruptionNumRequests, LlmInputAudioTokens,
     LlmInputCachedTokens, LlmInputTextTokens, LlmInputTokens, LlmOutputAudioTokens,
@@ -24,9 +23,9 @@ use lk_agents_abi::telemetry::instruments::{
 };
 use lk_agents_abi::telemetry::record::Key;
 use lk_agents_abi::telemetry::spans::agent_turn::FunctionToolEnd;
-use lk_agents_abi::telemetry::spans::session::{BlockingSeverity, EventLoopBlocked};
-use lk_agents_net::telemetry::ExporterSlot;
-use lk_agents_net::telemetry::otlp::{AppConfig, Exporter, Limits, ProcessIdentity, SdkName};
+use lk_agents_telemetry::ExporterSlot;
+use lk_agents_telemetry::otlp::{AppConfig, Exporter, Limits, ProcessIdentity, SdkName};
+pub(crate) use lk_agents_telemetry::stall::{Blocked, event_loop_blocked};
 use parking_lot::Mutex;
 use serde_json::Value as JsonValue;
 
@@ -117,8 +116,8 @@ pub(crate) fn watch_stalls(
 }
 
 static PROCESS: LazyLock<Process> = LazyLock::new(|| {
-    let slot = Arc::new(ExporterSlot::default());
-    let tracer = Tracer::process(slot.clone(), crate::process::host_clock(), seed());
+    let slot = ExporterSlot::process();
+    let tracer = Tracer::new(slot.clone(), crate::process::host_clock(), seed());
     if let Some(capture) = capture_from_env() {
         tracer.set_capture_content(capture);
     }
@@ -285,58 +284,6 @@ impl lk_agents_abi::telemetry::host::Telemetry for Telemetry {
             notify(Duration::from_secs_f64(duration.max(0.0)));
         }
         event_loop_blocked(&cx, &PROCESS.blocked, duration, task);
-    }
-}
-
-/// A stall's report decides its severity from these, as 1.8.10's monitor did.
-const BLOCKED_WARNING: f64 = 0.1;
-const BLOCKED_ERROR: f64 = 0.5;
-/// At most this many `event_loop_blocked` spans a minute; the rest are counted.
-const BLOCKED_SPANS_PER_MINUTE: usize = 30;
-
-/// The spans reported in the last minute, and the stalls suppressed since the last one.
-#[derive(Default)]
-pub(crate) struct Blocked(Mutex<(std::collections::VecDeque<u64>, u32)>);
-
-/// One stall: its measurement always, its span within the rate limit.
-pub(crate) fn event_loop_blocked(cx: &Cx, blocked: &Blocked, duration: f64, task: Option<String>) {
-    let severity =
-        if duration >= BLOCKED_ERROR { BlockingSeverity::Error } else { BlockingSeverity::Warning };
-    lk_agents_net::telemetry::measure(cx, &EventLoopBlockedDuration { severity }, duration);
-    let now = cx.now_nanos();
-    let suppressed = {
-        let (sent, suppressed) = &mut *blocked.0.lock();
-        while sent.front().is_some_and(|at| now.saturating_sub(*at) >= 60_000_000_000) {
-            sent.pop_front();
-        }
-        if sent.len() >= BLOCKED_SPANS_PER_MINUTE {
-            *suppressed += 1;
-            return;
-        }
-        sent.push_back(now);
-        std::mem::take(suppressed)
-    };
-    let start = now.saturating_sub((duration * 1e9) as u64);
-    let span = lk_agents_net::telemetry::start_at(
-        cx,
-        EventLoopBlocked {
-            duration: Seconds(duration),
-            threshold: Seconds(BLOCKED_WARNING),
-            gc_time: None,
-            cpu_time: None,
-            severity,
-            task,
-            stack: None,
-            import: None,
-            suppressed: (suppressed > 0).then_some(suppressed),
-        },
-        start,
-    );
-    if severity == BlockingSeverity::Error {
-        let message = format!("the event loop was blocked for {duration:.3}s");
-        lk_agents_net::telemetry::end(span, Failure { kind: ErrorType::EventLoopBlocked, message });
-    } else {
-        lk_agents_net::telemetry::end(span, ());
     }
 }
 

@@ -63,7 +63,7 @@ impl SessionOwner {
 }
 
 /// The report's event retention, through its declared operations.
-type Retention = lk_agents_net::telemetry::session_report::EventRetention;
+type Retention = lk_agents_telemetry::session_report::EventRetention;
 
 struct Inner {
     env: ProcessEnv,

@@ -204,7 +204,7 @@ impl Inner {
         let (Some(options), Some(job)) = (self.state.lock().recording, self.job.get()) else {
             return Ok(());
         };
-        let exporter = self.tracer.exporter();
+        let exporter = telemetry::exporter();
         let outputs = telemetry::ReportOutputs {
             exporter: exporter.as_deref(),
             cloud: self.cloud.as_ref().filter(|_| self.observability_url.is_some()),
@@ -233,7 +233,7 @@ impl Inner {
         } else {
             telemetry::end(span, ());
         }
-        if let (Some(exporter), Some(job)) = (self.tracer.exporter(), self.job.get()) {
+        if let (Some(exporter), Some(job)) = (telemetry::exporter(), self.job.get()) {
             exporter.close_job(&job.key, secs(telemetry::SHUTDOWN_TIMEOUT_SECONDS)).await;
         }
         result.map(drop)
@@ -738,7 +738,7 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
         st.recording = Some(options);
         let uploads = options.recording_enabled();
         drop(st);
-        if let (Some(exporter), Some(job)) = (self.inner.tracer.exporter(), self.inner.job.get()) {
+        if let (Some(exporter), Some(job)) = (telemetry::exporter(), self.inner.job.get()) {
             let cloud = observability && self.inner.cloud.is_some();
             // Metrics follow the recording as a whole, as 1.8.10's process meter did; the only
             // logs are the session report's records.

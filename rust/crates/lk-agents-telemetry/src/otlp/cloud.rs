@@ -39,8 +39,8 @@ pub(crate) async fn client() -> Result<reqwest::Client, String> {
     let cell = CLIENT.get();
     let client = cell
         .get_or_try_init(|| async {
-            crate::tls::config().await?;
-            crate::tls::http_client_builder()?
+            lk_agents_net::tls::config().await?;
+            lk_agents_net::tls::http_client_builder()?
                 .retry(reqwest::retry::never())
                 .connect_timeout(CONNECT_TIMEOUT)
                 .redirect(reqwest::redirect::Policy::none())
@@ -98,7 +98,7 @@ impl CloudEndpoint {
         request: impl FnOnce(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
     ) -> Result<Answer, Unsent> {
         let client = client().await.map_err(Unsent::Setup)?;
-        let bearer = crate::token::observability_bearer(&self.api_key, &self.api_secret)
+        let bearer = lk_agents_net::token::observability_bearer(&self.api_key, &self.api_secret)
             .map_err(|error| Unsent::Setup(error.to_string()))?;
         let url = format!("{}/observability/{path}", self.base_url.trim_end_matches('/'));
         let response = request(client.post(url).bearer_auth(bearer)).send().await?;

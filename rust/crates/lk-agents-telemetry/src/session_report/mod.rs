@@ -20,7 +20,7 @@ use lk_agents_abi::telemetry::report::{RecordingOptions, SessionReport};
 use lk_agents_core::telemetry::report;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
-use crate::telemetry::otlp::{CloudEndpoint, Exporter};
+use crate::otlp::{CloudEndpoint, Exporter};
 pub use events::EventRetention;
 pub use recording::Uploaded;
 

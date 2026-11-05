@@ -30,6 +30,7 @@ ASYNC = {
     "lk-agents-inference",
     "lk-agents-worker",
     "lk-agents-net",
+    "lk-agents-telemetry",
     "lk-agents-storage",
     "lk-agents-cli",
 }
@@ -47,7 +48,10 @@ GRAPH = {
     # net -> core: the delegation A2A client executes core::a2a decisions. net -> media: the
     # blocking I/O pool is an instance of media's worker pool.
     "lk-agents-net": {"lk-agents-abi", "lk-agents-core", "lk-agents-media"},
-    "lk-agents-worker": {"lk-agents-abi", "lk-agents-net"},
+    # telemetry -> net: the exporter sends over net's TLS with its bearer and blocking pool, and
+    # its host classes take net's `ProcessEnv`; net's span API records to its exporter slot.
+    "lk-agents-telemetry": {"lk-agents-abi", "lk-agents-core", "lk-agents-media", "lk-agents-net"},
+    "lk-agents-worker": {"lk-agents-abi", "lk-agents-net", "lk-agents-telemetry"},
     "lk-agents-cli": {"lk-agents-abi", "lk-agents-worker", "lk-agents-net"},
     "lk-agents-storage": {"lk-agents-abi", "lk-agents-net"},
     # The DST runs the runtime's real executors over faked ports (decision 92); providers and the

@@ -9,7 +9,7 @@ use tokio::net::TcpListener;
 
 use super::recording::{Multipart, encode_header, retry_delay};
 use super::*;
-use crate::telemetry::otlp::{CloudRecording, JobIdentity, Limits, ProcessIdentity, SdkName};
+use crate::otlp::{CloudRecording, JobIdentity, Limits, ProcessIdentity, SdkName};
 
 struct Request {
     path: String,
@@ -77,7 +77,7 @@ fn cloud(url: &str) -> CloudEndpoint {
 }
 
 fn clock() -> Arc<dyn Clock> {
-    Arc::new(crate::clock::RealClock::new())
+    Arc::new(lk_agents_net::clock::RealClock::new())
 }
 
 fn recording(audio_path: Option<String>) -> RecordingUpload {
@@ -217,7 +217,7 @@ async fn send(url: &str) -> Result<Uploaded, UploadError> {
 
 fn job_exporter(url: &str) -> Exporter {
     let exporter = Exporter::start(
-        &crate::task::TokioSpawner::current(),
+        &lk_agents_net::task::TokioSpawner::current(),
         clock(),
         ProcessIdentity {
             sdk_name: SdkName::Python,

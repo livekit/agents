@@ -16,8 +16,8 @@ use prost::Message;
 
 use super::ReportAdmission;
 use super::UploadError;
-use crate::telemetry::otlp::CloudEndpoint;
-use crate::telemetry::otlp::cloud::{Answer, Unsent};
+use crate::otlp::CloudEndpoint;
+use crate::otlp::cloud::{Answer, Unsent};
 
 const CHUNK_BYTES: usize = 64 * 1024;
 /// Four attempts, bounded together by the caller's limit; a `RetryInfo` delay overrides the
@@ -156,7 +156,7 @@ impl Multipart {
         let Some((file, _)) = audio else {
             return reqwest::Body::from([head, tail].concat());
         };
-        let io = crate::blocking_io::blocking_io();
+        let io = lk_agents_net::blocking_io::blocking_io();
         let chunks = stream::try_unfold(file, move |mut file| {
             let io = io.clone();
             async move {
@@ -199,7 +199,7 @@ fn part(out: &mut Vec<u8>, boundary: &str, name: &str, file: &str, kind: &str, b
 /// The audio file and its length; a file that cannot be read uploads without its part.
 async fn open(path: &str) -> Option<(std::fs::File, u64)> {
     let owned = path.to_owned();
-    let opened = crate::blocking_io::blocking_io()
+    let opened = lk_agents_net::blocking_io::blocking_io()
         .run((), move || {
             let file = std::fs::File::open(owned)?;
             let len = file.metadata()?.len();

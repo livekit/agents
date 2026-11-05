@@ -18,6 +18,7 @@ tokio-util = "0.7"
 lk-agents-abi = { path = "../lk-agents-abi" }
 lk-agents-inference = { path = "../lk-agents-inference", default-features = false }
 lk-agents-net = { path = "../lk-agents-net" }
+lk-agents-telemetry = { path = "../lk-agents-telemetry" }
 # The shared agent execution core whose `AgentRun` effects `agent_run` executes.
 lk-agents-core = { path = "../lk-agents-core" }
 lk-agents-voice = { path = "../lk-agents-voice", default-features = false }
