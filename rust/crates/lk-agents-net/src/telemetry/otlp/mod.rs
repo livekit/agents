@@ -6,11 +6,13 @@
 //! exports full batches as they fill, everything queued each second and metrics every 30 s.
 //!
 //! - [`config`]: identities, the Cloud endpoint and recording decision, the application endpoint.
+//! - `cloud`: the process's telemetry HTTP client and the Cloud endpoint's requests.
 //! - `destination`: the job registry, queues, holding and batch selection.
 //! - `encode`: content policy, identity stamps and the OTLP request bodies.
 //! - `metrics`: per-destination aggregation, delta or cumulative.
 //! - [`proto`]: the OTLP messages, generated from opentelemetry-proto (`proto_tests.rs`).
 
+pub(crate) mod cloud;
 pub mod config;
 mod destination;
 mod encode;
@@ -21,26 +23,23 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime};
 
-use futures_util::StreamExt as _;
 use lk_agents_abi::telemetry::record::{JobKey, Record, RecordSink};
 use lk_agents_abi::{Clock, OwnedTask, Spawner, SpawnerExt as _, Ts, before, timeout};
 use parking_lot::Mutex;
-use tokio::sync::{Notify, OnceCell};
+use tokio::sync::Notify;
 
-use crate::telemetry::session_report::recording;
-
+use cloud::Answer;
 pub use config::{
     AppConfig, CloudEndpoint, CloudRecording, JobIdentity, ProcessIdentity, SdkName, Simulation,
     Temporality,
 };
 pub use destination::Limits;
-use destination::{Batch, Payload, State, Take};
+use destination::{App, Batch, Cloud, State, Take};
 use lk_agents_core::telemetry::policy::ContentPolicy;
 
 const SPAN_INTERVAL: Duration = Duration::from_secs(1);
 const METRIC_INTERVAL: Duration = Duration::from_secs(30);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
-const RESPONSE_BYTES: usize = 64 * 1024;
 
 /// What the exporter could not do, since the process started.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -88,7 +87,6 @@ struct Shared {
     /// Exports in progress, and their settling.
     in_flight: AtomicUsize,
     idle: Notify,
-    client: OnceCell<reqwest::Client>,
 }
 
 /// The process's telemetry exporter.
@@ -112,7 +110,6 @@ impl Exporter {
             wake: Notify::new(),
             in_flight: AtomicUsize::new(0),
             idle: Notify::new(),
-            client: OnceCell::new(),
         });
         let task = spawner.spawn(run(shared.clone()));
         Exporter { shared, task: Mutex::new(Some(task)) }
@@ -155,27 +152,11 @@ impl Exporter {
     /// Sends what the job has queued, its last metrics included, then forgets it. Bounded by
     /// `limit`: what is not sent by then is dropped and counted.
     pub async fn close_job(&self, key: &JobKey, limit: Duration) {
-        let shared = &*self.shared;
-        let deadline = shared.clock.now().saturating_add(limit);
-        let now = shared.wall_nanos();
-        let batches =
-            shared.state.lock().take(Take { job: Some(key), metrics: true, all: true }, now);
-        let complete = shared.send(batches, Some(deadline)).await && shared.settled(deadline).await;
-        add(&shared.counters.dropped, shared.state.lock().remove_job(key));
+        let complete = self.flush(Some(key), limit).await;
+        add(&self.shared.counters.dropped, self.shared.state.lock().remove_job(key));
         if !complete {
-            add(&shared.counters.incomplete_cleanup, 1);
+            add(&self.shared.counters.incomplete_cleanup, 1);
         }
-    }
-
-    /// Sends what the job has queued, its metrics included, and keeps it open. False when
-    /// `limit` passed first.
-    pub async fn flush_job(&self, key: &JobKey, limit: Duration) -> bool {
-        let shared = &*self.shared;
-        let deadline = shared.clock.now().saturating_add(limit);
-        let now = shared.wall_nanos();
-        let batches =
-            shared.state.lock().take(Take { job: Some(key), metrics: true, all: true }, now);
-        shared.send(batches, Some(deadline)).await && shared.settled(deadline).await
     }
 
     /// Whether the job's project refused recording.
@@ -195,12 +176,13 @@ impl Exporter {
         add(&self.shared.counters.abandoned_sessions, usize::from(abandoned));
     }
 
-    /// Sends everything queued, metrics included. False when `limit` passed first.
-    pub async fn flush(&self, limit: Duration) -> bool {
+    /// Sends everything queued, metrics included: `job`'s Cloud records only, or everything.
+    /// False when `limit` passed first.
+    pub async fn flush(&self, job: Option<&JobKey>, limit: Duration) -> bool {
         let shared = &*self.shared;
         let deadline = shared.clock.now().saturating_add(limit);
         let now = shared.wall_nanos();
-        let batches = shared.state.lock().take(Take { job: None, metrics: true, all: true }, now);
+        let batches = shared.state.lock().take(Take { job, metrics: true, all: true }, now);
         shared.send(batches, Some(deadline)).await && shared.settled(deadline).await
     }
 
@@ -214,7 +196,7 @@ impl Exporter {
             }
             state.closed = true;
         }
-        let complete = self.flush(limit).await;
+        let complete = self.flush(None, limit).await;
         drop(self.task.lock().take());
         if !complete {
             add(&self.shared.counters.incomplete_cleanup, 1);
@@ -302,7 +284,7 @@ impl Shared {
         let _in_flight = InFlight(self);
         let mut complete = true;
         for batch in batches {
-            let records = batch.payload().records();
+            let records = batch.records();
             let limit = match deadline {
                 None => REQUEST_TIMEOUT,
                 Some(at) => at.saturating_duration_since(self.clock.now()).min(REQUEST_TIMEOUT),
@@ -358,147 +340,99 @@ impl Shared {
             let state = self.state.lock();
             (state.process.clone(), state.cloud.clone())
         };
-        let request = match batch {
+        match batch {
             Batch::Cloud { identity, recording, payload, .. } => {
                 let Some(cloud) = cloud else { return Outcome::Sent };
-                let base = cloud.base_url.trim_end_matches('/');
                 let resource = encode::cloud_resource(&process, &identity);
-                let mut stamp = encode::job_stamp(&process, &identity, true);
-                stamp.extend(encode::session_flags(&recording));
+                let stamp = encode::cloud_stamp(&process, &identity, &recording);
                 let policy = ContentPolicy::cloud(recording.redaction);
                 let (signal, body) = match payload {
-                    Payload::Spans(spans) => {
-                        let spans: Vec<_> = spans
-                            .into_iter()
-                            .map(|(mut span, _)| {
-                                policy.span(&mut span);
-                                encode::stamp(&mut span.attributes, &stamp);
-                                span
-                            })
-                            .collect();
-                        let request =
-                            encode::Message::Traces(encode::traces_request(resource, &spans));
-                        ("traces", encode::body(&request, true))
+                    Cloud::Spans(mut spans) => {
+                        for span in &mut spans {
+                            policy.span(span);
+                            encode::stamp(&mut span.attributes, &stamp);
+                        }
+                        ("traces", encode::body(&encode::traces_request(resource, &spans), true))
                     }
-                    Payload::Logs(logs) => {
-                        let logs: Vec<_> = logs
-                            .into_iter()
-                            .map(|mut log| {
-                                policy.log(&mut log);
-                                encode::stamp(&mut log.attributes, &stamp);
-                                log
-                            })
-                            .collect();
-                        let request = encode::Message::Logs(encode::logs_request(resource, &logs));
-                        ("logs", encode::body(&request, true))
+                    Cloud::Logs(mut logs) => {
+                        for log in &mut logs {
+                            policy.log(log);
+                            encode::stamp(&mut log.attributes, &stamp);
+                        }
+                        ("logs", encode::body(&encode::logs_request(resource, &logs), true))
                     }
-                    Payload::Metrics(metrics) => {
-                        let request =
-                            encode::Message::Metrics(encode::metrics_request(resource, metrics));
-                        ("metrics", encode::body(&request, true))
+                    Cloud::Metrics(metrics) => {
+                        ("metrics", encode::body(&encode::metrics_request(resource, metrics), true))
                     }
                 };
-                let bearer =
-                    match crate::token::observability_bearer(&cloud.api_key, &cloud.api_secret) {
-                        Ok(token) => token,
-                        Err(error) => return Outcome::Failed(error.to_string()),
-                    };
-                let url = format!("{base}/observability/{signal}/otlp/v0");
-                (url, body, vec![("authorization".to_owned(), format!("Bearer {bearer}"))], true)
+                let body = match body {
+                    Ok(body) => body,
+                    Err(error) => return Outcome::Failed(error),
+                };
+                let path = format!("{signal}/otlp/v0");
+                match cloud.post(&path, |request| body.attach(request)).await {
+                    Ok(answer) => Outcome::of(answer, &path),
+                    Err(error) => Outcome::Failed(error.to_string()),
+                }
             }
             Batch::App { config, payload } => {
                 let resource = encode::app_resource(&process, &config.resource);
                 let (url, body) = match payload {
-                    Payload::Spans(spans) => {
+                    App::Spans(spans) => {
                         let policy = ContentPolicy::application(config.allow_pii);
                         let spans: Vec<_> = spans
                             .into_iter()
-                            .map(|(mut span, identity)| {
-                                policy.span(&mut span);
-                                if let Some(identity) = identity {
-                                    let mut stamp = encode::job_stamp(&process, &identity, true);
+                            .map(|mut queued| {
+                                policy.span(&mut queued.span);
+                                if let Some(job) = &queued.job {
+                                    let mut stamp = encode::app_stamp(&process, job);
                                     policy.attributes(&mut stamp);
-                                    encode::stamp(&mut span.attributes, &stamp);
+                                    encode::stamp(&mut queued.span.attributes, &stamp);
                                 }
-                                encode::stamp(&mut span.attributes, &config.metadata);
-                                span
+                                encode::stamp(&mut queued.span.attributes, &config.metadata);
+                                queued.span
                             })
                             .collect();
-                        let request =
-                            encode::Message::Traces(encode::traces_request(resource, &spans));
-                        (&config.traces_endpoint, encode::body(&request, config.gzip))
+                        let body =
+                            encode::body(&encode::traces_request(resource, &spans), config.gzip);
+                        (&config.traces_endpoint, body)
                     }
-                    Payload::Metrics(metrics) => {
-                        let request =
-                            encode::Message::Metrics(encode::metrics_request(resource, metrics));
+                    App::Metrics(metrics) => {
+                        let request = encode::metrics_request(resource, metrics);
                         (&config.metrics_endpoint, encode::body(&request, config.gzip))
                     }
-                    Payload::Logs(_) => return Outcome::Sent,
                 };
-                let Some(url) = url.clone() else { return Outcome::Sent };
-                (url, body, config.headers.clone(), false)
+                let Some(url) = url else { return Outcome::Sent };
+                let body = match body {
+                    Ok(body) => body,
+                    Err(error) => return Outcome::Failed(error),
+                };
+                let client = match cloud::client().await {
+                    Ok(client) => client,
+                    Err(error) => return Outcome::Failed(error),
+                };
+                let mut request = body.attach(client.post(url));
+                for (key, value) in &config.headers {
+                    request = request.header(key, value);
+                }
+                match request.send().await {
+                    Ok(response) => Outcome::of(cloud::answer(response, false).await, url),
+                    Err(error) => Outcome::Failed(error.to_string()),
+                }
             }
-        };
-        let (url, body, headers, cloud) = request;
-        match body {
-            Ok(body) => self.post(&url, headers, body, cloud).await,
-            Err(error) => Outcome::Failed(error),
         }
     }
+}
 
-    async fn post(
-        &self,
-        url: &str,
-        headers: Vec<(String, String)>,
-        body: encode::Body,
-        cloud: bool,
-    ) -> Outcome {
-        let client = self
-            .client
-            .get_or_try_init(|| async {
-                crate::tls::config().await?;
-                crate::tls::http_client_builder()?
-                    .retry(reqwest::retry::never())
-                    .connect_timeout(REQUEST_TIMEOUT)
-                    .redirect(reqwest::redirect::Policy::none())
-                    .build()
-                    .map_err(|error| error.to_string())
-            })
-            .await;
-        let client = match client {
-            Ok(client) => client,
-            Err(error) => return Outcome::Failed(error),
-        };
-        let mut request = client
-            .post(url)
-            .header(reqwest::header::CONTENT_TYPE, "application/x-protobuf")
-            .body(body.bytes);
-        if body.gzip {
-            request = request.header(reqwest::header::CONTENT_ENCODING, "gzip");
-        }
-        for (key, value) in headers {
-            request = request.header(key, value);
-        }
-        let response = match request.send().await {
-            Ok(response) => response,
-            Err(error) => return Outcome::Failed(error.to_string()),
-        };
-        let status = response.status();
-        if status.is_success() {
-            return Outcome::Sent;
-        }
-        let mut body = Vec::new();
-        let mut chunks = response.bytes_stream();
-        while let Some(Ok(chunk)) = chunks.next().await {
-            if body.len() + chunk.len() > RESPONSE_BYTES {
-                break;
+impl Outcome {
+    fn of(answer: Answer, url: &str) -> Outcome {
+        match answer {
+            Answer::Sent => Outcome::Sent,
+            Answer::Disabled => Outcome::Disabled,
+            Answer::Refused { status, .. } => {
+                Outcome::Failed(format!("{url} answered HTTP {status}"))
             }
-            body.extend_from_slice(&chunk);
         }
-        if cloud && recording::is_disabled_response(status.as_u16(), &body) {
-            return Outcome::Disabled;
-        }
-        Outcome::Failed(format!("{url} answered HTTP {}", status.as_u16()))
     }
 }
 

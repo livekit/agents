@@ -83,38 +83,45 @@ struct Job {
 
 pub(crate) struct AppDestination {
     pub config: Arc<AppConfig>,
-    spans: VecDeque<(SpanRecord, Option<Arc<JobIdentity>>, usize)>,
+    spans: VecDeque<(AppSpan, usize)>,
     usage: Usage,
     metrics: Aggregator,
 }
 
-/// One request's worth of records, taken from the queues; encoded outside the lock.
-pub(crate) enum Batch {
-    Cloud { job: JobKey, identity: Arc<JobIdentity>, recording: CloudRecording, payload: Payload },
-    App { config: Arc<AppConfig>, payload: Payload },
+/// A span for the application endpoint, which mixes jobs: each span carries its job's identity.
+pub(crate) struct AppSpan {
+    pub span: SpanRecord,
+    pub job: Option<Arc<JobIdentity>>,
 }
 
-pub(crate) enum Payload {
-    Spans(Vec<(SpanRecord, Option<Arc<JobIdentity>>)>),
+/// One request's worth of records, taken from the queues; encoded outside the lock.
+pub(crate) enum Batch {
+    Cloud { job: JobKey, identity: Arc<JobIdentity>, recording: CloudRecording, payload: Cloud },
+    App { config: Arc<AppConfig>, payload: App },
+}
+
+/// A Cloud request: one job's spans, report records or metrics.
+pub(crate) enum Cloud {
+    Spans(Vec<SpanRecord>),
     Logs(Vec<LogRecord>),
     Metrics(Vec<Metric>),
 }
 
-impl Payload {
-    /// What a failed or abandoned batch counts.
-    pub fn records(&self) -> usize {
-        match self {
-            Payload::Spans(s) => s.len(),
-            Payload::Logs(l) => l.len(),
-            Payload::Metrics(m) => m.len(),
-        }
-    }
+/// An application request: spans or metrics, never report records.
+pub(crate) enum App {
+    Spans(Vec<AppSpan>),
+    Metrics(Vec<Metric>),
 }
 
 impl Batch {
-    pub fn payload(&self) -> &Payload {
+    /// What a failed or abandoned batch counts.
+    pub fn records(&self) -> usize {
         match self {
-            Batch::Cloud { payload, .. } | Batch::App { payload, .. } => payload,
+            Batch::Cloud { payload: Cloud::Spans(s), .. } => s.len(),
+            Batch::Cloud { payload: Cloud::Logs(l), .. } => l.len(),
+            Batch::Cloud { payload: Cloud::Metrics(m), .. }
+            | Batch::App { payload: App::Metrics(m), .. } => m.len(),
+            Batch::App { payload: App::Spans(s), .. } => s.len(),
         }
     }
 }
@@ -262,7 +269,7 @@ impl State {
             match &record {
                 Record::Span(span) if app.config.traces_endpoint.is_some() => {
                     if app.usage.admit(&limits, bytes) {
-                        app.spans.push_back((span.clone(), identity, bytes));
+                        app.spans.push_back((AppSpan { span: span.clone(), job: identity }, bytes));
                         admitted.batch_ready |= app.spans.len() >= BATCH_RECORDS;
                     } else {
                         admitted.dropped += 1;
@@ -355,19 +362,14 @@ impl State {
                     payload,
                 };
                 while due(job.spans.len()) {
-                    let spans = drain(&mut job.spans, &mut self.cloud_usage, |(s, b)| (s, b));
-                    batches.push(batch(Payload::Spans(
-                        spans.into_iter().map(|s| (s, None)).collect(),
-                    )));
+                    batches.push(batch(Cloud::Spans(drain(&mut job.spans, &mut self.cloud_usage))));
                 }
                 while due(job.logs.len()) {
-                    let logs = drain(&mut job.logs, &mut self.cloud_usage, |(l, b)| (l, b));
-                    batches.push(batch(Payload::Logs(logs)));
+                    batches.push(batch(Cloud::Logs(drain(&mut job.logs, &mut self.cloud_usage))));
                 }
                 if take.metrics && !job.metrics.is_empty() {
-                    let mut stamp = super::encode::job_stamp(&self.process, &job.identity, true);
-                    stamp.extend(super::encode::session_flags(recording));
-                    batches.push(batch(Payload::Metrics(job.metrics.collect(now, &stamp))));
+                    let stamp = super::encode::cloud_stamp(&self.process, &job.identity, recording);
+                    batches.push(batch(Cloud::Metrics(job.metrics.collect(now, &stamp))));
                 }
             }
         }
@@ -388,31 +390,23 @@ impl State {
 impl AppDestination {
     fn take(&mut self, all: bool, metrics: bool, now: u64, batches: &mut Vec<Batch>) {
         while all && !self.spans.is_empty() || self.spans.len() >= BATCH_RECORDS {
-            let spans = drain(&mut self.spans, &mut self.usage, |(s, i, b)| ((s, i), b));
-            batches
-                .push(Batch::App { config: self.config.clone(), payload: Payload::Spans(spans) });
+            let spans = drain(&mut self.spans, &mut self.usage);
+            batches.push(Batch::App { config: self.config.clone(), payload: App::Spans(spans) });
         }
         if metrics && !self.metrics.is_empty() {
             let metrics = self.metrics.collect(now, &Vec::new());
-            batches.push(Batch::App {
-                config: self.config.clone(),
-                payload: Payload::Metrics(metrics),
-            });
+            batches
+                .push(Batch::App { config: self.config.clone(), payload: App::Metrics(metrics) });
         }
     }
 }
 
 /// Up to one batch from the front of `queue`, releasing its retained bytes.
-fn drain<T, R>(
-    queue: &mut VecDeque<T>,
-    usage: &mut Usage,
-    split: impl Fn(T) -> (R, usize),
-) -> Vec<R> {
+fn drain<T>(queue: &mut VecDeque<(T, usize)>, usage: &mut Usage) -> Vec<T> {
     let n = queue.len().min(BATCH_RECORDS);
     queue
         .drain(..n)
-        .map(|item| {
-            let (record, bytes) = split(item);
+        .map(|(record, bytes)| {
             usage.release(bytes);
             record
         })

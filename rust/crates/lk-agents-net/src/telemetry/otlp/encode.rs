@@ -33,67 +33,58 @@ pub(crate) fn stamp(attributes: &mut KeyValues, stamp: &KeyValues) {
     }
 }
 
-/// Writes a declaration, omitting the identity values that are unknown (empty).
-fn write(out: &mut KeyValues, decl: &impl Attrs) {
-    let mut attributes = KeyValues::new();
-    decl.write(&mut attributes);
-    attributes.retain(|(_, v)| !matches!(v, Value::String(s) if s.is_empty()));
-    out.extend(attributes);
+/// A job's identity: the room name is content, which the caller keeps off resources.
+fn identity(process: &ProcessIdentity, job: &JobIdentity) -> Stamp {
+    Stamp {
+        lk_room_id: job.room_id.clone(),
+        room_id: job.room_id.clone(),
+        lk_job_id: job.job_id.clone(),
+        job_id: job.job_id.clone(),
+        room_name: job.room_name.clone().map(Content),
+        agent_name: job.agent_name.clone(),
+        cloud_agent_id: process.cloud_agent_id.clone(),
+        deployment_id: process.deployment_id.clone(),
+    }
 }
 
-/// A job's identity attributes. `room_name` is content and stays off resources.
-pub(crate) fn job_stamp(
-    process: &ProcessIdentity,
-    job: &JobIdentity,
-    room_name: bool,
-) -> KeyValues {
+/// What the application destination stamps on a job's spans, before its content policy.
+pub(crate) fn app_stamp(process: &ProcessIdentity, job: &JobIdentity) -> KeyValues {
     let mut out = KeyValues::new();
-    write(
-        &mut out,
-        &Stamp {
-            lk_room_id: job.room_id.clone(),
-            room_id: job.room_id.clone(),
-            lk_job_id: job.job_id.clone(),
-            job_id: job.job_id.clone(),
-            room_name: Content(if room_name { job.room_name.clone() } else { String::new() }),
-            agent_name: job.agent_name.clone().unwrap_or_default(),
-            cloud_agent_id: process.cloud_agent_id.clone(),
-            deployment_id: process.deployment_id.clone(),
-        },
-    );
+    identity(process, job).write(&mut out);
     out
 }
 
-/// The session flags Cloud's ingest reads on every span and log record.
-pub(crate) fn session_flags(recording: &CloudRecording) -> KeyValues {
+/// What the Cloud destination stamps on a job's every span, log record and measurement: its
+/// identity and the session flags Cloud's ingest reads.
+pub(crate) fn cloud_stamp(
+    process: &ProcessIdentity,
+    job: &JobIdentity,
+    recording: &CloudRecording,
+) -> KeyValues {
+    let mut out = app_stamp(process, job);
     let simulation = recording.simulation.as_ref();
-    let mut out = KeyValues::new();
-    write(
-        &mut out,
-        &SessionFlags {
-            redaction: recording.redaction,
-            simulation: simulation.is_some(),
-            simulation_run_id: simulation.map(|s| s.run_id.clone().unwrap_or_default()),
-            simulation_job_id: simulation.map(|s| s.job_id.clone().unwrap_or_default()),
-        },
-    );
+    SessionFlags {
+        redaction: recording.redaction,
+        simulation: simulation.is_some(),
+        simulation_run_id: simulation.and_then(|s| s.run_id.clone()),
+        simulation_job_id: simulation.and_then(|s| s.job_id.clone()),
+    }
+    .write(&mut out);
     out
 }
 
 fn sdk(process: &ProcessIdentity, out: &mut KeyValues) {
-    write(
-        out,
-        &SdkResource {
-            name: process.sdk_name.as_str().to_owned(),
-            version: process.sdk_version.clone(),
-        },
-    );
+    SdkResource {
+        name: process.sdk_name.as_str().to_owned(),
+        version: process.sdk_version.clone(),
+    }
+    .write(out);
 }
 
 pub(crate) fn cloud_resource(process: &ProcessIdentity, job: &JobIdentity) -> Resource {
     let mut attributes: KeyValues = vec![(Cow::Borrowed(SERVICE_NAME), FRAMEWORK.into())];
     sdk(process, &mut attributes);
-    attributes.extend(job_stamp(process, job, false));
+    Stamp { room_name: None, ..identity(process, job) }.write(&mut attributes);
     resource(&attributes)
 }
 
@@ -272,26 +263,27 @@ pub(crate) fn metrics_request(
     }
 }
 
-/// An encoded request body and its headers.
+/// An encoded request body.
 pub(crate) struct Body {
-    pub bytes: Vec<u8>,
-    pub gzip: bool,
+    bytes: Vec<u8>,
+    gzip: bool,
 }
 
-/// One export request.
-pub(crate) enum Message {
-    Traces(ExportTraceServiceRequest),
-    Logs(ExportLogsServiceRequest),
-    Metrics(ExportMetricsServiceRequest),
+impl Body {
+    /// `request` with this body and its content headers.
+    pub fn attach(self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        let request = request.header(reqwest::header::CONTENT_TYPE, "application/x-protobuf");
+        let request = if self.gzip {
+            request.header(reqwest::header::CONTENT_ENCODING, "gzip")
+        } else {
+            request
+        };
+        request.body(self.bytes)
+    }
 }
 
-pub(crate) fn body(message: &Message, gzip: bool) -> Result<Body, String> {
-    use prost::Message as _;
-    let bytes = match message {
-        Message::Traces(m) => m.encode_to_vec(),
-        Message::Logs(m) => m.encode_to_vec(),
-        Message::Metrics(m) => m.encode_to_vec(),
-    };
+pub(crate) fn body(message: &impl prost::Message, gzip: bool) -> Result<Body, String> {
+    let bytes = message.encode_to_vec();
     let bytes = if gzip {
         let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
         encoder.write_all(&bytes).map_err(|e| e.to_string())?;

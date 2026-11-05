@@ -63,6 +63,11 @@ fn simulation(job: &livekit_protocol::Job) -> Option<Simulation> {
     Some(Simulation { run_id: Some(run_id), job_id: field("jobId", "job_id") })
 }
 
+/// A protocol string field: empty is unset.
+fn known(value: &str) -> Option<String> {
+    (!value.is_empty()).then(|| value.to_owned())
+}
+
 fn nanos(at: f64) -> u64 {
     (at * 1e9) as u64
 }
@@ -95,10 +100,10 @@ pub(crate) fn start_job(
         exporter.open_job(
             key.clone(),
             JobIdentity {
-                room_id: room.sid.clone(),
-                job_id: job.id.clone(),
-                room_name: room.name.clone(),
-                agent_name: Some(job.agent_name.clone()).filter(|name| !name.is_empty()),
+                room_id: known(&room.sid),
+                job_id: known(&job.id),
+                room_name: known(&room.name),
+                agent_name: known(&job.agent_name),
             },
         );
     }
@@ -116,9 +121,9 @@ pub(crate) fn start_job(
     let started = tracer.now_nanos() as f64 / 1e9;
     let f = fields;
     let decl = JobEntrypoint {
-        dispatch_id: Some(job.dispatch_id.clone()).filter(|id| !id.is_empty()),
-        worker_id: Some(f.worker_id.clone()).filter(|id| !id.is_empty()),
-        agent_id: job.state.as_ref().map(|s| s.agent_id.clone()).filter(|id| !id.is_empty()),
+        dispatch_id: known(&job.dispatch_id),
+        worker_id: known(&f.worker_id),
+        agent_id: job.state.as_ref().and_then(|s| known(&s.agent_id)),
         accept_latency: gap(f.received_at, f.accepted_at),
         assignment_latency: gap(f.accepted_at, f.assigned_at),
         launch_latency: gap(f.assigned_at, f.launched_at),

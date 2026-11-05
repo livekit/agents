@@ -53,7 +53,7 @@ pub async fn export(
         for record in report::records(report, options) {
             exporter.record(Record::Log(record));
         }
-        if !exporter.flush_job(key, deadline.saturating_duration_since(clock.now())).await {
+        if !exporter.flush(Some(key), deadline.saturating_duration_since(clock.now())).await {
             log::warn!(target: "livekit.agents", "the session's telemetry was not all sent in time");
         }
         if exporter.job_disabled(key) {

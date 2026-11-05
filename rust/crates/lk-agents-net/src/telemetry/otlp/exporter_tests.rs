@@ -144,9 +144,9 @@ fn key(job: &str) -> JobKey {
 
 fn identity(job: &str) -> JobIdentity {
     JobIdentity {
-        room_id: format!("RM_{job}"),
-        job_id: job.to_owned(),
-        room_name: "private-room".into(),
+        room_id: Some(format!("RM_{job}")),
+        job_id: Some(job.to_owned()),
+        room_name: Some("private-room".into()),
         agent_name: Some("front-desk".into()),
     }
 }
@@ -222,7 +222,7 @@ async fn cloud_requests_carry_one_job_and_its_identity() {
         span: None,
         job: Some(key("AJ_1")),
     }));
-    assert!(exporter.flush(LIMIT).await);
+    assert!(exporter.flush(None, LIMIT).await);
     let requests = received(&mut rx);
     assert_eq!(requests.len(), 3, "two trace requests, one log request");
     for request in &requests {
@@ -301,14 +301,14 @@ async fn spans_are_held_until_the_recording_decision() {
     for _ in 0..=held {
         exporter.record(span("job_entrypoint", Some("AJ_3"), vec![]));
     }
-    assert!(exporter.flush(LIMIT).await);
+    assert!(exporter.flush(None, LIMIT).await);
     assert!(received(&mut rx).is_empty(), "nothing is sent before the decision");
     assert_eq!(exporter.diagnostics().dropped, 1, "the hold is bounded");
 
     exporter.register_job(&key("AJ_1"), recording());
     exporter.register_job(&key("AJ_2"), CloudRecording { traces: false, ..recording() });
     exporter.close_job(&key("AJ_3"), LIMIT).await;
-    assert!(exporter.flush(LIMIT).await);
+    assert!(exporter.flush(None, LIMIT).await);
     let requests = received(&mut rx);
     assert_eq!(requests.len(), 1);
     let traces: ExportTraceServiceRequest = requests[0].decode();
@@ -372,7 +372,7 @@ async fn each_destination_applies_its_own_content_policy() {
         exporter.open_job(key("AJ_1"), identity("AJ_1"));
         exporter.register_job(&key("AJ_1"), CloudRecording { redaction, ..recording() });
         exporter.record(sensitive());
-        assert!(exporter.flush(LIMIT).await);
+        assert!(exporter.flush(None, LIMIT).await);
 
         let cloud = only_span(&received(&mut cloud_rx)[0]);
         let a = &cloud.attributes;
@@ -433,11 +433,11 @@ async fn cloud_metrics_are_delta_per_job_and_application_metrics_cumulative() {
     exporter.record(counter(Some("AJ_1"), 2));
     exporter.register_job(&key("AJ_1"), recording());
     exporter.record(counter(Some("AJ_1"), 3));
-    assert!(exporter.flush(LIMIT).await);
+    assert!(exporter.flush(None, LIMIT).await);
     exporter.record(counter(Some("AJ_1"), 4));
     exporter.close_job(&key("AJ_1"), LIMIT).await;
     exporter.record(counter(Some("AJ_1"), 100));
-    assert!(exporter.flush(LIMIT).await);
+    assert!(exporter.flush(None, LIMIT).await);
 
     let cloud = received(&mut cloud_rx);
     assert!(cloud.iter().all(|r| r.path == "/observability/metrics/otlp/v0"));
@@ -471,7 +471,7 @@ async fn a_full_queue_drops_and_counts() {
         exporter.record(span("tts_request", None, vec![]));
     }
     assert_eq!(exporter.diagnostics().dropped, 2);
-    assert!(exporter.flush(LIMIT).await);
+    assert!(exporter.flush(None, LIMIT).await);
     let traces: ExportTraceServiceRequest = received(&mut rx)[0].decode();
     assert_eq!(traces.resource_spans[0].scope_spans[0].spans.len(), 3);
 
@@ -499,12 +499,12 @@ async fn recording_disabled_stops_that_jobs_export() {
         exporter.register_job(&key(job), recording());
     }
     exporter.record(span("agent_turn", Some("AJ_1"), vec![]));
-    assert!(exporter.flush(LIMIT).await);
+    assert!(exporter.flush(None, LIMIT).await);
     assert_eq!(received(&mut rx).len(), 1);
     exporter.record(span("agent_turn", Some("AJ_1"), vec![]));
     exporter.record(counter(Some("AJ_1"), 1));
     exporter.record(span("agent_turn", Some("AJ_2"), vec![]));
-    assert!(exporter.flush(LIMIT).await);
+    assert!(exporter.flush(None, LIMIT).await);
     let requests = received(&mut rx);
     assert_eq!(requests.len(), 1, "only the other job still exports");
     let traces: ExportTraceServiceRequest = requests[0].decode();
@@ -529,7 +529,7 @@ async fn the_application_endpoint_speaks_protobuf_with_its_headers() {
     proto.gzip = true;
     exporter.configure_app(Some(proto));
     exporter.record(span("second", None, vec![]));
-    assert!(exporter.flush(LIMIT).await);
+    assert!(exporter.flush(None, LIMIT).await);
 
     let first = received(&mut first_rx);
     assert_eq!(first.len(), 1);

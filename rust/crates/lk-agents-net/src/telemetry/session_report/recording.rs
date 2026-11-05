@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use futures_util::{StreamExt, stream};
+use futures_util::{StreamExt as _, stream};
 use livekit_protocol::MetricsRecordingHeader;
 use lk_agents_abi::Clock;
 use lk_agents_abi::errors::ApiError;
@@ -17,22 +17,9 @@ use prost::Message;
 use super::ReportAdmission;
 use super::UploadError;
 use crate::telemetry::otlp::CloudEndpoint;
-
-/// The 401 that means "the project owner turned recording off", matched case-insensitively.
-/// Other 401s must not disable uploads.
-const DISABLED_MARKERS: [&str; 2] = ["data recording is disabled", "disabled by owner"];
-
-/// Whether a Cloud response is the project's "recording disabled" refusal.
-pub(crate) fn is_disabled_response(status_code: u16, body: &[u8]) -> bool {
-    if status_code != 401 {
-        return false;
-    }
-    let text = String::from_utf8_lossy(body).to_lowercase();
-    DISABLED_MARKERS.iter().any(|m| text.contains(m))
-}
+use crate::telemetry::otlp::cloud::{Answer, Unsent};
 
 const CHUNK_BYTES: usize = 64 * 1024;
-const RESPONSE_BYTES: usize = 64 * 1024;
 /// Four attempts, bounded together by the caller's limit; a `RetryInfo` delay overrides the
 /// jittered backoff.
 const ATTEMPTS: RequestPolicy = RequestPolicy {
@@ -52,10 +39,6 @@ pub enum Uploaded {
     Disabled,
 }
 
-fn upload_error(err: impl std::fmt::Display) -> UploadError {
-    UploadError(err.to_string())
-}
-
 /// Uploads `recording` to `cloud` within `limit`, retrying refusals that carry a `RetryInfo` and
 /// transport failures. A missing audio file uploads the rest.
 pub async fn upload(
@@ -64,34 +47,19 @@ pub async fn upload(
     clock: &dyn Clock,
     limit: Duration,
 ) -> Result<Uploaded, UploadError> {
-    let url = format!("{}/observability/recordings/v0", cloud.base_url.trim_end_matches('/'));
-    let url = reqwest::Url::parse(&url).map_err(upload_error)?;
-    if !matches!(url.scheme(), "http" | "https") {
-        return Err(UploadError("observability endpoint must use HTTP or HTTPS".into()));
-    }
-    crate::tls::config().await.map_err(upload_error)?;
-    // One request per attempt: `attempts` is the retry loop.
-    let client = crate::tls::http_client_builder()
-        .map_err(upload_error)?
-        .retry(reqwest::retry::never())
-        .connect_timeout(Duration::from_secs(30))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(upload_error)?;
     let send = async {
         let _permit = ReportAdmission::process().upload().await;
-        attempts(&client, cloud, recording, url, clock).await
+        attempts(cloud, recording, clock).await
     };
     lk_agents_abi::timeout(clock, limit, send)
         .await
         .map_err(|_| UploadError("session recording upload deadline elapsed".into()))?
 }
 
+/// One request per attempt: this is the retry loop.
 async fn attempts(
-    client: &reqwest::Client,
     cloud: &CloudEndpoint,
     recording: &RecordingUpload,
-    url: reqwest::Url,
     clock: &dyn Clock,
 ) -> Result<Uploaded, UploadError> {
     let mut steps = Vec::new();
@@ -112,32 +80,27 @@ async fn attempts(
             attempts.wake(clock.now(), None, &mut steps);
             continue;
         };
-        let bearer = crate::token::observability_bearer(&cloud.api_key, &cloud.api_secret)
-            .map_err(upload_error)?;
         let body = Multipart::new(recording).await;
-        let result = client
-            .post(url.clone())
-            .bearer_auth(bearer)
-            .header(reqwest::header::CONTENT_TYPE, body.content_type())
-            .header(reqwest::header::CONTENT_LENGTH, body.len)
-            .body(body.into_body())
-            .send()
+        let result = cloud
+            .post("recordings/v0", |request| {
+                request
+                    .header(reqwest::header::CONTENT_TYPE, body.content_type())
+                    .header(reqwest::header::CONTENT_LENGTH, body.len)
+                    .body(body.into_body())
+            })
             .await;
         let (error, retry_after) = match result {
-            Ok(response) if response.status().is_success() => return Ok(Uploaded::Sent),
-            Ok(response) => {
-                let status = response.status().as_u16();
-                let body = response_body(response).await?;
-                if is_disabled_response(status, &body) {
-                    return Ok(Uploaded::Disabled);
-                }
+            Ok(Answer::Sent) => return Ok(Uploaded::Sent),
+            Ok(Answer::Disabled) => return Ok(Uploaded::Disabled),
+            Ok(Answer::Refused { status, body }) => {
                 failure = format!("recording upload failed with HTTP {status}");
                 let retry_after = retry_delay(&body);
                 let error = ApiError::from_http(&failure, status.into(), None);
                 let retryable = error.retryable || retry_after.is_some();
                 (error.with_retryable(retryable), retry_after)
             }
-            Err(err) => {
+            Err(Unsent::Setup(error)) => return Err(UploadError(error)),
+            Err(Unsent::Transport(err)) => {
                 failure = format!("recording upload transport failed: {err}");
                 let retryable = err.is_connect() || err.is_timeout() || err.is_body();
                 (ApiError::connection(Some(failure.clone())).with_retryable(retryable), None)
@@ -277,19 +240,6 @@ pub(super) fn encode_header(h: &RecordingHeader) -> Vec<u8> {
     .encode_to_vec()
 }
 
-async fn response_body(response: reqwest::Response) -> Result<Vec<u8>, UploadError> {
-    let mut body = Vec::new();
-    let mut chunks = response.bytes_stream();
-    while let Some(chunk) = chunks.next().await {
-        let chunk = chunk.map_err(upload_error)?;
-        if body.len().saturating_add(chunk.len()) > RESPONSE_BYTES {
-            return Err(UploadError("recording upload response exceeds the 64 KiB limit".into()));
-        }
-        body.extend_from_slice(&chunk);
-    }
-    Ok(body)
-}
-
 /// A `google.rpc.Status` body's `RetryInfo` delay, in milliseconds.
 pub(super) fn retry_delay(body: &[u8]) -> Option<u64> {
     let status = tonic_types::pb::Status::decode(body).ok()?;
@@ -308,15 +258,4 @@ pub(super) fn retry_delay(body: &[u8]) -> Option<u64> {
         }
     }
     None
-}
-
-#[cfg(test)]
-mod tests {
-    // Catches: any 401 disabling uploads, or the owner's refusal missed for its casing.
-    #[test]
-    fn only_the_owners_refusal_disables_uploads() {
-        assert!(super::is_disabled_response(401, b"Project data recording is DISABLED by owner"));
-        assert!(!super::is_disabled_response(401, b"bad token"));
-        assert!(!super::is_disabled_response(403, b"data recording is disabled"));
-    }
 }

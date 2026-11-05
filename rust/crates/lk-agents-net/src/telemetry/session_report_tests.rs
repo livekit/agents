@@ -230,9 +230,9 @@ fn job_exporter(url: &str) -> Exporter {
     exporter.configure_cloud(cloud(url));
     let key = JobKey("AJ_1".into());
     let identity = JobIdentity {
-        room_id: "RM_1".into(),
-        job_id: "AJ_1".into(),
-        room_name: "room".into(),
+        room_id: Some("RM_1".into()),
+        job_id: Some("AJ_1".into()),
+        room_name: Some("room".into()),
         agent_name: None,
     };
     exporter.open_job(key.clone(), identity);

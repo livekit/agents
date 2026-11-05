@@ -8,24 +8,23 @@ use crate::types::attributes;
 use crate::voice::rtc;
 
 /// The job's identity, stamped by the exporter on every span, log record and Cloud measurement of
-/// the job (and, without the room name, on the Cloud resource). Never set by a declaration; an
-/// empty value is omitted.
+/// the job (and, without the room name, on the Cloud resource). Never set by a declaration.
 #[derive(Attrs)]
 pub struct JobIdentity {
     #[attr(protocol::LK_ROOM_ID)]
-    pub lk_room_id: String,
+    pub lk_room_id: Option<String>,
     /// The room session id: Cloud's ingest, session view and Agent Insights find a job by it.
     #[attr("room_id")]
-    pub room_id: String,
+    pub room_id: Option<String>,
     #[attr(protocol::LK_JOB_ID)]
-    pub lk_job_id: String,
+    pub lk_job_id: Option<String>,
     /// The job id: Cloud's consumers find a job's records by it.
     #[attr("job_id")]
-    pub job_id: String,
+    pub job_id: Option<String>,
     #[attr(protocol::LK_PII_ROOM_NAME)]
-    pub room_name: Content<String>,
+    pub room_name: Option<Content<String>>,
     #[attr(protocol::LK_AGENT_NAME)]
-    pub agent_name: String,
+    pub agent_name: Option<String>,
     /// LiveKit Cloud agent id.
     #[attr("lk.cloud_agent_id")]
     pub cloud_agent_id: Option<String>,

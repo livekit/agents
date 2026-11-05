@@ -45,12 +45,12 @@ impl ProcessIdentity {
     }
 }
 
-/// A job's identity, known when the job is received.
+/// A job's identity, known when the job is received; `None` is unknown and never stamped.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct JobIdentity {
-    pub room_id: String,
-    pub job_id: String,
-    pub room_name: String,
+    pub room_id: Option<String>,
+    pub job_id: Option<String>,
+    pub room_name: Option<String>,
     pub agent_name: Option<String>,
 }
 
