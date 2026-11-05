@@ -47,10 +47,6 @@ impl InferenceModels for Models {
             .collect()
     }
 
-    fn inference_default_url(inference_url: Option<String>, server_url: Option<String>) -> String {
-        crate::headers::default_inference_url(inference_url.as_deref(), server_url.as_deref())
-    }
-
     fn local_models_init(vad: bool, eot: bool) -> bool {
         crate::local_models::init(vad, eot)
     }

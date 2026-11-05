@@ -772,8 +772,9 @@ pub struct RealtimeOptions {
 #[crate::host(record(module = "realtime_options", extract))]
 #[derive(Clone)]
 pub struct OpenAIRealtimeConfig {
+    /// The caller's key. Outside the gateway and Azure, `OPENAI_API_KEY` when not given; for
+    /// `azure_defaults` (`with_azure`), `AZURE_OPENAI_API_KEY`.
     pub api_key: Option<String>,
-    pub base_url: String,
     pub conn_options: ApiConnectOptions,
     pub options: RealtimeOptions,
     #[host(default = None)]
@@ -788,8 +789,16 @@ pub struct OpenAIRealtimeConfig {
     pub azure_deployment: Option<String>,
     #[host(default = None)]
     pub entra_token: Option<String>,
+    /// Azure's defaults and credential rules (`with_azure`).
     #[host(default = false)]
     pub azure_defaults: bool,
+    /// The caller's base URL. Not given: for Azure, `{azure_endpoint}/openai` with
+    /// `azure_endpoint` else `AZURE_OPENAI_ENDPOINT`; otherwise `OPENAI_BASE_URL`, else OpenAI's.
+    #[host(default = None)]
+    pub base_url: Option<String>,
+    /// `with_azure`'s endpoint; exclusive with `base_url`.
+    #[host(default = None)]
+    pub azure_endpoint: Option<String>,
     #[host(default = None)]
     pub api_secret: Option<String>,
     #[host(default = None)]

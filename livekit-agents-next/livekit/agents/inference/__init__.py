@@ -3,7 +3,6 @@ detectors, and the lazily loaded avatar and realtime integrations."""
 
 from __future__ import annotations
 
-import os
 import platform
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -26,7 +25,7 @@ from .._generated.inference_models import (
 )
 from .._generated.language import LanguageCode
 from .._generated.overlap import OverlappingSpeechEvent as OverlappingSpeechEvent
-from ..job import _server_setting
+from ..job import _server_setting, get_job_context
 from ..log import logger
 from ..metrics import EOTInferenceMetrics
 from ..types import (
@@ -36,7 +35,7 @@ from ..types import (
     NotGiven,
     NotGivenOr,
 )
-from ..utils import is_dev_mode, is_given, is_hosted, shortuuid
+from ..utils import is_dev_mode, is_given, is_hosted
 from ..version import __version__
 
 if TYPE_CHECKING:
@@ -51,9 +50,7 @@ HEADER_INFERENCE_PRIORITY = "X-LiveKit-Inference-Priority"
 
 def get_default_inference_url() -> str:
     """``LIVEKIT_INFERENCE_URL``, else the staging or production gateway by the server's URL."""
-    return _core.inference_default_url(
-        os.environ.get("LIVEKIT_INFERENCE_URL"), _server_setting("LIVEKIT_URL")
-    )
+    return _core.inference_url(_server_setting("LIVEKIT_URL"))
 
 
 def extract_quota_usage(headers: Mapping[str, str]) -> dict[str, str]:
@@ -64,34 +61,19 @@ def extract_quota_usage(headers: Mapping[str, str]) -> dict[str, str]:
 def default_api_key(explicit: str | None) -> str:
     """``explicit``, else ``LIVEKIT_INFERENCE_API_KEY``, else the server's key; ``""`` when
     nothing resolves."""
-    return _core.inference_resolve_api_key(
-        explicit, os.environ.get("LIVEKIT_INFERENCE_API_KEY"), _server_setting("LIVEKIT_API_KEY")
-    )
+    return _core.inference_api_key(explicit, _server_setting("LIVEKIT_API_KEY"))
 
 
 def default_api_secret(explicit: str | None) -> str:
     """The same ladder for the secret."""
-    return _core.inference_resolve_api_secret(
-        explicit,
-        os.environ.get("LIVEKIT_INFERENCE_API_SECRET"),
-        _server_setting("LIVEKIT_API_SECRET"),
-    )
+    return _core.inference_api_secret(explicit, _server_setting("LIVEKIT_API_SECRET"))
 
 
 def resolve_credentials(api_key: str | None, api_secret: str | None) -> tuple[str, str]:
     """The inference key and secret (``default_api_key``, ``default_api_secret``); raises
     when either is missing."""
-    key, secret = default_api_key(api_key), default_api_secret(api_secret)
-    if not key:
-        raise ValueError(
-            "api_key is required, either as argument or set LIVEKIT_API_KEY environmental variable"
-        )
-    if not secret:
-        raise ValueError(
-            "api_secret is required, either as argument or set LIVEKIT_API_SECRET environmental "
-            "variable"
-        )
-    return key, secret
+    creds = Credentials.resolve(None, api_key, api_secret)
+    return creds.api_key, creds.api_secret
 
 
 @dataclass(frozen=True)
@@ -109,37 +91,33 @@ class Credentials:
         api_key: NotGivenOr[str] | None,
         api_secret: NotGivenOr[str] | None,
     ) -> Credentials:
-        key, secret = resolve_credentials(
-            api_key if is_given(api_key) else None, api_secret if is_given(api_secret) else None
-        )
-        url = base_url if is_given(base_url) and base_url else get_default_inference_url()
-        return cls(base_url=url, api_key=key, api_secret=secret)
+        """Each given value, else the ladders and ``get_default_inference_url``; raises when the
+        key or the secret is missing."""
+        given = [v if is_given(v) else None for v in (base_url, api_key, api_secret)]
+        server = [_server_setting(f"LIVEKIT_{n}") for n in ("URL", "API_KEY", "API_SECRET")]
+        return cls(*_core.inference_credentials(*given, *server))
+
+
+_USER_AGENT = f"LiveKit Agents/{__version__} (python {platform.python_version()})"
 
 
 def get_inference_headers(*, inference_class: str | None = None) -> dict[str, str]:
     """The identification headers of an inference request: the SDK, and in a job its room, job,
     agent, worker token, the job's ``inference_headers`` and a fresh session id."""
-    headers = {"User-Agent": f"LiveKit Agents/{__version__} (python {platform.python_version()})"}
-    if inference_class:
-        headers[HEADER_INFERENCE_PRIORITY] = inference_class
-    try:
-        from ..job import get_job_context
-
-        ctx = get_job_context()
-    except RuntimeError:
-        return headers
-    if isinstance(room_sid := ctx.job.room.sid, str) and room_sid:
-        headers["X-LiveKit-Room-ID"] = room_sid
-    if isinstance(job_id := ctx.job.id, str) and job_id:
-        headers["X-LiveKit-Job-ID"] = job_id
-    if worker_token := os.getenv("LIVEKIT_WORKER_TOKEN"):
-        headers["X-LiveKit-Worker-Token"] = worker_token
-    # the local participant exists only once the room is connected
-    if ctx.room.isconnected() and isinstance(agent_sid := ctx.agent.sid, str) and agent_sid:
-        headers["X-LiveKit-Agent-ID"] = agent_sid
-    headers.update(ctx.inference_headers)
-    headers[HEADER_SESSION_ID] = shortuuid("inference_")
-    return headers
+    ctx = get_job_context(required=False)
+    if ctx is None:
+        return dict(_core.inference_identity_headers(_USER_AGENT, inference_class))
+    return dict(
+        _core.inference_identity_headers(
+            _USER_AGENT,
+            inference_class,
+            ctx.job.room.sid,
+            ctx.job.id,
+            # the local participant exists only once the room is connected
+            ctx.agent.sid if ctx.room.isconnected() else None,
+            list(ctx.inference_headers.items()),
+        )
+    )
 
 
 def _silero_model() -> Any:

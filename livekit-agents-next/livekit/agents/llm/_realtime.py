@@ -7,7 +7,6 @@ class keeps the plugin's constructor and hands its arguments over as given.
 
 from __future__ import annotations
 
-import os
 from typing import Any, Literal
 
 from pydantic import BaseModel
@@ -72,6 +71,7 @@ class RealtimeModel(llm_realtime.RealtimeModel):
         max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         _azure_defaults: bool = False,
+        _azure_endpoint: str | None = None,
     ) -> None:
         """
         Initialize a Realtime model client for OpenAI or Azure OpenAI.
@@ -98,23 +98,6 @@ class RealtimeModel(llm_realtime.RealtimeModel):
         Raises:
             ValueError: If OPENAI_API_KEY is missing in non-Azure mode, or if Azure endpoint cannot be determined when in Azure mode.
         """
-        is_azure = entra_token is not None or azure_deployment is not None
-
-        if not is_azure:
-            api_key = api_key or os.environ.get("OPENAI_API_KEY")
-        if api_key is None and not is_azure:
-            raise ValueError(
-                "The api_key client option must be set either by passing api_key "
-                "to the client or by setting the OPENAI_API_KEY environment variable"
-            )
-        if not base_url and is_azure:
-            if (azure_endpoint := os.getenv("AZURE_OPENAI_ENDPOINT")) is None:
-                raise ValueError(
-                    "Missing Azure endpoint. Please pass base_url "
-                    "or set AZURE_OPENAI_ENDPOINT environment variable."
-                )
-            base_url = f"{azure_endpoint.rstrip('/')}/openai"
-
         label = (
             _PLUGIN_LABEL
             if type(self) is RealtimeModel
@@ -124,8 +107,8 @@ class RealtimeModel(llm_realtime.RealtimeModel):
             OpenAIRealtimeConfig(
                 dialect=self._dialect,
                 api_key=api_key,
-                base_url=(base_url if is_given(base_url) else "")
-                or os.getenv("OPENAI_BASE_URL", OPENAI_BASE_URL),
+                base_url=base_url if is_given(base_url) else None,
+                azure_endpoint=_azure_endpoint,
                 model=model,
                 voice=voice,
                 modalities=list[str](modalities) if modalities else None,
@@ -203,23 +186,6 @@ class RealtimeModel(llm_realtime.RealtimeModel):
         Raises:
             ValueError: If credentials are missing, Azure endpoint cannot be determined, or both `base_url` and `azure_endpoint` are provided.
         """
-        api_key = api_key or os.getenv("AZURE_OPENAI_API_KEY")
-        if api_key is None and entra_token is None:
-            raise ValueError(
-                "Missing credentials. Please pass one of `api_key`, `entra_token`, "
-                "or the `AZURE_OPENAI_API_KEY` environment variable."
-            )
-        if base_url is None:
-            azure_endpoint = azure_endpoint or os.getenv("AZURE_OPENAI_ENDPOINT")
-            if azure_endpoint is None:
-                raise ValueError(
-                    "Missing Azure endpoint. Please pass the `azure_endpoint` "
-                    "parameter or set the `AZURE_OPENAI_ENDPOINT` environment variable."
-                )
-            base_url = f"{azure_endpoint.rstrip('/')}/openai"
-        elif azure_endpoint is not None:
-            raise ValueError("base_url and azure_endpoint are mutually exclusive")
-
         return RealtimeModel(
             voice=voice,
             modalities=modalities,
@@ -232,9 +198,10 @@ class RealtimeModel(llm_realtime.RealtimeModel):
             api_key=api_key,
             azure_deployment=azure_deployment,
             entra_token=entra_token,
-            base_url=base_url,
+            base_url=NOT_GIVEN if base_url is None else base_url,
             max_session_duration=max_session_duration,
             _azure_defaults=True,
+            _azure_endpoint=azure_endpoint,
         )
 
     def update_options(

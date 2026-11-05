@@ -1,6 +1,7 @@
 //! Credential resolution for the inference gateway and its host constructors.
 
 use lk_agents_abi::errors::ApiError;
+use lk_agents_abi::inference::InvalidOption;
 
 /// `api_key if is_given(api_key) else os.getenv("LIVEKIT_INFERENCE_API_KEY",
 /// os.getenv("LIVEKIT_API_KEY", ""))`. A set-but-empty `LIVEKIT_INFERENCE_API_KEY` shadows
@@ -47,24 +48,72 @@ pub fn resolve_api_secret(
     Ok(secret)
 }
 
-/// The two ladders as the host calls them.
+fn env(name: &str) -> Option<String> {
+    std::env::var(name).ok()
+}
+
+/// The ladders, the gateway URL and the identification headers as the host calls them.
 pub struct Credentials;
 
 impl lk_agents_abi::inference::InferenceCredentials for Credentials {
-    fn inference_resolve_api_key(
-        explicit: Option<String>,
-        inference: Option<String>,
-        server: Option<String>,
-    ) -> String {
+    fn inference_api_key(explicit: Option<String>, server: Option<String>) -> String {
+        let inference = env("LIVEKIT_INFERENCE_API_KEY");
         resolve_credential(explicit.as_deref(), inference.as_deref(), server.as_deref())
     }
 
-    fn inference_resolve_api_secret(
-        explicit: Option<String>,
-        inference: Option<String>,
-        server: Option<String>,
-    ) -> String {
+    fn inference_api_secret(explicit: Option<String>, server: Option<String>) -> String {
+        let inference = env("LIVEKIT_INFERENCE_API_SECRET");
         resolve_credential(explicit.as_deref(), inference.as_deref(), server.as_deref())
+    }
+
+    fn inference_url(server_url: Option<String>) -> String {
+        let inference = env("LIVEKIT_INFERENCE_URL");
+        crate::headers::default_inference_url(inference.as_deref(), server_url.as_deref())
+    }
+
+    fn inference_credentials(
+        base_url: Option<String>,
+        api_key: Option<String>,
+        api_secret: Option<String>,
+        server_url: Option<String>,
+        server_api_key: Option<String>,
+        server_api_secret: Option<String>,
+    ) -> Result<(String, String, String), InvalidOption> {
+        let invalid = |error: ApiError| InvalidOption(error.message);
+        let inference = env("LIVEKIT_INFERENCE_API_KEY");
+        let key =
+            resolve_api_key(api_key.as_deref(), inference.as_deref(), server_api_key.as_deref())
+                .map_err(invalid)?;
+        let inference = env("LIVEKIT_INFERENCE_API_SECRET");
+        let secret = resolve_api_secret(
+            api_secret.as_deref(),
+            inference.as_deref(),
+            server_api_secret.as_deref(),
+        )
+        .map_err(invalid)?;
+        let url = match base_url.filter(|url| !url.is_empty()) {
+            Some(url) => url,
+            None => Self::inference_url(server_url),
+        };
+        Ok((url, key, secret))
+    }
+
+    fn inference_identity_headers(
+        user_agent: String,
+        inference_class: Option<String>,
+        room_sid: Option<String>,
+        job_id: Option<String>,
+        agent_sid: Option<String>,
+        job_headers: Option<Vec<(String, String)>>,
+    ) -> Vec<(String, String)> {
+        let job = job_headers.map(|headers| crate::headers::JobIdentity {
+            room_sid,
+            job_id,
+            agent_sid,
+            worker_token: env("LIVEKIT_WORKER_TOKEN"),
+            headers,
+        });
+        crate::headers::identity_headers(&user_agent, inference_class.as_deref(), job).into_vec()
     }
 }
 

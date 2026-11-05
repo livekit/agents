@@ -96,6 +96,48 @@ fn native_headers(user_agent: &str, inference_class: Option<&str>) -> Headers {
     headers
 }
 
+/// The job an inference request is made for, as the host reads its context.
+#[derive(Debug, Clone, Default)]
+pub struct JobIdentity {
+    pub room_sid: Option<String>,
+    pub job_id: Option<String>,
+    /// The agent participant's sid, once the room is connected.
+    pub agent_sid: Option<String>,
+    /// `LIVEKIT_WORKER_TOKEN`.
+    pub worker_token: Option<String>,
+    /// The job's `inference_headers`, which override the ones above.
+    pub headers: Vec<(String, String)>,
+}
+
+/// `get_inference_headers()`: [`native_headers`] under the host's `user_agent`, then in a job its
+/// identity, its own headers and a fresh session id.
+pub fn identity_headers(
+    user_agent: &str,
+    inference_class: Option<&str>,
+    job: Option<JobIdentity>,
+) -> Headers {
+    let mut headers = native_headers(user_agent, inference_class);
+    let Some(job) = job else {
+        return headers;
+    };
+    let nonempty = |value: Option<String>| value.filter(|value| !value.is_empty());
+    for (name, value) in [
+        ("X-LiveKit-Room-ID", nonempty(job.room_sid)),
+        ("X-LiveKit-Job-ID", nonempty(job.job_id)),
+        ("X-LiveKit-Worker-Token", nonempty(job.worker_token)),
+        ("X-LiveKit-Agent-ID", nonempty(job.agent_sid)),
+    ] {
+        if let Some(value) = value {
+            headers.set(name, value);
+        }
+    }
+    for (name, value) in job.headers {
+        headers.set(name, value);
+    }
+    headers.set(HEADER_SESSION_ID, crate::ids::shortuuid(crate::ids::SESSION_ID_PREFIX));
+    headers
+}
+
 /// Identification (finished by the host from the job context, else [`native_headers`]) and the
 /// pinned provider.
 pub fn identification_headers(
@@ -194,6 +236,37 @@ mod tests {
         let h = native_headers("ua", None);
         assert_eq!(h.iter().count(), 1);
         assert_eq!(h.get(HEADER_USER_AGENT), Some("ua"));
+    }
+
+    // Catches: job headers outside a job, an empty id sent, or the job's own headers not winning.
+    #[test]
+    fn a_job_adds_its_nonempty_identity_its_headers_and_a_session_id() {
+        let job = JobIdentity {
+            room_sid: Some("RM_1".into()),
+            job_id: Some(String::new()),
+            agent_sid: Some("PA_1".into()),
+            worker_token: None,
+            headers: vec![
+                ("X-LiveKit-Room-ID".into(), "RM_2".into()),
+                ("X-Extra".into(), "1".into()),
+            ],
+        };
+        let h = identity_headers("ua", Some("low"), Some(job));
+        let names: Vec<&str> = h.iter().map(|(k, _)| k).collect();
+        assert_eq!(
+            names,
+            [
+                HEADER_USER_AGENT,
+                HEADER_INFERENCE_PRIORITY,
+                "X-LiveKit-Room-ID",
+                "X-LiveKit-Agent-ID",
+                "X-Extra",
+                HEADER_SESSION_ID
+            ]
+        );
+        assert_eq!(h.get("X-LiveKit-Room-ID"), Some("RM_2"));
+        assert!(h.get(HEADER_SESSION_ID).is_some_and(|id| id.starts_with("inference_")));
+        assert_eq!(identity_headers("ua", None, None).iter().count(), 1);
     }
 
     // Catches: R2b on `if inference_class:`.

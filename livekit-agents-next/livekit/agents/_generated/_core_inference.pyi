@@ -19,31 +19,48 @@ from .stt import STTCapabilities
 from .tts import TTSCapabilities
 from .turn_events import TurnDetectorModel
 
-def inference_resolve_api_key(
-    explicit: str | None = None,
-    inference: str | None = None,
-    server: str | None = None,
-) -> str:
-    """`explicit`, else `inference` (`LIVEKIT_INFERENCE_API_KEY`), else `server` (the server's
-    `LIVEKIT_API_KEY`); a set but empty `inference` shadows `server`. The host reads the
-    environment.
+def inference_api_key(explicit: str | None = None, server: str | None = None) -> str:
+    """`explicit`, else `LIVEKIT_INFERENCE_API_KEY`, else `server`; `""` when nothing resolves. A
+    set but empty `LIVEKIT_INFERENCE_API_KEY` shadows `server`.
     """
 
-def inference_resolve_api_secret(
-    explicit: str | None = None,
-    inference: str | None = None,
-    server: str | None = None,
-) -> str:
-    """The same ladder for the secret."""
+def inference_api_secret(explicit: str | None = None, server: str | None = None) -> str:
+    """The same ladder for the secret, over `LIVEKIT_INFERENCE_API_SECRET`."""
+
+def inference_url(server_url: str | None = None) -> str:
+    """A nonempty `LIVEKIT_INFERENCE_URL`, then staging if `server_url` names the staging cloud,
+    then production.
+    """
+
+def inference_credentials(
+    base_url: str | None,
+    api_key: str | None,
+    api_secret: str | None,
+    server_url: str | None,
+    server_api_key: str | None,
+    server_api_secret: str | None,
+) -> tuple[str, str, str]:
+    """The gateway's URL (a nonempty `base_url`, else [`Self::inference_url`]) and key pair (the
+    ladders above); a `ValueError` when the key or the secret does not resolve.
+    """
+
+def inference_identity_headers(
+    user_agent: str,
+    inference_class: str | None = None,
+    room_sid: str | None = None,
+    job_id: str | None = None,
+    agent_sid: str | None = None,
+    job_headers: Sequence[tuple[str, str]] | None = None,
+) -> list[tuple[str, str]]:
+    """An inference request's identification headers, in order: `user_agent`, the priority of a
+    nonempty `inference_class`, and in a job (`job_headers` given) its nonempty room, job and
+    agent ids, `LIVEKIT_WORKER_TOKEN` when set, the job's `job_headers` (overriding any of
+    these) and a fresh session id.
+    """
 
 def inference_quota_usage(headers: Sequence[tuple[str, str]]) -> list[tuple[str, str]]:
     """The gateway's quota dimensions among a response's header pairs (names case-insensitive);
     an empty value is not reported.
-    """
-
-def inference_default_url(inference_url: str | None = None, server_url: str | None = None) -> str:
-    """`inference_url` (`LIVEKIT_INFERENCE_URL`), then staging if the server's `LIVEKIT_URL` names
-    the staging cloud, then production. The host reads the environment.
     """
 
 def local_models_init(vad: bool, eot: bool) -> bool:

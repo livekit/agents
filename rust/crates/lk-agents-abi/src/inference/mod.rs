@@ -7,28 +7,57 @@ pub mod models;
 
 use serde_json::Value;
 
-/// The inference gateway's credential ladders (`inference/_utils.py`). Each returns `""` when
-/// nothing resolves: the caller raises with its own message, and tests the explicit value
-/// (truthiness vs `is_given`) itself.
+/// The inference gateway's credentials and identification. The core reads
+/// `LIVEKIT_INFERENCE_URL`, `LIVEKIT_INFERENCE_API_KEY`, `LIVEKIT_INFERENCE_API_SECRET` and
+/// `LIVEKIT_WORKER_TOKEN` from the environment; `server_*` are the server's `LIVEKIT_URL` and key
+/// pair as the host resolves them (in a job, its `AgentServer`'s settings).
 #[crate::host(functions)]
 pub trait InferenceCredentials {
-    /// `explicit`, else `inference` (`LIVEKIT_INFERENCE_API_KEY`), else `server` (the server's
-    /// `LIVEKIT_API_KEY`); a set but empty `inference` shadows `server`. The host reads the
-    /// environment.
+    /// `explicit`, else `LIVEKIT_INFERENCE_API_KEY`, else `server`; `""` when nothing resolves. A
+    /// set but empty `LIVEKIT_INFERENCE_API_KEY` shadows `server`.
     #[host(function)]
-    fn inference_resolve_api_key(
+    fn inference_api_key(
         #[host(default = None)] explicit: Option<String>,
-        #[host(default = None)] inference: Option<String>,
         #[host(default = None)] server: Option<String>,
     ) -> String;
 
-    /// The same ladder for the secret.
+    /// The same ladder for the secret, over `LIVEKIT_INFERENCE_API_SECRET`.
     #[host(function)]
-    fn inference_resolve_api_secret(
+    fn inference_api_secret(
         #[host(default = None)] explicit: Option<String>,
-        #[host(default = None)] inference: Option<String>,
         #[host(default = None)] server: Option<String>,
     ) -> String;
+
+    /// A nonempty `LIVEKIT_INFERENCE_URL`, then staging if `server_url` names the staging cloud,
+    /// then production.
+    #[host(function)]
+    fn inference_url(#[host(default = None)] server_url: Option<String>) -> String;
+
+    /// The gateway's URL (a nonempty `base_url`, else [`Self::inference_url`]) and key pair (the
+    /// ladders above); a `ValueError` when the key or the secret does not resolve.
+    #[host(function)]
+    fn inference_credentials(
+        base_url: Option<String>,
+        api_key: Option<String>,
+        api_secret: Option<String>,
+        server_url: Option<String>,
+        server_api_key: Option<String>,
+        server_api_secret: Option<String>,
+    ) -> Result<(String, String, String), InvalidOption>;
+
+    /// An inference request's identification headers, in order: `user_agent`, the priority of a
+    /// nonempty `inference_class`, and in a job (`job_headers` given) its nonempty room, job and
+    /// agent ids, `LIVEKIT_WORKER_TOKEN` when set, the job's `job_headers` (overriding any of
+    /// these) and a fresh session id.
+    #[host(function)]
+    fn inference_identity_headers(
+        user_agent: String,
+        #[host(default = None)] inference_class: Option<String>,
+        #[host(default = None)] room_sid: Option<String>,
+        #[host(default = None)] job_id: Option<String>,
+        #[host(default = None)] agent_sid: Option<String>,
+        #[host(default = None)] job_headers: Option<Vec<(String, String)>>,
+    ) -> Vec<(String, String)>;
 }
 /// The gateway's model tables, request headers and local model registry the host reads: pure
 /// lookups, safe in a forked child.
@@ -38,14 +67,6 @@ pub trait InferenceModels {
     /// an empty value is not reported.
     #[host(function)]
     fn inference_quota_usage(headers: Vec<(String, String)>) -> Vec<(String, String)>;
-
-    /// `inference_url` (`LIVEKIT_INFERENCE_URL`), then staging if the server's `LIVEKIT_URL` names
-    /// the staging cloud, then production. The host reads the environment.
-    #[host(function)]
-    fn inference_default_url(
-        #[host(default = None)] inference_url: Option<String>,
-        #[host(default = None)] server_url: Option<String>,
-    ) -> String;
 
     /// Loads the native models' weights; `false` when no provider is linked.
     #[host(function)]

@@ -9889,9 +9889,6 @@ pub mod realtime_options {
                     (v.extract::<::std::string::String>()).map(Some)
                 }
             })?,
-            base_url: crate::py_values::attr_with(obj, "OpenAIRealtimeConfig", "base_url", |v| {
-                v.extract::<::std::string::String>()
-            })?,
             conn_options: crate::py_values::attr_with(
                 obj,
                 "OpenAIRealtimeConfig",
@@ -9977,6 +9974,25 @@ pub mod realtime_options {
                 "OpenAIRealtimeConfig",
                 "azure_defaults",
                 |v| v.extract::<bool>(),
+            )?,
+            base_url: crate::py_values::attr_with(obj, "OpenAIRealtimeConfig", "base_url", |v| {
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (v.extract::<::std::string::String>()).map(Some)
+                }
+            })?,
+            azure_endpoint: crate::py_values::attr_with(
+                obj,
+                "OpenAIRealtimeConfig",
+                "azure_endpoint",
+                |v| {
+                    if v.is_none() {
+                        Ok(None)
+                    } else {
+                        (v.extract::<::std::string::String>()).map(Some)
+                    }
+                },
             )?,
             api_secret: crate::py_values::attr_with(
                 obj,

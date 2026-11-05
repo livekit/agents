@@ -269,10 +269,12 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<evals::CoreJudgeRunner>()?;
     m.add_function(wrap_pyfunction!(evals::_core_evaluation_score, m)?)?;
     m.add_function(wrap_pyfunction!(evals::_core_judge_tool_schemas, m)?)?;
-    m.add_function(wrap_pyfunction!(inference::inference_resolve_api_key, m)?)?;
-    m.add_function(wrap_pyfunction!(inference::inference_resolve_api_secret, m)?)?;
+    m.add_function(wrap_pyfunction!(inference::inference_api_key, m)?)?;
+    m.add_function(wrap_pyfunction!(inference::inference_api_secret, m)?)?;
+    m.add_function(wrap_pyfunction!(inference::inference_url, m)?)?;
+    m.add_function(wrap_pyfunction!(inference::inference_credentials, m)?)?;
+    m.add_function(wrap_pyfunction!(inference::inference_identity_headers, m)?)?;
     m.add_function(wrap_pyfunction!(inference::inference_quota_usage, m)?)?;
-    m.add_function(wrap_pyfunction!(inference::inference_default_url, m)?)?;
     m.add_function(wrap_pyfunction!(inference::local_models_init, m)?)?;
     m.add_function(wrap_pyfunction!(inference::tts_parse_model_string, m)?)?;
     m.add_function(wrap_pyfunction!(inference::tts_has_aligned_transcript, m)?)?;

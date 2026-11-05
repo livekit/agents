@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 
 use super::session::{Auth, Connect, OpenAIRealtime};
 use super::wire::Azure;
-use crate::realtime::dialect::{Dialect, INFERENCE, TurnDetection};
+use crate::realtime::dialect::{Dialect, INFERENCE, OPENAI, TurnDetection};
 use crate::realtime::machine::{OptionsPatch, SessionOptions};
 use lk_agents_net::env::ProcessEnv;
 
@@ -43,6 +43,56 @@ fn patch(options: RealtimeOptions) -> OptionsPatch {
     }
 }
 
+/// The caller's key and base URL, with the environment's defaults: `with_azure`'s rules first
+/// (`azure_defaults`), then the constructor's. Errors are the messages a caller sees.
+fn endpoint(
+    config: &OpenAIRealtimeConfig,
+    env: impl Fn(&str) -> Option<String>,
+) -> Result<(Option<String>, String), &'static str> {
+    let nonempty = |value: &Option<String>| value.clone().filter(|value| !value.is_empty());
+    let azure_base = |endpoint: String| format!("{}/openai", endpoint.trim_end_matches('/'));
+    let mut api_key = config.api_key.clone();
+    let mut base_url = config.base_url.clone();
+    if config.azure_defaults {
+        api_key = nonempty(&api_key).or_else(|| env("AZURE_OPENAI_API_KEY"));
+        if api_key.is_none() && config.entra_token.is_none() {
+            return Err(
+                "Missing credentials. Please pass one of `api_key`, `entra_token`, or the \
+                 `AZURE_OPENAI_API_KEY` environment variable.",
+            );
+        }
+        if base_url.is_none() {
+            let endpoint =
+                nonempty(&config.azure_endpoint).or_else(|| env("AZURE_OPENAI_ENDPOINT")).ok_or(
+                    "Missing Azure endpoint. Please pass the `azure_endpoint` parameter or set the \
+                     `AZURE_OPENAI_ENDPOINT` environment variable.",
+                )?;
+            base_url = Some(azure_base(endpoint));
+        } else if config.azure_endpoint.is_some() {
+            return Err("base_url and azure_endpoint are mutually exclusive");
+        }
+    }
+    let is_azure = config.entra_token.is_some() || config.azure_deployment.is_some();
+    if !is_azure {
+        api_key = nonempty(&api_key).or_else(|| env(OPENAI.api_key_env));
+        if api_key.is_none() {
+            return Err("The api_key client option must be set either by passing api_key to the \
+                 client or by setting the OPENAI_API_KEY environment variable");
+        }
+    }
+    if is_azure && nonempty(&base_url).is_none() {
+        let endpoint = env("AZURE_OPENAI_ENDPOINT").ok_or(
+            "Missing Azure endpoint. Please pass base_url or set AZURE_OPENAI_ENDPOINT \
+             environment variable.",
+        )?;
+        base_url = Some(azure_base(endpoint));
+    }
+    let base_url = nonempty(&base_url).unwrap_or_else(|| {
+        env("OPENAI_BASE_URL").unwrap_or_else(|| OPENAI.default_base_url.to_owned())
+    });
+    Ok((api_key, base_url))
+}
+
 impl OpenAIRealtimeModel for OpenAIRealtime {
     type Env = ProcessEnv;
 
@@ -50,12 +100,21 @@ impl OpenAIRealtimeModel for OpenAIRealtime {
         env: &ProcessEnv,
         config: OpenAIRealtimeConfig,
     ) -> Result<Self, RealtimeConfigurationError> {
-        let dialect = match config.dialect {
-            Some(name) => name.parse().map_err(|e: crate::realtime::dialect::UnknownDialect| {
-                RealtimeConfigurationError::Invalid(e.to_string())
-            })?,
-            None => Dialect::for_base_url(&config.base_url),
+        let named = config
+            .dialect
+            .as_deref()
+            .map(str::parse::<Dialect>)
+            .transpose()
+            .map_err(|e| RealtimeConfigurationError::Invalid(e.to_string()))?;
+        // the gateway's caller resolved its own credentials and URL
+        let (api_key, base_url) = match &named {
+            Some(dialect) if dialect.provider_label == INFERENCE.provider_label => {
+                (config.api_key.clone(), config.base_url.clone().unwrap_or_default())
+            }
+            _ => endpoint(&config, |name| std::env::var(name).ok())
+                .map_err(|error| RealtimeConfigurationError::Invalid(error.to_owned()))?,
         };
+        let dialect = named.unwrap_or_else(|| Dialect::for_base_url(&base_url));
         let is_inference = dialect.provider_label == INFERENCE.provider_label;
         let mut opts = SessionOptions::from_dialect(&dialect, false);
         if let Some(model) = config.model {
@@ -103,19 +162,19 @@ impl OpenAIRealtimeModel for OpenAIRealtime {
         let is_azure = config.azure_deployment.is_some() || config.entra_token.is_some();
         let auth = if is_inference {
             Auth::Inference {
-                api_key: config.api_key.unwrap_or_default(),
+                api_key: api_key.unwrap_or_default(),
                 api_secret: config.api_secret.unwrap_or_default(),
                 provider: config.inference_provider,
                 inference_class: config.inference_class,
                 identity: Default::default(),
             }
         } else if is_azure {
-            Auth::Azure { api_key: config.api_key, entra_token: config.entra_token }
+            Auth::Azure { api_key, entra_token: config.entra_token }
         } else {
-            Auth::Bearer(config.api_key.unwrap_or_default())
+            Auth::Bearer(api_key.unwrap_or_default())
         };
         let connect = Connect {
-            base_url: config.base_url,
+            base_url,
             azure: is_azure.then_some(Azure { deployment: config.azure_deployment }),
             auth,
             conn: config.conn_options,
@@ -161,6 +220,77 @@ impl OpenAIRealtimeModel for OpenAIRealtime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn config(api_key: Option<&str>, base_url: Option<&str>) -> OpenAIRealtimeConfig {
+        OpenAIRealtimeConfig {
+            api_key: api_key.map(str::to_owned),
+            conn_options: Default::default(),
+            options: RealtimeOptions::default(),
+            dialect: None,
+            model: None,
+            voice: None,
+            modalities: None,
+            azure_deployment: None,
+            entra_token: None,
+            azure_defaults: false,
+            base_url: base_url.map(str::to_owned),
+            azure_endpoint: None,
+            api_secret: None,
+            inference_provider: None,
+            inference_class: None,
+            label: None,
+        }
+    }
+
+    fn vars(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> + use<> {
+        let pairs: Vec<(String, String)> =
+            pairs.iter().map(|(k, v)| ((*k).to_owned(), (*v).to_owned())).collect();
+        move |name| pairs.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone())
+    }
+
+    // Catches: the OpenAI key or URL not falling back to the environment, an empty key counted
+    // as given, or a missing key accepted.
+    #[test]
+    fn openai_takes_its_key_and_url_from_the_environment_when_not_given() {
+        let env = vars(&[("OPENAI_API_KEY", "env-key"), ("OPENAI_BASE_URL", "https://proxy/v1")]);
+        assert_eq!(
+            endpoint(&config(Some(""), None), &env).unwrap(),
+            (Some("env-key".into()), "https://proxy/v1".into())
+        );
+        assert_eq!(
+            endpoint(&config(Some("mine"), Some("https://x/v1")), &env).unwrap(),
+            (Some("mine".into()), "https://x/v1".into())
+        );
+        assert_eq!(
+            endpoint(&config(Some("k"), None), vars(&[])).unwrap().1,
+            OPENAI.default_base_url
+        );
+        assert!(endpoint(&config(None, None), vars(&[])).unwrap_err().contains("OPENAI_API_KEY"));
+    }
+
+    // Catches: Azure reading OPENAI_API_KEY, its endpoint not joined under `/openai`, or
+    // `with_azure` accepting both a base URL and an endpoint.
+    #[test]
+    fn azure_builds_its_url_from_the_endpoint_and_keeps_its_own_key() {
+        let env = vars(&[("OPENAI_API_KEY", "openai"), ("AZURE_OPENAI_ENDPOINT", "https://az/")]);
+        let mut azure = config(None, None);
+        azure.azure_deployment = Some("d".into());
+        assert_eq!(endpoint(&azure, &env).unwrap(), (None, "https://az/openai".into()));
+        assert!(endpoint(&azure, vars(&[])).unwrap_err().contains("pass base_url"));
+
+        azure.azure_defaults = true;
+        assert!(endpoint(&azure, &env).unwrap_err().starts_with("Missing credentials"));
+        let env =
+            vars(&[("AZURE_OPENAI_API_KEY", "az-key"), ("AZURE_OPENAI_ENDPOINT", "https://az")]);
+        assert_eq!(
+            endpoint(&azure, &env).unwrap(),
+            (Some("az-key".into()), "https://az/openai".into())
+        );
+        azure.azure_endpoint = Some("https://mine//".into());
+        assert_eq!(endpoint(&azure, &env).unwrap().1, "https://mine/openai");
+        azure.base_url = Some("https://b".into());
+        assert!(endpoint(&azure, &env).unwrap_err().contains("mutually exclusive"));
+    }
 
     // Catches: an omitted option and an explicit `None` collapsing into one another, which either
     // clears a setting the caller left alone or keeps one the caller cleared.

@@ -44,7 +44,9 @@ class RealtimeOptions:
 @dataclass(kw_only=True, slots=True)
 class OpenAIRealtimeConfig:
     api_key: str | None
-    base_url: str
+    """The caller's key. Outside the gateway and Azure, `OPENAI_API_KEY` when not given; for
+    `azure_defaults` (`with_azure`), `AZURE_OPENAI_API_KEY`.
+    """
     conn_options: APIConnectOptions
     options: RealtimeOptions
     dialect: str | None = None
@@ -54,6 +56,13 @@ class OpenAIRealtimeConfig:
     azure_deployment: str | None = None
     entra_token: str | None = None
     azure_defaults: bool = False
+    """Azure's defaults and credential rules (`with_azure`)."""
+    base_url: str | None = None
+    """The caller's base URL. Not given: for Azure, `{azure_endpoint}/openai` with
+    `azure_endpoint` else `AZURE_OPENAI_ENDPOINT`; otherwise `OPENAI_BASE_URL`, else OpenAI's.
+    """
+    azure_endpoint: str | None = None
+    """`with_azure`'s endpoint; exclusive with `base_url`."""
     api_secret: str | None = None
     inference_provider: str | None = None
     inference_class: str | None = None
