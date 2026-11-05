@@ -102,3 +102,31 @@ class TestCloudStreamSendOrdering:
             assert start_ids == [first_id, second_id]
         finally:
             await stream.aclose()
+
+
+class TestCloudStreamTurnSamples:
+    """``inference_start`` carries the user turn length, counted like the local transport."""
+
+    async def test_turn_samples_count_from_the_turn_start(self) -> None:
+        stream, fake_ws, transport = make_stream(connect_script=[None])
+        try:
+            await wait_until_connected(transport)
+            transport.push_frame(_pcm_frame(8000))  # silence before the user speaks
+            transport.push_frame(_pcm_frame(4000))
+            transport.on_start_of_turn(0.25)
+            for _ in range(100):
+                transport.push_frame(_pcm_frame(1600))
+            transport.run_inference("past-the-window")
+            transport.flush()
+            transport.push_frame(_pcm_frame(320))
+            transport.run_inference("after-flush")
+            await drain_send_queue(transport)
+
+            starts = {
+                m.inference_start.request_id: m.inference_start.turn_samples
+                for m in fake_ws.sent
+                if m.WhichOneof("message") == "inference_start"
+            }
+            assert starts == {"past-the-window": 4000 + 100 * 1600, "after-flush": 320}
+        finally:
+            await stream.aclose()

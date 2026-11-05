@@ -60,6 +60,9 @@ __all__ = [
 ]
 
 
+_MAX_UINT32 = 2**32 - 1
+
+
 @dataclass
 class _CloudTransportOptions:
     """Cloud-WebSocket-specific options. Held separately from
@@ -91,6 +94,9 @@ class _CloudTransport:
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._session_id: str | None = None
         self._num_retries = 0
+        # the user turn length so far, counted since the last flush, as the local transport
+        # counts it; sent with each inference_start
+        self._turn_samples = 0
 
         self._send_ch: aio.Chan[ClientMessage] | None = None
         self._stream_ref: weakref.ref[_BaseStreamingTurnDetectorStream] | None = None
@@ -103,12 +109,20 @@ class _CloudTransport:
         self._stream_ref = weakref.ref(stream)
 
     def run_inference(self, request_id: str) -> None:
-        self._send_message(ClientMessage(inference_start=InferenceStart(request_id=request_id)))
+        # the gateway adds the audio that reaches it after this message
+        turn_samples = min(self._turn_samples, _MAX_UINT32)
+        self._send_message(
+            ClientMessage(
+                inference_start=InferenceStart(request_id=request_id, turn_samples=turn_samples)
+            )
+        )
 
     def push_frame(self, frame: rtc.AudioFrame) -> None:
         pcm_bytes = bytes(frame.data)
         if not pcm_bytes:
             return
+        # count the turn even while disconnected: the user keeps speaking
+        self._turn_samples += frame.samples_per_channel
         audio_created_at = Timestamp()
         audio_created_at.GetCurrentTime()
         self._send_message(
@@ -122,9 +136,10 @@ class _CloudTransport:
         )
 
     def on_start_of_turn(self, elapsed: float) -> None:
-        pass
+        self._turn_samples = min(self._turn_samples, int(elapsed * self._opts.sample_rate))
 
     def flush(self) -> None:
+        self._turn_samples = 0
         self._send_message(ClientMessage(session_flush=SessionFlush()))
 
     def detach(self) -> None:
