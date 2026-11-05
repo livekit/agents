@@ -236,6 +236,7 @@ class TurnDetectorStream:
     def flush(self, reason: str | None = None) -> None:
         """Turn boundary: reset Krisp TT's state before the next user turn."""
         self.cancel_inference()
+        self._chunker.reset()  # a partial frame of the ended turn must not start the next one
         if not self._ch.closed:
             self._ch.send_nowait(_ResetSentinel())
 

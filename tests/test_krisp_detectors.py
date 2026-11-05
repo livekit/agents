@@ -203,6 +203,24 @@ async def test_flush_resets_tt_with_bot_speaking(
     assert pair.closed
 
 
+async def test_flush_drops_the_ended_turns_partial_frame(
+    models: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pair = _install(monkeypatch, turn_detector, _speech_then_silence(10))
+    stream = turn_detector.TurnDetector().stream()
+
+    stream.push_audio(_samples(FRAME_SAMPLES * 3 // 2))  # one frame, half a frame left over
+    stream.flush(reason="turn committed")  # the turn ends between two Krisp frames
+    stream.push_audio(_samples(FRAME_SAMPLES // 2))  # must not complete the stale half frame
+    await _drain()
+    assert pair.calls == [False]
+
+    stream.push_audio(_samples(FRAME_SAMPLES // 2))  # the new turn's first whole frame
+    await _drain()
+    assert pair.calls == [False, True]  # it carries the reset
+    await stream.aclose()
+
+
 def _pause_rising(speech: int, *, start: float, step: float) -> Script:
     """Voice for ``speech`` frames, then a pause whose TT result (ready after 10 frames)
     starts at ``start`` and rises by ``step`` per frame."""
