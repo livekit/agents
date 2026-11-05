@@ -21,6 +21,7 @@
     "ConsoleIo",
     "DataStreamAudioOutput",
     "DataStreamAudioReceiver",
+    "DuplexInput",
     "DuplexRealtimeModel",
     "EotStream",
     "ExpFilter",

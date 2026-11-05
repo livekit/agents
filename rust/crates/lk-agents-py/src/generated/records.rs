@@ -6021,6 +6021,65 @@ pub mod duplex {
         }
         Err(super::not_a(obj, "DuplexEvent"))
     }
+
+    // Declared in rust/crates/lk-agents-abi/src/llm/duplex.rs.
+    static DUPLEX_INPUT_GAP: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn duplex_input_gap_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::llm::duplex::DuplexInputGap,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ::lk_agents_abi::llm::duplex::DuplexInputGap { duration } = value;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item("duration", ::pyo3::IntoPyObjectExt::into_bound_py_any(duration, py)?)?;
+        crate::py_calls::call(
+            DUPLEX_INPUT_GAP
+                .import(py, "livekit.agents._generated.duplex", "DuplexInputGap")?
+                .as_any(),
+            (),
+            Some(&kwargs),
+        )
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/llm/duplex.rs.
+    static DUPLEX_INPUT_MUTE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn duplex_input_mute_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::llm::duplex::DuplexInputMute,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ::lk_agents_abi::llm::duplex::DuplexInputMute { muted } = value;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item("muted", ::pyo3::IntoPyObjectExt::into_bound_py_any(muted, py)?)?;
+        crate::py_calls::call(
+            DUPLEX_INPUT_MUTE
+                .import(py, "livekit.agents._generated.duplex", "DuplexInputMute")?
+                .as_any(),
+            (),
+            Some(&kwargs),
+        )
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/llm/duplex.rs.
+
+    pub fn duplex_input_item_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::llm::duplex::DuplexInputItem,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        Ok(match value {
+            ::lk_agents_abi::llm::duplex::DuplexInputItem::Audio(x) => {
+                crate::generated::records::rtc_frames::audio_frame_to_py(py, x)?
+            }
+            ::lk_agents_abi::llm::duplex::DuplexInputItem::Gap(x) => {
+                crate::generated::records::duplex::duplex_input_gap_to_py(py, x)?
+            }
+            ::lk_agents_abi::llm::duplex::DuplexInputItem::Mute(x) => {
+                crate::generated::records::duplex::duplex_input_mute_to_py(py, x)?
+            }
+        })
+    }
 }
 
 pub mod evals {

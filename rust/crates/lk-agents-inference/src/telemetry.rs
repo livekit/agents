@@ -27,6 +27,7 @@ use lk_agents_core::telemetry::gen_ai;
 
 // What the crate's logic names, spelled `telemetry::` there (`telemetry.md`, rule 4).
 pub(crate) use lk_agents_abi::telemetry::decl::GenAiContent;
+pub(crate) use lk_agents_abi::telemetry::instruments::DuplexOutputLag;
 pub use lk_agents_abi::telemetry::spans::inference::RequestSpan;
 pub(crate) use lk_agents_abi::telemetry::spans::inference::{
     Attempt, LlmFallbackAdapter, LlmFallbackChoice, LlmRequestRun, TtsRequestRun,
@@ -34,7 +35,9 @@ pub(crate) use lk_agents_abi::telemetry::spans::inference::{
 pub(crate) use lk_agents_abi::telemetry::spans::text::{
     JudgeEvaluation, JudgeEvaluationEnd, JudgeVerdict,
 };
-pub(crate) use lk_agents_net::telemetry::{Cx, ErrorType, Failed, Failure, ScopedSpan, end, start};
+pub(crate) use lk_agents_net::telemetry::{
+    Cx, ErrorType, Failed, Failure, ScopedSpan, end, measure, start,
+};
 
 /// The GenAI registry's spelling of a provider, `unknown` when it has none.
 pub fn provider_name(provider: &str) -> String {

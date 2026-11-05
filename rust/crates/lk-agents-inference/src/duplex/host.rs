@@ -1,9 +1,10 @@
 //! `_core.DuplexRealtimeModel`, `_core.FixedGate` and `_core.AdaptiveNoiseGate`: the engine over the
-//! adapter's declared host views. The plugin session's updates apply one after the other, its
-//! output audio and events are pulled here.
+//! adapter's declared host views. The caller's audio goes into the plugin's input, its updates
+//! apply one after the other, its output audio and events are pulled here.
 
 use crate::telemetry;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use lk_agents_abi::errors::{HostError, ProviderError};
@@ -124,10 +125,15 @@ pub(super) fn provider_error(e: HostError) -> ProviderError {
 /// A plugin's session.
 pub(super) struct HostSession {
     view: Arc<dyn abi::DuplexSession>,
+    input: Arc<dyn abi::DuplexInputQueue>,
     lane: mpsc::UnboundedSender<DuplexCommand>,
     /// Every event, the audio and the refused replies among them; `None` once the session closed.
     events: tokio::sync::Mutex<mpsc::UnboundedReceiver<Option<DuplexEvent>>>,
     tx: mpsc::UnboundedSender<Option<DuplexEvent>>,
+    /// Microseconds of output audio queued ahead of the session: its output lag.
+    output_queued: Arc<AtomicU64>,
+    lag: telemetry::DuplexOutputLag,
+    cx: Mutex<Option<telemetry::Cx>>,
     spawner: Arc<dyn Spawner>,
     tasks: Mutex<Vec<OwnedTask>>,
 }
@@ -140,16 +146,22 @@ impl HostSession {
     ) -> Self {
         let (lane, lane_rx) = mpsc::unbounded_channel();
         let (tx, events) = mpsc::unbounded_channel();
+        let output_queued = Arc::default();
+        let id = lk_agents_abi::ProviderId::of_label(label.clone());
         let session = HostSession {
             view: Arc::clone(&view),
+            input: Arc::clone(view.input()),
             lane,
             events: tokio::sync::Mutex::new(events),
             tx: tx.clone(),
+            output_queued: Arc::clone(&output_queued),
+            lag: telemetry::DuplexOutputLag { model: telemetry::model_labels(&id) },
+            cx: Mutex::new(None),
             spawner: Arc::clone(spawner),
             tasks: Mutex::new(Vec::new()),
         };
         session.spawn(Self::forward(Arc::clone(&view), tx.clone()));
-        session.spawn(Self::pump_audio(Arc::clone(&view), tx.clone()));
+        session.spawn(Self::pump_audio(Arc::clone(&view), tx.clone(), output_queued));
         session.spawn(Self::run_lane(view, lane_rx, label, tx));
         session
     }
@@ -193,10 +205,12 @@ impl HostSession {
     async fn pump_audio(
         view: Arc<dyn abi::DuplexSession>,
         tx: mpsc::UnboundedSender<Option<DuplexEvent>>,
+        output_queued: Arc<AtomicU64>,
     ) {
         let error = loop {
             match view.next_audio(&telemetry::Cx::NONE).await {
                 Ok(Some(audio)) => {
+                    output_queued.fetch_add(micros(&audio.frame), Ordering::Relaxed);
                     let event = DuplexEvent::Audio { frame: audio.frame, start_ms: audio.start_ms };
                     let _ = tx.send(Some(event));
                 }
@@ -264,10 +278,10 @@ impl HostSession {
             ))));
         }
     }
-    /// Queued on the host, in order.
+    /// Queued on the host, in order; the caller's audio goes into the plugin's input.
     pub(super) fn send(&self, cmd: DuplexCommand) {
         match cmd {
-            DuplexCommand::PushAudio(frame) => self.view.push_audio(frame),
+            DuplexCommand::PushAudio(frame) => self.input.push(frame),
             DuplexCommand::GenerateReply { req_id, instructions, tool_choice } => {
                 let view = Arc::clone(&self.view);
                 self.spawn(Self::generate(
@@ -287,9 +301,27 @@ impl HostSession {
         }
     }
 
+    /// Pre-connect audio, kept in full by the plugin's input.
+    pub(super) fn head(&self, frame: AudioFrame) {
+        self.input.head(frame);
+    }
+
+    /// Measures the input's drops and the output lag under `cx`'s job.
+    pub(super) fn observe(&self, cx: telemetry::Cx) {
+        self.input.observe(&cx);
+        *self.cx.lock() = Some(cx);
+    }
+
     /// `None` once the session is closed.
     pub(super) async fn next_event(&self) -> Option<DuplexEvent> {
-        self.events.lock().await.recv().await.flatten()
+        let event = self.events.lock().await.recv().await.flatten();
+        if let Some(DuplexEvent::Audio { frame, .. }) = &event {
+            let lag = self.output_queued.fetch_sub(micros(frame), Ordering::Relaxed);
+            if let Some(cx) = self.cx.lock().as_ref() {
+                telemetry::measure(cx, &self.lag, lag as f64 / 1e6);
+            }
+        }
+        event
     }
 
     pub(super) async fn aclose(&self) {
@@ -297,6 +329,10 @@ impl HostSession {
         drop(std::mem::take(&mut *self.tasks.lock()));
         self.view.aclose(&telemetry::Cx::NONE).await;
     }
+}
+
+fn micros(frame: &AudioFrame) -> u64 {
+    (frame.duration() * 1e6) as u64
 }
 
 // ------------------------------------------------------------------------------------ the model

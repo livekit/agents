@@ -276,9 +276,15 @@ impl RealtimeSession for DuplexSession {
         }
     }
 
-    /// The duplex input keeps no policy: pre-connect audio is ordinary audio to it.
+    /// Kept in full by the plugin's input, ahead of the live audio it keeps current.
     fn head(&self, frame: lk_agents_abi::AudioFrame) {
-        self.send(RealtimeCommand::PushAudio(lk_agents_abi::PushAudio { frame }));
+        if !self.lock().closed {
+            self.host.head(frame);
+        }
+    }
+
+    fn observe(&self, cx: telemetry::Cx) {
+        self.host.observe(cx);
     }
 
     fn next_event(&self) -> lk_agents_abi::BoxFuture<'_, Option<Event>> {

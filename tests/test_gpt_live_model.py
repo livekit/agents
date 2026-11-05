@@ -470,6 +470,119 @@ async def test_an_unmuted_session_is_not_muted_again_on_reconnect(
         await model.aclose()
 
 
+async def test_mute_and_unmute_apply_where_they_were_asked_in_the_audio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A mute travels in the input: the audio pushed before it is heard, the audio after is not."""
+    ws = _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        await session._update_session()
+        await asyncio.sleep(0.05)
+        session.push_audio(_silence(100))
+        session.mute_input()
+        session.push_audio(_silence(100))
+        session.unmute_input()
+        session.push_audio(_silence(100))
+        await asyncio.sleep(0.05)
+        assert [event["type"] for event in ws.sent] == [
+            "session.start",
+            "session.input_audio.append",
+            "session.input_audio.mute",
+            "session.input_audio.append",
+            "session.input_audio.unmute",
+            "session.input_audio.append",
+        ]
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_audio_dropped_behind_a_slow_session_counts_as_the_callers_silence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A burst the session cannot keep up with reaches it as its newest audio after a gap; the
+    gap is still time the caller said nothing new, so their turn ends on it."""
+    ws = _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    events = _user_events(session)
+    try:
+        await session._update_session()
+        await asyncio.sleep(0.05)
+        session._handle_event(_transcript("user", " Hello", 0))
+        for _ in range(100):
+            session.push_audio(_silence(10))
+        await asyncio.sleep(0.05)
+        appended = [e for e in ws.sent if e["type"] == "session.input_audio.append"]
+        sent = sum(len(base64.b64decode(e["audio"])) for e in appended) / 2 / 24000
+        assert sent < 0.5, "the session answers audio older than the input keeps"
+        assert [name for name, _ in events][-1] == "input_speech_stopped"
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_an_unexpected_failure_reconnects(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Only auth and protocol errors are final: a bug-shaped failure of one connection is retried."""
+    ws = _LifecycleWS()
+    attempts = 0
+
+    async def connect(self: GPTVoiceSession) -> _LifecycleWS:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("private-failure-detail")
+        return ws
+
+    monkeypatch.setattr(GPTVoiceSession, "_create_ws_conn", connect)
+    model = GPTLiveModel(
+        api_key="sk-test", conn_options=APIConnectOptions(max_retry=1, retry_interval=0)
+    )
+    session = model.session()
+    errors: list[llm.RealtimeModelError] = []
+    session.on("error", errors.append)
+    try:
+        await session._update_session()
+        await asyncio.wait_for(ws.started.wait(), timeout=1)
+        assert attempts == 2
+        assert [e.recoverable for e in errors] == [True]
+        assert "private-failure-detail" not in repr(errors[0].error)
+    finally:
+        ws.emit({"type": "session.closed", "reason": "close_requested", "usage": {"seconds": 0}})
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_a_malformed_server_event_is_a_final_protocol_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ws = _LifecycleWS()
+
+    async def connect(self: GPTVoiceSession) -> _LifecycleWS:
+        return ws
+
+    monkeypatch.setattr(GPTVoiceSession, "_create_ws_conn", connect)
+    model = GPTLiveModel(
+        api_key="sk-test", conn_options=APIConnectOptions(max_retry=3, retry_interval=0)
+    )
+    session = model.session()
+    errors: list[llm.RealtimeModelError] = []
+    session.on("error", errors.append)
+    try:
+        await session._update_session()
+        await asyncio.wait_for(ws.started.wait(), timeout=1)
+        ws.incoming.put_nowait(aiohttp.WSMessage(aiohttp.WSMsgType.TEXT, "{not json", ""))
+        with pytest.raises(APIError, match="malformed"):
+            await asyncio.wait_for(asyncio.shield(session._main_atask), timeout=1)
+        assert [e.recoverable for e in errors] == [False]
+    finally:
+        with contextlib.suppress(APIError):
+            await session.aclose()
+        await model.aclose()
+
+
 async def test_provider_content_is_only_logged_under_pii_fields(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -942,13 +1055,16 @@ async def test_delayed_context_receipts_do_not_block_commands_or_finish_speech(
         # A context receipt can outlast the read timeout without holding later commands.
         assert options.read_timeout is not None
         await asyncio.sleep(options.read_timeout * 2)
-        assert [event["type"] for event in ws.sent] == [
-            "session.start",
-            "session.instructions.append",
-            "session.thinking.append",
-            "session.commentary.append",
-            "session.input_audio.append",
-        ]
+        # the caller's audio goes out beside the commands, not behind them
+        assert sorted(event["type"] for event in ws.sent) == sorted(
+            [
+                "session.start",
+                "session.instructions.append",
+                "session.thinking.append",
+                "session.commentary.append",
+                "session.input_audio.append",
+            ]
+        )
         assert not errors
         assert not speeches
 
@@ -963,7 +1079,8 @@ async def test_delayed_context_receipts_do_not_block_commands_or_finish_speech(
         handle = speeches[0]
         assert sum(frame.duration for frame in delivered) == pytest.approx(0.1)
 
-        for append in ws.sent[1:4]:
+        context = [e for e in ws.sent if e["type"] != "session.input_audio.append"][1:]
+        for append in context:
             session._handle_event(
                 {"type": f"{append['type']}ed", "client_event_id": append["event_id"]}
             )
@@ -1371,6 +1488,12 @@ def _user_events(session: GPTVoiceSession) -> list[tuple[str, Any]]:
     return events
 
 
+async def _sent(session: GPTVoiceSession, frame: rtc.AudioFrame) -> None:
+    """Push a frame and give the session the time to pull it from its input."""
+    session.push_audio(frame)
+    await asyncio.sleep(0.01)
+
+
 def _silence(duration_ms: int) -> rtc.AudioFrame:
     samples = 24000 * duration_ms // 1000
     return rtc.AudioFrame(
@@ -1429,7 +1552,7 @@ async def test_the_callers_turn_ends_on_their_own_audio(monkeypatch: pytest.Monk
         await session._update_session()
         await asyncio.sleep(0.05)
         for _ in range(20):
-            session.push_audio(_silence(100))  # audio already pushed must not count as quiet
+            await _sent(session, _silence(100))  # audio already sent must not count as quiet
         session._handle_event(_transcript("user", " What", 1800))
         session._handle_event(_transcript("user", " is the", 2000))
 
@@ -1445,10 +1568,10 @@ async def test_the_callers_turn_ends_on_their_own_audio(monkeypatch: pytest.Monk
         # every frame but the last leaves the pause just short of ending the turn
         frames = int(gpt_live_model._MIN_SILENCE_MS // 100)
         for _ in range(frames - 1):
-            session.push_audio(_silence(100))
+            await _sent(session, _silence(100))
         assert len(events) == 3  # quiet, but not yet for the whole pause
 
-        session.push_audio(_silence(100))
+        await _sent(session, _silence(100))
         assert [name for name, _ in events[-2:]] == [
             "input_audio_transcription_completed",
             "input_speech_stopped",

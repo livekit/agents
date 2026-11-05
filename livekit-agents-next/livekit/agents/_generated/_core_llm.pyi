@@ -18,7 +18,7 @@ from livekit.agents.tts import TTS
 from .._core import TtsStream
 from .chat_items import ChatItem, ChatRole
 from .connect import APIConnectOptions
-from .duplex import DuplexCapabilities
+from .duplex import DuplexCapabilities, DuplexInputItem
 from .llm import ChatChunk, SerializedImage
 from .llm_fallback import RealtimeFallbackMember
 from .mcp import MCPToolOptions, ResolvedToolOptions
@@ -103,6 +103,19 @@ class AdaptiveNoiseGate:
         """End the open burst, keeping whatever has been learned about the model."""
 
 def duplex_realtime_capabilities(caps: DuplexCapabilities) -> RealtimeCapabilities: ...
+
+class DuplexInput:
+    """`_core.DuplexInput`: a duplex session's input. The engine pushes the caller's audio, the plugin
+    pulls it; a plugin more than 250 ms behind skips to the newest audio after a gap.
+    """
+    def __new__(cls) -> Self: ...
+    def push(self, frame: AudioFrame) -> None: ...
+    def mute(self, muted: bool) -> None:
+        """Queued after the audio pushed so far; raises when the plugin stopped pulling."""
+    def flush(self) -> None:
+        """Drops the queued audio: what is pulled next is the newest."""
+    def __aiter__(self) -> Self: ...
+    async def __anext__(self) -> DuplexInputItem: ...
 
 class DuplexRealtimeModel:
     """`DuplexRealtimeAdapter`'s engine, the session's realtime model when handed to it."""

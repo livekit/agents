@@ -9,7 +9,7 @@ use lk_agents_abi::{AudioFrame, BoxFuture, ToolChoice, VirtualClock};
 /// A plugin's model and session over the declared views: `None` stays silent and open; a script
 /// is its transcript, then the end of the session.
 struct FakeHost(Arc<FakeSession>);
-struct FakeSession(Mutex<Option<Vec<DuplexTranscript>>>);
+struct FakeSession(Mutex<Option<Vec<DuplexTranscript>>>, Arc<dyn abi::DuplexInputQueue>);
 
 impl DuplexHost for FakeHost {
     fn label(&self) -> Result<String, HostError> {
@@ -34,7 +34,9 @@ fn applied<'a>() -> BoxFuture<'a, Result<(), HostError>> {
 }
 
 impl abi::DuplexSession for FakeSession {
-    fn push_audio(&self, _: AudioFrame) {}
+    fn input(&self) -> &Arc<dyn abi::DuplexInputQueue> {
+        &self.1
+    }
     fn configure(
         &self,
         _cx: &lk_agents_abi::telemetry::Cx,
@@ -103,8 +105,17 @@ async fn session(
     script: Option<Vec<DuplexTranscript>>,
     clock: Arc<VirtualClock>,
 ) -> Arc<dyn RealtimeSession> {
+    let input = Arc::new(crate::duplex::DuplexInput::new(clock.clone()));
+    session_on(script, clock, input).await
+}
+
+async fn session_on(
+    script: Option<Vec<DuplexTranscript>>,
+    clock: Arc<VirtualClock>,
+    input: Arc<crate::duplex::DuplexInput>,
+) -> Arc<dyn RealtimeSession> {
     let model = DuplexAdapterModel {
-        host: Arc::new(FakeHost(Arc::new(FakeSession(Mutex::new(script))))),
+        host: Arc::new(FakeHost(Arc::new(FakeSession(Mutex::new(script), input)))),
         label: "fake".into(),
         caps: crate::duplex::realtime_capabilities(DuplexCapabilities::default()),
         audio_timeout: crate::duplex::AUDIO_TIMEOUT,
@@ -195,5 +206,26 @@ async fn duplex_host_eof_delivers_unclaimed_final_text_before_stream_end() {
     }
     assert_eq!(text, "Final text");
     assert!(completed);
+    session.aclose().await;
+}
+
+// Catches: the caller's audio going anywhere but the plugin's input, or the pre-connect head
+// held to the live audio's bound there.
+#[tokio::test]
+async fn the_callers_audio_reaches_the_plugins_input_head_first_and_in_full() {
+    let clock = Arc::new(VirtualClock::new());
+    let input = Arc::new(crate::duplex::DuplexInput::new(clock.clone()));
+    let session = session_on(None, clock, input.clone()).await;
+    let frame = |tag: i16| AudioFrame::new(tag.to_le_bytes().repeat(160), 16_000, 1, 160);
+    for _ in 0..100 {
+        session.head(frame(1));
+    }
+    session.send(RealtimeCommand::PushAudio(lk_agents_abi::PushAudio { frame: frame(2) }));
+    let (mut head, mut live) = (0.0, 0.0);
+    while let Ok(Some(item)) = tokio::time::timeout(Duration::from_millis(10), input.recv()).await {
+        let abi::DuplexInputItem::Audio(f) = item else { panic!("unexpected {item:?}") };
+        *if f.data[0] == 1 { &mut head } else { &mut live } += f.duration();
+    }
+    assert!((head - 1.0f64).abs() < 1e-9 && (live - 0.01f64).abs() < 1e-9, "{head} {live}");
     session.aclose().await;
 }

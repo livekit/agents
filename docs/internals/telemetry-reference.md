@@ -352,8 +352,9 @@ and `model_name`, the `G` labels `gen_ai.operation.name`, `gen_ai.provider.name`
 | `lk.agents.usage.tts_characters`, `interruption_num_requests` | counter | | `M` | when > 0 |
 | `lk.agents.connection.acquire_time` | histogram | s | `M`, `connection_reused` (`"true"`, `"false"`) | each WebSocket connection |
 | `lk.agents.event_loop.blocked_duration` | histogram | s | `severity` (`warning`, `error`) | each stall |
-| `lk.agents.audio.dropped` | counter | s | `policy` (`catch_up`, `now`), `consumer` (`room_input`, `realtime`, `stt`, `vad`, `interruption`, `end_of_turn`, `stt_node`, `recording`) | each drop of an audio input channel |
-| `lk.agents.audio.catch_up_time` | histogram | s | `consumer` (`vad`, `interruption`, `end_of_turn`, `recording`) | each consumer that drained a pre-connect head |
+| `lk.agents.duplex.output_lag` | histogram | s | `M` | each frame of a duplex model's output the session takes |
+| `lk.agents.audio.dropped` | counter | s | `policy` (`catch_up`, `now`), `consumer` (`room_input`, `realtime`, `stt`, `vad`, `interruption`, `end_of_turn`, `stt_node`, `recording`, `duplex`) | each drop of an audio input channel |
+| `lk.agents.audio.catch_up_time` | histogram | s | `consumer` (`vad`, `interruption`, `end_of_turn`, `recording`, `duplex`) | each consumer that drained a pre-connect head |
 | `gen_ai.client.token.usage` | histogram | `{token}` | `G`, `gen_ai.token.type` (`input`, `output`) | each LLM and realtime response |
 | `gen_ai.client.operation.duration` | histogram | s | `G` | each LLM and realtime response |
 | `gen_ai.client.operation.time_to_first_chunk` | histogram | s | `G` | when measured |

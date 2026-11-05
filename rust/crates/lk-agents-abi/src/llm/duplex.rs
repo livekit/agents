@@ -1,9 +1,10 @@
 //! `llm.DuplexRealtimeAdapter`'s engine: a duplex model run as a realtime model, its output gated
 //! and segmented in `lk-agents-inference`; the plugin's model and session stay host objects.
 
+use std::any::Any;
 use std::sync::Arc;
 
-use crate::errors::HostError;
+use crate::errors::{ApiError, HostError};
 use crate::llm::inference::InvalidPayload;
 use crate::llm::realtime::Event;
 use crate::{AudioFrame, ChatItem, ToolChoice};
@@ -132,6 +133,78 @@ pub enum DuplexEvent {
     Session(Event),
 }
 
+/// Caller audio the input dropped to stay current, as the seconds it covered: silence to the model.
+#[crate::host(record(
+    module = "duplex",
+    path = "livekit.agents.llm.duplex",
+    name = "DuplexInputGap",
+    dataclass,
+    emit
+))]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DuplexInputGap {
+    pub duration: f64,
+}
+
+/// The caller's input is muted, or unmuted, from this point of the audio on.
+#[crate::host(record(
+    module = "duplex",
+    path = "livekit.agents.llm.duplex",
+    name = "DuplexInputMute",
+    dataclass,
+    emit
+))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DuplexInputMute {
+    pub muted: bool,
+}
+
+/// What a plugin pulls from its input, in order: the caller's audio, a gap, a mute or an unmute.
+#[crate::host(record(module = "duplex", emit, transparent))]
+#[derive(Debug, Clone, PartialEq)]
+pub enum DuplexInputItem {
+    Audio(AudioFrame),
+    Gap(DuplexInputGap),
+    Mute(DuplexInputMute),
+}
+
+/// A duplex session's input as the engine feeds it: never blocks, and keeps the plugin on current
+/// audio.
+#[crate::host(native(refused = "expected a native DuplexInput"))]
+pub trait DuplexInputQueue: Any + Send + Sync {
+    fn push(&self, frame: AudioFrame);
+    /// Pre-connect audio: kept in full.
+    fn head(&self, frame: AudioFrame);
+    /// Measures what the input drops under `cx`'s job.
+    fn observe(&self, cx: &crate::telemetry::Cx);
+}
+
+/// `_core.DuplexInput`: a duplex session's input. The engine pushes the caller's audio, the plugin
+/// pulls it; a plugin more than 250 ms behind skips to the newest audio after a gap.
+#[crate::host(class(name = "DuplexInput", native = DuplexInputQueue))]
+pub trait DuplexInput: Send + Sync + Sized + 'static {
+    /// What the hosting process lends the class.
+    #[host(env)]
+    type Env;
+
+    #[host(new)]
+    fn new(env: &Self::Env) -> Self;
+
+    #[host(call)]
+    fn push(&self, frame: AudioFrame);
+
+    /// Queued after the audio pushed so far; raises when the plugin stopped pulling.
+    #[host(call)]
+    fn mute(&self, muted: bool) -> Result<(), ApiError>;
+
+    /// Drops the queued audio: what is pulled next is the newest.
+    #[host(call)]
+    fn flush(&self) -> Result<(), ApiError>;
+
+    #[host(next)]
+    async fn next(&self) -> Result<Option<DuplexInputItem>, ApiError>;
+}
+
 /// A `DuplexRealtimeAdapter`'s model, as the engine opens sessions on it.
 #[crate::host(proxy(host = "livekit.agents._bindings.Duplex"))]
 pub trait DuplexHost: Send + Sync {
@@ -153,13 +226,13 @@ pub trait DuplexHost: Send + Sync {
     ) -> crate::BoxFuture<'_, Result<Arc<dyn DuplexSession>, HostError>>;
 }
 
-/// A plugin's `DuplexSession`: the engine applies the updates one after the other and pulls the
-/// output audio and the events.
+/// A plugin's `DuplexSession`: the engine feeds its input, applies the updates one after the other
+/// and pulls the output audio and the events.
 #[crate::host(proxy(host = "livekit.agents._bindings._DuplexSession"))]
 pub trait DuplexSession: Send + Sync {
-    /// Queued on the host loop, in order.
-    #[host(notify, name = "_core_push_audio")]
-    fn push_audio(&self, frame: AudioFrame);
+    /// The input the plugin pulls the caller's audio from.
+    #[host(read_once, name = "_core_input")]
+    fn input(&self) -> &Arc<dyn DuplexInputQueue>;
 
     /// The whole startup configuration at once (`_update_session`).
     #[host(await, name = "_core_configure")]

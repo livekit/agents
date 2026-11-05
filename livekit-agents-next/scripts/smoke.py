@@ -398,9 +398,6 @@ class _DuplexScript(llm.DuplexSession):
     def tools(self) -> llm.ToolContext:
         return llm.ToolContext.empty()
 
-    def push_audio(self, frame: rtc.AudioFrame) -> None:
-        pass
-
     async def _update_instructions(self, instructions: str) -> None:
         self.configured_with.append(instructions)
 

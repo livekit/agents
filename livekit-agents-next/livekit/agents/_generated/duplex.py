@@ -45,8 +45,26 @@ class DuplexOutputTranscriptDelta:
     end_ms: int | None = None
 
 
+@dataclass
+class DuplexInputGap:
+    """Caller audio the input dropped to stay current, as the seconds it covered: silence to the model."""
+
+    duration: float
+
+
+@dataclass
+class DuplexInputMute:
+    """The caller's input is muted, or unmuted, from this point of the audio on."""
+
+    muted: bool
+
+
 DuplexEvent: TypeAlias = DuplexOutputTranscriptDelta | Event
 """One event of a plugin session: its transcript, or what a realtime session reports."""
+
+
+DuplexInputItem: TypeAlias = AudioFrame | DuplexInputGap | DuplexInputMute
+"""What a plugin pulls from its input, in order: the caller's audio, a gap, a mute or an unmute."""
 
 
 DuplexCapabilities.__annotations__ = get_annotations(DuplexCapabilities, eval_str=True)
@@ -55,3 +73,7 @@ DuplexAudioFrame.__annotations__ = get_annotations(DuplexAudioFrame, eval_str=Tr
 DuplexAudioFrame.__module__ = "livekit.agents.llm.duplex"
 DuplexOutputTranscriptDelta.__annotations__ = get_annotations(DuplexOutputTranscriptDelta, eval_str=True)
 DuplexOutputTranscriptDelta.__module__ = "livekit.agents.llm.duplex"
+DuplexInputGap.__annotations__ = get_annotations(DuplexInputGap, eval_str=True)
+DuplexInputGap.__module__ = "livekit.agents.llm.duplex"
+DuplexInputMute.__annotations__ = get_annotations(DuplexInputMute, eval_str=True)
+DuplexInputMute.__module__ = "livekit.agents.llm.duplex"

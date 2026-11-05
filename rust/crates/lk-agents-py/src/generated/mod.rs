@@ -81,6 +81,7 @@ pub trait Implementations: 'static {
     type FixedGate: ::lk_agents_abi::llm::duplex::FixedGate;
     type AdaptiveNoiseGate: ::lk_agents_abi::llm::duplex::AdaptiveNoiseGate;
     type DuplexConfiguration: ::lk_agents_abi::llm::duplex::DuplexConfiguration;
+    type DuplexInput: ::lk_agents_abi::llm::duplex::DuplexInput;
     type DuplexRealtimeModel: ::lk_agents_abi::llm::duplex::DuplexRealtimeModel;
     type FallbackLlm: ::lk_agents_abi::llm::fallback::FallbackLlm;
     type FallbackTts: ::lk_agents_abi::llm::fallback::FallbackTts<Stream = Self::TtsStream>;
@@ -297,6 +298,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<llm::FixedGate>()?;
     m.add_class::<llm::AdaptiveNoiseGate>()?;
     m.add_function(wrap_pyfunction!(llm::duplex_realtime_capabilities, m)?)?;
+    m.add_class::<llm::DuplexInput>()?;
     m.add_class::<llm::DuplexRealtimeModel>()?;
     m.add_class::<llm::FallbackLlm>()?;
     m.add_class::<llm::FallbackLlmChunks>()?;

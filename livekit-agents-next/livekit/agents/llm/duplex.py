@@ -13,6 +13,8 @@ from livekit import rtc
 from livekit.agents._generated.duplex import (
     DuplexAudioFrame as DuplexAudioFrame,
     DuplexCapabilities as DuplexCapabilities,
+    DuplexInputGap as DuplexInputGap,
+    DuplexInputMute as DuplexInputMute,
     DuplexOutputTranscriptDelta as DuplexOutputTranscriptDelta,
 )
 
@@ -98,6 +100,10 @@ class DuplexSession(ABC, rtc.EventEmitter[DuplexEventTypes | TEvent], Generic[TE
         # set once the whole configuration is applied; a model whose configuration is immutable
         # once started waits on it before connecting
         self._configured = asyncio.Event()
+        # the caller's audio, its gaps and mute changes, in order: pulled with ``async for`` while
+        # connected and flushed on reconnect; a plugin more than 250 ms behind skips to the newest
+        # audio after a gap
+        self._input = _core.DuplexInput()
 
     @property
     def duplex_model(self) -> DuplexModel:
@@ -116,8 +122,9 @@ class DuplexSession(ABC, rtc.EventEmitter[DuplexEventTypes | TEvent], Generic[TE
     @abstractmethod
     def tools(self) -> ToolContext: ...
 
-    @abstractmethod
-    def push_audio(self, frame: rtc.AudioFrame) -> None: ...
+    def push_audio(self, frame: rtc.AudioFrame) -> None:
+        """Queue the caller's audio; the plugin pulls it from ``_input``."""
+        self._input.push(frame)
 
     def push_video(self, frame: rtc.VideoFrame) -> None:
         """Feed a video frame to the model; ignored by models without video input."""

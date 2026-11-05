@@ -269,6 +269,15 @@ pub struct AudioCatchUp {
     pub consumer: AudioConsumer,
 }
 
+/// Seconds of a duplex model's output audio queued ahead of the session when it takes the next
+/// frame: how far the session runs behind the model's output.
+#[metric(name = "lk.agents.duplex.output_lag", kind = Histogram, unit = "s", bounds = DURATION_BOUNDS)]
+#[derive(Attrs)]
+pub struct DuplexOutputLag {
+    #[attrs]
+    pub model: ModelLabels,
+}
+
 /// What an audio channel keeps when its consumer falls behind.
 #[derive(SpanValue, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AudioPolicy {
@@ -297,6 +306,8 @@ pub enum AudioConsumer {
     SttNode,
     /// The session recording's microphone channel.
     Recording,
+    /// A duplex model's input audio.
+    Duplex,
 }
 
 /// Input and output tokens of each LLM and realtime response. Deprecated upstream; declared as

@@ -41,6 +41,7 @@ impl super::Implementations for Selected {
         ::lk_agents_runtime::inference::duplex::AdaptiveNoiseGate,
     >;
     type DuplexConfiguration = ::lk_agents_runtime::inference::duplex::DuplexConfiguration;
+    type DuplexInput = ::lk_agents_runtime::inference::duplex::DuplexInput;
     type DuplexRealtimeModel = ::lk_agents_runtime::inference::duplex::DuplexAdapterModel;
     type FallbackLlm = ::lk_agents_runtime::inference::fallback::FallbackLlm;
     type FallbackTts = ::lk_agents_runtime::inference::fallback::FallbackTts;

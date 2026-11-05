@@ -1,9 +1,10 @@
-//! `DuplexRealtimeAdapter` (`llm/duplex_adapter.py`): a full-duplex speech model (it listens and
+//! `DuplexRealtimeAdapter` (`llm/duplex.py`): a full-duplex speech model (it listens and
 //! speaks at once, handling interruptions itself) run as the session's realtime model. The model's
 //! continuous output is gated, cut into generations and given its transcript here.
 
 pub mod gate;
 mod host;
+pub mod input;
 pub mod segmenter;
 pub mod session;
 #[cfg(test)]
@@ -15,6 +16,7 @@ use lk_agents_abi::{AudioFrame, ChatItem, ToolChoice};
 
 pub use gate::{AdaptiveNoiseGate, AudioGate, FixedGate};
 pub use host::GateClass;
+pub use input::DuplexInput;
 pub use lk_agents_abi::llm::duplex::DuplexCapabilities;
 pub use segmenter::{AUDIO_TIMEOUT, Fragment, Segmenter, Step};
 pub use session::DuplexAdapterModel;

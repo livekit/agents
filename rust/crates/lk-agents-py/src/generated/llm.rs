@@ -560,6 +560,89 @@ pub fn duplex_realtime_capabilities<'py>(
 }
 
 // Declared in rust/crates/lk-agents-abi/src/llm/duplex.rs.
+type DuplexInputImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::DuplexInput;
+
+/// `_core.DuplexInput`: a duplex session's input. The engine pushes the caller's audio, the plugin
+/// pulls it; a plugin more than 250 ms behind skips to the newest audio after a gap.
+#[pyclass(frozen, name = "DuplexInput", module = "livekit.agents._core")]
+pub struct DuplexInput(pub(crate) ::std::sync::Arc<DuplexInputImpl>);
+
+#[pymethods]
+impl DuplexInput {
+    #[new]
+    fn new(py: Python<'_>) -> PyResult<DuplexInput> {
+        crate::py_calls::check_pid()?;
+        let env = crate::process::env();
+        let out =
+            py.detach(|| <DuplexInputImpl as ::lk_agents_abi::llm::duplex::DuplexInput>::new(&env));
+        ::pyo3::PyResult::Ok(DuplexInput(::std::sync::Arc::new(out)))
+    }
+
+    #[pyo3(signature = (frame))]
+    fn push(&self, py: Python<'_>, frame: Bound<'_, PyAny>) -> PyResult<()> {
+        crate::py_calls::check_pid()?;
+        let frame = crate::generated::records::rtc_frames::audio_frame_from_py(frame.as_any())?;
+        py.detach(|| {
+            <DuplexInputImpl as ::lk_agents_abi::llm::duplex::DuplexInput>::push(&self.0, frame)
+        });
+        Ok(())
+    }
+
+    /// Queued after the audio pushed so far; raises when the plugin stopped pulling.
+    #[pyo3(signature = (muted))]
+    fn mute(&self, py: Python<'_>, muted: bool) -> PyResult<()> {
+        crate::py_calls::check_pid()?;
+        py.detach(|| {
+            <DuplexInputImpl as ::lk_agents_abi::llm::duplex::DuplexInput>::mute(&self.0, muted)
+        })
+        .map_err(|e: ::lk_agents_abi::errors::ApiError| {
+            <::lk_agents_abi::errors::ApiError as crate::py_errors::HostException>::to_py_err(&e)
+        })?;
+        Ok(())
+    }
+
+    /// Drops the queued audio: what is pulled next is the newest.
+    fn flush(&self, py: Python<'_>) -> PyResult<()> {
+        crate::py_calls::check_pid()?;
+        py.detach(|| {
+            <DuplexInputImpl as ::lk_agents_abi::llm::duplex::DuplexInput>::flush(&self.0)
+        })
+        .map_err(|e: ::lk_agents_abi::errors::ApiError| {
+            <::lk_agents_abi::errors::ApiError as crate::py_errors::HostException>::to_py_err(&e)
+        })?;
+        Ok(())
+    }
+
+    fn __aiter__(slf: Py<Self>) -> Py<Self> {
+        slf
+    }
+
+    fn __anext__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::py_calls::future_into_py(py, async move {
+            match <DuplexInputImpl as ::lk_agents_abi::llm::duplex::DuplexInput>::next(&this).await.map_err(|e: ::lk_agents_abi::errors::ApiError| <::lk_agents_abi::errors::ApiError as crate::py_errors::HostException>::to_py_err(&e))? {
+                Some(out) => Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(crate::generated::records::duplex::duplex_input_item_to_py(py, out)?, py)),
+                None => Err(::pyo3::exceptions::PyStopAsyncIteration::new_err(())),
+            }
+        })
+    }
+}
+
+// Wherever the host passes a `::lk_agents_abi::llm::duplex::DuplexInputQueue`, an instance of this class is itself.
+inventory::submit! {
+    crate::py_objects::HostNative {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::llm::duplex::DuplexInputQueue>(),
+        read: |obj| {
+            let this = obj.cast::<DuplexInput>().ok()?;
+            let native: ::std::sync::Arc<dyn ::lk_agents_abi::llm::duplex::DuplexInputQueue> = this.get().0.clone();
+            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        },
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/llm/duplex.rs.
 type DuplexRealtimeModelImpl =
     <crate::generated::implementations::Selected as super::Implementations>::DuplexRealtimeModel;
 
@@ -2849,8 +2932,7 @@ pub struct DuplexSessionProxy {
     host: ::std::sync::Arc<Py<PyAny>>,
     /// The host's running loop and a copy of its context, captured when it was taken.
     context: ::lk_agents_abi::utils::host_ref::HostRef,
-    /// The `notify` calls, delivered in order.
-    notifier: crate::py_calls::Notifier,
+    input: ::std::sync::Arc<dyn ::lk_agents_abi::llm::duplex::DuplexInputQueue>,
 }
 
 impl DuplexSessionProxy {
@@ -2894,33 +2976,25 @@ impl DuplexSessionProxy {
             Some(context) => ::std::clone::Clone::clone(context),
             None => crate::py_calls::capture_context(obj.py())?,
         };
-        Ok(DuplexSessionProxy {
-            host: ::std::sync::Arc::new(obj.clone().unbind()),
-            context,
-            notifier: ::std::default::Default::default(),
-        })
+        let input = {
+            let v = crate::py_calls::read(obj, "_core_input")?;
+            crate::py_objects::native::<dyn ::lk_agents_abi::llm::duplex::DuplexInputQueue>(
+                v.as_any(),
+            )
+            .ok_or_else(|| {
+                ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                    "DuplexSession._core_input",
+                    ": expected a native DuplexInput"
+                ))
+            })?
+        };
+        Ok(DuplexSessionProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context, input })
     }
 }
 
 impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
-    fn push_audio(&self, frame: ::lk_agents_abi::AudioFrame) {
-        let host = ::std::sync::Arc::clone(&self.host);
-        let frame_arg = frame;
-        ::lk_agents_runtime::host::notify(
-            &self.notifier,
-            "DuplexSession._core_push_audio",
-            &self.context,
-            &[],
-            false,
-            ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
-                    [crate::generated::records::rtc_frames::audio_frame_to_py(py, frame_arg)?];
-                Ok((
-                    host.bind(py).getattr("_core_push_audio")?,
-                    ::pyo3::types::PyTuple::new(py, args)?,
-                ))
-            }),
-        );
+    fn input(&self) -> &::std::sync::Arc<dyn ::lk_agents_abi::llm::duplex::DuplexInputQueue> {
+        &self.input
     }
 
     fn configure(

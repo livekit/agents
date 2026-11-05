@@ -6,7 +6,7 @@ import contextlib
 import json
 import os
 import time
-from collections.abc import AsyncIterable, Callable
+from collections.abc import AsyncIterable, Callable, Iterator
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal, TypedDict
 from urllib.parse import urlparse, urlunparse
@@ -119,7 +119,7 @@ class _Speech:
     end_ms: int | None = None
     started_at: float = field(default_factory=time.time)
     quiet_ms: int = 0
-    """Input audio pushed since the user's last fragment."""
+    """Input audio sent since the user's last fragment, gaps in it included."""
 
 
 # Responses delegation hands work to a backend Responses model, whose events arrive wrapped in
@@ -406,6 +406,7 @@ class GPTVoiceSession(
         self._tools = llm.ToolContext.empty()
         # the agent's instructions, set by _update_session before session.start and immutable after
         self._instructions: str | None = None
+        # commands; the caller's audio and mute changes are pulled from ``_input``
         self._msg_ch = utils.aio.Chan[types.ClientEvent | dict[str, Any]]()
         self._audio_ch = utils.aio.Chan[llm.DuplexAudioFrame]()
         self._input_resampler: rtc.AudioResampler | None = None
@@ -413,7 +414,8 @@ class GPTVoiceSession(
 
         # session.start opens a connection and carries the config that is immutable after it
         self._session_start_sent = False
-        # the mute state the app asked for, re-applied to each session a reconnect opens
+        # the mute state the input last carried to the service, re-applied to each session a
+        # reconnect opens
         self._input_muted = False
         self._session_started_fut: asyncio.Future[None] = asyncio.Future()
         self._session_closed_fut: asyncio.Future[None] = asyncio.Future()
@@ -539,37 +541,45 @@ class GPTVoiceSession(
                     finally:
                         # what arrives now is history for the next connection, not an append
                         self._session_start_sent = False
-                except APIError as e:
-                    if max_retries == 0 or not e.retryable:
-                        self._emit_error(e, recoverable=False)
-                        raise
+                except Exception as e:
+                    # only auth and protocol errors are final; anything unexpected is retried
+                    error = (
+                        e
+                        if isinstance(e, APIError)
+                        else APIConnectionError("GPT-Live session failed")
+                    )
+                    if error is not e:
+                        logger.error(
+                            "gpt-live session failed", extra={"error_type": type(e).__name__}
+                        )
+                    if max_retries == 0 or not error.retryable:
+                        self._emit_error(error, recoverable=False)
+                        if error is e:
+                            raise
+                        raise error from None
                     elif self._num_retries == max_retries:
-                        self._emit_error(e, recoverable=False)
+                        self._emit_error(error, recoverable=False)
                         raise APIConnectionError(
                             f"{self._provider_label} connection failed after "
                             f"{self._num_retries} attempts",
-                        ) from e
+                        ) from error
                     else:
-                        self._emit_error(e, recoverable=True)
+                        self._emit_error(error, recoverable=True)
                         interval = self._opts.conn_options.interval_for_retry(self._num_retries)
                         logger.warning(
                             f"{self._provider_label} connection failed, retrying in {interval}s",
-                            exc_info=e,
+                            exc_info=error,
                         )
                         await asyncio.sleep(interval)
                     self._num_retries += 1
-                except Exception as e:
-                    logger.error("gpt-live session failed", extra={"error_type": type(e).__name__})
-                    error = APIConnectionError("GPT-Live session failed", retryable=False)
-                    self._emit_error(error, recoverable=False)
-                    raise error from None
                 reconnecting = True
         finally:
             self._audio_ch.close()
 
     def _reset_for_reconnect(self) -> None:
         # a new connection is a new session, reseeded from the history; the rest of what the
-        # dropped one was carrying never arrives
+        # dropped one was carrying never arrives, and its input starts from the newest audio
+        self._input.flush()
         self._bstream.clear()
         self._input_resampler = None
         self._session_started_fut = asyncio.Future()
@@ -641,20 +651,36 @@ class GPTVoiceSession(
             start = self._session_start_event()
             self._session_start_sent = True
             await self._ws_send(ws_conn, start)
+            # the protocol asks for session.started before any audio or command goes out
+            if not self._session_started_fut.done():
+                await self._session_started_fut
             if self._input_muted:
                 # a new connection is a new session, and a session starts unmuted, so the mute
                 # the app asked for is re-applied before this one can hear anything
-                if not self._session_started_fut.done():
-                    await self._session_started_fut
                 await self._ws_send(
                     ws_conn, types.InputAudioMuteEvent(event_id=utils.shortuuid("mute_"))
                 )
 
-            async for msg in self._msg_ch:
-                # the protocol asks for session.started before any audio or command goes out
-                if not self._session_started_fut.done():
-                    await self._session_started_fut
-                await self._ws_send(ws_conn, msg)
+            async def _send_commands() -> None:
+                async for msg in self._msg_ch:
+                    await self._ws_send(ws_conn, msg)
+
+            async def _send_input() -> None:
+                # pulled only as fast as the socket takes it, so a slow socket drops old audio
+                async for item in self._input:
+                    for event in self._input_events(item):
+                        await self._ws_send(ws_conn, event)
+
+            senders = [
+                asyncio.create_task(_send_commands(), name="_send_commands"),
+                asyncio.create_task(_send_input(), name="_send_input"),
+            ]
+            try:
+                done, _ = await asyncio.wait(senders, return_when=asyncio.FIRST_COMPLETED)
+                for task in done:
+                    task.result()
+            finally:
+                await utils.aio.cancel_and_wait(*senders)
 
             await _close_ws()
 
@@ -677,7 +703,12 @@ class GPTVoiceSession(
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     continue
 
-                event = json.loads(msg.data)
+                try:
+                    event = json.loads(msg.data)
+                except json.JSONDecodeError:
+                    raise APIError(
+                        f"{self._provider_label} sent a malformed event", retryable=False
+                    ) from None
                 self.emit("openai_server_event_received", event)
                 # while closing only the shutdown events matter; the framework has torn down
                 if self._closing and event.get("type") not in _CLOSING_EVENTS:
@@ -1053,13 +1084,28 @@ class GPTVoiceSession(
     def tools(self) -> llm.ToolContext:
         return self._tools.copy()
 
-    def push_audio(self, frame: rtc.AudioFrame) -> None:
-        # the caller's turn ends on their own audio: this much pushed since their last fragment
+    def _input_events(
+        self, item: rtc.AudioFrame | llm.DuplexInputGap | llm.DuplexInputMute
+    ) -> Iterator[types.ClientEvent]:
+        """What one item of the input sends: its audio, or the mute change it carries."""
+        if isinstance(item, llm.DuplexInputMute):
+            self._input_muted = item.muted
+            if item.muted:
+                yield types.InputAudioMuteEvent(event_id=utils.shortuuid("mute_"))
+            else:
+                yield types.InputAudioUnmuteEvent(event_id=utils.shortuuid("unmute_"))
+            return
+
+        # the caller's turn ends on their own audio: this much since their last fragment, a gap
+        # in it counted as silence
         if (speech := self._speech.get("user")) is not None:
-            speech.quiet_ms += round(frame.duration * 1000)
+            speech.quiet_ms += round(item.duration * 1000)
             if speech.quiet_ms >= _MIN_SILENCE_MS:
                 self._end_speech("user")
+        if isinstance(item, llm.DuplexInputGap):
+            return
 
+        frame = item
         if self._input_resampler and frame.sample_rate != self._input_resampler_rate:
             self._input_resampler = None
         if self._input_resampler is None and (
@@ -1072,9 +1118,7 @@ class GPTVoiceSession(
         frames = self._input_resampler.push(frame) if self._input_resampler else [frame]
         for f in frames:
             for nf in self._bstream.push(f.data.tobytes()):
-                self.send_event(
-                    types.InputAudioAppendEvent(audio=base64.b64encode(nf.data).decode("utf-8"))
-                )
+                yield types.InputAudioAppendEvent(audio=base64.b64encode(nf.data).decode("utf-8"))
 
     def append_instructions(self, text: str, *, delegation_id: str | None = None) -> None:
         """Add a standing rule to the model's instructions, capped at 500 tokens."""
@@ -1109,14 +1153,13 @@ class GPTVoiceSession(
     def mute_input(self) -> None:
         """Replace microphone input with silence; the model keeps generating and speaking.
 
-        The state is remembered and re-applied to any session a reconnect opens.
+        It applies from the audio pushed so far on, and is remembered and re-applied to any session
+        a reconnect opens.
         """
-        self._input_muted = True
-        self.send_event(types.InputAudioMuteEvent(event_id=utils.shortuuid("mute_")))
+        self._input.mute(True)
 
     def unmute_input(self) -> None:
-        self._input_muted = False
-        self.send_event(types.InputAudioUnmuteEvent(event_id=utils.shortuuid("unmute_")))
+        self._input.mute(False)
 
     async def aclose(self) -> None:
         await super().aclose()

@@ -145,6 +145,25 @@
       ]
     },
     {
+      "id": "metric.lk.agents.duplex.output_lag",
+      "type": "metric",
+      "metric_name": "lk.agents.duplex.output_lag",
+      "instrument": "histogram",
+      "unit": "s",
+      "stability": "development",
+      "brief": "Seconds of a duplex model's output audio queued ahead of the session when it takes the next frame: how far the session runs behind the model's output.",
+      "attributes": [
+        {
+          "ref": "model_provider",
+          "requirement_level": "recommended"
+        },
+        {
+          "ref": "model_name",
+          "requirement_level": "recommended"
+        }
+      ]
+    },
+    {
       "id": "metric.lk.agents.event_loop.blocked_duration",
       "type": "metric",
       "metric_name": "lk.agents.event_loop.blocked_duration",

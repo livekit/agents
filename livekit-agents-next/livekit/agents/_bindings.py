@@ -772,8 +772,8 @@ class Duplex:
 
 
 class _DuplexSession:
-    """A plugin's ``DuplexSession`` flattened: the core applies the updates in order and pulls
-    the output audio; the session's callbacks report one event at a time."""
+    """A plugin's ``DuplexSession`` flattened: the core feeds its input, applies the updates in
+    order and pulls the output audio; the session's callbacks report one event at a time."""
 
     def __init__(
         self, session: llm.DuplexSession, tools: Callable[[], Sequence[Tool | Toolset]]
@@ -792,8 +792,8 @@ class _DuplexSession:
         )
         session.on("function_call", lambda call: put(realtime_wire.FunctionCallReady(call=call)))
 
-    def _core_push_audio(self, frame: rtc.AudioFrame) -> None:
-        self._session.push_audio(frame)
+    def _core_input(self) -> _core.DuplexInput:
+        return self._session._input
 
     async def _core_configure(
         self, instructions: str | None, items: list[ChatItem] | None, names: list[str]

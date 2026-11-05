@@ -78,6 +78,7 @@ from ._generated._core_invoke import (
 from ._generated._core_llm import (
     AdaptiveNoiseGate as AdaptiveNoiseGate,
     ChatRequest as ChatRequest,
+    DuplexInput as DuplexInput,
     DuplexRealtimeModel as DuplexRealtimeModel,
     FallbackLlm as FallbackLlm,
     FallbackLlmChunks as FallbackLlmChunks,
