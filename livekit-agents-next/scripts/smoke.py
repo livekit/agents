@@ -599,14 +599,10 @@ async def job() -> None:
     waits for the participant in the room, for whom a participant entrypoint runs, an API call is
     skipped, the
     shutdown it asks for runs the shutdown callback and tells the parent."""
-    from livekit.agents._generated.worker_ipc import StartJobFields
+    from livekit.agents._generated.worker_server import AcceptArguments, JobInfo, RunningJobInfo
+    from livekit.agents.ipc import JobRunnerOptions, JobStatus
     from livekit.agents.ipc.child import _JobProc
-    from livekit.agents.job import (
-        JobAcceptArguments,
-        JobContext,
-        JobExecutorType,
-        RunningJobInfo,
-    )
+    from livekit.agents.job import JobContext, JobExecutorType
     from livekit.protocol import agent as agent_proto, models
 
     print("== job")
@@ -650,8 +646,10 @@ async def job() -> None:
 
         def __init__(self) -> None:
             self.endpoint: asyncio.Future[int] = asyncio.get_running_loop().create_future()
+            self.launch: Any = None
 
-        async def _core_launch(self, endpoint: int) -> None:
+        async def _core_launch(self, endpoint: int, launch: Any) -> None:
+            self.launch = launch
             self.endpoint.set_result(endpoint)
 
         async def _core_completed(self, completion: Any) -> None:
@@ -662,51 +660,55 @@ async def job() -> None:
     parent = Parent()
     sup = _core.JobSupervisor(
         parent,
-        thread=True,
-        initialize_timeout=30,
-        close_timeout=30,
-        memory_warn_mb=0,
-        memory_limit_mb=0,
-        ping_interval=0,
-        ping_timeout=0,
-        high_ping_threshold=10,
+        JobRunnerOptions(
+            thread=True,
+            initialize_timeout=30,
+            close_timeout=30,
+            ping_interval=0,
+            ping_timeout=0,
+            high_ping_threshold=10,
+        ),
     )
+    await sup.start()
     cch = await parent.endpoint
-    initialized = asyncio.ensure_future(sup.initialize(asyncio_debug=False, http_proxy=None))
+    initialized = asyncio.ensure_future(sup.initialize())
     client = await asyncio.to_thread(_core.IpcClient, cch, runner.initialize)
     await initialized
     runner._client = client
     serving = asyncio.ensure_future(client.serve(runner))
-    request = RunningJobInfo(
-        accept_arguments=JobAcceptArguments(name="", identity="agent", metadata=""),
-        job=agent_proto.Job(id="AJ_smoke", room=models.Room(name="console", sid="RM_smoke")),
-        url="",
-        token="",
-        worker_id="smoke",
-        fake_job=True,
-    )
-    await sup.start_job(
-        StartJobFields(
-            job=request.job.SerializeToString(),
-            name=request.accept_arguments.name,
-            identity=request.accept_arguments.identity,
-            metadata=request.accept_arguments.metadata,
-            url=request.url,
-            token=request.token,
-            worker_id=request.worker_id,
-            fake_job=request.fake_job,
-            received_at=request.received_at,
-            accepted_at=request.accepted_at,
-            assigned_at=request.assigned_at,
-            launched_at=request.launched_at,
+    job = agent_proto.Job(id="AJ_smoke", room=models.Room(name="console", sid="RM_smoke"))
+    await sup.launch_job(
+        RunningJobInfo(
+            accept_arguments=AcceptArguments(name="", identity="agent", metadata="", attributes=[]),
+            job=JobInfo(
+                id=job.id,
+                dispatch_id="",
+                type=0,
+                room="console",
+                room_sid="RM_smoke",
+                agent_name="",
+                metadata="",
+                deployment="",
+                enable_recording=False,
+                enable_redaction=False,
+                proto=job.SerializeToString(),
+            ),
+            url="",
+            token="",
+            worker_id="smoke",
+            fake_job=True,
+            received_at=0,
+            accepted_at=0,
+            assigned_at=0,
         )
     )
     await asyncio.wait_for(serving, 30)
     assert runner._job_task is not None
     await asyncio.wait_for(runner._job_task, 30)
     await client.aclose()
-    sup._core_thread_exited()
-    assert await sup.run()
+    parent.launch.thread_exited()
+    assert await sup.join()
+    assert sup.status == JobStatus.SUCCESS, sup.status
     print(f"job {seen} told its parent {[m for m, _ in Parent.logs]}")
     # the participant's entrypoint runs beside the entrypoint, in no set order with it
     assert sorted(seen) == [
@@ -799,7 +801,7 @@ async def cli() -> None:
 
     from livekit.agents import cli as agents_cli
     from livekit.agents._generated.cli import CliArgsStart
-    from livekit.agents.job import JobAcceptArguments, RunningJobInfo
+    from livekit.agents._generated.worker_server import AcceptArguments, JobInfo, RunningJobInfo
     from livekit.protocol import agent as agent_proto
     from livekit.protocol.agent_pb import agent_dev
 
@@ -829,12 +831,29 @@ async def cli() -> None:
         reloaded: list[RunningJobInfo] = []
         _active_jobs = [
             RunningJobInfo(
-                accept_arguments=JobAcceptArguments(name="n", identity="i", metadata="m"),
-                job=agent_proto.Job(id="AJ_running"),
+                accept_arguments=AcceptArguments(
+                    name="n", identity="i", metadata="m", attributes=[]
+                ),
+                job=JobInfo(
+                    id="AJ_running",
+                    dispatch_id="",
+                    type=0,
+                    room=None,
+                    room_sid=None,
+                    agent_name="",
+                    metadata="",
+                    deployment="",
+                    enable_recording=False,
+                    enable_redaction=False,
+                    proto=agent_proto.Job(id="AJ_running").SerializeToString(),
+                ),
                 url="wss://x",
                 token="t",
                 worker_id="w",
                 fake_job=True,
+                received_at=0,
+                accepted_at=0,
+                assigned_at=0,
             )
         ]
 
@@ -1135,8 +1154,9 @@ async def llm_prewarm() -> None:
 _JOB_LOGS = """
 import asyncio, logging, multiprocessing as mp, sys
 from livekit.agents import Agent, cli
-from livekit.agents.ipc import JobExecutor
-from livekit.agents.job import JobAcceptArguments, RunningJobInfo
+from livekit.agents import _core
+from livekit.agents._generated.worker_server import AcceptArguments, JobInfo, RunningJobInfo
+from livekit.agents.ipc import JobLauncher, JobRunnerOptions
 from livekit.protocol import agent, models
 
 
@@ -1149,20 +1169,25 @@ async def entrypoint(ctx):
 async def main(style):
     if style != "none":
         cli.setup_logging("INFO")
-    proc = JobExecutor(
-        job_entrypoint_fnc=entrypoint, session_end_fnc=None,
-        simulation_end_fnc=None, initialize_timeout=60,
-        close_timeout=10, session_end_timeout=10, memory_warn_mb=0, memory_limit_mb=0,
-        ping_interval=2.5, ping_timeout=60, high_ping_threshold=1, http_proxy=None,
-        mp_ctx=mp.get_context("spawn"), loop=asyncio.get_running_loop(),
+    launcher = JobLauncher(
+        job_entrypoint_fnc=entrypoint, session_end_fnc=None, simulation_end_fnc=None,
+        session_end_timeout=10, mp_ctx=mp.get_context("spawn"), loop=asyncio.get_running_loop(),
+    )
+    proc = _core.JobSupervisor(
+        launcher, JobRunnerOptions(initialize_timeout=60, close_timeout=10, high_ping_threshold=1)
     )
     await proc.start()
     await proc.initialize()
-    room = models.Room(name="logs", sid="RM_logs")
+    job = agent.Job(id="AJ_logs", room=models.Room(name="logs", sid="RM_logs"))
     await proc.launch_job(RunningJobInfo(
-        accept_arguments=JobAcceptArguments(name="", identity="agent", metadata=""),
-        job=agent.Job(id="AJ_logs", room=room), url="", token="", worker_id="smoke",
-        fake_job=True,
+        accept_arguments=AcceptArguments(name="", identity="agent", metadata="", attributes=[]),
+        job=JobInfo(
+            id=job.id, dispatch_id="", type=0, room="logs", room_sid="RM_logs", agent_name="",
+            metadata="", deployment="", enable_recording=False, enable_redaction=False,
+            proto=job.SerializeToString(),
+        ),
+        url="", token="", worker_id="smoke", fake_job=True,
+        received_at=0, accepted_at=0, assigned_at=0,
     ))
     await proc.join()
 

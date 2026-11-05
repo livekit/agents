@@ -12,7 +12,8 @@ from typing import Any
 import pytest
 
 from livekit.agents import JobContext, _core
-from livekit.agents._generated.worker_ipc import StartJobFields
+from livekit.agents._generated.worker_server import AcceptArguments, JobInfo, RunningJobInfo
+from livekit.agents.ipc import JobRunnerOptions
 from livekit.agents.ipc.child import _JobProc
 from livekit.agents.job import JobExecutorType
 from livekit.protocol import agent, models
@@ -46,8 +47,10 @@ async def _run_job() -> None:
 
         def __init__(self) -> None:
             self.endpoint: asyncio.Future[int] = asyncio.get_running_loop().create_future()
+            self.launch: _core.JobLaunch | None = None
 
-        async def _core_launch(self, endpoint: int) -> None:
+        async def _core_launch(self, endpoint: int, launch: _core.JobLaunch) -> None:
+            self.launch = launch
             self.endpoint.set_result(endpoint)
 
         async def _core_completed(self, completion: Any) -> None:
@@ -60,19 +63,18 @@ async def _run_job() -> None:
     parent = Parent()
     supervisor = _core.JobSupervisor(
         parent,
-        thread=True,
-        initialize_timeout=3,
-        close_timeout=3,
-        memory_warn_mb=0,
-        memory_limit_mb=0,
-        ping_interval=0,
-        ping_timeout=0,
-        high_ping_threshold=1,
+        JobRunnerOptions(
+            thread=True,
+            initialize_timeout=3,
+            close_timeout=3,
+            ping_interval=0,
+            ping_timeout=0,
+            high_ping_threshold=1,
+        ),
     )
+    await supervisor.start()
     child_fd = await parent.endpoint
-    initializing = asyncio.ensure_future(
-        supervisor.initialize(asyncio_debug=False, http_proxy=None)
-    )
+    initializing = asyncio.ensure_future(supervisor.initialize())
     client = await asyncio.to_thread(_core.IpcClient, child_fd, runner.initialize)
     runner._client = client
     serving = asyncio.ensure_future(client.serve(runner))
@@ -81,27 +83,31 @@ async def _run_job() -> None:
         assert await asyncio.to_thread(entered.wait, 3), records
         # The writer is blocked in the host handler. Job acceptance and shutdown must still
         # complete on the real IPC connection and Python loop.
-        await asyncio.wait_for(
-            supervisor.start_job(
-                StartJobFields(
-                    job=agent.Job(
-                        id="AJ_logging", room=models.Room(name="logging")
-                    ).SerializeToString(),
-                    name="",
-                    identity="agent",
-                    metadata="",
-                    url="",
-                    token="",
-                    worker_id="worker",
-                    fake_job=True,
-                    received_at=0,
-                    accepted_at=0,
-                    assigned_at=0,
-                    launched_at=0,
-                )
+        job = agent.Job(id="AJ_logging", room=models.Room(name="logging"))
+        info = RunningJobInfo(
+            accept_arguments=AcceptArguments(name="", identity="agent", metadata="", attributes=[]),
+            job=JobInfo(
+                id=job.id,
+                dispatch_id="",
+                type=0,
+                room="logging",
+                room_sid=None,
+                agent_name="",
+                metadata="",
+                deployment="",
+                enable_recording=False,
+                enable_redaction=False,
+                proto=job.SerializeToString(),
             ),
-            timeout=3,
+            url="",
+            token="",
+            worker_id="worker",
+            fake_job=True,
+            received_at=0,
+            accepted_at=0,
+            assigned_at=0,
         )
+        await asyncio.wait_for(supervisor.launch_job(info), timeout=3)
         await asyncio.wait_for(asyncio.shield(serving), timeout=3)
         assert runner._job_task is not None
         await asyncio.wait_for(asyncio.shield(runner._job_task), timeout=3)
@@ -110,14 +116,17 @@ async def _run_job() -> None:
         async with asyncio.timeout(3):
             while not any(message == "job thread exiting" for _, message, _ in records):
                 await asyncio.sleep(0.01)
-        assert (logging.INFO, "job thread exiting", {"reason": "done ✓"}) in records, records
+        # the supervisor's diagnostics name the job the runner runs
+        expected = {"reason": "done ✓", "job_id": "AJ_logging", "room": "logging"}
+        assert (logging.INFO, "job thread exiting", expected) in records, records
     finally:
         release.set()
         await client.aclose()
         serving.cancel()
         await asyncio.gather(serving, return_exceptions=True)
         await runner.aclose()
-        supervisor._core_thread_exited()
+        assert parent.launch is not None
+        parent.launch.thread_exited()
 
 
 if __name__ == "__main__":

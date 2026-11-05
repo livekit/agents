@@ -3,10 +3,11 @@ use super::*;
 use std::any::Any;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use lk_agents_abi::BoxFuture;
 use lk_agents_abi::invoke::CallContext;
 use lk_agents_abi::worker::ipc::JobCompletion;
-use lk_agents_abi::worker::ipc_host::{JobExecutor as HostJobLauncher, SupervisedJob};
-use lk_agents_abi::{BoxFuture, RefRegistry};
+use lk_agents_abi::worker::ipc_host::{JobLauncher, LaunchReport, SupervisedJob};
+use lk_agents_abi::worker::types::{AcceptArguments, JobInfo, RunningJobInfo};
 use serde_json::{Map, Value};
 
 /// Processes are numbered in creation order; `fail_init` makes every initialize fail,
@@ -44,15 +45,18 @@ impl Host {
     }
 }
 
-/// The pool sees a process only by its identity: no step reaches the host's executor.
+/// The pool sees a process only by its identity: no step reaches its launcher.
 pub(in crate::ipc) struct Numbered(pub(in crate::ipc) usize);
 
-impl HostJobLauncher for Numbered {
+impl SupervisedJob for Numbered {}
+
+impl JobLauncher for Numbered {
     fn launch<'a>(
         &'a self,
         _cx: &lk_agents_abi::telemetry::Cx,
         _: &'a CallContext,
         _: i64,
+        _: Arc<dyn LaunchReport>,
     ) -> BoxFuture<'a, Result<(), HostError>> {
         unreachable!()
     }
@@ -73,71 +77,49 @@ impl HostJobLauncher for Numbered {
     ) -> Result<(), HostError> {
         unreachable!()
     }
-    fn start<'a>(
-        &'a self,
-        _cx: &lk_agents_abi::telemetry::Cx,
-        _: &'a CallContext,
-    ) -> BoxFuture<'a, Result<Arc<dyn SupervisedJob>, HostError>> {
-        unreachable!()
-    }
-    fn initialize<'a>(
-        &'a self,
-        _cx: &lk_agents_abi::telemetry::Cx,
-        _: &'a CallContext,
-    ) -> BoxFuture<'a, Result<(), HostError>> {
-        unreachable!()
-    }
-    fn launch_job<'a>(
-        &'a self,
-        _cx: &lk_agents_abi::telemetry::Cx,
-        _: &'a CallContext,
-        _: HostRef,
-        _: f64,
-    ) -> BoxFuture<'a, Result<(), HostError>> {
-        unreachable!()
-    }
-    fn close<'a>(
-        &'a self,
-        _cx: &lk_agents_abi::telemetry::Cx,
-        _: &'a CallContext,
-    ) -> BoxFuture<'a, Result<(), HostError>> {
-        unreachable!()
-    }
-    fn join<'a>(
-        &'a self,
-        _cx: &lk_agents_abi::telemetry::Cx,
-        _: &'a CallContext,
-    ) -> BoxFuture<'a, Result<bool, HostError>> {
-        unreachable!()
-    }
 }
 
 fn number(process: &Executor) -> usize {
-    let host: &dyn Any = &*process.host;
-    host.downcast_ref::<Numbered>().expect("a numbered process").0
+    let process: &dyn Any = &*process.0;
+    process.downcast_ref::<Numbered>().expect("a numbered process").0
 }
 
 fn numbers(processes: &[Executor]) -> Vec<usize> {
     processes.iter().map(number).collect()
 }
 
-struct NoRefs;
-
-impl RefRegistry for NoRefs {
-    fn release(&self, _: u64) {}
-}
-
-/// The job the pool hands a process: it never reads it.
-fn job() -> HostRef {
-    let refs: Arc<dyn RefRegistry> = Arc::new(NoRefs);
-    HostRef::new(0, &refs)
+/// The job `id`: the pool reads nothing else of it.
+pub(in crate::ipc) fn job(id: &str) -> RunningJobInfo {
+    RunningJobInfo {
+        accept_arguments: AcceptArguments::default(),
+        job: JobInfo {
+            id: id.to_owned(),
+            dispatch_id: String::new(),
+            r#type: 0,
+            room: None,
+            room_sid: None,
+            agent_name: String::new(),
+            metadata: String::new(),
+            deployment: String::new(),
+            enable_recording: false,
+            enable_redaction: false,
+            proto: Vec::new(),
+        },
+        url: String::new(),
+        token: String::new(),
+        worker_id: String::new(),
+        fake_job: false,
+        received_at: 0.0,
+        accepted_at: 0.0,
+        assigned_at: 0.0,
+    }
 }
 
 #[async_trait::async_trait]
 impl Executors for Host {
     async fn create(&self) -> Result<Executor, HostError> {
         let mut created = self.created.lock();
-        let process = Executor::new(Arc::new(Numbered(created.len())));
+        let process = Executor(Arc::new(Numbered(created.len())));
         created.push(process.clone());
         Ok(process)
     }
@@ -150,7 +132,12 @@ impl Executors for Host {
         }
         if self.fail_init { Err(HostError::new("init failed")) } else { Ok(()) }
     }
-    async fn launch(&self, _: &Executor, _: &HostRef) -> Result<(), HostError> {
+    async fn launch(
+        &self,
+        _: &Executor,
+        _: &RunningJobInfo,
+        _: &telemetry::Cx,
+    ) -> Result<(), HostError> {
         if self.slow_launch {
             std::future::pending::<()>().await;
         }
@@ -246,7 +233,7 @@ async fn keeps_the_idle_processes_warm_and_replaces_the_one_a_job_takes() {
     let pool = pool(&host, 2);
     pool.start().await.unwrap();
     assert_eq!(count(&host, ProcessEvent::Ready), 2);
-    pool.launch_job("j1", job()).await.unwrap();
+    pool.launch_job(job("j1"), telemetry::Cx::NONE).await.unwrap();
     assert_eq!(count(&host, ProcessEvent::JobLaunched), 1);
     tokio::time::sleep(REFILL_INTERVAL * 3).await;
     assert_eq!(count(&host, ProcessEvent::Ready), 3, "the taken process is replaced");
@@ -271,7 +258,7 @@ async fn exited_warm_process_is_never_assigned_to_a_job() {
     })
     .await
     .unwrap();
-    pool.launch_job("after-exit", job()).await.unwrap();
+    pool.launch_job(job("after-exit"), telemetry::Cx::NONE).await.unwrap();
     assert!(
         host.events
             .lock()
@@ -289,7 +276,7 @@ async fn a_launch_raises_when_every_spawn_fails() {
     let pool = pool(&host, 0);
     pool.start().await.unwrap();
     assert!(matches!(
-        pool.launch_job("j1", job()).await,
+        pool.launch_job(job("j1"), telemetry::Cx::NONE).await,
         Err(LaunchError::AcquireExhausted { attempts: MAX_ACQUIRE_ATTEMPTS })
     ));
     assert_eq!(pool.jobs_waiting(), 0);
@@ -314,7 +301,7 @@ async fn a_cancelled_launch_releases_its_wait_and_its_process() {
     pool.start().await.unwrap();
     let waiting = tokio::spawn({
         let pool = pool.clone();
-        async move { pool.launch_job("j1", job()).await }
+        async move { pool.launch_job(job("j1"), telemetry::Cx::NONE).await }
     });
     tokio::time::sleep(Duration::from_millis(5)).await;
     waiting.abort();
@@ -326,7 +313,7 @@ async fn a_cancelled_launch_releases_its_wait_and_its_process() {
     pool.start().await.unwrap();
     let launching = tokio::spawn({
         let pool = pool.clone();
-        async move { pool.launch_job("j1", job()).await }
+        async move { pool.launch_job(job("j1"), telemetry::Cx::NONE).await }
     });
     tokio::time::sleep(Duration::from_millis(20)).await;
     launching.abort();
@@ -343,7 +330,7 @@ async fn join_jobs_waits_for_the_processes_running_a_job() {
     let host = Arc::new(Host::default());
     let pool = pool(&host, 1);
     pool.start().await.unwrap();
-    pool.launch_job("j1", job()).await.unwrap();
+    pool.launch_job(job("j1"), telemetry::Cx::NONE).await.unwrap();
     let joining = tokio::spawn({
         let pool = pool.clone();
         async move { pool.join_jobs().await }
@@ -362,7 +349,7 @@ async fn a_failed_launch_is_retried_on_a_fresh_process() {
     let host = Arc::new(Host { fail_launch: AtomicUsize::new(1), ..Host::default() });
     let pool = pool(&host, 1);
     pool.start().await.unwrap();
-    pool.launch_job("j1", job()).await.unwrap();
+    pool.launch_job(job("j1"), telemetry::Cx::NONE).await.unwrap();
     assert_eq!(count(&host, ProcessEvent::JobLaunched), 1);
     assert!(host.closed.lock().contains(&0), "the process that failed is closed");
     pool.aclose().await;
@@ -381,7 +368,9 @@ async fn failed_launch_waiting_for_reaping_does_not_spawn_unbounded_replacements
     let requests: Vec<_> = (0..3)
         .map(|n| {
             let pool = pool.clone();
-            tokio::spawn(async move { pool.launch_job(&format!("job-{n}"), job()).await })
+            tokio::spawn(async move {
+                pool.launch_job(job(&format!("job-{n}")), telemetry::Cx::NONE).await
+            })
         })
         .collect();
 
@@ -407,13 +396,13 @@ async fn direct_launch_is_refused_after_drain_and_close() {
     pool.start().await.unwrap();
     pool.join_jobs().await;
     assert!(matches!(
-        pool.launch_job("after-drain", job()).await,
+        pool.launch_job(job("after-drain"), telemetry::Cx::NONE).await,
         Err(LaunchError::Admission(PoolAdmissionError::Draining))
     ));
     assert_eq!(host.created(), 1);
     pool.aclose().await;
     assert!(matches!(
-        pool.launch_job("after-close", job()).await,
+        pool.launch_job(job("after-close"), telemetry::Cx::NONE).await,
         Err(LaunchError::Admission(PoolAdmissionError::Closed))
     ));
     assert_eq!(host.created(), 1);
@@ -534,7 +523,7 @@ async fn os_exit_removes_warm_eligibility_before_the_reaping_receipt() {
     host.close(&host.process(0)).await.unwrap();
     tokio::time::sleep(REFILL_INTERVAL).await;
     assert!(numbers(&pool.processes()).contains(&0), "ownership must remain until reaping");
-    pool.launch_job("after-os-exit", job()).await.unwrap();
+    pool.launch_job(job("after-os-exit"), telemetry::Cx::NONE).await.unwrap();
     let dead_process_was_launched = host
         .events
         .lock()
@@ -558,7 +547,7 @@ fn an_event_handler_can_read_the_pool() {
             let pool = pool(&host, 1);
             let _ = host.reads_pool.set(pool.clone());
             pool.start().await.unwrap();
-            pool.launch_job("j1", job()).await.unwrap();
+            pool.launch_job(job("j1"), telemetry::Cx::NONE).await.unwrap();
             pool.aclose().await;
             assert!(count(&host, ProcessEvent::Closed) >= 1);
         });
@@ -608,14 +597,14 @@ mod generated_sequences {
         for n in 0..3 {
             let pool = pool.clone();
             requests.push(tokio::spawn(async move {
-                pool.launch_job(&format!("seed-{seed}-job-{n}"), job()).await
+                pool.launch_job(job(&format!("seed-{seed}-job-{n}")), telemetry::Cx::NONE).await
             }));
         }
         tokio::time::sleep(Duration::from_millis(1)).await;
         phase.set("duplicate admission");
         assert!(
             matches!(
-                pool.launch_job(&format!("seed-{seed}-job-0"), job()).await,
+                pool.launch_job(job(&format!("seed-{seed}-job-0")), telemetry::Cx::NONE).await,
                 Err(LaunchError::Admission(PoolAdmissionError::DuplicateJob))
             ),
             "duplicate admitted: seed {seed}"
@@ -653,7 +642,7 @@ mod generated_sequences {
         tokio::time::sleep(Duration::from_millis(1)).await;
         assert!(!drain.is_finished(), "drain finished with running jobs: seed {seed}");
         assert!(matches!(
-            pool.launch_job("during-drain", job()).await,
+            pool.launch_job(job("during-drain"), telemetry::Cx::NONE).await,
             Err(LaunchError::Admission(PoolAdmissionError::Draining))
         ));
         let mut processes = pool.processes();

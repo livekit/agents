@@ -389,8 +389,8 @@ def _worker_main() -> None:
         init = ipc.ProcPool.__init__
 
         def patched(self: Any, *args: Any, **kwargs: Any) -> None:
+            kwargs["options"].ping_timeout = ping_timeout
             init(self, *args, **kwargs)
-            self._executor_args["ping_timeout"] = ping_timeout
 
         ipc.ProcPool.__init__ = patched  # type: ignore[method-assign]
     if "job_executor_type" in options:

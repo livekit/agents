@@ -15,8 +15,9 @@ use parking_lot::Mutex;
 use tokio::sync::{Notify, watch};
 use tokio::time::Instant;
 
-use lk_agents_abi::HostRef;
+use crate::ipc::telemetry;
 use lk_agents_abi::errors::HostError;
+use lk_agents_abi::worker::types::RunningJobInfo;
 
 use super::process_pool::Executor;
 
@@ -104,7 +105,13 @@ pub trait Executors: Send + Sync + 'static {
     async fn create(&self) -> Result<Executor, HostError>;
     async fn start(&self, proc: &Executor) -> Result<(), HostError>;
     async fn initialize(&self, proc: &Executor) -> Result<(), HostError>;
-    async fn launch(&self, proc: &Executor, job: &HostRef) -> Result<(), HostError>;
+    /// Hands `job` to `proc`, continuing the span `cx`.
+    async fn launch(
+        &self,
+        proc: &Executor,
+        job: &RunningJobInfo,
+        cx: &telemetry::Cx,
+    ) -> Result<(), HostError>;
     async fn close(&self, proc: &Executor) -> Result<(), HostError>;
     /// A step that failed on `proc`, as the host's diagnostic `message`.
     fn failed(&self, proc: &Executor, message: &'static str, error: HostError);
@@ -750,7 +757,12 @@ impl ProcPool {
         }
     }
 
-    pub async fn launch_job(&self, job_id: &str, job: HostRef) -> Result<(), LaunchError> {
+    pub async fn launch_job(
+        &self,
+        job: RunningJobInfo,
+        cx: telemetry::Cx,
+    ) -> Result<(), LaunchError> {
+        let job_id = job.job.id.as_str();
         let admitted = self.update(|_, st| {
             let request = ReservationId(st.next_request);
             st.next_request += 1;
@@ -796,7 +808,7 @@ impl ProcPool {
                 }
                 Failure::Closed => LaunchError::Admission(PoolAdmissionError::Closed),
             })?;
-            match self.0.host.launch(&process, &job).await {
+            match self.0.host.launch(&process, &job, &cx).await {
                 Ok(()) => {
                     let completed = self.update(|_, st| {
                         if st.reservation(request) != Some(ReservationState::Reserved(id)) {

@@ -28,17 +28,17 @@ from livekit.agents import (
     ModelSettings,
     RunContext,
     VoiceSession,
+    _core,
     llm,
     stt,
     telemetry,
 )
 from livekit.agents.a2a import AgentClient
-from livekit.agents.ipc import JobExecutor
-from livekit.agents.job import JobAcceptArguments, RunningJobInfo
 from livekit.agents.llm import ChatContext, ChatMessage, FunctionToolCall
 from livekit.protocol import agent as agent_proto
 
 from .a2a_peer import Peer
+from .conformance.ipc_processes import job_runner, running_job
 from .fake_io import FakeAudioInput, FakeAudioOutput
 from .fake_llm import FakeLLM, FakeLLMResponse
 from .fake_stt import FakeSTT, FakeUserSpeech
@@ -391,7 +391,7 @@ def _attr(span: dict[str, Any], key: str) -> Any:
 
 async def test_job_callbacks_spans_nest_under_their_job_spans(
     collector: _Collector,
-    own_executor: Callable[[JobExecutor], JobExecutor],
+    own_executor: Callable[[_core.JobSupervisor], _core.JobSupervisor],
 ) -> None:
     async def entrypoint(ctx: JobContext) -> None:
         with _opened("entrypoint"):
@@ -403,28 +403,19 @@ async def test_job_callbacks_spans_nest_under_their_job_spans(
             await asyncio.sleep(0)
 
     executor = own_executor(
-        JobExecutor(
-            thread=True,
-            job_entrypoint_fnc=entrypoint,
+        job_runner(
+            entrypoint,
             session_end_fnc=session_end,
-            simulation_end_fnc=None,
-            initialize_timeout=10,
-            close_timeout=10,
             session_end_timeout=5,
+            thread=True,
             ping_interval=0,
             high_ping_threshold=1,
-            http_proxy=None,
-            loop=asyncio.get_running_loop(),
         )
     )
     try:
         await executor.start()
         await executor.initialize()
-        await executor.launch_job(
-            RunningJobInfo(
-                JobAcceptArguments("", "", ""), agent_proto.Job(id="AJ_parent"), "", "", "", True
-            )
-        )
+        await executor.launch_job(running_job(agent_proto.Job(id="AJ_parent")))
         await asyncio.wait_for(executor.join(), 10)
     finally:
         await executor.aclose()

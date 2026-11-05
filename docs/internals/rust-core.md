@@ -2305,8 +2305,8 @@ pool policy, in three layers:
 - Supervisor, pool and dispatch: policy over a channel and a runner, never
   sockets, framing or the OS.
 
-What a job runs in is a `JobExecutor`: `launch()` creates the channel, has the
-host start the runner on the job's end and returns the `Runner` with the
+What a job runs in is a `RunnerExecutor`: `launch()` creates the channel, has the
+host's launcher start the runner on the job's end and returns the `Runner` with the
 worker's end. A `Runner` has three operations: `finished()` resolves with its
 `Exit` (code, and whether it was killed) once nothing of it is left, `stop()`
 ends it where it can be forced and `memory_mb()` samples its own footprint.
@@ -2326,6 +2326,31 @@ The host-language process adapter launches and bootstraps the child with the
 Rust-created IPC endpoint. Python uses `multiprocessing`; Node supplies its own
 launch adapter. The child runs application initialization and job callbacks.
 Host adapters do not implement IPC loops, supervision or pool policy.
+
+The host's port is the launcher (`ipc.JobLauncher`): `_core_launch(endpoint, launch)`
+starts the process (`multiprocessing`, the forkserver's preloads) or the job thread
+and reports it on `launch` (`_core.JobLaunch`: a process's receipt, a thread's
+return); `_core_completed` finishes the start method's bookkeeping;
+`_core_log` writes the supervisor's diagnostics, which already name the pid and
+the job. Everything else is the native `JobSupervisor` the pool creates and drives:
+
+| State | Meaning |
+| --- | --- |
+| `started`, `closing` | `start()` was called; `aclose()`/`kill()` was called, after which nothing starts and no job is taken |
+| `initialized`, `initialize_time` | the runner answered its `Hello`, and how long it took |
+| `pid` | the process's id once the OS created it; `None` for a thread |
+| `status` | `None` until a job was launched, `RUNNING` until the runner ended, then `SUCCESS` (exit 0, clean channel) or `FAILED` |
+| `running_job` | the worker's `RunningJobInfo`, set once the runner took it, kept after it ended |
+| `exitcode`, `killed` | set once supervision is over; `killed`: stopped by force |
+
+`aclose()` asks an initialized runner to shut down and stops it past
+`close_timeout`; `kill()` stops it at once. A thread cannot be stopped: both wait
+for it to return, and it has no pong deadline nor memory limit. A runner takes
+one job: a second `launch_job` is refused. Supervision settings and their
+production defaults are `JobRunnerOptions`. The pool answers `active_jobs`
+(`status` `RUNNING`) and `get_by_job_id`, and notifies the host of each
+process's step through one `emit`, which also drives the Prometheus process
+metrics.
 
 Provider clients and model execution run in the job process
 (`lk-agents-inference`). There is no separate inference-process service.

@@ -212,16 +212,7 @@ impl ::lk_agents_abi::cli::DevServer for DevServerProxy {
     fn running_jobs(
         &self,
     ) -> ::std::result::Result<
-        ::std::vec::Vec<(
-            ::std::vec::Vec<u8>,
-            ::std::string::String,
-            ::std::string::String,
-            ::std::string::String,
-            ::std::string::String,
-            ::std::string::String,
-            ::std::string::String,
-            bool,
-        )>,
+        ::std::vec::Vec<::lk_agents_abi::worker::types::RunningJobInfo>,
         ::lk_agents_abi::errors::HostError,
     > {
         let host = ::std::sync::Arc::clone(&self.host);
@@ -248,53 +239,9 @@ impl ::lk_agents_abi::cli::DevServer for DevServerProxy {
                 items
                     .map(|item| {
                         let item = item?;
-                        (|| -> ::pyo3::PyResult<_> {
-                            let tuple = item.cast::<::pyo3::types::PyTuple>()?;
-                            if tuple.len() != 8 {
-                                return Err(::pyo3::exceptions::PyTypeError::new_err(format!(
-                                    "{}: expected a tuple of 8 items",
-                                    "DevServer._core_running_jobs"
-                                )));
-                            }
-                            let item_0 = tuple.get_item(0)?;
-                            let item_1 = tuple.get_item(1)?;
-                            let item_2 = tuple.get_item(2)?;
-                            let item_3 = tuple.get_item(3)?;
-                            let item_4 = tuple.get_item(4)?;
-                            let item_5 = tuple.get_item(5)?;
-                            let item_6 = tuple.get_item(6)?;
-                            let item_7 = tuple.get_item(7)?;
-                            Ok((
-                                (if item_0.is_instance_of::<::pyo3::types::PyBytes>()
-                                    || item_0.is_instance_of::<::pyo3::types::PyByteArray>()
-                                    || item_0.is_instance_of::<::pyo3::types::PyMemoryView>()
-                                {
-                                    crate::py_values::owned_bytes(
-                                        item_0.as_any(),
-                                        "DevServer._core_running_jobs",
-                                    )
-                                } else {
-                                    item_0.try_iter().and_then(|items| {
-                                        items
-                                            .map(|item| {
-                                                let item = item?;
-                                                crate::py_values::number_from_py::<u8>(
-                                                    item.as_any(),
-                                                    "DevServer._core_running_jobs",
-                                                )
-                                            })
-                                            .collect::<PyResult<Vec<_>>>()
-                                    })
-                                })?,
-                                (item_1.extract::<::std::string::String>())?,
-                                (item_2.extract::<::std::string::String>())?,
-                                (item_3.extract::<::std::string::String>())?,
-                                (item_4.extract::<::std::string::String>())?,
-                                (item_5.extract::<::std::string::String>())?,
-                                (item_6.extract::<::std::string::String>())?,
-                                (item_7.extract::<bool>())?,
-                            ))
-                        })()
+                        crate::generated::records::worker_server::running_job_info_from_py(
+                            item.as_any(),
+                        )
                     })
                     .collect::<PyResult<Vec<_>>>()
             }))
@@ -310,16 +257,7 @@ impl ::lk_agents_abi::cli::DevServer for DevServerProxy {
     fn reload_jobs(
         &self,
         cx: &::lk_agents_abi::telemetry::Cx,
-        jobs: ::std::vec::Vec<(
-            ::std::vec::Vec<u8>,
-            ::std::string::String,
-            ::std::string::String,
-            ::std::string::String,
-            ::std::string::String,
-            ::std::string::String,
-            ::std::string::String,
-            bool,
-        )>,
+        jobs: ::std::vec::Vec<::lk_agents_abi::worker::types::RunningJobInfo>,
     ) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
     {
         let host = ::std::sync::Arc::clone(&self.host);
@@ -331,8 +269,16 @@ impl ::lk_agents_abi::cli::DevServer for DevServerProxy {
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
-                    [::pyo3::IntoPyObjectExt::into_bound_py_any(jobs_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [::pyo3::types::PyList::new(
+                    py,
+                    jobs_arg
+                        .into_iter()
+                        .map(|x| {
+                            crate::generated::records::worker_server::running_job_info_to_py(py, x)
+                        })
+                        .collect::<PyResult<Vec<_>>>()?,
+                )?
+                .into_any()];
                 Ok((
                     host.bind(py).getattr("_core_reload_jobs")?,
                     ::pyo3::types::PyTuple::new(py, args)?,

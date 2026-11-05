@@ -7,6 +7,7 @@ use lk_agents_net::task::{TaskSet, TokioSpawner};
 use std::sync::Arc;
 use std::time::Duration;
 
+use lk_agents_abi::errors::HostError;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::Instant;
 
@@ -218,6 +219,8 @@ struct Control {
 
 #[derive(Clone, Default)]
 struct Status {
+    /// Whether a runner was launched, once the launch settled, with why not.
+    launched: Option<Result<(), HostError>>,
     failure: Option<lk_agents_abi::worker::ipc::IpcFailure>,
     /// How the runner ended, once it did.
     exit: Option<Exit>,
@@ -254,6 +257,7 @@ impl RunnerSupervisor {
             match executor.launch().await {
                 Ok((runner, channel)) => {
                     drop(executor);
+                    status_tx.send_modify(|status| status.launched = Some(Ok(())));
                     let driver = Driver::new(opts, host, blocking_io, runner, channel, status_tx);
                     driver.run(commands_rx, control_rx).await;
                 }
@@ -262,6 +266,15 @@ impl RunnerSupervisor {
         };
         driving.spawn(&spawner, "job runner supervisor", run);
         Self { commands, control, status, _driver: driving }
+    }
+
+    /// Once the launch settled: whether a runner was launched, with why not.
+    pub async fn launched(&self) -> Result<(), HostError> {
+        let mut status = self.status.clone();
+        match status.wait_for(|status| status.launched.is_some()).await {
+            Ok(status) => status.launched.clone().unwrap_or(Ok(())),
+            Err(_) => Err(HostError::new("the supervisor ended before the launch settled")),
+        }
     }
 
     /// Whether `stop()` killed the runner.
@@ -334,17 +347,18 @@ impl RunnerSupervisor {
 
 /// A launch that started nothing: whatever was asked of the runner fails with why.
 async fn refuse(
-    cause: String,
+    cause: HostError,
     host: Arc<dyn SupervisorCallbacks>,
     mut commands: mpsc::Receiver<Command>,
     status: watch::Sender<Status>,
 ) {
     host.log(Level::Error, &format!("launch failed before starting a runner: {cause}"), vec![]);
+    status.send_modify(|status| status.launched = Some(Err(cause.clone())));
     commands.close();
     while let Some(command) = commands.recv().await {
         match command {
             Command::Initialize(_, reply) => {
-                let _ = reply.send(Err(InitError::Failed(cause.clone())));
+                let _ = reply.send(Err(InitError::Failed(cause.to_string())));
             }
             Command::StartJob(_, reply) => {
                 let _ = reply.send(Err(StartJobError::Closed));

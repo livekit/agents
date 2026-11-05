@@ -12,8 +12,72 @@ from typing import TYPE_CHECKING, Any
 
 import psutil
 
+from livekit.agents import _core
+from livekit.agents._generated.worker_server import AcceptArguments, JobInfo, RunningJobInfo
+from livekit.agents.ipc import JobLauncher, JobRunnerOptions
+
 if TYPE_CHECKING:
-    from livekit.agents.ipc import JobExecutor
+    from collections.abc import Awaitable, Callable
+    from multiprocessing.context import BaseContext
+
+    from livekit.agents import JobContext
+    from livekit.protocol import agent
+
+
+def job_runner(
+    entrypoint: Callable[[JobContext], Awaitable[None]],
+    *,
+    session_end_fnc: Callable[[JobContext], Awaitable[None]] | None = None,
+    session_end_timeout: float = 1,
+    mp_ctx: BaseContext | None = None,
+    preload_modules: tuple[str, ...] = (),
+    user_arguments: Any | None = None,
+    launcher: type[JobLauncher] = JobLauncher,
+    **options: Any,
+) -> _core.JobSupervisor:
+    """One job runner over a fresh launcher; `options` are its `JobRunnerOptions`."""
+    options.setdefault("initialize_timeout", 10)
+    options.setdefault("close_timeout", 10)
+    return _core.JobSupervisor(
+        launcher(
+            job_entrypoint_fnc=entrypoint,
+            session_end_fnc=session_end_fnc,
+            simulation_end_fnc=None,
+            session_end_timeout=session_end_timeout,
+            preload_modules=preload_modules,
+            mp_ctx=mp_ctx,
+            user_arguments=user_arguments,
+            loop=asyncio.get_running_loop(),
+        ),
+        JobRunnerOptions(**options),
+    )
+
+
+def running_job(job: agent.Job, *, fake_job: bool = True) -> RunningJobInfo:
+    """The worker's record of `job`, as a dispatch would hand it over."""
+    return RunningJobInfo(
+        accept_arguments=AcceptArguments(name="", identity="", metadata="", attributes=[]),
+        job=JobInfo(
+            id=job.id,
+            dispatch_id=job.dispatch_id,
+            type=job.type,
+            room=job.room.name if job.HasField("room") else None,
+            room_sid=job.room.sid if job.HasField("room") else None,
+            agent_name=job.agent_name,
+            metadata=job.metadata,
+            deployment=job.deployment,
+            enable_recording=job.enable_recording,
+            enable_redaction=job.enable_redaction,
+            proto=job.SerializeToString(),
+        ),
+        url="",
+        token="",
+        worker_id="",
+        fake_job=fake_job,
+        received_at=0.0,
+        accepted_at=0.0,
+        assigned_at=0.0,
+    )
 
 
 def process_snapshot(process: psutil.Process) -> dict[str, Any]:
@@ -79,7 +143,7 @@ def terminate_processes(records: list[dict[str, Any]]) -> None:
                 process.kill()
 
 
-async def close_owned_executor(executor: JobExecutor, artifact_dir: Path) -> None:
+async def close_owned_executor(executor: _core.JobSupervisor, artifact_dir: Path) -> None:
     """Capture evidence before cleanup; a missed deadline remains a failure after emergency reaping."""
     artifact_dir.mkdir(parents=True, exist_ok=True)
     before = tree_snapshot(executor.pid) if executor.pid else []
@@ -89,8 +153,7 @@ async def close_owned_executor(executor: JobExecutor, artifact_dir: Path) -> Non
     try:
         async with asyncio.timeout(5):
             await executor.aclose()
-            if executor.started:
-                await executor.join()
+            await executor.join()
     except BaseException as error:
         failure = error
         observed = {record["pid"]: record for record in before}
@@ -99,9 +162,8 @@ async def close_owned_executor(executor: JobExecutor, artifact_dir: Path) -> Non
         before = list(observed.values())
         artifact.write_text(json.dumps({"failure": repr(error), "before": before}, indent=2))
         terminate_processes(before)
-        if executor.started:
-            with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(executor.join(), timeout=5)
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(executor.join(), timeout=5)
     finally:
         after: list[dict[str, Any]] = []
         deadline = asyncio.get_running_loop().time() + 5

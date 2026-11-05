@@ -5,12 +5,19 @@
 use crate::ipc::telemetry;
 use std::sync::Arc;
 
+use lk_agents_abi::errors::HostError;
 use lk_agents_abi::invoke::CallContext;
 use lk_agents_abi::worker::ipc_host;
 use tokio::sync::watch;
 
 use super::ipc_channel::{self, Channel};
+use super::owner::{JobLaunch, Report};
 use super::wire::{ToChild, ToParent};
+
+/// A local failure, as a launch reports it.
+pub(super) fn host_error(error: impl std::fmt::Display) -> HostError {
+    HostError::new(error.to_string())
+}
 
 /// The worker's end of a runner's channel.
 pub type Connection = Channel<ToChild, ToParent>;
@@ -18,9 +25,9 @@ pub type Connection = Channel<ToChild, ToParent>;
 /// Launches one job runner.
 #[async_trait::async_trait]
 pub trait RunnerExecutor: Send + Sync + 'static {
-    /// Starts a runner and returns it with the worker's end of its channel; an error means
-    /// nothing was started.
-    async fn launch(&self) -> Result<(Box<dyn Runner>, Connection), String>;
+    /// Starts a runner and returns it with the worker's end of its channel; an error (the host's
+    /// own, when the host failed) means nothing was started.
+    async fn launch(&self) -> Result<(Box<dyn Runner>, Connection), HostError>;
 }
 
 /// One launched runner.
@@ -45,34 +52,27 @@ pub struct Exit {
     pub killed: bool,
 }
 
-/// A job thread of the worker's own process: the host starts it on the job's end of the channel
-/// and reports its return through [`ThreadExecutor::exited`].
+/// A job thread of the worker's own process: the launcher starts it on the job's end of the
+/// channel and reports its return on the launch.
 pub struct ThreadExecutor {
-    host: Arc<dyn ipc_host::JobExecutor>,
+    launcher: Arc<dyn ipc_host::JobLauncher>,
     context: CallContext,
-    exited: watch::Sender<bool>,
+    exited: Arc<watch::Sender<bool>>,
 }
 
 impl ThreadExecutor {
-    pub fn new(host: Arc<dyn ipc_host::JobExecutor>, context: CallContext) -> Self {
-        Self { host, context, exited: watch::channel(false).0 }
-    }
-
-    /// The thread returned.
-    pub fn exited(&self) {
-        self.exited.send_replace(true);
+    pub fn new(launcher: Arc<dyn ipc_host::JobLauncher>, context: CallContext) -> Self {
+        Self { launcher, context, exited: Arc::new(watch::channel(false).0) }
     }
 }
 
 #[async_trait::async_trait]
 impl RunnerExecutor for ThreadExecutor {
-    async fn launch(&self) -> Result<(Box<dyn Runner>, Connection), String> {
-        let (parent, child) = ipc_channel::pair().map_err(|error| error.to_string())?;
-        let connection = Channel::from_endpoint(parent).map_err(|error| error.to_string())?;
-        self.host
-            .launch(&telemetry::Cx::NONE, &self.context, child)
-            .await
-            .map_err(|error| error.to_string())?;
+    async fn launch(&self) -> Result<(Box<dyn Runner>, Connection), HostError> {
+        let (parent, child) = ipc_channel::pair().map_err(host_error)?;
+        let connection = Channel::from_endpoint(parent).map_err(host_error)?;
+        let launch = JobLaunch::report(Report::Thread(self.exited.clone()));
+        self.launcher.launch(&telemetry::Cx::NONE, &self.context, child, launch).await?;
         Ok((Box::new(JobThread(self.exited.subscribe())), connection))
     }
 }

@@ -328,6 +328,7 @@ from ._generated._core_voice import (
 from ._generated._core_worker import (
     HttpExchange as HttpExchange,
     IpcClient as IpcClient,
+    JobLaunch as JobLaunch,
     JobRun as JobRun,
     JobSupervisor as JobSupervisor,
     ProcPool as ProcPool,

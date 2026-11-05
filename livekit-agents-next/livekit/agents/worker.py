@@ -14,23 +14,15 @@ from typing import TYPE_CHECKING, Any, Literal, TypedDict, TypeVar
 from typing_extensions import Unpack
 
 from livekit import rtc
-from livekit.protocol import agent, models
+from livekit.protocol import models
 
 from . import _core, ipc, telemetry, utils
 from ._generated.worker_options import ServerOptions
-from ._generated.worker_server import (
-    ProcessStartOptions,
-    RunningJobInfo as CoreRunningJobInfo,
-)
+from ._generated.worker_server import ProcessStartOptions, RunningJobInfo
 from .evals import SimulationContext
 from .http import AgentRoutes
 from .ipc import preload_module_names
-from .job import (
-    JobAcceptArguments,
-    JobContext,
-    JobExecutorType,
-    RunningJobInfo,
-)
+from .job import JobContext, JobExecutorType
 from .log import logger
 from .storage import _CallThreadEntrypoint
 from .storage.session import _Handler
@@ -397,8 +389,7 @@ class _ServerCallbacks:
         self._proc_pool: ipc.ProcPool | None = None
 
     def active_jobs(self) -> list[RunningJobInfo]:
-        pool = self._proc_pool
-        return [p.running_job for p in pool.processes if p.running_job] if pool else []
+        return self._proc_pool.active_jobs if self._proc_pool is not None else []
 
     async def launch(self, info: RunningJobInfo) -> None:
         assert self._proc_pool is not None
@@ -438,15 +429,18 @@ class _ServerCallbacks:
             simulation_end_fnc=door.on_simulation_end,
             preload_modules=self._server._preload_modules,
             loop=loop,
-            job_executor_type=JobExecutorType(opts.job_executor_type),
             mp_ctx=mp_ctx,
             num_idle_processes=opts.pool.num_idle_processes,
-            initialize_timeout=opts.pool.initialize_timeout,
-            close_timeout=opts.pool.close_timeout,
+            options=ipc.JobRunnerOptions(
+                thread=JobExecutorType(opts.job_executor_type) == JobExecutorType.THREAD,
+                initialize_timeout=opts.pool.initialize_timeout,
+                close_timeout=opts.pool.close_timeout,
+                memory_warn_mb=opts.pool.memory_warn_mb,
+                memory_limit_mb=opts.pool.memory_limit_mb,
+                http_proxy=opts.pool.http_proxy,
+                asyncio_debug=loop.get_debug(),
+            ),
             session_end_timeout=opts.pool.session_end_timeout,
-            memory_warn_mb=opts.pool.memory_warn_mb,
-            memory_limit_mb=opts.pool.memory_limit_mb,
-            http_proxy=opts.pool.http_proxy,
             env=opts.env,
         )
         for event in ("process_started", "process_closed", "process_job_launched"):
@@ -482,34 +476,17 @@ class _ServerCallbacks:
         if self._proc_pool is not None:
             await self._proc_pool.aclose()
 
-    def _job_status(self, proc: ipc.JobExecutor) -> None:
-        if proc.running_job is not None and self._server._runtime is not None:
-            self._server._runtime.job_status(proc.running_job.job.id, proc.status.value)
+    def _job_status(self, proc: _core.JobSupervisor) -> None:
+        job, status = proc.running_job, proc.status
+        if job is not None and status is not None and self._server._runtime is not None:
+            self._server._runtime.job_status(job.job.id, status.value)
 
     # --- jobs and the user's load_fnc
 
-    async def _core_launch_job(self, info: CoreRunningJobInfo) -> str:
+    async def _core_launch_job(self, info: RunningJobInfo) -> str:
         """A job the core took, with the timeline it stamped."""
-        job = agent.Job.FromString(info.job.proto)
-        await self.launch(
-            RunningJobInfo(
-                accept_arguments=JobAcceptArguments(
-                    name=info.accept_arguments.name,
-                    identity=info.accept_arguments.identity,
-                    metadata=info.accept_arguments.metadata,
-                    attributes=dict(info.accept_arguments.attributes),
-                ),
-                job=job,
-                url=info.url,
-                token=info.token,
-                worker_id=info.worker_id,
-                fake_job=info.fake_job,
-                received_at=info.received_at,
-                accepted_at=info.accepted_at,
-                assigned_at=info.assigned_at,
-            )
-        )
-        return job.id  # `job_status` is keyed on the LiveKit job id
+        await self.launch(info)
+        return info.job.id  # `job_status` is keyed on the LiveKit job id
 
     async def _core_terminate_job(self, job_id: str) -> None:
         if self._proc_pool is not None and (proc := self._proc_pool.get_by_job_id(job_id)):

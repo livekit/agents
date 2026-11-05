@@ -13,6 +13,7 @@ pub mod ipc;
 pub mod server;
 pub mod transport;
 mod worker;
+pub use worker::job_info;
 #[cfg(test)]
 mod worker_tests;
 

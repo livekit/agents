@@ -925,7 +925,8 @@ pub trait WorkerHost: Send + Sync {
     async fn stop_endpoints(&self) {}
 }
 
-pub(crate) fn job_info(job: &livekit_protocol::Job) -> JobInfo {
+/// The job's scalar fields beside its exact bytes.
+pub fn job_info(job: &livekit_protocol::Job) -> JobInfo {
     JobInfo {
         id: job.id.clone(),
         dispatch_id: job.dispatch_id.clone(),

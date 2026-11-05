@@ -4,8 +4,9 @@ use std::any::Any;
 use std::sync::Arc;
 
 use crate::invoke::CallContext;
-use crate::worker::ipc::JobCompletion;
+use crate::worker::ipc::{JobCompletion, JobRunnerOptions, JobStatus};
 use crate::worker::job::StartJobFields;
+use crate::worker::types::RunningJobInfo;
 use crate::{HostRef, errors::HostError};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
@@ -33,18 +34,20 @@ pub enum WorkerError {
     Host(#[from] HostError),
 }
 
-/// The executor of one job runner (`ipc.JobExecutor`): it starts the job process or thread,
-/// owns the start method's bookkeeping and receives the supervisor's diagnostics.
-#[crate::host(proxy(host = "livekit.agents.ipc.JobExecutor"))]
-pub trait JobExecutor: Any + Send + Sync {
-    /// Start the runner on the job's end of the channel. A process reports its receipt through
-    /// `_core_launched_process`, a thread its return through `_core_thread_exited`.
+/// The host's side of one job runner (`ipc.JobLauncher`): it starts the runner, finishes the start
+/// method's bookkeeping once the runner ended, and writes the supervisor's diagnostics.
+#[crate::host(proxy(host = "livekit.agents.ipc.JobLauncher"))]
+pub trait JobLauncher: Send + Sync {
+    /// Start the runner on the job's end of the channel: a thread of this process when
+    /// `launch.thread`, else a process. A process reports its receipt through
+    /// `launch.process_started`, a thread its return through `launch.thread_exited`.
     #[host(await, name = "_core_launch")]
     fn launch<'a>(
         &'a self,
         cx: &crate::telemetry::Cx,
         #[host(context)] context: &'a CallContext,
         endpoint: i64,
+        launch: Arc<dyn LaunchReport>,
     ) -> crate::BoxFuture<'a, Result<(), HostError>>;
     /// The runner ended and its supervision is over.
     #[host(await, name = "_core_completed")]
@@ -54,7 +57,8 @@ pub trait JobExecutor: Any + Send + Sync {
         #[host(context)] context: &'a CallContext,
         completion: JobCompletion,
     ) -> crate::BoxFuture<'a, Result<(), HostError>>;
-    /// One supervision diagnostic on the host's logger, with the failure that caused it.
+    /// One supervision diagnostic on the host's logger, with the failure that caused it. `extra`
+    /// already names the process (`pid`) and its job (`job_id`, `room`, `room_id`).
     #[host(call, name = "_core_log")]
     fn log(
         &self,
@@ -63,46 +67,46 @@ pub trait JobExecutor: Any + Send + Sync {
         extra: Map<String, Value>,
         error: Option<HostError>,
     ) -> Result<(), HostError>;
-    /// The pool's steps: start the process (its supervisor), initialize it, hand it a job
-    /// (`launched_at` is when it took it), close it and join it.
-    #[host(await, name = "_core_start")]
-    fn start<'a>(
-        &'a self,
-        cx: &crate::telemetry::Cx,
-        #[host(context)] context: &'a CallContext,
-    ) -> crate::BoxFuture<'a, Result<Arc<dyn SupervisedJob>, HostError>>;
-    #[host(await, name = "initialize")]
-    fn initialize<'a>(
-        &'a self,
-        cx: &crate::telemetry::Cx,
-        #[host(context)] context: &'a CallContext,
-    ) -> crate::BoxFuture<'a, Result<(), HostError>>;
-    #[host(await, name = "_core_launch_job")]
-    fn launch_job<'a>(
-        &'a self,
-        cx: &crate::telemetry::Cx,
-        #[host(context)] context: &'a CallContext,
-        info: HostRef,
-        launched_at: f64,
-    ) -> crate::BoxFuture<'a, Result<(), HostError>>;
-    #[host(await, name = "aclose")]
-    fn close<'a>(
-        &'a self,
-        cx: &crate::telemetry::Cx,
-        #[host(context)] context: &'a CallContext,
-    ) -> crate::BoxFuture<'a, Result<(), HostError>>;
-    #[host(await, name = "_core_join")]
-    fn join<'a>(
-        &'a self,
-        cx: &crate::telemetry::Cx,
-        #[host(context)] context: &'a CallContext,
-    ) -> crate::BoxFuture<'a, Result<bool, HostError>>;
 }
 
-/// A native `JobSupervisor`, as its executor hands it to the pool.
+/// A native `JobLaunch`, as the supervisor hands it to its launcher.
+#[crate::host(native(refused = "expected a native JobLaunch"))]
+pub trait LaunchReport: Any + Send + Sync {}
+
+/// One launch of a job runner, as the launcher reports it.
+#[crate::host(class(name = "JobLaunch", native = LaunchReport))]
+pub trait JobLaunch: Send + Sync + Sized + 'static {
+    /// The runner is a thread of this process, else a process of the launcher's start method.
+    #[host(getter)]
+    fn thread(&self) -> bool;
+    /// The process's receipt, reported on the launch worker right after the OS created it.
+    #[host(call)]
+    fn process_started(
+        &self,
+        pid: u32,
+        sentinel: i64,
+        method: String,
+        owned: Vec<i64>,
+    ) -> Result<(), WorkerError>;
+    /// The job thread returned, reported from that thread.
+    #[host(call)]
+    fn thread_exited(&self) -> Result<(), WorkerError>;
+}
+
+/// A native `JobSupervisor`, as the pool hands it to the host.
 #[crate::host(native(refused = "expected a native JobSupervisor"))]
 pub trait SupervisedJob: Any + Send + Sync {}
 
+/// One job runner, a process or (`options.thread`) a thread of this process, and its one job:
+/// the worker launches it through `launcher`, initializes it, hands it the job, pings it,
+/// samples its memory, closes it and waits for its end, whether or not the host still awaits.
+///
+/// `status` is `None` until a job was launched, then `RUNNING` until the runner ended, then
+/// `SUCCESS` (exit code 0 and a clean control channel) or `FAILED`. `running_job` is set once
+/// the runner took its job and is kept after the runner ended. `aclose()` asks an initialized
+/// runner to shut down and stops it when late (`close_timeout`); `kill()` stops it at once. A
+/// thread cannot be stopped: both wait for it to return, and it has no pong deadline nor memory
+/// limit.
 #[crate::host(class(name = "JobSupervisor", native = SupervisedJob))]
 pub trait JobSupervisor: Send + Sync + Sized + 'static {
     /// What the hosting process lends the class.
@@ -110,66 +114,72 @@ pub trait JobSupervisor: Send + Sync + Sized + 'static {
     type Env;
 
     #[host(new)]
-    #[allow(clippy::too_many_arguments)]
-    /// `thread`: the runner is a thread of this process, else a process of the host's start
-    /// method.
-    #[allow(clippy::too_many_arguments, reason = "Preserve the public Python signature")]
     fn new(
         env: &Self::Env,
-        host: Arc<dyn JobExecutor>,
-        #[host(kw)] thread: bool,
-        initialize_timeout: f64,
-        close_timeout: f64,
-        memory_warn_mb: f64,
-        memory_limit_mb: f64,
-        ping_interval: f64,
-        ping_timeout: f64,
-        high_ping_threshold: f64,
+        launcher: Arc<dyn JobLauncher>,
+        options: JobRunnerOptions,
         #[host(context)] context: CallContext,
     ) -> Result<Self, WorkerError>;
-    /// The seconds the process took to be ready.
-    #[host(await)]
-    async fn initialize(
-        &self,
-        #[host(kw)] asyncio_debug: bool,
-        http_proxy: Option<String>,
-    ) -> Result<f64, WorkerError>;
+    /// `PCEXEC_...` for a process, `THEXEC_...` for a thread.
+    #[host(getter)]
+    fn id(&self) -> String;
+    #[host(getter)]
+    fn thread(&self) -> bool;
+    /// `start()` was called.
+    #[host(getter)]
+    fn started(&self) -> bool;
+    /// The runner answered its initialization.
     #[host(getter)]
     fn initialized(&self) -> bool;
-    /// The launch's receipt, reported on the launch worker right after the OS created the child.
-    #[host(call)]
-    fn _core_launched_process(
+    /// `aclose()` or `kill()` was called: it starts no runner and takes no job.
+    #[host(getter)]
+    fn closing(&self) -> bool;
+    /// The runner was stopped by force (a process killed).
+    #[host(getter)]
+    fn killed(&self) -> bool;
+    /// The process's id, once the OS created it; `None` for a thread, and for a forkserver child
+    /// whose id the forkserver has not reported.
+    #[host(getter)]
+    fn pid(&self) -> Option<u32>;
+    /// The runner's exit code once its supervision is over (negative: the signal that ended a
+    /// Unix process).
+    #[host(getter)]
+    fn exitcode(&self) -> Option<i32>;
+    #[host(getter)]
+    fn status(&self) -> Option<JobStatus>;
+    #[host(getter)]
+    fn running_job(&self) -> Option<RunningJobInfo>;
+    /// The seconds the runner took to be ready, once it was.
+    #[host(getter)]
+    fn initialize_time(&self) -> Option<f64>;
+    /// Launch the runner; returns once it exists. Raises once closing, when already started, or
+    /// with the launcher's own error when nothing was launched. A launch failing after the OS
+    /// created the process is logged with its cause and the process is stopped.
+    #[host(await)]
+    async fn start(&self) -> Result<(), WorkerError>;
+    /// Send the runner its `Hello` and wait for it to be ready: the seconds it took. A late runner
+    /// is stopped (`TimeoutError`).
+    #[host(await)]
+    async fn initialize(&self) -> Result<f64, WorkerError>;
+    /// Hand the ready runner its one job, stamped `launched_at` now; the job continues the
+    /// caller's current span. Raises when it is not ready or already has a job.
+    #[host(await)]
+    async fn launch_job(
         &self,
-        pid: u32,
-        sentinel: i64,
-        method: String,
-        owned: Vec<i64>,
-    ) -> Result<(), WorkerError>;
-    /// A job thread returned, reported from that thread.
-    #[host(call)]
-    fn _core_thread_exited(&self) -> Result<(), WorkerError>;
-    /// Launch, supervise and wait for the runner's end; whether one ran (a process reaped, a
-    /// thread returned). Cancelling the wait leaves the runner owned.
-    #[host(await)]
-    async fn run(&self) -> bool;
-    #[host(await)]
-    async fn _core_wait_exit(&self) -> bool;
-    #[host(await)]
-    async fn _core_join(&self) -> bool;
-    #[host(await)]
-    async fn aclose(&self);
-    #[host(await)]
-    async fn kill(&self);
-    /// The job continues the caller's current span (`fields.traceparent`).
-    #[host(await)]
-    async fn start_job(
-        &self,
-        fields: StartJobFields,
+        info: RunningJobInfo,
         #[host(context)] context: CallContext,
         cx: crate::telemetry::Cx,
     ) -> Result<(), WorkerError>;
-    #[host(getter)]
-    fn killed(&self) -> bool;
+    /// Close it gracefully (see the class) and wait for its cleanup; at once when not started.
+    #[host(await)]
+    async fn aclose(&self);
+    /// Stop it at once and wait for its cleanup; at once when not started.
+    #[host(await)]
+    async fn kill(&self);
+    /// Wait for the end of its supervision, its completion reported to the launcher: whether a
+    /// runner ran. `False` at once when it was never started.
+    #[host(await)]
+    async fn join(&self) -> bool;
 }
 
 /// The process's setup, called with the parent's HTTP proxy before readiness.
@@ -311,16 +321,20 @@ pub trait IpcClient: Send + Sync + Sized + 'static {
 
 #[crate::host(proxy(host = "livekit.agents.ipc.ProcPool"))]
 pub trait PoolCallbacks: Send + Sync {
-    /// A new executor, made on the host's loop.
+    /// The launcher of a new process, made on the host's loop.
     #[host(await, name = "_core_create")]
     fn create(
         &self,
         cx: &crate::telemetry::Cx,
-    ) -> crate::BoxFuture<'_, Result<Arc<dyn JobExecutor>, HostError>>;
+    ) -> crate::BoxFuture<'_, Result<Arc<dyn JobLauncher>, HostError>>;
+    /// The pool's one notification of a process's step: `process_created`, `process_started`,
+    /// `process_ready`, `process_job_launched`, `process_closed`, or a cleanup failure.
     #[host(notify, name = "emit")]
-    fn emit(&self, event: String, process: Arc<dyn JobExecutor>);
+    fn emit(&self, event: String, process: Arc<dyn SupervisedJob>);
 }
 
+/// The warm job processes: the pool keeps `num_idle_processes` ready, hands each job the next one
+/// and retries a failed spawn or launch. Each process is a `JobSupervisor` with `options`.
 #[crate::host(class(name = "ProcPool"))]
 pub trait ProcessPool: Send + Sync + Sized + 'static {
     /// What the hosting process lends the class.
@@ -332,12 +346,18 @@ pub trait ProcessPool: Send + Sync + Sized + 'static {
         env: &Self::Env,
         host: Arc<dyn PoolCallbacks>,
         #[host(kw)] num_idle_processes: usize,
-        initialize_timeout: f64,
-        close_timeout: f64,
+        options: JobRunnerOptions,
         #[host(context)] context: CallContext,
     ) -> Result<Self, WorkerError>;
+    /// The processes the pool owns, from their creation until their cleanup.
     #[host(getter)]
-    fn processes(&self) -> Vec<Arc<dyn JobExecutor>>;
+    fn processes(&self) -> Vec<Arc<dyn SupervisedJob>>;
+    /// The jobs whose process runs them now (`status` `RUNNING`).
+    #[host(getter)]
+    fn active_jobs(&self) -> Vec<RunningJobInfo>;
+    /// The pool's process that took the job `job_id`.
+    #[host(call)]
+    fn get_by_job_id(&self, job_id: String) -> Option<Arc<dyn SupervisedJob>>;
     #[host(getter)]
     fn jobs_waiting(&self) -> usize;
     #[host(getter)]
@@ -346,8 +366,14 @@ pub trait ProcessPool: Send + Sync + Sized + 'static {
     fn set_target_idle_processes(&self, n: usize);
     #[host(await)]
     async fn start(&self) -> Result<(), WorkerError>;
+    /// The job continues the caller's current span.
     #[host(await)]
-    async fn launch_job(&self, job_id: String, info: HostRef) -> Result<(), WorkerError>;
+    async fn launch_job(
+        &self,
+        info: RunningJobInfo,
+        #[host(context)] context: CallContext,
+        cx: crate::telemetry::Cx,
+    ) -> Result<(), WorkerError>;
     /// Waits until every process a job was launched on exited (the drain).
     #[host(await)]
     async fn join_jobs(&self);

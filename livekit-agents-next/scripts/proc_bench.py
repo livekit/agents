@@ -28,33 +28,28 @@ from typing import Any
 
 import psutil
 
-from livekit.agents.ipc import JobExecutor, configure_forkserver
+from livekit.agents import _core
+from livekit.agents.ipc import JobLauncher, JobRunnerOptions, configure_forkserver
 
 
 async def _entrypoint(ctx: Any) -> None:
     ctx.shutdown("bench")
 
 
-def _executor(method: str) -> JobExecutor:
-    return JobExecutor(
+def _executor(method: str) -> _core.JobSupervisor:
+    launcher = JobLauncher(
         job_entrypoint_fnc=_entrypoint,
         session_end_fnc=None,
         simulation_end_fnc=None,
-        initialize_timeout=120,
-        close_timeout=10,
         session_end_timeout=10,
-        memory_warn_mb=0,
-        memory_limit_mb=0,
-        ping_interval=2.5,
-        ping_timeout=60,
-        high_ping_threshold=1,
-        http_proxy=None,
         mp_ctx=mp.get_context(method),
         loop=asyncio.get_running_loop(),
     )
+    options = JobRunnerOptions(initialize_timeout=120, close_timeout=10, high_ping_threshold=1)
+    return _core.JobSupervisor(launcher, options)
 
 
-async def _ready(method: str) -> tuple[JobExecutor, float]:
+async def _ready(method: str) -> tuple[_core.JobSupervisor, float]:
     proc = _executor(method)
     started = time.perf_counter()
     await proc.start()

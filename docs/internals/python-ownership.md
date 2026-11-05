@@ -204,7 +204,7 @@ Keep ASGI request/response adaptation and authored route/handler registration. C
 
 ### Process and worker lifecycle
 
-Worker/runtime own registration, leases, job state, process supervision, shutdown/report ordering and timeouts. Keep Python multiprocessing bootstrap, interpreter setup, import/preload operations, SDK room creation and entrypoint callbacks behind narrow ports.
+Worker/runtime own registration, leases, job state, process supervision, shutdown/report ordering and timeouts. Keep Python multiprocessing bootstrap, interpreter setup, import/preload operations, SDK room creation and entrypoint callbacks behind narrow ports. The job processes' port is `ipc.JobLauncher` (start the process or thread, the start method's bookkeeping, logging); each process's state (status, running job, pid, exit code) is the native `JobSupervisor`'s ([rust-core](rust-core.md#worker-and-job-processes)).
 
 | File | Lines |
 | --- | ---: |

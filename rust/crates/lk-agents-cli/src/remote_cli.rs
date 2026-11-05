@@ -5,33 +5,44 @@ use lk_agents_abi::errors::HostError;
 use prost::Message as _;
 use std::sync::Arc;
 
-pub use lk_agents_abi::cli::{DevJob, DevServer};
+pub use lk_agents_abi::cli::DevServer;
+use lk_agents_abi::worker::types::{AcceptArguments, RunningJobInfo};
 
-fn to_proto(job: DevJob) -> livekit_protocol::agent::RunningAgentJobInfo {
-    let (job, accept_name, accept_identity, accept_metadata, url, token, worker_id, mock_job) = job;
+fn to_proto(info: RunningJobInfo) -> livekit_protocol::agent::RunningAgentJobInfo {
     livekit_protocol::agent::RunningAgentJobInfo {
-        job,
-        accept_name,
-        accept_identity,
-        accept_metadata,
-        url,
-        token,
-        worker_id,
-        mock_job,
+        job: info.job.proto,
+        accept_name: info.accept_arguments.name,
+        accept_identity: info.accept_arguments.identity,
+        accept_metadata: info.accept_arguments.metadata,
+        url: info.url,
+        token: info.token,
+        worker_id: info.worker_id,
+        mock_job: info.fake_job,
     }
 }
 
-fn from_proto(pb: livekit_protocol::agent::RunningAgentJobInfo) -> DevJob {
-    (
-        pb.job,
-        pb.accept_name,
-        pb.accept_identity,
-        pb.accept_metadata,
-        pb.url,
-        pb.token,
-        pb.worker_id,
-        pb.mock_job,
-    )
+/// A job kept across the reload; no dispatch offered it to this process.
+fn from_proto(
+    pb: livekit_protocol::agent::RunningAgentJobInfo,
+) -> Result<RunningJobInfo, HostError> {
+    let job = livekit_protocol::Job::decode(pb.job.as_slice())
+        .map_err(|e| HostError::new(format!("cannot reload a job: {e}")))?;
+    Ok(RunningJobInfo {
+        accept_arguments: AcceptArguments {
+            name: pb.accept_name,
+            identity: pb.accept_identity,
+            metadata: pb.accept_metadata,
+            attributes: Vec::new(),
+        },
+        job: lk_agents_worker::job_info(&job),
+        url: pb.url,
+        token: pb.token,
+        worker_id: pb.worker_id,
+        fake_job: pb.mock_job,
+        received_at: 0.0,
+        accepted_at: 0.0,
+        assigned_at: 0.0,
+    })
 }
 
 /// The dev channel to `lk agent dev` at `cli_addr` (`host:port`), length-prefixed
@@ -101,7 +112,7 @@ async fn serve_dev_channel(
             job.token = lk_agents_net::token::extend_job_token(&job.token, &api_key, &api_secret)
                 .map_err(|e| HostError::new(format!("cannot reload a job: {e}")))?;
             job.url = url.clone();
-            jobs.push(from_proto(job));
+            jobs.push(from_proto(job)?);
         }
         server.reload_jobs(&lk_agents_abi::telemetry::Cx::NONE, jobs).await?;
     }

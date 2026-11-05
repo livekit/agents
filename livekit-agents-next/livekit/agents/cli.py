@@ -11,8 +11,6 @@ import sys
 from builtins import ExceptionGroup
 from collections.abc import Mapping
 
-from livekit.protocol import agent
-
 from . import _core
 from ._bindings import CLIError
 from ._generated.cli import (
@@ -22,7 +20,8 @@ from ._generated.cli import (
     CliParseResultDisplay,
     LogRecord,
 )
-from .job import JobAcceptArguments, JobExecutorType, RunningJobInfo
+from ._generated.worker_server import RunningJobInfo
+from .job import JobExecutorType
 from .log import DEV_LEVEL, _add_global_log_fields, logger
 from .types import NOT_GIVEN
 from .worker import AgentServer, Plugin
@@ -337,34 +336,12 @@ class _DevServer:
     def __init__(self, server: AgentServer) -> None:
         self._server = server
 
-    def _core_running_jobs(self) -> list[tuple[bytes, str, str, str, str, str, str, bool]]:
-        return [
-            (
-                info.job.SerializeToString(),
-                info.accept_arguments.name,
-                info.accept_arguments.identity,
-                info.accept_arguments.metadata,
-                info.url,
-                info.token,
-                info.worker_id,
-                info.fake_job,
-            )
-            for info in self._server._active_jobs
-        ]
+    def _core_running_jobs(self) -> list[RunningJobInfo]:
+        return self._server._active_jobs
 
-    async def _core_reload_jobs(
-        self, jobs: list[tuple[bytes, str, str, str, str, str, str, bool]]
-    ) -> None:
+    async def _core_reload_jobs(self, jobs: list[RunningJobInfo]) -> None:
         """The jobs a dev reload carried over, on this server and a fresh token: relaunched."""
-        for job, name, identity, meta, url, token, worker_id, fake_job in jobs:
-            info = RunningJobInfo(
-                accept_arguments=JobAcceptArguments(name=name, identity=identity, metadata=meta),
-                job=agent.Job.FromString(bytes(job)),
-                url=url,
-                token=token,
-                worker_id=worker_id,
-                fake_job=fake_job,
-            )
+        for info in jobs:
             extra = {"job_id": info.job.id, "agent_name": info.job.agent_name}
             logger.log(DEV_LEVEL, "reloading job", extra=extra)
             assert self._server._jobs is not None

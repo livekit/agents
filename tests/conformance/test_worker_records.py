@@ -11,7 +11,7 @@ import pytest
 
 from livekit.agents import AgentServer, JobContext, _core, cli
 from livekit.agents._generated.cli import CliArgsConsole, CliArgsStart
-from livekit.agents.job import RunningJobInfo
+from livekit.agents._generated.worker_server import RunningJobInfo
 from livekit.agents.worker import _ServerCallbacks
 
 pytestmark = pytest.mark.unit
@@ -120,7 +120,7 @@ async def test_native_simulated_job_reaches_python_launch_adapter(
         await server._simulate_job("typed-launch", fake_job=True)
         assert len(launched) == 1
         assert launched[0].fake_job
-        assert launched[0].job.room.name == "typed-launch"
+        assert launched[0].job.room == "typed-launch"
     finally:
         await server.aclose()
         await asyncio.wait_for(running, timeout=3)

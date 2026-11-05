@@ -10,14 +10,14 @@ from typing import Self
 
 from livekit.agents._core import Role
 from livekit.agents.http import _AsgiServer
-from livekit.agents.ipc import JobExecutor, ProcPool as HostProcPool
+from livekit.agents.ipc import JobLauncher, ProcPool as HostProcPool
 from livekit.agents.ipc.child import _JobProc
 from livekit.agents.worker import _ServerCallbacks
 
 from .worker_endpoint import ExchangeEvent, ExchangeMessage, RequestHead
-from .worker_ipc import StartJobFields
+from .worker_ipc import JobRunnerOptions, JobStatus, StartJobFields
 from .worker_options import ServerOptions
-from .worker_server import EndpointRoute
+from .worker_server import EndpointRoute, RunningJobInfo
 
 def room_join_token(
     api_key: str,
@@ -47,49 +47,84 @@ class HttpExchange:
 def cpu_count() -> float:
     """Logical CPUs, fractional under a cgroup quota. Reads, starts nothing."""
 
+class JobLaunch:
+    """One launch of a job runner, as the launcher reports it."""
+    @property
+    def thread(self) -> bool:
+        """The runner is a thread of this process, else a process of the launcher's start method."""
+    def process_started(self, pid: int, sentinel: int, method: str, owned: Sequence[int]) -> None:
+        """The process's receipt, reported on the launch worker right after the OS created it."""
+    def thread_exited(self) -> None:
+        """The job thread returned, reported from that thread."""
+
 class JobSupervisor:
-    def __new__(
-        cls,
-        host: JobExecutor,
-        *,
-        thread: bool,
-        initialize_timeout: float,
-        close_timeout: float,
-        memory_warn_mb: float,
-        memory_limit_mb: float,
-        ping_interval: float,
-        ping_timeout: float,
-        high_ping_threshold: float,
-    ) -> Self:
-        """`thread`: the runner is a thread of this process, else a process of the host's start
-        method.
-        """
-    async def initialize(self, *, asyncio_debug: bool, http_proxy: str | None) -> float:
-        """The seconds the process took to be ready."""
+    """One job runner, a process or (`options.thread`) a thread of this process, and its one job:
+    the worker launches it through `launcher`, initializes it, hands it the job, pings it,
+    samples its memory, closes it and waits for its end, whether or not the host still awaits.
+
+    `status` is `None` until a job was launched, then `RUNNING` until the runner ended, then
+    `SUCCESS` (exit code 0 and a clean control channel) or `FAILED`. `running_job` is set once
+    the runner took its job and is kept after the runner ended. `aclose()` asks an initialized
+    runner to shut down and stops it when late (`close_timeout`); `kill()` stops it at once. A
+    thread cannot be stopped: both wait for it to return, and it has no pong deadline nor memory
+    limit.
+    """
+    def __new__(cls, launcher: JobLauncher, options: JobRunnerOptions) -> Self: ...
     @property
-    def initialized(self) -> bool: ...
-    def _core_launched_process(
-        self,
-        pid: int,
-        sentinel: int,
-        method: str,
-        owned: Sequence[int],
-    ) -> None:
-        """The launch's receipt, reported on the launch worker right after the OS created the child."""
-    def _core_thread_exited(self) -> None:
-        """A job thread returned, reported from that thread."""
-    async def run(self) -> bool:
-        """Launch, supervise and wait for the runner's end; whether one ran (a process reaped, a
-        thread returned). Cancelling the wait leaves the runner owned.
-        """
-    async def _core_wait_exit(self) -> bool: ...
-    async def _core_join(self) -> bool: ...
-    async def aclose(self) -> None: ...
-    async def kill(self) -> None: ...
-    async def start_job(self, fields: StartJobFields) -> None:
-        """The job continues the caller's current span (`fields.traceparent`)."""
+    def id(self) -> str:
+        """`PCEXEC_...` for a process, `THEXEC_...` for a thread."""
     @property
-    def killed(self) -> bool: ...
+    def thread(self) -> bool: ...
+    @property
+    def started(self) -> bool:
+        """`start()` was called."""
+    @property
+    def initialized(self) -> bool:
+        """The runner answered its initialization."""
+    @property
+    def closing(self) -> bool:
+        """`aclose()` or `kill()` was called: it starts no runner and takes no job."""
+    @property
+    def killed(self) -> bool:
+        """The runner was stopped by force (a process killed)."""
+    @property
+    def pid(self) -> int | None:
+        """The process's id, once the OS created it; `None` for a thread, and for a forkserver child
+        whose id the forkserver has not reported.
+        """
+    @property
+    def exitcode(self) -> int | None:
+        """The runner's exit code once its supervision is over (negative: the signal that ended a
+        Unix process).
+        """
+    @property
+    def status(self) -> JobStatus | None: ...
+    @property
+    def running_job(self) -> RunningJobInfo | None: ...
+    @property
+    def initialize_time(self) -> float | None:
+        """The seconds the runner took to be ready, once it was."""
+    async def start(self) -> None:
+        """Launch the runner; returns once it exists. Raises once closing, when already started, or
+        with the launcher's own error when nothing was launched. A launch failing after the OS
+        created the process is logged with its cause and the process is stopped.
+        """
+    async def initialize(self) -> float:
+        """Send the runner its `Hello` and wait for it to be ready: the seconds it took. A late runner
+        is stopped (`TimeoutError`).
+        """
+    async def launch_job(self, info: RunningJobInfo) -> None:
+        """Hand the ready runner its one job, stamped `launched_at` now; the job continues the
+        caller's current span. Raises when it is not ready or already has a job.
+        """
+    async def aclose(self) -> None:
+        """Close it gracefully (see the class) and wait for its cleanup; at once when not started."""
+    async def kill(self) -> None:
+        """Stop it at once and wait for its cleanup; at once when not started."""
+    async def join(self) -> bool:
+        """Wait for the end of its supervision, its completion reported to the launcher: whether a
+        runner ran. `False` at once when it was never started.
+        """
 
 class IpcClient:
     def __new__(
@@ -108,16 +143,24 @@ class IpcClient:
     async def aclose(self) -> None: ...
 
 class ProcPool:
+    """The warm job processes: the pool keeps `num_idle_processes` ready, hands each job the next one
+    and retries a failed spawn or launch. Each process is a `JobSupervisor` with `options`.
+    """
     def __new__(
         cls,
         host: HostProcPool,
         *,
         num_idle_processes: int,
-        initialize_timeout: float,
-        close_timeout: float,
+        options: JobRunnerOptions,
     ) -> Self: ...
     @property
-    def processes(self) -> list[JobExecutor]: ...
+    def processes(self) -> list[JobSupervisor]:
+        """The processes the pool owns, from their creation until their cleanup."""
+    @property
+    def active_jobs(self) -> list[RunningJobInfo]:
+        """The jobs whose process runs them now (`status` `RUNNING`)."""
+    def get_by_job_id(self, job_id: str) -> JobSupervisor | None:
+        """The pool's process that took the job `job_id`."""
     @property
     def jobs_waiting(self) -> int: ...
     @property
@@ -125,7 +168,8 @@ class ProcPool:
     @target_idle_processes.setter
     def target_idle_processes(self, n: int) -> None: ...
     async def start(self) -> None: ...
-    async def launch_job(self, job_id: str, info: object) -> None: ...
+    async def launch_job(self, info: RunningJobInfo) -> None:
+        """The job continues the caller's current span."""
     async def join_jobs(self) -> None:
         """Waits until every process a job was launched on exited (the drain)."""
     async def aclose(self) -> None: ...

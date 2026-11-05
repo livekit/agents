@@ -13,17 +13,17 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from livekit.agents import JobContext
-from livekit.agents.ipc import JobExecutor
-from livekit.agents.job import JobAcceptArguments, RunningJobInfo
+from livekit.agents import JobContext, _core
 from livekit.protocol import agent
+
+from .ipc_processes import job_runner, running_job
 
 pytestmark = pytest.mark.unit
 
 
 @pytest.mark.parametrize("active", [True, False], ids=["active", "missing"])
 async def test_job_ipc_preserves_each_parent_and_restores_the_callers_context(
-    own_executor: Callable[[JobExecutor], JobExecutor], active: bool
+    own_executor: Callable[[_core.JobSupervisor], _core.JobSupervisor], active: bool
 ) -> None:
     exporter = InMemorySpanExporter()
     provider = TracerProvider(shutdown_on_exit=False)
@@ -37,19 +37,7 @@ async def test_job_ipc_preserves_each_parent_and_restores_the_callers_context(
         ctx.shutdown("done")
 
     async def run(job_id: str, trace_id: int, span_id: int) -> None:
-        executor = JobExecutor(
-            thread=True,
-            job_entrypoint_fnc=entrypoint,
-            session_end_fnc=None,
-            simulation_end_fnc=None,
-            initialize_timeout=10,
-            close_timeout=10,
-            session_end_timeout=1,
-            ping_interval=0,
-            high_ping_threshold=1,
-            http_proxy=None,
-            loop=asyncio.get_running_loop(),
-        )
+        executor = job_runner(entrypoint, thread=True, ping_interval=0, high_ping_threshold=1)
         own_executor(executor)
         try:
             await executor.start()
@@ -62,16 +50,7 @@ async def test_job_ipc_preserves_each_parent_and_restores_the_callers_context(
                 else trace.INVALID_SPAN
             )
             with trace.use_span(parent):
-                await executor.launch_job(
-                    RunningJobInfo(
-                        JobAcceptArguments("", "", ""),
-                        agent.Job(id=job_id),
-                        "",
-                        "",
-                        "",
-                        True,
-                    )
-                )
+                await executor.launch_job(running_job(agent.Job(id=job_id)))
                 assert trace.get_current_span() is parent
             await asyncio.wait_for(executor.join(), 10)
         finally:

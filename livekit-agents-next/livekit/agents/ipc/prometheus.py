@@ -7,6 +7,7 @@ import os
 import prometheus_client
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest, multiprocess
 
+from .. import _core
 from ..utils import nodename
 
 _PROC_INITIALIZE_TIME = prometheus_client.Histogram(
@@ -48,16 +49,19 @@ def update_worker_load(worker_load: float) -> None:
     _WORKER_LOAD.labels(nodename=nodename()).set(worker_load)
 
 
-def job_started() -> None:
-    _RUNNING_JOBS.labels(nodename=nodename()).inc()
-
-
-def job_ended() -> None:
-    _RUNNING_JOBS.labels(nodename=nodename()).dec()
-
-
-def proc_initialized(*, time_elapsed: float) -> None:
-    _PROC_INITIALIZE_TIME.labels(nodename=nodename()).observe(time_elapsed)
+def process_event(event: str, process: _core.JobSupervisor) -> None:
+    """The pool's notification of a job process's step (a job thread is not counted): its
+    initialization time once ready, and the jobs running, from their launch to the process's
+    cleanup."""
+    if process.thread:
+        return
+    labels = {"nodename": nodename()}
+    if event == "process_ready" and (elapsed := process.initialize_time) is not None:
+        _PROC_INITIALIZE_TIME.labels(**labels).observe(elapsed)
+    elif event == "process_job_launched":
+        _RUNNING_JOBS.labels(**labels).inc()
+    elif event == "process_closed" and process.running_job is not None:
+        _RUNNING_JOBS.labels(**labels).dec()
 
 
 def exposition() -> tuple[str, str]:

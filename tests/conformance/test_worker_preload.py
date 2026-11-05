@@ -16,10 +16,16 @@ from pathlib import Path
 import psutil
 import pytest
 
-from livekit.agents.ipc import JobExecutor, configure_forkserver
-from livekit.agents.job import JobAcceptArguments, JobContext, RunningJobInfo
+from livekit.agents import _core
+from livekit.agents.ipc import configure_forkserver
+from livekit.agents.job import JobContext
 from livekit.protocol import agent
-from tests.conformance.ipc_processes import close_owned_executor, run_owned_process
+from tests.conformance.ipc_processes import (
+    close_owned_executor,
+    job_runner,
+    run_owned_process,
+    running_job,
+)
 
 pytestmark = [pytest.mark.e2e, pytest.mark.no_concurrent]
 
@@ -88,36 +94,29 @@ def preload_events(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def _executor(
-    own_executor: Callable[[JobExecutor], JobExecutor],
+    own_executor: Callable[[_core.JobSupervisor], _core.JobSupervisor],
     *,
     modules: tuple[str, ...],
     entrypoint: Callable[[JobContext], Awaitable[None]] = _observe,
-    method: str | None = "spawn",
-) -> JobExecutor:
+    method: str = "spawn",
+) -> _core.JobSupervisor:
     return own_executor(
-        JobExecutor(
-            job_entrypoint_fnc=entrypoint,
-            session_end_fnc=None,
-            simulation_end_fnc=None,
+        job_runner(
+            entrypoint,
+            mp_ctx=multiprocessing.get_context(method),
+            preload_modules=modules,
             initialize_timeout=15,
             close_timeout=1,
-            session_end_timeout=1,
             ping_interval=0.1,
             ping_timeout=5,
             high_ping_threshold=1,
-            http_proxy=None,
-            mp_ctx=multiprocessing.get_context(method) if method is not None else None,
-            loop=asyncio.get_running_loop(),
-            preload_modules=modules,
         )
     )
 
 
-async def _run_job(process: JobExecutor, events: Path, kind: str) -> list[object]:
+async def _run_job(process: _core.JobSupervisor, events: Path, kind: str) -> list[object]:
     """Launch a fake job and return the observation its entrypoint recorded."""
-    await process.launch_job(
-        RunningJobInfo(JobAcceptArguments("", "", ""), agent.Job(id=kind), "", "", "", True)
-    )
+    await process.launch_job(running_job(agent.Job(id=kind)))
     deadline = time.monotonic() + 20
     while time.monotonic() < deadline:
         for line in events.read_text().splitlines() if events.exists() else []:
@@ -128,16 +127,18 @@ async def _run_job(process: JobExecutor, events: Path, kind: str) -> list[object
     raise AssertionError(f"the {kind} job recorded nothing")
 
 
-async def _close(process: JobExecutor) -> None:
+async def _close(process: _core.JobSupervisor) -> None:
     await asyncio.wait_for(process.aclose(), timeout=5)
     await asyncio.wait_for(process.join(), timeout=5)
 
 
 @pytest.mark.asyncio
 async def test_preloads_rtc_and_the_start_method_are_ready_before_the_first_job(
-    own_executor: Callable[[JobExecutor], JobExecutor], preload_events: Path
+    own_executor: Callable[[_core.JobSupervisor], _core.JobSupervisor], preload_events: Path
 ) -> None:
-    process = _executor(own_executor, modules=("_livekit_preload_first",), method=None)
+    # the server's default start method (`multiprocessing_context`)
+    default = "forkserver" if sys.platform == "linux" else "spawn"
+    process = _executor(own_executor, modules=("_livekit_preload_first",), method=default)
     await asyncio.wait_for(process.start(), timeout=20)
     await asyncio.wait_for(process.initialize(), timeout=20)
     _, pid, method, rtc_warm, _ = await _run_job(process, preload_events, "job")
@@ -149,7 +150,7 @@ async def test_preloads_rtc_and_the_start_method_are_ready_before_the_first_job(
 
 @pytest.mark.asyncio
 async def test_spawn_preloads_in_order_before_ready_with_independent_data(
-    own_executor: Callable[[JobExecutor], JobExecutor], preload_events: Path
+    own_executor: Callable[[_core.JobSupervisor], _core.JobSupervisor], preload_events: Path
 ) -> None:
     pids = []
     for _ in range(2):
@@ -182,7 +183,7 @@ async def test_spawn_preloads_in_order_before_ready_with_independent_data(
 
 @pytest.mark.asyncio
 async def test_a_failed_preload_names_its_module_and_prevents_ready(
-    own_executor: Callable[[JobExecutor], JobExecutor], preload_events: Path
+    own_executor: Callable[[_core.JobSupervisor], _core.JobSupervisor], preload_events: Path
 ) -> None:
     process = _executor(own_executor, modules=("_livekit_preload_first", "_livekit_preload_broken"))
     await asyncio.wait_for(process.start(), timeout=20)

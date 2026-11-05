@@ -163,6 +163,7 @@ impl super::Implementations for Selected {
     type JoinTokens = ::lk_agents_runtime::net::token::JoinTokens;
     type HttpExchange = ::lk_agents_runtime::worker::http::Exchange;
     type ServerEnvironment = ::lk_agents_runtime::worker::server::Environment;
+    type JobLaunch = ::lk_agents_runtime::worker::ipc::JobLaunch;
     type JobSupervisor = ::lk_agents_runtime::worker::ipc::JobSupervisor;
     type IpcClient = ::lk_agents_runtime::worker::ipc::ChildChannel;
     type ProcessPool = ::lk_agents_runtime::worker::ipc::ProcessPool;

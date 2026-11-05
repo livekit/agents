@@ -1,115 +1,118 @@
 //! The worker's warm job processes as the host drives them (`_core.ProcPool`): the pool keeps
-//! them warm and hands each job the next ready one; the host makes the executors.
+//! them warm and hands each job the next ready one; each process is a [`JobSupervisor`] over a
+//! launcher the host makes.
 
 use crate::ipc::telemetry;
 use lk_agents_abi::logging::LogWriter;
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
-use lk_agents_abi::HostRef;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::invoke::CallContext;
-use lk_agents_abi::worker::ipc_host::{JobExecutor as HostJobLauncher, PoolCallbacks, WorkerError};
+use lk_agents_abi::worker::ipc::{JobRunnerOptions, JobStatus};
+use lk_agents_abi::worker::ipc_host::{
+    JobSupervisor as _, PoolCallbacks, SupervisedJob, WorkerError,
+};
+use lk_agents_abi::worker::types::RunningJobInfo;
 
-use super::owner::{JobSupervisor, queue_log};
+use super::owner::JobSupervisor;
 use super::pool::{Executors, LaunchError, PoolJoinOutcome, PoolOptions, ProcPool, ProcessEvent};
-use super::{Level, RunnerSupervisor, secs};
+use super::{Level, secs};
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::task::TokioSpawner;
 
-/// One executor and, once started, its native supervisor.
+/// One of the pool's processes, compared by identity.
 #[derive(Clone)]
-pub struct Executor {
-    pub(super) host: Arc<dyn HostJobLauncher>,
-    supervisor: Arc<OnceLock<RunnerSupervisor>>,
+pub struct Executor(pub(super) Arc<dyn SupervisedJob>);
+
+impl PartialEq for Executor {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::addr_eq(Arc::as_ptr(&self.0), Arc::as_ptr(&other.0))
+    }
 }
 
 impl Executor {
-    pub(super) fn new(host: Arc<dyn HostJobLauncher>) -> Self {
-        Self { host, supervisor: Arc::new(OnceLock::new()) }
+    fn supervisor(&self) -> Result<&JobSupervisor, HostError> {
+        let process: &dyn Any = &*self.0;
+        process.downcast_ref().ok_or_else(|| HostError::new("a foreign process in the pool"))
     }
 }
 
-/// Compared by identity.
-impl PartialEq for Executor {
-    fn eq(&self, other: &Self) -> bool {
-        std::ptr::addr_eq(Arc::as_ptr(&self.host), Arc::as_ptr(&other.host))
+fn host_error(error: WorkerError) -> HostError {
+    match error {
+        WorkerError::Host(error) => error,
+        error => HostError::new(error.to_string()),
     }
 }
 
-/// The host's pool and the context its executors' steps run in (the pool's constructor's).
+/// The host's pool, the processes' settings and the context their host calls run in (the
+/// pool's constructor's).
 struct HostExecutors {
-    logging: LogWriter,
+    env: ProcessEnv,
     host: Arc<dyn PoolCallbacks>,
+    options: JobRunnerOptions,
     context: CallContext,
 }
 
 #[async_trait::async_trait]
 impl Executors for HostExecutors {
     fn logger(&self) -> LogWriter {
-        self.logging
+        self.env.logging
     }
 
     async fn create(&self) -> Result<Executor, HostError> {
-        Ok(Executor::new(self.host.create(&telemetry::Cx::NONE).await?))
+        let launcher = self.host.create(&telemetry::Cx::NONE).await?;
+        let process =
+            JobSupervisor::new(&self.env, launcher, self.options.clone(), self.context.clone())
+                .map_err(host_error)?;
+        Ok(Executor(Arc::new(process)))
     }
 
     async fn start(&self, proc: &Executor) -> Result<(), HostError> {
-        let started: Arc<dyn Any + Send + Sync> =
-            proc.host.start(&telemetry::Cx::NONE, &self.context).await?;
-        let owner = started
-            .downcast::<JobSupervisor>()
-            .map_err(|_| HostError::new("the executor started a foreign JobSupervisor"))?;
-        proc.supervisor
-            .set(owner.sup.clone())
-            .map_err(|_| HostError::new("process start already reported"))
+        proc.supervisor()?.start().await.map_err(host_error)
     }
 
     async fn initialize(&self, proc: &Executor) -> Result<(), HostError> {
-        proc.host.initialize(&telemetry::Cx::NONE, &self.context).await
+        proc.supervisor()?.initialize().await.map(drop).map_err(host_error)
     }
 
-    /// The dispatch timeline: a warm process is now handling the job (`launched_at`).
-    async fn launch(&self, proc: &Executor, job: &HostRef) -> Result<(), HostError> {
-        proc.host
-            .launch_job(
-                &telemetry::Cx::NONE,
-                &self.context,
-                job.clone(),
-                lk_agents_net::clock::unix_now(),
-            )
-            .await
+    async fn launch(
+        &self,
+        proc: &Executor,
+        job: &RunningJobInfo,
+        cx: &telemetry::Cx,
+    ) -> Result<(), HostError> {
+        let process = proc.supervisor()?;
+        process.launch_job(job.clone(), self.context.clone(), cx.clone()).await.map_err(host_error)
     }
 
     async fn close(&self, proc: &Executor) -> Result<(), HostError> {
-        proc.host.close(&telemetry::Cx::NONE, &self.context).await
+        proc.supervisor()?.aclose().await;
+        Ok(())
     }
 
     fn failed(&self, proc: &Executor, message: &'static str, error: HostError) {
-        queue_log(self.logging, proc.host.clone(), Level::Error, message, vec![], Some(error));
+        if let Ok(process) = proc.supervisor() {
+            process.logger().log(Level::Error, message, vec![], Some(error));
+        }
     }
 
     async fn wait_exit(&self, proc: &Executor) -> Result<(), HostError> {
-        let supervisor = proc
-            .supervisor
-            .get()
-            .ok_or_else(|| HostError::new("ready process has no native supervisor"))?;
-        match supervisor.wait_exit().await {
+        match proc.supervisor()?.wait_exit().await? {
             true => Ok(()),
             false => Err(HostError::new("ready process finished without an OS exit observation")),
         }
     }
 
     async fn join(&self, proc: &Executor) -> Result<PoolJoinOutcome, HostError> {
-        let reaped = match proc.supervisor.get() {
-            Some(supervisor) => supervisor.wait_cleaned().await,
-            None => proc.host.join(&telemetry::Cx::NONE, &self.context).await?,
-        };
-        Ok(if reaped { PoolJoinOutcome::Reaped } else { PoolJoinOutcome::NotLaunched })
+        Ok(match proc.supervisor()?.join().await {
+            true => PoolJoinOutcome::Reaped,
+            false => PoolJoinOutcome::NotLaunched,
+        })
     }
 
     fn emit(&self, event: ProcessEvent, proc: &Executor) {
-        self.host.emit(event.as_str().into(), proc.host.clone());
+        self.host.emit(event.as_str().into(), proc.0.clone());
     }
 }
 
@@ -125,24 +128,43 @@ impl lk_agents_abi::worker::ipc_host::ProcessPool for ProcessPool {
         env: &ProcessEnv,
         host: Arc<dyn PoolCallbacks>,
         num_idle_processes: usize,
-        initialize_timeout: f64,
-        close_timeout: f64,
+        options: JobRunnerOptions,
         context: CallContext,
     ) -> Result<Self, WorkerError> {
         let opts = PoolOptions {
             num_idle_processes,
-            initialize_timeout: secs(initialize_timeout),
-            close_timeout: secs(close_timeout),
+            initialize_timeout: secs(options.initialize_timeout),
+            close_timeout: secs(options.close_timeout),
         };
-        let executors = HostExecutors { host, context, logging: env.logging };
-        Ok(Self {
-            pool: ProcPool::new(Arc::new(executors), opts),
-            spawner: TokioSpawner::new((env.runtime)().map_err(WorkerError::Failed)?),
-        })
+        let spawner = TokioSpawner::new((env.runtime)().map_err(WorkerError::Failed)?);
+        let executors = HostExecutors { env: env.clone(), host, options, context };
+        Ok(Self { pool: ProcPool::new(Arc::new(executors), opts), spawner })
     }
 
-    fn processes(&self) -> Vec<Arc<dyn HostJobLauncher>> {
-        self.pool.processes().into_iter().map(|proc| proc.host).collect()
+    fn processes(&self) -> Vec<Arc<dyn SupervisedJob>> {
+        self.pool.processes().into_iter().map(|proc| proc.0).collect()
+    }
+
+    fn active_jobs(&self) -> Vec<RunningJobInfo> {
+        self.pool
+            .processes()
+            .into_iter()
+            .filter_map(|proc| {
+                let process = proc.supervisor().ok()?;
+                (process.status() == Some(JobStatus::Running)).then(|| process.running_job())?
+            })
+            .collect()
+    }
+
+    fn get_by_job_id(&self, job_id: String) -> Option<Arc<dyn SupervisedJob>> {
+        self.pool
+            .processes()
+            .into_iter()
+            .find(|proc| {
+                let job = proc.supervisor().ok().and_then(|process| process.running_job());
+                job.is_some_and(|info| info.job.id == job_id)
+            })
+            .map(|proc| proc.0)
     }
 
     fn jobs_waiting(&self) -> usize {
@@ -167,10 +189,15 @@ impl lk_agents_abi::worker::ipc_host::ProcessPool for ProcessPool {
             .map_err(|error| WorkerError::Failed(error.to_string()))
     }
 
-    async fn launch_job(&self, job_id: String, info: HostRef) -> Result<(), WorkerError> {
+    async fn launch_job(
+        &self,
+        info: RunningJobInfo,
+        _context: CallContext,
+        cx: telemetry::Cx,
+    ) -> Result<(), WorkerError> {
         let pool = self.pool.clone();
-        self.spawner.run(async move { pool.launch_job(&job_id, info).await }).await.map_err(
-            |error| match error {
+        self.spawner.run(async move { pool.launch_job(info, cx).await }).await.map_err(|error| {
+            match error {
                 LaunchError::Admission(reason) => WorkerError::Failed(reason.to_string()),
                 LaunchError::AcquireExhausted { attempts } => WorkerError::Failed(format!(
                     "no process became available after {attempts} attempts"
@@ -179,8 +206,8 @@ impl lk_agents_abi::worker::ipc_host::ProcessPool for ProcessPool {
                     WorkerError::Failed("no process became available after 3 attempts".into())
                 }
                 LaunchError::Launch(error) => WorkerError::Host(error),
-            },
-        )
+            }
+        })
     }
 
     async fn join_jobs(&self) {

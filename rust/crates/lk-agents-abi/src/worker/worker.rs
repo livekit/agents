@@ -58,7 +58,7 @@ impl Default for WorkerPermissions {
 
 /// The scalar half of a `livekit.agent.Job`.
 #[derive(Debug, Clone, PartialEq)]
-#[crate::host(record(module = "worker_server", emit))]
+#[crate::host(record(module = "worker_server", emit, extract))]
 pub struct JobInfo {
     pub id: String,
     pub dispatch_id: String,
@@ -91,7 +91,7 @@ impl JobRequest {
 
 /// `RunningJobInfo`: what a launched job is handed.
 #[derive(Debug, Clone, PartialEq)]
-#[crate::host(record(module = "worker_server", emit))]
+#[crate::host(record(module = "worker_server", emit, extract))]
 pub struct RunningJobInfo {
     pub accept_arguments: AcceptArguments,
     pub job: JobInfo,
@@ -118,7 +118,7 @@ pub enum JobDecision {
 
 /// Accepted participant fields; application attributes retain their own string keys.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-#[crate::host(record(module = "worker_server", emit))]
+#[crate::host(record(module = "worker_server", emit, extract))]
 pub struct AcceptArguments {
     pub name: String,
     pub identity: String,

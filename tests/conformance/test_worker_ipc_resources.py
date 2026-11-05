@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import gc
 import json
+import logging
 import multiprocessing as mp
 import os
 import pickle
@@ -30,9 +31,9 @@ from livekit.agents._generated.worker_ipc import (
     JobCompletion,
     StartJobFields,
 )
-from livekit.agents.ipc import JobExecutor
-from livekit.agents.job import JobAcceptArguments, RunningJobInfo
+from livekit.agents.ipc import JobLauncher, JobRunnerOptions
 from livekit.protocol import agent
+from tests.conformance.ipc_processes import running_job
 
 pytestmark = pytest.mark.e2e
 
@@ -106,25 +107,17 @@ async def _unused_entrypoint(context: Any) -> None:
     context.shutdown("stress complete")
 
 
-class _Executor(JobExecutor):
-    def __init__(self, method: str, behavior: str = "normal") -> None:
-        production_deadlines = behavior in {"real_job", "watchdog"}
+class _Launcher(JobLauncher):
+    def __init__(self, method: str, behavior: str) -> None:
         super().__init__(
             job_entrypoint_fnc=_unused_entrypoint,
             session_end_fnc=None,
             simulation_end_fnc=None,
-            initialize_timeout=2
-            if behavior == "blocked_initialize"
-            else _PROCESS_INITIALIZE_TIMEOUT,
-            close_timeout=_PROCESS_CLOSE_TIMEOUT if production_deadlines else 0.25,
             session_end_timeout=0.25,
-            ping_interval=0.05,
-            ping_timeout=60 if production_deadlines else 0.2,
-            high_ping_threshold=0.1,
-            http_proxy=None,
             mp_ctx=mp.get_context(method),
             loop=asyncio.get_running_loop(),
         )
+        self.method = method
         self.behavior = behavior
         self.launch_gate: asyncio.Event | None = None
         self.launch_entered = asyncio.Event()
@@ -136,24 +129,49 @@ class _Executor(JobExecutor):
         self.completion = completion
         await super()._core_completed(completion)
 
-    def _create_process(self, endpoint: socket.socket) -> Any:
+    def _create_process(self, mp_ctx: Any, endpoint: Any) -> Any:
         if self.behavior == "real_job":
-            return super()._create_process(endpoint)
-        return self._mp_ctx.Process(target=_ipc_child, args=(endpoint, self.behavior))
+            return super()._create_process(mp_ctx, endpoint)
+        return mp_ctx.Process(target=_ipc_child, args=(endpoint, self.behavior))
 
-    async def _core_launch(self, endpoint: int) -> None:
+    async def _core_launch(self, endpoint: int, launch: _core.JobLaunch) -> None:
         self.launch_entered.set()
         if self.launch_gate is not None:
             await self.launch_gate.wait()
-        await super()._core_launch(endpoint)
+        await super()._core_launch(endpoint, launch)
         self.process_spawned.set()
         if self.receipt_gate is not None:
             await self.receipt_gate.wait()
 
 
+def _options(behavior: str) -> JobRunnerOptions:
+    production_deadlines = behavior in {"real_job", "watchdog"}
+    return JobRunnerOptions(
+        initialize_timeout=2 if behavior == "blocked_initialize" else _PROCESS_INITIALIZE_TIMEOUT,
+        close_timeout=_PROCESS_CLOSE_TIMEOUT if production_deadlines else 0.25,
+        ping_interval=0.05,
+        ping_timeout=60 if production_deadlines else 0.2,
+        high_ping_threshold=0.1,
+    )
+
+
+class _Executor:
+    """A job runner and its launcher, as these tests drive and observe them."""
+
+    def __init__(self, method: str, behavior: str = "normal") -> None:
+        self.launcher = _Launcher(method, behavior)
+        self.sup = _core.JobSupervisor(self.launcher, _options(behavior))
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.sup, name)
+
+    async def aclose(self) -> None:
+        await self.sup.aclose()
+
+
 @pytest.fixture
 async def executor_factory(
-    own_executor: Callable[[JobExecutor], JobExecutor],
+    own_executor: Callable[[Any], Any],
 ) -> AsyncIterator[Callable[[str, str], _Executor]]:
     owned: list[_Executor] = []
 
@@ -167,19 +185,19 @@ async def executor_factory(
         yield create
     finally:
         for executor in owned:
-            if executor.launch_gate is not None:
-                executor.launch_gate.set()
-            if executor.receipt_gate is not None:
-                executor.receipt_gate.set()
+            if executor.launcher.launch_gate is not None:
+                executor.launcher.launch_gate.set()
+            if executor.launcher.receipt_gate is not None:
+                executor.launcher.receipt_gate.set()
 
 
-async def _assert_reaped(executor: _Executor) -> None:
+async def _assert_reaped(executor: Any, method: str) -> None:
     await asyncio.wait_for(executor.join(), timeout=5)
     assert executor.exitcode is not None, "native owner must deliver the start method's receipt"
     pid = executor.pid
     assert pid is not None
     assert not psutil.pid_exists(pid), "a zombie is not a reaped process"
-    if os.name == "posix" and executor._mp_ctx.get_start_method() == "spawn":
+    if os.name == "posix" and method == "spawn":
         with pytest.raises(ChildProcessError):
             os.waitpid(pid, os.WNOHANG)
 
@@ -192,7 +210,7 @@ async def test_process_resource_lifecycle_matrix(
     await executor.start()
     await executor.initialize()
     await asyncio.wait_for(executor.aclose(), timeout=3)
-    await _assert_reaped(executor)
+    await _assert_reaped(executor, method)
     assert executor.exitcode == 0
 
 
@@ -206,7 +224,7 @@ async def test_failed_initialization_retains_native_cleanup_ownership(
     with pytest.raises((RuntimeError, TimeoutError, ConnectionError)):
         await executor.initialize()
     await asyncio.wait_for(executor.aclose(), timeout=3)
-    await _assert_reaped(executor)
+    await _assert_reaped(executor, method)
     assert executor.exitcode != 0
 
 
@@ -216,23 +234,23 @@ async def test_cancelled_start_does_not_abandon_a_launched_process(
     method: str, after_launch: bool, executor_factory: Callable[[str, str], _Executor]
 ) -> None:
     executor = executor_factory(method, "normal")
-    executor.launch_gate = asyncio.Event()
-    executor.receipt_gate = asyncio.Event()
-    starting = asyncio.create_task(executor.start())
-    await executor.launch_entered.wait()
+    executor.launcher.launch_gate = asyncio.Event()
+    executor.launcher.receipt_gate = asyncio.Event()
+    starting = asyncio.ensure_future(executor.start())
+    await executor.launcher.launch_entered.wait()
     if after_launch:
-        executor.launch_gate.set()
-        await asyncio.wait_for(executor.process_spawned.wait(), timeout=5)
+        executor.launcher.launch_gate.set()
+        await asyncio.wait_for(executor.launcher.process_spawned.wait(), timeout=5)
     starting.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await starting
-    executor.launch_gate.set()
+    executor.launcher.launch_gate.set()
     # In the postlaunch case, keep the host launch result blocked while native close reaps.
     if not after_launch:
-        executor.receipt_gate.set()
+        executor.launcher.receipt_gate.set()
     await asyncio.wait_for(executor.aclose(), timeout=5)
-    await _assert_reaped(executor)
-    executor.receipt_gate.set()
+    await _assert_reaped(executor, method)
+    executor.launcher.receipt_gate.set()
 
 
 @pytest.mark.parametrize("method", _METHODS)
@@ -243,13 +261,12 @@ async def test_blocked_python_health_kill(
     await executor.start()
     await executor.initialize()
     entered = tmp_path / "blocked-callback.entered"
-    job = RunningJobInfo(
-        JobAcceptArguments("", "", str(entered)), agent.Job(id="blocked-python"), "", "", "", True
-    )
+    job = running_job(agent.Job(id="blocked-python"))
+    job.accept_arguments.metadata = str(entered)
     started = time.monotonic()
     with pytest.raises((RuntimeError, ConnectionError)):
         await executor.launch_job(job)
-    await _assert_reaped(executor)
+    await _assert_reaped(executor, method)
     assert entered.exists(), "the real host loop must enter the blocking callback"
     # The configured 200 ms health deadline and bounded receipt wait
     # must finish well before the intentionally blocked 60-second host callback.
@@ -267,9 +284,9 @@ async def test_launch_failure_keeps_its_cause_and_settles_close(
     executor = executor_factory(method, "normal")
     # Multiprocessing must reject the unpicklable target before creating a child.
     monkeypatch.setattr(
-        executor,
+        executor.launcher,
         "_create_process",
-        lambda endpoint: executor._mp_ctx.Process(target=lambda: None),
+        lambda mp_ctx, endpoint: mp_ctx.Process(target=lambda: None),
     )
     # Python 3.14 raises PicklingError where earlier versions raise AttributeError.
     with pytest.raises((AttributeError, pickle.PicklingError), match="local object"):
@@ -284,6 +301,7 @@ async def test_post_spawn_failure_keeps_native_owner_and_original_cause(
     method: str,
     executor_factory: Callable[[str, str], _Executor],
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     import importlib
 
@@ -303,43 +321,42 @@ async def test_post_spawn_failure_keeps_native_owner_and_original_cause(
 
     monkeypatch.setattr(popen, "__init__", fail_after_spawn)
     executor = executor_factory(method, "normal")
-    with pytest.raises(OSError, match="fixture bootstrap failed after OS launch"):
+    with caplog.at_level(logging.ERROR, logger="livekit.agents"):
+        # the process exists: the native owner took it, the launch's cause is logged
         await asyncio.wait_for(executor.start(), timeout=5)
-    assert executor.pid is not None, "partial Popen failure must still publish native ownership"
+        assert executor.pid is not None, "partial Popen failure must still publish native ownership"
+        async with asyncio.timeout(5):
+            while "fixture bootstrap failed after OS launch" not in caplog.text:
+                await asyncio.sleep(0.01)
     await asyncio.wait_for(executor.aclose(), timeout=3)
-    await _assert_reaped(executor)
+    await _assert_reaped(executor, method)
     assert executor.exitcode != 0
 
 
 @pytest.mark.parametrize("method", _METHODS)
-async def test_ready_pool_processes_use_native_exit_and_reaping_handles(
-    method: str,
-    executor_factory: Callable[[str, str], _Executor],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async def callback_must_not_run() -> bool:
-        raise AssertionError("ready process observation crossed the Python loop")
-
+async def test_ready_pool_processes_use_native_exit_and_reaping_handles(method: str) -> None:
     class Host:
         def __init__(self) -> None:
-            self.ready: list[_Executor] = []
+            self.ready: list[_core.JobSupervisor] = []
 
-        def _core_create(self) -> _Executor:
-            executor = executor_factory(method, "normal")
-            monkeypatch.setattr(executor, "_core_wait_exit", callback_must_not_run)
-            monkeypatch.setattr(executor, "_core_join", callback_must_not_run)
-            return executor
+        async def _core_create(self) -> _Launcher:
+            return _Launcher(method, "normal")
 
-        def emit(self, event: str, executor: _Executor) -> None:
+        def emit(self, event: str, process: _core.JobSupervisor) -> None:
             if event == "process_ready":
-                self.ready.append(executor)
+                self.ready.append(process)
 
     host = Host()
     pool = _core.ProcPool(
         host,
         num_idle_processes=1,
-        initialize_timeout=_PROCESS_INITIALIZE_TIMEOUT,
-        close_timeout=0.25,
+        options=JobRunnerOptions(
+            initialize_timeout=_PROCESS_INITIALIZE_TIMEOUT,
+            close_timeout=0.25,
+            ping_interval=0.05,
+            ping_timeout=0.2,
+            high_ping_threshold=0.1,
+        ),
     )
     try:
         await asyncio.wait_for(pool.start(), timeout=_PROCESS_INITIALIZE_TIMEOUT + 5)
@@ -349,16 +366,16 @@ async def test_ready_pool_processes_use_native_exit_and_reaping_handles(
         _kill_pid(pid)
         # Native ownership/eligibility keeps progressing while host callbacks cannot run.
         time.sleep(1)
-        await _assert_reaped(executor)
+        await _assert_reaped(executor, method)
 
         async def replacement_ready() -> None:
-            while not any(replacement is not executor for replacement in host.ready):
+            while not any(replacement.id != executor.id for replacement in host.ready):
                 await asyncio.sleep(0.01)
 
         await asyncio.wait_for(replacement_ready(), timeout=_PROCESS_INITIALIZE_TIMEOUT + 5)
-        assert executor not in pool.processes
+        assert executor.id not in {process.id for process in pool.processes}
         assert any(
-            replacement.pid != pid for replacement in host.ready if replacement is not executor
+            replacement.pid != pid for replacement in host.ready if replacement.id != executor.id
         )
     finally:
         await asyncio.wait_for(pool.aclose(), timeout=5)
@@ -371,18 +388,16 @@ async def test_ready_pool_processes_use_native_exit_and_reaping_handles(
 async def test_real_ipc_protocol_failure_vectors(
     method: str, fault: str, executor_factory: Callable[[str, str], _Executor]
 ) -> None:
-    from livekit.agents.ipc import JobStatus
-
     executor = executor_factory(method, fault)
     await executor.start()
     with pytest.raises((RuntimeError, ConnectionError)):
         await asyncio.wait_for(
             executor.initialize(), timeout=_PROCESS_INITIALIZE_TIMEOUT + _PROCESS_CLOSE_TIMEOUT
         )
-    await _assert_reaped(executor)
-    assert executor.status == JobStatus.FAILED
-    assert executor.completion is not None
-    failure = executor.completion.failure
+    await _assert_reaped(executor, method)
+    assert executor.status is None, "no job ran"
+    assert executor.launcher.completion is not None
+    failure = executor.launcher.completion.failure
     if fault == "wire_oversized_prefix":
         assert isinstance(failure, IpcFailureTooLarge)
         assert failure.size == 2**32 - 1
@@ -397,18 +412,15 @@ async def test_real_ipc_protocol_failure_vectors(
 
 
 @pytest.mark.parametrize("method", _METHODS)
-async def test_real_ipc_stress_matrix(
-    method: str, own_executor: Callable[[JobExecutor], JobExecutor], tmp_path: Path
-) -> None:
-    from tests.conformance.ipc_processes import process_snapshot
+async def test_real_ipc_stress_matrix(method: str, tmp_path: Path) -> None:
+    from tests.conformance.ipc_processes import close_owned_executor, process_snapshot
 
     parent = psutil.Process()
-    retained: list[weakref.ReferenceType[JobExecutor]] = []
+    retained: list[weakref.ReferenceType[_Launcher]] = []
 
     async def cycle(index: int) -> None:
         executor = _Executor(method, "real_job")
-        own_executor(executor)
-        retained.append(weakref.ref(executor))
+        retained.append(weakref.ref(executor.launcher))
         started_at = time.monotonic()
         phases: dict[str, float] = {}
         try:
@@ -416,23 +428,15 @@ async def test_real_ipc_stress_matrix(
             phases["launch"] = time.monotonic() - started_at
             await executor.initialize()
             phases["ready"] = time.monotonic() - started_at
-            info = RunningJobInfo(
-                JobAcceptArguments("", "", ""),
-                agent.Job(id=f"stress-{index}", metadata=f"wire-stress-{index}"),
-                "",
-                "",
-                "",
-                True,
-            )
+            info = running_job(agent.Job(id=f"stress-{index}", metadata=f"wire-stress-{index}"))
             await executor.launch_job(info)
             phases["job_accepted"] = time.monotonic() - started_at
-            await asyncio.wait_for(executor._core_wait_exit(), timeout=5)
-            await _assert_reaped(executor)
-            assert executor.completion is not None
-            assert executor.completion.failure is None
+            await _assert_reaped(executor, method)
+            assert executor.launcher.completion is not None
+            assert executor.launcher.completion.failure is None
             assert executor.exitcode == 0
         finally:
-            await executor.aclose()
+            await close_owned_executor(executor.sup, tmp_path / "ipc-cleanup")
             phases["closed"] = time.monotonic() - started_at
             (tmp_path / f"ipc-{method}-{index}-phases.json").write_text(
                 json.dumps(phases, indent=2)
@@ -517,7 +521,7 @@ async def test_real_ipc_stress_matrix(
 
 
 async def test_ipc_fixture_watchdog_failure(
-    own_executor: Callable[[JobExecutor], JobExecutor],
+    own_executor: Callable[[Any], Any],
     tmp_path: Path,
 ) -> None:
     if os.environ.get("LIVEKIT_IPC_WATCHDOG_CHILD") == "1":

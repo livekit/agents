@@ -30,8 +30,9 @@ from typing import Any, Literal, TypeAlias
 import psutil
 
 from livekit.agents import JobContext, _core
-from livekit.agents.ipc import JobExecutor, ProcPool, configure_forkserver
-from livekit.agents.job import JobAcceptArguments, JobExecutorType, JobProcess, RunningJobInfo
+from livekit.agents._generated.worker_server import AcceptArguments, JobInfo, RunningJobInfo
+from livekit.agents.ipc import JobLauncher, JobRunnerOptions, ProcPool, configure_forkserver
+from livekit.agents.job import JobProcess
 from livekit.protocol import agent
 from scripts.bench.metrics import LoopLag, distribution
 
@@ -104,7 +105,7 @@ async def entrypoint(context: JobContext) -> None:
     context.shutdown("IPC benchmark completed")
 
 
-class ObservedExecutor(JobExecutor):
+class ObservedLauncher(JobLauncher):
     """Observe completion without replacing any process/supervisor behavior."""
 
     completions: int = 0
@@ -117,7 +118,8 @@ class ObservedExecutor(JobExecutor):
 @dataclass
 class Ledger:
     directory: Path
-    created: list[ObservedExecutor] = field(default_factory=list)
+    launchers: list[ObservedLauncher] = field(default_factory=list)
+    processes: dict[str, _core.JobSupervisor] = field(default_factory=dict)
     events: Counter[tuple[str, str]] = field(default_factory=Counter)
     ready_ns: dict[str, int] = field(default_factory=dict)
     created_ns: dict[str, int] = field(default_factory=dict)
@@ -134,9 +136,12 @@ class Ledger:
     dispatch_ns: list[int] = field(default_factory=list)
     job_start_ns: list[int] = field(default_factory=list)
 
-    def event(self, event: str, process: JobExecutor) -> None:
+    def event(self, event: str, process: _core.JobSupervisor) -> None:
         identity = process.id
         self.events[event, identity] += 1
+        if event == "process_created":
+            self.processes[identity] = process
+            self.created_ns[identity] = time.monotonic_ns()
         if event == "process_started" and process.pid is not None:
             try:
                 self.births[identity] = (process.pid, psutil.Process(process.pid).create_time())
@@ -159,12 +164,19 @@ class Ledger:
         if event != "process_closed" and self.events["process_closed", identity]:
             self.violations.append(f"{event} after close for {identity}")
 
-    def make_executor(self, arguments: dict[str, Any]) -> ObservedExecutor:
-        process = ObservedExecutor(**arguments)
-        process.user_arguments = {"directory": str(self.directory), "executor_id": process.id}
-        self.created_ns[process.id] = time.monotonic_ns()
-        self.created.append(process)
-        return process
+    def make_launcher(self, arguments: dict[str, Any]) -> ObservedLauncher:
+        # the launcher's own identity: the core names its process only once it made it
+        token = f"launcher-{len(self.launchers)}"
+        user_arguments = {"directory": str(self.directory), "executor_id": token}
+        launcher = ObservedLauncher(**arguments, user_arguments=user_arguments)
+        self.launchers.append(launcher)
+        return launcher
+
+    def settled(self) -> bool:
+        """Every process closed once and every launched one's completion reported once."""
+        spawned = sum(p.pid is not None for p in self.processes.values())
+        closed = all(self.events["process_closed", identity] == 1 for identity in self.processes)
+        return closed and sum(launcher.completions for launcher in self.launchers) == spawned
 
     def verify(self) -> dict[str, int]:
         require(not self.violations, str(self.violations))
@@ -183,21 +195,19 @@ class Ledger:
             digest, submitted_ns = self.submitted[job_id]
             require(receipt["metadata_sha256"] == digest, f"payload corruption: {job_id}")
             require(receipt["started_ns"] >= submitted_ns, f"invalid start time: {job_id}")
-            process = next(p for p in self.created if p.id == identity)
-            require(process.pid == receipt["pid"], f"wrong process received {job_id}")
+            pids = {p.pid for p in self.processes.values()}
+            require(receipt["pid"] in pids, f"wrong process received {job_id}")
         require(
             self.acknowledged <= started,
             f"acknowledged but never ran: {self.acknowledged - started}",
         )
         require(started <= self.acknowledged | self.cancelled, "unexpected job execution")
-        for process in self.created:
-            require(
-                self.events["process_closed", process.id] == 1, f"process not retired: {process.id}"
-            )
-            require(
-                process.completions == int(process.pid is not None),
-                f"bad completion count: {process.id}",
-            )
+        require(
+            all(launcher.completions <= 1 for launcher in self.launchers),
+            "a completion reported twice",
+        )
+        require(self.settled(), "bad retirement or completion count")
+        for process in self.processes.values():
             if process.pid is not None:
                 require(process.exitcode is not None, f"missing exit observation: {process.id}")
         for pid, birth in self.births.values():
@@ -205,12 +215,12 @@ class Ledger:
                 not same_process_alive(pid, birth), f"child still exists (including zombies): {pid}"
             )
         return {
-            "executors_created": len(self.created),
-            "processes_spawned": sum(p.pid is not None for p in self.created),
+            "executors_created": len(self.processes),
+            "processes_spawned": sum(p.pid is not None for p in self.processes.values()),
             "peak_owned_executors": self.peak_live,
             "peak_unready_executors": self.peak_unready,
-            "forced_kills": sum(p.killed for p in self.created),
-            "graceful_exits": sum(p.exitcode == 0 for p in self.created),
+            "forced_kills": sum(p.killed for p in self.processes.values()),
+            "graceful_exits": sum(p.exitcode == 0 for p in self.processes.values()),
             "acknowledged_jobs": len(self.acknowledged),
             "cancelled_requests": len(self.cancelled),
             "cancelled_jobs_started": len(started & self.cancelled),
@@ -232,8 +242,8 @@ class ObservedPool(ProcPool):
         for event in events:
             self.on(event, lambda process, event=event: ledger.event(event, process))
 
-    def _core_create(self) -> JobExecutor:
-        return self.ledger.make_executor(self._executor_args)
+    async def _core_create(self) -> JobLauncher:
+        return self.ledger.make_launcher(self._launcher_args)
 
 
 async def eventually(predicate: Callable[[], bool], timeout: float, description: str) -> None:
@@ -250,14 +260,9 @@ def options(args: argparse.Namespace) -> dict[str, Any]:
         "job_entrypoint_fnc": entrypoint,
         "session_end_fnc": None,
         "simulation_end_fnc": None,
-        "initialize_timeout": args.timeout,
-        "close_timeout": 2.0,
+        "options": JobRunnerOptions(initialize_timeout=args.timeout, close_timeout=2.0),
         "session_end_timeout": 1.0,
-        "job_executor_type": JobExecutorType.PROCESS,
         "mp_ctx": mp.get_context(args.start_method),
-        "memory_warn_mb": 0,
-        "memory_limit_mb": 0,
-        "http_proxy": None,
         "env": [("LIVEKIT_AGENTS_PRELOAD_LOCAL_INFERENCE", "0")],
         "loop": asyncio.get_running_loop(),
     }
@@ -280,18 +285,35 @@ def job(ledger: Ledger, args: argparse.Namespace, label: str) -> RunningJobInfo:
     )
     ledger.submitted[job_id] = (hashlib.sha256(metadata.encode()).hexdigest(), time.monotonic_ns())
     return RunningJobInfo(
-        accept_arguments=JobAcceptArguments(name="ipc-bench", identity=job_id, metadata=""),
-        job=agent.Job(id=job_id, metadata=metadata),
+        accept_arguments=AcceptArguments(
+            name="ipc-bench", identity=job_id, metadata="", attributes=[]
+        ),
+        job=JobInfo(
+            id=job_id,
+            dispatch_id="",
+            type=0,
+            room=None,
+            room_sid=None,
+            agent_name="",
+            metadata=metadata,
+            deployment="",
+            enable_recording=False,
+            enable_redaction=False,
+            proto=agent.Job(id=job_id, metadata=metadata).SerializeToString(),
+        ),
         url="",
         token="",
         worker_id="ipc-bench",
         fake_job=True,
+        received_at=0,
+        accepted_at=0,
+        assigned_at=0,
     )
 
 
 async def accepted(
     pool: ProcPool, ledger: Ledger, info: RunningJobInfo, timeout: float
-) -> JobExecutor:
+) -> _core.JobSupervisor:
     started = time.monotonic_ns()
     await asyncio.wait_for(pool.launch_job(info), timeout)
     ledger.dispatch_ns.append(time.monotonic_ns() - started)
@@ -307,7 +329,7 @@ async def accepted(
 
 
 async def finish(
-    ledger: Ledger, info: RunningJobInfo, process: JobExecutor, timeout: float
+    ledger: Ledger, info: RunningJobInfo, process: _core.JobSupervisor, timeout: float
 ) -> None:
     (ledger.directory / "release" / info.job.id).touch()
     await asyncio.wait_for(process.join(), timeout)
@@ -315,7 +337,7 @@ async def finish(
     require(process.exitcode == 0, f"normal job failed: {info.job.id}, exit={process.exitcode}")
 
 
-def idle(pool: ProcPool, ledger: Ledger) -> list[JobExecutor]:
+def idle(pool: ProcPool, ledger: Ledger) -> list[_core.JobSupervisor]:
     return [p for p in pool.processes if p.id in ledger.ready_ns and p.running_job is None]
 
 
@@ -327,25 +349,20 @@ async def cleanup(pool: ProcPool, ledger: Ledger, timeout: float) -> None:
         errors.append(error)
     finally:
         # Also join processes removed from pool.processes, including abandoned launch callers.
-        async def stop(process: JobExecutor) -> None:
+        async def stop(process: _core.JobSupervisor) -> None:
             if process.started:
                 try:
                     await asyncio.wait_for(process.kill(), timeout)
                 finally:
                     await asyncio.wait_for(process.join(), timeout)
 
-        results = await asyncio.gather(*(stop(p) for p in ledger.created), return_exceptions=True)
+        results = await asyncio.gather(
+            *(stop(p) for p in ledger.processes.values()), return_exceptions=True
+        )
         errors.extend(error for error in results if isinstance(error, BaseException))
         try:
             await eventually(
-                lambda: (
-                    not pool.processes
-                    and all(
-                        (p.pid is None or p.completions == 1)
-                        and ledger.events["process_closed", p.id] == 1
-                        for p in ledger.created
-                    )
-                ),
+                lambda: not pool.processes and ledger.settled(),
                 timeout,
                 "process retirement/completion callbacks did not settle",
             )
@@ -473,10 +490,7 @@ async def run_round(directory: Path, args: argparse.Namespace, index: int) -> di
         require(not pool.processes, "pool close returned with retained processes")
         require(pool._jobs_waiting_for_process == 0, "cancelled requests retained admission")
         await eventually(
-            lambda: all(
-                (p.pid is None or p.completions == 1) and ledger.events["process_closed", p.id] == 1
-                for p in ledger.created
-            ),
+            ledger.settled,
             args.timeout,
             "completion/close notifications missing after pool shutdown",
         )

@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
+use lk_agents_abi::errors::HostError;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
 use tokio::sync::watch;
 use tokio::time::Instant;
@@ -101,7 +102,7 @@ mod supervision {
     async fn launch_rejection_without_a_process_is_not_reported_as_os_exit_or_reaping() {
         let host = Arc::new(FakeHost::default());
         let (parent, _child) = memory();
-        let refusal = Some("spawn refused".into());
+        let refusal = Some(HostError::new("spawn refused"));
         let sup = start(FakeExecutor { refusal, ..executor(parent, &host) }, &host, short(60.0));
         let initialized = sup.initialize(hello()).await;
         assert!(matches!(initialized, Err(InitError::Failed(cause)) if cause == "spawn refused"));
@@ -395,12 +396,12 @@ impl Runner for FakeRunner {
 struct FakeExecutor {
     launch: Mutex<Option<(FakeRunner, Channel<ToChild, ToParent>)>>,
     gate: Option<Arc<tokio::sync::Semaphore>>,
-    refusal: Option<String>,
+    refusal: Option<HostError>,
 }
 
 #[async_trait::async_trait]
 impl RunnerExecutor for FakeExecutor {
-    async fn launch(&self) -> Result<(Box<dyn Runner>, Channel<ToChild, ToParent>), String> {
+    async fn launch(&self) -> Result<(Box<dyn Runner>, Channel<ToChild, ToParent>), HostError> {
         if let Some(gate) = &self.gate {
             let _ = gate.acquire().await;
         }
