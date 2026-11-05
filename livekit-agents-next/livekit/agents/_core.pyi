@@ -266,6 +266,7 @@ from ._generated._core_voice import (
     TtsNodeFrames as TtsNodeFrames,
     VoiceSession as VoiceSession,
     WarmTransfer as WarmTransfer,
+    _core_AvatarLifecycle as _core_AvatarLifecycle,
     _core_create_room_session as _core_create_room_session,
     _core_NodeCalls as _core_NodeCalls,
     _core_playback_begin as _core_playback_begin,

@@ -121,6 +121,7 @@ impl super::Implementations for Selected {
     type DataStreamAudioOutput = ::lk_agents_runtime::avatar::output::DataStreamAudioOutput;
     type DataStreamAudioReceiver = ::lk_agents_runtime::avatar::receiver::DataStreamAudioReceiver;
     type AvatarRunner = ::lk_agents_runtime::avatar::runner::AvatarRunner;
+    type AvatarLifecycle = ::lk_agents_runtime::avatar::lifecycle::AvatarLifecycle;
     type QueueAudio = ::lk_agents_runtime::avatar::output::QueueAudio;
     type PlayState = ::lk_agents_runtime::voice::background_audio::PlayState;
     type BackgroundAudioPlayer = ::lk_agents_runtime::voice::background_audio::BackgroundAudio;

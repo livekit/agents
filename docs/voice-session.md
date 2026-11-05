@@ -345,6 +345,45 @@ probability; a total below 1 can pick silence. `play()` returns a `PlayHandle`
 to `stop()`, check `done()` or await until it finishes. `aclose()` stops every
 sound and unpublishes the track.
 
+## Avatars
+
+An `AvatarSession` (a provider plugin, or `inference.AvatarSession`) replaces
+the call's audio with a stream to a remote avatar worker that publishes the
+video on the agent's behalf:
+
+```python
+avatar = tavus.AvatarSession(...)
+await avatar.start(session, room=ctx.room)
+await avatar.wait_for_join()  # raises TimeoutError after 30 s by default
+await session.start(agent, room=ctx.room)
+```
+
+`start()` begins the avatar's lifecycle in the session's runtime:
+
+- It waits in the background for the avatar participant (`avatar_identity`)
+  to join the room and publish its video, once the room is connected.
+  `wait_for_join(timeout=)` awaits it and raises `TimeoutError` after
+  `timeout` seconds (`None` waits indefinitely); a timeout does not end the
+  wait, so a later call can still see the join. It raises
+  `asyncio.CancelledError` once the avatar closed before it joined, and the
+  room's error if the room failed first.
+- Inside a job, the job's shutdown runs the avatar's `aclose()` (a plugin's
+  own), in the shutdown's span.
+- `metrics_collected` emits `AvatarMetrics`: once when the avatar joined
+  (`session_started_time` when the room was connected, `avatar_joined_time`
+  when its video was published), then for each assistant message the session
+  adds with a `playback_latency` (from the first audio frame sent to the
+  avatar to the worker's `lk.playback_started`), until the close. Each is also
+  recorded with the session's metrics once the session runs.
+
+`aclose()` closes the avatar's audio output, stops the join wait and the
+metrics, then, inside a job while the room is connected, removes the avatar
+participant through RoomService `RemoveParticipant` with the job's
+`LIVEKIT_URL` and key pair. A participant already gone (`not_found`) is
+skipped; any other failure is logged and does not fail the close. Concurrent
+closes wait for the same close, a later one does nothing, and `start()` again
+begins a new lifecycle.
+
 ## The call's thread
 
 On a server with storage, the door resolves the call's thread before the

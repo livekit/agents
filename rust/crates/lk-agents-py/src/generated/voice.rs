@@ -424,6 +424,101 @@ impl AvatarRunner {
     }
 }
 
+// Declared in rust/crates/lk-agents-abi/src/voice/avatar.rs.
+type CoreAvatarLifecycleImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::AvatarLifecycle;
+
+fn _extract_avatar_lifecycle_wait_for_join_timeout(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<AvatarLifecycleWaitForJoinTimeoutInput> {
+    if obj.is_none() {
+        Ok(None)
+    } else {
+        (crate::py_values::number_from_py::<f64>(obj.as_any(), "timeout")).map(Some)
+    }
+}
+type AvatarLifecycleWaitForJoinTimeoutInput = ::std::option::Option<f64>;
+
+/// `CoreAvatarLifecycle`: an agent's avatar from `AvatarSession.start()` to its close. Created,
+/// it waits in the background for the avatar participant to join `room` and publish video (once
+/// `room` is connected) and reports the join as `AvatarMetrics` (`session_started_time` when the
+/// room was connected, `avatar_joined_time` when the video was published); a session's assistant
+/// message added with a `playback_latency` is reported as `AvatarMetrics(playback_latency=..)`
+/// until the close. Each metric reaches the avatar's `metrics_collected` and the session's
+/// metrics once it runs. Inside a job, the job's shutdown runs the avatar's `aclose`.
+#[pyclass(frozen, name = "_core_AvatarLifecycle", module = "livekit.agents._core")]
+pub struct CoreAvatarLifecycle(pub(crate) ::std::sync::Arc<CoreAvatarLifecycleImpl>);
+
+#[pymethods]
+impl CoreAvatarLifecycle {
+    #[new]
+    #[pyo3(signature = (owner, room, *, identity, provider, avatar, job = None))]
+    fn new(
+        py: Python<'_>,
+        owner: Bound<'_, PyAny>,
+        room: Bound<'_, PyAny>,
+        identity: ::std::string::String,
+        provider: ::std::string::String,
+        avatar: Bound<'_, PyAny>,
+        job: Option<Bound<'_, PyAny>>,
+    ) -> PyResult<CoreAvatarLifecycle> {
+        crate::py_calls::check_pid()?;
+        let env = crate::process::env();
+        let owner = owner
+            .cast::<super::voice::CoreSessionOwner>()
+            .map(|value| ::std::sync::Arc::clone(&value.get().0))
+            .map_err(::pyo3::PyErr::from)?;
+        let room = crate::generated::voice::RtcRoomProxy::from_host(room.as_any())?;
+        let avatar = crate::generated::voice::AvatarHostProxy::from_host(avatar.as_any())?;
+        let job = job
+            .map(|v| crate::generated::worker::SessionJobProxy::from_host(v.as_any()))
+            .transpose()?;
+        let out = py
+            .detach(|| {
+                <CoreAvatarLifecycleImpl as ::lk_agents_abi::voice::avatar::AvatarLifecycle>::new(
+                    &env, owner, room, identity, provider, avatar, job,
+                )
+            })
+            .map_err(|e: ::lk_agents_abi::errors::HostError| {
+                <::lk_agents_abi::errors::HostError as crate::py_errors::HostException>::to_py_err(
+                    &e,
+                )
+            })?;
+        ::pyo3::PyResult::Ok(CoreAvatarLifecycle(::std::sync::Arc::new(out)))
+    }
+
+    /// Until the avatar joined; `timeout` seconds at most (`None` waits as long as it takes).
+    #[pyo3(signature = (timeout))]
+    fn wait_for_join<'py>(
+        &self,
+        py: Python<'py>,
+        #[pyo3(from_py_with = _extract_avatar_lifecycle_wait_for_join_timeout)]
+        timeout: AvatarLifecycleWaitForJoinTimeoutInput,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::py_calls::future_into_py(py, async move {
+            let () = <CoreAvatarLifecycleImpl as ::lk_agents_abi::voice::avatar::AvatarLifecycle>::wait_for_join(&this, timeout)
+                .await.map_err(|e: ::lk_agents_abi::voice::avatar::AvatarJoinError| <::lk_agents_abi::voice::avatar::AvatarJoinError as crate::py_errors::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
+        })
+    }
+
+    /// Stops the join wait and the metrics, then, inside a job and while `room` is connected,
+    /// removes the avatar participant from the room through the job's RoomService
+    /// (`RemoveParticipant`): a participant already gone (`not_found`) is skipped, any other
+    /// failure logged. Once, however many callers: each waits for the same close.
+    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::py_calls::future_into_py(py, async move {
+            let () = <CoreAvatarLifecycleImpl as ::lk_agents_abi::voice::avatar::AvatarLifecycle>::aclose(&this, )
+                .await;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
+        })
+    }
+}
+
 // Declared in rust/crates/lk-agents-abi/src/voice/avatar_queue.rs.
 type CoreQueueAudioImpl =
     <crate::generated::implementations::Selected as super::Implementations>::QueueAudio;
@@ -6083,6 +6178,123 @@ impl ::lk_agents_abi::voice::avatar::AvatarVideoGenerator for AvatarVideoGenerat
                 let out = (if o.is_none() { Ok(None) } else { (crate::generated::records::avatar::avatar_frame_from_py(o.as_any())).map(Some) }).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
             })
+        })
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/voice/avatar.rs.
+
+/// [`::lk_agents_abi::voice::avatar::AvatarHost`] over a host `livekit.agents.voice.avatar.AvatarSession`.
+#[derive(Clone)]
+pub struct AvatarHostProxy {
+    host: ::std::sync::Arc<Py<PyAny>>,
+    /// The host's running loop and a copy of its context, captured when it was taken.
+    context: ::lk_agents_abi::utils::host_ref::HostRef,
+    /// The `notify` calls, delivered in order.
+    notifier: crate::py_calls::Notifier,
+}
+
+impl AvatarHostProxy {
+    /// A registered native class as itself, any other host object behind this proxy.
+    pub fn from_host(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::avatar::AvatarHost>> {
+        if let Some(native) =
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::avatar::AvatarHost>(obj)
+        {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+    }
+
+    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    pub fn in_context(
+        obj: &Bound<'_, PyAny>,
+        context: &::lk_agents_abi::utils::host_ref::HostRef,
+    ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::voice::avatar::AvatarHost>> {
+        if let Some(native) =
+            crate::py_objects::native::<dyn ::lk_agents_abi::voice::avatar::AvatarHost>(obj)
+        {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
+    }
+
+    /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
+    pub fn owned(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::voice::avatar::AvatarHost>> {
+        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+    }
+
+    fn take(
+        obj: &Bound<'_, PyAny>,
+        context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
+    ) -> PyResult<Self> {
+        let context = match context {
+            Some(context) => ::std::clone::Clone::clone(context),
+            None => crate::py_calls::capture_context(obj.py())?,
+        };
+        Ok(AvatarHostProxy {
+            host: ::std::sync::Arc::new(obj.clone().unbind()),
+            context,
+            notifier: ::std::default::Default::default(),
+        })
+    }
+}
+
+impl ::lk_agents_abi::voice::avatar::AvatarHost for AvatarHostProxy {
+    fn metrics_collected(&self, metrics: ::lk_agents_abi::metrics::AvatarMetrics) {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let metrics_arg = metrics;
+        ::lk_agents_runtime::host::notify(
+            &self.notifier,
+            "AvatarHost._core_metrics_collected",
+            &self.context,
+            &[],
+            false,
+            ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
+                    [crate::generated::records::metrics::avatar_metrics_to_py(py, metrics_arg)?];
+                Ok((
+                    host.bind(py).getattr("_core_metrics_collected")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
+            }),
+        );
+    }
+
+    fn close(
+        &self,
+    ) -> ::std::result::Result<::lk_agents_abi::HostRef, ::lk_agents_abi::errors::HostError> {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let out = ::lk_agents_runtime::host::call_now(
+            &crate::py_calls::Entry,
+            ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] =
+                    [host.bind(py).clone(), ::pyo3::types::PyString::new(py, "aclose").into_any()];
+                Ok((
+                    py.import("builtins")?.getattr("getattr")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
+            }),
+        );
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.value.bind(py);
+            let out = (crate::py_objects::object_ref_from_py(o.as_any())).map_err(|e| {
+                <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(
+                    py, &e,
+                )
+            })?;
+            Ok(out)
         })
     }
 }
@@ -11955,6 +12167,26 @@ impl crate::py_errors::HostException for ::lk_agents_abi::voice::avatar::Receive
             Self::BadStream(..) => {
                 ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
             }
+            _ => ::pyo3::exceptions::PyRuntimeError::new_err(::std::string::ToString::to_string(
+                self,
+            )),
+        }
+    }
+}
+
+impl crate::py_errors::HostException for ::lk_agents_abi::voice::avatar::AvatarJoinError {
+    fn to_py_err(&self) -> ::pyo3::PyErr {
+        #[allow(unreachable_patterns)]
+        match self {
+            Self::Timeout(..) => ::pyo3::exceptions::PyTimeoutError::new_err(
+                ::std::string::ToString::to_string(self),
+            ),
+            Self::Closed => crate::py_errors::host_exception(
+                "asyncio",
+                "CancelledError",
+                ::std::string::ToString::to_string(self),
+            ),
+            Self::Rtc(inner) => crate::py_errors::HostException::to_py_err(inner),
             _ => ::pyo3::exceptions::PyRuntimeError::new_err(::std::string::ToString::to_string(
                 self,
             )),

@@ -54,8 +54,11 @@ def setup(monkeypatch):
         async def start_session(self, **kwargs):
             return SessionResponse(session_id="provider-session")
 
-    monkeypatch.setattr(BaseAvatarSession, "_wait_avatar_join", AsyncMock())
-    monkeypatch.setattr("livekit.agents.voice.avatar.get_job_context", lambda **kwargs: None)
+    async def start(self, agent_session, room):
+        # these tests own the audio output, not the room's avatar lifecycle
+        self._room, self._agent_session = room, agent_session
+
+    monkeypatch.setattr(BaseAvatarSession, "start", start)
     monkeypatch.setattr("livekit.plugins.anam.avatar.AnamAPI", API)
     monkeypatch.setattr(
         "livekit.plugins.anam.avatar.get_job_context",

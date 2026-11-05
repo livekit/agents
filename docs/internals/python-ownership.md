@@ -157,7 +157,7 @@ Runtime reuses RTC source/publication capabilities and owns pacing, bounded fram
 
 | File | Lines |
 | --- | ---: |
-| [voice/avatar.py](../../livekit-agents-next/livekit/agents/voice/avatar.py) | 507 |
+| [voice/avatar.py](../../livekit-agents-next/livekit/agents/voice/avatar.py) | 454 |
 
 ### Voice auxiliary lifecycle
 
@@ -271,6 +271,7 @@ Implemented ownership changes (validation is recorded with the change):
 
 - Avatar media uses shared RTC source/publication capabilities. `_AvatarMedia` and its host proxy are removed. Voice owns the pacing plan; runtime owns publication, bounded frame delivery and cleanup. The generated native synchronizer preserves the operations exposed by `runner.av_sync`; its concrete type is native rather than `rtc.AVSynchronizer`.
 - Queue audio admission, segment epochs, discarded-segment ordering and stale playback report handling are in `voice::avatar::queue`. Python forwards frames and executes playback event effects; it owns no segment queue.
+- An `AvatarSession`'s lifecycle is the runtime's `_core_AvatarLifecycle`: the join wait and `wait_for_join`'s timeout, the join metric, the playback-latency metric (from each assistant `ItemAdded` the session owner delivers while the avatar is attached), the avatar's `aclose` registered on the job's shutdown through the `SessionJob` proxy (`_core_on_avatar_shutdown`, in the shutdown's span), and the participant's removal on close through `lk-agents-net`'s RoomService client with the job's `_server_env` credentials (`not_found` skipped, any other failure logged). The Python join task, `conversation_item_added` listener, `_emit_metrics` and the `livekit.api` removal call are removed; Python keeps the audio output's ownership and emits `metrics_collected`.
 - Shared toolset lifetime and group/scope selection are in `core::toolsets`; runtime owns setup/close effects, cancellation and rollback. Python refcounts, locks and separate text/voice acquisition/rollback loops are removed. Object identity, rather than the public toolset label, identifies a shared connection.
 - Voice startup, handoff rollback, per-agent release and session shutdown address the native toolset registry directly. Python provides SDK toolset identities and schema reflection; `_core_setup_tools`, `_core_close_toolsets` and the bootstrap abort callback are removed. Failed or cancelled admissions do not occupy a later activation’s release slot.
 - Owned toolset setup uses generated HostInvoker cancellation signalling and waits for the Python task’s actual settlement, including async `finally` blocks.

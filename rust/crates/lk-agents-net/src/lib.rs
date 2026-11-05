@@ -10,6 +10,7 @@
 //!   OTLP exporter to LiveKit Cloud and the application's endpoint ([`telemetry::otlp`]); the
 //!   LiveKit Cloud session report's records and recording upload ([`telemetry::session_report`]).
 //! - [`blocking_io`]: the process's blocking I/O pool.
+//! - [`room_service`]: LiveKit RoomService calls the framework makes in a job's room.
 //! - [`dns`]: name resolution and TCP connects on the blocking I/O pool.
 //! - [`env`]: what the hosting process lends a client.
 //! - [`task`]: owned tasks with correlated cancellation and one observed outcome.
@@ -27,6 +28,7 @@ pub mod clock;
 pub mod dns;
 pub mod env;
 pub mod http;
+pub mod room_service;
 pub mod source;
 pub mod sse;
 pub mod task;

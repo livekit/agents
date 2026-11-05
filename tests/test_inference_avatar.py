@@ -7,7 +7,6 @@ import asyncio
 import contextlib
 from collections.abc import AsyncIterator
 from typing import Any
-from unittest.mock import AsyncMock
 
 import pytest
 from aiohttp import web
@@ -137,7 +136,11 @@ async def _start(avatar: AvatarSession, session: _VoiceSession | None = None) ->
 def _audio_sink(monkeypatch: pytest.MonkeyPatch) -> None:
     """The avatar's audio sink is the room's; these tests own the gateway, not the room."""
     monkeypatch.setattr(avatar_mod, "DataStreamAudioOutput", _AudioSink)
-    monkeypatch.setattr(BaseAvatarSession, "_wait_avatar_join", AsyncMock())
+
+    async def start(self: BaseAvatarSession, agent_session: Any, room: Any) -> None:
+        self._room, self._agent_session = room, agent_session
+
+    monkeypatch.setattr(BaseAvatarSession, "start", start)
 
 
 async def test_a_second_start_while_the_first_creates_is_refused() -> None:

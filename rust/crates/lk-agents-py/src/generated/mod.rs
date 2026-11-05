@@ -166,6 +166,7 @@ pub trait Implementations: 'static {
     type DataStreamAudioOutput: ::lk_agents_abi::voice::avatar::DataStreamAudioOutput;
     type DataStreamAudioReceiver: ::lk_agents_abi::voice::avatar::DataStreamAudioReceiver;
     type AvatarRunner: ::lk_agents_abi::voice::avatar::AvatarRunner<Synchronizer = Self::AVSynchronizer>;
+    type AvatarLifecycle: ::lk_agents_abi::voice::avatar::AvatarLifecycle<Owner = Self::SessionOwner>;
     type QueueAudio: ::lk_agents_abi::voice::avatar_queue::QueueAudio;
     type PlayState: ::lk_agents_abi::voice::background_audio::PlayState;
     type BackgroundAudioPlayer: ::lk_agents_abi::voice::background_audio::BackgroundAudioPlayer<State = Self::PlayState>;
@@ -425,6 +426,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<voice::DataStreamAudioOutput>()?;
     m.add_class::<voice::DataStreamAudioReceiver>()?;
     m.add_class::<voice::AvatarRunner>()?;
+    m.add_class::<voice::CoreAvatarLifecycle>()?;
     m.add_class::<voice::CoreQueueAudio>()?;
     m.add_class::<voice::PlayState>()?;
     m.add_class::<voice::BackgroundAudioPlayer>()?;

@@ -12,13 +12,14 @@ from typing import Any, Self
 from livekit.agents import VAD
 from livekit.agents._generated.expressive import ExpressiveOptions
 from livekit.agents.beta.workflows import _TransferHost
+from livekit.agents.job import JobContext
 from livekit.agents.llm import LLM
 from livekit.agents.llm.tool_context import ToolChoice
 from livekit.agents.stt import STT
 from livekit.agents.tts import TTS
 from livekit.agents.voice._session_bindings import SessionHost
 from livekit.agents.voice.agent_session import TextTransforms, _SessionNodes
-from livekit.agents.voice.avatar import AudioReceiver, VideoGenerator
+from livekit.agents.voice.avatar import AudioReceiver, AvatarSession, VideoGenerator
 from livekit.agents.voice.io import (
     AudioInput,
     AudioOutput,
@@ -148,6 +149,34 @@ class AvatarRunner:
     async def wait_for_complete(self) -> None: ...
     def clear_buffer(self, epoch: int) -> None: ...
     async def aclose(self) -> None: ...
+
+class _core_AvatarLifecycle:
+    """`_core_AvatarLifecycle`: an agent's avatar from `AvatarSession.start()` to its close. Created,
+    it waits in the background for the avatar participant to join `room` and publish video (once
+    `room` is connected) and reports the join as `AvatarMetrics` (`session_started_time` when the
+    room was connected, `avatar_joined_time` when the video was published); a session's assistant
+    message added with a `playback_latency` is reported as `AvatarMetrics(playback_latency=..)`
+    until the close. Each metric reaches the avatar's `metrics_collected` and the session's
+    metrics once it runs. Inside a job, the job's shutdown runs the avatar's `aclose`.
+    """
+    def __new__(
+        cls,
+        owner: _core_SessionOwner,
+        room: Room,
+        *,
+        identity: str,
+        provider: str,
+        avatar: AvatarSession,
+        job: JobContext | None = None,
+    ) -> Self: ...
+    async def wait_for_join(self, timeout: float | None) -> None:
+        """Until the avatar joined; `timeout` seconds at most (`None` waits as long as it takes)."""
+    async def aclose(self) -> None:
+        """Stops the join wait and the metrics, then, inside a job and while `room` is connected,
+        removes the avatar participant from the room through the job's RoomService
+        (`RemoveParticipant`): a participant already gone (`not_found`) is skipped, any other
+        failure logged. Once, however many callers: each waits for the same close.
+        """
 
 class _core_QueueAudio:
     def __new__(cls, wait_playback_start: bool) -> Self: ...

@@ -1576,6 +1576,7 @@ dependencies = [
  "bytes",
  "flate2",
  "futures-util",
+ "livekit-api",
  "livekit-protocol",
  "livekit-token",
  "lk-agents-abi",

@@ -216,6 +216,17 @@ impl lk_agents_abi::worker::job::SessionJob for Job {
     ) -> Result<(), lk_agents_abi::errors::HostError> {
         unreachable!("only the session owner joins its job")
     }
+    fn on_avatar_shutdown(
+        &self,
+        _: lk_agents_abi::HostRef,
+    ) -> Result<(), lk_agents_abi::errors::HostError> {
+        unreachable!("only an avatar closes on the job's shutdown")
+    }
+    fn server_env(
+        &self,
+    ) -> Result<std::collections::BTreeMap<String, String>, lk_agents_abi::errors::HostError> {
+        unreachable!("only an avatar calls the job's RoomService")
+    }
 }
 
 // Catches: the room connecting before `session_start` exists, so `room_connect` parents to the

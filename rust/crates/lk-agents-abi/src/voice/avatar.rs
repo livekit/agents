@@ -242,3 +242,71 @@ pub struct AvatarOptions {
     pub audio_sample_rate: u32,
     pub audio_channels: u16,
 }
+
+/// The agent's `AvatarSession`, as its lifecycle reaches it.
+#[crate::host(proxy(host = "livekit.agents.voice.avatar.AvatarSession"))]
+pub trait AvatarHost: Send + Sync {
+    /// The avatar's `metrics_collected` event.
+    #[host(notify, name = "_core_metrics_collected")]
+    fn metrics_collected(&self, metrics: crate::metrics::base::AvatarMetrics);
+    /// The avatar's `aclose` (a plugin's own), which the job's shutdown runs.
+    #[host(call, getter = "aclose")]
+    fn close(&self) -> Result<crate::HostRef, crate::errors::HostError>;
+}
+
+/// Why `wait_for_join` returned without the avatar.
+#[crate::host(error(kind = "RuntimeError"))]
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+pub enum AvatarJoinError {
+    /// The avatar had not published its video within the waiter's timeout. The join wait goes
+    /// on; a later `wait_for_join` can still see it.
+    #[host(kind = "TimeoutError")]
+    #[error("the avatar did not join within {0}s")]
+    Timeout(f64),
+    /// The avatar closed before it joined, or while it was awaited.
+    #[host(kind = "asyncio.CancelledError")]
+    #[error("the avatar session was closed")]
+    Closed,
+    /// The room failed or disconnected before the avatar joined.
+    #[error(transparent)]
+    #[host(delegate)]
+    Rtc(#[from] crate::voice::rtc::RtcError),
+}
+
+/// `_core_AvatarLifecycle`: an agent's avatar from `AvatarSession.start()` to its close. Created,
+/// it waits in the background for the avatar participant to join `room` and publish video (once
+/// `room` is connected) and reports the join as `AvatarMetrics` (`session_started_time` when the
+/// room was connected, `avatar_joined_time` when the video was published); a session's assistant
+/// message added with a `playback_latency` is reported as `AvatarMetrics(playback_latency=..)`
+/// until the close. Each metric reaches the avatar's `metrics_collected` and the session's
+/// metrics once it runs. Inside a job, the job's shutdown runs the avatar's `aclose`.
+#[crate::host(class(name = "_core_AvatarLifecycle"))]
+pub trait AvatarLifecycle: Send + Sync + Sized + 'static {
+    /// What the hosting process lends the class.
+    #[host(env)]
+    type Env;
+    #[host(class(name = "_core_SessionOwner"))]
+    type Owner: Send + Sync + 'static;
+
+    #[host(new)]
+    fn new(
+        env: &Self::Env,
+        owner: std::sync::Arc<Self::Owner>,
+        room: std::sync::Arc<dyn crate::voice::rtc::RtcRoom>,
+        #[host(kw)] identity: String,
+        provider: String,
+        avatar: std::sync::Arc<dyn AvatarHost>,
+        #[host(default = None)] job: Option<std::sync::Arc<dyn crate::worker::job::SessionJob>>,
+    ) -> Result<Self, crate::errors::HostError>;
+
+    /// Until the avatar joined; `timeout` seconds at most (`None` waits as long as it takes).
+    #[host(await)]
+    async fn wait_for_join(&self, timeout: Option<f64>) -> Result<(), AvatarJoinError>;
+
+    /// Stops the join wait and the metrics, then, inside a job and while `room` is connected,
+    /// removes the avatar participant from the room through the job's RoomService
+    /// (`RemoveParticipant`): a participant already gone (`not_found`) is skipped, any other
+    /// failure logged. Once, however many callers: each waits for the same close.
+    #[host(await)]
+    async fn aclose(&self);
+}

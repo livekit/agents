@@ -44,6 +44,8 @@ mod playout {
 mod audio;
 #[path = "avatar_tests.rs"]
 mod avatar;
+#[path = "avatar_lifecycle_tests.rs"]
+mod avatar_lifecycle;
 #[path = "conversation_tests.rs"]
 mod conversation;
 #[path = "input_tests.rs"]

@@ -4,12 +4,13 @@ byte stream per segment on ``lk.audio_stream``, ``lk.clear_buffer`` from the age
 ``lk.playback_started`` and ``lk.playback_finished`` back. Both DataStream ends run in the core
 (``_core.DataStreamAudioOutput``, ``_core.DataStreamAudioReceiver``), as does the runner
 (``_core.AvatarRunner``): RTC source capabilities, native pacing and queue state are shared
-with the Rust runtime. Python adapts user callbacks and delivers SDK events."""
+with the Rust runtime. An ``AvatarSession``'s join wait, metrics, shutdown close and participant
+removal are its ``_core.AvatarLifecycle``'s. Python adapts user callbacks and delivers SDK
+events."""
 
 from __future__ import annotations
 
 import asyncio
-import logging
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Coroutine
@@ -25,16 +26,13 @@ from .._generated.avatar_options import AvatarOptions
 from .._generated.avatar_queue import QueueEffects
 from .._generated.io_events import AvatarPlaybackSegment
 from ..job import get_job_context
-from ..metrics import AvatarMetrics, Metadata
+from ..metrics import AvatarMetrics
 from ..types import NOT_GIVEN, NotGivenOr
-from .events import ConversationItemAddedEvent
 from .io import AudioOutput, AudioOutputCapabilities
 from .room_io import Room
 
 if TYPE_CHECKING:
     from .agent_session import VoiceSession
-
-logger = logging.getLogger(__name__)
 
 __all__ = [
     "AvatarRunner",
@@ -146,11 +144,27 @@ TEvent = TypeVar("TEvent", default=Never, contravariant=True)
 
 
 class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent], Generic[TEvent]):
-    """Base class for avatar plugin sessions."""
+    """Base class for avatar plugin sessions.
+
+    ``start()`` begins the avatar's lifecycle in the session's runtime:
+
+    - It waits in the background for the avatar participant (``avatar_identity``) to join the
+      room and publish its video, once the room is connected; ``wait_for_join()`` awaits it.
+    - Inside a job, the job's shutdown runs ``aclose()`` (a subclass's own).
+    - ``metrics_collected`` emits ``AvatarMetrics``: once when the avatar joined
+      (``session_started_time`` when the room was connected, ``avatar_joined_time`` when its
+      video was published), then for each assistant message the session adds with a
+      ``playback_latency`` (the delay between the first audio frame sent to the avatar and its
+      playback start), until ``aclose()``. Each is also recorded with the session's metrics once
+      the session runs.
+
+    A subclass calls ``super().start()`` and ``super().aclose()``; ``start()`` again after
+    ``aclose()`` begins a new lifecycle.
+    """
 
     def __init__(self) -> None:
         super().__init__()
-        self._wait_avatar_join_task: asyncio.Task[None] | None = None
+        self._lifecycle: _core._core_AvatarLifecycle | None = None
         self._room: rtc.Room | None = None
         self._agent_session: VoiceSession | None = None
         self._audio_output: DataStreamAudioOutput | None = None
@@ -167,19 +181,16 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
         return "unknown"
 
     async def start(self, agent_session: VoiceSession, room: rtc.Room) -> None:
-        job_ctx = get_job_context(required=False)
-        if job_ctx is not None:
-            job_ctx.add_shutdown_callback(self.aclose)
-        else:
-            logger.debug(
-                "AvatarSession started outside a job context; call aclose() manually to "
-                "release resources when the job shuts down"
-            )
-
         self._room = room
         self._agent_session = agent_session
-        self._agent_session.on("conversation_item_added", self._on_conversation_item_added)
-        self._wait_avatar_join_task = asyncio.create_task(self._wait_avatar_join(room))
+        self._lifecycle = _core._core_AvatarLifecycle(
+            agent_session._owner,
+            Room.of(room),
+            identity=self.avatar_identity,
+            provider=self.provider,
+            avatar=self,
+            job=get_job_context(required=False),
+        )
 
     def _attach_audio_output(
         self, agent_session: VoiceSession, output: DataStreamAudioOutput
@@ -190,21 +201,21 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
         agent_session.output.replace_audio_tail(output)
 
     async def wait_for_join(self, *, timeout: float | None = 30.0) -> None:
-        """Wait until the avatar participant has joined the room and
-        published its video track.
+        """Wait until the avatar participant has joined the room and published its video track.
 
-        Raises ``asyncio.TimeoutError`` if it doesn't arrive within
-        ``timeout`` seconds. Pass ``timeout=None`` to wait indefinitely.
+        Raises ``TimeoutError`` if it doesn't within ``timeout`` seconds (``None`` waits
+        indefinitely); the join wait itself goes on. Raises ``asyncio.CancelledError`` once the
+        avatar closed before it joined, and the room's error if the room failed first. Returns at
+        once before ``start()``, or after ``aclose()``.
         """
-        if self._wait_avatar_join_task is None:
-            # not started
+        if self._lifecycle is None:
             return
-        if timeout is None:
-            await self._wait_avatar_join_task
-            return
-        await asyncio.wait_for(asyncio.shield(self._wait_avatar_join_task), timeout=timeout)
+        await self._lifecycle.wait_for_join(timeout)
 
     async def aclose(self) -> None:
+        """Close the avatar's audio output, then stop the join wait and the metrics and, inside a
+        job while the room is connected, remove the avatar participant from the room (one that
+        already left is skipped; another failure is logged). Idempotent."""
         try:
             output = self._audio_output
             if output is not None:
@@ -212,74 +223,18 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
                 if self._audio_output is output:
                     self._audio_output = None
         finally:
-            if self._room is not None and self._room.isconnected():
-                job_ctx = get_job_context(required=False)
-                if job_ctx is not None:
-                    from livekit import api
-
-                    try:
-                        await job_ctx.api.room.remove_participant(
-                            api.RoomParticipantIdentity(
-                                room=self._room.name,
-                                identity=self.avatar_identity,
-                            )
-                        )
-                    except Exception as e:
-                        if isinstance(e, api.TwirpError) and e.code == "not_found":
-                            logger.debug(
-                                "avatar participant not in room, skipping removal",
-                                extra={"identity": self.avatar_identity},
-                            )
-                        else:
-                            logger.warning(
-                                "failed to remove avatar participant",
-                                extra={"identity": self.avatar_identity},
-                                exc_info=True,
-                            )
-
-            if self._agent_session:
-                self._agent_session.off("conversation_item_added", self._on_conversation_item_added)
+            lifecycle = self._lifecycle
+            if lifecycle is not None:
+                # a concurrent close waits for the same one
+                await lifecycle.aclose()
+            if self._lifecycle is lifecycle:
+                self._lifecycle = None
                 self._agent_session = None
+                self._room = None
 
-            self._room = None
-            if self._wait_avatar_join_task:
-                await utils.aio.cancel_and_wait(self._wait_avatar_join_task)
-                self._wait_avatar_join_task = None
+    # what `_core_AvatarLifecycle` calls (`AvatarHost`)
 
-    async def _wait_avatar_join(self, room: rtc.Room) -> None:
-        # from the room's connection to the avatar's video track
-        started_time, joined_time = await _core.wait_avatar_join(
-            _core._core_create_room_session(Room.of(room)), self.avatar_identity
-        )
-        self._emit_metrics(
-            AvatarMetrics(
-                timestamp=joined_time,
-                session_started_time=started_time,
-                avatar_joined_time=joined_time,
-                metadata=Metadata(
-                    model_provider=self.provider,
-                ),
-            )
-        )
-
-    def _on_conversation_item_added(self, ev: ConversationItemAddedEvent) -> None:
-        if ev.item.type == "message" and ev.item.role == "assistant":
-            playback_latency = ev.item.metrics.get("playback_latency")
-            if playback_latency is not None:
-                self._emit_metrics(
-                    AvatarMetrics(
-                        timestamp=ev.created_at,
-                        playback_latency=playback_latency,
-                        metadata=Metadata(
-                            model_provider=self.provider,
-                        ),
-                    )
-                )
-
-    def _emit_metrics(self, metrics: AvatarMetrics) -> None:
-        assert self._agent_session is not None
-        if (core := self._agent_session._core) is not None:
-            core.report_avatar_metrics(metrics)
+    def _core_metrics_collected(self, metrics: AvatarMetrics) -> None:
         self.emit("metrics_collected", metrics)
 
 

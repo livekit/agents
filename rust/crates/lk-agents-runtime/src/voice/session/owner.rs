@@ -55,6 +55,12 @@ impl lk_agents_abi::voice::session_owner::SessionPreparation for Prepared {
 
 pub struct SessionOwner(Arc<Inner>);
 
+impl SessionOwner {
+    pub(crate) fn avatars(&self) -> &crate::avatar::lifecycle::Avatars {
+        &self.0.avatars
+    }
+}
+
 /// The report's event retention, through its declared operations.
 type Retention = lk_agents_net::telemetry::session_report::EventRetention;
 
@@ -80,6 +86,8 @@ struct Inner {
     /// `update_agent(chat_ctx=)` before `start()`: the history a session started without one
     /// opens on.
     start_history: Mutex<Option<Vec<lk_agents_abi::ChatItem>>>,
+    /// The avatars `AvatarSession.start()` attached.
+    avatars: crate::avatar::lifecycle::Avatars,
 }
 
 #[derive(Clone)]
@@ -126,6 +134,12 @@ struct Events {
 
 impl SessionEvents for Events {
     fn event(&self, wire: HostWire, state: Arc<dyn DeliveredState>) {
+        if let HostWire::ItemAdded(added) = &wire
+            && let Some(owner) = self.owner.upgrade()
+        {
+            let at = lk_agents_abi::unix_secs(owner.env.clock.wall());
+            crate::avatar::lifecycle::item_added(&SessionOwner(owner), &added.item, at);
+        }
         if let HostWire::Close(close) = &wire
             && let Some(owner) = self.owner.upgrade()
             && let Err(error) = SessionOwner(owner).shutdown(close.reason.to_string(), false)
@@ -378,6 +392,7 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
             recording: OnceCell::new(),
             selection: Mutex::new(Selection::default()),
             start_history: Mutex::new(None),
+            avatars: Default::default(),
         }))
     }
 

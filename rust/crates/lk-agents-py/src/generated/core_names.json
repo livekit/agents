@@ -108,6 +108,7 @@
     "_core_A2ADoor",
     "_core_AgentConfig",
     "_core_AppTransaction",
+    "_core_AvatarLifecycle",
     "_core_ContextActivation",
     "_core_Credentials",
     "_core_HandlerTurn",

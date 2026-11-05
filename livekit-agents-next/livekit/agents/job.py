@@ -284,6 +284,12 @@ class JobContext:
             name="VoiceSession.aclose",
         )
 
+    def _core_on_avatar_shutdown(self, close: Callable[[], Coroutine[None, None, None]]) -> None:
+        # an avatar's aclose, run in the shutdown's span like the session's close
+        self._run.add_shutdown_callback(
+            close, takes_reason=False, framework=True, name="AvatarSession.aclose"
+        )
+
     @property
     def session_directory(self) -> Path:
         return Path(self._session_directory)

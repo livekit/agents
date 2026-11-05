@@ -23,7 +23,8 @@ pub struct StartJobFields {
 
 /// The job a session runs for (on the job's room, or the console's), as the session's owner
 /// sequences its start: the primary claim, the recording, the shutdown, and the room connected
-/// beside the opening, before the remote session host starts on it.
+/// beside the opening, before the remote session host starts on it. An avatar started for the
+/// job closes on its shutdown and removes its participant with the job's API credentials.
 #[crate::host(proxy(host = "livekit.agents.job.JobContext"))]
 pub trait SessionJob: Send + Sync {
     /// `JobContext.connect()`: the room connected, once however many callers; its `room_connect`
@@ -52,6 +53,15 @@ pub trait SessionJob: Send + Sync {
     /// `session` closes as the job shuts down, in the shutdown's span.
     #[host(call, name = "_core_on_shutdown")]
     fn on_shutdown(&self, session: crate::HostRef) -> Result<(), crate::errors::HostError>;
+    /// An avatar's `close` (its `aclose`) runs as the job shuts down, in the shutdown's span.
+    #[host(call, name = "_core_on_avatar_shutdown")]
+    fn on_avatar_shutdown(&self, close: crate::HostRef) -> Result<(), crate::errors::HostError>;
+    /// The server's settings by variable name: `LIVEKIT_URL`, `LIVEKIT_API_KEY` and
+    /// `LIVEKIT_API_SECRET` are what the job's API calls authenticate with.
+    #[host(call, getter = "_server_env")]
+    fn server_env(
+        &self,
+    ) -> Result<std::collections::BTreeMap<String, String>, crate::errors::HostError>;
 }
 
 // Public data contracts. Python behavior remains in its adapters.

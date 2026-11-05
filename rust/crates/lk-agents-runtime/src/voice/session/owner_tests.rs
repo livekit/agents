@@ -244,6 +244,12 @@ impl lk_agents_abi::worker::job::SessionJob for Job {
         self.calls.lock().push(format!("on_shutdown {}", session.id()));
         Ok(())
     }
+    fn on_avatar_shutdown(&self, _: HostRef) -> Result<(), HostError> {
+        unreachable!("only an avatar closes on the job's shutdown")
+    }
+    fn server_env(&self) -> Result<std::collections::BTreeMap<String, String>, HostError> {
+        unreachable!("only an avatar calls the job's RoomService")
+    }
 }
 
 struct Run;

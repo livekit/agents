@@ -726,19 +726,28 @@ class TestAvatarSession:
         monkeypatch.setattr("livekit.plugins.synthesia.avatar.SynthesiaAPI", factory)
         return rec
 
+    @pytest.fixture(autouse=True)
+    def base_start(self, monkeypatch):
+        # these tests own the provider session, not the room's avatar lifecycle
+        async def start(self, agent_session, room):
+            self._room, self._agent_session = room, agent_session
+
+        monkeypatch.setattr(BaseAvatarSession, "start", start)
+
     @pytest.fixture
     def instant_join(self, monkeypatch):
-        async def _ok(self, room):
+        async def _ok(self, *, timeout=30.0):
             return None
 
-        monkeypatch.setattr(BaseAvatarSession, "_wait_avatar_join", _ok)
+        monkeypatch.setattr(BaseAvatarSession, "wait_for_join", _ok)
 
     @pytest.fixture
     def hanging_join(self, monkeypatch):
-        async def _never(self, room):
-            await asyncio.Event().wait()
+        async def _never(self, *, timeout=30.0):
+            await asyncio.sleep(timeout)
+            raise TimeoutError
 
-        monkeypatch.setattr(BaseAvatarSession, "_wait_avatar_join", _never)
+        monkeypatch.setattr(BaseAvatarSession, "wait_for_join", _never)
 
     def _session(self, avatar=None, **kwargs):
         return synthesia.AvatarSession(
@@ -1010,7 +1019,7 @@ class TestAvatarSession:
         assert agent.output.audio.closed is True
         assert session._audio_output is None
         assert room.listener_count("disconnected") == 0
-        assert agent.listener_count("conversation_item_added") == 0
+        assert session._agent_session is None
 
     async def test_start_failure_raises_mapped_and_tears_down(self, api_recorder, instant_join):
         api_recorder.error = SynthesiaError("bad key", type=ErrorType.AUTH)
@@ -1026,7 +1035,7 @@ class TestAvatarSession:
         # installed, so there is nothing to close.
         assert agent.output.audio is None
         assert session._audio_output is None
-        assert agent.listener_count("conversation_item_added") == 0
+        assert session._agent_session is None
 
     async def test_mid_session_track_drop_logs_and_tears_down(
         self, api_recorder, instant_join, caplog
@@ -1131,7 +1140,7 @@ class TestAvatarSession:
             await session.aclose()
 
         assert session._close_done.is_set()
-        assert agent.listener_count("conversation_item_added") == 0
+        assert session._agent_session is None
         assert room.listener_count("disconnected") == 0
         assert room.listener_count("track_unpublished") == 0
         assert room.listener_count("participant_disconnected") == 0
@@ -1167,7 +1176,7 @@ class TestAvatarSession:
             assert len(api_recorder.requests) == 2
             assert agent.output.audio is not old_audio
             assert agent.output.audio.closed is False
-            assert agent.listener_count("conversation_item_added") == 1
+            assert session._agent_session is agent
         finally:
             release.set()
             await closing
@@ -1317,7 +1326,7 @@ class TestAvatarSession:
 
         assert room.listener_count("disconnected") == 0
         assert room.listener_count("track_unpublished") == 0
-        assert agent.listener_count("conversation_item_added") == 0
+        assert session._agent_session is None
         assert agent.output.audio.closed is True
         assert session._audio_output is None
 
@@ -1393,10 +1402,14 @@ class TestUsageExample:
         monkeypatch.setenv("LIVEKIT_API_KEY", "lk_key")
         monkeypatch.setenv("LIVEKIT_API_SECRET", "lk_secret")
 
-        async def _joined(self, room):
+        async def _start(self, agent_session, room):
+            self._room, self._agent_session = room, agent_session
+
+        async def _joined(self, *, timeout=30.0):
             return None
 
-        monkeypatch.setattr(BaseAvatarSession, "_wait_avatar_join", _joined)
+        monkeypatch.setattr(BaseAvatarSession, "start", _start)
+        monkeypatch.setattr(BaseAvatarSession, "wait_for_join", _joined)
 
         # start() reads the publish-on-behalf identity from the job context rather
         # than the room, since the room may not have finished connecting yet.
