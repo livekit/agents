@@ -297,7 +297,10 @@ pub trait AudioInput: Send + Sync {
 
     /// [`next_frame`](Self::next_frame), marking the pre-connect audio a room input replays
     /// ahead of its live frames.
-    fn next_input(&self, cx: &crate::telemetry::Cx) -> crate::BoxFuture<'_, Result<Option<InputFrame>>> {
+    fn next_input(
+        &self,
+        cx: &crate::telemetry::Cx,
+    ) -> crate::BoxFuture<'_, Result<Option<InputFrame>>> {
         let next = self.next_frame(cx);
         Box::pin(async move { Ok(next.await?.map(|frame| InputFrame { frame, head: false })) })
     }

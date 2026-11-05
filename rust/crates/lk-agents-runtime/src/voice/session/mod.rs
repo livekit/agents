@@ -297,16 +297,19 @@ impl VoiceSession {
             let Ready { mut builder, nodes, interruption, probe } = ready;
             #[cfg(not(feature = "dst"))]
             let Ready { mut builder, nodes, interruption } = ready;
+            let cx = builder.trace.clone();
             if let Some(open_port) = interruption {
-                let cx = builder.tracer.resume(&builder.trace);
                 builder.interruption = Some(open_port(anchor, &cx));
+            }
+            if let Some(eot) = &builder.eot {
+                eot.observe(&cx);
             }
 
             // The room's own IO first, under `session_start`; its events join the driver's queue,
             // one stream, one order.
             room_io.clone().start(builder.startup());
             let (job, session_span) =
-                (builder.trace.job.clone(), builder.opening().session.context);
+                (builder.trace.job().cloned(), builder.opening().session.context);
             builder.room_io_events = Some(room_io.clone());
 
             let tts_adapter = executor.tts_adapter();
@@ -396,8 +399,7 @@ impl VoiceSession {
         // The room connects under `session_start`, reserved before the driver opens it.
         let startup = match &mut *self.stage.lock() {
             Stage::Ready(ready) => {
-                let startup = ready.builder.startup();
-                ready.builder.tracer.resume(&startup)
+                ready.builder.startup()
             }
             _ => telemetry::Cx::NONE,
         };
@@ -824,11 +826,10 @@ impl VoiceSession {
                     }
                 }
             };
-            let (activation, set_up) = match telemetry::check(&span, setup.await) {
-                Ok(ready) => {
-                    telemetry::end_with(span, ());
-                    ready
-                }
+            let set_up = setup.await;
+            telemetry::end(span, set_up.as_ref().map(|_| ()));
+            let (activation, set_up) = match set_up {
+                Ok(ready) => ready,
                 Err(error) => {
                     hooks.hook_failed("setup_tools", error.host_ref.clone());
                     call.reply_to.settle(failed(error));

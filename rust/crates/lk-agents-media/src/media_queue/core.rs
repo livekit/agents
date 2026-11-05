@@ -54,6 +54,10 @@ impl<M, E> Core<M, E> {
         self.event(event)
     }
 
+    pub(super) fn len(&self) -> usize {
+        self.items.len()
+    }
+
     /// The media past the floor, which the bound may drop.
     pub(super) fn frames(&self) -> usize {
         self.frames

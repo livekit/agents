@@ -71,12 +71,13 @@ impl NodeFactory for AgentNodes {
 
     fn llm_node<'a>(
         &'a self,
+        cx: &telemetry::Cx,
         req: &'a ChatRequest,
     ) -> lk_agents_abi::BoxFuture<'a, Result<LlmStream, ProviderError>> {
+        let cx = cx.clone();
         Box::pin(async move {
-            let trace = req.trace.clone().unwrap_or_default();
-            let calls = Arc::new(NodeCalls { trace: trace.clone(), ..NodeCalls::default() });
-            let out = self.host.llm(&self.tracer.resume(&trace), req, calls).await?;
+            let calls = Arc::new(NodeCalls { step: Some(cx.clone()), ..NodeCalls::default() });
+            let out = self.host.llm(&cx, req, calls).await?;
             Ok(Box::new(Mapped { source: out, map: llm_chunk, calls: None }) as LlmStream)
         })
     }
@@ -94,7 +95,7 @@ impl NodeFactory for AgentNodes {
             let (sink, input) = channel();
             let calls = Arc::new(NodeCalls {
                 expressive,
-                trace: cx.trace_context(),
+                step: Some(cx.clone()),
                 ..NodeCalls::default()
             });
             let out = self.host.tts(&cx, Box::new(input), calls.clone()).await?;
@@ -462,6 +463,14 @@ impl StreamInput<AudioFrame> for AudioSink {
         Ok(())
     }
 
+    fn head(&self, frame: AudioFrame) -> Result<(), ProviderError> {
+        match self.audio.lock().as_ref() {
+            Some(audio) if !audio.is_closed() => audio.head(frame),
+            _ => return Err(Self::closed()),
+        }
+        Ok(())
+    }
+
     fn flush(&self) -> Result<(), ProviderError> {
         match self.audio.lock().as_ref() {
             Some(audio) if !audio.is_closed() => Ok(()),
@@ -545,8 +554,8 @@ pub struct NodeCalls {
     /// The synthesis carries expressive markup; the default node opens its provider with it.
     pub(super) expressive: bool,
     connection: Mutex<Option<ConnectionAcquired>>,
-    /// The step's node span, job and conversation.
-    pub(super) trace: telemetry::TraceContext,
+    /// The step's node span, job and conversation; `None` outside a step.
+    pub(super) step: Option<telemetry::Cx>,
 }
 
 #[derive(Default)]
@@ -711,11 +720,12 @@ impl Llm for Node<dyn Llm> {
 
     fn chat<'a>(
         &'a self,
-        _cx: &telemetry::Cx,
+        cx: &telemetry::Cx,
         req: &'a ChatRequest,
     ) -> lk_agents_abi::BoxFuture<'a, Result<LlmStream, ProviderError>> {
+        let cx = cx.clone();
         Box::pin(async move {
-            let stream = self.host.llm_node(req).await.map_err(final_error)?;
+            let stream = self.host.llm_node(&cx, req).await.map_err(final_error)?;
             Ok(Box::new(Final(stream)) as LlmStream)
         })
     }
@@ -945,6 +955,7 @@ mod tests {
 
         fn llm_node<'a>(
             &'a self,
+            _cx: &telemetry::Cx,
             _req: &'a ChatRequest,
         ) -> lk_agents_abi::BoxFuture<'a, Result<LlmStream, ProviderError>> {
             Box::pin(async move { Err(lk_agents_abi::errors::ApiError::new("down").into()) })

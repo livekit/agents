@@ -88,6 +88,21 @@
       ]
     },
     {
+      "id": "metric.lk.agents.audio.catch_up_time",
+      "type": "metric",
+      "metric_name": "lk.agents.audio.catch_up_time",
+      "instrument": "histogram",
+      "unit": "s",
+      "stability": "development",
+      "brief": "How long a consumer took to drain the pre-connect audio replayed ahead of the live input: longer than that audio lasted, it falls behind the call.",
+      "attributes": [
+        {
+          "ref": "consumer",
+          "requirement_level": "required"
+        }
+      ]
+    },
+    {
       "id": "metric.lk.agents.audio.dropped",
       "type": "metric",
       "metric_name": "lk.agents.audio.dropped",

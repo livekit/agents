@@ -19,7 +19,8 @@ use std::sync::{Arc, Mutex, Weak};
 use std::task::{Context, Poll, Wake, Waker};
 
 use fastrand::Rng;
-use lk_agents_abi::{AudioFrame, BoxFuture, resources::ResourceId};
+use lk_agents_abi::voice::io::InputFrame;
+use lk_agents_abi::{BoxFuture, resources::ResourceId};
 use lk_agents_voice::agent_session::VoiceEvent;
 
 use crate::sched::{Sampling, Sched, Step};
@@ -80,7 +81,7 @@ const POOL: u64 = u64::MAX;
 pub enum Next {
     Event(Box<VoiceRuntimeEvent>),
     /// The microphone's frames that arrived since the last step, in order.
-    Frames(Vec<AudioFrame>),
+    Frames(Vec<InputFrame>),
     /// One turn for the driver's ready tasks.
     Tasks,
     /// One turn for one bridged task.
@@ -181,7 +182,7 @@ fn label(event: &VoiceRuntimeEvent) -> &'static str {
 
 enum Item {
     Event(Box<VoiceRuntimeEvent>),
-    Frames(Vec<AudioFrame>),
+    Frames(Vec<InputFrame>),
 }
 
 /// Who sent an event: one host origin, one recognition stream, one detector leg, one kind of
@@ -244,7 +245,7 @@ impl Queue {
     }
 
     /// A microphone frame: it joins the pending batch, or starts one.
-    pub fn push_frame(&mut self, frame: AudioFrame) {
+    pub fn push_frame(&mut self, frame: InputFrame) {
         if let Some(Item::Frames(batch)) = self.sched.pending_mut(&Source::Frames) {
             batch.push(frame);
             return;
@@ -286,7 +287,7 @@ impl Queue {
     }
 
     /// Everything still pending, in arrival order: the frames, and the events.
-    pub fn drain(&mut self) -> (Vec<AudioFrame>, Vec<VoiceRuntimeEvent>) {
+    pub fn drain(&mut self) -> (Vec<InputFrame>, Vec<VoiceRuntimeEvent>) {
         self.trail.lock().unwrap().pending.clear();
         let (mut frames, mut events) = (Vec::new(), Vec::new());
         for item in self.sched.drain() {
@@ -542,7 +543,7 @@ mod tests {
             },
             Next::Frames(frames) => {
                 let ids: Vec<String> =
-                    frames.iter().map(|f| format!("f{}", f.samples_per_channel)).collect();
+                    frames.iter().map(|f| format!("f{}", f.frame.samples_per_channel)).collect();
                 ids.join("+")
             }
             Next::Tasks => "pool".into(),
@@ -583,13 +584,9 @@ mod tests {
     }
 
     /// A microphone frame, told apart by its sample count.
-    fn frame(n: u32) -> AudioFrame {
-        AudioFrame {
-            data: vec![0u8; 2 * n as usize].into(),
-            sample_rate: 48_000,
-            num_channels: 1,
-            samples_per_channel: n,
-        }
+    fn frame(n: u32) -> InputFrame {
+        let frame = lk_agents_abi::AudioFrame::new(vec![0u8; 2 * n as usize], 48_000, 1, n);
+        InputFrame { frame, head: false }
     }
 
     /// The frames that arrive between two steps are one step, in their order; a frame after it

@@ -4,7 +4,7 @@
 type PublicationSnapshot = (Vec<Publication>, Vec<Arc<dyn TrackPublication>>);
 
 use crate::telemetry;
-use lk_agents_abi::voice::io::{AudioInput, IoError, Result, VideoInput};
+use lk_agents_abi::voice::io::{AudioInput, InputFrame, IoError, Result, VideoInput};
 use lk_agents_abi::voice::room_io::AudioInputConfig;
 use lk_agents_abi::voice::rtc::TrackSource;
 use lk_agents_abi::voice::rtc::{
@@ -51,6 +51,8 @@ trait Queue: Send + Sync + 'static {
     fn recv(
         receiver: &mut Self::Receiver,
     ) -> impl Future<Output = Option<Item<Self::Frame, InputEvent>>> + Send;
+    /// The pre-connect audio received so far.
+    fn head(receiver: &Self::Receiver) -> Duration;
 }
 
 impl Queue for AudioSender<InputEvent> {
@@ -72,6 +74,9 @@ impl Queue for AudioSender<InputEvent> {
         receiver: &mut AudioReceiver<InputEvent>,
     ) -> impl Future<Output = Option<Item<AudioFrame, InputEvent>>> + Send {
         receiver.recv()
+    }
+    fn head(receiver: &AudioReceiver<InputEvent>) -> Duration {
+        receiver.head().received
     }
 }
 
@@ -95,6 +100,9 @@ impl Queue for VideoSender<InputEvent> {
         receiver: &mut VideoReceiver<InputEvent>,
     ) -> impl Future<Output = Option<Item<VideoFrameRef, InputEvent>>> + Send {
         receiver.recv()
+    }
+    fn head(_: &VideoReceiver<InputEvent>) -> Duration {
+        Duration::ZERO
     }
 }
 
@@ -193,11 +201,13 @@ impl<Q: Queue> Readers<Q> {
         }
     }
 
-    async fn recv(&self) -> Result<Option<Q::Frame>> {
+    /// The next frame, and whether it replays pre-connect audio.
+    async fn recv(&self) -> Result<Option<(Q::Frame, bool)>> {
         let mut queue = self.queue.lock().await;
         loop {
+            let head = Q::head(&queue);
             match Q::recv(&mut queue).await {
-                Some(Item::Media(frame)) => return Ok(Some(frame)),
+                Some(Item::Media(frame)) => return Ok(Some((frame, Q::head(&queue) > head))),
                 Some(Item::Event(InputEvent::Failed(error))) => return Err(error),
                 Some(Item::Gap(_) | Item::Event(InputEvent::SourceChanged)) => {}
                 None => return Ok(None),
@@ -452,7 +462,7 @@ impl VideoInput for ParticipantVideoInput {
         &'a self,
         _cx: &telemetry::Cx,
     ) -> lk_agents_abi::BoxFuture<'a, Result<Option<VideoFrameRef>>> {
-        Box::pin(async move { self.readers.recv().await })
+        Box::pin(async move { Ok(self.readers.recv().await?.map(|(frame, _)| frame)) })
     }
     fn on_attached(&self) {
         self.readers.decide(|readers| readers.set_attached(true));
@@ -543,7 +553,7 @@ impl ParticipantAudioInput {
         telemetry::event(&span, telemetry::FirstFrame);
         let now = span.cx().now_nanos();
         let delay = subscribed.map(|at| telemetry::Seconds(now.saturating_sub(at) as f64 / 1e9));
-        telemetry::end_with(span, telemetry::WaitForAudioTrackEnd { first_frame_delay: delay });
+        telemetry::end(span, telemetry::WaitForAudioTrackEnd { first_frame_delay: delay });
     }
 
     pub fn reading(&self) -> Option<TrackSid> {
@@ -691,7 +701,15 @@ impl AudioInput for ParticipantAudioInput {
         &'a self,
         _cx: &telemetry::Cx,
     ) -> lk_agents_abi::BoxFuture<'a, Result<Option<AudioFrame>>> {
-        Box::pin(async move { self.readers.recv().await })
+        Box::pin(async move { Ok(self.readers.recv().await?.map(|(frame, _)| frame)) })
+    }
+    fn next_input<'a>(
+        &'a self,
+        _cx: &telemetry::Cx,
+    ) -> lk_agents_abi::BoxFuture<'a, Result<Option<InputFrame>>> {
+        Box::pin(async move {
+            Ok(self.readers.recv().await?.map(|(frame, head)| InputFrame { frame, head }))
+        })
     }
     fn on_attached(&self) {
         self.readers.decide(|readers| readers.set_attached(true));

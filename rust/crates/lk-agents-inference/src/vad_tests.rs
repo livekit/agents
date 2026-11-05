@@ -347,3 +347,74 @@ async fn vad_admission_leaves_capacity_for_image_and_recording_work() {
     let recording = media_pool.try_admit(JobClass::Recording).unwrap();
     drop((models, image, recording));
 }
+
+// Catches: a flush or gap during speech resetting the detector without ending the speech, so the
+// session stays speaking.
+#[tokio::test]
+async fn a_flush_during_speech_ends_the_speech() {
+    let vad = LocalVad::new(
+        VadOptions::default(),
+        Arc::new(EnergyFactory),
+        &lk_agents_inference::testkit::env(),
+    );
+    let (sink, mut source) = vad.stream_native().unwrap();
+    for _ in 0..10 {
+        sink.push(AudioFrame::new(1000_i16.to_le_bytes().repeat(512), 16_000, 1, 512)).unwrap();
+    }
+    sink.flush().unwrap();
+    sink.end_input();
+    let mut kinds = Vec::new();
+    while let Some(output) = source.next().await.unwrap() {
+        if output.event.kind != VadEventType::InferenceDone {
+            kinds.push(output.event.kind);
+        }
+    }
+    assert_eq!(kinds, [VadEventType::StartOfSpeech, VadEventType::EndOfSpeech]);
+}
+
+// Catches: a pre-connect head cut to its last 500 ms by the `Now` policy, a head scored at real
+// time, or live audio heard during the catch-up queued behind the head instead of cut to the
+// newest.
+#[tokio::test(flavor = "current_thread")]
+async fn a_ten_second_head_is_scored_in_full_far_faster_than_real_time() {
+    let (started, ready) = tokio::sync::oneshot::channel();
+    let (release, blocked) = std::sync::mpsc::channel();
+    let windows = Arc::new(Mutex::new(Vec::new()));
+    let factory = StalledFactory(Mutex::new(Some(StalledModel {
+        started: Some(started),
+        release: blocked,
+        windows: windows.clone(),
+    })));
+    let vad: Arc<dyn lk_agents_abi::Vad> = Arc::new(LocalVad::new(
+        VadOptions::default(),
+        Arc::new(factory),
+        &lk_agents_inference::testkit::env(),
+    ));
+    let measurements = lk_agents_inference::testkit::Measurements::default();
+    let (sink, mut source) = vad.stream(&measurements.cx()).await.unwrap().split();
+    // One 32 ms window per frame, the head's marked negative, the live ones positive.
+    let frame = |n: i16| AudioFrame::new(n.to_le_bytes().repeat(512), 16_000, 1, 512);
+    const HEAD: i16 = 313;
+    for n in 1..=HEAD {
+        sink.head(frame(-n)).unwrap();
+    }
+    ready.await.unwrap();
+    for n in 1..=100 {
+        sink.push(frame(n)).unwrap();
+    }
+    let began = std::time::Instant::now();
+    release.send(()).unwrap();
+    sink.end_input();
+    while source.next().await.unwrap().is_some() {}
+    let took = began.elapsed();
+
+    let windows = windows.lock();
+    let (head, live) = windows.split_at(HEAD as usize);
+    assert_eq!(head, (1..=HEAD).map(|n| -n).collect::<Vec<_>>(), "the head in full, in order");
+    assert!(live.len() <= 16, "the live backlog was replayed: {live:?}");
+    assert_eq!(live.last(), Some(&100), "the newest live audio is scored");
+    eprintln!("VAD: 10.0 s head scored in {took:?}");
+    assert!(took < Duration::from_secs(1), "10 s of head took {took:?}");
+    let measured = measurements.of("lk.agents.audio.catch_up_time");
+    assert!(matches!(measured[..], [seconds] if seconds < 1.0), "{measured:?}");
+}

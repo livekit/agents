@@ -151,7 +151,8 @@ impl AudioInputRouter {
                     if per_frame > 0 {
                         for _ in 0..frames {
                             let frame = silence_frame(per_frame, rate, channels);
-                            effects.push(AudioInputRouterEffect::PushFrame { sink, frame });
+                            let head = false;
+                            effects.push(AudioInputRouterEffect::PushFrame { sink, frame, head });
                         }
                     }
                 }
@@ -180,8 +181,14 @@ impl AudioInputRouter {
     }
 
     /// One microphone frame to every installed sink on its feed side: silence to the substituted
-    /// channels while the gate discards, the frame to the rest.
-    pub fn on_frame(&mut self, frame: AudioFrame, now: Ts) -> Vec<AudioInputRouterEffect> {
+    /// channels while the gate discards, the frame to the rest. A `head` frame replays pre-connect
+    /// audio, and every sink keeps it in full.
+    pub fn on_frame(
+        &mut self,
+        frame: AudioFrame,
+        head: bool,
+        now: Ts,
+    ) -> Vec<AudioInputRouterEffect> {
         let mut effects = Vec::new();
         self.last_input = Some((frame.sample_rate, frame.num_channels));
         // Muted: dropped at the source, before any channel or counter sees it.
@@ -196,12 +203,12 @@ impl AudioInputRouter {
         self.input_shape = Some((FrameShape::of(&frame), self.conversion.frame_shape()));
         // `Raw` channels: the source frame; the substitute has the room frame's shape.
         let raw_silence = self.discard.then(|| silence_like(&frame));
-        self.push(Feed::Raw, &frame, raw_silence.as_ref(), &mut effects);
+        self.push(Feed::Raw, &frame, raw_silence.as_ref(), head, &mut effects);
         // `Converted` channels: the Rust detectors expect 16 kHz mono.
         let Ok(ready) = self.conversion.convert(&frame) else { return effects };
         for converted in ready {
             let substitute = self.discard.then(|| silence_like(&converted));
-            self.push(Feed::Converted, &converted, substitute.as_ref(), &mut effects);
+            self.push(Feed::Converted, &converted, substitute.as_ref(), head, &mut effects);
         }
         effects
     }
@@ -211,6 +218,7 @@ impl AudioInputRouter {
         feed: Feed,
         frame: &AudioFrame,
         silence: Option<&AudioFrame>,
+        head: bool,
         effects: &mut Vec<AudioInputRouterEffect>,
     ) {
         for channel in AudioChannel::ALL {
@@ -228,7 +236,7 @@ impl AudioInputRouter {
             };
             slot.frames += 1;
             slot.shape = Some(FrameShape::of(heard));
-            effects.push(AudioInputRouterEffect::PushFrame { sink, frame: heard.clone() });
+            effects.push(AudioInputRouterEffect::PushFrame { sink, frame: heard.clone(), head });
         }
     }
 }
@@ -316,4 +324,32 @@ fn mono(frame: &AudioFrame) -> AudioFrame {
     }
     let spc = (bytes.len() / 2) as u32;
     AudioFrame::new(bytes, frame.sample_rate, 1, spc)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pushed(effects: &[AudioInputRouterEffect]) -> Vec<(ResourceId, bool)> {
+        let pushes = effects.iter().filter_map(|effect| match effect {
+            AudioInputRouterEffect::PushFrame { sink, head, .. } => Some((*sink, *head)),
+            _ => None,
+        });
+        pushes.collect()
+    }
+
+    // Catches: pre-connect audio reaching a converted or raw sink as live audio, which a `Now`
+    // sink cuts to its last 500 ms.
+    #[test]
+    fn a_head_frame_reaches_every_sink_as_head() {
+        let mut router = AudioInputRouter::new(16_000);
+        let (vad, eot) = (ResourceId(1), ResourceId(2));
+        router.handle(AudioInputRouterCommand::Install { channel: AudioChannel::Vad, sink: vad });
+        router.handle(AudioInputRouterCommand::Install { channel: AudioChannel::Eot, sink: eot });
+        let frame = || silence_frame(320, 16_000, 1);
+        let head = router.on_frame(frame(), true, Ts::ZERO);
+        assert_eq!(pushed(&head), [(vad, true), (eot, true)]);
+        let live = router.on_frame(frame(), false, Ts::ZERO);
+        assert_eq!(pushed(&live), [(vad, false), (eot, false)]);
+    }
 }

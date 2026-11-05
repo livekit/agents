@@ -727,7 +727,7 @@ async fn preconnect_uses_session_format_and_never_replays_failed_processing() {
         };
         let info = pcm_info("TR_buffer", rate, channels);
         room.send_byte_stream("user", info, [pcm]).unwrap();
-        let (processor, _live) = Processor::new(fail);
+        let (processor, live) = Processor::new(fail);
         let track = Processed { track: user.publish_microphone("TR_buffer"), processor };
         let processor = track.processor.clone();
         input.handle_event(&subscribed(&user, Arc::new(track))).unwrap();
@@ -737,13 +737,23 @@ async fn preconnect_uses_session_format_and_never_replays_failed_processing() {
                 "processing failure must reach the session input"
             );
         } else {
-            let frame =
-                input.next_frame(&lk_agents_abi::telemetry::Cx::NONE).await.unwrap().unwrap();
+            let cx = lk_agents_abi::telemetry::Cx::NONE;
+            let replayed = input.next_input(&cx).await.unwrap().unwrap();
+            let frame = replayed.frame;
+            assert!(replayed.head, "the replay reaches the session as pre-connect audio");
             assert_eq!((frame.sample_rate, frame.num_channels), (24000, 1));
             assert!(
                 frame.data.as_chunks::<2>().0.iter().all(|b| i16::from_le_bytes(*b) == 11),
                 "only processed normalized PCM may reach the session"
             );
+            live.push(AudioFrame::new(vec![0; 960], 24_000, 1, 480));
+            let after = loop {
+                let next = input.next_input(&cx).await.unwrap().unwrap();
+                if !next.head {
+                    break next.frame;
+                }
+            };
+            assert!(after.data.iter().all(|b| *b == 0), "only the live frame is live");
         }
         assert!(
             processor.formats.lock().unwrap().iter().all(|format| *format == (24000, 1)),

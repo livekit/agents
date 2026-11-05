@@ -800,6 +800,52 @@ async fn a_socket_that_fell_behind_restarts_the_gateway_on_the_newest_audio() {
     assert_eq!(audio.last(), Some(&299), "the newest audio is sent");
 }
 
+// Catches: a pre-connect head lost because it arrived before the connection, cut to its last
+// 500 ms, or sent at real time; and live audio heard meanwhile queued behind it.
+#[tokio::test]
+async fn a_ten_second_head_heard_before_the_connection_reaches_the_gateway_in_full_and_fast() {
+    let fixture = cloud_fixture(Arc::new(RecordingSink::default()));
+    let measurements = crate::testkit::Measurements::default();
+    fixture.transport.observe(measurements.cx());
+    // 10 s of 20 ms head frames marked negative, then 3 s of live ones marked positive.
+    for n in 1..=500 {
+        fixture.transport.push_head(&pcm_frame(16_000, &[-n; 320]));
+    }
+    for n in 1..=150 {
+        fixture.transport.push_frame(&pcm_frame(16_000, &[n; 320]));
+    }
+    let began = std::time::Instant::now();
+    let transport = fixture.transport.clone();
+    let running = tokio::spawn(async move { transport.run().await });
+    within("the head to drain", async {
+        while measurements.of("lk.agents.audio.catch_up_time").is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    let took = began.elapsed();
+    fixture.transport.detach();
+    drop(fixture.server);
+    let _ = within("the transport", running).await;
+
+    let samples: Vec<i16> = client_messages(&fixture.sent)
+        .iter()
+        .filter_map(|m| match &m.message {
+            Some(proto::client_message::Message::InputAudio(audio)) => Some(
+                audio.audio.as_chunks::<2>().0.iter().map(|s| i16::from_le_bytes(*s)).collect(),
+            ),
+            _ => None,
+        })
+        .flat_map(|audio: Vec<i16>| audio.into_iter().step_by(320))
+        .collect();
+    let (head, live) = samples.split_at(500);
+    assert_eq!(head, (1..=500).map(|n| -n).collect::<Vec<_>>(), "the head in full, in order");
+    assert!(live.len() <= 25, "the live backlog was sent: {live:?}");
+    assert_eq!(live.last(), Some(&150), "the newest live audio is sent");
+    eprintln!("cloud end of turn: 10.0 s head sent in {took:?}");
+    assert!(took < Duration::from_secs(1), "10 s of head took {took:?}");
+}
+
 // Catches: an `https://` gateway URL, rewriting more than the scheme, losing the bearer token, or
 // minting it with the wrong grant, `sub`, `iss` or a TTL other than `ttl=600`.
 #[tokio::test]

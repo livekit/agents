@@ -194,6 +194,27 @@ fn the_head_is_kept_in_full_under_now() {
     assert_eq!(timeline(&items)[2..], [("gap", 20, 0), ("audio", 20, 12)]);
 }
 
+// Catches: a consumer that cannot tell the head from live audio, so it cannot measure its
+// catch-up, or a merged frame that straddles the end of the head.
+#[test]
+fn head_progress_counts_the_head_received_and_never_merges_it_with_live_audio() {
+    let (tx, mut rx) = audio::<&str>(Policy::Now(ms(500)));
+    for tag in 0..8 {
+        tx.head(frame(10, tag));
+    }
+    tx.push(frame(10, 8));
+    assert_eq!(rx.head(), Head { received: ms(0), pending: true });
+    assert_eq!(timeline(&[next(&mut rx).unwrap()]), [("audio", 50, 0)]);
+    assert_eq!(rx.head(), Head { received: ms(50), pending: true });
+    assert_eq!(timeline(&[next(&mut rx).unwrap()]), [("audio", 30, 5)], "the head's rest alone");
+    assert_eq!(rx.head(), Head { received: ms(80), pending: false });
+    assert_eq!(timeline(&[next(&mut rx).unwrap()]), [("audio", 10, 8)]);
+    assert_eq!(rx.head().received, ms(80), "live audio is not head");
+    tx.head(frame(10, 9));
+    tx.flush("source changed").unwrap();
+    assert_eq!(rx.head(), Head { received: ms(80), pending: false }, "flushed with the rest");
+}
+
 // Catches: the bound dropping audio an event was ordered after (a committed buffer).
 #[test]
 fn audio_before_an_event_is_never_dropped_by_the_bound() {

@@ -167,7 +167,7 @@ impl VadModel for HostModel {
 
 impl Vad for LocalVad {
     fn label(&self) -> String {
-        "livekit.agents.inference.vad.VAD".into()
+        "livekit.agents.inference.VAD".into()
     }
 
     fn capabilities(&self) -> VadCapabilities {
@@ -236,6 +236,10 @@ pub struct VadInput {
 impl StreamInput<AudioFrame> for VadInput {
     fn push(&self, item: AudioFrame) -> Result<(), ProviderError> {
         self.sink.push(item)
+    }
+
+    fn head(&self, item: AudioFrame) -> Result<(), ProviderError> {
+        self.sink.head(item)
     }
 
     fn flush(&self) -> Result<(), ProviderError> {

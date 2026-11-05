@@ -136,6 +136,10 @@ impl StreamInput<AudioFrame> for InterruptionAudioSink {
         self.0.send(InputEvent::Audio(frame)).map_err(Into::into)
     }
 
+    fn head(&self, frame: AudioFrame) -> Result<(), lk_agents_abi::errors::ProviderError> {
+        self.0.head(frame).map_err(Into::into)
+    }
+
     fn flush(&self) -> Result<(), lk_agents_abi::errors::ProviderError> {
         // `_FlushSentinel`, forwarded so both channels carry the same sequence.
         self.0.send(InputEvent::Flush).map_err(Into::into)

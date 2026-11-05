@@ -32,7 +32,7 @@ struct Flush;
 struct Input {
     /// `None` once the input ended.
     audio: Mutex<Option<AudioSender<Flush>>>,
-    drops: AudioDrops,
+    drops: Arc<AudioDrops>,
     cancelled: CancellationToken,
 }
 
@@ -55,6 +55,10 @@ impl StreamInput<AudioFrame> for Input {
         let dropped = self.send(|audio| audio.push(frame))?;
         self.drops.record(dropped);
         Ok(())
+    }
+
+    fn head(&self, frame: AudioFrame) -> Result<(), ProviderError> {
+        self.send(|audio| audio.head(frame))
     }
 
     fn flush(&self) -> Result<(), ProviderError> {
@@ -114,6 +118,19 @@ impl StreamOutput<VadOutput> for Output {
 
 impl lk_agents_abi::utils::stream::ProviderStream<VadOutput> for Output {}
 
+/// `false` once the stream is cancelled or its reader is gone.
+async fn emit(
+    stop: &CancellationToken,
+    output: &mpsc::Sender<VadOutput>,
+    event: VadOutput,
+) -> bool {
+    tokio::select! {
+        biased;
+        () = stop.cancelled() => false,
+        result = output.send(event) => result.is_ok(),
+    }
+}
+
 type DetectionStream =
     lk_agents_abi::DuplexStream<Box<dyn StreamInput<AudioFrame>>, Box<dyn StreamOutput<VadOutput>>>;
 
@@ -130,8 +147,9 @@ pub(super) fn open(
 ) -> Result<DetectionStream, ProviderError> {
     let (audio, mut input) = media_queue::audio(INPUT_POLICY);
     let (output, events) = mpsc::channel(OUTPUT_CAPACITY);
-    let drops = AudioDrops::new(telemetry::AudioConsumer::Vad, INPUT_POLICY);
+    let drops = Arc::new(AudioDrops::new(telemetry::AudioConsumer::Vad, INPUT_POLICY));
     drops.observe(cx.clone());
+    let (catch_up, worker_clock) = (drops.clone(), clock.clone());
     let cancelled = CancellationToken::new();
     let stop = cancelled.clone();
     // Only channel descriptors precede admission; refusal constructs no model and retains no
@@ -142,6 +160,7 @@ pub(super) fn open(
             let mut model = models.create();
             runtime.block_on(async move {
                 loop {
+                    catch_up.catching_up(input.head(), worker_clock.now());
                     let item = tokio::select! {
                         biased;
                         () = stop.cancelled() => return Ok(()),
@@ -165,8 +184,13 @@ pub(super) fn open(
                             }
                         },
                         Item::Gap(_) | Item::Event(Flush) => {
-                            machine.reset();
+                            let ended = machine.reset();
                             model.reset();
+                            if let Some(event) = ended
+                                && !emit(&stop, &output, event).await
+                            {
+                                return Ok(());
+                            }
                             None
                         }
                     };
@@ -181,12 +205,8 @@ pub(super) fn open(
                             inference_duration,
                         });
                         for event in events {
-                            tokio::select! {
-                                biased;
-                                () = stop.cancelled() => return Ok(()),
-                                result = output.send(event) => {
-                                    if result.is_err() { return Ok(()); }
-                                },
+                            if !emit(&stop, &output, event).await {
+                                return Ok(());
                             }
                         }
                         next = following;

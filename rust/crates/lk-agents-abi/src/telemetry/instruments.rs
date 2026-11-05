@@ -259,6 +259,16 @@ pub struct AudioDropped {
     pub consumer: AudioConsumer,
 }
 
+/// How long a consumer took to drain the pre-connect audio replayed ahead of the live input:
+/// longer than that audio lasted, it falls behind the call.
+#[metric(name = "lk.agents.audio.catch_up_time", kind = Histogram, unit = "s", bounds = DURATION_BOUNDS)]
+#[derive(Attrs)]
+pub struct AudioCatchUp {
+    /// The consumer the channel feeds.
+    #[attr("consumer")]
+    pub consumer: AudioConsumer,
+}
+
 /// What an audio channel keeps when its consumer falls behind.
 #[derive(SpanValue, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AudioPolicy {

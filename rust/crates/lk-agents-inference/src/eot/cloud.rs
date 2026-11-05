@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 use lk_agents_abi::errors::{ApiError, TimeoutPhase};
 use lk_agents_abi::{ApiConnectOptions, AudioFrame, Clock, Elapsed, EotInferenceMetrics};
-use lk_agents_media::media_queue::{self, AudioSender, Item, Policy};
+use lk_agents_media::media_queue::{self, AudioReceiver, AudioSender, Item, Policy};
 use lk_agents_net::audio_drops::AudioDrops;
 use lk_agents_net::telemetry;
 use lk_agents_net::transport::{
@@ -68,10 +68,12 @@ fn duration_millis(d: Option<&pbjson_types::Duration>) -> i64 {
     d.map_or(0, |d| d.seconds * 1000 + i64::from(d.nanos) / 1_000_000)
 }
 
-#[derive(Default)]
 struct CloudState {
-    /// The connection's queue: audio, and the control messages in order with it.
+    /// The connection's queue: audio, and the control messages in order with it. Open from
+    /// construction, so the audio heard while connecting (a pre-connect head) waits in it.
     send: Option<AudioSender<Message>>,
+    /// Control messages go only to a live connection.
+    connected: bool,
     session_id: Option<String>,
 }
 
@@ -80,6 +82,8 @@ pub struct CloudTransport {
     sink: Arc<dyn PredictionListener>,
     transport: Arc<dyn WsTransport>,
     state: Mutex<CloudState>,
+    /// The queue's consumer, taken by the connection.
+    receiver: Mutex<Option<AudioReceiver<Message>>>,
     clock: Arc<dyn Clock>,
     drops: AudioDrops,
 }
@@ -91,19 +95,16 @@ impl CloudTransport {
         transport: Arc<dyn WsTransport>,
         clock: Arc<dyn Clock>,
     ) -> Self {
+        let (send, receiver) = media_queue::audio(INPUT_POLICY);
         CloudTransport {
             opts,
             sink,
             transport,
-            state: Mutex::new(CloudState::default()),
+            state: Mutex::new(CloudState { send: Some(send), connected: false, session_id: None }),
+            receiver: Mutex::new(Some(receiver)),
             clock,
             drops: AudioDrops::new(telemetry::AudioConsumer::EndOfTurn, INPUT_POLICY),
         }
-    }
-
-    /// Measures the audio the connection's queue drops under `cx`'s job.
-    pub fn observe(&self, cx: telemetry::Cx) {
-        self.drops.observe(cx);
     }
 
     #[cfg(test)]
@@ -116,7 +117,8 @@ impl CloudTransport {
     /// stopped draining refuses it too; the prediction it carried times out, and the local model
     /// takes over.
     fn send_message(&self, message: Message) {
-        if let Some(send) = self.state.lock().send.as_ref() {
+        let state = self.state.lock();
+        if let Some(send) = state.send.as_ref().filter(|_| state.connected) {
             let _ = send.event(message);
         }
     }
@@ -249,13 +251,17 @@ impl CloudTransport {
 
     async fn run_once(&self) -> Result<(), ApiError> {
         let (ws_sink, mut ws_stream) = self.connect().await?;
-        let (send, mut send_rx) = media_queue::audio(INPUT_POLICY);
-        self.state.lock().send = Some(send);
+        let mut send_rx = self.receiver.lock().take().ok_or_else(|| {
+            ApiError::new("the turn detector connection already ran").with_retryable(false)
+        })?;
+        self.state.lock().connected = true;
 
         let closing = AtomicBool::new(false);
 
         let sender = async {
-            while let Some(item) = send_rx.recv().await {
+            loop {
+                self.drops.catching_up(send_rx.head(), self.clock.now());
+                let Some(item) = send_rx.recv().await else { break };
                 let message = match item {
                     Item::Media(frame) => Message::InputAudio(proto::InputAudio {
                         audio: frame.data.to_vec(),
@@ -311,6 +317,7 @@ impl CloudTransport {
         let result = tokio::try_join!(sender, receiver).map(|_| ());
         let mut state = self.state.lock();
         state.send = None;
+        state.connected = false;
         state.session_id = None;
         result
     }
@@ -340,6 +347,16 @@ impl EotTransport for CloudTransport {
         if let Some(dropped) = dropped {
             self.drops.record(dropped);
         }
+    }
+
+    fn push_head(&self, frame: &AudioFrame) {
+        if let Some(send) = self.state.lock().send.as_ref() {
+            send.head(frame.clone());
+        }
+    }
+
+    fn observe(&self, cx: telemetry::Cx) {
+        self.drops.observe(cx);
     }
 
     fn flush(&self) {

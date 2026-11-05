@@ -147,6 +147,13 @@ impl io::AudioInput for RoomAudioInput {
         self.0.next_frame(&telemetry::Cx::NONE)
     }
 
+    fn next_input(
+        &self,
+        _cx: &telemetry::Cx,
+    ) -> lk_agents_abi::BoxFuture<'_, io::Result<Option<io::InputFrame>>> {
+        self.0.next_input(&telemetry::Cx::NONE)
+    }
+
     fn on_attached(&self) {
         self.0.on_attached()
     }

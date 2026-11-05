@@ -39,6 +39,13 @@ impl AudioInput {
         true
     }
 
+    /// Pre-connect audio, kept in full. `false` once the input ended or its pump is gone.
+    pub(crate) fn head(&self, frame: AudioFrame) -> bool {
+        let Some(audio) = self.open() else { return false };
+        audio.head(frame);
+        true
+    }
+
     /// `None` once the input ended or its pump is gone.
     pub(crate) fn flush(&self) -> Option<Result<(), Stuck>> {
         self.open().map(|audio| audio.event(Flush))

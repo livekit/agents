@@ -101,7 +101,7 @@ impl EotStream {
     ) -> DetectorStream {
         let shell = (session.model() == TurnDetectorModel::V1).then(|| make(session.model()));
         let id = ProviderId {
-            label: "livekit.agents.inference.eot.TurnDetector".into(),
+            label: "livekit.agents.inference.TurnDetector".into(),
             model: session.model().as_str().into(),
             provider: crate::eot::PROVIDER.into(),
         };
@@ -140,10 +140,14 @@ impl EotStream {
         self.inner.lock()
     }
 
-    fn push(inner: &mut Inner, frame: AudioFrame) {
+    fn push(inner: &mut Inner, frame: AudioFrame, head: bool) {
         if !inner.degraded && !inner.session.is_closed() {
             if let Some(shell) = &inner.shell {
-                shell.transport.push_frame(&frame);
+                if head {
+                    shell.transport.push_head(&frame);
+                } else {
+                    shell.transport.push_frame(&frame);
+                }
             } else {
                 inner.replacement_audio.push(&lk_agents_media::pcm_samples(&frame.data));
             }
@@ -393,12 +397,8 @@ impl lk_agents_abi::turn::inference::EotStream for DetectorStream {
     }
 }
 
-impl lk_agents_abi::EotDetector for DetectorStream {
-    fn id(&self) -> ProviderId {
-        ProviderId { model: self.model().as_str().into(), ..self.0.id.clone() }
-    }
-
-    fn push_audio(&self, frame: AudioFrame) {
+impl DetectorStream {
+    fn hear(&self, frame: AudioFrame, head: bool) {
         let mut inner = self.0.lock();
         let format = (frame.sample_rate, frame.num_channels);
         match inner.input_format {
@@ -431,7 +431,28 @@ impl lk_agents_abi::EotDetector for DetectorStream {
             None => Some(frame),
         };
         if let Some(out) = out {
-            EotStream::push(&mut inner, out);
+            EotStream::push(&mut inner, out, head);
+        }
+    }
+}
+
+impl lk_agents_abi::EotDetector for DetectorStream {
+    fn id(&self) -> ProviderId {
+        ProviderId { model: self.model().as_str().into(), ..self.0.id.clone() }
+    }
+
+    fn push_audio(&self, frame: AudioFrame) {
+        self.hear(frame, false);
+    }
+
+    fn push_head(&self, frame: AudioFrame) {
+        self.hear(frame, true);
+    }
+
+    /// The cloud transport is mounted at open, before the session that observes it.
+    fn observe(&self, cx: &telemetry::Cx) {
+        if let Some(shell) = &self.0.lock().shell {
+            shell.transport.observe(cx.clone());
         }
     }
 
@@ -450,7 +471,7 @@ impl lk_agents_abi::EotDetector for DetectorStream {
             let tail = r.flush().map(<[i16]>::to_vec).unwrap_or_default();
             if !tail.is_empty() {
                 let ch = inner.input_format.map_or(1, |(_, c)| c);
-                EotStream::push(&mut inner, pcm_frame(tail, self.0.rate, ch));
+                EotStream::push(&mut inner, pcm_frame(tail, self.0.rate, ch), false);
             }
         }
         inner.input_format = None;

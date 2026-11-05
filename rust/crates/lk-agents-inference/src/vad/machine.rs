@@ -167,8 +167,14 @@ impl VadMachine {
     }
 
     /// The `_FlushSentinel` branch: every counter restarts and the window in flight goes stale.
-    /// The runtime resets the model's recurrent state with it.
-    pub fn reset(&mut self) {
+    /// The runtime resets the model's recurrent state with it. Speech in progress ends first, so
+    /// the session is never left speaking.
+    pub fn reset(&mut self) -> Option<VadOutput> {
+        let ended = self.pub_speaking.then(|| {
+            self.pub_silence_duration = self.silence_threshold_duration;
+            let speech = (self.pub_speech_duration - self.silence_threshold_duration).max(0.0);
+            self.edge(VadEventType::EndOfSpeech, speech)
+        });
         self.speech_buffer_index = 0;
         self.speech_buffer_max_reached = false;
         self.speech_buffer.fill(0);
@@ -188,6 +194,7 @@ impl VadMachine {
             && self.input_sample_rate != MODEL_SAMPLE_RATE)
             .then(|| new_resampler(self.input_sample_rate))
             .flatten();
+        ended
     }
 
     /// `_VADStream.update_options`: the thresholds apply from the next window; once the sample rate
@@ -570,7 +577,7 @@ mod tests {
     fn vad_eot_supplied_result_vectors_ignore_results_from_before_a_flush() {
         let mut m = VadMachine::new(VadOptions::default());
         let stale = m.push(window()).unwrap().expect("a whole window is scored");
-        m.reset();
+        assert_eq!(m.reset(), None, "nothing was spoken");
         let current = m.push(window()).unwrap().expect("the flushed stream scores again");
         let late = VadResult { window: stale.window, probability: 1.0, inference_duration: 0.0 };
         assert_eq!(m.predicted(late), (Vec::new(), None), "a stale result changes nothing");
@@ -581,6 +588,20 @@ mod tests {
         });
         assert_eq!(out[0].event.samples_index, VAD_WINDOW_SAMPLES as u64, "the counters restarted");
         assert_eq!(next, None);
+    }
+
+    // Catches: a gap or flush during speech resetting the detector silently, leaving the session
+    // speaking until the next end of speech that may never come.
+    #[test]
+    fn a_reset_during_speech_ends_it_first() {
+        let mut vad = machine(&[1.0; 4]);
+        let out = (0..4).flat_map(|_| vad.push(window()).unwrap()).collect::<Vec<_>>();
+        assert!(kinds(&out).contains(&VadEventType::StartOfSpeech));
+        let ended = vad.m.reset().expect("speech in progress ends");
+        assert_eq!(ended.event.kind, VadEventType::EndOfSpeech);
+        assert!(!ended.event.speaking);
+        assert!(ended.event.speech_duration > 0.0);
+        assert_eq!(vad.m.reset(), None, "the reset left it silent");
     }
 
     // Catches: a second window handed out while one is in flight: a recurrent model would score

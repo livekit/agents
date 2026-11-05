@@ -39,6 +39,12 @@ pub trait StreamInput<T>: Send + Sync {
     /// [`StreamOutput`].
     fn push(&self, item: T) -> Result<(), ProviderError>;
 
+    /// Pre-connect audio, replayed ahead of the live input: kept in full where `push` would drop
+    /// to keep the input current.
+    fn head(&self, item: T) -> Result<(), ProviderError> {
+        self.push(item)
+    }
+
     /// End of the current segment (`_FlushSentinel`), not a close.
     fn flush(&self) -> Result<(), ProviderError>;
 
@@ -119,6 +125,10 @@ pub trait ProviderStream<T>: StreamOutput<T> {
 impl<T, S: StreamInput<T> + ?Sized> StreamInput<T> for Box<S> {
     fn push(&self, item: T) -> Result<(), ProviderError> {
         S::push(self, item)
+    }
+
+    fn head(&self, item: T) -> Result<(), ProviderError> {
+        S::head(self, item)
     }
 
     fn flush(&self) -> Result<(), ProviderError> {

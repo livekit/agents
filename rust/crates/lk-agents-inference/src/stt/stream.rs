@@ -72,6 +72,13 @@ impl StreamInput<AudioFrame> for RecognitionInput {
         Err(self.closed_error())
     }
 
+    fn head(&self, item: AudioFrame) -> Result<(), ProviderError> {
+        if !*self.control.stop.borrow() && self.audio.head(item) {
+            return Ok(());
+        }
+        Err(self.closed_error())
+    }
+
     fn flush(&self) -> Result<(), ProviderError> {
         match self.audio.flush() {
             Some(flushed) if !*self.control.stop.borrow() => {

@@ -293,6 +293,7 @@ METRIC_GEN_AI_CLIENT_OPERATION_TIME_TO_FIRST_CHUNK: Final = "gen_ai.client.opera
 METRIC_GEN_AI_CLIENT_TOKEN_USAGE: Final = "gen_ai.client.token.usage"
 METRIC_GEN_AI_EXECUTE_TOOL_DURATION: Final = "gen_ai.execute_tool.duration"
 METRIC_GEN_AI_INVOKE_AGENT_DURATION: Final = "gen_ai.invoke_agent.duration"
+METRIC_LK_AGENTS_AUDIO_CATCH_UP_TIME: Final = "lk.agents.audio.catch_up_time"
 METRIC_LK_AGENTS_AUDIO_DROPPED: Final = "lk.agents.audio.dropped"
 METRIC_LK_AGENTS_CONNECTION_ACQUIRE_TIME: Final = "lk.agents.connection.acquire_time"
 METRIC_LK_AGENTS_EVENT_LOOP_BLOCKED_DURATION: Final = "lk.agents.event_loop.blocked_duration"

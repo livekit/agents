@@ -10,6 +10,8 @@ pub enum AudioInputRouterEffect {
     PushFrame {
         sink: ResourceId,
         frame: AudioFrame,
+        /// Pre-connect audio: the sink keeps it in full (`StreamInput::head`).
+        head: bool,
     },
     /// Ending, not dropping: dropping a host stream doesn't close it.
     EndInput(ResourceId),

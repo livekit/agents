@@ -3,7 +3,8 @@
 //! and session Clock/Spawner as production. The harness only chooses what reaches the loop's queue
 //! and when.
 
-use lk_agents_abi::{AudioFrame, BoxFuture, Spawner, Stt, Vad};
+use lk_agents_abi::voice::io::InputFrame;
+use lk_agents_abi::{BoxFuture, Spawner, Stt, Vad};
 use lk_agents_runtime::voice::VoiceRuntimeEvent;
 use lk_agents_runtime::voice::resources::Resources;
 use lk_agents_runtime::voice::session::{
@@ -96,9 +97,9 @@ impl QueueOwner for Running {
 pub(crate) struct Session {
     stage: Stage,
     pub intake: mpsc::UnboundedReceiver<VoiceRuntimeEvent>,
-    pub mic: mpsc::Receiver<AudioFrame>,
+    pub mic: mpsc::Receiver<InputFrame>,
     events: mpsc::UnboundedSender<VoiceRuntimeEvent>,
-    frames: mpsc::Sender<AudioFrame>,
+    frames: mpsc::Sender<InputFrame>,
     woken: Arc<Woken>,
 }
 
@@ -141,7 +142,7 @@ impl Session {
         self.woken.woken.store(true, Ordering::Relaxed);
     }
 
-    pub(crate) fn deliver_frames(&mut self, frames: Vec<AudioFrame>) {
+    pub(crate) fn deliver_frames(&mut self, frames: Vec<InputFrame>) {
         for frame in frames {
             self.frames.try_send(frame).expect("the delivery channel holds any batch");
         }

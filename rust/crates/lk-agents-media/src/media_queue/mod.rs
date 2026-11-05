@@ -44,6 +44,15 @@ pub enum Policy {
     Now(Duration),
 }
 
+/// The head audio a receiver has drained.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Head {
+    /// Received so far, monotone.
+    pub received: Duration,
+    /// Head audio is still queued.
+    pub pending: bool,
+}
+
 /// More than [`MAX_EVENTS`] events are pending: the consumer stopped draining.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("media consumer stopped draining its events")]

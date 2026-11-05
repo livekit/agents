@@ -32,9 +32,8 @@ pub use legs::Executor;
 
 use crate::telemetry;
 use crate::voice::session::Tx;
-use lk_agents_abi::AudioFrame;
 use lk_agents_abi::resources::ResourceId;
-use lk_agents_abi::voice::io::AudioInput;
+use lk_agents_abi::voice::io::{AudioInput, InputFrame};
 use lk_agents_net::task::{TaskId, TaskSet};
 use lk_agents_voice::agent_activity::scheduling::SpeechId;
 use lk_agents_voice::agent_session::{
@@ -80,10 +79,10 @@ pub struct VoiceRuntime {
     /// The microphone's frames, straight from its reader. A full queue holds the reader back, as
     /// the reference's forwarding loop awaits each frame, so the loss falls to the input's own
     /// channel and the session never grows without limit.
-    pub frames: tokio::sync::mpsc::Receiver<AudioFrame>,
+    pub frames: tokio::sync::mpsc::Receiver<InputFrame>,
     /// Where the data plane's reports and a reader's end join the queue.
     reports: Tx,
-    frames_tx: tokio::sync::mpsc::Sender<AudioFrame>,
+    frames_tx: tokio::sync::mpsc::Sender<InputFrame>,
     /// The microphone, its id and its reader.
     source: Option<(ResourceId, TaskId)>,
     /// Where each awaited call's answer goes, until the core answers it.
@@ -410,14 +409,14 @@ impl VoiceRuntime {
         }
     }
 
-    fn on_frame(&mut self, frame: AudioFrame, now: Now) {
+    fn on_frame(&mut self, InputFrame { frame, head }: InputFrame, now: Now) {
         // The session recorder hears every frame the forwarder does, muted ones excepted.
         if self.forwarder.input_enabled()
             && let Some(tap) = self.shared.recorder_tap()
         {
             tap.recorder.on_input_frame(tap.now(), &frame);
         }
-        let effects = self.forwarder.on_frame(frame, now.at);
+        let effects = self.forwarder.on_frame(frame, head, now.at);
         self.perform(effects);
     }
 
@@ -569,9 +568,10 @@ impl VoiceRuntime {
         let resources = &self.shared.resources;
         for effect in effects {
             match effect {
-                AudioInputRouterEffect::PushFrame { sink, frame } => {
+                AudioInputRouterEffect::PushFrame { sink, frame, head } => {
                     if let Some(stream) = resources.audio_sink(sink)
-                        && let Err(error) = stream.push(frame)
+                        && let Err(error) =
+                            if head { stream.head(frame) } else { stream.push(frame) }
                         && self.push_warned.insert(sink)
                     {
                         log::warn!(
@@ -633,7 +633,7 @@ impl Drop for VoiceRuntime {
 /// closes. The input is the host's, not a `HostStream`: nothing to close, so no `Closed`.
 async fn read_audio(
     input: Arc<dyn AudioInput>,
-    frames: tokio::sync::mpsc::Sender<AudioFrame>,
+    frames: tokio::sync::mpsc::Sender<InputFrame>,
     mut closing: tokio::sync::watch::Receiver<bool>,
     queue: Tx,
 ) {
@@ -641,7 +641,7 @@ async fn read_audio(
     let cause = loop {
         let frame = tokio::select! {
             biased;
-            frame = input.next_frame(&telemetry::Cx::NONE) => match frame {
+            frame = input.next_input(&telemetry::Cx::NONE) => match frame {
                 Ok(Some(frame)) => frame,
                 Ok(None) => break ChannelEndCause::SourceEnded,
                 Err(e) => {

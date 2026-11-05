@@ -50,6 +50,14 @@ pub trait EotTransport: Send + Sync {
     /// One frame of 16-bit little-endian PCM, already at the detector's rate.
     fn push_frame(&self, frame: &AudioFrame);
 
+    /// Pre-connect audio: kept in full where `push_frame` would drop to stay current.
+    fn push_head(&self, frame: &AudioFrame) {
+        self.push_frame(frame);
+    }
+
+    /// Measures the transport's input under `cx`'s job.
+    fn observe(&self, _cx: lk_agents_net::telemetry::Cx) {}
+
     fn flush(&self);
 
     /// No more audio is coming. The cloud transport sends `session_close`; both then let

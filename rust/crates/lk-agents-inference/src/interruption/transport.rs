@@ -15,6 +15,7 @@ use crate::interruption::proto::{
     ClientMessage, ENCODING_S16LE, ServerMessage, SessionCreateSettings, frame_request,
 };
 use lk_agents_abi::ApiConnectOptions;
+use lk_agents_abi::AudioFrame;
 use lk_agents_abi::Clock;
 use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::turn::detector::ReqId;
@@ -29,7 +30,7 @@ use lk_agents_net::token::{INFERENCE_TOKEN_TTL, inference_bearer_with_ttl};
 use lk_agents_net::transport::{
     TransportError, WsMessage, WsReceiver, WsSender, WsTransport, close_status,
 };
-use parking_lot::Mutex;
+use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::{Duration, UNIX_EPOCH};
@@ -108,6 +109,7 @@ impl AdaptiveInterruptionDetector {
         let (input_failure, _) = watch::channel(None);
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let closed = Arc::new(AtomicBool::new(false));
+        let drops = Arc::new(AudioDrops::new(telemetry::AudioConsumer::Interruption, INPUT_POLICY));
 
         let ctx = StreamContext {
             opts: self.opts.clone(),
@@ -117,10 +119,11 @@ impl AdaptiveInterruptionDetector {
             reconnect: reconnect.clone(),
             closed: closed.clone(),
             input_failure: input_failure.clone(),
+            drops: drops.clone(),
         };
         let input_tx = InterruptionInput(Arc::new(InputShared {
             queue: Mutex::new(Some(queue)),
-            drops: AudioDrops::new(telemetry::AudioConsumer::Interruption, INPUT_POLICY),
+            drops,
             failure: input_failure,
         }));
         let task = TokioSpawner::current().spawn(main_task(ctx, input_rx));
@@ -147,6 +150,8 @@ struct StreamContext {
     reconnect: Arc<Notify>,
     closed: Arc<AtomicBool>,
     input_failure: watch::Sender<Option<ApiError>>,
+    /// The input's drops and catch-up, measured where each is seen.
+    drops: Arc<AudioDrops>,
 }
 
 impl StreamContext {
@@ -215,19 +220,14 @@ pub struct InterruptionInput(Arc<InputShared>);
 struct InputShared {
     /// `None` once the input ended.
     queue: Mutex<Option<AudioSender<InputEvent>>>,
-    drops: AudioDrops,
+    drops: Arc<AudioDrops>,
     failure: watch::Sender<Option<ApiError>>,
 }
 
 impl InterruptionInput {
     pub fn send(&self, event: InputEvent) -> Result<(), StreamClosed> {
         let shared = &*self.0;
-        if shared.failure.borrow().is_some() {
-            return Err(StreamClosed::Stuck);
-        }
-        let queue = shared.queue.lock();
-        let queue = queue.as_ref().filter(|queue| !queue.is_closed());
-        let queue = queue.ok_or(StreamClosed::InputEnded)?;
+        let queue = self.open()?;
         match event {
             InputEvent::Audio(frame) => shared.drops.record(queue.push(frame)),
             event => queue.event(event).map_err(|stuck| {
@@ -236,6 +236,23 @@ impl InterruptionInput {
             })?,
         }
         Ok(())
+    }
+
+    /// Pre-connect audio: kept in full where `Audio` would drop to stay current.
+    pub fn head(&self, frame: AudioFrame) -> Result<(), StreamClosed> {
+        self.open()?.head(frame);
+        Ok(())
+    }
+
+    /// The open queue: `Stuck` once a sentinel was refused, `InputEnded` once the input ended.
+    fn open(&self) -> Result<MappedMutexGuard<'_, AudioSender<InputEvent>>, StreamClosed> {
+        if self.0.failure.borrow().is_some() {
+            return Err(StreamClosed::Stuck);
+        }
+        MutexGuard::try_map(self.0.queue.lock(), |queue| {
+            queue.as_mut().filter(|queue| !queue.is_closed())
+        })
+        .map_err(|_| StreamClosed::InputEnded)
     }
 
     /// Measures the audio the queue drops under `cx`'s job.
@@ -273,9 +290,9 @@ pub struct InterruptionStream {
 /// `RuntimeError("... is closed")` / `RuntimeError("... input ended")`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum StreamClosed {
-    #[error("livekit.agents.inference.interruption.InterruptionWebSocketStream is closed")]
+    #[error("livekit.agents.inference.InterruptionWebSocketStream is closed")]
     Closed,
-    #[error("livekit.agents.inference.interruption.InterruptionWebSocketStream input ended")]
+    #[error("livekit.agents.inference.InterruptionWebSocketStream input ended")]
     InputEnded,
     #[error("interruption input stopped draining")]
     Stuck,
@@ -453,6 +470,7 @@ async fn run_once(
     let mut data_tx = Some(data_tx);
 
     let outcome = loop {
+        ctx.drops.catching_up(input_rx.head(), ctx.clock.now());
         let deadline = core.lock().next_deadline();
         let inference_deadline = async {
             match deadline {
@@ -788,6 +806,40 @@ mod tests {
         assert!(matches!(event, Some(StreamEvent::Error(error))
             if !error.recoverable && error.error.message.contains("stopped draining")));
         assert!(stream.finish().await.is_err());
+    }
+
+    // Catches: a pre-connect head drained at real time (a per-frame wait or round trip), or not
+    // measured, while the agent speaks and every frame fills the window.
+    #[tokio::test]
+    async fn a_ten_second_head_drains_far_faster_than_real_time() {
+        let detector = detector(Arc::new(FakeWs::new(Vec::new()).keep_open()));
+        let mut stream = detector.stream();
+        let input = stream.sender().unwrap();
+        let measurements = crate::testkit::Measurements::default();
+        input.observe(measurements.cx());
+        let frame = || AudioFrame::new(vec![0; 640], 16_000, 1, 320);
+        stream.push(InputEvent::AgentSpeechStarted).unwrap();
+        let began = std::time::Instant::now();
+        for _ in 0..500 {
+            input.head(frame()).unwrap();
+        }
+        let measured = lk_agents_abi::timeout(
+            &lk_agents_net::clock::RealClock::new(),
+            Duration::from_secs(1),
+            async {
+                loop {
+                    if let [seconds] = measurements.of("lk.agents.audio.catch_up_time")[..] {
+                        return seconds;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            },
+        )
+        .await
+        .expect("10 s of head drains within a second");
+        eprintln!("interruption: 10.0 s head drained in {:?}", began.elapsed());
+        assert!(measured < 1.0, "{measured}");
+        stream.end_input().unwrap();
     }
 
     #[tokio::test]

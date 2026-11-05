@@ -2,14 +2,20 @@
 //! gap, a backlog merged into frames of up to [`MERGED_FRAME`].
 
 use super::core::{Consumer, Core, Producer, channel};
-use super::{Item, MERGED_FRAME, Policy, Stuck};
+use super::{Head, Item, MERGED_FRAME, Policy, Stuck};
 use lk_agents_abi::AudioFrame;
 use lk_agents_abi::voice::rtc::frame_duration;
 use std::time::Duration;
 
 pub fn audio<E>(policy: Policy) -> (AudioSender<E>, AudioReceiver<E>) {
-    let (producer, consumer) =
-        channel(AudioQueue { core: Core::new(), policy, lag: Duration::ZERO });
+    let queue = AudioQueue {
+        core: Core::new(),
+        policy,
+        lag: Duration::ZERO,
+        head_items: 0,
+        head_received: Duration::ZERO,
+    };
+    let (producer, consumer) = channel(queue);
     (AudioSender(producer), AudioReceiver { queue: consumer, rest: Vec::new() })
 }
 
@@ -18,6 +24,10 @@ struct AudioQueue<E> {
     policy: Policy,
     /// The duration of the core's frames past the floor, which the policy bounds.
     lag: Duration,
+    /// The items from the front up to the last head frame still queued.
+    head_items: usize,
+    /// The head audio received so far.
+    head_received: Duration,
 }
 
 impl<E> AudioQueue<E> {
@@ -46,6 +56,16 @@ impl<E> AudioQueue<E> {
         dropped
     }
 
+    fn head(&mut self, frame: AudioFrame) {
+        self.core.head(frame);
+        self.head_items = self.core.len();
+    }
+
+    fn flush(&mut self, event: E) -> Result<(), Stuck> {
+        self.head_items = 0;
+        self.core.flush(event)
+    }
+
     /// Drops the oldest frame the policy may drop into the gap that starts the run.
     fn drop_oldest(&mut self) -> Duration {
         let duration = frame_duration(&self.core.drop_oldest());
@@ -56,11 +76,13 @@ impl<E> AudioQueue<E> {
 
     /// The next item, leaving the frames that merge into a popped frame in `rest` for [`merge`],
     /// so the shared queue merges outside its lock. A frame that merges with nothing leaves `rest`
-    /// empty and passes as pushed.
+    /// empty and passes as pushed. Head and live audio never merge.
     fn pop(&mut self, rest: &mut Vec<AudioFrame>) -> Option<Item<AudioFrame, E>> {
+        let head = self.head_items > 0;
         let item = self.pop_front()?;
         if let Item::Media(first) = &item {
             while let Some(Item::Media(next)) = self.core.front()
+                && (self.head_items > 0) == head
                 && joins(first, rest, next)
             {
                 if let Some(Item::Media(next)) = self.pop_front() {
@@ -73,8 +95,14 @@ impl<E> AudioQueue<E> {
 
     fn pop_front(&mut self) -> Option<Item<AudioFrame, E>> {
         let (item, counted) = self.core.pop()?;
-        if counted && let Item::Media(frame) = &item {
-            self.lag = self.lag.saturating_sub(frame_duration(frame));
+        let head = self.head_items > 0;
+        self.head_items = self.head_items.saturating_sub(1);
+        if let Item::Media(frame) = &item {
+            if counted {
+                self.lag = self.lag.saturating_sub(frame_duration(frame));
+            } else if head {
+                self.head_received += frame_duration(frame);
+            }
         }
         Some(item)
     }
@@ -127,7 +155,7 @@ impl<E> AudioSender<E> {
 
     /// Pre-connect audio: kept in full, outside both policies.
     pub fn head(&self, frame: AudioFrame) {
-        self.0.apply(|queue| queue.core.head(frame));
+        self.0.apply(|queue| queue.head(frame));
     }
 
     /// In order with the audio pushed before it. `Stuck` when the consumer stopped draining.
@@ -137,7 +165,7 @@ impl<E> AudioSender<E> {
 
     /// Drops all queued audio, then queues `event`: start over from here. No `Gap`.
     pub fn flush(&self, event: E) -> Result<(), Stuck> {
-        self.0.apply(|queue| queue.core.flush(event)).unwrap_or(Ok(()))
+        self.0.apply(|queue| queue.flush(event)).unwrap_or(Ok(()))
     }
 
     /// The receiver is gone: what is pushed goes nowhere.
@@ -170,6 +198,13 @@ impl<E> AudioReceiver<E> {
     /// Frames the policy dropped so far, monotone.
     pub fn dropped(&self) -> u64 {
         self.queue.read(|queue| queue.core.dropped())
+    }
+
+    /// How far the receiver is through the head audio: a received item that grew
+    /// [`Head::received`] was head audio.
+    pub fn head(&self) -> Head {
+        self.queue
+            .read(|queue| Head { received: queue.head_received, pending: queue.head_items > 0 })
     }
 }
 

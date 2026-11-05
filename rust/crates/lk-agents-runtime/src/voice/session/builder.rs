@@ -189,8 +189,8 @@ pub struct DriverBuilder {
     pub journal: Journal,
     /// Where the session's spans and measurements go: the process tracer in production.
     pub tracer: telemetry::Tracer,
-    /// The span the session continues and the job it records for.
-    pub trace: telemetry::TraceContext,
+    /// The span the session continues, the job it records for and its conversation.
+    pub trace: telemetry::Cx,
     /// The job's ids, which `agent_session` repeats.
     pub job_ids: telemetry::JobIds,
     /// The session's spans reserved at `start()`; drawn at the opening when `None`.
@@ -259,8 +259,8 @@ impl DriverBuilder {
             session_id: None,
             storage: None,
             journal: Default::default(),
+            trace: tracer.root(),
             tracer,
-            trace: Default::default(),
             job_ids: Default::default(),
             opening: None,
             report: Default::default(),
@@ -270,31 +270,31 @@ impl DriverBuilder {
     /// The session's startup spans: those `start()` reserved, else reserved now.
     pub fn opening(&mut self) -> telemetry::Opening {
         *self.opening.get_or_insert_with(|| {
-            let cx = self.tracer.resume(&self.trace);
-            let session = telemetry::reserve::<telemetry::AgentSession>(&cx);
-            let start = telemetry::reserve(&cx.under::<telemetry::AgentSession>(session.context));
+            let cx = &self.trace;
+            let session = telemetry::reserve::<telemetry::AgentSession>(cx);
+            let start = telemetry::reserve(&cx.clone().under::<telemetry::AgentSession>(session.context));
             telemetry::Opening { session, start, activity: None }
         })
     }
 
     /// The context startup work runs under: the session's `session_start`.
-    pub fn startup(&mut self) -> telemetry::TraceContext {
+    pub fn startup(&mut self) -> telemetry::Cx {
         let start = self.opening().start.context;
-        telemetry::TraceContext { span: Some(start), ..self.trace.clone() }
+        self.trace.clone().under::<telemetry::SessionStart>(start)
     }
 
     /// `gen_ai.conversation.id`: the call's thread, else the job's room session id; the session's
     /// own id only outside a job.
     fn conversation(&self, session_id: &str) -> String {
-        self.trace.conversation.clone().unwrap_or_else(|| session_id.to_owned())
+        self.trace.conversation().unwrap_or(session_id).to_owned()
     }
 
     /// The session's context: what its systems' spans (AMD's, a handoff's) open under.
     pub(crate) fn session_cx(&mut self, session_id: &str) -> telemetry::Cx {
         let root = self.opening().session.context;
         let conversation = self.conversation(session_id);
-        self.tracer
-            .resume(&self.trace)
+        self.trace
+            .clone()
             .with_conversation(Some(conversation.as_str()))
             .under::<telemetry::AgentSession>(root)
     }
@@ -324,8 +324,7 @@ impl DriverBuilder {
         // The STT pump runs under the first agent's activity, as the reference's does.
         let opening = self.opening();
         let activity = opening.activity.map_or(opening.start.context, |activity| activity.context);
-        let trace = telemetry::TraceContext { span: Some(activity), ..self.trace.clone() };
-        let cx = self.tracer.resume(&trace);
+        let cx = self.trace.clone().continuing(Some(activity));
         let opened = executor
             .open_legs(&self.resources, self.stt.clone(), self.vad.clone(), cx.clone())
             .await?;
@@ -390,12 +389,12 @@ impl DriverBuilder {
                 session_id,
                 storage_enabled: self.storage.is_some(),
                 telemetry: telemetry::SessionTelemetry {
-                    parent: self.trace.span,
-                    job: self.trace.job.clone(),
-                    conversation: self.trace.conversation.clone(),
+                    parent: self.trace.span(),
+                    job: self.trace.job().cloned(),
+                    conversation: self.trace.conversation().map(str::to_owned),
                     job_ids: self.job_ids.clone(),
                     // Ids unique across processes in a job; seeded from the session id otherwise.
-                    ids: (self.trace.span.is_some() || self.trace.job.is_some())
+                    ids: (self.trace.span().is_some() || self.trace.job().is_some())
                         .then(|| telemetry::seeded_ids(telemetry::random_seed())),
                     opening: Some(self.opening()),
                 },
@@ -500,11 +499,8 @@ impl DriverBuilder {
                 .0,
             keyterms: tokio::sync::watch::channel(None).0,
         };
-        let trace = self.tracer.resume(&telemetry::TraceContext {
-            span: None,
-            job: self.trace.job.clone(),
-            conversation: Some(self.conversation(&session_id)),
-        });
+        let trace = (self.trace.clone().continuing(None))
+            .with_conversation(Some(self.conversation(&session_id).as_str()));
         let shared = Arc::new(SessionShared {
             tool_bodies: self.tool_bodies.clone(),
             view: publications.view.subscribe(),
@@ -659,6 +655,11 @@ struct EotAudioSink(Arc<dyn EotDetector>);
 impl StreamInput<AudioFrame> for EotAudioSink {
     fn push(&self, frame: AudioFrame) -> Result<(), lk_agents_abi::errors::ProviderError> {
         self.0.push_audio(frame);
+        Ok(())
+    }
+
+    fn head(&self, frame: AudioFrame) -> Result<(), lk_agents_abi::errors::ProviderError> {
+        self.0.push_head(frame);
         Ok(())
     }
 

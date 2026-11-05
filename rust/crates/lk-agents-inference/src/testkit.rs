@@ -438,3 +438,33 @@ pub mod fallback {
 pub fn env() -> lk_agents_net::env::ProcessEnv {
     lk_agents_net::env::ProcessEnv::current_runtime()
 }
+
+/// What a job measured, collected for assertions.
+#[derive(Clone, Default)]
+pub struct Measurements(Arc<Mutex<Vec<(&'static str, f64)>>>);
+
+impl lk_agents_abi::telemetry::record::RecordSink for Measurements {
+    fn record(&self, record: lk_agents_abi::telemetry::record::Record) {
+        if let lk_agents_abi::telemetry::record::Record::Measurement(m) = record {
+            let value = match m.value {
+                lk_agents_abi::telemetry::record::Number::Double(v) => v,
+                lk_agents_abi::telemetry::record::Number::Int(v) => v as f64,
+            };
+            self.0.lock().push((m.instrument, value));
+        }
+    }
+}
+
+impl Measurements {
+    /// The job to observe a consumer under.
+    pub fn cx(&self) -> lk_agents_net::telemetry::Cx {
+        let clock = Arc::new(lk_agents_abi::VirtualClock::new());
+        lk_agents_net::telemetry::Tracer::new(Arc::new(self.clone()), clock, 7).root()
+    }
+
+    /// The values recorded for `instrument`, in order.
+    pub fn of(&self, instrument: &str) -> Vec<f64> {
+        let measured = self.0.lock();
+        measured.iter().filter(|(name, _)| *name == instrument).map(|(_, v)| *v).collect()
+    }
+}

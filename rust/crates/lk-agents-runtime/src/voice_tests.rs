@@ -76,7 +76,8 @@ async fn close_is_serviced_before_ready_media() {
     let (mut runtime, handle, _steps) = session("saturated-media").await;
     let (media, frames) = tokio::sync::mpsc::channel(64);
     for _ in 0..64 {
-        media.try_send(lk_agents_abi::AudioFrame::new(vec![0; 320], 16_000, 1, 160)).unwrap();
+        let frame = lk_agents_abi::AudioFrame::new(vec![0; 320], 16_000, 1, 160);
+        media.try_send(lk_agents_abi::voice::io::InputFrame { frame, head: false }).unwrap();
     }
     runtime.frames = frames;
     handle.api.send(Command::Close(Close::default())).unwrap();
