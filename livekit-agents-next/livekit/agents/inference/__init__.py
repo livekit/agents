@@ -3,7 +3,6 @@ detectors, and the lazily loaded avatar and realtime integrations."""
 
 from __future__ import annotations
 
-import asyncio
 import os
 import platform
 from collections.abc import Mapping
@@ -17,7 +16,7 @@ from livekit.agents._generated.interruption_errors import (
     InterruptionDetectionError as InterruptionDetectionError,
 )
 
-from .. import _core
+from .. import _bindings, _core
 from .._generated import vad
 from .._generated.inference_models import (
     InferenceClass as InferenceClass,
@@ -37,7 +36,7 @@ from ..types import (
     NotGiven,
     NotGivenOr,
 )
-from ..utils import aio, is_dev_mode, is_given, is_hosted, shortuuid
+from ..utils import is_dev_mode, is_given, is_hosted, shortuuid
 from ..version import __version__
 
 if TYPE_CHECKING:
@@ -237,32 +236,20 @@ class VAD(vad.VAD):
 
 
 class _VADStream(vad.VADStream):
+    """The native VAD's stream: frames and flushes in, its events out, through ``pump``."""
+
     def __init__(self, parent: VAD) -> None:
         self._native = parent._native.stream()
         super().__init__(parent)
 
     async def _main_task(self) -> None:
-        native = self._native
+        await _bindings.pump(self._native, self.input, self._feed, self.send)
 
-        async def _push() -> None:
-            # a refused push (capacity) still ends the input, so its error reaches the reader
-            try:
-                async for item in self.input:
-                    if isinstance(item, self.Flush):
-                        native.flush()
-                    else:
-                        native.push(item)
-            finally:
-                native.end_input()
-
-        push = asyncio.create_task(_push())
-        try:
-            while (ev := await native.recv()) is not None:
-                self.send(ev)
-            await push
-        finally:
-            await aio.cancel_and_wait(push)
-            await native.aclose()
+    def _feed(self, item: rtc.AudioFrame | vad.VADStream.Flush) -> None:
+        if isinstance(item, self.Flush):
+            self._native.flush()
+        else:
+            self._native.push(item)
 
 
 DEFAULT_SAMPLE_RATE = 16000
