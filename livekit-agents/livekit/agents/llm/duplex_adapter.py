@@ -6,15 +6,14 @@ import time
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Literal, Protocol
-
-import numpy as np
+from typing import Literal
 
 from livekit import rtc
 
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr, TimedString
 from ..utils import aio, is_given, shortuuid
+from ..utils.audio_gate import AdaptiveNoiseGate, AudioGate, FixedGate  # noqa: F401 (re-export)
 from .chat_context import ChatContext, ChatMessage, FunctionCall
 from .duplex import (
     DuplexAudioFrame,
@@ -36,9 +35,6 @@ from .realtime import (
 from .tool_context import Tool, ToolChoice, ToolContext
 from .utils import compute_chat_ctx_diff
 
-# a floor this low is digital silence; it keeps the gate's ratios finite when a model emits zeros
-_SILENCE_FLOOR = 1e-4
-
 # transcript is text the model says it spoke; when no sound ever opens a burst for it, this much
 # audio later it is emitted as a text-only generation rather than lost. audio is never held for it
 _UNCLAIMED_TRANSCRIPT_MS = 3000
@@ -53,128 +49,6 @@ _AUDIO_TIMEOUT = 0.8
 # how far ahead of its sound a fragment is handed over: span labels sit about a frame early
 # against the audible onset, and text a little early reads better than late
 _ATTACH_LEAD_MS = 300
-
-
-class AudioGate(Protocol):
-    """Decides which frames of the model's output carry speech worth playing."""
-
-    def update(self, frame: rtc.AudioFrame) -> bool:
-        """True while the frame belongs to an open burst of output."""
-        ...
-
-    def deactivate(self) -> None:
-        """End the open burst, keeping whatever has been learned about the model."""
-        ...
-
-
-class FixedGate:
-    """Opens on output that stands out from a silence the plugin already knows."""
-
-    def __init__(
-        self,
-        silence: float,
-        *,
-        activation_ratio: float = 3.0,
-        deactivation_ratio: float = 1.8,
-        min_silence_duration: float = 0.5,
-    ) -> None:
-        self._floor = max(silence, _SILENCE_FLOOR)
-        self._activation_ratio = activation_ratio
-        self._deactivation_ratio = deactivation_ratio
-        self._min_silence_duration = min_silence_duration
-        self._open = False
-        self._quiet = 0.0
-
-    def deactivate(self) -> None:
-        self._open = False
-        self._quiet = 0.0
-
-    def update(self, frame: rtc.AudioFrame) -> bool:
-        samples = np.frombuffer(frame.data, dtype=np.int16).astype(np.float32)
-        rms = float(np.sqrt(np.mean(np.square(samples)))) / 32768.0 if samples.size else 0.0
-
-        if not self._open:
-            if rms > self._floor * self._activation_ratio:
-                self._open = True
-                self._quiet = 0.0
-        elif rms < self._floor * self._deactivation_ratio:
-            self._quiet += frame.duration
-            if self._quiet >= self._min_silence_duration:
-                self._open = False
-        else:
-            self._quiet = 0.0
-
-        return self._open
-
-
-class AdaptiveNoiseGate:
-    """Opens on output that stands out from the model's own silence.
-
-    The floor is the quietest ``min_silence_duration`` stretch the model produced while it was
-    not speaking, within ``window``: speech never raises it, and no single frame defines it.
-    Thresholds are ratios against it and durations count audio rather than wall clock, so one
-    set of defaults ports across providers, frame sizes and networks.
-    """
-
-    def __init__(
-        self,
-        *,
-        activation_ratio: float = 3.0,
-        deactivation_ratio: float = 1.8,
-        min_silence_duration: float = 0.5,
-        window: float = 10.0,
-    ) -> None:
-        self._activation_ratio = activation_ratio
-        self._deactivation_ratio = deactivation_ratio
-        self._min_silence_duration = min_silence_duration
-        self._window = window
-        self._history: deque[tuple[float, float]] = deque()
-        self._history_duration = 0.0
-        self._stretch_sum = 0.0
-        self._stretch_duration = 0.0
-        self._open = False
-        self._quiet = 0.0
-
-    def deactivate(self) -> None:
-        self._open = False
-        self._quiet = 0.0
-
-    def update(self, frame: rtc.AudioFrame) -> bool:
-        samples = np.frombuffer(frame.data, dtype=np.int16).astype(np.float32)
-        rms = float(np.sqrt(np.mean(np.square(samples)))) / 32768.0 if samples.size else 0.0
-
-        if not self._open:
-            # only silence teaches the floor, and only a whole stretch of it
-            self._stretch_sum += rms * frame.duration
-            self._stretch_duration += frame.duration
-            if self._stretch_duration >= self._min_silence_duration:
-                mean = self._stretch_sum / self._stretch_duration
-                self._history.append((mean, self._stretch_duration))
-                self._history_duration += self._stretch_duration
-                self._stretch_sum = self._stretch_duration = 0.0
-                while self._history_duration > self._window and len(self._history) > 1:
-                    self._history_duration -= self._history.popleft()[1]
-
-        if self._history:
-            floor = min(level for level, _ in self._history)
-        elif self._stretch_duration:
-            floor = self._stretch_sum / self._stretch_duration
-        else:
-            floor = rms
-        floor = max(floor, _SILENCE_FLOOR)
-
-        if not self._open:
-            if rms > floor * self._activation_ratio:
-                self._open = True
-                self._quiet = 0.0
-        elif rms < floor * self._deactivation_ratio:
-            self._quiet += frame.duration
-            if self._quiet >= self._min_silence_duration:
-                self._open = False
-        else:
-            self._quiet = 0.0
-
-        return self._open
 
 
 @dataclass

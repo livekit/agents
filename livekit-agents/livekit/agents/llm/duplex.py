@@ -17,7 +17,7 @@ from .realtime import RealtimeError
 from .tool_context import Tool, ToolChoice, ToolContext
 
 if TYPE_CHECKING:
-    from .duplex_adapter import AudioGate
+    from ..utils.audio_gate import AudioGate
 
 
 @dataclass
