@@ -129,11 +129,26 @@ fn run(received: &Receiver<Arc<Watched>>) {
         watches.retain_mut(|entry| {
             let (keep, stalled) = entry.check(t, paused, &mut sampler);
             if let Some(stall) = stalled {
+                if stall.duration >= CAP {
+                    still_stuck(&stall);
+                }
                 lk_agents_runtime::telemetry::loop_stalled(stall);
             }
             keep
         });
     }
+}
+
+/// A loop still stuck at the cap may hold the GIL for good, and the core's log lines reach Python's
+/// `logging` only through the GIL: this one is written to stderr directly, so it is seen.
+fn still_stuck(stall: &LoopStall) {
+    use std::io::Write as _;
+    let at = stall.stack.as_deref().and_then(|stack| stack.lines().next()).unwrap_or("unknown");
+    let line = format!(
+        "livekit.agents: event loop still blocked after {}s at {at}\n",
+        stall.duration.as_secs()
+    );
+    let _ = std::io::stderr().write_all(line.as_bytes());
 }
 
 struct Entry {

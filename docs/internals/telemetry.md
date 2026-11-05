@@ -153,7 +153,8 @@ Rust; Python only proves its loop is alive.
   rate-limited `event_loop_blocked` span whose `lk.blocking.stack` is the most frequent sample's
   20 deepest frames and `lk.blocking.import` the file being imported, if any, and, within the same
   limit, a `livekit.agents` warning naming the innermost frame (`event loop blocked for 395ms at
-  busy (app.py:42)`).
+  busy (app.py:42)`). A loop still stuck at 30 s may hold the GIL for good, and the core's log
+  lines reach Python's `logging` through the GIL: that report is also written to stderr directly.
 - **Never fatal.** When py-spy cannot start (permission, seccomp, an unknown CPython layout)
   one warning is logged and stacks are off for the process; a failed sample is skipped and a
   panic in it is caught. Stalls are always recorded with their duration; nothing on the loop
