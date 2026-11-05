@@ -62,6 +62,7 @@ members = [
     "livekit-plugins-hamming",
     "livekit-plugins-hume",
     "livekit-plugins-inworld",
+    "livekit-plugins-kalpa",
     "livekit-plugins-keyframe",
     "livekit-plugins-krisp",
     "livekit-plugins-langchain",
@@ -2255,6 +2256,9 @@ images = [
 inworld = [
     { name = "livekit-plugins-inworld" },
 ]
+kalpa = [
+    { name = "livekit-plugins-kalpa" },
+]
 keyframe = [
     { name = "livekit-plugins-keyframe" },
 ]
@@ -2449,6 +2453,7 @@ requires-dist = [
     { name = "livekit-plugins-hamming", marker = "extra == 'hamming'", editable = "livekit-plugins/livekit-plugins-hamming" },
     { name = "livekit-plugins-hume", marker = "extra == 'hume'", editable = "livekit-plugins/livekit-plugins-hume" },
     { name = "livekit-plugins-inworld", marker = "extra == 'inworld'", editable = "livekit-plugins/livekit-plugins-inworld" },
+    { name = "livekit-plugins-kalpa", marker = "extra == 'kalpa'", editable = "livekit-plugins/livekit-plugins-kalpa" },
     { name = "livekit-plugins-keyframe", marker = "extra == 'keyframe'", editable = "livekit-plugins/livekit-plugins-keyframe" },
     { name = "livekit-plugins-langchain", marker = "extra == 'langchain'", editable = "livekit-plugins/livekit-plugins-langchain" },
     { name = "livekit-plugins-lemonslice", marker = "extra == 'lemonslice'", editable = "livekit-plugins/livekit-plugins-lemonslice" },
@@ -2519,7 +2524,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "bland", "boson", "boson-avatar", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hume", "images", "inworld", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "meta", "microsoft-ai", "minimax", "mistralai", "murf", "nabrah", "neuphonic", "nltk", "nvidia", "openai", "palabra", "perplexity", "phonic", "protoface", "resemble", "reson8", "respeecher", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "slng", "smallestai", "soniox", "spatius", "speechify", "speechmatics", "spitch", "synthesia", "tavus", "thunderphone", "trugen", "turn-detector", "typesafe", "ultravox", "upliftai", "vakyam", "xai", "zoom-ai"]
+provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "bland", "boson", "boson-avatar", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hume", "images", "inworld", "kalpa", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "meta", "microsoft-ai", "minimax", "mistralai", "murf", "nabrah", "neuphonic", "nltk", "nvidia", "openai", "palabra", "perplexity", "phonic", "protoface", "resemble", "reson8", "respeecher", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "slng", "smallestai", "soniox", "spatius", "speechify", "speechmatics", "spitch", "synthesia", "tavus", "thunderphone", "trugen", "turn-detector", "typesafe", "ultravox", "upliftai", "vakyam", "xai", "zoom-ai"]
 
 [[package]]
 name = "livekit-api"
@@ -3308,6 +3313,16 @@ dependencies = [
 requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
 
 [[package]]
+name = "livekit-plugins-kalpa"
+source = { editable = "livekit-plugins/livekit-plugins-kalpa" }
+dependencies = [
+    { name = "livekit-agents" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
+
+[[package]]
 name = "livekit-plugins-keyframe"
 source = { editable = "livekit-plugins/livekit-plugins-keyframe" }
 dependencies = [
@@ -3657,18 +3672,24 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+realtime = [
+    { name = "rimelabs-sdk" },
+]
 stt = [
+    { name = "livekit-agents" },
     { name = "rimelabs-sdk" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "livekit-agents", marker = "extra == 'stt'", editable = "livekit-agents" },
     { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
-    { name = "protobuf", specifier = ">=6.33.5" },
+    { name = "protobuf", specifier = ">=5.29.6" },
     { name = "rime-api", specifier = ">=0.3.0" },
-    { name = "rimelabs-sdk", marker = "python_full_version >= '3.11' and extra == 'stt'", specifier = ">=0.1.0a18" },
+    { name = "rimelabs-sdk", marker = "python_full_version >= '3.11' and extra == 'realtime'", specifier = ">=0.1.0a29" },
+    { name = "rimelabs-sdk", marker = "python_full_version >= '3.11' and extra == 'stt'", specifier = ">=0.1.0a29" },
 ]
-provides-extras = ["stt"]
+provides-extras = ["realtime", "stt"]
 
 [[package]]
 name = "livekit-plugins-rtzr"
@@ -5905,7 +5926,7 @@ wheels = [
 
 [[package]]
 name = "rimelabs-sdk"
-version = "0.1.0a18"
+version = "0.1.0a29"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "audioop-lts", marker = "python_full_version >= '3.13'" },
@@ -5914,9 +5935,9 @@ dependencies = [
     { name = "rime-api" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/7a/66/4f5d26cfb7531366fbfa2257d63a23cc9ce38decd5380ed9d168330cf5fb/rimelabs_sdk-0.1.0a18.tar.gz", hash = "sha256:06d15d67ab4dfa409332c07d6c54f56ca29276cf947f823decfe77df25473427", size = 197184, upload-time = "2026-10-21T06:41:57.062Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/14/c3/8f3d9ef51a88af4eed8486d1cacc883633a1212936d0689a633effedcf67/rimelabs_sdk-0.1.0a29.tar.gz", hash = "sha256:d7c3b3af429e598b2743a842623de25f740db0b23d914c7c98600e713abfd2e1", size = 243865, upload-time = "2026-11-03T19:12:13.088Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/36/73/585d3905e01fcf44f7c9548a5adcb60d39d3fc0da23fbbae08bcae9efa21/rimelabs_sdk-0.1.0a18-py3-none-any.whl", hash = "sha256:930ff7ef53a16b472e262b86767089d0e179d214e5636bf826a20f188cd11900", size = 62525, upload-time = "2026-10-21T06:41:55.85Z" },
+    { url = "https://files.pythonhosted.org/packages/c8/b6/dc92855616eba08397f8b1c33c3ec658c7e7b0bbdd21454c8511b08dc849/rimelabs_sdk-0.1.0a29-py3-none-any.whl", hash = "sha256:05aa3bc074ab4ec1cf32a5a42eb1e118bb3294299c625a5b08870cdd42f886bd", size = 78733, upload-time = "2026-11-03T19:12:11.827Z" },
 ]
 
 [[package]]

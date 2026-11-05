@@ -7,6 +7,8 @@ from collections.abc import Awaitable, Callable
 from multiprocessing.context import BaseContext
 from typing import Any, Literal
 
+from livekit.protocol import agent
+
 from .. import utils
 from ..job import JobContext, JobExecutorType, JobProcess, RunningJobInfo
 from ..log import logger
@@ -21,6 +23,7 @@ EventTypes = Literal[
     "process_ready",
     "process_closed",
     "process_job_launched",
+    "process_job_connected",
 ]
 
 MAX_CONCURRENT_INITIALIZATIONS = min(math.ceil(get_cpu_monitor().cpu_count()), 4)
@@ -166,6 +169,8 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         MAX_LAUNCH_ATTEMPTS = 3
 
         for attempt in range(MAX_LAUNCH_ATTEMPTS):
+            # _acquire_proc takes an idle process before its first await, so no other job races this
+            warm = not self._warmed_proc_queue.empty()
             self._jobs_waiting_for_process += 1
             try:
                 proc = await self._acquire_proc(info.job.id)
@@ -174,6 +179,8 @@ class ProcPool(utils.EventEmitter[EventTypes]):
 
             # dispatch timeline: a warm process is now handling this job
             info.launched_at = time.time()
+            info.launched_mono = time.monotonic()
+            info.launched_warm = warm
             try:
                 await proc.launch_job(info)
                 self.emit("process_job_launched", proc)
@@ -204,6 +211,10 @@ class ProcPool(utils.EventEmitter[EventTypes]):
     @utils.log_exceptions(logger=logger)
     async def _proc_spawn_task(self) -> None:
         proc: JobExecutor
+
+        def _on_join_timing(timing: agent.JobJoinTiming) -> None:
+            self.emit("process_job_connected", proc, timing)
+
         if self._job_executor_type == JobExecutorType.THREAD:
             proc = job_thread_executor.ThreadJobExecutor(
                 initialize_process_fnc=self._initialize_process_fnc,
@@ -218,6 +229,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
                 high_ping_threshold=0.5,
                 http_proxy=self._http_proxy,
                 loop=self._loop,
+                on_join_timing=_on_join_timing,
             )
         elif self._job_executor_type == JobExecutorType.PROCESS:
             proc = job_proc_executor.ProcJobExecutor(
@@ -237,6 +249,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
                 memory_warn_mb=self._memory_warn_mb,
                 memory_limit_mb=self._memory_limit_mb,
                 http_proxy=self._http_proxy,
+                on_join_timing=_on_join_timing,
             )
         else:
             raise ValueError(f"unsupported job executor: {self._job_executor_type}")

@@ -944,6 +944,196 @@ async def test_only_session_started_releases_the_queued_commands(
         await model.aclose()
 
 
+def _numbered_frame(number: int) -> rtc.AudioFrame:
+    samples = gpt_live_model.SAMPLE_RATE // 10
+    return rtc.AudioFrame(
+        data=np.full(samples, number, dtype=np.int16).tobytes(),
+        sample_rate=gpt_live_model.SAMPLE_RATE,
+        num_channels=1,
+        samples_per_channel=samples,
+    )
+
+
+def _numbered_traffic(sent: list[dict[str, Any]]) -> list[int | str]:
+    return [
+        int(np.frombuffer(base64.b64decode(event["audio"]), dtype=np.int16)[0])
+        if event["type"] == "session.input_audio.append"
+        else event["type"]
+        for event in sent
+    ]
+
+
+async def test_a_started_session_receives_only_the_newest_four_seconds_of_queued_audio(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    ws = _connect_hook(monkeypatch, auto_start=False)
+
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        await session._update_session()
+        for number in range(10):
+            session.push_audio(_numbered_frame(number))
+        session.append_commentary("The caller is on hold.")
+        for number in range(10, 60):
+            session.push_audio(_numbered_frame(number))
+        session.append_thinking("The caller sounds rushed.")
+        await asyncio.sleep(0.05)
+
+        with caplog.at_level(logging.INFO, logger="livekit.agents"):
+            session._handle_event({"type": "session.started", "session": {"id": "live_1"}})
+            await asyncio.sleep(0.05)
+
+        assert _numbered_traffic(ws.sent) == [
+            "session.start",
+            "session.commentary.append",
+            *range(20, 60),
+            "session.thinking.append",
+        ]
+        [drop] = [r for r in caplog.records if r.message.startswith("gpt-live dropped queued")]
+        assert (drop.dropped_s, drop.kept_s) == (2.0, 4.0)
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_a_reconnected_session_receives_only_the_newest_four_seconds_queued_before_it_started(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sockets = [_LifecycleWS(), _LifecycleWS(start=False)]
+    connections = iter(sockets)
+
+    async def connect(self: GPTLiveSession) -> _LifecycleWS:
+        return next(connections)
+
+    monkeypatch.setattr(GPTLiveSession, "_create_ws_conn", connect)
+    model = GPTLiveModel(
+        api_key="sk-test", conn_options=APIConnectOptions(max_retry=1, retry_interval=0)
+    )
+    session = model.session()
+    try:
+        await session._update_session()
+        await asyncio.wait_for(sockets[0].started.wait(), timeout=1)
+
+        await sockets[0].close()
+        await asyncio.wait_for(sockets[1].started.wait(), timeout=1)
+        for number in range(60):
+            session.push_audio(_numbered_frame(number))
+        await asyncio.sleep(0.05)
+        sockets[1].emit({"type": "session.started", "session": {"id": "live_2"}})
+        await asyncio.sleep(0.05)
+
+        assert _numbered_traffic(sockets[1].sent) == ["session.start", *range(20, 60)]
+    finally:
+        for ws in sockets:
+            ws.emit(
+                {"type": "session.closed", "reason": "close_requested", "usage": {"seconds": 0}}
+            )
+        await session.aclose()
+        await model.aclose()
+
+
+class _AppendFailingWS(_LifecycleWS):
+    async def send_str(self, data: str) -> None:
+        if json.loads(data)["type"] == "session.input_audio.append":
+            raise ConnectionError
+        await super().send_str(data)
+
+
+async def test_a_send_failure_in_the_backlog_leaves_the_rest_for_the_next_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sockets = [_AppendFailingWS(start=False), _LifecycleWS()]
+    connections = iter(sockets)
+
+    async def connect(self: GPTLiveSession) -> _LifecycleWS:
+        return next(connections)
+
+    monkeypatch.setattr(GPTLiveSession, "_create_ws_conn", connect)
+    model = GPTLiveModel(
+        api_key="sk-test", conn_options=APIConnectOptions(max_retry=1, retry_interval=0)
+    )
+    session = model.session()
+    try:
+        await session._update_session()
+        await asyncio.wait_for(sockets[0].started.wait(), timeout=1)
+        for number in range(60):
+            session.push_audio(_numbered_frame(number))
+        session.append_commentary("The caller is on hold.")
+        sockets[0].emit({"type": "session.started", "session": {"id": "live_1"}})
+
+        await asyncio.wait_for(sockets[1].started.wait(), timeout=1)
+        await asyncio.sleep(0.05)
+        assert _numbered_traffic(sockets[1].sent) == [
+            "session.start",
+            *range(21, 60),
+            "session.commentary.append",
+        ]
+    finally:
+        for ws in sockets:
+            ws.emit(
+                {"type": "session.closed", "reason": "close_requested", "usage": {"seconds": 0}}
+            )
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_a_backlog_under_the_cap_is_sent_whole(monkeypatch: pytest.MonkeyPatch) -> None:
+    ws = _connect_hook(monkeypatch, auto_start=False)
+
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        await session._update_session()
+        for number in range(30):
+            session.push_audio(_numbered_frame(number))
+        await asyncio.sleep(0.05)
+
+        session._handle_event({"type": "session.started", "session": {"id": "live_1"}})
+        await asyncio.sleep(0.05)
+
+        assert _numbered_traffic(ws.sent) == ["session.start", *range(30)]
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_a_session_closed_before_it_started_sends_none_of_its_queued_audio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ws = _connect_hook(monkeypatch, auto_start=False)
+
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    await session._update_session()
+    for number in range(60):
+        session.push_audio(_numbered_frame(number))
+    await asyncio.sleep(0.05)
+
+    await asyncio.wait_for(session.aclose(), timeout=1)
+    assert _numbered_traffic(ws.sent) == ["session.start", "session.close"]
+    await model.aclose()
+
+
+async def test_a_session_closed_as_it_starts_sends_its_backlog_and_closes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ws = _connect_hook(monkeypatch, auto_start=False)
+    monkeypatch.setattr(gpt_live_model, "_SESSION_CLOSE_TIMEOUT", 0.1)
+
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    await session._update_session()
+    for number in range(60):
+        session.push_audio(_numbered_frame(number))
+    await asyncio.sleep(0.05)
+
+    session._handle_event({"type": "session.started", "session": {"id": "live_1"}})
+    await asyncio.wait_for(session.aclose(), timeout=1)
+    assert _numbered_traffic(ws.sent) == ["session.start", *range(60), "session.close"]
+    await model.aclose()
+
+
 async def test_output_audio_is_forwarded_as_frames(monkeypatch: pytest.MonkeyPatch) -> None:
     """Every delta reaches the stream, silence included; the framework decides what plays."""
     _connect_hook(monkeypatch)
