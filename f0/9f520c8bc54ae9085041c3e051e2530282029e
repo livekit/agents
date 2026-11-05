@@ -1,0 +1,25 @@
+livekit-agents/livekit/agents/inference/eot/base.py
+  s_9dc60d915e2121::t_54afb56799864e 102-106,137,201-209,366-369
+tests/fake_turn_detector_ws.py
+  s_9dc60d915e2121::t_6492c7328042bc 162-172
+tests/test_turn_detection_cloud_stream.py
+  s_9dc60d915e2121::t_b3704f79cf9a3b 23,98,102,193-242
+tests/test_turn_detection_fsm.py
+  s_9dc60d915e2121::t_3e2e82e11f4390 15-16,52,92-97,134,139-160,184-186,226-227
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f09f520c8bc54ae9085041c3e051e2530282029e",
+  "prompts": {},
+  "sessions": {
+    "s_9dc60d915e2121": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3bb7b518-e716-431d-8b0e-9b5f73deb748",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
