@@ -4324,7 +4324,8 @@
             "vad",
             "interruption",
             "end_of_turn",
-            "stt_node"
+            "stt_node",
+            "recording"
           ],
           "label": true
         }
@@ -4374,7 +4375,8 @@
             "vad",
             "interruption",
             "end_of_turn",
-            "stt_node"
+            "stt_node",
+            "recording"
           ],
           "label": true
         }

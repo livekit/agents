@@ -295,6 +295,8 @@ pub enum AudioConsumer {
     EndOfTurn,
     /// A custom `stt_node`'s input audio.
     SttNode,
+    /// The session recording's microphone channel.
+    Recording,
 }
 
 /// Input and output tokens of each LLM and realtime response. Deprecated upstream; declared as

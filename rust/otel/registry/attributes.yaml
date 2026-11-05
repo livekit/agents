@@ -63,6 +63,12 @@
                 "value": "stt_node",
                 "brief": "stt_node",
                 "stability": "development"
+              },
+              {
+                "id": "recording",
+                "value": "recording",
+                "brief": "recording",
+                "stability": "development"
               }
             ]
           },

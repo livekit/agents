@@ -146,6 +146,7 @@ impl VoiceRuntime {
             VoiceEffect::AttachRecorder { recorder, output: _ } => {
                 self.recorder_observers.detach(&self.shared, None);
                 let Some(recorder) = self.shared.resources.recorder(recorder.0) else { return };
+                recorder.observe(&self.peer.session);
                 let tap =
                     crate::voice::recorder::RecorderTap::new(recorder, self.shared.time.clock());
                 self.publications.recorder.send_replace(Some(tap));

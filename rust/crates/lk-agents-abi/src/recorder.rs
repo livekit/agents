@@ -52,6 +52,12 @@ pub trait AudioRecorder: Send + Sync {
         Box::pin(async { Ok(()) })
     }
     fn on_input_frame(&self, now: f64, frame: &AudioFrame);
+    /// Pre-connect audio: it ends where the live input after it begins.
+    fn on_input_head(&self, now: f64, frame: &AudioFrame) {
+        self.on_input_frame(now, frame);
+    }
+    /// Measures what the input drops under the session's job.
+    fn observe(&self, _cx: &crate::telemetry::Cx) {}
     fn capture_frame(&self, now: f64, frame: &AudioFrame);
     fn on_playback_started(&self, created_at: f64);
     fn on_playback_progressed(&self, started_at: f64, offset: f64, duration: f64);

@@ -217,6 +217,13 @@ impl<E: OggOpusEncoder, W: Write> RecordingFile<E, W> {
         self.recording.as_ref().map_or(0, Recorder::retained_bytes) + self.placer.retained_bytes()
     }
 
+    /// Input dropped before it reached the file: silence of `duration` on the input channel.
+    pub fn input_gap(&mut self, duration: f64) {
+        if let Some(recording) = &mut self.recording {
+            recording.on_input_gap(duration);
+        }
+    }
+
     /// Applies one command; `FinishRecording` writes the file's tail and returns `true`.
     pub fn apply(
         &mut self,

@@ -106,13 +106,13 @@ async fn recording_orders_flush_and_finish_after_accepted_audio() {
     })
     .await
     .unwrap();
-    recorder.record(RecordingCommand::Input(0.1, frame(&[1234]))).unwrap();
+    recorder.input(0.1, &frame(&[1234]), false).unwrap();
     let flushing = {
         let recorder = recorder.clone();
         tokio::spawn(async move { recorder.flush(0.1).await })
     };
     started.await.unwrap();
-    recorder.record(RecordingCommand::Input(0.2, frame(&[2345]))).unwrap();
+    recorder.input(0.2, &frame(&[2345]), false).unwrap();
     let finishing = {
         let recorder = recorder.clone();
         tokio::spawn(async move { recorder.finish(0.2).await })
@@ -125,10 +125,7 @@ async fn recording_orders_flush_and_finish_after_accepted_audio() {
     flushing.await.unwrap().unwrap();
     let summary = finishing.await.unwrap().unwrap();
     assert_eq!(recorder.finish(0.3).await.unwrap(), summary);
-    assert_eq!(
-        recorder.record(RecordingCommand::Input(0.4, frame(&[9999]))),
-        Err(RecordingFailure::Closed)
-    );
+    assert_eq!(recorder.input(0.4, &frame(&[9999]), false), Err(RecordingFailure::Closed));
     let mut want = lk_agents_media::pcm_bytes(&[1234, 0, 2345, 0]);
     want.extend_from_slice(PCM_ENCODER_TRAILER);
     assert_eq!(*bytes.lock(), want);
@@ -149,16 +146,16 @@ async fn recording_overflow_releases_pcm_and_preserves_other_work() {
     })
     .await
     .unwrap();
-    recorder.record(RecordingCommand::Input(0.1, frame(&[1]))).unwrap();
+    recorder.input(0.1, &frame(&[1]), false).unwrap();
     let flushing = {
         let recorder = recorder.clone();
         tokio::spawn(async move { recorder.flush(0.1).await })
     };
     started.await.unwrap();
-    recorder.record(RecordingCommand::Input(0.2, frame(&[2]))).unwrap();
-    recorder.record(RecordingCommand::Input(0.3, frame(&[3]))).unwrap();
+    recorder.record(RecordingCommand::Capture(0.2, frame(&[2]))).unwrap();
+    recorder.record(RecordingCommand::Capture(0.3, frame(&[3]))).unwrap();
     assert_eq!(
-        recorder.record(RecordingCommand::Input(0.4, frame(&[4]))),
+        recorder.record(RecordingCommand::Capture(0.4, frame(&[4]))),
         Err(RecordingFailure::Overflow("staging commands"))
     );
     assert!(matches!(
@@ -188,7 +185,7 @@ async fn recording_close_deadline_keeps_stalled_worker_owned_until_settlement() 
     })
     .await
     .unwrap();
-    recorder.record(RecordingCommand::Input(0.1, frame(&[1]))).unwrap();
+    recorder.input(0.1, &frame(&[1]), false).unwrap();
     let flushing = {
         let recorder = recorder.clone();
         tokio::spawn(async move { recorder.flush(0.1).await })
@@ -218,7 +215,7 @@ async fn recording_write_failure_reaches_flush_and_terminal_outcome_once() {
     })
     .await
     .unwrap();
-    recorder.record(RecordingCommand::Input(0.1, frame(&[1]))).unwrap();
+    recorder.input(0.1, &frame(&[1]), false).unwrap();
     let error = recorder.flush(0.1).await.unwrap_err();
     assert!(matches!(&error, RecordingFailure::Io(detail) if detail == "full disk"));
     assert_eq!(recorder.finish(0.1).await, Err(error));
@@ -261,7 +258,7 @@ async fn cancelled_finish_waiter_does_not_abandon_accepted_audio() {
     })
     .await
     .unwrap();
-    recorder.record(RecordingCommand::Input(100.1, frame(&[4444]))).unwrap();
+    recorder.input(100.1, &frame(&[4444]), false).unwrap();
     let finishing = {
         let recorder = recorder.clone();
         tokio::spawn(async move { recorder.finish(100.1).await })
@@ -322,7 +319,7 @@ async fn finalization_preserves_the_input_resamplers_tail() {
             .await
             .unwrap();
         let input = AudioFrame::new(lk_agents_media::pcm_bytes(&[16000; 160]), 16_000, 1, 160);
-        recorder.record(RecordingCommand::Input(0.01, input)).unwrap();
+        recorder.input(0.01, &input, false).unwrap();
         if flush_before_finish {
             recorder.flush(0.01).await.unwrap();
         }
@@ -365,7 +362,7 @@ async fn host_finish_preserves_the_session_close_time_after_a_settled_flush() {
     })
     .await
     .unwrap();
-    recorder.record(RecordingCommand::Input(0.1, frame(&[1234]))).unwrap();
+    recorder.input(0.1, &frame(&[1234]), false).unwrap();
     // A recent microphone is only settled through its most recent frame; the session closes
     // later. Finalization must still extend the timeline through the requested close time.
     assert_eq!(recorder.flush(0.5).await.unwrap().last_flushed, Some(0.1));
@@ -386,7 +383,7 @@ async fn recording_burst_preserves_input_timing_and_discarded_output_offsets() {
     })
     .await
     .unwrap();
-    recorder.record(RecordingCommand::Input(1., frame(&(1..=10).collect::<Vec<_>>()))).unwrap();
+    recorder.input(1., &frame(&(1..=10).collect::<Vec<_>>()), false).unwrap();
     recorder.record(RecordingCommand::Capture(0., frame(&(100..110).collect::<Vec<_>>()))).unwrap();
     recorder.record(RecordingCommand::Progress(1., 0.2, 0.6)).unwrap();
     recorder.finish(2.).await.unwrap();
@@ -440,4 +437,68 @@ async fn recording_fallback_drains_played_audio_and_retires_each_segment_once() 
     let mut encoded = lk_agents_media::pcm_bytes(&expected);
     encoded.extend_from_slice(PCM_ENCODER_TRAILER);
     assert_eq!(*bytes.lock(), encoded);
+}
+
+/// The left (input) channel of what the stub encoder wrote, without its trailer.
+fn input_channel(bytes: &[u8]) -> Vec<i16> {
+    let pcm = &bytes[..bytes.len() - PCM_ENCODER_TRAILER.len()];
+    pcm.as_chunks::<4>().0.iter().map(|sample| i16::from_le_bytes([sample[0], sample[1]])).collect()
+}
+
+// Catches: a burst behind a stalled worker failing the recording, or the audio its bound drops
+// collapsing the timeline instead of becoming silence of the same length.
+#[tokio::test]
+async fn a_stalled_recording_keeps_call_time_with_the_dropped_audio_as_silence() {
+    let media_pool = media_pool(1);
+    let (sink, started, release) = Sink::new(true, false);
+    let bytes = sink.bytes;
+    let encoder = Encoder(sink.trace.clone());
+    let recorder = SessionRecorder::open_with(&media_pool, 10, Some(0.0), limits(), move || {
+        Ok((encoder, sink.writer))
+    })
+    .await
+    .unwrap();
+    let value = |index: usize| index as i16 + 1;
+    recorder.input(0.1, &frame(&[value(0)]), false).unwrap();
+    let flushing = {
+        let recorder = recorder.clone();
+        tokio::spawn(async move { recorder.flush(0.1).await })
+    };
+    started.await.unwrap();
+    // 16s of microphone while the worker is stuck in a write: 6s more than the bound keeps.
+    for index in 1..=160 {
+        recorder.input((index + 1) as f64 / 10., &frame(&[value(index)]), false).unwrap();
+    }
+    release.send(()).unwrap();
+    flushing.await.unwrap().unwrap();
+    let summary = recorder.finish(16.1).await.unwrap();
+    assert_eq!(summary.dropped_input_samples, 0);
+
+    // The first frame, the 6s the bound dropped as silence, then the 10s it kept, on call time.
+    let expected: Vec<i16> =
+        (0..=160).map(|index| if (1..=60).contains(&index) { 0 } else { value(index) }).collect();
+    assert_eq!(input_channel(&bytes.lock()), expected);
+}
+
+// Catches: pre-connect audio replayed in a burst being stacked on itself or over the live audio
+// instead of ending where the live audio begins.
+#[tokio::test]
+async fn pre_connect_audio_ends_where_the_live_audio_begins() {
+    let media_pool = media_pool(1);
+    let (sink, _, _) = Sink::new(false, false);
+    let bytes = sink.bytes;
+    let encoder = Encoder(sink.trace.clone());
+    let recorder = SessionRecorder::open_with(&media_pool, 10, None, limits(), move || {
+        Ok((encoder, sink.writer))
+    })
+    .await
+    .unwrap();
+    for sample in 1..=5 {
+        recorder.input(1.0, &frame(&[sample]), true).unwrap();
+    }
+    recorder.input(1.1, &frame(&[6]), false).unwrap();
+    recorder.input(1.2, &frame(&[7]), false).unwrap();
+    let summary = recorder.finish(1.2).await.unwrap();
+    assert_eq!(summary.started_at, Some(0.5));
+    assert_eq!(input_channel(&bytes.lock()), [1, 2, 3, 4, 5, 6, 7]);
 }

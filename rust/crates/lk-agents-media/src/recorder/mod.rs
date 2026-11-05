@@ -180,6 +180,19 @@ impl Track {
         self.received_until = Some(started_at + frame.duration());
     }
 
+    /// Audio dropped upstream: the run goes on past `duration` of silence, so what follows keeps
+    /// its place on the timeline.
+    pub fn skip(&mut self, duration: f64) {
+        if self.run_start.is_none() {
+            return;
+        }
+        if let Ok(Some(tail)) = self.resampler.flush() {
+            self.place(&PcmFrame::from_audio_frame(&tail).samples);
+        }
+        self.run_samples +=
+            round_ties_even_like_python(duration * f64::from(self.sample_rate)) as i64;
+    }
+
     fn place(&mut self, samples: &[i16]) {
         if samples.is_empty() {
             return;
@@ -492,6 +505,13 @@ impl<E: OggOpusEncoder> Recorder<E> {
         let started_at = now - frame.duration();
         self.mixer.push(INPUT_CHANNEL, started_at, frame);
         self.input_settled = self.mixer.tracks[INPUT_CHANNEL].emitted_until().unwrap_or(started_at);
+    }
+
+    /// Input dropped upstream is written as silence of the same duration.
+    pub fn on_input_gap(&mut self, duration: f64) {
+        let track = &mut self.mixer.tracks[INPUT_CHANNEL];
+        track.skip(duration);
+        self.input_settled = track.emitted_until().unwrap_or(self.input_settled);
     }
 
     pub fn on_output_placed(&mut self, placed: &Placed) {

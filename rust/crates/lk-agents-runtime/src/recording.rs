@@ -1,5 +1,7 @@
 //! One admitted worker owns a recording's PCM, encoder and ordered writes. Ingress only retains
 //! bounded frame references; terminal status is published after the worker and file have settled.
+//! The microphone reaches the worker through a `media_queue`: what its bound drops is written as
+//! silence, so the file keeps call time.
 
 #[cfg(any(test, feature = "media-ffmpeg"))]
 use std::io::Write;
@@ -10,17 +12,29 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use lk_agents_abi::AudioFrame;
+#[cfg(any(test, feature = "media-ffmpeg"))]
+use lk_agents_abi::Clock;
 use lk_agents_abi::recorder::AudioRecorder;
+use lk_agents_media::media_queue::AudioSender;
+#[cfg(any(test, feature = "media-ffmpeg"))]
+use lk_agents_media::media_queue::{self, AudioReceiver, Item, Policy};
 #[cfg(any(test, feature = "media-ffmpeg"))]
 use lk_agents_media::pool::{JobClass, MediaPool};
 #[cfg(any(test, feature = "media-ffmpeg"))]
 use lk_agents_media::recorder::{FileLimits, OggOpusEncoder, RecordingFile};
-use lk_agents_media::recorder::{RecordingCommand, RecordingLimits};
+use lk_agents_media::recorder::{RESYNC_TOLERANCE, RecordingCommand, RecordingLimits};
+use lk_agents_net::audio_drops::AudioDrops;
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::task::{TaskSet, TokioSpawner};
 use tokio::sync::{RwLock, mpsc, oneshot, watch};
 
 pub use lk_agents_abi::recorder::{RecordingFailure, RecordingStatus, RecordingSummary};
+
+use crate::telemetry;
+
+/// The microphone's bound: what the recording keeps while its worker falls behind.
+#[cfg(any(test, feature = "media-ffmpeg"))]
+const INPUT_POLICY: Policy = Policy::CatchUp(Duration::from_secs(10));
 
 type Outcome = Result<RecordingSummary, RecordingFailure>;
 
@@ -60,10 +74,22 @@ struct Shared {
     limits: RecordingLimits,
 }
 
+/// The microphone's side of the recording, as the session's thread queues it.
+struct Input {
+    /// Each event starts a run at that call time; the audio after it follows on.
+    audio: AudioSender<f64>,
+    /// Where the audio queued so far ends on the call's timeline; `None` before the first frame.
+    until: Option<f64>,
+    /// The last frame queued was pre-connect audio.
+    head: bool,
+}
+
 /// The tap is cheap to share; dropping the final tap requests abandonment. The worker's supervisor
 /// retains its actual task until exit even when a close deadline or a calling future is cancelled.
 pub struct SessionRecorder {
     tx: mpsc::Sender<Queued>,
+    input: parking_lot::Mutex<Input>,
+    drops: Arc<AudioDrops>,
     shared: Arc<Shared>,
     runtime: tokio::runtime::Handle,
     /// The worker's supervisor and the finalization, which the recording owns past any waiter.
@@ -170,9 +196,17 @@ impl SessionRecorder {
             limits,
         });
         let (tx, rx) = mpsc::channel(limits.queued_commands + 1);
-        let recorder =
-            Self { tx, shared: shared.clone(), runtime: runtime.clone(), tasks: Arc::default() };
-        let worker_shared = shared.clone();
+        let (audio, input) = media_queue::audio(INPUT_POLICY);
+        let drops = Arc::new(AudioDrops::new(telemetry::AudioConsumer::Recording, INPUT_POLICY));
+        let recorder = Self {
+            tx,
+            input: parking_lot::Mutex::new(Input { audio, until: None, head: false }),
+            drops: drops.clone(),
+            shared: shared.clone(),
+            runtime: runtime.clone(),
+            tasks: Arc::default(),
+        };
+        let (worker_shared, worker_runtime) = (shared.clone(), runtime.clone());
         let worker = media_pool
             .try_spawn(JobClass::Recording, move || {
                 let file = limits.file();
@@ -184,7 +218,7 @@ impl SessionRecorder {
                     }
                 };
                 worker_shared.ready.send_replace(Some(Ok(())));
-                run(file, rx, worker_shared)
+                run(file, rx, input, &drops, worker_shared, &worker_runtime)
             })
             .map_err(|error| RecordingFailure::Worker(error.to_string()))?;
         let spawner = TokioSpawner::new(runtime.clone());
@@ -260,20 +294,29 @@ impl SessionRecorder {
         error
     }
 
-    fn submit(&self, command: Command, bytes: usize) -> Result<(), RecordingFailure> {
+    /// Holds admission open while one producer queues, so the finish barrier follows its work.
+    fn admit(
+        &self,
+        bytes: usize,
+    ) -> Result<tokio::sync::RwLockReadGuard<'_, ()>, RecordingFailure> {
         if let Some(error) = self.shared.failure.get() {
             return Err(error.clone());
         }
         if self.shared.finishing.load(Ordering::Acquire) {
             return Err(RecordingFailure::Closed);
         }
-        let Ok(_admission) = self.shared.admission.try_read() else {
+        let Ok(admission) = self.shared.admission.try_read() else {
             return Err(RecordingFailure::Closed);
         };
         if self.shared.finishing.load(Ordering::Acquire) {
             return Err(RecordingFailure::Closed);
         }
         self.shared.limits.admit_frame(bytes).map_err(|error| self.fail(error))?;
+        Ok(admission)
+    }
+
+    fn submit(&self, command: Command, bytes: usize) -> Result<(), RecordingFailure> {
+        let _admission = self.admit(bytes)?;
         if self
             .shared
             .commands
@@ -302,6 +345,36 @@ impl SessionRecorder {
                 self.fail(RecordingFailure::Worker("worker stopped accepting commands".into()))
             );
         }
+        Ok(())
+    }
+
+    /// Queues a microphone frame that ended at `now`. A frame arriving off its run's own clock
+    /// starts a new run; pre-connect audio is one run, which the worker ends where the live audio
+    /// after it begins. A worker that falls behind never fails the recording: past the bound the
+    /// oldest audio becomes silence.
+    fn input(&self, now: f64, frame: &AudioFrame, head: bool) -> Result<(), RecordingFailure> {
+        RecordingCommand::Input(now, frame.clone()).validate().map_err(|error| self.fail(error))?;
+        let _admission = self.admit(frame.data.len())?;
+        let duration = frame.duration();
+        let start = now - duration;
+        let mut input = self.input.lock();
+        let run = match input.until {
+            None => true,
+            Some(until) => !head && (input.head || (start - until).abs() > RESYNC_TOLERANCE),
+        };
+        if run && input.audio.event(start).is_ok() {
+            input.until = Some(start);
+        }
+        let dropped = if head {
+            input.audio.head(frame.clone());
+            Duration::ZERO
+        } else {
+            input.audio.push(frame.clone())
+        };
+        input.until = Some(input.until.unwrap_or(start) + duration);
+        input.head = head;
+        drop(input);
+        self.drops.record(dropped);
         Ok(())
     }
 
@@ -410,7 +483,13 @@ impl AudioRecorder for SessionRecorder {
         Box::pin(lk_agents_abi::recorder::SessionRecorder::finish(self, None))
     }
     fn on_input_frame(&self, now: f64, frame: &AudioFrame) {
-        let _ = self.record(RecordingCommand::Input(now, frame.clone()));
+        let _ = self.input(now, frame, false);
+    }
+    fn on_input_head(&self, now: f64, frame: &AudioFrame) {
+        let _ = self.input(now, frame, true);
+    }
+    fn observe(&self, cx: &telemetry::Cx) {
+        self.drops.observe(cx.clone());
     }
     fn capture_frame(&self, now: f64, frame: &AudioFrame) {
         let _ = self.record(RecordingCommand::Capture(now, frame.clone()));
@@ -433,9 +512,12 @@ impl AudioRecorder for SessionRecorder {
 fn run<E: OggOpusEncoder, W: Write>(
     mut file: RecordingFile<E, W>,
     rx: mpsc::Receiver<Queued>,
+    input: AudioReceiver<f64>,
+    drops: &AudioDrops,
     shared: Arc<Shared>,
+    runtime: &tokio::runtime::Handle,
 ) -> Outcome {
-    let outcome = process(&mut file, rx, &shared);
+    let outcome = runtime.block_on(process(&mut file, rx, input, drops, &shared));
     if let Err(error) = &outcome {
         shared.fail(error.clone());
     }
@@ -445,10 +527,20 @@ fn run<E: OggOpusEncoder, W: Write>(
     outcome
 }
 
+/// What the worker takes next: microphone audio, ahead of the commands queued after it.
 #[cfg(any(test, feature = "media-ffmpeg"))]
-fn process<E: OggOpusEncoder, W: Write>(
+enum Next {
+    /// The item, and the head audio received before it.
+    Input(Option<Item<AudioFrame, f64>>, Duration),
+    Command(Option<Queued>),
+}
+
+#[cfg(any(test, feature = "media-ffmpeg"))]
+async fn process<E: OggOpusEncoder, W: Write>(
     file: &mut RecordingFile<E, W>,
     mut rx: mpsc::Receiver<Queued>,
+    input: AudioReceiver<f64>,
+    drops: &AudioDrops,
     shared: &Shared,
 ) -> Outcome {
     // Between blocks: stop on a failure reported elsewhere, and let other workers run.
@@ -457,33 +549,124 @@ fn process<E: OggOpusEncoder, W: Write>(
         std::thread::yield_now();
         Ok(())
     };
-    while let Some(item) = rx.blocking_recv() {
-        if item.data {
-            shared.commands.fetch_sub(1, Ordering::AcqRel);
-            shared.queued_bytes.fetch_sub(item.bytes, Ordering::AcqRel);
-        }
-        shared.check_failure()?;
-        match item.command {
-            Command::Record(command) => {
-                if file.apply(command, &mut between)? {
-                    return Ok(file.summary().clone());
+    let clock = lk_agents_net::clock::RealClock::new();
+    let mut input = Some(input);
+    let mut timeline = Timeline::default();
+    loop {
+        let next = match &mut input {
+            Some(audio) => {
+                let head = audio.head();
+                drops.catching_up(head, clock.now());
+                tokio::select! {
+                    biased;
+                    item = audio.recv() => Next::Input(item, head.received),
+                    item = rx.recv() => Next::Command(item),
                 }
             }
-            Command::Flush(now, reply) => {
-                let outcome = file.apply(RecordingCommand::Flush(now), &mut between).map(drop);
-                if let Some(reply) = reply {
-                    let _ = reply.send(outcome.clone().map(|()| file.summary().clone()));
-                }
-                outcome?;
+            None => Next::Command(rx.recv().await),
+        };
+        match next {
+            Next::Input(None, _) => input = None,
+            Next::Input(Some(item), before) => {
+                shared.check_failure()?;
+                let head = input.as_ref().is_some_and(|audio| audio.head().received > before);
+                timeline.apply(item, head, file, &mut between)?;
             }
-            Command::Abandon => return Err(RecordingFailure::Closed),
+            Next::Command(None) => return Err(RecordingFailure::Closed),
+            Next::Command(Some(item)) => {
+                if item.data {
+                    shared.commands.fetch_sub(1, Ordering::AcqRel);
+                    shared.queued_bytes.fetch_sub(item.bytes, Ordering::AcqRel);
+                }
+                shared.check_failure()?;
+                match item.command {
+                    Command::Record(command) => {
+                        if matches!(command, RecordingCommand::FinishRecording(_)) {
+                            timeline.settle(file, &mut between)?;
+                        }
+                        if file.apply(command, &mut between)? {
+                            return Ok(file.summary().clone());
+                        }
+                    }
+                    Command::Flush(now, reply) => {
+                        let outcome =
+                            file.apply(RecordingCommand::Flush(now), &mut between).map(drop);
+                        if let Some(reply) = reply {
+                            let _ = reply.send(outcome.clone().map(|()| file.summary().clone()));
+                        }
+                        outcome?;
+                    }
+                    Command::Abandon => return Err(RecordingFailure::Closed),
+                }
+            }
         }
         let retained = file.retained_bytes();
         shared.summary.send_replace(file.summary().clone());
         shared.retained_bytes.store(retained, Ordering::Release);
         shared.limits.check_retained(retained)?;
     }
-    Err(RecordingFailure::Closed)
+}
+
+/// The microphone's timeline on the worker: where its next frame starts, and the pre-connect audio
+/// held until the live audio after it says where it ends.
+#[cfg(any(test, feature = "media-ffmpeg"))]
+#[derive(Default)]
+struct Timeline {
+    at: f64,
+    head: Vec<AudioFrame>,
+}
+
+#[cfg(any(test, feature = "media-ffmpeg"))]
+impl Timeline {
+    fn apply<E: OggOpusEncoder, W: Write>(
+        &mut self,
+        item: Item<AudioFrame, f64>,
+        head: bool,
+        file: &mut RecordingFile<E, W>,
+        between: lk_agents_media::recorder::BetweenBlocks<'_>,
+    ) -> Result<(), RecordingFailure> {
+        match item {
+            Item::Event(start) => {
+                self.place_head(start, file, between)?;
+                self.at = start;
+            }
+            Item::Media(frame) if head => self.head.push(frame),
+            Item::Media(frame) => {
+                self.at += frame.duration();
+                file.apply(RecordingCommand::Input(self.at, frame), between)?;
+            }
+            Item::Gap(gap) => {
+                self.at += gap.as_secs_f64();
+                file.input_gap(gap.as_secs_f64());
+            }
+        }
+        Ok(())
+    }
+
+    /// The held pre-connect audio, ending at `end`.
+    fn place_head<E: OggOpusEncoder, W: Write>(
+        &mut self,
+        end: f64,
+        file: &mut RecordingFile<E, W>,
+        between: lk_agents_media::recorder::BetweenBlocks<'_>,
+    ) -> Result<(), RecordingFailure> {
+        let mut at = end - self.head.iter().map(AudioFrame::duration).sum::<f64>();
+        for frame in self.head.drain(..) {
+            at += frame.duration();
+            file.apply(RecordingCommand::Input(at, frame), between)?;
+        }
+        Ok(())
+    }
+
+    /// No live audio followed the pre-connect audio: it starts where its run did.
+    fn settle<E: OggOpusEncoder, W: Write>(
+        &mut self,
+        file: &mut RecordingFile<E, W>,
+        between: lk_agents_media::recorder::BetweenBlocks<'_>,
+    ) -> Result<(), RecordingFailure> {
+        let end = self.at + self.head.iter().map(AudioFrame::duration).sum::<f64>();
+        self.place_head(end, file, between)
+    }
 }
 
 #[cfg(test)]

@@ -414,7 +414,11 @@ impl VoiceRuntime {
         if self.forwarder.input_enabled()
             && let Some(tap) = self.shared.recorder_tap()
         {
-            tap.recorder.on_input_frame(tap.now(), &frame);
+            if head {
+                tap.recorder.on_input_head(tap.now(), &frame);
+            } else {
+                tap.recorder.on_input_frame(tap.now(), &frame);
+            }
         }
         let effects = self.forwarder.on_frame(frame, head, now.at);
         self.perform(effects);
