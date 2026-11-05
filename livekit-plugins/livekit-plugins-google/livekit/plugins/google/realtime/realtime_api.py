@@ -1337,7 +1337,7 @@ class RealtimeSession(llm.RealtimeSession):
                     [item for item in self._chat_ctx.items if item.id not in self._unsent_item_ids]
                 )
 
-        calls: list[tuple[str, str, str]] = []
+        calls: list[llm.FunctionCall] = []
         if response.server_content:
             self._handle_server_content(response.server_content)
         if response.tool_call:
@@ -1347,8 +1347,8 @@ class RealtimeSession(llm.RealtimeSession):
 
         # mirror the server history, after the turn's messages added above, so the
         # tool results the framework appends to `chat_ctx` keep their calls
-        for call_id, name, arguments in calls:
-            self._chat_ctx.insert(llm.FunctionCall(call_id=call_id, name=name, arguments=arguments))
+        for call in calls:
+            self._chat_ctx.insert(call.model_copy(update={"created_at": time.time()}))
         if response.tool_call_cancellation:
             self._handle_tool_call_cancellation(response.tool_call_cancellation)
         if response.usage_metadata:
@@ -1680,13 +1680,13 @@ class RealtimeSession(llm.RealtimeSession):
         ]
         self._send_client_event(types.LiveClientToolResponse(function_responses=responses))
 
-    def _handle_tool_calls(self, tool_call: types.LiveServerToolCall) -> list[tuple[str, str, str]]:
+    def _handle_tool_calls(self, tool_call: types.LiveServerToolCall) -> list[llm.FunctionCall]:
         if not self._current_generation:
             logger.warning("received tool call but no active generation.")
             return []
 
         gen = self._current_generation
-        calls: list[tuple[str, str, str]] = []
+        calls: list[llm.FunctionCall] = []
         for fnc_call in tool_call.function_calls or []:
             arguments = json.dumps(fnc_call.args)
             call_id = fnc_call.id
@@ -1694,7 +1694,9 @@ class RealtimeSession(llm.RealtimeSession):
                 call_id = utils.shortuuid("fnc-call-")
                 self._synthetic_call_ids.add(call_id)
             self._open_call_ids.add(call_id)
-            calls.append((call_id, fnc_call.name or "", arguments))
+            calls.append(
+                llm.FunctionCall(call_id=call_id, name=fnc_call.name or "", arguments=arguments)
+            )
 
             gen.function_ch.send_nowait(
                 llm.FunctionCall(

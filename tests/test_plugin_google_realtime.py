@@ -443,6 +443,18 @@ async def test_tool_call_is_recorded_after_the_turn_it_ends(
         assert kinds == [("message", "user"), ("message", "assistant"), ("function_call", None)]
 
 
+async def test_handle_tool_calls_returns_the_function_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(monkeypatch) as session:
+        session._start_new_generation()
+
+        calls = session._handle_tool_calls(_tool_call(call_id="fc-ret", name="lookup"))
+
+        assert all(isinstance(call, llm.FunctionCall) for call in calls)
+        assert [(call.call_id, call.name) for call in calls] == [("fc-ret", "lookup")]
+
+
 async def test_lone_tool_call_finalizes_generation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
