@@ -19,7 +19,7 @@ import dataclasses
 import os
 from collections.abc import Sequence
 from enum import Enum, StrEnum
-from typing import SupportsFloat, TypeVar, cast
+from typing import TypeVar, cast
 from urllib.parse import urlparse
 
 from pydantic import TypeAdapter, ValidationError
@@ -86,15 +86,6 @@ AGENT_URL_PATH = "/v2/agent"
 SUPPORTED_SAMPLE_RATE = 16000
 SUPPORTED_AUDIO_ENCODINGS = (AudioEncoding.PCM_S16LE,)
 
-# Why each part of the pre-Agent-STT surface is inert, reported wherever a caller still
-# reaches for it. See `_DROPPED_ARGS` and `STT.update_speakers`.
-_SPEAKER_FOCUS_REMOVED = (
-    "`SpeakerFocusMode` is not supported by Agent STT, so speaker focus is dropped from the "
-    "config; it is expected to be reintroduced in a future release"
-)
-_EOU_REMOVED = "end-of-utterance timing is the service's own and is not configurable"
-_LEGACY_ARG = "the argument predates Agent STT and was already unused"
-
 
 class TurnDetectionMode(StrEnum):
     """How turn boundaries (end of speech) are detected.
@@ -107,28 +98,14 @@ class TurnDetectionMode(StrEnum):
 
     The member names and values mirror the Agent STT SDK's own turn-detection modes so
     the two never drift.
-
-    The plugin offered four modes before Agent STT: `EXTERNAL`, `FIXED`, `ADAPTIVE` and
-    `SMART_TURN`. `EXTERNAL` carries over unchanged. The other three each named a
-    service-side endpointing strategy, and Agent STT exposes exactly one, so they are kept
-    only so existing code still runs and `_resolve_turn_detection_mode` reconciles them to
-    `DEFAULT_TURN_DETECTION_MODE`.
     """
 
     VAD = AgentTurnDetectionMode.VAD.value
     EXTERNAL = AgentTurnDetectionMode.EXTERNAL.value
 
-    # Deprecated, resolved to the default mode. This enum has always been the plugin's own
-    # — no SDK declares these three — so the values are carried over verbatim from the
-    # modes the plugin accepted before Agent STT. Remove after 2026-10-05.
-    FIXED = "fixed"
-    ADAPTIVE = "adaptive"
-    SMART_TURN = "smart_turn"
 
-
-# The mode a caller gets when they ask for none, and where the deprecated modes land.
-# `EXTERNAL` for parity with the plugin's pre-Agent-STT default. Single source of truth:
-# changing it moves the default and the deprecated modes together.
+# The mode a caller gets when they ask for none. `EXTERNAL` for parity with the plugin's
+# pre-Agent-STT default.
 DEFAULT_TURN_DETECTION_MODE = TurnDetectionMode.EXTERNAL
 
 
@@ -181,7 +158,6 @@ class STT(stt.STT):
         base_url: NotGivenOr[str] = NOT_GIVEN,
         turn_detection_mode: TurnDetectionMode = DEFAULT_TURN_DETECTION_MODE,
         model: NotGivenOr[Model | str] = NOT_GIVEN,
-        operating_point: NotGivenOr[Model | str] = NOT_GIVEN,
         domain: NotGivenOr[str] = NOT_GIVEN,
         language: str = "en",
         output_locale: NotGivenOr[str] = NOT_GIVEN,
@@ -196,7 +172,6 @@ class STT(stt.STT):
         sample_rate: int = 16000,
         audio_encoding: AudioEncoding = AudioEncoding.PCM_S16LE,
         vad: NotGivenOr[VAD | None] = NOT_GIVEN,
-        **kwargs: object,
     ):
         """Create a new instance of Speechmatics STT using Agent STT SDK.
 
@@ -218,17 +193,11 @@ class STT(stt.STT):
                 closes a turn, so nothing is finalized. `VAD` instead lets the service
                 and close turns itself; pair it with `turn_detection="stt"` on the
                 `VoiceSession`, which otherwise ignores the end-of-speech events this
-                plugin emits. The deprecated `FIXED`, `ADAPTIVE` and `SMART_TURN` modes
-                all resolve to the default mode with a warning. Defaults to
-                `DEFAULT_TURN_DETECTION_MODE`.
+                plugin emits. Defaults to `DEFAULT_TURN_DETECTION_MODE`.
 
             model: The transcription model to use, e.g. `"linden-1"`. A name agent-STT
                 does not accept falls back to the default model with a warning. Defaults
-                to the SDK's default model. Preferred over `operating_point`.
-
-            operating_point: Deprecated alias for `model`; `model` wins if both are given.
-                The old `enhanced` / `standard` operating points are not agent-STT models,
-                so they fall back to the default model too. Optional.
+                to the SDK's default model.
 
             domain: Domain to use. Optional.
 
@@ -251,8 +220,8 @@ class STT(stt.STT):
                 Optional.
 
             speaker_format: Formatter for speaker-attributed text, with `text` and
-                `speaker_id` placeholders, e.g. `@{speaker_id}: {text}`. Replaces the
-                deprecated `speaker_active_format`. Defaults to the raw transcript.
+                `speaker_id` placeholders, e.g. `@{speaker_id}: {text}`. Defaults to the raw
+                transcript.
 
             prefer_current_speaker: Bias closely-spaced words toward the same speaker.
                 Optional.
@@ -273,13 +242,7 @@ class STT(stt.STT):
                 When omitted in `EXTERNAL` mode, `livekit-plugins-silero` is loaded if it
                 is installed, so a bare `STT()` still closes turns. Pass `vad=None` to opt
                 out and drive `finalize()` yourself. Defaults to NOT_GIVEN.
-
-            **kwargs: Catches deprecated parameters. A warning is logged for every name,
-                whether it is a recognised deprecation or not.
         """
-
-        # Normalize the deprecated modes away before anything reads the mode.
-        turn_detection_mode = _resolve_turn_detection_mode(turn_detection_mode)
 
         # `EXTERNAL` is the default and the service does not endpoint in it, so a bare
         # `STT()` has nothing to close a turn with. Load a local VAD to drive `finalize()`,
@@ -316,7 +279,7 @@ class STT(stt.STT):
             speaker_format=_set(speaker_format),
             known_speakers=_set(known_speakers) or [],
             additional_vocab=_normalize_additional_vocab(_set(additional_vocab) or []),
-            model=_resolve_model(model, operating_point),
+            model=_resolve_model(model),
             include_partials=_set(include_partials),
             enable_diarization=enable_diarization if is_given(enable_diarization) else True,
             speaker_sensitivity=_set(speaker_sensitivity),
@@ -324,11 +287,7 @@ class STT(stt.STT):
             prefer_current_speaker=_set(prefer_current_speaker),
         )
 
-        # Migrate / warn about any deprecated kwargs before anything reads the options
-        _check_deprecated_args(kwargs, opts)
-
-        # Capabilities mirror the resolved options, so a value that arrived through a
-        # deprecated alias is reflected too. Unset partials means the service default,
+        # Capabilities mirror the resolved options. Unset partials means the service default,
         # which is on.
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -489,19 +448,6 @@ class STT(stt.STT):
         if len(results) == 1:
             return results[0]
         return results
-
-    def update_speakers(
-        self,
-        focus_speakers: NotGivenOr[list[str]] = NOT_GIVEN,
-        ignore_speakers: NotGivenOr[list[str]] = NOT_GIVEN,
-        focus_mode: object = NOT_GIVEN,
-    ) -> None:
-        """Deprecated no-op, kept so code written against the previous plugin still runs.
-
-        Agent STT does not support speaker focus, so there is nothing to update mid-session
-        and the arguments are ignored. Diarization is unaffected — see `get_speaker_ids`.
-        """
-        logger.warning(f"`STT.update_speakers()` is deprecated: {_SPEAKER_FOCUS_REMOVED}")
 
 
 class SpeechStream(stt.RecognizeStream):
@@ -914,17 +860,6 @@ def _build_diarization_config(opts: STTOptions) -> SpeakerDiarizationConfig | No
     )
 
 
-# The pre-Agent-STT modes, all of which named a service-side endpointing strategy.
-# Remove after 2026-10-05.
-_DEPRECATED_TURN_DETECTION_MODES = frozenset(
-    {
-        TurnDetectionMode.FIXED,
-        TurnDetectionMode.ADAPTIVE,
-        TurnDetectionMode.SMART_TURN,
-    }
-)
-
-
 def _load_default_vad() -> VAD | None:
     """Load a local VAD to drive `finalize()` in `EXTERNAL` mode, or `None` if unavailable.
 
@@ -991,36 +926,6 @@ def _normalize_additional_vocab(entries: Sequence[object]) -> list[AdditionalVoc
     return normalized
 
 
-def _resolve_turn_detection_mode(mode: TurnDetectionMode) -> TurnDetectionMode:
-    """Reconcile the pre-Agent-STT turn detection modes with the two that remain.
-
-    `FIXED`, `ADAPTIVE` and `SMART_TURN` each selected one of the old engine's
-    service-side endpointing strategies. Agent-STT exposes none of them by name, so all
-    three resolve to `DEFAULT_TURN_DETECTION_MODE`; `EXTERNAL` keeps its meaning and
-    passes through.
-
-    `FIXED` is the lossy case: it timed turns from `end_of_utterance_silence_trigger`,
-    which agent-STT does not support, so the service's own timing applies instead. It
-    warns separately rather than resolving quietly.
-
-    Returns:
-        `VAD` or `EXTERNAL` — the only modes the rest of the plugin handles.
-    """
-    if mode not in _DEPRECATED_TURN_DETECTION_MODES:
-        return mode
-
-    logger.warning(
-        f"`TurnDetectionMode.{mode.name}` is deprecated and will be removed after 2026-10-05; "
-        f"it resolves to `TurnDetectionMode.{DEFAULT_TURN_DETECTION_MODE.name}`, the default mode"
-    )
-    if mode is TurnDetectionMode.FIXED:
-        logger.warning(
-            "`TurnDetectionMode.FIXED` timed turns with `end_of_utterance_silence_trigger`, "
-            "which agent-STT does not support: the service's own endpointing timing applies"
-        )
-    return DEFAULT_TURN_DETECTION_MODE
-
-
 def _handle_turn_detection_mode(mode: TurnDetectionMode) -> AgentTurnDetectionMode:
     """Map the plugin's turn detection mode onto the session driver's.
 
@@ -1067,17 +972,8 @@ def _model_name(value: Model | str) -> str:
     return value.value if isinstance(value, Enum) else str(value)
 
 
-def _resolve_model(
-    model: NotGivenOr[Model | str],
-    operating_point: NotGivenOr[Model | str],
-) -> str:
-    """Reconcile the preferred `model` with its deprecated `operating_point` alias.
-
-    Rules:
-        - neither given          -> the SDK's default model
-        - only `operating_point` -> use it, with a deprecation warning
-        - only `model`           -> use it
-        - both given             -> `model` wins, with a warning if the two differ
+def _resolve_model(model: NotGivenOr[Model | str]) -> str:
+    """Resolve `model` to a model name agent-STT accepts; the SDK's default when not given.
 
     This never raises. A name agent-STT does not accept — a typo, or one of the `enhanced` /
     `standard` operating points the plugin took before Agent STT — falls back to the default
@@ -1086,22 +982,7 @@ def _resolve_model(
     Returns:
         The resolved model name as a string.
     """
-    resolved_model = _model_name(model) if is_given(model) else None
-    resolved_op = _model_name(operating_point) if is_given(operating_point) else None
-
-    if resolved_op is not None:
-        logger.warning(
-            "`operating_point` is deprecated and will be removed in a future release; "
-            "use `model` instead"
-        )
-
-    if resolved_model and resolved_op and resolved_model != resolved_op:
-        logger.warning(
-            f"`model` ({resolved_model!r}) and `operating_point` ({resolved_op!r}) name "
-            f"different options; using {resolved_model!r}."
-        )
-
-    resolved = resolved_model or resolved_op
+    resolved = _model_name(model) if is_given(model) else None
     if not resolved:
         return DEFAULT_MODEL.value
 
@@ -1115,75 +996,3 @@ def _resolve_model(
         f"belong to the previous service and have no Agent STT equivalent."
     )
     return DEFAULT_MODEL.value
-
-
-# Deprecated arguments with no agent-STT equivalent, each with the reason it is gone.
-# Accepted so upgrading does not break construction, but they reach neither the config nor
-# the wire.
-_DROPPED_ARGS: dict[str, str] = {
-    "audio_settings": _LEGACY_ARG,
-    "chunk_size": _LEGACY_ARG,
-    "end_of_turn_config": _EOU_REMOVED,
-    "end_of_utterance_max_delay": _EOU_REMOVED,
-    "end_of_utterance_mode": _EOU_REMOVED,
-    "end_of_utterance_silence_trigger": _EOU_REMOVED,
-    "focus_mode": _SPEAKER_FOCUS_REMOVED,
-    "focus_speakers": _SPEAKER_FOCUS_REMOVED,
-    "http_session": _LEGACY_ARG,
-    "ignore_speakers": _SPEAKER_FOCUS_REMOVED,
-    "max_delay": "Agent STT rejects it",
-    "punctuation_overrides": "Agent STT rejects it",
-    "speaker_passive_format": "a segment has no active/passive split to format",
-    "transcription_config": _LEGACY_ARG,
-    "vad_config": "turn detection is set with `turn_detection_mode`",
-}
-
-# Deprecated arguments that were renamed: old name -> STTOptions field.
-_MIGRATED_ARGS = {
-    "diarization_sensitivity": "speaker_sensitivity",
-    "enable_partials": "include_partials",
-    "speaker_active_format": "speaker_format",
-}
-
-
-def _check_deprecated_args(kwargs: dict[str, object], opts: STTOptions) -> None:
-    """Warn about deprecated kwargs, and migrate the ones that still have an equivalent.
-
-    Anything in `_DROPPED_ARGS` is reported and discarded; anything in `_MIGRATED_ARGS`
-    is carried over to the option that replaced it.
-    """
-
-    for name, reason in _DROPPED_ARGS.items():
-        if name in kwargs:
-            logger.warning(f"`{name}` is deprecated and ignored: {reason}")
-
-    for name, replacement in _MIGRATED_ARGS.items():
-        if name not in kwargs:
-            continue
-
-        # An explicit new-style argument always wins over the deprecated alias.
-        if getattr(opts, replacement) is not None:
-            logger.warning(f"Both `{name}` and `{replacement}` provided; using `{replacement}`")
-            continue
-
-        try:
-            if replacement == "speaker_sensitivity":
-                # float() validates the deprecated value's numeric conversion at runtime.
-                opts.speaker_sensitivity = float(cast(SupportsFloat, kwargs[name]))
-            elif replacement == "include_partials":
-                opts.include_partials = bool(kwargs[name])
-            else:
-                opts.speaker_format = str(kwargs[name])
-        except (TypeError, ValueError) as e:
-            raise ValueError(f"`{name}` has an invalid value: {e}") from e
-
-        logger.warning(f"`{name}` is deprecated, migrated to `{replacement}`")
-
-    # Anything left is a typo or an argument from some other plugin. `**kwargs` swallows it,
-    # so without this the caller never learns why their setting had no effect.
-    unrecognized = sorted(set(kwargs) - _DROPPED_ARGS.keys() - _MIGRATED_ARGS.keys())
-    if unrecognized:
-        logger.warning(
-            f"unrecognized argument(s) ignored: {', '.join(unrecognized)}. Check for a typo — "
-            "nothing reads them."
-        )

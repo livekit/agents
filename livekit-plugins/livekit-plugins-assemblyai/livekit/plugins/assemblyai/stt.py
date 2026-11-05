@@ -87,7 +87,6 @@ class STTOptions:
         "universal-streaming-multilingual",
         "u3-rt-pro",
         "u3-rt-pro-beta-1",
-        "u3-pro",
         "universal-3-5-pro",
         "universal-3-6-pro",
     ] = "universal-3-6-pro"
@@ -176,12 +175,10 @@ class STT(stt.STT):
             "universal-streaming-multilingual",
             "u3-rt-pro",
             "u3-rt-pro-beta-1",
-            "u3-pro",
             "universal-3-5-pro",
             "universal-3-6-pro",
         ] = "universal-3-6-pro",
         language_detection: NotGivenOr[bool] = NOT_GIVEN,
-        language_code: NotGivenOr[str] = NOT_GIVEN,
         language_codes: NotGivenOr[str | list[str]] = NOT_GIVEN,
         end_of_turn_confidence_threshold: NotGivenOr[float] = NOT_GIVEN,
         min_turn_silence: NotGivenOr[int] = NOT_GIVEN,
@@ -203,9 +200,6 @@ class STT(stt.STT):
         http_session: aiohttp.ClientSession | None = None,
         buffer_size_seconds: float = 0.05,
         base_url: str = "wss://streaming.assemblyai.com",
-        # Deprecated — use min_turn_silence instead
-        min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
-        agent_context_carryover: NotGivenOr[bool] = NOT_GIVEN,
     ):
         """
         Args:
@@ -217,8 +211,6 @@ class STT(stt.STT):
                 0 and 1 that determines how sensitive the VAD is. Lower values make the VAD
                 more sensitive (detects quieter speech). Higher values make it less sensitive.
                 Defaults to 0.4.
-            language_code: Deprecated — use ``language_codes`` instead (it accepts a
-                single code directly). Mutually exclusive with ``language_codes``.
             language_codes: Steer transcription toward one or more expected languages.
                 Accepts a single code ('es') or a list (['en', 'es']). Each entry
                 accepts any common format ('en', 'en-US', 'english') and is normalized
@@ -234,7 +226,6 @@ class STT(stt.STT):
                 default. At construction an empty value is equivalent to leaving it
                 unset.
             min_turn_silence: Minimum silence in ms before a confident end-of-turn is finalized.
-            min_end_of_turn_silence_when_confident: Deprecated. Use min_turn_silence instead.
             continuous_partials: Whether to emit additional partial transcripts during long
                 turns at a steady ~3 second cadence, on top of the baseline partials
                 (one at 750 ms after turn start, configurable via `interruption_delay`,
@@ -252,20 +243,15 @@ class STT(stt.STT):
                 via `update_options(agent_context=...)`. Only supported with the
                 Universal-3 Pro family models (max 1750 characters; longer values raise
                 ValueError). When chat-context carryover is on (the default on the Universal-3
-                Pro family) each assistant reply replaces this value automatically; disable it
-                to manage this manually.
+                Pro family) each assistant reply replaces this value automatically; turn it off
+                with ``VoiceSession(stt_context_options={"forward_chat_context": False})`` to
+                manage this manually.
             previous_context_n_turns: Maximum number of prior conversation entries (user
                 transcripts and any `agent_context` values) carried forward as context for
                 each transcription. Set to 0 to disable automatic context carryover
                 entirely; leave unset to use the server default (recommended). Range 0–100.
                 Only supported with the Universal-3 Pro family models. Set at construction
                 (connect) time only; it cannot be changed via `update_options`.
-            agent_context_carryover: Deprecated, use
-                ``VoiceSession(stt_context_options={"forward_chat_context": ...})`` instead.
-                On the Universal-3 Pro family, assistant replies are carried into ``agent_context``
-                by default; pass ``False`` to opt out. On other models it is off. Replies longer
-                than the 1750-character server cap are truncated (keeping the tail) before
-                being sent.
             voice_focus: Voice Focus isolates the primary voice and suppresses background
                 noise (chatter, keyboard clicks, fan hum, room echo) before the audio reaches
                 the model. Use 'near-field' for headsets, handsets, and close-talking
@@ -287,13 +273,6 @@ class STT(stt.STT):
                 Leave unset to use the server default. Only supported with the Universal-3 Pro
                 family models. Set at construction (connect) time only.
         """
-        if is_given(language_code) and is_given(language_codes):
-            raise ValueError(
-                "language_code and language_codes are mutually exclusive; "
-                "use language_codes (it accepts a single code directly)"
-            )
-        if is_given(language_code):
-            logger.warning("'language_code' is deprecated, use 'language_codes' instead.")
         # An explicit empty value ([] or "") is equivalent to unset at
         # construction — the param is omitted from the connect query either
         # way — so it is not subject to the U3-Pro-family gate below.
@@ -302,24 +281,8 @@ class STT(stt.STT):
         if is_given(agent_context):
             _validate_agent_context(agent_context)
 
-        # agent_context carryover is only available on the u3-rt-pro family ("u3-pro" is
-        # normalized to "u3-rt-pro" below), where it is on by default; the session's
-        # stt_context_options.forward_chat_context toggle is the supported way to control it.
-        supports_carryover = model in _U3_PRO_MODELS or model == "u3-pro"
-        if is_given(agent_context_carryover):
-            logger.warning(
-                "'agent_context_carryover' is deprecated, use "
-                "VoiceSession(stt_context_options={'forward_chat_context': ...}) instead."
-            )
-            if agent_context_carryover and not supports_carryover:
-                logger.warning(
-                    "agent_context_carryover is enabled but model %r does not support it; ignoring",
-                    model,
-                )
-        # on by default for supported models; an explicit agent_context_carryover=False opts out
-        carryover_enabled = supports_carryover and (
-            agent_context_carryover if is_given(agent_context_carryover) else True
-        )
+        # chat-context carryover into agent_context is only available on the u3-rt-pro family,
+        # where it is on; the session's stt_context_options.forward_chat_context toggle controls it.
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
@@ -328,12 +291,9 @@ class STT(stt.STT):
                 offline_recognize=False,
                 diarization=is_given(speaker_labels) and speaker_labels is True,
                 keyterms=True,
-                chat_context=carryover_enabled,
+                chat_context=model in _U3_PRO_MODELS,
             ),
         )
-        if model == "u3-pro":
-            logger.warning("'u3-pro' is deprecated, use 'universal-3-6-pro' instead.")
-            model = "universal-3-6-pro"
 
         # These parameters are only supported by the Universal-3 Pro family of models.
         if model not in _U3_PRO_MODELS:
@@ -346,7 +306,6 @@ class STT(stt.STT):
                 "voice_focus": voice_focus,
                 "voice_focus_threshold": voice_focus_threshold,
                 "mode": mode,
-                "language_code": language_code,
                 "language_codes": language_codes,
             }
             for _param_name, _param_value in _u3_pro_only_params.items():
@@ -366,15 +325,6 @@ class STT(stt.STT):
             )
         self._api_key = assemblyai_api_key
 
-        # Handle deprecated min_end_of_turn_silence_when_confident
-        if is_given(min_end_of_turn_silence_when_confident):
-            logger.warning(
-                "'min_end_of_turn_silence_when_confident' is deprecated, "
-                "use 'min_turn_silence' instead."
-            )
-            if not is_given(min_turn_silence):
-                min_turn_silence = min_end_of_turn_silence_when_confident
-
         # we want to minimize latency as much as possible, it's ok if the phrase arrives in multiple final transcripts
         # designed to work with LK's end of turn models.
         # Skip this default when a `mode` preset is selected so the server's
@@ -383,12 +333,9 @@ class STT(stt.STT):
             min_turn_silence = 100
 
         # Normalize to bare ISO 639-1 codes (e.g. "es-ES" / "Spanish" -> "es"),
-        # the form AssemblyAI's language steering expects. The singular
-        # language_code is shorthand for a one-element list.
+        # the form AssemblyAI's language steering expects.
         normalized_language_codes: NotGivenOr[list[str]] = NOT_GIVEN
-        if is_given(language_code):
-            normalized_language_codes = _normalize_language_codes(language_code)
-        elif is_given(language_codes):
+        if is_given(language_codes):
             normalized_language_codes = _normalize_language_codes(language_codes)
 
         self._opts = STTOptions(
@@ -477,17 +424,7 @@ class STT(stt.STT):
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
         continuous_partials: NotGivenOr[bool] = NOT_GIVEN,
         interruption_delay: NotGivenOr[int] = NOT_GIVEN,
-        # Deprecated — use min_turn_silence instead
-        min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
     ) -> None:
-        if is_given(min_end_of_turn_silence_when_confident):
-            logger.warning(
-                "'min_end_of_turn_silence_when_confident' is deprecated, "
-                "use 'min_turn_silence' instead."
-            )
-            if not is_given(min_turn_silence):
-                min_turn_silence = min_end_of_turn_silence_when_confident
-
         # Validate/normalize before mutating any option so a ValueError from a
         # bad value cannot leave _opts partially updated.
         if is_given(language_codes):
@@ -619,17 +556,7 @@ class SpeechStream(stt.RecognizeStream):
         vad_threshold: NotGivenOr[float] = NOT_GIVEN,
         continuous_partials: NotGivenOr[bool] = NOT_GIVEN,
         interruption_delay: NotGivenOr[int] = NOT_GIVEN,
-        # Deprecated — use min_turn_silence instead
-        min_end_of_turn_silence_when_confident: NotGivenOr[int] = NOT_GIVEN,
     ) -> None:
-        if is_given(min_end_of_turn_silence_when_confident):
-            logger.warning(
-                "'min_end_of_turn_silence_when_confident' is deprecated, "
-                "use 'min_turn_silence' instead."
-            )
-            if not is_given(min_turn_silence):
-                min_turn_silence = min_end_of_turn_silence_when_confident
-
         # Validate/normalize before mutating any option so a ValueError from a
         # bad value cannot leave _opts partially updated.
         if is_given(language_codes):

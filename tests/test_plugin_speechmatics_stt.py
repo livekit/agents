@@ -27,7 +27,6 @@ from livekit.agents.utils.aio import ChanEmpty
 from livekit.plugins.speechmatics import stt as speechmatics_stt
 from livekit.plugins.speechmatics.stt import (
     DEFAULT_BASE_URL,
-    DEFAULT_TURN_DETECTION_MODE,
     SpeechStream,
     TurnDetectionMode,
 )
@@ -54,8 +53,7 @@ WIRE_WHITELIST = frozenset(
     }
 )
 
-# The pre-Agent-STT public names, by what a user would have written.
-REMOVED_TURN_MODES = ("ADAPTIVE", "FIXED", "SMART_TURN")
+# The pre-Agent-STT operating points, by what a user would have written.
 LEGACY_OPERATING_POINTS = ("enhanced", "standard")
 
 
@@ -123,16 +121,9 @@ class _StubClient:
 
 
 def test_capabilities_mirror_resolved_options() -> None:
-    """Capabilities must be built from the resolved options, not the raw arguments.
-
-    `enable_partials` arrives deprecated and is migrated to `include_partials`. Computing
-    capabilities first advertised `interim_results=True` while the service was told to
-    withhold partials.
-    """
+    """Capabilities must be built from the resolved options, not the raw arguments."""
     assert _stt().capabilities.interim_results is True
-
-    for kwargs in ({"include_partials": False}, {"enable_partials": False}):
-        assert _stt(**kwargs).capabilities.interim_results is False
+    assert _stt(include_partials=False).capabilities.interim_results is False
 
     assert _stt(enable_diarization=False).capabilities.diarization is False
 
@@ -155,22 +146,6 @@ def test_audio_format_is_validated() -> None:
 # --- Model resolution ----------------------------------------------------------------
 
 
-def test_operating_point_alias_and_conflict(caplog) -> None:
-    """The deprecated alias still works, and `model` wins when both are given.
-
-    The warning goes through `logger`, not `warnings.warn`: a `DeprecationWarning` is
-    silenced outside `__main__`, so this deprecation printed nothing in a real agent.
-    """
-    with caplog.at_level("WARNING"):
-        assert _stt(operating_point="linden-1").model == "linden-1"
-    assert "`operating_point` is deprecated" in caplog.text
-
-    caplog.clear()
-    with caplog.at_level("WARNING"):
-        assert _stt(model="linden-1", operating_point="enhanced").model == "linden-1"
-    assert "using 'linden-1'" in caplog.text
-
-
 @pytest.mark.parametrize("value", ("lindne-1", *LEGACY_OPERATING_POINTS))
 def test_unsupported_model_falls_back(value: str, caplog) -> None:
     """Nothing a caller can name breaks construction — a typo and the old RT operating
@@ -179,31 +154,13 @@ def test_unsupported_model_falls_back(value: str, caplog) -> None:
     `enhanced` is the one that matters: the pre-migration README's own examples used it.
     """
     with caplog.at_level("WARNING"):
-        instance = _stt(operating_point=value)
+        instance = _stt(model=value)
 
     assert instance.model == DEFAULT_MODEL.value
     assert value in caplog.text
 
 
 # --- Turn detection ------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("member", REMOVED_TURN_MODES)
-def test_deprecated_modes_resolve_to_the_default(member: str, caplog) -> None:
-    """All three named a service-side strategy agent-STT does not distinguish.
-
-    Asserted against the constant, not a literal, so moving the default moves the test
-    with it instead of turning it red.
-    """
-    mode = getattr(TurnDetectionMode, member)
-    assert mode.value == member.lower()  # the values the old plugin accepted
-
-    with caplog.at_level("WARNING"):
-        resolved = speechmatics_stt._resolve_turn_detection_mode(mode)
-
-    assert resolved is DEFAULT_TURN_DETECTION_MODE
-    assert member in caplog.text
-    assert "deprecated" in caplog.text
 
 
 def test_turn_config_is_a_top_level_sibling() -> None:
@@ -484,61 +441,18 @@ async def test_speakers_result_is_stored_not_emitted() -> None:
     assert _events(stream) == []
 
 
-# --- Legacy argument migration -----------------------------------------------------
+# --- Removed arguments ---------------------------------------------------------------
 
 
-def test_update_speakers_is_a_warning_no_op(caplog) -> None:
-    """The method only ever updated speaker focus, so there is nothing left for it to do.
-
-    It stays callable so old code keeps running instead of dying on `AttributeError`.
-    """
-    instance = _stt(vad=None)
-
-    with caplog.at_level("WARNING"):
-        assert instance.update_speakers(focus_speakers=["S1"], ignore_speakers=["S2"]) is None
-
-    assert "update_speakers" in caplog.text
-    assert "not supported by Agent STT" in caplog.text
-
-
-@pytest.mark.parametrize("name", sorted(speechmatics_stt._DROPPED_ARGS))
-def test_dropped_kwargs_are_reported(name: str, caplog) -> None:
-    """Accepted so upgrading does not break construction, but they reach nothing.
-
-    Each warning carries the reason, because "deprecated and no longer used" does not tell
-    a caller whether to go looking for a replacement.
-    """
-    with caplog.at_level("WARNING"):
+@pytest.mark.parametrize(
+    "name", ("operating_point", "enable_partials", "focus_speakers", "end_of_utterance_mode")
+)
+def test_removed_arguments_are_rejected(name: str) -> None:
+    """The pre-Agent-STT arguments fail at construction instead of being ignored."""
+    with pytest.raises(TypeError):
         _stt(vad=None, **{name: "whatever"})
 
-    assert name in caplog.text
-    assert speechmatics_stt._DROPPED_ARGS[name] in caplog.text
-
-
-def test_migrated_kwargs_carry_over(caplog) -> None:
-    """A renamed argument keeps working, and the explicit new name always wins."""
-    with caplog.at_level("WARNING"):
-        instance = _stt(vad=None, speaker_active_format="@{speaker_id}: {text}")
-
-    assert instance._stt_options.speaker_format == "@{speaker_id}: {text}"
-    assert "migrated to `speaker_format`" in caplog.text
-
-    caplog.clear()
-    with caplog.at_level("WARNING"):
-        instance = _stt(vad=None, speaker_format="{text}", speaker_active_format="ignored")
-
-    assert instance._stt_options.speaker_format == "{text}"
-    assert "using `speaker_format`" in caplog.text
-
-
-def test_unrecognized_kwargs_are_reported(caplog) -> None:
-    """`**kwargs` swallows anything, so a typo used to cost English-by-default in silence."""
-    with caplog.at_level("WARNING"):
-        instance = _stt(vad=None, langauge="fr")
-
-    assert instance._stt_options.language == "en"
-    assert "langauge" in caplog.text
-    assert "unrecognized" in caplog.text
+    assert not hasattr(speechmatics_stt.STT, "update_speakers")
 
 
 def test_non_agent_endpoint_is_reported(monkeypatch, caplog) -> None:

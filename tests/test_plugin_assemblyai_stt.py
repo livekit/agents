@@ -110,19 +110,6 @@ async def test_continuous_partials_requires_u3_rt_pro():
         STT(api_key="test-key", model="universal-streaming-english", continuous_partials=True)
 
 
-async def test_u3_pro_deprecated_rewrites_to_universal_3_6_pro():
-    """The deprecated 'u3-pro' alias warns and is rewritten to the recommended
-    default model 'universal-3-6-pro'."""
-    from livekit.plugins.assemblyai import STT
-
-    with patch("livekit.plugins.assemblyai.stt.logger") as mock_logger:
-        stt = STT(api_key="test-key", model="u3-pro")
-
-    assert stt._opts.speech_model == "universal-3-6-pro"
-    mock_logger.warning.assert_called_once()
-    assert "universal-3-6-pro" in mock_logger.warning.call_args.args[0]
-
-
 async def test_interruption_delay_requires_u3_rt_pro():
     """Test interruption_delay raises ValueError when used with a non-u3-rt-pro model."""
     from livekit.plugins.assemblyai import STT
@@ -578,8 +565,8 @@ async def test_silence_defaults_injected_without_mode():
 # ---------------------------------------------------------------------------
 
 
-async def test_language_code_normalized_to_iso_639_1():
-    """language_code is normalized to a bare ISO 639-1 code regardless of input format."""
+async def test_single_language_code_normalized_to_iso_639_1():
+    """A single language_codes entry is normalized to a bare ISO 639-1 code regardless of input format."""
     from livekit.plugins.assemblyai import STT
 
     for raw, expected in (
@@ -590,7 +577,7 @@ async def test_language_code_normalized_to_iso_639_1():
         ("english", "en"),
         ("pt-BR", "pt"),
     ):
-        stt = STT(api_key="test-key", model="u3-rt-pro", language_code=raw)
+        stt = STT(api_key="test-key", model="u3-rt-pro", language_codes=raw)
         assert stt._opts.language_codes == [expected]
 
 
@@ -605,14 +592,6 @@ async def test_language_codes_normalized_and_deduped():
         language_codes=["en-US", "en-GB", "Spanish", "es"],
     )
     assert stt._opts.language_codes == ["en", "es"]
-
-
-async def test_language_code_and_language_codes_mutually_exclusive():
-    """Passing both spellings raises — they fill the same server field."""
-    from livekit.plugins.assemblyai import STT
-
-    with pytest.raises(ValueError, match="mutually exclusive"):
-        STT(api_key="test-key", model="u3-rt-pro", language_code="en", language_codes=["es"])
 
 
 async def test_language_codes_max_10():
@@ -651,14 +630,6 @@ async def test_language_codes_multi_cannot_be_combined():
 
     with pytest.raises(ValueError, match="multi"):
         STT(api_key="test-key", model="u3-rt-pro", language_codes=["multi", "en"])
-
-
-async def test_language_code_requires_u3_pro_family():
-    """language_code raises ValueError when used with a non-u3-rt-pro-family model."""
-    from livekit.plugins.assemblyai import STT
-
-    with pytest.raises(ValueError, match="language_code"):
-        STT(api_key="test-key", model="universal-streaming-multilingual", language_code="es")
 
 
 async def test_language_codes_requires_u3_pro_family():
@@ -709,7 +680,7 @@ async def test_language_code_singular_in_connect_config():
         captured["url"] = url
         return MagicMock()
 
-    stt = STT(api_key="test-key", model="universal-3-5-pro", language_code="es")
+    stt = STT(api_key="test-key", model="universal-3-5-pro", language_codes="es")
     stream = _make_stream_for_unit_test(stt)
     stream._session.ws_connect = _fake_ws_connect
     await stream._connect_ws()
@@ -867,21 +838,8 @@ async def test_language_codes_accepts_bare_string():
     assert stt_norm._opts.language_codes == ["es"]
 
 
-async def test_language_code_singular_logs_deprecation_warning(caplog):
-    """The singular language_code still works but logs a deprecation warning."""
-    import logging
-
-    from livekit.plugins.assemblyai import STT
-
-    with caplog.at_level(logging.WARNING):
-        stt = STT(api_key="test-key", model="u3-rt-pro", language_code="es")
-
-    assert stt._opts.language_codes == ["es"]
-    assert "'language_code' is deprecated" in caplog.text
-
-
 # ---------------------------------------------------------------------------
-# agent_context server cap (1750 chars) + agent_context_carryover deprecation
+# agent_context server cap (1750 chars) and chat-context carryover
 #
 # The server rejects `agent_context` longer than 1750 chars, and an invalid
 # UpdateConfiguration cancels the whole streaming session — so the plugin
@@ -998,74 +956,17 @@ async def test_carryover_on_by_default_for_u3_pro_family():
         "u3-rt-pro-beta-1",
         "universal-3-5-pro",
         "universal-3-6-pro",
-        "u3-pro",
     ):
         stt = STT(api_key="test-key", model=model)
         assert stt.capabilities.chat_context is True
 
 
-async def test_carryover_explicit_true_still_enables_and_warns(caplog):
-    """The deprecated agent_context_carryover=True still enables, and warns to migrate."""
-    import logging
-
+async def test_carryover_off_for_unsupported_models():
+    """Models outside the U3-Pro family do not advertise chat-context carryover."""
     from livekit.plugins.assemblyai import STT
 
-    with caplog.at_level(logging.WARNING):
-        stt = STT(api_key="test-key", model="universal-3-5-pro", agent_context_carryover=True)
-
-    assert stt.capabilities.chat_context is True
-    assert "deprecated" in caplog.text
-
-
-async def test_carryover_defaults_off_for_unsupported_models_without_warning(caplog):
-    """On non-U3-Pro models the default is silently off — no 'ignoring' warning."""
-    import logging
-
-    from livekit.plugins.assemblyai import STT
-
-    with caplog.at_level(logging.WARNING):
-        stt = STT(api_key="test-key", model="universal-streaming-english")
-
+    stt = STT(api_key="test-key", model="universal-streaming-english")
     assert stt.capabilities.chat_context is False
-    assert "agent_context_carryover" not in caplog.text
-
-
-async def test_carryover_explicit_true_on_unsupported_model_warns(caplog):
-    """Explicitly enabling carryover on an unsupported model keeps today's warning."""
-    import logging
-
-    from livekit.plugins.assemblyai import STT
-
-    with caplog.at_level(logging.WARNING):
-        stt = STT(
-            api_key="test-key",
-            model="universal-streaming-english",
-            agent_context_carryover=True,
-        )
-
-    assert stt.capabilities.chat_context is False
-    assert "agent_context_carryover" in caplog.text
-
-
-async def test_carryover_explicit_false_disables(caplog):
-    """The deprecated agent_context_carryover=False opts out on a supported model, and warns."""
-    import logging
-
-    from livekit.plugins.assemblyai import STT
-
-    with caplog.at_level(logging.WARNING):
-        stt = STT(api_key="test-key", agent_context_carryover=False)
-
-    assert stt.capabilities.chat_context is False
-    assert "deprecated" in caplog.text
-
-
-async def test_carryover_explicit_true_wins_over_n_turns_zero():
-    """agent_context_carryover=True enables carryover regardless of previous_context_n_turns."""
-    from livekit.plugins.assemblyai import STT
-
-    stt = STT(api_key="test-key", previous_context_n_turns=0, agent_context_carryover=True)
-    assert stt.capabilities.chat_context is True
 
 
 # ---------------------------------------------------------------------------

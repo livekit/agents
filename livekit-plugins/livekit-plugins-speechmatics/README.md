@@ -15,8 +15,9 @@ pip install livekit-plugins-speechmatics
 `model` selects the transcription model and defaults to `linden-1`, currently the only Agent STT
 model. Pass it as a string or as `speechmatics.Model.LINDEN_1`.
 
-`operating_point` is a deprecated alias for `model` and warns when used. The RT operating points
-`enhanced` and `standard` are not Agent STT models and are rejected by the service.
+The RT operating points `enhanced` and `standard` are not Agent STT models; a model name Agent STT
+does not accept falls back to the default model with a warning. `operating_point` was removed; pass
+`model`.
 
 ## Turn detection modes
 
@@ -32,10 +33,12 @@ The `turn_detection_mode` parameter controls how end-of-turn (endpointing) is de
   The session's own turn detector decides when the user's turn ends; `finalize()` only makes
   Speechmatics flush what it has as a final segment.
 
-The earlier `FIXED`, `ADAPTIVE` and `SMART_TURN` modes each selected one of the old engine's
-service-side endpointing strategies. Agent STT exposes a single one, so all three are deprecated
-and resolve to `VAD` with a warning. `FIXED` additionally loses its `end_of_utterance_silence_trigger`
-timing, which Agent STT does not support.
+The earlier `FIXED`, `ADAPTIVE` and `SMART_TURN` modes were removed: Agent STT exposes a single
+service-side endpointing strategy, so select `VAD` or `EXTERNAL`. There is no replacement for
+`FIXED`'s `end_of_utterance_silence_trigger` timing, nor for speaker focus (`focus_speakers`,
+`ignore_speakers`, `focus_mode`, `update_speakers()`); the other pre-Agent-STT arguments were removed
+too, and `diarization_sensitivity`, `enable_partials` and `speaker_active_format` are now
+`speaker_sensitivity`, `include_partials` and `speaker_format`.
 
 ## Usage — service-side endpointing (`VAD`, default)
 
