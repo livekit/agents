@@ -166,6 +166,48 @@ async def test_awaited_task_still_sees_other_running_tools() -> None:
     assert _shown_as_running(seen, "outer_greeting") == ["background_job"]
 
 
+class PaymentTask(AgentTask):
+    def __init__(self) -> None:
+        super().__init__(instructions="payment task")
+
+    async def on_enter(self) -> None:
+        await self.session.generate_reply(instructions="payment_greeting")
+
+
+@function_tool
+async def start_payment(ctx: RunContext) -> str:
+    """Starts a payment."""
+    await PaymentTask()
+    return "payment done"
+
+
+@pytest.mark.asyncio
+async def test_awaited_session_tool_stays_shown_as_running() -> None:
+    """A session-wide tool is in every agent's tools, including the task it awaits, so the
+    task can call it again: its in-progress pair has to stay."""
+    llm = FakeLLM(
+        fake_responses=[
+            FakeLLMResponse(
+                input="go",
+                content="",
+                ttft=0,
+                duration=0,
+                tool_calls=[
+                    FunctionToolCall(name="start_payment", arguments="{}", call_id="call_pay")
+                ],
+            ),
+            FakeLLMResponse(input="payment_greeting", content="hi", ttft=0, duration=0),
+        ]
+    )
+    seen = _record_llm_inputs(llm)
+
+    async with AgentSession(llm=llm, tools=[start_payment]) as sess:
+        await sess.start(Agent(instructions="root agent"))
+        await asyncio.wait_for(sess.run(user_input="go"), timeout=5.0)
+
+    assert _shown_as_running(seen, "payment_greeting") == ["start_payment"]
+
+
 class SimpleTask(AgentTask):
     """A task that needs a user turn to complete (user must trigger 'finish')."""
 

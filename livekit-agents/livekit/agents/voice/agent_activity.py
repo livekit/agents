@@ -3632,13 +3632,16 @@ class AgentActivity(RecognitionHooks):
         # re-issues it and duplicates side effects. inject an in-progress placeholder so it
         # leaves the call alone. mutating chat_ctx directly (not a copy) keeps a custom
         # llm_node's edits; the placeholder is stripped again before chat_ctx is forwarded.
-        # skip the calls this AgentTask (and its parent tasks) is awaited in: the task can't
-        # call them, and a placeholder for one makes its model call it as an unknown function.
+        # skip the calls this AgentTask (and its parent tasks) is awaited in when this turn
+        # can't call them: a placeholder for one makes the model call it as an unknown
+        # function. one it can call, such as a session-wide tool, keeps its placeholder.
+        fnc_tools = tool_ctx.function_tools
         awaiting: set[str] = set()
         agent: Agent | None = self._agent
         while isinstance(agent, AgentTask):
-            if agent._awaiting_call is not None:
-                awaiting.add(agent._awaiting_call.call_id)
+            call = agent._awaiting_call
+            if call is not None and call.name not in fnc_tools:
+                awaiting.add(call.call_id)
             agent = agent._old_agent
         _inject_running_tool_calls(
             chat_ctx,
