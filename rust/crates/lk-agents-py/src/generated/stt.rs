@@ -52,13 +52,14 @@ pub struct FallbackStt(pub(crate) ::std::sync::Arc<FallbackSttImpl>);
 
 #[pymethods]
 impl FallbackStt {
-    /// `stts` in order, each already streaming (the host wraps a recognize-only entry in its
-    /// `StreamAdapter`); the keywords are `FallbackAdapter.__init__`'s.
+    /// `members` in order, each already streaming (the host wraps a recognize-only entry in its
+    /// `StreamAdapter`); the keywords are `FallbackAdapter.__init__`'s, whose mixin builds it from
+    /// the adapter's attributes, one per loop.
     #[new]
-    #[pyo3(signature = (stts, *, attempt_timeout = 10.0, max_retry_per_stt = 1, retry_interval = 5.0, on_availability = None))]
+    #[pyo3(signature = (members, *, attempt_timeout = 10.0, max_retry_per_stt = 1, retry_interval = 5.0, on_availability = None))]
     fn new(
         py: Python<'_>,
-        stts: Bound<'_, PyAny>,
+        members: Bound<'_, PyAny>,
         #[pyo3(from_py_with = _extract_fallback_stt_new_attempt_timeout)]
         attempt_timeout: FallbackSttNewAttemptTimeoutInput,
         #[pyo3(from_py_with = _extract_fallback_stt_new_max_retry_per_stt)]
@@ -69,7 +70,7 @@ impl FallbackStt {
     ) -> PyResult<FallbackStt> {
         crate::py_calls::check_pid()?;
         let env = crate::process::env();
-        let stts = stts.try_iter().and_then(|items| {
+        let members = members.try_iter().and_then(|items| {
             items
                 .map(|item| {
                     let item = item?;
@@ -80,7 +81,7 @@ impl FallbackStt {
         let on_availability = on_availability
             .map(|v| crate::generated::llm::ChainObserverProxy::from_host(v.as_any()))
             .transpose()?;
-        let out = py.detach(|| <FallbackSttImpl as ::lk_agents_abi::stt::fallback::FallbackStt>::new(&env, stts, attempt_timeout, max_retry_per_stt, retry_interval, on_availability)).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as crate::py_errors::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <FallbackSttImpl as ::lk_agents_abi::stt::fallback::FallbackStt>::new(&env, members, attempt_timeout, max_retry_per_stt, retry_interval, on_availability)).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as crate::py_errors::HostException>::to_py_err(&e))?;
         ::pyo3::PyResult::Ok(FallbackStt(::std::sync::Arc::new(out)))
     }
 
@@ -579,7 +580,8 @@ pub struct SttStreamAdapter(pub(crate) ::std::sync::Arc<SttStreamAdapterImpl>);
 
 #[pymethods]
 impl SttStreamAdapter {
-    /// The wrapped STT and VAD; each stream binds its own recognition policy.
+    /// The wrapped STT and VAD; each stream binds its own recognition policy. `StreamAdapter`'s
+    /// mixin builds it from the adapter's attributes, one per loop.
     #[new]
     #[pyo3(signature = (stt, vad))]
     fn new(

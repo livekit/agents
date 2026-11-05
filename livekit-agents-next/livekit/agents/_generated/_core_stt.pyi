@@ -21,15 +21,16 @@ class FallbackStt:
     """`stt.FallbackAdapter`'s engine as the host builds it; the public class stays Python."""
     def __new__(
         cls,
-        stts: Sequence[STT[Any]],
+        members: Sequence[STT[Any]],
         *,
         attempt_timeout: float = 10.0,
         max_retry_per_stt: int = 1,
         retry_interval: float = 5.0,
         on_availability: FallbackListener | None = None,
     ) -> Self:
-        """`stts` in order, each already streaming (the host wraps a recognize-only entry in its
-        `StreamAdapter`); the keywords are `FallbackAdapter.__init__`'s.
+        """`members` in order, each already streaming (the host wraps a recognize-only entry in its
+        `StreamAdapter`); the keywords are `FallbackAdapter.__init__`'s, whose mixin builds it from
+        the adapter's attributes, one per loop.
         """
     @property
     def active_index(self) -> int:
@@ -144,7 +145,9 @@ class InferenceSttStream:
 class SttStreamAdapter:
     """`stt.StreamAdapter`'s engine as the host builds it; the public class stays Python."""
     def __new__(cls, stt: STT[Any], vad: VAD[Any]) -> Self:
-        """The wrapped STT and VAD; each stream binds its own recognition policy."""
+        """The wrapped STT and VAD; each stream binds its own recognition policy. `StreamAdapter`'s
+        mixin builds it from the adapter's attributes, one per loop.
+        """
     async def recognize(
         self,
         frames: Sequence[AudioFrame],

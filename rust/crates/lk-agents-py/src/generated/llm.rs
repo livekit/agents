@@ -738,11 +738,12 @@ pub struct FallbackLlm(pub(crate) ::std::sync::Arc<FallbackLlmImpl>);
 
 #[pymethods]
 impl FallbackLlm {
+    /// `llm.FallbackAdapter`'s mixin builds it from the adapter's attributes, one per loop.
     #[new]
-    #[pyo3(signature = (llms, *, attempt_timeout = 5.0, max_retry_per_llm = 0, retry_interval = 0.5, sticky = false, on_availability = None))]
+    #[pyo3(signature = (members, *, attempt_timeout = 5.0, max_retry_per_llm = 0, retry_interval = 0.5, sticky = false, on_availability = None))]
     fn new(
         py: Python<'_>,
-        llms: Bound<'_, PyAny>,
+        members: Bound<'_, PyAny>,
         #[pyo3(from_py_with = _extract_fallback_llm_new_attempt_timeout)]
         attempt_timeout: FallbackLlmNewAttemptTimeoutInput,
         #[pyo3(from_py_with = _extract_fallback_llm_new_max_retry_per_llm)]
@@ -754,7 +755,7 @@ impl FallbackLlm {
     ) -> PyResult<FallbackLlm> {
         crate::py_calls::check_pid()?;
         let env = crate::process::env();
-        let llms = llms.try_iter().and_then(|items| {
+        let members = members.try_iter().and_then(|items| {
             items
                 .map(|item| {
                     let item = item?;
@@ -765,7 +766,7 @@ impl FallbackLlm {
         let on_availability = on_availability
             .map(|v| crate::generated::llm::ChainObserverProxy::from_host(v.as_any()))
             .transpose()?;
-        let out = py.detach(|| <FallbackLlmImpl as ::lk_agents_abi::llm::fallback::FallbackLlm>::new(&env, llms, attempt_timeout, max_retry_per_llm, retry_interval, sticky, on_availability)).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as crate::py_errors::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <FallbackLlmImpl as ::lk_agents_abi::llm::fallback::FallbackLlm>::new(&env, members, attempt_timeout, max_retry_per_llm, retry_interval, sticky, on_availability)).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as crate::py_errors::HostException>::to_py_err(&e))?;
         ::pyo3::PyResult::Ok(FallbackLlm(::std::sync::Arc::new(out)))
     }
 
@@ -917,11 +918,12 @@ pub struct FallbackTts(pub(crate) ::std::sync::Arc<FallbackTtsImpl>);
 
 #[pymethods]
 impl FallbackTts {
+    /// `tts.FallbackAdapter`'s mixin builds it from the adapter's attributes, one per loop.
     #[new]
-    #[pyo3(signature = (ttss, *, max_retry_per_tts = 2, attempt_timeout = None, sample_rate = None, on_availability = None))]
+    #[pyo3(signature = (members, *, max_retry_per_tts = 2, attempt_timeout = None, sample_rate = None, on_availability = None))]
     fn new(
         py: Python<'_>,
-        ttss: Bound<'_, PyAny>,
+        members: Bound<'_, PyAny>,
         #[pyo3(from_py_with = _extract_fallback_tts_new_max_retry_per_tts)]
         max_retry_per_tts: FallbackTtsNewMaxRetryPerTtsInput,
         #[pyo3(from_py_with = _extract_fallback_tts_new_attempt_timeout)]
@@ -932,7 +934,7 @@ impl FallbackTts {
     ) -> PyResult<FallbackTts> {
         crate::py_calls::check_pid()?;
         let env = crate::process::env();
-        let ttss = ttss.try_iter().and_then(|items| {
+        let members = members.try_iter().and_then(|items| {
             items
                 .map(|item| {
                     let item = item?;
@@ -943,7 +945,7 @@ impl FallbackTts {
         let on_availability = on_availability
             .map(|v| crate::generated::llm::ChainObserverProxy::from_host(v.as_any()))
             .transpose()?;
-        let out = py.detach(|| <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::new(&env, ttss, max_retry_per_tts, attempt_timeout, sample_rate, on_availability)).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as crate::py_errors::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::new(&env, members, max_retry_per_tts, attempt_timeout, sample_rate, on_availability)).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as crate::py_errors::HostException>::to_py_err(&e))?;
         ::pyo3::PyResult::Ok(FallbackTts(::std::sync::Arc::new(out)))
     }
 

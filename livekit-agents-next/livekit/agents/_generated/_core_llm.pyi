@@ -128,14 +128,15 @@ class FallbackLlm:
     """The native LLM chain behind `llm.FallbackAdapter`. Runtime owns its live providers and tasks."""
     def __new__(
         cls,
-        llms: Sequence[LLM[Any]],
+        members: Sequence[LLM[Any]],
         *,
         attempt_timeout: float = 5.0,
         max_retry_per_llm: int = 0,
         retry_interval: float = 0.5,
         sticky: bool = False,
         on_availability: FallbackListener | None = None,
-    ) -> Self: ...
+    ) -> Self:
+        """`llm.FallbackAdapter`'s mixin builds it from the adapter's attributes, one per loop."""
     @property
     def active_index(self) -> int: ...
     async def aclose(self) -> None: ...
@@ -159,13 +160,14 @@ class FallbackTts:
     """`tts.FallbackAdapter`'s engine as the host builds it; the public class stays Python."""
     def __new__(
         cls,
-        ttss: Sequence[TTS[Any]],
+        members: Sequence[TTS[Any]],
         *,
         max_retry_per_tts: int = 2,
         attempt_timeout: float | None = None,
         sample_rate: int | None = None,
         on_availability: FallbackListener | None = None,
-    ) -> Self: ...
+    ) -> Self:
+        """`tts.FallbackAdapter`'s mixin builds it from the adapter's attributes, one per loop."""
     @property
     def active_index(self) -> int: ...
     @property
