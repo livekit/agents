@@ -27,6 +27,9 @@ from livekit.agents.utils.misc import is_given
 from ...llm._realtime import gpt_live_types as types
 from ...llm._realtime.gpt_live import (
     DEFAULT_VOICE,
+    DecisionEventEnvelope as DecisionEventEnvelope,
+    DecisionsOptions as DecisionsOptions,
+    DecisionsTrigger as DecisionsTrigger,
     GPTLiveModel as _GPTLiveModel,
     GPTLiveSession as _GPTLiveSession,
 )
@@ -40,6 +43,9 @@ _FATAL_ERROR_CODES = frozenset(
         "unsupported_service_tier",
         "invalid_delegated_model",
         "unsupported_delegated_model",
+        "invalid_triggers",
+        "decisions_not_enabled",
+        "decisions_not_available",
     }
 )
 
@@ -65,11 +71,13 @@ class OpenAIResponsesOptions(TypedDict, total=False):
 
 
 class OpenAIDuplexOptions(TypedDict, total=False):
-    delegation: Literal["responses", "client"]
+    delegation: Literal["responses", "client", "decisions"]
     """Where delegated work goes, fixed for the life of the session. ``responses`` (the default)
     runs it on a backend model, so ``@function_tool`` works as usual; ``client`` hands it to the
-    application as a ``delegation_created`` event."""
+    application as a ``delegation_created`` event; ``decisions`` evaluates questions."""
     responses_options: OpenAIResponsesOptions
+    decisions_options: DecisionsOptions
+    triggers: list[DecisionsTrigger]
 
 
 @dataclass
@@ -158,6 +166,8 @@ class DuplexModel(_GPTLiveModel):
             voice=voice if is_given(voice) else DEFAULT_VOICE,
             delegation=options.get("delegation", "responses"),
             responses_options=responses_options if responses_options is not None else NOT_GIVEN,
+            decisions_options=options.get("decisions_options", NOT_GIVEN),
+            triggers=options.get("triggers", NOT_GIVEN),
             api_key="livekit-inference",
             base_url=base_url or get_default_inference_url(),
             http_session=http_session,

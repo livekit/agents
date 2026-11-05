@@ -19,6 +19,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents.language import LanguageCode
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
@@ -38,9 +39,6 @@ class _TTSOptions:
     api_key: str
     voice: str
     language: str | None
-    speed: float | None
-    steps: int | None
-    visemes: bool
     base_url: str
     sample_rate: int
 
@@ -62,14 +60,6 @@ class TTS(tts.TTS):
         language: Language code: ``"en"``, ``"es"``, ``"ca"``, ``"gl"``,
             ``"eu"``, ``"pt"``, ``"fr"``, ``"it"`` or ``"de"``. Any other value
             uses the English speakers. Defaults to ``"en"``.
-        speed: Accepted for compatibility (0.5-2.0); the ``versa-2.0`` model
-            sets its own pace and this does not change the audio. Sent only
-            when given.
-        steps: Accepted for compatibility; ``versa-2.0`` runs a fixed schedule
-            of denoising steps and this does not change the audio. Sent only
-            when given.
-        visemes: Whether to enable viseme (lip-sync) data. Defaults to
-            ``False``.
         base_url: Base URL for the Lokutor API. Defaults to
             ``"wss://api.lokutor.com"``.
         tokenizer: Sentence tokenizer for streaming input. The agent pushes LLM
@@ -90,9 +80,6 @@ class TTS(tts.TTS):
         api_key: str | None = None,
         voice: VoiceID | str = DEFAULT_VOICE_ID,
         language: TTSLanguage | str | None = "en",
-        speed: float | None = None,
-        steps: int | None = None,
-        visemes: bool = False,
         base_url: str = DEFAULT_BASE_URL,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
@@ -117,9 +104,6 @@ class TTS(tts.TTS):
             api_key=lokutor_api_key,
             voice=voice,
             language=language,
-            speed=speed,
-            steps=steps,
-            visemes=visemes,
             base_url=base_url,
             sample_rate=DEFAULT_SAMPLE_RATE,
         )
@@ -400,12 +384,7 @@ def _build_request(opts: _TTSOptions, text: str) -> dict[str, Any]:
     request: dict[str, Any] = {
         "text": text,
         "voice": opts.voice,
-        "visemes": opts.visemes,
     }
-    if opts.speed is not None:
-        request["speed"] = opts.speed
-    if opts.steps is not None:
-        request["steps"] = opts.steps
     if opts.language:
-        request["language"] = opts.language
+        request["language"] = LanguageCode(opts.language).language
     return request

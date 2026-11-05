@@ -238,6 +238,9 @@ class SpeechStream(stt.SpeechStream):
         self._done = False
         self._audio_sent = 0.0
         self._audio_reported = 0.0
+        # Audio position (seconds into this stream) where the last final transcript ended: the earliest
+        # the next utterance can start. The server sends no word timings.
+        self._utterance_floor = 0.0
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         try:
@@ -399,7 +402,14 @@ class SpeechStream(stt.SpeechStream):
                     else stt.SpeechEventType.INTERIM_TRANSCRIPT
                 ),
                 request_id=self._request_id,
-                alternatives=[stt.SpeechData(language=self._language, text=text)],
+                alternatives=[
+                    stt.SpeechData(
+                        language=self._language,
+                        text=text,
+                        start_time=self.start_time_offset + self._utterance_floor,
+                        end_time=self.start_time_offset + self._audio_sent,
+                    )
+                ],
             )
         )
         if final:
@@ -407,6 +417,7 @@ class SpeechStream(stt.SpeechStream):
                 stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH, request_id=self._request_id)
             )
             self._report_usage()
+            self._utterance_floor = self._audio_sent
             self._speaking = False
             self._request_id = ""
 

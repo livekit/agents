@@ -63,8 +63,6 @@ async with tts:
 | `api_key` | `str` | env `LOKUTOR_API_KEY` | Lokutor API key |
 | `voice` | `str` | `"F1"` | Voice slot, `F1`-`F5` (female) or `M1`-`M5` (male). Each language has its own native speaker in each slot |
 | `language` | `str \| None` | `"en"` | One of the nine languages; any other value uses the English speakers |
-| `visemes` | `bool` | `False` | Lip-sync viseme data |
-| `speed`, `steps` | | not sent | Accepted for compatibility; `versa-2.0` sets its own pace and step schedule, so they do not change the audio |
 | `tokenizer` | `tokenize.SentenceTokenizer` | `blingfire` | Splits the streamed input into sentences; each sentence is one request, so the voice has per-sentence prosody |
 | `base_url` | `str` | `"wss://api.lokutor.com"` | API base URL |
 

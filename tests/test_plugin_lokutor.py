@@ -141,6 +141,11 @@ async def test_stream_turns_partials_and_finals_into_speech_events():
     assert final.alternatives[0].text == "Hola, bon dia."
     assert final.alternatives[0].language == "es"
     assert final.request_id == events[1].request_id == events[4].request_id
+    # Times are audio positions from the start of the stream: the utterance opens at 0 and the final
+    # one ends where the audio ended.
+    assert final.alternatives[0].start_time == 0.0
+    assert final.alternatives[0].end_time == pytest.approx(1.0, abs=0.01)
+    assert 0.0 < events[1].alternatives[0].end_time <= final.alternatives[0].end_time
     usage = events[5].recognition_usage
     assert usage is not None and usage.audio_duration == pytest.approx(1.0, abs=0.01)
     # The key travels in a header, never the URL; the language as the API names it.
@@ -411,32 +416,6 @@ def test_tts_none_language():
     assert tts._opts.language is None
 
 
-def test_tts_speed_and_steps_unset_by_default():
-    # versa-2.0 sets its own pace and runs a fixed step schedule: both are
-    # accepted for compatibility, and sent only when given.
-    from livekit.plugins.lokutor import TTS
-
-    tts = TTS(api_key="test-key")
-    assert tts._opts.speed is None
-    assert tts._opts.steps is None
-
-
-def test_tts_default_visemes():
-    from livekit.plugins.lokutor import TTS
-
-    tts = TTS(api_key="test-key")
-    assert tts._opts.visemes is False
-
-
-def test_tts_custom_params():
-    from livekit.plugins.lokutor import TTS
-
-    tts = TTS(api_key="test-key", speed=1.5, steps=8, visemes=True)
-    assert tts._opts.speed == 1.5
-    assert tts._opts.steps == 8
-    assert tts._opts.visemes is True
-
-
 def test_tts_sample_rate_is_fixed_at_44100():
     # Lokutor's TTS output is always 44.1 kHz; the rate is not configurable
     # (a mismatched rate would corrupt playback), so it is pinned.
@@ -533,18 +512,12 @@ def test_build_request_includes_language():
         api_key="key",
         voice="F1",
         language="es",
-        speed=1.0,
-        steps=5,
-        visemes=False,
         base_url="wss://api.lokutor.com",
         sample_rate=44100,
     )
     request = _build_request(opts, "hola")
     assert request["text"] == "hola"
     assert request["voice"] == "F1"
-    assert request["speed"] == 1.0
-    assert request["steps"] == 5
-    assert request["visemes"] is False
     assert request["language"] == "es"
 
 
@@ -555,9 +528,6 @@ def test_build_request_without_language():
         api_key="key",
         voice="M1",
         language=None,
-        speed=1.05,
-        steps=5,
-        visemes=False,
         base_url="wss://api.lokutor.com",
         sample_rate=44100,
     )
@@ -565,25 +535,6 @@ def test_build_request_without_language():
     assert request["text"] == "hello"
     assert request["voice"] == "M1"
     assert "language" not in request
-
-
-def test_build_request_leaves_out_unset_speed_and_steps():
-    from livekit.plugins.lokutor.tts import _build_request, _TTSOptions
-
-    opts = _TTSOptions(
-        api_key="key",
-        voice="F2",
-        language="ca",
-        speed=None,
-        steps=None,
-        visemes=False,
-        base_url="wss://api.lokutor.com",
-        sample_rate=44100,
-    )
-    request = _build_request(opts, "bon dia")
-    assert "speed" not in request
-    assert "steps" not in request
-    assert request["language"] == "ca"
 
 
 # --- TTS stream: segments, sentences ---
@@ -739,3 +690,18 @@ async def test_a_retry_ends_the_utterance_the_dropped_connection_left_open():
     ]
     ids = [e.request_id for e in events if e.type in (T.INTERIM_TRANSCRIPT, T.FINAL_TRANSCRIPT)]
     assert ids[0] != ids[1]
+
+
+def test_build_request_normalizes_language():
+    from livekit.plugins.lokutor.tts import _build_request, _TTSOptions
+
+    opts = _TTSOptions(
+        api_key="key",
+        voice="F1",
+        language="es-ES",
+        base_url="wss://api.lokutor.com",
+        sample_rate=44100,
+    )
+    request = _build_request(opts, "hola")
+    assert request["language"] == "es"
+    assert set(request) == {"text", "voice", "language"}
