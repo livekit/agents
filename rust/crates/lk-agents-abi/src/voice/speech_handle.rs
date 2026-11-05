@@ -37,26 +37,26 @@ pub trait SpeechHandle: Send + Sync + Sized + 'static {
 
     /// `speech_handle.id`. Empty until the loop has minted `speech_{n}`; a detached handle answers
     /// the id it was constructed with.
-    #[host(getter)]
+    #[host(getter, facade(module = "speech_view", class = "SpeechView", target = "_native"))]
     fn id(&self) -> String;
 
-    #[host(getter)]
+    #[host(getter, facade(module = "speech_view", class = "SpeechView", target = "_native"))]
     fn num_steps(&self) -> u32;
 
     /// What this speech committed to the conversation; a copy.
-    #[host(getter)]
+    #[host(getter, facade(module = "speech_view", class = "SpeechView", target = "_native"))]
     fn chat_items(&self) -> Vec<ChatItem>;
 
-    #[host(getter)]
+    #[host(getter, facade(module = "speech_view", class = "SpeechView", target = "_native"))]
     fn scheduled(&self) -> bool;
 
     /// `True` from the tick `interrupt()` was called until the speech is done, and once the loop
     /// has interrupted the speech for any reason (an interruption, a supersede, the close). A done
     /// speech reads the loop's verdict.
-    #[host(getter)]
+    #[host(getter, facade(module = "speech_view", class = "SpeechView", target = "_native"))]
     fn interrupted(&self) -> bool;
 
-    #[host(call)]
+    #[host(call, facade(module = "speech_view", class = "SpeechView", target = "_native"))]
     fn done(&self) -> bool;
 
     /// The core's last accepted `allow_interruptions`.

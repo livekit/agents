@@ -14,7 +14,7 @@ from typing_extensions import TypeVar
 
 from livekit import rtc
 
-from .. import _core, llm
+from .. import _core
 from .._generated import speech_defaults
 from .._generated.io_events import PlaybackSegment as PlaybackSegment
 from .._generated.language import LanguageCode
@@ -24,6 +24,7 @@ from .._generated.playback_events import (
     PlaybackStartedEvent as PlaybackStartedEvent,
 )
 from .._generated.rtc_wire import AudioOutputCapabilities as AudioOutputCapabilities
+from .._generated.speech_view import SpeechView
 from .._generated.turn import (
     EndpointingOptions,
     InterruptionOptions,
@@ -407,7 +408,7 @@ InterruptionSource = Literal["audio_activity", "user_turn", "programmatic"]
 """Why a speech was interrupted, as the reference's ``agent_turn`` trace names it."""
 
 
-class SpeechHandle:
+class SpeechHandle(SpeechView):
     """One speech of the session, over the core's handle: its state is the core's, and awaiting
     it waits for the core to finish playing it out. Awaiting never raises; read
     ``exception()`` for a failure. The core hands this object back wherever the speech is named
@@ -438,20 +439,8 @@ class SpeechHandle:
         return handle or SpeechHandle(core)
 
     @property
-    def id(self) -> str:
-        return self._core.id
-
-    @property
-    def num_steps(self) -> int:
-        return self._core.num_steps
-
-    @property
-    def scheduled(self) -> bool:
-        return self._core.scheduled
-
-    @property
-    def interrupted(self) -> bool:
-        return self._core.interrupted
+    def _native(self) -> _core.SpeechHandle:
+        return self._core
 
     @property
     def allow_interruptions(self) -> bool:
@@ -460,14 +449,6 @@ class SpeechHandle:
     @allow_interruptions.setter
     def allow_interruptions(self, value: bool) -> None:
         self._core.allow_interruptions = value
-
-    @property
-    def chat_items(self) -> list[llm.ChatItem]:
-
-        return list(self._core.chat_items)
-
-    def done(self) -> bool:
-        return self._core.done()
 
     def exception(self) -> BaseException | None:
         """The error the speech failed with, or ``None``.
