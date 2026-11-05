@@ -31,6 +31,7 @@ from ._bindings import (
     create_api_error_from_http,
     redacted_cause,
 )
+from ._core import ProviderAttempts
 from ._generated.language import LanguageCode
 from ._generated.usage import (
     EOTUsage,
@@ -161,6 +162,7 @@ def __getattr__(name: str) -> object:
 
 
 __all__ = [
+    "ProviderAttempts",
     "TextSession",
     "TextSessionState",
     "TextSessionTurn",

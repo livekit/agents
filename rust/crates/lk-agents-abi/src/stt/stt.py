@@ -215,7 +215,10 @@ class STT(
 class RecognizeStream(ABC):
     """A live recognition: audio in through ``push_frame``, ``SpeechEvent`` out.
 
-    Plugins implement ``_run``, reading ``input`` and handing each event to ``send``.
+    Plugins implement ``_run``: one attempt at the recognition, reading ``input`` and handing
+    each event to ``send``. The framework runs it under ``conn_options`` (docs/models.md
+    "Provider attempts"): a retryable ``APIError`` reconnects by calling ``_run`` again, which
+    reads the audio the failed attempt had not taken; transcripts already sent stay delivered.
     """
 
     class Flush:
@@ -250,7 +253,12 @@ class RecognizeStream(ABC):
         self._needed_sr = sample_rate if is_given(sample_rate) else None
         self._pushed_sr = 0
         self._resampler: rtc.AudioResampler | None = None
-        self._core_attempts = _bindings.AttemptLoop("stt_stream", conn_options, self._emit_error)
+        self._core_attempts: _core.ProviderAttempts = _core.ProviderAttempts(
+            "stt_stream", conn_options, self
+        )
+        self._core_attempt_task: asyncio.Task[None] | None = None
+        self._core_cancelled = False
+        self._attempt_started = 0.0
         self._task = asyncio.create_task(self._main_task())
         self._task.add_done_callback(lambda _: self._close_events())
 
@@ -287,7 +295,15 @@ class RecognizeStream(ABC):
         self._start_time = value
 
     @abstractmethod
-    async def _run(self) -> None: ...
+    async def _run(self) -> None:
+        """One attempt: connect, read ``input`` until it ends and ``send`` each event.
+
+        Called once per attempt, in a fresh task; a retry calls it again with ``input`` still
+        holding the audio not yet read, and ``start_time``/``start_time_offset`` moved on so
+        timestamps stay linear. Raise ``APIError`` (``retryable=True`` for transient failures)
+        to fail the attempt. Cancellation means a deadline passed or the stream was closed:
+        clean up and let it propagate.
+        """
 
     def _input_received(self, item: rtc.AudioFrame | RecognizeStream.Flush) -> None:
         if isinstance(item, self.Flush):
@@ -297,21 +313,27 @@ class RecognizeStream(ABC):
         self._core_attempts.input_ended()
 
     async def _main_task(self) -> None:
-        started = time.time()
+        self._attempt_started = time.time()
+        # run() starts from the task, after the framework set ``core``
+        await _bindings.run_attempts(self, self._core_attempts)
 
+    async def _core_attempt(self, retry: bool) -> None:
+        _bindings.attempt_started(self)
         # each attempt moves the timeline on by the time the last one ran, so a reconnected
         # stream's timestamps stay linear
-        async def attempt() -> None:
-            nonlocal started
-            now = time.time()
-            self._start_time_offset += now - started
-            self._start_time = started = now
-            await self._run()
+        now = time.time()
+        self._start_time_offset += now - self._attempt_started
+        self._start_time = self._attempt_started = now
+        await self._run()
 
-        await self._core_attempts.run(attempt)
+    def _core_produced(self) -> bool:
+        return False
 
-    def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
-        self._stt._emit_error(api_error, recoverable)
+    def _core_retrying(self, error: Exception) -> None:
+        self._stt._emit_error(error, True)
+
+    def _core_failed(self, error: Exception) -> None:
+        self._stt._emit_error(error, False)
 
     def _close_events(self) -> None:
         self._event_ch.close()

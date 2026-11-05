@@ -21,6 +21,7 @@ from livekit import rtc
 from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIStatusError, LanguageCode, stt
 from livekit.agents.types import NOT_GIVEN
 from livekit.plugins.elevenlabs import stt as elevenlabs_stt
+from tests.utils.attempts import observed_attempts
 
 pytestmark = pytest.mark.plugin("elevenlabs")
 
@@ -64,7 +65,6 @@ def _new_stream(
     # These parser tests do not run the stream lifecycle or own tasks. Initialize its provider
     # state and retry counter without replacing the scheduler; the attempt loop reads the running
     # loop's clock, so every caller is an async test.
-    from livekit.agents import _bindings
 
     stream = object.__new__(elevenlabs_stt.SpeechStream)
     stream._stt = elevenlabs_stt.STT(api_key="test-key", model="scribe_v2_realtime")
@@ -74,9 +74,7 @@ def _new_stream(
     stream._speaking = False
     stream._last_partial_text = ""
     stream._start_time_offset = 0.0
-    stream._core_attempts = _bindings.AttemptLoop(
-        "stt_stream", DEFAULT_API_CONNECT_OPTIONS, stream._emit_error
-    )
+    stream._core_attempts = observed_attempts("stt_stream", DEFAULT_API_CONNECT_OPTIONS)
     stream._event_ch = _EventSink()
     return stream
 

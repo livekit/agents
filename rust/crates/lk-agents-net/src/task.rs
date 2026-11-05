@@ -377,3 +377,31 @@ mod tests {
         assert_eq!(rx.await.unwrap(), TaskOutcome::Cancelled);
     }
 }
+
+/// Explicit cancellation of an owned host operation, acknowledged by its normal result.
+pub struct Cancellation(tokio::sync::watch::Sender<bool>);
+impl Default for Cancellation {
+    fn default() -> Self {
+        Self(tokio::sync::watch::channel(false).0)
+    }
+}
+impl Cancellation {
+    pub fn cancel(&self) {
+        self.0.send_replace(true);
+    }
+}
+impl lk_agents_abi::invoke::Cancellation for Cancellation {
+    fn is_cancelled(&self) -> bool {
+        *self.0.borrow()
+    }
+    fn cancelled(&self) -> lk_agents_abi::BoxFuture<'_, ()> {
+        let mut changes = self.0.subscribe();
+        Box::pin(async move {
+            while !*changes.borrow_and_update() {
+                if changes.changed().await.is_err() {
+                    return;
+                }
+            }
+        })
+    }
+}

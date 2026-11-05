@@ -337,11 +337,12 @@ class ChunkedStream(ABC):
         self._metrics: _core.TtsMetricState | None = _core.TtsMetricState(
             False, tts.label, tts.model, tts.provider
         )
-        self._core_attempts = _bindings.AttemptLoop("tts_batch", conn_options, self._emit_error)
-        self._synthesize_task = asyncio.create_task(
-            self._core_attempts.run(self._attempt, produced=self._produced),
-            name="TTS._synthesize_task",
+        self._core_attempts: _core.ProviderAttempts = _core.ProviderAttempts(
+            "tts_batch", conn_options, self
         )
+        self._core_attempt_task: asyncio.Task[None] | None = None
+        self._core_cancelled = False
+        self._synthesize_task = asyncio.create_task(self._main_task(), name="TTS._synthesize_task")
         self._synthesize_task.add_done_callback(lambda _: self._event_ch.close())
 
     @property
@@ -356,13 +357,28 @@ class ChunkedStream(ABC):
     def exception(self) -> BaseException | None:
         return self._synthesize_task.exception()
 
-    def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
-        self._tts._emit_error(api_error, recoverable)
+    def _core_retrying(self, error: Exception) -> None:
+        self._tts._emit_error(error, True)
+
+    def _core_failed(self, error: Exception) -> None:
+        self._tts._emit_error(error, False)
 
     @abstractmethod
-    async def _run(self, output_emitter: _core.AudioEmitter) -> None: ...
+    async def _run(self, output_emitter: _core.AudioEmitter) -> None:
+        """One attempt: synthesize ``input_text`` into ``output_emitter``.
 
-    async def _attempt(self) -> None:
+        Called once per attempt with a fresh emitter; a retry calls it again from the start.
+        Raise ``APIError`` (``retryable=True`` for transient failures) to fail the attempt;
+        once audio was pushed a failure is not retried. Cancellation means a deadline passed
+        or the stream was closed: clean up and let it propagate.
+        """
+
+    async def _main_task(self) -> None:
+        # run() starts from the task, after the framework set ``core``
+        await _bindings.run_attempts(self, self._core_attempts)
+
+    async def _core_attempt(self, retry: bool) -> None:
+        _bindings.attempt_started(self)
         self._emitter = output_emitter = _core.AudioEmitter(
             label=self._tts.label, dst_ch=self._event_ch
         )
@@ -376,7 +392,7 @@ class ChunkedStream(ABC):
         finally:
             await output_emitter.aclose()
 
-    def _produced(self) -> bool:
+    def _core_produced(self) -> bool:
         return self._emitter is not None and self._emitter.pushed_duration() > 0.0
 
     def _invalid(self, output_emitter: _core.AudioEmitter) -> str | None:
@@ -450,26 +466,45 @@ class SynthesizeStream(ABC):
         self._emitter: _core.AudioEmitter | None = None
         self._metrics = _core.TtsMetricState(True, tts.label, tts.model, tts.provider)
         self._segment_text = ""
-        self._core_attempts = _bindings.AttemptLoop("tts_stream", conn_options, self._emit_error)
-        self._task = asyncio.create_task(
-            self._core_attempts.run(self._attempt, produced=self._produced, again=self._replay),
-            name="TTS._main_task",
+        self._core_attempts: _core.ProviderAttempts = _core.ProviderAttempts(
+            "tts_stream", conn_options, self
         )
+        self._core_attempt_task: asyncio.Task[None] | None = None
+        self._core_cancelled = False
+        self._task = asyncio.create_task(self._main_task(), name="TTS._main_task")
         self._task.add_done_callback(lambda _: self._event_ch.close())
         self._started_time: float = 0
         self._pushed_text: str = ""
         # whether this synthesis carries expressive markup; the framework sets it at open
-        self._expressive = False
+        self._expressive: bool = False
         self._segment_open = False
         self._num_segments = 0
 
-    def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
-        self._tts._emit_error(api_error, recoverable)
+    def _core_retrying(self, error: Exception) -> None:
+        self._tts._emit_error(error, True)
+
+    def _core_failed(self, error: Exception) -> None:
+        self._tts._emit_error(error, False)
 
     @abstractmethod
-    async def _run(self, output_emitter: _core.AudioEmitter) -> None: ...
+    async def _run(self, output_emitter: _core.AudioEmitter) -> None:
+        """One attempt: read ``input`` and synthesize it into ``output_emitter``.
 
-    async def _attempt(self) -> None:
+        Called once per attempt with a fresh emitter; a retry calls it again with ``input``
+        replayed from the start. Raise ``APIError`` (``retryable=True`` for transient
+        failures) to fail the attempt; once audio was pushed a failure is not retried.
+        Cancellation means a deadline passed or the stream was closed: clean up and let it
+        propagate.
+        """
+
+    async def _main_task(self) -> None:
+        # run() starts from the task, after the framework set ``core``
+        await _bindings.run_attempts(self, self._core_attempts)
+
+    async def _core_attempt(self, retry: bool) -> None:
+        _bindings.attempt_started(self)
+        if retry:
+            self._replay()
         self._emitter = output_emitter = _core.AudioEmitter(
             label=self._tts.label, dst_ch=self._event_ch
         )
@@ -483,7 +518,7 @@ class SynthesizeStream(ABC):
         finally:
             await output_emitter.aclose()
 
-    def _produced(self) -> bool:
+    def _core_produced(self) -> bool:
         return self._emitter is not None and self._emitter.pushed_duration() > 0.0
 
     def _replay(self) -> None:

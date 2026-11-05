@@ -1,14 +1,27 @@
-//! Host provider observations projected onto the shared supplied-time attempt machine.
+//! The attempts of a host provider's request: [`AttemptMachine`] projects the host's
+//! observations onto the shared supplied-time attempt machine, and [`ProviderAttempts`] executes
+//! it, running the host's attempt (`_core_attempt`) under its deadlines and retry decisions.
 
-use lk_agents_abi::errors::{ApiError, ApiErrorKind, ProviderError};
+use std::sync::Arc;
+
+use lk_agents_abi::HostRef;
+use lk_agents_abi::errors::{ApiError, ApiErrorKind, HostError, ProviderError};
+use lk_agents_abi::invoke::CallContext;
+use lk_agents_net::task::Cancellation;
+use parking_lot::Mutex;
+use tokio::sync::{Notify, watch};
+use tokio::time::Instant;
+
+use crate::telemetry;
 use lk_agents_abi::types::connect::{ApiConnectOptions, ApiConnectOptionsError};
-use lk_agents_abi::types::provider::{ProviderAttempts as Port, ResponseObservation};
+use lk_agents_abi::types::provider::{AttemptHost, ProviderAttempts as Port, ResponseObservation};
 use lk_agents_abi::types::retry::{RequestKind, RetryDecision};
 use lk_agents_abi::{SpeechEvent, SpeechEventType, Ts};
 use lk_agents_core::attempts::{AttemptStep, Attempts, RequestPolicy, terminal_failure};
 
+/// The decisions of one request's attempts, on supplied time.
 #[derive(Debug)]
-pub struct ProviderAttempts {
+pub struct AttemptMachine {
     kind: RequestKind,
     options: ApiConnectOptions,
     attempt_started: Ts,
@@ -21,8 +34,8 @@ pub struct ProviderAttempts {
     error: Option<ApiError>,
 }
 
-impl Port for ProviderAttempts {
-    fn new(
+impl AttemptMachine {
+    pub fn new(
         kind: RequestKind,
         conn_options: ApiConnectOptions,
         now_ns: u64,
@@ -62,16 +75,16 @@ impl Port for ProviderAttempts {
         Ok(result)
     }
 
-    fn external_retry_owner(&mut self) {
+    pub fn external_retry_owner(&mut self) {
         self.attempts.disable_retries();
     }
 
-    fn ready(&mut self, now_ns: u64) -> Result<bool, ApiError> {
+    pub fn ready(&mut self, now_ns: u64) -> Result<bool, ApiError> {
         self.poll(Ts::from_nanos(now_ns))?;
         Ok(std::mem::take(&mut self.permit))
     }
 
-    fn failure(
+    pub fn failure(
         &mut self,
         error: ProviderError,
         produced_output: bool,
@@ -123,20 +136,20 @@ impl Port for ProviderAttempts {
         Ok(terminal_failure(self.kind, &error, self.options.max_retry, self.attempts.retries()))
     }
 
-    fn wake_at(&self) -> Option<u64> {
+    pub fn wake_at(&self) -> Option<u64> {
         self.attempts.wake_at(self.expecting).map(Ts::as_nanos)
     }
 
-    fn expect_response(&mut self, now_ns: u64) {
+    pub fn expect_response(&mut self, now_ns: u64) {
         self.expecting.get_or_insert(Ts::from_nanos(now_ns));
     }
 
-    fn input_ended(&mut self, now_ns: u64) {
+    pub fn input_ended(&mut self, now_ns: u64) {
         self.input_ended = true;
         self.expect_response(now_ns);
     }
 
-    fn observe(&mut self, event: SpeechEvent, now_ns: u64) {
+    pub fn observe(&mut self, event: SpeechEvent, now_ns: u64) {
         match event.kind {
             SpeechEventType::InterimTranscript | SpeechEventType::PreflightTranscript => {
                 self.pending_transcript = true;
@@ -148,7 +161,7 @@ impl Port for ProviderAttempts {
         }
     }
 
-    fn observe_response(&mut self, observation: ResponseObservation, now_ns: u64) {
+    pub fn observe_response(&mut self, observation: ResponseObservation, now_ns: u64) {
         match observation {
             ResponseObservation::Audio if !self.input_ended => self.complete_response(),
             ResponseObservation::Progress | ResponseObservation::Audio => {
@@ -158,7 +171,7 @@ impl Port for ProviderAttempts {
         }
     }
 
-    fn succeeded(&mut self, now_ns: u64) -> Result<(), ApiError> {
+    pub fn succeeded(&mut self, now_ns: u64) -> Result<(), ApiError> {
         let now = Ts::from_nanos(now_ns);
         self.poll(now)?;
         if self.kind == RequestKind::SttStream && (!self.input_ended || self.pending_transcript) {
@@ -174,18 +187,18 @@ impl Port for ProviderAttempts {
         Ok(())
     }
 
-    fn cleanup_timeout(&self) -> f64 {
+    pub fn cleanup_timeout(&self) -> f64 {
         lk_agents_abi::HOST_TEARDOWN_TIMEOUT.as_secs_f64()
     }
 
-    fn cancel(&mut self, now_ns: u64) {
+    pub fn cancel(&mut self, now_ns: u64) {
         let mut steps = Vec::new();
         self.attempts.cancel(Ts::from_nanos(now_ns), &mut steps);
         self.permit = false;
     }
 }
 
-impl ProviderAttempts {
+impl AttemptMachine {
     fn complete_response(&mut self) {
         self.expecting = None;
         self.input_ended = false;
@@ -269,6 +282,278 @@ impl ProviderAttempts {
     }
 }
 
+/// One host provider request, its attempts executed natively (`livekit.agents.ProviderAttempts`).
+///
+/// `run` waits until the machine permits an attempt, runs the host's attempt while racing it
+/// against the next deadline and the host's observations, and turns a failure into the machine's
+/// decision: retry after its delay, raise the attempt's own error, raise `APIConnectionError`
+/// once retries are exhausted, or stop. Time is this request's monotonic clock.
+pub struct ProviderAttempts {
+    host: Arc<dyn AttemptHost>,
+    context: CallContext,
+    kind: RequestKind,
+    epoch: Instant,
+    state: Mutex<State>,
+    /// Woken by every observation, so a deadline the host moved is re-read.
+    changed: Notify,
+}
+
+struct State {
+    machine: AttemptMachine,
+    /// The session owns retries: `run` executes exactly one attempt.
+    core: bool,
+    /// The running attempt's settlement: `true` once its host task finished.
+    inflight: Option<watch::Receiver<bool>>,
+    /// Retries were exhausted.
+    exhausted: bool,
+}
+
+impl Port for ProviderAttempts {
+    fn new(
+        kind: RequestKind,
+        conn_options: ApiConnectOptions,
+        host: Arc<dyn AttemptHost>,
+        context: CallContext,
+    ) -> Result<Self, ApiConnectOptionsError> {
+        let machine = AttemptMachine::new(kind, conn_options, 0)?;
+        Ok(Self {
+            host,
+            context,
+            kind,
+            epoch: Instant::now(),
+            state: Mutex::new(State { machine, core: false, inflight: None, exhausted: false }),
+            changed: Notify::new(),
+        })
+    }
+
+    fn core(&self) -> bool {
+        self.state.lock().core
+    }
+
+    fn set_core(&self, core: bool) {
+        let mut state = self.state.lock();
+        if core && !state.core {
+            state.machine.external_retry_owner();
+        }
+        state.core = core;
+    }
+
+    async fn run(&self, cx: telemetry::Cx) -> Result<Option<HostRef>, ProviderError> {
+        let result = self.drive(&cx).await;
+        let now = self.now();
+        self.state.lock().machine.cancel(now);
+        result
+    }
+
+    fn expect_response(&self, r#final: bool) {
+        self.observed(|machine, now| match r#final {
+            true => machine.input_ended(now),
+            false => machine.expect_response(now),
+        });
+    }
+
+    fn input_ended(&self) {
+        self.observed(AttemptMachine::input_ended);
+    }
+
+    fn progress(&self) {
+        self.observed(|machine, now| machine.observe_response(ResponseObservation::Progress, now));
+    }
+
+    fn audio_received(&self) {
+        self.observed(|machine, now| machine.observe_response(ResponseObservation::Audio, now));
+    }
+
+    fn complete_response(&self) {
+        self.observed(|machine, now| machine.observe_response(ResponseObservation::Complete, now));
+    }
+
+    fn observe(&self, event: SpeechEvent) {
+        self.observed(|machine, now| machine.observe(event, now));
+    }
+
+    fn exhausted(&self) -> bool {
+        self.state.lock().exhausted
+    }
+
+    async fn settled(&self) {
+        let inflight = self.state.lock().inflight.clone();
+        if let Some(mut settled) = inflight {
+            let cleanup = std::time::Duration::from_secs_f64(self.cleanup_timeout());
+            if tokio::time::timeout(cleanup, settled.wait_for(|done| *done)).await.is_err() {
+                stalled_cleanup();
+            }
+        }
+    }
+
+    fn cleanup_timeout(&self) -> f64 {
+        lk_agents_abi::HOST_TEARDOWN_TIMEOUT.as_secs_f64()
+    }
+}
+
+impl ProviderAttempts {
+    fn now(&self) -> u64 {
+        u64::try_from(self.epoch.elapsed().as_nanos()).unwrap_or(u64::MAX)
+    }
+
+    fn at(&self, ns: u64) -> Instant {
+        self.epoch + std::time::Duration::from_nanos(ns)
+    }
+
+    fn observed(&self, observe: impl FnOnce(&mut AttemptMachine, u64)) {
+        let now = self.now();
+        observe(&mut self.state.lock().machine, now);
+        self.changed.notify_one();
+    }
+
+    /// The machine's permit for the next attempt, waiting for its backoff.
+    async fn permitted(&self) -> Result<(), ProviderError> {
+        loop {
+            let now = self.now();
+            let (ready, wake) = {
+                let mut state = self.state.lock();
+                (state.machine.ready(now)?, state.machine.wake_at())
+            };
+            if ready {
+                return Ok(());
+            }
+            let Some(at) = wake else {
+                return Err(ApiError::new("provider request has no pending attempt")
+                    .with_retryable(false)
+                    .into());
+            };
+            tokio::time::sleep_until(self.at(at)).await;
+        }
+    }
+
+    async fn drive(&self, cx: &telemetry::Cx) -> Result<Option<HostRef>, ProviderError> {
+        if self.state.lock().core {
+            self.permitted().await?;
+            let value = self.execute(cx, false).await?;
+            let now = self.now();
+            self.state.lock().machine.succeeded(now)?;
+            return Ok(value);
+        }
+        let mut retrying = false;
+        loop {
+            self.permitted().await?;
+            let error = match self.execute(cx, retrying).await {
+                Ok(value) => {
+                    let now = self.now();
+                    self.state.lock().machine.succeeded(now)?;
+                    return Ok(value);
+                }
+                Err(error) => error,
+            };
+            let produced = self.host.produced().map_err(host_error)?;
+            let now = self.now();
+            let decision = self.state.lock().machine.failure(error.clone(), produced, now)?;
+            match decision {
+                RetryDecision::Stop => return Ok(None),
+                RetryDecision::Raise => return Err(error),
+                RetryDecision::Exhausted(message) => {
+                    let terminal = ApiError {
+                        cause: Some(Box::new(error)),
+                        ..ApiError::connection(Some(message))
+                    };
+                    self.state.lock().exhausted = true;
+                    return Err(terminal.into());
+                }
+                RetryDecision::Retry(delay) => {
+                    log::warn!(
+                        target: "livekit.agents",
+                        "{} attempt failed: {error}, retrying in {delay}s",
+                        self.kind.as_str()
+                    );
+                    self.host.retrying(error);
+                    retrying = true;
+                }
+            }
+        }
+    }
+
+    /// One attempt, cancelled when a deadline passes: time and observations return to the
+    /// machine before a result is accepted.
+    async fn execute(
+        &self,
+        cx: &telemetry::Cx,
+        retry: bool,
+    ) -> Result<Option<HostRef>, ProviderError> {
+        let cancel = Arc::new(Cancellation::default());
+        // The attempt runs in its own task: a dropped `run` leaves it to the host, which cancels
+        // it in the same turn (`_bindings.run_attempts`), and `settled` waits for its cleanup.
+        let (done, settled) = watch::channel(false);
+        self.state.lock().inflight = Some(settled);
+        let (host, context, signal, cx) =
+            (self.host.clone(), self.context.clone(), cancel.clone(), cx.clone());
+        let mut attempt = tokio::spawn(async move {
+            let result = host.attempt(&cx, &context, signal, retry).await;
+            done.send_replace(true);
+            result
+        });
+        let joined = |result: Result<_, tokio::task::JoinError>| {
+            result.unwrap_or_else(|error| {
+                Err(ApiError::new(format!("provider attempt task failed: {error}"))
+                    .with_retryable(false)
+                    .into())
+            })
+        };
+        let interrupted = loop {
+            let wake = self.state.lock().machine.wake_at().map(|at| self.at(at));
+            let notified = self.changed.notified();
+            tokio::select! {
+                biased;
+                result = &mut attempt => {
+                    let now = self.now();
+                    self.state.lock().machine.ready(now)?;
+                    return joined(result);
+                }
+                () = notified => {}
+                () = async {
+                    match wake {
+                        Some(at) => tokio::time::sleep_until(at).await,
+                        None => std::future::pending().await,
+                    }
+                } => {}
+            }
+            let now = self.now();
+            if let Err(error) = self.state.lock().machine.ready(now) {
+                break error;
+            }
+        };
+        // An attempt already finishing on its own (a provider's own timeout racing this one) is
+        // not interrupted in its cleanup; its outcome is rejected all the same.
+        if tokio::time::timeout(DEADLINE_GRACE, &mut attempt).await.is_ok() {
+            return Err(interrupted.into());
+        }
+        cancel.cancel();
+        let cleanup = std::time::Duration::from_secs_f64(self.cleanup_timeout());
+        if tokio::time::timeout(cleanup, attempt).await.is_err() {
+            stalled_cleanup();
+        }
+        Err(interrupted.into())
+    }
+}
+
+/// How long an attempt past its deadline may take to finish by itself before it is cancelled.
+const DEADLINE_GRACE: std::time::Duration = std::time::Duration::from_millis(50);
+
+fn stalled_cleanup() {
+    log::error!(
+        target: "livekit.agents",
+        "provider cleanup incomplete; its host task retains ownership until settlement"
+    );
+}
+
+/// A host failure outside the API taxonomy: never retried.
+fn host_error(error: HostError) -> ProviderError {
+    ProviderError::Host { error, api_kind: None, retryable: false, status_code: None }
+}
+
+#[cfg(test)]
+#[path = "provider_tests.rs"]
+mod executor_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -290,8 +575,7 @@ mod tests {
             RequestKind::Interruption,
             RequestKind::Avatar,
         ] {
-            let mut operation =
-                ProviderAttempts::new(kind, ApiConnectOptions::default(), 0).unwrap();
+            let mut operation = AttemptMachine::new(kind, ApiConnectOptions::default(), 0).unwrap();
             assert_eq!(operation.ready(0), Ok(true));
             let decision = operation.failure(ApiError::connection(None).into(), true, 0).unwrap();
             assert_eq!(
@@ -304,8 +588,7 @@ mod tests {
             );
         }
         for kind in [RequestKind::Llm, RequestKind::TtsBatch, RequestKind::TtsStream] {
-            let mut operation =
-                ProviderAttempts::new(kind, ApiConnectOptions::default(), 0).unwrap();
+            let mut operation = AttemptMachine::new(kind, ApiConnectOptions::default(), 0).unwrap();
             operation.ready(0).unwrap();
             let cancelled = ApiError { status_code: Some(499), ..ApiError::connection(None) };
             assert_eq!(operation.failure(cancelled.into(), false, 0).unwrap(), RetryDecision::Stop);
@@ -316,7 +599,7 @@ mod tests {
     fn recognition_is_passive_until_a_dequeued_flush_and_final_transcript_clears_the_wait() {
         let options =
             ApiConnectOptions { max_retry: 0, read_timeout: Some(2.0), ..Default::default() };
-        let mut operation = ProviderAttempts::new(RequestKind::SttStream, options, 0).unwrap();
+        let mut operation = AttemptMachine::new(RequestKind::SttStream, options, 0).unwrap();
         assert_eq!(operation.ready(0), Ok(true));
         assert_eq!(operation.ready(at(100)), Ok(false));
         operation.observe(SpeechEvent::new(SpeechEventType::StartOfSpeech), at(100));
@@ -337,7 +620,7 @@ mod tests {
     fn a_synthesis_read_deadline_runs_only_while_a_response_is_owed() {
         let options =
             ApiConnectOptions { max_retry: 0, read_timeout: Some(2.0), ..Default::default() };
-        let mut operation = ProviderAttempts::new(RequestKind::TtsStream, options, 0).unwrap();
+        let mut operation = AttemptMachine::new(RequestKind::TtsStream, options, 0).unwrap();
         assert_eq!(operation.ready(0), Ok(true));
         assert_eq!(operation.ready(at(10)), Ok(false), "idle input owes no response");
         operation.expect_response(at(10));
@@ -363,7 +646,7 @@ mod tests {
             ApiConnectOptions { max_retry: 3, read_timeout: Some(1.0), ..Default::default() };
         for kind in [RequestKind::Llm, RequestKind::TtsStream, RequestKind::SttStream] {
             for delivered in [false, true] {
-                let mut operation = ProviderAttempts::new(kind, options, 0).unwrap();
+                let mut operation = AttemptMachine::new(kind, options, 0).unwrap();
                 assert_eq!(operation.ready(0), Ok(true));
                 operation.expect_response(0);
                 let error = operation.ready(at(1)).unwrap_err();
@@ -385,7 +668,7 @@ mod tests {
     #[test]
     fn sdk_timeouts_retry_without_creating_a_second_transport_interruption() {
         let options = ApiConnectOptions { max_retry: 1, ..Default::default() };
-        let mut operation = ProviderAttempts::new(RequestKind::Llm, options, 0).unwrap();
+        let mut operation = AttemptMachine::new(RequestKind::Llm, options, 0).unwrap();
         let timeout = ApiError::timed_out(TimeoutPhase::Read);
         assert_eq!(operation.ready(0), Ok(true));
         assert_eq!(
@@ -400,7 +683,7 @@ mod tests {
     fn final_transcripts_reset_retries_without_restarting_the_total_deadline() {
         let options =
             ApiConnectOptions { max_retry: 1, total_timeout: Some(5.0), ..Default::default() };
-        let mut operation = ProviderAttempts::new(RequestKind::SttStream, options, 0).unwrap();
+        let mut operation = AttemptMachine::new(RequestKind::SttStream, options, 0).unwrap();
         assert_eq!(operation.ready(0), Ok(true));
         assert_eq!(
             operation.failure(ApiError::connection(None).into(), false, at(1)).unwrap(),
@@ -426,7 +709,7 @@ mod tests {
             total_timeout: Some(5.0),
             ..Default::default()
         };
-        let mut operation = ProviderAttempts::new(RequestKind::SttStream, options, 0).unwrap();
+        let mut operation = AttemptMachine::new(RequestKind::SttStream, options, 0).unwrap();
         assert_eq!(operation.ready(0), Ok(true));
         operation.expect_response(0);
         assert_eq!(operation.ready(at(1)).unwrap_err().phase, Some(TimeoutPhase::Read));
@@ -450,7 +733,7 @@ mod tests {
     fn a_response_timeout_after_the_input_ended_is_not_retried() {
         let options =
             ApiConnectOptions { max_retry: 3, read_timeout: Some(1.0), ..Default::default() };
-        let mut operation = ProviderAttempts::new(RequestKind::SttStream, options, 0).unwrap();
+        let mut operation = AttemptMachine::new(RequestKind::SttStream, options, 0).unwrap();
         assert_eq!(operation.ready(0), Ok(true));
         operation.input_ended(0);
         let error = operation.ready(at(1)).unwrap_err();
@@ -465,7 +748,7 @@ mod tests {
     fn a_timed_out_attempt_never_restarts_the_retry_budget() {
         let options =
             ApiConnectOptions { max_retry: 1, connect_timeout: Some(0.5), ..Default::default() };
-        let mut operation = ProviderAttempts::new(RequestKind::SttStream, options, 0).unwrap();
+        let mut operation = AttemptMachine::new(RequestKind::SttStream, options, 0).unwrap();
         let timeout = ApiError::timed_out(TimeoutPhase::Read);
         assert_eq!(operation.ready(0), Ok(true));
         assert_eq!(
@@ -480,7 +763,7 @@ mod tests {
     fn an_external_retry_owner_keeps_stream_deadlines_and_completion_validation() {
         let options =
             ApiConnectOptions { max_retry: 3, read_timeout: Some(0.0), ..Default::default() };
-        let mut operation = ProviderAttempts::new(RequestKind::SttStream, options, 0).unwrap();
+        let mut operation = AttemptMachine::new(RequestKind::SttStream, options, 0).unwrap();
         operation.external_retry_owner();
         assert_eq!(operation.ready(0), Ok(true));
         assert!(operation.succeeded(0).is_err());
@@ -493,7 +776,7 @@ mod tests {
     fn noise_start_and_end_do_not_require_a_transcript_or_arm_a_read_timer() {
         let options =
             ApiConnectOptions { max_retry: 0, read_timeout: Some(1.0), ..Default::default() };
-        let mut operation = ProviderAttempts::new(RequestKind::SttStream, options, 0).unwrap();
+        let mut operation = AttemptMachine::new(RequestKind::SttStream, options, 0).unwrap();
         operation.ready(0).unwrap();
         operation.observe(SpeechEvent::new(SpeechEventType::StartOfSpeech), 0);
         operation.observe(SpeechEvent::new(SpeechEventType::EndOfSpeech), 0);
@@ -505,7 +788,7 @@ mod tests {
     #[test]
     fn recognition_completion_refuses_premature_eof_and_pending_transcripts() {
         let options = ApiConnectOptions { max_retry: 0, ..Default::default() };
-        let mut operation = ProviderAttempts::new(RequestKind::SttStream, options, 0).unwrap();
+        let mut operation = AttemptMachine::new(RequestKind::SttStream, options, 0).unwrap();
         operation.ready(0).unwrap();
         assert!(operation.succeeded(0).is_err());
         operation.input_ended(0);

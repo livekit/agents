@@ -24,7 +24,6 @@ use lk_agents_abi::{BoxFuture, FunctionCall};
 use lk_agents_abi::{OwnedTask, SpawnerExt};
 use lk_agents_net::task::TokioSpawner;
 use std::collections::BTreeMap;
-use tokio::sync::watch;
 
 /// Runs `call` through `entry` in a copy of the host context `scope` captured, with `cx`'s span
 /// current; dropping the future cancels the host side, which still settles. A refused call
@@ -171,30 +170,4 @@ impl HostInvoker {
 }
 
 // Explicit cancellation of an owned host operation, acknowledged by its normal result.
-
-pub struct Cancellation(watch::Sender<bool>);
-impl Default for Cancellation {
-    fn default() -> Self {
-        Self(watch::channel(false).0)
-    }
-}
-impl Cancellation {
-    pub fn cancel(&self) {
-        self.0.send_replace(true);
-    }
-}
-impl lk_agents_abi::invoke::Cancellation for Cancellation {
-    fn is_cancelled(&self) -> bool {
-        *self.0.borrow()
-    }
-    fn cancelled(&self) -> BoxFuture<'_, ()> {
-        let mut changes = self.0.subscribe();
-        Box::pin(async move {
-            while !*changes.borrow_and_update() {
-                if changes.changed().await.is_err() {
-                    return;
-                }
-            }
-        })
-    }
-}
+pub use lk_agents_net::task::Cancellation;

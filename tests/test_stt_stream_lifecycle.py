@@ -185,6 +185,8 @@ async def test_recognition_close_retains_cancellation_resistant_cleanup() -> Non
         release.set()
         await closing
         await asyncio.wait_for(settled.wait(), timeout=1)
+        # the stream's task ends once the native executor reports the retained cleanup settled
+        await asyncio.wait_for(asyncio.gather(stream._task, return_exceptions=True), timeout=1)
 
 
 async def test_recognition_flush_queued_behind_backpressure_does_not_arm_read_timeout() -> None:

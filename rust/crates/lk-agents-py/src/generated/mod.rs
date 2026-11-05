@@ -405,7 +405,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(turn::resolve_keyterm_detection, m)?)?;
     m.add_function(wrap_pyfunction!(types::api_connect_options_check, m)?)?;
     m.add_function(wrap_pyfunction!(types::api_retry_interval, m)?)?;
-    m.add_class::<types::CoreProviderAttempts>()?;
+    m.add_class::<types::ProviderAttempts>()?;
     m.add_class::<utils::AudioByteStream>()?;
     m.add_class::<utils::ConnectionPoolState>()?;
     m.add_class::<utils::ExpFilter>()?;

@@ -219,7 +219,7 @@ from ._generated._core_turn import (
     resolve_keyterm_detection as resolve_keyterm_detection,
 )
 from ._generated._core_types import (
-    _core_ProviderAttempts as _core_ProviderAttempts,
+    ProviderAttempts as ProviderAttempts,
     api_connect_options_check as api_connect_options_check,
     api_retry_interval as api_retry_interval,
 )

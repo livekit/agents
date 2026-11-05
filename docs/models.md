@@ -104,7 +104,7 @@ plugin's classes, not these bases.
 | --- | --- |
 | `livekit.agents.llm` | `LLM`, `LLMStream`, `ChatChunk` (its `usage` is a `TokenUsage`), `ChoiceDelta`, `FunctionToolCall`, `LLMError`; realtime: `RealtimeModel`, `RealtimeSession`, `RealtimeCapabilities`, `RealtimeError`, `RealtimeModelError` and its events (`EventTypes`: `InputSpeechStartedEvent`, `InputSpeechStoppedEvent`, `InputTranscriptionCompleted`, `GenerationCreatedEvent` with its `MessageGeneration`s, `RemoteItemAddedEvent`, `RealtimeSessionReconnectedEvent`); duplex (`llm.duplex`): `DuplexModel`, `DuplexSession`, `DuplexCapabilities`, `DuplexRealtimeAdapter` (a duplex model as a realtime model), `DuplexAudioFrame`, `DuplexOutputTranscriptDelta`, `AudioGate`/`FixedGate`; tools as providers read them: `Tool`, `ToolContext`, `ToolChoice`, `FunctionTool`, `RawFunctionTool`, `ProviderTool`, `is_function_tool`, `is_raw_function_tool` |
 | `livekit.agents.stt`, `livekit.agents.tts` | `STT`, `RecognizeStream`, `SpeechEvent` (`SpeechEventType`, `SpeechData` alternatives, `RecognitionUsage`), `STTCapabilities`, `STTError`, `SpeakerContext`; `TTS`, `ChunkedStream`, `SynthesizeStream`, `SynthesizedAudio`, `AudioEmitter`, `TTSCapabilities`, `MarkupInfo`, `TTSError`, `SentenceStreamPacer`; each module's `FallbackAdapter` and `StreamAdapter` |
-| `livekit.agents` | `Plugin`, `VAD`, `VADStream`, `VADEvent`, `VADEventType`, `VADCapabilities`, `LanguageCode`, `get_job_context`, `NOT_GIVEN`/`NotGivenOr`/`NotGiven`, `DEFAULT_API_CONNECT_OPTIONS`, `create_api_error_from_http`, `redacted_cause` |
+| `livekit.agents` | `Plugin`, `VAD`, `VADStream`, `VADEvent`, `VADEventType`, `VADCapabilities`, `LanguageCode`, `get_job_context`, `NOT_GIVEN`/`NotGivenOr`/`NotGiven`, `DEFAULT_API_CONNECT_OPTIONS`, `create_api_error_from_http`, `redacted_cause`, `ProviderAttempts` (a stream's `_core_attempts`, see [provider attempts](#provider-attempts)) |
 | `livekit.agents.tokenize` | `SentenceTokenizer`, `SentenceStream`, `WordTokenizer`, `WordStream`, `TokenData`, `BufferedSentenceStream`, `BufferedWordStream`, the `basic` and `blingfire` tokenizers, `replace_words` |
 | `livekit.agents.utils` | `ConnectionPool`, `http_context`, `shortuuid`, `is_given`, `log_exceptions`, `EventEmitter`; `aio`: `Chan`, `ChanClosed`, `ChanEmpty`, `Interval`, `cancel_and_wait`; `media`: `AudioStreamDecoder`, `encode` |
 | `livekit.agents.voice.avatar` | `AvatarSession`, `DataStreamAudioOutput`; an avatar replaces the call's audio with `session.output.replace_audio_tail(sink)`. The avatar worker's side: `AvatarRunner`, `AvatarOptions`, `VideoGenerator`, `AudioReceiver`/`DataStreamAudioReceiver`, `AudioSegmentEnd`, `QueueAudioOutput`; it publishes on the agent's behalf (`livekit.agents.types.ATTRIBUTE_PUBLISH_ON_BEHALF`) |
@@ -125,6 +125,55 @@ A plugin keeps the cause of the errors it raises, redacted:
 `raise APIConnectionError(...) from redacted_cause(error)` chains the original
 error's type and traceback without its message, which can carry credentials or
 provider data.
+
+### Provider attempts
+
+A plugin's `LLMStream`, `ChunkedStream`, `SynthesizeStream` and
+`RecognizeStream` implement `_run`: **one attempt** at the request. The
+framework runs it; the plugin never retries, sleeps between retries or
+enforces `conn_options` itself.
+
+- **When `_run` is called.** Once when the stream starts, then once per retry,
+  each time in a fresh task. Nothing from a failed attempt is kept: an LLM
+  attempt sends its chunks again, a TTS attempt gets a fresh `AudioEmitter`, a
+  `SynthesizeStream` retry reads `input` again from its first token, and a
+  `RecognizeStream` retry reads the audio the failed attempt had not taken, with
+  `start_time`/`start_time_offset` moved on so timestamps stay linear.
+- **What is retried.** An `APIError` with `retryable=True` (the default for
+  connection errors and retryable statuses), up to `max_retry` more attempts
+  (the first after 0.1 seconds, then `retry_interval` apart), all within
+  `total_timeout`. Any other exception, or a
+  non-retryable `APIError`, ends the stream with that same exception. For LLM and TTS a
+  status 499 stops the request quietly. Once retries are exhausted the stream raises
+  `APIConnectionError` whose `__cause__` is the last attempt's error.
+- **Delivered output is final.** After an LLM chunk with content or a tool
+  call reached the reader, or TTS audio was pushed, a failure is not retried: the caller already
+  has partial output. A recognition retries regardless; transcripts already
+  sent stay delivered.
+- **Errors as events.** Each failed attempt that is retried is emitted as the
+  provider's `error` event with `recoverable=True`; the error that ends the
+  stream is emitted with `recoverable=False`: the very exception the stream
+  raises, or, once retries are exhausted, the last attempt's error (the raised
+  `APIConnectionError`'s `__cause__`). Inside a session the session reports
+  what ends the stream.
+- **Deadlines.** `read_timeout` runs only while a response is owed and
+  restarts on progress. Report it through `self._core_attempts` (a
+  `livekit.agents.ProviderAttempts`): `expect_response(final=False)` when the
+  plugin sent something that owes an answer (`final=True` for its last input),
+  `progress()` when response data arrived (a heartbeat is not progress),
+  `audio_received()` for synthesized audio, `complete_response()` when nothing
+  is owed any more. STT streams report through `send()` and the input channel
+  automatically. When a deadline passes, the attempt fails like a retryable
+  failure; one still running 50 ms later is cancelled (an attempt already
+  finishing on its own is left to finish its cleanup).
+- **Cancellation.** `_run` is cancelled when a deadline passes or the stream is
+  closed (`aclose()`). Clean up (close sockets, release connections) and let
+  `CancelledError` propagate; the stream counts as closed only after that
+  cleanup, waited for at most a bounded teardown time, after which it is
+  reported as stalled and keeps running.
+- **Inside a session.** The session owns retries and fallback: it opens the
+  stream again itself, so there `_run` runs exactly once per stream, still
+  under its deadlines.
 
 In a plugin's own retry loop, `async with conn_options.total_deadline():`
 bounds the operation by `total_timeout`, and `conn_options.interval_for_retry(n)`

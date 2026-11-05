@@ -18,8 +18,8 @@ from livekit.agents import (
     APIError,
     APIStatusError,
     APITimeoutError,
+    ProviderAttempts,
     TokenUsage,
-    _bindings,
     llm,
     utils,
 )
@@ -130,7 +130,7 @@ class _ResponsesWebsocket:
         self,
         msg: Mapping[str, object],
         *,
-        attempts: _bindings.AttemptLoop,
+        attempts: ProviderAttempts,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> AsyncGenerator[dict[str, JsonValue], None]:
         """Send ``msg`` and yield its events; ``attempts`` runs the read deadline."""

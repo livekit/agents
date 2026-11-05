@@ -16,7 +16,7 @@ from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIStatusError,
-    _bindings,
+    ProviderAttempts,
     llm as agents_llm,
     utils,
 )
@@ -25,6 +25,7 @@ from livekit.plugins.openai.responses.llm import (
     LLMStream,
     _ResponsesWebsocket,
 )
+from tests.utils.attempts import observed_attempts
 
 pytestmark = pytest.mark.plugin("openai")
 
@@ -64,8 +65,8 @@ class _RecordingWS:
         self.closed = True
 
 
-def _attempts() -> _bindings.AttemptLoop:
-    return _bindings.AttemptLoop("llm", DEFAULT_API_CONNECT_OPTIONS, lambda *_: None)
+def _attempts() -> ProviderAttempts:
+    return observed_attempts("llm", DEFAULT_API_CONNECT_OPTIONS)
 
 
 def _make_transport() -> _ResponsesWebsocket:
@@ -384,7 +385,7 @@ class _ReplayResponsesWS:
         self,
         payload: dict,
         *,
-        attempts: _bindings.AttemptLoop,
+        attempts: ProviderAttempts,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ):  # noqa: ANN201
         self.attempts += 1
@@ -503,7 +504,7 @@ class _StallingResponsesWS:
         self,
         payload: dict,
         *,
-        attempts: _bindings.AttemptLoop,
+        attempts: ProviderAttempts,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ):  # noqa: ANN201
         self.attempts += 1
@@ -610,7 +611,7 @@ class _CachingResponsesWS:
         self.concurrent_started = asyncio.Event()
 
     async def generate_response(
-        self, payload: dict, *, attempts: _bindings.AttemptLoop, conn_options: APIConnectOptions
+        self, payload: dict, *, attempts: ProviderAttempts, conn_options: APIConnectOptions
     ):
         self.requests.append(payload)
         response = {**_RESPONSE_CREATED["response"], "id": f"resp_{len(self.requests)}"}

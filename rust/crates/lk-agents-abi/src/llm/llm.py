@@ -209,8 +209,12 @@ class _LLMEventChannel(aio.Chan[ChatChunk]):
 class LLMStream(ABC):
     """One completion: ``ChatChunk`` out.
 
-    Plugins implement ``_run``, sending the provider's chunks to ``_event_ch``; its attempts are
-    retried per ``conn_options``.
+    Plugins implement ``_run``: one attempt at the request, sending the provider's chunks to
+    ``_event_ch``. The framework runs it under ``conn_options`` (docs/models.md "Provider
+    attempts"): a retryable ``APIError`` raised before any chunk with content reached the
+    reader runs ``_run`` again from the start; once content was delivered, or for any other
+    exception, the error ends the stream. The read deadline is armed while a response is owed;
+    report progress through ``self._core_attempts``.
     """
 
     def __init__(
@@ -227,29 +231,47 @@ class LLMStream(ABC):
         self._conn_options = conn_options
         self._event_ch = _LLMEventChannel()
         self._metrics = self._new_metrics()
-        self._core_attempts = _bindings.AttemptLoop("llm", conn_options, self._emit_error)
+        self._core_attempts: _core.ProviderAttempts = _core.ProviderAttempts(
+            "llm", conn_options, self
+        )
+        self._core_attempt_task: asyncio.Task[None] | None = None
+        self._core_cancelled = False
         self._task = asyncio.create_task(self._main_task(), name="LLM._main_task")
         self._task.add_done_callback(lambda _: self._event_ch.close())
 
     @abstractmethod
-    async def _run(self) -> None: ...
+    async def _run(self) -> None:
+        """One attempt: send the request and push every chunk to ``_event_ch``.
+
+        Called once per attempt, in a fresh task; a retry calls it again with nothing kept
+        from the failed attempt. Raise ``APIError`` (``retryable=True`` for transient
+        failures) to fail the attempt. Cancellation means a deadline passed or the stream was
+        closed: clean up and let it propagate.
+        """
 
     def _new_metrics(self) -> _core.LlmMetricState:
         llm = self._llm
         return _core.LlmMetricState(time.perf_counter(), llm.label, llm.model, llm.provider)
 
-    async def _attempt(self) -> None:
+    async def _core_attempt(self, retry: bool) -> None:
+        _bindings.attempt_started(self)
         self._metrics = self._new_metrics()
         await self._run()
 
+    def _core_produced(self) -> bool:
+        return self._event_ch.output_sent
+
+    def _core_retrying(self, error: Exception) -> None:
+        self._llm._emit_error(error, True)
+
+    def _core_failed(self, error: Exception) -> None:
+        self._llm._emit_error(error, False)
+
     async def _main_task(self) -> None:
-        # a failure after output reached the reader is final: the core never retries it
-        await self._core_attempts.run(self._attempt, produced=lambda: self._event_ch.output_sent)
+        # run() starts from the task, after the framework set ``core``
+        await _bindings.run_attempts(self, self._core_attempts)
         record = self._metrics.finish(time.perf_counter(), False, time.time())
         _bindings.emit_metrics(self._llm, record)
-
-    def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
-        self._llm._emit_error(api_error, recoverable)
 
     def send(self, chunk: ChatChunk) -> None:
         """Hand ``chunk`` to the reader."""

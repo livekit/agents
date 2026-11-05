@@ -6,7 +6,7 @@ import asyncio
 import contextlib
 import time
 import weakref
-from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterable, AsyncIterator, Callable
 from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar, cast
 
 from pydantic import BaseModel
@@ -14,12 +14,6 @@ from pydantic import BaseModel
 from livekit import rtc
 
 from . import _core
-from ._generated._retry import (
-    _core_RetryDecisionExhausted,
-    _core_RetryDecisionRaise,
-    _core_RetryDecisionRetry,
-    _core_RetryDecisionStop,
-)
 from .log import logger
 
 if TYPE_CHECKING:
@@ -161,149 +155,30 @@ def core_leg(provider: _Provider | None) -> Any:
     return None if provider is None else provider._core_leg()
 
 
-def _now_ns() -> int:
-    return int(asyncio.get_running_loop().time() * 1e9)
+class AttemptHost(Protocol):
+    """What ``ProviderAttempts`` runs for one provider request (docs/models.md "Provider
+    attempts"). ``LLMStream``, ``ChunkedStream``, ``SynthesizeStream`` and ``RecognizeStream``
+    implement it; a plugin implements ``_run`` and never these."""
 
+    _core_attempt_task: asyncio.Task[Any] | None
+    _core_cancelled: bool
 
-class AttemptLoop:
-    """Execute host callbacks as the shared supplied-time attempt machine authorizes them."""
+    async def _core_attempt(self, retry: bool) -> object:
+        """One attempt: the provider's ``_run``, its value the request's result; ``retry``: an
+        earlier attempt failed, so a stream replaying its input rewinds it first."""
+        ...
 
-    def __init__(
-        self, kind: str, conn: APIConnectOptions, emit_error: Callable[[Exception, bool], None]
-    ) -> None:
-        self.kind = kind
-        self.emit_error = emit_error
-        self.core = False
-        self._request = _core._core_ProviderAttempts(kind, conn, _now_ns())
-        self._changed = asyncio.Event()
+    def _core_produced(self) -> bool:
+        """Whether output already reached the caller, so the request may not be replayed."""
+        ...
 
-    @property
-    def core(self) -> bool:
-        return self._core
+    def _core_retrying(self, error: Exception) -> None:
+        """A failed attempt that will be retried, as the provider's recoverable ``error``."""
+        ...
 
-    @core.setter
-    def core(self, value: bool) -> None:
-        self._core = value
-        if value:
-            self._request.external_retry_owner()
-
-    @property
-    def cleanup_timeout(self) -> float:
-        return self._request.cleanup_timeout
-
-    def expect_response(self, *, final: bool = False) -> None:
-        """A request was written and owes a response; ``final``: the last input was sent."""
-        if final:
-            self._request.input_ended(_now_ns())
-        else:
-            self._request.expect_response(_now_ns())
-        self._changed.set()
-
-    def input_ended(self) -> None:
-        self._request.input_ended(_now_ns())
-        self._changed.set()
-
-    def progress(self) -> None:
-        """Response data arrived; heartbeats are not progress."""
-        self._observe_response("progress")
-
-    def audio_received(self) -> None:
-        """Audio settles a protocol's first response; after the final input it is progress."""
-        self._observe_response("audio")
-
-    def complete_response(self) -> None:
-        """No response remains outstanding."""
-        self._observe_response("complete")
-
-    def _observe_response(self, observation: str) -> None:
-        self._request.observe_response(observation, _now_ns())
-        self._changed.set()
-
-    def observe(self, event: SpeechEvent) -> None:
-        self._request.observe(event, _now_ns())
-        self._changed.set()
-
-    async def run(
-        self,
-        attempt: Callable[[], Awaitable[_T]],
-        *,
-        produced: Callable[[], bool] = lambda: False,
-        again: Callable[[], None] = lambda: None,
-    ) -> _T:
-        if self.core:
-            try:
-                if not self._request.ready(_now_ns()):
-                    raise RuntimeError("provider request has no pending attempt")
-                value = await self._execute(attempt)
-                self._request.succeeded(_now_ns())
-                return value
-            finally:
-                self._request.cancel(_now_ns())
-        retrying = False
-        terminal_error: Exception | None = None
-        try:
-            while True:
-                while not self._request.ready(_now_ns()):
-                    at = self._request.wake_at()
-                    if at is None:
-                        raise RuntimeError("provider request has no pending attempt")
-                    await asyncio.sleep(max(0.0, (at - _now_ns()) / 1e9))
-                if retrying:
-                    again()
-                try:
-                    value = await self._execute(attempt)
-                    self._request.succeeded(_now_ns())
-                    return value
-                except Exception as error:
-                    decision = self._request.failure(error, produced(), _now_ns())
-                    match decision:
-                        case _core_RetryDecisionStop():
-                            return cast(_T, None)
-                        case _core_RetryDecisionRaise():
-                            raise
-                        case _core_RetryDecisionExhausted(message=message):
-                            terminal_error = error
-                            raise APIConnectionError(message) from error
-                        case _core_RetryDecisionRetry(delay=delay):
-                            self.emit_error(error, True)
-                            logger.warning(
-                                f"{self.kind} attempt failed: {error}, retrying in {delay}s"
-                            )
-                    retrying = True
-        except Exception as error:
-            self.emit_error(terminal_error if terminal_error is not None else error, False)
-            raise
-        finally:
-            self._request.cancel(_now_ns())
-
-    async def _execute(self, attempt: Callable[[], Awaitable[_T]]) -> _T:
-        from .utils import aio
-
-        async def invoke() -> _T:
-            return await attempt()
-
-        task = asyncio.create_task(invoke())
-        changed = asyncio.create_task(self._changed.wait())
-        try:
-            while True:
-                at = self._request.wake_at()
-                timeout = None if at is None else max(0.0, (at - _now_ns()) / 1e9)
-                await asyncio.wait(
-                    (task, changed), timeout=timeout, return_when=asyncio.FIRST_COMPLETED
-                )
-                # Time and observations return to the core before a result is accepted.
-                self._request.ready(_now_ns())
-                if task.done():
-                    return task.result()
-                if changed.done():
-                    self._changed.clear()
-                    changed = asyncio.create_task(self._changed.wait())
-        finally:
-            if not await aio.cancel_and_wait(task, changed, timeout=self.cleanup_timeout):
-                logger.error(
-                    "provider cleanup incomplete; its host task retains ownership until settlement",
-                    extra={"pending_host_cleanup": aio.pending_cleanup_count()},
-                )
+    def _core_failed(self, error: Exception) -> None:
+        """The error that ends the request, as the provider's unrecoverable ``error``."""
+        ...
 
 
 async def pump(
@@ -347,6 +222,70 @@ def emit_metrics(provider: _MetricsProvider, record: BaseModel | None) -> None:
         provider.emit("metrics_collected", record)
 
 
+async def run_attempts(host: AttemptHost, attempts: _core.ProviderAttempts) -> object:
+    """``attempts.run()`` for ``host``. A cancellation cancels the running attempt in the same
+    turn, as ``aclose()`` promises, then waits for its cleanup before propagating."""
+    try:
+        return await attempts.run()
+    except asyncio.CancelledError:
+        host._core_cancelled = True
+        if (task := host._core_attempt_task) is not None and not task.done():
+            task.cancel()
+        await attempts.settled()
+        raise
+    except Exception as error:
+        # the session reports what ends a request it owns; otherwise the ending event carries
+        # the last attempt's error once retries were exhausted, else the very exception raised
+        if not attempts.core:
+            cause = error.__cause__ if attempts.exhausted else None
+            host._core_failed(cause if isinstance(cause, Exception) else error)
+        raise
+
+
+def attempt_started(host: AttemptHost) -> None:
+    """Called first in every ``_core_attempt``: records the attempt's task so a cancellation
+    reaches it in the same turn; an attempt starting after its request was cancelled does not
+    run."""
+    if host._core_cancelled:
+        raise asyncio.CancelledError
+    host._core_attempt_task = asyncio.current_task()
+
+
+class _Recognition:
+    """``recognize``'s one request: ``_recognize_impl`` in attempts."""
+
+    def __init__(
+        self,
+        stt: STT,
+        buffer: list[rtc.AudioFrame] | rtc.AudioFrame,
+        *,
+        language: NotGivenOr[str],
+        conn_options: APIConnectOptions,
+    ) -> None:
+        self._stt, self._buffer, self._language, self._conn = stt, buffer, language, conn_options
+        self._attempts = _core.ProviderAttempts("stt_batch", conn_options, self)
+        self._core_attempt_task: asyncio.Task[object] | None = None
+        self._core_cancelled = False
+
+    async def run(self) -> object:
+        return await run_attempts(self, self._attempts)
+
+    async def _core_attempt(self, retry: bool) -> SpeechEvent:
+        attempt_started(self)
+        return await self._stt._recognize_impl(
+            self._buffer, language=self._language, conn_options=self._conn
+        )
+
+    def _core_produced(self) -> bool:
+        return False
+
+    def _core_retrying(self, error: Exception) -> None:
+        self._stt._emit_error(error, True)
+
+    def _core_failed(self, error: Exception) -> None:
+        self._stt._emit_error(error, False)
+
+
 async def recognize(
     stt: STT,
     buffer: list[rtc.AudioFrame] | rtc.AudioFrame,
@@ -356,9 +295,9 @@ async def recognize(
 ) -> SpeechEvent:
     """``STT.recognize``: ``_recognize_impl`` in attempts, its metrics once it answers."""
     started = time.perf_counter()
-    attempts = AttemptLoop("stt_batch", conn_options, stt._emit_error)
-    event = await attempts.run(
-        lambda: stt._recognize_impl(buffer, language=language, conn_options=conn_options)
+    event = cast(
+        "SpeechEvent",
+        await _Recognition(stt, buffer, language=language, conn_options=conn_options).run(),
     )
     frames = buffer if isinstance(buffer, list) else [buffer]
     record = _core.stt_batch_metrics(
