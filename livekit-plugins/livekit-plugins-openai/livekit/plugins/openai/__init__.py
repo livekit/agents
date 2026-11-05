@@ -23,7 +23,7 @@ See https://docs.livekit.io/agents/integrations/openai/ and
 https://docs.livekit.io/agents/integrations/llm/ for more information.
 """
 
-from . import realtime, responses, tools
+from . import beta, realtime, responses, tools
 from .decision_model import DecisionModel
 from .embeddings import EmbeddingData, create_embeddings
 from .llm import LLM, LLMStream
@@ -53,6 +53,7 @@ __all__ = [
     "TTSVoices",
     "create_embeddings",
     "EmbeddingData",
+    "beta",
     "realtime",
     "tools",
     "responses",
