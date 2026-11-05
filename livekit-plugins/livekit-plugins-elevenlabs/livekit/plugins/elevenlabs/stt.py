@@ -139,14 +139,12 @@ class STT(stt.STT):
         secondary_languages: NotGivenOr[list[str]] = NOT_GIVEN,
         include_language_detection: NotGivenOr[bool] = NOT_GIVEN,
         tag_audio_events: bool = True,
-        use_realtime: NotGivenOr[bool] = NOT_GIVEN,  # Deprecated
         sample_rate: STTRealtimeSampleRates = 16000,
         audio_chunk_duration_ms: int = 50,
         server_vad: NotGivenOr[VADOptions] = NOT_GIVEN,
         include_timestamps: bool = False,
         http_session: aiohttp.ClientSession | None = None,
         model: NotGivenOr[ElevenLabsSTTModels | str] = NOT_GIVEN,
-        model_id: NotGivenOr[ElevenLabsSTTModels | str] = NOT_GIVEN,  # Deprecated
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
         no_verbatim: NotGivenOr[bool] = NOT_GIVEN,
         enable_logging: bool = True,
@@ -171,8 +169,6 @@ class STT(stt.STT):
                 supported for Scribe v2 realtime.
             tag_audio_events (bool): Whether to tag audio events like (laughter), (footsteps), etc. in the transcription.
                 Only supported for Scribe v1 model. Default is True.
-            use_realtime (bool): Whether to use "scribe_v2_realtime" model for streaming mode. Default is NOT_GIVEN.
-                Note that this flag is deprecated in favour of explicitly specifying the model id.
             sample_rate (STTRealtimeSampleRates): Audio sample rate in Hz. Default is 16000.
             audio_chunk_duration_ms (int): Duration of each outgoing realtime audio chunk in
                 milliseconds. Must be a positive integer. Defaults to 50. Larger chunks reduce
@@ -180,9 +176,8 @@ class STT(stt.STT):
                 remaining chunk before committing. Only used for Scribe v2 realtime.
             server_vad (NotGivenOr[VADOptions]): Server-side VAD options, only supported for Scribe v2 realtime model.
             http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
-            model (ElevenLabsSTTModels | str): ElevenLabs STT model to use. If not specified a default model will
-                be selected based on parameters provided.
-            model_id (ElevenLabsSTTModels | str): Deprecated alias for `model`. Use `model` instead.
+            model (ElevenLabsSTTModels | str): ElevenLabs STT model to use; "scribe_v2_realtime"
+                streams, any other model transcribes in batch. Defaults to "scribe_v1".
             keyterms (NotGivenOr[list[str]]): A list of keywords or phrases to bias the transcription towards.
                 Supported for both Scribe v2 (batch) and Scribe v2 realtime. Batch accepts up to
                 1000 keyterms of at most 50 characters each; realtime accepts up to 50 keyterms of
@@ -198,27 +193,6 @@ class STT(stt.STT):
 
         _validate_audio_chunk_duration(audio_chunk_duration_ms)
 
-        if is_given(model_id):
-            if is_given(model):
-                logger.warning(
-                    "both `model` and `model_id` parameters are provided. `model_id` will be ignored."
-                )
-            else:
-                logger.warning("`model_id` parameter is deprecated, use `model` instead.")
-                model = model_id
-
-        if is_given(use_realtime):
-            if is_given(model):
-                logger.warning(
-                    "both `use_realtime` and `model` parameters are provided. `use_realtime` will be ignored."
-                )
-            else:
-                logger.warning(
-                    "`use_realtime` parameter is deprecated. "
-                    "Specify a realtime model to enable streaming. "
-                    "Defaulting model to one based on use_realtime parameter. "
-                )
-                model = "scribe_v2_realtime" if use_realtime else "scribe_v1"
         model = model if is_given(model) else "scribe_v1"
         use_realtime = model == "scribe_v2_realtime"
 

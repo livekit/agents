@@ -75,6 +75,15 @@ def _websocket_text_message(payload: dict[str, object]) -> object:
     return SimpleNamespace(type=aiohttp.WSMsgType.TEXT, data=json.dumps(payload))
 
 
+def test_synthesize_url_carries_no_streaming_latency_optimization() -> None:
+    tts = elevenlabs_tts.TTS(api_key="test-key", voice_id="voice-1")
+    url = elevenlabs_tts._synthesize_url(tts._opts)  # pyright: ignore[reportPrivateUsage]
+    assert url.startswith(f"{tts._opts.base_url}/text-to-speech/voice-1/stream?")
+    assert "optimize_streaming_latency" not in url
+    with pytest.raises(TypeError):
+        elevenlabs_tts.TTS(api_key="test-key", streaming_latency=3)  # type: ignore[call-arg]
+
+
 def test_auto_mode_defaults_to_false_with_chunk_length_schedule() -> None:
     tts = elevenlabs_tts.TTS(api_key="test-key", chunk_length_schedule=[120, 160, 250, 290])
     assert tts._opts.auto_mode is False

@@ -117,8 +117,6 @@ class STT(stt.STT):
         dictation: bool = False,
         replace: dict[str, str] | None = None,
         search: list[str] | None = None,
-        # deprecated
-        keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
         """Create a new instance of Deepgram STT.
 
@@ -190,11 +188,6 @@ class STT(stt.STT):
         self._api_key = deepgram_api_key
 
         model = _validate_model(model, language)
-        if is_given(keyterms):
-            logger.warning(
-                "`keyterms` is deprecated, use `keyterm` instead for consistency with Deepgram API."
-            )
-            keyterm = keyterms
         _validate_keyterm(model, language, keyterm, keywords)
 
         self._opts = STTOptions(
@@ -354,8 +347,6 @@ class STT(stt.STT):
         dictation: NotGivenOr[bool] = NOT_GIVEN,
         replace: NotGivenOr[dict[str, str] | None] = NOT_GIVEN,
         search: NotGivenOr[list[str] | None] = NOT_GIVEN,
-        # deprecated
-        keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
         if is_given(language):
             self._opts.language = LanguageCode(language)
@@ -381,11 +372,6 @@ class STT(stt.STT):
             self._opts.filler_words = filler_words
         if is_given(keywords):
             self._opts.keywords = keywords
-        if is_given(keyterms):
-            logger.warning(
-                "`keyterms` is deprecated, use `keyterm` instead for consistency with Deepgram API."
-            )
-            keyterm = keyterms
         if is_given(keyterm):
             self._user_keyterm = [keyterm] if isinstance(keyterm, str) else list(keyterm)
             keyterm = list(dict.fromkeys([*self._user_keyterm, *self._session_keyterms]))
@@ -529,8 +515,6 @@ class SpeechStream(stt.RecognizeStream):
         dictation: NotGivenOr[bool] = NOT_GIVEN,
         replace: NotGivenOr[dict[str, str] | None] = NOT_GIVEN,
         search: NotGivenOr[list[str] | None] = NOT_GIVEN,
-        # deprecated
-        keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
         if is_given(language):
             self._opts.language = LanguageCode(language)
@@ -556,11 +540,6 @@ class SpeechStream(stt.RecognizeStream):
             self._opts.filler_words = filler_words
         if is_given(keywords):
             self._opts.keywords = keywords
-        if is_given(keyterms):
-            logger.warning(
-                "`keyterms` is deprecated, use `keyterm` instead for consistency with Deepgram API."
-            )
-            keyterm = keyterms
         if is_given(keyterm):
             self._opts.keyterm = keyterm
             self._pending_keyterm = None

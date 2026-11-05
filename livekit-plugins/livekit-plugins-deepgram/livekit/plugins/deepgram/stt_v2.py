@@ -85,8 +85,6 @@ class STTv2(stt.STT):
         numerals: bool = False,
         profanity_filter: bool = False,
         redact: NotGivenOr[FluxRedaction] = NOT_GIVEN,
-        # deprecated
-        keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
         """Create a new instance of Deepgram STT.
 
@@ -129,12 +127,6 @@ class STTv2(stt.STT):
         if not deepgram_api_key:
             raise ValueError("Deepgram API key is required")
         self._api_key = deepgram_api_key
-
-        if is_given(keyterms):
-            logger.warning(
-                "`keyterms` is deprecated, use `keyterm` instead for consistency with Deepgram API."
-            )
-            keyterm = keyterms
 
         if is_given(eager_eot_threshold):
             effective_eot = eot_threshold if is_given(eot_threshold) else 0.7
@@ -230,8 +222,6 @@ class STTv2(stt.STT):
         tags: NotGivenOr[list[str]] = NOT_GIVEN,
         language_hint: NotGivenOr[list[str]] = NOT_GIVEN,
         endpoint_url: NotGivenOr[str] = NOT_GIVEN,
-        # deprecated
-        keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
         effective_eager = (
             eager_eot_threshold if is_given(eager_eot_threshold) else self._opts.eager_eot_threshold
@@ -253,11 +243,6 @@ class STTv2(stt.STT):
             self._opts.eot_threshold = eot_threshold
         if is_given(eot_timeout_ms):
             self._opts.eot_timeout_ms = eot_timeout_ms
-        if is_given(keyterms):
-            logger.warning(
-                "`keyterms` is deprecated, use `keyterm` instead for consistency with Deepgram API."
-            )
-            keyterm = keyterms
         if is_given(keyterm):
             self._user_keyterm = [keyterm] if isinstance(keyterm, str) else list(keyterm)
             keyterm = list(dict.fromkeys([*self._user_keyterm, *self._session_keyterms]))
@@ -358,8 +343,6 @@ class SpeechStreamv2(stt.RecognizeStream):
         language_hint: NotGivenOr[list[str]] = NOT_GIVEN,
         endpoint_url: NotGivenOr[str] = NOT_GIVEN,
         eager_eot_threshold: NotGivenOr[float] = NOT_GIVEN,
-        # deprecated
-        keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
         if is_given(model):
             self._opts.model = model
@@ -369,11 +352,6 @@ class SpeechStreamv2(stt.RecognizeStream):
             self._opts.eot_threshold = eot_threshold
         if is_given(eot_timeout_ms):
             self._opts.eot_timeout_ms = eot_timeout_ms
-        if is_given(keyterms):
-            logger.warning(
-                "`keyterms` is deprecated, use `keyterm` instead for consistency with Deepgram API."
-            )
-            keyterm = keyterms
         if is_given(keyterm):
             self._opts.keyterm = keyterm
         if is_given(mip_opt_out):

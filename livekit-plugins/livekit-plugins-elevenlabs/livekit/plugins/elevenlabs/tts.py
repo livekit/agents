@@ -108,7 +108,6 @@ class TTS(tts.TTS):
         encoding: NotGivenOr[TTSEncoding] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
-        streaming_latency: NotGivenOr[int] = NOT_GIVEN,
         inactivity_timeout: int = WS_INACTIVITY_TIMEOUT,
         auto_mode: NotGivenOr[bool] = NOT_GIVEN,
         apply_text_normalization: Literal["auto", "off", "on"] = "auto",
@@ -137,7 +136,6 @@ class TTS(tts.TTS):
                 instance, same as other models).
             api_key (NotGivenOr[str]): ElevenLabs API key. Can be set via argument or `ELEVEN_API_KEY` environment variable.
             base_url (NotGivenOr[str]): Custom base URL for the API. Optional.
-            streaming_latency (NotGivenOr[int]): Optimize for streaming latency, defaults to 0 - disabled. 4 for max latency optimizations. deprecated
             inactivity_timeout (int): Inactivity timeout in seconds for the websocket connection. Defaults to 300.
             auto_mode (bool): Reduces latency by disabling chunk schedule and buffers.
                 Sentence tokenizer will be used to synthesize one sentence at a time.
@@ -196,7 +194,6 @@ class TTS(tts.TTS):
             base_url=base_url if is_given(base_url) else API_BASE_URL_V1,
             encoding=encoding,
             sample_rate=self.sample_rate,
-            streaming_latency=streaming_latency,
             word_tokenizer=word_tokenizer,
             chunk_length_schedule=chunk_length_schedule,
             enable_ssml_parsing=enable_ssml_parsing,
@@ -241,7 +238,6 @@ class TTS(tts.TTS):
             name
             for name, is_set in (
                 ("chunk_length_schedule", is_given(self._opts.chunk_length_schedule)),
-                ("streaming_latency", is_given(self._opts.streaming_latency)),
                 ("enable_ssml_parsing", self._opts.enable_ssml_parsing),
                 (
                     "apply_language_text_normalization",
@@ -657,7 +653,6 @@ class _TTSOptions:
     base_url: str
     encoding: TTSEncoding
     sample_rate: int
-    streaming_latency: NotGivenOr[int]
     word_tokenizer: tokenize.WordTokenizer | tokenize.SentenceTokenizer
     chunk_length_schedule: NotGivenOr[list[int]]
     enable_ssml_parsing: bool
@@ -1390,13 +1385,10 @@ def _synthesize_url(opts: _TTSOptions) -> str:
     base_url = opts.base_url
     voice_id = opts.voice_id
     output_format = opts.encoding
-    url = (
+    return (
         f"{base_url}/text-to-speech/{voice_id}/stream?"
         f"output_format={output_format}&enable_logging={str(opts.enable_logging).lower()}"
     )
-    if is_given(opts.streaming_latency):
-        url += f"&optimize_streaming_latency={opts.streaming_latency}"
-    return url
 
 
 def _multi_stream_url(opts: _TTSOptions) -> str:
