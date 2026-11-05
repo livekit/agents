@@ -7,7 +7,6 @@ import asyncio
 import contextlib
 import contextvars
 import dataclasses
-import weakref
 from collections import deque
 from collections.abc import AsyncIterable, AsyncIterator, Callable, Coroutine
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -229,8 +228,6 @@ def initialize(
     )
     # `update_agent(chat_ctx=)` before `start()`: the history the session starts on
     session._start_chat_ctx = None
-    session._agent_state = "initializing"
-    session._user_state = "listening"
     session._input = io.AgentInput(session)
     session._output = io.AgentOutput(session)
     # what a job's session report reads
@@ -253,8 +250,6 @@ def initialize(
     session._recording_path = None
     session._audio_input_options = None
     session._tasks = set()
-    # the handles the core announced, for their done callbacks (``speech_done``)
-    session._speech_handles = weakref.WeakValueDictionary()
 
 
 class SessionAdapter:

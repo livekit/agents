@@ -111,6 +111,13 @@ pub trait SpeechHandle: Send + Sync + Sized + 'static {
     /// Resolves once the loop has created the speech and put it in the queue.
     #[host(await)]
     async fn wait_until_created(&self) -> Result<(), SpeechRefused>;
+
+    /// Resolves once the session has handed the host this speech's `speech_done` event, so what
+    /// waits on it runs after that event's callbacks; at once for a speech the session ended
+    /// before creating and for a handle constructed directly, and when the session closes for one
+    /// it never reported. Never raises.
+    #[host(await)]
+    async fn wait_reported(&self);
 }
 
 // Public data contracts. Python behavior remains in its adapters.

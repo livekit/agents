@@ -43,10 +43,18 @@ impl HostDrain {
                     };
                     self.forward_usage(&mut forwarded);
                     self.deliver(wire);
+                    // What waits on the speech's end runs after the host handled its event.
+                    if let VoiceHostEvent::Session(SessionEvent::SpeechDone { speech, .. }) = ev
+                        && let Some(handle) = speeches.get(speech)
+                    {
+                        handle.reported();
+                    }
                 }
             }
         }
         answering.into_iter().for_each(|task| self.tasks.cancel(task));
+        // The session reports nothing more: no wait on a speech's end outlives it.
+        runner.speeches.report_all();
         // Dropping the runner tells `aclose()` the host has seen everything.
         drop(runner);
         // However the session closed, its remote session host closes with it.

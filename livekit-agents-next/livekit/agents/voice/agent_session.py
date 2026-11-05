@@ -12,7 +12,6 @@ import asyncio
 import contextlib
 import contextvars
 import copy
-import weakref
 from collections import deque
 from collections.abc import AsyncIterable, AsyncIterator, Callable, Sequence
 from pathlib import Path
@@ -121,8 +120,6 @@ class VoiceSession(SessionCommands, rtc.EventEmitter[EventTypes], Generic[Contex
     _store: ContextStore | None
     _room: rtc.Room | None
     _amd: AMD | None
-    _agent_state: AgentState
-    _user_state: UserState
     _started_at: float | None
     _event_snapshots: deque[dict[str, Any]]
     _root_span_context: Any
@@ -132,7 +129,6 @@ class VoiceSession(SessionCommands, rtc.EventEmitter[EventTypes], Generic[Contex
     _recording_path: Path | None
     _audio_input_options: AudioInputOptions | None
     _tasks: set[asyncio.Task[Any]]
-    _speech_handles: weakref.WeakValueDictionary[str, SpeechHandle]
 
     def __init__(
         self,
@@ -267,11 +263,14 @@ class VoiceSession(SessionCommands, rtc.EventEmitter[EventTypes], Generic[Contex
 
     @property
     def agent_state(self) -> AgentState:
-        return self._agent_state
+        """``"initializing"`` until the agent's first state change; read as ``history`` is, as
+        of the event being handled inside a callback and the latest delivered elsewhere."""
+        return self._state.agent_state
 
     @property
     def user_state(self) -> UserState:
-        return self._user_state
+        """``"listening"`` until the person's first state change; read as ``history`` is."""
+        return self._state.user_state
 
     @property
     def current_agent(self) -> Agent:

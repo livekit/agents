@@ -108,6 +108,8 @@ pub struct SpeechHandle {
     /// `_interrupt_fut`: one-shot, the whole speech (its tools and any follow-up step).
     interrupted: Monotone<bool>,
     done: Monotone<bool>,
+    /// The session handed the host this speech's `speech_done` event, or will never hand it one.
+    reported: Monotone<bool>,
     /// How many steps were authorized to play: each authorization opens one generation.
     authorized: Monotone<usize>,
     /// One cell per authorized step, addressed absolutely: set once its generation is done.
@@ -143,6 +145,7 @@ impl SpeechHandle {
             scheduled: Monotone::new(false),
             interrupted: Monotone::new(false),
             done: Monotone::new(false),
+            reported: Monotone::new(false),
             authorized: Monotone::new(0),
             generations: Mutex::new(Vec::new()),
             inner: Mutex::new(Inner {
@@ -376,6 +379,11 @@ impl SpeechHandle {
         self.interrupted.wait_for(|set| *set).await;
     }
 
+    /// The session handed the host this speech's `speech_done` event, or never will.
+    pub fn reported(&self) {
+        self.reported.set(true);
+    }
+
     /// `wait_for_playout()`, and so `__await__`; the host's call adds the self-wait guard.
     pub async fn wait_for_playout(&self) {
         self.done.wait_for(|set| *set).await;
@@ -507,6 +515,12 @@ impl Speeches {
 
     pub fn get(&self, id: SpeechId) -> Option<Arc<SpeechHandle>> {
         self.handles.lock().get(&id).cloned()
+    }
+
+    /// The session ended: no speech it holds will be reported done.
+    pub fn report_all(&self) {
+        let handles: Vec<_> = self.handles.lock().values().cloned().collect();
+        handles.iter().for_each(|handle| handle.reported());
     }
 
     /// Nothing names `id` any more: the session lets its handle go (the host keeps its own).
@@ -716,6 +730,12 @@ impl lk_agents_abi::voice::speech_handle::SpeechHandle for SpeechHandle {
 
     async fn wait_until_created(&self) -> Result<(), HostRefused> {
         self.wait_created().await.map_err(refused)
+    }
+
+    async fn wait_reported(&self) {
+        if self.wait_created().await.is_ok() {
+            self.reported.wait_for(|set| *set).await;
+        }
     }
 }
 

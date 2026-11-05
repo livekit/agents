@@ -323,12 +323,12 @@ pub struct Variant {
     pub route: Option<Route>,
 }
 
-/// `#[host(event)]`: emitted as the public event its model's `type` names (`mirror`: the host also
-/// keeps the event's `new_state` on that attribute); `#[host(ignored)]`: received, not acted on.
+/// `#[host(event)]`: emitted as the public event its model's `type` names; `#[host(ignored)]`:
+/// received, not acted on.
 /// Other members have host behaviour.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Route {
-    Event { mirror: Option<String> },
+    Event,
     Ignored,
 }
 

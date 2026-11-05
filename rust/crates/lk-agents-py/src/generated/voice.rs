@@ -3751,7 +3751,8 @@ pub fn plan_session_start<'py>(
 type CoreSessionStateImpl =
     <crate::generated::implementations::Selected as super::Implementations>::SessionState;
 
-/// `CoreSessionState`: one delivered state, as the host reads it.
+/// `CoreSessionState`: one delivered state (the history and the agent's and user's states), as
+/// the host reads it.
 #[pyclass(frozen, name = "_core_SessionState", module = "livekit.agents._core")]
 pub struct CoreSessionState(pub(crate) ::std::sync::Arc<CoreSessionStateImpl>);
 
@@ -3772,6 +3773,22 @@ impl CoreSessionState {
             )?
             .into_any(),
         )
+    }
+
+    /// `session.agent_state`: `"initializing"` until the first `agent_state_changed`.
+    #[getter]
+    fn agent_state<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| <CoreSessionStateImpl as ::lk_agents_abi::voice::session_effects::SessionState>::agent_state(&self.0));
+        crate::generated::records::events::agent_state_to_py(py, out)
+    }
+
+    /// `session.user_state`: `"listening"` until the first `user_state_changed`.
+    #[getter]
+    fn user_state<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| <CoreSessionStateImpl as ::lk_agents_abi::voice::session_effects::SessionState>::user_state(&self.0));
+        crate::generated::records::events::user_state_to_py(py, out)
     }
 }
 
@@ -4608,6 +4625,20 @@ impl SpeechHandle {
         crate::py_calls::future_into_py(py, async move {
             let () = <SpeechHandleImpl as ::lk_agents_abi::voice::speech_handle::SpeechHandle>::wait_until_created(&this, )
                 .await.map_err(|e: ::lk_agents_abi::voice::speech_handle::SpeechRefused| <::lk_agents_abi::voice::speech_handle::SpeechRefused as crate::py_errors::HostException>::to_py_err(&e))?;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
+        })
+    }
+
+    /// Resolves once the session has handed the host this speech's `speech_done` event, so what
+    /// waits on it runs after that event's callbacks; at once for a speech the session ended
+    /// before creating and for a handle constructed directly, and when the session closes for one
+    /// it never reported. Never raises.
+    fn wait_reported<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::py_calls::future_into_py(py, async move {
+            let () = <SpeechHandleImpl as ::lk_agents_abi::voice::speech_handle::SpeechHandle>::wait_reported(&this, )
+                .await;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
         })
     }

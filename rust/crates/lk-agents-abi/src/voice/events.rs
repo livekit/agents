@@ -662,8 +662,8 @@ pub struct HistoryReloadedWire {
 
 /// Every event the session hands its host, as the record the host reads, routed by its class.
 ///
-/// `#[host(event)]` members are emitted as public session events (`mirror` keeps the event's
-/// `new_state` on the session) and `#[host(ignored)]` ones are dropped, both via
+/// `#[host(event)]` members are emitted as public session events and `#[host(ignored)]` ones are
+/// dropped, both via
 /// `_generated/session_dispatch.py`; the rest have host behaviour.
 #[crate::host(record(module = "session_wire", emit, transparent, dispatch = "session_dispatch"))]
 pub enum HostWire {
@@ -691,9 +691,9 @@ pub enum HostWire {
     BackchannelConfirmed(BackchannelConfirmedWire),
     #[host(ignored)]
     OverlapInterruption(OverlapInterruptionEvent),
-    #[host(event(mirror = "_agent_state"))]
+    #[host(event)]
     AgentStateChanged(AgentStateChanged),
-    #[host(event(mirror = "_user_state"))]
+    #[host(event)]
     UserStateChanged(UserStateChanged),
     #[host(event)]
     AgentFalseInterruption(AgentFalseInterruption),
@@ -704,6 +704,8 @@ pub enum HostWire {
     RunItemAdded(RunItemAddedWire),
     RunRefused(RunRefusedWire),
     RunSettled(RunSettledWire),
+    // A speech's handle learns its end natively (`SpeechHandle.wait_reported`).
+    #[host(ignored)]
     SpeechDone(SpeechDoneWire),
     FloorChanged(FloorChangedWire),
     Close(CloseWire),

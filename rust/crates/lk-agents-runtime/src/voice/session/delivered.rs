@@ -1,8 +1,8 @@
-//! What the host's events have delivered: `session.history` as the host's own item objects. Each
-//! event reaches the host with the state it leaves, so a callback reads the session as of its
-//! event, and a read outside one reads the latest.
+//! What the host's events have delivered: `session.history` as the host's own item objects, and
+//! the agent's and user's states. Each event reaches the host with the state it leaves, so a
+//! callback reads the session as of its event, and a read outside one reads the latest.
 
-use lk_agents_abi::voice::events::HostWire;
+use lk_agents_abi::voice::events::{AgentState, HostWire, UserState};
 use lk_agents_abi::voice::session_effects::{DeliveredState, SessionEvents};
 use lk_agents_abi::{ChatItem, HostRef};
 use parking_lot::Mutex;
@@ -17,9 +17,22 @@ struct Item {
 }
 
 /// One delivered state. Never changed: each change publishes a new one.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct SessionState {
     history: Vec<Item>,
+    agent_state: AgentState,
+    user_state: UserState,
+}
+
+/// Before the first event: no history, the agent initializing, the user listening.
+impl Default for SessionState {
+    fn default() -> Self {
+        Self {
+            history: Vec::new(),
+            agent_state: AgentState::Initializing,
+            user_state: UserState::Listening,
+        }
+    }
 }
 
 impl SessionState {
@@ -60,6 +73,14 @@ impl lk_agents_abi::voice::session_effects::SessionState for SessionState {
     fn history(&self) -> Vec<HostRef> {
         self.history.iter().map(|item| item.host.clone()).collect()
     }
+
+    fn agent_state(&self) -> AgentState {
+        self.agent_state
+    }
+
+    fn user_state(&self) -> UserState {
+        self.user_state
+    }
 }
 
 /// The latest delivered state, advanced by the host drain and read by the session.
@@ -94,6 +115,12 @@ impl Delivered {
             HostWire::HistoryReloaded(reloaded) => {
                 let hosts = host_items(events, &reloaded.items);
                 self.publish(|state| state.reload(&reloaded.items, hosts));
+            }
+            HostWire::AgentStateChanged(changed) => {
+                self.publish(|state| state.agent_state = changed.new_state)
+            }
+            HostWire::UserStateChanged(changed) => {
+                self.publish(|state| state.user_state = changed.new_state)
             }
             _ => {}
         }

@@ -435,7 +435,11 @@ class SpeechHandle:
     """One speech of the session, over the core's handle: its state is the core's, and awaiting
     it waits for the core to finish playing it out. Awaiting never raises; read
     ``exception()`` for a failure. The core hands this object back wherever the speech is named
-    (``speech_created``, a tool's ``RunContext``), for as long as it lives."""
+    (``speech_created``, a tool's ``RunContext``), for as long as it lives.
+
+    The speech ends twice, in this order: ``done()`` turns true and ``wait_for_playout()``
+    returns once the core finished it; its done callbacks run once the session has also handed
+    the host the speech's end, after the callbacks of every session event before it."""
 
     SPEECH_PRIORITY_LOW = speech_defaults.SPEECH_PRIORITY_LOW
     """Priority for messages that should be played after all other messages in the queue"""
@@ -444,22 +448,18 @@ class SpeechHandle:
     SPEECH_PRIORITY_HIGH = speech_defaults.SPEECH_PRIORITY_HIGH
     """Priority for important messages that should be played before others."""
 
-    def __init__(self, core: _core.SpeechHandle, *, host_done: bool = False) -> None:
+    def __init__(self, core: _core.SpeechHandle) -> None:
         self._core = core
-        self._done_callbacks: list[Callable[[SpeechHandle], None]] = []
-        # The session's `speech_done` reached this handle. Never inferred from the core's
-        # `done()`, which turns true before `speech_done` reaches the host loop.
-        self._host_done = host_done
+        # the core's report of the speech's end, awaited once a done callback is added
+        self._reported: asyncio.Future[None] | None = None
         core.host = weakref.ref(self)
 
     @staticmethod
-    def _of(core: _core.SpeechHandle, *, reported: bool = True) -> SpeechHandle:
-        """The handle over ``core``: the one already made, else a new one. The session holds a
-        speech's handle from ``speech_created`` to ``speech_done``, so a new one for an ended
-        speech starts done; ``speech_created`` itself passes ``reported=False``."""
+    def _of(core: _core.SpeechHandle) -> SpeechHandle:
+        """The handle over ``core``: the one already made, else a new one."""
         ref = core.host
         handle = ref() if ref is not None else None
-        return handle or SpeechHandle(core, host_done=reported and core.done())
+        return handle or SpeechHandle(core)
 
     @property
     def id(self) -> str:
@@ -532,26 +532,19 @@ class SpeechHandle:
         return _await().__await__()
 
     def add_done_callback(self, callback: Callable[[SpeechHandle], None]) -> None:
-        """``callback(handle)`` once the session reported the speech done (``speech_done``); soon,
-        if it already did. Every callback runs on that one event, in the order added."""
-        if self._host_done:
-            asyncio.get_running_loop().call_soon(callback, self)
-            return
-        self._done_callbacks.append(callback)
+        """Run ``callback(handle)`` on the event loop once the session has handed the host the
+        speech's end, after the callbacks of the session events before it; soon, if it already
+        has. Callbacks run in the order added; one that raises is logged and the rest still run.
+        A speech the session ended before creating, and a handle constructed directly, are
+        reported at once; the session's close reports every speech it still holds."""
+        if self._reported is None:
+            self._reported = asyncio.ensure_future(self._core.wait_reported())
+        self._reported.add_done_callback(_DoneCallback(self, callback))
 
     def remove_done_callback(self, callback: Callable[[SpeechHandle], None]) -> None:
-        with contextlib.suppress(ValueError):
-            self._done_callbacks.remove(callback)
-
-    def _mark_done(self) -> None:
-        """The core reported the speech done (``speech_done``): its callbacks run, in order."""
-        self._host_done = True
-        callbacks, self._done_callbacks = self._done_callbacks, []
-        for callback in callbacks:
-            try:
-                callback(self)
-            except Exception as e:
-                logger.warning(f"error in done_callback: {callback}", exc_info=e)
+        """Forget every registration of ``callback`` that has not run yet."""
+        if self._reported is not None:
+            self._reported.remove_done_callback(_DoneCallback(self, callback))
 
     async def wait_if_not_interrupted(self, aw: Sequence[Awaitable[object]]) -> None:
         """Wait for ``aw``, unless the speech is interrupted first; ``aw`` is never cancelled."""
@@ -568,6 +561,28 @@ class SpeechHandle:
 
     def __repr__(self) -> str:
         return f"SpeechHandle(id={self.id!r}, done={self.done()}, interrupted={self.interrupted})"
+
+
+class _DoneCallback:
+    """A done callback as the report's future runs it: on the handle, and equal to another
+    registration of the same callback, so ``remove_done_callback`` finds it."""
+
+    __slots__ = ("callback", "handle")
+
+    def __init__(self, handle: SpeechHandle, callback: Callable[[SpeechHandle], None]) -> None:
+        self.handle = handle
+        self.callback = callback
+
+    def __call__(self, _: asyncio.Future[None]) -> None:
+        try:
+            self.callback(self.handle)
+        except Exception as e:
+            logger.warning(f"error in done_callback: {self.callback}", exc_info=e)
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, _DoneCallback) and other.callback == self.callback
+
+    __hash__ = None  # type: ignore[assignment]
 
 
 @runtime_checkable

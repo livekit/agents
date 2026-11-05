@@ -31,6 +31,7 @@ from .avatar_queue import QueueEffects
 from .background_audio_wire import Sound
 from .chat_items import ChatContent, ChatItem
 from .connect import APIConnectOptions
+from .events import AgentState, UserState
 from .io_events import AvatarPlaybackSegment, PlaybackSegment
 from .llm import ChatChunk
 from .metrics import AvatarMetrics
@@ -784,12 +785,20 @@ def plan_session_start(*, job_default: bool, another_session_is_primary: bool) -
     """
 
 class _core_SessionState:
-    """`_core_SessionState`: one delivered state, as the host reads it."""
+    """`_core_SessionState`: one delivered state (the history and the agent's and user's states), as
+    the host reads it.
+    """
     @property
     def history(self) -> list[object]:
         """`session.history`'s items, in history order: the host's own objects, the same ones each
         later state and every event naming the item hand back.
         """
+    @property
+    def agent_state(self) -> AgentState:
+        """`session.agent_state`: `"initializing"` until the first `agent_state_changed`."""
+    @property
+    def user_state(self) -> UserState:
+        """`session.user_state`: `"listening"` until the first `user_state_changed`."""
 
 def rt_server_turn_detection(
     *,
@@ -979,6 +988,12 @@ class SpeechHandle:
         """
     async def wait_until_created(self) -> None:
         """Resolves once the loop has created the speech and put it in the queue."""
+    async def wait_reported(self) -> None:
+        """Resolves once the session has handed the host this speech's `speech_done` event, so what
+        waits on it runs after that event's callbacks; at once for a speech the session ended
+        before creating and for a handle constructed directly, and when the session closes for one
+        it never reported. Never raises.
+        """
 
 def dtmf_capture_plan(confirmation: bool) -> CapturePlan: ...
 

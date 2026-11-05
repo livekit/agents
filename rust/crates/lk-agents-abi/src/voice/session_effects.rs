@@ -174,13 +174,22 @@ pub trait SessionHooks: Send + Sync {
 #[crate::host(native(refused = "expected a native session state"))]
 pub trait DeliveredState: std::any::Any + Send + Sync {}
 
-/// `_core_SessionState`: one delivered state, as the host reads it.
+/// `_core_SessionState`: one delivered state (the history and the agent's and user's states), as
+/// the host reads it.
 #[crate::host(class(name = "_core_SessionState", native = DeliveredState))]
 pub trait SessionState: Send + Sync + Sized + 'static {
     /// `session.history`'s items, in history order: the host's own objects, the same ones each
     /// later state and every event naming the item hand back.
     #[host(getter)]
     fn history(&self) -> Vec<crate::HostRef>;
+
+    /// `session.agent_state`: `"initializing"` until the first `agent_state_changed`.
+    #[host(getter)]
+    fn agent_state(&self) -> crate::voice::events::AgentState;
+
+    /// `session.user_state`: `"listening"` until the first `user_state_changed`.
+    #[host(getter)]
+    fn user_state(&self) -> crate::voice::events::UserState;
 }
 
 /// Where a host session's events go: one notification per event, delivered in driver order on

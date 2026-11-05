@@ -722,7 +722,7 @@ fn native(v: &syn::Variant) -> bool {
     voc::read(&v.attrs).is_ok_and(|entries| voc::find(&entries, "native").is_some())
 }
 
-/// A dispatched member's `event` / `event(mirror = "..")` / `ignored`, taken out of `entries`.
+/// A dispatched member's `event` / `ignored`, taken out of `entries`.
 fn route(at: &str, entries: &mut Vec<Entry>, dispatched: bool) -> Result<Option<Route>, String> {
     let mut routes = Vec::new();
     entries.retain(|e| {
@@ -743,13 +743,12 @@ fn route(at: &str, entries: &mut Vec<Entry>, dispatched: bool) -> Result<Option<
     if route.value.is_some() {
         return Err(format!("{at}: `{}` takes no value", route.key));
     }
+    if !route.nested.is_empty() {
+        return Err(format!("{at}: `{}` is a bare flag", route.key));
+    }
     Ok(Some(match route.key.as_str() {
-        "event" => {
-            voc::only(at, &route.nested, &["mirror"])?;
-            Route::Event { mirror: voc::text(at, &route.nested, "mirror")? }
-        }
-        _ if route.nested.is_empty() => Route::Ignored,
-        _ => return Err(format!("{at}: `ignored` is a bare flag")),
+        "event" => Route::Event,
+        _ => Route::Ignored,
     }))
 }
 

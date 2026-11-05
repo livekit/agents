@@ -1,4 +1,5 @@
-"""`VoiceSession.history`: the native session's history, read as of the event being handled."""
+"""`VoiceSession.history`, `agent_state` and `user_state`: the native session's delivered state,
+read as of the event being handled."""
 
 import asyncio
 
@@ -6,7 +7,7 @@ import pytest
 
 from livekit.agents import Agent, VoiceSession
 from livekit.agents.llm import ChatContext, ChatItem
-from livekit.agents.voice.events import ConversationItemAddedEvent
+from livekit.agents.voice.events import AgentStateChangedEvent, ConversationItemAddedEvent
 
 from .fake_io import FakeAudioOutput
 from .fake_tts import FakeTTS
@@ -87,3 +88,33 @@ async def test_a_pre_start_update_agent_history_is_the_start_history() -> None:
     async with session:
         await session.start(agent)
         assert _texts(session.history.items) == ["carried over"]
+
+
+async def test_a_state_callback_reads_the_state_of_its_event() -> None:
+    session = _session()
+    assert (session.agent_state, session.user_state) == ("initializing", "listening")
+    seen: list[tuple[str, str]] = []
+    read_later: list[asyncio.Task[str]] = []
+    done = asyncio.Event()
+
+    async def read_once_done() -> str:
+        await done.wait()
+        return session.agent_state
+
+    @session.on("agent_state_changed")
+    def on_state(ev: AgentStateChangedEvent) -> None:
+        seen.append((ev.new_state, session.agent_state))
+        read_later.append(asyncio.ensure_future(read_once_done()))
+
+    async with session:
+        await session.start(Agent(instructions="Greet.", name="desk"))
+        await asyncio.wait_for(session.say("One moment."), timeout=5)
+        await asyncio.wait_for(session.wait_for_idle(), timeout=5)
+        async with asyncio.timeout(5):
+            while session.agent_state != seen[-1][0]:
+                await asyncio.sleep(0.01)
+        done.set()
+        assert seen and all(new == read for new, read in seen)
+        assert [await task for task in read_later] == [new for new, _ in seen]
+        assert "speaking" in [new for new, _ in seen]
+        assert session.agent_state == seen[-1][0], "outside a callback, the latest"

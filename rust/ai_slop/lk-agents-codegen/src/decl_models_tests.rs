@@ -292,7 +292,7 @@ fn an_omitted_field_is_computed_from_the_record_read() {
 }
 
 // Catches: a dispatched member routed by anything but its model class, an event emitted under a
-// name its model does not carry, a mirror or an ignored member lost, or a route outside a
+// name its model does not carry, an ignored member lost, or a route outside a
 // dispatched record accepted.
 #[test]
 fn a_dispatched_record_routes_its_members_by_model_class() {
@@ -305,7 +305,7 @@ fn a_dispatched_record_routes_its_members_by_model_class() {
         pub struct SpeechDone { pub id: String }
         #[crate::host(record(module = "events", emit, transparent, dispatch = "session_dispatch"))]
         pub enum HostWire {
-            #[host(event(mirror = "_agent_state"))]
+            #[host(event)]
             State(AgentStateChanged),
             #[host(ignored)]
             Turn(TurnCompleted),
@@ -318,7 +318,6 @@ fn a_dispatched_record_routes_its_members_by_model_class() {
     for want in [
         "from .events import AgentStateChanged, TurnCompleted\n",
         "PUBLIC_EVENTS: dict[type, str] = {\n    AgentStateChanged: \"agent_state_changed\",\n}\n",
-        "MIRRORED_STATES: dict[type, str] = {\n    AgentStateChanged: \"_agent_state\",\n}\n",
         "IGNORED_EVENTS: frozenset[type] = frozenset(\n    {\n        TurnCompleted,\n    }\n)\n",
     ] {
         assert!(dispatch.contains(want), "{want}\n{dispatch}");

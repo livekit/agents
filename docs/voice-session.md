@@ -56,6 +56,7 @@ object a text handler gets. Outside a call `ctx.live_session` is `None`.
 | `update_agent(agent)`, `update_options(...)`, `override_options(...)` | see [updating a live session](#updating-a-live-session) |
 | `history` | the call's conversation, a new `ChatContext` over the session's items on each read; empty on a new thread and before `start()`; see [reading the session from a callback](#reading-the-session-from-a-callback) |
 | `current_agent` | the agent speaking now |
+| `agent_state`, `user_state` | the agent's and the person's state, `"initializing"` and `"listening"` until their first change; read as `history` is |
 | `usage` | latest immutable `Usage` snapshot; retained after shutdown; see [usage and metrics](usage.md) |
 | `on(event, callback)` | subscribe to a session event, below |
 | `aclose()`, `async with` | end the call's session |
@@ -81,17 +82,33 @@ Every event type is exported from `livekit.agents.voice.events`, the common ones
 
 ### Reading the session from a callback
 
-The session's history is held by the native session and read, never copied, by
-`session.history`. Each event reaches its callbacks with the session state it
-belongs to. Inside an event callback, and in any task the callback starts,
-`session.history` is the history as of that event: it ends with the items that
-event delivered and omits items added after it, even when the callback reads it
-later. Anywhere else it is the latest history the session's events have
-delivered. The items are the session's own objects: the item of a
+The session's history and states are held by the native session and read,
+never copied, by `session.history`, `session.agent_state` and
+`session.user_state`. Each event reaches its callbacks with the session state it
+belongs to. Inside an event callback, and in any task the callback starts, they
+read the session as of that event: the history ends with the items that event
+delivered and omits items added after it, and an `"agent_state_changed"`
+callback reads its own `new_state`, even when the callback reads them later.
+Anywhere else they are the latest the session's events have delivered. The items are the session's own objects: the item of a
 `"conversation_item_added"` event, a run's items and every later
 `session.history` are the same Python objects. Each read returns a new
 `ChatContext`, so editing it does not change the session; use
 `update_agent(agent, chat_ctx=)` or `Agent.update_chat_ctx()` to supply a different history.
+
+### Speech handles
+
+`say()` and `generate_reply()` return the speech's `SpeechHandle`; the same
+object is handed back wherever the speech is named (`"speech_created"`,
+`ctx.speech_handle`). A speech ends twice, in this order. First the native
+session finishes it: `done()` turns true, and `await handle` and
+`wait_for_playout()` return; awaiting never raises, and `exception()` reads a
+failure. Then the session hands the host the speech's end, after every session
+event before it: only then do the callbacks given to `add_done_callback(cb)` run,
+each as `cb(handle)` on the event loop, in the order added. A callback added
+after that runs soon; one that raises is logged and the others still run;
+`remove_done_callback(cb)` forgets registrations that have not run. A speech the
+session ended before creating is reported at once, and closing the session
+reports every speech it still holds, so no callback waits past the session.
 
 Usage is read through `session.usage`, without an update event. Intermediate
 snapshots contain measurements received so far; after awaiting `aclose()`, the

@@ -251,7 +251,7 @@ fn dispatch(r: &RecordDecl, decls: &Declarations) -> Result<Out, String> {
         unreachable!("a dispatched record is a transparent enum")
     };
     let mut imports = Imports::default();
-    let (mut events, mut mirrors, mut ignored) = (String::new(), String::new(), String::new());
+    let (mut events, mut ignored) = (String::new(), String::new());
     for v in variants {
         let Some(route) = &v.route else { continue };
         let at = format!("{}: {}::{}", r.source, r.rust, v.rust_name);
@@ -267,7 +267,7 @@ fn dispatch(r: &RecordDecl, decls: &Declarations) -> Result<Out, String> {
         imports.add(&format!(".{module}"), name);
         match route {
             Route::Ignored => ignored.push_str(&format!("        {name},\n")),
-            Route::Event { mirror } => {
+            Route::Event => {
                 let event = decls
                     .records
                     .iter()
@@ -278,9 +278,6 @@ fn dispatch(r: &RecordDecl, decls: &Declarations) -> Result<Out, String> {
                         format!("{at}: an event's model names it with constant(type = \"..\")")
                     })?;
                 events.push_str(&format!("    {name}: {event:?},\n"));
-                if let Some(attr) = mirror {
-                    mirrors.push_str(&format!("    {name}: {attr:?},\n"));
-                }
             }
         }
     }
@@ -296,11 +293,10 @@ fn dispatch(r: &RecordDecl, decls: &Declarations) -> Result<Out, String> {
     Ok(Out {
         path: format!("{}.py", r.dispatch.as_deref().expect("dispatched")),
         text: format!(
-            "# GENERATED FILE -- DO NOT EDIT.\n#\n# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[host(record)]`\n# declarations in:\n#     {source}\n\n{imports}\n# `{union}` members the host emits as public session events: {{model class: event name}}.\nPUBLIC_EVENTS: dict[type, str] = {events}\n\n# Public events whose `new_state` the host keeps on the session: {{model class: attribute}}.\nMIRRORED_STATES: dict[type, str] = {mirrors}\n\n# `{union}` members the host receives and does not act on.\nIGNORED_EVENTS: frozenset[type] = {set}\n",
+            "# GENERATED FILE -- DO NOT EDIT.\n#\n# Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[host(record)]`\n# declarations in:\n#     {source}\n\n{imports}\n# `{union}` members the host emits as public session events: {{model class: event name}}.\nPUBLIC_EVENTS: dict[type, str] = {events}\n\n# `{union}` members the host receives and does not act on.\nIGNORED_EVENTS: frozenset[type] = {set}\n",
             source = r.source,
             imports = imports.render(&[]),
             events = map(&events),
-            mirrors = map(&mirrors),
         ),
     })
 }

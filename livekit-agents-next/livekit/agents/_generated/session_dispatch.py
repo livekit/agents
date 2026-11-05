@@ -20,6 +20,7 @@ from .session_wire import (
     ParticipantLinked,
     ParticipantUnlinked,
     PreemptiveGenerationEvent,
+    SpeechDoneWire,
     UserTurnCompletedWire,
 )
 
@@ -33,12 +34,6 @@ PUBLIC_EVENTS: dict[type, str] = {
     AgentFalseInterruptionEvent: "agent_false_interruption",
 }
 
-# Public events whose `new_state` the host keeps on the session: {model class: attribute}.
-MIRRORED_STATES: dict[type, str] = {
-    AgentStateChangedEvent: "_agent_state",
-    UserStateChangedEvent: "_user_state",
-}
-
 # `HostWire` members the host receives and does not act on.
 IGNORED_EVENTS: frozenset[type] = frozenset(
     {
@@ -48,6 +43,7 @@ IGNORED_EVENTS: frozenset[type] = frozenset(
         PreemptiveGenerationEvent,
         BackchannelConfirmedWire,
         OverlapInterruptionEvent,
+        SpeechDoneWire,
         ParticipantLinked,
         ParticipantUnlinked,
     }

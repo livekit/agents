@@ -46,7 +46,7 @@ import logging
 from typing import TYPE_CHECKING, Literal, cast
 
 from .._generated.amd import AMDPredictionEvent
-from .._generated.session_dispatch import IGNORED_EVENTS, MIRRORED_STATES, PUBLIC_EVENTS
+from .._generated.session_dispatch import IGNORED_EVENTS, PUBLIC_EVENTS
 from .._generated.session_wire import (
     CloseWire,
     DeleteRoomRequested,
@@ -59,7 +59,6 @@ from .._generated.session_wire import (
     RunSettledWire,
     SessionErrorWire,
     SpeechCreatedWire,
-    SpeechDoneWire,
     TextInputWire,
     ToolCallStartedWire,
     ToolExecutionUpdatedWire,
@@ -392,8 +391,6 @@ def dispatch(self: VoiceSession[Any], wire: HostWire) -> None:
     if kind in IGNORED_EVENTS:
         return
     if (name := PUBLIC_EVENTS.get(kind)) is not None:
-        if (attr := MIRRORED_STATES.get(kind)) is not None:
-            setattr(self, attr, getattr(wire, "new_state"))  # noqa: B009
         self.emit(cast(EventTypes, name), cast(AgentEvent, wire))
         return
     handler = _HANDLERS.get(kind)
@@ -402,8 +399,7 @@ def dispatch(self: VoiceSession[Any], wire: HostWire) -> None:
 
 
 def _on_speech_created(self: VoiceSession[Any], wire: SpeechCreatedWire) -> None:
-    handle = SpeechHandle._of(cast(_core.SpeechHandle, wire.speech_handle), reported=False)
-    self._speech_handles[handle.id] = handle
+    handle = SpeechHandle._of(cast(_core.SpeechHandle, wire.speech_handle))
     self.emit(
         "speech_created",
         SpeechCreatedEvent(
@@ -412,11 +408,6 @@ def _on_speech_created(self: VoiceSession[Any], wire: SpeechCreatedWire) -> None
             speech_handle=handle,
         ),
     )
-
-
-def _on_speech_done(self: VoiceSession[Any], wire: SpeechDoneWire) -> None:
-    if (handle := self._speech_handles.pop(wire.speech_id, None)) is not None:
-        handle._mark_done()
 
 
 def _on_item_added(self: VoiceSession[Any], wire: ItemAddedWire) -> None:
@@ -576,7 +567,6 @@ def _wire_run(run: object | None) -> _VoiceRun | None:
 # The `HostWire` members with host behaviour, by record class.
 _HANDLERS: dict[type, Callable[[VoiceSession[Any], Any], None]] = {
     SpeechCreatedWire: _on_speech_created,
-    SpeechDoneWire: _on_speech_done,
     ItemAddedWire: _on_item_added,
     RunItemAddedWire: _on_run_item,
     RunRefusedWire: _on_run_refused,
