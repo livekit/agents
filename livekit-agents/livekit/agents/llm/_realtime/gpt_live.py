@@ -12,7 +12,7 @@ from typing import Any, Literal, TypedDict
 from urllib.parse import urlparse, urlunparse
 
 import aiohttp
-from openai.types.responses import ResponseTextConfigParam
+from openai.types.responses import EasyInputMessage, ResponseTextConfigParam
 from openai.types.responses.response_input_item import FunctionCallOutput
 from openai.types.shared_params import Reasoning
 
@@ -115,15 +115,16 @@ class DecisionsTrigger(TypedDict):
     decisions: DecisionsOptions
 
 
-@dataclass
-class GPTLiveDelegation:
-    """Work the model handed to the application, under client delegation.
+@dataclass(kw_only=True)
+class GPTLiveDelegation(llm.DelegationCreatedEvent):
+    """A delegation, in either mode; under client delegation it is work handed to the application.
 
     It carries no task text: the ask is whatever the conversation says, which the agent's chat
-    context holds. Answer it with :meth:`GPTLiveSession.append_commentary`, passing this id.
+    context holds. Answer a client delegation with :meth:`GPTLiveSession.append_commentary`,
+    passing this id.
     """
 
-    id: str
+    mode: Literal["responses", "client"] = "client"
     pending_transcript: str
     """The caller's current turn, not yet in the chat context when the model delegates."""
 
@@ -138,6 +139,8 @@ class _Speech:
     started_at: float = field(default_factory=time.time)
     quiet_ms: int = 0
     """Input audio pushed since the user's last fragment."""
+    delegated: bool = False
+    """For the user: a delegation started during the turn, or work running when it began."""
 
 
 # Responses delegation hands work to a backend Responses model, whose events arrive wrapped in
@@ -158,6 +161,7 @@ class _LiveOptions:
     responses: ResponsesDelegationOptions
     decisions: DecisionsOptions
     triggers: list[DecisionsTrigger] | None
+    delegation_detection: llm.DelegationDetectionOptions | None
     service_tier: types.ServiceTier | None
     api_key: str | None
     base_url: str
@@ -179,6 +183,7 @@ class GPTLiveModel(llm.DuplexModel):
         responses_options: NotGivenOr[ResponsesDelegationOptions] = NOT_GIVEN,
         decisions_options: NotGivenOr[DecisionsOptions] = NOT_GIVEN,
         triggers: NotGivenOr[list[DecisionsTrigger]] = NOT_GIVEN,
+        delegation_detection: bool | llm.DelegationDetectionOptions = False,
         service_tier: NotGivenOr[types.ServiceTier] = NOT_GIVEN,
         api_key: str | None = None,
         base_url: NotGivenOr[str] = NOT_GIVEN,
@@ -202,6 +207,11 @@ class GPTLiveModel(llm.DuplexModel):
             responses_options: The backend Responses model, under ``delegation="responses"``.
             decisions_options: Model and questions for ``delegation="decisions"``.
             triggers: Decisions configurations evaluated on transcript events, in any mode.
+            delegation_detection: Delegate a turn the model should have and did not. After each
+                turn the model left undelegated, once it is quiet, a detector judges the turn and
+                starts the delegation itself. ``True`` uses :class:`~livekit.agents.llm.
+                DelegationDetector` on LiveKit Inference; a dict sets the detector or the grace
+                period. Off by default, since it costs a model call per undelegated turn.
             service_tier: Processing tier the session runs under, sent as the
                 ``OpenAI-Service-Tier`` header on the connection, for example ``ultrafast``.
                 Unset leaves the header off, and the account's default applies.
@@ -239,6 +249,8 @@ class GPTLiveModel(llm.DuplexModel):
             )
         if is_given(responses_options) and delegation != "responses":
             raise ValueError("responses_options requires delegation='responses'")
+        if delegation_detection and delegation == "decisions":
+            raise ValueError("delegation_detection requires delegation='responses' or 'client'")
         is_azure = azure_deployment is not None or entra_token is not None
         if not is_azure:
             api_key = api_key or os.environ.get("OPENAI_API_KEY")
@@ -289,6 +301,9 @@ class GPTLiveModel(llm.DuplexModel):
             responses=responses,
             decisions=decisions,
             triggers=triggers if is_given(triggers) else None,
+            delegation_detection=(
+                {} if delegation_detection is True else delegation_detection or None
+            ),
             service_tier=service_tier if is_given(service_tier) else None,
             api_key=api_key,
             base_url=resolved_base_url,
@@ -315,6 +330,7 @@ class GPTLiveModel(llm.DuplexModel):
         responses_options: NotGivenOr[ResponsesDelegationOptions] = NOT_GIVEN,
         decisions_options: NotGivenOr[DecisionsOptions] = NOT_GIVEN,
         triggers: NotGivenOr[list[DecisionsTrigger]] = NOT_GIVEN,
+        delegation_detection: bool | llm.DelegationDetectionOptions = False,
         service_tier: NotGivenOr[types.ServiceTier] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
@@ -333,6 +349,7 @@ class GPTLiveModel(llm.DuplexModel):
                 Mutually exclusive with ``azure_endpoint``.
             voice: Output voice, as in :class:`GPTLiveModel`.
             delegation: Where delegated work goes, as in :class:`GPTLiveModel`.
+            delegation_detection: As in :class:`GPTLiveModel`.
             responses_options: The backend Responses model under ``delegation="responses"``.
                 Its ``model`` is required, and names a deployment in the same resource.
             service_tier: Processing tier, as in :class:`GPTLiveModel`.
@@ -370,6 +387,7 @@ class GPTLiveModel(llm.DuplexModel):
             responses_options=responses_options,
             decisions_options=decisions_options,
             triggers=triggers,
+            delegation_detection=delegation_detection,
             service_tier=service_tier,
             api_key=api_key,
             base_url=endpoint if endpoint is not None else NOT_GIVEN,
@@ -427,7 +445,8 @@ class GPTLiveSession(
     Exposes these extra events:
     - openai_server_event_received: raw server events
     - openai_client_event_queued: raw client events sent to the server
-    - delegation_created: a :class:`GPTLiveDelegation`, under client delegation
+    - delegation_created: a :class:`GPTLiveDelegation` for every delegation; under client
+      delegation the application answers it
     - decision_event: a :class:`types.DecisionEventEnvelope` with answers and usage
 
     The ``append_*`` methods queue context and return without waiting. Their ``*.appended``
@@ -467,6 +486,10 @@ class GPTLiveSession(
         self._backend_running_responses: dict[str | None, set[str]] = {}
         self._backend_open_calls: set[str] = set()
         self._backend_response_pending = False
+        # the response.create of a delegate() call, until the delegation it starts is created
+        self._delegate_event_id: str | None = None
+        # client delegations delegate() made up; the service never issued their ids
+        self._manual_delegation_ids: set[str] = set()
 
         # the newest history item the last ask was about, so an ask never repeats one
         self._asked_item_id: str | None = None
@@ -631,6 +654,7 @@ class GPTLiveSession(
         self._backend_running_responses.clear()
         self._backend_open_calls.clear()
         self._backend_response_pending = False
+        self._delegate_event_id = None
         self._usage_total = types.Usage()
         self._session_id = None
 
@@ -857,7 +881,12 @@ class GPTLiveSession(
             self._end_speech(role)
             speech = None
         if speech is None:
-            speech = self._speech[role] = _Speech(message_id=utils.shortuuid("speech_"))
+            speech = self._speech[role] = _Speech(
+                message_id=utils.shortuuid("speech_"),
+                # the service runs one delegation at a time, so work already running covers the
+                # turn: the model starts none for it, and it would queue behind the work anyway
+                delegated=role == "user" and self._backend_busy,
+            )
             self._history.insert(
                 llm.ChatMessage(
                     id=speech.message_id,
@@ -907,6 +936,11 @@ class GPTLiveSession(
                 transcript=speech.text,
                 is_final=True,
                 turn_started_at=speech.started_at,
+                delegated=(
+                    speech.delegated or self._backend_busy
+                    if self._opts.delegation != "decisions"
+                    else None
+                ),
             ),
         )
         self.emit(
@@ -917,14 +951,37 @@ class GPTLiveSession(
         delegation = event.delegation
         if not delegation.id:
             logger.warning("gpt-live delegation has no id; nothing can answer it")
-        elif delegation.target == "client":
-            speech = self._speech.get("user")
-            self.emit(
-                "delegation_created",
-                GPTLiveDelegation(
-                    id=delegation.id, pending_transcript=speech.text if speech else ""
-                ),
-            )
+            return
+        manual = (
+            event.client_event_id is not None and event.client_event_id == self._delegate_event_id
+        )
+        if manual:
+            self._delegate_event_id = None
+        self._emit_delegation(
+            delegation.id,
+            source="manual" if manual else "model",
+            mode="client" if delegation.target == "client" else "responses",
+        )
+
+    def _emit_delegation(
+        self,
+        delegation_id: str,
+        *,
+        source: Literal["model", "manual"],
+        mode: Literal["responses", "client"],
+    ) -> None:
+        speech = self._speech.get("user")
+        if speech is not None:
+            speech.delegated = True
+        self.emit(
+            "delegation_created",
+            GPTLiveDelegation(
+                id=delegation_id,
+                source=source,
+                mode=mode,
+                pending_transcript=speech.text if speech else "",
+            ),
+        )
 
     def _handle_response_event(self, envelope: types.ResponseEventEnvelope) -> None:
         # the inner event carries no response id, so a delegation's responses are followed in
@@ -1076,6 +1133,8 @@ class GPTLiveSession(
         )
 
     def _handle_error(self, error: types.ErrorBody) -> None:
+        if error.client_event_id is not None and error.client_event_id == self._delegate_event_id:
+            self._delegate_event_id = None
         logger.error(
             "gpt-live returned an error",
             extra={"lk.pii.error": error.model_dump(exclude_none=True)},
@@ -1181,11 +1240,63 @@ class GPTLiveSession(
         text: str,
         delegation_id: str | None,
     ) -> None:
+        if delegation_id in self._manual_delegation_ids:
+            # the service would refuse an id it never issued; without one the model just says it
+            delegation_id = None
         self.send_event(
             event_cls(
                 event_id=utils.shortuuid("append_"), delegation_id=delegation_id, content=text
             )
         )
+
+    def delegate(self, instructions: str | None = None) -> None:
+        """Start a delegation on the conversation so far, for a turn the model did not delegate.
+
+        Under ``delegation="responses"`` the backend runs it after any work already running, with
+        ``instructions`` as a developer note; it is refused while a function call waits for its
+        output, so that raises ``RealtimeError``. Under client delegation the application answers
+        its ``delegation_created`` like any other.
+        """
+        if self._opts.delegation == "decisions":
+            raise llm.RealtimeError("gpt-live decisions delegation has nothing to delegate to")
+        if not self._session_start_sent:
+            raise llm.RealtimeError("gpt-live cannot delegate before the session starts")
+
+        if self._opts.delegation == "client":
+            delegation_id = utils.shortuuid("lk_delegation_")
+            self._manual_delegation_ids.add(delegation_id)
+            if instructions:
+                self.append_thinking(instructions)
+            self._emit_delegation(delegation_id, source="manual", mode="client")
+            return
+
+        # a call counts from its output_item.done, before its response completes
+        if self._backend_open_calls or any(self._backend_running_responses.values()):
+            raise llm.RealtimeError("gpt-live cannot delegate while a function call is open")
+        if instructions:
+            self.send_event(
+                types.ResponseItemCreateEvent(
+                    event_id=utils.shortuuid("delegate_note_"),
+                    item=EasyInputMessage(type="message", role="developer", content=instructions),
+                )
+            )
+        # its delegation_created comes back from the service, which echoes this id
+        self._delegate_event_id = utils.shortuuid("delegate_")
+        self.send_event(types.ResponseCreateEvent(event_id=self._delegate_event_id))
+
+    @property
+    def _backend_busy(self) -> bool:
+        # client work is the application's, so nothing here knows whether it still runs
+        return bool(
+            self._delegate_event_id
+            or self._backend_running_responses
+            or self._backend_open_calls
+            or self._backend_response_pending
+        )
+
+    @property
+    def _delegation_detection(self) -> llm.DelegationDetectionOptions | None:
+        return self._opts.delegation_detection
 
     def mute_input(self) -> None:
         """Replace microphone input with silence; the model keeps generating and speaking.

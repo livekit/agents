@@ -187,6 +187,9 @@ class InputTranscriptionCompleted:
     generating should set this, so the user message can be placed on the session
     timeline where the turn happened rather than where the transcript arrived.
     """
+    delegated: bool | None = None
+    """On a final transcript, whether the model delegated the turn or work it already runs
+    covers it; None for a model that does not delegate."""
 
 
 @dataclass

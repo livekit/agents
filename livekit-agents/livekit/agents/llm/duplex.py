@@ -13,6 +13,7 @@ from livekit import rtc
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
 from .chat_context import ChatContext, ChatItem
+from .delegation import DelegationDetectionOptions
 from .realtime import RealtimeError
 from .tool_context import Tool, ToolChoice, ToolContext
 
@@ -61,6 +62,7 @@ DuplexEventTypes = Literal[
     "input_speech_started",  # the user's turns, as the plugin detects them
     "input_speech_stopped",
     "input_audio_transcription_completed",
+    "delegation_created",  # a DelegationCreatedEvent, for a model that delegates
     "session_reconnected",
     "metrics_collected",
     "error",
@@ -151,6 +153,13 @@ class DuplexSession(ABC, rtc.EventEmitter[DuplexEventTypes | TEvent], Generic[TE
         """Feed a video frame to the model; ignored by models without video input."""
         pass
 
+    def delegate(self, instructions: str | None = None) -> None:
+        """Start a delegation on the conversation so far, for a turn the model did not delegate.
+
+        It emits ``delegation_created`` like one the model starts, with ``source="manual"``.
+        """
+        raise RealtimeError(f"{type(self).__name__} cannot manually delegate")
+
     async def aclose(self) -> None:
         """Close the session; an override calls ``super().aclose()`` first.
 
@@ -162,6 +171,11 @@ class DuplexSession(ABC, rtc.EventEmitter[DuplexEventTypes | TEvent], Generic[TE
 
     # underscored until the shape settles: this is the framework's contract with the plugin, and
     # apps reach a plugin's own methods through Agent.duplex_session
+
+    @property
+    def _delegation_detection(self) -> DelegationDetectionOptions | None:
+        """Turns the model did not delegate are judged, and delegated, under these options."""
+        return None
 
     @abstractmethod
     async def _update_instructions(self, instructions: str) -> None: ...

@@ -797,7 +797,7 @@ async def test_client_delegation_reaches_the_application_and_is_answered(
         await asyncio.sleep(0.05)
         assert ws.sent[0]["session"]["delegation"] == {"type": "client"}
 
-        # a responses-targeted delegation is the backend's, so it must not reach the app
+        # a responses-targeted delegation is the backend's: reported, but not the app's to answer
         session._handle_event(
             {
                 "type": "session.delegation.created",
@@ -810,7 +810,8 @@ async def test_client_delegation_reaches_the_application_and_is_answered(
                 },
             }
         )
-        assert not delegations
+        assert [d.mode for d in delegations] == ["responses"]
+        delegations.clear()
 
         # the model delegates before the caller's turn closes, so the words that triggered it
         # ride on the event rather than waiting a second for the chat context
@@ -2105,6 +2106,76 @@ async def test_decisions_delegation_and_manual_evaluation(
         await model.aclose()
 
 
+async def test_delegate_starts_backend_work_the_service_reports_as_manual(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ws = _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    created: list[GPTLiveDelegation] = []
+    session.on("delegation_created", created.append)
+    try:
+        await session._update_session()
+        await asyncio.sleep(0.05)
+        session.delegate("Cancel the caller's 3pm appointment.")
+        await asyncio.sleep(0.05)
+        note, create = ws.sent[-2:]
+        assert note["type"] == "response.item.create"
+        assert note["item"]["role"] == "developer"
+        assert create["type"] == "response.create"
+        assert created == []  # the service's own event reports it
+
+        for client_event_id in (create["event_id"], None):
+            session._handle_event(
+                {
+                    "type": "session.delegation.created",
+                    "delegation": {"id": f"d{len(created)}", "target": "responses"},
+                    "client_event_id": client_event_id,
+                }
+            )
+        assert [(d.source, d.mode) for d in created] == [
+            ("manual", "responses"),
+            ("model", "responses"),
+        ]
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_the_final_transcript_says_whether_the_turn_was_delegated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    finals: list[bool | None] = []
+    session.on(
+        "input_audio_transcription_completed",
+        lambda ev: ev.is_final and finals.append(ev.delegated),
+    )
+
+    def turn(start_ms: int, *, delegation: str | None = None) -> None:
+        session._handle_event(_transcript("user", " Cancel it.", start_ms))
+        if delegation is not None:
+            session._handle_event(
+                {"type": "session.delegation.created", "delegation": {"id": delegation}}
+            )
+        session.push_audio(_silence(1000))
+
+    try:
+        await session._update_session()
+        await asyncio.sleep(0.05)
+        turn(1000, delegation="d1")
+        turn(5000)
+        # work running when the turn begins covers it: the model starts nothing for it
+        session._handle_event(_response_event("d1", {"type": "response.created"}))
+        turn(9000)
+        assert finals == [True, False, True]
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
 @pytest.mark.parametrize("delegation", ["client", "responses"])
 @pytest.mark.parametrize("hosted", [False, True])
 async def test_decisions_triggers_do_not_enable_manual_evaluation(
@@ -2149,8 +2220,51 @@ async def test_decisions_triggers_do_not_enable_manual_evaluation(
         await model.aclose()
 
 
+async def test_delegate_is_refused_only_while_a_function_call_is_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        await session._update_session()
+        await asyncio.sleep(0.05)
+        session._handle_event(_response_event("d1", {"type": "response.created"}))
+        # running backend work is no obstacle: the service queues the delegation behind it
+        session.delegate()
+        session._handle_event(_response_event("d1", _function_call_done("call_1")))
+        with pytest.raises(llm.RealtimeError):
+            session.delegate()
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
 def test_decisions_delegation_requires_configuration() -> None:
     with pytest.raises(ValueError, match="decisions_options"):
         GPTLiveModel(api_key="sk-test", delegation="decisions")
     with pytest.raises(ValueError, match="decisions_options"):
         GPTLiveModel(api_key="sk-test", decisions_options={"model": "gpt-6-luna"})
+
+
+async def test_a_client_delegate_is_answered_like_the_models_own(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ws = _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test", delegation="client")
+    session = model.session()
+    created: list[GPTLiveDelegation] = []
+    session.on("delegation_created", created.append)
+    try:
+        await session._update_session()
+        await asyncio.sleep(0.05)
+        session.delegate()
+        assert [(d.source, d.mode) for d in created] == [("manual", "client")]
+        session.append_commentary("It is cancelled.", delegation_id=created[0].id)
+        await asyncio.sleep(0.05)
+        # the service never issued the id, so the answer goes without one
+        assert ws.sent[-1]["type"] == "session.commentary.append"
+        assert ws.sent[-1].get("delegation_id") is None
+    finally:
+        await session.aclose()
+        await model.aclose()

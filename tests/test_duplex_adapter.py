@@ -54,6 +54,7 @@ class _FakeDuplexModel(llm.DuplexModel):
         )
         self.session_obj: _FakeDuplexSession | None = None
         self.askable = False
+        self.detection: llm.DelegationDetectionOptions | None = None
 
     @property
     def model(self) -> str:
@@ -80,6 +81,7 @@ class _FakeDuplexSession(llm.DuplexSession):
         self.appended: list[llm.ChatItem] = []
         self.replies_requested: list[object] = []
         self.fail_instructions = False
+        self.delegations: list[str | None] = []
 
     @property
     def audio_stream(self) -> aio.Chan[llm.DuplexAudioFrame]:
@@ -106,6 +108,13 @@ class _FakeDuplexSession(llm.DuplexSession):
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         pass
+
+    @property
+    def _delegation_detection(self) -> llm.DelegationDetectionOptions | None:
+        return self._duplex_model.detection
+
+    def delegate(self, instructions: str | None = None) -> None:
+        self.delegations.append(instructions)
 
     async def aclose(self) -> None:
         await super().aclose()
@@ -149,12 +158,14 @@ class _FakeDuplexSession(llm.DuplexSession):
             llm.DuplexOutputTranscriptDelta(text=text, start_ms=start_ms, end_ms=end_ms),
         )
 
-    def heard(self, item_id: str, text: str) -> None:
+    def heard(self, item_id: str, text: str, *, delegated: bool | None = None) -> None:
         """The plugin's account of one finished user turn."""
         self.emit("input_speech_started", llm.InputSpeechStartedEvent())
         self.emit(
             "input_audio_transcription_completed",
-            llm.InputTranscriptionCompleted(item_id=item_id, transcript=text, is_final=True),
+            llm.InputTranscriptionCompleted(
+                item_id=item_id, transcript=text, is_final=True, delegated=delegated
+            ),
         )
         self.emit(
             "input_speech_stopped", llm.InputSpeechStoppedEvent(user_transcription_enabled=False)
@@ -1109,3 +1120,91 @@ async def test_a_duplex_model_starts_outside_a_text_simulation() -> None:
     session = AgentSession(llm=_FakeDuplexModel())
     await session.start(Agent(instructions="hi"))
     await session.aclose()
+
+
+# delegation detection: a turn the model did not delegate is judged once the model is quiet
+
+GRACE = 0.05
+
+
+@pytest.fixture
+async def detecting() -> tuple[_FakeDuplexSession, list[llm.DelegationCheck], list[bool | str]]:
+    """A session whose detector answers from ``verdicts`` and records what it judged."""
+    checks: list[llm.DelegationCheck] = []
+    verdicts: list[bool | str] = []
+
+    async def detector(check: llm.DelegationCheck) -> bool | str:
+        checks.append(check)
+        return verdicts.pop(0)
+
+    model = _FakeDuplexModel()
+    model.detection = {"detector": detector, "grace_period": GRACE}
+    session = llm.DuplexRealtimeAdapter(model).session()
+    fake = model.session_obj
+    assert fake is not None
+    fake.push(0.001, count=20)  # let the gate learn the model's floor
+    await _settle()
+
+    yield fake, checks, verdicts
+
+    await session.aclose()
+
+
+async def test_an_undelegated_turn_is_judged_and_delegated(detecting) -> None:
+    fake, checks, verdicts = detecting
+    verdicts += [True, "Cancel the 3pm."]
+    fake.heard("u1", "Cancel my 3pm.", delegated=False)
+    await asyncio.sleep(GRACE * 2)
+    fake.heard("u2", "The one on Friday.", delegated=False)
+    await asyncio.sleep(GRACE * 2)
+
+    assert [c.chat_ctx.items[-1].text_content for c in checks] == [
+        "Cancel my 3pm.",
+        "The one on Friday.",
+    ]
+    # a verdict in words goes to the delegated work as its note
+    assert fake.delegations == [None, "Cancel the 3pm."]
+
+
+async def test_a_turn_the_model_delegated_is_not_judged(detecting) -> None:
+    fake, checks, _ = detecting
+    fake.heard("u1", "Cancel my 3pm.", delegated=True)
+    fake.heard("u2", "Hi.")  # a model that does not delegate says nothing about it
+    await asyncio.sleep(GRACE * 2)
+    assert checks == []
+
+
+async def test_a_no_leaves_the_turn_alone(detecting) -> None:
+    fake, checks, verdicts = detecting
+    verdicts.append(False)
+    fake.heard("u1", "Hi there.", delegated=False)
+    await asyncio.sleep(GRACE * 2)
+    assert len(checks) == 1
+    assert fake.delegations == []
+
+
+async def test_the_judgment_waits_for_the_model_to_finish_its_reply(detecting) -> None:
+    fake, checks, verdicts = detecting
+    verdicts.append(True)
+    fake.heard("u1", "Cancel my 3pm.", delegated=False)
+    fake.push(0.3, count=3)
+    fake.say("I've cancelled it.")
+    await asyncio.sleep(GRACE * 2)
+    assert checks == []
+
+    fake.push(0.001, count=8)
+    await asyncio.sleep(GRACE * 2)
+    assert checks[0].chat_ctx.items[-1].text_content == "I've cancelled it."
+    assert fake.delegations == [None]
+
+
+@pytest.mark.parametrize("event", ["delegation_created", "input_speech_started"])
+async def test_a_delegation_or_a_new_turn_drops_the_pending_judgment(detecting, event) -> None:
+    fake, checks, _ = detecting
+    fake.heard("u1", "Cancel my 3pm.", delegated=False)
+    if event == "delegation_created":
+        fake.emit(event, llm.DelegationCreatedEvent(id="d1"))
+    else:
+        fake.emit(event, llm.InputSpeechStartedEvent())
+    await asyncio.sleep(GRACE * 2)
+    assert checks == []

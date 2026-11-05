@@ -16,6 +16,13 @@ from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr, TimedString
 from ..utils import aio, is_given, shortuuid
 from .chat_context import ChatContext, ChatMessage, FunctionCall
+from .delegation import (
+    DEFAULT_GRACE_PERIOD,
+    DelegationCheck,
+    DelegationCreatedEvent,
+    DelegationDetector,
+    DelegationDetectorFn,
+)
 from .duplex import (
     DuplexAudioFrame,
     DuplexCapabilities,
@@ -25,6 +32,7 @@ from .duplex import (
 )
 from .realtime import (
     GenerationCreatedEvent,
+    InputSpeechStartedEvent,
     InputTranscriptionCompleted,
     MessageGeneration,
     RealtimeCapabilities,
@@ -336,12 +344,23 @@ class _DuplexRealtimeSession(RealtimeSession):
         # the conversation as the framework sees it: the adapter names every message, so this is
         # what a context update diffs against, and only what is new reaches the model
         self._chat_ctx = ChatContext.empty()
+        self._instructions: str | None = None
+        # a turn the model did not delegate is judged once the model has been quiet for the
+        # grace period after it, so the judgment sees the reply and the model gets its chance
+        self._delegation_detector: DelegationDetectorFn | None = None
+        self._delegation_grace_period = DEFAULT_GRACE_PERIOD
+        if (opts := duplex._delegation_detection) is not None:
+            self._delegation_detector = opts.get("detector") or DelegationDetector()
+            self._delegation_grace_period = opts.get("grace_period", DEFAULT_GRACE_PERIOD)
+        self._delegation_check_pending = False
+        self._delegation_check_atask: asyncio.Task[None] | None = None
 
         duplex.on("transcript_delta", self._on_transcript_delta)
         duplex.on("function_call", self._on_function_call)
         duplex.on("session_reconnected", self._on_session_reconnected)
         duplex.on("input_audio_transcription_completed", self._on_input_transcription)
-        duplex.on("input_speech_started", lambda ev: self.emit("input_speech_started", ev))
+        duplex.on("input_speech_started", self._on_input_speech_started)
+        duplex.on("delegation_created", self._on_delegation_created)
         duplex.on("input_speech_stopped", lambda ev: self.emit("input_speech_stopped", ev))
         duplex.on("metrics_collected", lambda ev: self.emit("metrics_collected", ev))
         duplex.on("error", lambda ev: self.emit("error", ev))
@@ -435,6 +454,8 @@ class _DuplexRealtimeSession(RealtimeSession):
             audio_start_ms=self._audio_ms,
             heard_ms=self._audio_ms,
         )
+        if kind == "speech" and self._delegation_check_atask is not None:
+            self._delegation_check_atask.cancel()
         ev = GenerationCreatedEvent(
             message_stream=burst.message_ch,
             function_stream=burst.function_ch,
@@ -474,6 +495,7 @@ class _DuplexRealtimeSession(RealtimeSession):
             self._attach_fragments(burst)
             if (message := burst.close()) is not None:
                 self._chat_ctx.insert(message)
+            self._schedule_delegation_check()
         self._waiting_since_ms = self._audio_ms
 
     def _attach_fragments(self, burst: _Burst) -> None:
@@ -528,6 +550,55 @@ class _DuplexRealtimeSession(RealtimeSession):
                 )
             )
         self.emit("input_audio_transcription_completed", ev)
+        if ev.is_final and ev.delegated is False and self._delegation_detector is not None:
+            self._delegation_check_pending = True
+            self._schedule_delegation_check()
+
+    def _on_input_speech_started(self, ev: InputSpeechStartedEvent) -> None:
+        # the next turn's judgment covers this one
+        self._cancel_delegation_check()
+        self.emit("input_speech_started", ev)
+
+    def _on_delegation_created(self, ev: DelegationCreatedEvent) -> None:
+        self._cancel_delegation_check()
+
+    def _cancel_delegation_check(self) -> None:
+        self._delegation_check_pending = False
+        if self._delegation_check_atask is not None:
+            self._delegation_check_atask.cancel()
+
+    def _schedule_delegation_check(self) -> None:
+        # the model's speech holds the check back: a burst opening cancels it, closing reschedules
+        if not self._delegation_check_pending or self._burst is not None:
+            return
+        if self._delegation_check_atask is not None:
+            self._delegation_check_atask.cancel()
+        self._delegation_check_atask = asyncio.create_task(
+            self._delegation_check_task(), name="DuplexRealtimeSession.delegation_check"
+        )
+
+    async def _delegation_check_task(self) -> None:
+        assert self._delegation_detector is not None
+        await asyncio.sleep(self._delegation_grace_period)
+        check = DelegationCheck(
+            chat_ctx=self._chat_ctx.copy(),
+            tools=self._duplex.tools.flatten(),
+            instructions=self._instructions,
+        )
+        # the model speaking again cancels the judgment, and the turn waits to be judged with it
+        try:
+            verdict = await self._delegation_detector(check)
+        except Exception:
+            logger.exception("delegation detector failed")
+            verdict = False
+        self._delegation_check_pending = False
+        if verdict is False:
+            return
+        logger.info("the model did not delegate a turn that needs it; delegating it")
+        try:
+            self._duplex.delegate(verdict if isinstance(verdict, str) else None)
+        except RealtimeError:
+            logger.exception("could not start the delegation the detector asked for")
 
     def _on_function_call(self, call: FunctionCall) -> None:
         self._chat_ctx.insert(call)
@@ -581,6 +652,8 @@ class _DuplexRealtimeSession(RealtimeSession):
         if is_given(chat_ctx):
             chat_ctx = chat_ctx.copy(exclude_handoff=True, exclude_config_update=True)
             self._chat_ctx = chat_ctx.copy()
+        if is_given(instructions):
+            self._instructions = instructions
         try:
             await self._duplex._update_session(
                 instructions=instructions, chat_ctx=chat_ctx, tools=tools
@@ -592,6 +665,7 @@ class _DuplexRealtimeSession(RealtimeSession):
             raise
 
     async def update_instructions(self, instructions: str) -> None:
+        self._instructions = instructions
         await self._duplex._update_instructions(instructions)
 
     async def update_chat_ctx(self, chat_ctx: ChatContext) -> None:
@@ -685,6 +759,8 @@ class _DuplexRealtimeSession(RealtimeSession):
             self._pending_reply.set_exception(RealtimeError(reason))
 
     async def aclose(self) -> None:
+        if self._delegation_check_atask is not None:
+            await aio.cancel_and_wait(self._delegation_check_atask)
         await aio.cancel_and_wait(self._segment_atask)
         self._close_burst()
         self._fail_pending_reply("the session closed before the model replied")
