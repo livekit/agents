@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 import functools
-from typing import Any, Literal
+from typing import Any
 
 import aiohttp
 
@@ -19,74 +19,27 @@ from livekit.agents._generated.stt_provider_options import (
 
 from .. import _bindings, _core, stt
 from .._generated import vad as vad_mod
-from .._generated.inference_stt import FallbackModel
+from .._generated.inference_stt import (
+    AssemblyAIModels as AssemblyAIModels,
+    CartesiaModels as CartesiaModels,
+    DeepgramFluxModels as DeepgramFluxModels,
+    DeepgramModels as DeepgramModels,
+    FallbackModel as FallbackModel,
+    GoogleModels as GoogleModels,
+    InworldModels as InworldModels,
+    SpeechmaticsModels as SpeechmaticsModels,
+    STTEncoding as STTEncoding,
+    STTLanguages as STTLanguages,
+    STTModels as STTModels,
+    XaiModels as XaiModels,
+)
 from .._generated.language import LanguageCode
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given
 from ._utils import Credentials, get_inference_headers
 
-DeepgramModels = Literal[
-    "deepgram/nova-3",
-    "deepgram/nova-3-medical",
-    "deepgram/nova-2",
-    "deepgram/nova-2-medical",
-    "deepgram/nova-2-conversationalai",
-    "deepgram/nova-2-phonecall",
-]
-
-
-DeepgramFluxModels = Literal[
-    "deepgram/flux-general", "deepgram/flux-general-en", "deepgram/flux-general-multi"
-]
-
-
-CartesiaModels = Literal["cartesia/ink-whisper", "cartesia/ink-2"]
-
-
-AssemblyAIModels = Literal[
-    "assemblyai/universal-streaming",
-    "assemblyai/universal-streaming-multilingual",
-    "assemblyai/u3-rt-pro",
-    "assemblyai/universal-3-5-pro",
-    "assemblyai/universal-3-6-pro",
-]
-
-
-XaiModels = Literal["xai/stt-1"]
-
-
-SpeechmaticsModels = Literal[
-    "speechmatics/enhanced", "speechmatics/standard", "speechmatics/linden-1"
-]
-
-
-InworldModels = Literal["inworld/inworld-stt-1"]
-
-
-GoogleModels = Literal["google/gemini-3.5-transcribe-live"]
-
-
-STTLanguages = Literal["multi", "en", "de", "es", "fr", "ja", "pt", "zh", "hi"]
-
-
 FallbackModelType = FallbackModel | str
-
-
-STTModels = (
-    DeepgramModels
-    | DeepgramFluxModels
-    | CartesiaModels
-    | AssemblyAIModels
-    | XaiModels
-    | SpeechmaticsModels
-    | InworldModels
-    | GoogleModels
-    | Literal["auto"]
-)
-
-
-STTEncoding = Literal["pcm_s16le"]
 
 
 __all__ = [

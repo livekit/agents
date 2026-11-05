@@ -4,16 +4,14 @@ import os
 import platform
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal
 
 from .. import _core
+from .._generated.inference_models import InferenceClass as InferenceClass
 from ..job import _server_setting
 from ..types import NotGivenOr
 from ..utils import is_given
 from ..utils.misc import shortuuid
 from ..version import __version__
-
-InferenceClass = Literal["priority", "standard", "low"]
 
 __all__ = [
     "InferenceClass",

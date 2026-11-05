@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import functools
-from typing import Any, Literal
+from typing import Any
 
 import aiohttp
 
@@ -15,58 +15,23 @@ from livekit.agents._generated.tts_provider_options import (
 )
 
 from .. import _core, tts
-from .._generated.inference_tts import FallbackModel
+from .._generated.inference_tts import (
+    CartesiaModels as CartesiaModels,
+    DeepgramModels as DeepgramModels,
+    FallbackModel as FallbackModel,
+    FishAudioModels as FishAudioModels,
+    InworldModels as InworldModels,
+    RimeModels as RimeModels,
+    TTSEncoding as TTSEncoding,
+    TTSModels as TTSModels,
+    XaiModels as XaiModels,
+)
 from .._generated.language import LanguageCode
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given, shortuuid
 from ._utils import Credentials, get_inference_headers
 
-CartesiaModels = Literal[
-    "cartesia",
-    "cartesia/sonic-3.5",
-    "cartesia/sonic-3",
-    "cartesia/sonic-2",
-    "cartesia/sonic-turbo",
-    "cartesia/sonic",
-    "cartesia/sonic-3-latest",
-    "cartesia/sonic-latest",
-]
-
-
-DeepgramModels = Literal["deepgram", "deepgram/aura", "deepgram/aura-2"]
-
-
-RimeModels = Literal["rime", "rime/coda", "rime/mistv2", "rime/mistv3", "rime/mist"]
-
-
-InworldModels = Literal[
-    "inworld",
-    "inworld/inworld-tts-2",
-    "inworld/inworld-tts-1.5-max",
-    "inworld/inworld-tts-1.5-mini",
-    "inworld/inworld-tts-1.5",
-    "inworld/inworld-tts-1-max",
-    "inworld/inworld-tts-1",
-]
-
-
-XaiModels = Literal["xai/tts-1"]
-
-
-FishAudioModels = Literal[
-    "fishaudio", "fishaudio/s2.1-pro", "fishaudio/s2.1-pro-free", "fishaudio/s2-pro"
-]
-
-
-TTSModels = (
-    CartesiaModels | DeepgramModels | RimeModels | InworldModels | XaiModels | FishAudioModels
-)
-
-
 FallbackModelType = FallbackModel | str
-
-
-TTSEncoding = Literal["pcm_s16le"]
 
 
 __all__ = [

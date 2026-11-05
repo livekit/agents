@@ -2,15 +2,13 @@ from __future__ import annotations
 
 import asyncio
 from concurrent.futures import Executor
-from typing import Any, Literal
+from typing import Any
 
 from .. import _core
 from .._generated import vad
+from .._generated.inference_models import VADModels as VADModels
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import aio, is_given
-
-VADModels = Literal["silero"]
-
 
 __all__ = ["VAD", "VADModels"]
 

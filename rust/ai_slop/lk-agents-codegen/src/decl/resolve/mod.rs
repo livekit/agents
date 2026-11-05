@@ -853,7 +853,8 @@ impl Resolver<'_> {
         let attrs = item_attrs(it);
         let entries = voc::read(attrs).map_err(|e| format!("{at}: {e}"))?;
         if let Some(record) = voc::find(&entries, "record") {
-            let (module_name, name, extract, emit) = record_target(at, record, &ident)?;
+            let (module_name, name, extract, emit) =
+                record_target(at, record, &ident, unit_enum(it))?;
             return Ok(Ty::Record(Record {
                 rust,
                 host: HostForm::Record { module: module_name, name },

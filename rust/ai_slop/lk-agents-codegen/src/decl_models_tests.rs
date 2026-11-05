@@ -86,6 +86,30 @@ fn a_transparent_record_crosses_as_its_variants_values() {
     );
 }
 
+// Catches: a type-hint-only `Literal` (a model catalog no native entry takes) refused for not
+// crossing, a union of them lost, or conversions written for either.
+#[test]
+fn literal_aliases_and_their_union_are_models_without_conversions() {
+    let decls = read(
+        r#"#[crate::host(record(module = "models", name = "AModels"))]
+        pub enum A { #[host(rename = "a/1")] One }
+        #[crate::host(record(module = "models", name = "BModels"))]
+        pub enum B { #[host(rename = "b/1")] One }
+        #[crate::host(record(module = "models", name = "AllModels", transparent))]
+        pub enum All { A(A), B(B) }"#,
+    )
+    .expect("resolves");
+    let models = crate::records::python(&decls).expect("models");
+    let text = &models.iter().find(|o| o.path == "models.py").expect("models.py").text;
+    assert!(
+        text.contains("AModels: TypeAlias = Literal[\"a/1\"]")
+            && text.contains("AllModels: TypeAlias = AModels | BModels"),
+        "{text}"
+    );
+    let shell = crate::records::conversions(&decls).expect("conversions").text;
+    assert!(!shell.contains("models"), "{shell}");
+}
+
 // Catches: a model's fixed discriminator (`type`) forced into Rust state, missing from the model,
 // or demanded of the host when it builds one.
 #[test]

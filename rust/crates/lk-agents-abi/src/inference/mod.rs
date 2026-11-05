@@ -3,6 +3,7 @@
 
 pub mod avatar_session;
 pub mod fallback;
+pub mod models;
 
 use serde_json::Value;
 

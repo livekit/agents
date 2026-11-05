@@ -11,7 +11,7 @@ impl Resolver<'_> {
         let index =
             module.items.iter().position(|i| std::ptr::eq(i, item)).expect("read from here");
         let ident = item_ident(item);
-        let (py_module, name, extract, emit) = record_target(at, record, &ident)?;
+        let (py_module, name, extract, emit) = record_target(at, record, &ident, unit_enum(item))?;
         let persisted = voc::find(&record.nested, "persisted").is_some();
         let transparent = voc::find(&record.nested, "transparent").is_some();
         let enumeration = voc::find(&record.nested, "enum").is_some();
@@ -758,6 +758,7 @@ pub(super) fn record_target(
     at: &str,
     record: &Entry,
     ident: &str,
+    literal: bool,
 ) -> Result<(String, String, bool, bool), String> {
     voc::only(
         at,
@@ -822,9 +823,11 @@ pub(super) fn record_target(
     let extract = voc::find(&record.nested, "extract").is_some();
     let emit = voc::find(&record.nested, "emit").is_some();
     // Explicit model declarations need no converter until a native entry actually uses them.
-    // This includes subclassed Pydantic bases and host-facing configuration/event records.
+    // This includes subclassed Pydantic bases, host-facing configuration/event records and
+    // `Literal` aliases (unit-only enums).
     if !extract
         && !emit
+        && !literal
         && !["pydantic", "dataclass", "typed_dict", "enum", "transparent"]
             .iter()
             .any(|kind| voc::find(&record.nested, kind).is_some())

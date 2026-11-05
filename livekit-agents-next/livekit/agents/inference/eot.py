@@ -11,6 +11,10 @@ from pydantic import JsonValue
 from livekit import rtc
 
 from .. import _core
+from .._generated.inference_models import (
+    TurnDetectorModels as TurnDetectorModels,
+    TurnDetectorVersions as TurnDetectorVersions,
+)
 from .._generated.language import LanguageCode
 from ..log import logger
 from ..metrics import EOTInferenceMetrics
@@ -35,9 +39,6 @@ __all__ = [
     "TurnDetectorModels",
     "TurnDetectorVersions",
 ]
-
-TurnDetectorModels = Literal["turn-detector-v1", "turn-detector-v1-mini"]
-TurnDetectorVersions = Literal["v1", "v1-mini"]
 
 DEFAULT_SAMPLE_RATE = 16000
 DEFAULT_PREDICTION_TIMEOUT = 1.0

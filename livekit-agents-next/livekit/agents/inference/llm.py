@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 import functools
-from typing import TYPE_CHECKING, Any, Literal, cast, get_args
+from typing import TYPE_CHECKING, Any, cast, get_args
 
 from livekit.agents._generated.llm_provider_options import (
     ChatCompletionOptions as ChatCompletionOptions,
@@ -10,6 +10,19 @@ from livekit.agents._generated.llm_provider_options import (
 
 from .. import _core, llm
 from .._exceptions import APIConnectionError, APIStatusError, APITimeoutError
+from .._generated.inference_llm import (
+    DeepSeekModels as DeepSeekModels,
+    GoogleModels as GoogleModels,
+    KimiModels as KimiModels,
+    LLMModels as LLMModels,
+    OpenAIModels as OpenAIModels,
+    OpenAIRealtimeModels as OpenAIRealtimeModels,
+    RealtimeModels as RealtimeModels,
+    ReasoningEffort as ReasoningEffort,
+    XAIModels as XAIModels,
+    XAIRealtimeModels as XAIRealtimeModels,
+    ZAIModels as ZAIModels,
+)
 from ..llm import ToolChoice, utils as llm_utils
 from ..llm.chat_context import ChatContext
 from ..llm.tool_context import Tool
@@ -30,74 +43,6 @@ if TYPE_CHECKING:
     from ..llm import ToolChoice
 
 
-ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]
-
-
-OpenAIModels = Literal[
-    "openai/gpt-4o",
-    "openai/gpt-4o-mini",
-    "openai/gpt-4.1",
-    "openai/gpt-4.1-mini",
-    "openai/gpt-4.1-nano",
-    "openai/gpt-5",
-    "openai/gpt-5-mini",
-    "openai/gpt-5-nano",
-    "openai/gpt-5.1",
-    "openai/gpt-5.1-chat-latest",
-    "openai/gpt-5.2",
-    "openai/gpt-5.2-chat-latest",
-    "openai/gpt-5.3-chat-latest",
-    "openai/gpt-5.4",
-    "openai/gpt-5.4-mini",
-    "openai/gpt-5.4-nano",
-    "openai/gpt-5.5",
-    "openai/gpt-5.6-luna",
-    "openai/gpt-5.6-sol",
-    "openai/gpt-5.6-terra",
-    "openai/chat-latest",
-    "openai/gpt-oss-120b",
-]
-
-
-GoogleModels = Literal[
-    "google/gemini-3.1-pro",
-    "google/gemini-3-flash",
-    "google/gemini-3.1-flash-lite",
-    "google/gemini-3.5-flash",
-    "google/gemini-2.5-pro",
-    "google/gemini-2.5-flash",
-    "google/gemini-2.5-flash-lite",
-]
-
-
-KimiModels = Literal["moonshotai/kimi-k2.5", "moonshotai/kimi-k2.6"]
-
-
-DeepSeekModels = Literal["deepseek-ai/deepseek-v3", "deepseek-ai/deepseek-v3.2"]
-
-
-ZAIModels = Literal["zai/glm-5.1"]
-
-
-XAIModels = Literal[
-    "xai/grok-4-1-fast-non-reasoning",
-    "xai/grok-4-1-fast-reasoning",
-    "xai/grok-4.20-0309-non-reasoning",
-    "xai/grok-4.20-0309-reasoning",
-    "xai/grok-4.20-multi-agent-0309",
-    "xai/grok-4.3",
-    "xai/grok-4.5",
-]
-
-
-LLMModels = OpenAIModels | GoogleModels | KimiModels | DeepSeekModels | ZAIModels | XAIModels
-
-
-"""Scheduling class for a request. ``low`` yields to voice traffic, so it is only
-appropriate for work no caller is waiting on.
-"""
-
-
 __all__ = [
     "LLM",
     "LLMStream",
@@ -113,23 +58,6 @@ __all__ = [
     "OpenAIRealtimeModels",
     "XAIRealtimeModels",
 ]
-
-OpenAIRealtimeModels = Literal[
-    "openai/gpt-realtime",
-    "openai/gpt-realtime-mini",
-    "openai/gpt-realtime-1.5",
-    "openai/gpt-realtime-2",
-    "openai/gpt-realtime-2.1",
-    "openai/gpt-realtime-2.1-mini",
-]
-
-XAIRealtimeModels = Literal[
-    "xai/grok-voice",
-    "xai/grok-voice-latest",
-    "xai/grok-voice-think-fast-2.0",
-]
-
-RealtimeModels = OpenAIRealtimeModels | XAIRealtimeModels
 
 _REALTIME_MODEL_IDS: frozenset[str] = frozenset(
     model for literal in get_args(RealtimeModels) for model in get_args(literal)
