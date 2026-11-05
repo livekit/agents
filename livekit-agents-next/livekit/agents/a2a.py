@@ -41,13 +41,7 @@ from ._generated.a2a_metadata import (
     GRANT_HEADER,
     RPC_PATH,
 )
-from ._generated.a2a_remote import (
-    RemoteEvent,
-    RemoteEventFollow,
-    RemoteEventInputRequired,
-    RemoteEventOutcome,
-    RemoteEventProgress,
-)
+from ._generated.a2a_remote import RemoteEventInputRequired, RemoteEventOutcome
 from ._generated.storage_options import Policy, TurnOptions
 from ._generated.tool_report import ToolOutcomeInputRequired, ToolReport
 from .job import _server_credentials
@@ -280,73 +274,64 @@ class _RemoteTool(Toolset):
         thread_id = thread.id if agent._token is None and thread is not None else None
         token = _core._core_remote_token(url, *project, agent._token, thread_id)
         shared = thread_id if agent._token is None and token is not None else None
-        client = AgentClient(url, token=token, conn_options=agent._conn_options)
-        reply: Reply | None = None
         try:
-            await client.connect()
-            message = interaction.message(
+            event = await interaction.run(
+                _Delegation(ctx),
                 raw_arguments,
                 agent._card.structured_input,
-                client.offers_extension,
                 history.items,
+                token,
                 shared,
-                token if shared else None,
+                agent._conn_options,
+                ctx._session is not None,
             )
-            reply = await client.send(message)
-            if ctx._session is not None:
-                # The live session owns the interaction from here: the call waits on the expert
-                # while the conversation goes on.
-                await ctx.update(_DELEGATED)
-            while True:
-                event: RemoteEvent | None = None
-                async for update in reply:
-                    event = interaction.update(update)
-                    ctx.function_call.extra.update(_json_object(interaction.extra))
-                    if isinstance(event, RemoteEventProgress):
-                        await ctx.update(event.text)
-                    elif isinstance(
-                        event, RemoteEventInputRequired | RemoteEventOutcome | RemoteEventFollow
-                    ):
-                        break
-                await reply.aclose()
-                if isinstance(event, RemoteEventFollow):
-                    reply = await client._core_subscribe(event.task_id, event.thread_id)
-                elif isinstance(event, RemoteEventInputRequired) and ctx._session is not None:
-                    answer = await _ask_the_person(ctx, event)
-                    reply = await client.send(interaction.answer(event.request_id, answer))
-                elif isinstance(event, RemoteEventInputRequired):
-                    transition = InputRequired(
-                        event.question, tool=self._tool, verbatim=event.verbatim_full
-                    )
-                    return ToolReport(outcome=event.outcome, transition=transition)
-                elif isinstance(event, RemoteEventOutcome):
-                    return ToolReport(outcome=event.outcome)
-                else:
-                    raise RuntimeError("the remote interaction ended without an outcome")
         except asyncio.CancelledError:
+            # stopped in this turn, then its reply (cancelling the remote task) and client closed
             interaction.cancelled()
             ctx.function_call.extra.update(_json_object(interaction.extra))
+            await interaction.settled()
             raise
-        finally:
-            if reply is not None:
-                await reply.aclose()
-            await client.aclose()
+        if isinstance(event, RemoteEventInputRequired):
+            transition = InputRequired(
+                event.question, tool=self._tool, verbatim=event.verbatim_full
+            )
+            return ToolReport(outcome=event.outcome, transition=transition)
+        assert isinstance(event, RemoteEventOutcome)
+        return ToolReport(outcome=event.outcome)
 
 
 _DELEGATED = "The request is with the expert: its progress, questions and result reach the person."
 
 
-async def _ask_the_person(ctx: RunContext, event: RemoteEventInputRequired) -> str:
-    """The expert's question goes to the live session, which presents it when the floor permits
-    and forwards the person's reply here."""
-    assert ctx._session is not None
-    ctx._expert_answer = asyncio.get_running_loop().create_future()
-    question = ToolOutcomeInputRequired(question=event.question, verbatim=event.verbatim_full)
-    try:
-        ctx._tool_update(ToolReport(outcome=question))
-        return await ctx._expert_answer
-    finally:
-        ctx._expert_answer = None
+class _Delegation:
+    """What ``_core_RemoteInteraction.run`` reaches on the host for one tool call: its progress
+    and retained state, and on a call the person."""
+
+    def __init__(self, ctx: RunContext) -> None:
+        self._ctx = ctx
+
+    async def _core_progress(self, text: str | None, extra: dict[str, object]) -> None:
+        self._ctx.function_call.extra.update(_json_object(extra))
+        if text is not None:
+            await self._ctx.update(text)
+
+    async def _core_delegated(self) -> None:
+        # The live session owns the interaction from here: the call waits on the expert while
+        # the conversation goes on.
+        await self._ctx.update(_DELEGATED)
+
+    async def _core_ask(self, question: str, verbatim: bool) -> str:
+        """The expert's question goes to the live session, which presents it when the floor
+        permits and forwards the person's reply here."""
+        ctx = self._ctx
+        assert ctx._session is not None
+        ctx._expert_answer = asyncio.get_running_loop().create_future()
+        outcome = ToolOutcomeInputRequired(question=question, verbatim=verbatim)
+        try:
+            ctx._tool_update(ToolReport(outcome=outcome))
+            return await ctx._expert_answer
+        finally:
+            ctx._expert_answer = None
 
 
 def _json_object(value: dict[str, object]) -> dict[str, JsonValue]:

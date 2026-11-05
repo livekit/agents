@@ -264,6 +264,41 @@ async def test_remote_failure_and_cancellation_are_truthful_tool_outcomes(
         assert output.is_error and output.output == "coverage unavailable"
 
 
+# Catches: a cancelled delegation leaving its remote task running, or its client open.
+@pytest.mark.asyncio
+async def test_cancelling_a_delegating_run_cancels_the_remote_task(peer: Peer) -> None:
+    from livekit.agents import Agent
+    from livekit.agents.llm import FunctionToolCall
+
+    from .fake_llm import FakeLLM, FakeLLMResponse
+
+    peer.scenario = "wait"
+    call = FunctionToolCall(
+        name="coverage_expert", arguments=json.dumps({"request": "Check"}), call_id="c"
+    )
+    agent = Agent(
+        instructions="Call coverage_expert.",
+        tools=[_remote(peer).as_tool()],
+        llm=FakeLLM(
+            fake_responses=[
+                FakeLLMResponse(input="Check", content="", ttft=0, duration=0, tool_calls=[call])
+            ]
+        ),
+    )
+    run = asyncio.create_task(agent.run("Check"))
+    async with asyncio.timeout(5):
+        while not any(rpc and "message" in rpc["params"] for _, _, rpc in peer.requests):
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(0.05)
+        run.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await run
+        await peer.canceled.wait()
+    cancel = next(rpc for _, _, rpc in peer.requests if rpc and rpc["method"] == "CancelTask")
+    assert cancel["params"]["id"] == "remote-task"
+    peer.release.set()
+
+
 @pytest.mark.asyncio
 async def test_closing_a_pending_public_reply_cancels_exact_remote_task(peer: Peer) -> None:
     peer.scenario = "wait"

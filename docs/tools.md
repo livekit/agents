@@ -193,7 +193,15 @@ or live session is created by a backend run.
 
 The adapter manages connection lifecycle, authentication, task correlation,
 and delegation metadata. Applications configure the endpoint and attach its
-tool; protocol calls and metadata recording are internal.
+tool; protocol calls and metadata recording are internal. One call of the tool
+connects, sends the request and follows the remote task to its outcome, a task
+the endpoint moved included; each update is recorded on the function call's
+`extra` before its progress text reaches `ctx.update()`. On a call the request
+is announced to the person once sent, and each question the expert asks is put
+to the person, whose reply answers it; off a call the question ends the tool call
+as `InputRequired`. Cancelling the tool call records the cancellation in `extra`,
+then closes its reply, which cancels the remote task, and its connection before
+the cancellation propagates.
 
 When the caller holds
 [explicit authority](protocol/a2a.md#delegation-and-conversation-data) to share

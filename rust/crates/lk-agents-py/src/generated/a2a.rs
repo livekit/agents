@@ -463,6 +463,7 @@ inventory::submit! {
 type CoreRemoteInteractionImpl =
     <crate::generated::implementations::Selected as super::Implementations>::RemoteInteraction;
 
+/// One delegation of a tool call to a remote agent (docs/agents.md "Remote agents").
 #[pyclass(frozen, name = "_core_RemoteInteraction", module = "livekit.agents._core")]
 pub struct CoreRemoteInteraction(pub(crate) ::std::sync::Arc<CoreRemoteInteractionImpl>);
 
@@ -523,36 +524,72 @@ impl CoreRemoteInteraction {
         crate::generated::records::a2a_client::message_to_py(py, out)
     }
 
-    /// The person's answer to the retained input request `request_id`, on its task; refused
-    /// once that request was settled or superseded.
-    #[pyo3(signature = (request_id, text))]
-    fn answer<'py>(
+    /// Run the delegation on the endpoint: connect with `token`, send the call's message
+    /// (`thread_id` shares the caller's thread under `token`'s grant), then follow its updates:
+    /// each reaches `host.progress`, a moved task is followed, and on a call (`live`) the
+    /// request is announced through `host.delegated` and each question answered through
+    /// `host.ask`. Returns the outcome, or, off a call, the expert's question. The client and
+    /// its reply are closed before it returns.
+    #[pyo3(signature = (host, arguments, structured, history, token, thread_id, conn_options, live))]
+    fn run<'py>(
         &self,
         py: Python<'py>,
-        request_id: ::std::string::String,
-        text: ::std::string::String,
+        host: Bound<'_, PyAny>,
+        arguments: Bound<'_, PyAny>,
+        structured: bool,
+        history: Bound<'_, PyAny>,
+        token: ::std::option::Option<::std::string::String>,
+        thread_id: ::std::option::Option<::std::string::String>,
+        conn_options: Option<Bound<'_, PyAny>>,
+        live: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
-        let out = py.detach(|| <CoreRemoteInteractionImpl as ::lk_agents_abi::a2a::remote::RemoteInteraction>::answer(&self.0, request_id, text)).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as crate::py_errors::HostException>::to_py_err(&e))?;
-        crate::generated::records::a2a_client::message_to_py(py, out)
+        let env = crate::process::env();
+        let host = crate::generated::a2a::DelegationHostProxy::from_host(host.as_any())?;
+        let arguments = crate::py_values::value_from_py(arguments.as_any(), "arguments")?;
+        let history = history.try_iter().and_then(|items| {
+            items
+                .map(|item| {
+                    let item = item?;
+                    crate::generated::records::chat_items::chat_item_from_py(item.as_any())
+                })
+                .collect::<PyResult<Vec<_>>>()
+        })?;
+        let conn_options = conn_options
+            .map(|v| crate::generated::records::connect::api_connect_options_from_py(v.as_any()))
+            .transpose()?;
+        let context = crate::py_calls::entered();
+        let cx = crate::py_calls::entry_cx();
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::py_calls::future_into_py(py, async move {
+            let out = <CoreRemoteInteractionImpl as ::lk_agents_abi::a2a::remote::RemoteInteraction>::run(&this, &env, host, arguments, structured, history, token, thread_id, conn_options, live, context, cx)
+                .await.map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as crate::py_errors::HostException>::to_py_err(&e))?;
+            Python::attach(|py| {
+                ::pyo3::IntoPyObjectExt::into_py_any(
+                    crate::generated::records::a2a_remote::remote_event_to_py(py, out)?,
+                    py,
+                )
+            })
+        })
     }
 
-    #[pyo3(signature = (update))]
-    fn update<'py>(
-        &self,
-        py: Python<'py>,
-        update: Bound<'_, PyAny>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        crate::py_calls::check_pid()?;
-        let update = crate::generated::records::a2a_client::task_update_from_py(update.as_any())?;
-        let out = py.detach(|| <CoreRemoteInteractionImpl as ::lk_agents_abi::a2a::remote::RemoteInteraction>::update(&self.0, update)).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as crate::py_errors::HostException>::to_py_err(&e))?;
-        crate::generated::records::a2a_remote::remote_event_to_py(py, out)
-    }
-
+    /// The tool call was cancelled: the interaction records it and a running delegation stops,
+    /// closing its reply (which cancels the remote task) and client; `settled()` waits for that.
     fn cancelled(&self, py: Python<'_>) -> PyResult<()> {
         crate::py_calls::check_pid()?;
         py.detach(|| <CoreRemoteInteractionImpl as ::lk_agents_abi::a2a::remote::RemoteInteraction>::cancelled(&self.0)).map_err(|e: ::lk_agents_abi::a2a::client::AgentClientError| <::lk_agents_abi::a2a::client::AgentClientError as crate::py_errors::HostException>::to_py_err(&e))?;
         Ok(())
+    }
+
+    /// After `cancelled()`: the running delegation's cleanup, bounded by the teardown limit.
+    fn settled<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_calls::check_pid()?;
+        let this = ::std::sync::Arc::clone(&self.0);
+        crate::py_calls::future_into_py(py, async move {
+            let () = <CoreRemoteInteractionImpl as ::lk_agents_abi::a2a::remote::RemoteInteraction>::settled(&this, )
+                .await;
+            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
+        })
     }
 
     #[getter]
@@ -704,6 +741,188 @@ pub fn normalize_handler_output<'py>(
     })?;
     let out = py.detach(|| <HandlerOutcomesImpl as ::lk_agents_abi::a2a::turn::HandlerOutcomes>::normalize_handler_output(output, outcome, runs)).map_err(|e: ::lk_agents_abi::storage::StorageError| <::lk_agents_abi::storage::StorageError as crate::py_errors::HostException>::to_py_err(&e))?;
     crate::generated::records::storage_turn::handler_output_to_py(py, out)
+}
+
+// Declared in rust/crates/lk-agents-abi/src/a2a/remote.rs.
+
+/// [`::lk_agents_abi::a2a::remote::DelegationHost`] over a host `livekit.agents.a2a._Delegation`.
+#[derive(Clone)]
+pub struct DelegationHostProxy {
+    host: ::std::sync::Arc<Py<PyAny>>,
+}
+
+impl DelegationHostProxy {
+    /// A registered native class as itself, any other host object behind this proxy.
+    pub fn from_host(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::a2a::remote::DelegationHost>> {
+        if let Some(native) =
+            crate::py_objects::native::<dyn ::lk_agents_abi::a2a::remote::DelegationHost>(obj)
+        {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+    }
+
+    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    pub fn in_context(
+        obj: &Bound<'_, PyAny>,
+        context: &::lk_agents_abi::utils::host_ref::HostRef,
+    ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::a2a::remote::DelegationHost>> {
+        if let Some(native) =
+            crate::py_objects::native::<dyn ::lk_agents_abi::a2a::remote::DelegationHost>(obj)
+        {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
+    }
+
+    /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
+    pub fn owned(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::a2a::remote::DelegationHost>> {
+        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+    }
+
+    fn take(
+        obj: &Bound<'_, PyAny>,
+        context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
+    ) -> PyResult<Self> {
+        let _ = context;
+        Ok(DelegationHostProxy { host: ::std::sync::Arc::new(obj.clone().unbind()) })
+    }
+}
+
+impl ::lk_agents_abi::a2a::remote::DelegationHost for DelegationHostProxy {
+    fn progress<'a>(
+        &'a self,
+        cx: &::lk_agents_abi::telemetry::Cx,
+        context: &::lk_agents_abi::invoke::CallContext,
+        text: ::std::option::Option<::std::string::String>,
+        extra: ::serde_json::Map<::std::string::String, ::serde_json::Value>,
+    ) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
+    {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let text_arg = text;
+        let extra_arg = extra;
+        let started = ::lk_agents_runtime::host::call(
+            &crate::py_calls::Entry,
+            "DelegationHost._core_progress",
+            context,
+            &[],
+            cx,
+            ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
+                    ::pyo3::IntoPyObjectExt::into_bound_py_any(text_arg, py)?,
+                    crate::py_values::extra_to_py(py, &extra_arg)?.into_any(),
+                ];
+                Ok((
+                    host.bind(py).getattr("_core_progress")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
+            }),
+        );
+        ::std::boxed::Box::pin(async move {
+            let out = started.await;
+            ::pyo3::Python::attach(|py| {
+                let out = match out {
+                    Ok(out) => out,
+                    Err(e) => {
+                        return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
+                    }
+                };
+                let o = out.value.bind(py);
+                let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                Ok(())
+            })
+        })
+    }
+
+    fn delegated<'a>(
+        &'a self,
+        cx: &::lk_agents_abi::telemetry::Cx,
+        context: &::lk_agents_abi::invoke::CallContext,
+    ) -> ::lk_agents_abi::BoxFuture<'a, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
+    {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let started = ::lk_agents_runtime::host::call(
+            &crate::py_calls::Entry,
+            "DelegationHost._core_delegated",
+            context,
+            &[],
+            cx,
+            ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                Ok((
+                    host.bind(py).getattr("_core_delegated")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
+            }),
+        );
+        ::std::boxed::Box::pin(async move {
+            let out = started.await;
+            ::pyo3::Python::attach(|py| {
+                let out = match out {
+                    Ok(out) => out,
+                    Err(e) => {
+                        return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
+                    }
+                };
+                let o = out.value.bind(py);
+                let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                Ok(())
+            })
+        })
+    }
+
+    fn ask<'a>(
+        &'a self,
+        cx: &::lk_agents_abi::telemetry::Cx,
+        context: &::lk_agents_abi::invoke::CallContext,
+        question: ::std::string::String,
+        verbatim: bool,
+    ) -> ::lk_agents_abi::BoxFuture<
+        'a,
+        ::std::result::Result<::std::string::String, ::lk_agents_abi::errors::HostError>,
+    > {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let question_arg = question;
+        let verbatim_arg = verbatim;
+        let started = ::lk_agents_runtime::host::call(
+            &crate::py_calls::Entry,
+            "DelegationHost._core_ask",
+            context,
+            &[],
+            cx,
+            ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
+                    ::pyo3::IntoPyObjectExt::into_bound_py_any(question_arg, py)?,
+                    ::pyo3::IntoPyObjectExt::into_bound_py_any(verbatim_arg, py)?,
+                ];
+                Ok((
+                    host.bind(py).getattr("_core_ask")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
+            }),
+        );
+        ::std::boxed::Box::pin(async move {
+            let out = started.await;
+            ::pyo3::Python::attach(|py| {
+                let out = match out {
+                    Ok(out) => out,
+                    Err(e) => {
+                        return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
+                    }
+                };
+                let o = out.value.bind(py);
+                let out = (o.extract::<::std::string::String>()).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+                Ok(out)
+            })
+        })
+    }
 }
 
 // Declared in rust/crates/lk-agents-abi/src/a2a/turn.rs.

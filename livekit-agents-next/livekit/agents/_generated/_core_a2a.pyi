@@ -8,6 +8,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Self
 
+from livekit.agents.a2a import _Delegation
 from livekit.agents.storage.session import _TurnHost
 
 from .._core import Storage, Thread
@@ -112,6 +113,7 @@ class _core_A2ADoor:
     async def aclose(self) -> None: ...
 
 class _core_RemoteInteraction:
+    """One delegation of a tool call to a remote agent (docs/agents.md "Remote agents")."""
     def __new__(
         cls,
         endpoint: str,
@@ -135,12 +137,30 @@ class _core_RemoteInteraction:
         token: str | None = None,
     ) -> Message:
         """The call's message; `thread_id` shares the caller's thread under `token`'s grant for it."""
-    def answer(self, request_id: str, text: str) -> Message:
-        """The person's answer to the retained input request `request_id`, on its task; refused
-        once that request was settled or superseded.
+    async def run(
+        self,
+        host: _Delegation,
+        arguments: object,
+        structured: bool,
+        history: Sequence[ChatItem],
+        token: str | None,
+        thread_id: str | None,
+        conn_options: APIConnectOptions | None,
+        live: bool,
+    ) -> RemoteEvent:
+        """Run the delegation on the endpoint: connect with `token`, send the call's message
+        (`thread_id` shares the caller's thread under `token`'s grant), then follow its updates:
+        each reaches `host.progress`, a moved task is followed, and on a call (`live`) the
+        request is announced through `host.delegated` and each question answered through
+        `host.ask`. Returns the outcome, or, off a call, the expert's question. The client and
+        its reply are closed before it returns.
         """
-    def update(self, update: TaskUpdate) -> RemoteEvent: ...
-    def cancelled(self) -> None: ...
+    def cancelled(self) -> None:
+        """The tool call was cancelled: the interaction records it and a running delegation stops,
+        closing its reply (which cancels the remote task) and client; `settled()` waits for that.
+        """
+    async def settled(self) -> None:
+        """After `cancelled()`: the running delegation's cleanup, bounded by the teardown limit."""
     @property
     def extra(self) -> dict[str, object]: ...
 
