@@ -120,14 +120,6 @@ pub trait SpeechHandle: Send + Sync + Sized + 'static {
     async fn wait_reported(&self);
 }
 
-// Public data contracts. Python behavior remains in its adapters.
-
-#[crate::host(record(module = "speech_details", path = "livekit.agents.voice.io", dataclass))]
-pub struct InputDetails {
-    #[host(annotation = "typing.Literal['text', 'audio']")]
-    pub modality: String,
-}
-
 #[crate::host(file(module = "speech_defaults"))]
 const _: () = ();
 
@@ -142,7 +134,3 @@ pub const SPEECH_PRIORITY_NORMAL: i32 = 5;
 /// Priority for important messages that should be played before others.
 #[crate::host(constant)]
 pub const SPEECH_PRIORITY_HIGH: i32 = 10;
-
-/// `DEFAULT_INPUT_DETAILS.modality`: the default input modality.
-#[crate::host(constant)]
-pub const DEFAULT_INPUT_MODALITY: &str = "audio";

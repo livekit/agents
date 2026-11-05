@@ -30,7 +30,6 @@ import weakref
 from collections.abc import Generator, Sequence
 from typing import Protocol, runtime_checkable
 
-from livekit.agents._generated.speech_details import InputDetails as InputDetails
 from livekit.agents._generated.turn_events import TurnDetectionEvent as TurnDetectionEvent
 
 from .._generated import speech_defaults
