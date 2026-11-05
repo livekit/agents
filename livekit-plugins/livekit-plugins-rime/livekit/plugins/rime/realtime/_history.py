@@ -372,53 +372,115 @@ class PrismHistory:
         return llm.ChatContext([*self._chat.items, *additions])
 
     def _progress_target(self, target: llm.ChatContext) -> llm.ChatContext:
-        """Keep acknowledged live results in place when core sorts them by time.
+        """Preserve acknowledged order for interleaved progress results.
 
-        A tool can produce its first progress output before Prism finishes a
-        filler. Core inserts that output by creation time, while our journal
-        records it after the filler on acknowledgment. Treat only this known
-        call/filler/result permutation as the same history.
+        Core inserts results by creation time, which can precede the end of a
+        filler or another tool's result acknowledgment. Only unchanged progress
+        results may move, within runs of known progress items and generated
+        messages. New items, other history, and changed content remain barriers.
+        Explicit history edits bypass this normalization.
         """
         items = _items(target)
         requested = {item.id: item for item in items}
-        positions = {item.id: index for index, item in enumerate(self._chat.items)}
-        for call in items[:]:
-            if not isinstance(call, llm.FunctionCall) or not call.extra.get(
-                "__livekit_agents_tool_non_blocking"
-            ):
+        if len(requested) != len(items):
+            return target  # Leave duplicate-ID rejection to the normal validation.
+        old = {item.id: item for item in self._chat.items}
+        positions = {item.id: index for index, item in enumerate(items)}
+        calls = {
+            item.call_id: item
+            for item in items
+            if isinstance(item, llm.FunctionCall)
+            and item.extra.get("__livekit_agents_tool_non_blocking")
+            and item.id in old
+            and _wire(item) == _wire(old[item.id])
+        }
+        eligible = {item.id for item in calls.values()}
+        results: set[str] = set()
+        for item in items:
+            previous = old.get(item.id)
+            if previous is None:
                 continue
-            if call.id not in positions or _wire(call) != _wire(
-                self._chat.items[positions[call.id]]
+            if (
+                isinstance(item, llm.FunctionCallOutput)
+                and (call := calls.get(item.call_id)) is not None
+                and positions[call.id] < positions[item.id]
+                and _wire(item) == _wire(previous)
             ):
-                continue
-            start = positions[call.id] + 1
-            fillers: list[llm.ChatItem] = []
-            for previous in self._chat.items[start:]:
-                if isinstance(previous, llm.ChatMessage) and previous.id in self._variants:
-                    fillers.append(previous)
-                    continue
-                if (
-                    fillers
-                    and isinstance(previous, llm.FunctionCallOutput)
-                    and previous.call_id == call.call_id
-                ):
-                    output = requested.get(previous.id)
-                    if output is None or _wire(output) != _wire(previous):
-                        break
-                    present = [item.id for item in fillers if item.id in requested]
-                    index = items.index(call) + 1
-                    block = items[index : index + len(present) + 1]
-                    if (
-                        len({item.id for item in block}) == len(block)
-                        and [item.id for item in block if item.id != previous.id] == present
-                        and any(item.id == previous.id for item in block)
-                    ):
-                        items[index : index + len(block)] = [
-                            *(requested[item_id] for item_id in present),
-                            output,
-                        ]
-                break
-        return llm.ChatContext(items)
+                eligible.add(item.id)
+                results.add(item.id)
+            elif (
+                isinstance(item, llm.ChatMessage)
+                and isinstance(previous, llm.ChatMessage)
+                and item.role == previous.role == "assistant"
+                and all(isinstance(c, str) for c in item.content)
+                and item.text_content in self._variants.get(item.id, set())
+            ):
+                eligible.add(item.id)
+
+        # Both projections must have an uninterrupted run of eligible items.
+        # Omitted user messages must still prevent movement across their position.
+        blocks: dict[str, int] = {}
+        acknowledged = {item.id: index for index, item in enumerate(self._chat.items)}
+        block = 0
+        for item in self._chat.items:
+            if item.id in eligible:
+                blocks[item.id] = block
+            else:
+                block += 1
+        start = 0
+        while start < len(items):
+            group = blocks.get(items[start].id)
+            end = start + 1
+            if group is not None:
+                while end < len(items) and blocks.get(items[end].id) == group:
+                    end += 1
+                current = items[start:end]
+                ordered = sorted(current, key=lambda item: acknowledged[item.id])
+                if [i.id for i in current if i.id not in results] == [
+                    i.id for i in ordered if i.id not in results
+                ]:
+                    items[start:end] = ordered
+            start = end
+        return self._include_late_progress_messages(items)
+
+    def _include_late_progress_messages(self, items: list[llm.ChatItem]) -> llm.ChatContext:
+        """Keep output observed after core captured a progress-only append.
+
+        A deferred reply can finish while another tool's update waits for core's
+        context lock. Its generated message was not available to that snapshot;
+        strict mode must not interpret its absence as a requested deletion.
+        """
+        old = {item.id: item for item in self._chat.items}
+        added = [item for item in items if item.id not in old]
+        target = llm.ChatContext(items)
+        if not added or len(added) % 2 or items[-len(added) :] != added:
+            return target
+        for call, output in zip(added[::2], added[1::2], strict=True):
+            if not (
+                isinstance(call, llm.FunctionCall)
+                and call.extra.get("__livekit_agents_tool_non_blocking")
+                and isinstance(output, llm.FunctionCallOutput)
+                and call.call_id == output.call_id
+            ):
+                return target
+        requested = {item.id: item for item in items}
+        missing = [item for item in self._chat.items if item.id not in requested]
+        captured_at = max(item.created_at for item in added)
+        if not missing or any(
+            not isinstance(item, llm.ChatMessage)
+            or item.role != "assistant"
+            or item.id not in self._variants
+            or item.created_at <= captured_at
+            for item in missing
+        ):
+            return target
+        if [item.id for item in items[: -len(added)]] != [
+            item.id for item in self._chat.items if item.id in requested
+        ]:
+            return target
+        return llm.ChatContext(
+            [*(requested.get(item.id, item) for item in self._chat.items), *added]
+        )
 
     async def sync(
         self, target: llm.ChatContext, *, shared: bool = False, progress: bool = False

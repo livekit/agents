@@ -98,7 +98,9 @@ class RealtimeModel(llm.RealtimeModel):
     """Prism for one AgentSession. Requires the Rime SDK realtime extra and Python 3.11.
 
     Omit endpoint to use public Prism. An injected Rime client stays caller-owned.
-    Otherwise Rime reads RIME_API_KEY. Settings updates wait for acknowledgment.
+    Otherwise Rime reads RIME_API_KEY. update_options() queues live settings updates
+    and returns immediately. Stored settings change after provider acknowledgment;
+    refusals are reported through error events.
     Context updates preserve omitted history by default. Use context_mode="strict"
     for replacement semantics through Agent.update_chat_ctx().
     A closed session may be replaced with a fresh conversation, such as an

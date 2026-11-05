@@ -6036,6 +6036,165 @@ class TestRealtime:
                     responder.cancel()
                     await asyncio.gather(responder, return_exceptions=True)
 
+    @pytest.mark.parametrize("context_mode", ["shared", "strict"])
+    @pytest.mark.parametrize("rapid", [False, True])
+    @pytest.mark.parametrize("silent", [False, True])
+    @pytest.mark.parametrize("finish_during_reply", [False, True])
+    async def test_interleaved_tool_progress_with_late_filler(
+        self, context_mode, rapid, silent, finish_during_reply
+    ):
+        ready: set[str] = set()
+        executions: list[str] = []
+        later, finish = asyncio.Event(), asyncio.Event()
+
+        async def work(ctx: RunContext, name: str) -> str:
+            executions.append(name)
+            await ctx.update(f"Searching {name}", silent=silent)
+            if rapid:
+                await ctx.update(f"Found {name}", silent=silent)
+            ready.add(name)
+            await later.wait()
+            await ctx.update(f"Finishing {name}", silent=silent)
+            await finish.wait()
+            return f"{name} shipped"
+
+        @function_tool
+        async def lookup_a(ctx: RunContext) -> str:
+            """Look up the first order."""
+            return await work(ctx, "a")
+
+        @function_tool
+        async def lookup_b(ctx: RunContext) -> str:
+            """Look up the second order."""
+            return await work(ctx, "b")
+
+        names = ["a"] if rapid else ["a", "b"]
+        async with peer_model(playback="discard", context_mode=context_mode) as (peer, model, _):
+            async with AgentSession(llm=model) as owner:
+                await owner.start(Agent(instructions="test", tools=[lookup_a, lookup_b]))
+                speech = owner.generate_reply()
+                response = await peer.start(await peer.next())
+                for name in names:
+                    await peer.emit(
+                        "response.function_call_arguments.done",
+                        response_id=response,
+                        item_id=f"lookup-{name}-item",
+                        call_id=f"lookup-{name}-call",
+                        name=f"lookup_{name}",
+                        arguments="{}",
+                    )
+                await wait_until(lambda: ready == set(names))
+                await peer.message(response, text="Checking your orders")
+                await peer.end(response)
+                replies = []
+
+                async def respond():
+                    while True:
+                        request = await peer.next()
+                        replies.append(request)
+                        response = await peer.start(request)
+                        await peer.message(response)
+                        await peer.end(response)
+
+                def output_ids():
+                    return [
+                        i.call_id
+                        for i in model._session.chat_ctx.items
+                        if isinstance(i, llm.FunctionCallOutput)
+                    ]
+
+                responder = asyncio.create_task(respond())
+                try:
+                    await asyncio.wait_for(speech.wait_for_playout(), 3)
+                    await asyncio.wait_for(owner.wait_for_idle(), 3)
+                    later.set()
+                    update = "_update_2" if rapid else "_update_1"
+                    updates = {f"lookup-{name}-call{update}" for name in names}
+                    await wait_until(lambda: updates <= set(output_ids()))
+                    if not silent and not finish_during_reply:
+                        await wait_until(
+                            lambda: all(
+                                any(
+                                    call in req["response"].get("prism_instruction", "")
+                                    for req in replies
+                                )
+                                for call in updates
+                            )
+                        )
+                    if not finish_during_reply:
+                        await asyncio.wait_for(owner.wait_for_idle(), 3)
+                    finish.set()
+                    finals = {f"lookup-{name}-call_final" for name in names}
+                    await wait_until(lambda: finals <= set(output_ids()))
+                    await wait_until(
+                        lambda: all(
+                            any(
+                                call in req["response"].get("prism_instruction", "")
+                                for req in replies
+                            )
+                            for call in finals
+                        )
+                    )
+                    await asyncio.wait_for(owner.wait_for_idle(), 3)
+                    assert sorted(executions) == names
+                    assert len(output_ids()) == (4 if rapid else 6)
+                    assert len(set(output_ids())) == len(output_ids())
+                    assert all(
+                        op["type"] != "conversation.item.delete" for op in peer.history_operations
+                    )
+                    assert peer.connections == 1
+                    if context_mode == "shared" and not rapid:
+                        # Correcting result positions must not hide a call reorder.
+                        target = owner.current_agent.chat_ctx.copy()
+                        indices = [target.index_by_id(f"lookup-{name}-item") for name in names]
+                        a, b = indices
+                        target.items[a], target.items[b] = target.items[b], target.items[a]
+                        before = len(peer.history_operations)
+                        with pytest.raises(PrismHistoryUpdateError):
+                            await owner.current_agent.update_chat_ctx(target)
+                        assert len(peer.history_operations) == before
+                finally:
+                    responder.cancel()
+                    await asyncio.gather(responder, return_exceptions=True)
+
+    @pytest.mark.parametrize("late_message", [False, True])
+    @pytest.mark.parametrize("explicit", [False, True])
+    async def test_progress_snapshot_preserves_only_later_observations(
+        self, late_message, explicit
+    ):
+        def progress():
+            return llm.ChatContext(
+                [
+                    llm.FunctionCall(
+                        call_id="past-update",
+                        name="lookup",
+                        arguments="{}",
+                        extra={"__livekit_agents_tool_non_blocking": True},
+                    ),
+                    llm.FunctionCallOutput(call_id="past-update", output="Working", is_error=False),
+                ]
+            )
+
+        async with peer_model(context_mode="strict", playback="discard") as (peer, model, _):
+            async with AgentSession(llm=model) as owner:
+                agent = Agent(instructions="test", tools=[lookup])
+                await owner.start(agent)
+                provider = model._session
+                if late_message:
+                    target = progress()
+                item_id = await completed_message(peer, provider)
+                await asyncio.wait_for(owner.wait_for_idle(), 3)
+                if not late_message:
+                    target = progress()
+                if explicit:
+                    await model._replace_chat_ctx(agent, target)
+                else:
+                    await provider.update_chat_ctx(target)
+                kept = late_message and not explicit
+                assert (provider.chat_ctx.get_by_id(item_id) is not None) is kept
+                assert any(i["id"] == item_id for i in peer.server_items) is kept
+                assert provider.chat_ctx.items[-1].call_id == "past-update"
+
     async def test_partial_history_failure_allows_a_queued_independent_edit(self):
         async with peer_model(context_mode="strict") as (peer, model, _):
             session = model.session()
