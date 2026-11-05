@@ -205,13 +205,13 @@ pub trait DuplexInput: Send + Sync + Sized + 'static {
     async fn next(&self) -> Result<Option<DuplexInputItem>, ApiError>;
 }
 
-/// A `DuplexRealtimeAdapter`'s model, as the engine opens sessions on it.
+/// A `DuplexRealtimeAdapter` (`adapter`) and its model, as the engine opens sessions on it.
 #[crate::host(proxy(host = "livekit.agents._bindings.Duplex"))]
 pub trait DuplexHost: Send + Sync {
-    #[host(call, name = "_core_label")]
+    #[host(call, getter = "adapter.duplex_model.label")]
     fn label(&self) -> Result<String, HostError>;
 
-    #[host(call, name = "_core_capabilities")]
+    #[host(call, getter = "adapter.duplex_model.capabilities")]
     fn capabilities(&self) -> Result<DuplexCapabilities, HostError>;
 
     /// The gate the adapter or the model declares; `None`: the adaptive gate.
@@ -227,11 +227,12 @@ pub trait DuplexHost: Send + Sync {
 }
 
 /// A plugin's `DuplexSession`: the engine feeds its input, applies the updates one after the other
-/// and pulls the output audio and the events.
+/// and pulls the output audio and the events. `_bindings._DuplexSession` holds the plugin's session
+/// as `plugin` and the events its callbacks report as `events`.
 #[crate::host(proxy(host = "livekit.agents._bindings._DuplexSession"))]
 pub trait DuplexSession: Send + Sync {
     /// The input the plugin pulls the caller's audio from.
-    #[host(read_once, name = "_core_input")]
+    #[host(read_once, getter = "plugin._input")]
     fn input(&self) -> &Arc<dyn DuplexInputQueue>;
 
     /// The whole startup configuration at once (`_update_session`).
@@ -244,7 +245,7 @@ pub trait DuplexSession: Send + Sync {
         names: Vec<String>,
     ) -> crate::BoxFuture<'_, Result<(), HostError>>;
 
-    #[host(await, name = "_core_update_instructions")]
+    #[host(await, name = "plugin._update_instructions")]
     fn update_instructions(
         &self,
         cx: &crate::telemetry::Cx,
@@ -252,7 +253,7 @@ pub trait DuplexSession: Send + Sync {
     ) -> crate::BoxFuture<'_, Result<(), HostError>>;
 
     /// New chat items only: the adapter owns the context.
-    #[host(await, name = "_core_append_items")]
+    #[host(await, name = "plugin._append_items")]
     fn append_items(
         &self,
         cx: &crate::telemetry::Cx,
@@ -283,14 +284,14 @@ pub trait DuplexSession: Send + Sync {
     ) -> crate::BoxFuture<'_, Result<Option<DuplexAudio>, HostError>>;
 
     /// The next event; `None` once the session closed.
-    #[host(await, name = "_core_next_event")]
+    #[host(await, name = "events.get")]
     fn next_event(
         &self,
         cx: &crate::telemetry::Cx,
     ) -> crate::BoxFuture<'_, Result<Option<DuplexEvent>, HostError>>;
 
     /// Closes the plugin's session, as a failed startup configuration does.
-    #[host(await, name = "_core_close_plugin")]
+    #[host(await, name = "plugin.aclose")]
     fn close_plugin(&self, cx: &crate::telemetry::Cx) -> crate::BoxFuture<'_, ()>;
 
     #[host(await, name = "_core_aclose")]

@@ -45,17 +45,16 @@ if TYPE_CHECKING:
     from .llm import FallbackAdapter as _LlmFallback
     from .stt import FallbackAdapter as _SttFallback
     from .tts import FallbackAdapter as _TtsFallback
-    from .types import APIConnectOptions, NotGivenOr, TranscriptChunk
+    from .types import APIConnectOptions, NotGivenOr
     from .voice.agent_session import VoiceSession
     from .voice.room_io import TextInputEvent
 import dataclasses
-import functools
 from collections.abc import Iterable, Sequence
 from typing import TYPE_CHECKING, Never
 
 if TYPE_CHECKING:
     from . import llm
-    from ._generated import duplex, realtime_wire
+    from ._generated import duplex, realtime_wire, rtc_wire
     from ._generated.llm_fallback import AvailabilityChanged
     from ._generated.tool_options import ProviderToolDeclaration, ToolSpec
     from ._generated.turn_events import EotPrediction
@@ -657,14 +656,6 @@ def evaluation_result_core_score(self: EvaluationResult) -> EvaluationScore:
     return _core._core_evaluation_score([j.verdict for j in self.judgments.values()])
 
 
-def duck(obj: Any, cls: type) -> Any:
-    """The view of ``obj`` as the core's ``cls``: called by the core, once per handed object."""
-    for base, view in _views().items():
-        if issubclass(cls, base):
-            return view(obj)
-    raise TypeError(f"no core view of {type(obj).__name__} as {cls.__qualname__}")
-
-
 def chat_request(req: _core.ChatRequest) -> tuple[llm.ChatContext, list[Tool]]:
     """The context and the offered tools of a request the core makes."""
     from . import llm
@@ -743,48 +734,43 @@ def forward_session_events(
 
 
 class Duplex:
-    """A ``DuplexRealtimeAdapter``'s model as the core's duplex host: the core gates and segments
-    the output; ``tools`` names the tool objects the core refers to by name."""
+    """A ``DuplexRealtimeAdapter`` (``adapter``) as the core's duplex host: the core reads its
+    model's label and capabilities, gates and segments the output; ``tools`` names the tool
+    objects the core refers to by name."""
 
     def __init__(
         self, adapter: llm.DuplexRealtimeAdapter, tools: Callable[[], Sequence[Tool | Toolset]]
     ) -> None:
-        self._adapter = adapter
+        self.adapter = adapter
         self._tools = tools
-
-    def _core_label(self) -> str:
-        return self._adapter.duplex_model.label
-
-    def _core_capabilities(self) -> duplex.DuplexCapabilities:
-        return dataclasses.replace(self._adapter.duplex_model.capabilities)
 
     def _core_gate(self) -> llm.AudioGate | None:
         """The gate the adapter or the model declares; ``None``: the adaptive gate."""
         return (
-            self._adapter._gate()
-            if self._adapter._gate
-            else self._adapter.duplex_model.audio_gate()
+            self.adapter._gate() if self.adapter._gate else self.adapter.duplex_model.audio_gate()
         )
 
     async def _core_session(self) -> _DuplexSession:
         """A new plugin session."""
-        return _DuplexSession(self._adapter.duplex_model.session(), self._tools)
+        return _DuplexSession(self.adapter.duplex_model.session(), self._tools)
 
 
 class _DuplexSession:
-    """A plugin's ``DuplexSession`` flattened: the core feeds its input, applies the updates in
-    order and pulls the output audio; the session's callbacks report one event at a time."""
+    """A plugin's ``DuplexSession`` (``plugin``) flattened: the core feeds its input, applies the
+    updates in order and pulls the output audio; the session's callbacks queue one event at a time
+    into ``events``. The core calls the plugin's own update methods directly; the methods here
+    resolve tool names and convert records."""
 
     def __init__(
         self, session: llm.DuplexSession, tools: Callable[[], Sequence[Tool | Toolset]]
     ) -> None:
         from ._generated import realtime_wire
 
-        self._session = session
+        self.plugin = session
         self._tools = tools
         self._audio = aiter(session.audio_stream)
-        self._events: asyncio.Queue[Any] = asyncio.Queue()
-        put = self._events.put_nowait
+        self.events: asyncio.Queue[Any] = asyncio.Queue()
+        put = self.events.put_nowait
         forward_session_events(session, put)
         session.on(
             "transcript_delta",
@@ -792,35 +778,26 @@ class _DuplexSession:
         )
         session.on("function_call", lambda call: put(realtime_wire.FunctionCallReady(call=call)))
 
-    def _core_input(self) -> _core.DuplexInput:
-        return self._session._input
-
     async def _core_configure(
         self, instructions: str | None, items: list[ChatItem] | None, names: list[str]
     ) -> None:
         from .types import NOT_GIVEN
 
-        await self._session._update_session(
+        await self.plugin._update_session(
             instructions=instructions or NOT_GIVEN,
             chat_ctx=_chat_ctx(items),
             tools=offered_tools(self._tools(), names),
         )
 
-    async def _core_update_instructions(self, instructions: str) -> None:
-        await self._session._update_instructions(instructions)
-
-    async def _core_append_items(self, items: list[ChatItem]) -> None:
-        await self._session._append_items(items)
-
     async def _core_update_tools(self, names: list[str]) -> None:
-        await self._session._update_tools(offered_tools(self._tools(), names))
+        await self.plugin._update_tools(offered_tools(self._tools(), names))
 
     async def _core_generate(
         self, instructions: str | None, tool_choice: llm.ToolChoice | None
     ) -> None:
         from .types import NOT_GIVEN
 
-        self._session._generate_reply(
+        self.plugin._generate_reply(
             instructions=instructions or NOT_GIVEN,
             tool_choice=NOT_GIVEN if tool_choice is None else tool_choice,
         )
@@ -832,15 +809,9 @@ class _DuplexSession:
             return None
         return dataclasses.replace(item)
 
-    async def _core_next_event(self) -> Any:
-        return await self._events.get()
-
-    async def _core_close_plugin(self) -> None:
-        await self._session.aclose()
-
     async def _core_aclose(self) -> None:
-        await self._session.aclose()
-        self._events.put_nowait(None)
+        await self.plugin.aclose()
+        self.events.put_nowait(None)
 
 
 def _chat_ctx(items: list[ChatItem] | None) -> NotGivenOr[llm.ChatContext]:
@@ -860,8 +831,10 @@ class FallbackListener(Protocol):
 
 
 class TurnDetector:
-    """A ``turn_detection`` object as the core's end-of-turn detector: its ``stream()`` hears
-    the user's audio and predicts the end of their turn."""
+    """A ``turn_detection`` object as the core's end-of-turn detector: its ``stream()`` (opened
+    here as ``stream``) hears the user's audio and predicts the end of their turn. The core pushes
+    audio, cancels, flushes and closes the stream directly; the methods here report the
+    detector's identity and convert its prediction."""
 
     def __init__(self, detector: _StreamingTurnDetector) -> None:
         if not hasattr(detector, "stream"):
@@ -870,26 +843,17 @@ class TurnDetector:
                 "use livekit.agents.inference.TurnDetector"
             )
         self._detector = detector
-        self._stream = detector.stream()
+        self.stream = detector.stream()
 
     def _core_id(self) -> ProviderId:
         cls = type(self._detector)
         label = f"{cls.__module__}.{cls.__name__}"
         return {"label": label, "model": self._detector.model, "provider": self._detector.provider}
 
-    def _core_push_audio(self, frame: rtc.AudioFrame) -> None:
-        self._stream.push_audio(frame)
-
-    def _core_cancel(self, timed_out: bool) -> None:
-        self._stream.cancel_inference(timed_out=timed_out)
-
-    def _core_flush(self, reason: str | None) -> None:
-        self._stream.flush(reason)
-
     async def _core_predict(self, timeout: float | None) -> EotPrediction:
         from ._generated.turn_events import EotPrediction
 
-        ev = await self._stream.predict()
+        ev = await self.stream.predict()
         return EotPrediction(
             end_of_turn_probability=ev.end_of_turn_probability,
             last_speaking_time=ev.last_speaking_time,
@@ -898,150 +862,38 @@ class TurnDetector:
             backchannel_probability=ev.backchannel_probability,
         )
 
-    async def _core_aclose(self) -> None:
-        await self._stream.aclose()
+
+# --- io legs ---------------------------------------------------------------------------------
 
 
-# --- io legs ----------------------------------------------------------------------------------
+async def next_audio_frame(source: io.AudioInput) -> rtc.AudioFrame | None:
+    """The core's read of an ``io.AudioInput``: its next frame, ``None`` once it ends."""
+    try:
+        return await source.__anext__()
+    except StopAsyncIteration:
+        return None
 
 
-class _AudioInput:
-    def __init__(self, obj: io.AudioInput) -> None:
-        self._obj = obj
+async def next_video_frame(source: io.VideoInput) -> rtc_wire.VideoFrameRef | None:
+    """The core's read of an ``io.VideoInput``: its next frame as the core's side-table key,
+    ``None`` once it ends."""
+    from ._generated import rtc_wire
 
-    def _core_label(self) -> str:
-        return self._obj.label
-
-    async def _core_next_frame(self) -> Any:
-        try:
-            return await self._obj.__anext__()
-        except StopAsyncIteration:
-            return None
-
-    def _core_on_attached(self) -> None:
-        self._obj.on_attached()
-
-    def _core_on_detached(self) -> None:
-        self._obj.on_detached()
+    try:
+        # the source's frame carries its capture time, which ``rtc.VideoFrame`` does not declare
+        frame: Any = await source.__anext__()
+    except StopAsyncIteration:
+        return None
+    return rtc_wire.VideoFrameRef(
+        frame=frame, width=frame.width, height=frame.height, timestamp_us=frame.timestamp_us
+    )
 
 
-class _VideoInput(_AudioInput):
-    async def _core_next_frame(self) -> Any:
-        from ._generated import rtc_wire
-
-        frame = await super()._core_next_frame()
-        if frame is None:
-            return None
-        return rtc_wire.VideoFrameRef(
-            frame=frame, width=frame.width, height=frame.height, timestamp_us=frame.timestamp_us
-        )
-
-
-class _AudioOutput:
-    """``io.AudioOutput`` as a core sink, and as the listener of a core leg it wraps: the sink's
-    playback reports go into its ``PlaybackTracker``, the leg's into its ``on_playback_*``."""
-
-    def __init__(self, obj: io.AudioOutput) -> None:
-        self._obj = obj
-
-    def _core_label(self) -> str:
-        return self._obj.label
-
-    def _core_tracker(self) -> _core.PlaybackTracker:
-        return self._obj._tracker
-
-    def _core_capabilities(self) -> io.AudioOutputCapabilities:
-        from .voice import io
-
-        return io.AudioOutputCapabilities(pause=self._obj.can_pause)
-
-    def _core_sample_rate(self) -> int | None:
-        return self._obj.sample_rate
-
-    def _core_begin_segment(self, segment: io.PlaybackSegment) -> None:
-        self._obj.begin_segment(segment)
-
-    async def _core_capture(self, frame: rtc.AudioFrame) -> None:
-        await self._obj.capture_frame(frame)
-
-    def _core_flush_segment(self) -> None:
-        self._obj.flush()
-
-    def _core_clear_buffer(self) -> None:
-        self._obj.clear_buffer()
-
-    def _core_on_attached(self) -> None:
-        self._obj.on_attached()
-
-    def _core_on_detached(self) -> None:
-        self._obj.on_detached()
-
-    def _core_pause(self) -> None:
-        self._obj.pause()
-
-    def _core_resume(self) -> None:
-        self._obj.resume()
-
-    def _core_on_playback_started(self, segment: io.PlaybackSegment, created_at: float) -> None:
-        self._obj.on_playback_started(segment=segment, created_at=created_at)
-
-    def _core_on_playback_progressed(
-        self, segment: io.PlaybackSegment, started_at: float, offset: float, duration: float
-    ) -> None:
-        self._obj.on_playback_progressed(
-            segment=segment, started_at=started_at, offset=offset, duration=duration
-        )
-
-    def _core_on_playback_finished(
-        self,
-        segment: io.PlaybackSegment,
-        playback_position: float,
-        interrupted: bool,
-        synchronized_transcript: str | None,
-    ) -> None:
-        self._obj.on_playback_finished(
-            segment=segment,
-            playback_position=playback_position,
-            interrupted=interrupted,
-            synchronized_transcript=synchronized_transcript,
-        )
-
-
-class _TextOutput:
-    def __init__(self, obj: io.TextOutput) -> None:
-        self._obj = obj
-
-    def _core_label(self) -> str:
-        return self._obj.label
-
-    async def _core_capture_timed(self, text: TranscriptChunk) -> None:
-        await self._obj.capture_transcript(text)
-
-    async def _core_capture_text(self, text: str) -> None:
-        await self._obj.capture_text(text)
-
-    def _core_flush(self) -> None:
-        self._obj.flush()
-
-    def _core_on_attached(self) -> None:
-        self._obj.on_attached()
-
-    def _core_on_detached(self) -> None:
-        self._obj.on_detached()
-
-
-@functools.cache
-def _views() -> dict[type, Any]:
+def audio_output_capabilities(output: io.AudioOutput) -> io.AudioOutputCapabilities:
+    """What the core reads of an ``io.AudioOutput`` once: whether its whole chain can pause."""
     from .voice import io
-    from .voice.room_io import Room
 
-    return {
-        io.AudioInput: _AudioInput,
-        io.VideoInput: _VideoInput,
-        io.AudioOutput: _AudioOutput,
-        io.TextOutput: _TextOutput,
-        Room: Room.of,
-    }
+    return io.AudioOutputCapabilities(pause=output.can_pause)
 
 
 # --- tools ------------------------------------------------------------------------------------

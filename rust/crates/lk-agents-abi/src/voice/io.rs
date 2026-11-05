@@ -1,6 +1,6 @@
 //! A host `io.AudioInput` / `VideoInput` / `AudioOutput` / `TextOutput` is its trait through the
-//! generated proxy, which calls the host object's `_core_view` view. A host sink reports its
-//! playback into the [`PlaybackTracker`] its `_core_tracker()` hands over, stamped on the
+//! generated proxy, which calls the io class's own methods and reads its properties. A host sink
+//! reports its playback into the [`PlaybackTracker`] its `_tracker` holds, stamped on the
 //! session's clock by [`PlaybackTracker::anchor_to`].
 
 use crate::voice::rtc::TrackSid;
@@ -154,7 +154,7 @@ pub trait PlaybackTracker: PlaybackObserver + Send + Sync {
     fn wait_for_playout(&self) -> crate::BoxFuture<'_, PlaybackFinished>;
 }
 
-/// `_core.PlaybackTracker`: the tracker a host sink reports to (`io.AudioOutput._core_tracker()`),
+/// `_core.PlaybackTracker`: the tracker a host sink reports to (`io.AudioOutput._tracker`),
 /// shared with the session that reads it.
 #[crate::host(class(name = "PlaybackTracker", native = PlaybackTracker))]
 pub trait Playback: PlaybackTracker + Sized + 'static {
@@ -244,26 +244,23 @@ fn seconds(value: f64, path: &'static str) -> std::result::Result<Duration, Inva
 }
 
 /// What a host wrapper over a core leg hears of its playback (`_ParticipantAudioOutput`, re-emitting
-/// the leg's events as its own): `io.AudioOutput`'s `on_playback_*`, through its `_core_*` surface.
-#[crate::host(proxy(
-    host = "livekit.agents.voice.io.AudioOutput",
-    view = "livekit.agents._bindings._AudioOutput"
-))]
+/// the leg's events as its own): `io.AudioOutput`'s `on_playback_*`, called by keyword.
+#[crate::host(proxy(host = "livekit.agents.voice.io.AudioOutput"))]
 pub trait PlaybackListener: Send + Sync {
-    #[host(notify, name = "_core_on_playback_started")]
-    fn on_playback_started(&self, segment: PlaybackSegment, created_at: f64);
-    #[host(notify, name = "_core_on_playback_progressed")]
+    #[host(notify)]
+    fn on_playback_started(&self, #[host(kw)] segment: PlaybackSegment, created_at: f64);
+    #[host(notify)]
     fn on_playback_progressed(
         &self,
-        segment: PlaybackSegment,
+        #[host(kw)] segment: PlaybackSegment,
         started_at: f64,
         offset: f64,
         duration: f64,
     );
-    #[host(notify, name = "_core_on_playback_finished")]
+    #[host(notify)]
     fn on_playback_finished(
         &self,
-        segment: PlaybackSegment,
+        #[host(kw)] segment: PlaybackSegment,
         playback_position: f64,
         interrupted: bool,
         synchronized_transcript: Option<String>,
@@ -280,16 +277,13 @@ pub struct InputFrame {
 
 /// `io.AudioInput`: the source end of the audio-in chain. Exactly one reader: two tasks pulling
 /// one host-backed async iterator lose data.
-#[crate::host(proxy(
-    host = "livekit.agents.voice.io.AudioInput",
-    view = "livekit.agents._bindings._AudioInput"
-))]
+#[crate::host(proxy(host = "livekit.agents.voice.io.AudioInput"))]
 pub trait AudioInput: Send + Sync {
-    #[host(read_once, name = "_core_label")]
+    #[host(read_once, getter = "label")]
     fn label(&self) -> &str;
 
-    /// The next frame, or `None` at end of stream.
-    #[host(await, name = "_core_next_frame")]
+    /// The next frame, or `None` at end of stream (its `__anext__` raised `StopAsyncIteration`).
+    #[host(await, function = "livekit.agents._bindings.next_audio_frame")]
     fn next_frame(
         &self,
         cx: &crate::telemetry::Cx,
@@ -306,54 +300,49 @@ pub trait AudioInput: Send + Sync {
     }
 
     /// The chain was enabled; frames are dropped while detached, so a re-attach resumes mid-stream.
-    #[host(notify, name = "_core_on_attached")]
+    #[host(notify)]
     fn on_attached(&self) {}
-    #[host(notify, name = "_core_on_detached")]
+    #[host(notify)]
     fn on_detached(&self) {}
 }
 
 /// `io.VideoInput`: the source end of the video-in chain; one reader. Frames are side-table keys.
-#[crate::host(proxy(
-    host = "livekit.agents.voice.io.VideoInput",
-    view = "livekit.agents._bindings._VideoInput"
-))]
+#[crate::host(proxy(host = "livekit.agents.voice.io.VideoInput"))]
 pub trait VideoInput: Send + Sync {
-    #[host(read_once, name = "_core_label")]
+    #[host(read_once, getter = "label")]
     fn label(&self) -> &str;
 
-    /// The next frame, or `None` at end of stream.
-    #[host(await, name = "_core_next_frame")]
+    /// The next frame as its side-table key, or `None` at end of stream.
+    #[host(await, function = "livekit.agents._bindings.next_video_frame")]
     fn next_frame(
         &self,
         cx: &crate::telemetry::Cx,
     ) -> crate::BoxFuture<'_, Result<Option<crate::voice::rtc::VideoFrameRef>>>;
 
     /// `set_video_enabled`: frames are dropped while detached.
-    #[host(notify, name = "_core_on_attached")]
+    #[host(notify)]
     fn on_attached(&self) {}
-    #[host(notify, name = "_core_on_detached")]
+    #[host(notify)]
     fn on_detached(&self) {}
 }
 
 /// `io.AudioOutput`: one link in the audio-out chain. Implement [`capture`](Self::capture) and
 /// [`flush_segment`](Self::flush_segment); call [`AudioOutputExt::capture_frame`] and [`AudioOutputExt::flush`].
-#[crate::host(proxy(
-    host = "livekit.agents.voice.io.AudioOutput",
-    view = "livekit.agents._bindings._AudioOutput"
-))]
+#[crate::host(proxy(host = "livekit.agents.voice.io.AudioOutput"))]
 pub trait AudioOutput: Send + Sync {
-    #[host(read_once, name = "_core_label")]
+    #[host(read_once, getter = "label")]
     fn label(&self) -> &str;
 
     /// This node's own bookkeeping and event fan-out. One per node, never shared.
-    #[host(read_once, name = "_core_tracker")]
+    #[host(read_once, getter = "_tracker")]
     fn tracker(&self) -> &Arc<dyn PlaybackTracker>;
 
-    #[host(read_once, name = "_core_capabilities")]
+    /// A host output's `can_pause`, its whole chain's.
+    #[host(read_once, function = "livekit.agents._bindings.audio_output_capabilities")]
     fn capabilities(&self) -> AudioOutputCapabilities;
 
     /// Admit the key before capturing; wrappers forward that same key to their leaves.
-    #[host(call, name = "_core_begin_segment")]
+    #[host(call)]
     fn begin_segment(&self, segment: PlaybackSegment) -> Result<()> {
         if !self.tracker().begin_segment(segment) {
             return Err(IoError::PlaybackSegmentUnavailable);
@@ -365,7 +354,7 @@ pub trait AudioOutput: Send + Sync {
     }
 
     /// The rate this sink requires, or `None` if it takes any.
-    #[host(read_once, name = "_core_sample_rate")]
+    #[host(read_once, getter = "sample_rate")]
     fn sample_rate(&self) -> Option<u32> {
         None
     }
@@ -376,7 +365,7 @@ pub trait AudioOutput: Send + Sync {
 
     /// Push one frame downstream. Callers use [`AudioOutputExt::capture_frame`]. Awaited on a host
     /// sink, where backpressure lives.
-    #[host(await, name = "_core_capture")]
+    #[host(await, name = "capture_frame")]
     fn capture<'a>(
         &'a self,
         cx: &crate::telemetry::Cx,
@@ -384,35 +373,35 @@ pub trait AudioOutput: Send + Sync {
     ) -> crate::BoxFuture<'a, Result<()>>;
 
     /// End the current segment. **Not the caller's entry point** -- use [`AudioOutputExt::flush`].
-    #[host(notify, name = "_core_flush_segment")]
+    #[host(notify, name = "flush")]
     fn flush_segment(&self);
 
     /// Throw away buffered audio and stop playback immediately. Synchronous: this is interruption.
-    #[host(notify, name = "_core_clear_buffer")]
+    #[host(notify)]
     fn clear_buffer(&self);
 
-    #[host(notify, name = "_core_on_attached")]
+    #[host(notify)]
     fn on_attached(&self) {
         if let Some(next) = self.next_in_chain() {
             next.on_attached();
         }
     }
 
-    #[host(notify, name = "_core_on_detached")]
+    #[host(notify)]
     fn on_detached(&self) {
         if let Some(next) = self.next_in_chain() {
             next.on_detached();
         }
     }
 
-    #[host(notify, name = "_core_pause")]
+    #[host(notify)]
     fn pause(&self) {
         if let Some(next) = self.next_in_chain() {
             next.pause();
         }
     }
 
-    #[host(notify, name = "_core_resume")]
+    #[host(notify)]
     fn resume(&self) {
         if let Some(next) = self.next_in_chain() {
             next.resume();
@@ -454,12 +443,9 @@ pub trait AudioOutputExt: AudioOutput {
 impl<T: AudioOutput + ?Sized> AudioOutputExt for T {}
 
 /// `io.TextOutput`: one link in the transcript chain; `flush` is the whole protocol.
-#[crate::host(proxy(
-    host = "livekit.agents.voice.io.TextOutput",
-    view = "livekit.agents._bindings._TextOutput"
-))]
+#[crate::host(proxy(host = "livekit.agents.voice.io.TextOutput"))]
 pub trait TextOutput: Send + Sync {
-    #[host(read_once, name = "_core_label")]
+    #[host(read_once, getter = "label")]
     fn label(&self) -> &str;
 
     fn next_in_chain(&self) -> Option<Arc<dyn TextOutput>> {
@@ -468,7 +454,7 @@ pub trait TextOutput: Send + Sync {
 
     /// Capture text with alignment and speaker metadata. Plain-text outputs can use the default,
     /// which forwards only the explicit text field.
-    #[host(await, name = "_core_capture_timed")]
+    #[host(await, name = "capture_transcript")]
     fn capture_timed<'a>(
         &'a self,
         _cx: &crate::telemetry::Cx,
@@ -478,7 +464,7 @@ pub trait TextOutput: Send + Sync {
     }
 
     /// Capture a text delta. Must not drop: a lost token mangles the transcript and the speech.
-    #[host(await, name = "_core_capture_text")]
+    #[host(await)]
     fn capture_text<'a>(
         &'a self,
         cx: &crate::telemetry::Cx,
@@ -505,17 +491,17 @@ pub trait TextOutput: Send + Sync {
     }
 
     /// The generation is complete; close the segment.
-    #[host(notify, name = "_core_flush")]
+    #[host(notify)]
     fn flush(&self);
 
-    #[host(notify, name = "_core_on_attached")]
+    #[host(notify)]
     fn on_attached(&self) {
         if let Some(next) = self.next_in_chain() {
             next.on_attached();
         }
     }
 
-    #[host(notify, name = "_core_on_detached")]
+    #[host(notify)]
     fn on_detached(&self) {
         if let Some(next) = self.next_in_chain() {
             next.on_detached();

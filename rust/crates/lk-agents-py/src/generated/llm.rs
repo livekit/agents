@@ -2785,9 +2785,12 @@ impl ::lk_agents_abi::llm::duplex::DuplexHost for DuplexHostProxy {
         let out = ::lk_agents_runtime::host::call_now(
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
+                    host.bind(py).getattr("adapter")?.getattr("duplex_model")?,
+                    ::pyo3::types::PyString::new(py, "label").into_any(),
+                ];
                 Ok((
-                    host.bind(py).getattr("_core_label")?,
+                    py.import("builtins")?.getattr("getattr")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -2820,9 +2823,12 @@ impl ::lk_agents_abi::llm::duplex::DuplexHost for DuplexHostProxy {
         let out = ::lk_agents_runtime::host::call_now(
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
+                    host.bind(py).getattr("adapter")?.getattr("duplex_model")?,
+                    ::pyo3::types::PyString::new(py, "capabilities").into_any(),
+                ];
                 Ok((
-                    host.bind(py).getattr("_core_capabilities")?,
+                    py.import("builtins")?.getattr("getattr")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -2991,13 +2997,13 @@ impl DuplexSessionProxy {
             None => crate::py_calls::capture_context(obj.py())?,
         };
         let input = {
-            let v = crate::py_calls::read(obj, "_core_input")?;
+            let v = obj.getattr("plugin")?.getattr("_input")?;
             crate::py_objects::native::<dyn ::lk_agents_abi::llm::duplex::DuplexInputQueue>(
                 v.as_any(),
             )
             .ok_or_else(|| {
                 ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                    "DuplexSession._core_input",
+                    "DuplexSession.plugin._input",
                     ": expected a native DuplexInput"
                 ))
             })?
@@ -3079,7 +3085,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
         let instructions_arg = instructions;
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
-            "DuplexSession._core_update_instructions",
+            "DuplexSession.plugin._update_instructions",
             &self.context,
             &[],
             cx,
@@ -3087,7 +3093,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [::pyo3::IntoPyObjectExt::into_bound_py_any(instructions_arg, py)?];
                 Ok((
-                    host.bind(py).getattr("_core_update_instructions")?,
+                    host.bind(py).getattr("plugin")?.getattr("_update_instructions")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -3119,7 +3125,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
         let items_arg = items;
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
-            "DuplexSession._core_append_items",
+            "DuplexSession.plugin._append_items",
             &self.context,
             &[],
             cx,
@@ -3133,7 +3139,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
                 )?
                 .into_any()];
                 Ok((
-                    host.bind(py).getattr("_core_append_items")?,
+                    host.bind(py).getattr("plugin")?.getattr("_append_items")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -3300,14 +3306,14 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
-            "DuplexSession._core_next_event",
+            "DuplexSession.events.get",
             &self.context,
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("_core_next_event")?,
+                    host.bind(py).getattr("events")?.getattr("get")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -3336,14 +3342,14 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
-            "DuplexSession._core_close_plugin",
+            "DuplexSession.plugin.aclose",
             &self.context,
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("_core_close_plugin")?,
+                    host.bind(py).getattr("plugin")?.getattr("aclose")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -3351,7 +3357,7 @@ impl ::lk_agents_abi::llm::duplex::DuplexSession for DuplexSessionProxy {
         );
         ::std::boxed::Box::pin(async move {
             if let Err(e) = started.await {
-                log::warn!("DuplexSession._core_close_plugin failed: {e}");
+                log::warn!("DuplexSession.plugin.aclose failed: {e}");
             }
         })
     }

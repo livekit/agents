@@ -19,8 +19,8 @@ pub enum LegEvent<V> {
     Closed,
 }
 
-/// A host `turn_detection` object is this trait through `_core_view.TurnDetector`, which speaks
-/// the detector's `stream()` behind the `_core_*` surface.
+/// A host `turn_detection` object is this trait through `_bindings.TurnDetector`, which opens the
+/// detector's `stream()` as its `stream`; the calls go to that stream.
 #[crate::host(proxy(host = "livekit.agents._bindings.TurnDetector"))]
 pub trait EotDetector: Send + Sync + 'static {
     /// The detector's `model`/`provider`, as `EOUMetrics.metadata` names them.
@@ -30,7 +30,7 @@ pub trait EotDetector: Send + Sync + 'static {
     }
 
     /// One frame of the user's audio. Fire-and-forget, gated as the STT leg is.
-    #[host(notify(lossy), name = "_core_push_audio")]
+    #[host(notify(lossy), name = "stream.push_audio")]
     fn push_audio(&self, frame: crate::AudioFrame);
 
     /// Pre-connect audio: kept in full where `push_audio` would drop to stay current.
@@ -43,11 +43,11 @@ pub trait EotDetector: Send + Sync + 'static {
 
     /// `cancel_inference(timed_out=..)` (`audio_recognition.py:1592`); the detector reports a
     /// timeout and a superseding speech differently.
-    #[host(notify, name = "_core_cancel")]
-    fn cancel_inference(&self, timed_out: bool);
+    #[host(notify, name = "stream.cancel_inference")]
+    fn cancel_inference(&self, #[host(kw)] timed_out: bool);
 
     /// `flush(reason)`: a segment boundary, not a close.
-    #[host(notify, name = "_core_flush")]
+    #[host(notify, name = "stream.flush")]
     fn flush(&self, reason: Option<String>);
     /// Ask for a prediction (`stream.predict()`).
     ///
@@ -71,7 +71,7 @@ pub trait EotDetector: Send + Sync + 'static {
 
     /// Close what the detector holds open (a streaming detector's stream) at session close: an
     /// open stream keeps the session alive (`audio_recognition.py:855`). Nothing by default.
-    #[host(await, name = "_core_aclose")]
+    #[host(await, name = "stream.aclose")]
     fn aclose(&self, _cx: &crate::telemetry::Cx) -> crate::BoxFuture<'_, ()> {
         Box::pin(async move {})
     }

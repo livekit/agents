@@ -37,7 +37,7 @@ Keep Python imports, lazy module loading, entrypoint and package metadata. Gener
 
 ### Boundary generation
 
-Generate record conversion, callback dispatch, views and forwarding from ABI declarations. Keep only Python SDK/object conversion and context capture handwritten.
+Generate record conversion, callback dispatch, views and forwarding from ABI declarations. Keep only Python SDK/object conversion and context capture handwritten. A proxy calls the host object's own methods and reads its attributes (`name = "a.b"`, `getter = "a.b"`, `#[host(kw)]`, `sdk` enum numbers; rust-core.md "Declarations and placement"): no handwritten class renames `_core_x` to `obj.x`. The io legs (`io.AudioInput`, `VideoInput`, `AudioOutput`, `TextOutput`), the SDK stream writers and video source are called directly; `_bindings.py` keeps only `next_audio_frame`, `next_video_frame` and `audio_output_capabilities`, declared as `function = ".."`.
 
 | File | Lines |
 | --- | ---: |
@@ -149,7 +149,7 @@ Runtime owns room orchestration and playback accounting through the shared RTC c
 | File | Lines |
 | --- | ---: |
 | [utils/participant.py](../../livekit-agents-next/livekit/agents/utils/participant.py) | 136 |
-| [voice/room_io.py](../../livekit-agents-next/livekit/agents/voice/room_io.py) | 630 |
+| [voice/room_io.py](../../livekit-agents-next/livekit/agents/voice/room_io.py) | 538 |
 
 ### Avatar media and transport
 

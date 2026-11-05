@@ -217,7 +217,7 @@ class BackgroundAudioPlayer:
     async def aclose(self) -> None: ...
 
 class PlaybackTracker:
-    """`_core.PlaybackTracker`: the tracker a host sink reports to (`io.AudioOutput._core_tracker()`),
+    """`_core.PlaybackTracker`: the tracker a host sink reports to (`io.AudioOutput._tracker`),
     shared with the session that reads it.
     """
     def __new__(cls) -> Self: ...

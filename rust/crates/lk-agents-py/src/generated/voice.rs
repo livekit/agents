@@ -824,7 +824,7 @@ impl BackgroundAudioPlayer {
 type PlaybackTrackerImpl =
     <crate::generated::implementations::Selected as super::Implementations>::Playback;
 
-/// `_core.PlaybackTracker`: the tracker a host sink reports to (`io.AudioOutput._core_tracker()`),
+/// `_core.PlaybackTracker`: the tracker a host sink reports to (`io.AudioOutput._tracker`),
 /// shared with the session that reads it.
 #[pyclass(frozen, name = "PlaybackTracker", module = "livekit.agents._core")]
 pub struct PlaybackTracker(pub(crate) ::std::sync::Arc<PlaybackTrackerImpl>);
@@ -6096,12 +6096,6 @@ impl PlaybackListenerProxy {
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
     ) -> PyResult<Self> {
-        let view = crate::py_calls::call(
-            &obj.py().import("livekit.agents._bindings")?.getattr("_AudioOutput")?,
-            (obj,),
-            None,
-        )?;
-        let obj = &view;
         let context = match context {
             Some(context) => ::std::clone::Clone::clone(context),
             None => crate::py_calls::capture_context(obj.py())?,
@@ -6125,19 +6119,30 @@ impl ::lk_agents_abi::voice::io::PlaybackListener for PlaybackListenerProxy {
         let created_at_arg = created_at;
         ::lk_agents_runtime::host::notify(
             &self.notifier,
-            "PlaybackListener._core_on_playback_started",
+            "PlaybackListener.on_playback_started",
             &self.context,
             &[],
             false,
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
-                    crate::generated::records::io_events::playback_segment_to_py(py, segment_arg)?,
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(created_at_arg, py)?,
-                ];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("_core_on_playback_started")?,
+                    host.bind(py).getattr("on_playback_started")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
-                    None,
+                    Some({
+                        let kwargs = ::pyo3::types::PyDict::new(py);
+                        kwargs.set_item(
+                            "segment",
+                            crate::generated::records::io_events::playback_segment_to_py(
+                                py,
+                                segment_arg,
+                            )?,
+                        )?;
+                        kwargs.set_item(
+                            "created_at",
+                            ::pyo3::IntoPyObjectExt::into_bound_py_any(created_at_arg, py)?,
+                        )?;
+                        kwargs
+                    }),
                 ))
             }),
         );
@@ -6157,21 +6162,38 @@ impl ::lk_agents_abi::voice::io::PlaybackListener for PlaybackListenerProxy {
         let duration_arg = duration;
         ::lk_agents_runtime::host::notify(
             &self.notifier,
-            "PlaybackListener._core_on_playback_progressed",
+            "PlaybackListener.on_playback_progressed",
             &self.context,
             &[],
             false,
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 4] = [
-                    crate::generated::records::io_events::playback_segment_to_py(py, segment_arg)?,
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(started_at_arg, py)?,
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(offset_arg, py)?,
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(duration_arg, py)?,
-                ];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("_core_on_playback_progressed")?,
+                    host.bind(py).getattr("on_playback_progressed")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
-                    None,
+                    Some({
+                        let kwargs = ::pyo3::types::PyDict::new(py);
+                        kwargs.set_item(
+                            "segment",
+                            crate::generated::records::io_events::playback_segment_to_py(
+                                py,
+                                segment_arg,
+                            )?,
+                        )?;
+                        kwargs.set_item(
+                            "started_at",
+                            ::pyo3::IntoPyObjectExt::into_bound_py_any(started_at_arg, py)?,
+                        )?;
+                        kwargs.set_item(
+                            "offset",
+                            ::pyo3::IntoPyObjectExt::into_bound_py_any(offset_arg, py)?,
+                        )?;
+                        kwargs.set_item(
+                            "duration",
+                            ::pyo3::IntoPyObjectExt::into_bound_py_any(duration_arg, py)?,
+                        )?;
+                        kwargs
+                    }),
                 ))
             }),
         );
@@ -6191,21 +6213,41 @@ impl ::lk_agents_abi::voice::io::PlaybackListener for PlaybackListenerProxy {
         let synchronized_transcript_arg = synchronized_transcript;
         ::lk_agents_runtime::host::notify(
             &self.notifier,
-            "PlaybackListener._core_on_playback_finished",
+            "PlaybackListener.on_playback_finished",
             &self.context,
             &[],
             false,
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 4] = [
-                    crate::generated::records::io_events::playback_segment_to_py(py, segment_arg)?,
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(playback_position_arg, py)?,
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(interrupted_arg, py)?,
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(synchronized_transcript_arg, py)?,
-                ];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("_core_on_playback_finished")?,
+                    host.bind(py).getattr("on_playback_finished")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
-                    None,
+                    Some({
+                        let kwargs = ::pyo3::types::PyDict::new(py);
+                        kwargs.set_item(
+                            "segment",
+                            crate::generated::records::io_events::playback_segment_to_py(
+                                py,
+                                segment_arg,
+                            )?,
+                        )?;
+                        kwargs.set_item(
+                            "playback_position",
+                            ::pyo3::IntoPyObjectExt::into_bound_py_any(playback_position_arg, py)?,
+                        )?;
+                        kwargs.set_item(
+                            "interrupted",
+                            ::pyo3::IntoPyObjectExt::into_bound_py_any(interrupted_arg, py)?,
+                        )?;
+                        kwargs.set_item(
+                            "synchronized_transcript",
+                            ::pyo3::IntoPyObjectExt::into_bound_py_any(
+                                synchronized_transcript_arg,
+                                py,
+                            )?,
+                        )?;
+                        kwargs
+                    }),
                 ))
             }),
         );
@@ -6262,18 +6304,12 @@ impl AudioInputProxy {
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
     ) -> PyResult<Self> {
-        let view = crate::py_calls::call(
-            &obj.py().import("livekit.agents._bindings")?.getattr("_AudioInput")?,
-            (obj,),
-            None,
-        )?;
-        let obj = &view;
         let context = match context {
             Some(context) => ::std::clone::Clone::clone(context),
             None => crate::py_calls::capture_context(obj.py())?,
         };
         let label = {
-            let v = crate::py_calls::read(obj, "_core_label")?;
+            let v = obj.getattr("label")?;
             v.extract::<::std::string::String>()?
         };
         Ok(AudioInputProxy {
@@ -6303,14 +6339,14 @@ impl ::lk_agents_abi::voice::io::AudioInput for AudioInputProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
-            "AudioInput._core_next_frame",
+            "AudioInput.livekit.agents._bindings.next_audio_frame",
             &self.context,
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [host.bind(py).clone()];
                 Ok((
-                    host.bind(py).getattr("_core_next_frame")?,
+                    py.import("livekit.agents._bindings")?.getattr("next_audio_frame")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -6336,14 +6372,14 @@ impl ::lk_agents_abi::voice::io::AudioInput for AudioInputProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         ::lk_agents_runtime::host::notify(
             &self.notifier,
-            "AudioInput._core_on_attached",
+            "AudioInput.on_attached",
             &self.context,
             &[],
             false,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("_core_on_attached")?,
+                    host.bind(py).getattr("on_attached")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -6355,14 +6391,14 @@ impl ::lk_agents_abi::voice::io::AudioInput for AudioInputProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         ::lk_agents_runtime::host::notify(
             &self.notifier,
-            "AudioInput._core_on_detached",
+            "AudioInput.on_detached",
             &self.context,
             &[],
             false,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("_core_on_detached")?,
+                    host.bind(py).getattr("on_detached")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -6421,18 +6457,12 @@ impl VideoInputProxy {
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
     ) -> PyResult<Self> {
-        let view = crate::py_calls::call(
-            &obj.py().import("livekit.agents._bindings")?.getattr("_VideoInput")?,
-            (obj,),
-            None,
-        )?;
-        let obj = &view;
         let context = match context {
             Some(context) => ::std::clone::Clone::clone(context),
             None => crate::py_calls::capture_context(obj.py())?,
         };
         let label = {
-            let v = crate::py_calls::read(obj, "_core_label")?;
+            let v = obj.getattr("label")?;
             v.extract::<::std::string::String>()?
         };
         Ok(VideoInputProxy {
@@ -6462,14 +6492,14 @@ impl ::lk_agents_abi::voice::io::VideoInput for VideoInputProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
-            "VideoInput._core_next_frame",
+            "VideoInput.livekit.agents._bindings.next_video_frame",
             &self.context,
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [host.bind(py).clone()];
                 Ok((
-                    host.bind(py).getattr("_core_next_frame")?,
+                    py.import("livekit.agents._bindings")?.getattr("next_video_frame")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -6495,14 +6525,14 @@ impl ::lk_agents_abi::voice::io::VideoInput for VideoInputProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         ::lk_agents_runtime::host::notify(
             &self.notifier,
-            "VideoInput._core_on_attached",
+            "VideoInput.on_attached",
             &self.context,
             &[],
             false,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("_core_on_attached")?,
+                    host.bind(py).getattr("on_attached")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -6514,14 +6544,14 @@ impl ::lk_agents_abi::voice::io::VideoInput for VideoInputProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         ::lk_agents_runtime::host::notify(
             &self.notifier,
-            "VideoInput._core_on_detached",
+            "VideoInput.on_detached",
             &self.context,
             &[],
             false,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("_core_on_detached")?,
+                    host.bind(py).getattr("on_detached")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -6583,44 +6613,41 @@ impl AudioOutputProxy {
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
     ) -> PyResult<Self> {
-        let view = crate::py_calls::call(
-            &obj.py().import("livekit.agents._bindings")?.getattr("_AudioOutput")?,
-            (obj,),
-            None,
-        )?;
-        let obj = &view;
         let context = match context {
             Some(context) => ::std::clone::Clone::clone(context),
             None => crate::py_calls::capture_context(obj.py())?,
         };
         let label = {
-            let v = crate::py_calls::read(obj, "_core_label")?;
+            let v = obj.getattr("label")?;
             v.extract::<::std::string::String>()?
         };
         let tracker = {
-            let v = crate::py_calls::read(obj, "_core_tracker")?;
+            let v = obj.getattr("_tracker")?;
             crate::py_objects::native::<dyn ::lk_agents_abi::voice::io::PlaybackTracker>(v.as_any())
                 .ok_or_else(|| {
                     ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                        "AudioOutput._core_tracker",
+                        "AudioOutput._tracker",
                         ": expected a `_core.PlaybackTracker`"
                     ))
                 })?
         };
         let capabilities = {
-            let v = crate::py_calls::read(obj, "_core_capabilities")?;
+            let v = crate::py_calls::call(
+                &obj.py()
+                    .import("livekit.agents._bindings")?
+                    .getattr("audio_output_capabilities")?,
+                (obj,),
+                None,
+            )?;
             crate::generated::records::rtc_wire::audio_output_capabilities_from_py(v.as_any())?
         };
         let sample_rate = {
-            let v = crate::py_calls::read(obj, "_core_sample_rate")?;
+            let v = obj.getattr("sample_rate")?;
             if v.is_none() {
                 Ok(None)
             } else {
-                (crate::py_values::number_from_py::<u32>(
-                    v.as_any(),
-                    "AudioOutput._core_sample_rate",
-                ))
-                .map(Some)
+                (crate::py_values::number_from_py::<u32>(v.as_any(), "AudioOutput.sample_rate"))
+                    .map(Some)
             }?
         };
         Ok(AudioOutputProxy {
@@ -6663,7 +6690,7 @@ impl ::lk_agents_abi::voice::io::AudioOutput for AudioOutputProxy {
                         segment_arg,
                     )?];
                 Ok((
-                    host.bind(py).getattr("_core_begin_segment")?,
+                    host.bind(py).getattr("begin_segment")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -6706,7 +6733,7 @@ impl ::lk_agents_abi::voice::io::AudioOutput for AudioOutputProxy {
         let frame_arg = ::std::clone::Clone::clone(frame);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
-            "AudioOutput._core_capture",
+            "AudioOutput.capture_frame",
             &self.context,
             &[],
             cx,
@@ -6714,7 +6741,7 @@ impl ::lk_agents_abi::voice::io::AudioOutput for AudioOutputProxy {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [crate::generated::records::rtc_frames::audio_frame_to_py(py, frame_arg)?];
                 Ok((
-                    host.bind(py).getattr("_core_capture")?,
+                    host.bind(py).getattr("capture_frame")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -6740,17 +6767,13 @@ impl ::lk_agents_abi::voice::io::AudioOutput for AudioOutputProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         ::lk_agents_runtime::host::notify(
             &self.notifier,
-            "AudioOutput._core_flush_segment",
+            "AudioOutput.flush",
             &self.context,
             &[],
             false,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((
-                    host.bind(py).getattr("_core_flush_segment")?,
-                    ::pyo3::types::PyTuple::new(py, args)?,
-                    None,
-                ))
+                Ok((host.bind(py).getattr("flush")?, ::pyo3::types::PyTuple::new(py, args)?, None))
             }),
         );
     }
@@ -6759,14 +6782,14 @@ impl ::lk_agents_abi::voice::io::AudioOutput for AudioOutputProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         ::lk_agents_runtime::host::notify(
             &self.notifier,
-            "AudioOutput._core_clear_buffer",
+            "AudioOutput.clear_buffer",
             &self.context,
             &[],
             false,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("_core_clear_buffer")?,
+                    host.bind(py).getattr("clear_buffer")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -6778,14 +6801,14 @@ impl ::lk_agents_abi::voice::io::AudioOutput for AudioOutputProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         ::lk_agents_runtime::host::notify(
             &self.notifier,
-            "AudioOutput._core_on_attached",
+            "AudioOutput.on_attached",
             &self.context,
             &[],
             false,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("_core_on_attached")?,
+                    host.bind(py).getattr("on_attached")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -6797,14 +6820,14 @@ impl ::lk_agents_abi::voice::io::AudioOutput for AudioOutputProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         ::lk_agents_runtime::host::notify(
             &self.notifier,
-            "AudioOutput._core_on_detached",
+            "AudioOutput.on_detached",
             &self.context,
             &[],
             false,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("_core_on_detached")?,
+                    host.bind(py).getattr("on_detached")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -6816,17 +6839,13 @@ impl ::lk_agents_abi::voice::io::AudioOutput for AudioOutputProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         ::lk_agents_runtime::host::notify(
             &self.notifier,
-            "AudioOutput._core_pause",
+            "AudioOutput.pause",
             &self.context,
             &[],
             false,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((
-                    host.bind(py).getattr("_core_pause")?,
-                    ::pyo3::types::PyTuple::new(py, args)?,
-                    None,
-                ))
+                Ok((host.bind(py).getattr("pause")?, ::pyo3::types::PyTuple::new(py, args)?, None))
             }),
         );
     }
@@ -6835,17 +6854,13 @@ impl ::lk_agents_abi::voice::io::AudioOutput for AudioOutputProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         ::lk_agents_runtime::host::notify(
             &self.notifier,
-            "AudioOutput._core_resume",
+            "AudioOutput.resume",
             &self.context,
             &[],
             false,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((
-                    host.bind(py).getattr("_core_resume")?,
-                    ::pyo3::types::PyTuple::new(py, args)?,
-                    None,
-                ))
+                Ok((host.bind(py).getattr("resume")?, ::pyo3::types::PyTuple::new(py, args)?, None))
             }),
         );
     }
@@ -6901,18 +6916,12 @@ impl TextOutputProxy {
         obj: &Bound<'_, PyAny>,
         context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
     ) -> PyResult<Self> {
-        let view = crate::py_calls::call(
-            &obj.py().import("livekit.agents._bindings")?.getattr("_TextOutput")?,
-            (obj,),
-            None,
-        )?;
-        let obj = &view;
         let context = match context {
             Some(context) => ::std::clone::Clone::clone(context),
             None => crate::py_calls::capture_context(obj.py())?,
         };
         let label = {
-            let v = crate::py_calls::read(obj, "_core_label")?;
+            let v = obj.getattr("label")?;
             v.extract::<::std::string::String>()?
         };
         Ok(TextOutputProxy {
@@ -6941,7 +6950,7 @@ impl ::lk_agents_abi::voice::io::TextOutput for TextOutputProxy {
         let text_arg = ::std::clone::Clone::clone(text);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
-            "TextOutput._core_capture_timed",
+            "TextOutput.capture_transcript",
             &self.context,
             &[],
             cx,
@@ -6949,7 +6958,7 @@ impl ::lk_agents_abi::voice::io::TextOutput for TextOutputProxy {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [crate::generated::records::transcript::transcript_chunk_to_py(py, text_arg)?];
                 Ok((
-                    host.bind(py).getattr("_core_capture_timed")?,
+                    host.bind(py).getattr("capture_transcript")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -6983,7 +6992,7 @@ impl ::lk_agents_abi::voice::io::TextOutput for TextOutputProxy {
         let text_arg = text.to_owned();
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
-            "TextOutput._core_capture_text",
+            "TextOutput.capture_text",
             &self.context,
             &[],
             cx,
@@ -6991,7 +7000,7 @@ impl ::lk_agents_abi::voice::io::TextOutput for TextOutputProxy {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [::pyo3::IntoPyObjectExt::into_bound_py_any(text_arg, py)?];
                 Ok((
-                    host.bind(py).getattr("_core_capture_text")?,
+                    host.bind(py).getattr("capture_text")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -7017,17 +7026,13 @@ impl ::lk_agents_abi::voice::io::TextOutput for TextOutputProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         ::lk_agents_runtime::host::notify(
             &self.notifier,
-            "TextOutput._core_flush",
+            "TextOutput.flush",
             &self.context,
             &[],
             false,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((
-                    host.bind(py).getattr("_core_flush")?,
-                    ::pyo3::types::PyTuple::new(py, args)?,
-                    None,
-                ))
+                Ok((host.bind(py).getattr("flush")?, ::pyo3::types::PyTuple::new(py, args)?, None))
             }),
         );
     }
@@ -7036,14 +7041,14 @@ impl ::lk_agents_abi::voice::io::TextOutput for TextOutputProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         ::lk_agents_runtime::host::notify(
             &self.notifier,
-            "TextOutput._core_on_attached",
+            "TextOutput.on_attached",
             &self.context,
             &[],
             false,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("_core_on_attached")?,
+                    host.bind(py).getattr("on_attached")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -7055,14 +7060,14 @@ impl ::lk_agents_abi::voice::io::TextOutput for TextOutputProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         ::lk_agents_runtime::host::notify(
             &self.notifier,
-            "TextOutput._core_on_detached",
+            "TextOutput.on_detached",
             &self.context,
             &[],
             false,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("_core_on_detached")?,
+                    host.bind(py).getattr("on_detached")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))

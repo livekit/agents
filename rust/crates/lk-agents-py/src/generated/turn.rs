@@ -572,7 +572,7 @@ impl ::lk_agents_abi::EotDetector for EotDetectorProxy {
         let frame_arg = frame;
         ::lk_agents_runtime::host::notify(
             &self.notifier,
-            "EotDetector._core_push_audio",
+            "EotDetector.stream.push_audio",
             &self.context,
             &[],
             true,
@@ -580,7 +580,7 @@ impl ::lk_agents_abi::EotDetector for EotDetectorProxy {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [crate::generated::records::rtc_frames::audio_frame_to_py(py, frame_arg)?];
                 Ok((
-                    host.bind(py).getattr("_core_push_audio")?,
+                    host.bind(py).getattr("stream")?.getattr("push_audio")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -593,17 +593,23 @@ impl ::lk_agents_abi::EotDetector for EotDetectorProxy {
         let timed_out_arg = timed_out;
         ::lk_agents_runtime::host::notify(
             &self.notifier,
-            "EotDetector._core_cancel",
+            "EotDetector.stream.cancel_inference",
             &self.context,
             &[],
             false,
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
-                    [::pyo3::IntoPyObjectExt::into_bound_py_any(timed_out_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("_core_cancel")?,
+                    host.bind(py).getattr("stream")?.getattr("cancel_inference")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
-                    None,
+                    Some({
+                        let kwargs = ::pyo3::types::PyDict::new(py);
+                        kwargs.set_item(
+                            "timed_out",
+                            ::pyo3::IntoPyObjectExt::into_bound_py_any(timed_out_arg, py)?,
+                        )?;
+                        kwargs
+                    }),
                 ))
             }),
         );
@@ -614,7 +620,7 @@ impl ::lk_agents_abi::EotDetector for EotDetectorProxy {
         let reason_arg = reason;
         ::lk_agents_runtime::host::notify(
             &self.notifier,
-            "EotDetector._core_flush",
+            "EotDetector.stream.flush",
             &self.context,
             &[],
             false,
@@ -622,7 +628,7 @@ impl ::lk_agents_abi::EotDetector for EotDetectorProxy {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [::pyo3::IntoPyObjectExt::into_bound_py_any(reason_arg, py)?];
                 Ok((
-                    host.bind(py).getattr("_core_flush")?,
+                    host.bind(py).getattr("stream")?.getattr("flush")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -682,14 +688,14 @@ impl ::lk_agents_abi::EotDetector for EotDetectorProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
-            "EotDetector._core_aclose",
+            "EotDetector.stream.aclose",
             &self.context,
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("_core_aclose")?,
+                    host.bind(py).getattr("stream")?.getattr("aclose")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
@@ -697,7 +703,7 @@ impl ::lk_agents_abi::EotDetector for EotDetectorProxy {
         );
         ::std::boxed::Box::pin(async move {
             if let Err(e) = started.await {
-                log::warn!("EotDetector._core_aclose failed: {e}");
+                log::warn!("EotDetector.stream.aclose failed: {e}");
             }
         })
     }
