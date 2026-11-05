@@ -59,6 +59,9 @@ pub struct Member {
     /// `getter = "a.b"`: a property answering the attribute along that path of the record
     /// itself, with no host hook.
     pub getter: Option<String>,
+    /// `core = "fn"`: a view computed in Rust, `_core.fn(self, args..)`, the record crossing as
+    /// its extracted value.
+    pub core: Option<String>,
 }
 
 #[derive(Debug, Clone)]

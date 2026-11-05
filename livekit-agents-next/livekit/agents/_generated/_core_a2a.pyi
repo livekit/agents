@@ -19,6 +19,7 @@ from .a2a_door import DoorConfig
 from .a2a_remote import RemoteEvent
 from .chat_items import ChatItem
 from .connect import APIConnectOptions
+from .storage_class import ThreadInfo
 from .storage_handler import HandlerOutcome, HandlerRun
 from .storage_options import TurnOptions
 from .storage_turn import HandlerOutput, TurnResult
@@ -53,6 +54,21 @@ def _core_auth_grant_allows(
     thread_id: str,
     scope: str | None,
 ) -> bool: ...
+
+def _core_auth_grant_can_create(grant: AgentThreadGrant, scope: str | None = None) -> bool:
+    """`AgentThreadGrant.can_create(scope)`."""
+
+def _core_auth_grant_can_list(grant: AgentThreadGrant, scope: str) -> bool:
+    """`AgentThreadGrant.can_list(scope)`."""
+
+def _core_auth_grant_can_read(grant: AgentThreadGrant, thread: ThreadInfo) -> bool:
+    """`AgentThreadGrant.can_read(thread)`."""
+
+def _core_auth_grant_can_write(grant: AgentThreadGrant, thread: ThreadInfo) -> bool:
+    """`AgentThreadGrant.can_write(thread)`."""
+
+def _core_auth_grant_can_delete(grant: AgentThreadGrant, thread: ThreadInfo) -> bool:
+    """`AgentThreadGrant.can_delete(thread)`."""
 
 def _core_unauthenticated_principal() -> Principal:
     """The caller of the console's unauthenticated listener: every thread permission, threads

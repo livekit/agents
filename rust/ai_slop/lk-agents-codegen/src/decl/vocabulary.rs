@@ -77,6 +77,7 @@
 //! | record enum | `record(.., transparent, dispatch = "session_dispatch")` | the host routes its members by model class through `_generated/<dispatch>.py` (`PUBLIC_EVENTS`, `IGNORED_EVENTS`) |
 //! | dispatched variant | `event`, `ignored` | emitted as the public event its model's `type` constant names, or received and dropped; an unrouted member has host behaviour |
 //! | record | `#[python(property(name = "x", ret = "int", getter = "a.b"))]` | a model property answering the record's attribute along that path, with no host hook |
+//! | record | `#[python(property(name = "x", ret = "bool", core = "_core_fn"))]`, `method(.., core = ..)` | a view computed in Rust: `_core._core_fn(self, args..)`, the record crossing as its extracted value (the record declares `extract`) |
 //! | record struct | `record(.., default)` | Rust `Default` from the fields' `default = <literal>` (a `Maybe` field: not given): one list of defaults for both languages; the one Rust the record marker expands to |
 //! | record struct | `record(.., persisted)` | application-saved state: the model gains private `_to_json()`/`_from_json()` through the record's serde codec in Rust (it derives `Serialize`/`Deserialize`) |
 //! | record field, tuple variant | `default = <literal>` | the model's default: an omitted keyword only; `None` stays a value an `Option` field takes and any other refuses |

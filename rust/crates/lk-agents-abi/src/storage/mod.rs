@@ -232,7 +232,7 @@ pub trait Storage: Send + Sync + Sized + 'static {
 }
 
 /// A thread: times are unix seconds, `0` for never, TTLs whole seconds.
-#[crate::host(record(module = "storage_class", emit))]
+#[crate::host(record(module = "storage_class", emit, extract))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct ThreadInfo {
     pub thread_id: String,

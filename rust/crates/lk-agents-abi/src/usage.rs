@@ -14,7 +14,7 @@ const _: () = ();
 #[python(property(
     name = "total_tokens",
     ret = "int",
-    hook = "token_usage_total",
+    core = "_core_token_usage_total",
     doc = "``input_tokens + output_tokens``."
 ))]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

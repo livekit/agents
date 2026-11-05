@@ -3,6 +3,8 @@
 
 use serde_json::{Map, Value};
 
+use crate::storage::ThreadInfo;
+
 /// A grant's authoring surface; the native core owns every permission decision.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[crate::host(record(
@@ -22,26 +24,31 @@ use serde_json::{Map, Value};
         name = "can_create",
         args = "scope: str | None = None",
         ret = "bool",
-        hook = "auth_grant_can_create"
+        core = "_core_auth_grant_can_create"
     ),
-    method(name = "can_list", args = "scope: str", ret = "bool", hook = "auth_grant_can_list"),
+    method(
+        name = "can_list",
+        args = "scope: str",
+        ret = "bool",
+        core = "_core_auth_grant_can_list"
+    ),
     method(
         name = "can_read",
         args = "thread: .storage_class.ThreadInfo",
         ret = "bool",
-        hook = "auth_grant_can_read"
+        core = "_core_auth_grant_can_read"
     ),
     method(
         name = "can_write",
         args = "thread: .storage_class.ThreadInfo",
         ret = "bool",
-        hook = "auth_grant_can_write"
+        core = "_core_auth_grant_can_write"
     ),
     method(
         name = "can_delete",
         args = "thread: .storage_class.ThreadInfo",
         ret = "bool",
-        hook = "auth_grant_can_delete"
+        core = "_core_auth_grant_can_delete"
     )
 )]
 pub struct AuthGrant {
@@ -160,6 +167,51 @@ pub trait AuthPermissions: Send + Sync + Sized + 'static {
         thread_id: String,
         scope: Option<String>,
     ) -> bool;
+
+    /// `AgentThreadGrant.can_create(scope)`.
+    #[host(function, name = "_core_auth_grant_can_create")]
+    fn can_create(grant: AuthGrant, #[host(default = None)] scope: Option<String>) -> bool {
+        Self::_core_auth_grant_allows(grant, AuthOperation::Create, String::new(), scope)
+    }
+
+    /// `AgentThreadGrant.can_list(scope)`.
+    #[host(function, name = "_core_auth_grant_can_list")]
+    fn can_list(grant: AuthGrant, scope: String) -> bool {
+        Self::_core_auth_grant_allows(grant, AuthOperation::List, String::new(), Some(scope))
+    }
+
+    /// `AgentThreadGrant.can_read(thread)`.
+    #[host(function, name = "_core_auth_grant_can_read")]
+    fn can_read(grant: AuthGrant, thread: ThreadInfo) -> bool {
+        Self::_core_auth_grant_allows(
+            grant,
+            AuthOperation::Read,
+            thread.thread_id,
+            Some(thread.scope),
+        )
+    }
+
+    /// `AgentThreadGrant.can_write(thread)`.
+    #[host(function, name = "_core_auth_grant_can_write")]
+    fn can_write(grant: AuthGrant, thread: ThreadInfo) -> bool {
+        Self::_core_auth_grant_allows(
+            grant,
+            AuthOperation::Write,
+            thread.thread_id,
+            Some(thread.scope),
+        )
+    }
+
+    /// `AgentThreadGrant.can_delete(thread)`.
+    #[host(function, name = "_core_auth_grant_can_delete")]
+    fn can_delete(grant: AuthGrant, thread: ThreadInfo) -> bool {
+        Self::_core_auth_grant_allows(
+            grant,
+            AuthOperation::Delete,
+            thread.thread_id,
+            Some(thread.scope),
+        )
+    }
 
     /// The caller of the console's unauthenticated listener: every thread permission, threads
     /// created in the `console` scope.

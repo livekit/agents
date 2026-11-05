@@ -6263,6 +6263,37 @@ pub mod evals {
             Some(&kwargs),
         )
     }
+
+    // Declared in rust/crates/lk-agents-abi/src/evals.rs.
+    static EVALUATION_RESULT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn evaluation_result_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::evals::EvaluationResult> {
+        let py = obj.py();
+        if !obj.is_instance(EVALUATION_RESULT.import(
+            py,
+            "livekit.agents._generated.evals",
+            "EvaluationResult",
+        )?)? {
+            return Err(super::not_a(obj, "EvaluationResult"));
+        }
+        Ok(::lk_agents_abi::evals::EvaluationResult {
+            judgments: crate::py_values::attr_with(obj, "EvaluationResult", "judgments", |v| {
+                v.cast::<::pyo3::types::PyDict>()?
+                    .iter()
+                    .map(|(key, item)| {
+                        let (key, item) = (&key, &item);
+                        Ok((
+                            key.extract::<::std::string::String>()?,
+                            crate::generated::records::evals::judgment_result_from_py(item)?,
+                        ))
+                    })
+                    .collect::<PyResult<::std::collections::BTreeMap<_, _>>>()
+            })?,
+        })
+    }
 }
 
 pub mod events {
@@ -14298,6 +14329,57 @@ pub mod storage_class {
     // Declared in rust/crates/lk-agents-abi/src/storage/mod.rs.
     static THREAD_INFO: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
+
+    pub fn thread_info_from_py(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::lk_agents_abi::storage::ThreadInfo> {
+        let py = obj.py();
+        if !obj.is_instance(THREAD_INFO.import(
+            py,
+            "livekit.agents._generated.storage_class",
+            "ThreadInfo",
+        )?)? {
+            return Err(super::not_a(obj, "ThreadInfo"));
+        }
+        Ok(::lk_agents_abi::storage::ThreadInfo {
+            thread_id: crate::py_values::attr_with(obj, "ThreadInfo", "thread_id", |v| {
+                v.extract::<::std::string::String>()
+            })?,
+            scope: crate::py_values::attr_with(obj, "ThreadInfo", "scope", |v| {
+                v.extract::<::std::string::String>()
+            })?,
+            attributes: crate::py_values::attr_with(obj, "ThreadInfo", "attributes", |v| {
+                v.cast::<::pyo3::types::PyDict>()?
+                    .iter()
+                    .map(|(key, item)| {
+                        let (key, item) = (&key, &item);
+                        Ok((
+                            key.extract::<::std::string::String>()?,
+                            item.extract::<::std::string::String>()?,
+                        ))
+                    })
+                    .collect::<PyResult<::std::collections::BTreeMap<_, _>>>()
+            })?,
+            created_at: crate::py_values::attr_with(obj, "ThreadInfo", "created_at", |v| {
+                crate::py_values::number_from_py::<i64>(v, "ThreadInfo.created_at")
+            })?,
+            last_active: crate::py_values::attr_with(obj, "ThreadInfo", "last_active", |v| {
+                crate::py_values::number_from_py::<i64>(v, "ThreadInfo.last_active")
+            })?,
+            expires_at: crate::py_values::attr_with(obj, "ThreadInfo", "expires_at", |v| {
+                crate::py_values::number_from_py::<i64>(v, "ThreadInfo.expires_at")
+            })?,
+            idle_ttl_seconds: crate::py_values::attr_with(
+                obj,
+                "ThreadInfo",
+                "idle_ttl_seconds",
+                |v| crate::py_values::number_from_py::<i64>(v, "ThreadInfo.idle_ttl_seconds"),
+            )?,
+            database_id: crate::py_values::attr_with(obj, "ThreadInfo", "database_id", |v| {
+                v.extract::<::std::string::String>()
+            })?,
+        })
+    }
 
     pub fn thread_info_to_py<'py>(
         py: Python<'py>,

@@ -62,9 +62,15 @@ pub fn members(attrs: &[syn::Attribute], outer: &str, owner: &str) -> Result<Vec
             continue;
         }
         let keys = &entry.nested;
-        voc::only(owner, keys, &["name", "args", "ret", "doc", "hook", "getter"])?;
+        voc::only(owner, keys, &["name", "args", "ret", "doc", "hook", "getter", "core"])?;
         let name = required(owner, keys, "name")?;
         let getter = voc::text(owner, keys, "getter")?;
+        let core = voc::text(owner, keys, "core")?;
+        if core.is_some() && (getter.is_some() || voc::find(keys, "hook").is_some()) {
+            return Err(format!(
+                "{owner}.{name}: core = \"fn\" is answered by `_core`, without a hook or a getter"
+            ));
+        }
         if let Some(path) = &getter
             && (entry.key != "property"
                 || voc::find(keys, "hook").is_some()
@@ -85,6 +91,7 @@ pub fn members(attrs: &[syn::Attribute], outer: &str, owner: &str) -> Result<Vec
             ret: voc::text(owner, keys, "ret")?.unwrap_or_else(|| "None".into()),
             doc: voc::text(owner, keys, "doc")?.unwrap_or_default(),
             getter,
+            core,
         });
     }
     Ok(out)

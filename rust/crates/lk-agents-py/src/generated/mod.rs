@@ -239,6 +239,11 @@ pub trait Implementations: 'static {
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<a2a::CoreCredentials>()?;
     m.add_function(wrap_pyfunction!(a2a::_core_auth_grant_allows, m)?)?;
+    m.add_function(wrap_pyfunction!(a2a::_core_auth_grant_can_create, m)?)?;
+    m.add_function(wrap_pyfunction!(a2a::_core_auth_grant_can_list, m)?)?;
+    m.add_function(wrap_pyfunction!(a2a::_core_auth_grant_can_read, m)?)?;
+    m.add_function(wrap_pyfunction!(a2a::_core_auth_grant_can_write, m)?)?;
+    m.add_function(wrap_pyfunction!(a2a::_core_auth_grant_can_delete, m)?)?;
     m.add_function(wrap_pyfunction!(a2a::_core_unauthenticated_principal, m)?)?;
     m.add_function(wrap_pyfunction!(a2a::_core_a2a_agent_card, m)?)?;
     m.add_function(wrap_pyfunction!(a2a::_core_a2a_message_text, m)?)?;
@@ -268,6 +273,9 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(errors::http_error_display, m)?)?;
     m.add_class::<evals::CoreJudgeRunner>()?;
     m.add_function(wrap_pyfunction!(evals::_core_evaluation_score, m)?)?;
+    m.add_function(wrap_pyfunction!(evals::_core_judgment_passed, m)?)?;
+    m.add_function(wrap_pyfunction!(evals::_core_judgment_failed, m)?)?;
+    m.add_function(wrap_pyfunction!(evals::_core_judgment_uncertain, m)?)?;
     m.add_function(wrap_pyfunction!(evals::_core_judge_tool_schemas, m)?)?;
     m.add_function(wrap_pyfunction!(inference::inference_api_key, m)?)?;
     m.add_function(wrap_pyfunction!(inference::inference_api_secret, m)?)?;
@@ -344,6 +352,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(media::split_sentences, m)?)?;
     m.add_function(wrap_pyfunction!(metrics::runtime_busy_seconds, m)?)?;
     m.add_function(wrap_pyfunction!(metrics::metrics_log_fields, m)?)?;
+    m.add_function(wrap_pyfunction!(metrics::_core_token_usage_total, m)?)?;
     m.add_function(wrap_pyfunction!(metrics::stt_batch_metrics, m)?)?;
     m.add_function(wrap_pyfunction!(metrics::stt_stream_metrics, m)?)?;
     m.add_class::<metrics::LlmMetricState>()?;

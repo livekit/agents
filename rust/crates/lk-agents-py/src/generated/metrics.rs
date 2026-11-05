@@ -91,6 +91,15 @@ fn _extract_provider_metrics_stt_stream_metrics_timestamp(
 }
 type ProviderMetricsSttStreamMetricsTimestampInput = f64;
 
+/// `TokenUsage.total_tokens`: input plus output.
+#[pyfunction]
+#[pyo3(signature = (tokens))]
+pub fn _core_token_usage_total(py: Python<'_>, tokens: Bound<'_, PyAny>) -> PyResult<u64> {
+    let tokens = crate::generated::records::usage::token_usage_from_py(tokens.as_any())?;
+    let out = py.detach(|| <ProviderMetricsImpl as ::lk_agents_abi::metrics::provider::ProviderMetrics>::token_usage_total(tokens));
+    ::pyo3::PyResult::Ok(out)
+}
+
 /// `STT.recognize`'s metrics for one batch recognition, stamped at `timestamp` (unix seconds)
 /// with the provider's label, model and provider name.
 #[pyfunction]

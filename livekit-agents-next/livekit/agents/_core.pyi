@@ -13,6 +13,11 @@ from ._generated._core_a2a import (
     _core_a2a_message_text as _core_a2a_message_text,
     _core_A2ADoor as _core_A2ADoor,
     _core_auth_grant_allows as _core_auth_grant_allows,
+    _core_auth_grant_can_create as _core_auth_grant_can_create,
+    _core_auth_grant_can_delete as _core_auth_grant_can_delete,
+    _core_auth_grant_can_list as _core_auth_grant_can_list,
+    _core_auth_grant_can_read as _core_auth_grant_can_read,
+    _core_auth_grant_can_write as _core_auth_grant_can_write,
     _core_Credentials as _core_Credentials,
     _core_delegation_tool as _core_delegation_tool,
     _core_HandlerTurn as _core_HandlerTurn,
@@ -45,6 +50,9 @@ from ._generated._core_evals import (
     _core_evaluation_score as _core_evaluation_score,
     _core_judge_tool_schemas as _core_judge_tool_schemas,
     _core_JudgeRunner as _core_JudgeRunner,
+    _core_judgment_failed as _core_judgment_failed,
+    _core_judgment_passed as _core_judgment_passed,
+    _core_judgment_uncertain as _core_judgment_uncertain,
 )
 from ._generated._core_inference import (
     InferenceAvatar as InferenceAvatar,
@@ -130,6 +138,7 @@ from ._generated._core_media import (
 from ._generated._core_metrics import (
     LlmMetricState as LlmMetricState,
     TtsMetricState as TtsMetricState,
+    _core_token_usage_total as _core_token_usage_total,
     metrics_log_fields as metrics_log_fields,
     runtime_busy_seconds as runtime_busy_seconds,
     stt_batch_metrics as stt_batch_metrics,

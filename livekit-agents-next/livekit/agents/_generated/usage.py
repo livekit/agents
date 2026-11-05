@@ -13,8 +13,6 @@ from typing import Annotated, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .. import _bindings
-
 
 class TokenUsage(BaseModel):
     """Token counts in one vocabulary. Totals are inclusive: the cache, reasoning and modality
@@ -47,7 +45,9 @@ class TokenUsage(BaseModel):
     @property
     def total_tokens(self) -> int:
         """``input_tokens + output_tokens``."""
-        return _bindings.token_usage_total(self)
+        from .. import _core
+
+        return _core._core_token_usage_total(self)
 
 
 class LLMUsage(BaseModel):

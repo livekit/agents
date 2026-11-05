@@ -131,22 +131,60 @@ impl CoreJudgeRunner {
 type EvaluationsImpl =
     <crate::generated::implementations::Selected as super::Implementations>::Evaluations;
 
-/// The aggregates of `verdicts`; a verdict other than pass, fail or maybe is refused.
+/// The aggregates of `result`'s verdicts; a verdict other than pass, fail or maybe is
+/// refused.
 #[pyfunction]
-#[pyo3(signature = (verdicts))]
+#[pyo3(signature = (result))]
 pub fn _core_evaluation_score<'py>(
     py: Python<'py>,
-    verdicts: ::std::vec::Vec<::std::string::String>,
+    result: Bound<'_, PyAny>,
 ) -> PyResult<Bound<'py, PyAny>> {
     crate::py_calls::check_pid()?;
+    let result = crate::generated::records::evals::evaluation_result_from_py(result.as_any())?;
     let out = py
-        .detach(|| <EvaluationsImpl as ::lk_agents_abi::evals::Evaluations>::score(verdicts))
+        .detach(|| <EvaluationsImpl as ::lk_agents_abi::evals::Evaluations>::score(result))
         .map_err(|e: ::lk_agents_abi::evals::InvalidJudgment| {
             <::lk_agents_abi::evals::InvalidJudgment as crate::py_errors::HostException>::to_py_err(
                 &e,
             )
         })?;
     crate::generated::records::evals::evaluation_score_to_py(py, out)
+}
+
+/// `JudgmentResult.passed`: the verdict is pass.
+#[pyfunction]
+#[pyo3(signature = (judgment))]
+pub fn _core_judgment_passed(py: Python<'_>, judgment: Bound<'_, PyAny>) -> PyResult<bool> {
+    crate::py_calls::check_pid()?;
+    let judgment = crate::generated::records::evals::judgment_result_from_py(judgment.as_any())?;
+    let out = py.detach(|| {
+        <EvaluationsImpl as ::lk_agents_abi::evals::Evaluations>::judgment_passed(judgment)
+    });
+    ::pyo3::PyResult::Ok(out)
+}
+
+/// `JudgmentResult.failed`: the verdict is fail.
+#[pyfunction]
+#[pyo3(signature = (judgment))]
+pub fn _core_judgment_failed(py: Python<'_>, judgment: Bound<'_, PyAny>) -> PyResult<bool> {
+    crate::py_calls::check_pid()?;
+    let judgment = crate::generated::records::evals::judgment_result_from_py(judgment.as_any())?;
+    let out = py.detach(|| {
+        <EvaluationsImpl as ::lk_agents_abi::evals::Evaluations>::judgment_failed(judgment)
+    });
+    ::pyo3::PyResult::Ok(out)
+}
+
+/// `JudgmentResult.uncertain`: the verdict is maybe.
+#[pyfunction]
+#[pyo3(signature = (judgment))]
+pub fn _core_judgment_uncertain(py: Python<'_>, judgment: Bound<'_, PyAny>) -> PyResult<bool> {
+    crate::py_calls::check_pid()?;
+    let judgment = crate::generated::records::evals::judgment_result_from_py(judgment.as_any())?;
+    let out = py.detach(|| {
+        <EvaluationsImpl as ::lk_agents_abi::evals::Evaluations>::judgment_uncertain(judgment)
+    });
+    ::pyo3::PyResult::Ok(out)
 }
 
 /// The judge tools' raw schemas, which the host offers a model it implements.

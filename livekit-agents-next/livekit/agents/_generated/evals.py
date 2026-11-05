@@ -29,23 +29,23 @@ class JudgmentResult:
     @property
     def passed(self) -> bool:
         """Whether the evaluation passed. Maybe is treated as not passed."""
-        from .. import _bindings
+        from .. import _core
 
-        return _bindings.judgment_result_passed(self)
+        return _core._core_judgment_passed(self)
 
     @property
     def failed(self) -> bool:
         """Whether the evaluation failed. Maybe is treated as not failed."""
-        from .. import _bindings
+        from .. import _core
 
-        return _bindings.judgment_result_failed(self)
+        return _core._core_judgment_failed(self)
 
     @property
     def uncertain(self) -> bool:
         """Whether the judge was uncertain about the verdict."""
-        from .. import _bindings
+        from .. import _core
 
-        return _bindings.judgment_result_uncertain(self)
+        return _core._core_judgment_uncertain(self)
 
 
 @dataclass(kw_only=True, slots=True)
@@ -119,42 +119,33 @@ class EvaluationResult:
     @property
     def score(self) -> float:
         """Score from 0.0 to 1.0. Pass=1, maybe=0.5, fail=0."""
-        from .. import _bindings
-
-        return _bindings.evaluation_result_score(self)
+        return self._score.score
 
     @property
     def all_passed(self) -> bool:
         """True if all judgments passed. Maybes count as not passed."""
-        from .. import _bindings
-
-        return _bindings.evaluation_result_all_passed(self)
+        return self._score.all_passed
 
     @property
     def any_passed(self) -> bool:
         """True if at least one judgment passed."""
-        from .. import _bindings
-
-        return _bindings.evaluation_result_any_passed(self)
+        return self._score.any_passed
 
     @property
     def majority_passed(self) -> bool:
         """True if more than half of the judgments passed."""
-        from .. import _bindings
-
-        return _bindings.evaluation_result_majority_passed(self)
+        return self._score.majority_passed
 
     @property
     def none_failed(self) -> bool:
         """True if no judgments explicitly failed. Maybes are allowed."""
-        from .. import _bindings
+        return self._score.none_failed
 
-        return _bindings.evaluation_result_none_failed(self)
-
+    @property
     def _score(self) -> EvaluationScore:
-        from .. import _bindings
+        from .. import _core
 
-        return _bindings.evaluation_result_core_score(self)
+        return _core._core_evaluation_score(self)
 
 
 JudgmentResult.__annotations__ = get_annotations(JudgmentResult, eval_str=True)

@@ -40,7 +40,6 @@ if TYPE_CHECKING:
         FunctionCallOutput,
         MetricsMetadata,
     )
-    from ._generated.evals import EvaluationResult, EvaluationScore, JudgmentResult
     from ._generated.llm import ChatChunk
     from ._generated.llm_fallback import AvailabilityChanged
     from ._generated.overlap import OverlappingSpeechEvent
@@ -53,12 +52,10 @@ if TYPE_CHECKING:
         VideoInputOptions,
     )
     from ._generated.session_events import ErrorEvent, FunctionToolsExecutedEvent
-    from ._generated.storage_class import ThreadInfo
     from ._generated.stt import STT, SpeechData, SpeechEvent
     from ._generated.tool_options import ProviderToolDeclaration, ToolSpec
     from ._generated.turn_events import EotPrediction
     from ._generated.types import ProviderId
-    from ._generated.usage import TokenUsage
     from .llm.chat_context import ChatItem
     from .llm.tool_context import Tool, Toolset
     from .types import APIConnectOptions, NotGivenOr
@@ -99,26 +96,6 @@ def auth_grant_post_init(grant: AgentThreadGrant) -> None:
     # Frozen records still accept arbitrary sequences at construction, then retain their own
     # list. This is Python authoring normalization, not a second grant schema or policy owner.
     object.__setattr__(grant, "thread_ids", list(grant.thread_ids))
-
-
-def auth_grant_can_create(grant: AgentThreadGrant, scope: str | None = None) -> bool:
-    return _core._core_auth_grant_allows(grant, "create", "", scope)
-
-
-def auth_grant_can_list(grant: AgentThreadGrant, scope: str) -> bool:
-    return _core._core_auth_grant_allows(grant, "list", "", scope)
-
-
-def auth_grant_can_read(grant: AgentThreadGrant, thread: ThreadInfo) -> bool:
-    return _core._core_auth_grant_allows(grant, "read", thread.thread_id, thread.scope)
-
-
-def auth_grant_can_write(grant: AgentThreadGrant, thread: ThreadInfo) -> bool:
-    return _core._core_auth_grant_allows(grant, "write", thread.thread_id, thread.scope)
-
-
-def auth_grant_can_delete(grant: AgentThreadGrant, thread: ThreadInfo) -> bool:
-    return _core._core_auth_grant_allows(grant, "delete", thread.thread_id, thread.scope)
 
 
 def on_loop(owner: object, build: Callable[[], _T]) -> _T:
@@ -336,10 +313,6 @@ def metrics_repr(metrics: BaseModel) -> str:
     return f"{type(metrics).__name__}({', '.join(f'{k}={v!r}' for k, v in fields.items())})"
 
 
-def token_usage_total(tokens: TokenUsage) -> int:
-    return tokens.input_tokens + tokens.output_tokens
-
-
 def speech_data_post_init(data: SpeechData) -> None:
     from ._generated.language import LanguageCode
 
@@ -535,50 +508,6 @@ async def default_text_input_cb(sess: VoiceSession, ev: TextInputEvent) -> None:
     async with sess._claim_user_turn():
         await sess.interrupt()
         sess.generate_reply(user_input=ev.text)
-
-
-def judgment_result_passed(self: JudgmentResult) -> bool:
-    """Whether the evaluation passed. Maybe is treated as not passed."""
-    return self.verdict == "pass"
-
-
-def judgment_result_failed(self: JudgmentResult) -> bool:
-    """Whether the evaluation failed. Maybe is treated as not failed."""
-    return self.verdict == "fail"
-
-
-def judgment_result_uncertain(self: JudgmentResult) -> bool:
-    """Whether the judge was uncertain about the verdict."""
-    return self.verdict == "maybe"
-
-
-def evaluation_result_score(self: EvaluationResult) -> float:
-    """Score from 0.0 to 1.0. Pass=1, maybe=0.5, fail=0."""
-    return self._score().score
-
-
-def evaluation_result_all_passed(self: EvaluationResult) -> bool:
-    """True if all judgments passed. Maybes count as not passed."""
-    return self._score().all_passed
-
-
-def evaluation_result_any_passed(self: EvaluationResult) -> bool:
-    """True if at least one judgment passed."""
-    return self._score().any_passed
-
-
-def evaluation_result_majority_passed(self: EvaluationResult) -> bool:
-    """True if more than half of the judgments passed."""
-    return self._score().majority_passed
-
-
-def evaluation_result_none_failed(self: EvaluationResult) -> bool:
-    """True if no judgments explicitly failed. Maybes are allowed."""
-    return self._score().none_failed
-
-
-def evaluation_result_core_score(self: EvaluationResult) -> EvaluationScore:
-    return _core._core_evaluation_score([j.verdict for j in self.judgments.values()])
 
 
 def chat_request(req: _core.ChatRequest) -> tuple[llm.ChatContext, list[Tool]]:

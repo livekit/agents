@@ -2,6 +2,7 @@
 //! `metrics::provider`.
 
 use crate::metrics::base::{LlmMetrics, SttMetrics, TtsMetrics};
+use crate::usage::TokenUsage;
 use crate::{LlmChunk, SpeechEvent, SynthesizedAudio};
 
 /// A `RECOGNITION_USAGE` event without its usage.
@@ -12,6 +13,10 @@ pub struct RecognitionUsageMissing;
 
 #[crate::host(functions(pid = false))]
 pub trait ProviderMetrics {
+    /// `TokenUsage.total_tokens`: input plus output.
+    #[host(function, name = "_core_token_usage_total")]
+    fn token_usage_total(tokens: TokenUsage) -> u64;
+
     /// `STT.recognize`'s metrics for one batch recognition, stamped at `timestamp` (unix seconds)
     /// with the provider's label, model and provider name.
     #[host(function)]

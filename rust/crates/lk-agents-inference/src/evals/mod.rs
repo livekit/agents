@@ -16,8 +16,8 @@ use std::time::SystemTime;
 use futures_util::future::join_all;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::evals::{
-    EvaluationHost, EvaluationScore, Evaluations, IntentFailure, IntentJudgment, InvalidJudgment,
-    JudgeOutcome, JudgeRunner, JudgeSpec, Judgment,
+    EvaluationHost, EvaluationResult, EvaluationScore, Evaluations, IntentFailure, IntentJudgment,
+    InvalidJudgment, JudgeOutcome, JudgeRunner, JudgeSpec, Judgment,
 };
 use lk_agents_abi::usage::TokenUsage;
 use lk_agents_abi::utils::host_ref::HostRef;
@@ -321,8 +321,21 @@ async fn first_call(
 pub struct Rules;
 
 impl Evaluations for Rules {
-    fn score(verdicts: Vec<String>) -> Result<EvaluationScore, InvalidJudgment> {
+    fn score(result: EvaluationResult) -> Result<EvaluationScore, InvalidJudgment> {
+        let verdicts: Vec<String> = result.judgments.into_values().map(|j| j.verdict).collect();
         prompts::score(&verdicts)
+    }
+
+    fn judgment_passed(judgment: Judgment) -> bool {
+        judgment.verdict == "pass"
+    }
+
+    fn judgment_failed(judgment: Judgment) -> bool {
+        judgment.verdict == "fail"
+    }
+
+    fn judgment_uncertain(judgment: Judgment) -> bool {
+        judgment.verdict == "maybe"
     }
 
     fn tool_schemas() -> serde_json::Value {

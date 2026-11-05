@@ -36,29 +36,29 @@ class AgentThreadGrant:
         _bindings.auth_grant_post_init(self)
 
     def can_create(self, scope: str | None = None) -> bool:
-        from .. import _bindings
+        from .. import _core
 
-        return _bindings.auth_grant_can_create(self, scope)
+        return _core._core_auth_grant_can_create(self, scope)
 
     def can_list(self, scope: str) -> bool:
-        from .. import _bindings
+        from .. import _core
 
-        return _bindings.auth_grant_can_list(self, scope)
+        return _core._core_auth_grant_can_list(self, scope)
 
     def can_read(self, thread: ThreadInfo) -> bool:
-        from .. import _bindings
+        from .. import _core
 
-        return _bindings.auth_grant_can_read(self, thread)
+        return _core._core_auth_grant_can_read(self, thread)
 
     def can_write(self, thread: ThreadInfo) -> bool:
-        from .. import _bindings
+        from .. import _core
 
-        return _bindings.auth_grant_can_write(self, thread)
+        return _core._core_auth_grant_can_write(self, thread)
 
     def can_delete(self, thread: ThreadInfo) -> bool:
-        from .. import _bindings
+        from .. import _core
 
-        return _bindings.auth_grant_can_delete(self, thread)
+        return _core._core_auth_grant_can_delete(self, thread)
 
 
 AuthOperation: TypeAlias = Literal["create", "list", "read", "write", "delete"]

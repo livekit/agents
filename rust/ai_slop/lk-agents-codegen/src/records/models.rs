@@ -843,6 +843,12 @@ fn properties(r: &RecordDecl, runtime: &mut Imports) -> String {
             s.push_str(&format!("        return self.{path}\n"));
             continue;
         }
+        if let Some(function) = &member.core {
+            s.push_str(&format!(
+                "        from .. import _core\n\n        return _core.{function}(self{arguments})\n"
+            ));
+            continue;
+        }
         match (r.pydantic.as_ref(), r.dataclass.as_ref(), member.is_property) {
             (Some(_), _, _) => {
                 runtime.add("..", "_bindings");

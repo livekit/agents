@@ -131,6 +131,97 @@ pub fn _core_auth_grant_allows(
     ::pyo3::PyResult::Ok(out)
 }
 
+/// `AgentThreadGrant.can_create(scope)`.
+#[pyfunction]
+#[pyo3(signature = (grant, scope = None))]
+pub fn _core_auth_grant_can_create(
+    py: Python<'_>,
+    grant: Bound<'_, PyAny>,
+    scope: ::std::option::Option<::std::string::String>,
+) -> PyResult<bool> {
+    crate::py_calls::check_pid()?;
+    let grant = crate::generated::records::a2a_auth::agent_thread_grant_from_py(grant.as_any())?;
+    let out = py.detach(|| {
+        <AuthPermissionsImpl as ::lk_agents_abi::a2a::auth::AuthPermissions>::can_create(
+            grant, scope,
+        )
+    });
+    ::pyo3::PyResult::Ok(out)
+}
+
+/// `AgentThreadGrant.can_list(scope)`.
+#[pyfunction]
+#[pyo3(signature = (grant, scope))]
+pub fn _core_auth_grant_can_list(
+    py: Python<'_>,
+    grant: Bound<'_, PyAny>,
+    scope: ::std::string::String,
+) -> PyResult<bool> {
+    crate::py_calls::check_pid()?;
+    let grant = crate::generated::records::a2a_auth::agent_thread_grant_from_py(grant.as_any())?;
+    let out = py.detach(|| {
+        <AuthPermissionsImpl as ::lk_agents_abi::a2a::auth::AuthPermissions>::can_list(grant, scope)
+    });
+    ::pyo3::PyResult::Ok(out)
+}
+
+/// `AgentThreadGrant.can_read(thread)`.
+#[pyfunction]
+#[pyo3(signature = (grant, thread))]
+pub fn _core_auth_grant_can_read(
+    py: Python<'_>,
+    grant: Bound<'_, PyAny>,
+    thread: Bound<'_, PyAny>,
+) -> PyResult<bool> {
+    crate::py_calls::check_pid()?;
+    let grant = crate::generated::records::a2a_auth::agent_thread_grant_from_py(grant.as_any())?;
+    let thread = crate::generated::records::storage_class::thread_info_from_py(thread.as_any())?;
+    let out = py.detach(|| {
+        <AuthPermissionsImpl as ::lk_agents_abi::a2a::auth::AuthPermissions>::can_read(
+            grant, thread,
+        )
+    });
+    ::pyo3::PyResult::Ok(out)
+}
+
+/// `AgentThreadGrant.can_write(thread)`.
+#[pyfunction]
+#[pyo3(signature = (grant, thread))]
+pub fn _core_auth_grant_can_write(
+    py: Python<'_>,
+    grant: Bound<'_, PyAny>,
+    thread: Bound<'_, PyAny>,
+) -> PyResult<bool> {
+    crate::py_calls::check_pid()?;
+    let grant = crate::generated::records::a2a_auth::agent_thread_grant_from_py(grant.as_any())?;
+    let thread = crate::generated::records::storage_class::thread_info_from_py(thread.as_any())?;
+    let out = py.detach(|| {
+        <AuthPermissionsImpl as ::lk_agents_abi::a2a::auth::AuthPermissions>::can_write(
+            grant, thread,
+        )
+    });
+    ::pyo3::PyResult::Ok(out)
+}
+
+/// `AgentThreadGrant.can_delete(thread)`.
+#[pyfunction]
+#[pyo3(signature = (grant, thread))]
+pub fn _core_auth_grant_can_delete(
+    py: Python<'_>,
+    grant: Bound<'_, PyAny>,
+    thread: Bound<'_, PyAny>,
+) -> PyResult<bool> {
+    crate::py_calls::check_pid()?;
+    let grant = crate::generated::records::a2a_auth::agent_thread_grant_from_py(grant.as_any())?;
+    let thread = crate::generated::records::storage_class::thread_info_from_py(thread.as_any())?;
+    let out = py.detach(|| {
+        <AuthPermissionsImpl as ::lk_agents_abi::a2a::auth::AuthPermissions>::can_delete(
+            grant, thread,
+        )
+    });
+    ::pyo3::PyResult::Ok(out)
+}
+
 /// The caller of the console's unauthenticated listener: every thread permission, threads
 /// created in the `console` scope.
 #[pyfunction]

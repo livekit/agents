@@ -17,6 +17,10 @@ fn host_metadata(model: String, provider: String) -> Option<Metadata> {
 pub struct ProviderMetrics;
 
 impl lk_agents_abi::metrics::provider::ProviderMetrics for ProviderMetrics {
+    fn token_usage_total(tokens: TokenUsage) -> u64 {
+        tokens.input_tokens.saturating_add(tokens.output_tokens)
+    }
+
     fn stt_batch_metrics(
         event: SpeechEvent,
         start: f64,

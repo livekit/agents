@@ -22,19 +22,19 @@ use crate::{ChatItem, Llm};
 #[python(property(
     name = "passed",
     ret = "bool",
-    hook = "judgment_result_passed",
+    core = "_core_judgment_passed",
     doc = "Whether the evaluation passed. Maybe is treated as not passed."
 ))]
 #[python(property(
     name = "failed",
     ret = "bool",
-    hook = "judgment_result_failed",
+    core = "_core_judgment_failed",
     doc = "Whether the evaluation failed. Maybe is treated as not failed."
 ))]
 #[python(property(
     name = "uncertain",
     ret = "bool",
-    hook = "judgment_result_uncertain",
+    core = "_core_judgment_uncertain",
     doc = "Whether the judge was uncertain about the verdict."
 ))]
 pub struct Judgment {
@@ -168,9 +168,22 @@ pub enum IntentFailure {
 /// The pure eval rules the host's types read.
 #[crate::host(functions)]
 pub trait Evaluations {
-    /// The aggregates of `verdicts`; a verdict other than pass, fail or maybe is refused.
+    /// The aggregates of `result`'s verdicts; a verdict other than pass, fail or maybe is
+    /// refused.
     #[host(function, name = "_core_evaluation_score")]
-    fn score(verdicts: Vec<String>) -> Result<EvaluationScore, InvalidJudgment>;
+    fn score(result: EvaluationResult) -> Result<EvaluationScore, InvalidJudgment>;
+
+    /// `JudgmentResult.passed`: the verdict is pass.
+    #[host(function, name = "_core_judgment_passed")]
+    fn judgment_passed(judgment: Judgment) -> bool;
+
+    /// `JudgmentResult.failed`: the verdict is fail.
+    #[host(function, name = "_core_judgment_failed")]
+    fn judgment_failed(judgment: Judgment) -> bool;
+
+    /// `JudgmentResult.uncertain`: the verdict is maybe.
+    #[host(function, name = "_core_judgment_uncertain")]
+    fn judgment_uncertain(judgment: Judgment) -> bool;
 
     /// The judge tools' raw schemas, which the host offers a model it implements.
     #[host(function, name = "_core_judge_tool_schemas")]
@@ -178,42 +191,41 @@ pub trait Evaluations {
 }
 
 /// Result of evaluating a conversation with a group of judges.
-#[crate::host(record(module = "evals", path = "livekit.agents.evals", dataclass))]
+#[crate::host(record(module = "evals", path = "livekit.agents.evals", dataclass, extract))]
 #[python(property(
     name = "score",
     ret = "float",
-    hook = "evaluation_result_score",
+    getter = "_score.score",
     doc = "Score from 0.0 to 1.0. Pass=1, maybe=0.5, fail=0."
 ))]
 #[python(property(
     name = "all_passed",
     ret = "bool",
-    hook = "evaluation_result_all_passed",
+    getter = "_score.all_passed",
     doc = "True if all judgments passed. Maybes count as not passed."
 ))]
 #[python(property(
     name = "any_passed",
     ret = "bool",
-    hook = "evaluation_result_any_passed",
+    getter = "_score.any_passed",
     doc = "True if at least one judgment passed."
 ))]
 #[python(property(
     name = "majority_passed",
     ret = "bool",
-    hook = "evaluation_result_majority_passed",
+    getter = "_score.majority_passed",
     doc = "True if more than half of the judgments passed."
 ))]
 #[python(property(
     name = "none_failed",
     ret = "bool",
-    hook = "evaluation_result_none_failed",
+    getter = "_score.none_failed",
     doc = "True if no judgments explicitly failed. Maybes are allowed."
 ))]
-#[python(method(
+#[python(property(
     name = "_score",
     ret = ".evals.EvaluationScore",
-    hook = "evaluation_result_core_score",
-    doc = ""
+    core = "_core_evaluation_score"
 ))]
 pub struct EvaluationResult {
     /// Individual judgment results keyed by judge name.
