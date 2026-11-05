@@ -295,9 +295,10 @@ impl SessionExecutor for Executor {
         resources: &'a Resources,
         model: Arc<dyn Realtime>,
         disabled: bool,
+        cx: telemetry::Cx,
     ) -> BoxFuture<'a, Result<(Arc<dyn RealtimeSession>, ResourceId), DriverError>> {
         Box::pin(async move {
-            let session = model.session(disabled).await?;
+            let session = model.session(cx, disabled).await?;
             self.realtime = Some(RealtimeConnection::new(
                 session.clone(),
                 self.time.clone(),

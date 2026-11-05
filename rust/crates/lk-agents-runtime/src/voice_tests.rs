@@ -658,6 +658,7 @@ impl lk_agents_abi::Realtime for RealtimeModelProbe {
     }
     fn session(
         &self,
+        _: lk_agents_abi::telemetry::Cx,
         _: bool,
     ) -> lk_agents_abi::BoxFuture<
         '_,
@@ -673,7 +674,12 @@ async fn realtime_open_is_owned_before_cores_or_runtime_exist() {
     let probe = Arc::new(RealtimeProbe::default());
     let mut executor = Executor::new(builder.time.clone(), builder.spawner.clone());
     let _ = executor
-        .open_realtime(&builder.resources, Arc::new(RealtimeModelProbe(probe.clone())), false)
+        .open_realtime(
+            &builder.resources,
+            Arc::new(RealtimeModelProbe(probe.clone())),
+            false,
+            lk_agents_abi::telemetry::Cx::NONE,
+        )
         .await
         .unwrap();
     drop(executor);

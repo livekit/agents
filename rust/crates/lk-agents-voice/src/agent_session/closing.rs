@@ -444,7 +444,6 @@ impl VoiceDriver {
             | Command::HookDone { .. }
             | Command::HostMetrics(_)
             | Command::AmdSpan(_)
-            | Command::EventLoopBlocked(_)
             | Command::SetStaticKeyterms(_)
             | Command::Recorder(_)
             | Command::Ivr(_)

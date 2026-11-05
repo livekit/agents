@@ -148,9 +148,6 @@ impl Inner {
             let mut machine = locked(&self.machine);
             let mut effects = Vec::new();
             let result = op(&mut machine, now, &mut effects);
-            if let Some(ids) = machine.take_provider_ids_update() {
-                effects.push(AudioEmitterEffect::ReportProviderRequestIds(ids));
-            }
             let dropped = machine.take_dropped_bytes();
             if dropped > 0 {
                 effects.push(AudioEmitterEffect::ReportDroppedBytes(dropped));
@@ -191,6 +188,7 @@ impl Inner {
                     audio.timed_transcript,
                     audio.usage.map(|usage| *usage),
                     audio.characters_count,
+                    audio.provider_request_ids,
                 );
             }
             AudioEmitterEffect::ScheduleFlushAfter(delay) => self.schedule_flush_after(delay),
@@ -199,9 +197,6 @@ impl Inner {
                 target: "livekit.agents",
                 "incomplete PCM sample at end of segment, discarding {bytes} trailing bytes"
             ),
-            AudioEmitterEffect::ReportProviderRequestIds(ids) => {
-                self.output.provider_request_ids(ids)
-            }
         }
     }
 

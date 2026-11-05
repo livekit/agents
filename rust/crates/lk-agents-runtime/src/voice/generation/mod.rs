@@ -37,10 +37,7 @@ pub(crate) struct ReplyResources {
 impl ReplyExecution {
     /// What the reply's host calls run under: the speech's turn, else the session.
     pub fn turn_cx(&self, shared: &crate::voice::session::SessionShared) -> telemetry::Cx {
-        match self.span {
-            Some(turn) => shared.trace.clone().under::<telemetry::AgentTurn>(turn),
-            None => shared.trace.clone(),
-        }
+        shared.turn_cx(self.span)
     }
 
     pub fn bind(

@@ -12,6 +12,7 @@ use lk_agents_abi::llm::realtime::{
 use lk_agents_abi::{Realtime, RealtimeCommand, RealtimeSession, WallAnchor};
 
 use lk_agents_net::env::ProcessEnv;
+use lk_agents_net::telemetry;
 
 /// The plugin session opens only when the driver calls `session()`; asked again, it is the same.
 pub struct HostRealtimeModel {
@@ -68,6 +69,7 @@ impl Realtime for HostRealtimeModel {
 
     fn session(
         &self,
+        cx: telemetry::Cx,
         turn_detection_disabled: bool,
     ) -> lk_agents_abi::BoxFuture<
         '_,
@@ -80,12 +82,12 @@ impl Realtime for HostRealtimeModel {
             }
             // The plugin's `session()` raised: the driver's start fails with its message, as the
             // reference's activity start does.
-            let host = self.host.session(turn_detection_disabled).await.map_err(|e| {
+            let host = self.host.session(&cx, turn_detection_disabled).await.map_err(|e| {
                 lk_agents_abi::errors::ProviderError::Local(lk_agents_abi::errors::ApiError::new(
                     format!("realtime session could not be opened: {}", e.message()),
                 ))
             })?;
-            let leg = HostRealtimeLeg::open(host, self.caps, self.anchor, &self.spawner);
+            let leg = HostRealtimeLeg::open(host, cx, self.caps, self.anchor, &self.spawner);
             *slot = Some(Arc::clone(&leg));
             Ok(leg as Arc<dyn RealtimeSession>)
         })
@@ -105,6 +107,8 @@ struct Requests {
 /// before the reply that reads it); each generation is drained in its own task.
 pub struct HostRealtimeLeg {
     host: Arc<dyn HostRealtimeSession>,
+    /// What the host calls run under: the context the session was opened in.
+    cx: telemetry::Cx,
     caps: RealtimeCapabilities,
     lane: tokio::sync::mpsc::UnboundedSender<RealtimeCommand>,
     requests: Arc<parking_lot::Mutex<Requests>>,
@@ -119,6 +123,7 @@ pub struct HostRealtimeLeg {
 impl HostRealtimeLeg {
     fn open(
         host: Arc<dyn HostRealtimeSession>,
+        cx: telemetry::Cx,
         caps: RealtimeCapabilities,
         anchor: lk_agents_abi::WallAnchor,
         spawner: &Arc<dyn lk_agents_abi::Spawner>,
@@ -127,6 +132,7 @@ impl HostRealtimeLeg {
         let (events_tx, events) = tokio::sync::mpsc::unbounded_channel();
         let leg = Arc::new(HostRealtimeLeg {
             host: Arc::clone(&host),
+            cx: cx.clone(),
             caps,
             lane,
             requests: Default::default(),
@@ -138,7 +144,7 @@ impl HostRealtimeLeg {
         let weak = Arc::downgrade(&leg);
         let forward = lk_agents_abi::SpawnerExt::spawn(
             &**spawner,
-            Self::forward(weak.clone(), host, anchor, events_tx.clone()),
+            Self::forward(weak.clone(), host, cx, anchor, events_tx.clone()),
         );
         let _ = leg.forward.set(forward);
         leg.spawn(Self::run_lane(weak, lane_rx, events_tx));
@@ -156,15 +162,16 @@ impl HostRealtimeLeg {
     async fn forward(
         leg: std::sync::Weak<Self>,
         host: Arc<dyn HostRealtimeSession>,
+        cx: telemetry::Cx,
         anchor: lk_agents_abi::WallAnchor,
         events: tokio::sync::mpsc::UnboundedSender<Event>,
     ) {
         loop {
-            match host.next_event().await {
+            match host.next_event(&cx).await {
                 Ok(Some(Event::ServerGeneration(g))) => {
                     let Some(leg) = leg.upgrade() else { return };
-                    let host = Arc::clone(&host);
-                    leg.spawn(async move { host.drain(g.generation, None).await });
+                    let (host, cx) = (Arc::clone(&host), cx.clone());
+                    leg.spawn(async move { host.drain(&cx, g.generation, None).await });
                 }
                 Ok(Some(ev)) => {
                     if events.send(ev.anchored(Some(anchor))).is_err() {
@@ -210,7 +217,7 @@ impl HostRealtimeLeg {
         if self.requests.lock().cancelled.remove(&req_id) {
             return;
         }
-        let request = match self.host.request(cmd).await {
+        let request = match self.host.request(&self.cx, cmd).await {
             Ok(request) => request,
             Err(error) => {
                 let _ =
@@ -220,12 +227,13 @@ impl HostRealtimeLeg {
         };
         // Cancelled while it was being sent: the future is cancelled instead of awaited.
         if self.requests.lock().cancelled.remove(&req_id) {
-            self.host.cancel(request).await;
+            self.host.cancel(&self.cx, request).await;
             return;
         }
         self.requests.lock().pending.insert(req_id.clone(), request.clone());
         self.spawn(Self::deliver_reply(
             Arc::clone(&self.host),
+            self.cx.clone(),
             Arc::clone(&self.requests),
             events.clone(),
             req_id,
@@ -236,16 +244,17 @@ impl HostRealtimeLeg {
     /// Awaits the request's generation and drains it; a failure is reported unless cancelled.
     async fn deliver_reply(
         host: Arc<dyn HostRealtimeSession>,
+        cx: telemetry::Cx,
         requests: Arc<parking_lot::Mutex<Requests>>,
         events: tokio::sync::mpsc::UnboundedSender<Event>,
         req_id: String,
         request: lk_agents_abi::HostRef,
     ) {
-        let generation = host.generation(request).await;
+        let generation = host.generation(&cx, request).await;
         // Gone from `pending`: cancelled, and a cancelled request reports nothing.
         let asked = requests.lock().pending.remove(&req_id).is_some();
         match generation {
-            Ok(generation) => host.drain(generation, Some(req_id)).await,
+            Ok(generation) => host.drain(&cx, generation, Some(req_id)).await,
             Err(error) if asked => {
                 let _ =
                     events.send(Event::GenerateReplyFailed(GenerateReplyFailed { req_id, error }));
@@ -258,15 +267,15 @@ impl HostRealtimeLeg {
 impl HostRealtimeLeg {
     /// A session update, awaited before the next command; a failure is logged.
     async fn update(&self, cmd: RealtimeCommand) {
-        let host = &self.host;
+        let (host, cx) = (&self.host, &self.cx);
         let updated = match cmd {
             RealtimeCommand::UpdateInstructions(c) => {
-                host.update_instructions(c.instructions).await
+                host.update_instructions(cx, c.instructions).await
             }
-            RealtimeCommand::UpdateChatCtx(c) => host.update_chat_ctx(c.chat_ctx.items).await,
-            RealtimeCommand::PushItem(c) => host.push_item(*c.item).await,
+            RealtimeCommand::UpdateChatCtx(c) => host.update_chat_ctx(cx, c.chat_ctx.items).await,
+            RealtimeCommand::PushItem(c) => host.push_item(cx, *c.item).await,
             RealtimeCommand::UpdateTools(c) => {
-                host.update_tools(c.tools.into_iter().map(|t| t.name).collect()).await
+                host.update_tools(cx, c.tools.into_iter().map(|t| t.name).collect()).await
             }
             // `send` routes the rest here only as updates.
             _ => Ok(()),
@@ -294,8 +303,8 @@ impl RealtimeSession for HostRealtimeLeg {
                     pending
                 };
                 if let Some(request) = pending {
-                    let host = Arc::clone(&self.host);
-                    self.spawn(async move { host.cancel(request).await });
+                    let (host, cx) = (Arc::clone(&self.host), self.cx.clone());
+                    self.spawn(async move { host.cancel(&cx, request).await });
                 }
             }
             RealtimeCommand::UpdateInstructions(_)
@@ -335,7 +344,7 @@ impl RealtimeSession for HostRealtimeLeg {
             // As the reference's `_core_aclose`: the drains and updates are cancelled, then the
             // session closes.
             drop(std::mem::take(&mut *self.tasks.lock()));
-            self.host.aclose().await;
+            self.host.aclose(&self.cx).await;
         })
     }
 }

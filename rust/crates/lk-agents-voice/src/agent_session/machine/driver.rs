@@ -88,6 +88,9 @@ pub enum VoiceEvent {
     /// Silence substituted per channel since the previous gate change, at a gate change.
     GateSilenced(Vec<(crate::audio::AudioChannel, u64)>),
     InputCensus(crate::data_plane::InputCensus),
+    /// The process's loop monitor: the host's event loop stalled this long. Recorded on the
+    /// session's span only; it decides nothing.
+    EventLoopBlocked(std::time::Duration),
 }
 
 /// The session's decision core: handed every [`VoiceEvent`] in arrival order by the
@@ -389,6 +392,7 @@ impl VoiceDriver {
                 }
             }
             Some(VoiceEvent::InputCensus(census)) => self.on_input_census(census),
+            Some(VoiceEvent::EventLoopBlocked(duration)) => self.event_loop_blocked(duration),
         }
         // Scheduled in the same cycle as the wake that changed it.
 
@@ -465,7 +469,6 @@ impl VoiceDriver {
             Command::Run(spec) => self.on_run(now, *spec),
             Command::VoiceTask(cmd) => self.on_voice_task(now, cmd),
             Command::AmdSpan(ev) => self.amd_span(&ev),
-            Command::EventLoopBlocked(duration) => self.event_loop_blocked(duration),
             Command::Dtmf(cmd) => self.dtmf_step(cmd.into()),
             Command::HostMetrics(record) => {
                 self.publish_event(crate::events::SessionEvent::MetricsCollected {

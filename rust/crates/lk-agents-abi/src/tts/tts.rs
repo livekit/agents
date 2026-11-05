@@ -69,6 +69,9 @@ pub struct SynthesizedAudio {
     /// Characters the provider billed for the segment, on its final frame
     #[host(default = None)]
     pub characters_count: Option<u64>,
+    /// The provider's request ids learnt since the previous frame, in the order learnt
+    #[host(default_factory = "list")]
+    pub provider_request_ids: Vec<String>,
     // `USERDATA_TTS_STARTED_TIME`: when the text was first sent to the provider, in wall-clock
     // seconds (a host's `perf_counter()` stamp is converted where it is read). `None` when absent
     // (`generation.py:426` branches on it); `0.0` is legitimate.
@@ -121,6 +124,7 @@ impl SynthesizedAudio {
             delta_text: String::new(),
             usage: None,
             characters_count: None,
+            provider_request_ids: Vec::new(),
             started_time: None,
             timed_transcript: Vec::new(),
             encoding: AudioEncoding::Pcm,

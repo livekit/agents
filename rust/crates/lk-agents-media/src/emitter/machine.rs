@@ -73,9 +73,9 @@ pub struct AudioEmitter {
     /// Indexed by `pushed_duration`.
     audio_durations: Vec<f64>,
     provider_request_ids: Vec<String>,
-    /// Pulled by the owner so the span write survives a `start_segment()` that is then rejected
-    /// (the reference's order).
-    pending_ids: Option<Vec<String>>,
+    /// Learnt since the last frame: the next frame carries them, even past a `start_segment()`
+    /// that is then rejected (the reference's order).
+    pending_ids: Vec<String>,
 
     seg: Option<SegmentCtx>,
     /// Reported while no segment was open; it rides on the next segment.
@@ -178,13 +178,8 @@ impl AudioEmitter {
             return false;
         }
         self.provider_request_ids.push(context_id.to_string());
-        self.pending_ids = Some(self.provider_request_ids.clone());
+        self.pending_ids.push(context_id.to_string());
         true
-    }
-
-    /// If it changed since the last call.
-    pub fn take_provider_ids_update(&mut self) -> Option<Vec<String>> {
-        self.pending_ids.take()
     }
 
     fn begin_segment(&mut self, segment_id: &str) -> Result<(), EmitterError> {
@@ -570,6 +565,7 @@ impl AudioEmitter {
             delta_text: String::new(),
             usage: usage.map(Box::new),
             characters_count,
+            provider_request_ids: std::mem::take(&mut self.pending_ids),
             // Stamped by `ChunkedStream`/`SynthesizeStream` on the way out (`tts.py:502`).
             started_time: None,
             // Consumed, not copied, or the synchroniser speaks the words twice.

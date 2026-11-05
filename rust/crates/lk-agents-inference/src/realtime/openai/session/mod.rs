@@ -974,6 +974,7 @@ impl lk_agents_abi::Realtime for OpenAIRealtime {
 
     fn session(
         &self,
+        cx: telemetry::Cx,
         turn_detection_disabled: bool,
     ) -> lk_agents_abi::BoxFuture<
         '_,
@@ -981,8 +982,9 @@ impl lk_agents_abi::Realtime for OpenAIRealtime {
     > {
         Box::pin(async move {
             // Infallible: a connect failure arrives as `Event::Error`, like a reconnect failure.
-            Ok(Arc::new(OpenAIRealtime::session(self, turn_detection_disabled).await)
-                as Arc<dyn lk_agents_abi::RealtimeSession>)
+            let session = OpenAIRealtime::session(self, turn_detection_disabled).await;
+            session.commands.drops.observe(cx);
+            Ok(Arc::new(session) as Arc<dyn lk_agents_abi::RealtimeSession>)
         })
     }
 }
@@ -1010,10 +1012,6 @@ impl lk_agents_abi::RealtimeSession for OpenAIRealtimeSession {
 
     fn aclose(&self) -> lk_agents_abi::BoxFuture<'_, ()> {
         Box::pin(async move { OpenAIRealtimeSession::aclose(self).await })
-    }
-
-    fn observe(&self, cx: telemetry::Cx) {
-        self.commands.drops.observe(cx);
     }
 }
 

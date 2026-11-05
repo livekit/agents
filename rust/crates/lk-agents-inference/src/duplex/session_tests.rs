@@ -123,7 +123,7 @@ async fn session_on(
         clock,
         spawner: Arc::new(lk_agents_net::task::TokioSpawner::current()),
     };
-    model.session(false).await.unwrap()
+    model.session(lk_agents_abi::telemetry::Cx::NONE, false).await.unwrap()
 }
 
 fn reply(req_id: &str) -> RealtimeCommand {

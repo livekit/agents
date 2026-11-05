@@ -12,5 +12,4 @@ pub enum AudioEmitterEffect {
     ScheduleFlushAfter(Duration),
     CancelScheduledFlush,
     ReportDroppedBytes(usize),
-    ReportProviderRequestIds(Vec<String>),
 }

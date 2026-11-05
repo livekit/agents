@@ -52,6 +52,7 @@ impl Realtime for Model {
     }
     fn session(
         &self,
+        _cx: lk_agents_abi::telemetry::Cx,
         _td: bool,
     ) -> lk_agents_abi::BoxFuture<'_, Result<Arc<dyn RealtimeSession>, ProviderError>> {
         Box::pin(async move { Ok(Arc::clone(&self.0) as Arc<dyn RealtimeSession>) })
@@ -122,7 +123,7 @@ async fn a_fatal_error_mid_reply_swaps_to_the_next_model_and_asks_for_the_reply_
         Arc::new(lk_agents_net::clock::RealClock::default()),
     )
     .unwrap();
-    let session = model.session(false).await.unwrap();
+    let session = model.session(lk_agents_abi::telemetry::Cx::NONE, false).await.unwrap();
 
     let mut kinds = Vec::new();
     for _ in 0..7 {
@@ -191,6 +192,7 @@ async fn cancellation_case(failed_open: bool) {
         }
         fn session(
             &self,
+            _cx: lk_agents_abi::telemetry::Cx,
             _: bool,
         ) -> lk_agents_abi::BoxFuture<'_, Result<Arc<dyn RealtimeSession>, ProviderError>> {
             Box::pin(async {
@@ -217,7 +219,7 @@ async fn cancellation_case(failed_open: bool) {
         Arc::new(lk_agents_net::clock::RealClock::default()),
     )
     .unwrap();
-    let session = model.session(false).await.unwrap();
+    let session = model.session(lk_agents_abi::telemetry::Cx::NONE, false).await.unwrap();
     let first = session.next_event().await.unwrap();
     let terminal = if failed_open {
         assert!(matches!(first, Event::Error(e) if e.recoverable));
@@ -268,6 +270,7 @@ async fn closing_during_a_failed_swap_does_not_publish_a_fatal_cancellation() {
         }
         fn session(
             &self,
+            _cx: lk_agents_abi::telemetry::Cx,
             _: bool,
         ) -> lk_agents_abi::BoxFuture<'_, Result<Arc<dyn RealtimeSession>, ProviderError>> {
             Box::pin(async move {
@@ -293,7 +296,7 @@ async fn closing_during_a_failed_swap_does_not_publish_a_fatal_cancellation() {
         Arc::new(lk_agents_net::clock::RealClock::default()),
     )
     .unwrap();
-    let session = model.session(false).await.unwrap();
+    let session = model.session(lk_agents_abi::telemetry::Cx::NONE, false).await.unwrap();
     let reading = tokio::spawn({
         let session = session.clone();
         async move { session.next_event().await }
@@ -325,7 +328,7 @@ async fn repeating_the_same_backend_does_not_create_a_second_fallback_identity()
         Arc::new(lk_agents_net::clock::RealClock::default()),
     )
     .unwrap();
-    let session = model.session(false).await.unwrap();
+    let session = model.session(lk_agents_abi::telemetry::Cx::NONE, false).await.unwrap();
     assert!(
         matches!(session.next_event().await, Some(Event::Error(e)) if !e.recoverable),
         "one failed backend cannot fall back to another occurrence of itself"
@@ -347,6 +350,7 @@ async fn zero_cooldown_exhausts_one_fallback_pass_without_reopening_failed_child
         }
         fn session(
             &self,
+            _cx: lk_agents_abi::telemetry::Cx,
             _: bool,
         ) -> lk_agents_abi::BoxFuture<'_, Result<Arc<dyn RealtimeSession>, ProviderError>> {
             Box::pin(async move {
@@ -370,7 +374,7 @@ async fn zero_cooldown_exhausts_one_fallback_pass_without_reopening_failed_child
         Arc::new(lk_agents_net::clock::RealClock::default()),
     )
     .unwrap();
-    let session = model.session(false).await.unwrap();
+    let session = model.session(lk_agents_abi::telemetry::Cx::NONE, false).await.unwrap();
     assert!(matches!(session.next_event().await, Some(Event::Error(e)) if e.recoverable));
     assert!(matches!(session.next_event().await, Some(Event::Error(e)) if !e.recoverable));
     assert_eq!(backup.0.load(std::sync::atomic::Ordering::SeqCst), 1);
@@ -393,7 +397,7 @@ async fn realtime_fallback_backlog_refuses_excess_requests_before_forwarding() {
         Arc::new(lk_agents_net::clock::RealClock::default()),
     )
     .unwrap();
-    let session = model.session(false).await.unwrap();
+    let session = model.session(lk_agents_abi::telemetry::Cx::NONE, false).await.unwrap();
     assert!(matches!(session.next_event().await, Some(Event::Error(_))));
     assert!(matches!(session.next_event().await, Some(Event::SessionSwapped { .. })));
     let (polling, polled) = tokio::sync::oneshot::channel();
@@ -460,6 +464,7 @@ impl Realtime for HangingOpen {
     }
     fn session(
         &self,
+        _cx: lk_agents_abi::telemetry::Cx,
         _: bool,
     ) -> lk_agents_abi::BoxFuture<'_, Result<Arc<dyn RealtimeSession>, ProviderError>> {
         Box::pin(std::future::pending())
@@ -481,7 +486,7 @@ async fn attempt_timeout_skips_a_model_whose_open_hangs() {
         Arc::new(lk_agents_net::clock::RealClock::default()),
     )
     .unwrap();
-    let session = model.session(false).await.unwrap();
+    let session = model.session(lk_agents_abi::telemetry::Cx::NONE, false).await.unwrap();
     assert!(matches!(session.next_event().await, Some(Event::Error(_))));
     let swapped = tokio::time::timeout(std::time::Duration::from_secs(5), session.next_event())
         .await
@@ -504,7 +509,7 @@ async fn pre_connect_audio_reaches_the_serving_model_as_head() {
         Arc::new(lk_agents_net::clock::RealClock::default()),
     )
     .unwrap();
-    let session = model.session(false).await.unwrap();
+    let session = model.session(lk_agents_abi::telemetry::Cx::NONE, false).await.unwrap();
     session.head(lk_agents_abi::AudioFrame::new(vec![0u8; 960], 24_000, 1, 480));
     assert_eq!(*primary.sent.lock(), ["head"]);
 }

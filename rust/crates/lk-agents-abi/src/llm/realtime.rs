@@ -424,9 +424,11 @@ pub trait Realtime: Send + Sync + 'static {
 
     fn capabilities(&self) -> RealtimeCapabilities;
 
-    /// `session(turn_detection_disabled=..)`: the session's choice, not the model's.
+    /// `session(turn_detection_disabled=..)`: the session's choice, not the model's. The session
+    /// works under `cx` for its life: its host calls, and the input audio it drops.
     fn session(
         &self,
+        cx: crate::telemetry::Cx,
         turn_detection_disabled: bool,
     ) -> crate::BoxFuture<
         '_,
@@ -453,9 +455,6 @@ pub trait RealtimeSession: Send + Sync {
     fn chat_ctx(&self) -> crate::BoxFuture<'_, crate::ChatContext>;
 
     fn aclose(&self) -> crate::BoxFuture<'_, ()>;
-
-    /// Reports the input audio the session drops under `cx`'s job.
-    fn observe(&self, _cx: crate::telemetry::Cx) {}
 }
 
 /// What the driver sends a session. A host session is sent the ones it applies at once
@@ -636,6 +635,7 @@ pub trait HostRealtime: Send + Sync {
     #[host(await, name = "_core_session")]
     fn session(
         &self,
+        cx: &crate::telemetry::Cx,
         turn_detection_disabled: bool,
     ) -> crate::BoxFuture<
         '_,
@@ -657,6 +657,7 @@ pub trait HostRealtimeSession: Send + Sync {
     #[host(await, name = "_core_update_instructions")]
     fn update_instructions(
         &self,
+        cx: &crate::telemetry::Cx,
         instructions: String,
     ) -> crate::BoxFuture<'_, Result<(), crate::errors::HostError>>;
 
@@ -664,6 +665,7 @@ pub trait HostRealtimeSession: Send + Sync {
     #[host(await, name = "_core_update_chat_ctx")]
     fn update_chat_ctx(
         &self,
+        cx: &crate::telemetry::Cx,
         items: Vec<ChatItem>,
     ) -> crate::BoxFuture<'_, Result<(), crate::errors::HostError>>;
 
@@ -671,6 +673,7 @@ pub trait HostRealtimeSession: Send + Sync {
     #[host(await, name = "_core_push_item")]
     fn push_item(
         &self,
+        cx: &crate::telemetry::Cx,
         item: ChatItem,
     ) -> crate::BoxFuture<'_, Result<(), crate::errors::HostError>>;
 
@@ -678,6 +681,7 @@ pub trait HostRealtimeSession: Send + Sync {
     #[host(await, name = "_core_update_tools")]
     fn update_tools(
         &self,
+        cx: &crate::telemetry::Cx,
         names: Vec<String>,
     ) -> crate::BoxFuture<'_, Result<(), crate::errors::HostError>>;
 
@@ -686,6 +690,7 @@ pub trait HostRealtimeSession: Send + Sync {
     #[host(await, name = "_core_request")]
     fn request(
         &self,
+        cx: &crate::telemetry::Cx,
         cmd: RealtimeCommand,
     ) -> crate::BoxFuture<'_, Result<crate::HostRef, RealtimeError>>;
 
@@ -693,26 +698,38 @@ pub trait HostRealtimeSession: Send + Sync {
     #[host(await, name = "_core_generation")]
     fn generation(
         &self,
+        cx: &crate::telemetry::Cx,
         request: crate::HostRef,
     ) -> crate::BoxFuture<'_, Result<crate::HostRef, RealtimeError>>;
 
     /// Drop a request still waiting for its generation (`future.cancel()`).
     #[host(await, name = "_core_cancel")]
-    fn cancel(&self, request: crate::HostRef) -> crate::BoxFuture<'_, ()>;
+    fn cancel(
+        &self,
+        cx: &crate::telemetry::Cx,
+        request: crate::HostRef,
+    ) -> crate::BoxFuture<'_, ()>;
 
     /// Report a generation's messages and function calls as events; `req_id` names the request it
     /// answers, `None` for one the server started.
     #[host(await, name = "_core_drain")]
-    fn drain(&self, generation: crate::HostRef, req_id: Option<String>)
-    -> crate::BoxFuture<'_, ()>;
+    fn drain(
+        &self,
+        cx: &crate::telemetry::Cx,
+        generation: crate::HostRef,
+        req_id: Option<String>,
+    ) -> crate::BoxFuture<'_, ()>;
 
     /// The next event; `None` once the session is closed. An `Err` is one event the host could
     /// not report, not the end.
     #[host(await, name = "_core_next_event")]
-    fn next_event(&self) -> crate::BoxFuture<'_, Result<Option<Event>, crate::errors::HostError>>;
+    fn next_event(
+        &self,
+        cx: &crate::telemetry::Cx,
+    ) -> crate::BoxFuture<'_, Result<Option<Event>, crate::errors::HostError>>;
 
     #[host(await, name = "_core_aclose")]
-    fn aclose(&self) -> crate::BoxFuture<'_, ()>;
+    fn aclose(&self, cx: &crate::telemetry::Cx) -> crate::BoxFuture<'_, ()>;
 }
 
 /// A plugin's realtime model as the core's own: its session opens when the driver first asks and

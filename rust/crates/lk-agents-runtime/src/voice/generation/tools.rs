@@ -104,11 +104,9 @@ struct HostedCall<'a> {
 }
 
 impl HostedCall<'_> {
-    /// The context the callbacks run under: the speech's turn, or no span.
+    /// The context the callbacks run under: the speech's turn, else the session.
     fn turn_cx(&self) -> telemetry::Cx {
-        self.turn.map_or(telemetry::Cx::NONE, |turn| {
-            self.shared.trace.clone().under::<telemetry::AgentTurn>(turn)
-        })
+        self.shared.turn_cx(self.turn)
     }
 
     /// Prepares, reads back or runs the call as told, from its `first` move until it is

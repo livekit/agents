@@ -72,6 +72,7 @@ impl ChainModel {
     /// timeout.
     async fn open(
         &self,
+        cx: lk_agents_abi::telemetry::Cx,
         turn_detection_disabled: bool,
         anchor: WallAnchor,
         clock: &dyn lk_agents_abi::Clock,
@@ -79,11 +80,11 @@ impl ChainModel {
     ) -> Result<Arc<dyn RealtimeSession>, ProviderError> {
         let open = async {
             match self {
-                ChainModel::Native(m) => m.session(turn_detection_disabled).await,
+                ChainModel::Native(m) => m.session(cx, turn_detection_disabled).await,
                 // Given its anchor and spawner, it needs no environment.
                 ChainModel::Host(h, spawner) => {
                     <HostRealtimeModel>::new(Arc::clone(h), anchor, Arc::clone(spawner))
-                        .session(turn_detection_disabled)
+                        .session(cx, turn_detection_disabled)
                         .await
                 }
             }
@@ -228,11 +229,18 @@ impl Realtime for RealtimeFallbackModel {
     /// A fresh session always starts on the primary, even after an earlier failover.
     fn session(
         &self,
+        cx: lk_agents_abi::telemetry::Cx,
         turn_detection_disabled: bool,
     ) -> lk_agents_abi::BoxFuture<'_, Result<Arc<dyn RealtimeSession>, ProviderError>> {
         Box::pin(async move {
             let first = self.children[0]
-                .open(turn_detection_disabled, self.anchor, &*self.clock, self.attempt_timeout)
+                .open(
+                    cx.clone(),
+                    turn_detection_disabled,
+                    self.anchor,
+                    &*self.clock,
+                    self.attempt_timeout,
+                )
                 .await?;
             let (restart_tx, restart_rx) = tokio::sync::watch::channel(false);
             self.active.store(0, std::sync::atomic::Ordering::Relaxed);
@@ -247,6 +255,7 @@ impl Realtime for RealtimeFallbackModel {
                 anchor: self.anchor,
                 clock: Arc::clone(&self.clock),
                 turn_detection_disabled,
+                cx,
                 model_active: Arc::clone(&self.active),
                 state: Mutex::new(SessionState {
                     active: first,
@@ -258,7 +267,6 @@ impl Realtime for RealtimeFallbackModel {
                     events: VecDeque::new(),
                     generation: None,
                     closed: false,
-                    audio: None,
                 }),
                 restart_tx,
                 changed: tokio::sync::Notify::new(),

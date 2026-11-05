@@ -26,10 +26,8 @@ pub trait EmitterOutput: Send + Sync {
         timed_transcript: Vec<TranscriptChunk>,
         usage: Option<TokenUsage>,
         characters_count: Option<u64>,
+        provider_request_ids: Vec<String>,
     );
-    /// The provider's request ids, on the synthesis' current span when it is recording.
-    #[host(notify)]
-    fn provider_request_ids(&self, ids: Vec<String>);
     #[host(call)]
     fn closed(&self) -> Result<bool, HostError>;
 }

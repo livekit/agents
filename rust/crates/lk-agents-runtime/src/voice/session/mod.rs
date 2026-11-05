@@ -362,8 +362,9 @@ impl VoiceSession {
                 job,
                 session_span,
                 Arc::new(move |duration| {
-                    let _ =
-                        stalled.send(VoiceCommandOrigin::Host, Command::EventLoopBlocked(duration));
+                    let _ = stalled.queue.send(
+                        lk_agents_voice::agent_session::VoiceEvent::EventLoopBlocked(duration),
+                    );
                 }),
             );
             admission.install(Running {
@@ -397,9 +398,12 @@ impl VoiceSession {
     ) -> Result<BoxFuture<'static, Result<(), StartFailed>>, OpenRefused> {
         let job = self.host.job.clone();
         // The room connects under `session_start`, reserved before the driver opens it.
-        let startup = match &mut *self.stage.lock() {
-            Stage::Ready(ready) => ready.builder.startup(),
-            _ => telemetry::Cx::NONE,
+        let (startup, session) = match &mut *self.stage.lock() {
+            Stage::Ready(ready) => (ready.builder.startup(), ready.builder.in_session()),
+            _ => {
+                let none = telemetry::Cx::NONE;
+                (none.clone(), none)
+            }
         };
         let remote = self.host.remote.clone().map(|config| {
             crate::voice::remote_session::hosting(config, self.time.clone(), self.spawner.clone())
@@ -414,6 +418,7 @@ impl VoiceSession {
             agents: self.agents.clone(),
             spawner: Arc::clone(&self.spawner),
             tasks: Arc::clone(&self.tasks),
+            session,
         };
         let opening =
             self.open(executor, remote.clone(), move |runner| Box::pin(drain.run(runner)))?;

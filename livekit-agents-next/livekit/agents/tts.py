@@ -11,15 +11,12 @@ import time
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Literal
 
-from opentelemetry import trace
-
 from livekit import rtc
 from livekit.agents._generated.tts_availability import (
     AvailabilityChangedEvent as AvailabilityChangedEvent,
 )
 
 from . import _bindings, _core, tokenize, utils
-from ._generated import semconv
 from ._generated.llm_fallback import AvailabilityChanged
 from ._generated.tts import (
     TTS,
@@ -82,6 +79,7 @@ class _EmitterOutput:
         timed_transcript: list[TranscriptChunk],
         usage: TokenUsage | None,
         characters_count: int | None,
+        provider_request_ids: list[str],
     ) -> None:
         if self._ch.closed:
             return
@@ -94,13 +92,9 @@ class _EmitterOutput:
                 is_final=is_final,
                 usage=usage,
                 characters_count=characters_count,
+                provider_request_ids=provider_request_ids,
             )
         )
-
-    def provider_request_ids(self, ids: list[str]) -> None:
-        span = trace.get_current_span()
-        if span.is_recording():
-            span.set_attribute(semconv.LK_PROVIDER_REQUEST_IDS, ids)
 
     def closed(self) -> bool:
         return self._ch.closed

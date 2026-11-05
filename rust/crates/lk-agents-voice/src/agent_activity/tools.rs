@@ -690,7 +690,13 @@ impl VoiceDriver {
         };
         self.activity.tools.reply = Some(ToolReply::Rendering { render, batch, at_tail });
         let rendering = Rendering::ToolReply { render };
-        self.record_effect(VoiceEffect::RenderToolHandlingTemplate { rendering, template, hosted });
+        let turn = self.speech_turn(hosted.speech);
+        self.record_effect(VoiceEffect::RenderToolHandlingTemplate {
+            rendering,
+            template,
+            hosted,
+            turn,
+        });
     }
 
     /// The deferred reply's instructions are rendered: it is scheduled, unless the floor stopped

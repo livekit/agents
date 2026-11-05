@@ -11,13 +11,6 @@ const SCOPES: [(&str, &str); 5] = [
     ("approval", "Approval"),
 ];
 
-/// Proxies whose awaited calls do not take a `cx` yet, run under no span: the realtime model's,
-/// declared in a file with unlanded work. Shrinks only.
-const CX_PENDING: [&str; 2] = [
-    "::lk_agents_abi::llm::realtime::HostRealtime",
-    "::lk_agents_abi::llm::realtime::HostRealtimeSession",
-];
-
 impl Resolver<'_> {
     /// A declaration-model proxy: every method declares its call and its context parameter.
     pub(super) fn proxy_trait(&self, tr: &syn::ItemTrait, proxy: &Entry) -> Result<Proxy, String> {
@@ -303,10 +296,7 @@ impl Resolver<'_> {
             });
         }
         // The span it runs under is named at every call site: forgetting it does not compile.
-        if kind == ProxyCall::Await
-            && !params.iter().any(|p| p.ty == Ty::Cx)
-            && !CX_PENDING.contains(&trait_path)
-        {
+        if kind == ProxyCall::Await && !params.iter().any(|p| p.ty == Ty::Cx) {
             return Err(format!("{at}: an awaited proxy call takes `cx: &telemetry::Cx`"));
         }
         let mut lends = false;

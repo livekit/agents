@@ -40,8 +40,6 @@ pub enum Command {
     /// From `VoiceCommandOrigin::Amd`: the detector attached or released its verdict; its `amd`
     /// span is the session trace's.
     AmdSpan(AmdSpan),
-    /// From the process's loop monitor: the host's event loop stalled this long.
-    EventLoopBlocked(std::time::Duration),
 }
 
 /// The answering-machine detector's span, as the detector reports it.
@@ -219,7 +217,6 @@ impl Command {
             Command::SetStaticKeyterms(_) => "Command::SetStaticKeyterms",
             Command::Run(_) => "Command::Run",
             Command::AmdSpan(_) => "Command::AmdSpan",
-            Command::EventLoopBlocked(_) => "Command::EventLoopBlocked",
             Command::Recorder(RecorderCommand::Attach(_)) => "Command::Recorder::Attach",
             Command::Recorder(RecorderCommand::Detach) => "Command::Recorder::Detach",
         }
@@ -677,8 +674,7 @@ impl Command {
             | Command::SetStaticKeyterms(_)
             | Command::Dtmf(_)
             | Command::Run(_)
-            | Command::AmdSpan(_)
-            | Command::EventLoopBlocked(_) => Vec::new(),
+            | Command::AmdSpan(_) => Vec::new(),
         }
     }
 }

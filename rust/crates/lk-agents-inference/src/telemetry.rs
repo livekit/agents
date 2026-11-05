@@ -426,6 +426,7 @@ impl TtsTrace {
     /// A frame's provider request id, for the attempt in flight.
     pub fn observe(&mut self, audio: &SynthesizedAudio) {
         self.request_id(audio.request_id.clone());
+        audio.provider_request_ids.iter().for_each(|id| self.request_id(id.clone()));
     }
 
     /// A provider request id of the attempt in flight.

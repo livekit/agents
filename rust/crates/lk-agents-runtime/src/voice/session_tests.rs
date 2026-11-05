@@ -308,6 +308,7 @@ impl SessionExecutor for Observing {
         resources: &'a crate::voice::resources::Resources,
         model: Arc<dyn lk_agents_abi::Realtime>,
         disabled: bool,
+        cx: lk_agents_abi::telemetry::Cx,
     ) -> lk_agents_abi::BoxFuture<
         'a,
         Result<
@@ -315,7 +316,7 @@ impl SessionExecutor for Observing {
             DriverError,
         >,
     > {
-        self.0.open_realtime(resources, model, disabled)
+        self.0.open_realtime(resources, model, disabled, cx)
     }
 
     fn own(self: Box<Self>, cores: SessionCores) -> Box<dyn QueueOwner> {

@@ -282,14 +282,16 @@ impl VoiceRuntime {
             E::AnswerExpert { hosted, answer } => {
                 hosted.host.answer_expert(&self.shared.speeches.invocation(&hosted), answer)
             }
-            E::ValidateOutput { speech, validation, candidate, hosted } => {
-                self.validate_output(speech, validation, candidate, hosted)
+            E::ValidateOutput { speech, validation, candidate, hosted, turn } => {
+                let cx = self.shared.turn_cx(turn);
+                self.validate_output(speech, validation, candidate, hosted, cx)
             }
             E::CancelOutputValidation { speech, validation } => {
                 self.cancel_host_callback((speech, HostCallbackId::OutputValidation(validation)))
             }
-            E::RenderToolHandlingTemplate { rendering, template, hosted } => {
-                self.render_tool_handling_template(rendering, template, hosted)
+            E::RenderToolHandlingTemplate { rendering, template, hosted, turn } => {
+                let cx = self.shared.turn_cx(turn);
+                self.render_tool_handling_template(rendering, template, hosted, cx)
             }
             E::CancelToolRefusal { speech, call } => {
                 self.cancel_host_callback((speech, HostCallbackId::ToolRefusal(call)))
@@ -576,6 +578,7 @@ impl VoiceRuntime {
         validation: lk_agents_abi::agent::run::ValidationId,
         candidate: lk_agents_abi::agent::OutputCandidate,
         hosted: HostedTool,
+        cx: telemetry::Cx,
     ) {
         let shared = Arc::clone(&self.shared);
         let cancelled = GenEvent::OutputValidated {
@@ -591,10 +594,7 @@ impl VoiceRuntime {
             let hosted = callback.hosted.as_ref().expect("callback is pending");
             // The voice run retains its live host value, not a persistence snapshot.
             let (verdict, value, _) = crate::output_validation::project(
-                hosted
-                    .host
-                    .validate_output(&telemetry::Cx::NONE, &hosted.invocation, candidate)
-                    .await,
+                hosted.host.validate_output(&cx, &hosted.invocation, candidate).await,
             );
             callback.completed();
             shared.report(GenEvent::OutputValidated { speech, validation, verdict, value });
@@ -611,16 +611,14 @@ impl VoiceRuntime {
         rendering: Rendering,
         template: lk_agents_abi::agent::ToolTemplate,
         hosted: HostedTool,
+        cx: telemetry::Cx,
     ) {
         let shared = Arc::clone(&self.shared);
         let cancelled = GenEvent::ToolHandlingTemplateRendered { rendering, text: None };
         let mut callback = PendingHostCallback::bind(&shared, hosted, cancelled);
         let work = async move {
             let hosted = callback.hosted.as_ref().expect("callback is pending");
-            let rendered = hosted
-                .host
-                .render_template(&telemetry::Cx::NONE, &hosted.invocation, template)
-                .await;
+            let rendered = hosted.host.render_template(&cx, &hosted.invocation, template).await;
             let text = rendered.unwrap_or_else(|e| {
                 log::error!(target: "livekit.agents", "a tool_handling template failed: {e}");
                 None

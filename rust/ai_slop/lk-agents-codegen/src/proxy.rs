@@ -289,8 +289,8 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
             m.lossy
         ));
     }
-    // A proxy not yet taking one (`CX_PENDING`) runs its calls under no span.
-    let cx = cx.unwrap_or_else(|| "&::lk_agents_abi::telemetry::Cx::NONE".to_owned());
+    // The resolver refuses an awaited call without one.
+    let Some(cx) = cx else { return Err(format!("{label}: an awaited proxy call takes a `cx`")) };
     let dispatch = match m.params.iter().find(|p| p.ty == Ty::Cancellation) {
         Some(cancel) => format!(
             "::lk_agents_runtime::host::call_cancellable(&crate::py_calls::Entry, \"{label}\", {scope}, &[{requires}], {cx}, {}, {host_call})",

@@ -65,32 +65,7 @@ impl VoiceDriver {
                 }
             }
             SessionEvent::UserInputTranscribed(t) => {
-                let text = t.ev.best_alternative().map_or("", |a| a.text.as_str());
-                // A transcript opens a turn no speech edge opened.
-                if text.is_empty() && self.activity.user_turn.is_none() {
-                    return;
-                }
-                let received = t.ev.created_at.unwrap_or(wall);
-                let kind = match t.ev.kind {
-                    SpeechEventType::FinalTranscript => telemetry::SttEventType::FinalTranscript,
-                    SpeechEventType::PreflightTranscript => {
-                        telemetry::SttEventType::PreflightTranscript
-                    }
-                    _ => telemetry::SttEventType::InterimTranscript,
-                };
-                self.hear_turn(now, telemetry::UserTurnOrigin::Transcript);
-                if let Some(turn) = &mut self.activity.user_turn {
-                    turn.transcript(received, kind, text, t.ev.request_id.as_str());
-                    // A final heard after the speech re-arms the countdown (1.8.10's `stt`
-                    // trigger).
-                    if t.is_final && !speaking && mode != TurnDetectionMode::Manual {
-                        let stt = telemetry::Endpointing {
-                            source: telemetry::EouSource::Stt,
-                            ..endpointing
-                        };
-                        turn.retriggered(&mut self.telemetry, stt);
-                    }
-                }
+                self.hear_transcript(now, wall, t, endpointing, speaking, mode)
             }
             SessionEvent::OverlappingSpeech(e) => {
                 if let Some(turn) = &mut self.activity.user_turn {
@@ -104,6 +79,36 @@ impl VoiceDriver {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// A transcript opens a turn no speech edge opened; a final heard after the speech re-arms
+    /// the countdown (1.8.10's `stt` trigger).
+    fn hear_transcript(
+        &mut self,
+        now: Ts,
+        wall: f64,
+        t: &crate::events::UserTranscriptEvent,
+        endpointing: telemetry::Endpointing,
+        speaking: bool,
+        mode: TurnDetectionMode,
+    ) {
+        let text = t.ev.best_alternative().map_or("", |a| a.text.as_str());
+        if text.is_empty() && self.activity.user_turn.is_none() {
+            return;
+        }
+        let received = t.ev.created_at.unwrap_or(wall);
+        let kind = match t.ev.kind {
+            SpeechEventType::FinalTranscript => telemetry::SttEventType::FinalTranscript,
+            SpeechEventType::PreflightTranscript => telemetry::SttEventType::PreflightTranscript,
+            _ => telemetry::SttEventType::InterimTranscript,
+        };
+        self.hear_turn(now, telemetry::UserTurnOrigin::Transcript);
+        let Some(turn) = &mut self.activity.user_turn else { return };
+        turn.transcript(received, kind, text, t.ev.request_id.as_str());
+        if t.is_final && !speaking && mode != TurnDetectionMode::Manual {
+            let stt = telemetry::Endpointing { source: telemetry::EouSource::Stt, ..endpointing };
+            turn.retriggered(&mut self.telemetry, stt);
         }
     }
 
@@ -188,6 +193,12 @@ impl super::AgentActivity {
 /// The agent turns: the speech's scheduler entry owns its turn until the speech's release, then
 /// the record of the tool calls it started that still run.
 impl VoiceDriver {
+    /// The span speech `speech`'s host callbacks run under: its turn, while it is held.
+    pub(crate) fn speech_turn(&mut self, speech: SpeechId) -> Option<telemetry::SpanContext> {
+        let trace = &self.telemetry;
+        self.activity.agent_turn(speech).and_then(|turn| turn.context(trace))
+    }
+
     /// A speech's first generation: its turn opens, or continues the discarded preemptive
     /// generation's. The runtime's work for it nests under the returned span.
     pub(crate) fn agent_turn_started(
@@ -342,71 +353,79 @@ impl VoiceDriver {
         let label = self.activity.agent.clone();
         let reserved_update = self.activity.arriving.as_ref().and_then(|a| a.update);
         match kind {
-            HookKind::OnEnter => {
-                let llm = self.session.llm.as_ref().map(|l| &l.provider);
-                let decl = telemetry::StartAgentActivity {
-                    agent_label: label.clone(),
-                    operation: telemetry::GenAiOperation::CreateAgent,
-                    agent_name: label.clone(),
-                    provider: llm.and_then(|l| {
-                        lk_agents_core::telemetry::gen_ai::provider_name(&l.provider)
-                    }),
-                    model: llm.map(|l| l.model.clone()),
-                };
-                let reserved = (self.activity.arriving.take())
-                    .filter(|a| a.agent == label)
-                    .map(|a| a.activity);
-                let (under, activity) = match &self.session.starting {
-                    Some(start) if self.activity.update.is_none() => (
-                        telemetry::Under::Start,
-                        match reserved {
-                            Some(r) => self.telemetry.open_in_reserved(&start.span, r, decl),
-                            None => self.telemetry.open_in(&start.span, decl),
-                        },
-                    ),
-                    _ => {
-                        let previous = String::new();
-                        let agent = label.clone();
-                        let update = telemetry::UpdateAgent {
-                            previous_agent_label: previous,
-                            agent_label: agent,
-                        };
-                        self.agent_update(reserved_update, update)?;
-                        let update = &self.activity.update.as_ref()?.span;
-                        let activity = match reserved {
-                            Some(r) => self.telemetry.open_in_reserved(update, r, decl),
-                            None => self.telemetry.open_in(update, decl),
-                        };
-                        (telemetry::Under::Update, activity)
-                    }
-                };
-                self.activity.running_activity = self.telemetry.context(&activity);
-                let hook =
-                    self.telemetry.open_in(&activity, telemetry::OnEnter { agent_label: label });
-                Some(telemetry::HookSpan::Enter { under, activity, hook })
-            }
-            HookKind::OnExit => {
-                let decl = telemetry::DrainAgentActivity { agent_label: label.clone() };
-                let (under, drain) = match &self.session.closing_span {
-                    Some(close) => (telemetry::Under::Close, self.telemetry.open_in(close, decl)),
-                    None => {
-                        let update = telemetry::UpdateAgent {
-                            previous_agent_label: label.clone(),
-                            agent_label: arriving.unwrap_or_default().to_owned(),
-                        };
-                        self.agent_update(reserved_update, update)?;
-                        let update = &self.activity.update.as_ref()?.span;
-                        (telemetry::Under::Update, self.telemetry.open_in(update, decl))
-                    }
-                };
-                let hook = self.telemetry.open_in(&drain, telemetry::OnExit { agent_label: label });
-                Some(telemetry::HookSpan::Exit { under, drain, hook })
-            }
+            HookKind::OnEnter => self.on_enter_span(label, reserved_update),
+            HookKind::OnExit => self.on_exit_span(label, arriving, reserved_update),
             HookKind::OnUserTurnCompleted
             | HookKind::OnUserTurnExceeded
             | HookKind::FillerSource
             | HookKind::FunctionToolsExecuted => None,
         }
+    }
+
+    /// `on_enter` runs in the agent's new activity: under `session_start` for the first agent,
+    /// else under the switch's `update_agent`.
+    fn on_enter_span(
+        &mut self,
+        label: String,
+        reserved_update: Option<telemetry::Reserved<telemetry::UpdateAgent>>,
+    ) -> Option<telemetry::HookSpan> {
+        let llm = self.session.llm.as_ref().map(|l| &l.provider);
+        let decl = telemetry::StartAgentActivity {
+            agent_label: label.clone(),
+            operation: telemetry::GenAiOperation::CreateAgent,
+            agent_name: label.clone(),
+            provider: llm
+                .and_then(|l| lk_agents_core::telemetry::gen_ai::provider_name(&l.provider)),
+            model: llm.map(|l| l.model.clone()),
+        };
+        let reserved =
+            (self.activity.arriving.take()).filter(|a| a.agent == label).map(|a| a.activity);
+        let (under, activity) = match &self.session.starting {
+            Some(start) if self.activity.update.is_none() => (
+                telemetry::Under::Start,
+                open_activity(&mut self.telemetry, &start.span, reserved, decl),
+            ),
+            _ => {
+                let update = telemetry::UpdateAgent {
+                    previous_agent_label: String::new(),
+                    agent_label: label.clone(),
+                };
+                self.agent_update(reserved_update, update)?;
+                let update = &self.activity.update.as_ref()?.span;
+                (
+                    telemetry::Under::Update,
+                    open_activity(&mut self.telemetry, update, reserved, decl),
+                )
+            }
+        };
+        self.activity.running_activity = self.telemetry.context(&activity);
+        let hook = self.telemetry.open_in(&activity, telemetry::OnEnter { agent_label: label });
+        Some(telemetry::HookSpan::Enter { under, activity, hook })
+    }
+
+    /// `on_exit` runs in the leaving agent's drain: under `session_close` when the session
+    /// closes, else under the switch's `update_agent`.
+    fn on_exit_span(
+        &mut self,
+        label: String,
+        arriving: Option<&str>,
+        reserved_update: Option<telemetry::Reserved<telemetry::UpdateAgent>>,
+    ) -> Option<telemetry::HookSpan> {
+        let decl = telemetry::DrainAgentActivity { agent_label: label.clone() };
+        let (under, drain) = match &self.session.closing_span {
+            Some(close) => (telemetry::Under::Close, self.telemetry.open_in(close, decl)),
+            None => {
+                let update = telemetry::UpdateAgent {
+                    previous_agent_label: label.clone(),
+                    agent_label: arriving.unwrap_or_default().to_owned(),
+                };
+                self.agent_update(reserved_update, update)?;
+                let update = &self.activity.update.as_ref()?.span;
+                (telemetry::Under::Update, self.telemetry.open_in(update, decl))
+            }
+        };
+        let hook = self.telemetry.open_in(&drain, telemetry::OnExit { agent_label: label });
+        Some(telemetry::HookSpan::Exit { under, drain, hook })
     }
 
     /// The callback returned, raised or timed out: its span ends, and the activity it ran in; the
@@ -512,3 +531,20 @@ impl VoiceDriver {
 #[cfg(test)]
 #[path = "spans_tests.rs"]
 mod tests;
+
+/// An agent's activity, opened as the span its toolsets reserved when they did.
+fn open_activity<P>(
+    trace: &mut telemetry::Trace,
+    parent: &telemetry::ManualSpan<P>,
+    reserved: Option<telemetry::Reserved<telemetry::StartAgentActivity>>,
+    decl: telemetry::StartAgentActivity,
+) -> telemetry::ManualSpan<telemetry::StartAgentActivity>
+where
+    P: lk_agents_abi::telemetry::decl::SpanDecl
+        + lk_agents_abi::telemetry::decl::ParentOf<telemetry::StartAgentActivity>,
+{
+    match reserved {
+        Some(r) => trace.open_in_reserved(parent, r, decl),
+        None => trace.open_in(parent, decl),
+    }
+}

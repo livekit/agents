@@ -658,7 +658,14 @@ impl VoiceDriver {
         };
         let operation = self.activity.tools.mint_operation();
         let hosted = HostedTool::of(&agent, self.session.ids.session(), speech, operation, None);
-        self.record_effect(VoiceEffect::ValidateOutput { speech, validation, candidate, hosted });
+        let turn = self.speech_turn(speech);
+        self.record_effect(VoiceEffect::ValidateOutput {
+            speech,
+            validation,
+            candidate,
+            hosted,
+            turn,
+        });
     }
 
     /// The reply's agent answered an output candidate.
@@ -700,7 +707,13 @@ impl VoiceDriver {
         let session = self.session.ids.session();
         let hosted = HostedTool::of(&agent, session, speech, operation, item.as_ref());
         let rendering = Rendering::Refusal { speech, call };
-        self.record_effect(VoiceEffect::RenderToolHandlingTemplate { rendering, template, hosted });
+        let turn = self.speech_turn(speech);
+        self.record_effect(VoiceEffect::RenderToolHandlingTemplate {
+            rendering,
+            template,
+            hosted,
+            turn,
+        });
     }
 
     /// The host rendered a template: a refusal answers its call, the deferred reply's

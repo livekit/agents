@@ -51,12 +51,12 @@ pub(super) struct SessionState {
     pub(super) events: VecDeque<Event>,
     pub(super) generation: Option<OpenGeneration>,
     pub(super) closed: bool,
-    /// Where each child reports the input audio it drops.
-    pub(super) audio: Option<lk_agents_abi::telemetry::Cx>,
 }
 
 pub struct FallbackSession {
     pub(super) children: Vec<ChainModel>,
+    /// What every child session works under, the one swapped in included.
+    pub(super) cx: lk_agents_abi::telemetry::Cx,
     pub(super) priority: Vec<ResourceId>,
     pub(super) cooldown: std::time::Duration,
     pub(super) attempt_timeout: Option<std::time::Duration>,
@@ -198,6 +198,7 @@ impl FallbackSession {
         }
         let child = &self.children[index];
         let open = child.open(
+            self.cx.clone(),
             self.turn_detection_disabled,
             self.anchor,
             &*self.clock,
@@ -243,9 +244,6 @@ impl FallbackSession {
         match outcome {
             Ok(()) => {
                 st.active = opened.expect("successful realtime open").1;
-                if let Some(cx) = st.audio.clone() {
-                    st.active.observe(cx);
-                }
                 st.active_index = target;
                 self.model_active.store(target, std::sync::atomic::Ordering::Relaxed);
                 st.events.push_back(Event::SessionSwapped { regenerate: self.regenerate_on_swap });
@@ -521,11 +519,5 @@ impl RealtimeSession for FallbackSession {
             self.changed.notify_one();
             active.aclose().await;
         })
-    }
-
-    fn observe(&self, cx: lk_agents_abi::telemetry::Cx) {
-        let mut st = self.lock();
-        st.active.observe(cx.clone());
-        st.audio = Some(cx);
     }
 }

@@ -81,6 +81,8 @@ class SynthesizedAudio:
     """Token usage the provider reported for the segment, on its final frame"""
     characters_count: int | None = None
     """Characters the provider billed for the segment, on its final frame"""
+    provider_request_ids: list[str] = field(default_factory=list)
+    """The provider's request ids learnt since the previous frame, in the order learnt"""
 
 
 class TTSError(BaseModel):

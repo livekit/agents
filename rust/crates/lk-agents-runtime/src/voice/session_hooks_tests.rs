@@ -171,7 +171,9 @@ async fn answered(hooks: &Arc<ScriptedHooks>, call: HookCall) -> HookOutcome {
         Arc::new(lk_agents_net::task::TokioSpawner::new(tokio::runtime::Handle::current()));
     let hooks: Arc<dyn SessionHooks> = hooks.clone();
     let tasks = Arc::new(lk_agents_net::task::TaskSet::default());
-    super::super::answer_hook(hooks, call, agents, handle.api.clone(), spawner, tasks).await;
+    let session = lk_agents_abi::telemetry::Cx::NONE;
+    super::super::answer_hook(hooks, call, agents, handle.api.clone(), spawner, tasks, session)
+        .await;
     while let Ok(event) = runtime.queue.try_recv() {
         if let VoiceRuntimeEvent::Input(VoiceEvent::Host(Sent {
             command: Command::HookDone { outcome, .. },

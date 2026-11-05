@@ -161,6 +161,7 @@ impl Realtime for FakeRealtime {
     /// Running when it returns, as the real session is: it connects in the background.
     fn session(
         &self,
+        _: lk_agents_abi::telemetry::Cx,
         disabled: bool,
     ) -> BoxFuture<'_, Result<Arc<dyn RealtimeSession>, ProviderError>> {
         Box::pin(async move {

@@ -44,12 +44,14 @@ impl Realtime for DuplexAdapterModel {
     /// Turn detection is inherent to a duplex model, so it is never asked to be off.
     fn session(
         &self,
+        cx: telemetry::Cx,
         _turn_detection_disabled: bool,
     ) -> lk_agents_abi::BoxFuture<'_, Result<Arc<dyn RealtimeSession>, ProviderError>> {
         Box::pin(async move {
             let gate = SessionGate::new(self.host.gate().map_err(provider_error)?);
-            let view = self.host.session(&telemetry::Cx::NONE).await.map_err(provider_error)?;
+            let view = self.host.session(&cx).await.map_err(provider_error)?;
             let host = HostSession::open(view, self.label.clone(), &self.spawner);
+            host.observe(cx);
             let segmenter = Segmenter::new(
                 self.label.clone(),
                 self.audio_timeout,
@@ -292,10 +294,6 @@ impl RealtimeSession for DuplexSession {
         if !self.lock().closed {
             self.host.head(frame);
         }
-    }
-
-    fn observe(&self, cx: telemetry::Cx) {
-        self.host.observe(cx);
     }
 
     fn next_event(&self) -> lk_agents_abi::BoxFuture<'_, Option<Event>> {

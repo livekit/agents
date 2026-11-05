@@ -16,6 +16,9 @@ pub(super) struct HostDrain {
     pub(super) agents: HostAgents,
     pub(super) spawner: Arc<dyn Spawner>,
     pub(super) tasks: Arc<TaskSet>,
+    /// The session's context under its `agent_session`: what a hook runs under without a span
+    /// of its own.
+    pub(super) session: telemetry::Cx,
 }
 
 impl HostDrain {
@@ -66,6 +69,7 @@ impl HostDrain {
             api,
             Arc::clone(&self.spawner),
             Arc::clone(&self.tasks),
+            self.session.clone(),
         );
         let mut answer = Box::pin(answer);
         let first =
@@ -122,12 +126,16 @@ pub(super) async fn answer_hook(
     api: Tx,
     spawner: Arc<dyn Spawner>,
     tasks: Arc<TaskSet>,
+    session: telemetry::Cx,
 ) {
     use lk_agents_voice::agent_session::{HookId, HookOutcome};
     let id = call.id();
     let kind = call.kind();
     // A hook runs with its span current: the application's spans inside it nest under it.
-    let under = |span| telemetry::Cx::NONE.continuing(span);
+    let under = |span: Option<telemetry::SpanContext>| match span {
+        Some(span) => session.clone().continuing(Some(span)),
+        None => session.clone(),
+    };
     let outcome: Result<HookOutcome, HostError> = match call {
         HookCall::OnEnter { agent, scope, span, .. } => match agents.get(&agent, scope) {
             Some(agent) => {
@@ -170,7 +178,7 @@ pub(super) async fn answer_hook(
         HookCall::OnUserTurnExceeded { agent, scope, event, .. } => match agents.get(&agent, scope)
         {
             Some(agent) => hooks
-                .on_user_turn_exceeded(&telemetry::Cx::NONE, &agent, &event)
+                .on_user_turn_exceeded(&session, &agent, &event)
                 .await
                 .map(|()| HookOutcome::Returned),
             None => Ok(HookOutcome::Failed),
@@ -181,7 +189,7 @@ pub(super) async fn answer_hook(
             let outputs =
                 event.function_call_outputs.into_iter().map(ChatItem::FunctionCallOutput).collect();
             hooks
-                .function_tools_executed(&telemetry::Cx::NONE, calls, outputs)
+                .function_tools_executed(&session, calls, outputs)
                 .await
                 .map(|reply_required| HookOutcome::FunctionToolsExecuted { reply_required })
         }
@@ -189,14 +197,13 @@ pub(super) async fn answer_hook(
         HookCall::FillerSource { source: None, .. } => {
             Ok(HookOutcome::Filler { text: None, spoke: false })
         }
-        HookCall::FillerSource { source: Some(source), step, .. } => hooks
-            .filler_source(&telemetry::Cx::NONE, &source, step)
-            .await
-            .map(|reply| match reply {
+        HookCall::FillerSource { source: Some(source), step, .. } => {
+            hooks.filler_source(&session, &source, step).await.map(|reply| match reply {
                 FillerReply::Text(text) => HookOutcome::Filler { text: Some(text), spoke: false },
                 FillerReply::Spoke => HookOutcome::Filler { text: None, spoke: true },
                 FillerReply::Declined => HookOutcome::Filler { text: None, spoke: false },
-            }),
+            })
+        }
     };
     // A raised hook carries its exception, which its span records.
     let outcome = outcome.unwrap_or_else(|e| {

@@ -96,12 +96,14 @@ pub trait SessionExecutor: Send {
         cx: telemetry::Cx,
     ) -> lk_agents_abi::BoxFuture<'a, Result<OpeningLegs, DriverError>>;
 
-    /// Opens the model with the core's turn-detection choice and registers its audio sink.
+    /// Opens the model under `cx` with the core's turn-detection choice and registers its audio
+    /// sink.
     fn open_realtime<'a>(
         &'a mut self,
         resources: &'a Resources,
         model: Arc<dyn lk_agents_abi::Realtime>,
         disabled: bool,
+        cx: telemetry::Cx,
     ) -> lk_agents_abi::BoxFuture<'a, Result<RealtimeLeg, DriverError>>;
 
     /// Takes the started cores over.
@@ -284,6 +286,12 @@ impl DriverBuilder {
         self.trace.clone().under::<telemetry::SessionStart>(start)
     }
 
+    /// The context the session's own host calls run under: its `agent_session`.
+    pub fn in_session(&mut self) -> telemetry::Cx {
+        let session = self.opening().session.context;
+        self.trace.clone().under::<telemetry::AgentSession>(session)
+    }
+
     /// `gen_ai.conversation.id`: the call's thread, else the job's room session id; the session's
     /// own id only outside a job.
     fn conversation(&self, session_id: &str) -> String {
@@ -330,10 +338,7 @@ impl DriverBuilder {
             .open_legs(&self.resources, self.stt.clone(), self.vad.clone(), cx.clone())
             .await?;
         self.install_legs(&mut sinks, opened);
-        let realtime = self.open_realtime(executor, &mut sinks).await?;
-        if let Some(realtime) = &realtime {
-            realtime.session.observe(cx);
-        }
+        let realtime = self.open_realtime(executor, &mut sinks, cx).await?;
         let realtime_events = realtime.as_ref().map(|realtime| Arc::clone(&realtime.session));
         let Sinks { by_channel: sinks, forwarder } = sinks;
 
@@ -561,6 +566,7 @@ impl DriverBuilder {
         &mut self,
         executor: &mut dyn SessionExecutor,
         sinks: &mut Sinks,
+        cx: telemetry::Cx,
     ) -> Result<Option<RealtimeStart>, DriverError> {
         let Some(model) = &self.realtime else {
             return Ok(None);
@@ -586,7 +592,7 @@ impl DriverBuilder {
         );
         self.config.effective.turn.owner = Some(owner);
         let (session, sink) =
-            executor.open_realtime(&self.resources, Arc::clone(model), disabled).await?;
+            executor.open_realtime(&self.resources, Arc::clone(model), disabled, cx).await?;
         sinks.insert(AudioChannel::Realtime, sink);
         Ok(Some(RealtimeStart { session, caps, disabled, resolved: side.turn_detection_mode }))
     }

@@ -37,7 +37,11 @@ impl EmitterOutput for Output {
         _timed_transcript: Vec<TranscriptChunk>,
         _usage: Option<TokenUsage>,
         _characters_count: Option<u64>,
+        provider_request_ids: Vec<String>,
     ) {
+        if !provider_request_ids.is_empty() {
+            self.ids.lock().push(provider_request_ids);
+        }
         self.sent.lock().push(Sent {
             samples: frame.samples_per_channel,
             channels: frame.num_channels,
@@ -49,10 +53,6 @@ impl EmitterOutput for Output {
             emitter.num_segments();
             emitter.flush().unwrap();
         }
-    }
-
-    fn provider_request_ids(&self, ids: Vec<String>) {
-        self.ids.lock().push(ids);
     }
 
     fn closed(&self) -> Result<bool, HostError> {
@@ -102,7 +102,7 @@ async fn a_consumer_re_entering_from_send_is_queued_behind_the_delivery() {
 }
 
 // Catches: a machine error discarding the effects its call already produced, or the provider id
-// noted before a rejected `start_segment` never reaching the span.
+// noted before a rejected `start_segment` never reaching a frame (the span reads them there).
 #[tokio::test]
 async fn effects_before_a_machine_error_are_delivered_and_the_error_follows() {
     let output = Arc::new(Output::default());
@@ -113,10 +113,11 @@ async fn effects_before_a_machine_error_are_delivered_and_the_error_follows() {
     let error = emitter.start_segment("p2".into()).unwrap_err();
     assert_eq!(error, EmitterError::SegmentAlreadyOpen);
     assert!(output.real_and_finals().0 > 0, "the frames from the push reached the host");
+    emitter.end_segment().unwrap();
     assert_eq!(
         *output.ids.lock(),
-        vec![vec!["p1".to_owned()], vec!["p1".to_owned(), "p2".to_owned()]],
-        "each new id is written once, including the one noted before the rejection"
+        vec![vec!["p1".to_owned()], vec!["p2".to_owned()]],
+        "each new id rides one frame, including the one noted before the rejection"
     );
 }
 

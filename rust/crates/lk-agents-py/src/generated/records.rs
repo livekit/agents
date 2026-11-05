@@ -20299,6 +20299,23 @@ pub mod tts {
             },
             || None,
         )?;
+        let provider_request_ids =
+            crate::py_values::attr_with(obj, "SynthesizedAudio", "provider_request_ids", |v| {
+                if v.is_instance_of::<::pyo3::types::PyList>()
+                    || v.is_instance_of::<::pyo3::types::PyTuple>()
+                {
+                    v.try_iter()?
+                        .map(|item| {
+                            let item = &item?;
+                            item.extract::<::std::string::String>()
+                        })
+                        .collect::<PyResult<Vec<_>>>()
+                } else {
+                    Err(::pyo3::exceptions::PyTypeError::new_err(
+                        "SynthesizedAudio.provider_request_ids: expected a list or tuple",
+                    ))
+                }
+            })?;
         let started_time = __source_frame_userdata
             .cast::<pyo3::types::PyDict>()?
             .get_item(
@@ -20346,6 +20363,7 @@ pub mod tts {
             delta_text,
             usage,
             characters_count,
+            provider_request_ids,
             started_time,
             timed_transcript,
             encoding,
@@ -20393,6 +20411,18 @@ pub mod tts {
                 None => py.None().into_bound(py),
                 Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
             },
+        )?;
+        kwargs.set_item(
+            "provider_request_ids",
+            ::pyo3::types::PyList::new(
+                py,
+                value
+                    .provider_request_ids
+                    .into_iter()
+                    .map(|x| ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py))
+                    .collect::<PyResult<Vec<_>>>()?,
+            )?
+            .into_any(),
         )?;
         if let Some(x) = value.started_time {
             __emitted_frame.getattr("userdata")?.set_item(

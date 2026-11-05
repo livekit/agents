@@ -316,6 +316,14 @@ pub struct SessionShared {
 }
 
 impl SessionShared {
+    /// What a speech's host calls run under: its turn, else the session.
+    pub fn turn_cx(&self, turn: Option<telemetry::SpanContext>) -> telemetry::Cx {
+        match turn {
+            Some(turn) => self.trace.clone().under::<telemetry::AgentTurn>(turn),
+            None => self.trace.clone(),
+        }
+    }
+
     pub fn mint_item_id(&self) -> String {
         let n = self.gen_ids.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         format!("{}_item_g{n:04}", self.session_id)

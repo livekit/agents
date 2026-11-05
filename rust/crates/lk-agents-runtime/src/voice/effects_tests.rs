@@ -168,6 +168,7 @@ async fn cancelling_one_validation_preserves_other_callbacks_until_speech_cancel
             validation: ValidationId(id),
             candidate: OutputCandidate::Text("candidate".into()),
             hosted: hosted(host, speech, id),
+            turn: None,
         });
     }
     first.started.notified().await;
@@ -223,11 +224,13 @@ async fn speech_cancellation_ends_refusal_rendering_but_preserves_deferred_reply
         rendering: Rendering::Refusal { speech, call: lk_agents_core::agent_run::CallId(1) },
         template: template(),
         hosted: hosted(refusal.clone(), speech, 1),
+        turn: None,
     });
     runtime.perform_voice_effect(VoiceEffect::RenderToolHandlingTemplate {
         rendering: Rendering::ToolReply { render: 2 },
         template: template(),
         hosted: hosted(deferred.clone(), speech, 2),
+        turn: None,
     });
     refusal.started.notified().await;
     deferred.started.notified().await;
@@ -273,6 +276,7 @@ async fn cancelling_one_refusal_reports_its_receipt_and_preserves_other_renderer
             rendering,
             template: ToolTemplate::ReplyAtTail { call_ids: vec!["reused".into()] },
             hosted: hosted(host, owner, operation as u64 + 1),
+            turn: None,
         });
     }
     for host in [&first, &sibling, &another_speech, &deferred] {
@@ -318,6 +322,7 @@ async fn releasing_a_speech_cancels_its_callbacks_but_preserves_detached_tool_wo
         validation: ValidationId(1),
         candidate: OutputCandidate::Text("candidate".into()),
         hosted: hosted(validation.clone(), speech, 1),
+        turn: None,
     });
     for (rendering, host) in [
         (
@@ -330,6 +335,7 @@ async fn releasing_a_speech_cancels_its_callbacks_but_preserves_detached_tool_wo
             rendering,
             template: ToolTemplate::ReplyAtTail { call_ids: vec!["call".into()] },
             hosted: hosted(host, speech, 2),
+            turn: None,
         });
     }
     let running_body = body.clone();

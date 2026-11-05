@@ -172,6 +172,7 @@ fn label(event: &VoiceRuntimeEvent) -> &'static str {
             VoiceEvent::InputStarted { .. } => "InputStarted",
             VoiceEvent::GateSilenced(_) => "GateSilenced",
             VoiceEvent::InputCensus(_) => "InputCensus",
+            VoiceEvent::EventLoopBlocked(_) => "EventLoopBlocked",
             VoiceEvent::StorageReloaded { .. } => "StorageReloaded",
             VoiceEvent::StorageSettled(_) => "StorageSettled",
             VoiceEvent::StorageAbandoned(_) => "StorageAbandoned",

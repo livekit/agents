@@ -264,16 +264,20 @@ fn misuse_of_the_lifecycle_is_refused() {
 #[test]
 fn a_provider_id_is_recorded_even_when_its_segment_is_rejected() {
     let mut fx = Fx::streaming("p1");
-    assert_eq!(fx.em.take_provider_ids_update(), Some(vec!["p1".to_string()]));
-
     // No byte was pushed, so "p1" is still open (see the quirk above) and this is rejected.
     assert!(fx.em.start_segment("p2").is_err());
-    assert_eq!(
-        fx.em.take_provider_ids_update(),
-        Some(vec!["p1".to_string(), "p2".to_string()]),
-        "the id was noted before the segment was refused"
-    );
-    assert_eq!(fx.em.take_provider_ids_update(), None, "and it is published once, not per call");
+    assert_eq!(fx.em.provider_request_ids(), ["p1", "p2"], "noted before the segment was refused");
+}
+
+// Catches: provider ids never reaching the frames the request's span reads, or repeated on
+// every frame.
+#[test]
+fn a_frame_carries_the_provider_ids_learnt_since_the_previous_one() {
+    let mut fx = Fx::streaming("p1");
+    fx.push(4800).flush();
+    let ids: Vec<_> = sent(&fx.eff).iter().map(|a| a.provider_request_ids.clone()).collect();
+    assert_eq!(ids.first().map(Vec::as_slice), Some(["p1".to_string()].as_slice()), "{ids:?}");
+    assert!(ids.iter().skip(1).all(Vec::is_empty), "{ids:?}");
 }
 
 // --------------------------------------------------------------------- identity and ids

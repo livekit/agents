@@ -141,6 +141,8 @@ pub enum VoiceEffect {
         validation: lk_agents_abi::agent::run::ValidationId,
         candidate: lk_agents_abi::agent::OutputCandidate,
         hosted: crate::tool_executor::HostedTool,
+        /// The speech's turn, which the callback runs under.
+        turn: Option<crate::telemetry::SpanContext>,
     },
     /// Cancel one output validator, leaving unrelated callbacks and background tools running.
     CancelOutputValidation {
@@ -154,6 +156,8 @@ pub enum VoiceEffect {
         rendering: crate::tool_executor::Rendering,
         template: lk_agents_abi::agent::ToolTemplate,
         hosted: crate::tool_executor::HostedTool,
+        /// The speech's turn, which the rendering runs under; `None` once it ended.
+        turn: Option<crate::telemetry::SpanContext>,
     },
     /// Cancel only this call's refusal renderer. Deferred tool-reply rendering and other
     /// calls keep their independent lifetimes. Idempotent when no renderer is pending.

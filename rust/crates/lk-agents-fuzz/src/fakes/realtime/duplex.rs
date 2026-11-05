@@ -102,7 +102,11 @@ impl Realtime for FakeDuplex {
     }
 
     /// Turn detection is the model's own: it is never asked to be off.
-    fn session(&self, _: bool) -> BoxFuture<'_, Result<Arc<dyn RealtimeSession>, ProviderError>> {
+    fn session(
+        &self,
+        _: lk_agents_abi::telemetry::Cx,
+        _: bool,
+    ) -> BoxFuture<'_, Result<Arc<dyn RealtimeSession>, ProviderError>> {
         Box::pin(async move {
             let model = Arc::new(Model {
                 registry: self.registry.clone(),

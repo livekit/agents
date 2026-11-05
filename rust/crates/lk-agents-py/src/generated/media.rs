@@ -785,6 +785,7 @@ impl ::lk_agents_abi::media::emitter::EmitterOutput for EmitterOutputProxy {
         timed_transcript: ::std::vec::Vec<::lk_agents_abi::TranscriptChunk>,
         usage: ::std::option::Option<::lk_agents_abi::usage::TokenUsage>,
         characters_count: ::std::option::Option<u64>,
+        provider_request_ids: ::std::vec::Vec<::std::string::String>,
     ) {
         let host = ::std::sync::Arc::clone(&self.host);
         let frame_arg = frame;
@@ -794,6 +795,7 @@ impl ::lk_agents_abi::media::emitter::EmitterOutput for EmitterOutputProxy {
         let timed_transcript_arg = timed_transcript;
         let usage_arg = usage;
         let characters_count_arg = characters_count;
+        let provider_request_ids_arg = provider_request_ids;
         ::lk_agents_runtime::host::notify(
             &self.notifier,
             "EmitterOutput.send",
@@ -801,7 +803,7 @@ impl ::lk_agents_abi::media::emitter::EmitterOutput for EmitterOutputProxy {
             &[],
             false,
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 7] = [
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 8] = [
                     crate::generated::records::rtc_frames::audio_frame_to_py(py, frame_arg)?,
                     ::pyo3::IntoPyObjectExt::into_bound_py_any(request_id_arg, py)?,
                     ::pyo3::IntoPyObjectExt::into_bound_py_any(segment_id_arg, py)?,
@@ -821,29 +823,9 @@ impl ::lk_agents_abi::media::emitter::EmitterOutput for EmitterOutputProxy {
                         Some(x) => crate::generated::records::usage::token_usage_to_py(py, x)?,
                     },
                     ::pyo3::IntoPyObjectExt::into_bound_py_any(characters_count_arg, py)?,
+                    ::pyo3::IntoPyObjectExt::into_bound_py_any(provider_request_ids_arg, py)?,
                 ];
                 Ok((host.bind(py).getattr("send")?, ::pyo3::types::PyTuple::new(py, args)?, None))
-            }),
-        );
-    }
-
-    fn provider_request_ids(&self, ids: ::std::vec::Vec<::std::string::String>) {
-        let host = ::std::sync::Arc::clone(&self.host);
-        let ids_arg = ids;
-        ::lk_agents_runtime::host::notify(
-            &self.notifier,
-            "EmitterOutput.provider_request_ids",
-            &self.context,
-            &[],
-            false,
-            ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
-                    [::pyo3::IntoPyObjectExt::into_bound_py_any(ids_arg, py)?];
-                Ok((
-                    host.bind(py).getattr("provider_request_ids")?,
-                    ::pyo3::types::PyTuple::new(py, args)?,
-                    None,
-                ))
             }),
         );
     }
