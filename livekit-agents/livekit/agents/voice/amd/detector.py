@@ -9,7 +9,7 @@ from opentelemetry import trace
 
 from livekit import rtc
 
-from ...inference import LLM as _InferenceLLM, STT as _InferenceSTT, LLMModels
+from ...inference import STT as _InferenceSTT
 from ...job import get_job_context
 from ...llm import LLM as _LLM
 from ...log import logger
@@ -36,6 +36,7 @@ from .classifier import (
 )
 
 if TYPE_CHECKING:
+    from ...inference import LLM as _InferenceLLM, LLMModels
     from ...llm import LLM
     from ...stt import STT
     from ..agent_session import AgentSession
@@ -584,6 +585,8 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
     ) -> _AMDClassifier | None:
         _llm: _InferenceLLM | _LLM | None = None
         if isinstance(self._llm_config, str):
+            from ...inference import LLM as _InferenceLLM
+
             _llm = _InferenceLLM(self._llm_config)
         elif isinstance(self._llm_config, _LLM):
             _llm = self._llm_config
