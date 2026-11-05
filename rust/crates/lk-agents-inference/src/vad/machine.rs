@@ -170,11 +170,7 @@ impl VadMachine {
     /// The runtime resets the model's recurrent state with it. Speech in progress ends first, so
     /// the session is never left speaking.
     pub fn reset(&mut self) -> Option<VadOutput> {
-        let ended = self.pub_speaking.then(|| {
-            self.pub_silence_duration = self.silence_threshold_duration;
-            let speech = (self.pub_speech_duration - self.silence_threshold_duration).max(0.0);
-            self.edge(VadEventType::EndOfSpeech, speech)
-        });
+        let ended = self.pub_speaking.then(|| self.end_at_boundary());
         self.speech_buffer_index = 0;
         self.speech_buffer_max_reached = false;
         self.speech_buffer.fill(0);
@@ -195,6 +191,26 @@ impl VadMachine {
             .then(|| new_resampler(self.input_sample_rate))
             .flatten();
         ended
+    }
+
+    /// Speech in progress ends at the reset, after the audio received but not yet scored (the
+    /// window in flight and an incomplete last window): it is the tail of the speech.
+    fn end_at_boundary(&mut self) -> VadOutput {
+        let tail = self.input.make_contiguous();
+        let copied = tail.len().min(self.speech_buffer.len() - self.speech_buffer_index);
+        self.speech_buffer[self.speech_buffer_index..self.speech_buffer_index + copied]
+            .copy_from_slice(&tail[..copied]);
+        self.speech_buffer_index += copied;
+        let duration = tail.len() as f64 / f64::from(self.input_sample_rate);
+        self.pub_current_sample += (duration * f64::from(MODEL_SAMPLE_RATE)).round() as u64;
+        self.pub_timestamp += duration;
+        self.pub_speech_duration += duration;
+        if self.silence_threshold_duration > 0.0 {
+            self.silence_threshold_duration += duration;
+        }
+        self.pub_silence_duration = self.silence_threshold_duration;
+        let speech = (self.pub_speech_duration - self.silence_threshold_duration).max(0.0);
+        self.edge(VadEventType::EndOfSpeech, speech)
     }
 
     /// `_VADStream.update_options`: the thresholds apply from the next window; once the sample rate
@@ -602,6 +618,24 @@ mod tests {
         assert!(!ended.event.speaking);
         assert!(ended.event.speech_duration > 0.0);
         assert_eq!(vad.m.reset(), None, "the reset left it silent");
+    }
+
+    // Catches: a flush at the end of input ending speech at the last scored window, so the
+    // incomplete last window (the tail of the speech) falls outside the turn.
+    #[test]
+    fn a_reset_during_speech_ends_after_the_unscored_tail() {
+        let mut vad = machine(&[1.0; 4]);
+        for _ in 0..4 {
+            vad.push(filled_window(1)).unwrap();
+        }
+        vad.push(mono(vec![2; 53 * 2], MODEL_SAMPLE_RATE)).unwrap();
+        let ended = vad.m.reset().expect("speech in progress ends");
+        assert_eq!(ended.event.samples_index, 4 * VAD_WINDOW_SAMPLES as u64 + 53);
+        let end = ended.event.timestamp * f64::from(MODEL_SAMPLE_RATE);
+        assert!((end - (4 * VAD_WINDOW_SAMPLES + 53) as f64).abs() < 1e-6);
+        let pcm = pcm_samples(&ended.frames[0].data);
+        assert_eq!(pcm.len(), 4 * VAD_WINDOW_SAMPLES + 53, "the tail is part of the speech");
+        assert!(pcm[4 * VAD_WINDOW_SAMPLES..].iter().all(|s| *s == 0x0202));
     }
 
     // Catches: a second window handed out while one is in flight: a recurrent model would score
