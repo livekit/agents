@@ -833,6 +833,8 @@ class SpeechStream(stt.SpeechStream):
                 self._opts.max_turn_silence
                 if is_given(self._opts.max_turn_silence)
                 else min_silence
+                if not is_given(self._opts.mode)
+                else None
             )
         else:
             min_silence = (
