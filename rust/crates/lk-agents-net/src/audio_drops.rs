@@ -53,7 +53,6 @@ impl AudioDrops {
 mod tests {
     use super::*;
     use lk_agents_abi::AudioFrame;
-    use lk_agents_abi::telemetry::record::{Record, RecordSink};
     use lk_agents_media::media_queue;
     use std::sync::Arc;
 
@@ -62,9 +61,9 @@ mod tests {
     #[test]
     fn drops_are_measured_as_seconds_of_audio_for_the_observed_consumer() {
         #[derive(Default)]
-        struct Collect(Mutex<Vec<Record>>);
-        impl RecordSink for Collect {
-            fn record(&self, record: Record) {
+        struct Collect(Mutex<Vec<lk_agents_abi::telemetry::record::Record>>);
+        impl lk_agents_abi::telemetry::record::RecordSink for Collect {
+            fn record(&self, record: lk_agents_abi::telemetry::record::Record) {
                 self.0.lock().push(record);
             }
         }
@@ -83,7 +82,7 @@ mod tests {
             .lock()
             .iter()
             .filter_map(|r| match r {
-                Record::Measurement(m) => Some(m.instrument),
+                lk_agents_abi::telemetry::record::Record::Measurement(m) => Some(m.instrument),
                 _ => None,
             })
             .collect();
