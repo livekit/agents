@@ -502,3 +502,29 @@ async fn pre_connect_audio_ends_where_the_live_audio_begins() {
     assert_eq!(summary.started_at, Some(0.5));
     assert_eq!(input_channel(&bytes.lock()), [1, 2, 3, 4, 5, 6, 7]);
 }
+
+// Catches: a periodic flush landing between the pre-connect burst and the first live frame,
+// writing past where the held pre-connect audio will be placed so it is dropped as late input.
+#[tokio::test]
+async fn pre_connect_audio_survives_a_flush_before_the_live_audio() {
+    let media_pool = media_pool(1);
+    let (sink, _, _) = Sink::new(false, false);
+    let bytes = sink.bytes;
+    let encoder = Encoder(sink.trace.clone());
+    let recorder = SessionRecorder::open_with(&media_pool, 10, None, limits(), move || {
+        Ok((encoder, sink.writer))
+    })
+    .await
+    .unwrap();
+    for sample in 1..=5 {
+        recorder.input(1.0, &frame(&[sample]), true).unwrap();
+    }
+    recorder.flush(1.0).await.unwrap();
+    recorder.input(1.1, &frame(&[6]), false).unwrap();
+    recorder.flush(1.1).await.unwrap();
+    recorder.input(1.2, &frame(&[7]), false).unwrap();
+    let summary = recorder.finish(1.2).await.unwrap();
+    assert_eq!(summary.dropped_input_samples, 0);
+    assert_eq!(summary.started_at, Some(0.5));
+    assert_eq!(input_channel(&bytes.lock()), [1, 2, 3, 4, 5, 6, 7]);
+}

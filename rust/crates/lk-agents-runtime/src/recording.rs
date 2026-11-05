@@ -589,6 +589,7 @@ async fn process<E: OggOpusEncoder, W: Write>(
                         }
                     }
                     Command::Flush(now, reply) => {
+                        file.hold_input(timeline.held_from());
                         let outcome =
                             file.apply(RecordingCommand::Flush(now), &mut between).map(drop);
                         if let Some(reply) = reply {
@@ -656,6 +657,13 @@ impl Timeline {
             file.apply(RecordingCommand::Input(at, frame), between)?;
         }
         Ok(())
+    }
+
+    /// Where the held pre-connect audio lands at the earliest: it ends where the live audio after
+    /// it begins, which is not before its own run.
+    fn held_from(&self) -> Option<f64> {
+        (!self.head.is_empty())
+            .then(|| self.at - self.head.iter().map(AudioFrame::duration).sum::<f64>())
     }
 
     /// No live audio followed the pre-connect audio: it starts where its run did.

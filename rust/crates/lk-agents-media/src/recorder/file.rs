@@ -163,6 +163,8 @@ pub struct RecordingFile<E: OggOpusEncoder, W: Write> {
     recording: Option<Recorder<E>>,
     placer: SegmentPlacer,
     requested_flush: Option<f64>,
+    /// Input still to arrive from this time on: a flush writes nothing from there.
+    input_held: Option<f64>,
     summary: RecordingSummary,
     sample_rate: u32,
     limits: FileLimits,
@@ -203,6 +205,7 @@ impl<E: OggOpusEncoder, W: Write> RecordingFile<E, W> {
             recording: None,
             placer: SegmentPlacer::new(),
             requested_flush: None,
+            input_held: None,
             summary: RecordingSummary { started_at: t0, ..Default::default() },
             sample_rate,
             limits,
@@ -224,12 +227,27 @@ impl<E: OggOpusEncoder, W: Write> RecordingFile<E, W> {
         }
     }
 
+    /// Input that will still arrive from `from` on (pre-connect audio, placed once the live audio
+    /// after it begins): the next flushes write nothing from there, so it is not dropped as late.
+    pub fn hold_input(&mut self, from: Option<f64>) {
+        self.input_held = from;
+    }
+
     /// Applies one command; `FinishRecording` writes the file's tail and returns `true`.
     pub fn apply(
         &mut self,
         command: RecordingCommand,
         between: BetweenBlocks<'_>,
     ) -> Result<bool, RecordingFailure> {
+        if let RecordingCommand::Flush(now) = command
+            && self.input_held.is_some()
+            && self.recording.is_none()
+        {
+            // Nothing recorded yet: the held input, not this flush, says where the file starts.
+            self.requested_flush =
+                Some(self.requested_flush.map_or(now, |previous| previous.max(now)));
+            return Ok(false);
+        }
         let now = match &command {
             RecordingCommand::Input(now, _)
             | RecordingCommand::Capture(now, _)
@@ -308,7 +326,8 @@ impl<E: OggOpusEncoder, W: Write> RecordingFile<E, W> {
             RecordingCommand::Flush(now) => {
                 self.requested_flush =
                     Some(self.requested_flush.map_or(now, |previous| previous.max(now)));
-                let until = recorder.settle_until(now, placer.pending_since());
+                let pending = [placer.pending_since(), self.input_held].into_iter().flatten();
+                let until = recorder.settle_until(now, pending.reduce(f64::min));
                 flush(recorder, &mut self.writer, until, &mut self.summary, block, between)?;
             }
             RecordingCommand::FinishRecording(_) => {
