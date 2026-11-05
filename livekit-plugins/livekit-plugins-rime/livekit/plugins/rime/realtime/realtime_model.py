@@ -693,7 +693,9 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
             await self._history.reconcile(chat_ctx, token.revision)
             return
         result = await self._history.sync(
-            chat_ctx, shared=token is None and self._model._context_mode == "shared"
+            chat_ctx,
+            shared=token is None and self._model._context_mode == "shared",
+            progress=token is None,
         )
         for ref, output in result.submitted:
             if output.reply_required:

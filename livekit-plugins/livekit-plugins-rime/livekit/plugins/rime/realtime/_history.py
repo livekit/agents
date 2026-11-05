@@ -344,10 +344,6 @@ class PrismHistory:
         positions = {item.id: index for index, item in enumerate(self._chat.items)}
         last = -1
         for item in _items(target):
-            if isinstance(item, llm.FunctionCall) and item.extra.get(
-                "__livekit_agents_tool_non_blocking"
-            ):
-                raise HistoryUpdateError("Prism does not support tool progress updates")
             if item.id in seen:
                 raise HistoryUpdateError("Prism history item IDs must be unique")
             seen.add(item.id)
@@ -375,7 +371,58 @@ class PrismHistory:
             )
         return llm.ChatContext([*self._chat.items, *additions])
 
-    async def sync(self, target: llm.ChatContext, *, shared: bool = False) -> HistorySyncResult:
+    def _progress_target(self, target: llm.ChatContext) -> llm.ChatContext:
+        """Keep acknowledged live results in place when core sorts them by time.
+
+        A tool can produce its first progress output before Prism finishes a
+        filler. Core inserts that output by creation time, while our journal
+        records it after the filler on acknowledgment. Treat only this known
+        call/filler/result permutation as the same history.
+        """
+        items = _items(target)
+        requested = {item.id: item for item in items}
+        positions = {item.id: index for index, item in enumerate(self._chat.items)}
+        for call in items[:]:
+            if not isinstance(call, llm.FunctionCall) or not call.extra.get(
+                "__livekit_agents_tool_non_blocking"
+            ):
+                continue
+            if call.id not in positions or _wire(call) != _wire(
+                self._chat.items[positions[call.id]]
+            ):
+                continue
+            start = positions[call.id] + 1
+            fillers: list[llm.ChatItem] = []
+            for previous in self._chat.items[start:]:
+                if isinstance(previous, llm.ChatMessage) and previous.id in self._variants:
+                    fillers.append(previous)
+                    continue
+                if (
+                    fillers
+                    and isinstance(previous, llm.FunctionCallOutput)
+                    and previous.call_id == call.call_id
+                ):
+                    output = requested.get(previous.id)
+                    if output is None or _wire(output) != _wire(previous):
+                        break
+                    present = [item.id for item in fillers if item.id in requested]
+                    index = items.index(call) + 1
+                    block = items[index : index + len(present) + 1]
+                    if (
+                        len({item.id for item in block}) == len(block)
+                        and [item.id for item in block if item.id != previous.id] == present
+                        and any(item.id == previous.id for item in block)
+                    ):
+                        items[index : index + len(block)] = [
+                            *(requested[item_id] for item_id in present),
+                            output,
+                        ]
+                break
+        return llm.ChatContext(items)
+
+    async def sync(
+        self, target: llm.ChatContext, *, shared: bool = False, progress: bool = False
+    ) -> HistorySyncResult:
         """Journal acknowledgments before the next write; never replay a failed edit."""
         async with self._lock:
             result = HistorySyncResult()
@@ -384,6 +431,8 @@ class PrismHistory:
             try:
                 if self._terminal_failure is not None:
                     raise self._terminal_failure
+                if progress:
+                    target = self._progress_target(target)
                 if shared:
                     target = self._shared_target(target)
                 await self._sync(target, result)
@@ -519,9 +568,6 @@ class PrismHistory:
         # Importing a result has server-defined placement directly after its call.
         # Reject requested orders that would require splitting that pair.
         to_create = desired if rebuild else added
-        requested_calls = {
-            item.call_id: item for item in desired if isinstance(item, llm.FunctionCall)
-        }
         for item in to_create:
             _wire(item)
             if isinstance(item, llm.FunctionCallOutput) and (
@@ -533,11 +579,6 @@ class PrismHistory:
                     raise HistoryUpdateError(
                         "Imported tool results must immediately follow their calls"
                     )
-            if isinstance(item, llm.FunctionCallOutput) and item.call_id in self._calls:
-                # LiveKit marks the execution copy when a tool becomes nonblocking.
-                # Read that annotation from the requested context, not shared objects.
-                if requested_calls[item.call_id].extra.get("__livekit_agents_tool_non_blocking"):
-                    raise HistoryUpdateError("Prism does not support tool progress updates")
         deletions = old if rebuild else removed
         if any(item.id not in self._ids for item in deletions):
             # Resolve server IDs for typed turns and live results not returned by

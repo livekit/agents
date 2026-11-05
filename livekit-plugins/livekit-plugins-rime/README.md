@@ -396,8 +396,14 @@ filler. Replace the map with `model.update_options(tool_fillers=...)`, or pass
 `agent.update_chat_ctx()` supports user, assistant, and system text messages and
 completed tool calls/results. Each imported message has at most 4000 characters.
 An imported result must immediately follow its call. Images, video, developer
-messages, and tool progress are unsupported. LiveKit configuration and handoff
+messages are unsupported. LiveKit configuration and handoff
 records stay local. Importing history does not execute tools or start a reply.
+
+Tools can use `await ctx.update(...)` to report progress. The first update completes
+the provider's original tool call. LiveKit imports later updates and the final
+result as completed call/result pairs and requests replies when needed. These
+imports do not execute the tool again. `silent=True` records progress without
+requesting a reply.
 
 The default `context_mode="shared"` keeps one conversation through agent and task
 handoffs. Ordinary context updates are views of that conversation. Empty or reduced
