@@ -99,7 +99,7 @@ async fn perform_llm_inference(
             }
         }
     }
-    let mut req = ChatRequest {
+    let req = ChatRequest {
         chat_ctx,
         tool_choice: ctx.plan.tool_choice.clone(),
         tools_host: ctx
@@ -119,7 +119,7 @@ async fn perform_llm_inference(
     // The step's `llm_node`, one `llm_request` in it, its attempts each an `llm_request_run`. A
     // registered `llm_node` runs under the node span and makes its own request, if any.
     let node = LlmNodeTrace::start(shared, ctx.span, &req);
-    let mut trace = telemetry::LlmTrace::start(node.cx(shared), llm.as_ref(), &mut req);
+    let mut trace = telemetry::LlmTrace::start(node.cx(shared), llm.as_ref(), &req);
     loop {
         let attempt = trace.attempt();
         shared.trace(GenerationStep::ChatRequested {

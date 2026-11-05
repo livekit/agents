@@ -64,7 +64,7 @@ impl Aggregator {
                 self.instruments.len() - 1
             }
         };
-        let instrument = &mut self.instruments[index];
+        let Some(instrument) = self.instruments.get_mut(index) else { return false };
         if instrument.kind != m.kind {
             return false;
         }
@@ -86,7 +86,8 @@ impl Aggregator {
                     },
                 };
                 instrument.series.push((m.labels.clone(), point));
-                &mut instrument.series.last_mut().expect("just pushed").1
+                let Some((_, point)) = instrument.series.last_mut() else { return false };
+                point
             }
         };
         let bounds = instrument.bounds;

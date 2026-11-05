@@ -3,6 +3,8 @@
 //! `function_tool` span the voice and text executors share; and the usage counters a metrics
 //! record feeds.
 
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
+
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock};

@@ -669,14 +669,14 @@ async fn classify(
 
     tx: tokio::sync::mpsc::UnboundedSender<Msg>,
     llm: Arc<dyn Llm>,
-    mut request: lk_agents_abi::ChatRequest,
+    request: lk_agents_abi::ChatRequest,
     req: u64,
     transcript: String,
     mut cancelled: tokio::sync::watch::Receiver<bool>,
     cx: telemetry::Cx,
 ) {
     let started_at = time.wall_secs();
-    let mut trace = telemetry::LlmTrace::start(&cx, llm.as_ref(), &mut request);
+    let mut trace = telemetry::LlmTrace::start(&cx, llm.as_ref(), &request);
     let mut attempt = Some(trace.attempt());
     let mut stream = match llm.chat(trace.cx(), &request).await {
         Ok(s) => s,

@@ -167,6 +167,8 @@ pub struct Declared {
     pub name: &'static str,
     pub parents: &'static [Parent],
     pub outlives_parent: bool,
+    /// Owned by a sans-I/O entity (`ManualSpan`), never ended by a scope's exit.
+    pub manual: bool,
 }
 
 impl Declared {
@@ -175,6 +177,7 @@ impl Declared {
             name: D::NAME,
             parents: D::PARENTS,
             outlives_parent: D::OUTLIVES_PARENT.is_some(),
+            manual: D::MANUAL,
         }
     }
 }

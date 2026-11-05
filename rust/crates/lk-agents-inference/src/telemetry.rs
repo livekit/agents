@@ -5,6 +5,8 @@
 //! opens none and calls it under its own context instead. A request that failed ends failed, also
 //! when it is dropped.
 
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
+
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::metrics::base::{Metadata, TtsMetrics};
 use lk_agents_abi::telemetry::decl::{Content, Json, Label, Measured, Seconds};

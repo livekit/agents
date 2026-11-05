@@ -99,8 +99,9 @@ impl ReportAdmission {
     }
 
     /// Waits for a recording upload slot.
-    async fn upload(&self) -> OwnedSemaphorePermit {
-        self.uploads.clone().acquire_owned().await.expect("the upload semaphore is never closed")
+    /// `None` once the semaphore closed (never, while the process lives).
+    async fn upload(&self) -> Option<OwnedSemaphorePermit> {
+        self.uploads.clone().acquire_owned().await.ok()
     }
 }
 

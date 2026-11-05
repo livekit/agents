@@ -275,7 +275,10 @@ impl State {
             }
         }
         let (Some(action), Some(key)) = (cloud, job) else { return admitted };
-        let job = self.jobs.get_mut(key).expect("an admitted record's job is open");
+        let Some(job) = self.jobs.get_mut(key) else {
+            admitted.dropped += 1;
+            return admitted;
+        };
         match (action, record) {
             (Action::Export, Record::Span(span)) => {
                 if self.cloud_usage.admit(&self.limits, bytes) {

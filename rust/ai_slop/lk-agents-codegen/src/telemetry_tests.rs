@@ -258,8 +258,8 @@ fn registry_rules_refuse_mistakes() {
             "written on every span",
         ),
         (
-            "/// S.\n#[span(name = \"s\", parent = Current, handle = Manual)]\n#[derive(Attrs)]\npub struct S;".into(),
-            "the `handle = Manual` spans are",
+            "/// S.\n#[span(name = \"s\", parent = Current)]\n#[derive(Attrs)]\npub struct S;\npub const SPANS: &[Declared] = &[];".into(),
+            "the `#[span]` declarations are",
         ),
     ] {
         let error = registry(&decls).err().unwrap_or_else(|| panic!("accepted:\n{decls}"));

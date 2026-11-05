@@ -14,6 +14,7 @@ from check import (
     executor_violations,
     host_call_violations,
     telemetry_spelling_violations,
+    cx_none_violations,
     length_violations,
     path_violations,
     pyo3_violations,
@@ -471,6 +472,31 @@ class HostCallContracts(unittest.TestCase):
                     "telemetry-use:rust/crates/lk-agents-net/src/http.rs",
                     "telemetry-use:rust/crates/lk-agents-py/src/py_calls.rs",
                 },
+            )
+
+    def test_cx_none_is_counted_outside_tests_comments_and_unspelled_crates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            files = {
+                # Violations: two uses in logic code.
+                "rust/crates/lk-agents-runtime/src/voice/io.rs": (
+                    "fn f() { g(&telemetry::Cx::NONE); h(&Cx::NONE); }\n"
+                ),
+                # Allowed: a comment, a string, a test module, a test file, an unspelled crate.
+                "rust/crates/lk-agents-inference/src/stt.rs": (
+                    "// Cx::NONE\nconst S: &str = \"Cx::NONE\";\n"
+                    "#[cfg(test)]\nmod tests { fn t() { f(&Cx::NONE); } }\n"
+                ),
+                "rust/crates/lk-agents-net/src/http_tests.rs": "fn t() { f(&Cx::NONE); }\n",
+                "rust/crates/lk-agents-media/src/codec.rs": "fn f() { g(&Cx::NONE); }\n",
+            }
+            for path, text in files.items():
+                file = root / path
+                file.parent.mkdir(parents=True, exist_ok=True)
+                file.write_text(text)
+            self.assertEqual(
+                cx_none_violations(root, list(files)),
+                {"cx-none:rust/crates/lk-agents-runtime/src/voice/io.rs": 2},
             )
 
     def test_a_host_call_outside_the_entry_is_a_violation(self):

@@ -5,6 +5,8 @@
 //! leave each step as records on `SessionEvent::Telemetry`; work that continues in the runtime
 //! gets its parent's `SpanContext`.
 
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
+
 pub(crate) mod agent_turn;
 pub(crate) mod session;
 pub(crate) mod user_turn;

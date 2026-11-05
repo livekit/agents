@@ -1,6 +1,8 @@
 //! Telemetry contracts: the span, metric and report record declarations, the policy limits and the
 //! session report.
 
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
+
 /// Telemetry limits; the decisions are `lk_agents_core::telemetry::policy`'s.
 pub mod policy {
     /// Nested host values deeper than this are refused.

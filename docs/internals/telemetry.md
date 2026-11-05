@@ -158,7 +158,7 @@ recording upload (section [Session report](#session-report-1)).
 | Rust → Python host call | the `cx: &telemetry::Cx` every host call takes (no default), activated in the call's `contextvars` copy |
 | Python stream returned by a host call | iterated in that call's own `contextvars` copy, the same copy for every pull and `aclose` |
 | Python → Rust call | the current span in `contextvars`, captured at the operation's entry |
-| Voice core → runtime | effects carry a `SpanRef` (trace id, span id, flags) of the core span the work runs under |
+| Voice core → runtime | effects carry a `SpanContext` (trace id, span id, flags) of the core span the work runs under |
 | `RemoteAgent` → A2A endpoint | W3C `traceparent` header; the endpoint's `a2a_request` continues it |
 | Worker → job process | `traceparent` in the job's dispatch; `job_entrypoint` continues it |
 
@@ -349,11 +349,11 @@ way to get span lifetimes wrong, so the rule is mechanical.
 | Held by | the code doing the work | the entity it describes, in a field named `span` |
 | Ends | **when dropped**, as cancelled, unless ended before | only by `self.telemetry.end(..)` in the entity's removal path; dropping it unended is a bug ([Sans-I/O](#sans-io-the-entity-owns-its-span)) |
 | Time | the runtime's injected clock | the step's `now`, supplied by the caller |
-| Parent check | debug assertion against the declared parents, and the DST | compile time: `child` takes the typed parent handle |
+| Parent check | debug assertion against the declared parents; DST rule `spans_nest_and_end` checks every recorded span | compile time: `open_in` takes the typed parent handle |
 
 The rule for choosing is mechanical: work that is one async call uses a
 `ScopedSpan`; state that lives across state-machine steps owns a
-`telemetry::Span` (the `ManualSpan` handle) in its `span` field.
+`telemetry::ManualSpan` in its `span` field.
 
 ### `ScopedSpan`: ends when its scope exits
 
@@ -365,7 +365,8 @@ including early returns and a future dropped by cancellation.
 async fn complete(&self, cx: &telemetry::Cx, request: ChatRequest) -> Result<LlmResponse, LlmError> {
     let span = telemetry::start(cx, LlmRequest { model: request.model(), provider: self.provider() });
     let response = self.send(span.cx(), request).await;
-    telemetry::end(span, response)   // records an Err, or the Ok's end attributes; returns it
+    telemetry::end(span, response.as_ref().map(LlmResponse::end));   // an Err fails it
+    response
 }
 ```
 
@@ -373,15 +374,16 @@ async fn complete(&self, cx: &telemetry::Cx, request: ChatRequest) -> Result<Llm
 | --- | --- |
 | `telemetry::start(cx, decl) -> ScopedSpan<D>` | Opens a child of `cx`'s current span. `#[must_use]`. |
 | `span.cx() -> &telemetry::Cx` | The child context. It borrows the span, so the span cannot be dropped while the context is in use, and `let _ = telemetry::start(..)` leaves no context to use. |
-| `telemetry::end(span, result) -> result` | Ends the span: an `Err` is recorded ([Errors](#errors)); an `Ok` ends with its `SpanEnd` attributes. Returns the result unchanged. Consumes the span. |
-| `telemetry::end_with(span, end)` | Ends the span with explicit end attributes. |
+| `telemetry::end(span, outcome)` | Ends the span with what it ended with: its end attributes, an error, a result (`result.as_ref()`; an `Err` fails it, [Errors](#errors)) or `telemetry::Failed { end, error }` (both). Consumes the span and returns nothing, so no control flow depends on telemetry. |
 | `telemetry::event(&span, event)` | Adds a declared event at the current time; `telemetry::event_at(&span, event, at)` at an earlier instant. |
-| `telemetry::check(&span, result) -> result` | Records an `Err` and leaves the span open. |
-| `telemetry::fail(&span, &error)` | Records a failure without a `Result`. |
 | `telemetry::start_at(cx, decl, at)` | Opens a span that began before the process knew of it (a job, from its receipt). |
 | `telemetry::measure(cx, &instrument, value)` | Records one measurement of a declared instrument for `cx`'s job. |
-| `telemetry::reserve::<D>(cx)` | Allocates a child context a voice core opens later. |
-| drop without `end` | Ends the span with `lk.cancelled = true`, keeping an error recorded by `check`. |
+| `telemetry::reserve::<D>(cx)` | Allocates a child context a voice core opens later: the session's startup work runs under its spans before the core exists. |
+| drop without `end` | Ends the span with `lk.cancelled = true`. |
+
+A failure the code learns before the span ends (a provider request that failed
+and is retried, an entrypoint that raised while the job keeps shutting down) is
+kept by the code and passed to `end`; nothing records into an open span.
 
 `lk_agents_net::telemetry` defines these. Each I/O crate's telemetry module
 (`lk-agents-runtime`'s and `lk-agents-inference`'s `telemetry.rs`,
@@ -400,20 +402,15 @@ the one telemetry item that appears in signatures.
 When a function is exactly one span, `#[telemetry::span]` writes that code:
 
 ```rust
-#[telemetry::span(LlmRequest { model: request.model(), provider: self.provider() })]
-async fn complete(&self, cx: &telemetry::Cx, request: ChatRequest) -> Result<LlmResponse, LlmError> {
-    self.send(cx, request).await
-}
-
-impl SpanEnd<LlmRequest> for LlmResponse {
-    fn end(&self) -> LlmRequestEnd {
-        LlmRequestEnd { ttft: self.ttft, legacy: Json(self.legacy_metrics()), usage: self.usage() }
-    }
+#[telemetry::span(JudgeEvaluation { name: name.into() })]
+async fn judge(&self, cx: &telemetry::Cx, name: &str) -> Result<JudgeEvaluationEnd, JudgeError> {
+    self.ask(cx, name).await
 }
 ```
 
 The attribute expands to the code of the first example: `cx` inside the body
-is the span's context and the body's `Result` goes through `telemetry::end`.
+is the span's context and the body's `Result` goes through `telemetry::end`, so
+its `Ok` is the declaration's end attributes.
 
 ### Sans-I/O: the entity owns its span
 
@@ -427,7 +424,7 @@ field named `span`. The machine's telemetry state, `self.telemetry`
 struct Turn {
     id: TurnId,
     origin: Origin,
-    span: telemetry::Span<telemetry::UserTurn>,
+    span: telemetry::ManualSpan<telemetry::UserTurn>,
 }
 
 // The parent is implied: user_turn's one declared parent is the session.
@@ -446,11 +443,11 @@ self.telemetry.end(turn.span, telemetry::UserTurnEnd { outcome: UserTurnOutcome:
 | `self.telemetry` | Effect |
 | --- | --- |
 | `step(now)` | Sets the step's time, once, at the machine's step entry. No other call takes a time. |
-| `open(decl) -> telemetry::Span<D>` | Opens a span under `D`'s declared parent when that parent is the session. `#[must_use]`. |
-| `open_in(&parent, decl) -> telemetry::Span<D>` | Opens a child of `parent`; `P: ParentOf<D>` is checked at compile time. |
-| `end(span, end)` | Ends the span with its end attributes. Consumes it. |
-| `event(&span, event)` / `fail(&span, error)` | A declared event; a failure ([Errors](#errors)). |
-| `context(&span) -> Option<SpanRef>` | What an effect carries, so the runtime opens a `ScopedSpan` under it; `None` for a span opened outside the session's life, which records nothing. |
+| `open(decl) -> telemetry::ManualSpan<D>` | Opens a span under `D`'s declared parent when that parent is the session. `#[must_use]`. |
+| `open_in(&parent, decl) -> telemetry::ManualSpan<D>` | Opens a child of `parent`; `P: ParentOf<D>` is checked at compile time. |
+| `end(span, outcome)` | Ends the span as `telemetry::end` does: end attributes, an error, a result or `Failed`. Consumes it. |
+| `event(&span, event)` | A declared event. |
+| `context(&span) -> Option<SpanContext>` | What an effect carries, so the runtime opens a `ScopedSpan` under it; `None` for a span opened outside the session's life, which records nothing. |
 | `set(&span, decl)` | Replaces the start attributes, for what the entity learns after it opened. |
 
 Calls take at most two arguments, of distinct types, and every value is a
@@ -474,7 +471,7 @@ every record, as the `EverySpan` group and the identity stamp.
 | A span ends at all | `Drop` asserts it was ended (debug builds, so every test and the DST); the mistake fails at the line that dropped the entity |
 | Nothing ends silently at close | a session close removes each live entity through its own removal path with the `closed` outcome; nothing ends spans in bulk. `Trace::close` then sweeps whatever remains: a non-zero sweep fails the DST and is a warning plus `telemetry.diagnostics()["swept"]` in production |
 | A session's spans always reach the exporter | the session closes on every exit path before the job's final flush; DST rule `sessions_export_their_root` |
-| A child is opened only under a declared parent | `open_in` takes `&telemetry::Span<P>` with `P: ParentOf<D>`; `open` exists only for declarations whose parent is the session |
+| A child is opened only under a declared parent | `open_in` takes `&telemetry::ManualSpan<P>` with `P: ParentOf<D>`; `open` exists only for declarations whose parent is the session |
 | One clock | the runtime's injected clock, the voice core's `now` and the `Trace` anchor all come from the `ProcessEnv` clock, so a `ScopedSpan` nested under a sans-I/O span shares its timeline |
 
 An entity that outlives its first owner hands its span over by value. A
@@ -506,12 +503,13 @@ opens its `ScopedSpan` under it.
 Every handle records a failure the way the OpenTelemetry API's
 `record_exception` does: status `ERROR` with the error's message, `error.type`,
 and an `exception` event carrying `exception.type`, `exception.message` and
-`exception.stacktrace`. `telemetry::end` on an `Err` and `self.telemetry.fail`
-both record it from a typed error:
+`exception.stacktrace`. `telemetry::end` and `self.telemetry.end` record it
+from a typed error:
 
 - An application exception (a hook, a tool, a node) arrives as the
   HostInvoker's `HostError`, with the Python exception's type, message and
-  traceback. The span records that exception, never a fixed description.
+  traceback. The span records that exception, never a fixed description, and
+  its `error.type` is the exception's class name, as OpenTelemetry asks.
 - A timeout records `error.type = "timeout"`; a provider error records the
   provider error's kind and message.
 - The message and stacktrace are content. Cloud's redaction does not read them,
@@ -663,7 +661,7 @@ pub struct ChatItemLog {
     #[attr("chat.item")]
     pub item: KvList<ChatItemWire>,
     #[span_id]
-    pub turn: Option<SpanRef>,
+    pub turn: Option<SpanContext>,
 }
 
 #[record(scope = "evaluations", body = "evaluation")]
@@ -774,11 +772,15 @@ A key moves to protocol only when a second producer emits it.
 | Check | Catches |
 | --- | --- |
 | Compile errors | undeclared keys and parents in the core, wrong attribute types, double ends |
-| `lk-agents-codegen --check` | declarations out of sync with generated outputs, `Content<T>` outside `lk.pii.*`, unknown semconv keys |
+| Compile errors (I/O) | a key or event a declaration does not hold (`start`, `event` and `measure` take only declarations), an end of the wrong type, a span ended twice (`end` consumes it), telemetry steering control flow (`end` returns nothing) |
+| `lk-agents-codegen --check` | declarations out of sync with generated outputs, `Content<T>` outside `lk.pii.*`, unknown semconv keys, a span missing from `spans::SPANS` |
+| Clippy | a panic (`unwrap`, `expect`, `panic!`) in a telemetry module: telemetry never fails the agent |
+| `rust/architecture/check.sh` (`cx-none`) | new work run under `Cx::NONE`: each use outside tests is counted per file and only shrinks |
+| `ScopedSpan` itself | GenAI message content recorded with capture off: every `GENAI_CONTENT` key is dropped at the span's end, whatever the emitter wrote |
 | `weaver registry check` | violations of protocol's naming policies |
 | Golden OTLP | any wire change: a fixed fake session (pipeline and realtime voice turns, an interruption and a backchannel, a tool call, a handoff, AMD, a failed hook, a text run with a remote agent) exports OTLP JSON compared with `tests/telemetry/golden/` |
 | Dashboard rendering | the golden traces and logs are published under `rust/otel/golden/`; the session view's tests in `livekit/web` load them and assert the turns, stages, latencies, tokens, tool time, transcript and evaluations they render |
-| DST span rules | every span ends exactly once; children end within their parent unless `outlives_parent`; parents are declared; an `Err` result is never recorded as cancelled; nothing reaches the close sweep |
+| DST span rules | every recorded span, scoped or manual, ends exactly once, under a declared parent and within it unless `outlives_parent`; a failed manual span is never recorded as cancelled; nothing reaches the close sweep |
 | Conformance tests | an application span inside a tool parents under `function_tool`; a `RemoteAgent` call continues the trace; concurrent jobs keep their identity; Cloud disabled; queue saturation; bounded shutdown |
 
 ## Adding telemetry

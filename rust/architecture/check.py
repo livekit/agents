@@ -421,6 +421,27 @@ def telemetry_spelling_violations(root: Path, paths: list[str]) -> set[str]:
     return violations
 
 
+# A host call or awaited work under `Cx::NONE` runs under no span: its spans start new traces and
+# the host sees no current span. Each use outside tests is a reviewed decision; the count per file
+# is a ceiling, so new work names the span it runs under.
+CX_NONE = re.compile(r"\bCx::NONE\b")
+
+
+def cx_none_violations(root: Path, paths: list[str]) -> dict[str, int]:
+    """Every `Cx::NONE` in a spelled crate's non-test code, counted per file."""
+    violations = {}
+    for path in paths:
+        parts = Path(path).parts
+        if parts[:2] != ("rust", "crates") or len(parts) < 4 or parts[2] not in TELEMETRY_SPELLED:
+            continue
+        if path.endswith("_tests.rs") or "/generated/" in path:
+            continue
+        text = without_test_modules(NOT_CODE.sub(blank, (root / path).read_text()))
+        if count := len(CX_NONE.findall(text)):
+            violations[f"cx-none:{path}"] = count
+    return violations
+
+
 def length_violations(root: Path, paths: list[str]) -> dict[str, int]:
     violations = {}
     for path in paths:
@@ -577,6 +598,7 @@ def check_boundaries(metadata: dict) -> int:
         ("executors", executor_violations(root, paths)),
         ("uses", use_violations(root, paths)),
         ("telemetry-spelling", telemetry_spelling_violations(root, paths)),
+        ("cx-none", cx_none_violations(root, paths)),
     ):
         path = f"rust/architecture/{name}-baseline.json"
         baseline = json.loads((root / path).read_text())

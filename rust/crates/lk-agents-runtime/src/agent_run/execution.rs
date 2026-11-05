@@ -158,7 +158,7 @@ impl Execution {
                 self.requests.insert(request, Some(cancel));
                 self.descriptions =
                     tools.iter().map(|t| (t.name.clone(), t.description.clone())).collect();
-                let mut req = ChatRequest {
+                let req = ChatRequest {
                     tools_host: self.setup.tools_host.clone(),
                     chat_ctx,
                     tools,
@@ -168,7 +168,7 @@ impl Execution {
                 let llm = self.setup.llm.clone();
                 let clock = self.setup.clock.clone();
                 let events = self.events_tx.clone();
-                let trace = telemetry::LlmTrace::start(&self.cx, llm.as_ref(), &mut req);
+                let trace = telemetry::LlmTrace::start(&self.cx, llm.as_ref(), &req);
                 self.runtime
                     .spawn(stream_request(request, req, llm, clock, events, cancelled, trace));
             }

@@ -4,6 +4,8 @@
 //! [`reserve`] and `#[telemetry::span]`.
 //! Ended spans and measurements reach the process's `RecordSink` (the OTLP exporter).
 
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
+
 pub mod host;
 pub mod otlp;
 pub mod session_report;
@@ -21,7 +23,7 @@ use lk_agents_abi::telemetry::decl::{
 use lk_agents_abi::telemetry::record::{
     EventRecord, FRAMEWORK, Key, Measurement, Record, RecordSink, SpanRecord, Status,
 };
-use lk_agents_abi::telemetry::spans::common::{EverySpan, Exception};
+use lk_agents_abi::telemetry::spans::common::{EverySpan, Exception, GENAI_CONTENT};
 use parking_lot::{Mutex, RwLock};
 
 use otlp::Exporter;
@@ -350,7 +352,20 @@ impl<D: SpanDecl> ScopedSpan<D> {
             job: self.cx.job().cloned(),
         };
         let end = outcome.and_then(|o| o.attributes());
-        finish_span(span, open.labels, open.measured, end, every, &mut |r| tracer.record(r));
+        let capture = self.cx.capture_content();
+        finish_span(span, open.labels, open.measured, end, every, &mut |mut record| {
+            // GenAI message content leaves only with capture on, whatever the caller wrote.
+            if let Record::Span(span) = &mut record
+                && !capture
+            {
+                let content = |(key, _): &(Key, _)| GENAI_CONTENT.contains(&&**key);
+                span.attributes.retain(|kv| !content(kv));
+                for event in &mut span.events {
+                    event.attributes.retain(|kv| !content(kv));
+                }
+            }
+            tracer.record(record)
+        });
     }
 }
 

@@ -52,7 +52,6 @@ mod agent_state_written_on_connect {
         let (rtc, clock) =
             FakeRtc::with_virtual_clock(lk_agents_runtime::rtc::events::RoomEventBus::port);
         let room = rtc.room("agent-state");
-        let tracer = lk_agents_runtime::net::telemetry::Tracer::disabled(clock.clone());
         let fixed = FixedRoom {
             rtc: Some(room.clone()),
             time: Timebase::from_virtual(clock),

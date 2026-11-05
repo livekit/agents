@@ -10,7 +10,7 @@ use std::sync::Arc;
 pub async fn detection_pass(
     shared: Arc<SessionShared>,
     llm: Arc<dyn Llm>,
-    mut request: ChatRequest,
+    request: ChatRequest,
     req: u64,
     span: Option<telemetry::SpanContext>,
 ) {
@@ -21,7 +21,7 @@ pub async fn detection_pass(
         Some(span) => shared.trace.clone().under::<telemetry::KeytermDetection>(span),
         None => shared.trace.clone(),
     };
-    let mut trace = telemetry::LlmTrace::start(&cx, llm.as_ref(), &mut request);
+    let mut trace = telemetry::LlmTrace::start(&cx, llm.as_ref(), &request);
     let attempt = trace.attempt();
     let mut stream = match llm.chat(trace.cx(), &request).await {
         Ok(stream) => stream,

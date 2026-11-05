@@ -197,3 +197,21 @@ async fn span_functions_are_one_span() {
     assert_eq!(attr(failed, "error.type"), Some(&Value::String("timeout".into())));
     assert_eq!(attr(failed, "lk.cancelled"), None);
 }
+
+// Catches: GenAI message content recorded while capture is off because an emitter forgot to gate
+// it: the span drops every `GENAI_CONTENT` key itself.
+#[test]
+fn content_leaves_only_with_capture_on() {
+    use lk_agents_abi::telemetry::decl::GenAiContent;
+    let (tracer, sink) = tracer();
+    for capture in [false, true] {
+        tracer.set_capture_content(capture);
+        let explanation = Some(GenAiContent("because".to_owned()));
+        let span = start(&tracer.root(), JudgeEvaluation { name: "j".into() });
+        end(span, JudgeEvaluationEnd { verdict: None, explanation });
+    }
+    let spans = sink.spans();
+    let [off, on] = spans.as_slice() else { panic!("{spans:?}") };
+    assert_eq!(attr(off, "gen_ai.evaluation.explanation"), None);
+    assert_eq!(attr(on, "gen_ai.evaluation.explanation"), Some(&Value::String("because".into())));
+}

@@ -308,7 +308,7 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
     }
 
     fn span(&self) -> Option<telemetry::SpanContext> {
-        Some(self.0.startup.get()?.opening.session.context.into())
+        Some(self.0.startup.get()?.opening.session.context)
     }
 
     fn storage(&self) -> Option<Arc<SessionStorage>> {

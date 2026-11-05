@@ -46,7 +46,6 @@ mod background_audio {
         let (rtc, clock) = FakeRtc::with_virtual_clock(RoomEventBus::port);
         let room = rtc.room(name);
         std::mem::forget(rtc);
-        let tracer = lk_agents_runtime::net::telemetry::Tracer::disabled(clock.clone());
         let fixed = FixedRoom {
             rtc: Some(room.clone()),
             time: Timebase::from_virtual(clock),

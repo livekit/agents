@@ -107,7 +107,7 @@ async fn attempts(
             }
         }
         let Some(attempt) = launched else {
-            let at = attempts.wake_at(None).expect("an undecided upload is waiting to retry");
+            let Some(at) = attempts.wake_at(None) else { return Err(UploadError(failure)) };
             clock.wait_until(at).await;
             attempts.wake(clock.now(), None, &mut steps);
             continue;

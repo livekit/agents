@@ -129,8 +129,8 @@ fn a_request_records_its_attempt_metrics_and_messages() {
     for capture in [true, false] {
         let (records, cx) = traced(capture);
         let llm = Script { label: "openai.LLM", serves: true };
-        let mut req = request();
-        let mut trace = LlmTrace::start(&cx, &llm, &mut req);
+        let req = request();
+        let mut trace = LlmTrace::start(&cx, &llm, &req);
         let attempt = trace.attempt();
         trace.observe(&chunk("hi"));
         trace.end_attempt(attempt, None);
@@ -174,8 +174,8 @@ fn a_request_records_its_attempt_metrics_and_messages() {
 fn request_metrics_carry_the_genai_labels() {
     let (records, cx) = traced(false);
     let llm = Script { label: "openai.LLM", serves: true };
-    let mut req = request();
-    let trace = LlmTrace::start(&cx, &llm, &mut req);
+    let req = request();
+    let trace = LlmTrace::start(&cx, &llm, &req);
     trace.end(false, None);
     let measured = records.measurements();
     let duration = measured

@@ -74,7 +74,7 @@ impl lk_agents_abi::telemetry::host::HostSpan for HostSpan {
     }
 
     fn context(&self) -> SpanContext {
-        self.context.into()
+        self.context
     }
 
     fn is_recording(&self) -> bool {

@@ -2418,7 +2418,7 @@ and verification. Placement:
 
 | Crate | Owns |
 | --- | --- |
-| `lk-agents-abi` | Span, event, metric and record declarations (`telemetry::spans`); the attribute wire types; `SpanRef` |
+| `lk-agents-abi` | Span, event, metric and record declarations (`telemetry::spans`); the attribute wire types; `SpanContext` |
 | `lk-agents-core` | `ManualSpan` and `Trace` for sans-I/O machines; destination policy, admission and byte charges; report records and tags |
 | `lk-agents-voice` | The session's spans, each owned by the entity it describes (session, user turn, speech) |
 | `lk-agents-runtime`, `-inference`, `-worker` | `ScopedSpan` spans at their I/O choke points; activating the current span for host calls |
@@ -2427,7 +2427,7 @@ and verification. Placement:
 
 Rules:
 
-- Parentage comes from explicit data: a `ManualSpan` parent handle, a `SpanRef`
+- Parentage comes from explicit data: a `ManualSpan` parent handle, a `SpanContext`
   in an effect, the `cx` of a `ScopedSpan`, the Invocation of a host call, or a
   validated W3C `traceparent`. No span is found through a process-global or
   thread-local current span.

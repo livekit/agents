@@ -3,6 +3,8 @@
 //! latencies between them; the job's registration with the exporter's Cloud destination; and the
 //! names the job's logic spells `telemetry::` (`telemetry.md`, rule 4).
 
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
+
 use lk_agents_abi::ATTRIBUTE_SIMULATOR_DISPATCH;
 use lk_agents_abi::telemetry::decl::Seconds;
 pub(crate) use lk_agents_abi::telemetry::record::JobKey;

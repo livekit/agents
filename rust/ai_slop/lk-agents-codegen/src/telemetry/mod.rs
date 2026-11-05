@@ -331,14 +331,15 @@ impl Reader<'_> {
             }
         }
         check(&r)?;
-        let mut listed = self.manual_list()?;
-        let mut manual: Vec<String> =
-            r.spans.iter().filter(|s| s.manual).map(|s| s.name.clone()).collect();
-        listed.sort();
-        manual.sort();
-        if listed != manual {
+        let mut declared: Vec<String> = r.spans.iter().map(|s| s.name.clone()).collect();
+        declared.sort();
+        let listed = self.span_list()?.map(|mut listed| {
+            listed.sort();
+            listed
+        });
+        if let Some(listed) = listed.filter(|listed| *listed != declared) {
             return Err(format!(
-                "telemetry::spans::MANUAL lists {listed:?}; the `handle = Manual` spans are {manual:?}"
+                "telemetry::spans::SPANS lists {listed:?}; the `#[span]` declarations are {declared:?}"
             ));
         }
         let mut listed = self.genai_content_list()?;
@@ -388,9 +389,10 @@ impl Reader<'_> {
         Ok(keys)
     }
 
-    /// The span names `telemetry::spans::MANUAL` lists, one `Declared::of::<D>()` each.
-    fn manual_list(&self) -> Result<Vec<String>, String> {
-        let here = "telemetry::spans::MANUAL";
+    /// The span names `telemetry::spans::SPANS` lists, one `Declared::of::<D>()` each; `None`
+    /// for a crate without the list.
+    fn span_list(&self) -> Result<Option<Vec<String>>, String> {
+        let here = "telemetry::spans::SPANS";
         let found = self
             .krate
             .modules
@@ -399,11 +401,11 @@ impl Reader<'_> {
             .filter(|(_, m)| m.path == ["telemetry", "spans"])
             .find_map(|(i, m)| {
                 m.items.iter().find_map(|item| match item {
-                    syn::Item::Const(c) if c.ident == "MANUAL" => Some((i, &*c.expr)),
+                    syn::Item::Const(c) if c.ident == "SPANS" => Some((i, &*c.expr)),
                     _ => None,
                 })
             });
-        let Some((module, expr)) = found else { return Ok(Vec::new()) };
+        let Some((module, expr)) = found else { return Ok(None) };
         let syn::Expr::Reference(r) = expr else { return Err(format!("{here} is `&[..]`")) };
         let syn::Expr::Array(items) = &*r.expr else { return Err(format!("{here} is `&[..]`")) };
         let mut names = Vec::new();
@@ -427,7 +429,7 @@ impl Reader<'_> {
                 _ => return Err(format!("{here}: `{}` is not a `#[span]`", path_str(ty))),
             }
         }
-        Ok(names)
+        Ok(Some(names))
     }
 
     /// The structs a declaration flattens or names as a span's end: not groups of their own.

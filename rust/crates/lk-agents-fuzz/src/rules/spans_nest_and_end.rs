@@ -3,16 +3,16 @@
 //! parent its declaration allows, within that parent unless declared to outlive it; the session
 //! ends its spans itself, so none reaches the close sweep, and a failed span is never recorded as
 //! cancelled. A span out of this shape is a turn lost, orphaned, misplaced or never ended on the
-//! dashboard. The runtime's own spans are outside this rule, except that the work a turn records
-//! under it (model requests, tool calls) carries the turn's job and conversation: a span without
-//! its job is never exported to Cloud.
+//! dashboard. The runtime's own spans (scoped) are held to their declared parents, ends and single
+//! end too; the work a turn records under it (model requests, tool calls) carries the turn's job
+//! and conversation: a span without its job is never exported to Cloud.
 use std::collections::BTreeMap;
 
 use lk_agents_abi::telemetry::decl::{Parent, SpanDecl};
 use lk_agents_abi::telemetry::record::{
     Key, Record, SpanRecord, SpanContext, Status, Value,
 };
-use lk_agents_abi::telemetry::spans::{MANUAL, agent_turn, session};
+use lk_agents_abi::telemetry::spans::{SPANS, agent_turn, session};
 use lk_agents_voice::events::SessionEvent;
 use lk_agents_voice::trace::{PlayoutStep, Step, ToolStep};
 
@@ -29,10 +29,11 @@ pub struct SpansNestAndEnd;
 impl Rule for SpansNestAndEnd {
     const CONTRACT: Contract = Contract {
         id: "spans_nest_and_end",
-        guarantee: "Every voice span ends exactly once, under a declared parent and within it unless declared to outlive it; a session that ended, closed or dropped, exported its root, the close sweep ends nothing, no failure is recorded as cancelled, an agent turn names what interrupted it exactly when it was interrupted and where its playout stopped when cut while heard, and the work recorded under a turn carries its job and conversation.",
+        guarantee: "Every span ends exactly once, under a declared parent and within it unless declared to outlive it; a session that ended, closed or dropped, exported its root, the close sweep ends nothing, no failure is recorded as cancelled, an agent turn names what interrupted it exactly when it was interrupted and where its playout stopped when cut while heard, and the work recorded under a turn carries its job and conversation.",
         examples: &[spoke_once],
         counterexamples: &[
             wrong_parent,
+            scoped_wrong_parent,
             parent_ends_first,
             ended_twice,
             swept,
@@ -97,7 +98,8 @@ impl Rule for SpansNestAndEnd {
             })
             .map(|speech| format!("_{}", speech.id))
             .collect();
-        let decl = |name: &str| MANUAL.iter().find(|d| d.name == name);
+        let decl = |name: &str| SPANS.iter().find(|d| d.name == name);
+        let manual = |name: &str| decl(name).is_some_and(|d| d.manual);
         let mut by_id: BTreeMap<u64, &SpanRecord> = BTreeMap::new();
         for span in &spans {
             if decl(&span.name).is_none() {
@@ -108,6 +110,11 @@ impl Rule for SpansNestAndEnd {
                 by_id.insert(span.context.span_id, span).is_none(),
                 format!("{} {:?} ended twice", span.name, span.context.span_id),
             );
+            // A scoped span dropped without `end` is cancelled by design; the session's own
+            // spans are ended by their owner.
+            if !manual(&span.name) {
+                continue;
+            }
             let cancelled =
                 span.attributes.contains(&(Key::Borrowed("lk.cancelled"), Value::Bool(true)));
             check.expect(
@@ -164,7 +171,7 @@ impl Rule for SpansNestAndEnd {
         }
         // Gone, closed or dropped, a session that recorded anything exported its root: the
         // dashboard hangs every row on `agent_session`.
-        let opened = spans.iter().any(|s| decl(&s.name).is_some());
+        let opened = spans.iter().any(|s| manual(&s.name));
         if opened && r.driver_finished() {
             check.expect(
                 Subject::Session,
@@ -178,7 +185,7 @@ impl Rule for SpansNestAndEnd {
 fn span(id: u64, parent: Option<u64>, name: &'static str, end: u64) -> SpanRecord {
     SpanRecord {
         context: SpanContext { trace_id: 1, span_id: id, sampled: true },
-        parent: parent.map(u64),
+        parent,
         name: Key::Borrowed(name),
         kind: Default::default(),
         start_unix_nanos: 0,
@@ -215,6 +222,13 @@ fn spoke_once() -> Recording {
 fn wrong_parent() -> Recording {
     Authored::new()
         .session(ended(vec![span(2, Some(1), "agent_speaking", 1), session_root(2)]))
+        .done()
+}
+
+/// A runtime span (a scoped one) under a parent its declaration does not allow.
+fn scoped_wrong_parent() -> Recording {
+    Authored::new()
+        .session(ended(vec![span(2, Some(1), "llm_request_run", 1), session_root(2)]))
         .done()
 }
 

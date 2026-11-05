@@ -201,12 +201,12 @@ fn policy(
 /// nothing, its chunks handed to the node until the node stops reading.
 async fn complete(
     llm: Arc<dyn Llm>,
-    mut req: ChatRequest,
+    req: ChatRequest,
     cx: telemetry::Cx,
     clock: Arc<dyn Clock>,
     tx: mpsc::Sender<Result<LlmChunk, ProviderError>>,
 ) {
-    let mut trace = telemetry::LlmTrace::start(&cx, llm.as_ref(), &mut req);
+    let mut trace = telemetry::LlmTrace::start(&cx, llm.as_ref(), &req);
     let mut attempts = Attempts::retrying(&req.conn_options, clock.now());
     loop {
         let attempt = trace.attempt();

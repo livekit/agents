@@ -9,7 +9,7 @@ impl VoiceDriver {
     /// The session's history, the turn span of each of its items, and its usage as of `now`.
     pub fn report(&self, now: std::time::SystemTime) -> telemetry::SessionReport {
         let turns = self.session.item_turns.items().iter();
-        let turns = turns.map(|(item, span)| (item.clone(), (*span).into()));
+        let turns = turns.map(|(item, span)| (item.clone(), *span));
         telemetry::SessionReport {
             chat_history: self.session.chat_ctx.items().cloned().collect(),
             turns: turns.collect(),
