@@ -164,6 +164,20 @@ fn round(x: f64, digits: usize) -> f64 {
     format!("{x:.digits$}").parse().unwrap_or(x)
 }
 
+/// Converts the seconds of [`SupervisorOptions::high_ping_threshold`] to a pong's milliseconds.
+const MILLIS_PER_SECOND: f64 = 1000.0;
+
+/// What the runner still reports once it exited: a refusal, or its own end.
+fn read_after_exit(msg: &ToParent) -> bool {
+    matches!(
+        msg,
+        ToParent::Ready { error: Some(_) }
+            | ToParent::JobAccepted { error: Some(_), .. }
+            | ToParent::ShuttingDown
+            | ToParent::Exiting { .. }
+    )
+}
+
 /// Where a graceful close is.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Close {
@@ -209,6 +223,15 @@ enum Command {
     Supervise,
     Initialize(Hello, oneshot::Sender<Result<Option<Duration>, InitError>>),
     StartJob(StartJob, oneshot::Sender<Result<(), StartJobError>>),
+}
+
+/// Whether a driver input still applies once the runner exited.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AfterExit {
+    /// What the runner did or said: still read after its exit.
+    Read,
+    /// A request to the runner: moot once it exited.
+    Dropped,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -484,59 +507,31 @@ impl Driver {
             tokio::select! {
                 biased;
                 () = async { tokio::time::sleep_until(deadline.unwrap()).await }, if deadline.is_some() => continue,
-                exit = runner.finished(), if self.exit.is_none() => self.input(true, |d| d.on_finished(exit)),
-                changed = control.changed(), if control_open => {
-                    if changed.is_err() {
+                exit = runner.finished(), if self.exit.is_none() => self.input(AfterExit::Read, |d| d.on_finished(exit)),
+                changed = control.changed(), if control_open => match changed {
+                    Ok(()) => self.on_control(*control.borrow_and_update(), &mut seen),
+                    Err(_) => {
                         control_open = false;
-                        self.input(false, Self::end);
-                    } else {
-                        let next = *control.borrow_and_update();
-                        if next.kill && !seen.kill {
-                            self.input(false, Self::end);
-                        }
-                        if next.shutdown && !seen.shutdown {
-                            self.input(false, Self::shutdown);
-                        }
-                        seen = next;
+                        self.input(AfterExit::Dropped, Self::end);
                     }
                 },
                 msg = channel.recv(), if reader_open => match msg {
-                    Ok(msg) => self.input(true, |d| d.on_message(msg)),
+                    Ok(msg) => self.input(AfterExit::Read, |d| d.on_message(msg)),
                     Err(reason) => {
                         reader_open = false;
-                        self.input(true, |d| d.on_reader_closed(reason));
+                        self.input(AfterExit::Read, |d| d.on_reader_closed(reason));
                     }
                 },
                 command = commands.recv(), if commands_open => match command {
-                    Some(Command::Supervise) => self.input(false, Self::supervise),
-                    Some(Command::Initialize(hello, reply)) => {
-                        if self.stopping() {
-                            let _ = reply.send(Err(InitError::Closed));
-                        } else if self.init_reply.is_some() {
-                            let _ = reply.send(Err(InitError::AlreadyInitializing));
-                        } else {
-                            self.init_reply = Some(reply);
-                            self.input(false, |d| d.initialize(hello));
-                        }
-                    }
-                    Some(Command::StartJob(job, reply)) => {
-                        if self.job_reply.is_some() {
-                            let _ = reply.send(Err(StartJobError::AlreadyRunning));
-                        } else {
-                            self.next_job_id += 1;
-                            let request_id = self.next_job_id;
-                            self.job_reply = Some((request_id, reply));
-                            self.input(false, |d| d.start_job(request_id, job));
-                        }
-                    }
+                    Some(command) => self.on_command(command),
                     None => {
                         commands_open = false;
-                        self.input(false, Self::end);
+                        self.input(AfterExit::Dropped, Self::end);
                     }
                 },
                 sample = async { self.sampling.as_mut().unwrap().await }, if self.sampling.is_some() => {
                     self.sampling = None;
-                    self.input(false, |d| d.on_sample(sample.ok().flatten()));
+                    self.input(AfterExit::Dropped, |d| d.on_sample(sample.ok().flatten()));
                 }
             }
             self.publish();
@@ -559,6 +554,55 @@ impl Driver {
         self.status.send_modify(|status| status.cleaned = true);
     }
 
+    /// The handle's control changed to `next`: each of kill and shutdown acts once.
+    fn on_control(&mut self, next: Control, seen: &mut Control) {
+        if next.kill && !seen.kill {
+            self.input(AfterExit::Dropped, Self::end);
+        }
+        if next.shutdown && !seen.shutdown {
+            self.input(AfterExit::Dropped, Self::shutdown);
+        }
+        *seen = next;
+    }
+
+    fn on_command(&mut self, command: Command) {
+        match command {
+            Command::Supervise => self.input(AfterExit::Dropped, Self::supervise),
+            Command::Initialize(hello, reply) => self.initialize_requested(hello, reply),
+            Command::StartJob(job, reply) => self.job_requested(job, reply),
+        }
+    }
+
+    /// One initialize at a time, and none once the runner is stopping.
+    fn initialize_requested(
+        &mut self,
+        hello: Hello,
+        reply: oneshot::Sender<Result<Option<Duration>, InitError>>,
+    ) {
+        if self.stopping() {
+            let _ = reply.send(Err(InitError::Closed));
+            return;
+        }
+        if self.init_reply.is_some() {
+            let _ = reply.send(Err(InitError::AlreadyInitializing));
+            return;
+        }
+        self.init_reply = Some(reply);
+        self.input(AfterExit::Dropped, |d| d.initialize(hello));
+    }
+
+    /// One job submission at a time, each with its own request id.
+    fn job_requested(&mut self, job: StartJob, reply: oneshot::Sender<Result<(), StartJobError>>) {
+        if self.job_reply.is_some() {
+            let _ = reply.send(Err(StartJobError::AlreadyRunning));
+            return;
+        }
+        self.next_job_id += 1;
+        let request_id = self.next_job_id;
+        self.job_reply = Some((request_id, reply));
+        self.input(AfterExit::Dropped, |d| d.start_job(request_id, job));
+    }
+
     fn now(&self) -> Duration {
         Instant::now().duration_since(self.origin)
     }
@@ -568,13 +612,13 @@ impl Driver {
     }
 
     /// One input: what is due first (a reply at a deadline cannot revive an expired phase), then
-    /// the input, which after the exit only `after_exit` inputs still reach.
-    fn input(&mut self, after_exit: bool, f: impl FnOnce(&mut Self)) {
+    /// the input, which after the exit only [`AfterExit::Read`] inputs still reach.
+    fn input(&mut self, after_exit: AfterExit, f: impl FnOnce(&mut Self)) {
         if self.cleaned() {
             return;
         }
         self.tick();
-        if self.exited() && !after_exit {
+        if self.exited() && after_exit == AfterExit::Dropped {
             return;
         }
         f(self);
@@ -838,101 +882,99 @@ impl Driver {
     }
 
     fn on_message(&mut self, msg: ToParent) {
-        if self.exited() {
-            match &msg {
-                ToParent::Ready { error: Some(_) } => {}
-                ToParent::JobAccepted { error: Some(_), .. }
-                | ToParent::ShuttingDown
-                | ToParent::Exiting { .. } => {}
-                _ => return,
-            }
+        if self.exited() && !read_after_exit(&msg) {
+            return;
         }
         let now = self.now();
         if let Some((started, _)) = self.init.take() {
-            let result = match msg {
-                ToParent::Ready { error: Some(error) } => Err(InitError::Failed(error)),
-                ToParent::Ready { error: None } => {
-                    self.initialized = true;
-                    let elapsed = now.saturating_sub(started);
-                    let extra =
-                        vec![("elapsed_time", ExtraValue::Float(round(elapsed.as_secs_f64(), 2)))];
-                    let message = format!("{} initialized", self.opts.runner);
-                    self.host.log(Level::Info, &message, extra);
-                    Ok(Some(elapsed))
-                }
-                _ => Err(InitError::Unexpected),
-            };
-            let refusal = match &result {
-                Err(error) => Some(ProtocolError::Unexpected(error.to_string())),
-                Ok(_) => None,
-            };
-            self.reply_init(result);
-            if let Some(refusal) = refusal {
-                self.fail_protocol(Arc::new(refusal));
-            }
+            self.on_init_reply(started, now, msg);
             return;
         }
         match msg {
-            ToParent::Pong { sent_ms } => {
-                self.ping_unanswered = false;
-                let delay = unix_now_ms().saturating_sub(sent_ms as i64);
-                if delay as f64 > self.opts.high_ping_threshold * 1000.0 {
-                    let message = format!("{} is unresponsive", self.opts.runner);
-                    self.host.log(
-                        Level::Warning,
-                        &message,
-                        vec![("delay", ExtraValue::Int(delay))],
-                    );
-                }
-                // a late pong does not revive a deadline that fired
-                if self.pong_deadline.is_some() {
-                    self.pong_deadline = Some(now + secs(self.opts.ping_timeout));
-                }
-            }
+            ToParent::Pong { sent_ms } => self.on_pong(sent_ms, now),
             ToParent::ShutdownAck => {
                 self.acked = true;
                 self.advance_close();
             }
-            ToParent::ShuttingDown => {
-                self.shutting_down = true;
-                self.next_ping = None;
-                self.pong_deadline = None;
-                if self.close == Close::None {
-                    self.closing = true;
-                    self.close = Close::Exit(now + secs(self.opts.close_timeout));
-                    self.cleanup_at.get_or_insert(now + secs(self.opts.close_timeout));
-                }
-                self.advance_close();
-            }
+            ToParent::ShuttingDown => self.on_shutting_down(now),
             ToParent::Exiting { reason } => {
                 let extra = vec![("reason", ExtraValue::Str(reason))];
                 self.host.log(Level::Info, &format!("{} exiting", self.opts.runner), extra);
             }
-            ToParent::JobAccepted { request_id, error } => {
-                if self.pending_job.is_some_and(|(pending, _)| pending == request_id) {
-                    self.pending_job = None;
-                    let result = match error {
-                        Some(error) => Err(StartJobError::Rejected(error)),
-                        None => {
-                            self.running_job = true;
-                            Ok(())
-                        }
-                    };
-                    let refused = result.is_err();
-                    self.reply_job(request_id, result);
-                    if refused {
-                        self.end();
-                    }
-                } else {
-                    self.fail_protocol(Arc::new(ProtocolError::Unexpected(format!(
-                        "job acknowledgment {request_id} has no pending submission"
-                    ))));
-                }
-            }
+            ToParent::JobAccepted { request_id, error } => self.on_job_accepted(request_id, error),
             ToParent::Ready { .. } => {
                 self.fail_protocol(Arc::new(ProtocolError::Unexpected("unsolicited Ready".into())))
             }
         }
+    }
+
+    /// The runner's answer to the initialize: a refusal or anything but `Ready` fails it.
+    fn on_init_reply(&mut self, started: Duration, now: Duration, msg: ToParent) {
+        let result = match msg {
+            ToParent::Ready { error: Some(error) } => Err(InitError::Failed(error)),
+            ToParent::Ready { error: None } => {
+                self.initialized = true;
+                let elapsed = now.saturating_sub(started);
+                let extra =
+                    vec![("elapsed_time", ExtraValue::Float(round(elapsed.as_secs_f64(), 2)))];
+                let message = format!("{} initialized", self.opts.runner);
+                self.host.log(Level::Info, &message, extra);
+                Ok(Some(elapsed))
+            }
+            _ => Err(InitError::Unexpected),
+        };
+        let refusal = match &result {
+            Err(error) => Some(ProtocolError::Unexpected(error.to_string())),
+            Ok(_) => None,
+        };
+        self.reply_init(result);
+        if let Some(refusal) = refusal {
+            self.fail_protocol(Arc::new(refusal));
+        }
+    }
+
+    fn on_pong(&mut self, sent_ms: u64, now: Duration) {
+        self.ping_unanswered = false;
+        let delay = unix_now_ms().saturating_sub(sent_ms as i64);
+        if delay as f64 > self.opts.high_ping_threshold * MILLIS_PER_SECOND {
+            let message = format!("{} is unresponsive", self.opts.runner);
+            self.host.log(Level::Warning, &message, vec![("delay", ExtraValue::Int(delay))]);
+        }
+        // a late pong does not revive a deadline that fired
+        if self.pong_deadline.is_some() {
+            self.pong_deadline = Some(now + secs(self.opts.ping_timeout));
+        }
+    }
+
+    /// The runner is ending on its own: it has the close timeout to exit.
+    fn on_shutting_down(&mut self, now: Duration) {
+        self.shutting_down = true;
+        self.next_ping = None;
+        self.pong_deadline = None;
+        if self.close == Close::None {
+            self.closing = true;
+            self.close = Close::Exit(now + secs(self.opts.close_timeout));
+            self.cleanup_at.get_or_insert(now + secs(self.opts.close_timeout));
+        }
+        self.advance_close();
+    }
+
+    /// The runner took the pending job, or refused it, which ends the runner.
+    fn on_job_accepted(&mut self, request_id: u64, error: Option<String>) {
+        if !self.pending_job.is_some_and(|(pending, _)| pending == request_id) {
+            self.fail_protocol(Arc::new(ProtocolError::Unexpected(format!(
+                "job acknowledgment {request_id} has no pending submission"
+            ))));
+            return;
+        }
+        self.pending_job = None;
+        let Some(error) = error else {
+            self.running_job = true;
+            self.reply_job(request_id, Ok(()));
+            return;
+        };
+        self.reply_job(request_id, Err(StartJobError::Rejected(error)));
+        self.end();
     }
 
     /// The first protocol failure remains authoritative even when the runner exits 0.

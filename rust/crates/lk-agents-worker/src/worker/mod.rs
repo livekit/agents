@@ -31,6 +31,9 @@ pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 
 const MAX_PENDING_WRITES: usize = 64;
 
+/// How long the loop sleeps when no timer is due; any input wakes it sooner.
+const IDLE_WAKE: Duration = Duration::from_secs(3600);
+
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeError {
     #[error("{0}")]
@@ -699,7 +702,7 @@ impl Worker {
                 .timers
                 .next_deadline()
                 .map(|at| at.saturating_duration_since(self.clock.now()))
-                .unwrap_or(Duration::from_secs(3600));
+                .unwrap_or(IDLE_WAKE);
             let result = tokio::select! {
                 changed = self.control.changed(), if control_open => {
                     if changed.is_ok() {
@@ -722,14 +725,13 @@ impl Worker {
                     }
                     Ok(())
                 }
-                event = connection.next_event(self.transport.clone(), &self.runtime_cfg) => {
-                    event.map(|event| {
-                        if matches!(event, ConnectionEvent::Registered(_)) {
-                            retries = 0;
-                        }
-                        self.handle_connection_event(event, &mut connection.outbox)
-                    })
-                }
+                event = connection.next_event(self.transport.clone(), &self.runtime_cfg) => event.map(|event| {
+                    // A registration ends the reconnect attempts.
+                    if matches!(event, ConnectionEvent::Registered(_)) {
+                        retries = 0;
+                    }
+                    self.handle_connection_event(event, &mut connection.outbox)
+                }),
                 _ = tokio::time::sleep(timer) => Ok(()),
             };
             self.settle();

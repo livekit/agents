@@ -259,36 +259,11 @@ impl Inner {
             tokio::select! {
                 r = &mut wait_entry, if !entry_done => {
                     entry_done = true;
-                    match r {
-                        Err(e) if cancelled(&e) => telemetry::event(root, telemetry::EntrypointCancelled),
-                        Err(e) => {
-                            crash = Some(e.clone());
-                            self.log(Level::Error, "unhandled exception while running the job task", Some(e), Vec::new());
-                            // A crash before ctx.connect() resolves nothing else: the shutdown
-                            // still runs, so the cleanup can flush the crash logs.
-                            self.end("job crashed".into(), telemetry::ShutdownCause::EntrypointCrashed);
-                        }
-                        Ok(()) => {
-                            telemetry::event(root, telemetry::EntrypointReturned);
-                            let unfinished = {
-                                let st = self.state.lock();
-                                !st.connected && st.cause != Some(telemetry::ShutdownCause::Application) && !self.fake
-                            };
-                            if unfinished {
-                                self.log(Level::Warning, "The job task completed without establishing a connection or performing a proper shutdown. Ensure that job_ctx.connect()/job_ctx.shutdown() is called and the job is correctly finalized.", None, Vec::new());
-                            }
-                        }
-                    }
+                    crash = self.entrypoint_settled(root, r);
                 }
                 () = &mut warn_at, if !entry_done && !warned => {
                     warned = true;
-                    let unconnected = {
-                        let st = self.state.lock();
-                        !st.connected && st.cause != Some(telemetry::ShutdownCause::Application)
-                    };
-                    if unconnected {
-                        self.log(Level::Warning, "The room connection was not established within 10 seconds after calling job_entry. This might mean that job_ctx.connect() was never invoked, or that no VoiceSession with an active RoomIO has been started.", None, Vec::new());
-                    }
+                    self.warn_if_unconnected();
                 }
                 _ = ended.wait_for(|e| *e) => break,
             }
@@ -314,9 +289,78 @@ impl Inner {
             let _ = host.cancel(shutdown.cx(), cx, entry).await;
             telemetry::event(root, telemetry::EntrypointCancelled);
         }
+        self.close_session(host, cx, shutdown.cx()).await;
+        self.run_session_end(host, cx, shutdown.cx()).await;
+        self.announce_exit(&reason, cause).await;
+        let disconnect = telemetry::start(shutdown.cx(), telemetry::RoomDisconnect);
+        let disconnected = host.disconnect(disconnect.cx(), cx).await;
+        telemetry::end(disconnect, disconnected.as_ref());
+        disconnected?;
+        self.run_shutdown_callbacks(host, cx, shutdown.cx(), &reason).await;
+        telemetry::end(shutdown, ());
+        Ok(crash)
+    }
 
+    /// The entrypoint returned or raised: its unhandled exception, which ends the job.
+    fn entrypoint_settled(
+        &self,
+        root: &telemetry::ScopedSpan<telemetry::JobEntrypoint>,
+        settled: Result<(), HostError>,
+    ) -> Option<HostError> {
+        match settled {
+            Err(e) if cancelled(&e) => {
+                telemetry::event(root, telemetry::EntrypointCancelled);
+                None
+            }
+            Err(e) => {
+                self.log(
+                    Level::Error,
+                    "unhandled exception while running the job task",
+                    Some(e.clone()),
+                    Vec::new(),
+                );
+                // A crash before ctx.connect() resolves nothing else: the shutdown
+                // still runs, so the cleanup can flush the crash logs.
+                self.end("job crashed".into(), telemetry::ShutdownCause::EntrypointCrashed);
+                Some(e)
+            }
+            Ok(()) => {
+                telemetry::event(root, telemetry::EntrypointReturned);
+                let unfinished = {
+                    let st = self.state.lock();
+                    !st.connected
+                        && st.cause != Some(telemetry::ShutdownCause::Application)
+                        && !self.fake
+                };
+                if unfinished {
+                    self.log(Level::Warning, "The job task completed without establishing a connection or performing a proper shutdown. Ensure that job_ctx.connect()/job_ctx.shutdown() is called and the job is correctly finalized.", None, Vec::new());
+                }
+                None
+            }
+        }
+    }
+
+    /// The entrypoint is still running past [`CONNECT_WARNING_DELAY`]: a warning unless the room
+    /// connected or the application ended the job.
+    fn warn_if_unconnected(&self) {
+        let unconnected = {
+            let st = self.state.lock();
+            !st.connected && st.cause != Some(telemetry::ShutdownCause::Application)
+        };
+        if unconnected {
+            self.log(Level::Warning, "The room connection was not established within 10 seconds after calling job_entry. This might mean that job_ctx.connect() was never invoked, or that no VoiceSession with an active RoomIO has been started.", None, Vec::new());
+        }
+    }
+
+    /// `VoiceSession.aclose()` within its bound; the shutdown goes on whatever it does.
+    async fn close_session(
+        &self,
+        host: &Arc<dyn JobProcess>,
+        cx: &CallContext,
+        under: &telemetry::Cx,
+    ) {
         let aclose_timeout = self.session_aclose_timeout;
-        match tokio::time::timeout(secs(aclose_timeout), host.close_session(shutdown.cx(), cx)).await {
+        match tokio::time::timeout(secs(aclose_timeout), host.close_session(under, cx)).await {
             Ok(Err(error)) => {
                 self.log(Level::Error, "error while closing the session", Some(error), Vec::new())
             }
@@ -330,12 +374,18 @@ impl Inner {
                 Vec::new(),
             ),
         }
+    }
 
+    /// The door's `on_session_end`, then the session report's upload, each in its span.
+    async fn run_session_end(
+        &self,
+        host: &Arc<dyn JobProcess>,
+        cx: &CallContext,
+        under: &telemetry::Cx,
+    ) {
         if let Some(session_end) = &self.session_end {
-            let span = telemetry::start(
-                shutdown.cx(),
-                telemetry::OnSessionEnd { callback: session_end.clone() },
-            );
+            let span =
+                telemetry::start(under, telemetry::OnSessionEnd { callback: session_end.clone() });
             let under = span.cx().clone();
             self.step(
                 span,
@@ -345,7 +395,7 @@ impl Inner {
             )
             .await;
         }
-        let span = telemetry::start(shutdown.cx(), telemetry::SessionEndUpload);
+        let span = telemetry::start(under, telemetry::SessionEndUpload);
         let under = span.cx().clone();
         self.step(
             span,
@@ -354,41 +404,40 @@ impl Inner {
             "failed to upload the session report",
         )
         .await;
-        // The parent learns the job is ending, then why.
+    }
+
+    /// The parent learns the job is ending, then why.
+    async fn announce_exit(&self, reason: &str, cause: telemetry::ShutdownCause) {
         if let Some(parent) = self.parent.get() {
             let _ = parent.send(ToParent::ShuttingDown).await;
         }
         let extra = vec![
-            ("reason", ExtraValue::Str(reason.clone())),
+            ("reason", ExtraValue::Str(reason.to_owned())),
             ("user_initiated", ExtraValue::Bool(cause == telemetry::ShutdownCause::Application)),
         ];
         self.log(Level::Debug, "shutting down job task", None, extra);
         if let Some(parent) = self.parent.get() {
-            let _ = parent.send(ToParent::Exiting { reason: bounded(reason.clone()) }).await;
+            let _ = parent.send(ToParent::Exiting { reason: bounded(reason.to_owned()) }).await;
         }
-        let disconnect = telemetry::start(shutdown.cx(), telemetry::RoomDisconnect);
-        let disconnected = host.disconnect(disconnect.cx(), cx).await;
-        telemetry::end(disconnect, disconnected.as_ref());
-        disconnected?;
+    }
 
-        // The shutdown callbacks run together.
+    /// The shutdown callbacks run together: all start before any is awaited.
+    async fn run_shutdown_callbacks(
+        &self,
+        host: &Arc<dyn JobProcess>,
+        cx: &CallContext,
+        under: &telemetry::Cx,
+        reason: &str,
+    ) {
         let callbacks = std::mem::take(&mut self.state.lock().shutdown_callbacks);
         let spawner = TokioSpawner::new(self.spawner.handle().clone());
         let runs: Vec<_> = callbacks
             .into_iter()
-            .map(|ShutdownCallback { callback, takes_reason, framework, name }| {
-                let (host, cx, parent) = (host.clone(), cx.clone(), shutdown.cx().clone());
-                let reason = takes_reason.then(|| reason.clone());
-                spawner.spawn(async move {
-                    if framework {
-                        return host.shutdown_callback(&parent, &cx, callback, reason).await;
-                    }
-                    let span =
-                        telemetry::start(&parent, telemetry::ShutdownCallback { callback: name });
-                    let ran = host.shutdown_callback(span.cx(), &cx, callback, reason).await;
-                    telemetry::end(span, ran.as_ref());
-                    ran
-                })
+            .map(|callback| {
+                let reason = callback.takes_reason.then(|| reason.to_owned());
+                let run =
+                    shutdown_callback(host.clone(), cx.clone(), under.clone(), callback, reason);
+                spawner.spawn(run)
             })
             .collect();
         for run in runs {
@@ -401,9 +450,24 @@ impl Inner {
                 );
             }
         }
-        telemetry::end(shutdown, ());
-        Ok(crash)
     }
+}
+
+/// One shutdown callback, in a span of its own unless livekit-agents registered it.
+async fn shutdown_callback(
+    host: Arc<dyn JobProcess>,
+    cx: CallContext,
+    parent: telemetry::Cx,
+    ShutdownCallback { callback, framework, name, .. }: ShutdownCallback,
+    reason: Option<String>,
+) -> Result<(), HostError> {
+    if framework {
+        return host.shutdown_callback(&parent, &cx, callback, reason).await;
+    }
+    let span = telemetry::start(&parent, telemetry::ShutdownCallback { callback: name });
+    let ran = host.shutdown_callback(span.cx(), &cx, callback, reason).await;
+    telemetry::end(span, ran.as_ref());
+    ran
 }
 
 fn log_level(level: Level) -> log::Level {

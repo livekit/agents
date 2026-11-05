@@ -44,40 +44,64 @@ pub fn watch_parent<F: FnOnce() + Send + 'static>(
     on_orphan: F,
 ) -> (mpsc::Receiver<ToChild>, OwnedTask<Result<(), ChannelError>>) {
     let (inbox, received) = mpsc::channel(INBOX);
+    let timeout = health_timeout.map(|t| t.min(FAR_DEADLINE));
+    let mut watch = ParentWatch {
+        channel,
+        inbox,
+        timeout,
+        deadline: Instant::now() + timeout.unwrap_or(FAR_DEADLINE),
+        pending: None,
+    };
     let watching = TokioSpawner::current().spawn(async move {
-        let far = Duration::from_secs(1 << 30);
-        let timeout = health_timeout.map(|t| t.min(far));
-        let mut deadline = Instant::now() + timeout.unwrap_or(far);
-        let mut pending = None;
+        let watched = watch.run().await;
+        if watched.is_err() {
+            on_orphan();
+        }
+        watched
+    });
+    (received, watching)
+}
+
+/// The deadline that stands for none, kept small enough to add to an `Instant`.
+const FAR_DEADLINE: Duration = Duration::from_secs(1 << 30);
+
+/// [`watch_parent`]'s task: one message at a time from the parent into the inbox.
+struct ParentWatch {
+    channel: Arc<Channel<ToParent, ToChild>>,
+    inbox: mpsc::Sender<ToChild>,
+    timeout: Option<Duration>,
+    deadline: Instant,
+    /// The message read but not yet admitted to the inbox.
+    pending: Option<ToChild>,
+}
+
+impl ParentWatch {
+    /// `Ok` once the child dropped its inbox; an error when the parent went, sent what cannot be
+    /// read or went quiet. The caller keeps the inbox open until it handled the end.
+    async fn run(&mut self) -> Result<(), ChannelError> {
         loop {
             tokio::select! {
                 biased;
-                () = tokio::time::sleep_until(deadline), if timeout.is_some() => {
-                    on_orphan();
+                () = tokio::time::sleep_until(self.deadline), if self.timeout.is_some() => {
                     return Err(ChannelError::Io {
                         kind: std::io::ErrorKind::TimedOut,
                         os_error: None,
                         message: "the IPC parent exceeded its health timeout".into(),
                     });
                 }
-                permit = inbox.reserve(), if pending.is_some() => {
+                permit = self.inbox.reserve(), if self.pending.is_some() => {
                     let Ok(permit) = permit else { return Ok(()) };
-                    permit.send(pending.take().unwrap());
+                    permit.send(self.pending.take().unwrap());
                 }
-                msg = channel.recv(), if pending.is_none() => match msg {
-                    Ok(msg) => {
-                        if let Some(timeout) = timeout { deadline = Instant::now() + timeout; }
-                        pending = Some(msg);
+                msg = self.channel.recv(), if self.pending.is_none() => {
+                    self.pending = Some(msg?);
+                    if let Some(timeout) = self.timeout {
+                        self.deadline = Instant::now() + timeout;
                     }
-                    Err(error) => {
-                        on_orphan();
-                        return Err(error);
-                    }
-                },
+                }
             }
         }
-    });
-    (received, watching)
+    }
 }
 
 impl ChildChannel {
@@ -131,6 +155,17 @@ impl ChildChannel {
             .map_err(|_| WorkerError::Failed("the runner started a foreign JobRun".into()))?;
         run.report_to(self.channel.clone());
         self.run.set(run).map_err(|_| running())
+    }
+
+    /// The inbox ended: why the parent watch ended, with the parent closing counted as done.
+    async fn finish_watching(&self) -> Result<(), WorkerError> {
+        let watching = self.watching.lock().take();
+        let Some(watching) = watching else { return Ok(()) };
+        match watching.await {
+            Ok(Ok(())) | Ok(Err(ChannelError::Closed)) => Ok(()),
+            Ok(Err(error)) => Err(WorkerError::Failed(error.to_string())),
+            Err(error) => Err(WorkerError::Failed(error.to_string())),
+        }
     }
 }
 
@@ -202,15 +237,7 @@ impl lk_agents_abi::worker::ipc_host::IpcClient for ChildChannel {
         let served = async {
             loop {
                 let Some(msg) = self.inbox.lock().await.recv().await else {
-                    let watching = self.watching.lock().take();
-                    return match watching {
-                        Some(watching) => match watching.await {
-                            Ok(Ok(())) | Ok(Err(ChannelError::Closed)) => Ok(()),
-                            Ok(Err(error)) => Err(WorkerError::Failed(error.to_string())),
-                            Err(error) => Err(WorkerError::Failed(error.to_string())),
-                        },
-                        None => Ok(()),
-                    };
+                    return self.finish_watching().await;
                 };
                 if !self.on_message(host.as_ref(), msg).await? {
                     return Ok(());

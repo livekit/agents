@@ -28,6 +28,10 @@ pub const VERSION: u32 = 6;
 pub const MAX_FRAME: usize = 4 << 20;
 /// Frames queued in each direction.
 const QUEUE: usize = 16;
+/// The preamble's length: [`MAGIC`], then [`VERSION`].
+const PREAMBLE: usize = MAGIC.len() + size_of::<u32>();
+/// The empty frame that ends a stream.
+const END_FRAME: [u8; 4] = [0; 4];
 /// How long [`Channel::close`] flushes what is queued, then how long it drains the peer.
 pub const CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -171,11 +175,23 @@ fn frame<T: Serialize>(msg: &T) -> Result<Vec<u8>, SendError> {
     Ok(postcard::to_extend(msg, frame).expect("the messages serialize"))
 }
 
-fn preamble() -> [u8; 8] {
-    let mut preamble = [0; 8];
-    preamble[..4].copy_from_slice(&MAGIC);
-    preamble[4..].copy_from_slice(&VERSION.to_be_bytes());
+fn preamble() -> [u8; PREAMBLE] {
+    let mut preamble = [0; PREAMBLE];
+    preamble[..MAGIC.len()].copy_from_slice(&MAGIC);
+    preamble[MAGIC.len()..].copy_from_slice(&VERSION.to_be_bytes());
     preamble
+}
+
+/// Whether the peer's preamble names this protocol.
+fn check_peer(peer: &[u8; PREAMBLE]) -> Result<(), ChannelError> {
+    let (magic, version) = peer.split_at(MAGIC.len());
+    if magic != MAGIC {
+        return Err(ChannelError::Malformed("the IPC peer is not a LiveKit agents process".into()));
+    }
+    if version != VERSION.to_be_bytes() {
+        return Err(ChannelError::Version(u32::from_be_bytes(version.try_into().unwrap())));
+    }
+    Ok(())
 }
 
 /// The peer finishing or vanishing is `Closed`; a stream ending inside a frame is `Truncated`.
@@ -229,28 +245,31 @@ async fn read_frames<In: DeserializeOwned, R: AsyncRead + Unpin>(
     received: mpsc::Sender<Result<In, ChannelError>>,
     finished: oneshot::Sender<()>,
 ) {
-    let mut peer = [0; 8];
-    let error = match read_start(&mut r, &mut peer).await {
+    let mut peer = [0; PREAMBLE];
+    let started = read_start(&mut r, &mut peer).await.and_then(|()| check_peer(&peer));
+    let error = match started {
         Err(error) => error,
-        Ok(()) if peer[..4] != MAGIC => {
-            ChannelError::Malformed("the IPC peer is not a LiveKit agents process".into())
-        }
-        Ok(()) if peer[4..] != VERSION.to_be_bytes() => {
-            ChannelError::Version(u32::from_be_bytes(peer[4..].try_into().unwrap()))
-        }
-        Ok(()) => loop {
-            match read_frame(&mut r).await {
-                Ok(msg) => {
-                    if received.send(Ok(msg)).await.is_err() {
-                        return;
-                    }
-                }
-                Err(error) => break error,
-            }
+        Ok(()) => match forward_frames(&mut r, &received).await {
+            Some(error) => error,
+            None => return,
         },
     };
     drop(finished);
     let _ = received.send(Err(error)).await;
+}
+
+/// The peer's messages to `received` until the first error; `None` once nobody receives them.
+async fn forward_frames<In: DeserializeOwned, R: AsyncRead + Unpin>(
+    r: &mut R,
+    received: &mpsc::Sender<Result<In, ChannelError>>,
+) -> Option<ChannelError> {
+    loop {
+        let msg = match read_frame(r).await {
+            Ok(msg) => msg,
+            Err(error) => return Some(error),
+        };
+        received.send(Ok(msg)).await.ok()?;
+    }
 }
 
 /// The preamble, then the queued frames until the queue closes or the peer finished (then what
@@ -262,36 +281,43 @@ async fn write_frames<In, W: AsyncWrite + Unpin>(
     mut peer_finished: oneshot::Receiver<()>,
     received: mpsc::Sender<Result<In, ChannelError>>,
 ) {
-    let written = async {
-        w.write_all(&preamble()).await?;
+    let Err(error) = write_queued(&mut w, &mut queued, &mut peer_finished).await else { return };
+    let error = failure(error, false);
+    if !matches!(error, ChannelError::Closed) {
+        let _ = received.send(Err(error)).await;
+    }
+}
+
+async fn write_queued<W: AsyncWrite + Unpin>(
+    w: &mut W,
+    queued: &mut mpsc::Receiver<Vec<u8>>,
+    peer_finished: &mut oneshot::Receiver<()>,
+) -> io::Result<()> {
+    w.write_all(&preamble()).await?;
+    w.flush().await?;
+    let mut peer_reading = true;
+    while let Some(frame) = next_frame(queued, peer_finished, &mut peer_reading).await {
+        w.write_all(&frame).await?;
         w.flush().await?;
-        let mut peer_reading = true;
-        loop {
-            let frame = if peer_reading {
-                tokio::select! {
-                    biased;
-                    frame = queued.recv() => frame,
-                    _ = &mut peer_finished => {
-                        peer_reading = false;
-                        continue;
-                    }
-                }
-            } else {
-                queued.try_recv().ok()
-            };
-            let Some(frame) = frame else { break };
-            w.write_all(&frame).await?;
-            w.flush().await?;
-        }
-        w.write_all(&[0; 4]).await?;
-        w.shutdown().await
-    };
-    if let Err(error) = written.await {
-        let error = failure(error, false);
-        if !matches!(error, ChannelError::Closed) {
-            let _ = received.send(Err(error)).await;
+    }
+    w.write_all(&END_FRAME).await?;
+    w.shutdown().await
+}
+
+/// While the peer reads, the next queued frame; once it finished, only what is already queued.
+async fn next_frame(
+    queued: &mut mpsc::Receiver<Vec<u8>>,
+    peer_finished: &mut oneshot::Receiver<()>,
+    peer_reading: &mut bool,
+) -> Option<Vec<u8>> {
+    if *peer_reading {
+        tokio::select! {
+            biased;
+            frame = queued.recv() => return frame,
+            _ = peer_finished => *peer_reading = false,
         }
     }
+    queued.try_recv().ok()
 }
 
 #[cfg(unix)]
