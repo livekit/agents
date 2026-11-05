@@ -95,4 +95,4 @@ Version 2.0 is a breaking change:
 - TTS `voice` is required and passed verbatim as the provider's voice identifier.
 - Language codes are no longer normalized client-side; send the value the model expects (for example BCP-47 `hi-IN` for Sarvam, not `hi`).
 - STT `recognize()` (HTTP batch) is no longer supported; use `stream()`. Only `pcm_s16le` input audio is supported.
-- `api_token` still works on STT but is deprecated; use `api_key`.
+- STT `api_token` was removed; use `api_key`.

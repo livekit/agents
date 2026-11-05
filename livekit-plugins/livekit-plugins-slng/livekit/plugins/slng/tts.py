@@ -255,7 +255,6 @@ class TTS(tts.TTS[Literal["slng_event"]]):
         api_key: str | None = None,
         model: str | None = None,
         connections: list[str | TTSConnectionConfig] | None = None,
-        model_endpoint: str | None = None,
         provider_api_key: str | None = None,
         voice: str,
         slng_base_url: str = "api.slng.ai",
@@ -308,12 +307,6 @@ class TTS(tts.TTS[Literal["slng_event"]]):
         if {"first_audio_timeout_s", "fallback_recovery_cooldown_s"} & model_options.keys():
             raise TypeError(
                 "Configure timeouts with APIConnectOptions and fallback with tts.FallbackAdapter"
-            )
-        if model_endpoint is not None:
-            raise ValueError(
-                "model_endpoint was removed in 2.0: the plugin always connects "
-                "through the Unmute Bridge. Pass model='provider/model:variant' "
-                "or connections=[...] instead."
             )
         resolved_key = api_key or os.environ.get("SLNG_API_KEY")
         if not resolved_key:
@@ -445,7 +438,6 @@ class TTS(tts.TTS[Literal["slng_event"]]):
                     api_key=resolved_key,
                     connections=[config],
                     model=None,
-                    model_endpoint=None,
                     provider_api_key=provider_api_key,
                     voice=config.voice or voice,
                     slng_base_url=slng_base_url,

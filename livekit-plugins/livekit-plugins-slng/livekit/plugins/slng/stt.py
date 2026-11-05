@@ -19,7 +19,6 @@ import contextlib
 import dataclasses
 import json
 import os
-import warnings
 import weakref
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -177,11 +176,8 @@ class STT(stt.STT[Literal["slng_event"]]):
         self,
         *,
         api_key: str | None = None,
-        api_token: str | None = None,
         model: str | None = None,
         connections: list[str | STTConnectionConfig] | None = None,
-        model_endpoint: str | None = None,
-        model_endpoints: Sequence[str] | None = None,
         provider_api_key: str | None = None,
         slng_base_url: str = "api.slng.ai",
         region_override: str | list[str] | None = None,
@@ -211,7 +207,6 @@ class STT(stt.STT[Literal["slng_event"]]):
 
         Args:
             api_key: SLNG API key. Falls back to the ``SLNG_API_KEY`` env var.
-            api_token: Deprecated alias for ``api_key``.
             model: Unmute Bridge model identifier, e.g. "deepgram/nova:3".
             connections: Ordered model, endpoint, or typed connection candidates.
             provider_api_key: Optional BYOK provider credential, sent as the
@@ -243,19 +238,7 @@ class STT(stt.STT[Literal["slng_event"]]):
             http_session: Optional HTTP session
             **model_options: Model-specific options (e.g., whisper_params={"task": "translate"})
         """
-        if model_endpoint is not None or model_endpoints is not None:
-            raise ValueError(
-                "model_endpoint/model_endpoints were removed in 2.0: the plugin "
-                "always connects through the Unmute Bridge. Pass "
-                "model='provider/model:variant' or connections=[...] instead."
-            )
-        if api_token is not None:
-            warnings.warn(
-                "api_token is deprecated, use api_key instead",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-        resolved_key = api_key or api_token or os.environ.get("SLNG_API_KEY")
+        resolved_key = api_key or os.environ.get("SLNG_API_KEY")
         if not resolved_key:
             raise ValueError("api_key is required, or set the SLNG_API_KEY environment variable")
 

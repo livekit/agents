@@ -149,8 +149,6 @@ RealtimeModel(
 
 The plugin always sends tool calls with `wait_for_speech_before_tool_call` on; this is not configurable per tool.
 
-> **Deprecated:** the top-level `forbid_speech_after_tool_call: list[str]` option still works but is deprecated — it now folds each listed tool into `configs_for_tools` as `forbid_speech_after_tool_call=True` (an explicit `configs_for_tools` entry wins) and logs a warning. Prefer `configs_for_tools`.
-
 ### Built-in tools
 
 Phonic's built-in tools — `choose_not_to_respond`, `keypad_input`, `natural_conversation_ending` — are enabled by listing their names in `phonic_tools`, alongside any Webhook tools. To configure one, add a `configs_for_tools` entry keyed by the same name (`respond_after_sec` for `choose_not_to_respond`; `speech_before_tool_call` for the other two). A built-in listed without a config uses its Phonic-side defaults.
