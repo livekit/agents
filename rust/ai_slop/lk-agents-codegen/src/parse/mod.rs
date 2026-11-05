@@ -62,8 +62,18 @@ pub fn members(attrs: &[syn::Attribute], outer: &str, owner: &str) -> Result<Vec
             continue;
         }
         let keys = &entry.nested;
-        voc::only(owner, keys, &["name", "args", "ret", "doc", "hook"])?;
+        voc::only(owner, keys, &["name", "args", "ret", "doc", "hook", "getter"])?;
         let name = required(owner, keys, "name")?;
+        let getter = voc::text(owner, keys, "getter")?;
+        if let Some(path) = &getter
+            && (entry.key != "property"
+                || voc::find(keys, "hook").is_some()
+                || path.split('.').any(|s| syn::parse_str::<syn::Ident>(s).is_err()))
+        {
+            return Err(format!(
+                "{owner}.{name}: getter = \"a.b\" is a property's attribute path, without a hook"
+            ));
+        }
         let args = voc::text(owner, keys, "args")?.unwrap_or_default();
         out.push(Member {
             hook: voc::text(owner, keys, "hook")?
@@ -74,6 +84,7 @@ pub fn members(attrs: &[syn::Attribute], outer: &str, owner: &str) -> Result<Vec
             args,
             ret: voc::text(owner, keys, "ret")?.unwrap_or_else(|| "None".into()),
             doc: voc::text(owner, keys, "doc")?.unwrap_or_default(),
+            getter,
         });
     }
     Ok(out)

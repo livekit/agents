@@ -41,7 +41,7 @@ if TYPE_CHECKING:
     from ._generated.session_events import ErrorEvent, FunctionToolsExecutedEvent
     from ._generated.storage_class import ThreadInfo
     from ._generated.stt import STT, SpeechData, SpeechEvent
-    from ._generated.usage import TokenUsage, Usage
+    from ._generated.usage import TokenUsage
     from .llm import FallbackAdapter as _LlmFallback
     from .stt import FallbackAdapter as _SttFallback
     from .tts import FallbackAdapter as _TtsFallback
@@ -401,18 +401,6 @@ def metrics_repr(metrics: BaseModel) -> str:
 
 def token_usage_total(tokens: TokenUsage) -> int:
     return tokens.input_tokens + tokens.output_tokens
-
-
-def usage_input_tokens(usage: Usage) -> int:
-    return usage.tokens.input_tokens
-
-
-def usage_output_tokens(usage: Usage) -> int:
-    return usage.tokens.output_tokens
-
-
-def usage_total_tokens(usage: Usage) -> int:
-    return usage.tokens.input_tokens + usage.tokens.output_tokens
 
 
 def speech_data_post_init(data: SpeechData) -> None:

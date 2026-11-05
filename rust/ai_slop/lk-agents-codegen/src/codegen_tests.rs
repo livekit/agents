@@ -380,6 +380,36 @@ fn checked_representations_and_model_methods_are_resolved_before_emission() {
     assert!(invalid.is_err());
 }
 
+// Catches: a declared attribute path answered through a host hook (or not at all), and a path
+// declared on a method or beside a hook accepted.
+#[test]
+fn a_model_property_reads_its_declared_attribute_path() {
+    let declarations = crate::decl::tests::read(r#"
+        #[crate::host(record(module = "values", dataclass, emit))]
+        #[python(property(name = "count", ret = "int", getter = "inner.count", doc = "The inner count."))]
+        pub struct Outer { pub inner: Inner }
+        #[crate::host(record(module = "values", dataclass, emit))]
+        pub struct Inner { pub count: u32 }
+    "#).unwrap();
+    let models = crate::records::python(&declarations).unwrap();
+    let model = &models.iter().find(|model| model.path == "values.py").unwrap().text;
+    assert!(
+        model.contains("    def count(self) -> int:\n        \"\"\"The inner count.\"\"\"\n        return self.inner.count\n"),
+        "{model}"
+    );
+    for member in [
+        r#"method(name = "count", ret = "int", getter = "inner.count")"#,
+        r#"property(name = "count", ret = "int", getter = "inner.count", hook = "count")"#,
+        r#"property(name = "count", ret = "int", getter = "inner..count")"#,
+    ] {
+        let source = format!(
+            "#[crate::host(record(module = \"values\", dataclass, emit))] #[python({member})] pub struct Outer {{ pub n: u32 }}"
+        );
+        let err = crate::decl::tests::read(&source).expect_err(member);
+        assert!(err.contains("a property's attribute path"), "{member}: {err}");
+    }
+}
+
 #[test]
 fn explicit_model_schemas_preserve_layout_and_postponed_callback_types() {
     let declarations = crate::decl::tests::read(r#"

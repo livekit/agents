@@ -160,17 +160,17 @@ class Usage(BaseModel):
     @property
     def input_tokens(self) -> int:
         """``tokens.input_tokens``."""
-        return _bindings.usage_input_tokens(self)
+        return self.tokens.input_tokens
 
     @property
     def output_tokens(self) -> int:
         """``tokens.output_tokens``."""
-        return _bindings.usage_output_tokens(self)
+        return self.tokens.output_tokens
 
     @property
     def total_tokens(self) -> int:
         """``tokens.total_tokens``."""
-        return _bindings.usage_total_tokens(self)
+        return self.tokens.total_tokens
 
 
 TokenUsage.__module__ = "livekit.agents"

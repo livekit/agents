@@ -56,6 +56,9 @@ pub struct Member {
     pub ret: String,
     pub doc: String,
     pub hook: String,
+    /// `getter = "a.b"`: a property answering the attribute along that path of the record
+    /// itself, with no host hook.
+    pub getter: Option<String>,
 }
 
 #[derive(Debug, Clone)]

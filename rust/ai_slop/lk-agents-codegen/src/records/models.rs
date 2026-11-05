@@ -843,6 +843,10 @@ fn properties(r: &RecordDecl, runtime: &mut Imports) -> String {
         } else {
             format!(", {}", member.arguments.join(", "))
         };
+        if let Some(path) = &member.getter {
+            s.push_str(&format!("        return self.{path}\n"));
+            continue;
+        }
         match (r.pydantic.as_ref(), r.dataclass.as_ref(), member.is_property) {
             (Some(_), _, _) => {
                 runtime.add("..", "_bindings");

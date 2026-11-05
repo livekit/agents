@@ -75,6 +75,7 @@
 //! | record struct | `record(.., nested_in = "Owner")` | its model is a class nested in the record struct `Owner`'s model of the same module, named `Owner.Name` (`RealtimeModelMetrics.InputTokenDetails`) |
 //! | record enum | `record(.., transparent, dispatch = "session_dispatch")` | the host routes its members by model class through `_generated/<dispatch>.py` (`PUBLIC_EVENTS`, `MIRRORED_STATES`, `IGNORED_EVENTS`) |
 //! | dispatched variant | `event`, `event(mirror = "_attr")`, `ignored` | emitted as the public event its model's `type` constant names (`mirror`: its `new_state` also kept on the session's `_attr`), or received and dropped; an unrouted member has host behaviour |
+//! | record | `#[python(property(name = "x", ret = "int", getter = "a.b"))]` | a model property answering the record's attribute along that path, with no host hook |
 //! | record struct | `record(.., default)` | Rust `Default` from the fields' `default = <literal>` (a `Maybe` field: not given): one list of defaults for both languages; the one Rust the record marker expands to |
 //! | record struct | `record(.., persisted)` | application-saved state: the model gains private `_to_json()`/`_from_json()` through the record's serde codec in Rust (it derives `Serialize`/`Deserialize`) |
 //! | record field, tuple variant | `default = <literal>` | the model's default: an omitted keyword only; `None` stays a value an `Option` field takes and any other refuses |

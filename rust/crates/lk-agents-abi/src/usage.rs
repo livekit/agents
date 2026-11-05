@@ -247,19 +247,19 @@ pub enum ModelUsage {
     property(
         name = "input_tokens",
         ret = "int",
-        hook = "usage_input_tokens",
+        getter = "tokens.input_tokens",
         doc = "``tokens.input_tokens``."
     ),
     property(
         name = "output_tokens",
         ret = "int",
-        hook = "usage_output_tokens",
+        getter = "tokens.output_tokens",
         doc = "``tokens.output_tokens``."
     ),
     property(
         name = "total_tokens",
         ret = "int",
-        hook = "usage_total_tokens",
+        getter = "tokens.total_tokens",
         doc = "``tokens.total_tokens``."
     )
 )]
