@@ -33,8 +33,6 @@ class AvatarSession(BaseAvatarSession):
         *,
         face_id: NotGivenOr[str] = NOT_GIVEN,
         pal_id: NotGivenOr[str] = NOT_GIVEN,
-        replica_id: NotGivenOr[str] = NOT_GIVEN,
-        persona_id: NotGivenOr[str] = NOT_GIVEN,
         api_url: NotGivenOr[str] = NOT_GIVEN,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         avatar_participant_identity: NotGivenOr[str] = NOT_GIVEN,
@@ -45,11 +43,8 @@ class AvatarSession(BaseAvatarSession):
         self._http_session: aiohttp.ClientSession | None = None
         self._conn_options = conn_options
         self.conversation_id: str | None = None
-        # `replica_id`/`persona_id` are deprecated aliases for `face_id`/`pal_id`.
         self._pal_id = pal_id
         self._face_id = face_id
-        self._persona_id = persona_id
-        self._replica_id = replica_id
         self._api = TavusAPI(
             api_url=api_url,
             api_key=api_key,
@@ -111,8 +106,6 @@ class AvatarSession(BaseAvatarSession):
         self.conversation_id = await self._api.create_conversation(
             pal_id=self._pal_id,
             face_id=self._face_id,
-            persona_id=self._persona_id,
-            replica_id=self._replica_id,
             properties={"livekit_ws_url": livekit_url, "livekit_room_token": livekit_token},
         )
 

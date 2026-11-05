@@ -31,37 +31,12 @@ DEFAULT_PAL_ID = "pb87e71797da"
 DEFAULT_FACE_ID = "r4067604db72"
 
 
-def _coalesce_with_deprecated(
-    new_value: NotGivenOr[str],
-    deprecated_value: NotGivenOr[str],
-    *,
-    deprecated_name: str,
-    new_name: str,
-) -> NotGivenOr[str]:
-    # Prefer the new arg; fall back to the deprecated alias and warn only when it's used.
-    if deprecated_value and not new_value:
-        logger.warning(f"`{deprecated_name}` is deprecated, use `{new_name}` instead")
-    return new_value or deprecated_value
-
-
-def _deprecated_env(deprecated_name: str, new_name: str) -> str | None:
-    # Read a deprecated env var, warning if it's set so callers migrate to `new_name`.
-    value = os.getenv(deprecated_name)
-    if value:
-        logger.warning(f"`{deprecated_name}` is deprecated, use `{new_name}` instead")
-    return value
-
-
 class _ConversationResponse(BaseModel):
     conversation_id: str
 
 
 class _PalResponse(BaseModel):
     pal_id: str
-
-
-class _PersonaResponse(BaseModel):
-    persona_id: str
 
 
 _ResponseT = TypeVar("_ResponseT", bound=BaseModel)
@@ -90,31 +65,11 @@ class TavusAPI:
         *,
         face_id: NotGivenOr[str] = NOT_GIVEN,
         pal_id: NotGivenOr[str] = NOT_GIVEN,
-        replica_id: NotGivenOr[str] = NOT_GIVEN,
-        persona_id: NotGivenOr[str] = NOT_GIVEN,
         properties: NotGivenOr[dict[str, JsonValue]] = NOT_GIVEN,
         extra_payload: NotGivenOr[dict[str, JsonValue]] = NOT_GIVEN,
     ) -> str:
-        # `replica_id`/`persona_id` are deprecated aliases for `face_id`/`pal_id`.
-        face_id = _coalesce_with_deprecated(
-            face_id, replica_id, deprecated_name="replica_id", new_name="face_id"
-        )
-        pal_id = _coalesce_with_deprecated(
-            pal_id, persona_id, deprecated_name="persona_id", new_name="pal_id"
-        )
-
-        face_id = (
-            face_id
-            or os.getenv("TAVUS_FACE_ID")
-            or _deprecated_env("TAVUS_REPLICA_ID", "TAVUS_FACE_ID")
-            or NOT_GIVEN
-        )
-        pal_id = (
-            pal_id
-            or os.getenv("TAVUS_PAL_ID")
-            or _deprecated_env("TAVUS_PERSONA_ID", "TAVUS_PAL_ID")
-            or NOT_GIVEN
-        )
+        face_id = face_id or os.getenv("TAVUS_FACE_ID") or NOT_GIVEN
+        pal_id = pal_id or os.getenv("TAVUS_PAL_ID") or NOT_GIVEN
 
         # extra_payload overrides the payload wholesale, so a pal named there counts
         # as user-supplied when deciding whether to fill in the stock face.
@@ -164,30 +119,6 @@ class TavusAPI:
 
         response_data = await self._post("pals", payload, response_type=_PalResponse)
         return response_data.pal_id
-
-    async def create_persona(
-        self,
-        name: NotGivenOr[str] = NOT_GIVEN,
-        *,
-        extra_payload: NotGivenOr[dict[str, JsonValue]] = NOT_GIVEN,
-    ) -> str:
-        # Deprecated: use create_pal(). Kept on the legacy /v2/personas endpoint.
-        logger.warning("`create_persona` is deprecated, use `create_pal` instead")
-        name = name if utils.is_given(name) and name else utils.shortuuid("lk_persona_")
-
-        payload: dict[str, JsonValue] = {
-            "persona_name": name,
-            "pipeline_mode": "echo",
-            "layers": {
-                "transport": {"transport_type": "livekit"},
-            },
-        }
-
-        if utils.is_given(extra_payload):
-            payload.update(extra_payload)
-
-        response_data = await self._post("personas", payload, response_type=_PersonaResponse)
-        return response_data.persona_id
 
     async def _post(
         self, endpoint: str, payload: dict[str, JsonValue], *, response_type: type[_ResponseT]

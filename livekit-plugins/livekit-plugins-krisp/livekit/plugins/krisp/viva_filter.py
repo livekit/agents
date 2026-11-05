@@ -30,7 +30,6 @@ public class is the facade, not the backend it forwards to.
 from __future__ import annotations
 
 import os
-import warnings
 from types import TracebackType
 from typing import Literal, Protocol
 
@@ -46,9 +45,6 @@ if not hasattr(rtc, "FrameProcessor"):
         "Please update livekit-rtc: pip install --upgrade 'livekit>=1.0.23'"
     )
 
-_legacy_deprecation_shown = False
-_frame_params_deprecation_shown = False
-
 
 class _NoiseSuppressionControl(Protocol):
     @property
@@ -59,42 +55,18 @@ class _NoiseSuppressionControl(Protocol):
 
 def _resolve_auth_provider(
     auth_provider: LiveKitCloudAuthProvider | KrispLicenseAuthProvider | None,
-    model_path: str | None,
 ) -> LiveKitCloudAuthProvider | KrispLicenseAuthProvider:
-    """Pick the auth provider, applying backwards-compat for legacy kwargs.
+    """Pick the auth provider.
 
     Resolution rules:
     1. ``auth_provider`` given → use it.
-    2. ``model_path`` given → construct ``KrispLicenseAuthProvider``
-       (deprecation warning, since ``model_path`` should be passed on the
-       provider instead).
-    3. Both ``KRISP_VIVA_SDK_LICENSE_KEY`` and ``KRISP_VIVA_FILTER_MODEL_PATH``
+    2. Both ``KRISP_VIVA_SDK_LICENSE_KEY`` and ``KRISP_VIVA_FILTER_MODEL_PATH``
        env vars set → construct ``KrispLicenseAuthProvider`` from the
        environment (the user is responsible for installing ``krisp_audio``).
-    4. Otherwise → default ``LiveKitCloudAuthProvider``.
+    3. Otherwise → default ``LiveKitCloudAuthProvider``.
     """
-    global _legacy_deprecation_shown
-
     if auth_provider is not None:
-        if model_path is not None:
-            raise ValueError(
-                "Pass model_path on KrispLicenseAuthProvider(model_path=...) "
-                "instead of on KrispVivaFilterFrameProcessor when an "
-                "auth_provider is supplied."
-            )
         return auth_provider
-
-    if model_path is not None:
-        if not _legacy_deprecation_shown:
-            warnings.warn(
-                "Passing `model_path` to KrispVivaFilterFrameProcessor is "
-                "deprecated. Use `auth_provider=KrispLicenseAuthProvider("
-                "model_path=...)` instead.",
-                DeprecationWarning,
-                stacklevel=3,
-            )
-            _legacy_deprecation_shown = True
-        return KrispLicenseAuthProvider(model_path=model_path)
 
     # Auto-select Krisp-direct license auth when both env vars are set;
     # otherwise fall back to LiveKit Cloud auth.
@@ -109,8 +81,6 @@ def _build_inner(
     provider: LiveKitCloudAuthProvider | KrispLicenseAuthProvider,
     *,
     noise_suppression_level: int,
-    frame_duration_ms: int,
-    sample_rate: int | None,
 ) -> tuple[rtc.FrameProcessor[rtc.AudioFrame], _NoiseSuppressionControl]:
     """Lazy-import and construct the backend FrameProcessor."""
     if isinstance(provider, LiveKitCloudAuthProvider):
@@ -130,8 +100,8 @@ def _build_inner(
 
         cloud_processor = _CloudKrispFrameProcessor(
             noise_suppression_level=noise_suppression_level,
-            frame_duration_ms=frame_duration_ms,
-            sample_rate=sample_rate,
+            frame_duration_ms=10,
+            sample_rate=None,
             mode=mode,
         )
         return cloud_processor, cloud_processor
@@ -143,8 +113,8 @@ def _build_inner(
         license_key=provider.license_key,
         model_path=provider.model_path,
         noise_suppression_level=noise_suppression_level,
-        frame_duration_ms=frame_duration_ms,
-        sample_rate=sample_rate,
+        frame_duration_ms=10,
+        sample_rate=None,
     )
 
     return license_processor, license_processor
@@ -191,10 +161,7 @@ class KrispVivaFilterFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
         *,
         mode: VivaMode = VivaMode.VOICE_ISOLATION,
         auth_provider: LiveKitCloudAuthProvider | KrispLicenseAuthProvider | None = None,
-        model_path: str | None = None,
         noise_suppression_level: int = 75,
-        frame_duration_ms: int | None = None,
-        sample_rate: int | None = None,
     ) -> None:
         """Initialize the Krisp frame processor.
 
@@ -203,44 +170,20 @@ class KrispVivaFilterFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
             auth_provider: Authentication provider. Defaults to
                 :class:`LiveKitCloudAuthProvider` (LiveKit Cloud auth + bundled
                 model). Pass :class:`KrispLicenseAuthProvider` to use a Krisp
-                license key + ``.kef`` model file directly.
-            model_path: **Deprecated.** Use
-                ``auth_provider=KrispLicenseAuthProvider(model_path=...)``
-                instead. Path to the Krisp model file (``.kef``).
-            frame_duration_ms: **Deprecated.** The processor now buffers input
-                frames of any size automatically, so this no longer needs to be
-                set. Frame duration in milliseconds (10, 15, 20, 30, or 32).
-            sample_rate: **Deprecated.** The processor now adapts to the input
-                sample rate automatically, so this no longer needs to be set.
-                Sample rate in Hz.
+                license key + ``.kef`` model file directly. Input frames of any
+                size and sample rate are adapted automatically.
 
         Raises:
             RuntimeError: If the chosen backend wheel is not installed.
-            ValueError: If ``frame_duration_ms`` is not supported, or — for
-                :class:`KrispLicenseAuthProvider` — if ``model_path`` is
-                missing or does not have a ``.kef`` extension.
+            ValueError: For :class:`KrispLicenseAuthProvider`, if ``model_path``
+                is missing or does not have a ``.kef`` extension.
             FileNotFoundError: If the license-mode model file does not exist.
         """
-        if frame_duration_ms is not None or sample_rate is not None:
-            global _frame_params_deprecation_shown
-            if not _frame_params_deprecation_shown:
-                warnings.warn(
-                    "Passing `sample_rate` / `frame_duration_ms` to "
-                    "KrispVivaFilterFrameProcessor is deprecated. The processor "
-                    "now adapts to the input sample rate and frame size "
-                    "automatically.",
-                    DeprecationWarning,
-                    stacklevel=2,
-                )
-                _frame_params_deprecation_shown = True
-
-        provider = _resolve_auth_provider(auth_provider, model_path)
+        provider = _resolve_auth_provider(auth_provider)
         self._inner, self._noise_control = _build_inner(
             mode,
             provider,
             noise_suppression_level=noise_suppression_level,
-            frame_duration_ms=frame_duration_ms if frame_duration_ms is not None else 10,
-            sample_rate=sample_rate,
         )
 
     # ----- FrameProcessor hooks: forward to the inner processor -------------

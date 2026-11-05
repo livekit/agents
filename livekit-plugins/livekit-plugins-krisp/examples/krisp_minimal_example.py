@@ -44,8 +44,6 @@ async def test_krisp_filter():
         krisp_processor = KrispVivaFilterFrameProcessor(
             auth_provider=KrispLicenseAuthProvider(),
             noise_suppression_level=100,
-            frame_duration_ms=10,
-            sample_rate=16000,
         )
         logger.info("✅ Krisp frame processor created successfully")
 
