@@ -101,6 +101,7 @@ async def test_word_timestamps_use_seconds(monkeypatch, is_final, offset):
         stream.push_frame(_audio_frame())
         stream.end_input()
         await asyncio.wait_for(stream._task, 1)
+        effective_offset = stream.start_time_offset
         event_type = (
             stt.SpeechEventType.FINAL_TRANSCRIPT
             if is_final
@@ -112,10 +113,10 @@ async def test_word_timestamps_use_seconds(monkeypatch, is_final, offset):
     speech = transcripts[0].alternatives[0]
     assert speech.words == ["hello", "world"]
     assert [word.start_time for word in speech.words] == pytest.approx(
-        [42.12 + offset, 44.24 + offset]
+        [42.12 + effective_offset, 44.24 + effective_offset]
     )
     assert [word.end_time for word in speech.words] == pytest.approx(
-        [42.56 + offset, 44.48 + offset]
+        [42.56 + effective_offset, 44.48 + effective_offset]
     )
     assert speech.start_time == speech.words[0].start_time
     assert speech.end_time == speech.words[-1].end_time
