@@ -249,6 +249,49 @@ async def _drain_generation(
     return text, audio_frames, function_calls
 
 
+async def test_usage_metadata_reports_thoughts_as_reasoning_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(monkeypatch) as session:
+        metrics: list[RealtimeModelMetrics] = []
+        session.on("metrics_collected", metrics.append)
+        session._start_new_generation()
+
+        session._handle_usage_metadata(
+            types.UsageMetadata(
+                prompt_token_count=397,
+                response_token_count=49,
+                thoughts_token_count=26,
+                total_token_count=446,
+            )
+        )
+
+        assert len(metrics) == 1
+        assert metrics[0].input_tokens == 397
+        assert metrics[0].output_tokens == 49
+        assert metrics[0].reasoning_tokens == 26
+        assert metrics[0].total_tokens == 446
+
+
+async def test_usage_metadata_distinguishes_zero_from_omitted_reasoning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(monkeypatch) as session:
+        metrics: list[RealtimeModelMetrics] = []
+        session.on("metrics_collected", metrics.append)
+
+        session._start_new_generation()
+        session._handle_usage_metadata(
+            types.UsageMetadata(response_token_count=10, thoughts_token_count=0)
+        )
+        session._start_new_generation()
+        session._handle_usage_metadata(types.UsageMetadata(response_token_count=10))
+
+        assert len(metrics) == 2
+        assert metrics[0].reasoning_tokens == 0
+        assert metrics[1].reasoning_tokens is None
+
+
 @pytest.mark.parametrize("vertexai", [False, True])
 @pytest.mark.parametrize("with_input_transcript", [False, True])
 async def test_ttft_is_unavailable_without_a_response_start_event(
