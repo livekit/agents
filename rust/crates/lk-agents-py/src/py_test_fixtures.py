@@ -428,17 +428,17 @@ def byte_stream_host():
     sent = []
 
     class Writer:
+        """An SDK byte stream writer: its ``info``, ``write`` and ``aclose``."""
+
         def __init__(self, topic):
             self.topic = topic
             self.data = b""
+            self.info = SimpleNamespace(stream_id="BS_1")
 
-        def _core_id(self):
-            return "BS_1"
-
-        async def _core_write(self, data):
+        async def write(self, data):
             self.data += data
 
-        async def _core_close(self):
+        async def aclose(self):
             sent.append((self.topic, self.data))
 
     class Participant:

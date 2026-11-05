@@ -29,7 +29,7 @@ pub(crate) fn emit(ty: &Ty, x: &str) -> Result<String, String> {
             };
             format!("{{ let scalar: {} = {x}.into(); {emitted} }}", via.rust())
         }
-        Ty::Record(Record { host: HostForm::Str, .. }) => {
+        Ty::Record(Record { host: HostForm::Str | HostForm::Wire, .. }) => {
             format!("crate::py_values::str_to_py(py, &{x})")
         }
         Ty::Tuple(ts) => {

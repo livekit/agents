@@ -930,7 +930,7 @@ fn annotation(ty: &Ty, module: &str, own: &[String], any: bool, typing: &mut Imp
                 typing.add(&format!(".{m}"), name);
                 name.clone()
             }
-            HostForm::WireStrs | HostForm::Str => "str".into(),
+            HostForm::WireStrs | HostForm::Str | HostForm::Wire => "str".into(),
             HostForm::Annotation(text)
             | HostForm::Converted(text, ..)
             | HostForm::Via { host: text, .. } => typing.annotation(text, &r.rust),

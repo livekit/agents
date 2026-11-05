@@ -13,11 +13,12 @@ pub struct VideoTrackOptions {
     pub height: u32,
 }
 
-#[crate::host(proxy(host = "livekit.agents.voice.room_io.VideoSource"))]
+/// An `rtc.VideoSource`: frames captured as they come; pacing is the native synchronizer's.
+#[crate::host(proxy(host = "livekit.rtc.VideoSource"))]
 pub trait VideoSource: Any + Send + Sync {
-    #[host(call, name = "_core_capture")]
+    #[host(call, name = "capture_frame")]
     fn capture(&self, frame: &VideoFrame) -> Result<(), RtcError>;
-    #[host(await, name = "_core_close")]
+    #[host(await, name = "aclose")]
     fn close(&self, cx: &crate::telemetry::Cx) -> crate::BoxFuture<'_, Result<(), RtcError>>;
 }
 

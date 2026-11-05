@@ -788,6 +788,7 @@ fn native(ty: &Ty) -> bool {
             HostForm::Record { .. }
                 | HostForm::WireStrs
                 | HostForm::Str
+                | HostForm::Wire
                 | HostForm::Converted(..)
                 | HostForm::Via { .. }
         ),
@@ -911,7 +912,7 @@ pub(crate) fn from_object(v: &str, ty: &Ty, path: &str, at: &str) -> Result<Stri
         Ty::Record(Record { host: HostForm::Via { .. }, .. }) => {
             crate::records::read(ty, &format!("{v}.as_any()"), path)?
         }
-        Ty::Record(Record { host: HostForm::Str, .. }) => {
+        Ty::Record(Record { host: HostForm::Str | HostForm::Wire, .. }) => {
             format!("crate::py_values::str_from_py({v}.as_any())")
         }
         Ty::Map(k, t) | Ty::OrderedMap(k, t) => {

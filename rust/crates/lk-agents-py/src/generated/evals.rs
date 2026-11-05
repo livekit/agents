@@ -228,7 +228,11 @@ impl ::lk_agents_abi::evals::EvaluationHost for EvaluationHostProxy {
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [crate::py_objects::object_ref_to_py(py, evaluator_arg)?];
-                Ok((host.bind(py).getattr("evaluate")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((
+                    host.bind(py).getattr("evaluate")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
         ::std::boxed::Box::pin(async move {

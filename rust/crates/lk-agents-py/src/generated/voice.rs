@@ -5385,6 +5385,7 @@ impl ::lk_agents_abi::voice::avatar::ClearBufferListener for ClearBufferListener
                 Ok((
                     host.bind(py).getattr("_core_clear_buffer")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -5468,6 +5469,7 @@ impl ::lk_agents_abi::voice::avatar::AvatarAudioReceiver for AvatarAudioReceiver
                 Ok((
                     host.bind(py).getattr("_core_open_audio")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -5514,6 +5516,7 @@ impl ::lk_agents_abi::voice::avatar::AvatarAudioReceiver for AvatarAudioReceiver
                 Ok((
                     host.bind(py).getattr("_core_next_audio")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -5558,6 +5561,7 @@ impl ::lk_agents_abi::voice::avatar::AvatarAudioReceiver for AvatarAudioReceiver
                 Ok((
                     host.bind(py).getattr("_core_notify_playback_started")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -5609,6 +5613,7 @@ impl ::lk_agents_abi::voice::avatar::AvatarAudioReceiver for AvatarAudioReceiver
                 Ok((
                     host.bind(py).getattr("_core_notify_playback_finished")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -5644,7 +5649,11 @@ impl ::lk_agents_abi::voice::avatar::AvatarAudioReceiver for AvatarAudioReceiver
             cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((host.bind(py).getattr("_core_aclose")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((
+                    host.bind(py).getattr("_core_aclose")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
         ::std::boxed::Box::pin(async move {
@@ -5746,6 +5755,7 @@ impl ::lk_agents_abi::voice::avatar::AvatarVideoGenerator for AvatarVideoGenerat
                 Ok((
                     host.bind(py).getattr("_core_push_audio")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -5784,6 +5794,7 @@ impl ::lk_agents_abi::voice::avatar::AvatarVideoGenerator for AvatarVideoGenerat
                 Ok((
                     host.bind(py).getattr("_core_clear_buffer")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -5822,6 +5833,7 @@ impl ::lk_agents_abi::voice::avatar::AvatarVideoGenerator for AvatarVideoGenerat
                 Ok((
                     host.bind(py).getattr("_core_open_frames")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -5863,6 +5875,7 @@ impl ::lk_agents_abi::voice::avatar::AvatarVideoGenerator for AvatarVideoGenerat
                 Ok((
                     host.bind(py).getattr("_core_next_frame")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -5967,7 +5980,11 @@ impl ::lk_agents_abi::voice::background_audio::FrameStream for FrameStreamProxy 
             cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((host.bind(py).getattr("_core_next")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((
+                    host.bind(py).getattr("_core_next")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
         ::std::boxed::Box::pin(async move {
@@ -5999,6 +6016,7 @@ impl ::lk_agents_abi::voice::background_audio::FrameStream for FrameStreamProxy 
                 Ok((
                     host.bind(py).getattr("_core_cancel_pending")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -6014,7 +6032,11 @@ impl ::lk_agents_abi::voice::background_audio::FrameStream for FrameStreamProxy 
             cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((host.bind(py).getattr("_core_close")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((
+                    host.bind(py).getattr("_core_close")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
         ::std::boxed::Box::pin(async move {
@@ -6115,6 +6137,7 @@ impl ::lk_agents_abi::voice::io::PlaybackListener for PlaybackListenerProxy {
                 Ok((
                     host.bind(py).getattr("_core_on_playback_started")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -6148,6 +6171,7 @@ impl ::lk_agents_abi::voice::io::PlaybackListener for PlaybackListenerProxy {
                 Ok((
                     host.bind(py).getattr("_core_on_playback_progressed")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -6181,6 +6205,7 @@ impl ::lk_agents_abi::voice::io::PlaybackListener for PlaybackListenerProxy {
                 Ok((
                     host.bind(py).getattr("_core_on_playback_finished")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -6287,6 +6312,7 @@ impl ::lk_agents_abi::voice::io::AudioInput for AudioInputProxy {
                 Ok((
                     host.bind(py).getattr("_core_next_frame")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -6319,6 +6345,7 @@ impl ::lk_agents_abi::voice::io::AudioInput for AudioInputProxy {
                 Ok((
                     host.bind(py).getattr("_core_on_attached")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -6337,6 +6364,7 @@ impl ::lk_agents_abi::voice::io::AudioInput for AudioInputProxy {
                 Ok((
                     host.bind(py).getattr("_core_on_detached")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -6443,6 +6471,7 @@ impl ::lk_agents_abi::voice::io::VideoInput for VideoInputProxy {
                 Ok((
                     host.bind(py).getattr("_core_next_frame")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -6475,6 +6504,7 @@ impl ::lk_agents_abi::voice::io::VideoInput for VideoInputProxy {
                 Ok((
                     host.bind(py).getattr("_core_on_attached")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -6493,6 +6523,7 @@ impl ::lk_agents_abi::voice::io::VideoInput for VideoInputProxy {
                 Ok((
                     host.bind(py).getattr("_core_on_detached")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -6634,6 +6665,7 @@ impl ::lk_agents_abi::voice::io::AudioOutput for AudioOutputProxy {
                 Ok((
                     host.bind(py).getattr("_core_begin_segment")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -6684,6 +6716,7 @@ impl ::lk_agents_abi::voice::io::AudioOutput for AudioOutputProxy {
                 Ok((
                     host.bind(py).getattr("_core_capture")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -6716,6 +6749,7 @@ impl ::lk_agents_abi::voice::io::AudioOutput for AudioOutputProxy {
                 Ok((
                     host.bind(py).getattr("_core_flush_segment")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -6734,6 +6768,7 @@ impl ::lk_agents_abi::voice::io::AudioOutput for AudioOutputProxy {
                 Ok((
                     host.bind(py).getattr("_core_clear_buffer")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -6752,6 +6787,7 @@ impl ::lk_agents_abi::voice::io::AudioOutput for AudioOutputProxy {
                 Ok((
                     host.bind(py).getattr("_core_on_attached")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -6770,6 +6806,7 @@ impl ::lk_agents_abi::voice::io::AudioOutput for AudioOutputProxy {
                 Ok((
                     host.bind(py).getattr("_core_on_detached")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -6785,7 +6822,11 @@ impl ::lk_agents_abi::voice::io::AudioOutput for AudioOutputProxy {
             false,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((host.bind(py).getattr("_core_pause")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((
+                    host.bind(py).getattr("_core_pause")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
     }
@@ -6800,7 +6841,11 @@ impl ::lk_agents_abi::voice::io::AudioOutput for AudioOutputProxy {
             false,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((host.bind(py).getattr("_core_resume")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((
+                    host.bind(py).getattr("_core_resume")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
     }
@@ -6906,6 +6951,7 @@ impl ::lk_agents_abi::voice::io::TextOutput for TextOutputProxy {
                 Ok((
                     host.bind(py).getattr("_core_capture_timed")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -6947,6 +6993,7 @@ impl ::lk_agents_abi::voice::io::TextOutput for TextOutputProxy {
                 Ok((
                     host.bind(py).getattr("_core_capture_text")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -6976,7 +7023,11 @@ impl ::lk_agents_abi::voice::io::TextOutput for TextOutputProxy {
             false,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((host.bind(py).getattr("_core_flush")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((
+                    host.bind(py).getattr("_core_flush")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
     }
@@ -6994,6 +7045,7 @@ impl ::lk_agents_abi::voice::io::TextOutput for TextOutputProxy {
                 Ok((
                     host.bind(py).getattr("_core_on_attached")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -7012,6 +7064,7 @@ impl ::lk_agents_abi::voice::io::TextOutput for TextOutputProxy {
                 Ok((
                     host.bind(py).getattr("_core_on_detached")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -7100,7 +7153,7 @@ impl ::lk_agents_abi::voice::nodes::SessionNodes for SessionNodesProxy {
             cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::Bound::new(py, crate::generated::llm::ChatRequest(::std::sync::Arc::new(req_arg)))?.into_any(), <dyn ::lk_agents_abi::voice::nodes::ProviderCalls as super::NativeToHost>::to_host(py, calls_arg)?];
-                Ok((host.bind(py).getattr("llm")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((host.bind(py).getattr("llm")?, ::pyo3::types::PyTuple::new(py, args)?, None))
             }),
         );
         ::std::boxed::Box::pin(async move {
@@ -7149,7 +7202,7 @@ impl ::lk_agents_abi::voice::nodes::SessionNodes for SessionNodesProxy {
             cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::Bound::new(py, NodeText(::lk_agents_runtime::net::source::SharedStream::new(text_arg, ::lk_agents_runtime::process::host_clock())))?.into_any(), <dyn ::lk_agents_abi::voice::nodes::ProviderCalls as super::NativeToHost>::to_host(py, calls_arg)?];
-                Ok((host.bind(py).getattr("tts")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((host.bind(py).getattr("tts")?, ::pyo3::types::PyTuple::new(py, args)?, None))
             }),
         );
         ::std::boxed::Box::pin(async move {
@@ -7196,7 +7249,7 @@ impl ::lk_agents_abi::voice::nodes::SessionNodes for SessionNodesProxy {
             cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::Bound::new(py, NodeAudio(::lk_agents_runtime::net::source::SharedStream::new(audio_arg, ::lk_agents_runtime::process::host_clock())))?.into_any(), <dyn ::lk_agents_abi::voice::nodes::ProviderCalls as super::NativeToHost>::to_host(py, calls_arg)?];
-                Ok((host.bind(py).getattr("stt")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((host.bind(py).getattr("stt")?, ::pyo3::types::PyTuple::new(py, args)?, None))
             }),
         );
         ::std::boxed::Box::pin(async move {
@@ -7253,6 +7306,7 @@ impl ::lk_agents_abi::voice::nodes::SessionNodes for SessionNodesProxy {
                 Ok((
                     host.bind(py).getattr("transcription")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -7391,27 +7445,27 @@ impl RtcRoomProxy {
             None => crate::py_calls::capture_context(obj.py())?,
         };
         let local = {
-            let v = crate::py_calls::read(obj, "_core_local")?;
+            let v = obj.getattr("local")?;
             crate::generated::voice::LocalParticipantProxy::from_host(v.as_any())?
         };
         let event_bus = {
-            let v = crate::py_calls::read(obj, "_core_event_bus")?;
+            let v = obj.getattr("bus")?;
             crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::RoomEventSink>(v.as_any())
                 .ok_or_else(|| {
                     ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                        "RtcRoom._core_event_bus",
+                        "RtcRoom.bus",
                         ": expected a _core.RoomEventBus"
                     ))
                 })?
         };
         let rpc_router = {
-            let v = crate::py_calls::read(obj, "_core_rpc_router")?;
+            let v = obj.getattr("rpc_router")?;
             crate::py_objects::native::<dyn ::lk_agents_abi::voice::rtc::ports::RpcRoutes>(
                 v.as_any(),
             )
             .ok_or_else(|| {
                 ::pyo3::exceptions::PyTypeError::new_err(concat!(
-                    "RtcRoom._core_rpc_router",
+                    "RtcRoom.rpc_router",
                     ": expected the room's native RPC router"
                 ))
             })?
@@ -7447,6 +7501,7 @@ impl ::lk_agents_abi::voice::rtc::RtcRoom for RtcRoomProxy {
                 Ok((
                     host.bind(py).getattr("_core_create_audio_source")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -7489,6 +7544,7 @@ impl ::lk_agents_abi::voice::rtc::RtcRoom for RtcRoomProxy {
                 Ok((
                     host.bind(py).getattr("_core_create_video_source")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -7520,8 +7576,15 @@ impl ::lk_agents_abi::voice::rtc::RtcRoom for RtcRoomProxy {
         let out = ::lk_agents_runtime::host::call_now(
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((host.bind(py).getattr("_core_name")?, ::pyo3::types::PyTuple::new(py, args)?))
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
+                    host.bind(py).getattr("rtc")?,
+                    ::pyo3::types::PyString::new(py, "name").into_any(),
+                ];
+                Ok((
+                    py.import("builtins")?.getattr("getattr")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
         ::pyo3::Python::attach(|py| {
@@ -7551,10 +7614,14 @@ impl ::lk_agents_abi::voice::rtc::RtcRoom for RtcRoomProxy {
         let out = ::lk_agents_runtime::host::call_now(
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
+                    host.bind(py).getattr("rtc")?,
+                    ::pyo3::types::PyString::new(py, "connection_state").into_any(),
+                ];
                 Ok((
-                    host.bind(py).getattr("_core_connection_state")?,
+                    py.import("builtins")?.getattr("getattr")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -7566,11 +7633,7 @@ impl ::lk_agents_abi::voice::rtc::RtcRoom for RtcRoomProxy {
                 }
             };
             let o = out.value.bind(py);
-            let out = (crate::py_values::str_from_py(o.as_any())).map_err(|e| {
-                <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(
-                    py, &e,
-                )
-            })?;
+            let out = (o.extract::<i32>().map(|v| <::lk_agents_abi::voice::rtc::ConnectionState as ::std::convert::TryFrom<i32>>::try_from(v).unwrap_or_default())).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
     }
@@ -7597,6 +7660,7 @@ impl ::lk_agents_abi::voice::rtc::RtcRoom for RtcRoomProxy {
                 Ok((
                     host.bind(py).getattr("_core_participant")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -7645,6 +7709,7 @@ impl ::lk_agents_abi::voice::rtc::RtcRoom for RtcRoomProxy {
                 Ok((
                     host.bind(py).getattr("_core_remote_participants")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -7704,6 +7769,7 @@ impl ::lk_agents_abi::voice::rtc::RtcRoom for RtcRoomProxy {
                 Ok((
                     host.bind(py).getattr("_core_register_byte_stream_handler")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -7740,8 +7806,9 @@ impl ::lk_agents_abi::voice::rtc::RtcRoom for RtcRoomProxy {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [::pyo3::IntoPyObjectExt::into_bound_py_any(topic_arg, py)?];
                 Ok((
-                    host.bind(py).getattr("_core_unregister_byte_stream_handler")?,
+                    host.bind(py).getattr("rtc")?.getattr("unregister_byte_stream_handler")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -7781,6 +7848,7 @@ impl ::lk_agents_abi::voice::rtc::RtcRoom for RtcRoomProxy {
                 Ok((
                     host.bind(py).getattr("_core_register_text_stream_handler")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -7817,8 +7885,9 @@ impl ::lk_agents_abi::voice::rtc::RtcRoom for RtcRoomProxy {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [::pyo3::IntoPyObjectExt::into_bound_py_any(topic_arg, py)?];
                 Ok((
-                    host.bind(py).getattr("_core_unregister_text_stream_handler")?,
+                    host.bind(py).getattr("rtc")?.getattr("unregister_text_stream_handler")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -7933,6 +8002,7 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
                 Ok((
                     host.bind(py).getattr("_core_publish_audio_source")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -7989,6 +8059,7 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
                 Ok((
                     host.bind(py).getattr("_core_publish_video_source")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -8022,10 +8093,14 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
         let out = ::lk_agents_runtime::host::call_now(
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
+                    host.bind(py).getattr("rtc")?,
+                    ::pyo3::types::PyString::new(py, "identity").into_any(),
+                ];
                 Ok((
-                    host.bind(py).getattr("_core_identity")?,
+                    py.import("builtins")?.getattr("getattr")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -8056,8 +8131,15 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
         let out = ::lk_agents_runtime::host::call_now(
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((host.bind(py).getattr("_core_kind")?, ::pyo3::types::PyTuple::new(py, args)?))
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
+                    host.bind(py).getattr("rtc")?,
+                    ::pyo3::types::PyString::new(py, "kind").into_any(),
+                ];
+                Ok((
+                    py.import("builtins")?.getattr("getattr")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
         ::pyo3::Python::attach(|py| {
@@ -8068,11 +8150,7 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
                 }
             };
             let o = out.value.bind(py);
-            let out = (crate::py_values::str_from_py(o.as_any())).map_err(|e| {
-                <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(
-                    py, &e,
-                )
-            })?;
+            let out = (o.extract::<i32>().map(|v| <::lk_agents_abi::voice::room_io::ParticipantKind as ::std::convert::TryFrom<i32>>::try_from(v).unwrap_or_default())).map_err(|e| <::lk_agents_abi::voice::rtc::RtcError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
             Ok(out)
         })
     }
@@ -8084,8 +8162,15 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
         let out = ::lk_agents_runtime::host::call_now(
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((host.bind(py).getattr("_core_sid")?, ::pyo3::types::PyTuple::new(py, args)?))
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
+                    host.bind(py).getattr("rtc")?,
+                    ::pyo3::types::PyString::new(py, "sid").into_any(),
+                ];
+                Ok((
+                    py.import("builtins")?.getattr("getattr")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
         ::pyo3::Python::attach(|py| {
@@ -8120,6 +8205,7 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
                 Ok((
                     host.bind(py).getattr("_core_track_publications")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -8187,6 +8273,7 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
                 Ok((
                     host.bind(py).getattr("_core_publish_audio_track")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -8222,7 +8309,7 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
         let sid_arg = ::std::clone::Clone::clone(sid);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
-            "LocalParticipant._core_unpublish_track",
+            "LocalParticipant.rtc.unpublish_track",
             &self.context,
             &[],
             cx,
@@ -8230,8 +8317,9 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [crate::py_values::str_to_py(py, &sid_arg)];
                 Ok((
-                    host.bind(py).getattr("_core_unpublish_track")?,
+                    host.bind(py).getattr("rtc")?.getattr("unpublish_track")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -8263,7 +8351,7 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
         let attrs_arg = attrs;
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
-            "LocalParticipant._core_set_attributes",
+            "LocalParticipant.rtc.set_attributes",
             &self.context,
             &[],
             cx,
@@ -8271,8 +8359,9 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [::pyo3::IntoPyObjectExt::into_bound_py_any(attrs_arg, py)?];
                 Ok((
-                    host.bind(py).getattr("_core_set_attributes")?,
+                    host.bind(py).getattr("rtc")?.getattr("set_attributes")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -8317,6 +8406,7 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
                 Ok((
                     host.bind(py).getattr("_core_publish_transcription")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -8362,6 +8452,7 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
                 Ok((
                     host.bind(py).getattr("_core_stream_text")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -8413,6 +8504,7 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
                 Ok((
                     host.bind(py).getattr("_core_stream_bytes")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -8465,6 +8557,7 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
                 Ok((
                     host.bind(py).getattr("_core_perform_rpc")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -8505,6 +8598,7 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
                 Ok((
                     host.bind(py).getattr("_core_register_rpc_method")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -8541,8 +8635,9 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [::pyo3::IntoPyObjectExt::into_bound_py_any(method_arg, py)?];
                 Ok((
-                    host.bind(py).getattr("_core_unregister_rpc_method")?,
+                    host.bind(py).getattr("rtc")?.getattr("unregister_rpc_method")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -8581,18 +8676,27 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
         let digit_arg = digit;
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
-            "LocalParticipant._core_publish_dtmf",
+            "LocalParticipant.rtc.publish_dtmf",
             &self.context,
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(code_arg, py)?,
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(digit_arg, py)?,
-                ];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("_core_publish_dtmf")?,
+                    host.bind(py).getattr("rtc")?.getattr("publish_dtmf")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    Some({
+                        let kwargs = ::pyo3::types::PyDict::new(py);
+                        kwargs.set_item(
+                            "code",
+                            ::pyo3::IntoPyObjectExt::into_bound_py_any(code_arg, py)?,
+                        )?;
+                        kwargs.set_item(
+                            "digit",
+                            ::pyo3::IntoPyObjectExt::into_bound_py_any(digit_arg, py)?,
+                        )?;
+                        kwargs
+                    }),
                 ))
             }),
         );
@@ -8615,7 +8719,7 @@ impl ::lk_agents_abi::voice::rtc::LocalParticipant for LocalParticipantProxy {
 
 // Declared in rust/crates/lk-agents-abi/src/voice/rtc/capabilities.rs.
 
-/// [`::lk_agents_abi::voice::rtc::ByteStreamWriter`] over a host `livekit.agents.voice.room_io.ByteStreamWriter`.
+/// [`::lk_agents_abi::voice::rtc::ByteStreamWriter`] over a host `livekit.rtc.ByteStreamWriter`.
 #[derive(Clone)]
 pub struct ByteStreamWriterProxy {
     host: ::std::sync::Arc<Py<PyAny>>,
@@ -8674,7 +8778,7 @@ impl ByteStreamWriterProxy {
             None => crate::py_calls::capture_context(obj.py())?,
         };
         let id = {
-            let v = crate::py_calls::read(obj, "_core_id")?;
+            let v = obj.getattr("info")?.getattr("stream_id")?;
             v.extract::<::std::string::String>()?
         };
         Ok(ByteStreamWriterProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), context, id })
@@ -8698,14 +8802,14 @@ impl ::lk_agents_abi::voice::rtc::ByteStreamWriter for ByteStreamWriterProxy {
         let data_arg = data.to_vec();
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
-            "ByteStreamWriter._core_write",
+            "ByteStreamWriter.write",
             &self.context,
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [::pyo3::IntoPyObjectExt::into_bound_py_any(data_arg, py)?];
-                Ok((host.bind(py).getattr("_core_write")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((host.bind(py).getattr("write")?, ::pyo3::types::PyTuple::new(py, args)?, None))
             }),
         );
         ::std::boxed::Box::pin(async move {
@@ -8734,13 +8838,13 @@ impl ::lk_agents_abi::voice::rtc::ByteStreamWriter for ByteStreamWriterProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
-            "ByteStreamWriter._core_close",
+            "ByteStreamWriter.aclose",
             &self.context,
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((host.bind(py).getattr("_core_close")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((host.bind(py).getattr("aclose")?, ::pyo3::types::PyTuple::new(py, args)?, None))
             }),
         );
         ::std::boxed::Box::pin(async move {
@@ -8762,7 +8866,7 @@ impl ::lk_agents_abi::voice::rtc::ByteStreamWriter for ByteStreamWriterProxy {
 
 // Declared in rust/crates/lk-agents-abi/src/voice/rtc/capabilities.rs.
 
-/// [`::lk_agents_abi::voice::rtc::TextStreamWriter`] over a host `livekit.agents.voice.room_io.TextStreamWriter`.
+/// [`::lk_agents_abi::voice::rtc::TextStreamWriter`] over a host `livekit.rtc.TextStreamWriter`.
 #[derive(Clone)]
 pub struct TextStreamWriterProxy {
     host: ::std::sync::Arc<Py<PyAny>>,
@@ -8836,14 +8940,14 @@ impl ::lk_agents_abi::voice::rtc::TextStreamWriter for TextStreamWriterProxy {
         let text_arg = text.to_owned();
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
-            "TextStreamWriter._core_write",
+            "TextStreamWriter.write",
             &self.context,
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [::pyo3::IntoPyObjectExt::into_bound_py_any(text_arg, py)?];
-                Ok((host.bind(py).getattr("_core_write")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((host.bind(py).getattr("write")?, ::pyo3::types::PyTuple::new(py, args)?, None))
             }),
         );
         ::std::boxed::Box::pin(async move {
@@ -8874,14 +8978,24 @@ impl ::lk_agents_abi::voice::rtc::TextStreamWriter for TextStreamWriterProxy {
         let attributes_arg = attributes;
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
-            "TextStreamWriter._core_close",
+            "TextStreamWriter.aclose",
             &self.context,
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
-                    [::pyo3::IntoPyObjectExt::into_bound_py_any(attributes_arg, py)?];
-                Ok((host.bind(py).getattr("_core_close")?, ::pyo3::types::PyTuple::new(py, args)?))
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                Ok((
+                    host.bind(py).getattr("aclose")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    Some({
+                        let kwargs = ::pyo3::types::PyDict::new(py);
+                        kwargs.set_item(
+                            "attributes",
+                            ::pyo3::IntoPyObjectExt::into_bound_py_any(attributes_arg, py)?,
+                        )?;
+                        kwargs
+                    }),
+                ))
             }),
         );
         ::std::boxed::Box::pin(async move {
@@ -8998,6 +9112,7 @@ impl ::lk_agents_abi::voice::rtc::AudioSource for AudioSourceProxy {
                 Ok((
                     host.bind(py).getattr("_core_capture")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -9026,6 +9141,7 @@ impl ::lk_agents_abi::voice::rtc::AudioSource for AudioSourceProxy {
                 Ok((
                     host.bind(py).getattr("_core_clear_queue")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -9057,10 +9173,14 @@ impl ::lk_agents_abi::voice::rtc::AudioSource for AudioSourceProxy {
         let out = ::lk_agents_runtime::host::call_now(
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
+                    host.bind(py).getattr("rtc")?,
+                    ::pyo3::types::PyString::new(py, "queued_duration").into_any(),
+                ];
                 Ok((
-                    host.bind(py).getattr("_core_queued_duration")?,
+                    py.import("builtins")?.getattr("getattr")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -9074,13 +9194,13 @@ impl ::lk_agents_abi::voice::rtc::AudioSource for AudioSourceProxy {
             let o = out.value.bind(py);
             let out = (crate::py_values::number_from_py::<f64>(
                 o.as_any(),
-                "AudioSource._core_queued_duration",
+                "AudioSource.rtc.queued_duration",
             )
             .and_then(|s| {
                 ::std::time::Duration::try_from_secs_f64(s).map_err(|e| {
                     ::pyo3::exceptions::PyValueError::new_err(format!(
                         "{}: {e}",
-                        "AudioSource._core_queued_duration"
+                        "AudioSource.rtc.queued_duration"
                     ))
                 })
             }))
@@ -9115,6 +9235,7 @@ impl ::lk_agents_abi::voice::rtc::AudioSource for AudioSourceProxy {
                 Ok((
                     host.bind(py).getattr("_core_wait_for_playout")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -9148,6 +9269,7 @@ impl ::lk_agents_abi::voice::rtc::AudioSource for AudioSourceProxy {
                 Ok((
                     host.bind(py).getattr("_core_playback_info")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -9174,13 +9296,17 @@ impl ::lk_agents_abi::voice::rtc::AudioSource for AudioSourceProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
-            "AudioSource._core_close",
+            "AudioSource.rtc.aclose",
             &self.context,
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((host.bind(py).getattr("_core_close")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((
+                    host.bind(py).getattr("rtc")?.getattr("aclose")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
         ::std::boxed::Box::pin(async move {
@@ -9255,16 +9381,16 @@ impl RemoteParticipantProxy {
             None => crate::py_calls::capture_context(obj.py())?,
         };
         let sid = {
-            let v = crate::py_calls::read(obj, "_core_sid")?;
+            let v = obj.getattr("rtc")?.getattr("sid")?;
             v.extract::<::std::string::String>()?
         };
         let identity = {
-            let v = crate::py_calls::read(obj, "_core_identity")?;
+            let v = obj.getattr("rtc")?.getattr("identity")?;
             crate::py_values::str_from_py(v.as_any())?
         };
         let kind = {
-            let v = crate::py_calls::read(obj, "_core_kind")?;
-            crate::py_values::str_from_py(v.as_any())?
+            let v = obj.getattr("rtc")?.getattr("kind")?;
+            v.extract::<i32>().map(|v| <::lk_agents_abi::voice::room_io::ParticipantKind as ::std::convert::TryFrom<i32>>::try_from(v).unwrap_or_default())?
         };
         Ok(RemoteParticipantProxy {
             host: ::std::sync::Arc::new(obj.clone().unbind()),
@@ -9295,7 +9421,11 @@ impl ::lk_agents_abi::voice::rtc::RemoteParticipant for RemoteParticipantProxy {
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((host.bind(py).getattr("_core_active")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((
+                    host.bind(py).getattr("_core_active")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
         ::pyo3::Python::attach(|py| {
@@ -9325,10 +9455,14 @@ impl ::lk_agents_abi::voice::rtc::RemoteParticipant for RemoteParticipantProxy {
         let out = ::lk_agents_runtime::host::call_now(
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
+                    host.bind(py).getattr("rtc")?,
+                    ::pyo3::types::PyString::new(py, "attributes").into_any(),
+                ];
                 Ok((
-                    host.bind(py).getattr("_core_attributes")?,
+                    py.import("builtins")?.getattr("getattr")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -9376,6 +9510,7 @@ impl ::lk_agents_abi::voice::rtc::RemoteParticipant for RemoteParticipantProxy {
                 Ok((
                     host.bind(py).getattr("_core_track_publications")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -9470,31 +9605,24 @@ impl TrackPublicationProxy {
             None => crate::py_calls::capture_context(obj.py())?,
         };
         let sid = {
-            let v = crate::py_calls::read(obj, "_core_sid")?;
+            let v = obj.getattr("rtc")?.getattr("sid")?;
             crate::py_values::str_from_py(v.as_any())?
         };
         let name = {
-            let v = crate::py_calls::read(obj, "_core_name")?;
+            let v = obj.getattr("rtc")?.getattr("name")?;
             v.extract::<::std::string::String>()?
         };
         let source = {
-            let v = crate::py_calls::read(obj, "_core_source")?;
-            crate::py_values::str_from_py(v.as_any())?
+            let v = obj.getattr("rtc")?.getattr("source")?;
+            v.extract::<i32>().map(|v| <::lk_agents_abi::voice::room_io::TrackSource as ::std::convert::TryFrom<i32>>::try_from(v).unwrap_or_default())?
         };
         let kind = {
-            let v = crate::py_calls::read(obj, "_core_kind")?;
-            crate::py_values::number_from_py::<i32>(v.as_any(), "TrackPublication._core_kind")?
+            let v = obj.getattr("rtc")?.getattr("kind")?;
+            crate::py_values::number_from_py::<i32>(v.as_any(), "TrackPublication.rtc.kind")?
         };
         let audio_features = {
-            let v = crate::py_calls::read(obj, "_core_audio_features")?;
-            v.try_iter().and_then(|items| {
-                items
-                    .map(|item| {
-                        let item = item?;
-                        crate::py_values::str_from_py(item.as_any())
-                    })
-                    .collect::<PyResult<Vec<_>>>()
-            })?
+            let v = obj.getattr("rtc")?.getattr("audio_features")?;
+            v.try_iter().and_then(|items| items.map(|item| item?.extract::<i32>()).collect::<::pyo3::PyResult<Vec<i32>>>()).map(|v| v.into_iter().filter_map(|v| <::lk_agents_abi::voice::rtc::AudioTrackFeature as ::std::convert::TryFrom<i32>>::try_from(v).ok()).collect::<Vec<_>>())?
         };
         Ok(TrackPublicationProxy {
             host: ::std::sync::Arc::new(obj.clone().unbind()),
@@ -9534,6 +9662,7 @@ impl ::lk_agents_abi::voice::rtc::TrackPublication for TrackPublicationProxy {
                 Ok((
                     host.bind(py).getattr("_core_is_subscribed")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -9580,6 +9709,7 @@ impl ::lk_agents_abi::voice::rtc::TrackPublication for TrackPublicationProxy {
                 Ok((
                     host.bind(py).getattr("_core_set_subscribed")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -9609,15 +9739,16 @@ impl ::lk_agents_abi::voice::rtc::TrackPublication for TrackPublicationProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
-            "TrackPublication._core_wait_for_subscription",
+            "TrackPublication.rtc.wait_for_subscription",
             &self.context,
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
                 Ok((
-                    host.bind(py).getattr("_core_wait_for_subscription")?,
+                    host.bind(py).getattr("rtc")?.getattr("wait_for_subscription")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -9657,6 +9788,7 @@ impl ::lk_agents_abi::voice::rtc::TrackPublication for TrackPublicationProxy {
                 Ok((
                     host.bind(py).getattr("_core_open_audio_stream")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -9698,6 +9830,7 @@ impl ::lk_agents_abi::voice::rtc::TrackPublication for TrackPublicationProxy {
                 Ok((
                     host.bind(py).getattr("_core_open_video_stream")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -9812,7 +9945,11 @@ impl ::lk_agents_abi::voice::rtc::AudioInputStream for AudioInputStreamProxy {
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((host.bind(py).getattr("_core_frames")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((
+                    host.bind(py).getattr("_core_frames")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
         ::pyo3::Python::attach(|py| {
@@ -9886,6 +10023,7 @@ impl ::lk_agents_abi::voice::rtc::AudioInputStream for AudioInputStreamProxy {
                 Ok((
                     host.bind(py).getattr("_core_process_audio")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -9908,7 +10046,7 @@ impl ::lk_agents_abi::voice::rtc::AudioInputStream for AudioInputStreamProxy {
 
 // Declared in rust/crates/lk-agents-abi/src/voice/rtc/media.rs.
 
-/// [`::lk_agents_abi::voice::rtc::VideoSource`] over a host `livekit.agents.voice.room_io.VideoSource`.
+/// [`::lk_agents_abi::voice::rtc::VideoSource`] over a host `livekit.rtc.VideoSource`.
 #[derive(Clone)]
 pub struct VideoSourceProxy {
     host: ::std::sync::Arc<Py<PyAny>>,
@@ -9993,8 +10131,9 @@ impl ::lk_agents_abi::voice::rtc::VideoSource for VideoSourceProxy {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [crate::generated::records::rtc_frames::video_frame_to_py(py, frame_arg)?];
                 Ok((
-                    host.bind(py).getattr("_core_capture")?,
+                    host.bind(py).getattr("capture_frame")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -10029,13 +10168,13 @@ impl ::lk_agents_abi::voice::rtc::VideoSource for VideoSourceProxy {
         let host = ::std::sync::Arc::clone(&self.host);
         let started = ::lk_agents_runtime::host::call(
             &crate::py_calls::Entry,
-            "VideoSource._core_close",
+            "VideoSource.aclose",
             &self.context,
             &[],
             cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((host.bind(py).getattr("_core_close")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((host.bind(py).getattr("aclose")?, ::pyo3::types::PyTuple::new(py, args)?, None))
             }),
         );
         ::std::boxed::Box::pin(async move {
@@ -10152,6 +10291,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
                 Ok((
                     host.bind(py).getattr("_core_on_enter")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -10191,6 +10331,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
                 Ok((
                     host.bind(py).getattr("_core_on_exit")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -10232,6 +10373,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
                 Ok((
                     host.bind(py).getattr("_core_toolset_resources")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -10285,6 +10427,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
                 Ok((
                     host.bind(py).getattr("_core_tool_infos")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -10332,6 +10475,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
                 Ok((
                     host.bind(py).getattr("_core_closing")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -10397,6 +10541,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
                 Ok((
                     host.bind(py).getattr("_core_on_user_turn_completed")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -10440,6 +10585,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
                 Ok((
                     host.bind(py).getattr("_core_on_user_turn_exceeded")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -10499,6 +10645,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
                 Ok((
                     host.bind(py).getattr("_core_function_tools_executed")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -10547,6 +10694,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
                 Ok((
                     host.bind(py).getattr("_core_filler_source")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -10591,6 +10739,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionHooks for SessionHooksProxy
                 Ok((
                     host.bind(py).getattr("_core_hook_failed")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -10676,7 +10825,11 @@ impl ::lk_agents_abi::voice::session_effects::SessionEvents for SessionEventsPro
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [crate::generated::records::session_wire::host_wire_to_py(py, wire_arg)?];
-                Ok((host.bind(py).getattr("_core_event")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((
+                    host.bind(py).getattr("_core_event")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
     }
@@ -10697,6 +10850,7 @@ impl ::lk_agents_abi::voice::session_effects::SessionEvents for SessionEventsPro
                 Ok((
                     host.bind(py).getattr("_core_error_message")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -10793,7 +10947,11 @@ impl ::lk_agents_abi::voice::session_owner::SessionHost for SessionHostProxy {
             cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((host.bind(py).getattr("prepare")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((
+                    host.bind(py).getattr("prepare")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
         ::std::boxed::Box::pin(async move {
@@ -10826,7 +10984,11 @@ impl ::lk_agents_abi::voice::session_owner::SessionHost for SessionHostProxy {
             cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((host.bind(py).getattr("started")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((
+                    host.bind(py).getattr("started")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
         ::std::boxed::Box::pin(async move {
@@ -10855,7 +11017,7 @@ impl ::lk_agents_abi::voice::session_owner::SessionHost for SessionHostProxy {
             cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((host.bind(py).getattr("closed")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((host.bind(py).getattr("closed")?, ::pyo3::types::PyTuple::new(py, args)?, None))
             }),
         );
         ::std::boxed::Box::pin(async move {
@@ -10964,6 +11126,7 @@ impl ::lk_agents_abi::voice::workflows::warm_transfer::TransferHost for Transfer
                 Ok((
                     host.bind(py).getattr("_core_start_hold")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -10998,6 +11161,7 @@ impl ::lk_agents_abi::voice::workflows::warm_transfer::TransferHost for Transfer
                 Ok((
                     host.bind(py).getattr("_core_stop_hold")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -11019,7 +11183,11 @@ impl ::lk_agents_abi::voice::workflows::warm_transfer::TransferHost for Transfer
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [crate::generated::records::workflows::io_enable_state_to_py(py, state_arg)?];
-                Ok((host.bind(py).getattr("_core_set_io")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((
+                    host.bind(py).getattr("_core_set_io")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
     }
@@ -11053,6 +11221,7 @@ impl ::lk_agents_abi::voice::workflows::warm_transfer::TransferHost for Transfer
                 Ok((
                     host.bind(py).getattr("_core_connect_human")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -11089,6 +11258,7 @@ impl ::lk_agents_abi::voice::workflows::warm_transfer::TransferHost for Transfer
                 Ok((
                     host.bind(py).getattr("_core_start_human")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -11123,6 +11293,7 @@ impl ::lk_agents_abi::voice::workflows::warm_transfer::TransferHost for Transfer
                 Ok((
                     host.bind(py).getattr("_core_close_human")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -11145,6 +11316,7 @@ impl ::lk_agents_abi::voice::workflows::warm_transfer::TransferHost for Transfer
                 Ok((
                     host.bind(py).getattr("_core_disconnect_human")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -11187,6 +11359,7 @@ impl ::lk_agents_abi::voice::workflows::warm_transfer::TransferHost for Transfer
                 Ok((
                     host.bind(py).getattr("_core_create_sip_participant")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -11232,6 +11405,7 @@ impl ::lk_agents_abi::voice::workflows::warm_transfer::TransferHost for Transfer
                 Ok((
                     host.bind(py).getattr("_core_connect_twilio_call")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -11280,6 +11454,7 @@ impl ::lk_agents_abi::voice::workflows::warm_transfer::TransferHost for Transfer
                 Ok((
                     host.bind(py).getattr("_core_http_post")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -11326,6 +11501,7 @@ impl ::lk_agents_abi::voice::workflows::warm_transfer::TransferHost for Transfer
                 Ok((
                     host.bind(py).getattr("_core_move_participant")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -11362,6 +11538,7 @@ impl ::lk_agents_abi::voice::workflows::warm_transfer::TransferHost for Transfer
                 Ok((
                     host.bind(py).getattr("_core_delete_caller_room")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -11382,8 +11559,9 @@ impl ::lk_agents_abi::voice::workflows::warm_transfer::TransferHost for Transfer
     }
 }
 
-/// Each `ALL` array's names, indexed by wire value, for the host adapter's reads of SDK ints:
-/// `(connection states, disconnect reasons, participant kinds, track sources, audio features)`.
+/// Each `ALL` array's names, indexed by wire value, for the host's SDK events and track options:
+/// `(connection states, disconnect reasons, track sources)`. Proxy reads take SDK numbers
+/// through their `sdk` declaration instead.
 #[pyfunction]
 pub fn rtc_wire_names(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
     ::pyo3::IntoPyObjectExt::into_bound_py_any(::lk_agents_abi::voice::rtc::rtc_wire_names(), py)

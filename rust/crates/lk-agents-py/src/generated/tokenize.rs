@@ -704,7 +704,11 @@ impl ::lk_agents_abi::tokenize::bindings::TokenizerCallback for TokenizerCallbac
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [::pyo3::IntoPyObjectExt::into_bound_py_any(text_arg, py)?];
-                Ok((host.bind(py).getattr("__call__")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((
+                    host.bind(py).getattr("__call__")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
         ::pyo3::Python::attach(|py| {

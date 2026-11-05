@@ -859,6 +859,7 @@ impl ::lk_agents_abi::Stt for SttProxy {
                 Ok((
                     host.bind(py).getattr("_core_prewarm")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -879,6 +880,7 @@ impl ::lk_agents_abi::Stt for SttProxy {
                 Ok((
                     host.bind(py).getattr("_core_update_keyterms")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -902,6 +904,7 @@ impl ::lk_agents_abi::Stt for SttProxy {
                 Ok((
                     host.bind(py).getattr("_core_push_conversation_item")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -932,7 +935,11 @@ impl ::lk_agents_abi::Stt for SttProxy {
                     error_arg.into_bound(py),
                     ::pyo3::IntoPyObjectExt::into_bound_py_any(recoverable_arg, py)?,
                 ];
-                Ok((host.bind(py).getattr("_core_failed")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((
+                    host.bind(py).getattr("_core_failed")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
     }
@@ -1000,6 +1007,7 @@ impl ::lk_agents_abi::Stt for SttProxy {
                 Ok((
                     host.bind(py).getattr("_core_recognize")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -1065,7 +1073,11 @@ impl ::lk_agents_abi::Stt for SttProxy {
                         py, bound,
                     )?);
                 }
-                Ok((host.bind(py).getattr("_core_stream")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((
+                    host.bind(py).getattr("_core_stream")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
         ::std::boxed::Box::pin(async move {

@@ -245,7 +245,7 @@ async def test_custom_processor_runs_once_and_only_its_owner_closes_it(
     monkeypatch.setattr(rtc.AudioStream, "from_track", from_track)
     processor = Processor()
     room = object.__new__(Room)
-    room._room = cast(rtc.Room, SimpleNamespace(remote_participants={"user": object()}))
+    room.rtc = cast(rtc.Room, SimpleNamespace(remote_participants={"user": object()}))
     publication = TrackPublication(
         room, cast(rtc.TrackPublication, SimpleNamespace(sid="TR_input", track=object()))
     )
@@ -290,7 +290,7 @@ def test_failed_input_setup_releases_only_its_owned_processor_and_keeps_the_caus
     monkeypatch.setattr(rtc, "AudioProcessingModule", make_apm)
     processor = Processor()
     room = object.__new__(Room)
-    room._room = cast(rtc.Room, SimpleNamespace(remote_participants={"user": object()}))
+    room.rtc = cast(rtc.Room, SimpleNamespace(remote_participants={"user": object()}))
     publication = TrackPublication(
         room, cast(rtc.TrackPublication, SimpleNamespace(sid="TR_input", track=object()))
     )
@@ -383,7 +383,7 @@ def test_sdk_reader_transfers_before_any_pull_and_refusal_closes_it(
 
     reader = Reader()
     room = object.__new__(Room)
-    room._room = cast(
+    room.rtc = cast(
         rtc.Room,
         SimpleNamespace(
             **{
@@ -499,7 +499,7 @@ async def test_failed_audio_publication_releases_its_unadopted_source(
     monkeypatch.setattr(rtc, "AudioSource", Source)
     monkeypatch.setattr(rtc.LocalAudioTrack, "create_audio_track", create_track)
     room = object.__new__(Room)
-    room._room = cast(
+    room.rtc = cast(
         rtc.Room, SimpleNamespace(local_participant=SimpleNamespace(publish_track=publish_track))
     )
     participant = LocalParticipant(room)

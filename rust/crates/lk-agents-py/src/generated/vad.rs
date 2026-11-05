@@ -310,7 +310,11 @@ impl ::lk_agents_abi::vad::inference::VadModels for VadModelsProxy {
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((host.bind(py).getattr("__call__")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((
+                    host.bind(py).getattr("__call__")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
         ::pyo3::Python::attach(|py| {
@@ -389,7 +393,11 @@ impl ::lk_agents_abi::vad::inference::VadModel for VadModelProxy {
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [::pyo3::IntoPyObjectExt::into_bound_py_any(window_arg, py)?];
-                Ok((host.bind(py).getattr("predict")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((
+                    host.bind(py).getattr("predict")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
         ::pyo3::Python::attach(|py| {
@@ -411,7 +419,7 @@ impl ::lk_agents_abi::vad::inference::VadModel for VadModelProxy {
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((host.bind(py).getattr("reset")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((host.bind(py).getattr("reset")?, ::pyo3::types::PyTuple::new(py, args)?, None))
             }),
         );
         ::pyo3::Python::attach(|py| {
@@ -535,6 +543,7 @@ impl ::lk_agents_abi::Vad for VadProxy {
                 Ok((
                     host.bind(py).getattr("_core_prewarm")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -563,7 +572,11 @@ impl ::lk_agents_abi::Vad for VadProxy {
             cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((host.bind(py).getattr("_core_stream")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((
+                    host.bind(py).getattr("_core_stream")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
         let wrap_cx = ::std::clone::Clone::clone(cx);

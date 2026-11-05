@@ -1408,7 +1408,11 @@ impl ::lk_agents_abi::worker::http::EndpointHandler for EndpointHandlerProxy {
             cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [<dyn ::lk_agents_abi::worker::http::EndpointExchange as super::NativeToHost>::to_host(py, exchange_arg)?, crate::generated::records::worker_endpoint::endpoint_request_to_py(py, request_arg)?];
-                Ok((host.bind(py).getattr("_core_handle")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((
+                    host.bind(py).getattr("_core_handle")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
         ::std::boxed::Box::pin(async move {
@@ -1501,6 +1505,7 @@ impl ::lk_agents_abi::worker::job::SessionJob for SessionJobProxy {
                 Ok((
                     host.bind(py).getattr("_core_connect")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -1624,6 +1629,7 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
                 Ok((
                     host.bind(py).getattr("_core_chat_history")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -1670,6 +1676,7 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
                 Ok((
                     host.bind(py).getattr("_core_agent_info")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -1717,6 +1724,7 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
                 Ok((
                     host.bind(py).getattr("_core_run_input")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -1764,6 +1772,7 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
                 Ok((
                     host.bind(py).getattr("_core_session_state")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -1808,6 +1817,7 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
                 Ok((
                     host.bind(py).getattr("_core_rtc_stats")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -1846,6 +1856,7 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
                 Ok((
                     host.bind(py).getattr("_core_session_usage")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -1895,6 +1906,7 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
                 Ok((
                     host.bind(py).getattr("_core_update_io")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -1942,6 +1954,7 @@ impl ::lk_agents_abi::worker::remote_session::SessionPort for SessionPortProxy {
                 Ok((
                     host.bind(py).getattr("_core_finalize_simulation")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -2050,7 +2063,11 @@ impl ::lk_agents_abi::worker::ipc_host::JobExecutor for JobExecutorProxy {
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [::pyo3::IntoPyObjectExt::into_bound_py_any(endpoint_arg, py)?];
-                Ok((host.bind(py).getattr("_core_launch")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((
+                    host.bind(py).getattr("_core_launch")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
         ::std::boxed::Box::pin(async move {
@@ -2093,6 +2110,7 @@ impl ::lk_agents_abi::worker::ipc_host::JobExecutor for JobExecutorProxy {
                 Ok((
                     host.bind(py).getattr("_core_completed")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -2136,7 +2154,11 @@ impl ::lk_agents_abi::worker::ipc_host::JobExecutor for JobExecutorProxy {
                         Some(x) => crate::py_errors::ExceptionValue::to_exception(x, py)?,
                     },
                 ];
-                Ok((host.bind(py).getattr("_core_log")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((
+                    host.bind(py).getattr("_core_log")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
         ::pyo3::Python::attach(|py| {
@@ -2180,7 +2202,11 @@ impl ::lk_agents_abi::worker::ipc_host::JobExecutor for JobExecutorProxy {
             cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((host.bind(py).getattr("_core_start")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((
+                    host.bind(py).getattr("_core_start")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
         ::std::boxed::Box::pin(async move {
@@ -2214,7 +2240,11 @@ impl ::lk_agents_abi::worker::ipc_host::JobExecutor for JobExecutorProxy {
             cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((host.bind(py).getattr("initialize")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((
+                    host.bind(py).getattr("initialize")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
         ::std::boxed::Box::pin(async move {
@@ -2258,6 +2288,7 @@ impl ::lk_agents_abi::worker::ipc_host::JobExecutor for JobExecutorProxy {
                 Ok((
                     host.bind(py).getattr("_core_launch_job")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -2292,7 +2323,7 @@ impl ::lk_agents_abi::worker::ipc_host::JobExecutor for JobExecutorProxy {
             cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((host.bind(py).getattr("aclose")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((host.bind(py).getattr("aclose")?, ::pyo3::types::PyTuple::new(py, args)?, None))
             }),
         );
         ::std::boxed::Box::pin(async move {
@@ -2328,7 +2359,11 @@ impl ::lk_agents_abi::worker::ipc_host::JobExecutor for JobExecutorProxy {
             cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((host.bind(py).getattr("_core_join")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((
+                    host.bind(py).getattr("_core_join")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
         ::std::boxed::Box::pin(async move {
@@ -2410,7 +2445,11 @@ impl ::lk_agents_abi::worker::ipc_host::ChildInitialize for ChildInitializeProxy
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [::pyo3::IntoPyObjectExt::into_bound_py_any(http_proxy_arg, py)?];
-                Ok((host.bind(py).getattr("__call__")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((
+                    host.bind(py).getattr("__call__")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
         ::pyo3::Python::attach(|py| {
@@ -2505,7 +2544,11 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
             cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((host.bind(py).getattr("_core_ping")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((
+                    host.bind(py).getattr("_core_ping")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
         ::std::boxed::Box::pin(async move {
@@ -2551,6 +2594,7 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
                 Ok((
                     host.bind(py).getattr("_core_start_job")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -2590,6 +2634,7 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
                 Ok((
                     host.bind(py).getattr("_core_start_entrypoint")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -2627,7 +2672,11 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [crate::py_objects::object_ref_to_py(py, task_arg)?];
-                Ok((host.bind(py).getattr("_core_wait")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((
+                    host.bind(py).getattr("_core_wait")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
         ::std::boxed::Box::pin(async move {
@@ -2664,7 +2713,11 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [crate::py_objects::object_ref_to_py(py, task_arg)?];
-                Ok((host.bind(py).getattr("_core_cancel")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((
+                    host.bind(py).getattr("_core_cancel")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
         ::std::boxed::Box::pin(async move {
@@ -2701,6 +2754,7 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
                 Ok((
                     host.bind(py).getattr("_core_close_session")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -2738,6 +2792,7 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
                 Ok((
                     host.bind(py).getattr("_core_session_end")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -2780,6 +2835,7 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
                 Ok((
                     host.bind(py).getattr("_core_session_report")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -2817,6 +2873,7 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
                 Ok((
                     host.bind(py).getattr("_core_disconnect")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -2861,6 +2918,7 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
                 Ok((
                     host.bind(py).getattr("_core_shutdown_callback")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -2904,7 +2962,11 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
                         Some(x) => crate::py_errors::ExceptionValue::to_exception(x, py)?,
                     },
                 ];
-                Ok((host.bind(py).getattr("_core_log")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((
+                    host.bind(py).getattr("_core_log")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
         ::pyo3::Python::attach(|py| {
@@ -2997,7 +3059,11 @@ impl ::lk_agents_abi::worker::ipc_host::JobCall for JobCallProxy {
             cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((host.bind(py).getattr("__call__")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((
+                    host.bind(py).getattr("__call__")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
         ::std::boxed::Box::pin(async move {
@@ -3095,7 +3161,11 @@ impl ::lk_agents_abi::worker::ipc_host::ParticipantEntrypoint for ParticipantEnt
                     crate::py_objects::object_ref_to_py(py, job_arg)?,
                     crate::py_objects::object_ref_to_py(py, participant_arg)?,
                 ];
-                Ok((host.bind(py).getattr("__call__")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((
+                    host.bind(py).getattr("__call__")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
         ::std::boxed::Box::pin(async move {
@@ -3197,7 +3267,11 @@ impl ::lk_agents_abi::worker::ipc_host::PoolCallbacks for PoolCallbacksProxy {
             cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((host.bind(py).getattr("_core_create")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((
+                    host.bind(py).getattr("_core_create")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
         ::std::boxed::Box::pin(async move {
@@ -3242,7 +3316,7 @@ impl ::lk_agents_abi::worker::ipc_host::PoolCallbacks for PoolCallbacksProxy {
                         ::std::sync::Arc::clone(&process_arg),
                     )?,
                 ];
-                Ok((host.bind(py).getattr("emit")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((host.bind(py).getattr("emit")?, ::pyo3::types::PyTuple::new(py, args)?, None))
             }),
         );
     }
@@ -3328,6 +3402,7 @@ impl ::lk_agents_abi::worker::server_host::ServerHost for ServerHostProxy {
                 Ok((
                     host.bind(py).getattr("_core_launch_job")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -3367,6 +3442,7 @@ impl ::lk_agents_abi::worker::server_host::ServerHost for ServerHostProxy {
                 Ok((
                     host.bind(py).getattr("_core_terminate_job")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -3402,7 +3478,11 @@ impl ::lk_agents_abi::worker::server_host::ServerHost for ServerHostProxy {
             cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((host.bind(py).getattr("_core_load")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((
+                    host.bind(py).getattr("_core_load")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
         ::std::boxed::Box::pin(async move {
@@ -3441,7 +3521,11 @@ impl ::lk_agents_abi::worker::server_host::ServerHost for ServerHostProxy {
                         py,
                         options_arg,
                     )?];
-                Ok((host.bind(py).getattr("_core_start")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((
+                    host.bind(py).getattr("_core_start")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
         ::std::boxed::Box::pin(async move {
@@ -3477,6 +3561,7 @@ impl ::lk_agents_abi::worker::server_host::ServerHost for ServerHostProxy {
                 Ok((
                     host.bind(py).getattr("_core_started")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -3516,6 +3601,7 @@ impl ::lk_agents_abi::worker::server_host::ServerHost for ServerHostProxy {
                 Ok((
                     host.bind(py).getattr("_core_idle_processes")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -3555,6 +3641,7 @@ impl ::lk_agents_abi::worker::server_host::ServerHost for ServerHostProxy {
                 Ok((
                     host.bind(py).getattr("_core_worker_load")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -3591,6 +3678,7 @@ impl ::lk_agents_abi::worker::server_host::ServerHost for ServerHostProxy {
                 Ok((
                     host.bind(py).getattr("_core_join_jobs")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -3624,7 +3712,11 @@ impl ::lk_agents_abi::worker::server_host::ServerHost for ServerHostProxy {
             cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((host.bind(py).getattr("_core_close")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((
+                    host.bind(py).getattr("_core_close")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
         ::std::boxed::Box::pin(async move {
@@ -3659,7 +3751,11 @@ impl ::lk_agents_abi::worker::server_host::ServerHost for ServerHostProxy {
             cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((host.bind(py).getattr("_core_health")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((
+                    host.bind(py).getattr("_core_health")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
         ::std::boxed::Box::pin(async move {
@@ -3700,6 +3796,7 @@ impl ::lk_agents_abi::worker::server_host::ServerHost for ServerHostProxy {
                 Ok((
                     host.bind(py).getattr("_core_metrics")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );

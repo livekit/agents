@@ -64,7 +64,12 @@ pub fn parse(path: &str, text: &str, proxies: &[&Proxy]) -> Result<Bases, String
         if p.generic && !header(block).contains("Generic[") {
             return Err(format!("{path}: `{class}` is `generic` but not `Generic[..]`"));
         }
-        for m in p.methods.iter().filter(|m| m.kind != ProxyCall::Bind) {
+        // A base class answers its declared methods; getters and functions are read elsewhere.
+        let methods = p.methods.iter().filter(|m| {
+            m.kind != ProxyCall::Bind
+                && matches!(&m.target, crate::decl::Target::Method(path) if path.len() == 1)
+        });
+        for m in methods {
             let def = |kw: &str| format!("\n    {kw} {}(", m.name);
             if !block.contains(&def("def")) && !block.contains(&def("async def")) {
                 return Err(format!(

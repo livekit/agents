@@ -110,6 +110,7 @@ pub(crate) fn holds_record(ty: &Ty) -> bool {
                 HostForm::Record { .. }
                     | HostForm::WireStrs
                     | HostForm::Str
+                    | HostForm::Wire
                     | HostForm::Converted(..)
                     | HostForm::Via { .. }
             )
@@ -613,7 +614,7 @@ pub(super) fn read(ty: &Ty, v: &str, path: &str) -> Result<String, String> {
                 None => convert(v)?,
             }
         }
-        Ty::Record(Record { host: HostForm::Str, .. }) => {
+        Ty::Record(Record { host: HostForm::Str | HostForm::Wire, .. }) => {
             format!("crate::py_values::str_from_py({v})")
         }
         Ty::Record(r) => {
@@ -728,7 +729,7 @@ fn transparent_rust(r: &RecordDecl, decls: &Declarations) -> Result<String, Stri
                 "",
                 is_a(&format!("{PACKAGE}.{module}"), name),
             ),
-            Ty::Record(Record { host: HostForm::Str, .. }) => {
+            Ty::Record(Record { host: HostForm::Str | HostForm::Wire, .. }) => {
                 ("str", "obj.is_instance_of::<::pyo3::types::PyString>()".to_owned())
             }
             Ty::Record(Record { host: HostForm::Annotation(text) | HostForm::Converted(text, ..), .. }) => {

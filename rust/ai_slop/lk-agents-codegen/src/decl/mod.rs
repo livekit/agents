@@ -434,8 +434,12 @@ pub struct Proxy {
     /// The host class the object is an instance of: its annotation.
     pub host: String,
     /// `view = "module.Class"`: the class whose instance over the host object the proxy calls,
-    /// for host classes that do not carry the `_core_*` surface themselves (the io legs).
+    /// for host objects whose calls need state the host class does not carry (a stream it opens).
     pub view: Option<(String, String)>,
+    /// `sdk`: the host is an SDK object whose enums are numbers: a `wire_enum` it returns is read
+    /// as its SDK number (`TryFrom<i32>`); a number this build has no variant for reads as the
+    /// enum's `Default`, and is dropped from a list.
+    pub sdk: bool,
     /// `base = "tts.py"`: the host class is a plugin base class, hand-written in that file beside
     /// the declaring one (see `crate::bases`).
     pub base: Option<String>,
@@ -500,8 +504,11 @@ impl Proxy {
 #[derive(Debug, Clone)]
 pub struct ProxyMethod {
     pub rust_name: String,
-    /// The host method called; the Rust name unless `name = ".."`.
+    /// What it reaches on the host, as its diagnostics name it: the method, attribute path or
+    /// function of its [`target`](Self::target).
     pub name: String,
+    /// What the host call addresses: a method, an attribute read, or a module function.
+    pub target: Target,
     pub kind: ProxyCall,
     /// Passed to the host in order, the context parameter included.
     pub params: Vec<Param>,
@@ -524,6 +531,17 @@ pub struct ProxyMethod {
     /// An awaited call declared `fn ..(..) -> BoxFuture<'lt, T>` (a trait without
     /// `#[async_trait]`): the future's lifetime, `'_`, or `'static` for a consuming call.
     pub boxed: Option<String>,
+}
+
+/// What a proxy call addresses on the host object (after its `view`, if any).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Target {
+    /// The Rust name, or `name = "a.b"`: the method found along that attribute path, called.
+    Method(Vec<String>),
+    /// `getter = "a.b"`: the attribute found along that path, read and not called.
+    Attribute(Vec<String>),
+    /// `function = "module.name"`: that module function, called with the host object first.
+    Function { module: String, name: String },
 }
 
 /// How the core calls the host: declared, then checked against the signature.
@@ -875,9 +893,11 @@ pub enum Ty {
 pub enum HostForm {
     /// Pure `#[host(wire_strs)]`: output through its existing `as_str`, no host input converter.
     WireStrs,
-    /// `#[host(string)]` / `#[host(wire_enum)]`: a `str` both ways, by its `Display` and `FromStr`
+    /// `#[host(string)]`: a `str` both ways, by its `Display` and `FromStr`
     /// (`crate::py_values::str_to_py` / `str_from_py`).
     Str,
+    /// `#[host(wire_enum)]`: a `str` both ways, as `Str`; an `sdk` proxy reads its SDK number.
+    Wire,
     /// `#[host(codec(.., host = ".."))]`: the annotation the declaration gives.
     Annotation(String),
     /// `codec(.., py = "module::converter")`: the annotation and declared binding primitive path.

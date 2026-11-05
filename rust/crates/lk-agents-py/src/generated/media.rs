@@ -687,7 +687,11 @@ impl ::lk_agents_abi::media::images::FrameReader for FrameReaderProxy {
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [crate::py_objects::object_ref_to_py(py, frame_arg)?];
-                Ok((host.bind(py).getattr("_core_rgba")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((
+                    host.bind(py).getattr("_core_rgba")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
         ::pyo3::Python::attach(|py| {
@@ -818,7 +822,7 @@ impl ::lk_agents_abi::media::emitter::EmitterOutput for EmitterOutputProxy {
                     },
                     ::pyo3::IntoPyObjectExt::into_bound_py_any(characters_count_arg, py)?,
                 ];
-                Ok((host.bind(py).getattr("send")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((host.bind(py).getattr("send")?, ::pyo3::types::PyTuple::new(py, args)?, None))
             }),
         );
     }
@@ -838,6 +842,7 @@ impl ::lk_agents_abi::media::emitter::EmitterOutput for EmitterOutputProxy {
                 Ok((
                     host.bind(py).getattr("provider_request_ids")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -849,7 +854,7 @@ impl ::lk_agents_abi::media::emitter::EmitterOutput for EmitterOutputProxy {
             &crate::py_calls::Entry,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((host.bind(py).getattr("closed")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((host.bind(py).getattr("closed")?, ::pyo3::types::PyTuple::new(py, args)?, None))
             }),
         );
         ::pyo3::Python::attach(|py| {

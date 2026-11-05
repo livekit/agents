@@ -590,7 +590,7 @@ mod telemetry {
         let span = SpanContext { trace_id: 0xabc, span_id: 0x42, sampled: true };
         let observe = |globals: &Py<PyAny>| -> _core::py_calls::HostCall {
             let globals = Python::attach(|py| globals.clone_ref(py));
-            Box::new(move |py| Ok((globals.bind(py).getattr("observe")?, PyTuple::empty(py))))
+            Box::new(move |py| Ok((globals.bind(py).getattr("observe")?, PyTuple::empty(py), None)))
         };
         let runtime = lk_agents_runtime::process::handle().unwrap();
         let (under, outside) = runtime.block_on(async {

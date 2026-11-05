@@ -997,7 +997,11 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [crate::generated::records::agent_run::invocation_to_py(py, invocation_arg)?];
-                Ok((host.bind(py).getattr("checkpoint")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((
+                    host.bind(py).getattr("checkpoint")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
         ::std::boxed::Box::pin(async move {
@@ -1038,6 +1042,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
                 Ok((
                     host.bind(py).getattr("render_instructions")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -1079,7 +1084,11 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [crate::generated::records::agent_run::invocation_to_py(py, invocation_arg)?];
-                Ok((host.bind(py).getattr("list_tools")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((
+                    host.bind(py).getattr("list_tools")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
         ::std::boxed::Box::pin(async move {
@@ -1127,7 +1136,11 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
                     crate::generated::records::agent_run::invocation_to_py(py, invocation_arg)?,
                     crate::py_values::extra_to_py(py, &arguments_arg)?.into_any(),
                 ];
-                Ok((host.bind(py).getattr("prepare_tool")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((
+                    host.bind(py).getattr("prepare_tool")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
         ::std::boxed::Box::pin(async move {
@@ -1175,7 +1188,11 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
                     crate::generated::records::agent_run::invocation_to_py(py, invocation_arg)?,
                     crate::py_objects::object_ref_to_py(py, prepared_arg)?,
                 ];
-                Ok((host.bind(py).getattr("read_back")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((
+                    host.bind(py).getattr("read_back")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
         ::std::boxed::Box::pin(async move {
@@ -1223,7 +1240,11 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
                     crate::generated::records::agent_run::invocation_to_py(py, invocation_arg)?,
                     crate::py_objects::object_ref_to_py(py, prepared_arg)?,
                 ];
-                Ok((host.bind(py).getattr("run_tool")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((
+                    host.bind(py).getattr("run_tool")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
         ::std::boxed::Box::pin(async move {
@@ -1274,6 +1295,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
                 Ok((
                     host.bind(py).getattr("validate_tool_completion")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -1325,6 +1347,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
                 Ok((
                     host.bind(py).getattr("validate_output")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -1373,6 +1396,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
                 Ok((
                     host.bind(py).getattr("render_template")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -1404,7 +1428,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
                     [crate::generated::records::agent_run::invocation_to_py(py, invocation_arg)?];
-                Ok((host.bind(py).getattr("cancel")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((host.bind(py).getattr("cancel")?, ::pyo3::types::PyTuple::new(py, args)?, None))
             }),
         );
     }
@@ -1431,6 +1455,7 @@ impl ::lk_agents_abi::agent::AgentCallbacks for AgentCallbacksProxy {
                 Ok((
                     host.bind(py).getattr("answer_expert")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -1511,7 +1536,11 @@ impl ::lk_agents_abi::agent::HostInstructions for HostInstructionsProxy {
             cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [<dyn ::lk_agents_abi::voice::speech_handle::Speech as super::NativeToHost>::to_host(py, speech_arg)?];
-                Ok((host.bind(py).getattr("_core_render")?, ::pyo3::types::PyTuple::new(py, args)?))
+                Ok((
+                    host.bind(py).getattr("_core_render")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
             }),
         );
         ::std::boxed::Box::pin(async move {
@@ -1593,6 +1622,7 @@ impl ::lk_agents_abi::agent::resources::ContextHydration for ContextHydrationPro
                 Ok((
                     host.bind(py).getattr("_core_release_hydration")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );

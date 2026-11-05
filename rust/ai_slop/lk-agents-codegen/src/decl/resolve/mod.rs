@@ -870,10 +870,11 @@ impl Resolver<'_> {
         if let Some(native) = voc::find(&entries, "native_enum") {
             return crate::native_enums::ty(native, &rust);
         }
-        if voc::find(&entries, "string").is_some() || voc::find(&entries, "wire_enum").is_some() {
+        let wire = voc::find(&entries, "wire_enum").is_some();
+        if voc::find(&entries, "string").is_some() || wire {
             return Ok(Ty::Record(Record {
                 rust,
-                host: HostForm::Str,
+                host: if wire { HostForm::Wire } else { HostForm::Str },
                 extract: true,
                 emit: true,
                 literal: false,

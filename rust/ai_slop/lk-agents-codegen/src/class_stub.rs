@@ -533,7 +533,7 @@ fn annotation(this: &str, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
             }
             // Two modules' models of one name are told apart by an alias.
             HostForm::Record { module, name } => imports.external(&format!(".{module}"), name),
-            HostForm::WireStrs | HostForm::Str => "str".into(),
+            HostForm::WireStrs | HostForm::Str | HostForm::Wire => "str".into(),
             HostForm::Annotation(text)
             | HostForm::Converted(text, ..)
             | HostForm::Via { host: text, .. } => imports.annotation(text, &r.rust),

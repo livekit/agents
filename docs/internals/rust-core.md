@@ -1272,6 +1272,32 @@ by the public API, a plugin base or host glue. Glue-only names use `_core_*`.
 Avoid duplicate wire records, per-language schemas and bindings that only
 rename another binding.
 
+A proxy addresses the host object's own surface; no handwritten view renames it. A method
+declares what it reaches: `name = "a.b"` calls the method along that attribute path,
+`getter = "a.b"` (with `call` or `read_once`) reads the attribute instead, and
+`function = "module.name"` calls a module function with the host object first, for glue that
+does more than rename. A `#[host(kw)]` parameter, and every one after it, is passed by keyword.
+A proxy can target an SDK class directly (`proxy(host = "livekit.rtc.ByteStreamWriter")`), and
+`proxy(.., sdk)` reads each `wire_enum` the host returns as its SDK number through the enum's
+`TryFrom<i32>`: an unknown number reads as the enum's `Default` and is dropped from a list. An
+adapter that carries state beside its SDK object (a room's event bus, a source's playout ledger)
+holds that object as `rtc`, and its declarations read through it:
+
+```rust
+#[crate::host(proxy(host = "livekit.agents.voice.room_io.Room", sdk))]
+pub trait RtcRoom: Send + Sync {
+    #[host(call, getter = "rtc.connection_state")]
+    fn connection_state(&self) -> Result<ConnectionState, RtcError>;
+    #[host(read_once, getter = "local")]
+    fn local(&self) -> &Arc<dyn LocalParticipant>;
+    #[host(call, name = "rtc.unregister_byte_stream_handler")]
+    fn unregister_byte_stream_handler(&self, topic: &str) -> Result<(), RtcError>;
+}
+```
+
+`view = "module.Class"` remains for host objects whose calls need state the host class does not
+carry, such as a turn detector's opened stream.
+
 Keep export attributes in one documented vocabulary shared by parsing and
 generation. New keys require multiple concrete uses, not feature-specific glue.
 

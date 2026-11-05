@@ -10,7 +10,7 @@
 //! handed out through its declared native wrapper when it names one.
 
 use crate::adapter::from_object;
-use crate::decl::{HostForm, Param, Proxy, ProxyCall, ProxyMethod, Record, Ty};
+use crate::decl::{HostForm, Param, Proxy, ProxyCall, ProxyMethod, Record, Target, Ty};
 
 pub fn proxy(p: &Proxy) -> Result<String, String> {
     let name = format!("{}Proxy", p.rust_name);
@@ -50,10 +50,27 @@ pub fn proxy(p: &Proxy) -> Result<String, String> {
     for m in p.methods.iter().filter(|m| m.kind == ProxyCall::ReadOnce) {
         let at = format!("{}::{}", tr, m.rust_name);
         fields.push(format!("    {}: {},\n", m.rust_name, m.ret.ok.rust()));
-        let read = from_object("v", &m.ret.ok, &format!("\"{}.{}\"", p.rust_name, m.name), &at)?;
+        let label = format!("\"{}.{}\"", p.rust_name, m.name);
+        let read = match sdk_read(p, "v", &m.ret.ok, &at)? {
+            Some(read) => read,
+            None => from_object("v", &m.ret.ok, &label, &at)?,
+        };
+        let value = match &m.target {
+            Target::Method(path) => {
+                let (last, along) = path.split_last().expect("a path has a name");
+                match along {
+                    [] => format!("crate::py_calls::read(obj, {last:?})?"),
+                    _ => format!("crate::py_calls::read(&obj{}, {last:?})?", attributes(along)),
+                }
+            }
+            Target::Attribute(path) => format!("obj{}", attributes(path)),
+            Target::Function { module, name } => format!(
+                "crate::py_calls::call(&obj.py().import({module:?})?.getattr({name:?})?, (obj,), None)?"
+            ),
+        };
         reads.push_str(&format!(
-            "        let {} = {{\n            let v = crate::py_calls::read(obj, {:?})?;\n            {read}?\n        }};\n",
-            m.rust_name, m.name
+            "        let {} = {{\n            let v = {value};\n            {read}?\n        }};\n",
+            m.rust_name
         ));
         inits.push(m.rust_name.clone());
     }
@@ -154,8 +171,12 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
     // Owned copies move into the call, which runs on the host's loop.
     let mut moved = String::new();
     let mut args = Vec::new();
+    let mut keywords = Vec::new();
     // A `CallContext` is what the call runs in, never an argument.
     for q in m.params.iter().filter(|q| !q.ty.hidden()) {
+        if p.sdk && holds_wire(&q.ty) {
+            return Err(format!("{at}({}): an sdk proxy passes no wire enum to the host", q.name));
+        }
         moved.push_str(&format!("        let {}_arg = {};\n", q.name, owned(q)));
         let value = to_host(&format!("{}_arg", q.name), &q.ty, &at)?;
         if m.kind == ProxyCall::Notify
@@ -170,6 +191,8 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
                 name = q.name,
             ));
             args.push(format!("{}_arg.into_bound(py)", q.name));
+        } else if q.kw_only {
+            keywords.push((q.name.clone(), value));
         } else {
             args.push(value);
         }
@@ -187,12 +210,35 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
         }
         _ => String::new(),
     };
+    // What the call reaches: a method along its path, an attribute read through the host's
+    // `getattr`, or a module function taking the host object first.
+    let callable = match &m.target {
+        Target::Method(path) => format!("host.bind(py){}", attributes(path)),
+        Target::Attribute(path) => {
+            let (last, along) = path.split_last().expect("a path has a name");
+            args.insert(0, format!("::pyo3::types::PyString::new(py, {last:?}).into_any()"));
+            args.insert(0, format!("host.bind(py){}", attributes(along)));
+            "py.import(\"builtins\")?.getattr(\"getattr\")?".to_owned()
+        }
+        Target::Function { module, name } => {
+            args.insert(0, "host.bind(py).clone()".to_owned());
+            format!("py.import({module:?})?.getattr({name:?})?")
+        }
+    };
+    let kwargs = if keywords.is_empty() {
+        "None".to_owned()
+    } else {
+        let set = keywords
+            .iter()
+            .map(|(name, value)| format!("kwargs.set_item({name:?}, {value})?; "))
+            .collect::<String>();
+        format!("Some({{ let kwargs = ::pyo3::types::PyDict::new(py); {set}kwargs }})")
+    };
     // Every call dispatches through the runtime's HostInvoker, entered by `crate::host`.
     let host_call = format!(
-        "::std::boxed::Box::new(move |py| {{\n                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; {}] = [{}];\n{bound}                Ok((host.bind(py).getattr({:?})?, ::pyo3::types::PyTuple::new(py, args)?))\n            }})",
+        "::std::boxed::Box::new(move |py| {{\n                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; {}] = [{}];\n{bound}                Ok(({callable}, ::pyo3::types::PyTuple::new(py, args)?, {kwargs}))\n            }})",
         args.len(),
         args.join(", "),
-        m.name
     );
     // What the call runs in: its own context parameter, else the context the proxy captured.
     let scope = match m.context {
@@ -227,10 +273,10 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
     if m.kind == ProxyCall::Call {
         let (ret, refused, wrap, err) = result_shape(m, &at)?;
         let binding = if m.ret.ok == Ty::Unit { "()" } else { "out" };
-        let read = if returns_proxy {
-            returned_value("o", &m.ret.ok, &label, &at)?
-        } else {
-            from_host("o", &m.ret.ok, &label, &at)?
+        let read = match sdk_read(p, "o", &m.ret.ok, &at)? {
+            Some(read) => read,
+            None if returns_proxy => returned_value("o", &m.ret.ok, &label, &at)?,
+            None => from_host("o", &m.ret.ok, &label, &at)?,
         };
         let unpack = if context.is_empty() { String::new() } else { stream_context(&err) };
         return Ok(format!(
@@ -268,7 +314,10 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
         ProxyCall::Await => {
             let (ret, refused, wrap, err) = result_shape(m, &at)?;
             let binding = if m.ret.ok == Ty::Unit { "()" } else { "out" };
-            let read = returned_value("o", &m.ret.ok, &label, &at)?;
+            let read = match sdk_read(p, "o", &m.ret.ok, &at)? {
+                Some(read) => read,
+                None => returned_value("o", &m.ret.ok, &label, &at)?,
+            };
             let unpack = if context.is_empty() { String::new() } else { stream_context(&err) };
             // `await(wrap = T)`: wrapped once the GIL is released, under the call's span.
             let (head, read_out, wrapped) = match &m.wrap {
@@ -294,6 +343,50 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
         ProxyCall::ReadOnce | ProxyCall::Bind | ProxyCall::Call | ProxyCall::Notify => {
             unreachable!("answered above")
         }
+    }
+}
+
+/// `.getattr("a")?.getattr("b")?`: the attributes along `path`.
+fn attributes(path: &[String]) -> String {
+    path.iter().map(|a| format!(".getattr({a:?})?")).collect()
+}
+
+/// An `sdk` proxy's read of a `wire_enum` (or a list of them) the host holds as its SDK number:
+/// `Some(PyResult<T>)` of `o`. A number this build has no variant for reads as the enum's
+/// `Default`, and is dropped from a list. `None`: the value is read by its declared kind.
+fn sdk_read(p: &Proxy, o: &str, ty: &Ty, at: &str) -> Result<Option<String>, String> {
+    let wire = |t: &Ty| match t {
+        Ty::Record(Record { host: HostForm::Wire, rust, .. }) => Some(rust.clone()),
+        _ => None,
+    };
+    if !p.sdk {
+        return Ok(None);
+    }
+    if let Some(rust) = wire(ty) {
+        return Ok(Some(format!(
+            "{o}.extract::<i32>().map(|v| <{rust} as ::std::convert::TryFrom<i32>>::try_from(v).unwrap_or_default())"
+        )));
+    }
+    if let Ty::List(item) = ty
+        && let Some(rust) = wire(item)
+    {
+        return Ok(Some(format!(
+            "{o}.try_iter().and_then(|items| items.map(|item| item?.extract::<i32>()).collect::<::pyo3::PyResult<Vec<i32>>>()).map(|v| v.into_iter().filter_map(|v| <{rust} as ::std::convert::TryFrom<i32>>::try_from(v).ok()).collect::<Vec<_>>())"
+        )));
+    }
+    if holds_wire(ty) {
+        return Err(format!("{at}: an sdk proxy reads a wire enum, or a list of them, by number"));
+    }
+    Ok(None)
+}
+
+fn holds_wire(ty: &Ty) -> bool {
+    match ty {
+        Ty::Record(Record { host: HostForm::Wire, .. }) => true,
+        Ty::Optional(t) | Ty::List(t) => holds_wire(t),
+        Ty::Tuple(items) => items.iter().any(holds_wire),
+        Ty::Map(k, v) | Ty::OrderedMap(k, v) => holds_wire(k) || holds_wire(v),
+        _ => false,
     }
 }
 
@@ -614,6 +707,107 @@ mod tests {
             assert!(!p.captures_context(), "{name} must construct without a running loop");
             let generated = super::proxy(p).expect("pure factory emits");
             assert!(!generated.contains("host_context(&self.context)"));
+        }
+    }
+
+    // Catches: an attribute path read as a method call (or a method path not followed), a module
+    // function called without the host object first, a keyword argument passed by position.
+    #[test]
+    fn proxy_calls_address_attributes_methods_and_functions_on_the_host() {
+        let decls = read(&proxy(concat!(
+            "#[host(call, getter = \"rtc.name\")] fn name(&self) -> Result<String, HostError>;",
+            "#[host(read_once, getter = \"info.stream_id\")] fn id(&self) -> String;",
+            "#[host(await, name = \"rtc.aclose\")] async fn close(&self, cx: &Cx, #[host(kw)] reason: String, code: u32) -> Result<(), HostError>;",
+            "#[host(await, function = \"livekit.agents._bindings.next_frame\")] async fn next(&self, cx: &Cx) -> Result<Option<String>, HostError>;",
+        )))
+        .expect("targets resolve");
+        let p = &decls.proxies[0];
+        let emitted: Vec<String> =
+            p.methods.iter().map(|m| super::method(p, m).expect("emits")).collect();
+        assert!(
+            emitted[0].contains("[host.bind(py).getattr(\"rtc\")?, ::pyo3::types::PyString::new(py, \"name\").into_any()]")
+                && emitted[0].contains("py.import(\"builtins\")?.getattr(\"getattr\")?"),
+            "{}",
+            emitted[0]
+        );
+        assert!(
+            emitted[2].contains("host.bind(py).getattr(\"rtc\")?.getattr(\"aclose\")?")
+                && emitted[2].contains("PyAny>; 0] = []")
+                && emitted[2].contains("kwargs.set_item(\"reason\", ")
+                && emitted[2].contains("kwargs.set_item(\"code\", "),
+            "{}",
+            emitted[2]
+        );
+        assert!(
+            emitted[3].contains("[host.bind(py).clone()]")
+                && emitted[3]
+                    .contains("py.import(\"livekit.agents._bindings\")?.getattr(\"next_frame\")?"),
+            "{}",
+            emitted[3]
+        );
+        let whole = super::proxy(p).expect("emits");
+        assert!(
+            whole.contains("let v = obj.getattr(\"info\")?.getattr(\"stream_id\")?;"),
+            "{whole}"
+        );
+        for (body, want) in [
+            (
+                "#[host(await, getter = \"x\")] async fn f(&self, cx: &Cx) -> Result<u32, HostError>;",
+                "a getter is read by `call` or `read_once`",
+            ),
+            (
+                "#[host(call, name = \"a\", getter = \"b\")] fn f(&self) -> Result<u32, HostError>;",
+                "one of name, getter, function",
+            ),
+            (
+                "#[host(call, getter = \"a..b\")] fn f(&self) -> Result<u32, HostError>;",
+                "a dotted path of attribute names",
+            ),
+            (
+                "#[host(call, function = \"next_frame\")] fn f(&self) -> Result<u32, HostError>;",
+                "a dotted module function",
+            ),
+            (
+                "#[host(await)] async fn f(&self, cx: &Cx, #[host(kw, context)] a: &Report) -> Result<(), HostError>;",
+                "`kw` marks a plain argument",
+            ),
+        ] {
+            let err = read(&proxy(body)).expect_err(body);
+            assert!(err.contains(want), "`{body}`: {err}");
+        }
+    }
+
+    // Catches: an SDK number read as a wire string (or an unknown number refusing the read), an
+    // unknown feature kept in a list, a wire enum crossing an sdk proxy anywhere else.
+    #[test]
+    fn an_sdk_proxy_reads_wire_enums_as_their_sdk_numbers() {
+        let room = |extra: &str| {
+            format!(
+                "use crate::errors::HostError;\n#[crate::host(wire_enum)] pub enum State {{ Off, On }}\n#[crate::host(proxy(host = \"livekit.rtc.Room\", sdk))]\npub trait Room: Send + Sync {{ #[host(call, getter = \"connection_state\")] fn state(&self) -> Result<State, HostError>; #[host(read_once, getter = \"features\")] fn features(&self) -> Vec<State>; {extra} }}"
+            )
+        };
+        let decls = read(&room("")).expect("an sdk proxy resolves");
+        let p = &decls.proxies[0];
+        assert!(p.sdk);
+        let state = super::method(p, &p.methods[0]).expect("emits");
+        assert!(
+            state.contains("o.extract::<i32>().map(|v| <::lk_agents_abi::llm::class::State as ::std::convert::TryFrom<i32>>::try_from(v).unwrap_or_default())"),
+            "{state}"
+        );
+        let whole = super::proxy(p).expect("emits");
+        assert!(whole.contains(".filter_map(|v| <::lk_agents_abi::llm::class::State as ::std::convert::TryFrom<i32>>::try_from(v).ok())"), "{whole}");
+        let plain = read(&room("").replace(", sdk", "")).expect("a plain proxy resolves");
+        let p = &plain.proxies[0];
+        let state = super::method(p, &p.methods[0]).expect("emits");
+        assert!(state.contains("crate::py_values::str_from_py(o.as_any())"), "{state}");
+        for extra in [
+            "#[host(call)] fn set(&self, s: State) -> Result<(), HostError>;",
+            "#[host(call)] fn maybe(&self) -> Result<Option<State>, HostError>;",
+        ] {
+            let decls = read(&room(extra)).expect("resolves");
+            let p = &decls.proxies[0];
+            let err = super::method(p, &p.methods[2]).expect_err(extra);
+            assert!(err.contains("an sdk proxy"), "`{extra}`: {err}");
         }
     }
 

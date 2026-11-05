@@ -232,6 +232,7 @@ impl ::lk_agents_abi::cli::DevServer for DevServerProxy {
                 Ok((
                     host.bind(py).getattr("_core_running_jobs")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );
@@ -335,6 +336,7 @@ impl ::lk_agents_abi::cli::DevServer for DevServerProxy {
                 Ok((
                     host.bind(py).getattr("_core_reload_jobs")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
                 ))
             }),
         );

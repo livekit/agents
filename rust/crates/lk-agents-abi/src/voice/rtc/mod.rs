@@ -1,9 +1,8 @@
 //! Values exchanged through the RTC capability boundary. Opaque video references keep frame
 //! resources owned by the host.
 
-/// Connection, disconnect, participant, track-source and audio-feature wire names.
-pub type RtcWireNames =
-    (Vec<&'static str>, Vec<&'static str>, Vec<&'static str>, Vec<&'static str>, Vec<&'static str>);
+/// Connection, disconnect and track-source wire names.
+pub type RtcWireNames = (Vec<&'static str>, Vec<&'static str>, Vec<&'static str>);
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -115,8 +114,8 @@ pub fn silence_frame(samples_per_channel: u32, sample_rate: u32, num_channels: u
 }
 
 /// `rtc.ConnectionState`. `room_io.py` reads it through `isconnected()`; the third state is what
-/// makes that a lossy read, so both are kept. Crosses as its name (`"connected"`); the host
-/// adapter folds a value this build has no variant for to `disconnected`, the safe read.
+/// makes that a lossy read, so both are kept. Crosses as its name (`"connected"`); an `sdk` proxy
+/// reads an SDK number this build has no variant for as `disconnected`, the safe read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
@@ -213,8 +212,8 @@ impl fmt::Display for UnknownDisconnectReason {
 
 impl std::error::Error for UnknownDisconnectReason {}
 
-/// `rtc.ParticipantKind`; must match the SDK's set, or an accepted participant is invisible. The
-/// host adapter folds an unknown kind to `standard`.
+/// `rtc.ParticipantKind`; must match the SDK's set, or an accepted participant is invisible. An
+/// `sdk` proxy reads an unknown kind as `standard`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[crate::host(codec(extract, emit, host = "str"))]
 #[crate::host(wire_enum)]
@@ -232,7 +231,7 @@ pub enum ParticipantKind {
 
 wire_i32!(ParticipantKind, "ParticipantKind");
 
-/// `rtc.TrackSource`. The host adapter folds an unknown source to `unknown`.
+/// `rtc.TrackSource`. An `sdk` proxy reads an unknown source as `unknown`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[crate::host(codec(extract, emit, host = "str"))]
 #[crate::host(wire_enum)]
@@ -248,8 +247,8 @@ pub enum TrackSource {
 wire_i32!(TrackSource, "TrackSource");
 
 /// `AudioTrackFeature` (`livekit.rtc._proto.track_pb2`). `_input.py` gates the pre-connect buffer on
-/// [`PreconnectBuffer`](Self::PreconnectBuffer). The host adapter drops a feature this build has
-/// no variant for.
+/// [`PreconnectBuffer`](Self::PreconnectBuffer). An `sdk` proxy drops a feature this build has no
+/// variant for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[crate::host(codec(extract, emit, host = "str"))]
 #[crate::host(wire_enum)]
@@ -265,16 +264,15 @@ pub enum AudioTrackFeature {
 
 wire_i32!(AudioTrackFeature, "AudioTrackFeature");
 
-/// Each `ALL` array's names, indexed by wire value, for the host adapter's reads of SDK ints:
-/// `(connection states, disconnect reasons, participant kinds, track sources, audio features)`.
+/// Each `ALL` array's names, indexed by wire value, for the host's SDK events and track options:
+/// `(connection states, disconnect reasons, track sources)`. Proxy reads take SDK numbers
+/// through their `sdk` declaration instead.
 #[crate::host(export(pid = false))]
 pub fn rtc_wire_names() -> RtcWireNames {
     (
         ConnectionState::ALL.iter().map(|v| v.as_str()).collect(),
         DisconnectReason::ALL.iter().map(|v| v.as_str()).collect(),
-        ParticipantKind::ALL.iter().map(|v| v.as_str()).collect(),
         TrackSource::ALL.iter().map(|v| v.as_str()).collect(),
-        AudioTrackFeature::ALL.iter().map(|v| v.as_str()).collect(),
     )
 }
 

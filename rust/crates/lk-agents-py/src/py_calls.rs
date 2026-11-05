@@ -79,9 +79,7 @@ pub fn holds_gil() -> bool {
 #[cfg(test)]
 pub(super) fn call_in<F>(context: &HostRef, call: F) -> BoxFuture<'static, PyResult<Py<PyAny>>>
 where
-    F: for<'py> FnOnce(Python<'py>) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyTuple>)>
-        + Send
-        + 'static,
+    F: for<'py> FnOnce(Python<'py>) -> PyResult<Invocation<'py>> + Send + 'static,
 {
     let called = lk_agents_runtime::host::call(
         &Entry,
@@ -276,10 +274,13 @@ pub(crate) fn captured_pair<'py>(
     captured.bind(py).extract()
 }
 
-/// A host call: builds the callable and its arguments, inside the entered context.
-pub type HostCall = Box<
-    dyn for<'py> FnOnce(Python<'py>) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyTuple>)> + Send,
->;
+/// A host call: builds the callable, its positional arguments and its keyword arguments, inside
+/// the entered context.
+pub type HostCall = Box<dyn for<'py> FnOnce(Python<'py>) -> PyResult<Invocation<'py>> + Send>;
+
+/// What a [`HostCall`] calls: the callable, its positional and its keyword arguments.
+pub type Invocation<'py> =
+    (Bound<'py, PyAny>, Bound<'py, PyTuple>, Option<Bound<'py, pyo3::types::PyDict>>);
 
 /// A copy of `ctx` with `span` the current OpenTelemetry span: what a host call runs in, and the
 /// stream it returns is pulled in.
@@ -362,8 +363,8 @@ fn start_call(
         let (event_loop, ctx) = captured_pair(py, context)?;
         let ctx = copy_in_span(py, &ctx, span)?;
         let started = start_in(py, &event_loop, &ctx, move |py| {
-            let (callable, arguments) = call(py)?;
-            callable.call1(arguments)
+            let (callable, arguments, keywords) = call(py)?;
+            callable.call(arguments, keywords.as_ref())
         })?;
         let pair = pyo3::types::PyTuple::new(py, [event_loop, ctx])?;
         Ok((started, pair.into_any().unbind()))
@@ -421,8 +422,8 @@ impl HostEntry for Entry {
 
     fn enter_now(&self, call: HostCall) -> PyResult<Called> {
         Python::attach(|py| {
-            let (callable, arguments) = call(py)?;
-            let value = callable.call1(arguments).map(Bound::unbind)?;
+            let (callable, arguments, keywords) = call(py)?;
+            let value = callable.call(arguments, keywords.as_ref()).map(Bound::unbind)?;
             Ok(Called { value, ran_in: None })
         })
     }
@@ -529,10 +530,11 @@ fn deliver(py: Python<'_>, notices: &Notices) {
             let delivered = (|| -> PyResult<()> {
                 let (event_loop, ctx) = captured_pair(py, &context)?;
                 let ctx = access::Context::copy(&ctx)?.call0()?;
-                let (callable, args) = call(py)?;
+                let (callable, args, keywords) = call(py)?;
                 let mut run = vec![callable];
                 run.extend(args.iter());
-                let value = access::Context::run(&ctx)?.call1(PyTuple::new(py, run)?)?;
+                let value =
+                    access::Context::run(&ctx)?.call(PyTuple::new(py, run)?, keywords.as_ref())?;
                 if access::InspectModule::isawaitable(&(access::InspectModule::import(py)?))?
                     .call1((&value,))?
                     .is_truthy()?
@@ -685,14 +687,12 @@ mod tests {
             globals: Py<PyAny>,
             name: &'static str,
             args: Vec<&'static str>,
-        ) -> impl for<'py> FnOnce(
-            Python<'py>,
-        ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyTuple>)>
+        ) -> impl for<'py> FnOnce(Python<'py>) -> PyResult<crate::py_calls::Invocation<'py>>
         + Send
         + 'static {
             move |py| {
                 let f = globals.bind(py).getattr(name)?;
-                Ok((f, PyTuple::new(py, args)?))
+                Ok((f, PyTuple::new(py, args)?, None))
             }
         }
 
@@ -803,7 +803,7 @@ mod tests {
                     false,
                     Box::new(move |py| {
                         let f = g.bind(py).getattr("note")?;
-                        Ok((f, PyTuple::new(py, [i])?))
+                        Ok((f, PyTuple::new(py, [i])?, None))
                     }),
                 );
             }
@@ -846,10 +846,10 @@ mod tests {
             ) -> impl for<'py> FnOnce(
                 Python<'py>,
             )
-                -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyTuple>)>
+                -> PyResult<crate::py_calls::Invocation<'py>>
             + Send
             + 'static {
-                move |py| Ok((g.bind(py).getattr(name)?, PyTuple::new(py, [i])?))
+                move |py| Ok((g.bind(py).getattr(name)?, PyTuple::new(py, [i])?, None))
             }
             let send = |name: &'static str, i: i64, lossy: bool| {
                 let g = Python::attach(|py| globals.clone_ref(py));
@@ -944,7 +944,9 @@ mod tests {
             let mut call = super::Entry.enter(
                 &context,
                 None,
-                Box::new(move |py| Ok((globals.bind(py).getattr("callback")?, PyTuple::empty(py)))),
+                Box::new(move |py| {
+                    Ok((globals.bind(py).getattr("callback")?, PyTuple::empty(py), None))
+                }),
             );
             assert!(matches!(
                 call.as_mut().poll(&mut Context::from_waker(Waker::noop())),
@@ -1014,12 +1016,10 @@ mod tests {
         fn callback(
             globals: Py<PyAny>,
             mode: &'static str,
-        ) -> impl for<'py> FnOnce(
-            Python<'py>,
-        ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyTuple>)>
+        ) -> impl for<'py> FnOnce(Python<'py>) -> PyResult<crate::py_calls::Invocation<'py>>
         + Send
         + 'static {
-            move |py| Ok((globals.bind(py).getattr("callback")?, PyTuple::new(py, [mode])?))
+            move |py| Ok((globals.bind(py).getattr("callback")?, PyTuple::new(py, [mode])?, None))
         }
 
         #[tokio::test]

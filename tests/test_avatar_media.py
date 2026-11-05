@@ -1,6 +1,7 @@
 """The native avatar publishes and captures through shared RTC capabilities."""
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
@@ -32,18 +33,21 @@ class Generator(VideoGenerator):
 
 
 class Source:
+    """A ``room_io.AudioSource``: its SDK source as ``rtc``, its ledger calls as ``_core_*``."""
+
     def __init__(self, events, kind):
         self.events = events
         self.kind = kind
+        self.rtc = SimpleNamespace(queued_duration=0.0, aclose=self.aclose)
+
+    async def aclose(self):
+        self.events.append(("close", self.kind))
 
     async def _core_capture(self, frame):
         self.events.append(("capture", self.kind))
 
     def _core_clear_queue(self):
         pass
-
-    def _core_queued_duration(self):
-        return 0.0
 
     async def _core_wait_for_playout(self):
         from livekit.agents._generated.rtc_wire import PlaybackInfo
@@ -55,35 +59,37 @@ class Source:
 
         return PlaybackInfo(played=0.0, discarded=0.0)
 
-    async def _core_close(self):
+
+class VideoSource:
+    """An ``rtc.VideoSource``."""
+
+    def __init__(self, events, kind):
+        self.events = events
+        self.kind = kind
+
+    def capture_frame(self, frame):
+        self.events.append(("capture", self.kind))
+
+    async def aclose(self):
         self.events.append(("close", self.kind))
 
 
-class VideoSource(Source):
-    def _core_capture(self, frame):
-        self.events.append(("capture", self.kind))
-
-
 class Publication:
+    """A ``room_io.TrackPublication``: its SDK publication as ``rtc``."""
+
     def __init__(self, events, kind, subscribed):
         self.events, self.kind, self.subscribed = events, kind, subscribed
+        audio = kind == "audio"
+        self.rtc = SimpleNamespace(
+            sid=kind,
+            name=f"avatar_{kind}",
+            source=rtc.TrackSource.SOURCE_MICROPHONE if audio else rtc.TrackSource.SOURCE_CAMERA,
+            kind=rtc.TrackKind.KIND_AUDIO if audio else rtc.TrackKind.KIND_VIDEO,
+            audio_features=[],
+            wait_for_subscription=self.wait_for_subscription,
+        )
 
-    def _core_sid(self):
-        return self.kind
-
-    def _core_name(self):
-        return f"avatar_{self.kind}"
-
-    def _core_source(self):
-        return "microphone" if self.kind == "audio" else "camera"
-
-    def _core_kind(self):
-        return 1 if self.kind == "audio" else 2
-
-    def _core_audio_features(self):
-        return []
-
-    async def _core_wait_for_subscription(self):
+    async def wait_for_subscription(self):
         self.events.append(("subscribe", self.kind))
         await self.subscribed.wait()
 
@@ -93,7 +99,9 @@ async def test_publication_order_rollback_and_sdk_source_reuse(monkeypatch, fail
     events = []
     subscribed = asyncio.Event()
     audio_source, video_source = Source(events, "audio"), VideoSource(events, "video")
-    monkeypatch.setattr(room_io.Room, "_core_connection_state", lambda self: "connected")
+    monkeypatch.setattr(
+        rtc.Room, "connection_state", property(lambda self: rtc.ConnectionState.CONN_CONNECTED)
+    )
     monkeypatch.setattr(room_io.Room, "_core_create_audio_source", lambda self, opts: audio_source)
     monkeypatch.setattr(room_io.Room, "_core_create_video_source", lambda self, opts: video_source)
 
@@ -111,12 +119,13 @@ async def test_publication_order_rollback_and_sdk_source_reuse(monkeypatch, fail
             raise ValueError("video publication failed")
         return Publication(events, "video", subscribed)
 
-    async def unpublish(self, sid):
+    async def unpublish(sid):
         events.append(("unpublish", sid))
 
     monkeypatch.setattr(room_io.LocalParticipant, "_core_publish_audio_source", publish_audio)
     monkeypatch.setattr(room_io.LocalParticipant, "_core_publish_video_source", publish_video)
-    monkeypatch.setattr(room_io.LocalParticipant, "_core_unpublish_track", unpublish)
+    local = SimpleNamespace(unpublish_track=unpublish)
+    monkeypatch.setattr(room_io.LocalParticipant, "rtc", property(lambda self: local))
     audio = QueueAudioOutput(sample_rate=16000)
     generator = Generator()
     runner = AvatarRunner(
