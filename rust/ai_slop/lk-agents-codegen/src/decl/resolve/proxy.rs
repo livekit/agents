@@ -339,10 +339,11 @@ impl Resolver<'_> {
             }
             None => false,
         };
-        let wrap = match voc::find(&entries, "bind") {
-            Some(bind) => {
-                voc::only(&at, &bind.nested, &["wrap"])?;
-                match voc::rust(&at, &bind.nested, "wrap")? {
+        // `bind(wrap = T)` or `await(wrap = T)`: a native wrapper around what the host hands out.
+        let wrap = match voc::find(&entries, "bind").or_else(|| voc::find(&entries, "await")) {
+            Some(declared) => {
+                voc::only(&at, &declared.nested, &["wrap"])?;
+                match voc::rust(&at, &declared.nested, "wrap")? {
                     None => None,
                     Some(t) => match self.shape(self.module, &t, &[], &at)? {
                         Shape::Named { found: Found::Item { module, item }, args }
@@ -359,12 +360,20 @@ impl Resolver<'_> {
                         {
                             Some(format!("::{}", path.join("::")))
                         }
-                        _ => return Err(format!("{at}: bind(wrap = T) names a crate type")),
+                        _ => return Err(format!("{at}: {key}(wrap = T) names a crate type")),
                     },
                 }
             }
             None => None,
         };
+        if kind == ProxyCall::Await
+            && wrap.is_some()
+            && (ret.refusal.is_some() || ret.err.is_none())
+        {
+            return Err(format!(
+                "{at}: await(wrap = T) wraps the value of a call returning `Result<T, E>`"
+            ));
+        }
         let requires = match voc::find(&entries, "requires") {
             None => Vec::new(),
             Some(requires) => {

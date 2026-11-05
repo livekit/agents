@@ -566,9 +566,10 @@ impl ::lk_agents_abi::Vad for VadProxy {
                 Ok((host.bind(py).getattr("_core_stream")?, ::pyo3::types::PyTuple::new(py, args)?))
             }),
         );
+        let wrap_cx = ::std::clone::Clone::clone(cx);
         ::std::boxed::Box::pin(async move {
             let out = started.await;
-            ::pyo3::Python::attach(|py| {
+            let out = ::pyo3::Python::attach(|py| {
                 let out = match out {
                     Ok(out) => out,
                     Err(e) => {
@@ -582,7 +583,12 @@ impl ::lk_agents_abi::Vad for VadProxy {
                 let o = out.value.bind(py);
                 let out = (crate::py_streams::HostStream::duplex(py, o, context, crate::generated::records::rtc_frames::audio_frame_to_py, |o| crate::generated::records::vad::vad_event_from_py(o.as_any()), ::lk_agents_runtime::process::host_clock()).map(|stream| { let (sink, source) = stream.split(); ::lk_agents_abi::DuplexStream::new(::std::boxed::Box::new(sink) as ::std::boxed::Box<dyn ::lk_agents_abi::StreamInput<::lk_agents_abi::AudioFrame>>, ::std::boxed::Box::new(source) as ::std::boxed::Box<dyn ::lk_agents_abi::ProviderStream<::lk_agents_abi::VadEvent>>) })).map_err(|e| <::lk_agents_abi::errors::ProviderError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(out)
-            })
+            })?;
+            Ok(::lk_agents_runtime::inference::vad::plugin::PluginInput::wrap(
+                out,
+                &wrap_cx,
+                ::lk_agents_runtime::process::host_clock(),
+            ))
         })
     }
 }

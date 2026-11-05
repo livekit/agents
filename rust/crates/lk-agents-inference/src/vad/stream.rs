@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::{AudioFrame, Clock, Closed, StreamInput, StreamOutput, Ts};
-use lk_agents_media::media_queue::{self, AudioSender, Item, Policy};
+use lk_agents_media::media_queue::{self, AudioReceiver, AudioSender, Item, Policy};
 use lk_agents_media::pool::{Job, JobClass, MediaPool};
 use lk_agents_net::audio_drops::AudioDrops;
 use lk_agents_net::telemetry;
@@ -27,16 +27,28 @@ fn failed(message: impl Into<String>) -> ProviderError {
 }
 
 /// The `_FlushSentinel`, in order with the audio.
-struct Flush;
+pub(super) struct Flush;
 
-struct Input {
+/// A detection's audio input, the `Now` queue's sending half.
+pub(super) struct Input {
     /// `None` once the input ended.
     audio: Mutex<Option<AudioSender<Flush>>>,
-    drops: Arc<AudioDrops>,
+    pub(super) drops: Arc<AudioDrops>,
     cancelled: CancellationToken,
 }
 
 impl Input {
+    /// Refuses audio once `cancelled`; drops are measured under `cx`'s job.
+    pub(super) fn open(
+        cancelled: CancellationToken,
+        cx: &telemetry::Cx,
+    ) -> (Self, AudioReceiver<Flush>) {
+        let (audio, rx) = media_queue::audio(INPUT_POLICY);
+        let drops = Arc::new(AudioDrops::new(telemetry::AudioConsumer::Vad, INPUT_POLICY));
+        drops.observe(cx.clone());
+        (Input { audio: Mutex::new(Some(audio)), drops, cancelled }, rx)
+    }
+
     fn send<R>(&self, op: impl FnOnce(&AudioSender<Flush>) -> R) -> Result<R, ProviderError> {
         if self.cancelled.is_cancelled() {
             return Err(failed("the VAD stream is closed"));
@@ -145,12 +157,10 @@ pub(super) fn open(
     runtime: tokio::runtime::Handle,
     cx: &telemetry::Cx,
 ) -> Result<DetectionStream, ProviderError> {
-    let (audio, mut input) = media_queue::audio(INPUT_POLICY);
-    let (output, events) = mpsc::channel(OUTPUT_CAPACITY);
-    let drops = Arc::new(AudioDrops::new(telemetry::AudioConsumer::Vad, INPUT_POLICY));
-    drops.observe(cx.clone());
-    let (catch_up, worker_clock) = (drops.clone(), clock.clone());
     let cancelled = CancellationToken::new();
+    let (sink, mut input) = Input::open(cancelled.clone(), cx);
+    let (output, events) = mpsc::channel(OUTPUT_CAPACITY);
+    let (catch_up, worker_clock) = (sink.drops.clone(), clock.clone());
     let stop = cancelled.clone();
     // Only channel descriptors precede admission; refusal constructs no model and retains no
     // queued audio. The same worker owns the recurrent state until settlement.
@@ -216,7 +226,7 @@ pub(super) fn open(
         })
         .map_err(|error| failed(error.to_string()))?;
     Ok(lk_agents_abi::DuplexStream::new(
-        Box::new(Input { audio: Mutex::new(Some(audio)), drops, cancelled: cancelled.clone() }),
+        Box::new(sink),
         Box::new(Output { events, worker: Some(worker), cancelled, clock }),
     ))
 }

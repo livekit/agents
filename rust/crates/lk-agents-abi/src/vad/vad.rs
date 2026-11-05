@@ -52,8 +52,9 @@ pub trait Vad: Send + Sync {
     fn prewarm(&self) {}
 
     /// Open a stream detecting speech in the audio pushed into it.
-    // `Err` is a construction failure. `async` as on [`Tts`](crate::Tts).
-    #[host(await, name = "_core_stream")]
+    // `Err` is a construction failure. `async` as on [`Tts`](crate::Tts). The core queues its
+    // input and awaits the host's `_core_push` (`PluginInput`), so a slow plugin drops old audio.
+    #[host(await(wrap = lk_agents_runtime::inference::vad::plugin::PluginInput), name = "_core_stream")]
     fn stream(
         &self,
         cx: &crate::telemetry::Cx,

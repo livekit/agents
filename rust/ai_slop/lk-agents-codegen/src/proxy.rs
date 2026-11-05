@@ -270,13 +270,24 @@ fn method(p: &Proxy, m: &ProxyMethod) -> Result<String, String> {
             let binding = if m.ret.ok == Ty::Unit { "()" } else { "out" };
             let read = returned_value("o", &m.ret.ok, &label, &at)?;
             let unpack = if context.is_empty() { String::new() } else { stream_context(&err) };
+            // `await(wrap = T)`: wrapped once the GIL is released, under the call's span.
+            let (head, read_out, wrapped) = match &m.wrap {
+                None => (head, "", String::new()),
+                Some(t) => (
+                    format!("{head}        let wrap_cx = ::std::clone::Clone::clone({cx});\n"),
+                    "let out = ",
+                    format!(
+                        "?;\n        Ok({t}::wrap(out, &wrap_cx, ::lk_agents_runtime::process::host_clock()))"
+                    ),
+                ),
+            };
             Ok(awaited(
                 m,
                 &sig,
                 &ret,
                 &head,
                 &format!(
-                    "        let out = started.await;\n        ::pyo3::Python::attach(|py| {{\n            let out = match out {{\n                Ok(out) => out,\n                Err(e) => {{\n{refused}                    return Err(<{err} as crate::py_errors::FromHostErr>::from_host(py, &e));\n                }}\n            }};\n{unpack}            let o = out.value.bind(py);\n            let {binding} = ({read}).map_err(|e| <{err} as crate::py_errors::FromHostErr>::from_host(py, &e))?;\n            Ok({wrap})\n        }})\n"
+                    "        let out = started.await;\n        {read_out}::pyo3::Python::attach(|py| {{\n            let out = match out {{\n                Ok(out) => out,\n                Err(e) => {{\n{refused}                    return Err(<{err} as crate::py_errors::FromHostErr>::from_host(py, &e));\n                }}\n            }};\n{unpack}            let o = out.value.bind(py);\n            let {binding} = ({read}).map_err(|e| <{err} as crate::py_errors::FromHostErr>::from_host(py, &e))?;\n            Ok({wrap})\n        }}){wrapped}\n"
                 ),
             ))
         }

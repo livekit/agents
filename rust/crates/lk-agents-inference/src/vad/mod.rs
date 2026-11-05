@@ -1,9 +1,11 @@
 //! `inference/vad.py`: the Silero VAD, its model from the linked native provider
 //! ([`crate::local_models`]) or else the host's `livekit.local_inference`. The decisions are in
 //! [`machine`]; [`stream`] runs each detection on an admitted media worker behind a
-//! `(Sink, Source)` pair. A native model needs no host call per audio frame.
+//! `(Sink, Source)` pair. A native model needs no host call per audio frame. A plugin VAD's
+//! stream takes its audio through [`plugin`].
 
 pub mod machine;
+pub mod plugin;
 mod stream;
 
 use crate::abi::{AudioFrame, StreamInput, StreamOutput};

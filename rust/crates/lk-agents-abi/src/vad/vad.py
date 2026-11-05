@@ -13,7 +13,6 @@ from typing_extensions import TypeVar
 
 from livekit import rtc
 
-from .._bindings import APIError
 from ..utils import aio
 from .chat_items import MetricsMetadata
 from .types import ProviderId
@@ -21,21 +20,19 @@ from .vad import VADCapabilities, VADEvent
 
 TEvent = TypeVar("TEvent", default=Never, contravariant=True)
 
-# The native VAD stream's bounds (lk-agents-inference vad/stream.rs): 2.56 s of 10 ms frames, at
-# most 2 MiB of pending audio, one second of 48 kHz stereo per frame and 64 pending events.
+# Entries ``input`` holds before the core's pump waits for it, and events the reader may leave
+# unread before the detector stops reading audio.
 _INPUT_CAPACITY = 256
-_INPUT_BYTES = 2 * 1024 * 1024
-_MAX_FRAME_BYTES = 192_000
 _OUTPUT_CAPACITY = 64
 
 
 class _Input(aio.Chan["rtc.AudioFrame | VADStream.Flush"]):
     """A stream's audio, read only while its reader keeps up with the events, as the native
-    stream's worker waits for event space: pending events stop the detector, and the bounded
-    input then refuses more audio."""
+    stream's worker waits for event space: pending events stop the detector, and the full input
+    then holds the core's pump, whose queue keeps the newest audio."""
 
     def __init__(self, stream: VADStream) -> None:
-        super().__init__(maxsize=_INPUT_CAPACITY, _on_receive=stream._input_received)
+        super().__init__(maxsize=_INPUT_CAPACITY)
         self._events_drained = stream._events_drained
 
     async def recv(self) -> rtc.AudioFrame | VADStream.Flush:
@@ -136,7 +133,6 @@ class VADStream(ABC):
 
     def __init__(self, vad: VAD) -> None:
         self._vad = vad
-        self._input_bytes = 0
         self._events_drained = asyncio.Event()
         self._events_drained.set()
         self.input: aio.Chan[rtc.AudioFrame | VADStream.Flush] = _Input(self)
@@ -148,30 +144,14 @@ class VADStream(ABC):
     @abstractmethod
     async def _main_task(self) -> None: ...
 
-    def _input_received(self, item: rtc.AudioFrame | VADStream.Flush) -> None:
-        if isinstance(item, rtc.AudioFrame):
-            self._input_bytes -= item.data.nbytes
-
-    def _send_input(self, item: rtc.AudioFrame | VADStream.Flush) -> None:
-        try:
-            self.input.send_nowait(item)
-        except aio.ChanFull:
-            raise APIError("VAD input capacity exhausted", retryable=False) from None
-
-    def push_frame(self, frame: rtc.AudioFrame) -> None:
-        """Push some audio frame to be analyzed. Audio beyond the stream's bounds raises
-        ``APIError`` and is not kept."""
+    def _check_open(self) -> None:
         self._check_input_not_ended()
         self._check_not_closed()
-        size = frame.data.nbytes
-        if size > _MAX_FRAME_BYTES:
-            raise APIError(
-                f"VAD input frame exceeds the {_MAX_FRAME_BYTES}-byte limit", retryable=False
-            )
-        if self._input_bytes + size > _INPUT_BYTES:
-            raise APIError("VAD input byte capacity exhausted", retryable=False)
-        self._send_input(frame)
-        self._input_bytes += size
+
+    def push_frame(self, frame: rtc.AudioFrame) -> None:
+        """Push audio to be analyzed. Raises ``ChanFull`` while ``input`` holds 256 entries."""
+        self._check_open()
+        self.input.send_nowait(frame)
 
     def flush(self) -> None:
         """Mark the end of the current segment.
@@ -181,9 +161,8 @@ class VADStream(ABC):
         pipeline to recover from out-of-band end-of-turn signals (e.g. STT EOS) without
         tearing down and recreating the stream.
         """
-        self._check_input_not_ended()
-        self._check_not_closed()
-        self._send_input(self.Flush())
+        self._check_open()
+        self.input.send_nowait(self.Flush())
 
     def end_input(self) -> None:
         """Mark the end of input, no more audio will be pushed"""
@@ -242,13 +221,15 @@ class VADStream(ABC):
     ) -> None:
         await self.aclose()
 
-    def _core_push(self, frame: rtc.AudioFrame) -> None:
-        self.push_frame(frame)
+    async def _core_push(self, frame: rtc.AudioFrame) -> None:
+        self._check_open()
+        await self.input.send(frame)
 
-    def _core_flush(self) -> None:
+    async def _core_flush(self) -> None:
         if not self.input.closed:
-            self.flush()
+            await self.input.send(self.Flush())
 
-    def _core_end_input(self) -> None:
+    async def _core_end_input(self) -> None:
         if not self.input.closed:
-            self.end_input()
+            await self._core_flush()
+            self.input.close()

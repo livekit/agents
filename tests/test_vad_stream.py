@@ -7,6 +7,7 @@ import pytest
 from livekit import rtc
 from livekit.agents import VAD, APIError, VADCapabilities, VADEvent, VADEventType, VADStream
 from livekit.agents.inference import VAD as InferenceVAD
+from livekit.agents.utils import aio
 
 pytestmark = pytest.mark.unit
 
@@ -35,15 +36,13 @@ def frame(samples: int = 160) -> rtc.AudioFrame:
 
 
 @pytest.mark.asyncio
-async def test_audio_beyond_the_stream_bounds_is_refused_and_not_kept() -> None:
+async def test_a_full_input_refuses_a_direct_push_and_keeps_what_it_holds() -> None:
     vad = StalledVAD()
     stream = vad.stream()
     for _ in range(256):
         stream.push_frame(frame())
-    with pytest.raises(APIError, match="capacity"):
+    with pytest.raises(aio.ChanFull):
         stream.push_frame(frame())
-    with pytest.raises(APIError, match="byte limit"):
-        stream.push_frame(frame(96_001))
 
     vad.reading.set()
 
@@ -55,6 +54,26 @@ async def test_audio_beyond_the_stream_bounds_is_refused_and_not_kept() -> None:
     stream.end_input()
     await asyncio.wait_for(stream._task, 1)
     assert len(vad.received) == 256
+
+
+@pytest.mark.asyncio
+async def test_the_core_push_waits_for_a_full_input_instead_of_failing() -> None:
+    vad = StalledVAD()
+    stream = vad.stream()
+    pushing = asyncio.create_task(_core_push_all(stream, 300))
+    await asyncio.sleep(0.05)
+    assert not pushing.done(), "the core's pump waits, its queue keeps the audio"
+
+    vad.reading.set()
+    await asyncio.wait_for(pushing, 1)
+    await asyncio.wait_for(stream._core_end_input(), 1)
+    await asyncio.wait_for(stream._task, 1)
+    assert len(vad.received) == 300
+
+
+async def _core_push_all(stream: VADStream, frames: int) -> None:
+    for _ in range(frames):
+        await stream._core_push(frame())
 
 
 @pytest.mark.asyncio
@@ -134,13 +153,13 @@ class EchoStream(VADStream):
 
 
 @pytest.mark.asyncio
-async def test_a_reader_behind_on_events_stops_the_detector_reading_audio() -> None:
+async def test_a_reader_behind_on_events_holds_the_core_push() -> None:
     stream = EchoVAD().stream()
-    stream.push_frame(frame(160 * 100))
-    with pytest.raises(APIError, match="capacity"):
-        for _ in range(512):
-            stream.push_frame(frame())
-            await asyncio.sleep(0)
+    await stream._core_push(frame(160 * 100))
+    pushing = asyncio.create_task(_core_push_all(stream, 512))
+    await asyncio.sleep(0.05)
+    assert not pushing.done(), "pending events stop the detector, and the full input the pump"
     # nothing the detector produced was dropped
     assert len([await anext(stream) for _ in range(100)]) == 100
     await stream.aclose()
+    pushing.cancel()

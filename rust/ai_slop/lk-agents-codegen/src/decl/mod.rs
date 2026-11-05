@@ -512,7 +512,8 @@ pub struct ProxyMethod {
     pub requires: Vec<&'static str>,
     pub ret: ProxyRet,
     /// `bind(wrap = T)`: the bound copy is handed out as `T::bound(copy, &x, clock)`, a native
-    /// wrapper the core runs around it (the retry loop of a host STT).
+    /// wrapper the core runs around it (the retry loop of a host STT). `await(wrap = T)`: the
+    /// awaited value is handed out as `T::wrap(value, cx, clock)` (a host VAD's input queue).
     pub wrap: Option<String>,
     /// `self: Box<Self>`: an awaited call that consumes the proxy.
     pub consumes: bool,

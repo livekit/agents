@@ -1087,6 +1087,24 @@ fn bound_provider_proxies_use_the_declared_native_wrapper_path() {
 }
 
 #[test]
+fn awaited_proxy_values_are_handed_out_through_the_declared_native_wrapper() {
+    let source = proxy(
+        "#[host(await(wrap = lk_agents_runtime::vad::Queued))] async fn open(&self, cx: &Cx) -> Result<String, HostError>;",
+    );
+    let decls = read(&source).expect("native wrapper resolves");
+    assert_eq!(
+        decls.proxies[0].methods[0].wrap.as_deref(),
+        Some("::lk_agents_runtime::vad::Queued")
+    );
+    let emitted = crate::adapter::emit(&decls).expect("wrapper emits");
+    let adapter = &emitted.iter().find(|o| o.path == "llm.rs").unwrap().text;
+    assert!(
+        adapter.contains("Ok(::lk_agents_runtime::vad::Queued::wrap(out, &wrap_cx, "),
+        "{adapter}"
+    );
+}
+
+#[test]
 fn declared_classes_consume_string_enums_with_native_error_expressions() {
     let source = format!(
         "{} {}",

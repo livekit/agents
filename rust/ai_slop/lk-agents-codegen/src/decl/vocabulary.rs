@@ -14,6 +14,7 @@
 //! | proxy method | `bind` | a `fn(&self, x: &X) -> Option<Arc<dyn Self>>`: a copy of the proxy passing `x` after the arguments of every awaited call; no host call |
 //! | proxy method | (none, with a default body) | native only: the proxy keeps the default (what only a native implementation answers) |
 //! | proxy method | `bind(wrap = T)` | `bind`, the copy handed out as `T::bound(copy, x, clock)`: a native wrapper the core runs around the host object (a host STT's retry loop) |
+//! | proxy method | `await(wrap = T)` | `await`, its value handed out as `T::wrap(value, cx, clock)`: a native wrapper the core runs around what the host returned (a host VAD's input queue) |
 //! | proxy trait | `: Any + Send + Sync` | a proxy of it passed to another proxy's host call (`Arc<dyn X>`, optional or not) is handed back as the host object it was taken from (before any `view`); a native implementation is refused there |
 //! | proxy parameter | `source(class = "X")` | a `Box<dyn StreamOutput<T>>` the core hands the host call as the generated stream class `X` (`recv`/`aclose`), written into the proxy's family |
 //! | proxy parameter | `context` | the one parameter whose `HostContext` is the context the call runs in (it is passed too); a call without one runs in the context the proxy captured when it was taken (the host's running loop and a copy of its context) |
