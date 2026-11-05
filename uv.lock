@@ -53,6 +53,7 @@ members = [
     "livekit-plugins-fal",
     "livekit-plugins-fireworksai",
     "livekit-plugins-fishaudio",
+    "livekit-plugins-fonadalabs",
     "livekit-plugins-gladia",
     "livekit-plugins-gnani",
     "livekit-plugins-google",
@@ -2224,6 +2225,9 @@ fireworksai = [
 fishaudio = [
     { name = "livekit-plugins-fishaudio" },
 ]
+fonadalabs = [
+    { name = "livekit-plugins-fonadalabs" },
+]
 gladia = [
     { name = "livekit-plugins-gladia" },
 ]
@@ -2436,6 +2440,7 @@ requires-dist = [
     { name = "livekit-plugins-fal", marker = "extra == 'fal'", editable = "livekit-plugins/livekit-plugins-fal" },
     { name = "livekit-plugins-fireworksai", marker = "extra == 'fireworksai'", editable = "livekit-plugins/livekit-plugins-fireworksai" },
     { name = "livekit-plugins-fishaudio", marker = "extra == 'fishaudio'", editable = "livekit-plugins/livekit-plugins-fishaudio" },
+    { name = "livekit-plugins-fonadalabs", marker = "extra == 'fonadalabs'", editable = "livekit-plugins/livekit-plugins-fonadalabs" },
     { name = "livekit-plugins-gladia", marker = "extra == 'gladia'", editable = "livekit-plugins/livekit-plugins-gladia" },
     { name = "livekit-plugins-gnani", marker = "extra == 'gnani'", editable = "livekit-plugins/livekit-plugins-gnani" },
     { name = "livekit-plugins-google", marker = "extra == 'google'", editable = "livekit-plugins/livekit-plugins-google" },
@@ -2514,7 +2519,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "bland", "boson-avatar", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hume", "images", "inworld", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "meta", "microsoft-ai", "minimax", "mistralai", "murf", "nabrah", "neuphonic", "nltk", "nvidia", "openai", "palabra", "perplexity", "phonic", "protoface", "resemble", "reson8", "respeecher", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "slng", "smallestai", "soniox", "spatius", "speechify", "speechmatics", "spitch", "synthesia", "tavus", "thunderphone", "trugen", "turn-detector", "typesafe", "ultravox", "upliftai", "vakyam", "xai", "zoom-ai"]
+provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "bland", "boson-avatar", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "fonadalabs", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hume", "images", "inworld", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "meta", "microsoft-ai", "minimax", "mistralai", "murf", "nabrah", "neuphonic", "nltk", "nvidia", "openai", "palabra", "perplexity", "phonic", "protoface", "resemble", "reson8", "respeecher", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "slng", "smallestai", "soniox", "spatius", "speechify", "speechmatics", "spitch", "synthesia", "tavus", "thunderphone", "trugen", "turn-detector", "typesafe", "ultravox", "upliftai", "vakyam", "xai", "zoom-ai"]
 
 [[package]]
 name = "livekit-api"
@@ -3166,6 +3171,20 @@ dependencies = [
 requires-dist = [
     { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
     { name = "msgpack", specifier = ">=1.2.3" },
+]
+
+[[package]]
+name = "livekit-plugins-fonadalabs"
+source = { editable = "livekit-plugins/livekit-plugins-fonadalabs" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "livekit-agents" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiohttp", specifier = ">=3.9.0" },
+    { name = "livekit-agents", editable = "livekit-agents" },
 ]
 
 [[package]]
