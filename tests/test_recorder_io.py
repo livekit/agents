@@ -20,6 +20,7 @@ from livekit.agents.voice.recorder_io import recorder_io as recorder_module
 from livekit.agents.voice.recorder_io.recorder_io import (
     RecorderAudioOutput,
     RecorderIO,
+    _Captured,
     _Track,
 )
 
@@ -130,6 +131,150 @@ async def test_the_fallback_truncates_an_interrupted_segment() -> None:
     assert round(placed[0][1].duration, 3) == 0.4
 
 
+class _RemoteSink(io.AudioOutput):
+    """A leaf shaped like a remote avatar worker: no runs, a position only at the end."""
+
+    def __init__(self, started_at: float = 100.0) -> None:
+        super().__init__(label="test", capabilities=io.AudioOutputCapabilities(pause=True))
+        self._started_at = started_at
+        self._received = 0.0
+
+    async def capture_frame(self, frame: rtc.AudioFrame) -> None:
+        await super().capture_frame(frame)
+        if not self._received:
+            self.on_playback_started(created_at=self._started_at)
+        self._received += frame.duration
+
+    def flush(self) -> None:
+        super().flush()
+
+    def clear_buffer(self) -> None:
+        pass
+
+    def finish_segment(self) -> None:
+        self.on_playback_finished(playback_position=self._received, interrupted=False)
+
+
+class _ReportingSink(_RemoteSink):
+    """A leaf with a local playhead, which reports it as it is cleared."""
+
+    def __init__(self, played: float = 0.0, started_at: float = 100.0) -> None:
+        super().__init__(started_at=started_at)
+        self._played = played
+
+    def clear_buffer(self) -> None:
+        self.on_playback_progressed(started_at=self._started_at, offset=0.0, duration=self._played)
+
+
+async def test_a_detached_sink_places_only_the_audio_it_played() -> None:
+    """A swap mid-playout must not record what the old sink still held."""
+    placed: list[tuple[float, rtc.AudioFrame]] = []
+    output = RecorderAudioOutput(
+        recording_io=MagicMock(recording=True),
+        audio_output=_ReportingSink(played=0.4),
+        on_played=lambda started_at, frame: placed.append((started_at, frame)),
+    )
+    proxy = output.next_in_chain
+    assert isinstance(proxy, io._AudioSinkProxy)
+
+    await output.capture_frame(_tone(1.0))
+    output.flush()
+    output.on_playback_started(created_at=100.0)
+
+    proxy.set_next_in_chain(_ReportingSink())  # 0.6s of the segment never played
+
+    assert len(placed) == 1
+    started_at, frame = placed[0]
+    assert started_at == 100.0
+    assert round(frame.duration, 3) == 0.4
+
+
+def _second(frame: rtc.AudioFrame) -> int:
+    """Which second of the marked segment a placed frame holds."""
+    data = np.frombuffer(frame.data, dtype=np.int16)
+    return int(np.unique(data)[0]) // 100 - 1
+
+
+def _marked(second: int) -> rtc.AudioFrame:
+    """One second of audio whose samples name their place in the segment."""
+    data = np.full(RATE, (second + 1) * 100, dtype=np.int16)
+    return rtc.AudioFrame(data.tobytes(), RATE, 1, RATE)
+
+
+async def _swap_mid_segment(
+    old: _RemoteSink, new: _RemoteSink
+) -> list[tuple[float, rtc.AudioFrame]]:
+    """A 10s segment whose sink is replaced after 5s, and where the recorder puts it."""
+    placed: list[tuple[float, rtc.AudioFrame]] = []
+    output = RecorderAudioOutput(
+        recording_io=MagicMock(recording=True),
+        audio_output=old,
+        on_played=lambda started_at, frame: placed.append((started_at, frame)),
+    )
+    proxy = output.next_in_chain
+    assert isinstance(proxy, io._AudioSinkProxy)
+
+    for s in range(5):
+        await output.capture_frame(_marked(s))
+    proxy.set_next_in_chain(new)
+    for s in range(5, 10):
+        await output.capture_frame(_marked(s))
+    output.flush()
+    new.finish_segment()
+    return placed
+
+
+async def test_a_sink_taking_over_a_segment_places_its_own_half() -> None:
+    """It counts from its own zero, so only the segment knows where its audio belongs."""
+    placed = await _swap_mid_segment(
+        _ReportingSink(played=2.0, started_at=100.0), _RemoteSink(started_at=105.0)
+    )
+
+    assert [(t, _second(f), round(f.duration, 3)) for t, f in placed] == [
+        (100.0, 0, 2.0),  # what the old sink reported playing
+        (105.0, 5, 5.0),  # the rest, which the new sink reports only as a position
+    ]
+
+
+async def test_a_detached_sink_that_reports_nothing_keeps_its_half() -> None:
+    """Everything it was given counts as played, the same as when a segment ends on it."""
+    placed = await _swap_mid_segment(_RemoteSink(started_at=100.0), _RemoteSink(started_at=105.0))
+
+    assert [(t, _second(f), round(f.duration, 3)) for t, f in placed] == [
+        (100.0, 0, 5.0),
+        (105.0, 5, 5.0),
+    ]
+
+
+async def test_each_sink_of_a_segment_places_the_stretch_it_was_given() -> None:
+    placed: list[tuple[float, rtc.AudioFrame]] = []
+    output = RecorderAudioOutput(
+        recording_io=MagicMock(recording=True),
+        audio_output=_RemoteSink(started_at=100.0),
+        on_played=lambda started_at, frame: placed.append((started_at, frame)),
+    )
+    proxy = output.next_in_chain
+    assert isinstance(proxy, io._AudioSinkProxy)
+    second, third = _RemoteSink(started_at=104.0), _RemoteSink(started_at=107.0)
+
+    for s in range(4):
+        await output.capture_frame(_marked(s))
+    proxy.set_next_in_chain(second)
+    for s in range(4, 7):
+        await output.capture_frame(_marked(s))
+    proxy.set_next_in_chain(third)
+    for s in range(7, 10):
+        await output.capture_frame(_marked(s))
+    output.flush()
+    third.finish_segment()
+
+    assert [(t, _second(f), round(f.duration, 3)) for t, f in placed] == [
+        (100.0, 0, 4.0),
+        (104.0, 4, 3.0),
+        (107.0, 7, 3.0),
+    ]
+
+
 async def test_a_segment_in_flight_holds_the_timeline() -> None:
     """The writer cannot settle a window whose agent audio has not been reported yet."""
     output, _ = _placing_output()
@@ -141,6 +286,20 @@ async def test_a_segment_in_flight_holds_the_timeline() -> None:
     output.on_playback_progressed(started_at=100.0, offset=0.0, duration=1.0)
     output.on_playback_finished(playback_position=1.0, interrupted=False)
     assert output.pending_since is None
+
+
+async def test_finishing_output_marks_its_recorder_run_ended() -> None:
+    recorder = MagicMock(recording=True)
+    output = RecorderAudioOutput(
+        recording_io=recorder,
+        audio_output=None,
+        on_played=lambda _started_at, _frame: None,
+    )
+
+    await output.capture_frame(_tone(0.1))
+    output.on_playback_finished(playback_position=0.1, interrupted=False)
+
+    recorder._end_run.assert_called_once_with(channel=1)
 
 
 # ---------------------------------------------------------------------------
@@ -202,6 +361,78 @@ def test_a_source_below_the_recording_rate_is_resampled_in_place() -> None:
     # 100ms of audio, twice as many samples at the recording rate; the samples the resampler
     # still held when the run ended are part of it
     assert np.count_nonzero(block[48000:]) == pytest.approx(4800, abs=50)
+
+
+def test_ending_a_run_places_the_resampler_tail_before_the_writer_advances() -> None:
+    track = _Track(sample_rate=48000, t0=0.0)
+    track.push(1.0, _loud(2400, sample_rate=24000))  # 100ms at 24kHz
+    track.end_run()
+
+    block = track.take(0, 48000 * 2)
+    assert np.all(block[:48000] == 0.0)
+    assert np.count_nonzero(block[48000:]) == pytest.approx(4800, abs=50)
+
+
+def test_ending_a_run_reanchors_the_next_segment_after_a_short_gap() -> None:
+    track = _Track(sample_rate=1000, t0=0.0)
+    track.push(0.0, _loud(100))
+    track.end_run()
+    track.push(0.15, _loud(100))  # the 50ms gap is below the drift tolerance
+
+    assert [pos for pos, _ in track._placed] == [0, 150]
+
+
+def test_ending_a_resampled_run_twice_is_idempotent() -> None:
+    track = _Track(sample_rate=48000, t0=0.0)
+    track.push(1.0, _loud(2400, sample_rate=24000))
+    track.end_run()  # output playback ended
+    track.end_run()  # RecorderIO closed before another run began
+
+    block = track.take(0, 48000 * 2)
+    assert np.count_nonzero(block[48000:]) == pytest.approx(4800, abs=50)
+
+
+def test_the_writer_waits_for_samples_the_resampler_still_holds() -> None:
+    """A resampler reports its input as arrived before it emits it, so a cursor placed at
+    the arrival time would write silence over audio that is still on its way."""
+    track = _Track(sample_rate=48000, t0=0.0)
+    for i in range(10):  # 500ms of continuous 24kHz input, as room_io delivers it
+        track.push(i * 0.05, _loud(1200, sample_rate=24000))
+
+    arrived = round(0.5 * 48000)
+    assert track.placed_through is not None
+    assert track.placed_through < arrived  # the resampler is still holding the difference
+
+    block = track.take(0, track.placed_through)
+    track.push(0.5, _loud(1200, sample_rate=24000))
+    block = np.concatenate([block, track.take(track.placed_through, arrived)])
+    assert np.count_nonzero(block) == len(block)  # no gap where the held-back samples belong
+
+
+def test_ending_a_stalled_run_leaves_its_tail_where_the_cursor_can_reach_it() -> None:
+    """When a source stops, the writer ends its run before it moves past it, so the samples
+    the resampler still holds land at the cursor instead of behind it."""
+    track = _Track(sample_rate=48000, t0=0.0)
+    for i in range(10):  # 500ms of 24kHz input, then the source goes quiet
+        track.push(i * 0.05, _loud(1200, sample_rate=24000))
+
+    cursor = track.placed_through
+    assert cursor is not None
+    written = track.take(0, cursor)  # the writer has written everything placed so far
+    track.end_run()
+    tail = track.take(cursor, cursor + 48000)
+
+    # all 500ms survives: what was placed, plus the tail the resampler was holding
+    assert np.count_nonzero(written) + np.count_nonzero(tail) == pytest.approx(24000, abs=50)
+    assert track.dropped_samples == 0
+
+
+def test_a_track_holding_nothing_back_does_not_hold_the_writer() -> None:
+    track = _Track(sample_rate=48000, t0=0.0)
+    assert track.placed_through is None  # nothing pushed yet
+
+    track.push(0.0, _loud(4800, sample_rate=48000))  # recording rate, so no resampler
+    assert track.placed_through is None
 
 
 def test_a_stereo_source_is_mixed_down() -> None:
@@ -360,3 +591,135 @@ async def test_the_writer_waits_on_the_agent_but_not_on_a_quiet_source() -> None
             assert flushed[-1] == pytest.approx(segment_began)
 
             task.cancel()
+
+
+async def _packet_sizes(path: Path, **options: object) -> list[int]:
+    """Record a second of silence then a second of tone, and return the encoded packet sizes."""
+    now = 1000.0
+    with patch(_CLOCK, side_effect=lambda: now):
+        source = _Source()
+        recorder = RecorderIO(agent_session=MagicMock(), sample_rate=RATE, **options)  # type: ignore[arg-type]
+        audio_in = recorder.record_input(source)
+        recorder.record_output(_Sink())
+        await recorder.start(output_path=path)
+
+        for i in range(20):
+            now += 0.1
+            source.frames.append(_tone(0.1, level=8000 if i >= 10 else 0))
+            await audio_in.__anext__()
+
+        await recorder.aclose()
+
+    with av.open(str(path)) as container:
+        sizes = [p.size for p in container.demux(audio=0) if p.size]
+    # the last packet holds the encoder's padding
+    return sizes[:-1]
+
+
+def _has_libopus() -> bool:
+    try:
+        av.Codec("libopus", "w")
+    except av.codec.codec.UnknownCodecError:
+        return False
+    return True
+
+
+requires_libopus = pytest.mark.skipif(not _has_libopus(), reason="libopus is not available")
+
+
+@requires_libopus
+async def test_the_default_encoding_packs_silence_into_smaller_packets(tmp_path: Path) -> None:
+    sizes = await _packet_sizes(tmp_path / "vbr.ogg")
+    assert min(sizes) < max(sizes)
+
+
+@requires_libopus
+async def test_a_constant_bit_rate_encodes_every_packet_at_the_same_size(tmp_path: Path) -> None:
+    """At 128 kb/s, a 20 ms packet is 320 bytes, silent or not, as in Egress recordings."""
+    sizes = await _packet_sizes(tmp_path / "cbr.ogg", bit_rate=128_000, constant_bit_rate=True)
+    assert set(sizes) == {320}
+
+
+@pytest.mark.parametrize("bit_rate", [499, 512_001, -1, True, 128_000.0, "128000"])
+async def test_a_bit_rate_the_encoder_would_reject_fails_at_construction(bit_rate: object) -> None:
+    """The encoder opens on its own thread, where a bad bit rate would cost the recording."""
+    with pytest.raises(ValueError, match="bit_rate"):
+        RecorderIO(agent_session=MagicMock(), bit_rate=bit_rate)  # type: ignore[arg-type]
+
+
+async def test_constant_bit_rate_without_libopus_warns(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    def no_libopus(name: str, mode: str) -> av.Codec:
+        if name == "libopus":
+            raise av.codec.codec.UnknownCodecError(name)
+        return av.Codec(name, mode)
+
+    with (
+        patch.object(recorder_module.av, "Codec", side_effect=no_libopus),
+        caplog.at_level("WARNING"),
+    ):
+        await _packet_sizes(tmp_path / "native.ogg", constant_bit_rate=True)
+
+    assert "constant_bit_rate requires libopus" in caplog.text
+
+
+async def _start_unwritable(
+    tmp_path: Path,
+) -> tuple[RecorderIO, io.AudioInput, _Source, RecorderAudioOutput]:
+    """A recorder whose output directory cannot be created, so its encode thread fails."""
+    blocker = tmp_path / "not-a-directory"
+    blocker.write_text("")
+
+    source = _Source()
+    recorder = RecorderIO(agent_session=MagicMock(), sample_rate=RATE)
+    audio_in = recorder.record_input(source)
+    audio_out = recorder.record_output(_Sink())
+    await recorder.start(output_path=blocker / "audio.ogg")
+    return recorder, audio_in, source, audio_out
+
+
+async def test_a_failed_encoder_setup_does_not_hang_close(tmp_path: Path) -> None:
+    """The thread that would have resolved the close is the one that failed."""
+    recorder, _, _, _ = await _start_unwritable(tmp_path)
+    await asyncio.wait_for(recorder.aclose(), timeout=5)
+
+
+async def test_a_failed_encoder_stops_buffering_audio(tmp_path: Path) -> None:
+    """Nothing drains the queue once the encode thread has exited."""
+    recorder, audio_in, source, audio_out = await _start_unwritable(tmp_path)
+    await asyncio.wait_for(asyncio.shield(recorder._close_fut), timeout=5)
+
+    queued = recorder._q.qsize()
+    for _ in range(10):
+        source.frames.append(_tone(0.1))
+        await audio_in.__anext__()
+    assert recorder._q.qsize() == queued
+
+    # the agent's side holds a segment's audio until playback finishes; it must not start one
+    await audio_out.capture_frame(_tone(1.0))
+    assert audio_out.pending_since is None
+    await recorder.aclose()
+
+
+async def test_a_restart_does_not_record_audio_left_over_from_a_failed_run(
+    tmp_path: Path,
+) -> None:
+    """Audio queued before an encoder failed must not land on the next run's timeline."""
+    now = 1000.0
+    path = tmp_path / "retry.ogg"
+
+    with patch(_CLOCK, side_effect=lambda: now):
+        recorder, _, _, _ = await _start_unwritable(tmp_path)
+        await asyncio.wait_for(asyncio.shield(recorder._close_fut), timeout=5)
+        # a frame that reached the queue just before the encoder failed
+        leftover = _Captured(channel=0, started_at=now + 0.5, frame=_tone(0.5, level=8000))
+        recorder._q.put_nowait(leftover)
+        await recorder.aclose()
+
+        await recorder.start(output_path=path)
+        now += 2.0
+        await recorder.aclose()
+
+    pcm, rate = _decode(path)
+    assert not any(_energy_bins(pcm[0], rate))

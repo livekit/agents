@@ -101,6 +101,16 @@ class StartJobRequest:
         channel.write_string(b, self.running_job.token)
         channel.write_string(b, self.running_job.worker_id)
         channel.write_bool(b, self.running_job.fake_job)
+        # unix timestamps: a 32-bit float only resolves ~128 s at this magnitude
+        channel.write_double(b, self.running_job.received_at)
+        channel.write_double(b, self.running_job.accepted_at)
+        channel.write_double(b, self.running_job.assigned_at)
+        channel.write_double(b, self.running_job.launched_at)
+        channel.write_double(b, self.running_job.received_mono)
+        channel.write_double(b, self.running_job.accepted_mono)
+        channel.write_double(b, self.running_job.assigned_mono)
+        channel.write_double(b, self.running_job.launched_mono)
+        channel.write_bool(b, self.running_job.launched_warm)
 
     def read(self, b: io.BytesIO) -> None:
         job = agent.Job()
@@ -116,6 +126,15 @@ class StartJobRequest:
             token=channel.read_string(b),
             worker_id=channel.read_string(b),
             fake_job=channel.read_bool(b),
+            received_at=channel.read_double(b),
+            accepted_at=channel.read_double(b),
+            assigned_at=channel.read_double(b),
+            launched_at=channel.read_double(b),
+            received_mono=channel.read_double(b),
+            accepted_mono=channel.read_double(b),
+            assigned_mono=channel.read_double(b),
+            launched_mono=channel.read_double(b),
+            launched_warm=channel.read_bool(b),
         )
 
 
@@ -227,6 +246,22 @@ class ShuttingDown:
         pass
 
 
+@dataclass
+class JoinTiming:
+    """sent by the subprocess once the job connected to the room: the worker-side join
+    instants, which the main process forwards to the server in its job status update"""
+
+    MSG_ID: ClassVar[int] = 12
+    timing: agent.JobJoinTiming = field(default_factory=agent.JobJoinTiming)
+
+    def write(self, b: io.BytesIO) -> None:
+        channel.write_bytes(b, self.timing.SerializeToString())
+
+    def read(self, b: io.BytesIO) -> None:
+        self.timing = agent.JobJoinTiming()
+        self.timing.ParseFromString(channel.read_bytes(b))
+
+
 IPC_MESSAGES = {
     InitializeRequest.MSG_ID: InitializeRequest,
     InitializeResponse.MSG_ID: InitializeResponse,
@@ -240,4 +275,5 @@ IPC_MESSAGES = {
     DumpStackTraceRequest.MSG_ID: DumpStackTraceRequest,
     ShutdownRequestAck.MSG_ID: ShutdownRequestAck,
     ShuttingDown.MSG_ID: ShuttingDown,
+    JoinTiming.MSG_ID: JoinTiming,
 }

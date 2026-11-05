@@ -28,6 +28,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from livekit.agents import stt
+from livekit.agents.voice import audio_recognition
 from livekit.agents.voice.audio_recognition import (
     AudioRecognition,
     _compute_end_of_turn_metrics,
@@ -45,12 +46,14 @@ def _make_recognition(
     """Wire the attributes ``_on_stt_event`` touches for transcript events."""
     ar = AudioRecognition.__new__(AudioRecognition)
     ar._session = MagicMock()
+    ar._session._root_span_context = None
     ar._session.amd = None
     ar._session._room_io = None
     ar._hooks = MagicMock()
     ar._vad = vad
     ar._turn_detection_mode = mode
     ar._user_turn_committed = False
+    ar._stt_turn_ended = False
     ar._vad_base_turn_detection = False
     ar._user_silence_ev = asyncio.Event()
     ar._speaking = False
@@ -63,6 +66,7 @@ def _make_recognition(
     ar._turn_transcript_received = False
     ar._transcription_timeout_handle = None
     ar._stt_request_ids = []
+    ar._stt_events = []
     ar._end_of_turn_task = None
     ar._audio_transcript = ""
     ar._audio_interim_transcript = ""
@@ -83,6 +87,12 @@ def _make_recognition(
     # only reached by the stt-mode END_OF_SPEECH / START_OF_SPEECH branches
     ar._user_turn_span = None
     ar._user_turn_start = None
+    ar._eou_wait_span = None
+    ar._eou_wait_started_at_ns = None
+    ar._eou_wait_rearms = 0
+    ar._eou_wait_floor_ns = None
+    ar._eou_wait_not_committed = 0
+    ar._eou_detection_span = None
     ar._stt_model = None
     ar._stt_provider = None
     ar._vad_stream = None
@@ -107,7 +117,9 @@ def _preflight_transcript(end_time: float) -> stt.SpeechEvent:
 
 
 @both_modes
-async def test_vad_anchor_survives_a_transcript_without_timestamps(mode: str) -> None:
+async def test_vad_anchor_survives_a_transcript_without_timestamps(
+    mode: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The reported regression: with the (default) VAD anchor discarded, a
     provider that sends no timestamps anchors the turn at transcript arrival and
     transcription_delay reports ~0 instead of the actual STT latency.
@@ -116,6 +128,8 @@ async def test_vad_anchor_survives_a_transcript_without_timestamps(mode: str) ->
     prefer, so the estimate would be nothing but ``now``.
     """
     now = time.time()
+    # the transcript is stamped with the same clock the anchor was derived from
+    monkeypatch.setattr(audio_recognition.time, "time", lambda: now)
     ar = _make_recognition(vad=MagicMock(), input_started_at=now - 10.0, mode=mode)
     vad_anchor = now - 0.6  # VAD end-of-speech, 0.6s of transcription latency ago
     ar._last_speaking_time = vad_anchor
@@ -151,10 +165,12 @@ async def test_usable_provider_timestamp_replaces_the_anchor_only_in_stt_mode(mo
 
 
 @both_modes
-async def test_skewed_provider_timestamp(mode: str) -> None:
+async def test_skewed_provider_timestamp(mode: str, monkeypatch: pytest.MonkeyPatch) -> None:
     # the provider's audio clock runs ahead of wall clock: end_time maps into the
     # future and the estimate clamps to `now`, zeroing the delay
     now = time.time()
+    # the clamp reads the clock again, so a slow runner would drift past the tolerance
+    monkeypatch.setattr(audio_recognition.time, "time", lambda: now)
     ar = _make_recognition(vad=MagicMock(), input_started_at=now - 10.0, mode=mode)
     vad_anchor = now - 0.6
     ar._last_speaking_time = vad_anchor
@@ -164,7 +180,7 @@ async def test_skewed_provider_timestamp(mode: str) -> None:
     if mode == "stt":
         # accepted: the provider owns the boundary here and a skewed timestamp is
         # indistinguishable from a good one, so the delay under-reports
-        assert ar._last_speaking_time == pytest.approx(now, abs=0.05)
+        assert now <= ar._last_speaking_time <= time.time()
     else:
         assert ar._last_speaking_time == vad_anchor
 
@@ -271,8 +287,9 @@ async def test_stt_end_of_speech_clamps_a_future_speech_end_time() -> None:
         )
     )
 
-    assert ar._last_speaking_time == pytest.approx(now, abs=0.05)
-    assert ar._last_speaking_time <= time.time()
+    # clamped to arrival time: bounded by the clock reads around the call rather than a
+    # fixed tolerance, which a loaded CI runner blows through
+    assert now <= ar._last_speaking_time <= time.time()
 
 
 async def test_stt_end_of_speech_without_timestamps_still_anchors_the_turn() -> None:
@@ -290,8 +307,62 @@ async def test_stt_end_of_speech_without_timestamps_still_anchors_the_turn() -> 
 
     await ar._on_stt_event(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH, alternatives=[]))
 
-    assert ar._last_speaking_time == pytest.approx(now, abs=0.05)
+    # the anchor moved from 0.6 s ago to arrival time (bounded by the clock reads around the call)
+    assert now <= ar._last_speaking_time <= time.time()
     assert ar._user_turn_committed is True
+
+
+@pytest.mark.parametrize("endpoint", ["wall", "word", "arrival"])
+@pytest.mark.parametrize("transcript", [_final_transcript, _preflight_transcript])
+async def test_untimed_transcript_preserves_the_current_stt_endpoint(
+    monkeypatch, endpoint, transcript
+):
+    now = 1010.0
+    monkeypatch.setattr(audio_recognition.time, "time", lambda: now)
+    ar = _make_recognition(vad=None, input_started_at=1000.0, mode="stt")
+    await ar._on_stt_event(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
+    eos = stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+    expected = now
+    if endpoint == "wall":
+        eos.speech_end_time = expected = 1009.4
+    elif endpoint == "word":
+        eos.alternatives = [stt.SpeechData(language="en", text="", end_time=9.4)]
+        expected = 1009.4
+    await ar._on_stt_event(eos)
+
+    now = 1010.5
+    await ar._on_stt_event(transcript(end_time=0.0))
+    assert ar._last_speaking_time == pytest.approx(expected)
+    metrics = _compute_end_of_turn_metrics(
+        speech_start_time=1008.0,
+        last_speaking_time=ar._last_speaking_time,
+        last_final_transcript_time=ar._last_final_transcript_time,
+        now=now,
+    )
+    assert metrics.transcription_delay == pytest.approx(now - expected)
+
+    now = 1012.0
+    await ar._on_stt_event(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
+    now = 1012.5
+    await ar._on_stt_event(transcript(end_time=0.0))
+    assert ar._last_speaking_time == now
+
+
+@both_modes
+async def test_untimed_eos_does_not_inherit_an_earlier_segment_final(mode: str) -> None:
+    """A final can stabilize a segment while the utterance continues."""
+    now = time.time()
+    ar = _make_recognition(vad=None, input_started_at=now - 10.0, mode=mode)
+    await ar._on_stt_event(_final_transcript(end_time=9.0))
+    assert ar._last_speaking_time == pytest.approx(now - 1.0, rel=0, abs=1e-6)
+
+    before_eos = time.time()
+    await ar._on_stt_event(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+
+    if mode == "stt":
+        assert before_eos <= ar._last_speaking_time <= time.time()
+    else:
+        assert ar._last_speaking_time == pytest.approx(now - 1.0, rel=0, abs=1e-6)
 
 
 @both_modes

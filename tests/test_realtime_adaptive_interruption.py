@@ -10,6 +10,7 @@ import pytest
 
 from livekit.agents import Agent, AgentSession, TurnHandlingOptions
 from livekit.agents.inference import OverlappingSpeechEvent
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.audio_recognition import (
     AudioRecognition,
@@ -112,7 +113,7 @@ def test_audio_activity_waits_for_min_words() -> None:
     activity._audio_recognition._current_transcript = "now enough words"
     activity._interrupt_by_audio_activity()
 
-    activity._current_speech.interrupt.assert_called_once_with()
+    activity._current_speech.interrupt.assert_called_once_with(source="audio_activity")
 
 
 def test_rejected_audio_interruption_clears_confirmed_verdict() -> None:
@@ -549,6 +550,57 @@ def test_positive_verdict_does_not_reopen_overlap_during_transcript_replay() -> 
     assert _sentinel_names(ch) == []
 
 
+@pytest.mark.parametrize("interruption", [NOT_GIVEN, True, False])
+def test_end_of_speech_passes_interruption_verdict_to_endpointing(
+    interruption: NotGivenOr[bool],
+) -> None:
+    ar, _ = _recognition_with_interruption_ch()
+    ar._speaking = True
+
+    ar._on_end_of_speech(ended_at=10.0, interruption=interruption)
+
+    ar._endpointing.on_end_of_speech.assert_called_once_with(
+        ended_at=10.0,
+        interruption=interruption,
+    )
+
+
+def test_agent_speech_end_keeps_gate_closed_during_transcript_replay() -> None:
+    ar, _ = _recognition_with_interruption_ch()
+    ar._on_start_of_agent_speech(started_at=9.0)
+    ar._on_start_of_speech(started_at=9.5)
+    ar._active_vad_speech_started_at = 9.5
+    ar._transcript_buffer.append(MagicMock(created_at=9.5, speech_end_time=None))
+    ar._process_stt_event = MagicMock(  # type: ignore[method-assign]
+        side_effect=lambda _: ar._on_start_of_speech(started_at=9.5)
+    )
+
+    ar._on_end_of_agent_speech(ended_at=10.0)
+
+    assert not ar._agent_speaking
+    assert not ar._transcript_gate_active
+    assert not ar._transcript_buffer
+
+
+@pytest.mark.parametrize("gate_active", [False, True])
+def test_agent_speech_end_releases_stale_transcripts_when_already_not_speaking(
+    gate_active: bool,
+) -> None:
+    ar, _ = _recognition_with_interruption_ch()
+    ar._agent_speech_started_at = 9.0
+    ar._active_vad_speech_started_at = 9.5
+    ar._transcript_gate_active = gate_active
+    held_event = MagicMock(created_at=9.5, speech_end_time=None)
+    ar._transcript_buffer.append(held_event)
+    ar._process_stt_event = MagicMock()  # type: ignore[method-assign]
+
+    ar._on_end_of_agent_speech(ended_at=10.0)
+
+    ar._process_stt_event.assert_called_once_with(held_event)  # type: ignore[attr-defined]
+    assert not ar._transcript_gate_active
+    assert not ar._transcript_buffer
+
+
 async def test_agent_speech_end_closes_overlap_before_reset() -> None:
     ar, ch = _recognition_with_interruption_ch()
     ar._on_start_of_agent_speech(started_at=time.time())
@@ -625,3 +677,31 @@ async def test_real_end_of_agent_speech_still_tears_down() -> None:
         "_AgentSpeechEndedSentinel",
     ]
     assert ch.sent[0]._agent_ended is True  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize("realtime", [False, True])
+async def test_text_simulation_disables_audio_turn_handling_without_warnings(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, realtime: bool
+) -> None:
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+    monkeypatch.setattr(AgentSession, "_text_only", property(lambda self: True))
+
+    session = AgentSession(
+        llm=FakeRealtimeModel(capabilities=fake_capabilities(turn_detection=False))
+        if realtime
+        else FakeLLM(fake_responses=[]),
+        stt=FakeSTT(),
+        vad=FakeVAD(fake_user_speeches=[]),
+        turn_handling=TurnHandlingOptions(
+            turn_detection="vad",
+            interruption={"mode": "adaptive"},
+        ),
+    )
+
+    with caplog.at_level("WARNING", logger="livekit.agents"):
+        activity = _make_activity(session)
+
+    assert activity._turn_detection is None
+    assert activity._interruption_detector is None
+    assert not [r for r in caplog.records if r.levelname == "WARNING"]

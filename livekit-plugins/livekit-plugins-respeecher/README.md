@@ -16,12 +16,18 @@ You'll need an API key from Respeecher. It can be set as an environment variable
 
 To get the key, log in to [Respeecher Space](https://space.respeecher.com/).
 
-## Example
+## Models
 
-To try out the Respeecher plugin, run the example:
+Supported public models are English (`/public/tts/en-rt`), Ukrainian (`/public/tts/ua-rt`),
+Swedish (`/public/tts/sv-rt`), Brazilian Portuguese (`/public/tts/pt-br-rt`),
+German (`/public/tts/de-rt`), and Arabic (`/public/tts/ar-rt`).
 
-```bash
-uv run python examples/other/text-to-speech/respeecher_tts.py start
+English and Ukrainian have default voices. For the other models, select a voice from
+`list_voices()` and pass its ID explicitly:
+
+```python
+from livekit.plugins import respeecher
+
+voices = await respeecher.list_voices(model="/public/tts/sv-rt")
+tts = respeecher.TTS(model="/public/tts/sv-rt", voice_id=voices[0].id)
 ```
-
-Check [`examples/other/text-to-speech/README.md`](../../examples/other/text-to-speech/README.md) for running details.

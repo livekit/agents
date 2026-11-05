@@ -134,9 +134,9 @@ class TTS(tts.TTS):
             voice_id (str): Voice ID. Defaults to `DEFAULT_VOICE_ID`.
             voice_settings (NotGivenOr[VoiceSettings]): Voice settings.
             model (TTSModels | str): TTS model to use. Defaults to "eleven_turbo_v2_5".
-                "eleven_v3" and "eleven_v3_conversational" go through ElevenLabs'
-                text-to-dialogue API instead (single voice per instance, same as
-                other models).
+                "eleven_v3", "eleven_v3_conversational", "eleven_v4" and "eleven_v4_turbo"
+                go through ElevenLabs' text-to-dialogue API instead (single voice per
+                instance, same as other models).
             api_key (NotGivenOr[str]): ElevenLabs API key. Can be set via argument or `ELEVEN_API_KEY` environment variable.
             base_url (NotGivenOr[str]): Custom base URL for the API. Optional.
             streaming_latency (NotGivenOr[int]): Optimize for streaming latency, defaults to 0 - disabled. 4 for max latency optimizations. deprecated
@@ -217,6 +217,8 @@ class TTS(tts.TTS):
 
         self.__current_connection: _Connection | _DialogueConnection | None = None
         self._connection_lock = asyncio.Lock()
+        self._prewarm_task: asyncio.Task[None] | None = None
+        self._opts_revision = 0
         self._warn_if_dialogue_model_ignores_options()
 
     @property
@@ -316,9 +318,11 @@ class TTS(tts.TTS):
             self._opts.pronunciation_dictionary_locators = pronunciation_dictionary_locators
             changed = True
 
-        if changed and self.__current_connection:
-            self.__current_connection.mark_non_current()
-            self.__current_connection = None
+        if changed:
+            self._opts_revision += 1
+            if self.__current_connection:
+                self.__current_connection.mark_non_current()
+                self.__current_connection = None
 
     async def _current_connection(self) -> tuple[_Connection | _DialogueConnection, float, bool]:
         """Get the current connection, creating one if needed.
@@ -327,24 +331,32 @@ class TTS(tts.TTS):
             Tuple of (connection, acquire_time, connection_reused)
         """
         async with self._connection_lock:
-            if (
-                self.__current_connection
-                and self.__current_connection.is_current
-                and not self.__current_connection._closed
-            ):
-                return self.__current_connection, 0.0, True
-
             session = self._ensure_session()
-            conn: _Connection | _DialogueConnection = (
-                _DialogueConnection(self._opts, session)
-                if is_dialogue_model(self._opts.model)
-                else _Connection(self._opts, session)
-            )
             t0 = time.perf_counter()
-            await conn.connect()
-            acquire_time = time.perf_counter() - t0
-            self.__current_connection = conn
-            return conn, acquire_time, False
+            while True:
+                if (
+                    self.__current_connection
+                    and self.__current_connection.is_current
+                    and not self.__current_connection._closed
+                ):
+                    return self.__current_connection, 0.0, True
+
+                opts_revision = self._opts_revision
+                opts = replace(self._opts)
+                conn: _Connection | _DialogueConnection = (
+                    _DialogueConnection(opts, session)
+                    if is_dialogue_model(opts.model)
+                    else _Connection(opts, session)
+                )
+                await conn.connect()
+
+                if opts_revision != self._opts_revision:
+                    await conn.aclose()
+                    continue
+
+                acquire_time = time.perf_counter() - t0
+                self.__current_connection = conn
+                return conn, acquire_time, False
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -358,7 +370,50 @@ class TTS(tts.TTS):
         self._streams.add(stream)
         return stream
 
+    def prewarm(self) -> None:
+        """Open the websocket connection before the first synthesis request."""
+        if self._prewarm_task is None or self._prewarm_task.done():
+            self._prewarm_task = asyncio.create_task(self._run_prewarm())
+
+    async def _run_prewarm(self) -> None:
+        retry_delay = 1.0
+        max_retry_delay = 30.0
+
+        try:
+            while True:
+                try:
+                    conn, _, _ = await self._current_connection()
+                    retry_delay = 1.0
+
+                    if not is_dialogue_model(self._opts.model) or conn._recv_task is None:
+                        return
+
+                    # Text-to-dialogue sockets are closed by the server after an idle period.
+                    # Wait for that closure and reconnect immediately so the next turn remains warm.
+                    # asyncio.wait() does not propagate cancellation from the receive task.
+                    await asyncio.wait({conn._recv_task})
+                except asyncio.CancelledError:
+                    raise
+                except APIStatusError as exc:
+                    if not exc.retryable:
+                        logger.warning(
+                            "elevenlabs prewarm stopped after non-retryable API error",
+                            extra={"status_code": exc.status_code, "lk.pii.error": str(exc)},
+                        )
+                        return
+                    await asyncio.sleep(retry_delay)
+                    retry_delay = min(retry_delay * 2, max_retry_delay)
+                except Exception:
+                    await asyncio.sleep(retry_delay)
+                    retry_delay = min(retry_delay * 2, max_retry_delay)
+        except asyncio.CancelledError:
+            raise
+
     async def aclose(self) -> None:
+        if self._prewarm_task:
+            await utils.aio.gracefully_cancel(self._prewarm_task)
+            self._prewarm_task = None
+
         for stream in list(self._streams):
             await stream.aclose()
         self._streams.clear()
@@ -672,6 +727,55 @@ class _StreamData:
     stream: SynthesizeStream
     waiter: asyncio.Future[None]
     timeout_timer: asyncio.TimerHandle | None = None
+    # set once close_context is sent: no more input, only provider output is pending
+    input_closed: bool = False
+    # text-to-dialogue alignment restarts at 0 on every message; this is where the
+    # next message's audio starts within the context
+    audio_offset_ms: float = 0.0
+    # trailing bytes of an incomplete Ogg page (opus output)
+    ogg_tail: bytes = b""
+
+
+def _ogg_end_ms(data: bytes) -> tuple[float | None, bytes]:
+    """Audio end (ms) of the last complete Ogg page in `data`, and the leftover bytes."""
+    end_ms = None
+    pos = 0
+    while len(data) - pos >= 27:
+        header_len = 27 + data[pos + 26]
+        if len(data) - pos < header_len:
+            break
+        page_len = header_len + sum(data[pos + 27 : pos + header_len])
+        if len(data) - pos < page_len:
+            break
+        granule = int.from_bytes(data[pos + 6 : pos + 14], "little", signed=True)
+        if granule > 0:  # 0 on header pages, -1 when no packet ends on the page
+            end_ms = granule / 48  # opus granule positions count 48 kHz samples
+        pos += page_len
+    return end_ms, data[pos:]
+
+
+def _advance_dialogue_clock(
+    ctx: _StreamData, opts: _TTSOptions, audio: bytes, alignment: dict[str, Any] | None
+) -> None:
+    """Move the context's clock past one text-to-dialogue message's audio."""
+    if not audio:
+        return
+    fmt = opts.encoding.split("_")  # e.g. pcm_24000, mp3_22050_32, opus_48000_32
+    if fmt[0] == "pcm":
+        ctx.audio_offset_ms += len(audio) / (2 * opts.sample_rate) * 1000  # 16-bit mono
+    elif fmt[0] == "mp3" and len(fmt) == 3:
+        ctx.audio_offset_ms += len(audio) * 8 / int(fmt[2])  # constant bitrate: kbps == bits per ms
+    else:
+        # the alignment span misses audio-only messages, so it is only a lower bound
+        starts = (alignment or {}).get("char_start_times_ms") or []
+        durs = (alignment or {}).get("char_durations_ms") or []
+        if starts and durs:
+            ctx.audio_offset_ms += starts[-1] + durs[-1]
+        if fmt[0] == "opus":
+            # every complete Ogg page carries the exact total audio sent so far
+            end_ms, ctx.ogg_tail = _ogg_end_ms(ctx.ogg_tail + audio)
+            if end_ms is not None:
+                ctx.audio_offset_ms = max(ctx.audio_offset_ms, end_ms)
 
 
 def _accumulate_alignment(
@@ -823,6 +927,7 @@ class _Connection:
                             "context_id": msg.context_id,
                             "close_context": True,
                         }
+                        self._mark_input_closed(msg.context_id)
                         await self._ws.send_json(close_pkt)
 
         except Exception as e:
@@ -913,6 +1018,10 @@ class _Connection:
                     emitter.push(b64data)
                     if ctx.timeout_timer:
                         ctx.timeout_timer.cancel()
+                        ctx.timeout_timer = None
+                    if ctx.input_closed:
+                        # the final response is still pending, keep the idle timeout active
+                        self._start_timeout_timer(context_id)
 
                 if data.get("isFinal"):
                     timed_words, _ = _to_timed_words(
@@ -972,6 +1081,12 @@ class _Connection:
             self._cleanup_context(context_id)
 
         ctx.timeout_timer = asyncio.get_event_loop().call_later(timeout, _on_timeout)
+
+    def _mark_input_closed(self, context_id: str) -> None:
+        """Arm the timeout for the final response once no more input will be sent"""
+        if ctx := self._context_data.get(context_id):
+            ctx.input_closed = True
+            self._start_timeout_timer(context_id)
 
     async def aclose(self) -> None:
         """Close the connection and clean up"""
@@ -1086,6 +1201,7 @@ class _DialogueConnection(_Connection):
                             "context_id": msg.context_id,
                             "close_context": True,
                         }
+                        self._mark_input_closed(msg.context_id)
                         await self._ws.send_json(close_pkt)
 
                 await self._send_due_keep_alives()
@@ -1164,21 +1280,28 @@ class _DialogueConnection(_Connection):
                 emitter = ctx.emitter
                 stream = ctx.stream
 
+                audio = base64.b64decode(data["audio"]) if data.get("audio") else b""
                 alignment = data.get("alignment")
                 if alignment:
+                    # times restart at 0 on every message: shift them onto the context's clock
+                    starts = alignment.get("char_start_times_ms")
                     _accumulate_alignment(
                         stream,
                         emitter,
                         alignment.get("chars"),
-                        alignment.get("char_start_times_ms"),
+                        [round(ctx.audio_offset_ms + s) for s in starts] if starts else None,
                         alignment.get("char_durations_ms"),
                     )
+                _advance_dialogue_clock(ctx, self._opts, audio, alignment)
 
-                if data.get("audio"):
-                    b64data = base64.b64decode(data["audio"])
-                    emitter.push(b64data)
+                if audio:
+                    emitter.push(audio)
                     if ctx.timeout_timer:
                         ctx.timeout_timer.cancel()
+                        ctx.timeout_timer = None
+                    if ctx.input_closed:
+                        # the final response is still pending, keep the idle timeout active
+                        self._start_timeout_timer(context_id)
 
                 if data.get("is_final"):
                     timed_words, _ = _to_timed_words(

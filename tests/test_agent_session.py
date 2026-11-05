@@ -16,6 +16,7 @@ from livekit.agents import (
     AgentFalseInterruptionEvent,
     AgentSession,
     AgentStateChangedEvent,
+    AgentTask,
     APIConnectionError,
     ConversationItemAddedEvent,
     FlushSentinel,
@@ -24,6 +25,7 @@ from livekit.agents import (
     ModelSettings,
     NotGivenOr,
     RunContext,
+    StopResponse,
     TurnHandlingOptions,
     UserInputTranscribedEvent,
     UserStateChangedEvent,
@@ -43,10 +45,10 @@ from livekit.agents.llm import (
 from livekit.agents.llm.chat_context import ChatContext, ChatMessage
 from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType, STTError
 from livekit.agents.utils import aio
-from livekit.agents.voice.agent_activity import AgentActivity
+from livekit.agents.voice.agent_activity import AgentActivity, _transcripts_equivalent
 from livekit.agents.voice.audio_recognition import AudioRecognition, _EndOfTurnInfo
 from livekit.agents.voice.endpointing import BaseEndpointing
-from livekit.agents.voice.events import FunctionToolsExecutedEvent
+from livekit.agents.voice.events import AgentState, FunctionToolsExecutedEvent, UserState
 from livekit.agents.voice.io import PlaybackFinishedEvent
 from livekit.agents.voice.tool_executor import UPDATE_TEMPLATE
 
@@ -470,7 +472,8 @@ async def test_tool_without_a_reply_returns_the_agent_to_listening() -> None:
     assert transitions[-2:] == [("speaking", "thinking"), ("thinking", "listening")]
 
 
-async def test_async_tool_defers_user_away_until_its_reply_lands() -> None:
+@pytest.mark.parametrize("reset_away_timer", [False, True])
+async def test_async_tool_defers_user_away_until_its_reply_lands(reset_away_timer: bool) -> None:
     """A background tool speaks for itself, so "away" must wait for that reply (#6883)."""
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "Look up my order")
@@ -498,7 +501,11 @@ async def test_async_tool_defers_user_away_until_its_reply_lands() -> None:
             """Look an order up in the background."""
             nonlocal tool_returned_at
             await context.update("looking it up")
-            await asyncio.sleep(20.0)
+            await asyncio.sleep(10.0)
+            if reset_away_timer:
+                assert context.session.agent_state == "listening"
+                context.session.reset_away_timer()
+            await asyncio.sleep(10.0)
             tool_returned_at = time.time()
             return "order 42 shipped"
 
@@ -516,6 +523,7 @@ async def test_async_tool_defers_user_away_until_its_reply_lands() -> None:
 
     # the agent is genuinely listening while the tool runs, so nothing but the tool holds
     # the window off; landing restarts it in full rather than firing on what was left
+    assert tool_returned_at > 0
     assert len(away_times) == 1
     assert away_times[0] >= tool_returned_at + 3.0
 
@@ -626,6 +634,30 @@ async def test_interruption(
     if not resume_false_interruption:
         # fake audio output doesn't support pause/resume
         check_timestamp(playback_finished_events[0].playback_position, 2.0, speed_factor=speed)
+
+
+async def test_interrupted_say_uses_speech_start_timestamp() -> None:
+    class SayOnEnterAgent(MyAgent):
+        async def on_enter(self) -> None:
+            self.session.say("I saw your application for a Honda")
+
+    actions = FakeActions()
+    actions.add_tts(10.0, input="I saw your application for a Honda")
+    actions.add_user_speech(1.0, 1.2, "Who is this?")
+    actions.add_llm("This is John.")
+    actions.add_tts(1.0)
+
+    session = create_session(actions)
+    agent = SayOnEnterAgent()
+
+    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    messages = [item for item in agent.chat_ctx.items if item.type == "message"]
+    assert [message.role for message in messages] == ["system", "assistant", "user", "assistant"]
+    assert messages[1].interrupted is True
+    assert messages[1].created_at == messages[1].metrics["started_speaking_at"]
+    assert messages[2].text_content == "Who is this?"
+    assert messages[3].text_content == "This is John."
 
 
 async def test_interruption_options() -> None:
@@ -968,8 +1000,10 @@ async def test_generate_reply() -> None:
     assert agent.chat_ctx.items[7].type == "function_call_output"
 
 
-async def test_on_enter_hides_ignore_on_enter_tools() -> None:
-    """IGNORE_ON_ENTER tools (bare + toolset-nested) are hidden inside on_enter, restored after."""
+@pytest.mark.parametrize("with_task", [False, True])
+async def test_on_enter_hides_ignore_on_enter_tools(with_task: bool) -> None:
+    """IGNORE_ON_ENTER tools (bare + toolset-nested) are hidden inside on_enter, restored after,
+    also when on_enter awaits an AgentTask (the resumed activity must not keep the marker)."""
 
     class _Toolset(Toolset):
         def __init__(self) -> None:
@@ -990,11 +1024,22 @@ async def test_on_enter_hides_ignore_on_enter_tools() -> None:
     async def bare_ignored() -> None:
         """A bare flagged tool."""
 
+    class _Task(AgentTask[None]):
+        def __init__(self) -> None:
+            super().__init__(instructions="complete the setup")
+
+        async def on_enter(self) -> None:
+            self.complete(None)
+
     class _Agent(Agent):
         def __init__(self) -> None:
             super().__init__(instructions="you are helpful", tools=[_Toolset(), bare_ignored])
 
         async def on_enter(self) -> None:
+            if with_task:
+                await _Task()
+                # The fake input sends only one frame; prime it again after resume.
+                session.input.audio.push(0.1)
             self.session.generate_reply(instructions="instructions:say hello to the user")
 
     actions = FakeActions()
@@ -1024,6 +1069,75 @@ async def test_on_enter_hides_ignore_on_enter_tools() -> None:
     assert captured[0] == {"keep"}
     # a later (non-on_enter) turn sees every tool again
     assert captured[1] == {"keep", "end_call", "bare_ignored"}
+
+
+async def test_on_enter_marker_does_not_follow_a_handoff_back() -> None:
+    """A handoff made from on_enter starts the next activity inside that on_enter's context. When
+    the session later hands back to the same agent, its new activity must not inherit the stale
+    marker and keep hiding the IGNORE_ON_ENTER tools on every turn."""
+
+    @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
+    async def end_call() -> None:
+        """Ends the call."""
+
+    @function_tool
+    async def keep() -> None:
+        """A normal tool."""
+
+    class _Router(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="you route the caller", tools=[end_call, keep])
+            self.entered = 0
+
+        async def on_enter(self) -> None:
+            self.entered += 1
+            if self.entered == 1:
+                await self.session.generate_reply(instructions="instructions:greet the user")
+                self.session.update_agent(specialist)
+
+    class _Specialist(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="you are a specialist")
+
+        async def on_user_turn_completed(
+            self, turn_ctx: ChatContext, new_message: ChatMessage
+        ) -> None:
+            self.session.update_agent(router)
+            raise StopResponse()
+
+    router = _Router()
+    specialist = _Specialist()
+
+    actions = FakeActions()
+    actions.add_llm("Hello!", input="instructions:greet the user")
+    actions.add_tts(1.0)
+    actions.add_user_speech(3.0, 4.0, "take me back")
+    actions.add_user_speech(6.0, 7.0, "goodbye")
+    actions.add_llm("Bye!")
+    actions.add_tts(1.0)
+
+    # no preemptive reply from the specialist, so the only LLM calls are the router's
+    session = create_session(actions, turn_handling={"preemptive_generation": {"enabled": False}})
+
+    captured: list[set[str]] = []
+    orig_chat = session.llm.chat
+
+    def _recording_chat(*, chat_ctx, tools=None, **kwargs):  # type: ignore[no-untyped-def]
+        captured.append(
+            {t.info.name for t in (tools or []) if isinstance(t, (FunctionTool, RawFunctionTool))}
+        )
+        return orig_chat(chat_ctx=chat_ctx, tools=tools, **kwargs)
+
+    session.llm.chat = _recording_chat  # type: ignore[method-assign]
+
+    await asyncio.wait_for(run_session(session, router), timeout=SESSION_TIMEOUT)
+
+    assert router.entered == 2
+    assert len(captured) == 2
+    greeting, user_turn = captured
+    assert greeting == {"keep"}
+    # the router's turn after the handoff back sees every tool again
+    assert user_turn == {"keep", "end_call"}
 
 
 async def test_on_enter_hides_tools_in_nested_tool_reply() -> None:
@@ -1182,6 +1296,25 @@ def test_explicit_aec_warmup_duration_overrides_outbound_sip_default(
 
     assert session.options.aec_warmup_duration == duration
     assert session._aec_warmup_remaining == (duration or 0.0)
+
+
+@pytest.mark.parametrize(
+    ("explicit", "expected_duration"),
+    [(NOT_GIVEN, None), (1.5, 1.5)],
+)
+def test_simulation_has_no_aec_warmup_by_default(
+    explicit: NotGivenOr[float | None], expected_duration: float | None
+) -> None:
+    session = AgentSession(vad=None, aec_warmup_duration=explicit)
+    participant = MagicMock(spec=rtc.RemoteParticipant)
+    participant.kind = rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD
+    participant.attributes = {}
+
+    with patch("livekit.agents.job.current_simulation", return_value=object()):
+        session._on_room_io_participant_linked(participant)
+
+    assert session.options.aec_warmup_duration == expected_duration
+    assert session._aec_warmup_remaining == (expected_duration or 0.0)
 
 
 def test_outbound_sip_cancels_aec_warmup_that_already_started() -> None:
@@ -1377,6 +1510,267 @@ async def test_stt_eos_falls_back_to_update_vad_when_no_active_stream() -> None:
         await _close_test_session(recognition._session)
 
 
+def _make_stt_turn_recognition(*, min_delay: float) -> tuple[AudioRecognition, list[str]]:
+    committed: list[str] = []
+
+    class _CommitRecordingHooks(_TestRecognitionHooks):
+        def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool:
+            committed.append(info.new_transcript)
+            return True
+
+    recognition = AudioRecognition(
+        create_session(FakeActions()),
+        hooks=_CommitRecordingHooks(),
+        endpointing=BaseEndpointing(min_delay=min_delay, max_delay=min_delay),
+        stt=MagicMock(),
+        vad=None,
+        interruption_detection=None,
+        turn_detection="stt",
+    )
+    return recognition, committed
+
+
+async def _send_stt_event(
+    recognition: AudioRecognition, type: SpeechEventType, text: str | None = None
+) -> None:
+    alternatives = [SpeechData(text=text, language=LanguageCode(""))] if text else []
+    await recognition._on_stt_event(SpeechEvent(type=type, alternatives=alternatives))
+    await asyncio.sleep(0.05)
+
+
+async def _send_vad_end(recognition: AudioRecognition) -> None:
+    await recognition._on_vad_event(
+        vad.VADEvent(
+            type=vad.VADEventType.END_OF_SPEECH,
+            samples_index=0,
+            timestamp=time.time(),
+            speech_duration=0.5,
+            silence_duration=0.3,
+        )
+    )
+    await asyncio.sleep(0.05)
+
+
+@pytest.mark.parametrize(
+    ("min_delay", "first_turns"),
+    [
+        pytest.param(0.0, ["I need the OTP.", "For the guard."], id="committed-before-final"),
+        pytest.param(0.5, ["I need the OTP. For the guard."], id="final-within-delay"),
+    ],
+)
+async def test_stt_final_after_a_later_end_of_speech_still_ends_a_turn(
+    min_delay: float, first_turns: list[str]
+) -> None:
+    recognition, committed = _make_stt_turn_recognition(min_delay=min_delay)
+    try:
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "I need the OTP.")
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "For the guard.")
+        await asyncio.sleep(min_delay + 0.1)
+
+        assert committed == first_turns
+        assert recognition._audio_transcript == ""
+
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "Thanks.")
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        await asyncio.sleep(min_delay + 0.1)
+
+        assert committed == [*first_turns, "Thanks."]
+    finally:
+        if recognition._end_of_turn_task is not None:
+            await aio.cancel_and_wait(recognition._end_of_turn_task)
+        await _close_test_session(recognition._session)
+
+
+async def test_stt_resume_supersedes_a_pending_end_of_speech() -> None:
+    """A provider START_OF_SPEECH reopens the turn; only its next END_OF_SPEECH ends it."""
+    recognition, committed = _make_stt_turn_recognition(min_delay=0.0)
+    try:
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "I need the OTP.")
+        await _send_vad_end(recognition)
+        assert committed == []
+
+        await _send_vad_end(recognition)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "For the")
+        assert committed == []
+
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        assert committed == ["I need the OTP. For the"]
+    finally:
+        if recognition._end_of_turn_task is not None:
+            await aio.cancel_and_wait(recognition._end_of_turn_task)
+        await _close_test_session(recognition._session)
+
+
+async def test_stt_resume_after_final_is_not_ended_by_a_vad_pause() -> None:
+    """Deepgram Flux order: EndOfTurn sends FINAL_TRANSCRIPT then END_OF_SPEECH (#8302)."""
+    recognition, committed = _make_stt_turn_recognition(min_delay=0.3)
+    try:
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "I live in Cantu.")
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        # the user resumes within min_delay
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.INTERIM_TRANSCRIPT, "in the province")
+        # a short pause: VAD ends before the provider does
+        await _send_vad_end(recognition)
+        await asyncio.sleep(0.4)
+        assert committed == []
+
+        await _send_stt_event(
+            recognition, SpeechEventType.FINAL_TRANSCRIPT, "in the province of Como."
+        )
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        await asyncio.sleep(0.4)
+        assert committed == ["I live in Cantu. in the province of Como."]
+    finally:
+        if recognition._end_of_turn_task is not None:
+            await aio.cancel_and_wait(recognition._end_of_turn_task)
+        await _close_test_session(recognition._session)
+
+
+async def test_stt_resume_without_words_is_ended_by_the_next_end_of_speech() -> None:
+    """A resume that transcribes nothing still commits the pending text on the provider's end."""
+    recognition, committed = _make_stt_turn_recognition(min_delay=0.3)
+    try:
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "I live in Cantu.")
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await asyncio.sleep(0.4)
+        assert committed == []
+
+        # e.g. a Flux EndOfTurn without words: no final, only END_OF_SPEECH
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        await asyncio.sleep(0.4)
+        assert committed == ["I live in Cantu."]
+    finally:
+        if recognition._end_of_turn_task is not None:
+            await aio.cancel_and_wait(recognition._end_of_turn_task)
+        await _close_test_session(recognition._session)
+
+
+async def test_stt_final_after_resume_waits_for_the_provider_end_of_speech() -> None:
+    """A final for the resumed speech doesn't let a VAD pause end the turn early."""
+    recognition, committed = _make_stt_turn_recognition(min_delay=0.3)
+    try:
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "I need")
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        # the user resumes within min_delay
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        # a mid-turn final for the resumed speech
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "the OTP")
+        await _send_vad_end(recognition)
+        await asyncio.sleep(0.4)
+        assert committed == []
+
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "for the guard")
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        await asyncio.sleep(0.4)
+        assert committed == ["I need the OTP for the guard"]
+    finally:
+        if recognition._end_of_turn_task is not None:
+            await aio.cancel_and_wait(recognition._end_of_turn_task)
+        await _close_test_session(recognition._session)
+
+
+async def test_stt_pending_end_of_turn_survives_vad_only_speech() -> None:
+    """VAD speech the provider ignores cancels the pending end of turn; its VAD end resumes it."""
+    recognition, committed = _make_stt_turn_recognition(min_delay=0.3)
+    try:
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "I live in Cantu.")
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        await recognition._on_vad_event(
+            vad.VADEvent(
+                type=vad.VADEventType.START_OF_SPEECH,
+                samples_index=0,
+                timestamp=time.time(),
+                speech_duration=0.1,
+                silence_duration=0.0,
+            )
+        )
+        await asyncio.sleep(0.4)
+        assert committed == []
+
+        await _send_vad_end(recognition)
+        await asyncio.sleep(0.4)
+        assert committed == ["I live in Cantu."]
+    finally:
+        if recognition._end_of_turn_task is not None:
+            await aio.cancel_and_wait(recognition._end_of_turn_task)
+        await _close_test_session(recognition._session)
+
+
+async def test_stt_turn_end_does_not_carry_into_manual_turn_detection() -> None:
+    recognition, committed = _make_stt_turn_recognition(min_delay=0.0)
+    try:
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "I need the OTP.")
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        assert committed == ["I need the OTP."]
+
+        recognition._update_options(turn_detection="manual")
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "For the guard.")
+        await asyncio.sleep(0.1)
+
+        assert committed == ["I need the OTP."]
+        assert recognition._audio_transcript == "For the guard."
+    finally:
+        if recognition._end_of_turn_task is not None:
+            await aio.cancel_and_wait(recognition._end_of_turn_task)
+        await _close_test_session(recognition._session)
+
+
+async def test_stt_turn_is_not_ended_by_vad_after_the_user_resumes() -> None:
+    recognition, committed = _make_stt_turn_recognition(min_delay=0.0)
+    try:
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "I need the OTP.")
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        assert committed == ["I need the OTP."]
+
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_vad_end(recognition)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "For the")
+        assert committed == ["I need the OTP."]
+
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        assert committed == ["I need the OTP.", "For the"]
+    finally:
+        if recognition._end_of_turn_task is not None:
+            await aio.cancel_and_wait(recognition._end_of_turn_task)
+        await _close_test_session(recognition._session)
+
+
+async def test_stt_cleared_turn_waits_for_its_own_end_of_speech() -> None:
+    recognition, committed = _make_stt_turn_recognition(min_delay=0.0)
+    try:
+        await _send_stt_event(recognition, SpeechEventType.START_OF_SPEECH)
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "I need the OTP.")
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        assert committed == ["I need the OTP."]
+
+        recognition._clear_user_turn()
+        await _send_stt_event(recognition, SpeechEventType.FINAL_TRANSCRIPT, "For the guard.")
+        assert committed == ["I need the OTP."]
+
+        await _send_stt_event(recognition, SpeechEventType.END_OF_SPEECH)
+        assert committed == ["I need the OTP.", "For the guard."]
+    finally:
+        if recognition._end_of_turn_task is not None:
+            await aio.cancel_and_wait(recognition._end_of_turn_task)
+        await _close_test_session(recognition._session)
+
+
 async def test_backchannel_boundary_releases_end_boundary_transcript() -> None:
     actions = FakeActions()
     session = create_session(
@@ -1485,6 +1879,107 @@ async def test_stt_errors_use_unrecoverable_error_tolerance() -> None:
         await session._closing_task
     finally:
         await _close_test_session(session)
+
+
+async def test_reset_away_timer_restarts_the_full_timeout() -> None:
+    async with AgentSession(
+        vad=None, turn_handling={"turn_detection": None}, user_away_timeout=3.0
+    ) as session:
+        user_states: list[str] = []
+        session.on("user_state_changed", lambda ev: user_states.append(ev.new_state))
+        await session.start(MyAgent())
+
+        for _ in range(2):
+            await asyncio.sleep(2.0)
+            session.reset_away_timer()
+
+        await asyncio.sleep(2.0)
+        assert session.user_state == "listening"
+        assert user_states == []
+
+        await asyncio.sleep(2.0)
+        assert session.user_state == "away"
+        assert user_states == ["away"]
+
+
+@pytest.mark.parametrize("agent_state", ["listening", "speaking", "thinking"])
+async def test_reset_away_timer_returns_away_user_to_listening(agent_state: AgentState) -> None:
+    async with AgentSession(
+        vad=None, turn_handling={"turn_detection": None}, user_away_timeout=3.0
+    ) as session:
+        transitions: list[tuple[str, str]] = []
+        session.on(
+            "user_state_changed", lambda ev: transitions.append((ev.old_state, ev.new_state))
+        )
+        await session.start(MyAgent())
+        await asyncio.sleep(4.0)
+        assert session.user_state == "away"
+
+        session._update_agent_state(agent_state)
+        session.reset_away_timer()
+        assert session.user_state == "listening"
+        assert transitions == [("listening", "away"), ("away", "listening")]
+
+        await asyncio.sleep(2.0)
+        assert session.user_state == "listening"
+        await asyncio.sleep(2.0)
+        assert session.user_state == ("away" if agent_state == "listening" else "listening")
+
+
+@pytest.mark.parametrize(
+    ("user_state", "agent_state"),
+    [("speaking", "listening"), ("listening", "speaking"), ("listening", "thinking")],
+)
+async def test_reset_away_timer_preserves_active_turns(
+    user_state: UserState, agent_state: AgentState
+) -> None:
+    async with AgentSession(
+        vad=None, turn_handling={"turn_detection": None}, user_away_timeout=3.0
+    ) as session:
+        await session.start(MyAgent())
+        session._update_user_state(user_state)
+        session._update_agent_state(agent_state)
+
+        session.reset_away_timer()
+        await asyncio.sleep(4.0)
+        assert session.user_state == user_state
+        assert session.agent_state == agent_state
+
+        session._update_user_state("listening")
+        session._update_agent_state("listening")
+        await asyncio.sleep(4.0)
+        assert session.user_state == "away"
+
+
+async def test_reset_away_timer_is_noop_when_disabled() -> None:
+    async with AgentSession(
+        vad=None, turn_handling={"turn_detection": None}, user_away_timeout=None
+    ) as session:
+        await session.start(MyAgent())
+        session.reset_away_timer()
+        await asyncio.sleep(30.0)
+        assert session.user_state == "listening"
+        assert session._user_away_timer is None
+
+
+async def test_reset_away_timer_is_noop_outside_session_lifetime() -> None:
+    async with AgentSession(
+        vad=None, turn_handling={"turn_detection": None}, user_away_timeout=3.0
+    ) as session:
+        session.reset_away_timer()
+        assert session._user_away_timer is None
+
+        await session.start(MyAgent())
+        timer = session._user_away_timer
+        session.shutdown()
+        session.reset_away_timer()
+        assert session._user_away_timer is timer
+
+        await session.aclose()
+        session.reset_away_timer()
+        await asyncio.sleep(4.0)
+        assert session.user_state == "listening"
+        assert session._user_away_timer is None
 
 
 async def test_final_transcript_resets_away_timer_when_not_speaking() -> None:
@@ -1757,7 +2252,7 @@ async def test_vad_fallback_uses_next_vad_inference_event(
                 speaking=True,
             )
         )
-        current_speech.interrupt.assert_called_once_with()
+        current_speech.interrupt.assert_called_once_with(source="audio_activity")
         assert any(
             record.levelno == logging.INFO
             and "falling back to VAD-based interruption" in record.message
@@ -2056,6 +2551,43 @@ async def test_preemptive_generation(preemptive_generation: dict, expected_laten
 
 
 @pytest.mark.parametrize(
+    "preflight, final, expected",
+    [
+        ("hello how are you", "Hello, how are you?", True),
+        ("مرحبا كيف حالك", "مرحبا، كيف حالك؟", True),
+        ("نعم أريد الحجز", "نعم، أريد الحجز؛", True),
+        ("آپ کیسے ہیں", "آپ کیسے ہیں۔", True),
+        ("आप कैसे हैं", "आप कैसे हैं।", True),
+        ("你好 我很好", "你好，我很好。", True),
+        # different words must still invalidate the preemptive generation
+        ("مرحبا كيف حالك", "مرحبا كيف حالكم؟", False),
+    ],
+)
+def test_preemptive_transcripts_equivalent(preflight: str, final: str, expected: bool) -> None:
+    assert _transcripts_equivalent(preflight, final) is expected
+
+
+@pytest.mark.parametrize(
+    "preemptive_generation, expected",
+    [
+        # bool form: the legacy on/off flag
+        (True, {"enabled": True, "preemptive_tts": False}),
+        (False, {"enabled": False, "preemptive_tts": False}),
+        # dict form: an options mapping, documented on the same kwarg (#7343)
+        ({"enabled": False}, {"enabled": False, "preemptive_tts": False}),
+        ({"enabled": True, "preemptive_tts": True}, {"enabled": True, "preemptive_tts": True}),
+    ],
+)
+async def test_deprecated_preemptive_generation_kwarg(
+    preemptive_generation: bool | dict, expected: dict
+) -> None:
+    session = AgentSession(preemptive_generation=preemptive_generation)
+    opts = session.options.preemptive_generation
+    assert {k: opts[k] for k in expected} == expected
+    assert isinstance(opts["enabled"], bool)
+
+
+@pytest.mark.parametrize(
     "session_preemptive, agent_preemptive, expected_latency",
     [
         # agent disables what the session enabled -> no preemptive generation (1.1s)
@@ -2339,6 +2871,9 @@ class _TestRecognitionHooks:
         return True
 
     def on_preemptive_generation(self, info: object) -> None:
+        pass
+
+    def on_preflight_stale(self, info: object) -> None:
         pass
 
     def retrieve_chat_ctx(self) -> ChatContext:

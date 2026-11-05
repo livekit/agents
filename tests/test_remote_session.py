@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import logging
 from collections.abc import AsyncIterator
 from unittest.mock import AsyncMock, MagicMock
@@ -11,6 +12,7 @@ from livekit.agents.llm import ChatContext, ChatMessage
 from livekit.agents.metrics import AgentSessionUsage
 from livekit.agents.voice import remote_session as remote_session_module
 from livekit.agents.voice.remote_session import (
+    TOPIC_SESSION_MESSAGES,
     RemoteSession,
     RoomSessionTransport,
     SessionHost,
@@ -58,6 +60,44 @@ class PairedTransport(SessionTransport):
             raise StopAsyncIteration from None
 
 
+class _ControllableTransport(SessionTransport):
+    """A transport whose receive side terminates when the test asks it to."""
+
+    def __init__(self) -> None:
+        self.sent = asyncio.Event()
+        self.disconnect = asyncio.Event()
+        self.receive_error: Exception | None = None
+
+    async def start(self) -> None:
+        pass
+
+    async def send_message(self, msg: agent_pb.AgentSessionMessage) -> None:
+        self.sent.set()
+
+    async def close(self) -> None:
+        self.disconnect.set()
+
+    def __aiter__(self) -> AsyncIterator[agent_pb.AgentSessionMessage]:
+        return self
+
+    async def __anext__(self) -> agent_pb.AgentSessionMessage:
+        await self.disconnect.wait()
+        if self.receive_error is not None:
+            raise self.receive_error
+        raise StopAsyncIteration
+
+
+class _SendFailsAfterDisconnectTransport(_ControllableTransport):
+    def __init__(self) -> None:
+        super().__init__()
+        self.fail_send = asyncio.Event()
+
+    async def send_message(self, msg: agent_pb.AgentSessionMessage) -> None:
+        self.sent.set()
+        await self.fail_send.wait()
+        raise RuntimeError("send failed")
+
+
 def _make_mock_session() -> MagicMock:
     session = MagicMock()
     session.on = MagicMock()
@@ -96,6 +136,147 @@ def _make_mock_session() -> MagicMock:
     session.usage = usage
 
     return session
+
+
+@pytest.mark.asyncio
+async def test_cancelled_request_is_removed_from_pending_requests():
+    transport = _ControllableTransport()
+    client = RemoteSession(transport)
+    await client.start()
+
+    request_task = asyncio.create_task(client.run("hello"))
+    await transport.sent.wait()
+    request_task.cancel()
+
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await request_task
+
+        assert not client._pending_requests
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_request_before_start_reports_session_not_started():
+    client = RemoteSession(_ControllableTransport())
+
+    with pytest.raises(RuntimeError, match="remote session not started"):
+        await client.run("hello")
+
+
+@pytest.mark.asyncio
+async def test_transport_eof_fails_pending_request_immediately():
+    transport = _ControllableTransport()
+    client = RemoteSession(transport)
+    await client.start()
+
+    request_task = asyncio.create_task(client.run("hello"))
+    await transport.sent.wait()
+    transport.disconnect.set()
+
+    try:
+        with pytest.raises(RuntimeError, match="remote session transport closed"):
+            await asyncio.wait_for(request_task, timeout=1.0)
+
+        assert not client._pending_requests
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_request_after_transport_eof_fails_immediately():
+    transport = _ControllableTransport()
+    client = RemoteSession(transport)
+    await client.start()
+
+    transport.disconnect.set()
+    assert client._recv_task is not None
+    await client._recv_task
+
+    try:
+        with pytest.raises(RuntimeError, match="remote session transport closed"):
+            await asyncio.wait_for(client.run("hello"), timeout=1.0)
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_receive_error_fails_pending_request_without_exposing_cause():
+    transport = _ControllableTransport()
+    client = RemoteSession(transport)
+    await client.start()
+
+    request_task = asyncio.create_task(client.run("hello"))
+    await transport.sent.wait()
+    transport.receive_error = RuntimeError("receive failed")
+    transport.disconnect.set()
+
+    try:
+        with pytest.raises(RuntimeError, match="remote session transport closed") as exc_info:
+            await asyncio.wait_for(request_task, timeout=1.0)
+
+        assert exc_info.value.__cause__ is None
+        assert not client._pending_requests
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_wait_for_ready_fails_immediately_after_transport_eof():
+    transport = _ControllableTransport()
+    client = RemoteSession(transport)
+    await client.start()
+
+    transport.disconnect.set()
+    assert client._recv_task is not None
+    await client._recv_task
+
+    try:
+        with pytest.raises(RuntimeError, match="remote session transport closed"):
+            await asyncio.wait_for(
+                client.wait_for_ready(timeout=10.0, retry_interval=1.0), timeout=0.5
+            )
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_receive_and_send_failures_do_not_leak_future_exception():
+    transport = _SendFailsAfterDisconnectTransport()
+    client = RemoteSession(transport)
+    await client.start()
+
+    loop = asyncio.get_running_loop()
+    original_handler = loop.get_exception_handler()
+    unhandled: list[dict[str, object]] = []
+    loop.set_exception_handler(lambda _loop, context: unhandled.append(context))
+
+    request_task = asyncio.create_task(client.run("hello"))
+    await transport.sent.wait()
+    pending_future = next(iter(client._pending_requests.values()))
+    transport.disconnect.set()
+    assert client._recv_task is not None
+    await client._recv_task
+    transport.fail_send.set()
+
+    try:
+        with pytest.raises(RuntimeError, match="send failed"):
+            await request_task
+
+        del pending_future
+        del request_task
+        gc.collect()
+        await asyncio.sleep(0)
+
+        assert not [
+            context
+            for context in unhandled
+            if context.get("message") == "Future exception was never retrieved"
+        ]
+    finally:
+        loop.set_exception_handler(original_handler)
+        await client.aclose()
 
 
 @pytest.mark.asyncio
@@ -265,15 +446,12 @@ def _fake_room(*, connected: bool = True, stream_error: Exception | None = None)
     room = MagicMock()
     room.isconnected = MagicMock(return_value=connected)
 
-    async def _stream_bytes(**kwargs):
+    async def _send_bytes(data, **kwargs):
         if stream_error is not None:
             raise stream_error
-        writer = MagicMock()
-        writer.write = AsyncMock()
-        writer.aclose = AsyncMock()
-        return writer
+        return MagicMock()
 
-    room.local_participant.stream_bytes = _stream_bytes
+    room.local_participant.send_bytes = _send_bytes
     return room
 
 
@@ -305,26 +483,53 @@ async def test_room_transport_serializes_concurrent_sends():
     overlapping = False
     in_flight = 0
 
-    async def _stream_bytes(**kwargs):
+    async def _send_bytes(data, **kwargs):
         nonlocal overlapping, in_flight
         in_flight += 1
         if in_flight > 1:
             overlapping = True
         await asyncio.sleep(0.01)  # a real send yields several times
         in_flight -= 1
-        writer = MagicMock()
-        writer.write = AsyncMock()
-        writer.aclose = AsyncMock()
-        return writer
+        return MagicMock()
 
     room = _fake_room()
-    room.local_participant.stream_bytes = _stream_bytes
+    room.local_participant.send_bytes = _send_bytes
     transport = RoomSessionTransport(room)
 
     await asyncio.gather(
         *(transport.send_message(agent_pb.AgentSessionMessage()) for _ in range(8))
     )
     assert not overlapping
+
+
+@pytest.mark.asyncio
+async def test_room_transport_sends_each_message_in_one_call():
+    """Each message is a single one-shot send, not an incremental stream.
+
+    A one-shot send lets the SDK put a small message in a single packet (and
+    compress a large one) for clients that support it; an incremental stream
+    always costs a header, a chunk and a trailer packet per message.
+    """
+    room = _fake_room()
+    room.local_participant.send_bytes = AsyncMock()
+    room.local_participant.stream_bytes = AsyncMock()
+    transport = RoomSessionTransport(room, remote_identity="user-1")
+
+    msg = agent_pb.AgentSessionMessage(
+        event=agent_pb.AgentSessionEvent(
+            agent_state_changed=agent_pb.AgentSessionEvent.AgentStateChanged(
+                old_state=agent_pb.AS_LISTENING, new_state=agent_pb.AS_SPEAKING
+            )
+        )
+    )
+    await transport.send_message(msg)
+
+    room.local_participant.stream_bytes.assert_not_called()
+    room.local_participant.send_bytes.assert_awaited_once()
+    args, kwargs = room.local_participant.send_bytes.await_args
+    assert args == (msg.SerializeToString(),)
+    assert kwargs["topic"] == TOPIC_SESSION_MESSAGES
+    assert kwargs["destination_identities"] == ["user-1"]
 
 
 class _FailingTransport(PairedTransport):

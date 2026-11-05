@@ -15,6 +15,7 @@ import pytest
 
 from livekit.agents.inference.stt import STT
 from livekit.agents.llm import AgentHandoff, ChatMessage
+from livekit.agents.stt import FallbackAdapter
 from livekit.agents.voice.events import ConversationItemAddedEvent
 
 pytestmark = pytest.mark.unit
@@ -40,7 +41,11 @@ def _assistant_item_event(text: str) -> ConversationItemAddedEvent:
 
 def test_chat_context_capability_on_for_u3_pro_family():
     """The chat_context capability follows the model's native support (U3 Pro family)."""
-    for model in ("assemblyai/u3-rt-pro", "assemblyai/universal-3-5-pro"):
+    for model in (
+        "assemblyai/u3-rt-pro",
+        "assemblyai/universal-3-5-pro",
+        "assemblyai/universal-3-6-pro",
+    ):
         stt = _make_stt(model=model)
         assert stt.capabilities.chat_context is True
 
@@ -114,6 +119,34 @@ def test_carryover_ignores_agent_handoff_items():
         ConversationItemAddedEvent(item=AgentHandoff(new_agent_id="agent-2"))
     )
     assert stt._opts.extra_kwargs.get("agent_context") is None
+
+
+def test_carryover_skipped_for_models_without_native_support():
+    """A model that cannot read agent_context never gets it."""
+    stt = _make_stt(model="openai/gpt-live-transcribe")
+    stt._push_conversation_item(_assistant_item_event("What is your date of birth?"))
+    assert "agent_context" not in stt._opts.extra_kwargs
+
+
+def test_carryover_reaches_only_fallback_instances_with_native_support():
+    """A FallbackAdapter forwards each item to every STT; only the U3 Pro one keeps it."""
+    u3 = _make_stt(model="assemblyai/universal-3-6-pro")
+    openai = _make_stt(model="openai/gpt-live-transcribe")
+    adapter = FallbackAdapter(stt=[openai, u3])
+    assert adapter.capabilities.chat_context is True
+
+    adapter._push_conversation_item(_assistant_item_event("What is your date of birth?"))
+
+    assert u3._opts.extra_kwargs.get("agent_context") == "What is your date of birth?"
+    assert "agent_context" not in openai._opts.extra_kwargs
+
+
+def test_carryover_stops_after_switch_to_model_without_native_support():
+    """The session's subscription outlives update_options(model=...); the new model gates it."""
+    stt = _make_stt(model="assemblyai/universal-3-6-pro")
+    stt.update_options(model="openai/gpt-live-transcribe")
+    stt._push_conversation_item(_assistant_item_event("What is your date of birth?"))
+    assert "agent_context" not in stt._opts.extra_kwargs
 
 
 def test_agent_context_set_via_extra_kwargs():

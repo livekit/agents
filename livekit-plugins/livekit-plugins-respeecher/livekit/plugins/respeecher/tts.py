@@ -163,7 +163,6 @@ class TTS(tts.TTS):
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
         )
-        self._retired_pools: list[utils.ConnectionPool[aiohttp.ClientWebSocketResponse]] = []
 
     @property
     def model(self) -> str:
@@ -175,14 +174,23 @@ class TTS(tts.TTS):
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
-        # WebSocket protocol does not support custom headers, using query parameter
         ws_url = self._opts.base_url.replace("https://", "wss://").replace("http://", "ws://")
         if not ws_url.startswith("wss://"):
             logger.error("Insecure WebSocket connection detected, wss:// required")
             raise APIConnectionError("Secure WebSocket connection (wss://) required")
 
-        full_ws_url = f"{ws_url}{self._opts.model}/tts/websocket?api_key={self._opts.api_key}&source={API_VERSION_HEADER}&version={API_VERSION}"
-        return await asyncio.wait_for(session.ws_connect(full_ws_url), timeout)
+        full_ws_url = f"{ws_url}{self._opts.model}/tts/websocket"
+        return await asyncio.wait_for(
+            session.ws_connect(
+                full_ws_url,
+                headers={
+                    API_AUTH_HEADER: self._opts.api_key,
+                    API_VERSION_HEADER: API_VERSION,
+                },
+                params={"source": "livekit", "version": API_VERSION},
+            ),
+            timeout,
+        )
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         await ws.close()
@@ -202,16 +210,11 @@ class TTS(tts.TTS):
         """Update TTS options"""
         if is_given(model) and model != self._opts.model:
             self._opts.model = model
-            # The model is baked into the WebSocket URL, so existing pooled
-            # connections can't serve the new model. Retire the old pool
-            # (letting any in-flight stream finish using its connection) and
-            # route new requests through a fresh pool. The retired pool is
-            # closed during aclose().
-            self._retired_pools.append(self._pool)
-            self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
-                connect_cb=self._connect_ws,
-                close_cb=self._close_ws,
-            )
+            # The model is baked into the WebSocket URL, so pooled connections
+            # can't serve the new one. invalidate() stops reusing them: idle ones
+            # are closed on the next drain, and one a stream is still using keeps
+            # working until it is returned, then is closed.
+            self._pool.invalidate()
 
         if is_given(voice_id):
             self._opts.voice_id = voice_id
@@ -239,9 +242,6 @@ class TTS(tts.TTS):
 
         self._streams.clear()
         await self._pool.aclose()
-        for pool in self._retired_pools:
-            await pool.aclose()
-        self._retired_pools.clear()
 
 
 class ChunkedStream(tts.ChunkedStream):

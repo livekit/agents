@@ -58,7 +58,7 @@ def to_chat_ctx(
             for content in msg.content:
                 if isinstance(content, llm.ImageContent):
                     current_content.append(_build_image(content))
-                elif isinstance(content, llm.AudioContent):
+                elif isinstance(content, (llm.AudioContent, llm.CacheBreakpoint)):
                     pass
                 elif content:
                     # str or Instructions

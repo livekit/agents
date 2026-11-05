@@ -63,6 +63,18 @@ class UserTextMessageEvent(UltravoxEvent):
     )
 
 
+class ForcedAgentMessageEvent(UltravoxEvent):
+    """Instructs the agent to speak text verbatim (ForcedAgentMessage in Ultravox docs)."""
+
+    type: Literal["forced_agent_message"] = "forced_agent_message"
+    content: str = Field("", description="Text the agent should speak")
+    uninterruptible: bool | None = Field(
+        None, description="Prevents user interruption while the agent speaks this message"
+    )
+    urgency: Literal["immediate", "soon"] | None = Field(None, description="Message urgency level")
+    thread_id: str | None = Field(None, alias="threadId", description="Target thread identifier")
+
+
 class SetOutputMediumEvent(UltravoxEvent):
     """Message to set the server's output medium."""
 
@@ -158,6 +170,7 @@ class PlaybackClearBufferEvent(UltravoxEvent):
 UltravoxEventType = (
     PingEvent
     | UserTextMessageEvent
+    | ForcedAgentMessageEvent
     | SetOutputMediumEvent
     | ClientToolResultEvent
     | CallStartedEvent

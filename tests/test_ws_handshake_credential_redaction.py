@@ -44,24 +44,27 @@ def _assert_redacted(err: APIStatusError) -> None:
     assert err.__cause__ is None
 
 
-@pytest.mark.plugin("deepgram")
+@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_deepgram_stt_redacts_api_key_from_handshake_error():
     from livekit.plugins.deepgram import STT
 
-    stt = STT(api_key=SECRET_API_KEY)
-    stream = stt.stream()
-    stream._session = _session_raising(
-        _handshake_error("api.deepgram.com", "Authorization", f"Token {SECRET_API_KEY}")
+    stt = STT(
+        api_key=SECRET_API_KEY,
+        http_session=_session_raising(
+            _handshake_error("api.deepgram.com", "Authorization", f"Token {SECRET_API_KEY}")
+        ),
     )
+    stream = stt.stream()
 
     with pytest.raises(APIStatusError) as exc_info:
         await stream._connect_ws()
 
+    await stream.aclose()
     _assert_redacted(exc_info.value)
 
 
-@pytest.mark.plugin("xai")
+@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_xai_tts_redacts_api_key_from_handshake_error():
     from livekit.plugins.xai import TTS
