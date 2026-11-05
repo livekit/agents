@@ -5,6 +5,7 @@
 use std::time::SystemTime;
 
 use crate::MediaRef;
+use crate::utils::video::RtcVideoFrame;
 use serde_json::{Map, Value};
 
 use crate::llm::chat_context::{
@@ -38,11 +39,16 @@ impl Default for ToDictOptions {
     }
 }
 
+/// Renders an image's host frame as its dump.
+pub type FrameRenderer = dyn Fn(&dyn RtcVideoFrame) -> Value;
+
 #[derive(Default, Clone, Copy)]
 pub struct ToDictHost<'a> {
     /// `None` is fine while media is excluded; reaching media without it is
     /// [`ToDictError::MediaNotRenderable`], never `null`.
     pub media: Option<&'a dyn Fn(&MediaRef) -> Value>,
+    /// The same for an image's host frame.
+    pub frame: Option<&'a FrameRenderer>,
     /// `Some` *is* `strip_markup=True`.
     pub strip_expr_markup: Option<&'a dyn Fn(&str) -> String>,
 }
@@ -101,6 +107,13 @@ impl DumpCx<'_> {
     fn media(&self, r: &MediaRef, kind: &'static str) -> Dumped {
         match self.host.media {
             Some(render) => Ok(Some(render(r))),
+            None => Err(ToDictError::MediaNotRenderable { kind }),
+        }
+    }
+
+    fn frame(&self, frame: &dyn RtcVideoFrame, kind: &'static str) -> Dumped {
+        match self.host.frame {
+            Some(render) => Ok(Some(render(frame))),
             None => Err(ToDictError::MediaNotRenderable { kind }),
         }
     }
@@ -165,7 +178,7 @@ impl ModelDump for ImageSource {
     fn model_dump(&self, cx: &DumpCx<'_>, at: &'static str) -> Dumped {
         match self {
             ImageSource::Url(u) => Ok(Some(u.as_str().into())),
-            ImageSource::Frame(r) => cx.media(r, at),
+            ImageSource::Frame(frame) => cx.frame(frame.as_ref(), at),
         }
     }
 }
@@ -221,6 +234,7 @@ mod tests {
         ImageContent, MetricsMetadata, MetricsReport,
     };
     use crate::testkit::{t, text};
+    use crate::utils::video::FakeFrame;
 
     struct NoopTable;
     impl RefRegistry for NoopTable {
@@ -237,8 +251,12 @@ mod tests {
         json!({ "ref": r.id() })
     }
 
+    fn fake_frame(frame: &dyn RtcVideoFrame) -> Value {
+        json!({ "ref": FakeFrame::id_of(frame) })
+    }
+
     fn host() -> ToDictHost<'static> {
-        ToDictHost { media: Some(&fake_media), strip_expr_markup: None }
+        ToDictHost { media: Some(&fake_media), frame: Some(&fake_frame), strip_expr_markup: None }
     }
 
     fn dump_with(items: Vec<ChatItem>, opts: ToDictOptions, host: &ToDictHost<'_>) -> Dumped {
@@ -404,7 +422,7 @@ mod tests {
         // Every optional field set, so swapped fields cannot cancel out as two `None`s.
         let img = ImageContent {
             id: "img_1".into(),
-            image: ImageSource::Frame(media_ref(4)),
+            image: ImageSource::Frame(FakeFrame::shared(4)),
             inference_width: Some(10),
             inference_height: Some(20),
             inference_detail: InferenceDetail::High,
@@ -426,7 +444,7 @@ mod tests {
     fn a_frame_without_a_renderer_is_an_error_not_a_null() {
         let img = ImageContent {
             id: "img_1".into(),
-            image: ImageSource::Frame(media_ref(4)),
+            image: ImageSource::Frame(FakeFrame::shared(4)),
             inference_width: None,
             inference_height: None,
             inference_detail: InferenceDetail::Auto,

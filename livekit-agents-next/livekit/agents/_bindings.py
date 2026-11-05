@@ -861,6 +861,13 @@ async def next_video_frame(source: io.VideoInput) -> rtc_wire.VideoFrameRef | No
     )
 
 
+def rgba_frame(frame: rtc.VideoFrame) -> rtc.VideoFrame:
+    """The core's read of a frame it encodes: its pixels as RGBA, converted from any other type."""
+    if frame.type == rtc.VideoBufferType.RGBA:
+        return frame
+    return frame.convert(rtc.VideoBufferType.RGBA)
+
+
 def audio_output_capabilities(output: io.AudioOutput) -> io.AudioOutputCapabilities:
     """What the core reads of an ``io.AudioOutput`` once: whether its whole chain can pause."""
     from .voice import io

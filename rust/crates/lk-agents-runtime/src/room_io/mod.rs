@@ -9,6 +9,7 @@ pub mod pre_connect_audio;
 use self::output::transcription::SegmentIds;
 use crate::rtc::wait;
 use crate::telemetry;
+use lk_agents_abi::utils::video::RtcVideoFrame;
 use lk_agents_abi::voice::io;
 use lk_agents_abi::voice::room_io::RoomIoConfig;
 use lk_agents_abi::voice::room_owner;
@@ -168,8 +169,8 @@ impl room_owner::RoomVideoInput for RoomVideoInput {
         self.0.reading()
     }
 
-    async fn read_frame(&self) -> io::Result<Option<lk_agents_abi::MediaRef>> {
-        self.0.next_frame(&telemetry::Cx::NONE).await.map(|frame| frame.map(|frame| frame.media))
+    async fn read_frame(&self) -> io::Result<Option<Arc<dyn RtcVideoFrame>>> {
+        self.0.next_frame(&telemetry::Cx::NONE).await.map(|frame| frame.map(|frame| frame.frame))
     }
 
     async fn aclose(&self) -> io::Result<()> {

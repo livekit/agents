@@ -23,9 +23,11 @@ mod bench {
     use std::time::{Duration, Instant};
 
     use lk_agents_abi::AudioFrame;
-    use lk_agents_abi::media::images::{ImageEncodeOptions, ImageInput};
+    use lk_agents_abi::media::images::{
+        ImageEncodeOptions, ImageFormat, ImageInput, ResizeStrategy,
+    };
     use lk_agents_abi::recorder::{AudioRecorder, SessionRecorder as RecorderClass};
-    use lk_agents_abi::utils::video::VideoFrame;
+    use lk_agents_abi::utils::video::{VideoBufferType, VideoFrame};
     use lk_agents_runtime::recording::SessionRecorder;
     use serde_json::{Value, json};
     use tokio::sync::oneshot;
@@ -427,18 +429,20 @@ mod bench {
         count: usize,
         resize: bool,
     ) -> Result<Value, Error> {
-        let frame = VideoFrame { width, height, buffer_type: 0, data: rgba.to_vec().into() };
+        let frame = VideoFrame {
+            width,
+            height,
+            buffer_type: VideoBufferType::Rgba,
+            data: rgba.to_vec().into(),
+        };
         let options = ImageEncodeOptions {
-            format: "JPEG".into(),
+            format: ImageFormat::Jpeg,
             quality: Some(75),
             resize_width: resize.then_some(1024),
             resize_height: resize.then_some(1024),
-            resize_strategy: resize.then(|| "center_aspect_fit".into()),
+            resize_strategy: resize.then_some(ResizeStrategy::CenterAspectFit),
         };
         let media_pool = lk_agents_media::pool::media_pool();
-        let images: std::sync::Arc<
-            dyn lk_agents_abi::llm::provider_format::ImageResolver + Send + Sync,
-        > = std::sync::Arc::new(lk_agents_media::images::Images::default());
         let (stop, heartbeat, observations) = start_heartbeat().await;
         let mut encoded = 0;
         let mut waves = 0;
@@ -452,12 +456,11 @@ mod bench {
                 let (prepared, cpu, maximum) =
                     measure_polls(lk_agents_runtime::inference::images::prepare_on(
                         &media_pool,
-                        images.clone(),
                         ImageInput::Frame(frame.clone()),
                         options.clone(),
                     ))
                     .await;
-                encoded += prepared?.0.ok_or("image preparation returned no bytes")?.len();
+                encoded += prepared?.data.ok_or("image preparation returned no bytes")?.len();
                 poll_cpu.extend(cpu);
                 poll_max_ms = poll_max_ms.max(maximum);
                 max_encode_ms = max_encode_ms.max(start.elapsed().as_secs_f64() * 1000.);

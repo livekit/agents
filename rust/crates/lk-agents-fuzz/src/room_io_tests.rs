@@ -18,7 +18,7 @@ use lk_agents_abi::voice::rtc::{
 };
 use lk_agents_abi::{
     ATTRIBUTE_TRANSCRIPTION_FINAL, ATTRIBUTE_TRANSCRIPTION_TRACK_ID, AudioFrame, Closed,
-    HOST_TEARDOWN_TIMEOUT, MediaRef, RefRegistry, StreamOutput, TOPIC_CHAT, Ts, VirtualClock,
+    HOST_TEARDOWN_TIMEOUT, StreamOutput, TOPIC_CHAT, Ts, VirtualClock, utils::video::FakeFrame,
 };
 use lk_agents_fuzz::fakes::room::{
     FailingProcessors, FakeRemoteParticipant, FakeRoom, FakeRtc, FakeTrackPublication, Faults,
@@ -679,17 +679,17 @@ async fn a_source_change_drops_the_old_tracks_queued_audio_and_video() {
     yields(4).await;
     let cx = lk_agents_abi::telemetry::Cx::NONE;
     let tone = |tag: u8| AudioFrame::new(vec![tag; 960], 24_000, 1, 480);
-    let registry: Arc<dyn RefRegistry> = Arc::new(NoRefs);
     let picture = |id: u64| VideoFrameRef {
-        media: MediaRef::new(id, &registry),
+        frame: FakeFrame::shared(id),
         width: 2,
         height: 2,
         timestamp_us: 0,
     };
+    let id = |frame: VideoFrameRef| FakeFrame::id_of(frame.frame.as_ref());
     old_mic.push_frame(tone(1));
     old_cam.push_video_frame(picture(1));
     assert_eq!(audio.next_frame(&cx).await.unwrap().unwrap().data.as_ref(), &[1; 960]);
-    assert_eq!(video.next_frame(&cx).await.unwrap().unwrap().media.id(), 1);
+    assert_eq!(id(video.next_frame(&cx).await.unwrap().unwrap()), Some(1));
     old_mic.push_frame(tone(2));
     old_cam.push_video_frame(picture(2));
     yields(4).await;
@@ -707,7 +707,7 @@ async fn a_source_change_drops_the_old_tracks_queued_audio_and_video() {
     audio.aclose().await;
     video.aclose().await;
     assert_eq!(heard.data.as_ref(), &[3; 960], "the old track's queued audio is dropped");
-    assert_eq!(seen.media.id(), 3, "the old track's queued video is dropped");
+    assert_eq!(id(seen), Some(3), "the old track's queued video is dropped");
 }
 
 #[tokio::test]

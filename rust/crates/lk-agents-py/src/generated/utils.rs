@@ -511,6 +511,108 @@ impl MovingAverage {
     }
 }
 
+// Declared in rust/crates/lk-agents-abi/src/utils/video.rs.
+
+/// [`::lk_agents_abi::utils::video::RtcVideoFrame`] over a host `livekit.rtc.VideoFrame`.
+#[derive(Clone)]
+pub struct RtcVideoFrameProxy {
+    host: ::std::sync::Arc<Py<PyAny>>,
+    /// The host object it was taken from, handed back as itself.
+    source: ::std::sync::Arc<Py<PyAny>>,
+}
+
+impl RtcVideoFrameProxy {
+    /// A registered native class as itself, any other host object behind this proxy.
+    pub fn from_host(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::utils::video::RtcVideoFrame>> {
+        if let Some(native) =
+            crate::py_objects::native::<dyn ::lk_agents_abi::utils::video::RtcVideoFrame>(obj)
+        {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
+    }
+
+    /// A host object a call returned, its calls run in a copy of the context that call ran in.
+    pub fn in_context(
+        obj: &Bound<'_, PyAny>,
+        context: &::lk_agents_abi::utils::host_ref::HostRef,
+    ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::utils::video::RtcVideoFrame>> {
+        if let Some(native) =
+            crate::py_objects::native::<dyn ::lk_agents_abi::utils::video::RtcVideoFrame>(obj)
+        {
+            return Ok(native);
+        }
+        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
+    }
+
+    /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
+    pub fn owned(
+        obj: &Bound<'_, PyAny>,
+    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::utils::video::RtcVideoFrame>> {
+        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
+    }
+
+    fn take(
+        obj: &Bound<'_, PyAny>,
+        context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
+    ) -> PyResult<Self> {
+        let source = ::std::sync::Arc::new(obj.clone().unbind());
+        let _ = context;
+        Ok(RtcVideoFrameProxy { host: ::std::sync::Arc::new(obj.clone().unbind()), source })
+    }
+}
+
+impl RtcVideoFrameProxy {
+    /// The host object behind a proxy of `::lk_agents_abi::utils::video::RtcVideoFrame`; a native implementation has none.
+    pub fn to_host<'py>(
+        py: Python<'py>,
+        value: ::std::sync::Arc<dyn ::lk_agents_abi::utils::video::RtcVideoFrame>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let any: ::std::sync::Arc<dyn ::std::any::Any + Send + Sync> = value;
+        match any.downcast::<Self>() {
+            Ok(proxy) => Ok(proxy.source.bind(py).clone()),
+            Err(_) => Err(::pyo3::exceptions::PyTypeError::new_err(
+                "a native `RtcVideoFrame` has no host object to hand back",
+            )),
+        }
+    }
+}
+
+impl ::lk_agents_abi::utils::video::RtcVideoFrame for RtcVideoFrameProxy {
+    fn rgba(
+        &self,
+    ) -> ::std::result::Result<
+        ::lk_agents_abi::utils::video::VideoFrame,
+        ::lk_agents_abi::errors::HostError,
+    > {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let out = ::lk_agents_runtime::host::call_now(
+            &crate::py_calls::Entry,
+            ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [host.bind(py).clone()];
+                Ok((
+                    py.import("livekit.agents._bindings")?.getattr("rgba_frame")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
+            }),
+        );
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.value.bind(py);
+            let out = (crate::generated::records::rtc_frames::video_frame_from_py(o.as_any())).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
+            Ok(out)
+        })
+    }
+}
+
 impl crate::py_errors::HostException for ::lk_agents_abi::utils::dates::DateError {
     fn to_py_err(&self) -> ::pyo3::PyErr {
         ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))

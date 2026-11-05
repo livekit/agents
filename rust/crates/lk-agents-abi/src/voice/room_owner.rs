@@ -66,7 +66,9 @@ pub trait RoomVideoInput: Send + Sync + Sized + 'static {
     #[host(getter)]
     fn reading(&self) -> Option<TrackSid>;
     #[host(await, name = "next_frame")]
-    async fn read_frame(&self) -> Result<Option<crate::MediaRef>>;
+    async fn read_frame(
+        &self,
+    ) -> Result<Option<std::sync::Arc<dyn crate::utils::video::RtcVideoFrame>>>;
     #[host(await)]
     async fn aclose(&self) -> Result<()>;
 }

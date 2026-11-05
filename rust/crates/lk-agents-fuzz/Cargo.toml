@@ -16,7 +16,8 @@ doctest = false
 
 [dependencies]
 lk-agents-voice = { path = "../lk-agents-voice", default-features = false }
-lk-agents-abi = { path = "../lk-agents-abi" }
+# The camera fakes' frames have no host behind them (`utils::video::FakeFrame`).
+lk-agents-abi = { path = "../lk-agents-abi", features = ["testkit"] }
 lk-agents-core = { path = "../lk-agents-core" }
 lk-agents-runtime = { path = "../lk-agents-runtime", default-features = false, features = ["dst"] }
 # The avatar fake's audio and video frames hold their tag as shared bytes.

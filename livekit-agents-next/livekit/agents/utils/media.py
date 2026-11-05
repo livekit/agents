@@ -179,18 +179,6 @@ async def encode(frame: rtc.VideoFrame, options: EncodeOptions) -> bytes:
     )
 
 
-class _FrameReader:
-    """How the core reads a host frame it encodes: as RGBA, converted from any other type."""
-
-    def _core_rgba(self, frame: rtc.VideoFrame) -> rtc.VideoFrame:
-        if frame.type == rtc.VideoBufferType.RGBA:
-            return frame
-        return frame.convert(rtc.VideoBufferType.RGBA)
-
-
-_core._core_install_frame_reader(_FrameReader())
-
-
 __all__ = [
     "AudioStreamDecoder",
     "EncodeOptions",

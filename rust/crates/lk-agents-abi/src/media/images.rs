@@ -1,27 +1,80 @@
-//! Image preparation's records and its host contracts; media prepares, the runtime admits.
+//! Image preparation's records and its host functions; media prepares, the runtime admits.
 
-use crate::MediaRef;
-use crate::utils::video::VideoFrame;
+use std::sync::Arc;
+
+use crate::utils::video::{RtcVideoFrame, VideoFrame};
 
 pub enum ImageInput {
     Frame(VideoFrame),
-    HostFrame(MediaRef),
+    HostFrame(Arc<dyn RtcVideoFrame>),
     Url { url: String, mime_type: Option<String> },
+}
+
+/// PIL's format names, upper case.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ImageFormat {
+    #[default]
+    Jpeg,
+    Png,
+}
+
+/// A typo must not default to JPEG.
+impl std::str::FromStr for ImageFormat {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, String> {
+        match s {
+            "JPEG" => Ok(ImageFormat::Jpeg),
+            "PNG" => Ok(ImageFormat::Png),
+            _ => Err(format!("unknown image format {s:?}: expected 'JPEG' or 'PNG'")),
+        }
+    }
+}
+
+/// `ResizeOptions.strategy` (`image.py:47`). The `Scale*` strategies do not letterbox, so the
+/// result is usually smaller (fit) or larger (cover) than the box in one dimension.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResizeStrategy {
+    CenterAspectFit,
+    CenterAspectCover,
+    ScaleAspectFit,
+    ScaleAspectCover,
+    Skew,
+}
+
+impl std::str::FromStr for ResizeStrategy {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, String> {
+        Ok(match s {
+            "center_aspect_fit" => ResizeStrategy::CenterAspectFit,
+            "center_aspect_cover" => ResizeStrategy::CenterAspectCover,
+            "scale_aspect_fit" => ResizeStrategy::ScaleAspectFit,
+            "scale_aspect_cover" => ResizeStrategy::ScaleAspectCover,
+            "skew" => ResizeStrategy::Skew,
+            _ => {
+                return Err(format!(
+                    "unknown resize strategy {s:?}: expected one of 'center_aspect_fit', \
+                     'center_aspect_cover', 'scale_aspect_fit', 'scale_aspect_cover', 'skew'"
+                ));
+            }
+        })
+    }
 }
 
 #[derive(Clone)]
 pub struct ImageEncodeOptions {
-    pub format: String,
+    pub format: ImageFormat,
     pub quality: Option<u8>,
     pub resize_width: Option<u32>,
     pub resize_height: Option<u32>,
-    pub resize_strategy: Option<String>,
+    pub resize_strategy: Option<ResizeStrategy>,
 }
 
 impl Default for ImageEncodeOptions {
     fn default() -> Self {
         Self {
-            format: "JPEG".into(),
+            format: ImageFormat::Jpeg,
             quality: Some(75),
             resize_width: None,
             resize_height: None,
@@ -30,22 +83,14 @@ impl Default for ImageEncodeOptions {
     }
 }
 
-pub type PreparedImage = (Option<Vec<u8>>, Option<String>, Option<String>, Option<String>);
-
-/// Reads a host video frame as an RGBA [`VideoFrame`], converting it when it is in another
-/// buffer type. The host hands one to the runtime as its process starts.
-#[crate::host(proxy(host = "livekit.agents.utils.media._FrameReader"))]
-pub trait FrameReader: Send + Sync {
-    #[host(call, name = "_core_rgba")]
-    fn rgba(&self, frame: &MediaRef) -> Result<VideoFrame, crate::errors::HostError>;
-}
-
-/// The host hands the process its frame reader as it starts.
-#[crate::host(functions)]
-pub trait FrameReaderInstall {
-    /// Hands the runtime the host's frame reader; images of host frames need it.
-    #[host(function, name = "_core_install_frame_reader", pid = false)]
-    fn install_frame_reader(reader: std::sync::Arc<dyn FrameReader>);
+/// A prepared image: inline bytes with their MIME type, or an external URL passed through.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PreparedImage {
+    pub data: Option<Vec<u8>>,
+    pub mime_type: Option<String>,
+    pub external_url: Option<String>,
+    /// A `data:` URL header's MIME type that a declared one overrode.
+    pub overridden_mime: Option<String>,
 }
 
 /// Frames as portable images, encoded on an admitted image worker.
@@ -59,7 +104,7 @@ pub trait ImageFunctions {
     #[allow(clippy::too_many_arguments)]
     async fn encode_image(
         env: &Self::Env,
-        frame: MediaRef,
+        frame: Arc<dyn RtcVideoFrame>,
         #[host(kw, default = "JPEG")] format: String,
         #[host(default = None)] quality: Option<u8>,
         #[host(default = None)] resize_width: Option<u32>,
@@ -71,7 +116,7 @@ pub trait ImageFunctions {
     #[host(function)]
     async fn serialize_image_frame(
         env: &Self::Env,
-        frame: MediaRef,
+        frame: Arc<dyn RtcVideoFrame>,
         #[host(default = None)] inference_width: Option<u32>,
         #[host(default = None)] inference_height: Option<u32>,
     ) -> Result<(Vec<u8>, String), ImageError>;

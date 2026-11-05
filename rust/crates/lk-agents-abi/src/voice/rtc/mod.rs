@@ -9,7 +9,7 @@ use std::fmt;
 use std::str::FromStr;
 use std::time::Duration;
 
-use lk_agents_abi::{AudioFrame, HostRef, MediaRef};
+use lk_agents_abi::{AudioFrame, HostRef};
 
 pub mod capabilities;
 mod error;
@@ -366,21 +366,31 @@ pub enum AudioStreamItem {
     ProcessorFailed(ProcessorFailure),
 }
 
-/// One frame off an `rtc.VideoStream`, as a host `io.VideoInput` answers `_core_next_frame()`: a
-/// [`MediaRef`](lk_agents_abi::MediaRef) (the pixels never cross), the size read at the seam to
-/// reject non-frames, and the frame's own capture stamp.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// One frame off an `rtc.VideoStream`, as a host `io.VideoInput` answers `_core_next_frame()`: the
+/// host frame (the pixels never cross), the size read at the seam to reject non-frames, and the
+/// frame's own capture stamp.
+#[derive(Debug, Clone)]
 #[crate::host(record(module = "rtc_wire", extract))]
 pub struct VideoFrameRef {
-    /// The side-table key; the host frame is released when the last clone drops.
-    #[host(rename = "frame")]
-    pub media: MediaRef,
+    /// Released when the last clone drops.
+    pub frame: std::sync::Arc<dyn lk_agents_abi::utils::video::RtcVideoFrame>,
     pub width: u32,
     pub height: u32,
     /// `VideoFrameEvent.timestamp_us`, the host's.
     #[host(default = 0)]
     pub timestamp_us: i64,
 }
+
+// Not derived: a derived `==` on an `Arc<dyn ..>` field tries to unsize-coerce, moving it.
+impl PartialEq for VideoFrameRef {
+    fn eq(&self, other: &Self) -> bool {
+        *self.frame == *other.frame
+            && (self.width, self.height, self.timestamp_us)
+                == (other.width, other.height, other.timestamp_us)
+    }
+}
+
+impl Eq for VideoFrameRef {}
 
 /// How many frames a `video_stream` queue holds before it evicts the oldest. Tiny on purpose: each
 /// held frame pins a decoded host frame, and the newest frame is the one worth keeping. A host

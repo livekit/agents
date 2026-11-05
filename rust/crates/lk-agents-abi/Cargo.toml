@@ -50,5 +50,6 @@ bytes = "1"
 [features]
 # See the `serde` dependency's note: the derive on the plain enums the voice core carries.
 serde = []
-# The zeroed metrics records tests fill in field by field (`metrics::testkit`).
+# The zeroed metrics records tests fill in field by field (`metrics::testkit`), and host frames
+# without a host (`utils::video::FakeFrame`).
 testkit = []

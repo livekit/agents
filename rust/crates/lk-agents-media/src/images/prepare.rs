@@ -1,77 +1,68 @@
 //! Image preparation bounds: pixel and byte caps, resize validation and encoding of one frame or
 //! data URL, as the admitted image worker runs it. The provider resolver uses the same bounds
-//! and reads host frames through its supplied `FrameReader`.
+//! and reads a host frame's pixels from the frame itself.
 
-use super::{EncodeOptions, ImageFormat, ResizeOptions, ResizeStrategy, RgbaFrame};
-use lk_agents_abi::MediaRef;
+use super::{EncodeOptions, ImageFormat, MediaError, ResizeOptions, RgbaFrame};
 use lk_agents_abi::llm::provider_format::{ImageResolver, SerializedImage};
-use lk_agents_abi::media::images::FrameReader;
-use lk_agents_abi::media::images::{ImageEncodeOptions, ImageInput, PreparedImage};
-use lk_agents_abi::utils::video::VideoFrame;
+use lk_agents_abi::media::images::{ImageEncodeOptions, ImageInput, PreparedImage, ResizeStrategy};
+use lk_agents_abi::utils::video::VideoBufferType;
 use lk_agents_abi::{ImageContent, ImageSource};
 use std::io::Write;
-use std::sync::Arc;
 
 const MAX_PIXELS: u64 = 4096 * 4096;
 pub const MAX_IMAGE_BYTES: usize = 16 * 1024 * 1024;
 
-/// Prepares `input`; a host frame is converted by `host_frame` (the host's RGBA conversion),
-/// once its dimensions passed [`validate_dimensions`].
+/// Prepares `input`: CPU work for an admitted image worker. A host frame hands over its RGBA
+/// pixels first.
 pub fn prepare(
     input: ImageInput,
     options: ImageEncodeOptions,
-    host_frame: impl FnOnce(MediaRef) -> Result<VideoFrame, String>,
-) -> Result<PreparedImage, String> {
+) -> Result<PreparedImage, MediaError> {
     let frame = match input {
         ImageInput::Url { url, mime_type } => {
             if url.len() > MAX_IMAGE_BYTES {
-                return Err("image URL exceeds 16 MiB".into());
+                return Err(MediaError::UrlTooLarge);
             }
-            return super::serialize_image_url(&url, mime_type.as_deref())
-                .map_err(|e| e.to_string());
+            return super::serialize_image_url(&url, mime_type.as_deref());
         }
         ImageInput::Frame(frame) => frame,
-        ImageInput::HostFrame(frame) => host_frame(frame)?,
+        ImageInput::HostFrame(frame) => {
+            frame.rgba().map_err(|e| MediaError::HostFrame(e.to_string()))?
+        }
     };
     validate_dimensions(frame.width, frame.height)?;
-    if frame.buffer_type != 0 {
-        return Err("image encoder requires an RGBA frame".into());
+    if frame.buffer_type != VideoBufferType::Rgba {
+        return Err(MediaError::NotRgba(frame.buffer_type));
     }
-    let format = options.format.parse::<ImageFormat>()?;
     let resize_options =
         match (options.resize_width, options.resize_height, options.resize_strategy) {
             (Some(width), Some(height), Some(strategy)) => {
                 validate_dimensions(width, height)?;
-                let strategy = strategy.parse::<ResizeStrategy>()?;
                 Some(ResizeOptions { width, height, strategy })
             }
             (None, None, None) => None,
-            _ => {
-                return Err(
-                    "resize needs all three of width, height and strategy, or none of them".into(),
-                );
-            }
+            _ => return Err(MediaError::PartialResize),
         };
-    let frame = RgbaFrame { width: frame.width, height: frame.height, data: &frame.data };
+    let rgba = RgbaFrame { width: frame.width, height: frame.height, data: &frame.data };
     if let Some(resize) = resize_options {
-        let (width, height) = super::resized_dimensions(frame.width, frame.height, resize)
-            .map_err(|e| e.to_string())?;
+        let (width, height) = super::resized_dimensions(rgba.width, rgba.height, resize)?;
         validate_dimensions(width, height)?;
     }
+    let format = options.format;
     let options = EncodeOptions { format, quality: options.quality, resize_options };
     let mut output = ImageBytes(Vec::new());
-    super::encode_into(frame, &options, &mut output).map_err(|e| e.to_string())?;
+    super::encode_into(rgba, &options, &mut output)?;
     let mime = match format {
         ImageFormat::Jpeg => "image/jpeg",
         ImageFormat::Png => "image/png",
     };
-    Ok((Some(output.0), Some(mime.into()), None, None))
+    Ok(PreparedImage { data: Some(output.0), mime_type: Some(mime.into()), ..Default::default() })
 }
 
 /// Between 1 and 4096 x 4096 pixels.
-pub fn validate_dimensions(width: u32, height: u32) -> Result<(), String> {
+pub fn validate_dimensions(width: u32, height: u32) -> Result<(), MediaError> {
     if width == 0 || height == 0 || u64::from(width) * u64::from(height) > MAX_PIXELS {
-        return Err("image dimensions must contain between 1 and 16777216 pixels".into());
+        return Err(MediaError::DimensionsOutOfRange);
     }
     Ok(())
 }
@@ -92,41 +83,11 @@ impl Write for ImageBytes {
     }
 }
 
-/// Image preparation with the host's frame reader, when the process has one.
-#[derive(Clone, Default)]
-pub struct Images {
-    frames: Option<Arc<dyn FrameReader>>,
-}
-
-impl Images {
-    pub fn new(frames: Option<Arc<dyn FrameReader>>) -> Self {
-        Self { frames }
-    }
-
-    /// Prepares `input` here, a host frame read through the host's reader: CPU work for an
-    /// admitted image worker.
-    pub fn prepare(
-        &self,
-        input: ImageInput,
-        options: ImageEncodeOptions,
-    ) -> Result<PreparedImage, String> {
-        prepare(input, options, |frame| {
-            let frames = self.frames.as_ref().ok_or("host frame conversion requires a host")?;
-            frames.rgba(&frame).map_err(|e| e.to_string())
-        })
-    }
-}
-
 /// How a realtime model prepares its images: on the image worker it already runs on.
-impl ImageResolver for Images {
-    fn prepare(
-        &self,
-        input: ImageInput,
-        options: ImageEncodeOptions,
-    ) -> Result<PreparedImage, String> {
-        Images::prepare(self, input, options)
-    }
+#[derive(Clone, Copy, Default)]
+pub struct Images;
 
+impl ImageResolver for Images {
     fn resolve(&self, image: &ImageContent) -> Result<SerializedImage, String> {
         let input = match &image.image {
             ImageSource::Url(url) => {
@@ -141,25 +102,24 @@ impl ImageResolver for Images {
             .inference_width
             .zip(image.inference_height)
             .filter(|(width, height)| *width > 0 && *height > 0);
-        let (data_bytes, mime_type, external_url, overridden_mime) = self
-            .prepare(
-                input,
-                ImageEncodeOptions {
-                    format: "JPEG".into(),
-                    resize_width: resize.map(|(width, _)| width),
-                    resize_height: resize.map(|(_, height)| height),
-                    resize_strategy: resize.map(|_| "scale_aspect_fit".into()),
-                    ..Default::default()
-                },
-            )
-            .map_err(|cause| format!("image {}: {cause}", image.id))?;
-        if let Some(header) = overridden_mime {
+        let prepared = prepare(
+            input,
+            ImageEncodeOptions {
+                format: ImageFormat::Jpeg,
+                resize_width: resize.map(|(width, _)| width),
+                resize_height: resize.map(|(_, height)| height),
+                resize_strategy: resize.map(|_| ResizeStrategy::ScaleAspectFit),
+                ..Default::default()
+            },
+        )
+        .map_err(|cause| format!("image {}: {cause}", image.id))?;
+        if let Some(header) = prepared.overridden_mime {
             log::warn!(target: "livekit.agents", declared_mime = image.mime_type.as_deref().unwrap_or_default(), header_mime = header.as_str(); "image MIME declaration overrides data URL header");
         }
         Ok(SerializedImage {
-            data_bytes,
-            mime_type,
-            external_url,
+            data_bytes: prepared.data,
+            mime_type: prepared.mime_type,
+            external_url: prepared.external_url,
             inference_detail: image.inference_detail,
         })
     }

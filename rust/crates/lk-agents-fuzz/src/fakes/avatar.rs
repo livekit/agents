@@ -96,7 +96,8 @@ impl Frames {
 
     fn video(&self, entry: Entry) -> VideoFrame {
         let data = bytes::Bytes::from_owner(self.tag(entry));
-        VideoFrame { width: 1, height: 1, buffer_type: 0, data }
+        let buffer_type = lk_agents_abi::utils::video::VideoBufferType::Rgba;
+        VideoFrame { width: 1, height: 1, buffer_type, data }
     }
 
     fn get(&self, data: &[u8]) -> Option<Entry> {

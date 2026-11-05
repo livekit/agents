@@ -146,10 +146,7 @@ pub enum Control {
     /// A camera: the frames the case feeds it, as ordinals it mints frames from.
     Video(mpsc::UnboundedSender<u64>),
     /// The person's camera track in the room: frames pushed onto it, minted the same way.
-    RoomVideo(
-        Arc<crate::fakes::room::FakeTrackPublication>,
-        Arc<dyn lk_agents_abi::errors::RefRegistry>,
-    ),
+    RoomVideo(Arc<crate::fakes::room::FakeTrackPublication>),
     /// The realtime socket: the server-side events the case injects.
     Realtime(Arc<realtime::Socket>),
     /// A realtime turn in progress: nothing to deliver to it, its end comes through the socket.
@@ -616,9 +613,9 @@ impl Registry {
             Control::Video(sender) => {
                 (output::feed_video(&sender, slot.nth, input), Some(Control::Video(sender)))
             }
-            Control::RoomVideo(camera, refs) => {
-                let accepted = output::feed_room_video(&camera, &refs, slot.nth, input);
-                (accepted, Some(Control::RoomVideo(camera, refs)))
+            Control::RoomVideo(camera) => {
+                let accepted = output::feed_room_video(&camera, slot.nth, input);
+                (accepted, Some(Control::RoomVideo(camera)))
             }
             Control::Realtime(socket) => {
                 (realtime::deliver(&socket, input), Some(Control::Realtime(socket)))

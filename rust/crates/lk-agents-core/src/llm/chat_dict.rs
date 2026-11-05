@@ -61,8 +61,8 @@ impl ChatContextDict for ChatDict {
         };
         let strip = crate::tts::markup::strip_expr_markup;
         let host = ToDictHost {
-            media: None,
             strip_expr_markup: strip_markup.then_some(&strip as &dyn Fn(&str) -> String),
+            ..Default::default()
         };
         to_dict(&items, &opts, &host)
     }

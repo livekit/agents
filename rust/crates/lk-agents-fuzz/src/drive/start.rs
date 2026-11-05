@@ -209,7 +209,7 @@ impl Run {
             },
             host_video_input: setup
                 .video
-                .then(|| fakes::FakeVideoInput::new(&registry, refs.clone()) as Arc<VideoIn>),
+                .then(|| fakes::FakeVideoInput::new(&registry) as Arc<VideoIn>),
             video_sampler: setup.video_sampler.then_some((1.0, 0.3)),
             host_transcription_output: legs.is_none().then(|| {
                 fakes::FakeTextOutput::new(registry.clone(), setup.text_output_raises) as _
@@ -508,7 +508,7 @@ impl Run {
                 format!("TR_cam_{}", self.joins).as_str(),
                 lk_agents_abi::voice::rtc::TrackSource::Camera,
             );
-            fakes::room_camera(&self.registry, camera, self.refs.clone());
+            fakes::room_camera(&self.registry, camera);
         }
     }
 }

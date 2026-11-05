@@ -28,6 +28,7 @@ from livekit.agents.voice.io import (
     VideoInput,
 )
 from livekit.agents.voice.room_io import RemoteParticipant, Room, TrackPublication
+from livekit.rtc import VideoFrame
 
 from .._core import SessionRecorder, Storage, VoiceAgent, _core_ContextActivation, _core_VoiceStore
 from ..types import NotGivenOr
@@ -1156,7 +1157,7 @@ class RoomVideoInput:
     """
     @property
     def reading(self) -> str | None: ...
-    async def next_frame(self) -> object | None: ...
+    async def next_frame(self) -> VideoFrame | None: ...
     async def aclose(self) -> None: ...
 
 class _core_RoomSession:

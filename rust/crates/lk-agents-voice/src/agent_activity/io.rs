@@ -406,7 +406,7 @@ impl VoiceDriver {
         }
         let image = lk_agents_abi::ImageContent {
             id: self.session.ids.mint("img"),
-            image: lk_agents_abi::ImageSource::Frame(frame.media),
+            image: lk_agents_abi::ImageSource::Frame(frame.frame),
             inference_width: None,
             inference_height: None,
             inference_detail: lk_agents_abi::InferenceDetail::Auto,
@@ -416,7 +416,7 @@ impl VoiceDriver {
         self.record_trace(InputStep::VideoFramePushed { sent });
     }
 
-    /// `AgentActivity.push_video`. Dropping a `MediaRef` releases the host object. A pipeline
+    /// `AgentActivity.push_video`. Dropping the frame releases the host object. A pipeline
     /// session has no realtime session to push to, so it is said once and dropped.
     pub(crate) fn push_video(&mut self, image: lk_agents_abi::ImageContent) -> bool {
         // `if not self._started: return`.

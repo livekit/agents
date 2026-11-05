@@ -2,6 +2,7 @@
 //! the format crate, which must not reach an encoder.
 
 use lk_agents_abi::llm::provider_format::SerializedImage;
+use lk_agents_abi::media::images::PreparedImage;
 use lk_agents_abi::{ImageContent, ImageSource};
 
 use super::encode::{EncodeOptions, MediaError, ResizeOptions, ResizeStrategy, RgbaFrame, encode};
@@ -50,18 +51,14 @@ pub fn serialize_image(
     }
 }
 
-/// `serialize_image`'s `str` arm, for a host that owns `ImageContent`:
-/// `(data_bytes, mime_type, external_url, header_mime_if_overridden)`.
-///
-/// Exactly one of `data_bytes`/`external_url` is set. The fourth element is the `data:` header's
-/// mime type when a declared `mime_type` overrode it -- the host logs the reference's warning.
-#[allow(clippy::type_complexity)]
+/// `serialize_image`'s `str` arm, for a host that owns `ImageContent`. Exactly one of `data` and
+/// `external_url` is set; the host logs the reference's warning for an `overridden_mime`.
 pub fn serialize_image_url(
     url: &str,
     mime_type: Option<&str>,
-) -> Result<(Option<Vec<u8>>, Option<String>, Option<String>, Option<String>), MediaError> {
-    let (data, mime, external, mismatch) = serialize_url_parts(url, mime_type)?;
-    Ok((data, mime, external, mismatch.map(|m| m.header)))
+) -> Result<PreparedImage, MediaError> {
+    let (data, mime_type, external_url, mismatch) = serialize_url_parts(url, mime_type)?;
+    Ok(PreparedImage { data, mime_type, external_url, overridden_mime: mismatch.map(|m| m.header) })
 }
 
 fn encode_frame(
@@ -172,16 +169,10 @@ fn b64decode(payload: &str) -> Result<Vec<u8>, MediaError> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use lk_agents_abi::{InferenceDetail, MediaRef, RefRegistry};
+    use lk_agents_abi::InferenceDetail;
+    use lk_agents_abi::utils::video::FakeFrame;
 
     use super::*;
-
-    struct Noop;
-    impl RefRegistry for Noop {
-        fn release(&self, _id: u64) {}
-    }
 
     fn url_image(url: &str, mime_type: Option<&str>) -> ImageContent {
         ImageContent {
@@ -195,10 +186,9 @@ mod tests {
     }
 
     fn frame_image(width: Option<u32>, height: Option<u32>) -> ImageContent {
-        let registry: Arc<dyn RefRegistry> = Arc::new(Noop);
         ImageContent {
             id: "img_2".into(),
-            image: ImageSource::Frame(MediaRef::new(7, &registry)),
+            image: ImageSource::Frame(FakeFrame::shared(7)),
             inference_width: width,
             inference_height: height,
             inference_detail: InferenceDetail::Low,

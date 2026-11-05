@@ -31,8 +31,7 @@ InferenceDetail: TypeAlias = Literal["auto", "high", "low"]
 
 ImageSource: TypeAlias = str | VideoFrame
 """A URL passes through as-is; a frame is encoded first, and the resize fields apply only to it.
-The frame crosses as its side-table key, handed back as the host's own frame (callers compare
-by identity).
+The frame is handed back as the host's own frame (callers compare by identity).
 """
 
 

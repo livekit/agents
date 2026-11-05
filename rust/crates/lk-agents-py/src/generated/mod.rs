@@ -101,7 +101,6 @@ pub trait Implementations: 'static {
     type ToolsetLifetime: ::lk_agents_abi::llm::toolsets::ToolsetLifetime;
     type ToolsetGroup: ::lk_agents_abi::llm::toolsets::ToolsetGroup;
     type ToolsetScopes: ::lk_agents_abi::llm::toolsets::ToolsetScopes;
-    type FrameReaderInstall: ::lk_agents_abi::media::images::FrameReaderInstall;
     type ImageFunctions: ::lk_agents_abi::media::images::ImageFunctions;
     type AudioEmitter: ::lk_agents_abi::media::emitter::AudioEmitter;
     type AudioDecoder: ::lk_agents_abi::media::codecs::AudioDecoder;
@@ -335,7 +334,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<llm::CoreToolsetLifetime>()?;
     m.add_class::<llm::CoreToolsetGroup>()?;
     m.add_class::<llm::CoreToolsetScopes>()?;
-    m.add_function(wrap_pyfunction!(media::_core_install_frame_reader, m)?)?;
     m.add_function(wrap_pyfunction!(media::encode_image, m)?)?;
     m.add_function(wrap_pyfunction!(media::serialize_image_frame, m)?)?;
     m.add_function(wrap_pyfunction!(media::serialize_image_url, m)?)?;

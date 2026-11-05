@@ -5354,7 +5354,10 @@ impl RoomVideoInput {
                 .await.map_err(|e: ::lk_agents_abi::voice::io::IoError| <::lk_agents_abi::voice::io::IoError as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(
-                    out.map(|value| crate::py_objects::object_ref_to_py(py, value)).transpose()?,
+                    out.map(|value| {
+                        crate::generated::utils::RtcVideoFrameProxy::to_host(py, value)
+                    })
+                    .transpose()?,
                     py,
                 )
             })

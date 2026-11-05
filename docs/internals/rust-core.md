@@ -230,8 +230,8 @@ Process-wide resources that need no runtime are owned by the crate whose work
 they bound, made on first use in each process (a forked child makes its own):
 the media pool (`lk_agents_media::pool::media_pool()`), the blocking I/O pool
 (`lk_agents_net::blocking_io::blocking_io()`) and the session report admission
-(`ReportAdmission::process()`). Image preparation is inference's: the host
-installs its frame reader there (`_core_install_frame_reader`). Both pools are instances of one primitive, media's
+(`ReportAdmission::process()`). Image preparation is inference's: a host frame
+crosses as an `RtcVideoFrame` proxy that hands over its own RGBA pixels. Both pools are instances of one primitive, media's
 `Pool`: plain threads that start on demand and exit when idle, with synchronous
 admission per class. The media pool runs codec, recording, image and model work;
 the blocking I/O pool (four threads) runs name resolution, file access and

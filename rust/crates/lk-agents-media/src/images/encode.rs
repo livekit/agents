@@ -6,6 +6,8 @@ use image::codecs::jpeg::JpegEncoder;
 use image::codecs::png::PngEncoder;
 use image::imageops::{self, FilterType};
 use image::{ExtendedColorType, ImageEncoder, RgbImage};
+pub use lk_agents_abi::media::images::{ImageFormat, ResizeStrategy};
+use lk_agents_abi::utils::video::VideoBufferType;
 
 /// PIL's default `resample` for an RGB image is `Resampling.BICUBIC`; Catmull-Rom is that kernel.
 const FILTER: FilterType = FilterType::CatmullRom;
@@ -43,29 +45,20 @@ pub enum MediaError {
     /// `binascii.Error`'s own text (`Incorrect padding`, ...).
     #[error("{0}")]
     InvalidBase64(String),
-    /// Only the driver can resolve a `MediaRef`; the caller passed `ImageContent` without its buffer.
+    /// The caller passed a frame's `ImageContent` without its RGBA buffer.
     #[error("image is a frame reference but no resolved RGBA buffer was supplied")]
     UnresolvedFrame,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ImageFormat {
-    #[default]
-    Jpeg,
-    Png,
-}
-
-/// PIL's format names, upper case; a typo must not default to JPEG.
-impl std::str::FromStr for ImageFormat {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, String> {
-        match s {
-            "JPEG" => Ok(ImageFormat::Jpeg),
-            "PNG" => Ok(ImageFormat::Png),
-            _ => Err(format!("unknown image format {s:?}: expected 'JPEG' or 'PNG'")),
-        }
-    }
+    #[error("image URL exceeds 16 MiB")]
+    UrlTooLarge,
+    #[error("image dimensions must contain between 1 and 16777216 pixels")]
+    DimensionsOutOfRange,
+    #[error("image encoder requires an RGBA frame, not {0:?}")]
+    NotRgba(VideoBufferType),
+    #[error("resize needs all three of width, height and strategy, or none of them")]
+    PartialResize,
+    /// The host could not hand over the frame's RGBA pixels.
+    #[error("{0}")]
+    HostFrame(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,37 +77,6 @@ impl Default for EncodeOptions {
             resize_options: None,
             quality: Some(DEFAULT_JPEG_QUALITY),
         }
-    }
-}
-
-/// `ResizeOptions.strategy` (`image.py:47`). The `Scale*` strategies do not letterbox, so the
-/// result is usually smaller (fit) or larger (cover) than the box in one dimension.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ResizeStrategy {
-    CenterAspectFit,
-    CenterAspectCover,
-    ScaleAspectFit,
-    ScaleAspectCover,
-    Skew,
-}
-
-impl std::str::FromStr for ResizeStrategy {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, String> {
-        Ok(match s {
-            "center_aspect_fit" => ResizeStrategy::CenterAspectFit,
-            "center_aspect_cover" => ResizeStrategy::CenterAspectCover,
-            "scale_aspect_fit" => ResizeStrategy::ScaleAspectFit,
-            "scale_aspect_cover" => ResizeStrategy::ScaleAspectCover,
-            "skew" => ResizeStrategy::Skew,
-            _ => {
-                return Err(format!(
-                    "unknown resize strategy {s:?}: expected one of 'center_aspect_fit', \
-                     'center_aspect_cover', 'scale_aspect_fit', 'scale_aspect_cover', 'skew'"
-                ));
-            }
-        })
     }
 }
 

@@ -1,8 +1,7 @@
 use super::*;
-use lk_agents_abi::{MediaRef, RefRegistry};
+use lk_agents_abi::utils::video::FakeFrame;
 use std::future::Future;
 use std::pin::pin;
-use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 
 /// Everything queued now, without waiting.
@@ -16,19 +15,14 @@ fn drain<E>(rx: &mut VideoReceiver<E>) -> Vec<Item<VideoFrameRef, E>> {
 
 /// A video frame numbered `n`.
 fn frame(n: u64) -> VideoFrameRef {
-    struct Noop;
-    impl RefRegistry for Noop {
-        fn release(&self, _: u64) {}
-    }
-    let registry: Arc<dyn RefRegistry> = Arc::new(Noop);
-    VideoFrameRef { media: MediaRef::new(n, &registry), width: 2, height: 2, timestamp_us: 0 }
+    VideoFrameRef { frame: FakeFrame::shared(n), width: 2, height: 2, timestamp_us: 0 }
 }
 
 fn ids(items: Vec<Item<VideoFrameRef, &'static str>>) -> Vec<Option<u64>> {
     items
         .into_iter()
         .map(|item| match item {
-            Item::Media(frame) => Some(frame.media.id()),
+            Item::Media(frame) => FakeFrame::id_of(frame.frame.as_ref()),
             Item::Event(_) => None,
             Item::Gap(_) => panic!("video never reports a gap"),
         })

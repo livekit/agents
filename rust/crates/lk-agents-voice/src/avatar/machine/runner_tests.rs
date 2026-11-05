@@ -17,7 +17,8 @@ fn pcm(id: u8, duration: f64) -> AudioFrame {
 }
 
 fn video(id: u8) -> VideoFrame {
-    VideoFrame { width: 1, height: 1, buffer_type: 0, data: vec![id].into() }
+    let buffer_type = lk_agents_abi::utils::video::VideoBufferType::Rgba;
+    VideoFrame { width: 1, height: 1, buffer_type, data: vec![id].into() }
 }
 
 fn audio(id: u8, duration: f64) -> AvatarEvent {

@@ -621,13 +621,10 @@ impl TtsLeg {
         Delivery::Delivered
     }
 
-    /// The request's started time, anchored by the first streamed attempt that reports one. The
-    /// source is asked with no lock held: a host stream answers under the GIL.
+    /// The request's started time, anchored by the first streamed attempt that reports one.
+    /// `started_time` is a plain read, so concurrent attempts settle the anchor under the lock.
     fn anchor_started(&self, source: &TtsSource) -> Option<f64> {
-        if self.log.is_none() {
-            return None;
-        }
-        // `started_time` is a plain read, so concurrent attempts settle the anchor under the lock.
+        self.log.as_ref()?;
         let mut anchor = self.started.lock();
         if anchor.is_none() {
             *anchor = source.started_time();

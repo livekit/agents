@@ -1,5 +1,5 @@
-//! `utils/images/` plus `serialize_image`: the driver resolves a `MediaRef` to host-converted
-//! [`RgbaFrame`], this encodes it, and `lk-agents-format` gets a plain value, never an encoder.
+//! `utils/images/` plus `serialize_image`: a host frame hands over its RGBA pixels
+//! ([`RgbaFrame`]), this encodes them, and `lk-agents-format` gets a plain value, never an encoder.
 //! `ImageContent._cache` is not ported: its key ignores the inference size (a live bug upstream).
 
 mod encode;

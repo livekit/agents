@@ -3,7 +3,10 @@
 
 pub mod protocol;
 
+use std::sync::Arc;
 use std::time::SystemTime;
+
+use crate::utils::video::RtcVideoFrame;
 
 /// JSON, not an opaque ref: the reference branches on it.
 pub type Extra = serde_json::Map<String, serde_json::Value>;
@@ -88,16 +91,15 @@ pub enum InferenceDetail {
 }
 
 /// A URL passes through as-is; a frame is encoded first, and the resize fields apply only to it.
-/// The frame crosses as its side-table key, handed back as the host's own frame (callers compare
-/// by identity).
+/// The frame is handed back as the host's own frame (callers compare by identity).
 #[crate::host(record(module = "chat_items", extract, emit, transparent))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", serde(tag = "kind", content = "value", rename_all = "snake_case"))]
 pub enum ImageSource {
     Url(String),
-    #[host(host_type = "livekit.rtc.VideoFrame")]
-    Frame(MediaRef),
+    #[cfg_attr(feature = "serde", serde(with = "crate::utils::video::live_frame"))]
+    Frame(Arc<dyn RtcVideoFrame>),
 }
 
 // `bare_urls`: the `///` below is a Python docstring, and the reference writes the URL bare.

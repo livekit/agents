@@ -11,12 +11,13 @@ use std::{
 
 use lk_agents_abi::SpawnerExt as _;
 use lk_agents_abi::recorder::{AudioRecorder, RecordingFailure};
+use lk_agents_abi::utils::video::FakeFrame;
 use lk_agents_abi::voice::io;
 use lk_agents_abi::voice::io::{
     AudioInput, AudioOutput, AudioOutputCapabilities, PlaybackFinished, PlaybackTracker,
     TextOutput, VideoInput,
 };
-use lk_agents_abi::{AudioFrame, MediaRef, Ts, errors::RefRegistry};
+use lk_agents_abi::{AudioFrame, Ts};
 
 use super::{Control, Registry};
 use crate::{
@@ -57,14 +58,13 @@ impl AudioInput for FakeAudioInput {
 /// case feeds by `VideoFrames`; a camera nobody feeds keeps the leg open and yields nothing.
 pub struct FakeVideoInput {
     frames: tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<u64>>,
-    refs: Arc<dyn RefRegistry>,
 }
 
 impl FakeVideoInput {
-    pub fn new(registry: &Registry, refs: Arc<dyn RefRegistry>) -> Arc<Self> {
+    pub fn new(registry: &Registry) -> Arc<Self> {
         let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
         registry.register(Kind::Video, Detail::None, Control::Video(sender));
-        Arc::new(FakeVideoInput { frames: tokio::sync::Mutex::new(receiver), refs })
+        Arc::new(FakeVideoInput { frames: tokio::sync::Mutex::new(receiver) })
     }
 }
 
@@ -82,7 +82,7 @@ impl VideoInput for FakeVideoInput {
         Box::pin(async move {
             let Some(ordinal) = self.frames.lock().await.recv().await else { return Ok(None) };
             Ok(Some(lk_agents_abi::voice::rtc::VideoFrameRef {
-                media: MediaRef::new(ordinal, &self.refs),
+                frame: FakeFrame::shared(ordinal),
                 width: 1280,
                 height: 720,
                 timestamp_us: (ordinal & 0xffff_ffff) as i64 * 33_000,
@@ -92,19 +92,14 @@ impl VideoInput for FakeVideoInput {
 }
 
 /// The person's camera track as a resource the case feeds by `VideoFrames`.
-pub fn room_camera(
-    registry: &Registry,
-    camera: Arc<crate::fakes::room::FakeTrackPublication>,
-    refs: Arc<dyn RefRegistry>,
-) {
-    registry.register(Kind::Video, Detail::RoomCamera, Control::RoomVideo(camera, refs));
+pub fn room_camera(registry: &Registry, camera: Arc<crate::fakes::room::FakeTrackPublication>) {
+    registry.register(Kind::Video, Detail::RoomCamera, Control::RoomVideo(camera));
 }
 
 /// So many frames onto the person's camera track, minted as the host camera's are. Accepted
 /// when a reader took them.
 pub(super) fn feed_room_video(
     camera: &crate::fakes::room::FakeTrackPublication,
-    refs: &Arc<dyn RefRegistry>,
     video: u32,
     what: &Input,
 ) -> bool {
@@ -116,7 +111,7 @@ pub(super) fn feed_room_video(
     let mut read = false;
     while let Ok(ordinal) = frames.try_recv() {
         let frame = lk_agents_abi::voice::rtc::VideoFrameRef {
-            media: MediaRef::new(ordinal, refs),
+            frame: FakeFrame::shared(ordinal),
             width: 1280,
             height: 720,
             timestamp_us: (ordinal & 0xffff_ffff) as i64 * 33_000,

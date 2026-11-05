@@ -11,19 +11,6 @@
 use pyo3::prelude::*;
 
 // Declared in rust/crates/lk-agents-abi/src/media/images.rs.
-type FrameReaderInstallImpl =
-    <crate::generated::implementations::Selected as super::Implementations>::FrameReaderInstall;
-
-/// Hands the runtime the host's frame reader; images of host frames need it.
-#[pyfunction]
-#[pyo3(signature = (reader))]
-pub fn _core_install_frame_reader(py: Python<'_>, reader: Bound<'_, PyAny>) -> PyResult<()> {
-    let reader = crate::generated::media::FrameReaderProxy::from_host(reader.as_any())?;
-    py.detach(|| <FrameReaderInstallImpl as ::lk_agents_abi::media::images::FrameReaderInstall>::install_frame_reader(reader));
-    Ok(())
-}
-
-// Declared in rust/crates/lk-agents-abi/src/media/images.rs.
 type ImageFunctionsImpl =
     <crate::generated::implementations::Selected as super::Implementations>::ImageFunctions;
 
@@ -98,7 +85,7 @@ pub fn encode_image<'py>(
 ) -> PyResult<Bound<'py, PyAny>> {
     crate::py_calls::check_pid()?;
     let env = crate::process::env();
-    let frame = crate::py_objects::object_ref_from_py(frame.as_any())?;
+    let frame = crate::generated::utils::RtcVideoFrameProxy::from_host(frame.as_any())?;
     crate::py_calls::future_into_py(py, async move {
         let out = <ImageFunctionsImpl as ::lk_agents_abi::media::images::ImageFunctions>::encode_image(&env, frame, format, quality, resize_width, resize_height, resize_strategy).await.map_err(|e: ::lk_agents_abi::media::images::ImageError| <::lk_agents_abi::media::images::ImageError as crate::py_errors::HostException>::to_py_err(&e))?;
         Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
@@ -118,7 +105,7 @@ pub fn serialize_image_frame<'py>(
 ) -> PyResult<Bound<'py, PyAny>> {
     crate::py_calls::check_pid()?;
     let env = crate::process::env();
-    let frame = crate::py_objects::object_ref_from_py(frame.as_any())?;
+    let frame = crate::generated::utils::RtcVideoFrameProxy::from_host(frame.as_any())?;
     crate::py_calls::future_into_py(py, async move {
         let out = <ImageFunctionsImpl as ::lk_agents_abi::media::images::ImageFunctions>::serialize_image_frame(&env, frame, inference_width, inference_height).await.map_err(|e: ::lk_agents_abi::media::images::ImageError| <::lk_agents_abi::media::images::ImageError as crate::py_errors::HostException>::to_py_err(&e))?;
         Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))
@@ -632,92 +619,6 @@ pub fn split_sentences(
 ) -> PyResult<MediaTokenizationSplitSentencesOutput> {
     let out = py.detach(|| <MediaTokenizationImpl as ::lk_agents_abi::media::codecs::MediaTokenization>::split_sentences(&text, min_sentence_len, retain_format)).map_err(|e: ::lk_agents_abi::media::codecs::CodecFailure| <::lk_agents_abi::media::codecs::CodecFailure as crate::py_errors::HostException>::to_py_err(&e))?;
     ::pyo3::PyResult::Ok(out)
-}
-
-// Declared in rust/crates/lk-agents-abi/src/media/images.rs.
-
-/// [`::lk_agents_abi::media::images::FrameReader`] over a host `livekit.agents.utils.media._FrameReader`.
-#[derive(Clone)]
-pub struct FrameReaderProxy {
-    host: ::std::sync::Arc<Py<PyAny>>,
-}
-
-impl FrameReaderProxy {
-    /// A registered native class as itself, any other host object behind this proxy.
-    pub fn from_host(
-        obj: &Bound<'_, PyAny>,
-    ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::media::images::FrameReader>> {
-        if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::media::images::FrameReader>(obj)
-        {
-            return Ok(native);
-        }
-        Ok(::std::sync::Arc::new(Self::take(obj, None)?))
-    }
-
-    /// A host object a call returned, its calls run in a copy of the context that call ran in.
-    pub fn in_context(
-        obj: &Bound<'_, PyAny>,
-        context: &::lk_agents_abi::utils::host_ref::HostRef,
-    ) -> PyResult<::std::sync::Arc<dyn ::lk_agents_abi::media::images::FrameReader>> {
-        if let Some(native) =
-            crate::py_objects::native::<dyn ::lk_agents_abi::media::images::FrameReader>(obj)
-        {
-            return Ok(native);
-        }
-        Ok(::std::sync::Arc::new(Self::take(obj, Some(context))?))
-    }
-
-    /// A host object the core owns (`Box<dyn ..>`), always behind this proxy.
-    pub fn owned(
-        obj: &Bound<'_, PyAny>,
-    ) -> PyResult<::std::boxed::Box<dyn ::lk_agents_abi::media::images::FrameReader>> {
-        Ok(::std::boxed::Box::new(Self::take(obj, None)?))
-    }
-
-    fn take(
-        obj: &Bound<'_, PyAny>,
-        context: ::std::option::Option<&::lk_agents_abi::utils::host_ref::HostRef>,
-    ) -> PyResult<Self> {
-        let _ = context;
-        Ok(FrameReaderProxy { host: ::std::sync::Arc::new(obj.clone().unbind()) })
-    }
-}
-
-impl ::lk_agents_abi::media::images::FrameReader for FrameReaderProxy {
-    fn rgba(
-        &self,
-        frame: &::lk_agents_abi::MediaRef,
-    ) -> ::std::result::Result<
-        ::lk_agents_abi::utils::video::VideoFrame,
-        ::lk_agents_abi::errors::HostError,
-    > {
-        let host = ::std::sync::Arc::clone(&self.host);
-        let frame_arg = ::std::clone::Clone::clone(frame);
-        let out = ::lk_agents_runtime::host::call_now(
-            &crate::py_calls::Entry,
-            ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
-                    [crate::py_objects::object_ref_to_py(py, frame_arg)?];
-                Ok((
-                    host.bind(py).getattr("_core_rgba")?,
-                    ::pyo3::types::PyTuple::new(py, args)?,
-                    None,
-                ))
-            }),
-        );
-        ::pyo3::Python::attach(|py| {
-            let out = match out {
-                Ok(out) => out,
-                Err(e) => {
-                    return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
-                }
-            };
-            let o = out.value.bind(py);
-            let out = (crate::generated::records::rtc_frames::video_frame_from_py(o.as_any())).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
-            Ok(out)
-        })
-    }
 }
 
 // Declared in rust/crates/lk-agents-abi/src/media/emitter.rs.

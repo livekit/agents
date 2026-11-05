@@ -120,7 +120,6 @@ from ._generated._core_llm import (
 from ._generated._core_media import (
     AudioDecoder as AudioDecoder,
     AudioEmitter as AudioEmitter,
-    _core_install_frame_reader as _core_install_frame_reader,
     encode_image as encode_image,
     serialize_image_frame as serialize_image_frame,
     serialize_image_url as serialize_image_url,

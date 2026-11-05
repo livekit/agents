@@ -43,12 +43,13 @@ use lk_agents_abi::voice::rtc::ParticipantKind;
 use lk_agents_abi::voice::session::UpdateAgentArgs;
 use lk_agents_abi::voice::session_effects::SessionEvents;
 use lk_agents_abi::{
-    AudioFrame, BoxFuture, ChatItem, ChatMessage, ImageContent, ImageSource, Maybe, MediaRef,
-    Realtime, Spawner, Ts,
+    AudioFrame, BoxFuture, ChatItem, ChatMessage, ImageContent, ImageSource, Maybe, Realtime,
+    Spawner, Ts,
     errors::RefRegistry,
     metrics::base::AgentMetrics,
     turn::interruption::InterruptionSource,
     turn::keyterms::{DetectionLlm, KeytermDetectionConfig, SttContextConfig},
+    utils::video::FakeFrame,
     voice::room_io::{AudioInputConfig, AudioOutputConfig, RoomIoConfig, TextOutputConfig},
     voice::session_options::{
         EndpointingKwargs, InterruptionKwargs, PreemptiveKwargs, SessionConnOptions, SessionKwargs,

@@ -2,7 +2,7 @@
 #![cfg(feature = "media-images")]
 
 use lk_agents_abi::media::images::{ImageEncodeOptions, ImageInput};
-use lk_agents_abi::utils::video::VideoFrame;
+use lk_agents_abi::utils::video::{VideoBufferType, VideoFrame};
 use lk_agents_abi::{ChatMessage, Role};
 use lk_agents_media::pool::JobClass;
 
@@ -33,17 +33,16 @@ async fn oversized_pixels_are_refused_before_buffer_conversion_or_encoding() {
     let media_pool = lk_agents_media::pool::MediaPool::new(Default::default()).unwrap();
     let result = lk_agents_runtime::inference::images::prepare_on(
         &media_pool,
-        std::sync::Arc::new(lk_agents_media::images::Images::default()),
         ImageInput::Frame(VideoFrame {
             width: 4097,
             height: 4097,
-            buffer_type: -1,
+            buffer_type: VideoBufferType::I420,
             data: bytes::Bytes::new(),
         }),
         ImageEncodeOptions::default(),
     )
     .await;
-    assert!(matches!(result, Err(error) if error.contains("16777216 pixels")));
+    assert!(matches!(result, Err(error) if error.0.contains("16777216 pixels")));
 }
 
 #[test]
@@ -57,7 +56,7 @@ fn realtime_default_image_preparation_accepts_admitted_inline_urls() {
         inference_detail: Default::default(),
         mime_type: None,
     };
-    let prepared = lk_agents_media::images::Images::default()
+    let prepared = lk_agents_media::images::Images
         .resolve(&image)
         .expect("the native constructor's resolver must accept a prepared inline image");
     assert_eq!(prepared.data_bytes.as_deref(), Some(&[1, 2, 3][..]));
@@ -73,7 +72,7 @@ fn realtime_default_image_preparation_accepts_admitted_inline_urls() {
     assert!(
         lk_agents_runtime::inference::realtime::openai::wire::to_wire_item(
             &item,
-            &lk_agents_media::images::Images::default()
+            &lk_agents_media::images::Images
         )
         .is_err(),
         "this realtime protocol requires inline images"
@@ -81,5 +80,5 @@ fn realtime_default_image_preparation_accepts_admitted_inline_urls() {
     let mut oversized = image;
     oversized.image =
         lk_agents_abi::ImageSource::Url("x".repeat(lk_agents_media::images::MAX_IMAGE_BYTES + 1));
-    assert!(lk_agents_media::images::Images::default().resolve(&oversized).is_err());
+    assert!(lk_agents_media::images::Images.resolve(&oversized).is_err());
 }

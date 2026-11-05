@@ -3956,9 +3956,9 @@ pub mod chat_items {
                 })?
                 .bind(obj.py()),
         )? {
-            return Ok(::lk_agents_abi::ImageSource::Frame(crate::py_objects::object_ref_from_py(
-                obj,
-            )?));
+            return Ok(::lk_agents_abi::ImageSource::Frame(
+                crate::generated::utils::RtcVideoFrameProxy::from_host(obj.as_any())?,
+            ));
         }
         Err(super::not_a(obj, "ImageSource"))
     }
@@ -3971,7 +3971,9 @@ pub mod chat_items {
             ::lk_agents_abi::ImageSource::Url(x) => {
                 ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?
             }
-            ::lk_agents_abi::ImageSource::Frame(x) => crate::py_objects::object_ref_to_py(py, x)?,
+            ::lk_agents_abi::ImageSource::Frame(x) => {
+                crate::generated::utils::RtcVideoFrameProxy::to_host(py, x)?
+            }
         })
     }
 
@@ -11388,7 +11390,10 @@ pub mod rtc_frames {
             crate::py_values::number_from_py::<u32>(v, "VideoFrameFromPy.height")
         })?;
         let buffer_type = crate::py_values::attr_with(obj, "VideoFrameFromPy", "type", |v| {
-            crate::py_values::number_from_py::<i32>(v, "VideoFrameFromPy.type")
+            crate::generated::records::from_representation::<
+                ::lk_agents_abi::utils::video::VideoBufferType,
+                i32,
+            >(crate::py_values::number_from_py::<i32>(v, "VideoFrameFromPy.type")?)
         })?;
         let data = crate::py_values::attr_with(obj, "VideoFrameFromPy", "data", |v| {
             crate::py_values::video_bytes(v, "VideoFrameFromPy.data")
@@ -11403,8 +11408,10 @@ pub mod rtc_frames {
         let kwargs = pyo3::types::PyDict::new(py);
         kwargs.set_item("width", ::pyo3::IntoPyObjectExt::into_bound_py_any(value.width, py)?)?;
         kwargs.set_item("height", ::pyo3::IntoPyObjectExt::into_bound_py_any(value.height, py)?)?;
-        kwargs
-            .set_item("type", ::pyo3::IntoPyObjectExt::into_bound_py_any(value.buffer_type, py)?)?;
+        kwargs.set_item("type", {
+            let scalar: i32 = value.buffer_type.into();
+            ::pyo3::IntoPyObjectExt::into_bound_py_any(scalar, py)?
+        })?;
         kwargs.set_item("data", ::pyo3::types::PyBytes::new(py, &value.data).into_any())?;
 
         crate::py_calls::call(
@@ -11627,8 +11634,8 @@ pub mod rtc_wire {
             return Err(super::not_a(obj, "VideoFrameRef"));
         }
         Ok(::lk_agents_abi::voice::rtc::VideoFrameRef {
-            media: crate::py_values::attr_with(obj, "VideoFrameRef", "frame", |v| {
-                crate::py_objects::object_ref_from_py(v)
+            frame: crate::py_values::attr_with(obj, "VideoFrameRef", "frame", |v| {
+                crate::generated::utils::RtcVideoFrameProxy::from_host(v.as_any())
             })?,
             width: crate::py_values::attr_with(obj, "VideoFrameRef", "width", |v| {
                 crate::py_values::number_from_py::<u32>(v, "VideoFrameRef.width")

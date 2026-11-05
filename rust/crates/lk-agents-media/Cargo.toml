@@ -47,6 +47,8 @@ sha2 = "0.10"
 tempfile = "3"
 
 [dev-dependencies]
+# Host frames without a host (`utils::video::FakeFrame`).
+lk-agents-abi = { path = "../lk-agents-abi", features = ["testkit"] }
 sha2 = "0.10"
 tempfile = "3"
 

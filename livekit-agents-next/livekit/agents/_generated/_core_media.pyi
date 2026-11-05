@@ -9,17 +9,14 @@ from typing import Self
 
 from livekit.agents.tts import SynthesizedAudio
 from livekit.agents.utils.aio import Chan
-from livekit.agents.utils.media import _FrameReader
+from livekit.rtc import VideoFrame
 
 from .rtc_frames import AudioFrame
 from .transcript import TranscriptChunk
 from .usage import TokenUsage
 
-def _core_install_frame_reader(reader: _FrameReader) -> None:
-    """Hands the runtime the host's frame reader; images of host frames need it."""
-
 async def encode_image(
-    frame: object,
+    frame: VideoFrame,
     *,
     format: str = "JPEG",
     quality: int | None = None,
@@ -29,7 +26,7 @@ async def encode_image(
 ) -> bytes: ...
 
 async def serialize_image_frame(
-    frame: object,
+    frame: VideoFrame,
     inference_width: int | None = None,
     inference_height: int | None = None,
 ) -> tuple[bytes, str]:

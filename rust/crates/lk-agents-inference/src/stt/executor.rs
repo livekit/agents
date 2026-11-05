@@ -379,7 +379,7 @@ impl AudioUplink {
         }
         let samples = usize::try_from(frame.sample_rate / FRAMES_PER_SECOND).unwrap_or(0).max(1);
         let stride = usize::from(frame.num_channels) * PCM_SAMPLE_BYTES;
-        if stride == 0 || frame.sample_rate == 0 || frame.data.len() % stride != 0 {
+        if stride == 0 || frame.sample_rate == 0 || !frame.data.len().is_multiple_of(stride) {
             return Err(ApiError::new("Invalid STT audio frame").with_retryable(false));
         }
         let mut frames = Vec::new();

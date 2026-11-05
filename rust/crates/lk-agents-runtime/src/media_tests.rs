@@ -7,9 +7,9 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
-use lk_agents_abi::media::images::{ImageEncodeOptions, ImageInput};
+use lk_agents_abi::media::images::{ImageEncodeOptions, ImageFormat, ImageInput};
 use lk_agents_abi::recorder::{AudioRecorder, SessionRecorder as RecorderApi};
-use lk_agents_abi::utils::video::VideoFrame;
+use lk_agents_abi::utils::video::{VideoBufferType, VideoFrame};
 use lk_agents_inference::codecs::{AudioDecoder, decoder_limits};
 use lk_agents_media::pool::JobClass;
 use lk_agents_runtime::recording::SessionRecorder;
@@ -132,10 +132,10 @@ async fn media_never_block_measurements() {
                 })
                 .collect::<Vec<_>>(),
         );
-        for format in ["JPEG", "PNG"] {
+        for format in [ImageFormat::Jpeg, ImageFormat::Png] {
             measure(
                 "image_encode",
-                json!({"width": width, "height": height, "format": format, "streams": 4}),
+                json!({"width": width, "height": height, "format": format!("{format:?}"), "streams": 4}),
                 async {
                     let mut tasks = Vec::new();
                     for _ in 0..4 {
@@ -144,18 +144,17 @@ async fn media_never_block_measurements() {
                         tasks.push(async move {
                             let image = lk_agents_runtime::inference::images::prepare_on(
                                 &media_pool,
-                                std::sync::Arc::new(lk_agents_media::images::Images::default()),
                                 ImageInput::Frame(VideoFrame {
                                     width,
                                     height,
-                                    buffer_type: 0,
+                                    buffer_type: VideoBufferType::Rgba,
                                     data,
                                 }),
-                                ImageEncodeOptions { format: format.into(), ..Default::default() },
+                                ImageEncodeOptions { format, ..Default::default() },
                             )
                             .await
                             .unwrap();
-                            assert!(!image.0.unwrap().is_empty());
+                            assert!(!image.data.unwrap().is_empty());
                         });
                     }
                     futures_util::future::join_all(tasks).await;

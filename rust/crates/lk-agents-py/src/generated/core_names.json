@@ -143,7 +143,6 @@
     "_core_delegation_tool",
     "_core_evaluation_score",
     "_core_event_loop_blocked",
-    "_core_install_frame_reader",
     "_core_judge_tool_schemas",
     "_core_persist_text_session_state",
     "_core_playback_begin",

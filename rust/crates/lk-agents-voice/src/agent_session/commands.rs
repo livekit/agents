@@ -16,8 +16,7 @@ pub enum Command {
     Speech(SpeechCommand),
     Activity(ActivityCommand),
     Turn(TurnCommand),
-    /// The pixels stay in the binding's side table (an `ImageSource::Frame` key); the host mints
-    /// the `img_` id.
+    /// The pixels stay in the host frame (`ImageSource::Frame`); the host mints the `img_` id.
     Video(lk_agents_abi::ImageContent),
     Close(Close),
     /// An id nobody waits on is dropped.

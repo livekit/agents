@@ -80,7 +80,7 @@ mod models {
                     lk_agents_abi::utils::video::VideoFrame {
                         width: 1,
                         height: 1,
-                        buffer_type: 0,
+                        buffer_type: lk_agents_abi::utils::video::VideoBufferType::Rgba,
                         data: vec![0u8; 4].into(),
                     },
                 )

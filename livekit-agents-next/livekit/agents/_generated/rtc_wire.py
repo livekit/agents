@@ -15,6 +15,8 @@ from inspect import get_annotations
 from typing import TYPE_CHECKING, TypeAlias
 
 if TYPE_CHECKING:
+    from livekit.rtc import VideoFrame
+
     from .rtc_frames import AudioFrame
 
 
@@ -90,13 +92,13 @@ follows, which arrives as that processor received it.
 
 @dataclass(kw_only=True, slots=True)
 class VideoFrameRef:
-    """One frame off an `rtc.VideoStream`, as a host `io.VideoInput` answers `_core_next_frame()`: a
-    [`MediaRef`](lk_agents_abi::MediaRef) (the pixels never cross), the size read at the seam to
-    reject non-frames, and the frame's own capture stamp.
+    """One frame off an `rtc.VideoStream`, as a host `io.VideoInput` answers `_core_next_frame()`: the
+    host frame (the pixels never cross), the size read at the seam to reject non-frames, and the
+    frame's own capture stamp.
     """
 
-    frame: object
-    """The side-table key; the host frame is released when the last clone drops."""
+    frame: VideoFrame
+    """Released when the last clone drops."""
     width: int
     height: int
     timestamp_us: int = 0

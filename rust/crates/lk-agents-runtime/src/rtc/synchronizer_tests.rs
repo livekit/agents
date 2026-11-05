@@ -81,7 +81,7 @@ fn frame() -> MediaFrame {
     MediaFrame::Video(VideoFrame {
         width: 1,
         height: 1,
-        buffer_type: 0,
+        buffer_type: lk_agents_abi::utils::video::VideoBufferType::Rgba,
         data: bytes::Bytes::from_static(&[0; 4]),
     })
 }

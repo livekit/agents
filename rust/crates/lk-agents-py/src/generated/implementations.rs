@@ -62,7 +62,6 @@ impl super::Implementations for Selected {
     type ToolsetLifetime = ::lk_agents_runtime::toolsets::lifetime::Lifetime;
     type ToolsetGroup = ::lk_agents_runtime::toolsets::group::Group;
     type ToolsetScopes = ::lk_agents_runtime::toolsets::scopes::Scopes;
-    type FrameReaderInstall = ::lk_agents_runtime::inference::images::ImageFunctions;
     type ImageFunctions = ::lk_agents_runtime::inference::images::ImageFunctions;
     type AudioEmitter = ::lk_agents_runtime::inference::tts::emitter::AudioEmitter;
     type AudioDecoder = ::lk_agents_runtime::inference::codecs::StreamDecoder;

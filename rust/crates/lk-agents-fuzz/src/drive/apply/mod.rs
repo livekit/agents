@@ -564,9 +564,7 @@ impl Run {
                 api.set_audio_input(source).is_ok()
             }
             Input::SetVideoInput { attach } => api
-                .set_video_input(
-                    attach.then(|| fakes::FakeVideoInput::new(&registry, self.refs.clone()) as _),
-                )
+                .set_video_input(attach.then(|| fakes::FakeVideoInput::new(&registry) as _))
                 .is_ok(),
             Input::SetIoEnabled { leg, enabled } => {
                 api.set_io_enabled(io_leg(*leg).into(), *enabled).is_ok()
@@ -648,7 +646,7 @@ impl Run {
                 .is_ok(),
             Input::PushVideo {} => api.push_video(ImageContent {
                 id: "img_case".into(),
-                image: ImageSource::Frame(MediaRef::new(self.record.now().seq, &self.refs)),
+                image: ImageSource::Frame(FakeFrame::shared(self.record.now().seq)),
                 inference_width: None,
                 inference_height: None,
                 inference_detail: Default::default(),

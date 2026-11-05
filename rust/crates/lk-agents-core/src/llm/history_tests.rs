@@ -273,9 +273,9 @@ fn messages_skips_every_non_message_kind() {
     assert_eq!(c.messages().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["m"]);
 }
 
-// Catches: comparing image content by anything other than its side-table id.
+// Catches: comparing image content by anything other than its host frame's identity.
 #[test]
-fn media_content_survives_a_copy_and_compares_by_side_table_id() {
+fn media_content_survives_a_copy_and_compares_by_identity() {
     struct Noop;
     impl lk_agents_abi::RefRegistry for Noop {
         fn release(&self, _id: u64) {}
@@ -285,7 +285,9 @@ fn media_content_survives_a_copy_and_compares_by_side_table_id() {
     let image = |id| {
         ChatContent::Image(lk_agents_abi::ImageContent {
             id: "img_1".into(),
-            image: lk_agents_abi::ImageSource::Frame(lk_agents_abi::MediaRef::new(id, &registry)),
+            image: lk_agents_abi::ImageSource::Frame(
+                lk_agents_abi::utils::video::FakeFrame::shared(id),
+            ),
             inference_width: None,
             inference_height: None,
             inference_detail: lk_agents_abi::InferenceDetail::Auto,
