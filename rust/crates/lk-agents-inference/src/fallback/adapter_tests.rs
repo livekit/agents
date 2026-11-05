@@ -125,8 +125,7 @@ impl Llm for FakeLlm {
 
 fn llm_chain(entries: Vec<Arc<dyn Llm>>) -> FallbackLlm {
     let (clock, spawner, obs) = parts();
-    let tracer = lk_agents_net::telemetry::Tracer::disabled(clock.clone());
-    FallbackLlm::new(entries, ChainPolicy::llm_defaults(), clock, spawner, obs, tracer)
+    FallbackLlm::new(entries, ChainPolicy::llm_defaults(), clock, spawner, obs)
         .expect("entries")
 }
 
@@ -146,7 +145,6 @@ async fn a_sticky_chain_keeps_the_entry_that_served_after_the_primary_recovers()
             clock.clone(),
             spawner,
             obs,
-            lk_agents_net::telemetry::Tracer::disabled(clock),
         )
         .expect("entries");
 

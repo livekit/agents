@@ -17171,13 +17171,13 @@ pub mod stt {
 pub mod telemetry {
     use pyo3::prelude::*;
 
-    // Declared in rust/crates/lk-agents-abi/src/telemetry/host.rs.
+    // Declared in rust/crates/lk-agents-abi/src/telemetry/record.rs.
     static SPAN_CONTEXT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
     pub fn span_context_from_py(
         obj: &Bound<'_, PyAny>,
-    ) -> PyResult<::lk_agents_abi::telemetry::host::SpanContext> {
+    ) -> PyResult<::lk_agents_abi::telemetry::decl::SpanContext> {
         let py = obj.py();
         if !obj.is_instance(SPAN_CONTEXT.import(
             py,
@@ -17186,7 +17186,7 @@ pub mod telemetry {
         )?)? {
             return Err(super::not_a(obj, "SpanContext"));
         }
-        Ok(::lk_agents_abi::telemetry::host::SpanContext {
+        Ok(::lk_agents_abi::telemetry::decl::SpanContext {
             trace_id: crate::py_values::attr_with(obj, "SpanContext", "trace_id", |v| {
                 crate::py_values::number_from_py::<u128>(v, "SpanContext.trace_id")
             })?,
@@ -17201,9 +17201,9 @@ pub mod telemetry {
 
     pub fn span_context_to_py<'py>(
         py: Python<'py>,
-        value: ::lk_agents_abi::telemetry::host::SpanContext,
+        value: ::lk_agents_abi::telemetry::decl::SpanContext,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let ::lk_agents_abi::telemetry::host::SpanContext { trace_id, span_id, sampled } = value;
+        let ::lk_agents_abi::telemetry::decl::SpanContext { trace_id, span_id, sampled } = value;
         let kwargs = ::pyo3::types::PyDict::new(py);
         kwargs.set_item("trace_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(trace_id, py)?)?;
         kwargs.set_item("span_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(span_id, py)?)?;

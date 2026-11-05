@@ -4,12 +4,12 @@
 
 use crate::agent_activity::scheduling::SpeechId;
 use crate::audio_recognition::TurnId;
-use lk_agents_abi::telemetry::decl::{Seconds, SpanDecl, SpanRef};
+use lk_agents_abi::telemetry::decl::{Seconds, SpanDecl, SpanContext};
 use lk_agents_abi::telemetry::errors::SpanError;
 use lk_agents_abi::telemetry::spans::session::{
     AgentSessionEnd, Amd, DrainAgentActivity, OnEnter, OnExit, StartAgentActivity, UpdateAgent,
 };
-use lk_agents_core::telemetry::span::{Reserved, Span, Trace};
+use lk_agents_core::telemetry::span::{ManualSpan, Reserved, Trace};
 use std::collections::BTreeMap;
 
 /// The span an agent's activity runs in.
@@ -23,15 +23,15 @@ pub(crate) enum Under {
 /// A span that holds agent activities (`session_start`, `update_agent`): it ends once its own
 /// work is `done` and no activity under it still runs.
 pub(crate) struct Holding<D: SpanDecl> {
-    pub(crate) span: Span<D>,
+    pub(crate) span: ManualSpan<D>,
     pub(crate) done: bool,
 }
 
 /// A lifecycle callback's span and the activity span it runs in: `on_enter` in
 /// `start_agent_activity`, `on_exit` in `drain_agent_activity`. Its hook record owns it.
 pub(crate) enum HookSpan {
-    Enter { under: Under, activity: Span<StartAgentActivity>, hook: Span<OnEnter> },
-    Exit { under: Under, drain: Span<DrainAgentActivity>, hook: Span<OnExit> },
+    Enter { under: Under, activity: ManualSpan<StartAgentActivity>, hook: ManualSpan<OnEnter> },
+    Exit { under: Under, drain: ManualSpan<DrainAgentActivity>, hook: ManualSpan<OnExit> },
 }
 
 impl std::fmt::Debug for HookSpan {
@@ -49,7 +49,7 @@ impl HookSpan {
     }
 
     /// The callback's span, which the host makes current while it runs.
-    pub(crate) fn context(&self, trace: &Trace) -> Option<SpanRef> {
+    pub(crate) fn context(&self, trace: &Trace) -> Option<SpanContext> {
         match self {
             HookSpan::Enter { hook, .. } => trace.context(hook),
             HookSpan::Exit { hook, .. } => trace.context(hook),
@@ -61,18 +61,12 @@ impl HookSpan {
     pub(crate) fn end(self, trace: &mut Trace, failure: Option<&dyn SpanError>) -> Under {
         match self {
             HookSpan::Enter { under, activity, hook } => {
-                if let Some(failure) = failure {
-                    trace.fail(&hook, failure);
-                }
-                trace.end(hook, ());
+                trace.end(hook, failure.map_or(Ok(()), Err));
                 trace.end(activity, ());
                 under
             }
             HookSpan::Exit { under, drain, hook } => {
-                if let Some(failure) = failure {
-                    trace.fail(&hook, failure);
-                }
-                trace.end(hook, ());
+                trace.end(hook, failure.map_or(Ok(()), Err));
                 trace.end(drain, ());
                 under
             }
@@ -91,7 +85,7 @@ pub(crate) struct Arriving {
 
 /// The answering-machine detection the runtime's detector runs, from its attach to its verdict.
 pub(crate) struct AmdDetection {
-    pub(crate) span: Span<Amd>,
+    pub(crate) span: ManualSpan<Amd>,
 }
 
 /// The event-loop stalls a session saw, which `agent_session` ends with.
@@ -126,37 +120,37 @@ impl Blocking {
 /// turns and the speeches that produce items.
 #[derive(Default)]
 pub(crate) struct ItemTurns {
-    items: BTreeMap<String, SpanRef>,
-    user_turns: BTreeMap<TurnId, SpanRef>,
-    speeches: BTreeMap<SpeechId, SpanRef>,
+    items: BTreeMap<String, SpanContext>,
+    user_turns: BTreeMap<TurnId, SpanContext>,
+    speeches: BTreeMap<SpeechId, SpanContext>,
 }
 
 impl ItemTurns {
     /// A committed user turn: its chat items record its span.
-    pub(crate) fn user_turn(&mut self, turn: TurnId, span: SpanRef) {
+    pub(crate) fn user_turn(&mut self, turn: TurnId, span: SpanContext) {
         self.user_turns.insert(turn, span);
     }
 
     /// A speech's turn opened: its chat items record its span.
-    pub(crate) fn speech(&mut self, speech: SpeechId, span: SpanRef) {
+    pub(crate) fn speech(&mut self, speech: SpeechId, span: SpanContext) {
         self.speeches.insert(speech, span);
     }
 
-    pub(crate) fn of_user_turn(&self, turn: TurnId) -> Option<SpanRef> {
+    pub(crate) fn of_user_turn(&self, turn: TurnId) -> Option<SpanContext> {
         self.user_turns.get(&turn).copied()
     }
 
-    pub(crate) fn of_speech(&self, speech: SpeechId) -> Option<SpanRef> {
+    pub(crate) fn of_speech(&self, speech: SpeechId) -> Option<SpanContext> {
         self.speeches.get(&speech).copied()
     }
 
     /// Item `item` was produced in `span`.
-    pub(crate) fn item(&mut self, item: &str, span: SpanRef) {
+    pub(crate) fn item(&mut self, item: &str, span: SpanContext) {
         self.items.insert(item.to_owned(), span);
     }
 
     /// The turn span of each chat item, by item id.
-    pub(crate) fn items(&self) -> &BTreeMap<String, SpanRef> {
+    pub(crate) fn items(&self) -> &BTreeMap<String, SpanContext> {
         &self.items
     }
 }

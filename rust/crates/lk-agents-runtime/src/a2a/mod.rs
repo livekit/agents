@@ -61,7 +61,7 @@ pub struct Turn {
     publisher: Option<Arc<door::stream::Publisher>>,
     host_context: Option<lk_agents_abi::HostRef>,
     /// The span the handler runs in: the request's `a2a_request`.
-    span: Option<telemetry::SpanRef>,
+    span: Option<telemetry::SpanContext>,
     /// The resolvers of commits left uncertain, owned by the door.
     resolvers: Arc<TaskSet>,
 }

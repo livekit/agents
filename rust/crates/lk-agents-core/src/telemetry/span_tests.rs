@@ -1,6 +1,6 @@
 use super::*;
 use lk_agents_abi::errors::HostError;
-use lk_agents_abi::telemetry::decl::{Content, Json};
+use lk_agents_abi::telemetry::decl::{Content, Failed, Json};
 use lk_agents_abi::telemetry::decl::{Measured, Seconds};
 use lk_agents_abi::telemetry::record::Value;
 use lk_agents_abi::telemetry::spans::common::GenAiOperation;
@@ -91,7 +91,7 @@ fn attr<'a>(span: &'a SpanRecord, key: &str) -> Option<&'a Value> {
 #[test]
 fn spans_nest_under_their_parent_on_the_anchor_timeline() {
     let mut t = trace();
-    let external = SpanRef { trace_id: TraceId(42), span_id: SpanId(9), sampled: true };
+    let external = SpanContext { trace_id: 42, span_id: 9, sampled: true };
     t.step(ts(0));
     let root = t.open_root(Some(external), None, session());
     t.step(ts(5));
@@ -102,10 +102,10 @@ fn spans_nest_under_their_parent_on_the_anchor_timeline() {
     t.end(root, session_end());
     let records = t.drain();
     let [start, root] = spans(&records)[..] else { panic!("{records:?}") };
-    assert_eq!(root.parent, Some(SpanId(9)));
-    assert_eq!(root.context.trace_id, TraceId(42));
+    assert_eq!(root.parent, Some(9));
+    assert_eq!(root.context.trace_id, 42);
     assert_eq!(start.parent, Some(root.context.span_id));
-    assert_eq!(start.context.trace_id, TraceId(42));
+    assert_eq!(start.context.trace_id, 42);
     assert_eq!((start.start_unix_nanos, start.end_unix_nanos), (wall_ms(5), wall_ms(20)));
     assert_eq!((root.start_unix_nanos, root.end_unix_nanos), (wall_ms(0), wall_ms(30)));
     assert_eq!(root.name, "agent_session");
@@ -191,13 +191,11 @@ fn events_and_failures_are_recorded_on_the_span() {
     let error = HostError::new("boom");
     let error = HostError { kind: "ValueError".into(), ..error };
     t.step(ts(6));
-    t.fail(&root, &error);
-    t.step(ts(8));
-    t.end(root, session_end());
+    t.end(root, Failed { end: session_end(), error: &error });
     let records = t.drain();
     let [root] = spans(&records)[..] else { panic!("{records:?}") };
     assert_eq!(root.status, Status::Error("boom".into()));
-    assert_eq!(attr(root, "error.type"), Some(&Value::String("exception".into())));
+    assert_eq!(attr(root, "error.type"), Some(&Value::String("ValueError".into())));
     assert_eq!(attr(root, "lk.cancelled"), None);
     let names: Vec<_> =
         root.events.iter().map(|e| (e.name.to_string(), e.time_unix_nanos)).collect();
@@ -386,7 +384,7 @@ fn an_end_attribute_replaces_the_start_value_under_its_key() {
     let mut wait = t.open_in(&turn, decl);
     wait.ended = true;
     let open = t.open.remove(&wait.context.span_id).expect("open");
-    t.finish(open, wall_ms(1), Some(&Rearmed { at: ts(1), source: EouSource::Stt }));
+    t.finish(open, wall_ms(1), Some(&Rearmed { at: ts(1), source: EouSource::Stt }), true);
     t.end(turn, turn_end(None));
     t.end(root, session_end());
     let records = t.drain();

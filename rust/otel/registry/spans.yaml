@@ -811,18 +811,6 @@
           "requirement_level": "required"
         },
         {
-          "ref": "lk.input.delta",
-          "requirement_level": "recommended"
-        },
-        {
-          "ref": "lk.input.base_span_id",
-          "requirement_level": "recommended"
-        },
-        {
-          "ref": "lk.input.dropped_from_base",
-          "requirement_level": "recommended"
-        },
-        {
           "ref": "lk.pii.response.text",
           "requirement_level": "required"
         },
@@ -885,18 +873,6 @@
         },
         {
           "ref": "gen_ai.tool.definitions",
-          "requirement_level": "recommended"
-        },
-        {
-          "ref": "lk.input.delta",
-          "requirement_level": "recommended"
-        },
-        {
-          "ref": "lk.input.base_span_id",
-          "requirement_level": "recommended"
-        },
-        {
-          "ref": "lk.input.dropped_from_base",
           "requirement_level": "recommended"
         },
         {

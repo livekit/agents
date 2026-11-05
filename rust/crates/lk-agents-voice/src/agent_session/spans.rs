@@ -10,7 +10,7 @@ use crate::telemetry::{
     self, AmdDetection, Holding, SessionTelemetry, Trace, UserTurnSpan, participant_attrs,
 };
 use lk_agents_abi::Ts;
-use lk_agents_abi::telemetry::decl::{Content, Seconds, SpanDecl, SpanRef};
+use lk_agents_abi::telemetry::decl::{Content, Seconds, SpanDecl, SpanContext};
 use lk_agents_abi::telemetry::errors::SpanError;
 use lk_agents_abi::telemetry::spans::common::{GenAiOperation, ParticipantAttrs};
 use lk_agents_abi::telemetry::spans::session::{
@@ -69,7 +69,7 @@ impl VoiceDriver {
 
     /// `session_start`'s context while it is open: the room connection and the waits the runtime
     /// runs for it nest under it.
-    pub fn session_start_span(&self) -> Option<SpanRef> {
+    pub fn session_start_span(&self) -> Option<SpanContext> {
         self.telemetry.context(&self.session.starting.as_ref()?.span)
     }
 
@@ -87,7 +87,7 @@ impl VoiceDriver {
         reason: lk_agents_abi::voice::events::CloseReason,
         drain: bool,
         error: Option<&ErrorEvent>,
-    ) -> Option<telemetry::Span<SessionClose>> {
+    ) -> Option<telemetry::ManualSpan<SessionClose>> {
         use lk_agents_abi::voice::events::CloseReason as R;
         let root = self.session.span.as_ref()?;
         let reason = match reason {

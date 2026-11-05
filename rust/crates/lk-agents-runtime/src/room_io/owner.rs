@@ -70,7 +70,6 @@ pub struct RoomIo {
     started: Notify,
     agent_state: watch::Sender<Option<String>>,
     chat_registered: Mutex<bool>,
-    tracer: telemetry::Tracer,
     /// The session's startup spans, under its `session_start`; ended with the first link.
     startup: Mutex<Option<Startup>>,
 }
@@ -87,8 +86,6 @@ struct Execution {
 }
 
 impl RoomIo {
-    /// `tracer` records the startup spans.
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         room: Arc<dyn RtcRoom>,
         clock: Arc<dyn Clock>,
@@ -97,7 +94,6 @@ impl RoomIo {
         config: RoomIoConfig,
         text_next_in_chain: Option<Arc<dyn TextOutput>>,
         pool: Option<lk_agents_media::pool::MediaPool>,
-        tracer: telemetry::Tracer,
     ) -> Arc<Self> {
         let pre_connect = config.audio_input.as_ref().filter(|a| a.pre_connect_audio).map(|a| {
             PreConnectAudioHandler::new(
@@ -184,7 +180,6 @@ impl RoomIo {
             started: Notify::new(),
             agent_state: watch::channel(None).0,
             chat_registered: Mutex::new(false),
-            tracer,
             startup: Mutex::new(None),
         })
     }
@@ -199,7 +194,7 @@ impl RoomIo {
             (cx.clone(), span)
         };
         let info = ParticipantInfo { identity: identity.clone(), sid: sid.to_owned(), kind };
-        telemetry::end_with(span, Some(telemetry::participant_attrs(&info)));
+        telemetry::end(span, Some(telemetry::participant_attrs(&info)));
         if let Some(input) = &self.audio_input {
             let identity = telemetry::Content(identity.as_str().to_owned());
             input.wait_for_track(telemetry::start(
@@ -299,14 +294,16 @@ impl RoomIo {
                 match (span, &outcome) {
                     (Some(span), Ok(())) => {
                         let track_id = out.published().map(|sid| sid.as_str().to_owned());
-                        telemetry::end_with(
+                        telemetry::end(
                             span,
                             telemetry::PublishAudioOutputEnd {
                                 track_id: track_id.unwrap_or_default(),
                             },
                         );
                     }
-                    (Some(span), Err(error)) => telemetry::fail(&span, error),
+                    (Some(span), Err(error)) => {
+                        telemetry::end(span, error);
+                    }
                     (None, _) => {}
                 }
                 outcome
@@ -827,18 +824,15 @@ impl room_owner::RoomIo for RoomIo {
         self.state.lock().state().linked
     }
 
-    fn start(self: Arc<Self>, startup: telemetry::TraceContext) {
+    fn start(self: Arc<Self>, startup: telemetry::Cx) {
         if !self.transition(RoomIoState::start) {
             return;
         }
         if let Some(input) = &self.audio_input {
-            input.observe(
-                self.tracer.resume(&telemetry::TraceContext { span: None, ..startup.clone() }),
-            );
+            input.observe(startup.clone().continuing(None));
         }
-        if let Some(span) = startup.span {
-            let cx = self.tracer.resume(&telemetry::TraceContext { span: None, ..startup });
-            let cx = cx.under::<telemetry::SessionStart>(span);
+        if let Some(span) = startup.span() {
+            let cx = startup.under::<telemetry::SessionStart>(span);
             let filter = self.config.participant_identity.is_some();
             let participant =
                 telemetry::start(&cx, telemetry::WaitForParticipant { participant_filter: filter });

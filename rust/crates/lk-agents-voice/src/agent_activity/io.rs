@@ -83,7 +83,7 @@ impl AgentInput {
         &mut self,
         leg: StreamKind,
         resource: lk_agents_abi::resources::ResourceId,
-        span: Option<lk_agents_abi::telemetry::record::SpanRef>,
+        span: Option<lk_agents_abi::telemetry::record::SpanContext>,
     ) -> (u64, VoiceEffect) {
         self.next_open += 1;
         let open = self.next_open;

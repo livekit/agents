@@ -8,7 +8,7 @@ use crate::agent_session::{HookKind, VoiceDriver};
 use crate::audio_recognition::{EouDetected, TurnDetectionMode};
 use crate::events::SessionEvent;
 use crate::telemetry::{
-    self, AgentTurnSpan, Arriving, Endpointing, EouSource, Holding, HookSpan, Reply, SpanRef, Stt,
+    self, AgentTurnSpan, Arriving, Endpointing, EouSource, Holding, HookSpan, Reply, SpanContext, Stt,
     Under,
 };
 use lk_agents_abi::llm::chat_context::CopyOptions;
@@ -193,7 +193,7 @@ impl super::AgentActivity {
 impl VoiceDriver {
     /// A speech's first generation: its turn opens, or continues the discarded preemptive
     /// generation's. The runtime's work for it nests under the returned span.
-    pub(crate) fn agent_turn_started(&mut self, speech: SpeechId, reply: Reply) -> Option<SpanRef> {
+    pub(crate) fn agent_turn_started(&mut self, speech: SpeechId, reply: Reply) -> Option<SpanContext> {
         let scheduler = &mut self.activity.speech_scheduler;
         if let Some(turn) = scheduler.agent_turn(speech) {
             return turn.context(&self.telemetry);
@@ -307,7 +307,7 @@ impl VoiceDriver {
 
     /// The activity an agent's input streams open under (`start_agent_activity`, as the
     /// reference's STT pump): the arriving agent's, reserved, else the running one's.
-    pub(crate) fn activity_span(&self) -> Option<SpanRef> {
+    pub(crate) fn activity_span(&self) -> Option<SpanContext> {
         (self.activity.arriving.as_ref().map(|a| a.activity.context))
             .or(self.activity.running_activity)
     }

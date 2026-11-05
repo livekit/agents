@@ -1,5 +1,5 @@
 use super::*;
-use lk_agents_abi::telemetry::host::SpanContext;
+use lk_agents_abi::telemetry::record::SpanContext;
 use lk_agents_abi::telemetry::record::{LogRecord, Value as Otlp};
 use lk_agents_abi::telemetry::report::{
     EvaluationRecord, Outcome, RecordingOptions, ReportOutcome, ReportTag, SessionReport,
@@ -192,7 +192,7 @@ fn records_match_the_1_8_10_shapes() {
     assert_eq!(user.time_unix_nanos, 1_700_000_001_250_000_000);
     // Catches: a chat item not linked to the span of the turn it belongs to.
     let turn = user.span.expect("the item's turn");
-    assert_eq!((turn.trace_id.0, turn.span_id.0), (5, 6));
+    assert_eq!((turn.trace_id, turn.span_id), (5, 6));
     assert_eq!(records[2].span, None, "an item with no turn");
     assert_eq!(user.severity_number, 0);
     assert_eq!(user.severity_text, "unspecified");

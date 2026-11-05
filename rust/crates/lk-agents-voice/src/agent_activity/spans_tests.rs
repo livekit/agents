@@ -13,7 +13,7 @@ use crate::telemetry::{
 use crate::trace::InterruptCause;
 use lk_agents_abi::Ts;
 use lk_agents_abi::telemetry::decl::SpanDecl;
-use lk_agents_abi::telemetry::record::{Number, Record, SpanRecord, SpanRef, Status, Value};
+use lk_agents_abi::telemetry::record::{Number, Record, SpanRecord, SpanContext, Status, Value};
 use lk_agents_abi::telemetry::spans::agent_turn::ChatContextDict;
 use lk_agents_abi::telemetry::spans::session::OnEnter;
 use lk_agents_abi::telemetry::spans::user_turn::{SttEventType, UserTurnOrigin, UserTurnOutcome};
@@ -107,7 +107,7 @@ impl Session {
     }
 
     /// Speech `id` is scheduled at `n` ms and its first generation opens its turn.
-    fn speech(&mut self, n: u64, id: u64, reply: Reply) -> Option<SpanRef> {
+    fn speech(&mut self, n: u64, id: u64, reply: Reply) -> Option<SpanContext> {
         self.at(n);
         let (speech, state) = self.d.new_speech(Some(SpeechId(id)), true);
         let admitted = self.d.schedule_speech(
@@ -202,7 +202,7 @@ fn opened() -> Session {
 fn reserved<D: SpanDecl>(session: &Session, id: u64, at: Ts) -> Reserved<D> {
     let root = session.d.session.span.as_ref().expect("the session is open");
     let root = session.d.telemetry.context(root).expect("recording");
-    let context = SpanRef { span_id: lk_agents_abi::telemetry::record::SpanId(id), ..root };
+    let context = SpanContext { span_id: id, ..root };
     Reserved::new(context, 1_000_000_000 + at.as_nanos())
 }
 
@@ -480,7 +480,7 @@ fn a_handoff_is_one_update_agent_and_a_raised_hook_records_its_exception() {
     assert!(update.end_unix_nanos <= 1_000_000_000 + 400_000_000, "the entry ends the handoff");
     let exit = one(&records, "on_exit");
     assert_eq!(exit.status, Status::Error("no table".into()));
-    assert_eq!(attr(exit, "error.type"), Some(&st("exception")));
+    assert_eq!(attr(exit, "error.type"), Some(&st("ValueError")));
     assert_eq!(exit.events[0].name, "exception");
     assert!(exit.events[0].attributes.contains(&("exception.type".into(), st("ValueError"))));
     let traceback = st("Traceback (most recent call last): ...");
@@ -855,9 +855,9 @@ fn unknown_metadata_is_omitted_not_blank() {
     assert_eq!(keys, ["lk.pii.participant_identity"]);
 }
 
-fn context(span: u64) -> SpanRef {
-    let trace_id = lk_agents_abi::telemetry::record::TraceId(9);
-    SpanRef { trace_id, span_id: lk_agents_abi::telemetry::record::SpanId(span), sampled: true }
+fn context(span: u64) -> SpanContext {
+    let trace_id = 9;
+    SpanContext { trace_id, span_id: span, sampled: true }
 }
 
 // Catches: the driver drawing new spans for what `start()` reserved, so the room's connection and

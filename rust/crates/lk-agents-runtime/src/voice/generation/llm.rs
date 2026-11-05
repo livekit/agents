@@ -144,7 +144,7 @@ async fn perform_llm_inference(
             model: id.model,
         });
         // One `LlmRequestFinished` per `ChatRequested`, a request that never became a stream included.
-        let (error, data) = match llm.chat(&telemetry::Cx::NONE, &req).await {
+        let (error, data) = match llm.chat(trace.cx(), &req).await {
             Err(error) => {
                 trace.end_attempt(attempt, Some(&error));
                 let class = Some(FailureClass::of(&error));
@@ -370,7 +370,7 @@ struct LlmNodeTrace {
 }
 
 impl LlmNodeTrace {
-    fn start(shared: &SessionShared, turn: Option<telemetry::SpanRef>, req: &ChatRequest) -> Self {
+    fn start(shared: &SessionShared, turn: Option<telemetry::SpanContext>, req: &ChatRequest) -> Self {
         let span = turn.map(|turn| {
             let (provider, function): (Vec<_>, Vec<_>) =
                 req.tools.iter().partition(|tool| tool.provider_tool.is_some());
@@ -390,7 +390,6 @@ impl LlmNodeTrace {
                     function_tools: names(function),
                     provider_tools: names(provider),
                     tool_sets: Vec::new(),
-                    input: None,
                 },
             )
         });
@@ -409,22 +408,24 @@ impl LlmNodeTrace {
         failed: Option<&ProviderError>,
     ) {
         let Some(span) = self.span else { return };
-        if let Some(error) = failed {
-            telemetry::fail(&span, error);
-        }
         let (text, calls) = (trace.text(), trace.calls());
         let ttft = trace.first_chunk_at().map(|at| at.saturating_sub(self.started) as f64 / 1e9);
         if let Some(ttft) = ttft {
             let model = telemetry::model_labels(&llm.id());
             telemetry::measure(span.cx(), &telemetry::TurnLlmTtft { model }, ttft);
         }
-        telemetry::end_with(
-            span,
-            telemetry::LlmNodeEnd {
-                response_text: telemetry::Content(text.to_owned()),
-                function_calls: telemetry::Content(telemetry::Json(calls.to_vec())),
-                ttft: telemetry::Measured(ttft.map(telemetry::Seconds)),
-            },
-        );
+        let end = telemetry::LlmNodeEnd {
+            response_text: telemetry::Content(text.to_owned()),
+            function_calls: telemetry::Content(telemetry::Json(calls.to_vec())),
+            ttft: telemetry::Measured(ttft.map(telemetry::Seconds)),
+        };
+        match failed {
+            Some(error) => {
+                telemetry::end(span, telemetry::Failed { end, error });
+            }
+            None => {
+                telemetry::end(span, end);
+            }
+        }
     }
 }

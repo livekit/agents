@@ -7,10 +7,11 @@ use super::decl::SpanValue;
 use crate::errors::{ApiError, ApiErrorKind, HostError, ProviderError};
 
 /// `error.type`: the class of a recorded failure.
-#[derive(SpanValue, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(SpanValue, Debug, Clone, PartialEq, Eq)]
 pub enum ErrorType {
-    /// An application exception; `exception.type` names its class.
-    Exception,
+    /// An application exception: its class name, as OpenTelemetry's `error.type` asks.
+    #[open]
+    Exception(String),
     Timeout,
     Cancelled,
     ApiError,
@@ -35,7 +36,7 @@ pub trait SpanError {
     fn message(&self) -> String;
     /// `exception.type`: the application exception's class, else `error.type`.
     fn exception_type(&self) -> Cow<'static, str> {
-        self.error_type().as_str().into()
+        self.error_type().as_str().to_owned().into()
     }
     fn stacktrace(&self) -> Option<String> {
         None
@@ -45,13 +46,11 @@ pub trait SpanError {
 /// An application exception: the host's type, message and traceback.
 impl SpanError for HostError {
     fn error_type(&self) -> ErrorType {
-        ErrorType::Exception
+        let class = if self.kind.is_empty() { "HostError" } else { &self.kind };
+        ErrorType::Exception(class.to_owned())
     }
     fn message(&self) -> String {
         self.message.clone()
-    }
-    fn exception_type(&self) -> Cow<'static, str> {
-        if self.kind.is_empty() { "HostError".into() } else { self.kind.clone().into() }
     }
     fn stacktrace(&self) -> Option<String> {
         self.traceback.clone()
@@ -150,9 +149,25 @@ pub struct Failure {
 
 impl SpanError for Failure {
     fn error_type(&self) -> ErrorType {
-        self.kind
+        self.kind.clone()
     }
     fn message(&self) -> String {
         self.message.clone()
+    }
+}
+
+/// A borrowed failure is the failure: `telemetry::end(span, result.as_ref())`.
+impl<E: SpanError + ?Sized> SpanError for &E {
+    fn error_type(&self) -> ErrorType {
+        (**self).error_type()
+    }
+    fn message(&self) -> String {
+        (**self).message()
+    }
+    fn exception_type(&self) -> Cow<'static, str> {
+        (**self).exception_type()
+    }
+    fn stacktrace(&self) -> Option<String> {
+        (**self).stacktrace()
     }
 }

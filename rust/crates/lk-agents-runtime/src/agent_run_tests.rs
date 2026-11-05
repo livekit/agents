@@ -143,7 +143,7 @@ struct FakeHost {
     /// Every invocation a callback ran under: (callback, operation, tool, approval).
     seen: Mutex<Vec<(&'static str, Invocation)>>,
     /// The span each callback ran under.
-    under: Mutex<Vec<(&'static str, Option<lk_agents_abi::telemetry::record::SpanRef>)>>,
+    under: Mutex<Vec<(&'static str, Option<lk_agents_abi::telemetry::record::SpanContext>)>>,
     cancelled: Mutex<Vec<u64>>,
     cancel: Notify,
     /// The run's progress port, once started.
@@ -172,7 +172,7 @@ impl FakeHost {
         &self,
         callback: &'static str,
         invocation: &Invocation,
-        span: Option<lk_agents_abi::telemetry::record::SpanRef>,
+        span: Option<lk_agents_abi::telemetry::record::SpanContext>,
     ) {
         self.seen.lock().push((callback, invocation.clone()));
         self.under.lock().push((callback, span));

@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 
 use lk_agents_abi::telemetry::decl::{Parent, SpanDecl};
 use lk_agents_abi::telemetry::record::{
-    Key, Record, SpanId, SpanRecord, SpanRef, Status, TraceId, Value,
+    Key, Record, SpanRecord, SpanContext, Status, Value,
 };
 use lk_agents_abi::telemetry::spans::{MANUAL, agent_turn, session};
 use lk_agents_voice::events::SessionEvent;
@@ -64,7 +64,7 @@ impl Rule for SpansNestAndEnd {
             let key = lk_agents_abi::telemetry::semconv::otel::GEN_AI_CONVERSATION_ID;
             span.attributes.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())
         };
-        let all: BTreeMap<SpanId, &SpanRecord> =
+        let all: BTreeMap<u64, &SpanRecord> =
             spans.iter().map(|span| (span.context.span_id, *span)).collect();
         for span in &spans {
             let Some(turn) = span.parent.and_then(|id| all.get(&id)) else { continue };
@@ -98,7 +98,7 @@ impl Rule for SpansNestAndEnd {
             .map(|speech| format!("_{}", speech.id))
             .collect();
         let decl = |name: &str| MANUAL.iter().find(|d| d.name == name);
-        let mut by_id: BTreeMap<SpanId, &SpanRecord> = BTreeMap::new();
+        let mut by_id: BTreeMap<u64, &SpanRecord> = BTreeMap::new();
         for span in &spans {
             if decl(&span.name).is_none() {
                 continue;
@@ -177,8 +177,8 @@ impl Rule for SpansNestAndEnd {
 
 fn span(id: u64, parent: Option<u64>, name: &'static str, end: u64) -> SpanRecord {
     SpanRecord {
-        context: SpanRef { trace_id: TraceId(1), span_id: SpanId(id), sampled: true },
-        parent: parent.map(SpanId),
+        context: SpanContext { trace_id: 1, span_id: id, sampled: true },
+        parent: parent.map(u64),
         name: Key::Borrowed(name),
         kind: Default::default(),
         start_unix_nanos: 0,

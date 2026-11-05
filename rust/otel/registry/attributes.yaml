@@ -606,24 +606,6 @@
           "brief": "The request is a fallback adapter's recovery probe."
         },
         {
-          "id": "lk.input.base_span_id",
-          "type": "string",
-          "stability": "development",
-          "brief": "Span whose input record this one continues."
-        },
-        {
-          "id": "lk.input.delta",
-          "type": "boolean",
-          "stability": "development",
-          "brief": "The span's input record is a delta over its base span."
-        },
-        {
-          "id": "lk.input.dropped_from_base",
-          "type": "int",
-          "stability": "development",
-          "brief": "Items of the base record not carried into this one."
-        },
-        {
           "id": "lk.llm_metrics",
           "type": "string",
           "stability": "development",

@@ -1,19 +1,18 @@
 //! Spans owned by sans-I/O state machines (`telemetry.md`, "Sans-I/O: the entity owns its span").
-//! The entity a span describes holds it in a field named `span` ([`Span`]) and the machine's
+//! The entity a span describes holds it in a field named `span` ([`ManualSpan`]) and the machine's
 //! [`Trace`] (`self.telemetry`) opens and ends it: [`Trace::step`] sets the step's instant once,
-//! [`Trace::open`] / [`Trace::open_in`] open, [`Trace::end`] ends. A declaration's `#[at]` field
+//! [`Trace::open`] / [`Trace::open_in`] open, [`Trace::end`] ends, failed or not. A declaration's `#[at]` field
 //! dates a start, an end or an event before the step that records it. Ended spans leave as
 //! [`Record`]s the caller drains each step.
 
 use lk_agents_abi::Ts;
 use lk_agents_abi::telemetry::decl::{
-    Attrs, Current, EventDecl, HasEvent, MetricDecl, ParentOf, SpanDecl, finish_span,
+    Attrs, Current, EventDecl, HasEvent, MetricDecl, ParentOf, SpanDecl, SpanEnd, finish_span,
 };
-use lk_agents_abi::telemetry::errors::{ErrorType, SpanError};
+use lk_agents_abi::telemetry::errors::ErrorType;
 use lk_agents_abi::telemetry::record::{
-    EventRecord, FRAMEWORK, JobKey, Key, KeyValues, Measurement, Number, Record, SpanId, SpanKind,
-    SpanRecord, SpanRef, Status, TraceId,
-};
+    EventRecord, FRAMEWORK, JobKey, Key, KeyValues, Measurement, Number, Record, SpanKind,
+    SpanRecord, SpanContext, Status};
 use lk_agents_abi::telemetry::spans::common::{EverySpan, Exception};
 use lk_agents_abi::telemetry::spans::session::AgentSession;
 use std::collections::BTreeMap;
@@ -39,14 +38,14 @@ pub fn seeded_ids(seed: u64) -> IdSource {
 /// it before the voice core learns the session started, so the core opens the span with this
 /// context and start instead of drawing its own.
 pub struct Reserved<D: SpanDecl> {
-    pub context: SpanRef,
+    pub context: SpanContext,
     /// Unix nanoseconds: when the work it describes began.
     pub start: u64,
     _decl: PhantomData<fn() -> D>,
 }
 
 impl<D: SpanDecl> Reserved<D> {
-    pub fn new(context: SpanRef, start: u64) -> Self {
+    pub fn new(context: SpanContext, start: u64) -> Self {
         Reserved { context, start, _decl: PhantomData }
     }
 }
@@ -71,13 +70,10 @@ impl<D: SpanDecl> PartialEq for Reserved<D> {
     }
 }
 
-/// The handle the entity a span describes owns, in a field named `span`.
-pub type Span<D> = ManualSpan<D>;
-
 /// What an open span recorded so far.
 struct Open {
-    context: SpanRef,
-    parent: Option<SpanId>,
+    context: SpanContext,
+    parent: Option<u64>,
     name: &'static str,
     kind: SpanKind,
     start: u64,
@@ -99,13 +95,13 @@ pub struct Trace {
     /// The step's instant, set once at the machine's step entry.
     now: Ts,
     /// The machine's root span (`agent_session`): the parent [`Trace::open`] implies.
-    root: Option<SpanRef>,
+    root: Option<SpanContext>,
     /// The root ended: spans opened after it record nothing.
     closed: bool,
     anchor: (Ts, SystemTime),
     job: Option<JobKey>,
     conversation_id: Option<String>,
-    open: BTreeMap<SpanId, Open>,
+    open: BTreeMap<u64, Open>,
     opened: u64,
     swept: u32,
     records: Vec<Record>,
@@ -150,10 +146,10 @@ impl Trace {
     /// [`Trace::open`] implies as parent.
     pub fn open_root<D: SpanDecl>(
         &mut self,
-        parent: Option<SpanRef>,
+        parent: Option<SpanContext>,
         reserved: Option<Reserved<D>>,
         decl: D,
-    ) -> Span<D>
+    ) -> ManualSpan<D>
     where
         Current: ParentOf<D>,
     {
@@ -169,23 +165,23 @@ impl Trace {
     }
 
     /// Opens a span under the root, at the step's instant or its declaration's `#[at]`.
-    pub fn open<D: SpanDecl>(&mut self, decl: D) -> Span<D>
+    pub fn open<D: SpanDecl>(&mut self, decl: D) -> ManualSpan<D>
     where
         AgentSession: ParentOf<D>,
     {
-        let Some(root) = self.root.filter(|_| !self.closed) else { return Span::dormant() };
+        let Some(root) = self.root.filter(|_| !self.closed) else { return ManualSpan::dormant() };
         let at = self.start_of(Some(root), &decl);
         self.start(at, Some(root), None, decl)
     }
 
     /// Opens a child of `parent`, at the step's instant or its declaration's `#[at]`, clamped to
     /// the parent's start.
-    pub fn open_in<P, D: SpanDecl>(&mut self, parent: &Span<P>, decl: D) -> Span<D>
+    pub fn open_in<P, D: SpanDecl>(&mut self, parent: &ManualSpan<P>, decl: D) -> ManualSpan<D>
     where
         P: SpanDecl + ParentOf<D>,
     {
         if !parent.recording {
-            return Span::dormant();
+            return ManualSpan::dormant();
         }
         let at = self.start_of(Some(parent.context), &decl);
         self.start(at, Some(parent.context), None, decl)
@@ -195,30 +191,49 @@ impl Trace {
     /// context and start, clamped to the parent's start.
     pub fn open_in_reserved<P, D: SpanDecl>(
         &mut self,
-        parent: &Span<P>,
+        parent: &ManualSpan<P>,
         reserved: Reserved<D>,
         decl: D,
-    ) -> Span<D>
+    ) -> ManualSpan<D>
     where
         P: SpanDecl + ParentOf<D>,
     {
         if !parent.recording {
-            return Span::dormant();
+            return ManualSpan::dormant();
         }
         let at = reserved.start.max(self.floor(parent.context));
         self.start(at, Some(parent.context), Some(reserved.context), decl)
     }
 
-    /// Ends `span` with its end attributes, at the step's instant or the end's `#[at]`.
-    pub fn end<D: SpanDecl>(&mut self, mut span: Span<D>, end: D::End) {
+    /// Ends `span` with its end attributes or its failure ([`SpanEnd`]), at the step's instant
+    /// or the end's `#[at]`.
+    pub fn end<D: SpanDecl>(&mut self, mut span: ManualSpan<D>, outcome: impl SpanEnd<D>) {
         span.ended = true;
-        let Some(open) = self.open.remove(&span.context.span_id) else { return };
-        let at = self.wall(end.at().unwrap_or(self.now));
-        self.finish(open, at, Some(&end));
+        let Some(mut open) = self.open.remove(&span.context.span_id) else { return };
+        let end = outcome.attributes();
+        let at = self.wall(end.and_then(Attrs::at).unwrap_or(self.now));
+        if let Some(error) = outcome.error() {
+            let exception = Exception {
+                kind: error.exception_type().into_owned(),
+                message: error.message(),
+                stacktrace: error.stacktrace(),
+            };
+            let mut attributes = KeyValues::new();
+            exception.write(&mut attributes);
+            let time_unix_nanos = self.wall(self.now).max(open.start);
+            open.events.push(EventRecord {
+                name: Key::Borrowed(Exception::NAME),
+                time_unix_nanos,
+                attributes,
+            });
+            open.status = Status::Error(exception.message);
+            open.error_type = Some(error.error_type());
+        }
+        self.finish(open, at, end, true);
     }
 
     /// Adds a declared event, at the step's instant or the event's `#[at]`.
-    pub fn event<D, E: EventDecl>(&mut self, span: &Span<D>, event: E)
+    pub fn event<D, E: EventDecl>(&mut self, span: &ManualSpan<D>, event: E)
     where
         D: SpanDecl + HasEvent<E>,
     {
@@ -226,24 +241,9 @@ impl Trace {
         push_event(self, span.context.span_id, at, E::NAME, &event);
     }
 
-    /// Records a failure on `span`: status `ERROR`, `error.type` and an `exception` event.
-    pub fn fail<D: SpanDecl>(&mut self, span: &Span<D>, error: &dyn SpanError) {
-        let at = self.wall(self.now);
-        let exception = Exception {
-            kind: error.exception_type().into_owned(),
-            message: error.message(),
-            stacktrace: error.stacktrace(),
-        };
-        push_event(self, span.context.span_id, at, Exception::NAME, &exception);
-        if let Some(open) = self.open.get_mut(&span.context.span_id) {
-            open.status = Status::Error(exception.message);
-            open.error_type = Some(error.error_type());
-        }
-    }
-
     /// Replaces `span`'s start attributes, as OpenTelemetry's `set_attributes` does on a live
     /// span: for what the entity learns after the span opened.
-    pub fn set<D: SpanDecl>(&mut self, span: &Span<D>, decl: D) {
+    pub fn set<D: SpanDecl>(&mut self, span: &ManualSpan<D>, decl: D) {
         let Some(open) = self.open.get_mut(&span.context.span_id) else { return };
         open.attributes.clear();
         decl.write(&mut open.attributes);
@@ -253,7 +253,7 @@ impl Trace {
 
     /// What a child, a link or an effect of `span` carries; `None` for a span that records
     /// nothing (opened outside the root's life).
-    pub fn context<D: SpanDecl>(&self, span: &Span<D>) -> Option<SpanRef> {
+    pub fn context<D: SpanDecl>(&self, span: &ManualSpan<D>) -> Option<SpanContext> {
         span.recording.then_some(span.context)
     }
 
@@ -266,13 +266,13 @@ impl Trace {
 
     /// A span's start: its declaration's `#[at]`, else the step's instant, never before its
     /// parent's start.
-    fn start_of<D: SpanDecl>(&self, parent: Option<SpanRef>, decl: &D) -> u64 {
+    fn start_of<D: SpanDecl>(&self, parent: Option<SpanContext>, decl: &D) -> u64 {
         let at = self.wall(decl.at().unwrap_or(self.now));
         parent.map_or(at, |p| at.max(self.floor(p)))
     }
 
     /// The start of open span `span`, or 0.
-    fn floor(&self, span: SpanRef) -> u64 {
+    fn floor(&self, span: SpanContext) -> u64 {
         self.open.get(&span.span_id).map_or(0, |o| o.start)
     }
 
@@ -285,7 +285,7 @@ impl Trace {
     /// closing; a span reaching this sweep is a bug the DST reports. Returns how many it ended.
     pub fn close(&mut self, now: Ts) -> u32 {
         let at = self.wall(now);
-        let depth = |id: SpanId, open: &BTreeMap<SpanId, Open>| {
+        let depth = |id: u64, open: &BTreeMap<u64, Open>| {
             let mut depth = 0u32;
             let mut parent = open.get(&id).and_then(|o| o.parent);
             while let Some(p) = parent.and_then(|p| open.get(&p)) {
@@ -294,13 +294,13 @@ impl Trace {
             }
             depth
         };
-        let mut ids: Vec<(u32, u64, SpanId)> =
+        let mut ids: Vec<(u32, u64, u64)> =
             self.open.iter().map(|(id, o)| (depth(*id, &self.open), o.order, *id)).collect();
         ids.sort_by(|a, b| b.cmp(a));
         let swept = ids.len() as u32;
         for (_, _, id) in ids {
             if let Some(open) = self.open.remove(&id) {
-                self.finish::<()>(open, at, None);
+                self.finish::<()>(open, at, None, false);
             }
         }
         self.swept += swept;
@@ -351,8 +351,8 @@ impl Trace {
     fn start<D: SpanDecl>(
         &mut self,
         at: u64,
-        parent: Option<SpanRef>,
-        reserved: Option<SpanRef>,
+        parent: Option<SpanContext>,
+        reserved: Option<SpanContext>,
         decl: D,
     ) -> ManualSpan<D> {
         const {
@@ -366,11 +366,11 @@ impl Trace {
         let context = reserved.unwrap_or_else(|| {
             let trace_id = match parent {
                 Some(p) => p.trace_id,
-                None => TraceId(u128::from(self.next_id()) << 64 | u128::from(self.next_id())),
+                None => u128::from(self.next_id()) << 64 | u128::from(self.next_id()),
             };
-            SpanRef {
+            SpanContext {
                 trace_id,
-                span_id: SpanId(self.next_id()),
+                span_id: self.next_id(),
                 sampled: parent.is_none_or(|p| p.sampled),
             }
         });
@@ -397,8 +397,8 @@ impl Trace {
         ManualSpan { context, ended: false, recording: true, _decl: PhantomData }
     }
 
-    /// Ends `open` at `at`, or after its children; without an `end`, swept as cancelled.
-    fn finish<E: Attrs>(&mut self, open: Open, at: u64, end: Option<&E>) {
+    /// Ends `open` at `at`, or after its children; not `ended` by its owner, swept as cancelled.
+    fn finish<E: Attrs>(&mut self, open: Open, at: u64, end: Option<&E>, ended: bool) {
         let Open {
             context,
             parent,
@@ -420,7 +420,7 @@ impl Trace {
         let every = EverySpan {
             conversation_id: self.conversation_id.clone(),
             error_type,
-            cancelled: end.is_none().then_some(true),
+            cancelled: (!ended).then_some(true),
         };
         let span = SpanRecord {
             context,
@@ -444,7 +444,7 @@ impl Trace {
 /// A span ended only by the entity that owns it (`telemetry.md`, "Two span handles").
 #[must_use = "a ManualSpan is ended by its owner"]
 pub struct ManualSpan<D: SpanDecl> {
-    context: SpanRef,
+    context: SpanContext,
     ended: bool,
     /// `false`: opened outside its trace's root life; it records nothing.
     recording: bool,
@@ -460,18 +460,18 @@ impl<D: SpanDecl> std::fmt::Debug for ManualSpan<D> {
 impl<D: SpanDecl> ManualSpan<D> {
     /// A span opened outside its trace's root life: every call on it records nothing.
     fn dormant() -> Self {
-        let none = SpanRef { trace_id: TraceId(0), span_id: SpanId(0), sampled: false };
+        let none = SpanContext { trace_id: 0, span_id: 0, sampled: false };
         ManualSpan { context: none, ended: false, recording: false, _decl: PhantomData }
     }
 
     /// The span's context, recording or not; the machine reads it through [`Trace::context`].
     #[cfg(test)]
-    pub(crate) fn context(&self) -> SpanRef {
+    pub(crate) fn context(&self) -> SpanContext {
         self.context
     }
 }
 
-fn push_event(trace: &mut Trace, span: SpanId, at: u64, name: &'static str, event: &dyn Attrs) {
+fn push_event(trace: &mut Trace, span: u64, at: u64, name: &'static str, event: &dyn Attrs) {
     let Some(open) = trace.open.get_mut(&span) else { return };
     let mut attributes = KeyValues::new();
     event.write(&mut attributes);

@@ -38,8 +38,6 @@ pub struct AgentNodes {
     host: Arc<dyn SessionNodes>,
     clock: Arc<dyn Clock>,
     spawner: fn() -> Result<Arc<dyn Spawner>, String>,
-    /// Records the requests a default node makes.
-    tracer: telemetry::Tracer,
 }
 
 impl lk_agents_abi::voice::nodes::AgentNodes for AgentNodes {
@@ -50,7 +48,6 @@ impl lk_agents_abi::voice::nodes::AgentNodes for AgentNodes {
             host,
             clock: Arc::clone(&env.clock),
             spawner: env.spawner,
-            tracer: env.tracer.clone(),
         }
     }
 }

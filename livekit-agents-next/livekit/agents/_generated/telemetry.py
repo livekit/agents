@@ -2,7 +2,7 @@
 #
 # Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[host(record)]`
 # declarations in:
-#     rust/crates/lk-agents-abi/src/telemetry/host.rs
+#     rust/crates/lk-agents-abi/src/telemetry/record.rs
 #     rust/crates/lk-agents-abi/src/telemetry/report/mod.rs
 #
 # Edit the Rust declaration and re-run `cargo run -p lk-agents-codegen -- --write`. CI regenerates and fails on a
@@ -18,9 +18,11 @@ if TYPE_CHECKING:
     from .usage import Usage
 
 
-@dataclass(kw_only=True, slots=True)
+@dataclass(frozen=True, kw_only=True, slots=True)
 class SpanContext:
-    """A span's W3C identity as the host passes and reads it."""
+    """A span's W3C identity: what a child, a link, an effect, a host call or a `traceparent`
+    carries. Ids are never zero; [`SpanContext::valid`] refuses a host's zero ids.
+    """
 
     trace_id: int
     span_id: int

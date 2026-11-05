@@ -97,22 +97,41 @@ pub fn span_value(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
         ));
     };
     let ident = &input.ident;
+    let mut open = false;
     let arms = data
         .variants
         .iter()
         .map(|v| {
+            let name = &v.ident;
+            if t::variant_open(v) {
+                if open || !matches!(&v.fields, syn::Fields::Unnamed(f) if f.unnamed.len() == 1) {
+                    return Err(syn::Error::new_spanned(
+                        v,
+                        "one `#[open]` variant carries its value: `Variant(String)`",
+                    ));
+                }
+                open = true;
+                return Ok(quote!(#ident::#name(value) => value.as_str()));
+            }
             if !matches!(v.fields, syn::Fields::Unit) {
-                return Err(syn::Error::new_spanned(v, "a `SpanValue` variant carries no data"));
+                return Err(syn::Error::new_spanned(
+                    v,
+                    "a `SpanValue` variant carries no data, unless `#[open]`",
+                ));
             }
             let wire = t::variant_wire(v)?;
-            let name = &v.ident;
             Ok(quote!(#ident::#name => #wire))
         })
         .collect::<syn::Result<Vec<_>>>()?;
+    let as_str = if open {
+        quote!(pub fn as_str(&self) -> &str)
+    } else {
+        quote!(pub const fn as_str(&self) -> &'static str)
+    };
     Ok(quote! {
         impl #ident {
             /// The wire string.
-            pub const fn as_str(&self) -> &'static str {
+            #as_str {
                 match self { #( #arms ),* }
             }
         }
@@ -155,6 +174,22 @@ pub fn role(role: &str, args: TokenStream, item: TokenStream) -> syn::Result<Tok
                     const MANUAL: bool = #manual;
                     const PARENTS: &'static [#d::Parent] =
                         &[#( <#parents as #d::SpanParent>::PARENT ),*];
+                }
+                impl #d::SpanEnd<#ident> for #end {
+                    fn attributes(&self) -> ::core::option::Option<&#end> {
+                        ::core::option::Option::Some(self)
+                    }
+                    fn error(&self) -> ::core::option::Option<&dyn ::lk_agents_abi::telemetry::errors::SpanError> {
+                        ::core::option::Option::None
+                    }
+                }
+                impl #d::SpanEnd<#ident> for &#end {
+                    fn attributes(&self) -> ::core::option::Option<&#end> {
+                        ::core::option::Option::Some(self)
+                    }
+                    fn error(&self) -> ::core::option::Option<&dyn ::lk_agents_abi::telemetry::errors::SpanError> {
+                        ::core::option::Option::None
+                    }
                 }
                 #( impl #d::ParentOf<#ident> for #parents {} )*
                 #( impl #d::HasEvent<#events> for #ident {} )*
@@ -205,7 +240,7 @@ pub fn role(role: &str, args: TokenStream, item: TokenStream) -> syn::Result<Tok
                 impl #d::RecordDecl for #ident {
                     const SCOPE: &'static str = #scope;
                     const BODY: &'static str = #body;
-                    fn span(&self) -> ::core::option::Option<#d::SpanRef> { #span }
+                    fn span(&self) -> ::core::option::Option<#d::SpanContext> { #span }
                 }
             }
         }
@@ -249,7 +284,8 @@ pub fn span_fn(args: TokenStream, mut function: syn::ItemFn) -> syn::Result<Toke
             let cx: &#t::Cx = __span.cx();
             #run
         };
-        #t::end(__span, __result)
+        #t::end(__span, __result.as_ref());
+        __result
     }})?;
     Ok(quote!(#function))
 }
@@ -325,7 +361,8 @@ mod tests {
         }
     }
 
-    // Catches: a variant spelled other than snake_case, or a data-carrying variant accepted.
+    // Catches: a variant spelled other than snake_case, a data-carrying variant accepted, or an
+    // `#[open]` variant not written as its value.
     #[test]
     fn span_values_are_snake_case_variants() {
         let out = derive(super::span_value, quote! { enum Origin { ServerSpeech, Text } });
@@ -334,6 +371,15 @@ mod tests {
         assert!(out.contains("S :: Up => \"CONN_UP\""), "{out}");
         let out = derive(super::span_value, quote! { enum E { A(u8) } });
         assert!(out.contains("carries no data"), "{out}");
+        let out = derive(super::span_value, quote! { enum E { #[open] Other(String), A } });
+        assert!(out.contains("E :: Other (value) => value . as_str ()"), "{out}");
+        assert!(out.contains("pub fn as_str (& self) -> & str"), "{out}");
+        for item in [
+            quote! { enum E { #[open] Other } },
+            quote! { enum E { #[open] A(String), #[open] B(String) } },
+        ] {
+            assert!(derive(super::span_value, item).contains("one `#[open]`"));
+        }
     }
 
     // Catches: the body escaping the span's context, its result not ending the span, or a
@@ -360,7 +406,10 @@ mod tests {
             "{out}"
         );
         assert!(out.contains("async { let __result : Result < Response , Error > ="), "{out}");
-        assert!(out.contains(":: lk_agents_net :: telemetry :: end (__span , __result)"), "{out}");
+        assert!(
+            out.contains(":: lk_agents_net :: telemetry :: end (__span , __result . as_ref ()) ;"),
+            "{out}"
+        );
         let sync = syn::parse2(quote! { fn f(cx: &Cx) -> Result<u8, E> { Ok(1) } }).unwrap();
         let out = super::span_fn(quote!(Marker {}), sync).unwrap().to_string();
         assert!(out.contains("(| | -> Result < u8 , E > { { Ok (1) } }) ()"), "{out}");
@@ -439,7 +488,7 @@ mod tests {
         let out = role(
             "record",
             quote!(scope = "chat_history", body = "chat item"),
-            quote! { struct R { #[attr("chat.item")] item: KvList<JsonObject>, #[span_id] turn: Option<SpanRef> } },
+            quote! { struct R { #[attr("chat.item")] item: KvList<JsonObject>, #[span_id] turn: Option<SpanContext> } },
         );
         assert!(
             out.contains("const BODY : & 'static str = \"chat item\"")

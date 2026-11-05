@@ -1015,21 +1015,6 @@
           "key": "lk.tool_sets",
           "type": "string[]",
           "required": true
-        },
-        {
-          "key": "lk.input.delta",
-          "type": "boolean",
-          "required": false
-        },
-        {
-          "key": "lk.input.base_span_id",
-          "type": "string",
-          "required": false
-        },
-        {
-          "key": "lk.input.dropped_from_base",
-          "type": "int",
-          "required": false
         }
       ],
       "end": [
@@ -1375,21 +1360,6 @@
               }
             ]
           }
-        },
-        {
-          "key": "lk.input.delta",
-          "type": "boolean",
-          "required": false
-        },
-        {
-          "key": "lk.input.base_span_id",
-          "type": "string",
-          "required": false
-        },
-        {
-          "key": "lk.input.dropped_from_base",
-          "type": "int",
-          "required": false
         },
         {
           "key": "lk.fallback.recovery",
@@ -4255,7 +4225,6 @@
           "required": false,
           "registry": "otel",
           "members": [
-            "exception",
             "timeout",
             "cancelled",
             "api_error",
@@ -5771,7 +5740,6 @@
           "required": false,
           "registry": "otel",
           "members": [
-            "exception",
             "timeout",
             "cancelled",
             "api_error",

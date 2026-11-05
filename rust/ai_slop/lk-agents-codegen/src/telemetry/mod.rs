@@ -721,11 +721,6 @@ impl Reader<'_> {
                     _ => return Err(format!("{at}: `{name}` is not an attribute type")),
                 });
             }
-            Found::Item { module: m, .. }
-                if self.krate.modules[*m].path == ["telemetry", "record"] && name == "SpanId" =>
-            {
-                return Ok(leaf(Wire::String));
-            }
             Found::Item { module: m, item } => {
                 if let syn::Item::Enum(e) = &self.krate.modules[*m].items[*item]
                     && derives(&e.attrs, "SpanValue")
@@ -733,6 +728,7 @@ impl Reader<'_> {
                     let members = e
                         .variants
                         .iter()
+                        .filter(|v| !t::variant_open(v))
                         .map(|v| t::variant_wire(v).map_err(|e| format!("{at}: {e}")))
                         .collect::<Result<_, _>>()?;
                     return Ok(Ty {

@@ -5,33 +5,7 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 
-use super::record::{SpanId, SpanRef, TraceId};
-
-/// A span's W3C identity as the host passes and reads it.
-#[crate::host(record(module = "telemetry", extract, emit))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SpanContext {
-    pub trace_id: u128,
-    pub span_id: u64,
-    pub sampled: bool,
-}
-
-impl SpanContext {
-    /// `None` for an invalid (zero) id.
-    pub fn span(self) -> Option<SpanRef> {
-        (self.trace_id != 0 && self.span_id != 0).then_some(SpanRef {
-            trace_id: TraceId(self.trace_id),
-            span_id: SpanId(self.span_id),
-            sampled: self.sampled,
-        })
-    }
-}
-
-impl From<SpanRef> for SpanContext {
-    fn from(span: SpanRef) -> Self {
-        SpanContext { trace_id: span.trace_id.0, span_id: span.span_id.0, sampled: span.sampled }
-    }
-}
+use super::record::SpanContext;
 
 /// A span started through the host's OpenTelemetry API (an application span, or a framework span
 /// around host-only code). Ended once; recorded by the process's exporter.

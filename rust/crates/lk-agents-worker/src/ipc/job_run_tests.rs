@@ -5,7 +5,7 @@ use super::*;
 use lk_agents_abi::BoxFuture;
 use lk_agents_abi::errors::RefRegistry;
 use lk_agents_abi::telemetry::policy::UPLOAD_TIMEOUT_SECONDS;
-use lk_agents_abi::telemetry::record::{Record, RecordSink, SpanRecord, SpanRef, Status};
+use lk_agents_abi::telemetry::record::{Record, RecordSink, SpanRecord, SpanContext, Status};
 use lk_agents_abi::worker::ipc_host::JobRun as _;
 use lk_agents_abi::worker::job::StartJobFields;
 use lk_agents_net::telemetry::Tracer;
@@ -38,7 +38,7 @@ struct Host {
     cancelled: Arc<AtomicBool>,
     events: Mutex<Vec<&'static str>>,
     /// Each step and the span current in it.
-    calls: Mutex<Vec<(&'static str, Option<SpanRef>)>>,
+    calls: Mutex<Vec<(&'static str, Option<SpanContext>)>>,
     logs: Mutex<Vec<String>>,
 }
 

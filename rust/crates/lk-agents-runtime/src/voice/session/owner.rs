@@ -68,7 +68,7 @@ struct Startup {
     storage: Arc<SessionStorage>,
     host: Arc<dyn SessionHost>,
     /// The span current at `start()` and the job: where the session's spans go.
-    trace: telemetry::TraceContext,
+    trace: telemetry::Cx,
     job_ids: telemetry::JobIds,
     /// The session's spans, reserved at `start()` so startup work runs under them.
     opening: telemetry::Opening,
@@ -128,13 +128,14 @@ impl SessionEvents for Events {
 
 impl Inner {
     async fn open(self: &Arc<Self>, startup: Startup) -> Result<(), HostError> {
-        let Startup { storage, host, mut trace, job_ids, mut opening } = startup;
+        let Startup { storage, host, trace, job_ids, mut opening } = startup;
         let ready =
             storage.open_ready().await.map_err(|error| HostError::new(error.to_string()))?;
         // `gen_ai.conversation.id` is the call's thread when it has one, else the job's.
-        if let Some(thread) = ready.thread() {
-            trace.conversation = Some(thread);
-        }
+        let trace = match ready.thread() {
+            Some(thread) => trace.with_conversation(Some(&thread)),
+            None => trace,
+        };
         let bindings = host.prepare(&telemetry::Cx::NONE).await?.bindings();
         if let Some(recorder) = bindings.recorder {
             // Retain it before waiting for readiness: even a failed open must be finalized.
@@ -144,11 +145,8 @@ impl Inner {
         let mut args = bindings.args;
         if let Some(hooks) = args.hooks.clone() {
             // The first agent's activity starts here: its toolsets are set up inside it.
-            let starting = self
-                .env
-                .tracer
-                .resume(&trace)
-                .under::<telemetry::SessionStart>(opening.start.context);
+            let starting =
+                trace.clone().under::<telemetry::SessionStart>(opening.start.context);
             let activity = telemetry::reserve::<telemetry::StartAgentActivity>(&starting);
             opening.activity = Some(activity);
             let span = starting.under::<telemetry::StartAgentActivity>(activity.context);
@@ -164,8 +162,9 @@ impl Inner {
                 }
                 Ok::<_, HostError>(())
             };
-            telemetry::check(&span, setup.await)?;
-            telemetry::end_with(span, ());
+            let set_up = setup.await;
+            telemetry::end(span, set_up.as_ref());
+            set_up?;
         }
         args.on_event =
             Some(Arc::new(Events { owner: Arc::downgrade(self), host: args.on_event.take() }));
@@ -273,13 +272,13 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
                     ),
                     None => (None, Default::default()),
                 };
-                let trace = telemetry::TraceContext { span: cx.span(), job, ..Default::default() };
+                let trace = self.0.env.tracer.root().continuing(cx.span()).with_job(job);
                 // `agent_session` and `session_start` from `start()`: the room connects and the
                 // first agent's toolsets set up under them before the driver opens them.
-                let cx = self.0.env.tracer.resume(&trace);
-                let session = telemetry::reserve::<telemetry::AgentSession>(&cx);
+                let cx = &trace;
+                let session = telemetry::reserve::<telemetry::AgentSession>(cx);
                 let start = telemetry::reserve::<telemetry::SessionStart>(
-                    &cx.under::<telemetry::AgentSession>(session.context),
+                    &cx.clone().under::<telemetry::AgentSession>(session.context),
                 );
                 let opening = telemetry::Opening { session, start, activity: None };
                 let startup = Startup { storage, host, trace, job_ids, opening };

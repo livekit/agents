@@ -72,7 +72,7 @@ pub fn records(report: &SessionReport, options: &RecordingOptions) -> Vec<LogRec
 
     if options.transcript {
         for item in &report.chat_history {
-            let turn = report.turns.get(item.id()).and_then(|span| span.span());
+            let turn = report.turns.get(item.id()).and_then(|span| span.valid());
             let record = ChatItemLog { item: KvList(encode_chat_item(item)), turn };
             let error = matches!(item, ChatItem::FunctionCallOutput(o) if o.is_error);
             let at = item.created_at().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();

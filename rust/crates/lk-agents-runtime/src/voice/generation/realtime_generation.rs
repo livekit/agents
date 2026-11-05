@@ -558,7 +558,7 @@ struct RealtimeSpansState {
     /// Metrics that arrived while their response's span was open, by response id.
     early: std::collections::VecDeque<RealtimeModelMetrics>,
     /// Ended responses still waiting for their metrics, by response id.
-    ended: std::collections::VecDeque<(String, telemetry::SpanRef)>,
+    ended: std::collections::VecDeque<(String, telemetry::SpanContext)>,
 }
 
 /// Bounds the responses remembered for metrics that never come.
@@ -573,7 +573,7 @@ impl RealtimeSpans {
     pub(crate) fn start(
         &self,
         shared: &SessionShared,
-        turn: Option<telemetry::SpanRef>,
+        turn: Option<telemetry::SpanContext>,
     ) -> Option<RealtimeSpan> {
         let model = self.0.lock().model.clone()?;
         let span = telemetry::start(
@@ -603,15 +603,17 @@ impl RealtimeSpans {
         let model = state.model.clone();
         match (early, response_id) {
             (Some(metrics), _) => {
-                telemetry::end_with(span.0, Some(response(&metrics, model.as_ref())))
+                telemetry::end(span.0, Some(response(&metrics, model.as_ref())));
             }
             (None, Some(id)) => {
                 if let Some(context) = span.0.cx().span() {
                     remember(&mut state.ended, (id.to_owned(), context));
                 }
-                telemetry::end_with(span.0, None);
+                telemetry::end(span.0, None);
             }
-            (None, None) => telemetry::end_with(span.0, None),
+            (None, None) => {
+                telemetry::end(span.0, None);
+            }
         }
     }
 
@@ -633,7 +635,7 @@ impl RealtimeSpans {
                         response: response(m, model.as_ref()),
                     },
                 );
-                telemetry::end_with(late, ());
+                telemetry::end(late, ());
             }
             None => remember(&mut state.early, m.clone()),
         }

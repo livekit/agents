@@ -3,7 +3,7 @@
 //! attribute (`spans`, `instruments`, `report::records`); `lk-agents-codegen` reads them into the
 //! registry, the consumer schema and the Python constants.
 
-pub use super::record::{InstrumentKind, KeyValues, Number, SpanKind, SpanRef, Value};
+pub use super::record::{InstrumentKind, KeyValues, Number, SpanKind, SpanContext, Value};
 pub use lk_agents_host_derive::{Attrs, SpanValue, event, metric, record, span};
 
 use super::record::Key;
@@ -62,6 +62,53 @@ pub trait SpanDecl: Attrs {
     const MANUAL: bool;
     /// The declared parents, for checks against a recorded span.
     const PARENTS: &'static [Parent];
+}
+
+/// What a span ends with (`telemetry::end`, `Trace::end`): its declared end attributes, an error
+/// or an `Err` (the span failed), or [`Failed`] (both). Every declaration's `End` is one.
+pub trait SpanEnd<D: SpanDecl> {
+    /// `None`: ended without end attributes.
+    fn attributes(&self) -> Option<&D::End>;
+    /// The failure the span ended with: status `ERROR`, `error.type` and an `exception` event.
+    fn error(&self) -> Option<&dyn super::errors::SpanError>;
+}
+
+/// An `Ok` ends with its value's attributes; an `Err` ends the span as failed.
+impl<D: SpanDecl, T: SpanEnd<D>, E: super::errors::SpanError> SpanEnd<D> for Result<T, E> {
+    fn attributes(&self) -> Option<&D::End> {
+        self.as_ref().ok().and_then(SpanEnd::attributes)
+    }
+    fn error(&self) -> Option<&dyn super::errors::SpanError> {
+        match self {
+            Ok(value) => value.error(),
+            Err(error) => Some(error),
+        }
+    }
+}
+
+/// An error ends the span as failed, without end attributes.
+impl<D: SpanDecl, E: super::errors::SpanError> SpanEnd<D> for E {
+    fn attributes(&self) -> Option<&D::End> {
+        None
+    }
+    fn error(&self) -> Option<&dyn super::errors::SpanError> {
+        Some(self)
+    }
+}
+
+/// A failed span that still records its end attributes (a failed attempt's request ids).
+pub struct Failed<'a, End> {
+    pub end: End,
+    pub error: &'a dyn super::errors::SpanError,
+}
+
+impl<D: SpanDecl> SpanEnd<D> for Failed<'_, D::End> {
+    fn attributes(&self) -> Option<&D::End> {
+        Some(&self.end)
+    }
+    fn error(&self) -> Option<&dyn super::errors::SpanError> {
+        Some(self.error)
+    }
 }
 
 /// A declared parent, as checks against recorded spans read it.
@@ -169,7 +216,7 @@ pub trait RecordDecl: Attrs {
     const SCOPE: &'static str;
     const BODY: &'static str;
     /// The span the record belongs to (`#[span_id]`).
-    fn span(&self) -> Option<SpanRef>;
+    fn span(&self) -> Option<SpanContext>;
 }
 
 /// A field's wire value. `None` omits the attribute.

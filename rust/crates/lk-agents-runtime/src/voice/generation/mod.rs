@@ -21,7 +21,7 @@ pub(crate) struct ReplyExecution {
     pub plan: Plan,
     pub resources: ReplyResources,
     /// The speech's `agent_turn`: its model requests and tool calls nest under it.
-    pub span: Option<telemetry::SpanRef>,
+    pub span: Option<telemetry::SpanContext>,
 }
 
 #[derive(Clone)]

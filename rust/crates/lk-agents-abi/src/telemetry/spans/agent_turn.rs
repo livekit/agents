@@ -3,7 +3,7 @@
 use serde::Serialize;
 
 use super::common::{GenAiOperation, OutputType, ParticipantAttrs, ToolType};
-use super::inference::{InputDelta, RealtimeResponse};
+use super::inference::RealtimeResponse;
 use super::session::AgentSession;
 use super::text::AgentRun;
 use crate::telemetry::decl::{
@@ -127,8 +127,6 @@ pub struct LlmNode {
     /// Toolsets offered.
     #[attr("lk.tool_sets")]
     pub tool_sets: Vec<String>,
-    #[attrs]
-    pub input: Option<InputDelta>,
 }
 
 // What the node yielded. The model and provider are its requests' (`llm_request`): a node makes

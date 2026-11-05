@@ -211,18 +211,16 @@ impl NodeFactory for FakeNodes {
 
     fn llm_node<'a>(
         &'a self,
+        cx: &lk_agents_abi::telemetry::Cx,
         req: &'a ChatRequest,
     ) -> lk_agents_abi::BoxFuture<'a, Result<LlmStream, ProviderError>> {
+        let cx = cx.clone();
         Box::pin(async move {
             self.used(NodeUse::Llm);
             if let Some(text) = self.llm_text {
                 return Ok(Box::new(NodeText(Some(text))) as LlmStream);
             }
-            self.llm
-                .as_ref()
-                .ok_or_else(|| missing("LLM"))?
-                .chat(&lk_agents_abi::telemetry::Cx::NONE, req)
-                .await
+            self.llm.as_ref().ok_or_else(|| missing("LLM"))?.chat(&cx, req).await
         })
     }
 

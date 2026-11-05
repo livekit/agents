@@ -264,7 +264,7 @@ impl Execution {
                                 &report.outcome,
                             );
                         } else if let Err(error) = &ran {
-                            telemetry::fail(&span, error);
+                            telemetry::end(span, error);
                         }
                         let event = match ran {
                             Ok((report, extra)) => {
@@ -362,23 +362,23 @@ impl Execution {
     /// Ends the invocation's span with its result.
     fn end_span(&mut self, settled: &Result<RunSettled, RunError>) {
         let Some(span) = self.span.take() else { return };
-        let status = match settled {
-            Ok(settled) => match settled.result.outcome {
-                RunOutcome::InputRequired { .. } => telemetry::RunStatus::InputRequired,
-                _ => telemetry::RunStatus::Completed,
-            },
-            Err(error) => {
-                telemetry::fail(
-                    &span,
-                    &telemetry::Failure {
-                        kind: telemetry::ErrorType::RunError,
-                        message: error.to_string(),
-                    },
-                );
-                telemetry::RunStatus::Failed
+        match settled {
+            Ok(settled) => {
+                let status = match settled.result.outcome {
+                    RunOutcome::InputRequired { .. } => telemetry::RunStatus::InputRequired,
+                    _ => telemetry::RunStatus::Completed,
+                };
+                telemetry::end(span, telemetry::AgentRunEnd { status });
             }
-        };
-        telemetry::end_with(span, telemetry::AgentRunEnd { status });
+            Err(error) => {
+                let end = telemetry::AgentRunEnd { status: telemetry::RunStatus::Failed };
+                let error = telemetry::Failure {
+                    kind: telemetry::ErrorType::RunError,
+                    message: error.to_string(),
+                };
+                telemetry::end(span, telemetry::Failed { end, error: &error });
+            }
+        }
     }
 
     /// Keeps the host value a report carries and hands the core its event.
@@ -456,7 +456,7 @@ async fn stream_request(
     let opened = tokio::select! {
         biased;
         _ = &mut cancelled => None,
-        opened = llm.chat(&telemetry::Cx::NONE, &req) => Some(opened),
+        opened = llm.chat(trace.cx(), &req) => Some(opened),
     };
     let mut stream = match opened {
         None => {

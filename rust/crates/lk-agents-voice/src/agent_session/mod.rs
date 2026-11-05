@@ -93,12 +93,12 @@ pub(crate) struct VoiceSessionState {
     /// `session._amd._on_end_of_turn(info)` would answer `True`: the AMD's (`SkipReplies`).
     pub(crate) amd_skips_replies: bool,
     /// The session's span (`agent_session`), from `start()` to the end of the close.
-    pub(crate) span: Option<crate::telemetry::Span<crate::telemetry::AgentSession>>,
+    pub(crate) span: Option<crate::telemetry::ManualSpan<crate::telemetry::AgentSession>>,
     /// The opening's `session_start`, until it and the first agent's activity are done.
     pub(crate) starting: Option<crate::telemetry::Holding<crate::telemetry::SessionStart>>,
     /// The close's `session_close`, from its request to the close. It opens before `closing`
     /// exists: the exits the request issues run under it.
-    pub(crate) closing_span: Option<crate::telemetry::Span<crate::telemetry::SessionClose>>,
+    pub(crate) closing_span: Option<crate::telemetry::ManualSpan<crate::telemetry::SessionClose>>,
     /// The answering-machine detection, from the detector's attach to its verdict.
     pub(crate) amd: Option<crate::telemetry::AmdDetection>,
     /// The event-loop stalls, which `agent_session` ends with.

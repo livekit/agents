@@ -3,8 +3,7 @@ use std::sync::Arc;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::telemetry::decl::Value;
 use lk_agents_abi::telemetry::record::{
-    Measurement, Record, RecordSink, SpanId, SpanRecord, SpanRef, TraceId,
-};
+    Measurement, Record, RecordSink, SpanRecord, SpanContext};
 use lk_agents_abi::{
     ChatContext, ChatMessage, ChatRequest, ChoiceDelta, Closed, Llm, LlmChunk, LlmStream, Role,
     StreamOutput, Ts, VirtualClock,
@@ -51,22 +50,17 @@ fn named<'a>(spans: &'a [SpanRecord], name: &str) -> Vec<&'a SpanRecord> {
     spans.iter().filter(|s| s.name == name).collect()
 }
 
-const PARENT: SpanRef = SpanRef { trace_id: TraceId(7), span_id: SpanId(8), sampled: true };
+const PARENT: SpanContext = SpanContext { trace_id: 7, span_id: 8, sampled: true };
 
 fn traced(capture: bool) -> (Arc<Records>, Cx) {
-    let (records, cx, _) = traced_by(capture);
-    (records, cx)
-}
-
-/// [`traced`], and the tracer a fallback adapter records with.
-fn traced_by(capture: bool) -> (Arc<Records>, Cx, Tracer) {
     let records = Arc::new(Records::default());
     let tracer = Tracer::new(records.clone(), Arc::new(VirtualClock::new()), 11);
     tracer.set_capture_content(capture);
     let cx = tracer.root().continuing(Some(PARENT));
-    (records, cx, tracer)
+    (records, cx)
 }
 
+/// [`traced`], and the tracer a fallback adapter records with.
 struct Script {
     label: &'static str,
     serves: bool,
@@ -145,7 +139,7 @@ fn a_request_records_its_attempt_metrics_and_messages() {
         let spans = records.spans();
         let request = named(&spans, "llm_request")[0];
         let run = named(&spans, "llm_request_run")[0];
-        assert_eq!(request.parent, Some(SpanId(8)));
+        assert_eq!(request.parent, Some(8));
         assert_eq!(run.parent, Some(request.context.span_id));
         assert_eq!(
             attr(run, "lk.provider_request_ids"),
@@ -218,36 +212,36 @@ impl Llm for Node {
 #[test]
 fn a_registered_node_makes_its_own_request() {
     let (records, cx) = traced(true);
-    let mut req = request();
+    let req = request();
     let mut trace =
-        LlmTrace::start(&cx, &Node(Script { label: "openai.LLM", serves: true }), &mut req);
+        LlmTrace::start(&cx, &Node(Script { label: "openai.LLM", serves: true }), &req);
     let attempt = trace.attempt();
     assert!(attempt.is_none());
     trace.observe(&chunk("hi"));
     trace.end_attempt(attempt, None);
     assert_eq!(trace.text(), "hi", "the node span still reads the response");
+    assert_eq!(trace.cx().span(), Some(PARENT), "the node runs under the caller's context");
     trace.end(false, None);
     assert!(records.spans().is_empty() && records.measurements().is_empty());
-    assert_eq!(req.trace.and_then(|t| t.span), Some(PARENT));
 }
 
 // Catches: a fallback adapter's caller opening an `llm_request` of its own, the adapter span not
 // parenting each entry's request, or the served entry not recorded on it.
 #[tokio::test]
 async fn a_fallback_adapter_records_one_request_per_entry_under_its_span() {
-    let (records, cx, tracer) = traced_by(false);
+    let (records, cx) = traced(false);
     let (clock, spawner, obs) = parts();
     let entries: Vec<Arc<dyn Llm>> = vec![
         Arc::new(Script { label: "primary", serves: false }),
         Arc::new(Script { label: "backup", serves: true }),
     ];
-    let chain = FallbackLlm::new(entries, ChainPolicy::llm_defaults(), clock, spawner, obs, tracer)
+    let chain = FallbackLlm::new(entries, ChainPolicy::llm_defaults(), clock, spawner, obs)
         .expect("entries");
     assert_eq!(chain.label(), FALLBACK_LLM_LABEL);
-    let mut req = request();
-    let trace = LlmTrace::start(&cx, &chain, &mut req);
-    assert!(req.trace.is_some(), "the adapter gets the caller's context");
-    let mut stream = chain.chat(&lk_agents_abi::telemetry::Cx::NONE, &req).await.expect("opens");
+    let req = request();
+    let trace = LlmTrace::start(&cx, &chain, &req);
+    assert_eq!(trace.cx().span(), cx.span(), "the adapter runs under the caller's context");
+    let mut stream = chain.chat(trace.cx(), &req).await.expect("opens");
     while stream.next().await.expect("serves").is_some() {}
     stream.close(Ts::ZERO).await;
     trace.end(false, None);
@@ -262,7 +256,7 @@ async fn a_fallback_adapter_records_one_request_per_entry_under_its_span() {
     let adapter = named(&spans, "llm_fallback_adapter");
     assert_eq!(adapter.len(), 1, "{spans:?}");
     let adapter = adapter[0];
-    assert_eq!(adapter.parent, Some(SpanId(8)));
+    assert_eq!(adapter.parent, Some(8));
     assert_eq!(attr(adapter, "lk.fallback.index"), Some(&Value::Int(1)));
     assert_eq!(attr(adapter, "lk.fallback.label"), Some(&Value::String("backup".into())));
     let models: Vec<_> =
@@ -374,7 +368,7 @@ async fn a_tts_fallback_adapter_records_each_instance_under_its_attempt() {
     let spans = records.spans();
     let adapter = named(&spans, "tts_fallback_adapter");
     assert_eq!(adapter.len(), 1, "{spans:?}");
-    assert!(named(&spans, "tts_request").iter().all(|r| r.parent != Some(SpanId(8))));
+    assert!(named(&spans, "tts_request").iter().all(|r| r.parent != Some(8)));
     let run = named(&spans, "tts_request_run")
         .into_iter()
         .find(|r| r.parent == Some(adapter[0].context.span_id))

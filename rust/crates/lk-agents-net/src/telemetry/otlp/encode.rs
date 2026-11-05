@@ -16,7 +16,7 @@ use super::proto::resource::v1::Resource;
 use super::proto::trace::v1 as trace;
 use lk_agents_abi::telemetry::decl::{Attrs, Content};
 use lk_agents_abi::telemetry::record::{
-    FRAMEWORK, Key, KeyValues, LogRecord, Record, SpanKind, SpanRecord, SpanRef, Status, Value,
+    FRAMEWORK, Key, KeyValues, LogRecord, Record, SpanKind, SpanRecord, SpanContext, Status, Value,
 };
 use lk_agents_abi::telemetry::semconv::otel::SERVICE_NAME;
 use lk_agents_abi::telemetry::spans::common::{JobIdentity as Stamp, SdkResource, SessionFlags};
@@ -134,7 +134,7 @@ pub(crate) fn key_values(attributes: &KeyValues) -> Vec<KeyValue> {
     attributes.iter().map(|(k, v)| key_value(k, v)).collect()
 }
 
-fn flags(context: &SpanRef) -> u32 {
+fn flags(context: &SpanContext) -> u32 {
     u32::from(context.sampled)
 }
 
@@ -155,9 +155,9 @@ fn span(record: &SpanRecord) -> trace::Span {
         }),
     };
     trace::Span {
-        trace_id: record.context.trace_id.0.to_be_bytes().to_vec(),
-        span_id: record.context.span_id.0.to_be_bytes().to_vec(),
-        parent_span_id: record.parent.map(|p| p.0.to_be_bytes().to_vec()).unwrap_or_default(),
+        trace_id: record.context.trace_id.to_be_bytes().to_vec(),
+        span_id: record.context.span_id.to_be_bytes().to_vec(),
+        parent_span_id: record.parent.map(|p| p.to_be_bytes().to_vec()).unwrap_or_default(),
         flags: flags(&record.context),
         name: record.name.to_string(),
         kind: kind as i32,
@@ -178,8 +178,8 @@ fn span(record: &SpanRecord) -> trace::Span {
             .links
             .iter()
             .map(|link| trace::span::Link {
-                trace_id: link.trace_id.0.to_be_bytes().to_vec(),
-                span_id: link.span_id.0.to_be_bytes().to_vec(),
+                trace_id: link.trace_id.to_be_bytes().to_vec(),
+                span_id: link.span_id.to_be_bytes().to_vec(),
                 flags: flags(link),
                 ..Default::default()
             })
@@ -198,8 +198,8 @@ fn log(record: &LogRecord) -> logs::LogRecord {
         body: Some(any_value(&record.body)),
         attributes: key_values(&record.attributes),
         flags: record.span.as_ref().map_or(0, flags),
-        trace_id: record.span.map(|s| s.trace_id.0.to_be_bytes().to_vec()).unwrap_or_default(),
-        span_id: record.span.map(|s| s.span_id.0.to_be_bytes().to_vec()).unwrap_or_default(),
+        trace_id: record.span.map(|s| s.trace_id.to_be_bytes().to_vec()).unwrap_or_default(),
+        span_id: record.span.map(|s| s.span_id.to_be_bytes().to_vec()).unwrap_or_default(),
         ..Default::default()
     }
 }

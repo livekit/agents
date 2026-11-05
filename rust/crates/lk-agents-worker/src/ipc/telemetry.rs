@@ -15,8 +15,6 @@ pub(crate) use lk_agents_net::telemetry::Tracer;
 pub(crate) use lk_agents_net::telemetry::otlp::CloudEndpoint;
 use lk_agents_net::telemetry::otlp::JobIdentity;
 pub(crate) use lk_agents_net::telemetry::otlp::Simulation;
-use lk_agents_net::telemetry::parse_traceparent;
-pub(crate) use lk_agents_net::telemetry::traceparent;
 use prost::Message as _;
 
 pub(crate) use lk_agents_abi::telemetry::decl::SpanDecl;
@@ -30,7 +28,9 @@ pub(crate) use lk_agents_abi::telemetry::spans::job::{
 };
 pub(crate) use lk_agents_net::telemetry::otlp::CloudRecording;
 pub(crate) use lk_agents_net::telemetry::session_report::{self, ReportOutputs};
-pub(crate) use lk_agents_net::telemetry::{Cx, ScopedSpan, check, end_with, event, fail, start};
+pub(crate) use lk_agents_net::telemetry::{
+    Cx, ScopedSpan, SpanContext, SpanEnd, end, event, start,
+};
 
 /// The job's root span, open until its shutdown ends.
 pub(crate) struct JobTrace {
@@ -111,7 +111,7 @@ pub(crate) fn start_job(
             },
         );
     }
-    let parent = fields.traceparent.as_deref().and_then(parse_traceparent);
+    let parent = fields.traceparent.as_deref().and_then(SpanContext::parse_traceparent);
     let cx = tracer
         .root()
         .continuing(parent)

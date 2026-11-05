@@ -6,7 +6,7 @@
 use super::participant_attrs;
 use crate::audio_recognition::{EndOfTurnInfo, EouDetected, UserTurnCommitVerdict};
 use lk_agents_abi::Ts;
-use lk_agents_abi::telemetry::decl::{BoolString, Content, Json, Measured, Seconds, SpanRef};
+use lk_agents_abi::telemetry::decl::{BoolString, Content, Json, Measured, Seconds, SpanContext};
 use lk_agents_abi::telemetry::errors::SpanError;
 use lk_agents_abi::telemetry::spans::agent_turn::ChatContextDict;
 use lk_agents_abi::telemetry::spans::user_turn::{
@@ -16,7 +16,7 @@ use lk_agents_abi::telemetry::spans::user_turn::{
 };
 use lk_agents_abi::voice::events::OverlappingSpeechEvent;
 use lk_agents_abi::voice::room_io::ParticipantInfo;
-use lk_agents_core::telemetry::span::{Span, Trace};
+use lk_agents_core::telemetry::span::{ManualSpan, Trace};
 
 /// Every way a decided turn ends; a new verdict is a new arm here.
 impl From<UserTurnCommitVerdict> for UserTurnOutcome {
@@ -54,7 +54,7 @@ impl Endpointing {
 }
 
 struct Speaking {
-    span: Span<UserSpeaking>,
+    span: ManualSpan<UserSpeaking>,
     verdict: Option<Verdict>,
 }
 
@@ -68,13 +68,13 @@ struct Verdict {
 }
 
 struct Wait {
-    span: Span<EouWait>,
+    span: ManualSpan<EouWait>,
     started: Ts,
     endpointing: Endpointing,
     rearms: u32,
     not_committed: u32,
     /// The prediction the countdown waits on.
-    detection: Option<Span<EouDetection>>,
+    detection: Option<ManualSpan<EouDetection>>,
 }
 
 /// What the decision knew of the turn, written when it ends.
@@ -91,10 +91,10 @@ struct Decided {
 /// (`on_user_turn_completed`).
 pub(crate) struct UserTurnSpan {
     /// `None` once ended.
-    span: Option<Span<UserTurn>>,
+    span: Option<ManualSpan<UserTurn>>,
     speaking: Option<Speaking>,
     wait: Option<Wait>,
-    hook: Option<Span<OnUserTurnCompleted>>,
+    hook: Option<ManualSpan<OnUserTurnCompleted>>,
     resumes: u32,
     request_ids: Vec<String>,
     stt_events: Vec<SttEvent>,
@@ -148,7 +148,7 @@ impl UserTurnSpan {
         trace: &mut Trace,
         participant: Option<&ParticipantInfo>,
         text: &str,
-    ) -> Option<SpanRef> {
+    ) -> Option<SpanContext> {
         let now = trace.now();
         let mut turn = Self::open(trace, now, UserTurnOrigin::Text, participant, &Stt::default());
         turn.decided.transcript = text.to_owned();
@@ -158,7 +158,7 @@ impl UserTurnSpan {
     }
 
     /// What the turn's chat item and its hook run under.
-    pub(crate) fn context(&self, trace: &Trace) -> Option<SpanRef> {
+    pub(crate) fn context(&self, trace: &Trace) -> Option<SpanContext> {
         trace.context(self.span.as_ref()?)
     }
 
@@ -339,7 +339,7 @@ impl UserTurnSpan {
 
     /// `on_user_turn_completed` runs for the committed turn: its span, which the host runs it
     /// under.
-    pub(crate) fn hook_issued(&mut self, trace: &mut Trace, agent: &str) -> Option<SpanRef> {
+    pub(crate) fn hook_issued(&mut self, trace: &mut Trace, agent: &str) -> Option<SpanContext> {
         let turn = self.span.as_ref()?;
         let span = trace.open_in(turn, OnUserTurnCompleted { agent_label: agent.into() });
         let context = trace.context(&span);
@@ -360,10 +360,7 @@ impl UserTurnSpan {
             if stop_response {
                 trace.event(&hook, StopResponse);
             }
-            if let Some(failure) = failure {
-                trace.fail(&hook, failure);
-            }
-            trace.end(hook, ());
+            trace.end(hook, failure.map_or(Ok(()), Err));
         }
         self.end(trace, UserTurnOutcome::Committed);
     }

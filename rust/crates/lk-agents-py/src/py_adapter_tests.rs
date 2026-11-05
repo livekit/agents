@@ -573,7 +573,7 @@ mod recording {
 
 mod telemetry {
     use lk_agents_abi::invoke::CallContext;
-    use lk_agents_abi::telemetry::record::{SpanId, SpanRef, TraceId};
+    use lk_agents_abi::telemetry::record::{SpanContext};
     use pyo3::prelude::*;
     use pyo3::types::PyTuple;
 
@@ -587,7 +587,7 @@ mod telemetry {
             let pair = globals.getattr("pair").unwrap();
             (globals.unbind(), _core::py_objects::retain(pair.unbind()))
         });
-        let span = SpanRef { trace_id: TraceId(0xabc), span_id: SpanId(0x42), sampled: true };
+        let span = SpanContext { trace_id: 0xabc, span_id: 0x42, sampled: true };
         let observe = |globals: &Py<PyAny>| -> _core::py_calls::HostCall {
             let globals = Python::attach(|py| globals.clone_ref(py));
             Box::new(move |py| Ok((globals.bind(py).getattr("observe")?, PyTuple::empty(py))))
@@ -635,7 +635,7 @@ mod telemetry {
             let job = SessionJobProxy::in_context(&globals.getattr("job").unwrap(), &context);
             (globals.unbind(), job.unwrap())
         });
-        let span = SpanRef { trace_id: TraceId(0xabc), span_id: SpanId(0x43), sampled: true };
+        let span = SpanContext { trace_id: 0xabc, span_id: 0x43, sampled: true };
         let runtime = lk_agents_runtime::process::handle().unwrap();
         runtime.block_on(async {
             let cx = lk_agents_abi::telemetry::Cx::NONE.continuing(Some(span));

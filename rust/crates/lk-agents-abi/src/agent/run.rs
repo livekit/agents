@@ -189,7 +189,7 @@ pub struct RunRequest {
     pub tools_host: Option<HostRef>,
     /// The caller's current span: the run's `agent_run` nests under it.
     #[host(default = None)]
-    pub parent: Option<crate::telemetry::host::SpanContext>,
+    pub parent: Option<crate::telemetry::record::SpanContext>,
 }
 
 /// A settled invocation, with the value the host validated when the output is one.

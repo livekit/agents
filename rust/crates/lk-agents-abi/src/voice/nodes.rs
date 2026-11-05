@@ -191,9 +191,10 @@ pub trait DefaultNodes {
 pub trait NodeFactory: Send + Sync {
     fn text_node(&self, below: Arc<dyn TextOutput>) -> Result<Arc<dyn TextNode>, HostError>;
     /// `llm_node(chat_ctx, tools, model_settings)`: its chunks, strings and flushes as chunks; it
-    /// runs under `req.trace`, the step's `llm_node` span.
+    /// runs under `cx`, the step's `llm_node` span.
     fn llm_node<'a>(
         &'a self,
+        cx: &crate::telemetry::Cx,
         req: &'a ChatRequest,
     ) -> crate::BoxFuture<'a, Result<LlmStream, ProviderError>>;
     /// `tts_node(text, model_settings)`: text pushed in, its frames out. `expressive`: the

@@ -98,7 +98,8 @@ impl JudgeRunner for Judges {
         let span = telemetry::start(&cx, telemetry::JudgeEvaluation { name: "intent".into() });
         let judged = self.intent(span.cx(), intent, message).await;
         match &judged {
-            Ok(judgment) => telemetry::end_with(
+            Ok(judgment) => {
+                telemetry::end(
                 span,
                 telemetry::JudgeEvaluationEnd {
                     verdict: Some(if judgment.success {
@@ -110,14 +111,17 @@ impl JudgeRunner for Judges {
                         .capture_content()
                         .then(|| telemetry::GenAiContent(judgment.reason.clone())),
                 },
-            ),
-            Err(error) => telemetry::fail(
-                &span,
-                &telemetry::Failure {
+            );
+            }
+            Err(error) => {
+                telemetry::end(
+                span,
+                telemetry::Failure {
                     kind: telemetry::ErrorType::JudgeError,
                     message: error.to_string(),
                 },
-            ),
+            );
+            }
         }
         judged
     }
@@ -185,7 +189,7 @@ impl Judges {
         match judged {
             Ok(judgment) => {
                 let capture = cx.capture_content();
-                telemetry::end_with(
+                telemetry::end(
                     span,
                     telemetry::JudgeEvaluationEnd {
                         verdict: match judgment.verdict.as_str() {
@@ -201,9 +205,9 @@ impl Judges {
                 JudgeOutcome::Judged { name, judgment }
             }
             Err(error) => {
-                telemetry::fail(
-                    &span,
-                    &telemetry::Failure {
+                telemetry::end(
+                    span,
+                    telemetry::Failure {
                         kind: telemetry::ErrorType::JudgeError,
                         message: error.clone(),
                     },
@@ -260,7 +264,7 @@ impl Judges {
     ) -> Result<(Option<String>, Option<TokenUsage>), ProviderError> {
         // Sent once and never kept: fixed ids and creation times.
         let at = SystemTime::UNIX_EPOCH;
-        let mut req = ChatRequest {
+        let req = ChatRequest {
             chat_ctx: ChatContext::new(vec![
                 ChatMessage::text("lk.judge.system", Role::System, system, at).into(),
                 ChatMessage::text("lk.judge.prompt", Role::User, prompt, at).into(),
@@ -274,11 +278,10 @@ impl Judges {
             tool_choice: Some(ToolChoice::Required),
             extra: Some(prompts::request_extra(&llm.model())),
             inference_class: Some(INFERENCE_CLASS.to_owned()),
-            trace: None,
         };
-        let mut trace = telemetry::LlmTrace::start(cx, llm.as_ref(), &mut req);
+        let mut trace = telemetry::LlmTrace::start(cx, llm.as_ref(), &req);
         let attempt = trace.attempt();
-        let read = match llm.chat(&telemetry::Cx::NONE, &req).await {
+        let read = match llm.chat(trace.cx(), &req).await {
             Ok(mut stream) => {
                 let read = first_call(stream.as_mut(), &mut trace).await;
                 let _ = stream.close(self.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT)).await;
@@ -287,10 +290,10 @@ impl Judges {
             Err(error) => Err(error),
         };
         trace.end_attempt(attempt, read.as_ref().err());
-        match &read {
-            Ok(_) => trace.end(false, None),
-            Err(error) => trace.fail(error),
+        if let Err(error) = &read {
+            trace.fail(error);
         }
+        trace.end(false, None);
         read
     }
 }

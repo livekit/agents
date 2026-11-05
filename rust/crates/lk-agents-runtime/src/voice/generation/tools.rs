@@ -100,7 +100,7 @@ struct HostedCall<'a> {
     /// The tool's description, for its `function_tool`.
     description: Option<String>,
     /// The speech's turn: the callbacks run under it.
-    turn: Option<telemetry::SpanRef>,
+    turn: Option<telemetry::SpanContext>,
 }
 
 impl HostedCall<'_> {

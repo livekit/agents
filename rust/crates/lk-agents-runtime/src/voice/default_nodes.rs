@@ -62,8 +62,9 @@ fn request_cx(
     calls: Option<&NodeCalls>,
     caller: &telemetry::Cx,
 ) -> telemetry::Cx {
-    let step = calls.map(|calls| calls.trace.clone()).unwrap_or_default();
-    env.tracer.resume(&telemetry::TraceContext { span: caller.span().or(step.span), ..step })
+    let step = calls.and_then(|calls| calls.step.clone()).unwrap_or_else(|| env.tracer.root());
+    let span = caller.span().or(step.span());
+    step.continuing(span)
 }
 
 impl lk_agents_abi::voice::nodes::DefaultNodes for DefaultNodes {
@@ -209,7 +210,7 @@ async fn complete(
     let mut attempts = Attempts::retrying(&req.conn_options, clock.now());
     loop {
         let attempt = trace.attempt();
-        let (error, produced) = match llm.chat(&telemetry::Cx::NONE, &req).await {
+        let (error, produced) = match llm.chat(trace.cx(), &req).await {
             Err(error) => (error, false),
             Ok(mut stream) => {
                 let mut produced = false;

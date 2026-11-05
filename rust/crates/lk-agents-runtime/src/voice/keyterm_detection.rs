@@ -12,7 +12,7 @@ pub async fn detection_pass(
     llm: Arc<dyn Llm>,
     mut request: ChatRequest,
     req: u64,
-    span: Option<telemetry::SpanRef>,
+    span: Option<telemetry::SpanContext>,
 ) {
     let provider = llm.id();
     let started_at = shared.time.wall_secs();
@@ -23,7 +23,7 @@ pub async fn detection_pass(
     };
     let mut trace = telemetry::LlmTrace::start(&cx, llm.as_ref(), &mut request);
     let attempt = trace.attempt();
-    let mut stream = match llm.chat(&telemetry::Cx::NONE, &request).await {
+    let mut stream = match llm.chat(trace.cx(), &request).await {
         Ok(stream) => stream,
         Err(error) => {
             trace.end_attempt(attempt, Some(&error));

@@ -72,7 +72,7 @@ pub(crate) struct KeytermSlot {
     /// Whether an STT without the `keyterms` capability was told so once already.
     warned_unsupported: bool,
     /// The pass in flight's `keyterm_detection`, until it answers or fails.
-    span: Option<crate::telemetry::Span<crate::telemetry::KeytermDetection>>,
+    span: Option<crate::telemetry::ManualSpan<crate::telemetry::KeytermDetection>>,
 }
 
 /// The `record_keyterms` spec (`keyterm_detection.STTContextOptions`): three string lists, forced.

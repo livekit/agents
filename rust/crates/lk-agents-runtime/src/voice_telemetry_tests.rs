@@ -6,8 +6,7 @@ use crate::voice::session::{DriverBuilder, Timebase};
 use lk_agents_abi::metrics::base::AgentMetrics;
 use lk_agents_abi::telemetry::decl::Value;
 use lk_agents_abi::telemetry::record::{
-    JobKey, Measurement, Record, RecordSink, SpanId, SpanRecord, SpanRef, TraceContext, TraceId,
-};
+    JobKey, Measurement, Record, RecordSink, SpanRecord, SpanContext};
 use lk_agents_voice::events::SessionEvent;
 use parking_lot::Mutex;
 
@@ -39,7 +38,7 @@ impl Records {
 }
 
 const JOB: &str = "AJ_1";
-const ENTRYPOINT: SpanRef = SpanRef { trace_id: TraceId(3), span_id: SpanId(4), sampled: true };
+const ENTRYPOINT: SpanContext = SpanContext { trace_id: 3, span_id: 4, sampled: true };
 
 async fn traced(name: &str) -> (VoiceRuntime, Arc<Records>) {
     let records = Arc::new(Records::default());
@@ -53,11 +52,8 @@ async fn traced(name: &str) -> (VoiceRuntime, Arc<Records>) {
     let mut builder = DriverBuilder::new("agent".into(), time, spawner, config);
     builder.session_id = Some(name.into());
     builder.tracer = lk_agents_net::telemetry::Tracer::new(records.clone(), clock, 5);
-    builder.trace = TraceContext {
-        span: Some(ENTRYPOINT),
-        job: Some(JobKey(JOB.into())),
-        ..Default::default()
-    };
+    builder.trace =
+        builder.tracer.root().continuing(Some(ENTRYPOINT)).with_job(Some(JobKey(JOB.into())));
     let mut executor = Executor::new(builder.time.clone(), builder.spawner.clone());
     let (cores, _handle) = builder.start(&mut executor).await.unwrap();
     (executor.into_runtime(cores), records)
@@ -72,7 +68,7 @@ fn labels(m: &Measurement) -> Vec<(String, Value)> {
 async fn the_session_joins_the_jobs_trace() {
     let (runtime, _records) = traced("joined").await;
     let start = runtime.driver.session_start_span().expect("session_start is open");
-    assert_eq!(start.trace_id, TraceId(3), "the session continues the entrypoint's trace");
+    assert_eq!(start.trace_id, 3, "the session continues the entrypoint's trace");
     assert_eq!(runtime.shared.trace.job(), Some(&JobKey(JOB.into())));
 }
 
@@ -134,7 +130,7 @@ async fn late_realtime_metrics_become_a_child_of_the_ended_inference() {
         model: "gpt-realtime".into(),
         provider: "openai".into(),
     }));
-    let turn = SpanRef { trace_id: TraceId(3), span_id: SpanId(9), sampled: true };
+    let turn = SpanContext { trace_id: 3, span_id: 9, sampled: true };
     let early = spans.start(&runtime.shared, Some(turn)).expect("a model");
     let mut m = lk_agents_abi::metrics::testkit::realtime();
     m.request_id = "resp_early".into();
@@ -177,7 +173,7 @@ fn event_loop_stalls_are_rate_limited() {
     crate::telemetry::event_loop_blocked(&cx, &blocked, 0.6, None);
     let spans = records.spans();
     assert_eq!(spans.len(), 30, "30 a minute");
-    assert!(spans.iter().all(|s| s.parent == Some(SpanId(4))));
+    assert!(spans.iter().all(|s| s.parent == Some(4)));
     let durations = records.measurements("lk.agents.event_loop.blocked_duration");
     assert_eq!(durations.len(), 33);
     assert_eq!(labels(&durations[32]), [("severity".to_owned(), Value::String("error".into()))]);
@@ -185,7 +181,7 @@ fn event_loop_stalls_are_rate_limited() {
 
 /// A job whose room connection records the span it ran under.
 #[derive(Default)]
-struct Job(Mutex<Vec<Option<SpanRef>>>);
+struct Job(Mutex<Vec<Option<SpanContext>>>);
 
 impl lk_agents_abi::worker::job::SessionJob for Job {
     fn connect(
@@ -212,7 +208,7 @@ async fn startup_runs_under_the_spans_start_reserved() {
         ..lk_agents_net::env::ProcessEnv::current_runtime()
     };
     let time = Timebase::from_virtual(clock);
-    let room = crate::room_io::FixedRoom { rtc: None, time, pool: None, tracer: tracer.clone() };
+    let room = crate::room_io::FixedRoom { rtc: None, time, pool: None };
     let job = Arc::new(Job::default());
     let args = lk_agents_abi::voice::session::VoiceSessionArgs {
         agent: "agent".into(),
@@ -226,15 +222,13 @@ async fn startup_runs_under_the_spans_start_reserved() {
         None,
     )
     .unwrap();
-    let trace = TraceContext {
-        span: Some(ENTRYPOINT),
-        job: Some(JobKey(JOB.into())),
-        conversation: Some("AT_thread".into()),
-    };
-    let cx = tracer.resume(&trace);
-    let reserved = crate::telemetry::reserve::<AgentSession>(&cx);
-    let start =
-        crate::telemetry::reserve::<SessionStart>(&cx.under::<AgentSession>(reserved.context));
+    let trace = (tracer.root().continuing(Some(ENTRYPOINT)))
+        .with_job(Some(JobKey(JOB.into())))
+        .with_conversation(Some("AT_thread"));
+    let reserved = crate::telemetry::reserve::<AgentSession>(&trace);
+    let start = crate::telemetry::reserve::<SessionStart>(
+        &trace.clone().under::<AgentSession>(reserved.context),
+    );
     let opening = lk_agents_voice::telemetry::Opening { session: reserved, start, activity: None };
     session.trace_under(trace, Default::default(), opening);
     use lk_agents_abi::voice::session::VoiceSession as _;
@@ -267,7 +261,7 @@ fn a_stall_reaches_the_sessions_of_its_job() {
     let heard: Arc<Mutex<Vec<(&str, std::time::Duration)>>> = Arc::default();
     let watch = |name: &'static str, job: &str| {
         let heard = heard.clone();
-        let session = SpanRef { trace_id: TraceId(1), span_id: SpanId(2), sampled: true };
+        let session = SpanContext { trace_id: 1, span_id: 2, sampled: true };
         crate::telemetry::watch_stalls(
             Some(JobKey(job.into())),
             session,

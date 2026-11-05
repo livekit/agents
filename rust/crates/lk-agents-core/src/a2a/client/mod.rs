@@ -18,7 +18,7 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 
 use crate::a2a::rpc::{TaskRef, task_state};
-use crate::telemetry;
+use lk_agents_abi::telemetry::record::SpanContext;
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum ClientError {
@@ -62,13 +62,11 @@ pub struct Request {
 }
 
 impl Request {
-    /// The request carrying the caller's W3C `traceparent`, when it is valid, so the endpoint's
-    /// work continues the caller's trace.
-    pub fn traced(mut self, traceparent: Option<&str>) -> Self {
-        if let Some(traceparent) =
-            traceparent.filter(|tp| telemetry::transport::TraceParent::parse(tp).is_some())
-        {
-            self.headers.push(("traceparent".into(), traceparent.into()));
+    /// The request carrying the caller's span as its W3C `traceparent`, so the endpoint's work
+    /// continues the caller's trace.
+    pub fn traced(mut self, caller: Option<SpanContext>) -> Self {
+        if let Some(caller) = caller {
+            self.headers.push(("traceparent".into(), caller.traceparent()));
         }
         self
     }

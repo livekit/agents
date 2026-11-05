@@ -280,7 +280,7 @@ impl lk_agents_abi::telemetry::record::RecordSink for Spans {
 // not nested under its judge, or a failed judge recorded as a success.
 #[tokio::test]
 async fn each_judge_is_one_span_under_the_caller() {
-    use lk_agents_abi::telemetry::record::{SpanId, SpanRef, Status, TraceId};
+    use lk_agents_abi::telemetry::record::{SpanContext, Status};
     let spans = Arc::new(Spans::default());
     let env = ProcessEnv {
         tracer: lk_agents_net::telemetry::Tracer::new(
@@ -298,21 +298,21 @@ async fn each_judge_is_one_span_under_the_caller() {
     let registry: Arc<dyn RefRegistry> = Arc::new(Registry);
     let runner =
         Judges::new(&env, Some(llm), HostRef::new(0, &registry), Arc::new(Host(Err("down"))));
-    let caller = SpanRef { trace_id: TraceId(5), span_id: SpanId(6), sampled: true };
+    let caller = SpanContext { trace_id: 5, span_id: 6, sampled: true };
     runner
         .evaluate(
             vec![built_in("safety"), host_judge("booking")],
             vec![],
             None,
             Default::default(),
-            env.tracer.entry(Some(caller)),
+            env.tracer.root().continuing(Some(caller)),
         )
         .await
         .unwrap();
     let spans = spans.0.lock().clone();
     let judges: Vec<_> = spans.iter().filter(|s| s.name == "judge_evaluation").collect();
     assert_eq!(judges.len(), 2, "{spans:?}");
-    assert!(judges.iter().all(|j| j.parent == Some(SpanId(6)) && j.context.trace_id == TraceId(5)));
+    assert!(judges.iter().all(|j| j.parent == Some(6) && j.context.trace_id == 5));
     let request = spans.iter().find(|s| s.name == "llm_request").expect("the judge model request");
     let safety = judges.iter().find(|j| j.status == Status::Unset).expect("the built-in judged");
     assert_eq!(request.parent, Some(safety.context.span_id));
@@ -320,7 +320,7 @@ async fn each_judge_is_one_span_under_the_caller() {
 }
 
 /// Answers with `judgment` and keeps the span the core made current for it.
-struct Seen(Judgment, Mutex<Option<lk_agents_abi::telemetry::record::SpanRef>>);
+struct Seen(Judgment, Mutex<Option<lk_agents_abi::telemetry::record::SpanContext>>);
 
 impl EvaluationHost for Seen {
     fn evaluate<'a>(

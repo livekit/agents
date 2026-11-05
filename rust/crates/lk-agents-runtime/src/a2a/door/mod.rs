@@ -32,7 +32,7 @@ const RESPONSE_CAPACITY: usize = 64;
 /// What a sent message's turn runs its handler in.
 struct TurnCall {
     host_context: Option<lk_agents_abi::HostRef>,
-    span: Option<telemetry::SpanRef>,
+    span: Option<telemetry::SpanContext>,
 }
 /// The transport's database frame ceiling also bounds one decoded door payload.
 pub const MAX_PAYLOAD_BYTES: usize = 16 << 20;
@@ -213,7 +213,7 @@ impl Inner {
         let frame = match request.call {
             Call::Send { message, history_length, streaming } => {
                 // The request continues its caller's trace.
-                let parent = traceparent.as_deref().and_then(telemetry::parse_traceparent);
+                let parent = traceparent.as_deref().and_then(telemetry::SpanContext::parse_traceparent);
                 let span = telemetry::start(
                     &self.tracer.root().continuing(parent),
                     telemetry::A2aRequest {
@@ -225,8 +225,9 @@ impl Inner {
                 let call = TurnCall { host_context, span: span.cx().span() };
                 let sent =
                     self.send(id, &principal, message, history_length, streaming, &sender, call);
-                let frames = telemetry::check(&span, sent.await)?;
-                telemetry::end_with(span, ());
+                let sent = sent.await;
+                telemetry::end(span, sent.as_ref().map(|_| ()));
+                let frames = sent?;
                 for frame in frames {
                     let _ = sender.send(Ok(frame)).await;
                 }

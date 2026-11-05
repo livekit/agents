@@ -114,7 +114,7 @@ pub mod spans;
 use std::sync::Arc;
 
 use decl::SpanDecl;
-use record::{JobKey, Record, SpanId, SpanRef, TraceContext, TraceId};
+use record::{JobKey, Record, SpanContext};
 
 /// What records a context's spans: the process tracer (`lk_agents_net::telemetry::Tracer`), or
 /// the DST's.
@@ -142,7 +142,7 @@ pub struct Cx {
 
 #[derive(Clone, Copy)]
 struct Current {
-    span: SpanRef,
+    span: SpanContext,
     /// The declared span's name; `None` for a span from outside the framework (an application
     /// span, a `traceparent`).
     name: Option<&'static str>,
@@ -156,20 +156,6 @@ impl Cx {
     /// A context with no current span, outside any job, recording to `recorder`.
     pub fn root(recorder: Arc<dyn Recorder>) -> Cx {
         Cx { recorder: Some(recorder), ..Cx::NONE }
-    }
-
-    /// The caller's span at a host-to-framework entry (the span current in the caller's
-    /// `contextvars`), recording to `recorder`.
-    pub fn entry(recorder: Arc<dyn Recorder>, caller: Option<SpanRef>) -> Cx {
-        Cx::root(recorder).continuing(caller)
-    }
-
-    /// The context a [`TraceContext`] carries across an API that cannot carry a `Cx`.
-    pub fn resume(recorder: Arc<dyn Recorder>, trace: &TraceContext) -> Cx {
-        Cx::root(recorder)
-            .continuing(trace.span)
-            .with_job(trace.job.clone())
-            .with_conversation(trace.conversation.as_deref())
     }
 
     /// What records this context's spans; `None` for [`Cx::NONE`].
@@ -188,7 +174,7 @@ impl Cx {
     }
 
     /// The current span, what a host call activates and a `traceparent` carries.
-    pub fn span(&self) -> Option<SpanRef> {
+    pub fn span(&self) -> Option<SpanContext> {
         self.current.map(|c| c.span)
     }
 
@@ -206,15 +192,6 @@ impl Cx {
         self.conversation.as_deref()
     }
 
-    /// This context for an API that cannot carry a `Cx`; [`Cx::resume`] reopens it.
-    pub fn trace_context(&self) -> TraceContext {
-        TraceContext {
-            span: self.span(),
-            job: self.job.clone(),
-            conversation: self.conversation.as_deref().map(str::to_owned),
-        }
-    }
-
     /// The same context, recording for `job`.
     pub fn with_job(mut self, job: Option<JobKey>) -> Cx {
         self.job = job;
@@ -228,29 +205,29 @@ impl Cx {
     }
 
     /// The same context under `span`, a framework span of type `P` recorded elsewhere (a voice
-    /// effect's `SpanRef`).
-    pub fn under<P: SpanDecl>(mut self, span: SpanRef) -> Cx {
+    /// effect's `SpanContext`).
+    pub fn under<P: SpanDecl>(mut self, span: SpanContext) -> Cx {
         self.current = Some(Current { span, name: Some(P::NAME) });
         self
     }
 
     /// The same context under a span from outside the framework: an application span captured
     /// at a host entry, or a `traceparent`. `None` starts new traces.
-    pub fn continuing(mut self, span: Option<SpanRef>) -> Cx {
+    pub fn continuing(mut self, span: Option<SpanContext>) -> Cx {
         self.current = span.map(|span| Current { span, name: None });
         self
     }
 
     /// A new span's context under the current span: its trace, or a new one.
-    pub fn child_context(&self) -> SpanRef {
+    pub fn child_context(&self) -> SpanContext {
         let next = || self.recorder.as_ref().map_or(1, |r| r.next_id());
         let trace_id = match self.current {
             Some(c) => c.span.trace_id,
-            None => TraceId((u128::from(next()) << 64) | u128::from(next())),
+            None => (u128::from(next()) << 64) | u128::from(next()),
         };
-        SpanRef {
+        SpanContext {
             trace_id,
-            span_id: SpanId(next()),
+            span_id: next(),
             sampled: self.current.is_none_or(|c| c.span.sampled),
         }
     }

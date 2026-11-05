@@ -1,7 +1,7 @@
 //! Framework spans of the async I/O crates (docs/internals/telemetry.md "Span API"): the process
 //! [`Tracer`], the context [`Cx`] work runs in, and [`ScopedSpan`], ended when its scope exits.
-//! Callers spell every touchpoint `telemetry::`: [`start`], [`end`], [`end_with`], [`check`],
-//! [`fail`], [`event`], [`measure`], [`reserve`] and `#[telemetry::span]`.
+//! Callers spell every touchpoint `telemetry::`: [`start`], [`end`], [`event`], [`measure`],
+//! [`reserve`] and `#[telemetry::span]`.
 //! Ended spans and measurements reach the process's `RecordSink` (the OTLP exporter).
 
 pub mod host;
@@ -19,8 +19,7 @@ use lk_agents_abi::telemetry::decl::{
     finish_span,
 };
 use lk_agents_abi::telemetry::record::{
-    EventRecord, FRAMEWORK, Key, Measurement, Record, RecordSink, SpanId, SpanRecord, SpanRef,
-    Status, TraceContext, TraceId,
+    EventRecord, FRAMEWORK, Key, Measurement, Record, RecordSink, SpanRecord, Status,
 };
 use lk_agents_abi::telemetry::spans::common::{EverySpan, Exception};
 use parking_lot::{Mutex, RwLock};
@@ -29,19 +28,15 @@ use otlp::Exporter;
 
 /// `#[telemetry::span(Decl { .. })]` on a function taking `cx: &telemetry::Cx`: the function is
 /// that one span.
-pub use lk_agents_abi::telemetry::decl::span;
+pub use lk_agents_abi::telemetry::decl::{Failed, SpanEnd, span};
 pub use lk_agents_abi::telemetry::errors::{ErrorType, Failure, SpanError};
 pub use lk_agents_abi::telemetry::instruments::{
     AudioCatchUp, AudioConsumer, AudioDropped, AudioPolicy,
 };
+pub use lk_agents_abi::telemetry::record::SpanContext;
 pub use lk_agents_abi::telemetry::{Cx, Recorder};
 pub use lk_agents_core::telemetry::span::Reserved;
 use lk_agents_core::telemetry::span::{IdSource, seeded_ids};
-
-/// What an `Ok` value of a `#[span]` function ends its span with.
-pub trait SpanEnd<D: SpanDecl> {
-    fn end(&self) -> D::End;
-}
 
 /// The process's span recording: where records go, the clock that times them and the id source.
 /// One per process, lent through `ProcessEnv`; the DST builds its own with a fixed seed.
@@ -154,16 +149,6 @@ impl Tracer {
         Cx::root(self.0.clone())
     }
 
-    /// The caller's span at a host-to-framework entry.
-    pub fn entry(&self, caller: Option<SpanRef>) -> Cx {
-        Cx::entry(self.0.clone(), caller)
-    }
-
-    /// The context a [`TraceContext`] carries across a provider request.
-    pub fn resume(&self, trace: &TraceContext) -> Cx {
-        Cx::resume(self.0.clone(), trace)
-    }
-
     /// Hands a record produced elsewhere (a voice core span) to the sink.
     pub fn record(&self, record: Record) {
         self.0.sink.record(record);
@@ -198,25 +183,6 @@ impl Recorder for Inner {
     fn capture_content(&self) -> bool {
         self.capture_content.load(Ordering::Relaxed)
     }
-}
-
-/// A W3C `traceparent` header's span; `None` for an invalid one, which never refuses a request.
-pub fn parse_traceparent(value: &str) -> Option<SpanRef> {
-    let parent = lk_agents_core::telemetry::transport::TraceParent::parse(value)?;
-    Some(SpanRef {
-        trace_id: TraceId(u128::from_be_bytes(parent.trace_id)),
-        span_id: SpanId(u64::from_be_bytes(parent.span_id)),
-        sampled: parent.sampled,
-    })
-}
-
-/// `span` as a W3C `traceparent` header.
-pub fn traceparent(span: SpanRef) -> Option<String> {
-    lk_agents_core::telemetry::transport::TraceParent::format(
-        span.trace_id.0,
-        span.span_id.0,
-        span.sampled,
-    )
 }
 
 /// A process tracer's seed.
@@ -265,44 +231,14 @@ pub fn start_at<D: SpanDecl>(cx: &Cx, decl: D, start: u64) -> ScopedSpan<D> {
         labels,
         measured,
         events: Vec::new(),
-        failure: None,
     };
     ScopedSpan { cx: cx.clone().under::<D>(span), open: Mutex::new(Some(open)), _decl: PhantomData }
 }
 
-/// Ends `span`: an `Err` is recorded, an `Ok` ends it with its [`SpanEnd`] attributes. Returns
-/// the result unchanged.
-pub fn end<D: SpanDecl, T: SpanEnd<D>, E: SpanError>(
-    span: ScopedSpan<D>,
-    result: Result<T, E>,
-) -> Result<T, E> {
-    match &result {
-        Ok(value) => span.finish(Some(&value.end())),
-        Err(error) => span.record_failure(error),
-    }
-    result
-}
-
-/// Ends `span` with explicit end attributes.
-pub fn end_with<D: SpanDecl>(span: ScopedSpan<D>, end: D::End) {
-    span.finish(Some(&end));
-}
-
-/// On `Err`, records the error on `span`, then returns the result unchanged; the span stays open.
-pub fn check<D: SpanDecl, T, E: SpanError>(
-    span: &ScopedSpan<D>,
-    result: Result<T, E>,
-) -> Result<T, E> {
-    if let Err(error) = &result {
-        span.record_failure(error);
-    }
-    result
-}
-
-/// Records a failure on `span` as `record_exception` does: status, `error.type` and an
-/// `exception` event. The last failure recorded is the span's status.
-pub fn fail<D: SpanDecl>(span: &ScopedSpan<D>, error: &(impl SpanError + ?Sized)) {
-    span.record_failure(error);
+/// Ends `span` with what it ends with ([`SpanEnd`]): its end attributes, an error, a result
+/// (`result.as_ref()`: an `Err` fails it) or a [`Failed`] (both).
+pub fn end<D: SpanDecl>(span: ScopedSpan<D>, outcome: impl SpanEnd<D>) {
+    span.finish(Some(&outcome));
 }
 
 /// Adds a declared event to `span` at the current time.
@@ -351,18 +287,12 @@ pub fn reserve<D: SpanDecl>(cx: &Cx) -> Reserved<D> {
 }
 
 struct Open {
-    parent: Option<SpanId>,
+    parent: Option<u64>,
     start: u64,
     attributes: KeyValues,
     labels: KeyValues,
     measured: Vec<(Instrument, Number)>,
     events: Vec<EventRecord>,
-    failure: Option<Recorded>,
-}
-
-struct Recorded {
-    error_type: ErrorType,
-    message: String,
 }
 
 /// A span ended when dropped, as cancelled, unless ended before (docs "ScopedSpan").
@@ -379,39 +309,34 @@ impl<D: SpanDecl> ScopedSpan<D> {
         &self.cx
     }
 
-    fn record_failure(&self, error: &(impl SpanError + ?Sized)) {
-        let time = self.cx.now_nanos();
-        let error_type = error.error_type();
-        let message = error.message();
-        let mut attributes = KeyValues::new();
-        Exception {
-            kind: error.exception_type().into_owned(),
-            message: message.clone(),
-            stacktrace: error.stacktrace(),
-        }
-        .write(&mut attributes);
-        if let Some(open) = self.open.lock().as_mut() {
+    /// Ends the span; `None`: dropped without `end`, cancelled.
+    fn finish(&self, outcome: Option<&dyn SpanEnd<D>>) {
+        let Some(mut open) = self.open.lock().take() else { return };
+        let Some(tracer) = self.cx.recorder() else { return };
+        let Some(context) = self.cx.span() else { return };
+        let end_time = tracer.now_nanos();
+        let error = outcome.and_then(|o| o.error());
+        if let Some(error) = error {
+            let mut attributes = KeyValues::new();
+            Exception {
+                kind: error.exception_type().into_owned(),
+                message: error.message(),
+                stacktrace: error.stacktrace(),
+            }
+            .write(&mut attributes);
             open.events.push(EventRecord {
                 name: Key::Borrowed(<Exception as EventDecl>::NAME),
-                time_unix_nanos: time,
+                time_unix_nanos: end_time,
                 attributes,
             });
-            open.failure = Some(Recorded { error_type, message });
         }
-    }
-
-    fn finish(&self, end: Option<&D::End>) {
-        let Some(open) = self.open.lock().take() else { return };
-        let Some(tracer) = self.cx.recorder() else { return };
-        let end_time = tracer.now_nanos();
-        // Dropped without `end`: cancelled, unless it failed (an error is never a cancellation).
         let every = EverySpan {
             conversation_id: self.cx.conversation().map(str::to_owned),
-            error_type: open.failure.as_ref().map(|f| f.error_type),
-            cancelled: (end.is_none() && open.failure.is_none()).then_some(true),
+            error_type: error.map(|e| e.error_type()),
+            cancelled: outcome.is_none().then_some(true),
         };
         let span = SpanRecord {
-            context: self.cx.span().expect("a span's context is current"),
+            context,
             parent: open.parent,
             name: Key::Borrowed(D::NAME),
             kind: D::KIND,
@@ -420,10 +345,11 @@ impl<D: SpanDecl> ScopedSpan<D> {
             attributes: open.attributes,
             events: open.events,
             links: Vec::new(),
-            status: open.failure.map_or(Status::Unset, |f| Status::Error(f.message)),
+            status: error.map_or(Status::Unset, |e| Status::Error(e.message())),
             scope: Key::Borrowed(FRAMEWORK),
             job: self.cx.job().cloned(),
         };
+        let end = outcome.and_then(|o| o.attributes());
         finish_span(span, open.labels, open.measured, end, every, &mut |r| tracer.record(r));
     }
 }

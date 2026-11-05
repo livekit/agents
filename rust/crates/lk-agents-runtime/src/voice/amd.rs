@@ -670,7 +670,7 @@ async fn classify(
     let started_at = time.wall_secs();
     let mut trace = telemetry::LlmTrace::start(&cx, llm.as_ref(), &mut request);
     let mut attempt = Some(trace.attempt());
-    let mut stream = match llm.chat(&telemetry::Cx::NONE, &request).await {
+    let mut stream = match llm.chat(trace.cx(), &request).await {
         Ok(s) => s,
         Err(error) => {
             trace.end_attempt(attempt.take().flatten(), Some(&error));
@@ -875,9 +875,9 @@ mod tests {
         let records = Arc::new(Records::default());
         let clock = Arc::new(lk_agents_abi::VirtualClock::new());
         let tracer = telemetry::Tracer::new(records.clone(), clock.clone(), 3);
-        let amd = telemetry::SpanRef {
-            trace_id: telemetry::TraceId(1),
-            span_id: telemetry::SpanId(2),
+        let amd = telemetry::SpanContext {
+            trace_id: 1,
+            span_id: 2,
             sampled: true,
         };
         let cx = tracer.root().under::<telemetry::Amd>(amd);
@@ -895,7 +895,7 @@ mod tests {
             .filter_map(|r| if let telemetry::Record::Span(s) = r { Some(s.clone()) } else { None })
             .collect();
         let request = spans.iter().find(|s| s.name == "llm_request").expect("{spans:?}");
-        assert_eq!(request.parent, Some(telemetry::SpanId(2)));
+        assert_eq!(request.parent, Some(2));
         let tokens = request.attributes.iter().find(|(k, _)| *k == "gen_ai.usage.input_tokens");
         assert_eq!(tokens.map(|(_, v)| v.clone()), Some(telemetry::Value::Int(40)));
         let run = spans.iter().find(|s| s.name == "llm_request_run").expect("{spans:?}");

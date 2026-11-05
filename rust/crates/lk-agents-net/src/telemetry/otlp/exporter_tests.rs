@@ -10,8 +10,7 @@ use super::proto::common::v1::{KeyValue, any_value::Value as Any};
 use super::proto::metrics::v1 as proto_metrics;
 use lk_agents_abi::telemetry::policy::REDACTED_EXCEPTION;
 use lk_agents_abi::telemetry::record::{
-    EventRecord, InstrumentKind, JobKey, KeyValues, LogRecord, Measurement, Number, Record, SpanId,
-    SpanKind, SpanRecord, SpanRef, Status, TraceId, Value,
+    EventRecord, InstrumentKind, JobKey, KeyValues, LogRecord, Measurement, Number, Record, SpanKind, SpanRecord, SpanContext, Status, Value,
 };
 use prost::Message as _;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -157,8 +156,8 @@ fn recording() -> CloudRecording {
 
 fn span(name: &'static str, job: Option<&str>, attributes: KeyValues) -> Record {
     Record::Span(SpanRecord {
-        context: SpanRef { trace_id: TraceId(7), span_id: SpanId(9), sampled: true },
-        parent: Some(SpanId(3)),
+        context: SpanContext { trace_id: 7, span_id: 9, sampled: true },
+        parent: Some(3),
         name: Cow::Borrowed(name),
         kind: SpanKind::Internal,
         start_unix_nanos: 1,

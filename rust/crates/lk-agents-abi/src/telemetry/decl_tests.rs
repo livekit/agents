@@ -61,7 +61,7 @@ struct TestRecord {
     #[attr("chat.item")]
     item: KvList<JsonObject>,
     #[span_id]
-    turn: Option<SpanRef>,
+    turn: Option<SpanContext>,
 }
 
 fn parent_of<P: ParentOf<D>, D: SpanDecl>() {}
@@ -145,9 +145,9 @@ fn roles_carry_their_declarations() {
     parent_of::<External, TestParent>();
     has_event::<TestSpan, TestEvent>();
     assert_eq!(<TestEvent as EventDecl>::NAME, "test_event");
-    let turn = SpanRef {
-        trace_id: crate::telemetry::record::TraceId(1),
-        span_id: crate::telemetry::record::SpanId(2),
+    let turn = SpanContext {
+        trace_id: 1,
+        span_id: 2,
         sampled: true,
     };
     let mut item = JsonObject::new();

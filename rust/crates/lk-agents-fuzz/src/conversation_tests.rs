@@ -27,10 +27,9 @@ mod agent_state_written_on_connect {
         let ids =
             Arc::new(lk_agents_runtime::room_io::output::transcription::SegmentIds::default());
         let config = RoomIoConfig::default();
-        let tracer = lk_agents_runtime::net::telemetry::Tracer::disabled(clock.clone());
         let rtc = room.clone() as Arc<dyn RtcRoom>;
-        let io = RoomIo::new(rtc, clock, spawner, ids, config, None, None, tracer);
-        io.clone().start(Default::default());
+        let io = RoomIo::new(rtc, clock, spawner, ids, config, None, None);
+        io.clone().start(lk_agents_abi::telemetry::Cx::NONE);
         io.clone().on_agent_state_changed("listening");
         tokio::time::sleep(Duration::from_millis(50)).await;
         room.set_connection_state(ConnectionState::Connected);
@@ -58,7 +57,6 @@ mod agent_state_written_on_connect {
             rtc: Some(room.clone()),
             time: Timebase::from_virtual(clock),
             pool: None,
-            tracer,
         };
         let args = VoiceSessionArgs {
             agent: "agent".into(),

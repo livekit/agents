@@ -83,27 +83,28 @@ fn a_dropped_span_ends_cancelled_under_its_parent() {
     assert_eq!(entry.events[0].name, "entrypoint_started");
 }
 
-// Catches: `check` losing the error's type, message or traceback, an `Err` recorded as
-// cancelled, or `end` attributes missing.
+// Catches: an `Err` end losing the error's class, message or traceback, recorded as cancelled, a
+// `Failed` end dropping its attributes, or `end` attributes missing.
 #[test]
-fn check_records_the_exception_and_end_its_attributes() {
+fn end_records_the_exception_and_its_attributes() {
     let (tracer, sink) = tracer();
     let cx = tracer.root().with_job(Some(JobKey("J".into()))).with_conversation(Some("RM_1"));
-    let failed: Result<(), HostError> =
-        Err(HostError::new("boom").with_traceback(Some("Traceback ...".into())));
-    {
-        let span = start(&cx, run());
-        let _ = check(&span, failed);
-    }
-    let span = start(&cx, run());
-    let ok: Result<u8, ApiError> = Ok(1);
-    assert_eq!(check(&span, ok), Ok(1));
-    end_with(span, AgentRunEnd { status: RunStatus::Completed });
+    let mut error = HostError::new("boom").with_traceback(Some("Traceback ...".into()));
+    error.kind = "ValueError".into();
+    let failed: Result<AgentRunEnd, HostError> = Err(error);
+    end(start(&cx, run()), failed.as_ref());
+    let ok: Result<AgentRunEnd, ApiError> = Ok(AgentRunEnd { status: RunStatus::Completed });
+    end(start(&cx, run()), ok);
+    let error = ApiError::timeout(None);
+    end(start(&cx, run()), Failed { end: AgentRunEnd { status: RunStatus::Failed }, error: &error });
 
     let spans = sink.spans();
-    let [failed, ended] = spans.as_slice() else { panic!("{spans:?}") };
+    let [failed, ended, both] = spans.as_slice() else { panic!("{spans:?}") };
     assert_eq!(failed.status, Status::Error("boom".into()));
-    assert_eq!(attr(failed, "error.type"), Some(&Value::String("exception".into())));
+    assert_eq!(attr(failed, "error.type"), Some(&Value::String("ValueError".into())));
+    assert_eq!(attr(failed, "lk.run.status"), None);
+    assert_eq!(attr(both, "error.type"), Some(&Value::String("timeout".into())));
+    assert_eq!(attr(both, "lk.run.status"), Some(&Value::String("failed".into())));
     assert_eq!(attr(failed, "lk.cancelled"), None, "an error is never a cancellation");
     let exception = &failed.events[0];
     assert_eq!(exception.name, "exception");
@@ -123,17 +124,17 @@ fn check_records_the_exception_and_end_its_attributes() {
 #[test]
 fn spans_continue_foreign_contexts() {
     let (tracer, sink) = tracer();
-    let foreign = SpanRef { trace_id: TraceId(42), span_id: SpanId(9), sampled: true };
+    let foreign = SpanContext { trace_id: 42, span_id: 9, sampled: true };
     let cx = tracer.root().continuing(Some(foreign));
     drop(start(&cx, JudgeEvaluation { name: "j".into() }));
     drop(start(&cx, run()));
     drop(start(&tracer.root().continuing(None), job()));
     for span in &sink.spans()[..2] {
-        assert_eq!((span.context.trace_id, span.parent), (TraceId(42), Some(SpanId(9))));
+        assert_eq!((span.context.trace_id, span.parent), (42, Some(9)));
     }
     let under = tracer.root().under::<JobEntrypoint>(foreign);
     let shutdown = start(&under, JobShutdown { reason: "r".into(), user_initiated: true });
-    end_with(start(shutdown.cx(), OnSessionEnd { callback: "cb".into() }), ());
+    end(start(shutdown.cx(), OnSessionEnd { callback: "cb".into() }), ());
     let _ = JudgeEvaluationEnd { verdict: None, explanation: None };
 }
 
@@ -156,7 +157,7 @@ fn an_undeclared_parent_fails_the_debug_assertion() {
             recovery: None,
         },
     );
-    end_with(start(span.cx(), LlmRequestRun { attempt }), AttemptEnd::new(vec![]));
+    end(start(span.cx(), LlmRequestRun { attempt }), AttemptEnd::new(vec![]));
 }
 
 // Catches: ids repeating or depending on anything but the seed (the DST replays them).
@@ -172,26 +173,18 @@ fn ids_follow_the_seed() {
     assert_ne!(ids(3).span_id, ids(4).span_id);
 }
 
-struct Response(u8);
-
-impl SpanEnd<AgentRun> for Response {
-    fn end(&self) -> AgentRunEnd {
-        AgentRunEnd { status: if self.0 == 0 { RunStatus::Completed } else { RunStatus::Failed } }
-    }
-}
-
 #[span(AgentRun { operation: GenAiOperation::InvokeAgent, agent_name: name.into() })]
-async fn traced(cx: &Cx, name: &str, fail: bool) -> Result<Response, ApiError> {
+async fn traced(cx: &Cx, name: &str, fail: bool) -> Result<AgentRunEnd, ApiError> {
     if fail {
         return Err(ApiError::timeout(None));
     }
     let inner = start(cx, JudgeEvaluation { name: name.into() });
     drop(inner);
-    Ok(Response(0))
+    Ok(AgentRunEnd { status: RunStatus::Completed })
 }
 
 // Catches: the `#[span]` attribute not opening exactly one span, its body not running under it,
-// an early `return` escaping `check`, or `Ok` not ended through `SpanEnd`.
+// an early `return` escaping `end`, or `Ok` not ending with its attributes.
 #[tokio::test]
 async fn span_functions_are_one_span() {
     let (tracer, sink) = tracer();

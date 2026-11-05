@@ -115,6 +115,7 @@ impl lk_agents_abi::voice::nodes::NodeFactory for ClosingTextFactory {
     }
     fn llm_node<'a>(
         &'a self,
+        _cx: &lk_agents_abi::telemetry::Cx,
         _: &'a lk_agents_abi::ChatRequest,
     ) -> lk_agents_abi::BoxFuture<'a, Result<lk_agents_abi::LlmStream, ProviderError>> {
         Box::pin(async { Err(lk_agents_abi::errors::ApiError::connection(None).into()) })

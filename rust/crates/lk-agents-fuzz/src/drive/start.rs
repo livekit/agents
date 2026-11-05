@@ -249,7 +249,6 @@ impl Run {
             rtc: Some(room.clone()),
             time: time.clone(),
             pool: None,
-            tracer: tracer.clone(),
         });
         let api = Arc::new(
             VoiceSession::new(&scheduled(tasks.clone(), tracer), session_room, args, Some(options))
@@ -409,7 +408,6 @@ impl Run {
                 rtc: Some(run.room.clone()),
                 time: run.time.clone(),
                 pool: None,
-                tracer: lk_agents_runtime::net::telemetry::Tracer::disabled(run.time.clock()),
             });
             let ambient = vec![fakes::FakeSoundStream::sound(20)];
             let _ = player.start(room, fakes::HALF, ambient, true, None).await;

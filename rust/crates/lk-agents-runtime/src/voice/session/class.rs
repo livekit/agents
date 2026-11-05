@@ -888,7 +888,7 @@ impl VoiceSession {
     /// reserved; before `start()`.
     pub(crate) fn trace_under(
         &self,
-        trace: telemetry::TraceContext,
+        trace: telemetry::Cx,
         job_ids: telemetry::JobIds,
         opening: telemetry::Opening,
     ) {

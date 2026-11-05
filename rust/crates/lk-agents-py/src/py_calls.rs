@@ -286,12 +286,12 @@ pub type HostCall = Box<
 fn copy_in_span<'py>(
     py: Python<'py>,
     ctx: &Bound<'py, PyAny>,
-    span: Option<telemetry::record::SpanRef>,
+    span: Option<telemetry::record::SpanContext>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let ctx = access::Context::copy(ctx)?.call0()?;
     if let Some(span) = span {
         let activate = telemetry_hook(py, &ACTIVATE, access::TelemetryModule::_activate)?;
-        let ids = (span.trace_id.0, span.span_id.0, span.sampled);
+        let ids = (span.trace_id, span.span_id, span.sampled);
         access::Context::run(&ctx)?.call1((activate, ids.0, ids.1, ids.2))?;
     }
     Ok(ctx)
@@ -345,17 +345,17 @@ pub(crate) fn traceback(value: &Bound<'_, PyAny>) -> Option<String> {
 }
 
 /// The current OpenTelemetry span of the calling context, when valid.
-fn current_span(py: Python<'_>) -> Option<telemetry::record::SpanRef> {
+fn current_span(py: Python<'_>) -> Option<telemetry::record::SpanContext> {
     let current = telemetry_hook(py, &CURRENT, access::TelemetryModule::_current).ok()?;
     let current = current.call0().ok().filter(|c| !c.is_none())?;
-    crate::generated::records::telemetry::span_context_from_py(&current).ok()?.span()
+    crate::generated::records::telemetry::span_context_from_py(&current).ok()?.valid()
 }
 
 /// Starts `call` in a copy of `context` with `span` current; the pair it runs in is returned with
 /// its value.
 fn start_call(
     context: &HostRef,
-    span: Option<telemetry::record::SpanRef>,
+    span: Option<telemetry::record::SpanContext>,
     call: HostCall,
 ) -> PyResult<(Started, Py<PyAny>)> {
     Python::attach(|py| {
@@ -383,7 +383,7 @@ impl HostEntry for Entry {
     fn enter(
         &self,
         context: &HostRef,
-        span: Option<telemetry::record::SpanRef>,
+        span: Option<telemetry::record::SpanContext>,
         call: HostCall,
     ) -> BoxFuture<'static, PyResult<Called>> {
         let context = context.clone();
@@ -397,7 +397,7 @@ impl HostEntry for Entry {
     fn enter_cancellable(
         &self,
         context: &HostRef,
-        span: Option<telemetry::record::SpanRef>,
+        span: Option<telemetry::record::SpanContext>,
         call: HostCall,
         cancel: Arc<dyn lk_agents_abi::invoke::Cancellation>,
     ) -> BoxFuture<'static, PyResult<Called>> {
@@ -439,11 +439,10 @@ pub fn entered() -> lk_agents_abi::invoke::CallContext {
     lk_agents_abi::invoke::CallContext { host_context, ..Default::default() }
 }
 
-/// The caller's span at a `_core` call's entry (`telemetry::Cx::entry`), recording to the
-/// process tracer.
+/// The caller's span at a `_core` call's entry, recording to the process tracer.
 pub fn entry_cx() -> telemetry::Cx {
     let caller = Python::attach(current_span);
-    lk_agents_runtime::telemetry::tracer().entry(caller)
+    lk_agents_runtime::telemetry::tracer().root().continuing(caller)
 }
 
 /// Notifications waiting for the host loop past which a new lossy one is dropped (and logged).

@@ -4,7 +4,7 @@ use super::super::HostAgents;
 use super::settle;
 use crate::voice::VoiceRuntimeEvent;
 use lk_agents_abi::errors::HostError;
-use lk_agents_abi::telemetry::record::{SpanId, SpanRef, TraceId};
+use lk_agents_abi::telemetry::record::{SpanContext};
 use lk_agents_abi::voice::session_effects::{FillerReply, SessionHooks};
 use lk_agents_voice::agent_activity::scheduling::SpeechId;
 use lk_agents_voice::agent_session::{Command, HookCall, HookId, HookOutcome};
@@ -31,7 +31,7 @@ struct ScriptedHooks {
     failed: Mutex<Vec<String>>,
     toolsets: ScopeRegistry,
     /// The span each hook ran under.
-    under: Mutex<Vec<Option<SpanRef>>>,
+    under: Mutex<Vec<Option<SpanContext>>>,
 }
 
 #[derive(Default)]
@@ -196,7 +196,7 @@ async fn hook_answers_reach_the_driver_as_the_host_gave_them() {
         ..Default::default()
     });
     let (id, agent) = (HookId(1), "agent".to_owned());
-    let span = |n| Some(SpanRef { trace_id: TraceId(7), span_id: SpanId(n), sampled: true });
+    let span = |n| Some(SpanContext { trace_id: 7, span_id: n, sampled: true });
     assert!(matches!(
         answered(&hooks, HookCall::OnEnter { id, agent: agent.clone(), scope: 0, span: span(1) })
             .await,

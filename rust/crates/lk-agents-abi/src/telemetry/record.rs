@@ -55,36 +55,54 @@ impl From<&str> for Value {
     }
 }
 
-/// A W3C trace id. Never zero.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct TraceId(pub u128);
-
-/// A W3C span id. Never zero.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct SpanId(pub u64);
-
-/// A span's context: what a child, a link, an effect or a `traceparent` carries.
+/// A span's W3C identity: what a child, a link, an effect, a host call or a `traceparent`
+/// carries. Ids are never zero; [`SpanContext::valid`] refuses a host's zero ids.
+#[crate::host(record(module = "telemetry", extract, emit))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct SpanRef {
-    pub trace_id: TraceId,
-    pub span_id: SpanId,
+pub struct SpanContext {
+    pub trace_id: u128,
+    pub span_id: u64,
     pub sampled: bool,
+}
+
+impl SpanContext {
+    /// `None` for an invalid (zero) id.
+    pub fn valid(self) -> Option<SpanContext> {
+        (self.trace_id != 0 && self.span_id != 0).then_some(self)
+    }
+
+    /// A W3C version-00 `traceparent` header; `None` for a malformed one or zero ids, which never
+    /// refuses a request.
+    pub fn parse_traceparent(value: &str) -> Option<SpanContext> {
+        let [version, trace_id, span_id, flags] = value.split('-').collect::<Vec<_>>()[..] else {
+            return None;
+        };
+        let hex = |text: &str, len| {
+            (text.len() == len && text.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')))
+                .then(|| u128::from_str_radix(text, 16).ok())
+                .flatten()
+        };
+        if version != "00" {
+            return None;
+        }
+        SpanContext {
+            trace_id: hex(trace_id, 32)?,
+            span_id: u64::try_from(hex(span_id, 16)?).ok()?,
+            sampled: hex(flags, 2)? & 1 != 0,
+        }
+        .valid()
+    }
+
+    /// The W3C `traceparent` header.
+    pub fn traceparent(self) -> String {
+        format!("00-{:032x}-{:016x}-{:02x}", self.trace_id, self.span_id, u8::from(self.sampled))
+    }
 }
 
 /// The job a record belongs to: the key the Cloud destination gates, batches and stamps by.
 /// `None` for records produced outside any job (worker lifecycle, application spans between jobs).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct JobKey(pub String);
-
-/// A span context crossing an API that cannot carry one (a provider request): the span a
-/// provider that records spans of its own (a fallback adapter) opens them under, and the job and
-/// conversation they record for.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct TraceContext {
-    pub span: Option<SpanRef>,
-    pub job: Option<JobKey>,
-    pub conversation: Option<String>,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SpanKind {
@@ -113,15 +131,15 @@ pub struct EventRecord {
 /// One ended span.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SpanRecord {
-    pub context: SpanRef,
-    pub parent: Option<SpanId>,
+    pub context: SpanContext,
+    pub parent: Option<u64>,
     pub name: Key,
     pub kind: SpanKind,
     pub start_unix_nanos: u64,
     pub end_unix_nanos: u64,
     pub attributes: KeyValues,
     pub events: Vec<EventRecord>,
-    pub links: Vec<SpanRef>,
+    pub links: Vec<SpanContext>,
     pub status: Status,
     /// Spans of instrumentation scopes other than the framework's (application spans) carry
     /// their own scope name.
@@ -139,7 +157,7 @@ pub struct LogRecord {
     pub severity_number: i32,
     pub severity_text: Key,
     pub attributes: KeyValues,
-    pub span: Option<SpanRef>,
+    pub span: Option<SpanContext>,
     pub job: Option<JobKey>,
 }
 
@@ -193,4 +211,30 @@ pub enum Record {
 /// record and counts it.
 pub trait RecordSink: Send + Sync {
     fn record(&self, record: Record);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SpanContext;
+
+    // Catches: a malformed, uppercase, oversized or zero-id `traceparent` accepted, or the header
+    // not round-tripping.
+    #[test]
+    fn traceparent_round_trips_and_refuses_invalid_headers() {
+        let valid = "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01";
+        let span = SpanContext::parse_traceparent(valid).unwrap();
+        assert!(span.sampled);
+        assert_eq!(span.traceparent(), valid);
+        for invalid in [
+            "",
+            "00-00000000000000000000000000000000-0123456789abcdef-01",
+            "00-0123456789abcdef0123456789abcdef-0000000000000000-01",
+            "00-0123456789ABCDEF0123456789abcdef-0123456789abcdef-01",
+            "01-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+            "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01-extra",
+        ] {
+            assert!(SpanContext::parse_traceparent(invalid).is_none(), "{invalid}");
+        }
+        assert!(SpanContext::parse_traceparent(&format!("{valid}0")).is_none());
+    }
 }

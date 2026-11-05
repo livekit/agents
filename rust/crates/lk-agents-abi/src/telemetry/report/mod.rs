@@ -153,7 +153,7 @@ pub struct SessionReport {
     pub chat_history: Vec<ChatItem>,
     /// The span of the turn each chat item belongs to, by item id.
     #[host(default_factory = "dict")]
-    pub turns: std::collections::BTreeMap<String, super::host::SpanContext>,
+    pub turns: std::collections::BTreeMap<String, super::record::SpanContext>,
     pub usage: Usage,
     #[host(default_factory = "list")]
     pub tags: Vec<ReportTag>,

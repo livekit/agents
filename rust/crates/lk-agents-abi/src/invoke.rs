@@ -4,7 +4,7 @@
 //! `lk-agents-runtime`'s `host` module owns the dispatch; the binding only enters.
 
 use crate::BoxFuture;
-use crate::telemetry::record::SpanRef;
+use crate::telemetry::record::SpanContext;
 use crate::utils::host_ref::HostRef;
 use std::sync::Arc;
 
@@ -92,7 +92,7 @@ pub trait HostEntry: Send + Sync + 'static {
     fn enter(
         &self,
         context: &HostRef,
-        span: Option<SpanRef>,
+        span: Option<SpanContext>,
         call: Self::Call,
     ) -> BoxFuture<'static, Result<Self::Value, Self::Error>>;
 
@@ -100,7 +100,7 @@ pub trait HostEntry: Send + Sync + 'static {
     fn enter_cancellable(
         &self,
         context: &HostRef,
-        span: Option<SpanRef>,
+        span: Option<SpanContext>,
         call: Self::Call,
         cancel: Arc<dyn Cancellation>,
     ) -> BoxFuture<'static, Result<Self::Value, Self::Error>>;

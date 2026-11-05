@@ -227,7 +227,7 @@ impl ipc_host::JobSupervisor for JobSupervisor {
         _context: CallContext,
         cx: telemetry::Cx,
     ) -> Result<(), WorkerError> {
-        fields.traceparent = cx.span().and_then(telemetry::traceparent);
+        fields.traceparent = cx.span().map(telemetry::SpanContext::traceparent);
         let sup = self.sup.clone();
         self.spawner
             .run(async move { sup.start_job(fields).await })

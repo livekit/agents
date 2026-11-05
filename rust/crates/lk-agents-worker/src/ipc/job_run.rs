@@ -175,19 +175,22 @@ impl Inner {
         run: impl Future<Output = Result<(), HostError>>,
         timeout: Option<f64>,
         error_msg: &str,
-    ) {
+    ) where
+        (): telemetry::SpanEnd<D>,
+    {
         let outcome = match timeout {
             Some(t) => tokio::time::timeout(secs(t), run).await.map_err(|_| ()),
             None => Ok(run.await),
         };
         match outcome {
-            Ok(Ok(())) => telemetry::end_with(span, ()),
-            Ok(Err(error)) => {
-                telemetry::fail(&span, &error);
-                self.log(Level::Error, error_msg, Some(error), Vec::new());
+            Ok(ran) => {
+                telemetry::end(span, ran.as_ref().map(|_| ()));
+                if let Err(error) = ran {
+                    self.log(Level::Error, error_msg, Some(error), Vec::new());
+                }
             }
             Err(()) => {
-                telemetry::fail(&span, &lk_agents_abi::Elapsed);
+                telemetry::end(span, lk_agents_abi::Elapsed);
                 let msg =
                     format!("{} timed out after {}s", D::NAME, timeout.unwrap_or_default() as i64);
                 self.log(Level::Error, &msg, None, Vec::new());
@@ -230,18 +233,28 @@ impl Inner {
     async fn run(self: Arc<Self>) -> Result<(), WorkerError> {
         let trace = self.take_trace();
         let result = self.clone().run_traced(&trace).await;
-        if let Err(error) = &result {
-            telemetry::fail(&trace.span, &HostError::new(error.to_string()));
-        }
         let telemetry::JobTrace { key, span, .. } = trace;
-        telemetry::end_with(span, ());
+        let failure = match &result {
+            Ok(crash) => crash.clone(),
+            Err(error) => Some(HostError::new(error.to_string())),
+        };
+        if let Some(error) = &failure {
+            telemetry::end(span, error);
+        } else {
+            telemetry::end(span, ());
+        }
         if let Some(exporter) = self.tracer.exporter() {
             exporter.close_job(&key, secs(telemetry::SHUTDOWN_TIMEOUT_SECONDS)).await;
         }
-        result
+        result.map(drop)
     }
 
-    async fn run_traced(self: Arc<Self>, trace: &telemetry::JobTrace) -> Result<(), WorkerError> {
+    /// Runs the job to its shutdown; `Ok` carries the entrypoint's unhandled exception, which its
+    /// root span ends with.
+    async fn run_traced(
+        self: Arc<Self>,
+        trace: &telemetry::JobTrace,
+    ) -> Result<Option<HostError>, WorkerError> {
         let (host, cx) = self.host.get().expect("run() sets the host first");
         let job = trace.span.cx();
         let entry = host.start_entrypoint(job, cx).await?;
@@ -251,6 +264,7 @@ impl Inner {
         tokio::pin!(warn_at);
         let mut ended = self.ended.subscribe();
         let (mut entry_done, mut warned) = (false, self.fake);
+        let mut crash = None;
         loop {
             tokio::select! {
                 r = &mut wait_entry, if !entry_done => {
@@ -258,7 +272,7 @@ impl Inner {
                     match r {
                         Err(e) if cancelled(&e) => telemetry::event(&trace.span, telemetry::EntrypointCancelled),
                         Err(e) => {
-                            telemetry::fail(&trace.span, &e);
+                            crash = Some(e.clone());
                             self.log(Level::Error, "unhandled exception while running the job task", Some(e), Vec::new());
                             // A crash before ctx.connect() resolves nothing else: the shutdown
                             // still runs, so the cleanup can flush the crash logs.
@@ -361,9 +375,8 @@ impl Inner {
             let _ = parent.send(ToParent::Exiting { reason: bounded(reason.clone()) }).await;
         }
         let disconnect = telemetry::start(shutdown.cx(), telemetry::RoomDisconnect);
-        let disconnected =
-            telemetry::check(&disconnect, host.disconnect(disconnect.cx(), cx).await);
-        telemetry::end_with(disconnect, ());
+        let disconnected = host.disconnect(disconnect.cx(), cx).await;
+        telemetry::end(disconnect, disconnected.as_ref());
         disconnected?;
 
         // The shutdown callbacks run together.
@@ -380,11 +393,8 @@ impl Inner {
                     }
                     let span =
                         telemetry::start(&parent, telemetry::ShutdownCallback { callback: name });
-                    let ran = telemetry::check(
-                        &span,
-                        host.shutdown_callback(span.cx(), &cx, callback, reason).await,
-                    );
-                    telemetry::end_with(span, ());
+                    let ran = host.shutdown_callback(span.cx(), &cx, callback, reason).await;
+                    telemetry::end(span, ran.as_ref());
                     ran
                 })
             })
@@ -399,8 +409,8 @@ impl Inner {
                 );
             }
         }
-        telemetry::end_with(shutdown, ());
-        Ok(())
+        telemetry::end(shutdown, ());
+        Ok(crash)
     }
 }
 

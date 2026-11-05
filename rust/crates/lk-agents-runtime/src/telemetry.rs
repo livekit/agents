@@ -30,9 +30,8 @@ use serde_json::Value as JsonValue;
 
 // What the runtime's logic names, spelled `telemetry::` there (`telemetry.md`, rule 4).
 pub(crate) use lk_agents_abi::telemetry::decl::{Content, Json, Measured, Seconds};
-pub(crate) use lk_agents_abi::telemetry::host::SpanContext;
 pub(crate) use lk_agents_abi::telemetry::instruments::{AudioConsumer, TurnLlmTtft, TurnTtsTtfb};
-pub(crate) use lk_agents_abi::telemetry::record::{JobKey, SpanRef, TraceContext};
+pub(crate) use lk_agents_abi::telemetry::record::JobKey;
 #[cfg(test)]
 pub(crate) use lk_agents_abi::telemetry::record::{Record, RecordSink, Value};
 pub(crate) use lk_agents_abi::telemetry::report::SessionReport;
@@ -58,8 +57,8 @@ pub(crate) use lk_agents_core::telemetry::span::seeded_ids;
 pub(crate) use lk_agents_core::telemetry::{gen_ai, log_keys};
 pub(crate) use lk_agents_inference::telemetry::{LlmTrace, TtsTrace, model_labels, provider_name};
 pub(crate) use lk_agents_net::telemetry::{
-    Cx, ErrorType, Failure, ScopedSpan, Tracer, check, end_with, event, fail, measure,
-    parse_traceparent, random_seed, reserve, start,
+    Cx, ErrorType, Failed, Failure, ScopedSpan, SpanContext, Tracer, end, event, measure,
+    random_seed, reserve, start,
 };
 pub(crate) use lk_agents_voice::telemetry::{
     Activation, JobIds, Opening, SessionTelemetry, participant_attrs,
@@ -84,7 +83,7 @@ struct Process {
 /// A running session as a stall reaches it: its job, its `agent_session` and its loop.
 struct Stalled {
     job: Option<JobKey>,
-    session: SpanRef,
+    session: SpanContext,
     notify: Arc<dyn Fn(Duration) + Send + Sync>,
 }
 
@@ -101,7 +100,7 @@ impl Drop for StallWatch {
 /// the returned watch drops.
 pub(crate) fn watch_stalls(
     job: Option<JobKey>,
-    session: SpanRef,
+    session: SpanContext,
     notify: Arc<dyn Fn(Duration) + Send + Sync>,
 ) -> StallWatch {
     static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -255,7 +254,7 @@ impl lk_agents_abi::telemetry::host::Telemetry for Telemetry {
         job: Option<String>,
         task: Option<String>,
     ) {
-        let parent = parent.and_then(SpanContext::span);
+        let parent = parent.and_then(SpanContext::valid);
         let job = job.map(JobKey);
         // The job's sessions count it; its span goes under the first one's `agent_session`.
         let sessions: Vec<_> = (PROCESS.sessions.lock().values())
@@ -319,15 +318,11 @@ pub(crate) fn event_loop_blocked(cx: &Cx, blocked: &Blocked, duration: f64, task
         start,
     );
     if severity == BlockingSeverity::Error {
-        lk_agents_net::telemetry::fail(
-            &span,
-            &lk_agents_net::telemetry::Failure {
-                kind: ErrorType::EventLoopBlocked,
-                message: format!("the event loop was blocked for {duration:.3}s"),
-            },
-        );
+        let message = format!("the event loop was blocked for {duration:.3}s");
+        lk_agents_net::telemetry::end(span, Failure { kind: ErrorType::EventLoopBlocked, message });
+    } else {
+        lk_agents_net::telemetry::end(span, ());
     }
-    lk_agents_net::telemetry::end_with(span, ());
 }
 
 /// One tool call's span, opened under `cx` (its `agent_turn` or `agent_run`).
@@ -388,14 +383,16 @@ pub(crate) fn end_function_tool(
     );
     let capture = cx.capture_content();
     let result = capture.then(|| GenAiContent(output.clone()));
-    if error {
-        let failure = Failure { kind: ErrorType::ToolError, message: output.clone() };
-        lk_agents_net::telemetry::fail(&span, &failure);
+    let failure = error.then(|| Failure { kind: ErrorType::ToolError, message: output.clone() });
+    let end = FunctionToolEnd { output: Content(output), is_error: error, result };
+    match &failure {
+        Some(error) => {
+            lk_agents_net::telemetry::end(span, Failed { end, error });
+        }
+        None => {
+            lk_agents_net::telemetry::end(span, end);
+        }
     }
-    lk_agents_net::telemetry::end_with(
-        span,
-        FunctionToolEnd { output: Content(output), is_error: error, result },
-    );
 }
 
 /// The `lk.agents.usage.*` counters and the connection time one metrics record carries, as

@@ -51,7 +51,6 @@ mod background_audio {
             rtc: Some(room.clone()),
             time: Timebase::from_virtual(clock),
             pool: None,
-            tracer,
         };
         let player = player(&fixed.time);
         player.start(Arc::new(fixed), 0.5, ambient, true, None).await.unwrap();

@@ -3,7 +3,7 @@
 //! [`Trace`] (`self.telemetry`) opens and ends it: the user turns ([`user_turn`]), the agent turns
 //! ([`agent_turn`]), and the session's own spans and its callbacks' ([`session`]). Ended spans
 //! leave each step as records on `SessionEvent::Telemetry`; work that continues in the runtime
-//! gets its parent's `SpanRef`.
+//! gets its parent's `SpanContext`.
 
 pub(crate) mod agent_turn;
 pub(crate) mod session;
@@ -23,12 +23,12 @@ use lk_agents_core::telemetry::span::IdSource;
 
 pub(crate) use agent_turn::{AgentTurnSpan, Reply};
 pub(crate) use lk_agents_abi::telemetry::spans::user_turn::EouSource;
-pub(crate) use lk_agents_core::telemetry::span::{Reserved, Span, Trace, seeded_ids};
+pub(crate) use lk_agents_core::telemetry::span::{ManualSpan, Reserved, Trace, seeded_ids};
 pub(crate) use session::{AmdDetection, Arriving, Blocking, Holding, HookSpan, ItemTurns, Under};
 pub(crate) use user_turn::{Endpointing, Stt, UserTurnSpan};
 
 // The declarations and records logic code names, under `telemetry::` (`telemetry.md`, rule 4).
-pub(crate) use lk_agents_abi::telemetry::record::SpanRef;
+pub(crate) use lk_agents_abi::telemetry::record::SpanContext;
 pub(crate) use lk_agents_abi::telemetry::report::SessionReport;
 pub(crate) use lk_agents_abi::telemetry::spans::session::{
     AgentSession, KeytermDetection, KeytermDetectionEnd, SessionClose, SessionStart,
@@ -56,7 +56,7 @@ pub(crate) fn disconnect_reason(reason: DisconnectReason) -> String {
 #[derive(Default)]
 pub struct SessionTelemetry {
     /// The span the session continues: the job's `job_entrypoint`, or the caller's current span.
-    pub parent: Option<SpanRef>,
+    pub parent: Option<SpanContext>,
     pub job: Option<JobKey>,
     /// `gen_ai.conversation.id`: the call's thread, else the job's room session id; `None` (outside
     /// a job) records the session's own id.
@@ -121,7 +121,7 @@ impl SpanError for HookFailure<'_> {
     fn exception_type(&self) -> Cow<'static, str> {
         match self {
             HookFailure::Raised(error) => error.exception_type(),
-            _ => self.error_type().as_str().into(),
+            _ => self.error_type().as_str().to_owned().into(),
         }
     }
     fn stacktrace(&self) -> Option<String> {

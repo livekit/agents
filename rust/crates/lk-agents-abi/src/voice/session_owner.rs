@@ -100,7 +100,7 @@ pub trait SessionOwner: Send + Sync + Sized + 'static {
     /// The session's `agent_session` span, from `start()`: the job's current span while the
     /// session runs.
     #[host(getter)]
-    fn span(&self) -> Option<crate::telemetry::host::SpanContext>;
+    fn span(&self) -> Option<crate::telemetry::record::SpanContext>;
     #[host(getter)]
     fn storage(&self) -> Option<Arc<Self::Storage>>;
     #[host(getter)]

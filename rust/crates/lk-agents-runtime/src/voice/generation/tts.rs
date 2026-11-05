@@ -137,7 +137,7 @@ pub(super) async fn perform_tts_inference(
         let error = match state.failed(error, produced) {
             AttemptFailure::Retry(error) => error,
             AttemptFailure::Stop(lost) => {
-                fail(trace.as_ref(), &lost);
+                fail(trace.as_mut(), &lost);
                 return Err(Box::new(lost));
             }
         };
@@ -150,14 +150,14 @@ pub(super) async fn perform_tts_inference(
                 Retried::GiveUp => RetryOutcome::Exhausted,
             };
         if let Some(lost) = state.after_retry(outcome) {
-            fail(trace.as_ref(), &lost);
+            fail(trace.as_mut(), &lost);
             return Err(Box::new(lost));
         }
     }
 }
 
 /// A lost voice fails its request with the provider's error.
-fn fail(trace: Option<&telemetry::TtsTrace>, lost: &Lost) {
+fn fail(trace: Option<&mut telemetry::TtsTrace>, lost: &Lost) {
     if let (Some(trace), Some(DriverError::Provider(error))) = (trace, &lost.failure) {
         trace.fail(error);
     }
@@ -193,7 +193,7 @@ pub(super) struct TtsNodeTrace {
 impl TtsNodeTrace {
     pub(super) fn start(
         shared: &SessionShared,
-        turn: Option<telemetry::SpanRef>,
+        turn: Option<telemetry::SpanContext>,
         tts: Option<&dyn Tts>,
     ) -> Self {
         let span = turn.zip(tts).map(|(turn, _)| {
@@ -219,7 +219,7 @@ impl TtsNodeTrace {
             let model = telemetry::model_labels(id);
             telemetry::measure(span.cx(), &telemetry::TurnTtsTtfb { model }, ttfb);
         }
-        telemetry::end_with(
+        telemetry::end(
             span,
             telemetry::TtsNodeEnd { ttfb: telemetry::Measured(self.ttfb.map(telemetry::Seconds)) },
         );

@@ -181,7 +181,7 @@ pub(crate) struct AgentActivity {
     pub(crate) arriving: Option<crate::telemetry::Arriving>,
     /// The last agent activity opened (`start_agent_activity`): what its input streams keep
     /// running under.
-    running_activity: Option<crate::telemetry::SpanRef>,
+    running_activity: Option<crate::telemetry::SpanContext>,
     /// So a preemptive generation can be keyed to the turn after it.
     last_turn: Option<crate::audio_recognition::TurnId>,
     /// A final arrived while the current speech was still uninterrupted: the preemptive

@@ -8,7 +8,6 @@ use crate::telemetry::decl::{
     Attrs, Content, Current, GenAiContent, Json, Measured, Seconds, SpanValue, span,
 };
 use crate::telemetry::instruments::GenAiTimeToFirstChunk;
-use crate::telemetry::record::SpanId;
 use crate::telemetry::semconv::otel;
 
 /// One request to an LLM provider, retries included, wherever it is made.
@@ -38,8 +37,6 @@ pub struct LlmRequest {
     pub input_messages: Option<GenAiContent<Json<Vec<InputMessage>>>>,
     #[attr(otel::GEN_AI_TOOL_DEFINITIONS)]
     pub tool_definitions: Option<GenAiContent<Json<Vec<ToolDefinition>>>>,
-    #[attrs]
-    pub input: Option<InputDelta>,
     /// The request is a fallback adapter's recovery probe.
     #[attr("lk.fallback.recovery")]
     pub recovery: Option<bool>,
@@ -83,20 +80,6 @@ pub struct GenAiUsage {
     pub cache_write_input_tokens: Option<u64>,
     #[attr(otel::GEN_AI_USAGE_REASONING_OUTPUT_TOKENS)]
     pub reasoning_output_tokens: Option<u64>,
-}
-
-/// A request's input as a delta over an earlier span's, with message capture.
-#[derive(Attrs)]
-pub struct InputDelta {
-    /// The span's input record is a delta over its base span.
-    #[attr("lk.input.delta")]
-    pub delta: bool,
-    /// Span whose input record this one continues.
-    #[attr("lk.input.base_span_id")]
-    pub base_span_id: SpanId,
-    /// Items of the base record not carried into this one.
-    #[attr("lk.input.dropped_from_base")]
-    pub dropped_from_base: u32,
 }
 
 /// One attempt of an LLM request.
@@ -383,13 +366,6 @@ pub struct ToolDefinition {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-}
-
-/// A span id as its 16 lowercase hex digits.
-impl SpanValue for SpanId {
-    fn value(&self) -> Option<crate::telemetry::decl::Value> {
-        Some(crate::telemetry::decl::Value::String(format!("{:016x}", self.0)))
-    }
 }
 
 /// An instant as ISO 8601 UTC with microseconds (`2023-11-14T22:13:20.250000+00:00`), as Python's

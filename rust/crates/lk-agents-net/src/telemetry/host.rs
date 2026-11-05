@@ -4,9 +4,8 @@
 use std::collections::BTreeMap;
 
 use lk_agents_abi::telemetry::decl::json;
-use lk_agents_abi::telemetry::host::SpanContext;
 use lk_agents_abi::telemetry::record::{
-    EventRecord, JobKey, Key, KeyValues, Record, SpanId, SpanKind, SpanRecord, SpanRef, Status,
+    EventRecord, JobKey, Key, KeyValues, Record, SpanKind, SpanRecord, SpanContext, Status,
 };
 use parking_lot::Mutex;
 use serde_json::Value;
@@ -16,7 +15,7 @@ use crate::env::ProcessEnv;
 
 pub struct HostSpan {
     tracer: Tracer,
-    context: SpanRef,
+    context: SpanContext,
     job: Option<JobKey>,
     open: Mutex<Option<Open>>,
 }
@@ -25,7 +24,7 @@ struct Open {
     name: String,
     scope: String,
     kind: SpanKind,
-    parent: Option<SpanId>,
+    parent: Option<u64>,
     start: u64,
     attributes: KeyValues,
     events: Vec<EventRecord>,
@@ -50,8 +49,8 @@ impl lk_agents_abi::telemetry::host::HostSpan for HostSpan {
         job: Option<String>,
     ) -> Self {
         let tracer = env.tracer.clone();
-        let parent = parent.and_then(SpanContext::span);
-        let context = match ids.and_then(SpanContext::span) {
+        let parent = parent.and_then(SpanContext::valid);
+        let context = match ids.and_then(SpanContext::valid) {
             Some(ids) => ids,
             None => tracer.root().continuing(parent).child_context(),
         };

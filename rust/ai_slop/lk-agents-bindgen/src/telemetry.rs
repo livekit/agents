@@ -246,6 +246,11 @@ fn usage(role: &str) -> &'static str {
     }
 }
 
+/// An `#[open]` `SpanValue` variant: a `String` outside the vocabulary, written as itself.
+pub fn variant_open(v: &syn::Variant) -> bool {
+    v.attrs.iter().any(|a| a.path().is_ident("open"))
+}
+
 /// A `SpanValue` variant's wire string: its `#[wire = ".."]`, else its snake_case name.
 pub fn variant_wire(v: &syn::Variant) -> syn::Result<String> {
     match v.attrs.iter().find(|a| a.path().is_ident("wire")) {

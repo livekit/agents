@@ -51,8 +51,6 @@ impl port::AgentClient for AgentClient {
         chat_ctx: Option<Vec<ChatItem>>,
         cx: crate::telemetry::Cx,
     ) -> Result<Self::Reply, AgentClientError> {
-        // The caller's current span continues in the agent it calls.
-        let traceparent = cx.span().and_then(crate::telemetry::traceparent);
         let mut message = message_to_wire(message)?;
         if let Some(metadata) = metadata {
             message
@@ -70,7 +68,7 @@ impl port::AgentClient for AgentClient {
             thread_id.as_deref(),
             task_id.as_deref(),
             history.as_ref(),
-            traceparent.as_deref(),
+            &cx,
         )
         .await
         .map_err(client_error)
@@ -82,8 +80,7 @@ impl port::AgentClient for AgentClient {
         thread_id: String,
         cx: crate::telemetry::Cx,
     ) -> Result<Self::Reply, AgentClientError> {
-        let traceparent = cx.span().and_then(crate::telemetry::traceparent);
-        self.subscribe(TaskRef { id: task_id, context_id: thread_id }, None, traceparent.as_deref())
+        self.subscribe(TaskRef { id: task_id, context_id: thread_id }, None, &cx)
             .await
             .map_err(client_error)
     }

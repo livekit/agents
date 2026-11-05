@@ -26,8 +26,6 @@ use lk_agents_net::env::ProcessEnv;
 pub struct LlmBackend {
     inner: Arc<dyn Llm>,
     clock: Arc<dyn Clock>,
-    /// Records each request the adapter makes of this entry, under the adapter's span.
-    tracer: telemetry::Tracer,
 }
 
 impl LlmBackend {
@@ -36,33 +34,29 @@ impl LlmBackend {
         &self.inner
     }
 
-    pub fn new(inner: Arc<dyn Llm>, clock: Arc<dyn Clock>, tracer: telemetry::Tracer) -> Arc<Self> {
-        Arc::new(LlmBackend { inner, clock, tracer })
+    pub fn new(inner: Arc<dyn Llm>, clock: Arc<dyn Clock>) -> Arc<Self> {
+        Arc::new(LlmBackend { inner, clock })
     }
 
-    /// One request of this entry: an `llm_request` under the adapter's span when the caller gave
-    /// one, a recovery probe's marked as such.
+    /// One request of this entry: an `llm_request` under the adapter's span, a recovery probe's
+    /// marked as such.
     async fn request(
         &self,
-        req: &ChatRequest,
+        req: &LlmAttempt,
         conn: &lk_agents_abi::ApiConnectOptions,
         recovery: bool,
     ) -> Result<LlmStream, ProviderError> {
         // `dataclasses.replace(self._conn_options, ...)`, on a clone of the request.
-        let mut attempt = req.clone();
+        let mut attempt = req.req.clone();
         attempt.conn_options = *conn;
         let llm = self.inner.with_conn_options(conn).unwrap_or_else(|| self.inner.clone());
-        let Some(parent) = attempt.trace.take() else {
-            return llm.chat(&telemetry::Cx::NONE, &attempt).await;
-        };
-        let cx = self.tracer.resume(&parent);
         let mut trace = if recovery {
-            telemetry::LlmTrace::recovery(&cx, llm.as_ref(), &mut attempt)
+            telemetry::LlmTrace::recovery(&req.cx, llm.as_ref(), &attempt)
         } else {
-            telemetry::LlmTrace::start(&cx, llm.as_ref(), &mut attempt)
+            telemetry::LlmTrace::start(&req.cx, llm.as_ref(), &attempt)
         };
         let run = trace.attempt();
-        match llm.chat(&telemetry::Cx::NONE, &attempt).await {
+        match llm.chat(trace.cx(), &attempt).await {
             Ok(stream) => Ok(Box::new(TracedStream { stream, trace: Some((trace, run)) })),
             Err(error) => {
                 trace.end_attempt(run, Some(&error));
@@ -118,10 +112,17 @@ impl StreamOutput<LlmChunk> for TracedStream {
 
 impl lk_agents_abi::utils::stream::ProviderStream<LlmChunk> for TracedStream {}
 
+/// What the chain replays to each entry: the whole request, because recovery replays it
+/// (`llm:174-200`), and the adapter span its `llm_request` spans open under.
+#[derive(Clone)]
+pub struct LlmAttempt {
+    pub req: ChatRequest,
+    pub cx: telemetry::Cx,
+}
+
 #[async_trait]
 impl Backend for LlmBackend {
-    /// The whole request, because recovery replays it (`llm:174-200`).
-    type Req = ChatRequest;
+    type Req = LlmAttempt;
     type Session = LlmStream;
 
     fn resource_id(&self) -> lk_agents_abi::resources::ResourceId {
@@ -155,38 +156,28 @@ impl Backend for LlmBackend {
 /// A host-constructed chain runs on the executor and clock its env lends.
 pub struct FallbackLlm {
     chain: Arc<FallbackChain<LlmBackend>>,
-    tracer: telemetry::Tracer,
 }
 
 impl FallbackLlm {
-    /// `tracer` records the adapter's spans when a caller hands it a context
-    /// ([`ChatRequest::trace`]).
+    /// The adapter's spans record under the context each `chat` call runs in.
     pub fn new(
         llms: Vec<Arc<dyn Llm>>,
         policy: ChainPolicy,
         clock: Arc<dyn Clock>,
         spawner: Arc<dyn Spawner>,
         observer: Arc<dyn ChainObserver>,
-        tracer: telemetry::Tracer,
     ) -> Result<Self, NoBackends> {
-        let entries = llms
-            .into_iter()
-            .map(|llm| LlmBackend::new(llm, Arc::clone(&clock), tracer.clone()))
-            .collect();
+        let entries = llms.into_iter().map(|llm| LlmBackend::new(llm, Arc::clone(&clock))).collect();
         let chain = FallbackChain::new(entries, policy, clock, spawner, observer)?;
-        Ok(FallbackLlm { chain: Arc::new(chain), tracer })
+        Ok(FallbackLlm { chain: Arc::new(chain) })
     }
 
     /// The adapter's span for one request, under the caller's context; its entries' requests
     /// open under it.
-    fn adapter_span(
-        &self,
-        req: &mut ChatRequest,
-    ) -> Option<telemetry::ScopedSpan<telemetry::LlmFallbackAdapter>> {
-        let parent = req.trace.take()?;
+    fn adapter_span(&self, cx: &telemetry::Cx) -> telemetry::ScopedSpan<telemetry::LlmFallbackAdapter> {
         let id = self.active().id();
-        let span = telemetry::start(
-            &self.tracer.resume(&parent),
+        telemetry::start(
+            cx,
             telemetry::LlmFallbackAdapter {
                 attempt: telemetry::Attempt {
                     provider: telemetry::provider_name(&id.provider),
@@ -196,9 +187,7 @@ impl FallbackLlm {
                 stream: true,
                 output_type: telemetry::OutputType::Text,
             },
-        );
-        req.trace = Some(span.cx().trace_context());
-        Some(span)
+        )
     }
 
     pub fn chain(&self) -> &Arc<FallbackChain<LlmBackend>> {
@@ -247,7 +236,6 @@ impl lk_agents_abi::llm::fallback::FallbackLlm for FallbackLlm {
             env.clock.clone(),
             (env.spawner)().map_err(InvalidPayload)?,
             observer,
-            env.tracer.clone(),
         )
         .map_err(|error| InvalidPayload(error.to_string()))
     }
@@ -333,19 +321,19 @@ impl Llm for FallbackLlm {
 
     fn chat<'a>(
         &'a self,
-        _cx: &telemetry::Cx,
+        cx: &telemetry::Cx,
         req: &'a ChatRequest,
     ) -> lk_agents_abi::BoxFuture<'a, Result<LlmStream, ProviderError>> {
+        let span = self.adapter_span(cx);
         Box::pin(async move {
             // Bounded, so a slow reader backpressures the provider; the text leg may not drop (§1.2d).
             let (tx, rx) = mpsc::channel::<Result<LlmChunk, ProviderError>>(32);
 
             let chain = Arc::clone(&self.chain);
             let drain_chain = Arc::clone(&self.chain);
-            let mut req = req.clone();
-            let span = self.adapter_span(&mut req);
+            let req = LlmAttempt { req: req.clone(), cx: span.cx().clone() };
             let call = ChainCall {
-                conn_options: req.conn_options,
+                conn_options: req.req.conn_options,
                 accepted_at: self.chain.clock().now(),
                 slot: RecoveryMode::OneShot,
             };
@@ -386,14 +374,10 @@ impl Llm for FallbackLlm {
 
                 match result {
                     Ok(ChainOutcome::Served(())) => {
-                        if let Some(span) = span {
-                            telemetry::end_with(span, Some(served(&chain)));
-                        }
+                        telemetry::end(span, Some(served(&chain)));
                     }
                     Err(e) => {
-                        if let Some(span) = &span {
-                            telemetry::fail(span, &e);
-                        }
+                        telemetry::end(span, &e);
                         let _ = tx.send(Err(e)).await;
                     }
                 }

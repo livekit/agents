@@ -1,7 +1,7 @@
 //! The agent's turn: one `agent_turn` per speech, from its first generation to its end and the
 //! end of the tools it started, with `agent_speaking` as a direct child and a `generation` event
 //! at each step's start. The speech's scheduler entry owns its [`AgentTurnSpan`]; the runtime
-//! opens the nodes, the realtime inference and the tool calls under the turn's [`SpanRef`]. A
+//! opens the nodes, the realtime inference and the tool calls under the turn's [`SpanContext`]. A
 //! preemptive generation discarded for the speech that answers the same user turn hands that
 //! speech its turn, as 1.8.10 does.
 
@@ -11,7 +11,9 @@ use crate::events::SpeechOutcome;
 use crate::trace::InterruptCause;
 use lk_agents_abi::Ts;
 use lk_agents_abi::errors::ProviderError;
-use lk_agents_abi::telemetry::decl::{Content, Json, Label, Measured, Number, Seconds, SpanRef};
+use lk_agents_abi::telemetry::decl::{
+    Content, Failed, Json, Label, Measured, Number, Seconds, SpanContext,
+};
 use lk_agents_abi::telemetry::instruments::{
     InvokeAgentDuration, ModelLabels, TurnE2eLatency, TurnOnUserTurnCompletedDelay,
 };
@@ -22,7 +24,7 @@ use lk_agents_abi::telemetry::spans::agent_turn::{
 use lk_agents_abi::telemetry::spans::common::GenAiOperation;
 use lk_agents_abi::voice::room_io::ParticipantInfo;
 use lk_agents_abi::{FunctionCall, MetricsReport, ProviderId};
-use lk_agents_core::telemetry::span::{Span, Trace};
+use lk_agents_core::telemetry::span::{ManualSpan, Trace};
 use std::collections::BTreeSet;
 use std::time::Duration;
 
@@ -88,7 +90,7 @@ pub(crate) fn interruption_source(cause: InterruptCause) -> InterruptionSource {
 /// The speech's scheduler entry owns it; a speech that ends while tools it started still run
 /// hands it to the record of those calls, and the last one to end ends it.
 pub(crate) struct AgentTurnSpan {
-    span: Span<AgentTurn>,
+    span: ManualSpan<AgentTurn>,
     /// The speech whose turn it is: the one that adopted it after a handover.
     speech: SpeechId,
     /// `lk.speech_id`, unique across sessions.
@@ -96,7 +98,7 @@ pub(crate) struct AgentTurnSpan {
     started: Ts,
     reply: Reply,
     progress: Progress,
-    speaking: Option<Span<AgentSpeaking>>,
+    speaking: Option<ManualSpan<AgentSpeaking>>,
     /// The tool calls it started that still run.
     calls: BTreeSet<String>,
 }
@@ -161,7 +163,7 @@ impl AgentTurnSpan {
     }
 
     /// What the runtime's work for the speech nests under.
-    pub(crate) fn context(&self, trace: &Trace) -> Option<SpanRef> {
+    pub(crate) fn context(&self, trace: &Trace) -> Option<SpanContext> {
         trace.context(&self.span)
     }
 
@@ -290,9 +292,6 @@ fn end_turn(trace: &mut Trace, turn: AgentTurnSpan) {
     let (outcome, error) = p.done.unwrap_or((SpeechOutcome::Completed, None));
     let interrupted = outcome == SpeechOutcome::Interrupted;
     let user = reply.user.as_ref().filter(|_| p.e2e.is_some());
-    if let (SpeechOutcome::Failed, Some(error)) = (outcome, &error) {
-        trace.fail(&span, error);
-    }
     let queue_wait = p.scheduled.zip(p.authorized).map(|(scheduled, authorized)| {
         Seconds(authorized.saturating_duration_since(scheduled).as_secs_f64())
     });
@@ -313,7 +312,10 @@ fn end_turn(trace: &mut Trace, turn: AgentTurnSpan) {
             .and_then(|u| u.on_user_turn_completed_delay)
             .map(Seconds),
     };
-    trace.end(span, end);
+    match error.as_ref().filter(|_| outcome == SpeechOutcome::Failed) {
+        Some(error) => trace.end(span, Failed { end, error }),
+        None => trace.end(span, end),
+    }
     if !recording {
         return;
     }
