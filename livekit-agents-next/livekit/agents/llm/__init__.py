@@ -11,7 +11,6 @@ from livekit.agents._generated.llm_availability import (
 )
 
 from .. import _bindings, _core
-from .._generated.chat_items import MetricsMetadata
 from .._generated.llm import (
     LLM,
     ChatChunk,
@@ -21,7 +20,6 @@ from .._generated.llm import (
     LLMStream,
 )
 from .._generated.llm_fallback import AvailabilityChanged
-from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given
 from . import utils
@@ -168,9 +166,11 @@ for n in NOT_IN_ALL:
     __pdoc__[n] = False
 
 
-class FallbackAdapter(LLM[Literal["llm_availability_changed"]]):
+class FallbackAdapter(_bindings.FallbackMembers[LLM], LLM[Literal["llm_availability_changed"]]):
     """Several LLMs behind one: a failed one is skipped until it recovers. The chain is the
     core's (``_core.FallbackLlm``)."""
+
+    _kind = "LLM"
 
     def __init__(
         self,
@@ -193,7 +193,7 @@ class FallbackAdapter(LLM[Literal["llm_availability_changed"]]):
         if not llm:
             raise ValueError("at least one LLM instance must be provided.")
         super().__init__()
-        self._llm_instances = llm
+        self._members = llm
         self._attempt_timeout = attempt_timeout
         self._max_retry_per_llm = max_retry_per_llm
         self._retry_interval = retry_interval
@@ -205,7 +205,7 @@ class FallbackAdapter(LLM[Literal["llm_availability_changed"]]):
         return _bindings.on_loop(
             self,
             lambda: _core.FallbackLlm(
-                [_bindings.core_leg(t) for t in self._llm_instances],
+                [_bindings.core_leg(t) for t in self._members],
                 on_availability=self,
                 attempt_timeout=self._attempt_timeout,
                 max_retry_per_llm=self._max_retry_per_llm,
@@ -220,28 +220,8 @@ class FallbackAdapter(LLM[Literal["llm_availability_changed"]]):
     def _core_availability_changed(self, ev: AvailabilityChanged) -> None:
         self.emit(
             "llm_availability_changed",
-            AvailabilityChangedEvent(llm=self._llm_instances[ev.index], available=ev.available),
+            AvailabilityChangedEvent(llm=self._members[ev.index], available=ev.available),
         )
-
-    def _core_all_unavailable(self) -> None:
-        logger.error("all LLMs are unavailable, retrying..")
-
-    @property
-    def _active(self) -> LLM:
-        chains = _bindings.built_on_loop(self)
-        return self._llm_instances[chains[0].active_index if chains else 0]
-
-    @property
-    def model(self) -> str:
-        return self._active.model
-
-    @property
-    def provider(self) -> str:
-        return self._active.provider
-
-    @property
-    def metrics_metadata(self) -> MetricsMetadata:
-        return self._active.metrics_metadata
 
     def chat(
         self,
@@ -265,12 +245,7 @@ class FallbackAdapter(LLM[Literal["llm_availability_changed"]]):
         )
 
     def prewarm(self, *, loop: asyncio.AbstractEventLoop | None = None) -> None:
-        self._llm_instances[0].prewarm(loop=loop)
-
-    async def aclose(self) -> None:
-        await super().aclose()
-        for chain in _bindings.built_on_loop(self):
-            await chain.aclose()
+        self._members[0].prewarm(loop=loop)
 
 
 class FallbackLLMStream(LLMStream):

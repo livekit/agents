@@ -43,7 +43,6 @@ from .types import (
 )
 
 if TYPE_CHECKING:
-    from ._generated.chat_items import MetricsMetadata
     from ._generated.usage import TokenUsage
 
 __all__ = [
@@ -151,8 +150,10 @@ async def _drain_native(native: Any, output_emitter: AudioEmitter, *, stream: bo
         out(audio)
 
 
-class FallbackAdapter(TTS[Literal["tts_availability_changed"]]):
+class FallbackAdapter(_bindings.FallbackMembers[TTS], TTS[Literal["tts_availability_changed"]]):
     """Several TTS behind one: a failed one is skipped until it recovers."""
+
+    _kind = "TTS"
 
     def __init__(
         self,
@@ -175,7 +176,7 @@ class FallbackAdapter(TTS[Literal["tts_availability_changed"]]):
             raise ValueError("at least one TTS instance must be provided.")
         if len({t.num_channels for t in tts}) != 1:
             raise ValueError("all TTS must have the same number of channels")
-        self._tts_instances = tts
+        self._members = tts
         self._max_retry_per_tts = max_retry_per_tts
         self._attempt_timeout = attempt_timeout
         sample_rate = sample_rate or max(t.sample_rate for t in tts)
@@ -193,7 +194,7 @@ class FallbackAdapter(TTS[Literal["tts_availability_changed"]]):
         return _bindings.on_loop(
             self,
             lambda: _core.FallbackTts(
-                [_bindings.core_leg(t) for t in self._tts_instances],
+                [_bindings.core_leg(t) for t in self._members],
                 max_retry_per_tts=self._max_retry_per_tts,
                 attempt_timeout=self._attempt_timeout,
                 sample_rate=self.sample_rate,
@@ -212,28 +213,8 @@ class FallbackAdapter(TTS[Literal["tts_availability_changed"]]):
     def _core_availability_changed(self, ev: AvailabilityChanged) -> None:
         self.emit(
             "tts_availability_changed",
-            AvailabilityChangedEvent(tts=self._tts_instances[ev.index], available=ev.available),
+            AvailabilityChangedEvent(tts=self._members[ev.index], available=ev.available),
         )
-
-    def _core_all_unavailable(self) -> None:
-        logger.error("all TTSs are unavailable, retrying..")
-
-    @property
-    def _active(self) -> TTS:
-        chains = _bindings.built_on_loop(self)
-        return self._tts_instances[chains[0].active_index if chains else 0]
-
-    @property
-    def model(self) -> str:
-        return self._active.model
-
-    @property
-    def provider(self) -> str:
-        return self._active.provider
-
-    @property
-    def metrics_metadata(self) -> MetricsMetadata:
-        return self._active.metrics_metadata
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -248,11 +229,7 @@ class FallbackAdapter(TTS[Literal["tts_availability_changed"]]):
         return FallbackSynthesizeStream(tts=self, conn_options=replace(conn_options, max_retry=0))
 
     def prewarm(self) -> None:
-        self._tts_instances[0].prewarm()
-
-    async def aclose(self) -> None:
-        for chain in _bindings.built_on_loop(self):
-            await chain.aclose()
+        self._members[0].prewarm()
 
 
 def _initialize(output_emitter: AudioEmitter, tts: TTS, *, stream: bool) -> None:

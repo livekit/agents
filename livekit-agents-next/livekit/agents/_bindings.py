@@ -42,19 +42,17 @@ if TYPE_CHECKING:
     from ._generated.storage_class import ThreadInfo
     from ._generated.stt import STT, SpeechData, SpeechEvent
     from ._generated.usage import TokenUsage
-    from .llm import FallbackAdapter as _LlmFallback
-    from .stt import FallbackAdapter as _SttFallback
-    from .tts import FallbackAdapter as _TtsFallback
     from .types import APIConnectOptions, NotGivenOr
     from .voice.agent_session import VoiceSession
     from .voice.room_io import TextInputEvent
 import dataclasses
 from collections.abc import Iterable, Sequence
-from typing import TYPE_CHECKING, Never
+from typing import TYPE_CHECKING, ClassVar, Generic, Never
 
 if TYPE_CHECKING:
     from . import llm
     from ._generated import duplex, realtime_wire, rtc_wire
+    from ._generated.chat_items import MetricsMetadata
     from ._generated.llm_fallback import AvailabilityChanged
     from ._generated.tool_options import ProviderToolDeclaration, ToolSpec
     from ._generated.turn_events import EotPrediction
@@ -142,7 +140,7 @@ def on_loop(owner: object, build: Callable[[], _T]) -> _T:
     return native
 
 
-def built_on_loop(owner: _LlmFallback | _SttFallback | _TtsFallback) -> list[_FallbackChain]:
+def built_on_loop(owner: object) -> list[_FallbackChain]:
     """What ``on_loop`` built for ``owner``, the running loop's first."""
     built: dict[asyncio.AbstractEventLoop, _FallbackChain] = dict(
         owner.__dict__.get("_core_by_loop", {})
@@ -807,6 +805,53 @@ def _chat_ctx(items: list[ChatItem] | None) -> NotGivenOr[llm.ChatContext]:
     from .types import NOT_GIVEN
 
     return NOT_GIVEN if items is None else llm.ChatContext(items)
+
+
+class _Member(Protocol):
+    @property
+    def model(self) -> str: ...
+    @property
+    def provider(self) -> str: ...
+    @property
+    def metrics_metadata(self) -> MetricsMetadata: ...
+
+
+_M = TypeVar("_M", bound=_Member)
+
+
+class FallbackMembers(Generic[_M]):
+    """What the STT, TTS and LLM ``FallbackAdapter`` share over their ``_members``: the member
+    the running loop's chain is serving (``_active``, the first before any chain is built) names
+    the adapter's ``model``, ``provider`` and ``metrics_metadata``; every member unavailable is
+    logged as ``all <_kind>s are unavailable``; ``aclose`` closes the chain of every loop."""
+
+    _kind: ClassVar[str]
+    _members: list[_M]
+
+    @property
+    def _active(self) -> _M:
+        chains = built_on_loop(self)
+        return self._members[chains[0].active_index if chains else 0]
+
+    @property
+    def model(self) -> str:
+        return self._active.model
+
+    @property
+    def provider(self) -> str:
+        return self._active.provider
+
+    @property
+    def metrics_metadata(self) -> MetricsMetadata:
+        return self._active.metrics_metadata
+
+    def _core_all_unavailable(self) -> None:
+        logger.error(f"all {self._kind}s are unavailable, retrying..")
+
+    async def aclose(self) -> None:
+        await super().aclose()  # type: ignore[misc]
+        for chain in built_on_loop(self):
+            await chain.aclose()
 
 
 class FallbackListener(Protocol):

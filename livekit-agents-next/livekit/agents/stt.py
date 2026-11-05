@@ -4,7 +4,7 @@ declarations) and the adapters, whose fallback chain is the core's (``_core.Fall
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from livekit import rtc
 from livekit.agents._generated.stt_availability import (
@@ -24,11 +24,7 @@ from ._generated.stt import (
     STTError,
 )
 from ._generated.vad import VAD
-from .log import logger
 from .types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
-
-if TYPE_CHECKING:
-    from ._generated.chat_items import MetricsMetadata
 
 __all__ = [
     "SpeechEventType",
@@ -55,8 +51,10 @@ class SpeakerContext(Protocol):
     def to_instructions(self) -> str: ...
 
 
-class FallbackAdapter(STT[Literal["stt_availability_changed"]]):
+class FallbackAdapter(_bindings.FallbackMembers[STT], STT[Literal["stt_availability_changed"]]):
     """Several STT behind one: a failed one is skipped until it recovers."""
+
+    _kind = "STT"
 
     def __init__(
         self,
@@ -94,7 +92,7 @@ class FallbackAdapter(STT[Literal["stt_availability_changed"]]):
                         else StreamAdapter(stt=recognizer, vad=vad)
                     )
             stt = [adapted[id(recognizer)] for recognizer in stt]
-        self._stt_instances = stt
+        self._members = stt
         self._attempt_timeout = attempt_timeout
         self._max_retry_per_stt = max_retry_per_stt
         self._retry_interval = retry_interval
@@ -109,7 +107,7 @@ class FallbackAdapter(STT[Literal["stt_availability_changed"]]):
         return _bindings.on_loop(
             self,
             lambda: _core.FallbackStt(
-                [_bindings.core_leg(t) for t in self._stt_instances],
+                [_bindings.core_leg(t) for t in self._members],
                 attempt_timeout=self._attempt_timeout,
                 max_retry_per_stt=self._max_retry_per_stt,
                 retry_interval=self._retry_interval,
@@ -129,35 +127,15 @@ class FallbackAdapter(STT[Literal["stt_availability_changed"]]):
     def _core_availability_changed(self, ev: AvailabilityChanged) -> None:
         self.emit(
             "stt_availability_changed",
-            AvailabilityChangedEvent(stt=self._stt_instances[ev.index], available=ev.available),
+            AvailabilityChangedEvent(stt=self._members[ev.index], available=ev.available),
         )
 
-    def _core_all_unavailable(self) -> None:
-        logger.error("all STTs are unavailable, retrying..")
-
-    @property
-    def _active(self) -> STT:
-        chains = _bindings.built_on_loop(self)
-        return self._stt_instances[chains[0].active_index if chains else 0]
-
-    @property
-    def model(self) -> str:
-        return self._active.model
-
-    @property
-    def provider(self) -> str:
-        return self._active.provider
-
-    @property
-    def metrics_metadata(self) -> MetricsMetadata:
-        return self._active.metrics_metadata
-
     def _update_session_keyterms(self, keyterms: list[str]) -> None:
-        for stt in self._stt_instances:
+        for stt in self._members:
             stt._update_session_keyterms(keyterms)
 
     def _push_conversation_item(self, role: str, text: str) -> None:
-        for stt in self._stt_instances:
+        for stt in self._members:
             stt._push_conversation_item(role, text)
 
     async def _recognize_impl(
@@ -183,11 +161,7 @@ class FallbackAdapter(STT[Literal["stt_availability_changed"]]):
         )
 
     def prewarm(self) -> None:
-        self._stt_instances[0].prewarm()
-
-    async def aclose(self) -> None:
-        for chain in _bindings.built_on_loop(self):
-            await chain.aclose()
+        self._members[0].prewarm()
 
 
 class StreamAdapterWrapper(RecognizeStream):
