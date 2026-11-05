@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import multiprocessing as mp
@@ -247,6 +248,7 @@ def test_init_recording_decides_only_once() -> None:
 async def test_cleanup_decides_export_when_no_session_decided() -> None:
     ctx = MagicMock()
     ctx._recording_initialized = False
+    ctx._rejected_recording = None
     ctx._early_log_handler = None
     ctx._telemetry_state = None
     ctx._handlers_with_filter = []
@@ -475,13 +477,36 @@ def test_install_thread_router_runs_once(monkeypatch: pytest.MonkeyPatch) -> Non
     assert sum(isinstance(h, _hosted_logs._ThreadJobRouter) for h in root.handlers) == 1
 
 
-def test_init_recording_decides_before_rejecting_the_options() -> None:
+_REJECTED = {"logs": False, "redaction": True, "transcript": False}
+
+
+def _cleanup_ctx() -> MagicMock:
     ctx = MagicMock()
     ctx._recording_initialized = False
+    ctx._rejected_recording = None
+    ctx._early_log_handler = None
+    ctx._telemetry_state = None
+    ctx._handlers_with_filter = []
     ctx.job.enable_redaction = False
+    return ctx
+
+
+async def test_cleanup_uses_rejected_options_when_no_session_decided() -> None:
+    ctx = _cleanup_ctx()
     with pytest.raises(ValueError):
-        JobContext.init_recording(ctx, {"logs": False, "redaction": True, "transcript": False})
+        JobContext.init_recording(ctx, _REJECTED)
+    ctx._hosted_output.decide.assert_not_called()
+    await JobContext._on_cleanup(ctx)
     ctx._hosted_output.decide.assert_called_once_with(logs=False, redaction=True)
+
+
+def test_a_valid_retry_decides_after_rejected_options() -> None:
+    ctx = _cleanup_ctx()
+    with pytest.raises(ValueError):
+        JobContext.init_recording(ctx, _REJECTED)
+    with contextlib.suppress(Exception):
+        JobContext.init_recording(ctx, {"logs": True, "redaction": True, "transcript": True})
+    ctx._hosted_output.decide.assert_called_once_with(logs=True, redaction=True)
 
 
 @pytest.mark.parametrize(("exitcode", "marked"), [(0, True), (None, False)])

@@ -212,6 +212,7 @@ class _ContextLogFieldsFilter(logging.Filter):
 
 class JobContext:
     _hosted_output: JobOutput | None = None
+    _rejected_recording: tuple[bool, bool] | None = None
 
     _PARTICIPANT_ENTRYPOINT_CALLBACK = Callable[
         ["JobContext", rtc.RemoteParticipant], Coroutine[None, None, None]
@@ -407,7 +408,8 @@ class JobContext:
 
     async def _on_cleanup(self) -> None:
         if self._hosted_output is not None and not self._recording_initialized:
-            self._hosted_output.decide(logs=True, redaction=self.job.enable_redaction)
+            logs, redaction = self._rejected_recording or (True, self.job.enable_redaction)
+            self._hosted_output.decide(logs=logs, redaction=redaction)
 
         # if session.start() was never reached and server wanted recording,
         # set up OTLP now and flush buffered crash logs
@@ -922,10 +924,11 @@ class JobContext:
 
     def init_recording(self, options: RecordingOptions) -> None:
         redaction_enabled = self.job.enable_redaction or options.get("redaction", False)
+        if redaction_enabled and options.get("audio", True) and not options.get("transcript", True):
+            self._rejected_recording = (options.get("logs", True), redaction_enabled)
+            raise ValueError("audio upload requires transcript upload when redaction is enabled")
         if self._hosted_output is not None and not self._recording_initialized:
             self._hosted_output.decide(logs=options.get("logs", True), redaction=redaction_enabled)
-        if redaction_enabled and options.get("audio", True) and not options.get("transcript", True):
-            raise ValueError("audio upload requires transcript upload when redaction is enabled")
 
         if self._recording_initialized:
             self._stop_log_buffering()
