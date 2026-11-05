@@ -311,6 +311,12 @@ class _FrameChunker:
         self._input_rate: int | None = None
         self._warned_channels = False
 
+    def reset(self) -> None:
+        """Drops buffered samples and resampler state, for audio that resumes after a gap."""
+        self._buf = np.empty(0, dtype=np.float32)
+        self._resampler = None
+        self._input_rate = None
+
     def push(self, frame: rtc.AudioFrame) -> list[np.ndarray]:
         if frame.num_channels != 1:
             if not self._warned_channels:

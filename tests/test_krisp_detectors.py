@@ -91,6 +91,16 @@ def _frames(n: int) -> rtc.AudioFrame:
     )
 
 
+def _samples(n: int) -> rtc.AudioFrame:
+    """``n`` samples of 16 kHz silence, which need not make whole frames."""
+    return rtc.AudioFrame(
+        data=np.zeros(n, dtype=np.int16).tobytes(),
+        sample_rate=16000,
+        num_channels=1,
+        samples_per_channel=n,
+    )
+
+
 async def _drain() -> None:
     for _ in range(20):
         await asyncio.sleep(0)
@@ -403,17 +413,18 @@ async def test_no_verdict_without_agent_speech(
     pair = _install(monkeypatch, interruption, _ip_script([0.9, 0.9]))
     stream = interruption.InterruptionDetector().stream()
 
+    stream.push_frame(_AgentSpeechEndedSentinel())  # no agent turn to end: nothing to reset
     stream.push_frame(_OverlapSpeechStartedSentinel(speech_duration=0.0, started_at=1.0))
     stream.push_frame(_frames(2))
     stream.push_frame(_OverlapSpeechEndedSentinel(ended_at=2.0))
     events = await _collect(stream)
 
     assert events == []
-    assert pair.calls == [False, False]  # IP idles while the bot is not speaking
+    assert pair.calls == []  # Krisp IP idles while the agent is silent, so it isn't called
     await stream.aclose()
 
 
-async def test_agent_speech_end_switches_bot_speaking_off(
+async def test_agent_speech_end_resets_krisp_once(
     models: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     pair = _install(monkeypatch, interruption, _ip_script([0.1] * 4))
@@ -422,10 +433,47 @@ async def test_agent_speech_end_switches_bot_speaking_off(
     stream.push_frame(_AgentSpeechStartedSentinel())
     stream.push_frame(_frames(2))
     stream.push_frame(_AgentSpeechEndedSentinel())
-    stream.push_frame(_frames(2))
+    stream.push_frame(_frames(2))  # the agent is silent: skipped
+    stream.push_frame(_AgentSpeechStartedSentinel())
+    stream.push_frame(_frames(1))
     await _collect(stream)
 
-    assert pair.calls == [True, True, False, False]
+    # one silent botSpeaking=False frame lets Krisp reset IP between the two agent turns
+    assert pair.calls == [True, True, False, True]
+    await stream.aclose()
+
+
+async def test_quick_agent_restart_still_resets_krisp(
+    models: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pair = _install(monkeypatch, interruption, _ip_script([0.1] * 3))
+    stream = interruption.InterruptionDetector().stream()
+
+    stream.push_frame(_AgentSpeechStartedSentinel())
+    stream.push_frame(_frames(1))
+    stream.push_frame(_AgentSpeechEndedSentinel())
+    stream.push_frame(_AgentSpeechStartedSentinel())  # no audio in between
+    stream.push_frame(_frames(1))
+    await _collect(stream)
+
+    assert pair.calls == [True, False, True]
+    await stream.aclose()
+
+
+async def test_audio_before_a_gap_is_not_glued_to_the_next_turn(
+    models: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pair = _install(monkeypatch, interruption, _ip_script([0.1] * 3))
+    stream = interruption.InterruptionDetector().stream()
+
+    stream.push_frame(_AgentSpeechStartedSentinel())
+    stream.push_frame(_samples(FRAME_SAMPLES * 3 // 2))  # one frame, half a frame left over
+    stream.push_frame(_AgentSpeechEndedSentinel())
+    stream.push_frame(_AgentSpeechStartedSentinel())
+    stream.push_frame(_samples(FRAME_SAMPLES // 2))  # would complete the stale half frame
+    await _collect(stream)
+
+    assert pair.calls == [True, False]  # the leftover half frame was dropped
     await stream.aclose()
 
 

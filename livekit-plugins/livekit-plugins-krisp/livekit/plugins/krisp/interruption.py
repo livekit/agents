@@ -18,7 +18,9 @@
 {"mode": detector}}``. While the agent speaks, every user frame runs through
 Krisp IP with ``botSpeaking=True``; when the user's overlapping speech reaches
 the probability threshold it is reported as a genuine interruption, otherwise
-the overlap is reported as a backchannel when it ends.
+the overlap is reported as a backchannel when it ends. Audio outside agent
+speech is skipped, because Krisp IP idles on it; one silent frame with
+``botSpeaking=False`` at the end of each agent turn lets Krisp reset its state.
 
 Krisp IP runs in-process on the public ``krisp_audio`` wheel (license mode)
 and needs a Krisp VAD model to supply its per-frame voice-activity input.
@@ -147,6 +149,8 @@ class InterruptionDetectorStream:
         self._opts = opts
         self._pair: _SessionPair | None = None  # loaded off the event loop by _run
         self._chunker = _FrameChunker(frame_samples(opts.frame_duration_ms))
+        # sent once when agent speech ends, so Krisp sees botSpeaking turn false
+        self._silence = np.zeros(frame_samples(opts.frame_duration_ms), dtype=np.float32)
         self._input_ch = aio.Chan[InterruptionDataFrameType]()
         self._event_ch = aio.Chan[OverlappingSpeechEvent]()
 
@@ -214,10 +218,16 @@ class InterruptionDetectorStream:
     async def _process_input(self) -> None:
         async for item in self._input_ch:
             if isinstance(item, _AgentSpeechStartedSentinel | _AgentSpeechEndedSentinel):
-                # on the end transition the SDK also resets IP's own state
+                was_speaking = self._bot_speaking
                 self._bot_speaking = isinstance(item, _AgentSpeechStartedSentinel)
                 self._overlap_started_at = None
                 self._last_probability = 0.0
+                if self._bot_speaking and not was_speaking:
+                    self._chunker.reset()  # audio was skipped while the agent was silent
+                elif was_speaking and not self._bot_speaking:
+                    # Krisp resets IP's state on the botSpeaking true -> false transition; send
+                    # it now, as the next audio may already belong to the next agent turn
+                    await asyncio.to_thread(self._process, [self._silence], False)
             elif isinstance(item, _OverlapSpeechStartedSentinel):
                 if self._bot_speaking:
                     # judged on the next scored frame: _last_probability may predate this overlap
@@ -230,6 +240,8 @@ class InterruptionDetectorStream:
                         agent_ended=item._agent_ended,
                     )
             elif isinstance(item, rtc.AudioFrame):
+                if not self._bot_speaking:
+                    continue  # Krisp IP idles while the agent is silent: skip VAD and IP
                 frames = self._chunker.push(item)
                 if not frames:
                     continue
