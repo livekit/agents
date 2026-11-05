@@ -1,6 +1,7 @@
 import asyncio
 import enum
 import json
+import logging
 from typing import Annotated, Any, Literal
 from unittest.mock import MagicMock
 
@@ -687,6 +688,18 @@ class TestToolExecution:
         be surfaced as a ToolError so the LLM can self-correct on the next turn."""
         with pytest.raises(ToolError, match="could not parse"):
             prepare_function_arguments(fnc=mock_tool_1, json_arguments="not json at all")
+
+    def test_argument_errors_are_logged_as_warnings(self, caplog):
+        """Argument errors go back to the LLM as a ToolError so it can retry on its
+        next turn; they are part of normal operation, so they log as warnings."""
+        with caplog.at_level(logging.DEBUG, logger="livekit.agents"):
+            with pytest.raises(ToolError, match="validation error"):
+                prepare_function_arguments(fnc=mock_tool_2, json_arguments='{"arg1": "d"}')
+            with pytest.raises(ToolError, match="could not parse"):
+                prepare_function_arguments(fnc=mock_tool_1, json_arguments="not json at all")
+
+        records = [r for r in caplog.records if r.getMessage().startswith("error parsing")]
+        assert [r.levelno for r in records] == [logging.WARNING, logging.WARNING]
 
     def test_repairs_gemma_template_token_leak(self):
         """Gemma chat-template tokens (<|...|>) sometimes leak into function-call
