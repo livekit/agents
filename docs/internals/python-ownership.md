@@ -192,15 +192,12 @@ Native storage/runtime own transactions, revisions, thread resolution and run-re
 
 ### A2A and HTTP adapters
 
-Keep ASGI request/response adaptation and authored route/handler registration. Core/net/runtime own authentication decisions, routing state, exchange lifecycle and cancellation; generate configuration and native projections.
+Keep ASGI request/response adaptation for the application's HTTP routes and authored route/handler registration. A2A endpoints are served natively: the worker hands each `text` route's exchange to the runtime's A2A door, which owns route matching, authentication, the payload budget, extension negotiation, the card and JSON/SSE framing; Python supplies only the handler. Core/net/runtime own authentication decisions, routing state, exchange lifecycle and cancellation; generate configuration and native projections.
 
 | File | Lines |
 | --- | ---: |
-| [a2a/auth.py](../../livekit-agents-next/livekit/agents/a2a/auth.py) | 75 |
-| [a2a/client.py](../../livekit-agents-next/livekit/agents/a2a/client.py) | 5 |
-| [a2a/endpoint.py](../../livekit-agents-next/livekit/agents/a2a/endpoint.py) | 292 |
-| [a2a/methods.py](../../livekit-agents-next/livekit/agents/a2a/methods.py) | 94 |
-| [http.py](../../livekit-agents-next/livekit/agents/http.py) | 282 |
+| [a2a.py](../../livekit-agents-next/livekit/agents/a2a.py) | 506 |
+| [http.py](../../livekit-agents-next/livekit/agents/http.py) | 281 |
 
 ### Process and worker lifecycle
 

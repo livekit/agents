@@ -7,13 +7,12 @@ approval, lane leases, persistence and A2A streaming use the production implemen
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
 import os
-import socket
 from datetime import timedelta
 
 import httpx
-import uvicorn
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse
 
@@ -93,7 +92,7 @@ class ScriptedLLM(FakeLLM):
         )
 
 
-def make_app(worker: str, service_url: str) -> AgentServer:
+def make_app(worker: str, service_url: str, port: int) -> AgentServer:
     storage = AgentDBStorage(
         holder=worker, lease_ttl=timedelta(seconds=2), renew_interval=timedelta(seconds=0.5)
     )
@@ -102,6 +101,7 @@ def make_app(worker: str, service_url: str) -> AgentServer:
         agent_name="e2e",
         api_key=os.environ["LIVEKIT_API_KEY"],
         api_secret=os.environ["LIVEKIT_API_SECRET"],
+        listeners={"public": {"port": port}, "health": {"port": 0}},
     )
     agent = Agent(
         context_type=ServiceCall,
@@ -166,12 +166,10 @@ if __name__ == "__main__":
     )
     logging.basicConfig(level=logging.WARNING, handlers=[handler])
     parser = argparse.ArgumentParser()
-    parser.add_argument("--fd", type=int, required=True)
+    parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--worker", required=True)
     parser.add_argument("--service", required=True)
     args = parser.parse_args()
-    server = make_app(args.worker, args.service)
-    sock = socket.socket(fileno=args.fd)
-    uvicorn.Server(
-        uvicorn.Config(server._http.app, log_level="warning", timeout_graceful_shutdown=1)
-    ).run(sockets=[sock])
+    server = make_app(args.worker, args.service, args.port)
+    # the worker serves its routes and text doors on its own loopback listener
+    asyncio.run(server._run(devmode=True, unregistered=True))

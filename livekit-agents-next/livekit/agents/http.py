@@ -57,10 +57,9 @@ _ALL_METHODS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRA
 
 
 class AgentRoutes:
-    """The routes an agent serves, as a Starlette application: its text doors, mounted by
-    ``AgentServer.add``, served through the LiveKit server at
-    ``/agents/{agent_name}/{deployment}/{path}``; a handler reads the request's preamble as
-    ``request.state.lk_request``.
+    """The application's HTTP routes, as a Starlette application, served through the LiveKit
+    server at ``/agents/{agent_name}/{deployment}/{path}`` beside the text doors, which the
+    worker serves itself; a handler reads the request's preamble as ``request.state.lk_request``.
 
     Handlers are Starlette endpoints: a request in, a response out. Any ASGI application mounts.
     """

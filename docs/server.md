@@ -92,7 +92,6 @@ state, passes it to `session.run()`, and saves the returned state.
 | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | `endpoint`                          | the last path segment of the endpoint's URL                                                                                              |
 | `description`                       | required: what another agent reads to decide whether to call                                                                             |
-| `auth`                              | the developer's own check: a callable taking the request and returning a truthy value to admit it                                       |
 | `inbox`, `debounce`                 | see below                                                                                                                                |
 | `storage`                           | this endpoint's storage when it is not the server's                                                                                      |
 | `version`                           | the card's version                                                                                                                       |
@@ -324,14 +323,35 @@ a `contextId` back, and sends it from then on. The card declares a bearer
 scheme for a LiveKit project token or thread grant, always listed and
 required.
 
+The worker serves each text door itself, on the same exchange server as the HTTP routes
+below; no application code runs before the handler. A door answers `GET`
+`/<endpoint>/.well-known/agent-card.json` with its card and `POST` `/<endpoint>/v1` with
+one JSON-RPC call; another path is `404`, another method `405`. Before either it
+authenticates the caller, in this order:
+
+1. the console's listener (`lk agent console`) vouches for every caller;
+2. a worker holding the project's API key and secret verifies the bearer, from
+   `Authorization: Bearer` or `X-LiveKit-Thread-Grant`; with none, a request a Cloud node
+   authorized (the node strips the project credential it verified) is the project;
+3. a worker without credentials admits only what a node authorized, as the project.
+
+A refusal is `401` or `403` with a JSON `{"error": message}` body, the same for the card.
+The body is read up to the 16 MiB payload budget; past it the call is refused with
+JSON-RPC `-32602` before any turn. A streaming method answers `text/event-stream` with
+`Cache-Control: no-cache`, one event per frame; every other answer, and an error, is one
+`application/json` body. An `A2A-Extensions` request naming the LiveKit extension is echoed
+back. The request's `A2A-Version` and `traceparent` reach the door, so the turn continues
+the caller's trace. Limits, deadlines, drain and stop are the exchange server's (below): a
+failure after an SSE stream started ends it with `x-lk-completion` trailers.
+
 The endpoint serves the conversation and nothing else. A thread's history
 and tasks are read from outside through the platform's threads service;
 see [clients.md](clients.md).
 
 ## HTTP routes
 
-`server.http` is a Starlette application for routes served alongside the
-agent, such as a token endpoint for a web client:
+`server.http` is a Starlette application for the application's own routes, served
+alongside the agent's text doors, such as a token endpoint for a web client:
 
 ```python
 from starlette.requests import Request
@@ -379,6 +399,9 @@ idiom.
 
 The server is in [`lk-agents-worker/src/http/`](../rust/crates/lk-agents-worker/src/http/mod.rs),
 with its binding contract in [`lk-agents-abi/src/worker/http/mod.rs`](../rust/crates/lk-agents-abi/src/worker/http/mod.rs).
+A route of kind `text` goes to its A2A door
+([`lk-agents-runtime/src/a2a/door/serve.rs`](../rust/crates/lk-agents-runtime/src/a2a/door/serve.rs))
+instead of the binding.
 Python route authoring and the ASGI adapter are in
 [`livekit/agents/http.py`](../livekit-agents-next/livekit/agents/http.py):
 `AgentRoutes` defines the routes, and `_AsgiServer` runs the application once per exchange.

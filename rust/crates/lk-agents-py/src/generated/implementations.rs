@@ -9,7 +9,6 @@ impl super::Implementations for Selected {
     type Reply = ::lk_agents_runtime::net::a2a_client::Reply;
     type AgentClient = ::lk_agents_runtime::net::a2a_client::AgentClient;
     type A2ADoor = ::lk_agents_runtime::a2a::door::Door;
-    type A2AResponse = ::lk_agents_runtime::a2a::door::Response;
     type RemoteInteraction = ::lk_agents_runtime::net::a2a_client::remote::RemoteInteraction;
     type RemoteConfiguration = ::lk_agents_runtime::net::a2a_client::remote::RemoteInteraction;
     type Turn = ::lk_agents_runtime::a2a::Turn;

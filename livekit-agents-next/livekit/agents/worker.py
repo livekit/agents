@@ -18,7 +18,7 @@ from livekit.protocol import models
 
 from . import _core, ipc, telemetry, utils
 from ._generated.worker_options import ServerOptions
-from ._generated.worker_server import ProcessStartOptions, RunningJobInfo
+from ._generated.worker_server import EndpointRoute, ProcessStartOptions, RunningJobInfo
 from .evals import SimulationContext
 from .http import AgentRoutes
 from .ipc import preload_module_names
@@ -214,7 +214,7 @@ class AgentServer(AgentHandler):
         self._on_started: list[Callable[[], Any]] = []
         self._rtc: RtcSession | None = None
         # HTTP routes served alongside the agent through the LiveKit server at
-        # /agents/{agent_name}/{deployment}/{path}; the text doors are mounted on it
+        # /agents/{agent_name}/{deployment}/{path}, beside the text doors the worker serves
         self._http = AgentRoutes()
         self._a2a_endpoints: dict[str, A2AEndpoint] = {}
         self._runtime: _core.ServerRuntime | None = None
@@ -273,8 +273,6 @@ class AgentServer(AgentHandler):
                 raise ValueError(f"a2a_session(endpoint={door.name!r}) is already served")
             storage = self._ensure_storage()
             door.bind(storage=storage, config=self._config)
-            self._http.mount(f"/{door.name}", door.app, name=door.name)
-            self._http.configure_endpoint(f"/{door.name}", public=False)
             self._a2a_endpoints[door.name] = door
         return doors
 
@@ -322,9 +320,20 @@ class AgentServer(AgentHandler):
                 unregistered=unregistered,
                 has_rtc=self._rtc is not None,
                 has_text_doors=bool(self._a2a_endpoints),
-                routes=self._http.manifest(),
+                routes=[
+                    # the worker serves each text door itself: its card and its JSON-RPC methods
+                    EndpointRoute(
+                        path=f"/{name}/{{path:path}}",
+                        methods=["GET", "HEAD", "POST"],
+                        kind="text",
+                        public=False,
+                    )
+                    for name in self._a2a_endpoints
+                ]
+                + self._http.manifest(),
                 has_load_fnc=self._load_fnc is not None,
                 endpoints=self._http._server,
+                text_doors=[await door.service.native() for door in self._a2a_endpoints.values()],
             )
         finally:
             if self._thread_server is not None:

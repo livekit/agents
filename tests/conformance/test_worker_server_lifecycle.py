@@ -50,6 +50,7 @@ async def test_close_during_drain_does_not_wait_for_running_jobs() -> None:
             routes=[],
             has_load_fnc=False,
             endpoints=http._server,
+            text_doors=[],
         )
     )
     draining: asyncio.Future[object] | None = None

@@ -58,24 +58,23 @@ async def workers(
         for name in ("worker-a", "worker-b"):
             with socket.socket() as sock:
                 sock.bind(("127.0.0.1", 0))
-                sock.listen()
-                url = f"http://127.0.0.1:{sock.getsockname()[1]}"
-                child = await stack.enter_async_context(
-                    child_process(
-                        sys.executable,
-                        "-m",
-                        "tests.e2e.worker",
-                        "--fd",
-                        str(sock.fileno()),
-                        "--worker",
-                        name,
-                        "--service",
-                        service.url,
-                        log=tmp_path / f"{name}.log",
-                        env=env,
-                        pass_fds=(sock.fileno(),),
-                    )
+                port = sock.getsockname()[1]
+            url = f"http://127.0.0.1:{port}/agents/e2e/default"
+            child = await stack.enter_async_context(
+                child_process(
+                    sys.executable,
+                    "-m",
+                    "tests.e2e.worker",
+                    "--port",
+                    str(port),
+                    "--worker",
+                    name,
+                    "--service",
+                    service.url,
+                    log=tmp_path / f"{name}.log",
+                    env=env,
                 )
+            )
             await child.ready(url + "/ready")
             children.append(child)
             caller = A2ACaller(url, token)

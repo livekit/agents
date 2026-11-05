@@ -1,23 +1,13 @@
-"""Token and HTTP authorization at the A2A door."""
+"""Token authorization at the A2A door: what a credential grants. The order in which the worker
+authenticates an HTTP request is pinned by the door's Rust tests."""
 
 import time
-from pathlib import Path
 
-import httpx
 import jwt
 import pytest
-from starlette.requests import HTTPConnection
 
-from livekit.agents import AgentServer
 from livekit.agents._generated.storage_class import ThreadInfo
-from livekit.agents.a2a import (
-    A2ASessionContext,
-    AgentThreadGrant,
-    Credentials,
-    Forbidden,
-    Unauthorized,
-)
-from livekit.agents.storage import SQLiteStorage
+from livekit.agents.a2a import AgentThreadGrant, Credentials, Forbidden, Unauthorized
 
 pytestmark = pytest.mark.unit
 
@@ -131,39 +121,3 @@ def test_endpoint_call_permission_is_independent_of_thread_access(credentials: C
     )
     with pytest.raises(Forbidden):
         credentials.verify(room_token)
-
-
-async def test_agent_card_requires_a_token_and_runs_custom_auth_on_every_request(
-    credentials: Credentials,
-    tmp_path: Path,
-) -> None:
-    seen: list[str] = []
-
-    def auth(request: HTTPConnection) -> bool:
-        seen.append("called")
-        return True
-
-    storage = SQLiteStorage(directory=str(tmp_path))
-    server = AgentServer(
-        storage=storage, agent_name="auth-agent", api_key=API_KEY, api_secret=API_SECRET
-    )
-
-    @server.a2a_session(endpoint="auth", description="Checks credentials", auth=auth)
-    async def handler(ctx: A2ASessionContext) -> str:
-        return "ok"
-
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=server._http.app), base_url="http://test"
-    ) as client:
-        path = "/auth/.well-known/agent-card.json"
-        refused = await client.get(path)
-        assert refused.status_code == 401 and "error" in refused.json()
-        query = await client.get(path, params={"access_token": credentials.project_token()})
-        assert query.status_code == 401
-        allowed = await client.get(
-            path, headers={"Authorization": f"Bearer {credentials.project_token()}"}
-        )
-        assert allowed.status_code == 200
-        assert allowed.json()["securityRequirements"]
-    assert len(seen) == 3
-    await storage.aclose()

@@ -40,9 +40,7 @@ sees for the endpoint; `RemoteAgent(url).as_tool()` reads them:
 A LiveKit endpoint lists the entry without `params`. Spelling and case are
 significant; other `params` keys are ignored.
 
-Every endpoint requires a token: a project token or a thread grant. `auth=`
-is the developer's own check on top: a function of the request, sync or async,
-run on every request; `False` refuses it with 401.
+Every endpoint requires a token: a project token or a thread grant.
 
 ## Threads and messages
 
@@ -256,8 +254,8 @@ directly verifies the token itself, from an `Authorization: Bearer` or an
 JSON-RPC `POST` carrying the bearer header.
 
 A refusal is an HTTP status with `{"error": "..."}`, not a JSON-RPC error:
-401 for no token, a token the project did not sign, or
-`auth=` returning `False`; 403 for a grant that does not cover the call.
+401 for no token or a token the project did not sign; 403 for a grant that
+does not cover the call.
 
 ## Delegation and conversation data
 

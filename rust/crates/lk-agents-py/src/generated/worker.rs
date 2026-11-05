@@ -1334,8 +1334,10 @@ impl ServerRuntime {
     }
 
     /// Start the job processes and the health listener and, unless `unregistered`, register;
-    /// return once closed. `endpoints` receives each stream for `routes`.
-    #[pyo3(signature = (*, devmode, unregistered, has_rtc, has_text_doors, routes, has_load_fnc, endpoints))]
+    /// return once closed. The worker serves each `text` route with its door from `text_doors`,
+    /// whose handlers run in the context this call captured; `endpoints` receives every other
+    /// stream for `routes`.
+    #[pyo3(signature = (*, devmode, unregistered, has_rtc, has_text_doors, routes, has_load_fnc, endpoints, text_doors))]
     fn run<'py>(
         &self,
         py: Python<'py>,
@@ -1346,6 +1348,7 @@ impl ServerRuntime {
         routes: Bound<'_, PyAny>,
         has_load_fnc: bool,
         endpoints: Bound<'_, PyAny>,
+        text_doors: Bound<'_, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
         let routes = routes.try_iter().and_then(|items| {
@@ -1358,9 +1361,26 @@ impl ServerRuntime {
         })?;
         let endpoints =
             crate::generated::worker::EndpointHandlerProxy::from_host(endpoints.as_any())?;
+        let text_doors = text_doors.try_iter().and_then(|items| {
+            items
+                .map(|item| {
+                    let item = item?;
+                    crate::py_objects::native::<dyn ::lk_agents_abi::a2a::door::TextEndpoint>(
+                        item.as_any(),
+                    )
+                    .ok_or_else(|| {
+                        ::pyo3::exceptions::PyTypeError::new_err(concat!(
+                            "text_doors",
+                            ": expected a native A2A door"
+                        ))
+                    })
+                })
+                .collect::<PyResult<Vec<_>>>()
+        })?;
+        let context = crate::py_calls::entered();
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
-            let () = <ServerRuntimeImpl as ::lk_agents_abi::worker::server_host::ServerRuntime>::run(&this, devmode, unregistered, has_rtc, has_text_doors, routes, has_load_fnc, endpoints)
+            let () = <ServerRuntimeImpl as ::lk_agents_abi::worker::server_host::ServerRuntime>::run(&this, devmode, unregistered, has_rtc, has_text_doors, routes, has_load_fnc, endpoints, text_doors, context)
                 .await.map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
         })

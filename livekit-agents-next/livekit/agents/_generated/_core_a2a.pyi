@@ -14,7 +14,7 @@ from .._core import Storage, Thread
 from .a2a_auth import AgentThreadGrant, AuthOperation, Principal
 from .a2a_card import EndpointDescriptor
 from .a2a_client import AgentCard, Message, MessageInput, MessageMetadata, TaskUpdate
-from .a2a_door import DoorConfig, DoorFrame
+from .a2a_door import DoorConfig
 from .a2a_remote import RemoteEvent
 from .chat_items import ChatItem
 from .connect import APIConnectOptions
@@ -54,11 +54,8 @@ def _core_unauthenticated_principal() -> Principal:
     created in the `console` scope.
     """
 
-def _core_a2a_extensions_header(requested: str | None) -> str | None:
-    """Echo the supported capabilities selected by the optional extension header."""
-
 def _core_a2a_agent_card(descriptor: EndpointDescriptor) -> str:
-    """Serialize the upstream A2A card; the host only adapts it to its HTTP/SDK representation."""
+    """The upstream A2A card's JSON, as the endpoint serves it."""
 
 def _core_a2a_message_text(message: Message) -> str:
     """The text parts of a generated A2A message, joined by newlines."""
@@ -112,23 +109,6 @@ class _core_A2ADoor:
         """
     @property
     def max_payload_bytes(self) -> int: ...
-    async def dispatch(
-        self,
-        body: bytes | bytearray | memoryview | list[int],
-        principal: Principal,
-        *,
-        version: str | None = None,
-        offset: str | None = None,
-        body_size: int | None = None,
-        host_context: object | None = None,
-        traceparent: str | None = None,
-    ) -> _core_A2AResponse: ...
-    async def aclose(self) -> None: ...
-
-class _core_A2AResponse:
-    @property
-    def streaming(self) -> bool: ...
-    async def next(self) -> DoorFrame | None: ...
     async def aclose(self) -> None: ...
 
 class _core_RemoteInteraction:

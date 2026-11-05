@@ -391,6 +391,7 @@ async def test_http_route_kind_is_validated_before_the_host_runs() -> None:
             routes=[EndpointRoute(path="/", methods=["GET"], kind="grpc", public=False)],
             has_load_fnc=False,
             endpoints=object(),
+            text_doors=[],
         )
     assert isinstance(failure.value.__cause__, ValueError)
     assert "not one of 'http', 'text'" in str(failure.value.__cause__)
@@ -442,6 +443,7 @@ async def test_drain_distinguishes_deadlines_from_identical_host_error_text(
             routes=[],
             has_load_fnc=False,
             endpoints=Endpoints(),
+            text_doors=[],
         )
     )
     try:

@@ -23,10 +23,3 @@ class DoorConfig:
     holder: str
     endpoint: EndpointDescriptor
     options: TurnOptions
-
-
-@dataclass(kw_only=True, slots=True)
-class DoorFrame:
-    json: str
-    sse: str
-    is_error: bool

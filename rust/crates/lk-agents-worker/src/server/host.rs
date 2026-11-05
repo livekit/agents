@@ -14,7 +14,9 @@ use async_trait::async_trait;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::worker::http::{EndpointHandler, EndpointKind};
 
-use crate::http::{EndpointServer, HttpServerLimits};
+use crate::http::{EndpointServer, HttpServerLimits, TextDoors};
+use lk_agents_abi::a2a::door::TextEndpoint;
+use lk_agents_abi::invoke::CallContext;
 use lk_agents_abi::worker::ipc_host::WorkerError;
 use lk_agents_abi::worker::server_host::{
     EndpointRoute, ServerConfig, ServerConfiguration, ServerHost as Host, ServerRuntime,
@@ -326,10 +328,18 @@ impl ServerRuntime for AgentServerRuntime {
         routes: Vec<EndpointRoute>,
         has_load_fnc: bool,
         endpoints: Arc<dyn EndpointHandler>,
+        text_doors: Vec<Arc<dyn TextEndpoint>>,
+        context: CallContext,
     ) -> Result<(), WorkerError> {
         let routes = routes.into_iter().map(manifest_entry).collect::<Vec<_>>();
-        let _ =
-            self.mounted.set(Arc::new(EndpointServer::new(endpoints, HttpServerLimits::default())));
+        let text = TextDoors {
+            doors: text_doors,
+            settings: self.settings.clone(),
+            serving: self.serving.clone(),
+            host_context: context.host_context,
+        };
+        let server = EndpointServer::new(endpoints, HttpServerLimits::default()).with_text(text);
+        let _ = self.mounted.set(Arc::new(server));
         let start = ServerStart {
             settings: self.settings(),
             devmode,

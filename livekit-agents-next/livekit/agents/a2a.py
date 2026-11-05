@@ -3,23 +3,16 @@
 from __future__ import annotations
 
 import asyncio
-import contextvars
-import inspect
+import json
 import os
 import weakref
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
 from datetime import timedelta
-from typing import TYPE_CHECKING, TypedDict, cast
+from typing import TypedDict, cast
 
-from a2a.types import a2a_pb2 as pb
 from google.protobuf import json_format, struct_pb2
 from google.protobuf.message import Message as ProtoMessage
 from pydantic import JsonValue
-from starlette.applications import Starlette
-from starlette.requests import HTTPConnection, Request
-from starlette.responses import JSONResponse, Response, StreamingResponse
-from starlette.routing import Route
 from typing_extensions import Unpack
 
 from . import _core
@@ -28,7 +21,6 @@ from ._core import (
     Reply,
     ServerConfig,
     _core_a2a_agent_card,
-    _core_a2a_extensions_header,
     _core_Credentials,
 )
 from ._generated.a2a_auth import AgentThreadGrant, Principal
@@ -43,7 +35,12 @@ from ._generated.a2a_client import (
     TextPart,
 )
 from ._generated.a2a_door import DoorConfig
-from ._generated.a2a_metadata import EXTENSION_URI, EXTENSIONS_HEADER
+from ._generated.a2a_metadata import (
+    AGENT_CARD_PATH as AGENT_CARD_PATH,
+    EXTENSION_URI as EXTENSION_URI,
+    GRANT_HEADER,
+    RPC_PATH,
+)
 from ._generated.a2a_remote import (
     RemoteEvent,
     RemoteEventFollow,
@@ -59,8 +56,6 @@ from .storage import Storage, Thread
 from .storage.session import A2ASessionContext, _Handler, _TurnHost
 from .types import APIConnectOptions
 from .voice.events import RunContext
-
-GRANT_HEADER = "X-LiveKit-Thread-Grant"
 
 
 class AuthError(Exception):
@@ -116,41 +111,7 @@ class Credentials:
         return self._native.thread_grant_token(grant, identity=identity, ttl_seconds=ttl_seconds)
 
 
-PROJECT = Principal(kind="project", grant=None, identity="", claims={}, endpoint_call=True)
-
-
 Metadata = dict[str, JsonValue]
-
-
-@dataclass(frozen=True)
-class Extensions:
-    """Whether a request activated the extension: read from ``A2A-Extensions``, echoed back.
-
-    A stock client that sends nothing gets ``Extensions()``: plain A2A, text only. The
-    server-owned keys (``interrupted``, ``mergedInto``) are written either way, since
-    ``metadata`` is core A2A; the typed chat context part follows the extension.
-    """
-
-    livekit: bool = False
-
-    @classmethod
-    def from_header(cls, value: str | None) -> Extensions:
-        return cls(livekit=_core_a2a_extensions_header(value) is not None)
-
-    @classmethod
-    def from_headers(cls, headers: Mapping[str, str] | None) -> Extensions:
-        """From a Starlette ``Headers`` or any mapping with a case-insensitive ``get``."""
-        if headers is None:
-            return cls()
-
-        value = headers.get(EXTENSIONS_HEADER)
-        if value is None:
-            value = headers.get(EXTENSIONS_HEADER.lower())
-        return cls.from_header(value)
-
-    def header(self) -> str | None:
-        """The echo: the URI when activated, ``None`` when not."""
-        return EXTENSION_URI if self.livekit else None
 
 
 # -- protobuf helpers --
@@ -178,25 +139,6 @@ def to_json(message: ProtoMessage) -> dict[str, JsonValue]:
     return json_format.MessageToDict(message, preserving_proto_field_name=False)
 
 
-# -- the agent card --
-
-
-def agent_card(
-    *,
-    url: str,
-    name: str,
-    description: str,
-    version: str = "1.0.0",
-) -> pb.AgentCard:
-    """Adapt the native card to the Python A2A SDK's protobuf representation."""
-    descriptor = EndpointDescriptor(name=name, description=description, version=version, url=url)
-    return json_format.Parse(_core_a2a_agent_card(descriptor), pb.AgentCard())
-
-
-if TYPE_CHECKING:
-    pass
-
-
 class A2AService:
     def __init__(
         self,
@@ -204,14 +146,12 @@ class A2AService:
         *,
         storage: Storage,
         agent_name: Callable[[], str],
-        credentials: Credentials | None,
         lane: Callable[[], str] | None = None,
     ) -> None:
         self._endpoint = endpoint
         self._storage = storage
         self._agent_name = agent_name
         self._lane = lane
-        self.credentials = credentials
         self._door: _core._core_A2ADoor | None = None
 
     @property
@@ -249,33 +189,9 @@ class A2AService:
             self._door = self._open()
         return self._door
 
-    async def dispatch(
-        self,
-        body: bytes,
-        principal: Principal,
-        *,
-        version: str | None = None,
-        offset: str | None = None,
-        body_size: int | None = None,
-        traceparent: str | None = None,
-    ) -> _core._core_A2AResponse:
-        return await (await self.native()).dispatch(
-            body,
-            principal,
-            version=version,
-            offset=offset,
-            body_size=body_size,
-            host_context=(asyncio.get_running_loop(), contextvars.copy_context()),
-            traceparent=traceparent,
-        )
-
     async def aclose(self) -> None:
         if self._door is not None:
             await self._door.aclose()
-
-
-if TYPE_CHECKING:
-    pass
 
 
 class RemoteAgent:
@@ -438,18 +354,9 @@ def _json_object(value: dict[str, object]) -> dict[str, JsonValue]:
     return cast("dict[str, JsonValue]", value)
 
 
-AGENT_CARD_PATH = "/.well-known/agent-card.json"
-RPC_PATH = "/v1"
-"""Where the binding's methods live under the endpoint, and what the card's URL points at."""
-
-AuthCallable = Callable[[HTTPConnection], "bool | Awaitable[bool]"]
-
-
 class A2ASessionOptions(TypedDict, total=False):
     """``a2a_session``'s optional parameters (docs/server.md)."""
 
-    auth: AuthCallable | None
-    """The developer's own check, a callable taking the request."""
     inbox: Policy | Mapping[str, Policy] | None
     """The turn policy for a message that arrives while one runs, or a map by channel."""
     debounce: timedelta | Mapping[str, timedelta] | None
@@ -483,7 +390,6 @@ class A2AEndpoint:
         *,
         endpoint: str,
         description: str,
-        auth: AuthCallable | None = None,
         inbox: Policy | Mapping[str, Policy] | None = None,
         debounce: timedelta | Mapping[str, timedelta] | None = None,
         storage: Storage | None = None,
@@ -495,7 +401,6 @@ class A2AEndpoint:
         self.handler = handler
         self.name = endpoint
         self.description = description
-        self.auth = auth
         self.turn_options = TurnOptions(
             policy=dict(inbox) if isinstance(inbox, Mapping) else inbox,
             debounce=_seconds(debounce),
@@ -506,16 +411,13 @@ class A2AEndpoint:
         self._service: A2AService | None = None
         self._url: str | None = None
         self._config: ServerConfig | None = None
-        self._app: Starlette | None = None
-        self._deployment = ""
 
     # -- binding to a server --
 
     def bind(self, *, storage: Storage, config: ServerConfig) -> A2AService:
         """Attach the endpoint to a server's storage and options: its agent name (the lane,
-        unless the door writes its own), credentials and URL."""
+        unless the door writes its own) and URL."""
         chosen = self._storage or storage
-        self._deployment = config.deployment
         # the card's version is the deployment's; a local worker, registered under none, falls
         # back to LIVEKIT_AGENT_VERSION
         self.version = (
@@ -526,11 +428,6 @@ class A2AEndpoint:
             self,
             storage=chosen,
             agent_name=lambda: config.agent_name,
-            credentials=(
-                Credentials(config.api_key, config.api_secret)
-                if config.api_key and config.api_secret
-                else None
-            ),
             lane=(lambda: own) if own else None,
         )
         self._config = config
@@ -565,129 +462,15 @@ class A2AEndpoint:
         return self._config.delegation_url(self.name)
 
     def card(self, base_url: str | None = None) -> dict[str, JsonValue]:
-        """The agent card as JSON (plan 7.3.1). ``base_url`` is where the endpoint is reached
-        when its own ``url`` is unknown, the request's base URL plus the mount path."""
+        """The agent card as JSON, as the endpoint serves it (plan 7.3.1). ``base_url`` is where
+        the endpoint is reached when its own ``url`` is unknown."""
         url = self.url
         cloud = url if url and not url.startswith("/") else None
         root = (cloud or base_url or f"/{self.name}").rstrip("/")
-        return to_json(
-            agent_card(
-                url=f"{root}{RPC_PATH}",
-                name=self.name,
-                description=self.description,
-                version=self.version,
-            )
+        descriptor = EndpointDescriptor(
+            name=self.name, description=self.description, version=self.version, url=root + RPC_PATH
         )
-
-    # -- the ASGI app --
-
-    @property
-    def app(self) -> Starlette:
-        """The endpoint as an ASGI application: the card and the JSON-RPC route at its root;
-        the server mounts it under ``/<endpoint>``."""
-        if self._app is None:
-            self._app = Starlette(
-                routes=[
-                    Route(AGENT_CARD_PATH, self._serve_card, methods=["GET"]),
-                    Route(RPC_PATH, self._serve_rpc, methods=["POST"]),
-                ]
-            )
-        return self._app
-
-    async def _serve_card(self, request: Request) -> Response:
-        try:
-            await self.authenticate(request)
-        except AuthError as error:
-            return _auth_response(error)
-        # served by the worker: its path on the address the request reached; otherwise the
-        # mount's path is the scope's root_path and base_url carries the host alone
-        url = self.url
-        if url and url.startswith("/"):
-            base = f"{request.url.scheme}://{request.url.netloc}{url}"
-        else:
-            base = str(request.base_url).rstrip("/") + str(request.scope.get("root_path") or "")
-        return JSONResponse(self.card(base.rstrip("/")))
-
-    async def authenticate(self, connection: HTTPConnection) -> Principal:
-        """The caller of a request: the preamble's grant and verdict, a bearer token when no
-        node is in front, the developer's ``auth``.
-
-        Raises ``Unauthorized`` when ``auth`` refuses or the token does not verify.
-        """
-        if self.auth is not None:
-            allowed = self.auth(connection)
-            if inspect.isawaitable(allowed):
-                allowed = await allowed
-            if not allowed:
-                raise Unauthorized("refused by the endpoint's auth")
-        lk_request = getattr(connection.state, "lk_request", None)
-        if getattr(lk_request, "unauthenticated", False):
-            return _core._core_unauthenticated_principal()
-        node_authorized = bool(getattr(lk_request, "authorized", False))
-        credentials = self.service.credentials
-        if credentials is not None:
-            principal = credentials._principal(
-                connection.headers,
-                agent_name=self.service.agent_name,
-                node_authorized=node_authorized,
-                deployment=self._deployment,
-            )
-        else:
-            if not node_authorized:
-                raise Unauthorized("a LiveKit bearer token is required")
-            principal = PROJECT
-
-        return principal
-
-    async def _serve_rpc(self, request: Request) -> Response:
-        try:
-            principal = await self.authenticate(request)
-        except AuthError as error:
-            return _auth_response(error)
-
-        headers: dict[str, str] = {}
-        if negotiated := Extensions.from_headers(request.headers).header():
-            headers[EXTENSIONS_HEADER] = negotiated
-        native = await self.service.native()
-        body = bytearray()
-        received = 0
-        async for chunk in request.stream():
-            received += len(chunk)
-            if received > native.max_payload_bytes:
-                break
-            body.extend(chunk)
-        # the caller's W3C trace context: the turn this request starts continues its trace
-        responses = await self.service.dispatch(
-            bytes(body),
-            principal,
-            version=request.headers.get("a2a-version"),
-            offset=request.headers.get("last-event-id"),
-            body_size=received,
-            traceparent=request.headers.get("traceparent"),
-        )
-        try:
-            first = await responses.next()
-        except AuthError as error:
-            await responses.aclose()
-            return _auth_response(error)
-        if first is None:
-            await responses.aclose()
-            raise RuntimeError("the native A2A door produced no response")
-        if not responses.streaming or first.is_error:
-            await responses.aclose()
-            return Response(first.json, media_type="application/json", headers=headers)
-
-        async def sse() -> AsyncIterator[bytes]:
-            try:
-                yield first.sse.encode()
-                while (frame := await responses.next()) is not None:
-                    yield frame.sse.encode()
-            finally:
-                await responses.aclose()
-
-        return StreamingResponse(
-            sse(), media_type="text/event-stream", headers={**headers, "Cache-Control": "no-cache"}
-        )
+        return cast("dict[str, JsonValue]", json.loads(_core_a2a_agent_card(descriptor)))
 
 
 def _seconds(
@@ -699,10 +482,6 @@ def _seconds(
     if isinstance(debounce, timedelta):
         return debounce.total_seconds()
     return {channel: wait.total_seconds() for channel, wait in debounce.items()}
-
-
-def _auth_response(error: AuthError) -> Response:
-    return JSONResponse({"error": error.message}, status_code=error.status)
 
 
 __all__ = [

@@ -1283,26 +1283,6 @@ pub mod a2a_door {
             Some(&kwargs),
         )
     }
-
-    // Declared in rust/crates/lk-agents-abi/src/a2a/door.rs.
-    static DOOR_FRAME: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn door_frame_to_py<'py>(
-        py: Python<'py>,
-        value: ::lk_agents_abi::a2a::door::DoorFrame,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let ::lk_agents_abi::a2a::door::DoorFrame { json, sse, is_error } = value;
-        let kwargs = ::pyo3::types::PyDict::new(py);
-        kwargs.set_item("json", ::pyo3::IntoPyObjectExt::into_bound_py_any(json, py)?)?;
-        kwargs.set_item("sse", ::pyo3::IntoPyObjectExt::into_bound_py_any(sse, py)?)?;
-        kwargs.set_item("is_error", ::pyo3::IntoPyObjectExt::into_bound_py_any(is_error, py)?)?;
-        crate::py_calls::call(
-            DOOR_FRAME.import(py, "livekit.agents._generated.a2a_door", "DoorFrame")?.as_any(),
-            (),
-            Some(&kwargs),
-        )
-    }
 }
 
 pub mod a2a_remote {

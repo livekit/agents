@@ -19,7 +19,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
-use super::{EndpointServer, Exchange, HttpServerLimits, Origin, StreamEnd, Wire};
+use super::{EndpointServer, Exchange, HttpServerLimits, Origin, StreamEnd, TextDoors, Wire};
 use crate::transport::HttpStreamResetCode as Code;
 
 #[derive(Default)]
@@ -1113,4 +1113,77 @@ async fn a_peer_that_answers_no_ping_is_gone() {
     assert_eq!(end.reset(), Some(Code::HsrAbort));
     assert_eq!(server.connections.open(), 0);
     drop(client);
+}
+
+/// An A2A door that answers with what it was served with.
+struct Door;
+
+impl lk_agents_abi::a2a::door::TextEndpoint for Door {
+    fn name(&self) -> &str {
+        "desk"
+    }
+    fn serve(
+        &self,
+        exchange: Arc<dyn EndpointExchange>,
+        serving: lk_agents_abi::a2a::door::TextServing,
+    ) -> BoxFuture<'_, Result<(), HostError>> {
+        Box::pin(async move {
+            let exchange: Arc<dyn Any + Send + Sync> = exchange;
+            let exchange = exchange.downcast::<Exchange>().expect("the worker's exchange");
+            let served = format!(
+                "{} {:?} {:?} {}",
+                serving.request.route,
+                serving.endpoint_url,
+                serving.credentials,
+                serving.agent_name
+            );
+            exchange.send(start(200, &[])).await.unwrap();
+            exchange.send(body(served.as_bytes(), false)).await.unwrap();
+            Ok(())
+        })
+    }
+}
+
+// Catches: an A2A route reaching the binding, or a door served without the worker's settings.
+#[tokio::test]
+async fn a_text_route_is_served_by_its_door_and_everything_else_by_the_binding() {
+    let settings = crate::server::ServerSettings {
+        api_key: "key".into(),
+        api_secret: "secret".into(),
+        agent_name: "front".into(),
+        ..Default::default()
+    };
+    let text = TextDoors {
+        doors: vec![Arc::new(Door)],
+        settings: Arc::new(parking_lot::Mutex::new(settings)),
+        serving: Arc::new(parking_lot::Mutex::new(crate::server::Serving::Local {
+            base: "http://127.0.0.1:1/agents/front/default".into(),
+        })),
+        host_context: None,
+    };
+    let server = EndpointServer::new(
+        Arc::new(App(Box::new(|exchange| {
+            Box::pin(async move {
+                exchange.send(start(200, &[])).await.unwrap();
+                exchange.send(body(b"binding", false)).await.unwrap();
+                Ok(())
+            })
+        }))),
+        HttpServerLimits::default(),
+    )
+    .with_text(text);
+    let raw = b"GET /desk/v1 HTTP/1.1\r\nHost: x\r\n\r\n";
+    let request = |route: &str, kind| EndpointRequest { route: route.into(), kind, ..preamble() };
+    let text = lk_agents_abi::worker::http::EndpointKind::Text;
+    let (out, _) = exchange_with(&server, raw, request("/desk/{path:path}", text)).await;
+    assert_eq!(
+        String::from_utf8(parse(&out).body).unwrap(),
+        "/desk/{path:path} Some(\"/agents/front/default/desk\") \
+         Some((\"key\", \"secret\")) front"
+    );
+    let http = lk_agents_abi::worker::http::EndpointKind::Http;
+    for (route, kind) in [("/desk/{path:path}", http), ("/other/{path:path}", text)] {
+        let (out, _) = exchange_with(&server, raw, request(route, kind)).await;
+        assert_eq!(parse(&out).body, b"binding", "{route} {kind:?}");
+    }
 }

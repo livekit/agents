@@ -14,6 +14,7 @@ from livekit.agents.ipc import JobLauncher, ProcPool as HostProcPool
 from livekit.agents.ipc.child import _JobProc
 from livekit.agents.worker import _ServerCallbacks
 
+from .._core import _core_A2ADoor
 from .worker_endpoint import ExchangeEvent, ExchangeMessage, RequestHead
 from .worker_ipc import JobRunnerOptions, JobStatus, StartJobFields
 from .worker_options import ServerOptions
@@ -312,9 +313,12 @@ class ServerRuntime:
         routes: Sequence[EndpointRoute],
         has_load_fnc: bool,
         endpoints: _AsgiServer,
+        text_doors: Sequence[_core_A2ADoor],
     ) -> None:
         """Start the job processes and the health listener and, unless `unregistered`, register;
-        return once closed. `endpoints` receives each stream for `routes`.
+        return once closed. The worker serves each `text` route with its door from `text_doors`,
+        whose handlers run in the context this call captured; `endpoints` receives every other
+        stream for `routes`.
         """
     async def drain(self, timeout: float | None = None) -> None:
         """`None` (or `0`) waits without a deadline; past it raises `TimeoutError`."""

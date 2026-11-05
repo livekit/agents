@@ -194,11 +194,12 @@ pub(super) async fn serve(server: &EndpointServer, wire: Wire, origin: Origin) {
             };
             let exchange =
                 Arc::new(Exchange { head: parsed.head, kind: Kind::Http(Box::new(http)) });
-            let handled = server.handler.handle(
-                &telemetry::Cx::NONE,
-                exchange.clone() as Arc<dyn EndpointExchange>,
-                request,
-            );
+            let native = exchange.clone() as Arc<dyn EndpointExchange>;
+            // An A2A route is the worker's own: its door answers it.
+            let handled = match server.text.as_ref().and_then(|text| text.route(&request)) {
+                Some((door, serving)) => door.serve(native, serving),
+                None => server.handler.handle(&telemetry::Cx::NONE, native, request),
+            };
             let Kind::Http(http) = &exchange.kind else { unreachable!("built as HTTP") };
             http.run(handled, deadline, server.state.subscribe()).await;
         }

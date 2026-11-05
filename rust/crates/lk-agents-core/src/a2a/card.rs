@@ -47,10 +47,6 @@ pub fn agent_card(descriptor: EndpointDescriptor) -> Result<Value, HostError> {
 }
 
 impl EndpointCard for CardBuilder {
-    fn _core_a2a_extensions_header(requested: Option<String>) -> Option<String> {
-        crate::a2a::rpc::extensions_header(requested.as_deref())
-    }
-
     fn _core_a2a_agent_card(descriptor: EndpointDescriptor) -> Result<String, HostError> {
         Ok(agent_card(descriptor)?.to_string())
     }

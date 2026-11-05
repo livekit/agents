@@ -1,15 +1,21 @@
 //! Executes decoded A2A RPCs against storage. A response observes one runtime-owned operation;
 //! dropping that observer leaves accepted work owned by the door.
 
+pub mod serve;
 pub(crate) mod stream;
 
 use crate::a2a::Turn;
 use crate::telemetry;
 use a2a::JsonRpcId;
 use lk_agents_abi::a2a::auth::{AuthOperation, AuthPrincipal};
-use lk_agents_abi::a2a::door::{A2ADoor, A2AResponse, DoorConfig, DoorError, DoorFrame};
+use lk_agents_abi::a2a::card::EndpointDescriptor;
+use lk_agents_abi::a2a::door::{
+    A2ADoor, DoorConfig, DoorError, DoorFrame, TextEndpoint, TextServing,
+};
 use lk_agents_abi::a2a::turn::TurnHost;
+use lk_agents_abi::errors::HostError;
 use lk_agents_abi::storage::{StorageError, StorageNamespace};
+use lk_agents_abi::worker::http::EndpointExchange;
 use lk_agents_core::a2a::auth::{authorize, first_message_scope};
 use lk_agents_core::a2a::rpc::{self, Call, Request, TaskRef};
 use lk_agents_core::a2a::wire;
@@ -39,6 +45,8 @@ pub const MAX_PAYLOAD_BYTES: usize = 16 << 20;
 
 pub struct Door {
     inner: Arc<Inner>,
+    /// What the card publishes; its URL is the request's.
+    endpoint: EndpointDescriptor,
     /// Accepted operations, which `aclose` waits out.
     tasks: Arc<TaskSet>,
     runtime: tokio::runtime::Handle,
@@ -59,7 +67,6 @@ struct Inner {
 }
 
 impl A2ADoor for Door {
-    type Response = Response;
     type Env = ProcessEnv;
 
     fn new(
@@ -75,7 +82,7 @@ impl A2ADoor for Door {
         let runtime = env
             .caller_runtime()
             .map_err(|error| StorageError::Unavailable(format!("A2A runtime: {error}")))?;
-        lk_agents_core::a2a::card::agent_card(config.endpoint)
+        lk_agents_core::a2a::card::agent_card(config.endpoint.clone())
             .map_err(|e| StorageError::Invalid(e.to_string()))?;
         if config.lane.is_empty() {
             return Err(StorageError::Invalid("an A2A door requires a lane".into()));
@@ -91,6 +98,7 @@ impl A2ADoor for Door {
                 clock: env.clock.clone(),
                 tracer: env.tracer.clone(),
             }),
+            endpoint: config.endpoint,
             tasks: Arc::default(),
             runtime,
             admission: Admission::default(),
@@ -101,7 +109,40 @@ impl A2ADoor for Door {
         MAX_PAYLOAD_BYTES
     }
 
-    async fn dispatch(
+    async fn aclose(&self) {
+        let clock = &*self.inner.clock;
+        let deadline = clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
+        if !self.tasks.wait_empty(clock, Some(deadline)).await {
+            log::error!(target: "livekit.agents", "A2A door cleanup missed its deadline; runtime retains accepted operations");
+        }
+    }
+}
+
+impl TextEndpoint for Door {
+    fn name(&self) -> &str {
+        &self.endpoint.name
+    }
+
+    fn serve(
+        &self,
+        exchange: Arc<dyn EndpointExchange>,
+        serving: TextServing,
+    ) -> lk_agents_abi::BoxFuture<'_, Result<(), HostError>> {
+        Box::pin(async move {
+            let exchange: Arc<dyn Any + Send + Sync> = exchange;
+            let exchange = exchange
+                .downcast::<lk_agents_worker::http::Exchange>()
+                .map_err(|_| HostError::new("expected the worker's HTTP exchange"))?;
+            serve::serve(self, &*exchange, serving).await
+        })
+    }
+}
+
+impl Door {
+    /// One JSON-RPC request; `body_size` is what the request carried, past a body cut at the
+    /// payload budget.
+    #[allow(clippy::too_many_arguments, reason = "one request's exchange")]
+    pub async fn dispatch(
         &self,
         body: Vec<u8>,
         principal: AuthPrincipal,
@@ -149,14 +190,6 @@ impl A2ADoor for Door {
         });
         Response { streaming, receiver: Mutex::new(receiver), cancel }
     }
-
-    async fn aclose(&self) {
-        let clock = &*self.inner.clock;
-        let deadline = clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
-        if !self.tasks.wait_empty(clock, Some(deadline)).await {
-            log::error!(target: "livekit.agents", "A2A door cleanup missed its deadline; runtime retains accepted operations");
-        }
-    }
 }
 
 pub struct Response {
@@ -165,18 +198,18 @@ pub struct Response {
     cancel: CancellationToken,
 }
 
-impl A2AResponse for Response {
-    fn streaming(&self) -> bool {
+impl Response {
+    pub fn streaming(&self) -> bool {
         self.streaming
     }
-    async fn next(&self) -> Result<Option<DoorFrame>, DoorError> {
+    pub async fn next(&self) -> Result<Option<DoorFrame>, DoorError> {
         let mut receiver = self.receiver.lock().await;
         tokio::select! {
             _ = self.cancel.cancelled() => Ok(None),
             item = receiver.recv() => item.transpose(),
         }
     }
-    async fn aclose(&self) {
+    pub async fn aclose(&self) {
         self.cancel.cancel();
         self.receiver.lock().await.close();
     }

@@ -9,6 +9,8 @@ from livekit.agents import AgentServer
 from livekit.agents.a2a import A2ASessionContext, Credentials
 from livekit.agents.storage import SQLiteStorage
 
+from .local_server import serving
+
 pytestmark = pytest.mark.unit
 
 
@@ -44,12 +46,9 @@ async def test_card_publishes_registered_endpoint_identity_and_version(
     async def reservations(ctx: A2ASessionContext) -> str:
         return "ok"
 
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=server._http.app),
-        base_url="http://card.test",
-    ) as client:
+    async with serving(server) as base, httpx.AsyncClient() as client:
         response = await client.get(
-            "/reservations/.well-known/agent-card.json",
+            f"{base}/reservations/.well-known/agent-card.json",
             headers={"Authorization": f"Bearer {credentials.project_token()}"},
         )
         assert response.status_code == 200
@@ -66,7 +65,7 @@ async def test_card_publishes_registered_endpoint_identity_and_version(
     ]
     assert card["supportedInterfaces"] == [
         {
-            "url": "http://card.test/reservations/v1",
+            "url": f"{base}/reservations/v1",
             "protocolBinding": "JSONRPC",
             "protocolVersion": "1.0",
         }

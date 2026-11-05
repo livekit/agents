@@ -4,7 +4,9 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use crate::a2a::door::TextEndpoint;
 use crate::errors::HostError;
+use crate::invoke::CallContext;
 use crate::worker::http::{EndpointHandler, EndpointKind};
 use crate::worker::ipc_host::WorkerError;
 use crate::worker::types::{ProcessStartOptions, RunningJobInfo, ServerOptions};
@@ -148,7 +150,9 @@ pub trait ServerRuntime: Send + Sync + Sized + 'static {
     fn http_port(&self) -> u16;
 
     /// Start the job processes and the health listener and, unless `unregistered`, register;
-    /// return once closed. `endpoints` receives each stream for `routes`.
+    /// return once closed. The worker serves each `text` route with its door from `text_doors`,
+    /// whose handlers run in the context this call captured; `endpoints` receives every other
+    /// stream for `routes`.
     #[host(await)]
     #[allow(clippy::too_many_arguments)]
     async fn run(
@@ -160,6 +164,8 @@ pub trait ServerRuntime: Send + Sync + Sized + 'static {
         routes: Vec<EndpointRoute>,
         has_load_fnc: bool,
         endpoints: Arc<dyn EndpointHandler>,
+        text_doors: Vec<Arc<dyn TextEndpoint>>,
+        #[host(context)] context: CallContext,
     ) -> Result<(), WorkerError>;
 
     /// `None` (or `0`) waits without a deadline; past it raises `TimeoutError`.

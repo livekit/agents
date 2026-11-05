@@ -17,8 +17,10 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
+use crate::server::{ServerSettings, Serving};
 use crate::{StreamPreamble, WorkerHost};
 use hyper::body::Bytes;
+use lk_agents_abi::a2a::door::{TextEndpoint, TextServing};
 use lk_agents_abi::worker::http::{
     EndpointHandler, EndpointKind, EndpointRequest as RequestMetadata, HttpScheme,
 };
@@ -148,9 +150,46 @@ pub(crate) struct Wire {
     pub end: Arc<dyn StreamEnd>,
 }
 
-/// The agent's endpoint server: the binding's handler, its limits and its open WebSockets.
+/// The A2A doors the worker serves itself, and what it serves their requests with.
+pub struct TextDoors {
+    pub doors: Vec<Arc<dyn TextEndpoint>>,
+    pub settings: Arc<parking_lot::Mutex<ServerSettings>>,
+    pub serving: Arc<parking_lot::Mutex<Serving>>,
+    /// The host context the doors' handlers run in.
+    pub host_context: Option<lk_agents_abi::HostRef>,
+}
+
+impl TextDoors {
+    /// The door of a `text` route (`/<endpoint>/{path:path}`) and its request's serving.
+    fn route(&self, request: &RequestMetadata) -> Option<(&Arc<dyn TextEndpoint>, TextServing)> {
+        if request.kind != EndpointKind::Text {
+            return None;
+        }
+        let name = request.route.trim_start_matches('/').split('/').next()?;
+        let door = self.doors.iter().find(|door| door.name() == name)?;
+        let serving = self.serving.lock().clone();
+        let settings = self.settings.lock();
+        let credentials = (!settings.api_key.is_empty() && !settings.api_secret.is_empty())
+            .then(|| (settings.api_key.clone(), settings.api_secret.clone()));
+        Some((
+            door,
+            TextServing {
+                request: request.clone(),
+                endpoint_url: settings.endpoint_url(&serving, name),
+                agent_name: settings.agent_name.clone(),
+                deployment: settings.deployment.clone(),
+                credentials,
+                host_context: self.host_context.clone(),
+            },
+        ))
+    }
+}
+
+/// The agent's endpoint server: the binding's handler, the A2A doors it serves itself, its limits
+/// and its open WebSockets.
 pub struct EndpointServer {
     handler: Arc<dyn EndpointHandler>,
+    text: Option<TextDoors>,
     limits: HttpServerLimits,
     connections: Arc<Connections>,
     /// Changed only with `websockets` locked, so a drain and a registration never race.
@@ -189,7 +228,12 @@ impl EndpointServer {
     pub fn new(handler: Arc<dyn EndpointHandler>, limits: HttpServerLimits) -> Self {
         let connections = Connections::new(limits.max_connections);
         let state = watch::Sender::new(ServerState::Serving);
-        Self { handler, limits, connections, state, websockets: Default::default() }
+        Self { handler, text: None, limits, connections, state, websockets: Default::default() }
+    }
+
+    /// Serve `text` routes with their A2A doors instead of the binding's handler.
+    pub fn with_text(self, text: TextDoors) -> Self {
+        Self { text: Some(text), ..self }
     }
 
     /// Admit no new exchange, send every open WebSocket a close frame so its client reconnects

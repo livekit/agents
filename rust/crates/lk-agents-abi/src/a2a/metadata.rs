@@ -7,6 +7,15 @@ const _: () = ();
 pub const EXTENSION_URI: &str = "https://livekit.io/a2a/ext/agents/v1";
 #[crate::host(constant)]
 pub const EXTENSIONS_HEADER: &str = "A2A-Extensions";
+/// The request header that carries a thread grant beside `Authorization`.
+#[crate::host(constant)]
+pub const GRANT_HEADER: &str = "X-LiveKit-Thread-Grant";
+/// Where an endpoint publishes its agent card, under `/<endpoint>`.
+#[crate::host(constant)]
+pub const AGENT_CARD_PATH: &str = "/.well-known/agent-card.json";
+/// Where an endpoint's JSON-RPC methods live, under `/<endpoint>`; the card's URL points here.
+#[crate::host(constant)]
+pub const RPC_PATH: &str = "/v1";
 #[crate::host(constant(name = "CHANNEL"))]
 pub const CHANNEL_KEY: &str = "https://livekit.io/a2a/ext/agents/v1/channel";
 #[crate::host(constant(name = "KIND"))]

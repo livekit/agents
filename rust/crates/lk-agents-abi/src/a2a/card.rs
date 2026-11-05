@@ -13,11 +13,7 @@ pub struct EndpointDescriptor {
 
 #[crate::host(functions)]
 pub trait EndpointCard: Send + Sync + Sized + 'static {
-    /// Echo the supported capabilities selected by the optional extension header.
-    #[host(function)]
-    fn _core_a2a_extensions_header(requested: Option<String>) -> Option<String>;
-
-    /// Serialize the upstream A2A card; the host only adapts it to its HTTP/SDK representation.
+    /// The upstream A2A card's JSON, as the endpoint serves it.
     #[host(function)]
     fn _core_a2a_agent_card(descriptor: EndpointDescriptor) -> Result<String, HostError>;
 }

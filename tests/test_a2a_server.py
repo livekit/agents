@@ -1,14 +1,17 @@
-"""``a2a_session`` over the wire, in process: a stock a2a-sdk client over HTTP+SSE with and
-without the extension header, two workers sharing one local agent-db (``storage_fixture.py``)
-for the thin slice, the interrupt, the inbox, a resend and a resubscribe, and the session grant
-at the endpoint."""
+"""``a2a_session`` over the wire, in process: each server runs on the worker's own loopback
+listener (``local_server.py``), which serves its text doors natively; a stock a2a-sdk client over
+HTTP+SSE with and without the extension header, two workers sharing one local agent-db
+(``storage_fixture.py``) for the thin slice, the interrupt, the inbox, a resend and a
+resubscribe. That listener vouches for every caller: authentication by bearer and by the node's
+verdict is pinned by the door's own tests (``lk-agents-runtime/src/a2a/door_tests.rs``)."""
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import pickle
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from typing import Any
 
 import httpx
@@ -44,6 +47,7 @@ from livekit.agents.llm import ChatItem, FunctionToolCall
 from livekit.agents.storage import Storage, StorageUnavailable, Thread
 
 from .fake_llm import FakeLLM, FakeLLMResponse
+from .local_server import serving
 
 pytestmark = [pytest.mark.unit]
 
@@ -58,9 +62,9 @@ PROJECT_ENV = (
 
 @pytest.fixture(autouse=True)
 def no_project_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """These tests build their servers in memory and address them as ``agents.test``; a
-    developer's exported demo environment (``LIVEKIT_URL`` shapes the card's URLs, the agent
-    variables its name and version) must not reach them."""
+    """These tests run their servers in process on the loopback listener; a developer's
+    exported demo environment (``LIVEKIT_URL`` shapes the card's URLs, the agent variables its
+    name and version) must not reach them."""
     for name in PROJECT_ENV:
         monkeypatch.delenv(name, raising=False)
 
@@ -96,27 +100,21 @@ def make_server(
     return server, endpoint
 
 
-def http_client(server: AgentServer, **headers: str) -> httpx.AsyncClient:
-    headers.setdefault(
-        "Authorization",
-        "Bearer "
-        + CREDENTIALS.thread_grant_token(
-            AgentThreadGrant(
-                all=True, scope="test", create=True, write=True, read=True, list=True, delete=True
-            )
-        ),
-    )
-    return httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=server._http.app),
-        base_url="http://agents.test",
-        headers=headers,
-        timeout=30.0,
-    )
+@contextlib.asynccontextmanager
+async def http_client(server: AgentServer) -> AsyncIterator[httpx.AsyncClient]:
+    """A client of ``server`` while it serves its endpoints on its loopback listener."""
+    async with serving(server) as base:
+        async with httpx.AsyncClient(base_url=base, timeout=30.0) as http:
+            yield http
+
+
+def endpoint_url(http: httpx.AsyncClient) -> str:
+    return f"{str(http.base_url).rstrip('/')}/{ENDPOINT}"
 
 
 async def stock_client(http: httpx.AsyncClient, *, extensions: str | None = None) -> Any:
     """A vanilla a2a-sdk client over JSON-RPC; ``extensions`` is the header it sends."""
-    card = await A2ACardResolver(http, f"http://agents.test/{ENDPOINT}").get_agent_card()
+    card = await A2ACardResolver(http, endpoint_url(http)).get_agent_card()
     client = ClientFactory(
         ClientConfig(
             httpx_client=http,
@@ -160,7 +158,7 @@ async def rpc(
     http: httpx.AsyncClient, method: str, params: Mapping[str, Any], **headers: str
 ) -> httpx.Response:
     return await http.post(
-        f"/{ENDPOINT}/v1",
+        f"{endpoint_url(http)}/v1",
         json={"jsonrpc": "2.0", "id": method, "method": method, "params": dict(params)},
         headers=headers,
     )
@@ -214,12 +212,14 @@ async def test_the_card_lists_the_http_interface_and_offers_the_extension(
 ) -> None:
     server, endpoint = make_server(thread_storage)
     async with http_client(server) as http:
-        response = await http.get(f"/{ENDPOINT}{AGENT_CARD_PATH}")
+        response = await http.get(f"{endpoint_url(http)}{AGENT_CARD_PATH}")
+        url = endpoint_url(http)
     assert response.status_code == 200
+    assert response.headers["content-type"] == "application/json"
     card = response.json()
     assert card["name"] == ENDPOINT
     bindings = [(i["protocolBinding"], i["url"]) for i in card["supportedInterfaces"]]
-    assert bindings == [("JSONRPC", f"http://agents.test/{ENDPOINT}/v1")]
+    assert bindings == [("JSONRPC", f"{url}/v1")]
     extensions = {e["uri"]: e for e in card["capabilities"]["extensions"]}
     assert set(extensions) == {EXTENSION_URI}
     # proto3 omits a false bool: not required is said by saying nothing
@@ -313,7 +313,7 @@ async def test_errors_map_as_the_plan_lists_them(thread_storage: Storage) -> Non
         # an unknown method, a malformed envelope
         r = await rpc(http, "tasks/explode", {})
         assert r.json()["error"]["code"] == -32601
-        r = await http.post(f"/{ENDPOINT}/v1", content=b"{not json")
+        r = await http.post(f"{endpoint_url(http)}/v1", content=b"{not json")
         assert r.json()["error"]["code"] == -32700
         # an unknown session fails the task thread-not-found (5.12)
         r = await rpc(http, "message/send", {"message": wire("hi", "m9", context_id="AT_unknown")})
@@ -527,6 +527,25 @@ async def test_a_resent_message_id_returns_the_existing_task(
     assert [i.text_content for i in items] == ["hi", "reply to: hi"]
 
 
+async def first_event(http: httpx.AsyncClient, ctx_id: str) -> tuple[str, httpx.Response]:
+    """A ``message/stream`` whose first event, the task, was read; the response stays open."""
+    request = http.build_request(
+        "POST",
+        f"{endpoint_url(http)}/v1",
+        json={
+            "jsonrpc": "2.0",
+            "id": "initial",
+            "method": "message/stream",
+            "params": {"message": wire("slow", "m1", context_id=ctx_id)},
+        },
+    )
+    response = await http.send(request, stream=True)
+    async for line in response.aiter_lines():
+        if line.startswith("data: "):
+            return json.loads(line[len("data: ") :])["result"]["task"]["id"], response
+    raise AssertionError("the stream ended before its first event")
+
+
 async def test_resubscribe_replays_after_the_first_stream_is_dropped(
     thread_storages: Workers,
 ) -> None:
@@ -538,35 +557,14 @@ async def test_resubscribe_replays_after_the_first_stream_is_dropped(
         await release.wait()
         return "done"
 
-    server_a, endpoint_a = make_server(a, handler)
+    server_a, _ = make_server(a, handler)
     server_b, _ = make_server(b, handler)
     ctx_id = (await a.threads.create_thread()).thread_id
 
-    # the first client reads the acknowledgment and drops the stream
-    principal = CREDENTIALS._principal(
-        {
-            "Authorization": "Bearer "
-            + CREDENTIALS.thread_grant_token(AgentThreadGrant(all=True, read=True, write=True))
-        },
-        agent_name=AGENT,
-    )
-    stream = await endpoint_a.service.dispatch(
-        json.dumps(
-            {
-                "jsonrpc": "2.0",
-                "id": "initial",
-                "method": "message/stream",
-                "params": {"message": wire("slow", "m1", context_id=ctx_id)},
-            }
-        ).encode(),
-        principal,
-    )
-    ack = await stream.next()
-    assert ack is not None
-    task_id = json.loads(ack.json)["result"]["task"]["id"]
-    await stream.aclose()
-
-    async with http_client(server_b) as http_b:
+    async with http_client(server_a) as http_a, http_client(server_b) as http_b:
+        # the first client reads the acknowledgment and drops the stream
+        task_id, dropped = await first_event(http_a, ctx_id)
+        await dropped.aclose()
         # a live follow from the other worker while the turn still runs
         following = asyncio.create_task(
             rpc(http_b, "tasks/resubscribe", {"id": task_id, "contextId": ctx_id})
@@ -597,8 +595,8 @@ async def test_resubscribe_replays_after_the_first_stream_is_dropped(
 async def test_the_stream_completes_when_the_first_client_vanishes_without_closing(
     thread_storages: Workers,
 ) -> None:
-    """A browser reload drops the response mid-turn: the ASGI send fails and the generator
-    is left suspended, never closed. The durable stream must still receive the rest of the
+    """A browser reload drops the response mid-turn: the response is left open and unread,
+    never closed. The durable stream must still receive the rest of the
     turn, or a tasks/resubscribe from another worker ends at the last frame the first client
     saw."""
     a, b = thread_storages
@@ -609,34 +607,13 @@ async def test_the_stream_completes_when_the_first_client_vanishes_without_closi
         await release.wait()
         return "done"
 
-    server_a, endpoint_a = make_server(a, handler)
+    server_a, _ = make_server(a, handler)
     server_b, _ = make_server(b, handler)
     ctx_id = (await a.threads.create_thread()).thread_id
 
-    principal = CREDENTIALS._principal(
-        {
-            "Authorization": "Bearer "
-            + CREDENTIALS.thread_grant_token(AgentThreadGrant(all=True, read=True, write=True))
-        },
-        agent_name=AGENT,
-    )
-    stream = await endpoint_a.service.dispatch(
-        json.dumps(
-            {
-                "jsonrpc": "2.0",
-                "id": "initial",
-                "method": "message/stream",
-                "params": {"message": wire("slow", "m1", context_id=ctx_id)},
-            }
-        ).encode(),
-        principal,
-    )
-    ack = await stream.next()
-    assert ack is not None
-    task_id = json.loads(ack.json)["result"]["task"]["id"]
-    # held, never closed: the suspended generator of a response whose client is gone
-
-    async with http_client(server_b) as http_b:
+    async with http_client(server_a) as http_a, http_client(server_b) as http_b:
+        # held, never closed: a response whose client is gone without closing
+        task_id, held = await first_event(http_a, ctx_id)
         following = asyncio.create_task(
             rpc(http_b, "tasks/resubscribe", {"id": task_id, "contextId": ctx_id})
         )
@@ -645,7 +622,7 @@ async def test_the_stream_completes_when_the_first_client_vanishes_without_closi
         response = await asyncio.wait_for(following, 10)
         results = [r["result"] for r in sse_results(response)]
         assert results[-1]["statusUpdate"]["status"]["state"] == "TASK_STATE_COMPLETED"
-    del stream
+        await held.aclose()
 
 
 async def test_tasks_cancel_ends_a_running_turn_at_its_checkpoint(
@@ -697,53 +674,6 @@ def grant_token(scope: str, **flags: bool) -> str:
     return CREDENTIALS.thread_grant_token(AgentThreadGrant(scope=scope, **flags))
 
 
-async def test_the_grant_creates_in_its_scope_and_refuses_another_scopes_session(
-    thread_storage: Storage,
-) -> None:
-    server, _ = make_server(thread_storage)
-    storage = server.storage
-    assert storage is not None
-    async with http_client(server) as http:
-        alice = {"Authorization": f"Bearer {grant_token('user:alice')}"}
-        bob = {"Authorization": f"Bearer {grant_token('user:bob')}"}
-        created = (await rpc(http, "message/send", {"message": wire("hi", "m1")}, **alice)).json()[
-            "result"
-        ]["task"]
-        ctx_id = created["contextId"]
-        info = await storage.threads.get_thread(ctx_id)
-        assert info.scope == "user:alice"
-        # Scope and explicit ids both authorize existing threads.
-        r = await rpc(http, "message/send", {"message": wire("hi", "m3", context_id=ctx_id)}, **bob)
-        assert r.status_code == 403
-        r = await rpc(http, "tasks/list", {"contextId": ctx_id}, **alice)
-        assert r.status_code == 200
-        listed = AgentThreadGrant(thread_ids=(ctx_id,), create=True, write=True, read=True)
-        by_id = {"Authorization": f"Bearer {CREDENTIALS.thread_grant_token(listed)}"}
-        r = await rpc(http, "tasks/list", {"contextId": ctx_id}, **by_id)
-        assert r.status_code == 200 and len(r.json()["result"]["tasks"]) == 1
-        # a grant with no scope cannot create, a flag the grant lacks, a token nobody signed
-        assert (
-            await rpc(http, "message/send", {"message": wire("hi", "m4")}, **by_id)
-        ).status_code == 403
-        read_only = {"Authorization": f"Bearer {grant_token('user:alice', read=True)}"}
-        assert (
-            await rpc(
-                http, "message/send", {"message": wire("hi", "m5", context_id=ctx_id)}, **read_only
-            )
-        ).status_code == 403
-        forged = Credentials("APIother", API_SECRET).thread_grant_token(
-            AgentThreadGrant(scope="user:alice", write=True, create=True)
-        )
-        assert (
-            await rpc(
-                http,
-                "message/send",
-                {"message": wire("hi", "m6")},
-                Authorization=f"Bearer {forged}",
-            )
-        ).status_code == 401
-
-
 def test_the_nodes_verdict_is_the_project_credential_and_a_bearer_is_verified_here() -> None:
     """Through a node the project credential is stripped and arrives as ``authorized``; a thread
     grant arrives as the bearer it is and the worker verifies it, as it verifies every token
@@ -780,58 +710,6 @@ def test_the_nodes_verdict_is_the_project_credential_and_a_bearer_is_verified_he
     assert scoped.can_write(thread)
     everything = AgentThreadGrant(all=True, create=True, write=True)
     assert not everything.can_create("user:x") and everything.can_write(thread)
-
-
-async def test_endpoint_auth_and_thread_authority_are_checked_on_every_request(
-    thread_storage: Storage,
-) -> None:
-    seen: list[str] = []
-
-    def auth(connection: Any) -> bool:
-        seen.append(connection.headers.get("x-api-key", ""))
-        return connection.headers.get("x-api-key") == "letmein"
-
-    server, _ = make_server(thread_storage, auth=auth)
-    async with http_client(server, Authorization="") as http:
-        # The developer check and thread authority are independent.
-        r = await rpc(
-            http, "message/send", {"message": wire("hi", "m1")}, **{"X-Api-Key": "letmein"}
-        )
-        assert r.status_code == 401
-        token = CREDENTIALS.project_token()
-        r = await rpc(
-            http, "message/send", {"message": wire("hi", "m2")}, Authorization=f"Bearer {token}"
-        )
-        assert r.status_code == 401
-        endpoint_only = await rpc(
-            http,
-            "message/send",
-            {"message": wire("hi", "endpoint-only")},
-            Authorization=f"Bearer {token}",
-            **{"X-Api-Key": "letmein"},
-        )
-        assert endpoint_only.status_code == 403
-        r = await rpc(
-            http,
-            "message/send",
-            {"message": wire("hi", "m3")},
-            Authorization="Bearer " + grant_token("user:alice"),
-            **{"X-Api-Key": "letmein"},
-        )
-        assert (
-            r.status_code == 200
-            and r.json()["result"]["task"]["status"]["state"] == "TASK_STATE_COMPLETED"
-        )
-        assert (await http.get(f"/{ENDPOINT}{AGENT_CARD_PATH}")).status_code == 401
-        response = await http.get(
-            f"/{ENDPOINT}{AGENT_CARD_PATH}",
-            headers={
-                "Authorization": "Bearer " + grant_token("user:alice"),
-                "X-Api-Key": "letmein",
-            },
-        )
-        assert response.status_code == 200 and response.json()["securityRequirements"]
-    assert seen == ["letmein", "", "letmein", "letmein", "", "letmein"]
 
 
 async def test_a_delegation_part_and_kind_reach_the_handler(
@@ -885,9 +763,10 @@ async def test_a_remote_agent_with_no_token_answers_in_the_callers_thread(
     thread_storage: Storage,
 ) -> None:
     """docs/internals/storage.md "Two brains, one thread": the fast brain's ``RemoteAgent(url)``
-    with no token, in a conversation on thread T, mints a grant for T and shares it; the
-    endpoint's real authorization admits it, and the back office answers in T on its own lane.
-    A project credential alone (what it minted before) is refused 403 for a message."""
+    with no token, in a conversation on thread T, mints a grant for T and shares it; the grant
+    may write T, and the back office answers in T on its own lane. A project credential alone
+    (what it minted before) grants no thread: the door refuses it 403 for a message
+    (``door_tests.rs``)."""
     from livekit.agents import _core
     from livekit.agents.llm import FunctionCall
 
@@ -908,6 +787,13 @@ async def test_a_remote_agent_with_no_token_answers_in_the_callers_thread(
     interaction = _core._core_RemoteInteraction(url, "desk", call, [], *project)
     message = interaction.message({"request": "book"}, False, True, [], caller.thread_id, token)
     assert message.context_id == caller.thread_id
+    assert token is not None
+    shared = CREDENTIALS._principal({"Authorization": f"Bearer {token}"}, agent_name=AGENT)
+    assert shared.grant is not None and shared.grant.can_write(caller)
+    endpoint_only = _core._core_remote_token(url, *project, None, None)
+    assert endpoint_only is not None
+    alone = CREDENTIALS._principal({"Authorization": f"Bearer {endpoint_only}"}, agent_name=AGENT)
+    assert alone.kind == "project" and alone.grant is None
     async with http_client(server) as http:
         sent = wire("book", message.message_id, context_id=message.context_id, kind="delegation")
         r = await rpc(http, "message/send", {"message": sent}, Authorization=f"Bearer {token}")
@@ -917,12 +803,6 @@ async def test_a_remote_agent_with_no_token_answers_in_the_callers_thread(
             caller.thread_id,
             "TASK_STATE_COMPLETED",
         )
-        endpoint_only = _core._core_remote_token(url, *project, None, None)
-        again = wire("book", "m2", context_id=caller.thread_id)
-        r = await rpc(
-            http, "message/send", {"message": again}, Authorization=f"Bearer {endpoint_only}"
-        )
-        assert r.status_code == 403
     assert seen["thread"] == caller.thread_id
 
 
@@ -946,7 +826,9 @@ async def test_a_storage_error_mid_turn_fails_the_task_storage_unavailable(
     assert reason == "storage-unavailable"
 
 
-async def test_each_request_supplies_its_own_application_context(thread_storage: Storage) -> None:
+async def test_each_request_runs_in_its_own_application_context(thread_storage: Storage) -> None:
+    """A handler runs in a copy of the context the server started in: what one request sets is
+    not what the next one sees."""
     import contextvars
 
     label = contextvars.ContextVar("request-label", default="missing")
@@ -954,18 +836,19 @@ async def test_each_request_supplies_its_own_application_context(thread_storage:
 
     async def handler(ctx: A2ASessionContext) -> str:
         seen.append(label.get())
+        label.set(ctx.message.text_content or "")
         return label.get()
 
     server, _ = make_server(thread_storage, handler)
-    async with http_client(server) as http:
-        for value in ("first", "second"):
-            token = label.set(value)
-            try:
-                result = await rpc(http, "message/send", {"message": wire("hello", value)})
+    token = label.set("server")
+    try:
+        async with http_client(server) as http:
+            for value in ("first", "second"):
+                result = await rpc(http, "message/send", {"message": wire(value, value)})
                 assert result.json()["result"]["task"]["artifacts"][0]["parts"][0]["text"] == value
-            finally:
-                label.reset(token)
-    assert seen == ["first", "second"]
+    finally:
+        label.reset(token)
+    assert seen == ["server", "server"]
 
 
 # Catches: a fast brain's call to its slow brain starting a new trace at the endpoint.
@@ -1031,7 +914,9 @@ async def test_payload_budget_refuses_before_durable_receipt(thread_storage: Sto
     server, endpoint = make_server(thread_storage, handler)
     native = await endpoint.service.native()
     async with http_client(server) as http:
-        response = await http.post(f"/{ENDPOINT}/v1", content=b" " * (native.max_payload_bytes + 1))
+        response = await http.post(
+            f"{endpoint_url(http)}/v1", content=b" " * (native.max_payload_bytes + 1)
+        )
     assert response.json()["error"]["code"] == -32602
     assert calls == 0
-    assert (await thread_storage.threads.list_threads("test")).threads == []
+    assert (await thread_storage.threads.list_threads("console")).threads == []

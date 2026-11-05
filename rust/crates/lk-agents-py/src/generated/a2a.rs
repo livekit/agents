@@ -140,25 +140,8 @@ pub fn _core_unauthenticated_principal<'py>(py: Python<'py>) -> PyResult<Bound<'
 // Declared in rust/crates/lk-agents-abi/src/a2a/card.rs.
 type EndpointCardImpl =
     <crate::generated::implementations::Selected as super::Implementations>::EndpointCard;
-type EndpointCardCoreA2aExtensionsHeaderOutput = ::std::option::Option<::std::string::String>;
 
-/// Echo the supported capabilities selected by the optional extension header.
-#[pyfunction]
-#[pyo3(signature = (requested))]
-pub fn _core_a2a_extensions_header(
-    py: Python<'_>,
-    requested: ::std::option::Option<::std::string::String>,
-) -> PyResult<EndpointCardCoreA2aExtensionsHeaderOutput> {
-    crate::py_calls::check_pid()?;
-    let out = py.detach(|| {
-        <EndpointCardImpl as ::lk_agents_abi::a2a::card::EndpointCard>::_core_a2a_extensions_header(
-            requested,
-        )
-    });
-    ::pyo3::PyResult::Ok(out)
-}
-
-/// Serialize the upstream A2A card; the host only adapts it to its HTTP/SDK representation.
+/// The upstream A2A card's JSON, as the endpoint serves it.
 #[pyfunction]
 #[pyo3(signature = (descriptor))]
 pub fn _core_a2a_agent_card(
@@ -413,36 +396,6 @@ impl AgentClient {
 type CoreA2ADoorImpl =
     <crate::generated::implementations::Selected as super::Implementations>::A2ADoor;
 
-fn _extract_a2_a_door_dispatch_body(obj: &Bound<'_, PyAny>) -> PyResult<A2ADoorDispatchBodyInput> {
-    if obj.is_instance_of::<::pyo3::types::PyBytes>()
-        || obj.is_instance_of::<::pyo3::types::PyByteArray>()
-        || obj.is_instance_of::<::pyo3::types::PyMemoryView>()
-    {
-        crate::py_values::owned_bytes(obj.as_any(), "body")
-    } else {
-        obj.try_iter().and_then(|items| {
-            items
-                .map(|item| {
-                    let item = item?;
-                    crate::py_values::number_from_py::<u8>(item.as_any(), "body")
-                })
-                .collect::<PyResult<Vec<_>>>()
-        })
-    }
-}
-type A2ADoorDispatchBodyInput = ::std::vec::Vec<u8>;
-
-fn _extract_a2_a_door_dispatch_body_size(
-    obj: &Bound<'_, PyAny>,
-) -> PyResult<A2ADoorDispatchBodySizeInput> {
-    if obj.is_none() {
-        Ok(None)
-    } else {
-        (crate::py_values::number_from_py::<usize>(obj.as_any(), "body_size")).map(Some)
-    }
-}
-type A2ADoorDispatchBodySizeInput = ::std::option::Option<usize>;
-
 #[pyclass(frozen, name = "_core_A2ADoor", module = "livekit.agents._core")]
 pub struct CoreA2ADoor(pub(crate) ::std::sync::Arc<CoreA2ADoorImpl>);
 
@@ -484,45 +437,6 @@ impl CoreA2ADoor {
         ::pyo3::PyResult::Ok(out)
     }
 
-    #[pyo3(signature = (body, principal, *, version = None, offset = None, body_size = None, host_context = None, traceparent = None))]
-    fn dispatch<'py>(
-        &self,
-        py: Python<'py>,
-        #[pyo3(from_py_with = _extract_a2_a_door_dispatch_body)] body: A2ADoorDispatchBodyInput,
-        principal: Bound<'_, PyAny>,
-        version: ::std::option::Option<::std::string::String>,
-        offset: ::std::option::Option<::std::string::String>,
-        #[pyo3(from_py_with = _extract_a2_a_door_dispatch_body_size)]
-        body_size: A2ADoorDispatchBodySizeInput,
-        host_context: Option<Bound<'_, PyAny>>,
-        traceparent: ::std::option::Option<::std::string::String>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        crate::py_calls::check_pid()?;
-        let principal = crate::generated::records::a2a_auth::principal_from_py(principal.as_any())?;
-        let host_context =
-            host_context.map(|v| crate::py_objects::object_ref_from_py(v.as_any())).transpose()?;
-        let this = ::std::sync::Arc::clone(&self.0);
-        crate::py_calls::future_into_py(py, async move {
-            let out = <CoreA2ADoorImpl as ::lk_agents_abi::a2a::door::A2ADoor>::dispatch(
-                &this,
-                body,
-                principal,
-                version,
-                offset,
-                body_size,
-                host_context,
-                traceparent,
-            )
-            .await;
-            Python::attach(|py| {
-                ::pyo3::IntoPyObjectExt::into_py_any(
-                    super::a2a::CoreA2AResponse(::std::sync::Arc::new(out)),
-                    py,
-                )
-            })
-        })
-    }
-
     fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
@@ -533,51 +447,15 @@ impl CoreA2ADoor {
     }
 }
 
-// Declared in rust/crates/lk-agents-abi/src/a2a/door.rs.
-type CoreA2AResponseImpl =
-    <crate::generated::implementations::Selected as super::Implementations>::A2AResponse;
-
-#[pyclass(frozen, name = "_core_A2AResponse", module = "livekit.agents._core")]
-pub struct CoreA2AResponse(pub(crate) ::std::sync::Arc<CoreA2AResponseImpl>);
-
-#[pymethods]
-impl CoreA2AResponse {
-    #[getter]
-    fn streaming(&self, py: Python<'_>) -> PyResult<bool> {
-        crate::py_calls::check_pid()?;
-        let out = py.detach(|| {
-            <CoreA2AResponseImpl as ::lk_agents_abi::a2a::door::A2AResponse>::streaming(&self.0)
-        });
-        ::pyo3::PyResult::Ok(out)
-    }
-
-    fn next<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        crate::py_calls::check_pid()?;
-        let this = ::std::sync::Arc::clone(&self.0);
-        crate::py_calls::future_into_py(py, async move {
-            let out = <CoreA2AResponseImpl as ::lk_agents_abi::a2a::door::A2AResponse>::next(&this, )
-                .await.map_err(|e: ::lk_agents_abi::a2a::door::DoorError| <::lk_agents_abi::a2a::door::DoorError as crate::py_errors::HostException>::to_py_err(&e))?;
-            Python::attach(|py| {
-                ::pyo3::IntoPyObjectExt::into_py_any(
-                    out.map(|value| {
-                        crate::generated::records::a2a_door::door_frame_to_py(py, value)
-                    })
-                    .transpose()?,
-                    py,
-                )
-            })
-        })
-    }
-
-    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        crate::py_calls::check_pid()?;
-        let this = ::std::sync::Arc::clone(&self.0);
-        crate::py_calls::future_into_py(py, async move {
-            let () =
-                <CoreA2AResponseImpl as ::lk_agents_abi::a2a::door::A2AResponse>::aclose(&this)
-                    .await;
-            Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
-        })
+// Wherever the host passes a `::lk_agents_abi::a2a::door::TextEndpoint`, an instance of this class is itself.
+inventory::submit! {
+    crate::py_objects::HostNative {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::a2a::door::TextEndpoint>(),
+        read: |obj| {
+            let this = obj.cast::<CoreA2ADoor>().ok()?;
+            let native: ::std::sync::Arc<dyn ::lk_agents_abi::a2a::door::TextEndpoint> = this.get().0.clone();
+            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        },
     }
 }
 
@@ -974,19 +852,6 @@ impl crate::py_errors::HostException for ::lk_agents_abi::a2a::client::AgentClie
             _ => ::pyo3::exceptions::PyRuntimeError::new_err(::std::string::ToString::to_string(
                 self,
             )),
-        }
-    }
-}
-
-impl crate::py_errors::HostException for ::lk_agents_abi::a2a::door::DoorError {
-    fn to_py_err(&self) -> ::pyo3::PyErr {
-        #[allow(unreachable_patterns)]
-        match self {
-            Self::Auth(inner) => crate::py_errors::HostException::to_py_err(inner),
-            Self::Storage(inner) => crate::py_errors::HostException::to_py_err(inner),
-            _ => {
-                ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
-            }
         }
     }
 }

@@ -30,15 +30,19 @@ def live_credentials(monkeypatch: pytest.MonkeyPatch) -> tuple[str, str, str]:
     return values
 
 
-async def test_real_worker_processes_start_and_refuse_unauthenticated_requests(
+async def test_real_worker_processes_start_and_serve_their_text_doors(
     workers: Workers,
 ) -> None:
+    """Each worker serves its routes and its text doors on its own listener. The workers run
+    as the console does, so the listener vouches for every caller; how a door refuses one is
+    pinned by its Rust tests (``lk-agents-runtime/src/a2a/door_tests.rs``)."""
     assert workers.a_process.process.pid != workers.b_process.process.pid
     for name, caller in (("worker-a", workers.a), ("worker-b", workers.b)):
         assert (await caller.http.get("/ready")).text == name
         async with httpx.AsyncClient(base_url=caller.http.base_url, trust_env=False) as http:
             response = await http.post("/desk/v1", json={})
-            assert response.status_code == 401
+            assert response.status_code == 200
+            assert response.json()["error"]["code"] == -32600
 
 
 async def started(child: Child) -> None:
