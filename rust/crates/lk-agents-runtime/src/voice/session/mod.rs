@@ -398,9 +398,7 @@ impl VoiceSession {
         let job = self.host.job.clone();
         // The room connects under `session_start`, reserved before the driver opens it.
         let startup = match &mut *self.stage.lock() {
-            Stage::Ready(ready) => {
-                ready.builder.startup()
-            }
+            Stage::Ready(ready) => ready.builder.startup(),
             _ => telemetry::Cx::NONE,
         };
         let remote = self.host.remote.clone().map(|config| {

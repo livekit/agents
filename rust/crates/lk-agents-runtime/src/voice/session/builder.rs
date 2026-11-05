@@ -272,7 +272,8 @@ impl DriverBuilder {
         *self.opening.get_or_insert_with(|| {
             let cx = &self.trace;
             let session = telemetry::reserve::<telemetry::AgentSession>(cx);
-            let start = telemetry::reserve(&cx.clone().under::<telemetry::AgentSession>(session.context));
+            let start =
+                telemetry::reserve(&cx.clone().under::<telemetry::AgentSession>(session.context));
             telemetry::Opening { session, start, activity: None }
         })
     }
