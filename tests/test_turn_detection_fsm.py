@@ -12,6 +12,7 @@ turn commits) lives in ``AudioRecognition`` and is covered by
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -47,6 +48,7 @@ class _FakeTransport:
 
     def run_inference(self, request_id: str, *, chat_ctx: ChatContext | None = None) -> None:
         self.events.append(("run_inference", request_id))
+        self.audio_events.append(("run_inference", request_id))
 
     def push_frame(self, frame: Any) -> None:
         self.audio_events.append(("push_frame", frame.samples_per_channel))
@@ -86,6 +88,12 @@ def _make_opts(thresholds: dict[str, float] | None = None) -> TurnDetectorOption
     )
 
 
+async def _drain(s: _FakeBackend) -> None:
+    """Let the stream's drain loop hand the queued items to the transport."""
+    for _ in range(3):
+        await asyncio.sleep(0)
+
+
 def _make_stream(thresholds: dict[str, float] | None = None) -> _FakeBackend:
     return _FakeBackend(detector=MagicMock(), opts=_make_opts(thresholds))
 
@@ -122,7 +130,30 @@ class TestAudioTurnDetectionRequests:
             fut = s.predict()
             assert s._request_id is not None
             assert not fut.done()
+            await _drain(s)
             assert s.events == [("run_inference", s._request_id)]
+        finally:
+            await s.aclose()
+
+    async def test_predict_runs_after_the_audio_pushed_before_it(self) -> None:
+        """predict queues behind the audio, so the transport sees every frame captured before
+        the call first and counts it in the turn length."""
+        s = _make_stream()
+        try:
+            frame = rtc.AudioFrame(
+                data=bytes(320), sample_rate=16000, num_channels=1, samples_per_channel=160
+            )
+            s.push_audio(frame)
+            s.push_audio(frame)
+            s.predict()
+            s.push_audio(frame)
+            await _drain(s)
+            assert s._fake_transport.audio_events == [
+                ("push_frame", 160),
+                ("push_frame", 160),
+                ("run_inference", s._request_id),
+                ("push_frame", 160),
+            ]
         finally:
             await s.aclose()
 
@@ -149,7 +180,9 @@ class TestAudioTurnDetectionRequests:
             assert s._request_id != old_id
             assert old_fut.done()
             assert old_fut.result().end_of_turn_probability == 0.0
-            assert sum(1 for e in s.events if e[0] == "run_inference") == 2
+            # the old request closed before the transport reached it, so only the new one runs
+            await _drain(s)
+            assert s.events == [("run_inference", s._request_id)]
         finally:
             await s.aclose()
 
@@ -189,7 +222,8 @@ class TestAudioTurnDetectionRequests:
             next_fut = s.predict()
             assert next_fut is not fut
             assert not next_fut.done()
-            assert sum(1 for e in s.events if e[0] == "run_inference") == 2
+            await _drain(s)
+            assert s.events == [("run_inference", s._request_id)]
         finally:
             await s.aclose()
 

@@ -99,6 +99,11 @@ class _BaseStreamingTurnDetectorStream:
     class _StartOfTurnSentinel:
         elapsed: float
 
+    @dataclass
+    class _InferenceSentinel:
+        request_id: str
+        chat_ctx: ChatContext | None
+
     def __init__(
         self,
         *,
@@ -129,6 +134,7 @@ class _BaseStreamingTurnDetectorStream:
             rtc.AudioFrame
             | _BaseStreamingTurnDetectorStream._FlushSentinel
             | _BaseStreamingTurnDetectorStream._StartOfTurnSentinel
+            | _BaseStreamingTurnDetectorStream._InferenceSentinel
         ]()
 
         self._request_id: str | None = None
@@ -192,7 +198,15 @@ class _BaseStreamingTurnDetectorStream:
             fallback_prefix="turn_request_",
         )
         self._request_fut = asyncio.get_running_loop().create_future()
-        self._transport.run_inference(self._request_id, chat_ctx=chat_ctx)
+        # queued behind the audio so far: the transport runs it after the frames captured before
+        # this call, and the turn length it reports covers them
+        # the items as of this call: the caller may add to chat_ctx before the transport runs it
+        snapshot = ChatContext(items=list(chat_ctx.items)) if chat_ctx is not None else None
+        self._audio_ch.send_nowait(
+            _BaseStreamingTurnDetectorStream._InferenceSentinel(
+                request_id=self._request_id, chat_ctx=snapshot
+            )
+        )
         return self._request_fut
 
     def cancel_inference(self, *, timed_out: bool = False) -> None:
@@ -349,6 +363,10 @@ class _BaseStreamingTurnDetectorStream:
                 self._transport.flush()
             elif isinstance(item, _BaseStreamingTurnDetectorStream._StartOfTurnSentinel):
                 self._transport.on_start_of_turn(item.elapsed)
+            elif isinstance(item, _BaseStreamingTurnDetectorStream._InferenceSentinel):
+                # a newer predict, a cancel, or a fallback closed this request while it waited
+                if item.request_id == self._request_id:
+                    self._transport.run_inference(item.request_id, chat_ctx=item.chat_ctx)
             else:
                 self._transport.push_frame(item)
 

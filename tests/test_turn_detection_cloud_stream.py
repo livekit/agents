@@ -20,6 +20,7 @@ from livekit.agents._exceptions import APIConnectionError
 from livekit.protocol.agent_pb.agent_session import ChatRole
 
 from .fake_turn_detector_ws import (
+    drain_audio_queue,
     drain_send_queue,
     make_stream,
     wait_until_connected,
@@ -94,9 +95,11 @@ class TestCloudStreamSendOrdering:
             chat_ctx.add_message(role="assistant", content="First question")
             stream.predict(chat_ctx)
             first_id = stream._request_id
+            await drain_audio_queue(stream)
             chat_ctx.add_message(role="assistant", content="Second question")
             stream.predict(chat_ctx)
             second_id = stream._request_id
+            await drain_audio_queue(stream)
             await drain_send_queue(transport)
 
             start_ids = [
@@ -183,6 +186,56 @@ class TestCloudStreamChatContext:
             assert fake_ws.sent[-2].WhichOneof("message") == "eot_input_chat_context"
             assert list(fake_ws.sent[-2].eot_input_chat_context.messages) == []
             assert fake_ws.sent[-1].WhichOneof("message") == "inference_start"
+        finally:
+            await stream.aclose()
+
+
+class TestCloudStreamQueuedInference:
+    """``inference_start`` waits behind the audio captured before ``predict``."""
+
+    async def test_audio_before_predict_precedes_inference_start(self) -> None:
+        stream, fake_ws, transport = make_stream(connect_script=[None])
+        try:
+            await wait_until_connected(transport)
+            stream.push_audio(_pcm_frame(1600))
+            stream.push_audio(_pcm_frame(1600))
+            stream.predict()
+            stream.push_audio(_pcm_frame(1600))
+            await drain_audio_queue(stream)
+            await drain_send_queue(transport)
+
+            kinds = [m.WhichOneof("message") for m in fake_ws.sent]
+            assert kinds == [
+                "input_audio",
+                "input_audio",
+                "eot_input_chat_context",
+                "inference_start",
+                "input_audio",
+            ]
+            start = next(m for m in fake_ws.sent if m.WhichOneof("message") == "inference_start")
+            assert start.inference_start.turn_samples == 3200
+        finally:
+            await stream.aclose()
+
+    async def test_request_replaced_before_it_runs_is_not_sent(self) -> None:
+        stream, fake_ws, transport = make_stream(connect_script=[None])
+        try:
+            await wait_until_connected(transport)
+            chat_ctx = llm.ChatContext()
+            chat_ctx.add_message(role="assistant", content="First question")
+            stream.predict(chat_ctx)
+            chat_ctx.add_message(role="assistant", content="Second question")
+            stream.predict(chat_ctx)
+            second_id = stream._request_id
+            await drain_audio_queue(stream)
+            await drain_send_queue(transport)
+
+            starts = [
+                m.inference_start.request_id
+                for m in fake_ws.sent
+                if m.WhichOneof("message") == "inference_start"
+            ]
+            assert starts == [second_id]
         finally:
             await stream.aclose()
 
