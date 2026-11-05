@@ -836,7 +836,7 @@ def compiler_locations(
         for span in message["spans"]:
             if not span["is_primary"]:
                 continue
-            in_worker_pool = False
+            in_exempt_module = False
             while span:
                 path = Path(span["file_name"])
                 if not path.is_absolute():
@@ -845,7 +845,7 @@ def compiler_locations(
                     relative = path.resolve().relative_to(root).as_posix()
                 except ValueError:
                     relative = ""
-                in_worker_pool |= relative.startswith(UNRESTRICTED)
+                in_exempt_module |= relative.startswith(UNRESTRICTED)
                 if relative.startswith("rust/crates/") and policed(relative, policy):
                     candidates.append(
                         (
@@ -858,7 +858,7 @@ def compiler_locations(
                     )
                     break
                 span = (span.get("expansion") or {}).get("span")
-            unrestricted.append(in_worker_pool)
+            unrestricted.append(in_exempt_module)
         if not candidates:
             if unrestricted and all(unrestricted):
                 continue
