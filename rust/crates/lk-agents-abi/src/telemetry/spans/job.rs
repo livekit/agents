@@ -15,7 +15,7 @@ use crate::telemetry::semconv::protocol;
         JobStartedOnServer, EntrypointReturned, EntrypointCancelled
     ]
 )]
-#[derive(Attrs)]
+#[derive(Attrs, Default)]
 pub struct JobEntrypoint {
     /// Agent dispatch id.
     #[attr("lk.dispatch_id")]

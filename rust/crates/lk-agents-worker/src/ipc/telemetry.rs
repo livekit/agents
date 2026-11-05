@@ -9,8 +9,7 @@ use lk_agents_abi::ATTRIBUTE_SIMULATOR_DISPATCH;
 use lk_agents_abi::telemetry::decl::Seconds;
 pub(crate) use lk_agents_abi::telemetry::record::JobKey;
 use lk_agents_abi::telemetry::spans::job::{
-    EntrypointStarted, JobAccepted, JobAssigned, JobEntrypoint, JobReceived, JobStartedOnServer,
-    ProcessAssigned,
+    EntrypointStarted, JobAccepted, JobAssigned, JobReceived, JobStartedOnServer, ProcessAssigned,
 };
 use lk_agents_abi::worker::job::StartJobFields;
 pub(crate) use lk_agents_net::telemetry::Tracer;
@@ -25,8 +24,8 @@ pub(crate) use lk_agents_abi::telemetry::policy::{
 };
 pub(crate) use lk_agents_abi::telemetry::report::RecordingOptions;
 pub(crate) use lk_agents_abi::telemetry::spans::job::{
-    EntrypointCancelled, EntrypointReturned, JobShutdown, OnSessionEnd, RoomDisconnect,
-    SessionEndUpload, ShutdownCallback,
+    EntrypointCancelled, EntrypointReturned, JobEntrypoint, JobShutdown, OnSessionEnd,
+    RoomDisconnect, SessionEndUpload, ShutdownCallback,
 };
 pub(crate) use lk_agents_net::telemetry::otlp::CloudRecording;
 pub(crate) use lk_agents_net::telemetry::session_report::{self, ReportOutputs};
@@ -34,12 +33,17 @@ pub(crate) use lk_agents_net::telemetry::{
     Cx, ScopedSpan, SpanContext, SpanEnd, end, event, start,
 };
 
-/// The job's root span, open until its shutdown ends.
-pub(crate) struct JobTrace {
+/// The job the exporter's registry knows, from its dispatch.
+pub(crate) struct Job {
     pub key: JobKey,
-    pub span: ScopedSpan<JobEntrypoint>,
-    /// The simulation run the job is part of, from its dispatch.
+    /// The simulation run the job is part of.
     pub simulation: Option<Simulation>,
+}
+
+/// A started job: who it is, and its root span, open until its shutdown ends.
+pub(crate) struct JobTrace {
+    pub job: Job,
+    pub span: ScopedSpan<JobEntrypoint>,
 }
 
 /// A simulated job's run identity: the `lk.simulator.dispatch` job attribute, a protojson
@@ -66,21 +70,6 @@ fn nanos(at: f64) -> u64 {
 /// Seconds between two known instants (zero is unknown).
 fn gap(start: f64, end: f64) -> Option<Seconds> {
     (start != 0.0 && end != 0.0).then(|| Seconds((end - start).max(0.0)))
-}
-
-/// The server's start instant in seconds: `JobState.started_at` is nanoseconds, or milliseconds
-/// or seconds should that change.
-fn server_started(started_at: i64) -> Option<f64> {
-    let v = started_at as f64;
-    (started_at > 0).then(|| {
-        if v > 1e17 {
-            v / 1e9
-        } else if v > 1e11 {
-            v / 1e3
-        } else {
-            v
-        }
-    })
 }
 
 /// The call's thread as its dispatch names it: the `thread_id` of the job's JSON metadata.
@@ -152,23 +141,22 @@ pub(crate) fn start_job(
         lk_agents_net::telemetry::event_at(&span, ProcessAssigned, at);
     }
     lk_agents_net::telemetry::event_at(&span, EntrypointStarted, nanos(started));
-    if let Some(at) = job.state.as_ref().and_then(|s| server_started(s.started_at)) {
-        lk_agents_net::telemetry::event_at(&span, JobStartedOnServer, nanos(at));
+    // `JobState.started_at`: unix nanoseconds.
+    if let Some(at) = job.state.as_ref().and_then(|s| u64::try_from(s.started_at).ok()) {
+        if at > 0 {
+            lk_agents_net::telemetry::event_at(&span, JobStartedOnServer, at);
+        }
     }
-    JobTrace { key, span, simulation: simulation(&job) }
+    JobTrace { job: Job { key, simulation: simulation(&job) }, span }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // Catches: a unit of `JobState.started_at` misread, or an unknown stage counted as an instant.
+    // Catches: an unknown stage counted as an instant.
     #[test]
-    fn stages_and_server_start_are_read_in_their_units() {
-        assert_eq!(server_started(1_700_000_000_000_000_000), Some(1_700_000_000.0));
-        assert_eq!(server_started(1_700_000_000_000), Some(1_700_000_000.0));
-        assert_eq!(server_started(1_700_000_000), Some(1_700_000_000.0));
-        assert_eq!(server_started(0), None);
+    fn unknown_stages_have_no_latency() {
         assert_eq!(gap(0.0, 2.0), None);
         assert_eq!(gap(3.0, 2.0), Some(Seconds(0.0)));
     }

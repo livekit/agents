@@ -107,11 +107,9 @@ struct Inner {
     /// Where the job's Cloud telemetry goes, signed with the server's credentials.
     cloud: Option<telemetry::CloudEndpoint>,
     /// The job's root span, from its start until its shutdown ends.
-    trace: Mutex<Option<telemetry::JobTrace>>,
-    /// The job the exporter's registry knows it by.
-    job_key: OnceLock<telemetry::JobKey>,
-    /// The simulation run the job is part of.
-    simulation: OnceLock<Option<telemetry::Simulation>>,
+    root: Mutex<Option<telemetry::ScopedSpan<telemetry::JobEntrypoint>>>,
+    /// The job the parent handed over; none for a job run outside one.
+    job: OnceLock<telemetry::Job>,
 }
 
 impl JobExecution for JobRun {
@@ -207,7 +205,7 @@ impl Inner {
         span: &telemetry::Cx,
     ) -> Result<(), HostError> {
         let Some(report) = host.session_report(span, cx).await? else { return Ok(()) };
-        let (Some(options), Some(key)) = (self.state.lock().recording, self.job_key.get()) else {
+        let (Some(options), Some(job)) = (self.state.lock().recording, self.job.get()) else {
             return Ok(());
         };
         let exporter = self.tracer.exporter();
@@ -216,24 +214,20 @@ impl Inner {
             cloud: self.cloud.as_ref().filter(|_| self.observability_url.is_some()),
             clock: &*self.clock,
         };
-        let simulated = self.simulation.get().is_some_and(Option::is_some);
+        let simulated = job.simulation.is_some();
         let limit = Duration::from_secs(telemetry::UPLOAD_TIMEOUT_SECONDS);
-        telemetry::session_report::export(outputs, key, &report, &options, simulated, limit)
+        telemetry::session_report::export(outputs, &job.key, &report, &options, simulated, limit)
             .await
             .map_err(|error| HostError::new(error.to_string()))
     }
 
-    /// The job's root span (one of its own when the parent never handed a job over).
-    fn take_trace(&self) -> telemetry::JobTrace {
-        let trace = self.trace.lock().take();
-        trace
-            .unwrap_or_else(|| telemetry::start_job(&self.tracer, None, &StartJobFields::default()))
-    }
-
     async fn run(self: Arc<Self>) -> Result<(), WorkerError> {
-        let trace = self.take_trace();
-        let result = self.clone().run_traced(&trace).await;
-        let telemetry::JobTrace { key, span, .. } = trace;
+        // A job run outside a parent's handover has a root span of its own and no exporter job.
+        let root = self.root.lock().take();
+        let span = root.unwrap_or_else(|| {
+            telemetry::start(&self.tracer.root(), telemetry::JobEntrypoint::default())
+        });
+        let result = self.clone().run_traced(&span).await;
         let failure = match &result {
             Ok(crash) => crash.clone(),
             Err(error) => Some(HostError::new(error.to_string())),
@@ -243,8 +237,8 @@ impl Inner {
         } else {
             telemetry::end(span, ());
         }
-        if let Some(exporter) = self.tracer.exporter() {
-            exporter.close_job(&key, secs(telemetry::SHUTDOWN_TIMEOUT_SECONDS)).await;
+        if let (Some(exporter), Some(job)) = (self.tracer.exporter(), self.job.get()) {
+            exporter.close_job(&job.key, secs(telemetry::SHUTDOWN_TIMEOUT_SECONDS)).await;
         }
         result.map(drop)
     }
@@ -253,10 +247,10 @@ impl Inner {
     /// root span ends with.
     async fn run_traced(
         self: Arc<Self>,
-        trace: &telemetry::JobTrace,
+        root: &telemetry::ScopedSpan<telemetry::JobEntrypoint>,
     ) -> Result<Option<HostError>, WorkerError> {
         let (host, cx) = self.host.get().expect("run() sets the host first");
-        let job = trace.span.cx();
+        let job = root.cx();
         let entry = host.start_entrypoint(job, cx).await?;
         let wait_entry = host.wait(job, cx, entry.clone());
         tokio::pin!(wait_entry);
@@ -270,7 +264,7 @@ impl Inner {
                 r = &mut wait_entry, if !entry_done => {
                     entry_done = true;
                     match r {
-                        Err(e) if cancelled(&e) => telemetry::event(&trace.span, telemetry::EntrypointCancelled),
+                        Err(e) if cancelled(&e) => telemetry::event(root, telemetry::EntrypointCancelled),
                         Err(e) => {
                             crash = Some(e.clone());
                             self.log(Level::Error, "unhandled exception while running the job task", Some(e), Vec::new());
@@ -279,7 +273,7 @@ impl Inner {
                             self.end("job crashed".into(), false);
                         }
                         Ok(()) => {
-                            telemetry::event(&trace.span, telemetry::EntrypointReturned);
+                            telemetry::event(root, telemetry::EntrypointReturned);
                             let unfinished = {
                                 let st = self.state.lock();
                                 !st.connected && !st.user_shutdown && !self.fake
@@ -320,7 +314,7 @@ impl Inner {
                 Vec::new(),
             );
             let _ = host.cancel(shutdown.cx(), cx, entry).await;
-            telemetry::event(&trace.span, telemetry::EntrypointCancelled);
+            telemetry::event(root, telemetry::EntrypointCancelled);
         }
 
         let aclose_timeout = self.session_aclose_timeout;
@@ -463,9 +457,8 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
                 tracer: env.tracer.clone(),
                 clock: env.clock.clone(),
                 cloud,
-                trace: Mutex::new(None),
-                job_key: OnceLock::new(),
-                simulation: OnceLock::new(),
+                root: Mutex::new(None),
+                job: OnceLock::new(),
             }),
         })
     }
@@ -487,10 +480,10 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
 
     fn start_trace(&self, fields: StartJobFields) {
         let inner = &self.inner;
-        let trace = telemetry::start_job(&inner.tracer, inner.cloud.as_ref(), &fields);
-        let _ = inner.job_key.set(trace.key.clone());
-        let _ = inner.simulation.set(trace.simulation.clone());
-        *inner.trace.lock() = Some(trace);
+        let telemetry::JobTrace { job, span } =
+            telemetry::start_job(&inner.tracer, inner.cloud.as_ref(), &fields);
+        let _ = inner.job.set(job);
+        *inner.root.lock() = Some(span);
     }
 
     /// The host's `observability_url`, else the server's when it is LiveKit Cloud's.
@@ -678,20 +671,18 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
         st.recording = Some(options);
         let uploads = options.recording_enabled();
         drop(st);
-        if let (Some(exporter), Some(key)) =
-            (self.inner.tracer.exporter(), self.inner.job_key.get())
-        {
+        if let (Some(exporter), Some(job)) = (self.inner.tracer.exporter(), self.inner.job.get()) {
             let cloud = observability && self.inner.cloud.is_some();
-            // Metrics follow the recording as a whole, as 1.8.10's process meter did. The only
-            // logs are the session report's records, which the recording options select.
+            // Metrics follow the recording as a whole, as 1.8.10's process meter did; the only
+            // logs are the session report's records.
             let recording = telemetry::CloudRecording {
                 traces: cloud && options.traces,
-                logs: cloud,
+                logs: cloud && options.logs,
                 metrics: cloud && uploads,
                 redaction,
-                simulation: self.inner.simulation.get().cloned().flatten(),
+                simulation: job.simulation.clone(),
             };
-            exporter.register_job(key, recording);
+            exporter.register_job(&job.key, recording);
         }
         Ok(())
     }
