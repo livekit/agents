@@ -66,7 +66,7 @@ from ._turn_hooks import TurnHooks
 from ._utils import _set_participant_attributes
 from .agent import Agent, AgentTask
 from .agent_activity import AgentActivity, _ReusableResources
-from .amd import AMD, AMDPredictionEvent
+from .amd import AMD, AMDCompletedEvent, AMDPredictionEvent
 from .events import (
     AgentEvent,
     AgentState,
@@ -772,6 +772,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def _on_amd_prediction(self, event: AMDPredictionEvent) -> None:
         if self._session_host is not None:
             self._session_host._on_amd_prediction(event)
+
+    def _on_amd_completed(self, event: AMDCompletedEvent) -> None:
+        if self._session_host is not None:
+            self._session_host._on_amd_completed(event)
 
     def on(self, event: EventTypes, callback: Callable | None = None) -> Callable:
         if event == "metrics_collected" and callback is not None:

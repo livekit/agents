@@ -1231,6 +1231,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             result = self._completion()
             self._resources.completion.set_result(result)
             self.emit("amd_completed", result)
+            self._session._on_amd_completed(result)
 
     # endregion
 

@@ -1312,6 +1312,20 @@ async def test_empty_turn_does_not_cancel_a_pending_terminal_prediction() -> Non
 
 
 @pytest.mark.asyncio
+async def test_completion_is_forwarded_to_session_observability() -> None:
+    async with running() as (detector, session, classifier, _):
+        host = Mock()
+        session._session_host = host
+        try:
+            await commit(detector, session, classifier)
+            classifier.prediction(1, AMDCategory.HUMAN)
+            result = await asyncio.wait_for(detector.execute(), 2)
+            host._on_amd_completed.assert_called_once_with(result)
+        finally:
+            session._session_host = None
+
+
+@pytest.mark.asyncio
 async def test_timeout_rearms_and_late_result_cannot_change_a_newer_turn() -> None:
     async with running(inference_timeout=0.02) as (detector, session, classifier, _):
         events = []

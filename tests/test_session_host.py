@@ -23,7 +23,7 @@ from livekit.agents.metrics import (
     STTModelUsage,
     TTSModelUsage,
 )
-from livekit.agents.voice.amd import AMDCategory, AMDPredictionEvent
+from livekit.agents.voice.amd import AMDCategory, AMDCompletedEvent, AMDPredictionEvent
 from livekit.agents.voice.events import (
     AgentStateChangedEvent,
     ConversationItemAddedEvent,
@@ -511,15 +511,9 @@ class TestSessionHostEvents:
         await host.aclose()
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        ("category", "transcript"),
-        [
-            (AMDCategory.MACHINE_SCREENING, "Please state your name."),
-            (AMDCategory.WAIT, "Please hold while I connect your call."),
-        ],
-    )
-    async def test_unsupported_amd_prediction_uses_remote_unknown(
-        self, transport: InMemoryTransport, category: AMDCategory, transcript: str
+    @pytest.mark.parametrize("category", list(AMDCategory))
+    async def test_amd_prediction_maps_each_category(
+        self, transport: InMemoryTransport, category: AMDCategory
     ) -> None:
         host = SessionHost(transport)
         await host.start()
@@ -528,15 +522,83 @@ class TestSessionHostEvents:
                 AMDPredictionEvent(
                     category=category,
                     reason="prediction",
-                    transcript=transcript,
+                    transcript="Please hold.",
                     speech_duration=1.0,
                     delay=0.1,
                 )
             )
             await asyncio.sleep(0.1)
             event = transport.sent[0].event.amd_prediction
-            assert event.category == agent_pb.AMD_UNKNOWN
-            assert event.transcript == transcript
+            assert agent_pb.AmdCategory.Name(event.category) == f"AMD_{category.name}"
+        finally:
+            await host.aclose()
+
+    @pytest.mark.asyncio
+    async def test_amd_prediction_carries_turn_stage_and_inference(
+        self, transport: InMemoryTransport
+    ) -> None:
+        host = SessionHost(transport)
+        await host.start()
+        try:
+            prediction = AMDPredictionEvent(
+                category=AMDCategory.WAIT,
+                reason="prediction",
+                transcript="Please hold while I connect your call.",
+                speech_duration=1.0,
+                delay=0.1,
+                turn_id=3,
+                stage=AMDCategory.MACHINE_SCREENING,
+                inference_duration=0.25,
+            )
+            host._on_amd_prediction(prediction)
+            host._on_amd_prediction(prediction.model_copy(update={"inference_duration": None}))
+            await asyncio.sleep(0.1)
+            inferred, reused = (msg.event.amd_prediction for msg in transport.sent)
+            assert inferred.turn_id == 3
+            assert inferred.stage == agent_pb.AMD_MACHINE_SCREENING
+            assert inferred.inference_duration.ToMilliseconds() == 250
+            assert inferred.speech_duration.ToMilliseconds() == 1000
+            assert inferred.delay.ToMilliseconds() == 100
+            assert not reused.HasField("inference_duration")
+        finally:
+            await host.aclose()
+
+    @pytest.mark.asyncio
+    async def test_amd_completed_carries_the_last_prediction(
+        self, transport: InMemoryTransport
+    ) -> None:
+        host = SessionHost(transport)
+        await host.start()
+        try:
+            prediction = AMDPredictionEvent(
+                category=AMDCategory.MACHINE_VM,
+                reason="prediction",
+                transcript="Leave a message after the tone.",
+                speech_duration=2.0,
+                delay=0.1,
+                turn_id=2,
+                stage=AMDCategory.MACHINE_VM,
+            )
+            host._on_amd_completed(
+                AMDCompletedEvent(
+                    category=AMDCategory.MACHINE_VM,
+                    reason="timeout",
+                    voicemail_message_played=True,
+                    last_prediction=prediction,
+                )
+            )
+            host._on_amd_completed(
+                AMDCompletedEvent(category=AMDCategory.UNCERTAIN, reason="cancelled")
+            )
+            await asyncio.sleep(0.1)
+            completed, cancelled = (msg.event.amd_completed for msg in transport.sent)
+            assert completed.category == agent_pb.AMD_MACHINE_VM
+            assert completed.reason == "timeout"
+            assert completed.voicemail_message_played
+            assert completed.prediction.turn_id == 2
+            assert completed.prediction.transcript == "Leave a message after the tone."
+            assert cancelled.reason == "cancelled"
+            assert not cancelled.HasField("prediction")
         finally:
             await host.aclose()
 

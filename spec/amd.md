@@ -624,9 +624,12 @@ models. `execute()` returns after cleanup, and `amd_completed` fires then.
 
 ## 13. Remote sessions
 
-AgentSession forwards each `amd_prediction` to the remote session host. The protocol
-has no category for `machine-screening` or `wait`. Both map to `AMD_UNKNOWN`. The
-remote protocol does not carry all prediction, menu, and completion fields yet.
+AgentSession forwards each `amd_prediction` and the `amd_completed` result to the
+remote session host. Each category maps to its own protocol category. A prediction
+carries its turn ID, stage, and inference duration. The inference duration is unset
+when the turn ran no inference. The completion carries the last prediction, which is
+unset when the run ended before one. The protocol does not carry `corrects_stage` or
+`amd_menu_observed`.
 
 ## 14. Invariants
 
