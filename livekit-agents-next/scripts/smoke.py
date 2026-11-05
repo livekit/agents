@@ -919,7 +919,7 @@ async def decoder() -> None:
     import io
     import wave
 
-    from livekit.agents.utils.codecs import AudioStreamDecoder
+    from livekit.agents.utils.media import AudioStreamDecoder
 
     print("== decoder")
     wav = io.BytesIO()

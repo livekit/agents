@@ -17,7 +17,7 @@ from livekit.agents import (
     stt,
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
-from livekit.agents.utils.audio import silence_frame
+from livekit.agents.utils.media import silence_frame
 
 pytestmark = pytest.mark.unit
 

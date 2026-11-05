@@ -262,7 +262,7 @@ async def test_segment_end_warns_on_incomplete_pcm(caplog: pytest.LogCaptureFixt
 @pytest.mark.no_concurrent
 async def test_compressed_finalization_delivers_the_complete_tail_before_join_returns():
     encoded = Path(__file__).with_name("change-sophie.opus").read_bytes()
-    decoder = utils.codecs.AudioStreamDecoder(sample_rate=SR, num_channels=NC, format="audio/ogg")
+    decoder = utils.media.AudioStreamDecoder(sample_rate=SR, num_channels=NC, format="audio/ogg")
     decoder.push(encoded)
     decoder.end_input()
     expected = b"".join([bytes(frame.data) async for frame in decoder])

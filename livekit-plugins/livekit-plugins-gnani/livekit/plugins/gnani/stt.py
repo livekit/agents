@@ -41,7 +41,7 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
-from livekit.agents.utils.misc import is_given
+from livekit.agents.utils import is_given
 
 if TYPE_CHECKING:
     from websockets.asyncio.client import ClientConnection

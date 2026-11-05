@@ -8,8 +8,7 @@ import time
 
 import pytest
 
-from livekit.agents.utils.audio import audio_frames_from_file
-from livekit.agents.utils.codecs import AudioStreamDecoder
+from livekit.agents.utils.media import AudioStreamDecoder, audio_frames_from_file
 
 # Decodes audio on background threads / executors with blocking waits; it deadlocks when forced
 # to share one event loop with other tests.

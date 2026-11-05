@@ -428,7 +428,7 @@ class SpeechStream(stt.RecognizeStream):
             self._processed_samples += frame.samples_per_channel
         self._segment_samples += frame.samples_per_channel
 
-    async def _commit(self, ws: _WebSocket, buffer: utils.audio.AudioByteStream) -> None:
+    async def _commit(self, ws: _WebSocket, buffer: utils.media.AudioByteStream) -> None:
         for frame in buffer.flush():
             await self._append(ws, frame)
         if not self._segment_samples:
@@ -443,7 +443,7 @@ class SpeechStream(stt.RecognizeStream):
             self._commit_future = None
 
     async def _send(self, ws: _WebSocket) -> None:
-        buffer = utils.audio.AudioByteStream(
+        buffer = utils.media.AudioByteStream(
             sample_rate=SAMPLE_RATE, num_channels=NUM_CHANNELS, samples_per_channel=800
         )
         if self._vad is None:
@@ -467,7 +467,7 @@ class SpeechStream(stt.RecognizeStream):
     async def _send_vad_segment(
         self,
         ws: _WebSocket,
-        buffer: utils.audio.AudioByteStream,
+        buffer: utils.media.AudioByteStream,
         detector: VAD,
     ) -> None:
         vad_stream = detector.stream()

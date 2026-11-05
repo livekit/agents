@@ -192,7 +192,7 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
             nonlocal closing_ws
 
             samples_per_chunk = self._sample_rate * self._audio_chunk_duration_ms // 1000
-            audio_bstream = utils.audio.AudioByteStream(
+            audio_bstream = utils.media.AudioByteStream(
                 sample_rate=self._sample_rate,
                 num_channels=1,
                 samples_per_channel=samples_per_chunk,

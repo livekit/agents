@@ -363,7 +363,7 @@ class SpeechStream(stt.RecognizeStream):
             await self._server_ready.wait()
 
             samples_50ms = self._opts.sample_rate // 20
-            audio_bstream = utils.audio.AudioByteStream(
+            audio_bstream = utils.media.AudioByteStream(
                 sample_rate=self._opts.sample_rate,
                 num_channels=1,
                 samples_per_channel=samples_50ms,

@@ -22,7 +22,7 @@ from livekit.agents.types import (
     NotGivenOr,
     TranscriptChunk,
 )
-from livekit.agents.utils import audio as audio_utils, is_given
+from livekit.agents.utils import is_given, media as audio_utils
 from phonic import AsyncPhonic
 from phonic.conversations.reconnectable_socket_client import (
     ReconnectableAsyncConversationsSocketClient,

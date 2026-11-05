@@ -13,11 +13,7 @@ from contextlib import asynccontextmanager
 import pytest
 
 from livekit import api, rtc
-from livekit.agents.utils.participant import (
-    wait_for_agent,
-    wait_for_participant,
-    wait_for_track_publication,
-)
+from livekit.agents.utils import wait_for_agent, wait_for_participant, wait_for_track_publication
 
 from .lk_server import LK_API_KEY, LK_API_SECRET, LK_URL, livekit_server  # noqa: F401
 

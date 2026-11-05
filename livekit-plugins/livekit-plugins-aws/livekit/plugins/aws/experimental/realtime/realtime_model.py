@@ -582,7 +582,7 @@ class RealtimeSession(  # noqa: F811
         )
         self._input_resampler: rtc.AudioResampler | None = None
         self._input_sample_rate: int | None = None
-        self._bstream = utils.audio.AudioByteStream(
+        self._bstream = utils.media.AudioByteStream(
             DEFAULT_INPUT_SAMPLE_RATE, DEFAULT_CHANNELS, samples_per_channel=DEFAULT_CHUNK_SIZE
         )
 

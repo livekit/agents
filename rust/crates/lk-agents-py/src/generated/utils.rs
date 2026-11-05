@@ -48,7 +48,7 @@ type AudioByteStreamPushDataInput = ::std::vec::Vec<u8>;
 
 /// Buffers bytes and emits whole frames: fixed-size, or progressive (20 ms first, doubling to
 /// the target) to cut TTS time-to-first-audio.
-#[pyclass(name = "AudioByteStream", module = "livekit.agents.utils.audio")]
+#[pyclass(name = "AudioByteStream", module = "livekit.agents.utils.media")]
 pub struct AudioByteStream(pub(crate) AudioByteStreamImpl);
 
 #[pymethods]

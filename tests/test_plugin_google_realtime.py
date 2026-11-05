@@ -1265,7 +1265,7 @@ async def test_bad_video_frame_does_not_restart_the_session(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     from livekit import rtc
-    from livekit.agents.utils import images
+    from livekit.agents.utils import media as images
 
     encoded = asyncio.Event()
     sent = asyncio.Event()

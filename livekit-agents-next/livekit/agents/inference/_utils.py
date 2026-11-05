@@ -9,8 +9,7 @@ from .. import _core
 from .._generated.inference_models import InferenceClass as InferenceClass
 from ..job import _server_setting
 from ..types import NotGivenOr
-from ..utils import is_given
-from ..utils.misc import shortuuid
+from ..utils import is_given, shortuuid
 from ..version import __version__
 
 __all__ = [

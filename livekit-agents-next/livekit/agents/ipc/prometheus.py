@@ -7,7 +7,7 @@ import os
 import prometheus_client
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest, multiprocess
 
-from ..utils.misc import nodename
+from ..utils import nodename
 
 _PROC_INITIALIZE_TIME = prometheus_client.Histogram(
     "lk_agents_proc_initialize_duration_seconds",

@@ -24,7 +24,7 @@ from livekit.agents.types import (
     APIConnectOptions,
     NotGivenOr,
 )
-from livekit.agents.utils import audio as audio_utils, images, is_given
+from livekit.agents.utils import is_given, media as audio_utils, media as images
 from livekit.plugins.google.realtime.api_proto import ClientEvents, LiveAPIModels, Voice
 
 from ..log import logger

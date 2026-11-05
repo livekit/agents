@@ -241,7 +241,7 @@ class SpeechStream(stt.RecognizeStream):
 
         async def _send_task(session: SttSession) -> None:
             samples_per_chunk = self._opts.sample_rate * _CHUNK_MS // 1000
-            audio_bstream = utils.audio.AudioByteStream(
+            audio_bstream = utils.media.AudioByteStream(
                 sample_rate=self._opts.sample_rate,
                 num_channels=1,
                 samples_per_channel=samples_per_chunk,

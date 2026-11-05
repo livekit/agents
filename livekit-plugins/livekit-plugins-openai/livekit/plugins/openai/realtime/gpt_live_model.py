@@ -437,7 +437,7 @@ class GPTVoiceSession(
         # the newest history item the last ask was about, so an ask never repeats one
         self._asked_item_id: str | None = None
 
-        self._bstream = utils.audio.AudioByteStream(
+        self._bstream = utils.media.AudioByteStream(
             SAMPLE_RATE, NUM_CHANNELS, samples_per_channel=SAMPLE_RATE // 10
         )
 

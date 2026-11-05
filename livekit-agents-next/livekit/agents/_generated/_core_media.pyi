@@ -9,7 +9,7 @@ from typing import Self
 
 from livekit.agents.tts import SynthesizedAudio
 from livekit.agents.utils.aio import Chan
-from livekit.agents.utils.images import _FrameReader
+from livekit.agents.utils.media import _FrameReader
 
 from .rtc_frames import AudioFrame
 from .transcript import TranscriptChunk

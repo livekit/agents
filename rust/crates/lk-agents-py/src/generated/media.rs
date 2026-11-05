@@ -624,7 +624,7 @@ pub fn split_sentences(
 
 // Declared in rust/crates/lk-agents-abi/src/media/images.rs.
 
-/// [`::lk_agents_abi::media::images::FrameReader`] over a host `livekit.agents.utils.images._FrameReader`.
+/// [`::lk_agents_abi::media::images::FrameReader`] over a host `livekit.agents.utils.media._FrameReader`.
 #[derive(Clone)]
 pub struct FrameReaderProxy {
     host: ::std::sync::Arc<Py<PyAny>>,

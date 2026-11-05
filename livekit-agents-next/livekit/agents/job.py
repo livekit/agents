@@ -49,8 +49,7 @@ from ._generated.telemetry import ReportOutcome, SessionReport as SessionReport
 from ._generated.types import ATTRIBUTE_SIMULATOR_DISPATCH
 from .log import logger
 from .types import NotGivenOr
-from .utils import http_context, is_given
-from .utils.participant import wait_for_participant
+from .utils import http_context, is_given, wait_for_participant
 from .version import __version__
 
 _JobContextVar = contextvars.ContextVar["JobContext"]("agents_job_context")

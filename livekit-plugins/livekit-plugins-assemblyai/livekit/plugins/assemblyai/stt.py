@@ -704,7 +704,7 @@ class SpeechStream(stt.RecognizeStream):
             anchored = False
 
             samples_per_buffer = self._opts.sample_rate // round(1 / self._opts.buffer_size_seconds)
-            audio_bstream = utils.audio.AudioByteStream(
+            audio_bstream = utils.media.AudioByteStream(
                 sample_rate=self._opts.sample_rate,
                 num_channels=1,
                 samples_per_channel=samples_per_buffer,

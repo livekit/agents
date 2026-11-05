@@ -44,7 +44,7 @@ from .._generated.provider_data import (
 from .._proto import encode_chat_item
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
-from ..utils.misc import is_given
+from ..utils import is_given
 
 if TYPE_CHECKING:
     from anthropic.types import MessageParam as AnthropicMessage

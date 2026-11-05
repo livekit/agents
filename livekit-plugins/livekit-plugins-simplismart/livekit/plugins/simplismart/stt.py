@@ -41,7 +41,7 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
-from livekit.agents.utils.misc import is_given
+from livekit.agents.utils import is_given
 
 from .log import logger
 from .models import STTModels
@@ -357,7 +357,7 @@ class SpeechStream(stt.RecognizeStream):
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             # forward audio to simplismart in chunks of 50ms
             samples_50ms = self._SAMPLE_RATE // 20
-            audio_bstream = utils.audio.AudioByteStream(
+            audio_bstream = utils.media.AudioByteStream(
                 sample_rate=self._SAMPLE_RATE,
                 num_channels=1,
                 samples_per_channel=samples_50ms,

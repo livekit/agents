@@ -2,7 +2,7 @@
 
 import pytest
 
-from livekit.agents.utils.audio import AudioByteStream
+from livekit.agents.utils.media import AudioByteStream
 
 pytestmark = pytest.mark.unit
 

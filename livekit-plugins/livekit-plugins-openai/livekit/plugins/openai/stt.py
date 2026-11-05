@@ -789,7 +789,7 @@ class SpeechStream(stt.RecognizeStream):
             nonlocal closing_ws
 
             # forward audio to OAI in chunks of 50ms
-            audio_bstream = utils.audio.AudioByteStream(
+            audio_bstream = utils.media.AudioByteStream(
                 sample_rate=SAMPLE_RATE,
                 num_channels=NUM_CHANNELS,
                 samples_per_channel=SAMPLE_RATE // 20,

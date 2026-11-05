@@ -4,7 +4,7 @@ use crate::AudioFrame;
 
 /// Buffers bytes and emits whole frames: fixed-size, or progressive (20 ms first, doubling to
 /// the target) to cut TTS time-to-first-audio.
-#[crate::host(class(name = "AudioByteStream", module = "livekit.agents.utils.audio", pid = false))]
+#[crate::host(class(name = "AudioByteStream", module = "livekit.agents.utils.media", pid = false))]
 pub trait AudioByteStream: Send + Sized + 'static {
     /// ``samples_per_channel=None`` means 100 ms, as in the reference.
     #[host(new)]

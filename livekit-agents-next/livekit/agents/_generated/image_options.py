@@ -38,6 +38,6 @@ class EncodeOptions:
 
 
 ResizeOptions.__annotations__ = get_annotations(ResizeOptions, eval_str=True)
-ResizeOptions.__module__ = "livekit.agents.utils.images"
+ResizeOptions.__module__ = "livekit.agents.utils.media"
 EncodeOptions.__annotations__ = get_annotations(EncodeOptions, eval_str=True)
-EncodeOptions.__module__ = "livekit.agents.utils.images"
+EncodeOptions.__module__ = "livekit.agents.utils.media"

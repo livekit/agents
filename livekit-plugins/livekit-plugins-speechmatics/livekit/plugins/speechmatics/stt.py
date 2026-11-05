@@ -687,7 +687,7 @@ class SpeechStream(stt.RecognizeStream):
         """Process audio from the input channel."""
         try:
             # Input audio stream
-            audio_bstream = utils.audio.AudioByteStream(
+            audio_bstream = utils.media.AudioByteStream(
                 sample_rate=self._sample_rate,
                 num_channels=1,
             )

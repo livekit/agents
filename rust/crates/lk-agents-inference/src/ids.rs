@@ -1,4 +1,4 @@
-//! `utils.misc.shortuuid` and `inference/_utils.create_inference_request_id`.
+//! `utils.shortuuid` and `inference/_utils.create_inference_request_id`.
 
 pub use lk_agents_net::strings::shortuuid;
 

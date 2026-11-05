@@ -305,7 +305,7 @@ class SpeechStream(stt.RecognizeStream):
         vad_stream: VADStream | None,
     ) -> None:
         samples_per_chunk = SAMPLE_RATE // 20  # 50ms chunks
-        audio_bstream = utils.audio.AudioByteStream(
+        audio_bstream = utils.media.AudioByteStream(
             sample_rate=SAMPLE_RATE,
             num_channels=NUM_CHANNELS,
             samples_per_channel=samples_per_chunk,

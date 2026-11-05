@@ -199,7 +199,7 @@ class SpeechStream(stt.RecognizeStream):
             await ws.send_bytes(wav_header)
 
             samples_per_chunk = self._opts.sample_rate // 20
-            audio_bstream = utils.audio.AudioByteStream(
+            audio_bstream = utils.media.AudioByteStream(
                 sample_rate=self._opts.sample_rate,
                 num_channels=NUM_CHANNELS,
                 samples_per_channel=samples_per_chunk,

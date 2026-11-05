@@ -25,8 +25,7 @@ from ..types import (
     NotGiven,
     NotGivenOr,
 )
-from ..utils import is_given
-from ..utils.misc import is_dev_mode, is_hosted
+from ..utils import is_dev_mode, is_given, is_hosted
 from ._utils import (
     default_api_key,
     default_api_secret,

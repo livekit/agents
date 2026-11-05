@@ -901,7 +901,7 @@ class SpeechStream(stt.RecognizeStream):
             nonlocal pending_user_state_finalize, recover_primary_after_final
             samples_per_buffer = self._samples_per_buffer()
             bytes_per_sample = _BYTES_PER_SAMPLE
-            audio_bstream = utils.audio.AudioByteStream(
+            audio_bstream = utils.media.AudioByteStream(
                 sample_rate=self._opts.sample_rate,
                 num_channels=1,
                 samples_per_channel=samples_per_buffer,

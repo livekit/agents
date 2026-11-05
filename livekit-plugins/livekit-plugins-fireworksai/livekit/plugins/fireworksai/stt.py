@@ -352,7 +352,7 @@ class SpeechStream(stt.RecognizeStream):
             nonlocal closing_ws
 
             samples_per_buffer = self._opts.sample_rate // 20  # 50ms chunk
-            audio_bstream = utils.audio.AudioByteStream(
+            audio_bstream = utils.media.AudioByteStream(
                 sample_rate=self._opts.sample_rate,
                 num_channels=1,
                 samples_per_channel=samples_per_buffer,

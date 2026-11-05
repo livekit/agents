@@ -7,7 +7,7 @@ import pytest
 
 from livekit import rtc
 from livekit.agents import llm
-from livekit.agents.utils import images
+from livekit.agents.utils import media as images
 
 pytestmark = pytest.mark.unit
 

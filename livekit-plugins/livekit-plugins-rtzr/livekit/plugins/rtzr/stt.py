@@ -312,7 +312,7 @@ class SpeechStream(stt.RecognizeStream):
 
     @utils.log_exceptions(logger=logger)
     async def _send_audio_task(self) -> None:
-        audio_bstream = utils.audio.AudioByteStream(
+        audio_bstream = utils.media.AudioByteStream(
             sample_rate=self._params.sample_rate,
             num_channels=1,
             samples_per_channel=self._params.sample_rate // (1000 // _DEFAULT_CHUNK_MS),

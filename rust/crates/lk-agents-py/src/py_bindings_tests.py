@@ -10,7 +10,7 @@ from livekit import rtc
 from livekit.agents import _core
 from livekit.agents.llm import RealtimeCapabilities, RealtimeModel
 from livekit.agents.storage import SQLiteStorage
-from livekit.agents.utils.audio import AudioByteStream
+from livekit.agents.utils.media import AudioByteStream
 from livekit.agents.voice.avatar import DataStreamAudioOutput
 
 pytestmark = pytest.mark.unit

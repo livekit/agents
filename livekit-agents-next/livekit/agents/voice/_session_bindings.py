@@ -43,7 +43,7 @@ from ..types import (
     NotGivenOr,
     TranscriptChunk,
 )
-from ..utils.misc import is_dev_mode, is_given, is_hosted, shortuuid
+from ..utils import is_dev_mode, is_given, is_hosted, shortuuid
 from . import Agent, ModelSettings, _BindingContextVar, _VoiceBinding, io
 from ._session_callbacks import _DynamicInstructions, _hook_name, _origin, _SessionNodes
 from .events import (

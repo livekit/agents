@@ -951,7 +951,7 @@ class SpeechStream(stt.RecognizeStream):
 
         # We'll aim to send audio chunks every ~100ms
         samples_100ms = self._opts.sample_rate // 10
-        audio_bstream = utils.audio.AudioByteStream(
+        audio_bstream = utils.media.AudioByteStream(
             sample_rate=self._opts.sample_rate,
             num_channels=self._opts.channels,
             samples_per_channel=samples_100ms,

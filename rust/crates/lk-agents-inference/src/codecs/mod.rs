@@ -379,7 +379,7 @@ impl DecoderInput {
     }
 }
 
-/// `_core.AudioDecoder`, the native half of `utils.codecs.AudioStreamDecoder`: input is queued
+/// `_core.AudioDecoder`, the native half of `utils.media.AudioStreamDecoder`: input is queued
 /// without waiting, frames are awaited, and EOF never blocks the host loop.
 pub struct StreamDecoder {
     input: DecoderInput,

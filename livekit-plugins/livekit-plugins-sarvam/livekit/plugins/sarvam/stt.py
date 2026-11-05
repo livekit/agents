@@ -46,7 +46,7 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
-from livekit.agents.utils.misc import is_given
+from livekit.agents.utils import is_given
 
 from ._utils import looks_like_error_text
 from .log import logger
@@ -640,7 +640,7 @@ class STT(stt.STT):
 
                 # If start/end times are still 0, use buffer duration as an estimate for end_time
                 if start_time == 0.0 and end_time == 0.0:
-                    end_time = utils.audio.calculate_audio_duration(buffer)
+                    end_time = utils.media.calculate_audio_duration(buffer)
 
                 alternatives = [
                     stt.SpeechData(

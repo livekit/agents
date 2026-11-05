@@ -301,7 +301,7 @@ class Qwen3SpeechStream(stt_module.RecognizeStream):
         async def _send() -> None:
             # LiveKit resamples to SAMPLE_RATE for us; this only re-chunks into
             # the ~100ms frames the server expects.
-            chunker = utils.audio.AudioByteStream(
+            chunker = utils.media.AudioByteStream(
                 sample_rate=SAMPLE_RATE,
                 num_channels=NUM_CHANNELS,
                 samples_per_channel=_SAMPLES_PER_CHUNK,

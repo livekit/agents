@@ -192,7 +192,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
 
         self._input_resampler: rtc.AudioResampler | None = None
         self._input_resampler_rate: int | None = None
-        self._bstream = utils.audio.AudioByteStream(
+        self._bstream = utils.media.AudioByteStream(
             SAMPLE_RATE,
             NUM_CHANNELS,
             samples_per_channel=1920,  # 80ms — valid Opus frame size
@@ -349,7 +349,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["personaplex_server_event"]]):
             # Reset codec and audio buffer state for new connection
             self._opus_writer = sphn.OpusStreamWriter(SAMPLE_RATE)
             self._opus_reader = sphn.OpusStreamReader(SAMPLE_RATE)
-            self._bstream = utils.audio.AudioByteStream(
+            self._bstream = utils.media.AudioByteStream(
                 SAMPLE_RATE,
                 NUM_CHANNELS,
                 samples_per_channel=1920,  # 80ms — valid Opus frame size

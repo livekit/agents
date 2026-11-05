@@ -165,7 +165,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         url = f"{self._opts.base_url}?voice={self._opts.voice}"
         headers = {"Authorization": f"Bearer {self._opts.api_key}"}
 
-        decoder = utils.codecs.AudioStreamDecoder(
+        decoder = utils.media.AudioStreamDecoder(
             sample_rate=SAMPLE_RATE,
             num_channels=NUM_CHANNELS,
             format="audio/mp3",

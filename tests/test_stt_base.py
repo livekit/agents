@@ -20,7 +20,7 @@ from livekit.agents.stt import (
     STTCapabilities,
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
-from livekit.agents.utils.audio import silence_frame
+from livekit.agents.utils.media import silence_frame
 
 from .fake_stt import FakeSTT, FakeUserSpeech
 from .fake_vad import FakeVAD

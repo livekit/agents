@@ -240,7 +240,7 @@ async def test_vad_adapter_preserves_the_utterances_recognition_retry_budget() -
         VADEventType,
         VADStream,
     )
-    from livekit.agents.utils.audio import silence_frame
+    from livekit.agents.utils.media import silence_frame
 
     class OneUtterance(VAD):
         def __init__(self):

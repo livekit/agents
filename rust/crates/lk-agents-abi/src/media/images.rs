@@ -34,7 +34,7 @@ pub type PreparedImage = (Option<Vec<u8>>, Option<String>, Option<String>, Optio
 
 /// Reads a host video frame as an RGBA [`VideoFrame`], converting it when it is in another
 /// buffer type. The host hands one to the runtime as its process starts.
-#[crate::host(proxy(host = "livekit.agents.utils.images._FrameReader"))]
+#[crate::host(proxy(host = "livekit.agents.utils.media._FrameReader"))]
 pub trait FrameReader: Send + Sync {
     #[host(call, name = "_core_rgba")]
     fn rgba(&self, frame: &MediaRef) -> Result<VideoFrame, crate::errors::HostError>;
@@ -94,7 +94,7 @@ pub struct ImageError(pub String);
 // Public data contracts. Python behavior remains in its adapters.
 
 /// How a frame is resized as it is encoded.
-#[crate::host(record(module = "image_options", path = "livekit.agents.utils.images", dataclass))]
+#[crate::host(record(module = "image_options", path = "livekit.agents.utils.media", dataclass))]
 pub struct ResizeOptions {
     pub width: i64,
     pub height: i64,
@@ -108,7 +108,7 @@ pub struct ResizeOptions {
 }
 
 /// How a frame is encoded.
-#[crate::host(record(module = "image_options", path = "livekit.agents.utils.images", dataclass))]
+#[crate::host(record(module = "image_options", path = "livekit.agents.utils.media", dataclass))]
 pub struct EncodeOptions {
     #[host(default = "JPEG", annotation = "typing.Literal['JPEG', 'PNG']")]
     pub format: String,

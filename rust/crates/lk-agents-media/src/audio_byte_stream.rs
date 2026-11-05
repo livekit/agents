@@ -1,4 +1,4 @@
-//! Chunking byte input into fixed-size audio frames (`utils.audio.AudioByteStream`).
+//! Chunking byte input into fixed-size audio frames (`utils.media.AudioByteStream`).
 
 use lk_agents_abi::AudioFrame;
 

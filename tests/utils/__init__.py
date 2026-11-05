@@ -62,7 +62,7 @@ class EventCollector:
 
 async def read_audio_file(path) -> rtc.AudioFrame:
     frames = []
-    async for f in utils.audio.audio_frames_from_file(path, sample_rate=48000, num_channels=1):
+    async for f in utils.media.audio_frames_from_file(path, sample_rate=48000, num_channels=1):
         frames.append(f)
 
     return rtc.combine_audio_frames(frames)
@@ -106,7 +106,7 @@ async def make_test_speech(
         return [input_audio], TEST_AUDIO_TRANSCRIPT, input_audio.duration
 
     chunk_size = int(input_audio.sample_rate / (1000 / chunk_duration_ms))
-    bstream = utils.audio.AudioByteStream(
+    bstream = utils.media.AudioByteStream(
         sample_rate=input_audio.sample_rate,
         num_channels=input_audio.num_channels,
         samples_per_channel=chunk_size,

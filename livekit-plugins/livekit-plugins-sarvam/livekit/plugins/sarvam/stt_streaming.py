@@ -41,7 +41,7 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
-from livekit.agents.utils.misc import is_given
+from livekit.agents.utils import is_given
 
 from ._utils import PeriodicCollector, looks_like_error_text
 from .log import logger
@@ -931,7 +931,7 @@ class RealtimeSpeechStream(stt.RecognizeStream):
     @utils.log_exceptions(logger=logger)
     async def _process_audio(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         samples_per_channel = max(int(self._opts.sample_rate * AUDIO_CHUNK_MS / 1000), 1)
-        audio_bstream = utils.audio.AudioByteStream(
+        audio_bstream = utils.media.AudioByteStream(
             sample_rate=self._opts.sample_rate,
             num_channels=1,
             samples_per_channel=samples_per_channel,

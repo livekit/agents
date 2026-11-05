@@ -320,7 +320,7 @@ class RealtimeSession(
         self._last_seen_user_ord: int = -1
         self._last_seen_agent_ord: int = -1
 
-        self._bstream = utils.audio.AudioByteStream(
+        self._bstream = utils.media.AudioByteStream(
             self._opts.input_sample_rate,
             NUM_CHANNELS,
             samples_per_channel=self._opts.input_sample_rate // 10,

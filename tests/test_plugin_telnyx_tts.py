@@ -19,15 +19,15 @@ pytestmark = pytest.mark.plugin("telnyx")
 async def test_invalid_audio_field_is_a_terminal_typed_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    decoder_type = utils.codecs.AudioStreamDecoder
+    decoder_type = utils.media.AudioStreamDecoder
 
     def decoder(
         *, sample_rate: int, num_channels: int, format: str
-    ) -> utils.codecs.AudioStreamDecoder:
+    ) -> utils.media.AudioStreamDecoder:
         # No audio reaches decoding; WAV keeps this wire test independent of optional FFmpeg.
         return decoder_type(sample_rate=sample_rate, num_channels=num_channels, format="audio/wav")
 
-    monkeypatch.setattr(utils.codecs, "AudioStreamDecoder", decoder)
+    monkeypatch.setattr(utils.media, "AudioStreamDecoder", decoder)
 
     async def handle(request: web.Request) -> web.WebSocketResponse:
         socket = web.WebSocketResponse()

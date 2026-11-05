@@ -7,7 +7,7 @@ from multidict import CIMultiDict, CIMultiDictProxy
 from yarl import URL
 
 from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions, APITimeoutError
-from livekit.agents.utils import ConnectionPool, connection_pool
+from livekit.agents.utils import ConnectionPool, aio as connection_pool
 
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
 

@@ -48,7 +48,7 @@ class ImageContent(BaseModel):
         # this instance is now available for your ChatContext
 
     # Encode your VideoFrame yourself for more control, and pass the result as a data URL (see EncodeOptions for more details)
-    from livekit.agents.utils.images import encode, EncodeOptions, ResizeOptions
+    from livekit.agents.utils.media import encode, EncodeOptions, ResizeOptions
 
     image_bytes = await encode(
         event.frame,
