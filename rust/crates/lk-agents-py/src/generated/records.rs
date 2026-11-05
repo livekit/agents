@@ -22370,7 +22370,11 @@ pub mod voice_session {
             "livekit.agents._generated.voice_session",
             "VoiceCommandOriginHook",
         )?)? {
-            return Ok(::lk_agents_abi::voice::session::VoiceCommandOrigin::Hook);
+            return Ok(::lk_agents_abi::voice::session::VoiceCommandOrigin::Hook {
+                hook: crate::py_values::attr_with(obj, "VoiceCommandOriginHook", "hook", |v| {
+                    v.extract::<::std::string::String>()
+                })?,
+            });
         }
         if obj.is_instance(VOICE_COMMAND_ORIGIN_AMD.import(
             py,
@@ -22438,17 +22442,21 @@ pub mod voice_session {
                     Some(&kwargs),
                 )
             }
-            ::lk_agents_abi::voice::session::VoiceCommandOrigin::Hook => crate::py_calls::call(
-                VOICE_COMMAND_ORIGIN_HOOK
-                    .import(
-                        py,
-                        "livekit.agents._generated.voice_session",
-                        "VoiceCommandOriginHook",
-                    )?
-                    .as_any(),
-                (),
-                None,
-            ),
+            ::lk_agents_abi::voice::session::VoiceCommandOrigin::Hook { hook } => {
+                let kwargs = ::pyo3::types::PyDict::new(py);
+                kwargs.set_item("hook", ::pyo3::IntoPyObjectExt::into_bound_py_any(hook, py)?)?;
+                crate::py_calls::call(
+                    VOICE_COMMAND_ORIGIN_HOOK
+                        .import(
+                            py,
+                            "livekit.agents._generated.voice_session",
+                            "VoiceCommandOriginHook",
+                        )?
+                        .as_any(),
+                    (),
+                    Some(&kwargs),
+                )
+            }
             ::lk_agents_abi::voice::session::VoiceCommandOrigin::Amd => crate::py_calls::call(
                 VOICE_COMMAND_ORIGIN_AMD
                     .import(py, "livekit.agents._generated.voice_session", "VoiceCommandOriginAmd")?

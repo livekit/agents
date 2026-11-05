@@ -171,8 +171,31 @@ pub(super) fn facade(entries: &[Entry], at: &str) -> Result<Option<Facade>, Stri
             voc::only(
                 at,
                 &entry.nested,
-                &["module", "class", "target", "future", "discard", "omit"],
+                &[
+                    "module",
+                    "class",
+                    "target",
+                    "future",
+                    "discard",
+                    "omit",
+                    "not_given",
+                    "origin",
+                    "returns",
+                    "annotation",
+                    "resolve",
+                ],
             )?;
+            let per_parameter = |key| {
+                voc::find(&entry.nested, key).map_or(Ok(Vec::new()), |list| {
+                    list.nested
+                        .iter()
+                        .map(|p| match &p.value {
+                            Some(voc::Value::Text(text)) => Ok((p.key.clone(), text.clone())),
+                            _ => Err(format!("{at}: facade {key}({} = ..) takes host text", p.key)),
+                        })
+                        .collect::<Result<Vec<_>, String>>()
+                })
+            };
             let required = |name| {
                 voc::text(at, &entry.nested, name)?
                     .ok_or_else(|| format!("{at}: facade requires {name}"))
@@ -184,6 +207,11 @@ pub(super) fn facade(entries: &[Entry], at: &str) -> Result<Option<Facade>, Stri
                 future: voc::find(&entry.nested, "future").is_some(),
                 discard: voc::find(&entry.nested, "discard").is_some(),
                 omit: voc::text(at, &entry.nested, "omit")?,
+                not_given: voc::find(&entry.nested, "not_given").is_some(),
+                origin: voc::text(at, &entry.nested, "origin")?,
+                returns: voc::text(at, &entry.nested, "returns")?,
+                annotations: per_parameter("annotation")?,
+                resolve: per_parameter("resolve")?,
             })
         })
         .transpose()

@@ -24,7 +24,7 @@ from .._generated.session_options import SessionKwargs
 from .._generated.session_owner import ProviderBindings
 from .._generated.session_wire import DEFAULT_HOOK_BOUND, DEFAULT_SILENT_FPS, DEFAULT_SPEAKING_FPS
 from .._generated.vad import VAD
-from .._generated.voice_session import UpdateAgentArgs, VoiceCommandOriginHook
+from .._generated.voice_session import UpdateAgentArgs
 from ..inference.llm import llm_from_model_string
 from ..llm import (
     LLM,
@@ -41,13 +41,12 @@ from ..types import (
 )
 from ..utils import is_dev_mode, is_given, is_hosted, shortuuid
 from . import Agent, ModelSettings, _BindingContextVar, _VoiceBinding, io
-from ._session_callbacks import _DynamicInstructions, _hook_name, _origin, _SessionNodes
+from ._session_callbacks import _DynamicInstructions, _SessionNodes
 from .events import (
     Context_T,
     RunContext,
     UserTurnExceededEvent,
 )
-from .io import SpeechHandle
 
 if TYPE_CHECKING:
     from .._core import VoiceAgent as _NativeAgent
@@ -421,67 +420,6 @@ class SessionAdapter:
         session._owner.update_agent(agent, frame)
         if session._core is None and chat_ctx is not None:
             session._start_chat_ctx = chat_ctx.copy()
-
-    def say(
-        self,
-        text: str | AsyncIterable[str],
-        *,
-        audio: NotGivenOr[AsyncIterable[rtc.AudioFrame]] = NOT_GIVEN,
-        allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
-        add_to_chat_ctx: bool = True,
-    ) -> SpeechHandle:
-        session = self.session
-        interruptions = allow_interruptions if is_given(allow_interruptions) else None
-        origin = _origin()
-        if is_given(audio):
-            assert isinstance(text, str), "say(audio=) takes the words it speaks as a str"
-            core = session._running.say_audio(
-                text,
-                audio,
-                allow_interruptions=interruptions,
-                add_to_chat_ctx=add_to_chat_ctx,
-                origin=origin,
-            )
-        elif isinstance(text, str):
-            core = session._running.say(
-                text,
-                allow_interruptions=interruptions,
-                add_to_chat_ctx=add_to_chat_ctx,
-                origin=origin,
-            )
-        else:
-            core = session._running.say_stream(
-                text,
-                allow_interruptions=interruptions,
-                add_to_chat_ctx=add_to_chat_ctx,
-                origin=origin,
-            )
-        return SpeechHandle(core)
-
-    def generate_reply(
-        self,
-        *,
-        user_input: NotGivenOr[str] = NOT_GIVEN,
-        instructions: NotGivenOr[str] = NOT_GIVEN,
-        tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
-        tools: NotGivenOr[list[str]] = NOT_GIVEN,
-        allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
-        chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
-    ) -> SpeechHandle:
-        """Reply now. ``tools`` narrows the offered tools to these names for this reply."""
-        session = self.session
-        core = session._running.generate_reply(
-            user_input=user_input if is_given(user_input) else None,
-            instructions=instructions if is_given(instructions) else None,
-            allow_interruptions=allow_interruptions if is_given(allow_interruptions) else None,
-            tool_choice=tool_choice if is_given(tool_choice) else None,
-            chat_ctx=chat_ctx.items if is_given(chat_ctx) else None,
-            on_enter=isinstance(_origin(), VoiceCommandOriginHook)
-            and _hook_name.get(None) == "on_enter",
-            tools=list(tools) if is_given(tools) else None,
-            origin=_origin(),
-        )
-        return SpeechHandle(core)
 
     async def _start_ivr_detection(self, transcript: str | None = None) -> None:
         """Start IVR detection: the DTMF tool joins the session's tools and the core's navigator

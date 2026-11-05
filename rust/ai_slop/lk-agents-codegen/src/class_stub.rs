@@ -465,7 +465,7 @@ fn strict_list_input(c: &Class, ty: &Ty, imports: &mut Imports) -> String {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Dir {
+pub(crate) enum Dir {
     In,
     Out,
     /// A proxy result decoded by from_object: list values may be any iterable.
@@ -474,7 +474,7 @@ enum Dir {
 
 /// What the host passes (`In`) or receives (`Out`): an emitted record is a dict of its fields.
 /// `this`: the class whose method it annotates (`Self`).
-fn annotation(this: &str, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
+pub(crate) fn annotation(this: &str, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
     match ty {
         Ty::Unit => "None".into(),
         // Hidden from the host's signature: the binding captures it.
@@ -579,6 +579,11 @@ fn annotation(this: &str, ty: &Ty, dir: Dir, imports: &mut Imports) -> String {
         Ty::HostSource { item, .. } => {
             imports.add("collections.abc", "AsyncIterable");
             format!("AsyncIterable[{}]", annotation(this, item, dir, imports))
+        }
+        Ty::OneOrStream(item) => {
+            imports.add("collections.abc", "AsyncIterable");
+            let item = annotation(this, item, dir, imports);
+            format!("{item} | AsyncIterable[{item}]")
         }
         Ty::Error(_) => "BaseException".into(),
         Ty::HostDuplex { output, .. } => {

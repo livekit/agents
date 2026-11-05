@@ -687,6 +687,17 @@ pub struct Facade {
     pub future: bool,
     pub discard: bool,
     pub omit: Option<String>,
+    /// Each `Option` parameter defaulting to `None` is the host's `NotGivenOr`, sent as `None`
+    /// when not given.
+    pub not_given: bool,
+    /// The host function (`module.fn`) whose value fills the `origin` parameter: the caller's.
+    pub origin: Option<String>,
+    /// The host callable (`module.Name`) the native result is handed to.
+    pub returns: Option<String>,
+    /// A parameter's host annotation, when the delegate takes another type than the native.
+    pub annotations: Vec<(String, String)>,
+    /// A parameter's host function (`module.fn`) applied to a given value before it is sent.
+    pub resolve: Vec<(String, String)>,
 }
 
 /// How the host calls a method: declared, then checked against the signature.
@@ -862,6 +873,9 @@ pub enum Ty {
         output: Box<Ty>,
         provider: bool,
     },
+    /// `OneOrStream<T>` a class method takes: the host's `T`, told apart by its type, or its
+    /// async iterable of `T` (a [`Ty::HostSource`]). Input only.
+    OneOrStream(Box<Ty>),
     /// A declared error (`#[host(error(..))]`) passed to the host as the exception it
     /// raises as. Output only.
     Error(ErrorDecl),
@@ -952,7 +966,7 @@ impl Ty {
 
     pub fn holds_host_stream(&self) -> bool {
         match self {
-            Ty::HostSource { .. } | Ty::HostDuplex { .. } => true,
+            Ty::HostSource { .. } | Ty::HostDuplex { .. } | Ty::OneOrStream(_) => true,
             Ty::Optional(t) | Ty::List(t) => t.holds_host_stream(),
             Ty::Tuple(ts) => ts.iter().any(Ty::holds_host_stream),
             _ => false,
@@ -1007,6 +1021,7 @@ impl Ty {
                 format!("Self::{assoc}")
             }
             Ty::Instance { assoc, shared: true, .. } => format!("::std::sync::Arc<Self::{assoc}>"),
+            Ty::OneOrStream(item) => format!("::lk_agents_abi::OneOrStream<{}>", item.rust()),
             Ty::HostSource { item, provider } => format!(
                 "::std::boxed::Box<dyn ::lk_agents_abi::{}<{}>>",
                 if *provider { "ProviderStream" } else { "StreamOutput" },

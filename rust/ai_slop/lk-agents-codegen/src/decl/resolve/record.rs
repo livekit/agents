@@ -875,6 +875,7 @@ fn check_record_field(at: &str, ty: &Ty, (extract, emit): (bool, bool)) -> Resul
         | Ty::Instance { .. }
         | Ty::HostSource { .. }
         | Ty::HostDuplex { .. }
+        | Ty::OneOrStream(_)
         | Ty::Unit => {
             return Err(format!("{at}: `{}` is not a record field", ty.rust()));
         }

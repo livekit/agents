@@ -62,7 +62,7 @@ pub(crate) fn read(llm: &str) -> Result<Declarations, String> {
             ("utils/maybe.rs", "pub enum Maybe<T> { NotGiven, Given(T) }"),
             (
                 "utils/stream.rs",
-                "pub trait StreamOutput<T> {}\npub trait StreamInput<T> {}\npub struct DuplexStream<I, O> { input: I, output: O }",
+                "pub trait StreamOutput<T> {}\npub trait StreamInput<T> {}\npub struct DuplexStream<I, O> { input: I, output: O }\npub enum OneOrStream<T> { One(T), Stream(Box<dyn StreamOutput<T>>) }",
             ),
         ],
     )?;

@@ -260,7 +260,7 @@ impl VoiceDriver {
             VoiceCommandOrigin::Amd => InterruptCause::Detector,
             VoiceCommandOrigin::Host
             | VoiceCommandOrigin::Tool { .. }
-            | VoiceCommandOrigin::Hook
+            | VoiceCommandOrigin::Hook { .. }
             | VoiceCommandOrigin::Ivr => InterruptCause::Host,
         };
         if cause == InterruptCause::Host {

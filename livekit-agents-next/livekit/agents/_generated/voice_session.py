@@ -61,7 +61,9 @@ class VoiceCommandOriginTool:
 
 @dataclass(kw_only=True, slots=True)
 class VoiceCommandOriginHook:
-    pass
+    """One of the agent's lifecycle hooks, by its name (`on_enter`, `on_exit`, ..)."""
+
+    hook: str
 
 
 @dataclass(kw_only=True, slots=True)

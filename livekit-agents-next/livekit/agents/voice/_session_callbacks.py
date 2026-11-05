@@ -85,7 +85,6 @@ if TYPE_CHECKING:
     from .agent_session import VoiceSession
 
 
-_hook_name: contextvars.ContextVar[str] = contextvars.ContextVar("lk_hook_name")
 _NodeCallsVar: contextvars.ContextVar[Any] = contextvars.ContextVar("lk_node_calls")
 
 
@@ -121,14 +120,18 @@ def _origin() -> VoiceCommandOrigin | None:
     return binding.origin if isinstance(binding, _VoiceBinding) else None
 
 
+def _items(chat_ctx: ChatContext) -> list[llm.ChatItem]:
+    """The items a command sends for ``chat_ctx``."""
+    return chat_ctx.items
+
+
 @contextlib.contextmanager
 def _in_hook(hook: str, session: VoiceSession[Any], agent: Agent) -> Any:
-    binding = _BindingContextVar.set(_VoiceBinding(session, agent, origin=VoiceCommandOriginHook()))
-    name = _hook_name.set(hook)
+    origin = VoiceCommandOriginHook(hook=hook)
+    binding = _BindingContextVar.set(_VoiceBinding(session, agent, origin=origin))
     try:
         yield
     finally:
-        _hook_name.reset(name)
         _BindingContextVar.reset(binding)
 
 

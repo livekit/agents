@@ -13,7 +13,7 @@ import contextlib
 import contextvars
 import copy
 from collections import deque
-from collections.abc import AsyncIterable, AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Generic, Literal, cast, overload
 
@@ -70,7 +70,6 @@ from .events import (
     EventTypes,
     UserState,
 )
-from .io import SpeechHandle
 from .room_io import (
     AudioInputOptions,
     RoomOptions,
@@ -398,41 +397,6 @@ class VoiceSession(SessionCommands, rtc.EventEmitter[EventTypes], Generic[Contex
         run = _VoiceRun(session=self)
         self._running.run(user_input=user_input, origin=_origin(), host=run)
         return run
-
-    def say(
-        self,
-        text: str | AsyncIterable[str],
-        *,
-        audio: NotGivenOr[AsyncIterable[rtc.AudioFrame]] = NOT_GIVEN,
-        allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
-        add_to_chat_ctx: bool = True,
-    ) -> SpeechHandle:
-        return self._adapter.say(
-            text,
-            audio=audio,
-            allow_interruptions=allow_interruptions,
-            add_to_chat_ctx=add_to_chat_ctx,
-        )
-
-    def generate_reply(
-        self,
-        *,
-        user_input: NotGivenOr[str] = NOT_GIVEN,
-        instructions: NotGivenOr[str] = NOT_GIVEN,
-        tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
-        tools: NotGivenOr[list[str]] = NOT_GIVEN,
-        allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
-        chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
-    ) -> SpeechHandle:
-        """Reply now. ``tools`` narrows the offered tools to these names for this reply."""
-        return self._adapter.generate_reply(
-            user_input=user_input,
-            instructions=instructions,
-            tool_choice=tool_choice,
-            tools=tools,
-            allow_interruptions=allow_interruptions,
-            chat_ctx=chat_ctx,
-        )
 
     @contextlib.asynccontextmanager
     async def _claim_user_turn(self) -> AsyncIterator[None]:

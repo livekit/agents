@@ -83,8 +83,8 @@ pub use tts::types::{
     no_duplex_path,
 };
 pub use utils::stream::{
-    Closed, DuplexStream, HOST_TEARDOWN_TIMEOUT, ProviderStream, RetryReport, StreamInput,
-    StreamOutput,
+    Closed, DuplexStream, HOST_TEARDOWN_TIMEOUT, OneOrStream, ProviderStream, RetryReport,
+    StreamInput, StreamOutput,
 };
 pub use vad::types::{Vad, VadCapabilities, VadSink, VadSource};
 

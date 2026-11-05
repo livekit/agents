@@ -5,6 +5,7 @@
 //! driver has forgotten, a hook already finished -- makes the input a refused attempt, and so does
 //! a call the API refuses. Nothing is invented to stand in for it, because a call carrying an id
 //! the driver never issued is a different test from the one the case asked for.
+use lk_agents_abi::OneOrStream;
 use lk_agents_abi::voice::speech_handle::SpeechHandle as HostSpeech;
 use std::task::{Context, Poll, Waker};
 
@@ -330,7 +331,9 @@ impl Run {
         let sent = match input {
             Input::Say { text: AgentText(text), input: say, allow, to_ctx } => {
                 let speech = match say {
-                    SayInput::Words => api.say(text.clone(), *allow, *to_ctx, None).ok(),
+                    SayInput::Words => {
+                        api.say(OneOrStream::One(text.clone()), None, *allow, *to_ctx, None).ok()
+                    }
                     SayInput::TextStream => {
                         api.say_text_channel(*allow, *to_ctx, None).ok().map(|(speech, pusher)| {
                             stream = Some((false, Feeding::Text(pusher)));
@@ -356,11 +359,10 @@ impl Run {
                 .generate_reply(
                     user_input.clone().map(|UserText(t)| t),
                     instructions.clone().map(|AgentText(t)| t),
+                    None,
+                    None,
                     *allow,
                     None,
-                    None,
-                    None,
-                    false,
                     None,
                 )
                 .map(|speech| {

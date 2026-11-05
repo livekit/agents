@@ -93,11 +93,11 @@ use super::*;
 use crate::room_io::FixedRoom;
 use crate::voice::speech_handle::SpeechHandle;
 use crate::voice::{Executor, remote_session};
-use lk_agents_abi::Maybe;
 use lk_agents_abi::errors::{HostError, ProviderError};
 use lk_agents_abi::telemetry::Cx;
 use lk_agents_abi::voice::events::CloseReason;
 use lk_agents_abi::voice::session::VoiceSession as _;
+use lk_agents_abi::{Maybe, OneOrStream};
 use lk_agents_voice::agent_activity::scheduling::SpeechId;
 use lk_agents_voice::agent_session::HandoffRefused;
 use lk_agents_voice::agent_session::commands::{ActivityCommand, HookId, HookOutcome, TurnCommand};
@@ -581,7 +581,7 @@ async fn the_leaving_agents_own_say_during_a_handoff_is_still_refused() {
             operation: 1,
             call_id: "call_1".into(),
         },
-        VoiceCommandOrigin::Hook,
+        VoiceCommandOrigin::Hook { hook: "on_enter".into() },
     ] {
         let (_held, handle) = say_from(&api, origin.clone());
         HostSpeech::wait_until_created(&*handle).await.expect("created at once");
@@ -748,10 +748,11 @@ async fn rare_host_calls_reach_a_running_session() {
     api.update_turn_options(Default::default()).unwrap();
 
     let words = Items(["Hello ".to_owned(), "there.".to_owned()].into());
-    let streamed = api.say_stream(Box::new(words), None, true, None).unwrap();
+    let streamed = api.say(OneOrStream::Stream(Box::new(words)), None, None, true, None).unwrap();
     HostSpeech::wait_until_created(&*streamed).await.unwrap();
     let frames = Items(Default::default());
-    let recorded = api.say_audio("Hi.".into(), Box::new(frames), None, true, None).unwrap();
+    let recorded =
+        api.say(OneOrStream::One("Hi.".into()), Some(Box::new(frames)), None, true, None).unwrap();
     HostSpeech::wait_until_created(&*recorded).await.unwrap();
 
     assert_eq!(api.keyterms(), None);
@@ -993,7 +994,7 @@ async fn a_finished_speech_leaves_the_sessions_registry() {
     let api = running(unobserved(no_room(), None)).await;
     api.set_audio_output(None).unwrap();
     for _ in 0..8 {
-        let speech = api.say("Done.".into(), None, true, None).unwrap();
+        let speech = api.say(OneOrStream::One("Done.".into()), None, None, true, None).unwrap();
         settle().await;
         api.time().advance(Duration::from_secs(1));
         settle().await;

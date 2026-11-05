@@ -17,8 +17,15 @@ use std::sync::Arc;
 #[derive(Debug, Clone, PartialEq, Eq, crate::Vocabulary)]
 pub enum VoiceCommandOrigin {
     Host,
-    Tool { invocation_id: String, operation: u64, call_id: String },
-    Hook,
+    Tool {
+        invocation_id: String,
+        operation: u64,
+        call_id: String,
+    },
+    /// One of the agent's lifecycle hooks, by its name (`on_enter`, `on_exit`, ..).
+    Hook {
+        hook: String,
+    },
     Amd,
     Ivr,
 }
@@ -552,21 +559,30 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
     #[host(call)]
     fn push_video(&self, content: crate::ChatContent) -> Result<bool, NotAnImage>;
 
-    /// `AgentSession.generate_reply()`: reply now, with no end of turn behind it. The overrides
-    /// apply to this reply only; `tools` narrows the driving agent's tools to these names (its
-    /// provider-owned tools stay), refused on a realtime model as `chat_ctx` is.
+    /// `generate_reply()`: reply now, with no end of turn behind it. The overrides apply to this
+    /// reply only; `tools` narrows the driving agent's tools to these names (its provider-owned
+    /// tools stay), refused on a realtime model as `chat_ctx` is. Sent from the agent's
+    /// `on_enter`, it is that hook's reply.
     #[host(call)]
+    #[host(facade(
+        module = "session_commands",
+        class = "SessionCommands",
+        target = "_running",
+        not_given,
+        origin = "..voice._session_callbacks._origin",
+        returns = "..voice.io.SpeechHandle",
+        annotation(chat_ctx = "..llm.ChatContext"),
+        resolve(chat_ctx = "..voice._session_callbacks._items")
+    ))]
     #[allow(clippy::too_many_arguments)]
     fn generate_reply(
         &self,
         #[host(kw, default = None)] user_input: Option<String>,
         #[host(default = None)] instructions: Option<String>,
-        #[host(default = None)] allow_interruptions: Option<bool>,
         #[host(default = None)] tool_choice: Option<crate::ToolChoice>,
-        #[host(default = None)] chat_ctx: Option<Vec<ChatItem>>,
         #[host(default = None)] tools: Option<Vec<String>>,
-        // Decided by the host: the reference tests a `ContextVar` plus agent/session identity.
-        #[host(default = false)] on_enter: bool,
+        #[host(default = None)] allow_interruptions: Option<bool>,
+        #[host(default = None)] chat_ctx: Option<Vec<ChatItem>>,
         #[host(default = None)] origin: Option<VoiceCommandOrigin>,
     ) -> Result<std::sync::Arc<Self::Speech>, CommandRefused>;
 
@@ -735,35 +751,23 @@ pub trait VoiceSession: Send + Sync + Sized + 'static {
         #[host(default = None)] host: Option<HostRef>,
     ) -> Result<(), CommandRefused>;
 
-    /// `AgentSession.say(text)`: speak these words, no LLM. The handle is the promise the loop
-    /// fulfils.
+    /// `say()`: speak `text` without the LLM, the words given or a stream of them read to its
+    /// end. With `audio`, those frames play instead of the TTS and `text`, a `str`, is still
+    /// committed. The handle is the promise the session fulfils.
     #[host(call)]
+    #[host(facade(
+        module = "session_commands",
+        class = "SessionCommands",
+        target = "_running",
+        not_given,
+        origin = "..voice._session_callbacks._origin",
+        returns = "..voice.io.SpeechHandle"
+    ))]
     fn say(
         &self,
-        text: String,
-        #[host(kw, default = None)] allow_interruptions: Option<bool>,
-        #[host(default = true)] add_to_chat_ctx: bool,
-        #[host(default = None)] origin: Option<VoiceCommandOrigin>,
-    ) -> Result<std::sync::Arc<Self::Speech>, CommandRefused>;
-
-    /// `AgentSession.say(AsyncIterable[str])`: the speech reads `text` to its end.
-    #[host(call)]
-    fn say_stream(
-        &self,
-        text: Box<dyn crate::StreamOutput<String>>,
-        #[host(kw, default = None)] allow_interruptions: Option<bool>,
-        #[host(default = true)] add_to_chat_ctx: bool,
-        #[host(default = None)] origin: Option<VoiceCommandOrigin>,
-    ) -> Result<std::sync::Arc<Self::Speech>, CommandRefused>;
-
-    /// `AgentSession.say(text, audio=..)`: pre-synthesised frames instead of TTS; `text` is still
-    /// committed.
-    #[host(call)]
-    fn say_audio(
-        &self,
-        text: String,
-        audio: Box<dyn crate::StreamOutput<crate::AudioFrame>>,
-        #[host(kw, default = None)] allow_interruptions: Option<bool>,
+        text: crate::OneOrStream<String>,
+        #[host(kw, default = None)] audio: Option<Box<dyn crate::StreamOutput<crate::AudioFrame>>>,
+        #[host(default = None)] allow_interruptions: Option<bool>,
         #[host(default = true)] add_to_chat_ctx: bool,
         #[host(default = None)] origin: Option<VoiceCommandOrigin>,
     ) -> Result<std::sync::Arc<Self::Speech>, CommandRefused>;

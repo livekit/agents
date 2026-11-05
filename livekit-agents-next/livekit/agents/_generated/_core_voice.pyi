@@ -603,16 +603,16 @@ class VoiceSession:
         *,
         user_input: str | None = None,
         instructions: str | None = None,
-        allow_interruptions: bool | None = None,
         tool_choice: ToolChoice | None = None,
-        chat_ctx: Sequence[ChatItem] | None = None,
         tools: Sequence[str] | None = None,
-        on_enter: bool = False,
+        allow_interruptions: bool | None = None,
+        chat_ctx: Sequence[ChatItem] | None = None,
         origin: VoiceCommandOrigin | None = None,
     ) -> SpeechHandle:
-        """`AgentSession.generate_reply()`: reply now, with no end of turn behind it. The overrides
-        apply to this reply only; `tools` narrows the driving agent's tools to these names (its
-        provider-owned tools stay), refused on a realtime model as `chat_ctx` is.
+        """`generate_reply()`: reply now, with no end of turn behind it. The overrides apply to this
+        reply only; `tools` narrows the driving agent's tools to these names (its provider-owned
+        tools stay), refused on a realtime model as `chat_ctx` is. Sent from the agent's
+        `on_enter`, it is that hook's reply.
         """
     def ivr_start(
         self,
@@ -718,35 +718,16 @@ class VoiceSession:
         """
     def say(
         self,
-        text: str,
+        text: str | AsyncIterable[str],
         *,
+        audio: AsyncIterable[AudioFrame] | None = None,
         allow_interruptions: bool | None = None,
         add_to_chat_ctx: bool = True,
         origin: VoiceCommandOrigin | None = None,
     ) -> SpeechHandle:
-        """`AgentSession.say(text)`: speak these words, no LLM. The handle is the promise the loop
-        fulfils.
-        """
-    def say_stream(
-        self,
-        text: AsyncIterable[str],
-        *,
-        allow_interruptions: bool | None = None,
-        add_to_chat_ctx: bool = True,
-        origin: VoiceCommandOrigin | None = None,
-    ) -> SpeechHandle:
-        """`AgentSession.say(AsyncIterable[str])`: the speech reads `text` to its end."""
-    def say_audio(
-        self,
-        text: str,
-        audio: AsyncIterable[AudioFrame],
-        *,
-        allow_interruptions: bool | None = None,
-        add_to_chat_ctx: bool = True,
-        origin: VoiceCommandOrigin | None = None,
-    ) -> SpeechHandle:
-        """`AgentSession.say(text, audio=..)`: pre-synthesised frames instead of TTS; `text` is still
-        committed.
+        """`say()`: speak `text` without the LLM, the words given or a stream of them read to its
+        end. With `audio`, those frames play instead of the TTS and `text`, a `str`, is still
+        committed. The handle is the promise the session fulfils.
         """
     def ivr_final(self, text: str) -> None:
         """`_start_ivr_detection(transcript)`: a final the navigator counts as if heard."""

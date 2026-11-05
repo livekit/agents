@@ -768,6 +768,14 @@ impl Resolver<'_> {
                     .is_ok_and(|found| found == Found::Item { module: *module, item: *item }) {
                     return Ok(Ty::Maybe(Box::new(one(args)?)));
                 }
+                if self.krate.resolve(0, &syn::parse_quote!(crate::utils::stream::OneOrStream))
+                    .is_ok_and(|found| found == Found::Item { module: *module, item: *item }) {
+                    let item = one(args)?;
+                    if item != Ty::Str {
+                        return Err(format!("{at}: a OneOrStream item is told apart as a `str`"));
+                    }
+                    return Ok(Ty::OneOrStream(Box::new(item)));
+                }
                 if !args.is_empty() {
                     return Err(format!("{at}: generic declarations cross only through an alias that binds them"));
                 }
@@ -1010,7 +1018,7 @@ fn check_input(at: &str, ty: &Ty) -> Result<(), String> {
         | Ty::Duplex { .. }
         | Ty::Handle { .. }
         | Ty::Unit => Err(format!("{at}: `{}` is not an input", ty.rust())),
-        Ty::HostSource { item, .. } => check_input(at, item),
+        Ty::HostSource { item, .. } | Ty::OneOrStream(item) => check_input(at, item),
         Ty::HostDuplex { input, output, .. } => {
             check_output(at, input)?;
             check_input(at, output)
@@ -1036,7 +1044,7 @@ fn check_output(at: &str, ty: &Ty) -> Result<(), String> {
         // implementation as the declared class it is.
         Ty::Proxy { declared: Some(_), boxed: false, .. } | Ty::Native { .. } => Ok(()),
         Ty::Proxy { .. } => Err(format!("{at}: a host proxy is not returned to the host")),
-        Ty::HostSource { .. } | Ty::HostDuplex { .. } => {
+        Ty::HostSource { .. } | Ty::HostDuplex { .. } | Ty::OneOrStream(_) => {
             Err(format!("{at}: a host stream is not handed back to the host"))
         }
         Ty::Source { item, .. } => check_output(at, item),

@@ -506,6 +506,7 @@ fn to_host(v: &str, ty: &Ty, at: &str) -> Result<String, String> {
         | Ty::Duplex { .. }
         | Ty::HostSource { .. }
         | Ty::HostDuplex { .. }
+        | Ty::OneOrStream(_)
         | Ty::Handle { .. }
         | Ty::Instance { .. } => {
             return Err(format!("{at}: `{}` is not passed to the host", ty.rust()));

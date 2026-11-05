@@ -950,6 +950,11 @@ pub(crate) fn from_object(v: &str, ty: &Ty, path: &str, at: &str) -> Result<Stri
             from_object("o", item, path, at)?,
             ty.rust()
         ),
+        Ty::OneOrStream(item) => format!(
+            "if {v}.is_instance_of::<::pyo3::types::PyString>() {{ {}.map(::lk_agents_abi::OneOrStream::One) }} else {{ {}.map(::lk_agents_abi::OneOrStream::Stream) }}",
+            from_object(v, item, path, at)?,
+            from_object(v, &Ty::HostSource { item: item.clone(), provider: false }, path, at)?,
+        ),
         Ty::Proxy { rust, declared: None, .. } => {
             return Err(format!(
                 "{at}: `{rust}` crosses behind its generated proxy: declare its methods' calls"

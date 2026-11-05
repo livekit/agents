@@ -259,7 +259,7 @@ fn foreground_holds_follow_the_captured_tool_owner_even_with_reused_call_ids() {
     }
     for caller in [
         VoiceCommandOrigin::Host,
-        VoiceCommandOrigin::Hook,
+        VoiceCommandOrigin::Hook { hook: "on_enter".into() },
         VoiceCommandOrigin::Amd,
         VoiceCommandOrigin::Ivr,
     ] {

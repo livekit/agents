@@ -223,5 +223,5 @@ fn self_wait_refusal_requires_the_exact_blocking_callback_owner() {
         handle.self_wait(Some(&origin("current", 2))),
         Err(SpeechRefused::SelfWait { name: "lookup".into() })
     );
-    assert!(handle.self_wait(Some(&VoiceCommandOrigin::Hook)).is_ok());
+    assert!(handle.self_wait(Some(&VoiceCommandOrigin::Hook { hook: "on_enter".into() })).is_ok());
 }

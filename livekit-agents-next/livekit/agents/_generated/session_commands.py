@@ -7,6 +7,17 @@ import asyncio
 from typing import TYPE_CHECKING
 
 from .. import _core
+from livekit.agents.llm.tool_context import ToolChoice
+from collections.abc import Sequence
+from ..voice.io import SpeechHandle
+from ..types import NOT_GIVEN
+from ..types import NotGivenOr
+from ..utils import is_given
+from ..llm import ChatContext
+from ..voice._session_callbacks import _items
+from ..voice._session_callbacks import _origin
+from collections.abc import AsyncIterable
+from .rtc_frames import AudioFrame
 from .usage import Usage
 
 
@@ -18,6 +29,33 @@ class SessionCommands:
 
         @property
         def _running(self) -> _core.VoiceSession: ...
+
+    def generate_reply(
+        self,
+        *,
+        user_input: NotGivenOr[str] = NOT_GIVEN,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        tools: NotGivenOr[Sequence[str]] = NOT_GIVEN,
+        allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
+        chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
+    ) -> SpeechHandle:
+        """`generate_reply()`: reply now, with no end of turn behind it. The overrides apply to this
+        reply only; `tools` narrows the driving agent's tools to these names (its provider-owned
+        tools stay), refused on a realtime model as `chat_ctx` is. Sent from the agent's
+        `on_enter`, it is that hook's reply.
+        """
+        return SpeechHandle(
+            self._running.generate_reply(
+                user_input=user_input if is_given(user_input) else None,
+                instructions=instructions if is_given(instructions) else None,
+                tool_choice=tool_choice if is_given(tool_choice) else None,
+                tools=tools if is_given(tools) else None,
+                allow_interruptions=allow_interruptions if is_given(allow_interruptions) else None,
+                chat_ctx=_items(chat_ctx) if is_given(chat_ctx) else None,
+                origin=_origin(),
+            )
+        )
 
     async def set_participant(self, identity: str | None) -> None:
         """`RoomIO.set_participant(identity)`: point the audio input and the user transcript at
@@ -44,6 +82,28 @@ class SessionCommands:
     async def wait_for_idle(self) -> None:
         """`AgentSession.wait_for_idle()`: answers when the session is idle (no hold but `hold`)."""
         return await self._running.wait_for_idle()
+
+    def say(
+        self,
+        text: str | AsyncIterable[str],
+        *,
+        audio: NotGivenOr[AsyncIterable[AudioFrame]] = NOT_GIVEN,
+        allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
+        add_to_chat_ctx: bool = True,
+    ) -> SpeechHandle:
+        """`say()`: speak `text` without the LLM, the words given or a stream of them read to its
+        end. With `audio`, those frames play instead of the TTS and `text`, a `str`, is still
+        committed. The handle is the promise the session fulfils.
+        """
+        return SpeechHandle(
+            self._running.say(
+                text,
+                audio=audio if is_given(audio) else None,
+                allow_interruptions=allow_interruptions if is_given(allow_interruptions) else None,
+                add_to_chat_ctx=add_to_chat_ctx,
+                origin=_origin(),
+            )
+        )
 
     def commit_user_turn(
         self,

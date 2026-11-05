@@ -499,14 +499,14 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         &self,
         user_input: Option<String>,
         instructions: Option<String>,
-        allow_interruptions: Option<bool>,
         tool_choice: Option<lk_agents_abi::ToolChoice>,
-        chat_ctx: Option<Vec<ChatItem>>,
         tools: Option<Vec<String>>,
-        on_enter: bool,
+        allow_interruptions: Option<bool>,
+        chat_ctx: Option<Vec<ChatItem>>,
         origin: Option<VoiceCommandOrigin>,
     ) -> Result<Speech, CommandRefused> {
         let origin = origin_of(origin);
+        let on_enter = matches!(&origin, VoiceCommandOrigin::Hook { hook } if hook == "on_enter");
         let (speech, call, reply) = self.speech_call(allow_interruptions)?;
         self.send_awaited(
             origin,
@@ -786,39 +786,36 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
 
     fn say(
         &self,
-        text: String,
+        text: lk_agents_abi::OneOrStream<String>,
+        audio: Option<Box<dyn lk_agents_abi::StreamOutput<lk_agents_abi::AudioFrame>>>,
         allow_interruptions: Option<bool>,
         add_to_chat_ctx: bool,
         origin: Option<VoiceCommandOrigin>,
     ) -> Result<Speech, CommandRefused> {
-        self.speak((SayText::Text(text), None), allow_interruptions, add_to_chat_ctx, origin)
-    }
-
-    fn say_stream(
-        &self,
-        text: Box<dyn lk_agents_abi::StreamOutput<String>>,
-        allow_interruptions: Option<bool>,
-        add_to_chat_ctx: bool,
-        origin: Option<VoiceCommandOrigin>,
-    ) -> Result<Speech, CommandRefused> {
-        let (speech, pusher) =
-            self.say_text_channel(allow_interruptions, add_to_chat_ctx, origin)?;
-        self.feed(pusher, text);
-        Ok(speech)
-    }
-
-    fn say_audio(
-        &self,
-        text: String,
-        audio: Box<dyn lk_agents_abi::StreamOutput<lk_agents_abi::AudioFrame>>,
-        allow_interruptions: Option<bool>,
-        add_to_chat_ctx: bool,
-        origin: Option<VoiceCommandOrigin>,
-    ) -> Result<Speech, CommandRefused> {
-        let (speech, pusher) =
-            self.say_audio_channel(text, allow_interruptions, add_to_chat_ctx, origin)?;
-        self.feed(pusher, audio);
-        Ok(speech)
+        use lk_agents_abi::OneOrStream;
+        match (text, audio) {
+            (OneOrStream::One(text), None) => self.speak(
+                (SayText::Text(text), None),
+                allow_interruptions,
+                add_to_chat_ctx,
+                origin,
+            ),
+            (OneOrStream::One(text), Some(audio)) => {
+                let (speech, pusher) =
+                    self.say_audio_channel(text, allow_interruptions, add_to_chat_ctx, origin)?;
+                self.feed(pusher, audio);
+                Ok(speech)
+            }
+            (OneOrStream::Stream(text), None) => {
+                let (speech, pusher) =
+                    self.say_text_channel(allow_interruptions, add_to_chat_ctx, origin)?;
+                self.feed(pusher, text);
+                Ok(speech)
+            }
+            (OneOrStream::Stream(_), Some(_)) => Err(CommandRefused::Invalid(
+                "say(audio=) takes the words it speaks as a str".to_owned(),
+            )),
+        }
     }
 
     fn ivr_final(&self, text: String) -> Result<(), SessionRefused> {

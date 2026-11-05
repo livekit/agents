@@ -74,6 +74,13 @@ pub enum Entry<T> {
     EndInput,
 }
 
+/// A value, or the host's async iterable of them read to its end (`T | AsyncIterable[T]`). The
+/// host's value is told apart by its type, so `T` is a `String`.
+pub enum OneOrStream<T> {
+    One(T),
+    Stream(Box<dyn StreamOutput<T>>),
+}
+
 /// `next` takes `&mut self`, so there is exactly one drain.
 pub trait StreamOutput<T>: Send {
     /// `Ok(None)` is a clean end. Kept apart: `__anext__` re-raises the task's exception on

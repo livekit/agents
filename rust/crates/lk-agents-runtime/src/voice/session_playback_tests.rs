@@ -1,5 +1,6 @@
 //! A silent physical sink fails boundedly without completing an unread replacement stream.
 use super::*;
+use lk_agents_abi::OneOrStream;
 
 #[tokio::test(start_paused = true)]
 async fn missing_playback_progress_and_finish_ends_the_speech_without_inventing_heard_audio() {
@@ -7,8 +8,15 @@ async fn missing_playback_progress_and_finish_ends_the_speech_without_inventing_
     let output = Arc::new(MissingPlaybackReports::default());
     api.set_audio_output(Some(output.clone())).unwrap();
     let frames = Items([lk_agents_abi::AudioFrame::new(vec![0; 320], 16_000, 1, 160)].into());
-    let speech =
-        api.say_audio("Not confirmed heard.".into(), Box::new(frames), None, true, None).unwrap();
+    let speech = api
+        .say(
+            OneOrStream::One("Not confirmed heard.".into()),
+            Some(Box::new(frames)),
+            None,
+            true,
+            None,
+        )
+        .unwrap();
     settle().await;
     assert!(output.1.get().is_some(), "the output never accepted the segment");
     // Ten milliseconds delivered, the transport's two-second allowance, then one clock tick.
@@ -182,7 +190,8 @@ async fn a_hard_aborted_generation_keeps_its_text_binding_until_source_cleanup_f
     api.send_awaited(VoiceCommandOrigin::Host, ActivityCommand::Update(Box::new(update)), call)
         .unwrap();
     assert_eq!(reply.await.unwrap(), Ok(()));
-    let speech = api.say("Still processing.".into(), None, true, None).unwrap();
+    let speech =
+        api.say(OneOrStream::One("Still processing.".into()), None, None, true, None).unwrap();
     settle().await;
     assert!(
         state.captured.load(Ordering::SeqCst),

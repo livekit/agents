@@ -3118,20 +3118,20 @@ impl VoiceSession {
         ::pyo3::PyResult::Ok(out)
     }
 
-    /// `AgentSession.generate_reply()`: reply now, with no end of turn behind it. The overrides
-    /// apply to this reply only; `tools` narrows the driving agent's tools to these names (its
-    /// provider-owned tools stay), refused on a realtime model as `chat_ctx` is.
-    #[pyo3(signature = (*, user_input = None, instructions = None, allow_interruptions = None, tool_choice = None, chat_ctx = None, tools = None, on_enter = false, origin = None))]
+    /// `generate_reply()`: reply now, with no end of turn behind it. The overrides apply to this
+    /// reply only; `tools` narrows the driving agent's tools to these names (its provider-owned
+    /// tools stay), refused on a realtime model as `chat_ctx` is. Sent from the agent's
+    /// `on_enter`, it is that hook's reply.
+    #[pyo3(signature = (*, user_input = None, instructions = None, tool_choice = None, tools = None, allow_interruptions = None, chat_ctx = None, origin = None))]
     fn generate_reply(
         &self,
         py: Python<'_>,
         user_input: ::std::option::Option<::std::string::String>,
         instructions: ::std::option::Option<::std::string::String>,
-        allow_interruptions: ::std::option::Option<bool>,
         tool_choice: Option<Bound<'_, PyAny>>,
-        chat_ctx: Option<Bound<'_, PyAny>>,
         tools: ::std::option::Option<::std::vec::Vec<::std::string::String>>,
-        on_enter: bool,
+        allow_interruptions: ::std::option::Option<bool>,
+        chat_ctx: Option<Bound<'_, PyAny>>,
         origin: Option<Bound<'_, PyAny>>,
     ) -> PyResult<super::voice::SpeechHandle> {
         crate::py_calls::check_pid()?;
@@ -3160,7 +3160,7 @@ impl VoiceSession {
                 crate::generated::records::voice_session::voice_command_origin_from_py(v.as_any())
             })
             .transpose()?;
-        let out = py.detach(|| <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::generate_reply(&self.0, user_input, instructions, allow_interruptions, tool_choice, chat_ctx, tools, on_enter, origin)).map_err(|e: ::lk_agents_abi::voice::session::CommandRefused| <::lk_agents_abi::voice::session::CommandRefused as crate::py_errors::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::generate_reply(&self.0, user_input, instructions, tool_choice, tools, allow_interruptions, chat_ctx, origin)).map_err(|e: ::lk_agents_abi::voice::session::CommandRefused| <::lk_agents_abi::voice::session::CommandRefused as crate::py_errors::HostException>::to_py_err(&e))?;
         ::pyo3::PyResult::Ok(super::voice::SpeechHandle(out))
     }
 
@@ -3501,96 +3501,71 @@ impl VoiceSession {
         Ok(())
     }
 
-    /// `AgentSession.say(text)`: speak these words, no LLM. The handle is the promise the loop
-    /// fulfils.
-    #[pyo3(signature = (text, *, allow_interruptions = None, add_to_chat_ctx = true, origin = None))]
+    /// `say()`: speak `text` without the LLM, the words given or a stream of them read to its
+    /// end. With `audio`, those frames play instead of the TTS and `text`, a `str`, is still
+    /// committed. The handle is the promise the session fulfils.
+    #[pyo3(signature = (text, *, audio = None, allow_interruptions = None, add_to_chat_ctx = true, origin = None))]
     fn say(
         &self,
         py: Python<'_>,
-        text: ::std::string::String,
-        allow_interruptions: ::std::option::Option<bool>,
-        add_to_chat_ctx: bool,
-        origin: Option<Bound<'_, PyAny>>,
-    ) -> PyResult<super::voice::SpeechHandle> {
-        crate::py_calls::check_pid()?;
-        let origin = origin
-            .map(|v| {
-                crate::generated::records::voice_session::voice_command_origin_from_py(v.as_any())
-            })
-            .transpose()?;
-        let out = py.detach(|| <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::say(&self.0, text, allow_interruptions, add_to_chat_ctx, origin)).map_err(|e: ::lk_agents_abi::voice::session::CommandRefused| <::lk_agents_abi::voice::session::CommandRefused as crate::py_errors::HostException>::to_py_err(&e))?;
-        ::pyo3::PyResult::Ok(super::voice::SpeechHandle(out))
-    }
-
-    /// `AgentSession.say(AsyncIterable[str])`: the speech reads `text` to its end.
-    #[pyo3(signature = (text, *, allow_interruptions = None, add_to_chat_ctx = true, origin = None))]
-    fn say_stream(
-        &self,
-        py: Python<'_>,
         text: Bound<'_, PyAny>,
+        audio: Option<Bound<'_, PyAny>>,
         allow_interruptions: ::std::option::Option<bool>,
         add_to_chat_ctx: bool,
         origin: Option<Bound<'_, PyAny>>,
     ) -> PyResult<super::voice::SpeechHandle> {
         crate::py_calls::check_pid()?;
-        let text = crate::py_calls::capture_context(text.py())
-            .and_then(|context| {
-                crate::py_streams::HostStream::open(
-                    text.py(),
-                    text.as_any(),
-                    &context,
-                    |o| o.extract::<::std::string::String>(),
-                    ::lk_agents_runtime::process::host_clock(),
-                )
+        let text = if text.is_instance_of::<::pyo3::types::PyString>() {
+            text.extract::<::std::string::String>().map(::lk_agents_abi::OneOrStream::One)
+        } else {
+            crate::py_calls::capture_context(text.py())
+                .and_then(|context| {
+                    crate::py_streams::HostStream::open(
+                        text.py(),
+                        text.as_any(),
+                        &context,
+                        |o| o.extract::<::std::string::String>(),
+                        ::lk_agents_runtime::process::host_clock(),
+                    )
+                })
+                .map(|s| {
+                    ::std::boxed::Box::new(s)
+                        as ::std::boxed::Box<
+                            dyn ::lk_agents_abi::StreamOutput<::std::string::String>,
+                        >
+                })
+                .map(::lk_agents_abi::OneOrStream::Stream)
+        }?;
+        let audio = audio
+            .map(|v| {
+                crate::py_calls::capture_context(v.py())
+                    .and_then(|context| {
+                        crate::py_streams::HostStream::open(
+                            v.py(),
+                            v.as_any(),
+                            &context,
+                            |o| {
+                                crate::generated::records::rtc_frames::audio_frame_from_py(
+                                    o.as_any(),
+                                )
+                            },
+                            ::lk_agents_runtime::process::host_clock(),
+                        )
+                    })
+                    .map(|s| {
+                        ::std::boxed::Box::new(s)
+                            as ::std::boxed::Box<
+                                dyn ::lk_agents_abi::StreamOutput<::lk_agents_abi::AudioFrame>,
+                            >
+                    })
             })
-            .map(|s| {
-                ::std::boxed::Box::new(s)
-                    as ::std::boxed::Box<dyn ::lk_agents_abi::StreamOutput<::std::string::String>>
-            })?;
+            .transpose()?;
         let origin = origin
             .map(|v| {
                 crate::generated::records::voice_session::voice_command_origin_from_py(v.as_any())
             })
             .transpose()?;
-        let out = py.detach(|| <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::say_stream(&self.0, text, allow_interruptions, add_to_chat_ctx, origin)).map_err(|e: ::lk_agents_abi::voice::session::CommandRefused| <::lk_agents_abi::voice::session::CommandRefused as crate::py_errors::HostException>::to_py_err(&e))?;
-        ::pyo3::PyResult::Ok(super::voice::SpeechHandle(out))
-    }
-
-    /// `AgentSession.say(text, audio=..)`: pre-synthesised frames instead of TTS; `text` is still
-    /// committed.
-    #[pyo3(signature = (text, audio, *, allow_interruptions = None, add_to_chat_ctx = true, origin = None))]
-    fn say_audio(
-        &self,
-        py: Python<'_>,
-        text: ::std::string::String,
-        audio: Bound<'_, PyAny>,
-        allow_interruptions: ::std::option::Option<bool>,
-        add_to_chat_ctx: bool,
-        origin: Option<Bound<'_, PyAny>>,
-    ) -> PyResult<super::voice::SpeechHandle> {
-        crate::py_calls::check_pid()?;
-        let audio = crate::py_calls::capture_context(audio.py())
-            .and_then(|context| {
-                crate::py_streams::HostStream::open(
-                    audio.py(),
-                    audio.as_any(),
-                    &context,
-                    |o| crate::generated::records::rtc_frames::audio_frame_from_py(o.as_any()),
-                    ::lk_agents_runtime::process::host_clock(),
-                )
-            })
-            .map(|s| {
-                ::std::boxed::Box::new(s)
-                    as ::std::boxed::Box<
-                        dyn ::lk_agents_abi::StreamOutput<::lk_agents_abi::AudioFrame>,
-                    >
-            })?;
-        let origin = origin
-            .map(|v| {
-                crate::generated::records::voice_session::voice_command_origin_from_py(v.as_any())
-            })
-            .transpose()?;
-        let out = py.detach(|| <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::say_audio(&self.0, text, audio, allow_interruptions, add_to_chat_ctx, origin)).map_err(|e: ::lk_agents_abi::voice::session::CommandRefused| <::lk_agents_abi::voice::session::CommandRefused as crate::py_errors::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <VoiceSessionImpl as ::lk_agents_abi::voice::session::VoiceSession>::say(&self.0, text, audio, allow_interruptions, add_to_chat_ctx, origin)).map_err(|e: ::lk_agents_abi::voice::session::CommandRefused| <::lk_agents_abi::voice::session::CommandRefused as crate::py_errors::HostException>::to_py_err(&e))?;
         ::pyo3::PyResult::Ok(super::voice::SpeechHandle(out))
     }
 

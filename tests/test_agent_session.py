@@ -485,3 +485,64 @@ async def test_generate_reply_tools_narrows_the_agents_tools_for_that_reply() ->
         await asyncio.wait_for(session.generate_reply(tools=["lookup_booking"]), timeout=5)
         await asyncio.wait_for(session.generate_reply(), timeout=5)
     assert offered == [["lookup_booking"], ["cancel_booking", "lookup_booking"]]
+
+
+async def test_a_reply_asked_from_on_enter_withholds_the_tools_that_ignore_it() -> None:
+    from livekit.agents import function_tool
+    from livekit.agents.llm.tool_context import ToolFlag
+
+    @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
+    async def transfer() -> str:
+        """Transfer the call."""
+        return "transferred"
+
+    @function_tool
+    async def lookup_booking() -> str:
+        """Look up the caller's booking."""
+        return "booked"
+
+    offered: list[list[str]] = []
+    session = VoiceSession(
+        vad=None, llm=FakeLLM(), tts=FakeTTS(fake_audio_duration=0.1), turn_detection="manual"
+    )
+    session.output.audio = FakeAudioOutput()
+
+    @session.llm_node
+    async def node(
+        ctx: RunContext, chat_ctx: ChatContext, tools: list, settings: ModelSettings
+    ) -> str:
+        offered.append(sorted(tool.info.name for tool in tools))
+        return "Welcome."
+
+    agent = Agent(instructions="Help.", name="desk", tools=[transfer, lookup_booking])
+
+    @agent.on_enter
+    async def greet(session: VoiceSession) -> None:
+        await session.generate_reply()
+
+    async with session:
+        await session.start(agent)
+        await asyncio.wait_for(session.wait_for_idle(), timeout=5)
+        await asyncio.wait_for(session.generate_reply(), timeout=5)
+    assert offered == [["lookup_booking"], ["lookup_booking", "transfer"]]
+
+
+async def test_say_speaks_a_str_a_stream_of_words_or_pre_synthesized_audio() -> None:
+    async def words() -> AsyncIterable[str]:
+        yield "Your booking "
+        yield "is confirmed."
+
+    async def frames() -> AsyncIterable[rtc.AudioFrame]:
+        yield rtc.AudioFrame(b"\x00\x00" * 480, 24000, 1, 480)
+
+    session = VoiceSession(vad=None, tts=FakeTTS(fake_audio_duration=0.1), turn_detection="manual")
+    session.output.audio = FakeAudioOutput()
+    async with session:
+        await session.start(Agent(instructions="Help.", name="desk"))
+        await asyncio.wait_for(session.say("One moment."), timeout=5)
+        await asyncio.wait_for(session.say(words()), timeout=5)
+        await asyncio.wait_for(session.say("Goodbye.", audio=frames()), timeout=5)
+        with pytest.raises(ValueError, match="takes the words it speaks as a str"):
+            session.say(words(), audio=frames())
+        said = [item.text_content for item in session.history.items if item.type == "message"]
+    assert said == ["One moment.", "Your booking is confirmed.", "Goodbye."]
