@@ -87,6 +87,7 @@ members = [
     "livekit-plugins-reson8",
     "livekit-plugins-respeecher",
     "livekit-plugins-rime",
+    "livekit-plugins-ringg",
     "livekit-plugins-rtzr",
     "livekit-plugins-runway",
     "livekit-plugins-sarvam",
@@ -2327,6 +2328,9 @@ respeecher = [
 rime = [
     { name = "livekit-plugins-rime" },
 ]
+ringg = [
+    { name = "livekit-plugins-ringg" },
+]
 rtzr = [
     { name = "livekit-plugins-rtzr" },
 ]
@@ -2472,6 +2476,7 @@ requires-dist = [
     { name = "livekit-plugins-reson8", marker = "extra == 'reson8'", editable = "livekit-plugins/livekit-plugins-reson8" },
     { name = "livekit-plugins-respeecher", marker = "extra == 'respeecher'", editable = "livekit-plugins/livekit-plugins-respeecher" },
     { name = "livekit-plugins-rime", marker = "extra == 'rime'", editable = "livekit-plugins/livekit-plugins-rime" },
+    { name = "livekit-plugins-ringg", marker = "extra == 'ringg'", editable = "livekit-plugins/livekit-plugins-ringg" },
     { name = "livekit-plugins-rtzr", marker = "extra == 'rtzr'", editable = "livekit-plugins/livekit-plugins-rtzr" },
     { name = "livekit-plugins-runway", marker = "extra == 'runway'", editable = "livekit-plugins/livekit-plugins-runway" },
     { name = "livekit-plugins-sarvam", marker = "extra == 'sarvam'", editable = "livekit-plugins/livekit-plugins-sarvam" },
@@ -2519,7 +2524,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "bland", "boson-avatar", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hume", "images", "inworld", "kalpa", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "meta", "microsoft-ai", "minimax", "mistralai", "murf", "nabrah", "neuphonic", "nltk", "nvidia", "openai", "palabra", "perplexity", "phonic", "protoface", "resemble", "reson8", "respeecher", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "slng", "smallestai", "soniox", "spatius", "speechify", "speechmatics", "spitch", "synthesia", "tavus", "thunderphone", "trugen", "turn-detector", "typesafe", "ultravox", "upliftai", "vakyam", "xai", "zoom-ai"]
+provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "bland", "boson-avatar", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hume", "images", "inworld", "kalpa", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "meta", "microsoft-ai", "minimax", "mistralai", "murf", "nabrah", "neuphonic", "nltk", "nvidia", "openai", "palabra", "perplexity", "phonic", "protoface", "resemble", "reson8", "respeecher", "rime", "ringg", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "slng", "smallestai", "soniox", "spatius", "speechify", "speechmatics", "spitch", "synthesia", "tavus", "thunderphone", "trugen", "turn-detector", "typesafe", "ultravox", "upliftai", "vakyam", "xai", "zoom-ai"]
 
 [[package]]
 name = "livekit-api"
@@ -3675,6 +3680,20 @@ requires-dist = [
     { name = "rimelabs-sdk", marker = "python_full_version >= '3.11' and extra == 'stt'", specifier = ">=0.1.0a29" },
 ]
 provides-extras = ["realtime", "stt"]
+
+[[package]]
+name = "livekit-plugins-ringg"
+source = { editable = "livekit-plugins/livekit-plugins-ringg" }
+dependencies = [
+    { name = "livekit-agents" },
+    { name = "ringglabs" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "livekit-agents", editable = "livekit-agents" },
+    { name = "ringglabs", specifier = ">=0.1.6" },
+]
 
 [[package]]
 name = "livekit-plugins-rtzr"
@@ -5923,6 +5942,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/14/c3/8f3d9ef51a88af4eed8486d1cacc883633a1212936d0689a633effedcf67/rimelabs_sdk-0.1.0a29.tar.gz", hash = "sha256:d7c3b3af429e598b2743a842623de25f740db0b23d914c7c98600e713abfd2e1", size = 243865, upload-time = "2026-11-03T19:12:13.088Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c8/b6/dc92855616eba08397f8b1c33c3ec658c7e7b0bbdd21454c8511b08dc849/rimelabs_sdk-0.1.0a29-py3-none-any.whl", hash = "sha256:05aa3bc074ab4ec1cf32a5a42eb1e118bb3294299c625a5b08870cdd42f886bd", size = 78733, upload-time = "2026-11-03T19:12:11.827Z" },
+]
+
+[[package]]
+name = "ringglabs"
+version = "0.1.6"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "httpx" },
+    { name = "websockets" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0c/22/64041fc95e6552eb37b6496bf9a584db97893cfbea1ff7017ac9f9aa7c05/ringglabs-0.1.6.tar.gz", hash = "sha256:bd4e2ca686e51c62168172bdba28e390e3ab438862993c03c542e65edbd16b58", size = 35898, upload-time = "2026-11-05T11:13:24.563Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a9/a4/4cfc73894de1ae5dd945e0a6d8c2b9a962801f54f21162dd13519aea3d35/ringglabs-0.1.6-py3-none-any.whl", hash = "sha256:5bd751b6fe5ad4b18c2a44658dd5c4f0a8a7193b3340a8bbb23d6add302f37b9", size = 28285, upload-time = "2026-11-05T11:13:22.937Z" },
 ]
 
 [[package]]
