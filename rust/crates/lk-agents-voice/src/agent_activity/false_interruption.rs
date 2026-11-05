@@ -2,10 +2,10 @@
 //! ([`PausedSpeech`]).
 
 use crate::agent_activity::options::AgentSessionOptions;
-use crate::agent_activity::scheduling::{SpeechId, Status};
+use crate::agent_activity::scheduling::{PreemptiveDiscard, SpeechId, Status};
 use crate::agent_session::effects::{AudioOp, VoiceEffect};
 use crate::agent_session::effects::{GateCause, GateOp, Timer};
-use crate::agent_session::{RequestId, VoiceDriver};
+use crate::agent_session::{Answer, RequestId, VoiceCommandOrigin, VoiceDriver};
 use crate::audio_recognition::TurnDetectionMode;
 use crate::events::SessionEvent;
 use crate::speech_handle::SpeechError;
@@ -253,6 +253,80 @@ pub enum TurnSettled {
 }
 
 impl VoiceDriver {
+    /// `session.interrupt()`, or the AMD's verdict: a detector's cut, not a host interrupt, so
+    /// it records no `HostInterrupt` step.
+    pub(crate) fn host_interrupt_all(&mut self, now: Ts, force: bool, call: Option<RequestId>) {
+        let cause = match self.command_origin {
+            VoiceCommandOrigin::Amd => InterruptCause::Detector,
+            VoiceCommandOrigin::Host
+            | VoiceCommandOrigin::Tool { .. }
+            | VoiceCommandOrigin::Hook
+            | VoiceCommandOrigin::Ivr => InterruptCause::Host,
+        };
+        if cause == InterruptCause::Host {
+            self.record_trace(InterruptStep::HostInterrupt { speech: None, force });
+        }
+        match self.interrupt_all(now, force, cause) {
+            Ok(speeches) => {
+                self.activity.interrupt_waiters.push(InterruptWaiter { speeches, call })
+            }
+            // The reference raises here, before the socket and the queue.
+            Err(refused) => self.answer(call, Answer::Interrupt(Err(refused))),
+        }
+    }
+
+    /// `SpeechHandle.interrupt()`: the whole speech, wherever it is: queued, playing, or in its
+    /// tools (which finish and commit, with no follow-up). The refusal is the same one by name.
+    pub(crate) fn host_interrupt_speech(&mut self, now: Ts, speech: SpeechId, force: bool) {
+        self.record_trace(InterruptStep::HostInterrupt { speech: Some(speech), force });
+        let tell_socket = match self.interrupt_speech(now, speech, InterruptCause::Host, force) {
+            // The socket too, once, for a pipeline speech on a realtime session.
+            Ok(InterruptOutcome::Now) => !self.activity.is_realtime_speech(speech),
+            // Already interrupted or done: a no-op, so another speech's live generation is
+            // not cancelled under it.
+            Ok(InterruptOutcome::Already) => false,
+            // Disallowed by the time it landed: the handle drops the request.
+            Err(_) => {
+                self.record_trace(InterruptStep::HostInterruptRefused { speech });
+                if let Some(state) = self.activity.speech_scheduler.speech_mut(speech) {
+                    state.interrupt_refused();
+                }
+                return;
+            }
+        };
+        if tell_socket {
+            self.realtime_interrupt(InterruptCause::Host);
+        }
+        // The user taking the floor back invalidates a preemptive generation about what
+        // they were saying.
+        self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned);
+    }
+
+    /// `disallow_interruptions()` and its release: read live by interruption, so no scheduling
+    /// step. A done handle refuses quietly; an unknown id is a no-op.
+    pub(crate) fn hold_interruptions(&mut self, speech: SpeechId, hold: bool) {
+        let Some(state) = self.activity.speech_scheduler.speech_mut(speech) else {
+            return;
+        };
+        if hold {
+            let _ = state.hold_interruptions();
+        } else {
+            state.release_interruptions();
+        }
+        let allow = state.allow_interruptions();
+        self.record_trace(InterruptStep::InterruptionsToggled { speech, allow });
+    }
+
+    /// `SpeechHandle.allow_interruptions = ..`: refused quietly on a done handle.
+    pub(crate) fn set_allow_interruptions(&mut self, speech: SpeechId, allow: bool) {
+        let Some(state) = self.activity.speech_scheduler.speech_mut(speech) else {
+            return;
+        };
+        let _ = state.set_allow_interruptions(allow);
+        let allow = state.allow_interruptions();
+        self.record_trace(InterruptStep::InterruptionsToggled { speech, allow });
+    }
+
     /// **The only writer of a speech's interruption.** `Err(InterruptionsNotAllowed)` when
     /// forbidden and not forced; an ended speech is `Ok(Already)`. The whole speech stops, whatever
     /// the cause (`_interrupt_fut` is one-shot): a cut playout cancels its tools, a speech in its

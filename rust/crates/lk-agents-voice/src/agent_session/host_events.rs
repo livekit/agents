@@ -161,7 +161,6 @@ pub type Speeches<'a> =
 impl SessionEvent {
     /// `None` for what is not the host's: the telemetry records go to the exporter.
     pub fn wire(&self, anchor: lk_agents_abi::WallAnchor, speeches: Speeches) -> Option<HostWire> {
-        use crate::events::{RunFailure, RunOutcome};
         use lk_agents_abi::metrics::base::AgentMetrics;
         use lk_agents_abi::voice::events as w;
         let speech_id = |id: SpeechId| id.to_string();
@@ -284,32 +283,9 @@ impl SessionEvent {
             }),
             // What `RunResult._mark_done` reads; the binding resolves the refs off its side table.
             SessionEvent::RunSettled { run, outcome, speech, input_requirements } => {
-                let (final_output, run_error) = match outcome {
-                    RunOutcome::Completed { final_output } => (final_output.clone(), None),
-                    RunOutcome::Failed(RunFailure::Run(err)) => (None, Some(err.clone())),
-                    RunOutcome::InputRequired { .. }
-                    | RunOutcome::Failed(RunFailure::Speech)
-                    | RunOutcome::Closed => (None, None),
-                };
-                let question = match outcome {
-                    RunOutcome::InputRequired { question, verbatim, answer_tool } => {
-                        Some(w::RunQuestion {
-                            question: question.clone(),
-                            verbatim: *verbatim,
-                            answer_tool: answer_tool.clone(),
-                        })
-                    }
-                    _ => None,
-                };
-                HostWire::RunSettled(w::RunSettledWire {
-                    input_requirements: input_requirements.clone(),
-                    run: run.host.clone(),
-                    outcome: outcome.as_str().to_owned(),
-                    final_output,
-                    question,
-                    run_error,
-                    speech_handle: speech.map(speeches),
-                })
+                let mut settled = run_settled_wire(run, outcome, input_requirements);
+                settled.speech_handle = speech.map(speeches);
+                HostWire::RunSettled(settled)
             }
             SessionEvent::SpeechDone { speech, outcome } => {
                 HostWire::SpeechDone(w::SpeechDoneWire {
@@ -328,7 +304,8 @@ impl SessionEvent {
                 HostWire::OverlappingSpeech(w::OverlappingSpeechWire { event: (**event).clone() })
             }
             SessionEvent::MetricsCollected { metrics, speech, .. } => {
-                let leg = matches!(**metrics, AgentMetrics::Vad(_)).then(|| "vad".to_owned());
+                let leg = matches!(**metrics, AgentMetrics::Vad(_))
+                    .then(|| w::METRICS_LEG_VAD.to_owned());
                 HostWire::MetricsCollected(w::MetricsCollectedWire {
                     metrics: (**metrics).clone(),
                     speech_id: speech.map(speech_id),
@@ -340,6 +317,39 @@ impl SessionEvent {
                 HostWire::ToolExecutionUpdated(w::ToolExecutionUpdated { update: update.wire() })
             }
         })
+    }
+}
+
+/// `run_settled`'s payload with no speech handle: the final output, the run's error or the
+/// question it asks, by its outcome.
+fn run_settled_wire(
+    run: &crate::events::RunRef,
+    outcome: &crate::events::RunOutcome,
+    input_requirements: &[lk_agents_abi::agent::run::RunInputRequirement],
+) -> lk_agents_abi::voice::events::RunSettledWire {
+    use crate::events::{RunFailure, RunOutcome};
+    use lk_agents_abi::voice::events as w;
+    let (final_output, run_error, question) = match outcome {
+        RunOutcome::Completed { final_output } => (final_output.clone(), None, None),
+        RunOutcome::Failed(RunFailure::Run(err)) => (None, Some(err.clone()), None),
+        RunOutcome::InputRequired { question, verbatim, answer_tool } => {
+            let question = w::RunQuestion {
+                question: question.clone(),
+                verbatim: *verbatim,
+                answer_tool: answer_tool.clone(),
+            };
+            (None, None, Some(question))
+        }
+        RunOutcome::Failed(RunFailure::Speech) | RunOutcome::Closed => (None, None, None),
+    };
+    w::RunSettledWire {
+        input_requirements: input_requirements.to_vec(),
+        run: run.host.clone(),
+        outcome: outcome.as_str().to_owned(),
+        final_output,
+        question,
+        run_error,
+        speech_handle: None,
     }
 }
 

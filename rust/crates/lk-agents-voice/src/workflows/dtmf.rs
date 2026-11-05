@@ -495,7 +495,8 @@ impl VoiceDriver {
         // `session.generate_reply()` answers on a realtime model's own socket; the read-back's
         // speech is named when the server creates it.
         if self.activity.realtime().is_some() {
-            self.realtime_reply(now, Some(user_input), None, None, None, None, true, true);
+            let role = crate::agent_activity::realtime::RealtimeReplyRole::ReadBack;
+            self.realtime_reply(now, Some(user_input), None, None, None, None, role);
             return;
         }
         let speech = self.generate_reply_speech(

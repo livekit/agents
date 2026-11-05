@@ -68,24 +68,7 @@ impl Drain {
     fn handle_outcomes(&mut self, ev: DrainEvent, mut cx: Cx<'_>, out: &mut Vec<DrainOutcome>) {
         match ev {
             DrainEvent::Asked(waiters) => self.asked(waiters, &mut cx, out),
-            DrainEvent::Paused(result) => {
-                let Some(AgentDrain { phase: phase @ Phase::Pausing, .. }) = &mut self.current
-                else {
-                    return;
-                };
-                match result {
-                    PauseResult::Settled if cx.quiet => self.finish(None, out),
-                    PauseResult::Settled => *phase = Phase::Settling,
-                    PauseResult::Refused => {
-                        let refused = if cx.closing {
-                            DrainRefused::Closing
-                        } else {
-                            DrainRefused::ActivityChanging
-                        };
-                        self.finish(Some(refused), out);
-                    }
-                }
-            }
+            DrainEvent::Paused(result) => self.paused(result, &cx, out),
             DrainEvent::Quiet => {
                 self.left_ready(true, out);
                 if let Some(AgentDrain { phase: Phase::Settling, .. }) = self.current {
@@ -93,22 +76,40 @@ impl Drain {
                 }
             }
             DrainEvent::Leaving => self.leaving(&mut cx, out),
-            DrainEvent::AgentStays => {
-                if cx.switching
-                    || !matches!(self.current, Some(AgentDrain { phase: Phase::Joined, .. }))
-                {
-                    return;
-                }
-                let Some(drain) = self.current.take() else { return };
-                if !drain.waiters.is_empty() {
-                    self.asked(drain.waiters, &mut cx, out);
-                }
-            }
+            DrainEvent::AgentStays => self.agent_stays(&mut cx, out),
             DrainEvent::Closing => {
                 if let Some(AgentDrain { phase: Phase::Exiting { .. }, .. }) = self.current {
                     self.finish(Some(DrainRefused::Closing), out);
                 }
             }
+        }
+    }
+
+    /// Scheduling paused: a quiet settle finishes the drain, one with a speech open waits for
+    /// its end, and a refusal ends it refused.
+    fn paused(&mut self, result: PauseResult, cx: &Cx<'_>, out: &mut Vec<DrainOutcome>) {
+        let Some(AgentDrain { phase: phase @ Phase::Pausing, .. }) = &mut self.current else {
+            return;
+        };
+        match result {
+            PauseResult::Settled if cx.quiet => self.finish(None, out),
+            PauseResult::Settled => *phase = Phase::Settling,
+            PauseResult::Refused => {
+                let refused =
+                    if cx.closing { DrainRefused::Closing } else { DrainRefused::ActivityChanging };
+                self.finish(Some(refused), out);
+            }
+        }
+    }
+
+    /// The handoff this drain joined ended without a swap: its callers' drain runs here.
+    fn agent_stays(&mut self, cx: &mut Cx<'_>, out: &mut Vec<DrainOutcome>) {
+        if cx.switching || !matches!(self.current, Some(AgentDrain { phase: Phase::Joined, .. })) {
+            return;
+        }
+        let Some(drain) = self.current.take() else { return };
+        if !drain.waiters.is_empty() {
+            self.asked(drain.waiters, cx, out);
         }
     }
 

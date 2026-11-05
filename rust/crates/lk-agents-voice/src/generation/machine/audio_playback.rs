@@ -56,6 +56,45 @@ pub enum AudioPlaybackEvent {
     PlayedConfirmed,
 }
 
+impl AudioPlaybackEvent {
+    /// The outcome of forwarding work, for the segment flow.
+    fn into_flow(self) -> AudioPlaybackFlowEvent {
+        match self {
+            Self::InterruptionChecked { interrupted } => {
+                AudioPlaybackFlowEvent::Ready { interrupted }
+            }
+            Self::SourceRead { next, interrupted } => {
+                AudioPlaybackFlowEvent::Source { next, interrupted }
+            }
+            Self::LaunchPermissionResolved { allowed } => AudioPlaybackFlowEvent::Launched(allowed),
+            Self::FrameForwarded(result) => AudioPlaybackFlowEvent::Forwarded(result),
+            Self::ResamplerTailForwarded(result) => AudioPlaybackFlowEvent::TailPushed(result),
+            Self::BoundaryFlushed => AudioPlaybackFlowEvent::BoundaryFlushed,
+            _ => panic!("audio playback outcome does not match forwarding work"),
+        }
+    }
+
+    /// The outcome of completion work, for the segment finish.
+    fn into_finish(self) -> AudioPlaybackFinishEvent {
+        match self {
+            Self::PlaybackReceiptReceived(result) => AudioPlaybackFinishEvent::Receipt(result),
+            Self::PlaybackReceiptAccepted(receipt) => AudioPlaybackFinishEvent::Accepted(receipt),
+            Self::PlayedConfirmed => AudioPlaybackFinishEvent::Confirmed,
+            _ => panic!("audio playback outcome does not match completion work"),
+        }
+    }
+
+    /// The outcome of cut receipt work, for the cut receipt.
+    fn into_cut(self) -> AudioPlaybackCutEvent {
+        match self {
+            Self::CutReceiptPolled(report) => AudioPlaybackCutEvent::Probed(report),
+            Self::CutReceiptYielded { closing } => AudioPlaybackCutEvent::Yielded { closing },
+            Self::CutReceiptWaited(report) => AudioPlaybackCutEvent::Waited(report),
+            _ => panic!("audio playback outcome does not match cut receipt work"),
+        }
+    }
+}
+
 // These states group existing policies without exposing their instruction enums to the runtime.
 enum PlaybackPhase {
     Initial { stop_at_boundary: bool },
@@ -108,26 +147,7 @@ impl AudioPlayback {
         let effect = match (phase, event) {
             (PlaybackPhase::Done, _) => return None,
             (PlaybackPhase::Forwarding(mut flow), event) => {
-                let event = match event {
-                    AudioPlaybackEvent::InterruptionChecked { interrupted } => {
-                        AudioPlaybackFlowEvent::Ready { interrupted }
-                    }
-                    AudioPlaybackEvent::SourceRead { next, interrupted } => {
-                        AudioPlaybackFlowEvent::Source { next, interrupted }
-                    }
-                    AudioPlaybackEvent::LaunchPermissionResolved { allowed } => {
-                        AudioPlaybackFlowEvent::Launched(allowed)
-                    }
-                    AudioPlaybackEvent::FrameForwarded(result) => {
-                        AudioPlaybackFlowEvent::Forwarded(result)
-                    }
-                    AudioPlaybackEvent::ResamplerTailForwarded(result) => {
-                        AudioPlaybackFlowEvent::TailPushed(result)
-                    }
-                    AudioPlaybackEvent::BoundaryFlushed => AudioPlaybackFlowEvent::BoundaryFlushed,
-                    _ => panic!("audio playback outcome does not match forwarding work"),
-                };
-                let effect = flow.handle(event, self.playout.pushed);
+                let effect = flow.handle(event.into_flow(), self.playout.pushed);
                 self.forwarding_effect(flow, effect)
             }
             (
@@ -142,17 +162,7 @@ impl AudioPlayback {
                 }
             }
             (PlaybackPhase::Finishing(mut finish), event) => {
-                let event = match event {
-                    AudioPlaybackEvent::PlaybackReceiptReceived(result) => {
-                        AudioPlaybackFinishEvent::Receipt(result)
-                    }
-                    AudioPlaybackEvent::PlaybackReceiptAccepted(receipt) => {
-                        AudioPlaybackFinishEvent::Accepted(receipt)
-                    }
-                    AudioPlaybackEvent::PlayedConfirmed => AudioPlaybackFinishEvent::Confirmed,
-                    _ => panic!("audio playback outcome does not match completion work"),
-                };
-                let effect = finish.handle(event, &self.playout);
+                let effect = finish.handle(event.into_finish(), &self.playout);
                 self.finishing_effect(finish, effect)
             }
             (PlaybackPhase::Clearing { finish, text }, AudioPlaybackEvent::OutputCleared) => {
@@ -160,19 +170,7 @@ impl AudioPlayback {
                 self.cut_effect(finish, text, receipt, effect)
             }
             (PlaybackPhase::Cutting { finish, text, mut receipt }, event) => {
-                let event = match event {
-                    AudioPlaybackEvent::CutReceiptPolled(report) => {
-                        AudioPlaybackCutEvent::Probed(report)
-                    }
-                    AudioPlaybackEvent::CutReceiptYielded { closing } => {
-                        AudioPlaybackCutEvent::Yielded { closing }
-                    }
-                    AudioPlaybackEvent::CutReceiptWaited(report) => {
-                        AudioPlaybackCutEvent::Waited(report)
-                    }
-                    _ => panic!("audio playback outcome does not match cut receipt work"),
-                };
-                let effect = receipt.handle(event, now);
+                let effect = receipt.handle(event.into_cut(), now);
                 self.cut_effect(finish, text, receipt, effect)
             }
             (

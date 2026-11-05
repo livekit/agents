@@ -178,7 +178,8 @@ impl VoiceDriver {
     /// The run's own `generate_reply(..)`, pipeline or realtime; owned like any session reply.
     fn run_reply(&mut self, now: Ts, user_input: Option<String>) {
         if self.activity.realtime().is_some() {
-            self.realtime_reply(now, user_input, None, None, None, None, false, true);
+            let role = crate::agent_activity::realtime::RealtimeReplyRole::VoiceRun;
+            self.realtime_reply(now, user_input, None, None, None, None, role);
             return;
         }
         let _ =

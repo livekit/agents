@@ -14,7 +14,7 @@ use crate::tool_executor::{
     APPROVAL_KEY, AgentFrame, CallId, HostedTool, NextReply, Rendering, StepEnd, StepNext, ToolGo,
     Toolset,
 };
-use crate::trace::ToolStep as TraceToolStep;
+use crate::trace::{GenerationStep, ToolStep as TraceToolStep};
 use lk_agents_abi::agent::run::{Output, RunError, RunOutcome, RunResult, ValidationId};
 use lk_agents_abi::agent::{AgentDefinition, FunctionToolInfo, OutputSpec, Retries};
 use lk_agents_abi::{
@@ -69,6 +69,38 @@ impl std::fmt::Debug for ReplyRun {
             .field("settling", &self.settling)
             .field("verdict", &self.verdict)
             .finish_non_exhaustive()
+    }
+}
+
+impl ReplyRun {
+    /// The finished run's output, taken from the values the agent accepted, and whether the
+    /// person cut it.
+    fn take_output(&mut self, result: Result<RunResult, RunError>) -> (Option<RunOutput>, bool) {
+        let RunResult { outcome, interrupted, .. } = match result {
+            Ok(result) => result,
+            Err(
+                error @ (RunError::ToolRetriesExceeded { .. }
+                | RunError::OutputRetriesExceeded { .. }
+                | RunError::Host(_)),
+            ) => return (Some(RunOutput::Failed(error)), false),
+            // The session reports a model's failure on the speech; a cancelled run is the
+            // person's cut.
+            Err(_) => return (None, false),
+        };
+        let output = match outcome {
+            RunOutcome::Completed { output: Output::Validated(v) } => {
+                self.accepted.remove(&v).map(RunOutput::Value)
+            }
+            // A validated text: the agent's accepted value, the last validation's.
+            RunOutcome::Completed { output: Output::Text(_) } => {
+                self.accepted.pop_last().map(|(_, v)| RunOutput::Value(v))
+            }
+            RunOutcome::NoOutput => None,
+            RunOutcome::InputRequired { question, verbatim, answer_tool } => {
+                Some(RunOutput::Ask { question, verbatim, answer_tool })
+            }
+        };
+        (output, interrupted)
     }
 }
 
@@ -250,26 +282,7 @@ impl VoiceDriver {
                     self.handle_reply_tool_results(speech);
                 }
                 AgentRunEffect::CancelToolExecution { execution } => {
-                    let running = self
-                        .activity
-                        .tools
-                        .running
-                        .iter()
-                        .find(|r| r.hosted.invocation.operation == execution)
-                        .cloned();
-                    if let Some(running) = running {
-                        if !running.detached()
-                            && let Some(call) = running.run_call
-                            && let Some(reply) =
-                                self.activity.tools.replies.get_mut(&running.speech)
-                        {
-                            reply.run.tool_cancellation_requested(call);
-                        }
-                        self.record_effect(VoiceEffect::CancelTool {
-                            call_id: running.call.call_id,
-                            hosted: running.hosted,
-                        });
-                    }
+                    self.cancel_tool_execution(execution)
                 }
                 AgentRunEffect::ValidateOutput { validation, candidate } => {
                     self.validate_reply_output(speech, validation, candidate)
@@ -280,16 +293,10 @@ impl VoiceDriver {
                 AgentRunEffect::LlmRequestCancel { request } => {
                     // Keep the producer's explicit stream-close path. An unresponsive source
                     // is bounded by the existing speech interruption watchdog.
-                    self.record_trace(crate::trace::GenerationStep::RequestCancelled {
-                        speech,
-                        request: request.0,
-                    });
-                    let _ = self.interrupt_speech(
-                        self.step.now,
-                        speech,
-                        crate::trace::InterruptCause::RunCancelled,
-                        true,
-                    );
+                    let request = request.0;
+                    self.record_trace(GenerationStep::RequestCancelled { speech, request });
+                    let cause = crate::trace::InterruptCause::RunCancelled;
+                    let _ = self.interrupt_speech(self.step.now, speech, cause, true);
                 }
                 AgentRunEffect::ToolPrepare { call, arguments, .. } => {
                     self.activity.reply_move(speech, call, ToolGo::Prepare { call, arguments })
@@ -339,6 +346,25 @@ impl VoiceDriver {
         }
         self.reply_settled_calls(speech);
         self.answer_reply_waiter(speech);
+    }
+
+    /// The run cancels a running tool: an attached call's reply hears it was asked to stop,
+    /// then the host cancels the execution.
+    fn cancel_tool_execution(&mut self, execution: u64) {
+        let tools = &self.activity.tools;
+        let Some(running) =
+            tools.running.iter().find(|r| r.hosted.invocation.operation == execution).cloned()
+        else {
+            return;
+        };
+        if !running.detached()
+            && let Some(call) = running.run_call
+            && let Some(reply) = self.activity.tools.replies.get_mut(&running.speech)
+        {
+            reply.run.tool_cancellation_requested(call);
+        }
+        let (call_id, hosted) = (running.call.call_id, running.hosted);
+        self.record_effect(VoiceEffect::CancelTool { call_id, hosted });
     }
 
     // ------------------------------------------------------------------ calls
@@ -590,33 +616,7 @@ impl VoiceDriver {
             self.session.runs.retain_input_requirements(&result.input_requirements);
         }
         let Some(reply) = self.activity.tools.replies.get_mut(&speech) else { return };
-        let mut interrupted = false;
-        let output = match result {
-            Ok(RunResult { outcome, interrupted: cut, .. }) => {
-                interrupted = cut;
-                match outcome {
-                    RunOutcome::Completed { output: Output::Validated(v) } => {
-                        reply.accepted.remove(&v).map(RunOutput::Value)
-                    }
-                    // A validated text: the agent's accepted value, the last validation's.
-                    RunOutcome::Completed { output: Output::Text(_) } => {
-                        reply.accepted.pop_last().map(|(_, v)| RunOutput::Value(v))
-                    }
-                    RunOutcome::NoOutput => None,
-                    RunOutcome::InputRequired { question, verbatim, answer_tool } => {
-                        Some(RunOutput::Ask { question, verbatim, answer_tool })
-                    }
-                }
-            }
-            Err(
-                error @ (RunError::ToolRetriesExceeded { .. }
-                | RunError::OutputRetriesExceeded { .. }
-                | RunError::Host(_)),
-            ) => Some(RunOutput::Failed(error)),
-            // The session reports a model's failure on the speech; a cancelled run is the
-            // person's cut.
-            Err(_) => None,
-        };
+        let (output, interrupted) = reply.take_output(result);
         reply.next = Some(if interrupted { StepNext::Interrupted } else { StepNext::Done });
         // Every call still waiting is over with the run.
         let waiting: Vec<_> =

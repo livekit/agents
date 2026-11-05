@@ -2,21 +2,19 @@
 //! `start_speech`, the generation's reports, the agent state, and `wait_for_idle`.
 
 use crate::agent::{Source, Visibility};
-use crate::agent_activity::false_interruption::{InterruptOutcome, InterruptWaiter};
+use crate::agent_activity::realtime::RealtimeReplyRole;
 use crate::agent_activity::scheduling::{PreemptiveDiscard, SpeechId, SpeechKind};
 use crate::agent_session::effects::{GateCause, GateOp, Timer};
 use crate::agent_session::{
-    Answer, ClosePhase, IdleWaiter, SayText, SpeechCommand, VoiceCommandOrigin, VoiceDriver,
+    Answer, ClosePhase, IdleWaiter, SayText, SpeechCall, SpeechCommand, VoiceCommandOrigin,
+    VoiceDriver,
 };
 use crate::audio_recognition::{EndOfTurnInfo, TurnEdits};
 use crate::events::SessionEvent;
 use crate::generation::{EndOfSpeech, TurnOutcome as GenTurnOutcome, end_of_speech};
 use crate::generation::{GenEvent, Providers, ReplyContext, ReplySource};
 use crate::tool_executor::Toolset;
-use crate::trace::{
-    CoreStep, GenerationStep, InterruptCause, InterruptStep, PlayoutStep, SpeechStep, ToolStep,
-    TurnStep,
-};
+use crate::trace::{GenerationStep, InterruptStep, PlayoutStep, SpeechStep, ToolStep};
 use lk_agents_abi::ChatItem;
 use lk_agents_abi::voice::events::AgentState;
 use lk_agents_abi::{ChatContext, ChatMessage, Modality, Role, Ts};
@@ -116,30 +114,20 @@ impl VoiceDriver {
         match cmd {
             // A realtime session answers on its own socket. These arms must come *before* the
             // pipeline arms: a guarded arm after its unguarded twin is dead code.
+            SpeechCommand::GenerateReply { chat_ctx, toolset, call, .. }
+                if self.activity.rt_session.is_some()
+                    && (chat_ctx.is_some() || toolset.is_some()) =>
+            {
+                self.refuse_realtime_reply_overrides(call)
+            }
             SpeechCommand::GenerateReply {
                 user_input,
                 instructions,
                 allow_interruptions,
                 tool_choice,
-                chat_ctx,
-                toolset,
                 call,
-                on_enter: _,
+                ..
             } if self.activity.rt_session.is_some() => {
-                // A realtime session's context and tools live in its session config, not per
-                // response: refused by name.
-                if chat_ctx.is_some() || toolset.is_some() {
-                    self.record_trace(CoreStep::PortFailure(
-                        "generate_reply(chat_ctx=) / generate_reply(tools=) on a realtime model: the \
-                         session owns both",
-                    ));
-                    self.fail_waiter(
-                        call,
-                        SpeechKind::GenerateReply,
-                        "generate_reply(chat_ctx=, tools=) is not supported on a realtime model",
-                    );
-                    return;
-                }
                 self.realtime_reply(
                     now,
                     user_input,
@@ -147,30 +135,21 @@ impl VoiceDriver {
                     allow_interruptions,
                     tool_choice,
                     call,
-                    false,
-                    true,
+                    RealtimeReplyRole::VoiceRun,
                 );
             }
             // The model speaks a `say` only with no TTS to (`AgentActivity.say`); with one, a
             // realtime session's `say` is synthesised like a pipeline's, audio and streams too.
-            SpeechCommand::Say { text, allow_interruptions, add_to_chat_ctx, call }
-                if !matches!(text, SayText::Audio { .. }) && self.realtime_says() =>
-            {
-                // The wire carries a string; a streamed `say` is refused by name.
-                let SayText::Text(text) = text else {
-                    self.record_trace(SpeechStep::SayRefused {
-                        why: SAY_SHAPE_REFUSED_ON_REALTIME,
-                    });
-                    self.fail_waiter(
-                        call,
-                        SpeechKind::Say,
-                        "say(stream) is not supported on a realtime model without a TTS",
-                    );
-                    return;
-                };
-                let request =
-                    crate::agent_activity::realtime::Request::Say { text, add_to_chat_ctx };
-                self.realtime_request(now, request, call, allow_interruptions, true);
+            SpeechCommand::Say {
+                text: SayText::Text(text),
+                allow_interruptions,
+                add_to_chat_ctx,
+                call,
+            } if self.realtime_says() => {
+                self.realtime_say(now, text, allow_interruptions, add_to_chat_ctx, call)
+            }
+            SpeechCommand::Say { text: SayText::Stream, call, .. } if self.realtime_says() => {
+                self.refuse_realtime_say_stream(call)
             }
             SpeechCommand::CommitUserTurn {
                 transcript_timeout,
@@ -190,74 +169,17 @@ impl VoiceDriver {
                 let speech = self.tool_speech(&self.command_origin);
                 self.session.idle.ask(IdleWaiter { hold, speech, grant: None, call, run: None });
             }
-            SpeechCommand::WaitForIdleAndHold { call } => {
-                // Minted at the ask, so the run a tool's hold belongs to can own it before idle.
-                let id = self.session.idle.mint_hold();
-                let speech = self.tool_speech(&self.command_origin);
-                let run = self
-                    .session
-                    .runs
-                    .current()
-                    .filter(|run| {
-                        speech.is_some_and(|speech| {
-                            self.activity.speech_scheduler.belongs_to_run(speech, run.id)
-                        })
-                    })
-                    .map(|run| run.id);
-                self.session.idle.ask(IdleWaiter {
-                    hold: None,
-                    speech,
-                    grant: Some(id),
-                    call,
-                    run,
-                });
-            }
+            SpeechCommand::WaitForIdleAndHold { call } => self.wait_for_idle_and_hold(call),
             SpeechCommand::ReleaseIdleHold { hold } => {
                 if self.session.idle.release(hold) {
                     self.record_trace(SpeechStep::IdleHoldReleased { hold });
                 }
             }
             SpeechCommand::EndCall { speech } => self.end_call(speech),
-            SpeechCommand::ClaimUserTurn => {
-                let (depth, eff) = self.session.states.claim_user_turn(now);
-                self.apply_user_state_updates(eff);
-                self.record_trace(TurnStep::UserTurnClaims { depth });
-            }
-            SpeechCommand::ReleaseUserTurn => {
-                let speaking = self.activity.audio_recognition.user_speaking();
-                let (depth, eff) = self.session.states.release_user_turn(now, speaking);
-                self.apply_user_state_updates(eff);
-                self.record_trace(TurnStep::UserTurnClaims { depth });
-            }
+            SpeechCommand::ClaimUserTurn => self.claim_user_turn(now),
+            SpeechCommand::ReleaseUserTurn => self.release_user_turn(now),
             SpeechCommand::Say { text, allow_interruptions, add_to_chat_ctx, call } => {
-                // `say(text)` with no TTS and an enabled audio output: refused before a handle
-                // exists. `say(audio=)` is exempt; a detached or disabled output speaks as text.
-                if !matches!(text, SayText::Audio { .. })
-                    && self.session.tts.is_none()
-                    && self.session.outputs.plays_audio()
-                {
-                    self.record_trace(SpeechStep::SayRefused { why: SAY_WITHOUT_TTS_REFUSED });
-                    self.fail_waiter(call, SpeechKind::Say, SAY_WITHOUT_TTS_REFUSED);
-                    return;
-                }
-                let interruptible = self.session.config.effective.turn.interruption.enabled();
-                self.start_speech(
-                    now,
-                    SpeechSpec {
-                        add_to_chat_ctx,
-                        host_speech: call.as_ref().map(|c| c.speech),
-                        ..SpeechSpec::new(
-                            SpeechKind::Say,
-                            match text {
-                                SayText::Text(text) => ReplySource::Text(text),
-                                SayText::Stream => ReplySource::TextStream,
-                                SayText::Audio { text } => ReplySource::Audio { text },
-                            },
-                            allow_interruptions.unwrap_or(interruptible),
-                        )
-                    },
-                );
-                self.answer_speech(call);
+                self.say(now, text, allow_interruptions, add_to_chat_ctx, call)
             }
             SpeechCommand::GenerateReply {
                 user_input,
@@ -292,73 +214,15 @@ impl VoiceDriver {
                 self.record_trace(SpeechStep::AuthorizationResumed);
                 self.activity.speech_scheduler.authorization_paused = false;
             }
-            SpeechCommand::Interrupt { force, call } => {
-                // The AMD's verdict is a detector's cut, not a host interrupt: no `HostInterrupt`
-                // step.
-                let cause = match self.command_origin {
-                    VoiceCommandOrigin::Amd => InterruptCause::Detector,
-                    VoiceCommandOrigin::Host
-                    | VoiceCommandOrigin::Tool { .. }
-                    | VoiceCommandOrigin::Hook
-                    | VoiceCommandOrigin::Ivr => InterruptCause::Host,
-                };
-                if cause == InterruptCause::Host {
-                    self.record_trace(InterruptStep::HostInterrupt { speech: None, force });
-                }
-                match self.interrupt_all(now, force, cause) {
-                    Ok(speeches) => {
-                        self.activity.interrupt_waiters.push(InterruptWaiter { speeches, call });
-                    }
-                    // The reference raises here, before the socket and the queue.
-                    Err(refused) => self.answer(call, Answer::Interrupt(Err(refused))),
-                }
+            SpeechCommand::Interrupt { force, call } => self.host_interrupt_all(now, force, call),
+            SpeechCommand::InterruptSpeech { speech, force } => {
+                self.host_interrupt_speech(now, speech, force)
             }
-            SpeechCommand::InterruptSpeech { speech: id, force } => {
-                self.record_trace(InterruptStep::HostInterrupt { speech: Some(id), force });
-                // The whole speech, wherever it is: queued, playing, or in its tools (which finish
-                // and commit, with no follow-up). The refusal is the same one by name.
-                let interrupted = self.interrupt_speech(now, id, InterruptCause::Host, force);
-                let tell_socket = match interrupted {
-                    // The socket too, once, for a pipeline speech on a realtime session.
-                    Ok(InterruptOutcome::Now) => !self.activity.is_realtime_speech(id),
-                    // Already interrupted or done: a no-op, so another speech's live generation is
-                    // not cancelled under it.
-                    Ok(InterruptOutcome::Already) => false,
-                    // Disallowed by the time it landed: the handle drops the request.
-                    Err(_) => {
-                        self.record_trace(InterruptStep::HostInterruptRefused { speech: id });
-                        if let Some(state) = self.activity.speech_scheduler.speech_mut(id) {
-                            state.interrupt_refused();
-                        }
-                        return;
-                    }
-                };
-                if tell_socket {
-                    self.realtime_interrupt(InterruptCause::Host);
-                }
-                // The user taking the floor back invalidates a preemptive generation about what
-                // they were saying.
-                self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned);
-            }
-            // `disallow_interruptions()` and its release: read live by interruption, so no scheduling
-            // step. A done handle refuses quietly; an unknown id is a no-op.
             SpeechCommand::HoldInterruptions { speech, hold } => {
-                if let Some(state) = self.activity.speech_scheduler.speech_mut(speech) {
-                    if hold {
-                        let _ = state.hold_interruptions();
-                    } else {
-                        state.release_interruptions();
-                    }
-                    let allow = state.allow_interruptions();
-                    self.record_trace(InterruptStep::InterruptionsToggled { speech, allow });
-                }
+                self.hold_interruptions(speech, hold)
             }
             SpeechCommand::SetAllowInterruptions { speech, allow } => {
-                if let Some(state) = self.activity.speech_scheduler.speech_mut(speech) {
-                    let _ = state.set_allow_interruptions(allow);
-                    let allow = state.allow_interruptions();
-                    self.record_trace(InterruptStep::InterruptionsToggled { speech, allow });
-                }
+                self.set_allow_interruptions(speech, allow)
             }
             // A background tool's later update or return: the pair, the event, the coalesced reply.
             SpeechCommand::ToolUpdate { invocation_id, operation, call_id, update } => {
@@ -377,6 +241,42 @@ impl VoiceDriver {
                 self.end_filler(id, crate::trace::FillerEnd::Stopped)
             }
         }
+    }
+
+    fn say(
+        &mut self,
+        now: Ts,
+        text: SayText,
+        allow_interruptions: Option<bool>,
+        add_to_chat_ctx: bool,
+        call: Option<SpeechCall>,
+    ) {
+        // `say(text)` with no TTS and an enabled audio output: refused before a handle
+        // exists. `say(audio=)` is exempt; a detached or disabled output speaks as text.
+        if !matches!(text, SayText::Audio { .. })
+            && self.session.tts.is_none()
+            && self.session.outputs.plays_audio()
+        {
+            self.record_trace(SpeechStep::SayRefused { why: SAY_WITHOUT_TTS_REFUSED });
+            self.fail_waiter(call, SpeechKind::Say, SAY_WITHOUT_TTS_REFUSED);
+            return;
+        }
+        let interruptible = self.session.config.effective.turn.interruption.enabled();
+        let source = match text {
+            SayText::Text(text) => ReplySource::Text(text),
+            SayText::Stream => ReplySource::TextStream,
+            SayText::Audio { text } => ReplySource::Audio { text },
+        };
+        let allow_interruptions = allow_interruptions.unwrap_or(interruptible);
+        self.start_speech(
+            now,
+            SpeechSpec {
+                add_to_chat_ctx,
+                host_speech: call.as_ref().map(|c| c.speech),
+                ..SpeechSpec::new(SpeechKind::Say, source, allow_interruptions)
+            },
+        );
+        self.answer_speech(call);
     }
 
     /// Shared with the run's own replies.

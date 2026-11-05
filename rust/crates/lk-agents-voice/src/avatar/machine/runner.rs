@@ -17,6 +17,9 @@ pub use lk_agents_abi::utils::video::{AudioReceiverFrame, AvatarFrame, MediaFram
 
 const LOG: &str = "livekit.agents";
 
+/// The playback position of a segment cut before any of it played.
+const NOT_PLAYED: f64 = 0.0;
+
 // ----------------------------------------------------------------------------- the host's side
 
 pub use lk_agents_abi::voice::avatar::{AvatarAudioReceiver, AvatarMedia, AvatarVideoGenerator};
@@ -79,6 +82,26 @@ pub enum AvatarEvent {
     MediaClosed(Result<(), ProviderError>),
 }
 
+impl AvatarEvent {
+    /// An answer to an op the loops issued, or input that feeds them: dropped once the close
+    /// cuts the loops.
+    fn dropped_once_cut(&self) -> bool {
+        matches!(
+            self,
+            AvatarEvent::RoomFailed(_)
+                | AvatarEvent::ClearBuffer { .. }
+                | AvatarEvent::GeneratorCleared { .. }
+                | AvatarEvent::AudioOpened(_)
+                | AvatarEvent::Audio(_)
+                | AvatarEvent::AudioPushed(_)
+                | AvatarEvent::FramesOpened(_)
+                | AvatarEvent::Frame(_)
+                | AvatarEvent::Published(_)
+                | AvatarEvent::Pushed(_)
+        )
+    }
+}
+
 /// What the runner asks of its receiver, generator and media.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AvatarIoOperation {
@@ -106,6 +129,15 @@ enum Pump {
     /// Waiting for the tracks to be published before pushing the held frame.
     Publishing,
     Done,
+}
+
+/// The runner's two loops, as the reference names them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Loop {
+    /// `_read_audio`: the receiver's audio into the generator.
+    ReadAudio,
+    /// `_forward_video`: the generator's frames out to the room.
+    ForwardVideo,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -227,294 +259,383 @@ impl RunnerCore {
     }
 
     pub fn handle(&mut self, event: AvatarEvent, _now: Ts) -> Vec<AvatarEffect> {
-        let mut out = Vec::new();
-        match event {
-            AvatarEvent::Start { call, connected } => {
-                self.connected |= connected;
-                if self.lazy_publish {
-                    self.begin(&mut out);
-                    out.push(AvatarEffect::Answer { call, result: Ok(()) });
-                } else {
-                    self.start_call = Some(call);
-                    self.ask_publish(&mut out);
-                }
-            }
-            AvatarEvent::WaitForComplete { call } => {
-                self.waiting.push(call);
-                self.answer_waiting(&mut out);
-            }
-            AvatarEvent::Connection { connected } => {
-                if connected && !self.connected {
-                    self.connected = true;
-                    if self.publish == Publish::Waiting {
-                        self.publish = Publish::InFlight;
-                        out.push(AvatarEffect::Io(AvatarIoOperation::Publish));
-                    }
-                }
-            }
-            AvatarEvent::RoomFailed(error) if !self.cut() => {
-                let error = RunnerError::Failed(error);
-                self.failed.get_or_insert(error.clone());
-                if let Some(call) = self.start_call.take() {
-                    out.push(AvatarEffect::Answer { call, result: Err(error) });
-                }
-                self.answer_waiting(&mut out);
-            }
-            AvatarEvent::ClearBuffer { epoch } if !self.cut() && epoch > self.clear_epoch => {
-                self.clear_epoch = epoch;
-                let clear = self.next_clear;
-                self.next_clear += 1;
-                self.clears.insert(clear, Clear { epoch, owed: std::mem::take(&mut self.owed) });
-                self.stale_end = std::mem::take(&mut self.reading);
-                if self.audio_pushing {
-                    self.clears_waiting.push(clear);
-                } else {
-                    out.push(AvatarEffect::Io(AvatarIoOperation::ClearGenerator { clear }));
-                }
-            }
-            AvatarEvent::GeneratorCleared { clear, result } if !self.cut() => {
-                let owed =
-                    self.clears.remove(&clear).map_or_else(VecDeque::new, |clear| clear.owed);
-                if let Err(error) = result {
-                    log_error("_handle_clear_buffer", &error);
-                }
-                // The receiver has cut this input even if the generator could not clear.
-                for segment in owed {
-                    let position = std::mem::take(&mut self.position);
-                    self.report_finished(segment, position, true, &mut out);
-                }
-                self.release_audio(&mut out);
-            }
-            AvatarEvent::AudioOpened(result) if !self.cut() => match result {
-                Ok(()) => out.push(AvatarEffect::Io(AvatarIoOperation::NextAudio)),
-                Err(e) => self.loop_ended(true, Err(e), &mut out),
-            },
-            AvatarEvent::Audio(result) if !self.cut() => match result {
-                Ok((epoch, starts_segment, segment, Some(_))) if epoch < self.clear_epoch => {
-                    if starts_segment {
-                        if let Some(clear) =
-                            self.clears.values_mut().find(|clear| clear.epoch > epoch)
-                        {
-                            if let Some(segment) = segment {
-                                clear.owed.push_back(segment);
-                            }
-                        } else {
-                            if let Some(segment) = segment {
-                                self.report_finished(segment, 0.0, true, &mut out);
-                            }
-                        }
-                    }
-                    out.push(AvatarEffect::Io(AvatarIoOperation::NextAudio));
-                }
-                Ok((_, _, _, Some(AudioReceiverFrame::SegmentEnd)))
-                    if std::mem::take(&mut self.stale_end) =>
-                {
-                    out.push(AvatarEffect::Io(AvatarIoOperation::NextAudio));
-                }
-                Ok((epoch, starts_segment, segment, Some(item)))
-                    if !self.clears.is_empty() || self.reporting =>
-                {
-                    self.held_audio = Some((epoch, starts_segment, segment, item));
-                }
-                Ok((_, _, None, Some(_))) => {
-                    self.loop_ended(
-                        true,
-                        Err(lk_agents_abi::errors::ApiError::new(
-                            "avatar audio has no segment identity",
-                        )
-                        .into()),
-                        &mut out,
-                    );
-                }
-                Ok((_, _, Some(segment), Some(item))) => {
-                    let frame = match item {
-                        AudioReceiverFrame::Audio(frame) => {
-                            if !std::mem::replace(&mut self.reading, true) {
-                                self.owed.push_back(segment);
-                            }
-                            self.stale_end = false;
-                            Some(MediaFrame::Audio(frame))
-                        }
-                        AudioReceiverFrame::SegmentEnd => {
-                            self.reading = false;
-                            None
-                        }
-                    };
-                    self.audio_pushing = true;
-                    out.push(AvatarEffect::Io(AvatarIoOperation::PushAudio(frame)));
-                }
-                Ok((_, _, _, None)) => self.loop_ended(true, Ok(()), &mut out),
-                Err(e) => self.loop_ended(true, Err(e), &mut out),
-            },
-            AvatarEvent::AudioPushed(result) if !self.cut() => {
-                self.audio_pushing = false;
-                for clear in std::mem::take(&mut self.clears_waiting) {
-                    out.push(AvatarEffect::Io(AvatarIoOperation::ClearGenerator { clear }));
-                }
-                match result {
-                    Ok(()) => out.push(AvatarEffect::Io(AvatarIoOperation::NextAudio)),
-                    Err(e) => self.loop_ended(true, Err(e), &mut out),
-                }
-            }
-            AvatarEvent::FramesOpened(result) if !self.cut() => match result {
-                Ok(()) => self.next_frame(&mut out),
-                Err(e) => self.loop_ended(false, Err(e), &mut out),
-            },
-            AvatarEvent::Frame(result) if !self.cut() => match result {
-                Ok(Some(AvatarFrame::SegmentEnd)) => {
-                    // the agent hears the segment finished; the forwarding goes on
-                    if let Some(segment) = self.owed.pop_front() {
-                        let position = std::mem::take(&mut self.position);
-                        self.report_finished(segment, position, false, &mut out);
-                    }
-                    self.next_frame(&mut out);
-                }
-                Ok(Some(AvatarFrame::Audio(frame))) => {
-                    let duration = frame.duration();
-                    self.forward(MediaFrame::Audio(frame), Some(duration), &mut out)
-                }
-                Ok(Some(AvatarFrame::Video(frame))) => {
-                    self.forward(MediaFrame::Video(frame), None, &mut out)
-                }
-                Ok(None) => self.loop_ended(false, Ok(()), &mut out),
-                Err(e) => self.loop_ended(false, Err(e), &mut out),
-            },
-            AvatarEvent::Published(result) if !self.cut() => {
-                self.publish = if result.is_ok() { Publish::Done } else { Publish::Never };
-                if let Some(call) = self.start_call.take() {
-                    match result {
-                        Ok(()) => {
-                            self.begin(&mut out);
-                            out.push(AvatarEffect::Answer { call, result: Ok(()) });
-                        }
-                        Err(e) => out.push(AvatarEffect::Answer {
-                            call,
-                            result: Err(RunnerError::Failed(e)),
-                        }),
-                    }
-                } else if self.forward == Pump::Publishing {
-                    match result {
-                        Ok(()) => {
-                            if let Some((frame, duration)) = self.held.take() {
-                                self.push(frame, duration, &mut out);
-                            }
-                        }
-                        Err(e) => {
-                            self.held = None;
-                            self.loop_ended(false, Err(e), &mut out);
-                        }
-                    }
-                }
-            }
-            AvatarEvent::Pushed(result) if !self.cut() => match result {
-                Ok(()) => {
-                    if let Some(duration) = self.pushing.take() {
-                        let started = self.position == 0.0 && duration > 0.0;
-                        self.position += duration;
-                        if started && let Some(segment) = self.owed.front().cloned() {
-                            out.push(AvatarEffect::Io(AvatarIoOperation::ReportStarted {
-                                segment,
-                            }));
-                        }
-                    }
-                    self.next_frame(&mut out);
-                }
-                Err(e) => {
-                    self.pushing = None;
-                    self.loop_ended(false, Err(e), &mut out);
-                }
-            },
-            AvatarEvent::Reported { finished, result } => {
-                let delivered = match result {
-                    Ok(()) => true,
-                    Err(error) => {
-                        log_error("the playback report", &error);
-                        if finished {
-                            // Delivery is unknown. Preserve the ordering barrier and held input
-                            // until explicit close; a failed callback is not an acknowledgement.
-                            self.failed.get_or_insert(RunnerError::Failed(error));
-                            self.answer_waiting(&mut out);
-                        }
-                        false
-                    }
-                };
-                if finished && delivered {
-                    self.reporting = false;
-                    if let Some(report) = self.reports.pop_front() {
-                        self.report_finished(
-                            report.segment,
-                            report.position,
-                            report.interrupted,
-                            &mut out,
-                        );
-                    }
-                    self.release_audio(&mut out);
-                }
-            }
-            AvatarEvent::Close { call } => match self.closing {
-                _ if self.closed => out.push(AvatarEffect::Answer { call, result: Ok(()) }),
-                // a second close while one is under way waits for nothing more: the first answers
-                Some(_) => out.push(AvatarEffect::Answer { call, result: Ok(()) }),
-                None => {
-                    self.closing = Some((Closing::Receiver, call));
-                    out.push(AvatarEffect::Io(AvatarIoOperation::CloseReceiver));
-                }
-            },
-            AvatarEvent::ReceiverClosed(result) => {
-                if let Some((Closing::Receiver, call)) = self.closing {
-                    match result {
-                        Ok(()) => {
-                            self.closing = Some((Closing::Cancelling, call));
-                            out.push(AvatarEffect::CancelIo);
-                        }
-                        // as the reference's `aclose`, which raises before cancelling anything
-                        Err(e) => {
-                            self.closing = None;
-                            out.push(AvatarEffect::Answer {
-                                call,
-                                result: Err(RunnerError::Failed(e)),
-                            });
-                        }
-                    }
-                }
-            }
-            AvatarEvent::IoCancelled => {
-                if let Some((Closing::Cancelling, call)) = self.closing {
-                    self.held = None;
-                    self.held_audio = None;
-                    self.reports.clear();
-                    self.reporting = false;
-                    self.frame_pull_paused = false;
-                    self.pushing = None;
-                    self.clears.clear();
-                    self.clears_waiting.clear();
-                    for pump in [&mut self.read, &mut self.forward] {
-                        if *pump != Pump::Done {
-                            *pump = Pump::Done;
-                            self.failed.get_or_insert(RunnerError::Closed);
-                        }
-                    }
-                    if !self.started {
-                        self.failed.get_or_insert(RunnerError::Closed);
-                    }
-                    self.answer_waiting(&mut out);
-                    self.closing = Some((Closing::Media, call));
-                    out.push(AvatarEffect::Io(AvatarIoOperation::CloseMedia));
-                }
-            }
-            AvatarEvent::MediaClosed(result) => {
-                if let Some((Closing::Media, call)) = self.closing.take() {
-                    self.closed = true;
-                    out.push(AvatarEffect::Answer {
-                        call,
-                        result: result.map_err(RunnerError::Failed),
-                    });
-                }
-            }
-            // an answer to an op the close cut, or a report that went through
-            _ => {}
+        let mut effects = Vec::new();
+        // an answer to an op the close cut
+        if self.cut() && event.dropped_once_cut() {
+            return effects;
         }
-        out
+        let out = &mut effects;
+        match event {
+            AvatarEvent::Start { call, connected } => self.start(call, connected, out),
+            AvatarEvent::WaitForComplete { call } => self.wait_for_complete(call, out),
+            AvatarEvent::Connection { connected } => self.connection(connected, out),
+            AvatarEvent::RoomFailed(error) => self.room_failed(error, out),
+            AvatarEvent::ClearBuffer { epoch } => self.clear_buffer(epoch, out),
+            AvatarEvent::GeneratorCleared { clear, result } => {
+                self.generator_cleared(clear, result, out)
+            }
+            AvatarEvent::AudioOpened(result) => self.audio_opened(result, out),
+            AvatarEvent::Audio(result) => self.audio_received(result, out),
+            AvatarEvent::AudioPushed(result) => self.audio_pushed(result, out),
+            AvatarEvent::FramesOpened(result) => self.frames_opened(result, out),
+            AvatarEvent::Frame(result) => self.frame_received(result, out),
+            AvatarEvent::Published(result) => self.published(result, out),
+            AvatarEvent::Pushed(result) => self.pushed(result, out),
+            AvatarEvent::Reported { finished, result } => self.reported(finished, result, out),
+            AvatarEvent::Close { call } => self.close(call, out),
+            AvatarEvent::ReceiverClosed(result) => self.receiver_closed(result, out),
+            AvatarEvent::IoCancelled => self.io_cancelled(out),
+            AvatarEvent::MediaClosed(result) => self.media_closed(result, out),
+        }
+        effects
+    }
+
+    fn start(&mut self, call: CallId, connected: bool, out: &mut Vec<AvatarEffect>) {
+        self.connected |= connected;
+        if self.lazy_publish {
+            self.begin(out);
+            out.push(AvatarEffect::Answer { call, result: Ok(()) });
+        } else {
+            self.start_call = Some(call);
+            self.ask_publish(out);
+        }
+    }
+
+    fn wait_for_complete(&mut self, call: CallId, out: &mut Vec<AvatarEffect>) {
+        self.waiting.push(call);
+        self.answer_waiting(out);
+    }
+
+    fn connection(&mut self, connected: bool, out: &mut Vec<AvatarEffect>) {
+        if !connected || self.connected {
+            return;
+        }
+        self.connected = true;
+        if self.publish == Publish::Waiting {
+            self.publish = Publish::InFlight;
+            out.push(AvatarEffect::Io(AvatarIoOperation::Publish));
+        }
+    }
+
+    fn room_failed(&mut self, error: ProviderError, out: &mut Vec<AvatarEffect>) {
+        let error = RunnerError::Failed(error);
+        self.failed.get_or_insert(error.clone());
+        if let Some(call) = self.start_call.take() {
+            out.push(AvatarEffect::Answer { call, result: Err(error) });
+        }
+        self.answer_waiting(out);
+    }
+
+    /// The receiver's `clear_buffer`: a stale epoch was already cleared.
+    fn clear_buffer(&mut self, epoch: u64, out: &mut Vec<AvatarEffect>) {
+        if epoch <= self.clear_epoch {
+            return;
+        }
+        self.clear_epoch = epoch;
+        let clear = self.next_clear;
+        self.next_clear += 1;
+        self.clears.insert(clear, Clear { epoch, owed: std::mem::take(&mut self.owed) });
+        self.stale_end = std::mem::take(&mut self.reading);
+        if self.audio_pushing {
+            self.clears_waiting.push(clear);
+        } else {
+            out.push(AvatarEffect::Io(AvatarIoOperation::ClearGenerator { clear }));
+        }
+    }
+
+    fn generator_cleared(
+        &mut self,
+        clear: u64,
+        result: Result<(), ProviderError>,
+        out: &mut Vec<AvatarEffect>,
+    ) {
+        let owed = self.clears.remove(&clear).map_or_else(VecDeque::new, |clear| clear.owed);
+        if let Err(error) = result {
+            log_error("_handle_clear_buffer", &error);
+        }
+        // The receiver has cut this input even if the generator could not clear.
+        let interrupted = true;
+        for segment in owed {
+            let position = std::mem::take(&mut self.position);
+            self.report_finished(segment, position, interrupted, out);
+        }
+        self.release_audio(out);
+    }
+
+    fn audio_opened(&mut self, result: Result<(), ProviderError>, out: &mut Vec<AvatarEffect>) {
+        match result {
+            Ok(()) => out.push(AvatarEffect::Io(AvatarIoOperation::NextAudio)),
+            Err(e) => self.loop_ended(Loop::ReadAudio, Err(e), out),
+        }
+    }
+
+    /// One read from the receiver. The arm order is the decision: stale epoch, stale segment
+    /// end, held while clearing or reporting, no segment identity, push, end.
+    fn audio_received(
+        &mut self,
+        result: Result<
+            (u64, bool, Option<AvatarPlaybackSegment>, Option<AudioReceiverFrame>),
+            ProviderError,
+        >,
+        out: &mut Vec<AvatarEffect>,
+    ) {
+        match result {
+            Ok((epoch, starts_segment, segment, Some(_))) if epoch < self.clear_epoch => {
+                if starts_segment && let Some(segment) = segment {
+                    self.owe_stale_segment(epoch, segment, out);
+                }
+                out.push(AvatarEffect::Io(AvatarIoOperation::NextAudio));
+            }
+            Ok((_, _, _, Some(AudioReceiverFrame::SegmentEnd)))
+                if std::mem::take(&mut self.stale_end) =>
+            {
+                out.push(AvatarEffect::Io(AvatarIoOperation::NextAudio));
+            }
+            Ok((epoch, starts_segment, segment, Some(item)))
+                if !self.clears.is_empty() || self.reporting =>
+            {
+                self.held_audio = Some((epoch, starts_segment, segment, item));
+            }
+            Ok((_, _, None, Some(_))) => {
+                let error =
+                    lk_agents_abi::errors::ApiError::new("avatar audio has no segment identity");
+                self.loop_ended(Loop::ReadAudio, Err(error.into()), out);
+            }
+            Ok((_, _, Some(segment), Some(item))) => self.push_audio(segment, item, out),
+            Ok((_, _, _, None)) => self.loop_ended(Loop::ReadAudio, Ok(()), out),
+            Err(e) => self.loop_ended(Loop::ReadAudio, Err(e), out),
+        }
+    }
+
+    /// A segment read before the clear that cut it: the clear in flight owes its finish, else
+    /// it is reported finished now.
+    fn owe_stale_segment(
+        &mut self,
+        epoch: u64,
+        segment: AvatarPlaybackSegment,
+        out: &mut Vec<AvatarEffect>,
+    ) {
+        let (position, interrupted) = (NOT_PLAYED, true);
+        match self.clears.values_mut().find(|clear| clear.epoch > epoch) {
+            Some(clear) => clear.owed.push_back(segment),
+            None => self.report_finished(segment, position, interrupted, out),
+        }
+    }
+
+    fn push_audio(
+        &mut self,
+        segment: AvatarPlaybackSegment,
+        item: AudioReceiverFrame,
+        out: &mut Vec<AvatarEffect>,
+    ) {
+        let frame = match item {
+            AudioReceiverFrame::Audio(frame) => {
+                if !std::mem::replace(&mut self.reading, true) {
+                    self.owed.push_back(segment);
+                }
+                self.stale_end = false;
+                Some(MediaFrame::Audio(frame))
+            }
+            AudioReceiverFrame::SegmentEnd => {
+                self.reading = false;
+                None
+            }
+        };
+        self.audio_pushing = true;
+        out.push(AvatarEffect::Io(AvatarIoOperation::PushAudio(frame)));
+    }
+
+    fn audio_pushed(&mut self, result: Result<(), ProviderError>, out: &mut Vec<AvatarEffect>) {
+        self.audio_pushing = false;
+        for clear in std::mem::take(&mut self.clears_waiting) {
+            out.push(AvatarEffect::Io(AvatarIoOperation::ClearGenerator { clear }));
+        }
+        match result {
+            Ok(()) => out.push(AvatarEffect::Io(AvatarIoOperation::NextAudio)),
+            Err(e) => self.loop_ended(Loop::ReadAudio, Err(e), out),
+        }
+    }
+
+    fn frames_opened(&mut self, result: Result<(), ProviderError>, out: &mut Vec<AvatarEffect>) {
+        match result {
+            Ok(()) => self.next_frame(out),
+            Err(e) => self.loop_ended(Loop::ForwardVideo, Err(e), out),
+        }
+    }
+
+    fn frame_received(
+        &mut self,
+        result: Result<Option<AvatarFrame>, ProviderError>,
+        out: &mut Vec<AvatarEffect>,
+    ) {
+        match result {
+            Ok(Some(AvatarFrame::SegmentEnd)) => {
+                // the agent hears the segment finished; the forwarding goes on
+                if let Some(segment) = self.owed.pop_front() {
+                    let position = std::mem::take(&mut self.position);
+                    let interrupted = false;
+                    self.report_finished(segment, position, interrupted, out);
+                }
+                self.next_frame(out);
+            }
+            Ok(Some(AvatarFrame::Audio(frame))) => {
+                let duration = frame.duration();
+                self.forward(MediaFrame::Audio(frame), Some(duration), out)
+            }
+            Ok(Some(AvatarFrame::Video(frame))) => {
+                self.forward(MediaFrame::Video(frame), None, out)
+            }
+            Ok(None) => self.loop_ended(Loop::ForwardVideo, Ok(()), out),
+            Err(e) => self.loop_ended(Loop::ForwardVideo, Err(e), out),
+        }
+    }
+
+    fn published(&mut self, result: Result<(), ProviderError>, out: &mut Vec<AvatarEffect>) {
+        self.publish = if result.is_ok() { Publish::Done } else { Publish::Never };
+        if let Some(call) = self.start_call.take() {
+            self.answer_start(call, result, out);
+        } else if self.forward == Pump::Publishing {
+            self.resume_held_frame(result, out);
+        }
+    }
+
+    /// `start()` waited on the publish.
+    fn answer_start(
+        &mut self,
+        call: CallId,
+        result: Result<(), ProviderError>,
+        out: &mut Vec<AvatarEffect>,
+    ) {
+        match result {
+            Ok(()) => {
+                self.begin(out);
+                out.push(AvatarEffect::Answer { call, result: Ok(()) });
+            }
+            Err(e) => out.push(AvatarEffect::Answer { call, result: Err(RunnerError::Failed(e)) }),
+        }
+    }
+
+    /// The forward loop held its frame while the tracks published.
+    fn resume_held_frame(
+        &mut self,
+        result: Result<(), ProviderError>,
+        out: &mut Vec<AvatarEffect>,
+    ) {
+        match result {
+            Ok(()) => {
+                if let Some((frame, duration)) = self.held.take() {
+                    self.push(frame, duration, out);
+                }
+            }
+            Err(e) => {
+                self.held = None;
+                self.loop_ended(Loop::ForwardVideo, Err(e), out);
+            }
+        }
+    }
+
+    fn pushed(&mut self, result: Result<(), ProviderError>, out: &mut Vec<AvatarEffect>) {
+        if let Err(e) = result {
+            self.pushing = None;
+            self.loop_ended(Loop::ForwardVideo, Err(e), out);
+            return;
+        }
+        if let Some(duration) = self.pushing.take() {
+            let started = self.position == NOT_PLAYED && duration > 0.0;
+            self.position += duration;
+            if started && let Some(segment) = self.owed.front().cloned() {
+                out.push(AvatarEffect::Io(AvatarIoOperation::ReportStarted { segment }));
+            }
+        }
+        self.next_frame(out);
+    }
+
+    fn reported(
+        &mut self,
+        finished: bool,
+        result: Result<(), ProviderError>,
+        out: &mut Vec<AvatarEffect>,
+    ) {
+        if let Err(error) = result {
+            log_error("the playback report", &error);
+            if finished {
+                // Delivery is unknown. Preserve the ordering barrier and held input
+                // until explicit close; a failed callback is not an acknowledgement.
+                self.failed.get_or_insert(RunnerError::Failed(error));
+                self.answer_waiting(out);
+            }
+            return;
+        }
+        if !finished {
+            return;
+        }
+        self.reporting = false;
+        if let Some(report) = self.reports.pop_front() {
+            self.report_finished(report.segment, report.position, report.interrupted, out);
+        }
+        self.release_audio(out);
+    }
+
+    fn close(&mut self, call: CallId, out: &mut Vec<AvatarEffect>) {
+        match self.closing {
+            _ if self.closed => out.push(AvatarEffect::Answer { call, result: Ok(()) }),
+            // a second close while one is under way waits for nothing more: the first answers
+            Some(_) => out.push(AvatarEffect::Answer { call, result: Ok(()) }),
+            None => {
+                self.closing = Some((Closing::Receiver, call));
+                out.push(AvatarEffect::Io(AvatarIoOperation::CloseReceiver));
+            }
+        }
+    }
+
+    fn receiver_closed(&mut self, result: Result<(), ProviderError>, out: &mut Vec<AvatarEffect>) {
+        let Some((Closing::Receiver, call)) = self.closing else {
+            return;
+        };
+        match result {
+            Ok(()) => {
+                self.closing = Some((Closing::Cancelling, call));
+                out.push(AvatarEffect::CancelIo);
+            }
+            // as the reference's `aclose`, which raises before cancelling anything
+            Err(e) => {
+                self.closing = None;
+                out.push(AvatarEffect::Answer { call, result: Err(RunnerError::Failed(e)) });
+            }
+        }
+    }
+
+    fn io_cancelled(&mut self, out: &mut Vec<AvatarEffect>) {
+        let Some((Closing::Cancelling, call)) = self.closing else {
+            return;
+        };
+        self.held = None;
+        self.held_audio = None;
+        self.reports.clear();
+        self.reporting = false;
+        self.frame_pull_paused = false;
+        self.pushing = None;
+        self.clears.clear();
+        self.clears_waiting.clear();
+        for pump in [&mut self.read, &mut self.forward] {
+            if *pump != Pump::Done {
+                *pump = Pump::Done;
+                self.failed.get_or_insert(RunnerError::Closed);
+            }
+        }
+        if !self.started {
+            self.failed.get_or_insert(RunnerError::Closed);
+        }
+        self.answer_waiting(out);
+        self.closing = Some((Closing::Media, call));
+        out.push(AvatarEffect::Io(AvatarIoOperation::CloseMedia));
+    }
+
+    fn media_closed(&mut self, result: Result<(), ProviderError>, out: &mut Vec<AvatarEffect>) {
+        if let Some((Closing::Media, call)) = self.closing.take() {
+            self.closed = true;
+            out.push(AvatarEffect::Answer { call, result: result.map_err(RunnerError::Failed) });
+        }
     }
 
     /// Start both loops.
@@ -604,17 +725,16 @@ impl RunnerCore {
         out.push(AvatarEffect::Io(AvatarIoOperation::Push(frame)));
     }
 
-    /// One loop's end: `read` or forward.
+    /// One loop's end.
     fn loop_ended(
         &mut self,
-        read: bool,
+        ended: Loop,
         result: Result<(), ProviderError>,
         out: &mut Vec<AvatarEffect>,
     ) {
-        let (pump, name) = if read {
-            (&mut self.read, "_read_audio")
-        } else {
-            (&mut self.forward, "_forward_video")
+        let (pump, name) = match ended {
+            Loop::ReadAudio => (&mut self.read, "_read_audio"),
+            Loop::ForwardVideo => (&mut self.forward, "_forward_video"),
         };
         *pump = Pump::Done;
         match result {

@@ -6,7 +6,7 @@ pub mod console;
 use lk_agents_abi::ChatItem;
 use lk_agents_abi::usage::{ModelUsage, Usage};
 use lk_agents_abi::voice::amd::AmdCategory;
-use lk_agents_abi::voice::events::AgentState;
+use lk_agents_abi::voice::events::{AgentState, ToolEndStatus, ToolReplyStatus};
 pub use lk_agents_abi::worker::remote_session::{
     AgentInfo, IoUpdate, RtcStats, RunOutcome, SessionPort, SessionState, SimulationVerdict,
     VerdictOutcome,
@@ -60,7 +60,7 @@ fn encode_amd_category(c: AmdCategory) -> proto::AmdCategory {
 /// (`remote_session.py:295-301`), which the reference drops; a malformed debug payload is refused.
 /// `language` and the hand-built tool calls' `id`/`created_at` go out unset, as in the reference.
 pub fn encode_wire(ev: WireEvent) -> Result<Option<proto::agent_session_event::Event>, String> {
-    use proto::agent_session_event::{self as pb, Event, tool_execution_updated as teu};
+    use proto::agent_session_event::{self as pb, Event};
     let call = |c: FunctionCallRef| proto::FunctionCall {
         name: c.name,
         arguments: c.arguments,
@@ -145,58 +145,87 @@ pub fn encode_wire(ev: WireEvent) -> Result<Option<proto::agent_session_event::E
             },
         }),
         WireEvent::ToolExecutionUpdated(ToolExecutionUpdatedWire { update }) => {
-            let update = match update {
-                ToolUpdateWire::Started(v) => teu::Update::Started(teu::Started {
-                    function_call: Some(proto::FunctionCall {
-                        id: v.id,
-                        call_id: v.call_id,
-                        name: v.name,
-                        arguments: v.arguments,
-                        created_at: None,
-                        extra: Default::default(),
-                    }),
-                }),
-                ToolUpdateWire::CallUpdated(v) => teu::Update::CallUpdated(teu::CallUpdated {
-                    id: v.id,
-                    call_id: v.call_id,
-                    message: v.message,
-                }),
-                ToolUpdateWire::Ended(v) => {
-                    let status = match v.status.as_str() {
-                        "done" => proto::ToolCallStatus::TcDone,
-                        "error" => proto::ToolCallStatus::TcError,
-                        "cancelled" => proto::ToolCallStatus::TcCancelled,
-                        _ => return Ok(None),
-                    };
-                    // `message` unset means cancelled or an empty return.
-                    teu::Update::Ended(teu::Ended {
-                        id: v.id,
-                        call_id: v.call_id,
-                        message: v.message,
-                        status: status as i32,
-                    })
-                }
-                ToolUpdateWire::ReplyUpdated(v) => {
-                    let status = match v.status.as_str() {
-                        "scheduled" => proto::ToolReplyStatus::TrScheduled,
-                        "completed" => proto::ToolReplyStatus::TrCompleted,
-                        "interrupted" => proto::ToolReplyStatus::TrInterrupted,
-                        "skipped" => proto::ToolReplyStatus::TrSkipped,
-                        _ => return Ok(None),
-                    };
-                    teu::Update::ReplyUpdated(teu::ReplyUpdated {
-                        update_ids: v.update_ids,
-                        status: status as i32,
-                        speech_id: v.speech_id,
-                    })
-                }
-            };
+            let Some(update) = encode_tool_update(update) else { return Ok(None) };
             Event::ToolExecutionUpdated(pb::ToolExecutionUpdated { update: Some(update) })
         }
         WireEvent::AgentFalseInterruption(v) => {
             Event::AgentFalseInterruption(pb::AgentFalseInterruption { resumed: v.resumed })
         }
     }))
+}
+
+/// One tool-lifecycle update in its proto shape. `None` for a status no
+/// [`ToolEndStatus`] / [`ToolReplyStatus`] spells, which the reference drops.
+fn encode_tool_update(
+    update: ToolUpdateWire,
+) -> Option<proto::agent_session_event::tool_execution_updated::Update> {
+    use proto::agent_session_event::tool_execution_updated as teu;
+    Some(match update {
+        ToolUpdateWire::Started(v) => teu::Update::Started(teu::Started {
+            function_call: Some(proto::FunctionCall {
+                id: v.id,
+                call_id: v.call_id,
+                name: v.name,
+                arguments: v.arguments,
+                created_at: None,
+                extra: Default::default(),
+            }),
+        }),
+        ToolUpdateWire::CallUpdated(v) => teu::Update::CallUpdated(teu::CallUpdated {
+            id: v.id,
+            call_id: v.call_id,
+            message: v.message,
+        }),
+        // `message` unset means cancelled or an empty return.
+        ToolUpdateWire::Ended(v) => teu::Update::Ended(teu::Ended {
+            status: encode_tool_end_status(ToolEndStatus::from_wire(&v.status)?) as i32,
+            id: v.id,
+            call_id: v.call_id,
+            message: v.message,
+        }),
+        ToolUpdateWire::ReplyUpdated(v) => teu::Update::ReplyUpdated(teu::ReplyUpdated {
+            status: encode_tool_reply_status(ToolReplyStatus::from_wire(&v.status)?) as i32,
+            update_ids: v.update_ids,
+            speech_id: v.speech_id,
+        }),
+    })
+}
+
+fn encode_tool_end_status(s: ToolEndStatus) -> proto::ToolCallStatus {
+    match s {
+        ToolEndStatus::Done => proto::ToolCallStatus::TcDone,
+        ToolEndStatus::Error => proto::ToolCallStatus::TcError,
+        ToolEndStatus::Cancelled => proto::ToolCallStatus::TcCancelled,
+    }
+}
+
+fn encode_tool_reply_status(s: ToolReplyStatus) -> proto::ToolReplyStatus {
+    match s {
+        ToolReplyStatus::Scheduled => proto::ToolReplyStatus::TrScheduled,
+        ToolReplyStatus::Completed => proto::ToolReplyStatus::TrCompleted,
+        ToolReplyStatus::Interrupted => proto::ToolReplyStatus::TrInterrupted,
+        ToolReplyStatus::Skipped => proto::ToolReplyStatus::TrSkipped,
+    }
+}
+
+/// A tool-lifecycle update in its wire shape: a started call crosses as its reference only.
+fn tool_update_wire(update: &lk_agents_abi::voice::events::ToolUpdate) -> ToolUpdateWire {
+    use lk_agents_abi::voice::events::ToolUpdate;
+    use lk_agents_abi::worker::remote_session::ToolCallStartedWire;
+    match update {
+        ToolUpdate::Started(started) => {
+            let call = &started.function_call;
+            ToolUpdateWire::Started(ToolCallStartedWire {
+                id: call.id.clone(),
+                call_id: call.call_id.clone(),
+                name: call.name.clone(),
+                arguments: call.arguments.clone(),
+            })
+        }
+        ToolUpdate::Updated(updated) => ToolUpdateWire::CallUpdated(updated.clone()),
+        ToolUpdate::Ended(ended) => ToolUpdateWire::Ended(ended.clone()),
+        ToolUpdate::Reply(reply) => ToolUpdateWire::ReplyUpdated(reply.clone()),
+    }
 }
 
 /// The session events `SessionHost` forwards to the client (`register_session`'s handlers, and the
@@ -207,9 +236,9 @@ pub fn encode_wire(ev: WireEvent) -> Result<Option<proto::agent_session_event::E
 pub fn session_event(
     wire: &lk_agents_abi::voice::events::HostWire,
 ) -> Option<(WireEvent, Option<f64>)> {
-    use lk_agents_abi::voice::events::{HostWire as W, ToolUpdate};
+    use lk_agents_abi::voice::events::HostWire as W;
     use lk_agents_abi::worker::remote_session::{
-        AmdPredictionWire, ErrorWire, OverlappingSpeechWire, ToolCallStartedWire,
+        AmdPredictionWire, ErrorWire, OverlappingSpeechWire,
     };
     let event = match wire {
         W::AgentStateChanged(ev) => WireEvent::AgentStateChanged(ev.clone()),
@@ -230,22 +259,10 @@ pub fn session_event(
             WireEvent::ConversationItemAdded(Box::new(ev.clone()))
         }
         W::Error(ev) => WireEvent::Error(ErrorWire { message: ev.error.to_string() }),
-        W::ToolExecutionUpdated(ev) => WireEvent::ToolExecutionUpdated(ToolExecutionUpdatedWire {
-            update: match &ev.update {
-                ToolUpdate::Started(started) => {
-                    let call = &started.function_call;
-                    ToolUpdateWire::Started(ToolCallStartedWire {
-                        id: call.id.clone(),
-                        call_id: call.call_id.clone(),
-                        name: call.name.clone(),
-                        arguments: call.arguments.clone(),
-                    })
-                }
-                ToolUpdate::Updated(updated) => ToolUpdateWire::CallUpdated(updated.clone()),
-                ToolUpdate::Ended(ended) => ToolUpdateWire::Ended(ended.clone()),
-                ToolUpdate::Reply(reply) => ToolUpdateWire::ReplyUpdated(reply.clone()),
-            },
-        }),
+        W::ToolExecutionUpdated(ev) => {
+            let update = tool_update_wire(&ev.update);
+            WireEvent::ToolExecutionUpdated(ToolExecutionUpdatedWire { update })
+        }
         W::FunctionToolsExecuted(ev) => tools_executed(ev),
         W::OverlappingSpeech(ev) => WireEvent::OverlappingSpeech(OverlappingSpeechWire {
             is_interruption: ev.event.is_interruption,
@@ -391,6 +408,16 @@ pub fn plan_request(request: &proto::SessionRequest) -> Option<RequestPlan<'_>> 
     })
 }
 
+/// A session state's `started_at` when the session has not recorded one: answered as now.
+const UNSET_STARTED_AT: f64 = 0.0;
+
+/// The user's simulation verdict: whether it succeeded, and why.
+fn encode_verdict(
+    (success, reason): (bool, String),
+) -> proto::session_response::finalize_simulation_response::SimulationVerdict {
+    proto::session_response::finalize_simulation_response::SimulationVerdict { success, reason }
+}
+
 /// Encode an observed operation result with the answer's supplied wall time.
 pub fn encode_session_reply(
     request_id: String,
@@ -427,7 +454,7 @@ pub fn encode_session_reply(
         SessionReply::SessionState((agent_state, user_state, agent_id, options, started_at)) => {
             let agent_state = AgentState::from_wire(&agent_state).unwrap_or(AgentState::Idle);
             let user_state = UserState::from_wire(&user_state).unwrap_or(UserState::Listening);
-            let started_at = started_at.filter(|t| *t != 0.0).unwrap_or(now);
+            let started_at = started_at.filter(|t| *t != UNSET_STARTED_AT).unwrap_or(now);
             (
                 None,
                 Response::GetSessionState(proto::session_response::GetSessionStateResponse {
@@ -472,12 +499,7 @@ pub fn encode_session_reply(
             (
                 error,
                 Response::FinalizeSimulation(proto::session_response::FinalizeSimulationResponse {
-                    user_verdict: verdict.map(|(success, reason)| {
-                        proto::session_response::finalize_simulation_response::SimulationVerdict {
-                            success,
-                            reason,
-                        }
-                    }),
+                    user_verdict: verdict.map(encode_verdict),
                 }),
             )
         }
@@ -600,63 +622,59 @@ pub fn encode_duration_secs(secs: f64) -> proto::Duration {
 /// `session_usage_updated` event and the `GetSessionUsage` reply. The wire predates request
 /// counts and cache writes; an unreported breakdown crosses as zero.
 pub fn encode_session_usage(usage: &Usage) -> proto::AgentSessionUsage {
+    proto::AgentSessionUsage { model_usage: usage.models.iter().map(encode_model_usage).collect() }
+}
+
+/// One model's usage; a count past the wire's `i32` saturates.
+fn encode_model_usage(mu: &ModelUsage) -> proto::ModelUsage {
     use proto::model_usage::Usage as Wire;
     let n = |v: u64| i32::try_from(v).unwrap_or(i32::MAX);
     let o = |v: Option<u64>| n(v.unwrap_or_default());
     let name = |v: &Option<String>| v.clone().unwrap_or_default();
-    proto::AgentSessionUsage {
-        model_usage: usage
-            .models
-            .iter()
-            .map(|mu| proto::ModelUsage {
-                usage: Some(match mu {
-                    ModelUsage::Llm(u) => Wire::Llm(proto::LlmModelUsage {
-                        provider: name(&u.provider),
-                        model: name(&u.model),
-                        input_tokens: n(u.tokens.input_tokens),
-                        input_cached_tokens: o(u.tokens.cache_read_tokens),
-                        input_audio_tokens: o(u.tokens.input_audio_tokens),
-                        input_cached_audio_tokens: o(u.tokens.cache_read_audio_tokens),
-                        input_text_tokens: o(u.tokens.input_text_tokens),
-                        input_cached_text_tokens: o(u.tokens.cache_read_text_tokens),
-                        input_image_tokens: o(u.tokens.input_image_tokens),
-                        input_cached_image_tokens: o(u.tokens.cache_read_image_tokens),
-                        output_tokens: n(u.tokens.output_tokens),
-                        output_audio_tokens: o(u.tokens.output_audio_tokens),
-                        output_text_tokens: o(u.tokens.output_text_tokens),
-                        session_duration: u.connection_duration.unwrap_or_default(),
-                    }),
-                    ModelUsage::Tts(u) => Wire::Tts(proto::TtsModelUsage {
-                        provider: name(&u.provider),
-                        model: name(&u.model),
-                        input_tokens: n(u.tokens.input_tokens),
-                        output_tokens: n(u.tokens.output_tokens),
-                        characters_count: o(u.characters_count),
-                        audio_duration: u.audio_duration.unwrap_or_default(),
-                    }),
-                    ModelUsage::Stt(u) => Wire::Stt(proto::SttModelUsage {
-                        provider: name(&u.provider),
-                        model: name(&u.model),
-                        input_tokens: n(u.tokens.input_tokens),
-                        output_tokens: n(u.tokens.output_tokens),
-                        audio_duration: u.audio_duration.unwrap_or_default(),
-                    }),
-                    ModelUsage::Interruption(u) => {
-                        Wire::Interruption(proto::InterruptionModelUsage {
-                            provider: name(&u.provider),
-                            model: name(&u.model),
-                            total_requests: n(u.requests),
-                        })
-                    }
-                    ModelUsage::Eot(u) => Wire::Eot(proto::EotModelUsage {
-                        provider: name(&u.provider),
-                        model: name(&u.model),
-                        total_requests: n(u.requests),
-                    }),
-                }),
-            })
-            .collect(),
-    }
+    let usage = match mu {
+        ModelUsage::Llm(u) => Wire::Llm(proto::LlmModelUsage {
+            provider: name(&u.provider),
+            model: name(&u.model),
+            input_tokens: n(u.tokens.input_tokens),
+            input_cached_tokens: o(u.tokens.cache_read_tokens),
+            input_audio_tokens: o(u.tokens.input_audio_tokens),
+            input_cached_audio_tokens: o(u.tokens.cache_read_audio_tokens),
+            input_text_tokens: o(u.tokens.input_text_tokens),
+            input_cached_text_tokens: o(u.tokens.cache_read_text_tokens),
+            input_image_tokens: o(u.tokens.input_image_tokens),
+            input_cached_image_tokens: o(u.tokens.cache_read_image_tokens),
+            output_tokens: n(u.tokens.output_tokens),
+            output_audio_tokens: o(u.tokens.output_audio_tokens),
+            output_text_tokens: o(u.tokens.output_text_tokens),
+            session_duration: u.connection_duration.unwrap_or_default(),
+        }),
+        ModelUsage::Tts(u) => Wire::Tts(proto::TtsModelUsage {
+            provider: name(&u.provider),
+            model: name(&u.model),
+            input_tokens: n(u.tokens.input_tokens),
+            output_tokens: n(u.tokens.output_tokens),
+            characters_count: o(u.characters_count),
+            audio_duration: u.audio_duration.unwrap_or_default(),
+        }),
+        ModelUsage::Stt(u) => Wire::Stt(proto::SttModelUsage {
+            provider: name(&u.provider),
+            model: name(&u.model),
+            input_tokens: n(u.tokens.input_tokens),
+            output_tokens: n(u.tokens.output_tokens),
+            audio_duration: u.audio_duration.unwrap_or_default(),
+        }),
+        ModelUsage::Interruption(u) => Wire::Interruption(proto::InterruptionModelUsage {
+            provider: name(&u.provider),
+            model: name(&u.model),
+            total_requests: n(u.requests),
+        }),
+        ModelUsage::Eot(u) => Wire::Eot(proto::EotModelUsage {
+            provider: name(&u.provider),
+            model: name(&u.model),
+            total_requests: n(u.requests),
+        }),
+    };
+    proto::ModelUsage { usage: Some(usage) }
 }
 
 /// `MessageToDict` then `Struct().update(d)` (`remote_session.py:833-841`). Only an object becomes

@@ -1025,15 +1025,13 @@ pub fn folded(steps: &[Step]) -> Vec<Step> {
             && *first == step
         {
             *count += 1;
-            match out.last_mut() {
-                Some(Step::Interrupt(InterruptStep::ByAudioActivityRepeated { count: c })) => {
-                    *c = *count
-                }
-                Some(_) | None => {
-                    out.push(Step::Interrupt(InterruptStep::ByAudioActivityRepeated {
-                        count: *count,
-                    }))
-                }
+            if let Some(Step::Interrupt(InterruptStep::ByAudioActivityRepeated { count: c })) =
+                out.last_mut()
+            {
+                *c = *count;
+            } else {
+                let repeated = InterruptStep::ByAudioActivityRepeated { count: *count };
+                out.push(Step::Interrupt(repeated));
             }
             continue;
         }

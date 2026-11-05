@@ -208,20 +208,25 @@ impl VoiceDriver {
                 self.record_effect(VoiceEffect::DiscardOpenedInput(sink));
             }
             (Ok(sink), true) => {
-                let channel = match leg {
-                    StreamKind::Stt => {
-                        if let Some(stt) = &self.session.stt {
-                            self.record_effect(VoiceEffect::ProviderPrewarm(stt.id));
-                        }
-                        self.input.stt_provider = None;
-                        self.keyterms_on_stt_swap(now, self.input.stt_open_same);
-                        AudioChannel::Stt
-                    }
-                    StreamKind::Vad => AudioChannel::Vad,
-                };
+                let channel = self.adopt_opened_leg(now, leg);
                 self.install_sink(channel, sink);
                 self.record_trace(InputStep::StreamOpened { leg: channel.label() });
             }
+        }
+    }
+
+    /// The opened leg replaces the old one. A new STT is prewarmed and its keyterms swapped in.
+    fn adopt_opened_leg(&mut self, now: Ts, leg: StreamKind) -> AudioChannel {
+        match leg {
+            StreamKind::Stt => {
+                if let Some(stt) = &self.session.stt {
+                    self.record_effect(VoiceEffect::ProviderPrewarm(stt.id));
+                }
+                self.input.stt_provider = None;
+                self.keyterms_on_stt_swap(now, self.input.stt_open_same);
+                AudioChannel::Stt
+            }
+            StreamKind::Vad => AudioChannel::Vad,
         }
     }
 

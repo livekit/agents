@@ -157,7 +157,8 @@ impl VoiceDriver {
 
     fn reply_with_full_history(&mut self, now: Ts) {
         if self.activity.rt_session.is_some() {
-            self.realtime_reply(now, None, None, None, None, None, false, false);
+            let role = crate::agent_activity::realtime::RealtimeReplyRole::Internal;
+            self.realtime_reply(now, None, None, None, None, None, role);
             return;
         }
         let interruptible = self.session.config.effective.turn.interruption.enabled();

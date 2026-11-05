@@ -2,7 +2,7 @@
 //! tool reply, and the fillers (`RunContext.with_filler`).
 
 use crate::agent::{Source, Visibility};
-use crate::agent_activity::realtime::Request;
+use crate::agent_activity::realtime::{RealtimeReplyRole, Request};
 use crate::agent_activity::scheduling::{SpeechId, SpeechKind};
 use crate::agent_activity::speech::SpeechSpec;
 use crate::agent_session::closing::SESSION_CLOSING;
@@ -76,44 +76,50 @@ impl VoiceDriver {
         let mut settled = false;
         let mut waiting = Vec::new();
         let now = self.step.now;
-        for mut d in std::mem::take(&mut self.activity.tools.deferred) {
+        for d in std::mem::take(&mut self.activity.tools.deferred) {
             // Behind an earlier call of the same speech still waiting: started in order.
             if waiting.iter().any(|w: &Deferred| w.speech == d.speech) {
                 waiting.push(d);
                 continue;
             }
-            // Authorization last: a discarded preemptive generation, or a speech interrupted
-            // while queued, drops the call unrun. A start already authorized runs, interrupted or
-            // not, as the reference's executor starts the body right after
-            // `tool_execution_started_cb`.
-            let state = self.activity.speech_scheduler.speech(d.speech);
-            match state.map(|s| (s.step_authorized(d.step), s.interrupted() || s.done())) {
-                Some((true, _)) => {
-                    // `_tool_execution_started_cb`: stamped with its start (history is ordered by
-                    // `created_at`, and it was made before the step was authorized).
-                    if d.id.is_none() {
-                        d.call.created_at = self.step.wall();
-                        d.id = self.reply_call_made(d.speech, d.call.clone());
-                    }
-                    match d.id {
-                        Some(id) if !self.activity.reply_first_ready(d.speech, id) => {
-                            waiting.push(d);
-                            continue;
-                        }
-                        Some(id) => self.start_call(now, d, id),
-                        None => self.answer(Some(d.go), Answer::ToolGo(ToolGo::Gone)),
-                    }
-                }
-                Some((false, false)) => {
-                    waiting.push(d);
-                    continue;
-                }
-                Some(_) | None => self.answer(Some(d.go), Answer::ToolGo(ToolGo::Gone)),
+            match self.try_start_deferred(now, d) {
+                Some(d) => waiting.push(d),
+                None => settled = true,
             }
-            settled = true;
         }
         self.activity.tools.deferred = waiting;
         settled
+    }
+
+    /// One waiting call, started or dropped unrun; returned when it keeps waiting.
+    ///
+    /// Authorization last: a discarded preemptive generation, or a speech interrupted while
+    /// queued, drops the call unrun. A start already authorized runs, interrupted or not, as the
+    /// reference's executor starts the body right after `tool_execution_started_cb`.
+    fn try_start_deferred(&mut self, now: Ts, d: Deferred) -> Option<Deferred> {
+        let state = self.activity.speech_scheduler.speech(d.speech);
+        match state.map(|s| (s.step_authorized(d.step), s.interrupted() || s.done())) {
+            Some((true, _)) => return self.start_authorized(now, d),
+            Some((false, false)) => return Some(d),
+            Some(_) | None => self.answer(Some(d.go), Answer::ToolGo(ToolGo::Gone)),
+        }
+        None
+    }
+
+    /// An authorized call starts once its run decided its first move.
+    fn start_authorized(&mut self, now: Ts, mut d: Deferred) -> Option<Deferred> {
+        // `_tool_execution_started_cb`: stamped with its start (history is ordered by
+        // `created_at`, and it was made before the step was authorized).
+        if d.id.is_none() {
+            d.call.created_at = self.step.wall();
+            d.id = self.reply_call_made(d.speech, d.call.clone());
+        }
+        match d.id {
+            Some(id) if !self.activity.reply_first_ready(d.speech, id) => return Some(d),
+            Some(id) => self.start_call(now, d, id),
+            None => self.answer(Some(d.go), Answer::ToolGo(ToolGo::Gone)),
+        }
+        None
     }
 
     /// The call is told to the speech and started with its first move.
@@ -631,16 +637,12 @@ impl VoiceDriver {
     ) -> Option<SpeechId> {
         if self.activity.rt_session.is_some() {
             let tool_choice = Some(lk_agents_abi::ToolChoice::Forbidden);
-            return self.realtime_reply(
-                now,
-                None,
-                Some(text),
-                None,
-                tool_choice,
-                None,
-                false,
-                participates_in_voice_run,
-            );
+            let role = if participates_in_voice_run {
+                RealtimeReplyRole::VoiceRun
+            } else {
+                RealtimeReplyRole::Internal
+            };
+            return self.realtime_reply(now, None, Some(text), None, tool_choice, None, role);
         }
         let speech = self.start_speech(
             now,
@@ -923,51 +925,62 @@ impl VoiceDriver {
             return;
         }
         match action {
-            FillerAction::WaitForIdle | FillerAction::Dwell(_) | FillerAction::CoolDown(_) => {
-                let until = match action {
-                    FillerAction::Dwell(at) | FillerAction::CoolDown(at) => Some(at),
-                    FillerAction::WaitForIdle | FillerAction::Fire { .. } | FillerAction::Done => {
-                        None
-                    }
-                };
-                let Some(timer) = self.activity.tools.filler_wait(id, until) else { return };
-                if timer.cancel {
-                    self.clear_deadline(Timer::Filler(id));
-                }
-                if let Some(at) = timer.arm {
-                    self.set_deadline(Timer::Filler(id), at);
-                }
+            FillerAction::WaitForIdle => self.arm_filler_timer(id, None),
+            FillerAction::Dwell(at) | FillerAction::CoolDown(at) => {
+                self.arm_filler_timer(id, Some(at))
             }
-            FillerAction::Fire { step } => {
-                // A second fire in the instant of the last: its say finished at birth (no voice
-                // to speak it), left the session idle at once, and `interval=0` with no dwell
-                // came round again with no time passing, forever. The reference's loop spins
-                // there; this ends the filler, as it ends one whose say is refused.
-                let Some(run) = self.activity.tools.fillers.get_mut(&id) else { return };
-                if run.fired_at.replace(now) == Some(now) {
-                    self.end_filler(id, FillerEnd::Refused);
-                    return;
-                }
-                match self.activity.tools.fillers.get(&id).map(|r| r.source.clone()) {
-                    Some(FillerSource::Text(text)) => {
-                        self.fire_filler(now, id, step, Some(text), false)
-                    }
-                    Some(FillerSource::Host(source)) => {
-                        let hook = self.activity.hooks.mint();
-                        let wait = self.activity.hook_wait();
-                        let call = HookCall::FillerSource { id: hook, filler: id, step, source };
-                        // A callable no host can run never produces: like one that raises, it ends
-                        // the filler. Taken as a decline, the next fire could come in this instant.
-                        if let Some(run) = self.activity.tools.fillers.get_mut(&id) {
-                            run.asking = Some(hook);
-                        }
-                        self.issue_hook(now, call, Some(wait));
-                    }
-                    None => {}
-                }
-            }
+            FillerAction::Fire { step } => self.fire_filler_step(now, id, step),
             FillerAction::Done => self.end_filler(id, FillerEnd::Done),
         }
+    }
+
+    /// A wait: until idle (`None`) or until `until`.
+    fn arm_filler_timer(&mut self, id: FillerId, until: Option<Ts>) {
+        let Some(timer) = self.activity.tools.filler_wait(id, until) else { return };
+        if timer.cancel {
+            self.clear_deadline(Timer::Filler(id));
+        }
+        if let Some(at) = timer.arm {
+            self.set_deadline(Timer::Filler(id), at);
+        }
+    }
+
+    fn fire_filler_step(&mut self, now: Ts, id: FillerId, step: u32) {
+        // A second fire in the instant of the last: its say finished at birth (no voice
+        // to speak it), left the session idle at once, and `interval=0` with no dwell
+        // came round again with no time passing, forever. The reference's loop spins
+        // there; this ends the filler, as it ends one whose say is refused.
+        let Some(run) = self.activity.tools.fillers.get_mut(&id) else { return };
+        if run.fired_at.replace(now) == Some(now) {
+            self.end_filler(id, FillerEnd::Refused);
+            return;
+        }
+        // A fixed text: nothing was spoken by a host callable.
+        let spoke = false;
+        match self.activity.tools.fillers.get(&id).map(|r| r.source.clone()) {
+            Some(FillerSource::Text(text)) => self.fire_filler(now, id, step, Some(text), spoke),
+            Some(FillerSource::Host(source)) => self.ask_filler_source(now, id, step, source),
+            None => {}
+        }
+    }
+
+    /// The host's callable gives the fire's text, through the `filler_source` hook.
+    fn ask_filler_source(
+        &mut self,
+        now: Ts,
+        id: FillerId,
+        step: u32,
+        source: Option<lk_agents_abi::HostRef>,
+    ) {
+        let hook = self.activity.hooks.mint();
+        let wait = self.activity.hook_wait();
+        let call = HookCall::FillerSource { id: hook, filler: id, step, source };
+        // A callable no host can run never produces: like one that raises, it ends
+        // the filler. Taken as a decline, the next fire could come in this instant.
+        if let Some(run) = self.activity.tools.fillers.get_mut(&id) {
+            run.asking = Some(hook);
+        }
+        self.issue_hook(now, call, Some(wait));
     }
 }
 

@@ -328,21 +328,20 @@ mod speech_scheduler {
                         return SchedulingPass { released, next: NextSpeech::Stay };
                     }
                     // A candidate that finished during the gap: the queue is looked at.
-                    SchedulingStep::Delaying { next, .. } => {
+                    SchedulingStep::Delaying { next: None, .. } => {
                         released = true;
-                        let Some(next) = next else {
-                            self.step = SchedulingStep::Idle;
-                            continue;
-                        };
+                        self.step = SchedulingStep::Idle;
+                        continue;
+                    }
+                    SchedulingStep::Delaying { next: Some(next), .. } => {
+                        released = true;
                         next
                     }
                     SchedulingStep::AuthorizationPaused { next } => next,
-                    SchedulingStep::Idle => {
-                        let Some(speech) = self.speech_q.pop_front() else {
-                            return SchedulingPass { released, next: NextSpeech::Stay };
-                        };
-                        speech
-                    }
+                    SchedulingStep::Idle => match self.speech_q.pop_front() {
+                        Some(speech) => speech,
+                        None => return SchedulingPass { released, next: NextSpeech::Stay },
+                    },
                 };
                 let live = self.speeches.get(&candidate);
                 if live.is_some_and(|e| !e.state.interrupted() && e.status == Status::Queued) {

@@ -322,9 +322,8 @@ impl AudioRecognition {
     /// `_on_vad_event`.
     #[must_use = "recognition effects must be applied before the next transition"]
     pub fn on_vad_event(&mut self, now: Ts, ev: &VadEvent) -> Vec<AudioRecognitionEffect> {
-        let mut eff = Vec::new();
         if self.closed {
-            return eff;
+            return Vec::new();
         }
         match ev.kind {
             VadEventType::StartOfSpeech => {
@@ -332,87 +331,90 @@ impl AudioRecognition {
                 // is measured from this anchor.
                 let started_at =
                     now.saturating_sub(secs(ev.speech_duration + ev.inference_duration));
-                eff.extend(self.user_speech_started(
-                    now,
-                    started_at,
-                    secs(ev.speech_duration),
-                    true,
-                ));
+                self.user_speech_started(now, started_at, secs(ev.speech_duration), true)
             }
+            VadEventType::InferenceDone => self.vad_inference_done(now, ev),
+            VadEventType::EndOfSpeech => self.vad_speech_ended(now, ev),
+        }
+    }
 
-            VadEventType::InferenceDone => {
-                // No emit: this fires ~30x/s. The driver fans it out itself.
-                if ev.raw_accumulated_speech > 0.0 {
-                    // "for metrics, get the *earliest* signal of speech as possible"
-                    self.last_speaking_time = Some(now);
-                    if self.speech_start_time.is_none() {
-                        self.speech_start_time =
-                            Some(now.saturating_sub(secs(ev.raw_accumulated_speech)));
-                    }
-                    // A prediction taken while the user is still in a segment is worthless, answered
-                    // or not: the next pause asks again.
-                    if let Phase::Speaking { since, prediction, declared } = &self.phase {
-                        let (since, prediction, declared) = (*since, *prediction, *declared);
-                        if prediction != Prediction::Absent {
-                            eff.extend(self.cancel_prediction(prediction));
-                            eff.extend(self.set_phase(Phase::Speaking {
-                                since,
-                                prediction: Prediction::Absent,
-                                declared,
-                            }));
-                        }
-                    }
-                }
+    /// One VAD inference. No emit: this fires ~30x/s. The driver fans it out itself.
+    fn vad_inference_done(&mut self, now: Ts, ev: &VadEvent) -> Vec<AudioRecognitionEffect> {
+        let mut eff = Vec::new();
+        if ev.raw_accumulated_speech > 0.0 {
+            eff.extend(self.note_speaking(now, ev.raw_accumulated_speech));
+        }
+        eff.extend(self.request_eot_after_silence(ev));
+        eff
+    }
 
-                if secs(ev.raw_accumulated_silence) >= MIN_SILENCE_DURATION
-                    && matches!(self.cfg.detector, Detector::Streaming { .. })
-                    && let Phase::Speaking { since, prediction: Prediction::Absent, declared } =
-                        &self.phase
-                {
-                    let (since, declared) = (*since, *declared);
-                    let req = self.mint_req();
-                    eff.push(AudioRecognitionEffect::RequestEot(req, self.prediction_timeout()));
-                    eff.extend(self.set_phase(Phase::Speaking {
-                        since,
-                        prediction: Prediction::Pending(req),
-                        declared,
-                    }));
-                }
-            }
+    /// Speech heard in this inference: the times are stamped, and a stale prediction dropped.
+    fn note_speaking(&mut self, now: Ts, raw_speech: f64) -> Vec<AudioRecognitionEffect> {
+        // "for metrics, get the *earliest* signal of speech as possible"
+        self.last_speaking_time = Some(now);
+        if self.speech_start_time.is_none() {
+            self.speech_start_time = Some(now.saturating_sub(secs(raw_speech)));
+        }
+        // A prediction taken while the user is still in a segment is worthless, answered
+        // or not: the next pause asks again.
+        let Phase::Speaking { since, prediction, declared } = self.phase else {
+            return Vec::new();
+        };
+        if prediction == Prediction::Absent {
+            return Vec::new();
+        }
+        let mut eff = self.cancel_prediction(prediction);
+        let prediction = Prediction::Absent;
+        eff.extend(self.set_phase(Phase::Speaking { since, prediction, declared }));
+        eff
+    }
 
-            VadEventType::EndOfSpeech => {
-                let vad_speech_started = self.vad_speech_started;
-                self.ensure_user_turn(now, None);
-                let ended_at =
-                    now.saturating_sub(secs(ev.silence_duration + ev.inference_duration));
-                // `last_speaking_time` is re-stamped unconditionally (`._on_vad_event`), even under
-                // a host commit: the commit's run keeps its own snapshot.
-                let silence_duration = ev.silence_duration + ev.inference_duration;
-                let end = EndOfSpeechEvent { at: ended_at, from_vad: true, silence_duration };
-                eff.extend(self.user_speech_ended(end));
-                // A host commit owns the countdown: the VAD's end restarts nothing, so the commit's
-                // anchor, `skip_reply` and deadline are kept. The reference restarts under a VAD
-                // owner.
-                let manual_committed = matches!(self.phase, Phase::ManualCommitted { .. });
+    /// A streaming detector is asked for the end of turn once the silence is long enough.
+    fn request_eot_after_silence(&mut self, ev: &VadEvent) -> Vec<AudioRecognitionEffect> {
+        let Phase::Speaking { since, prediction: Prediction::Absent, declared } = self.phase else {
+            return Vec::new();
+        };
+        if secs(ev.raw_accumulated_silence) < MIN_SILENCE_DURATION
+            || !matches!(self.cfg.detector, Detector::Streaming { .. })
+        {
+            return Vec::new();
+        }
+        let req = self.mint_req();
+        let mut eff = vec![AudioRecognitionEffect::RequestEot(req, self.prediction_timeout())];
+        let prediction = Prediction::Pending(req);
+        eff.extend(self.set_phase(Phase::Speaking { since, prediction, declared }));
+        eff
+    }
 
-                // "A committed turn clears `_vad_speech_started` before its late VAD EOS arrives".
-                // With no STT no transcript was ever expected.
-                if self.cfg.stt_enabled && vad_speech_started {
-                    eff.extend(self.arm_transcription_timeout(
-                        now,
-                        secs(ev.speech_duration),
-                        secs(ev.silence_duration + ev.inference_duration),
-                    ));
-                }
+    fn vad_speech_ended(&mut self, now: Ts, ev: &VadEvent) -> Vec<AudioRecognitionEffect> {
+        let vad_speech_started = self.vad_speech_started;
+        self.ensure_user_turn(now, None);
+        let ended_at = now.saturating_sub(secs(ev.silence_duration + ev.inference_duration));
+        // `last_speaking_time` is re-stamped unconditionally (`._on_vad_event`), even under
+        // a host commit: the commit's run keeps its own snapshot.
+        let silence_duration = ev.silence_duration + ev.inference_duration;
+        let end = EndOfSpeechEvent { at: ended_at, from_vad: true, silence_duration };
+        let mut eff = self.user_speech_ended(end);
+        // A host commit owns the countdown: the VAD's end restarts nothing, so the commit's
+        // anchor, `skip_reply` and deadline are kept. The reference restarts under a VAD
+        // owner.
+        let manual_committed = matches!(self.phase, Phase::ManualCommitted { .. });
 
-                if !manual_committed
-                    && (self.cfg.turn_detection_mode == TurnDetectionMode::Vad
-                        || (self.cfg.turn_detection_mode == TurnDetectionMode::Stt
-                            && self.declared()))
-                {
-                    eff.extend(self.run_eou_detection(now, Start::Auto { declared: false }));
-                }
-            }
+        // "A committed turn clears `_vad_speech_started` before its late VAD EOS arrives".
+        // With no STT no transcript was ever expected.
+        if self.cfg.stt_enabled && vad_speech_started {
+            eff.extend(self.arm_transcription_timeout(
+                now,
+                secs(ev.speech_duration),
+                secs(ev.silence_duration + ev.inference_duration),
+            ));
+        }
+
+        let mode = self.cfg.turn_detection_mode;
+        let detects =
+            mode == TurnDetectionMode::Vad || (mode == TurnDetectionMode::Stt && self.declared());
+        if !manual_committed && detects {
+            eff.extend(self.run_eou_detection(now, Start::Auto { declared: false }));
         }
         eff
     }

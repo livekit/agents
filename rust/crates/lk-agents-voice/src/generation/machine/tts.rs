@@ -331,61 +331,63 @@ pub enum SynthesisLossEvent {
 impl SynthesisLoss {
     pub fn handle(&mut self, event: SynthesisLossEvent) -> Vec<SynthesisLossEffect> {
         match event {
-            SynthesisLossEvent::Failed { lost, aligned } => {
-                let lost = *lost;
-                if let Some(error) = lost.failure {
-                    return vec![SynthesisLossEffect::Fail(error)];
-                }
-                if !lost.lost {
-                    self.pending = Some(LossText::Unheard);
-                    return vec![SynthesisLossEffect::Drain {
-                        opening: lost.opening,
-                        forward_text: false,
-                    }];
-                }
-                self.sink = lost.heard;
-                let mut effects =
-                    vec![SynthesisLossEffect::ReleaseVoice, SynthesisLossEffect::CutShort];
-                match aligned {
-                    Some(aligned) if aligned.stamped => {
-                        // Once stamps were accepted, model text can never become their fallback.
-                        self.pending = Some(LossText::Stamped(aligned.words));
-                        effects.push(SynthesisLossEffect::Drain {
-                            opening: lost.opening,
-                            forward_text: false,
-                        });
-                    }
-                    aligned => {
-                        if aligned.is_some_and(|a| !a.closed) {
-                            effects.push(SynthesisLossEffect::Capture(lost.opening.text.clone()));
-                        }
-                        self.pending = Some(LossText::Generated {
-                            played: lost.played,
-                            synchronized: lost.synchronized,
-                        });
-                        effects.push(SynthesisLossEffect::Drain {
-                            opening: lost.opening,
-                            forward_text: true,
-                        });
-                    }
-                }
-                effects
+            SynthesisLossEvent::Failed { lost, aligned } => self.failed(*lost, aligned),
+            SynthesisLossEvent::Drained(words) => self.drained(words),
+        }
+    }
+
+    /// The synthesis failed: a lost voice is released and cut short, and the drain forwards the
+    /// model's text only when no accepted stamps stand for what was heard.
+    fn failed(
+        &mut self,
+        lost: Lost,
+        aligned: Option<AlignedTranscript>,
+    ) -> Vec<SynthesisLossEffect> {
+        if let Some(error) = lost.failure {
+            return vec![SynthesisLossEffect::Fail(error)];
+        }
+        if !lost.lost {
+            self.pending = Some(LossText::Unheard);
+            return vec![SynthesisLossEffect::Drain { opening: lost.opening, forward_text: false }];
+        }
+        self.sink = lost.heard;
+        let mut effects = vec![SynthesisLossEffect::ReleaseVoice, SynthesisLossEffect::CutShort];
+        match aligned {
+            Some(aligned) if aligned.stamped => {
+                // Once stamps were accepted, model text can never become their fallback.
+                self.pending = Some(LossText::Stamped(aligned.words));
+                effects.push(SynthesisLossEffect::Drain {
+                    opening: lost.opening,
+                    forward_text: false,
+                });
             }
-            SynthesisLossEvent::Drained(words) => {
-                let Some(pending) = self.pending.take() else {
-                    return Vec::new();
-                };
-                let text = match pending {
-                    LossText::Unheard => return vec![SynthesisLossEffect::Heard(Heard::default())],
-                    LossText::Stamped(text) => text,
-                    LossText::Generated { played: true, synchronized } => {
-                        synchronized.unwrap_or(words.text)
-                    }
-                    LossText::Generated { played: false, .. } => String::new(),
-                };
-                let sink = std::mem::take(&mut self.sink);
-                vec![SynthesisLossEffect::Heard(Heard { text, complete: true, ..sink })]
+            aligned => {
+                if aligned.is_some_and(|a| !a.closed) {
+                    effects.push(SynthesisLossEffect::Capture(lost.opening.text.clone()));
+                }
+                let (played, synchronized) = (lost.played, lost.synchronized);
+                self.pending = Some(LossText::Generated { played, synchronized });
+                effects
+                    .push(SynthesisLossEffect::Drain { opening: lost.opening, forward_text: true });
             }
         }
+        effects
+    }
+
+    /// The drain is done: what was heard, from the stamps, the synchronized text or the words.
+    fn drained(&mut self, words: Visible) -> Vec<SynthesisLossEffect> {
+        let Some(pending) = self.pending.take() else {
+            return Vec::new();
+        };
+        let text = match pending {
+            LossText::Unheard => return vec![SynthesisLossEffect::Heard(Heard::default())],
+            LossText::Stamped(text) => text,
+            LossText::Generated { played: true, synchronized } => {
+                synchronized.unwrap_or(words.text)
+            }
+            LossText::Generated { played: false, .. } => String::new(),
+        };
+        let sink = std::mem::take(&mut self.sink);
+        vec![SynthesisLossEffect::Heard(Heard { text, complete: true, ..sink })]
     }
 }

@@ -242,6 +242,26 @@ pub struct ToolCallEnded {
     pub status: String,
 }
 
+/// How a tool call ended: [`ToolCallEnded::status`].
+#[crate::host(wire_strs)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolEndStatus {
+    Done,
+    Error,
+    Cancelled,
+}
+
+/// Where the deferred tool reply is: [`ToolReplyUpdated::status`].
+#[crate::host(wire_strs)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolReplyStatus {
+    Scheduled,
+    Completed,
+    Interrupted,
+    /// The model judged the results already covered and said nothing.
+    Skipped,
+}
+
 /// Lifecycle of the deferred reply that voices buffered tool updates: ``scheduled``
 /// when queued, then ``completed`` / ``interrupted`` / ``skipped``. One reply may cover
 /// several calls; an inline first update never gets one.
@@ -544,6 +564,9 @@ pub struct MetricsCollectedWire {
     /// for the VAD's, which the session folds; `None` for one a provider metered itself.
     pub leg: Option<String>,
 }
+
+/// [`MetricsCollectedWire::leg`] for a record of the session's VAD.
+pub const METRICS_LEG_VAD: &str = "vad";
 
 /// `overlapping_speech`'s wire payload: the interruption detector's verdict, as it reported it.
 #[crate::host(record(module = "session_wire", emit))]

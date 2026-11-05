@@ -3,8 +3,8 @@
 use crate::generation::SpeechSegmentEvent;
 use crate::transcription::VisibleStream;
 use lk_agents_abi::metrics::base::LlmMetrics;
-use lk_agents_abi::{Extra, LlmChunk};
 use lk_agents_abi::metrics::base::Metadata;
+use lk_agents_abi::{Extra, LlmChunk};
 use lk_agents_core::metrics::provider::LlmMetricState;
 
 pub enum LlmRead {

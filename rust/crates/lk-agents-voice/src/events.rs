@@ -359,43 +359,7 @@ impl ToolLifecycle {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ToolEndStatus {
-    Done,
-    Error,
-    Cancelled,
-}
-
-impl ToolEndStatus {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            ToolEndStatus::Done => "done",
-            ToolEndStatus::Error => "error",
-            ToolEndStatus::Cancelled => "cancelled",
-        }
-    }
-}
-
-/// `ToolReplyUpdated.status`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ToolReplyStatus {
-    Scheduled,
-    Completed,
-    Interrupted,
-    /// The model judged the results already covered and said nothing.
-    Skipped,
-}
-
-impl ToolReplyStatus {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            ToolReplyStatus::Scheduled => "scheduled",
-            ToolReplyStatus::Completed => "completed",
-            ToolReplyStatus::Interrupted => "interrupted",
-            ToolReplyStatus::Skipped => "skipped",
-        }
-    }
-}
+pub use lk_agents_abi::voice::events::{ToolEndStatus, ToolReplyStatus};
 
 /// Machines hold no wall clock; the driver stamps.
 #[derive(Debug, Clone, PartialEq)]

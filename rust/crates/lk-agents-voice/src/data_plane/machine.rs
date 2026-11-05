@@ -14,6 +14,9 @@ use lk_agents_abi::{AudioFrame, Ts};
 use lk_agents_media::AudioByteStream;
 use lk_agents_media::{AudioResampler, OnChange, Quality};
 
+/// The length of each silence frame `FlushSttWithSilence` pushes, in seconds.
+const SILENCE_FLUSH_FRAME_SECONDS: f64 = 0.2;
+
 /// Control inputs to the microphone fan-out. External commands enter through the owner's queue;
 /// the decision core's effects are applied in their batch before another frame is forwarded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -127,51 +130,60 @@ impl AudioInputRouter {
             AudioInputRouterCommand::SetSource(_) => self.input_started = false,
             // The silence the closing verdict produced, reported before the verdict that ends it.
             AudioInputRouterCommand::SetGateDiscard(discard) => {
-                let silenced: Vec<(AudioChannel, u64)> = AudioChannel::ALL
-                    .into_iter()
-                    .filter_map(|channel| {
-                        let slot = &mut self.slots[channel as usize];
-                        let delta = slot.silent - slot.silent_reported;
-                        slot.silent_reported = slot.silent;
-                        (delta > 0).then_some((channel, delta))
-                    })
-                    .collect();
-                if !silenced.is_empty() {
-                    effects.push(AudioInputRouterEffect::ReportToSession(Box::new(
-                        VoiceEvent::GateSilenced(silenced),
-                    )));
-                }
+                self.report_gate_silence(&mut effects);
                 self.discard = discard;
             }
             AudioInputRouterCommand::SetInputEnabled(enabled) => self.input_enabled = enabled,
             AudioInputRouterCommand::FlushSttWithSilence { frames } => {
-                let stt = self.slots[AudioChannel::Stt as usize].sink;
-                if let (Some(sink), Some((rate, channels))) = (stt, self.last_input) {
-                    let per_frame = (f64::from(rate) * 0.2) as u32;
-                    if per_frame > 0 {
-                        for _ in 0..frames {
-                            let frame = silence_frame(per_frame, rate, channels);
-                            let head = false;
-                            effects.push(AudioInputRouterEffect::PushFrame { sink, frame, head });
-                        }
-                    }
-                }
+                self.flush_stt_with_silence(frames, &mut effects)
             }
-            AudioInputRouterCommand::ReportCensus => {
-                let channels = AudioChannel::ALL
-                    .into_iter()
-                    .filter_map(|channel| {
-                        let slot = &self.slots[channel as usize];
-                        Some((channel, slot.frames, slot.silent, slot.shape?))
-                    })
-                    .collect();
-                let census = InputCensus { channels, input: self.input_shape };
-                effects.push(AudioInputRouterEffect::ReportToSession(Box::new(
-                    VoiceEvent::InputCensus(census),
-                )));
-            }
+            AudioInputRouterCommand::ReportCensus => effects.push(self.census()),
         }
         effects
+    }
+
+    fn report_gate_silence(&mut self, effects: &mut Vec<AudioInputRouterEffect>) {
+        let silenced: Vec<(AudioChannel, u64)> = AudioChannel::ALL
+            .into_iter()
+            .filter_map(|channel| {
+                let slot = &mut self.slots[channel as usize];
+                let delta = slot.silent - slot.silent_reported;
+                slot.silent_reported = slot.silent;
+                (delta > 0).then_some((channel, delta))
+            })
+            .collect();
+        if !silenced.is_empty() {
+            let event = VoiceEvent::GateSilenced(silenced);
+            effects.push(AudioInputRouterEffect::ReportToSession(Box::new(event)));
+        }
+    }
+
+    /// `frames` frames of silence into the STT, shaped as the last microphone frame.
+    fn flush_stt_with_silence(&self, frames: u32, effects: &mut Vec<AudioInputRouterEffect>) {
+        let stt = self.slots[AudioChannel::Stt as usize].sink;
+        let (Some(sink), Some((rate, channels))) = (stt, self.last_input) else { return };
+        let per_frame = (f64::from(rate) * SILENCE_FLUSH_FRAME_SECONDS) as u32;
+        if per_frame == 0 {
+            return;
+        }
+        // Flushing silence is live input, not a pre-connect replay.
+        let head = false;
+        effects.extend((0..frames).map(|_| {
+            let frame = silence_frame(per_frame, rate, channels);
+            AudioInputRouterEffect::PushFrame { sink, frame, head }
+        }));
+    }
+
+    fn census(&self) -> AudioInputRouterEffect {
+        let channels = AudioChannel::ALL
+            .into_iter()
+            .filter_map(|channel| {
+                let slot = &self.slots[channel as usize];
+                Some((channel, slot.frames, slot.silent, slot.shape?))
+            })
+            .collect();
+        let census = InputCensus { channels, input: self.input_shape };
+        AudioInputRouterEffect::ReportToSession(Box::new(VoiceEvent::InputCensus(census)))
     }
 
     /// The session ended: every sink still installed has its input ended.

@@ -5,14 +5,14 @@ use crate::agent::{Source, Visibility};
 use crate::agent_activity::false_interruption::InterruptRefusal;
 use crate::agent_activity::options::TurnDetection;
 use crate::agent_activity::scheduling::{SpeechId, SpeechKind};
-use crate::agent_activity::speech::SpeechSpec;
+use crate::agent_activity::speech::{SAY_SHAPE_REFUSED_ON_REALTIME, SpeechSpec};
 use crate::agent_session::effects::Timer;
 use crate::agent_session::{Close, ClosePhase, Closing, SpeechCall, VoiceDriver};
 use crate::audio_recognition::{ServerSpeech, TurnDetectionMode};
 use crate::events::{DiagnosticEvent, SessionEvent};
 use crate::generation::ReplySource;
 use crate::generation::fatal;
-use crate::trace::{InterruptCause, InterruptStep, RealtimeStep};
+use crate::trace::{CoreStep, InterruptCause, InterruptStep, RealtimeStep, SpeechStep};
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::llm::realtime::{Event, RealtimeCapabilities, RealtimeCommand, RealtimeError};
 use lk_agents_abi::voice::events::AgentState;
@@ -69,6 +69,17 @@ pub enum RealtimeWake {
         speech: SpeechId,
         cuts: Vec<rt::Truncate>,
     },
+}
+
+/// What a realtime `generate_reply` is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RealtimeReplyRole {
+    /// A reply that extends the explicit voice run.
+    VoiceRun,
+    /// The DTMF read-back: in the voice run, its answer confirmed by the user.
+    ReadBack,
+    /// Internal presentation (experts, tool instructions) outside the voice run.
+    Internal,
 }
 
 impl VoiceDriver {
@@ -926,10 +937,11 @@ impl VoiceDriver {
         allow_interruptions: Option<bool>,
         tool_choice: Option<lk_agents_abi::ToolChoice>,
         call: Option<SpeechCall>,
-        read_back: bool,
-        participates_in_voice_run: bool,
+        role: RealtimeReplyRole,
     ) -> Option<SpeechId> {
         self.activity.rt_session.as_ref()?;
+        let read_back = role == RealtimeReplyRole::ReadBack;
+        let participates_in_voice_run = role != RealtimeReplyRole::Internal;
         if let Some(text) = user_input {
             let wall = self.step.wall();
             let item = ChatMessage::text(self.session.ids.mint("item"), Role::User, &text, wall);
@@ -939,6 +951,44 @@ impl VoiceDriver {
         }
         let request = Request::GenerateReply { instructions, tool_choice, read_back };
         self.realtime_request(now, request, call, allow_interruptions, participates_in_voice_run)
+    }
+
+    /// A realtime session's context and tools live in its session config, not per response:
+    /// `generate_reply(chat_ctx=, tools=)` is refused by name.
+    pub(crate) fn refuse_realtime_reply_overrides(&mut self, call: Option<SpeechCall>) {
+        self.record_trace(CoreStep::PortFailure(
+            "generate_reply(chat_ctx=) / generate_reply(tools=) on a realtime model: the session \
+             owns both",
+        ));
+        self.fail_waiter(
+            call,
+            SpeechKind::GenerateReply,
+            "generate_reply(chat_ctx=, tools=) is not supported on a realtime model",
+        );
+    }
+
+    /// A text `say()` the model speaks itself, as the host's request in its voice run.
+    pub(crate) fn realtime_say(
+        &mut self,
+        now: Ts,
+        text: String,
+        allow_interruptions: Option<bool>,
+        add_to_chat_ctx: bool,
+        call: Option<SpeechCall>,
+    ) {
+        let request = Request::Say { text, add_to_chat_ctx };
+        let participates_in_voice_run = true;
+        self.realtime_request(now, request, call, allow_interruptions, participates_in_voice_run);
+    }
+
+    /// The model's wire carries a string: a streamed `say` is refused by name.
+    pub(crate) fn refuse_realtime_say_stream(&mut self, call: Option<SpeechCall>) {
+        self.record_trace(SpeechStep::SayRefused { why: SAY_SHAPE_REFUSED_ON_REALTIME });
+        self.fail_waiter(
+            call,
+            SpeechKind::Say,
+            "say(stream) is not supported on a realtime model without a TTS",
+        );
     }
 
     fn on_input_transcription(
