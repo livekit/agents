@@ -7,6 +7,8 @@ LiveKit owns the room connection, participant audio, interruption plumbing,
 transcript IO, and worker lifecycle. This plugin adapts LiveKit Agents realtime
 model calls to Boson's OpenAI-compatible realtime protocol subset.
 
+See [https://docs.livekit.io/agents/models/realtime/boson/](https://docs.livekit.io/agents/models/realtime/boson/) for more information.
+
 ## Installation
 
 ```bash
@@ -30,14 +32,6 @@ The defaults connect to the hosted API (`wss://api.boson.ai/v1/realtime`) with
 the `higgs-realtime` model and the `default` voice. To point at another
 deployment, pass `url=` — and `api_key=None` if it does not authenticate.
 
-`examples/agent.py` is a complete agent with function tools that you can talk to
-over your own microphone, with no LiveKit server involved:
-
-```bash
-export BOSON_API_KEY=...
-python examples/agent.py console
-```
-
 ## Model options
 
 `boson.realtime.RealtimeModel` accepts these options:
@@ -52,7 +46,7 @@ python examples/agent.py console
 | `temperature` | Optional. Sent as `session.temperature` when set; otherwise the server default is used. |
 | `max_output_tokens` | Sent as `session.max_output_tokens`. |
 | `tool_choice` | Sent as `session.tool_choice`. |
-| `speed` | Sent as `session.audio.output.speed`. Not currently supported for output audio; kept for wire compatibility. |
+| `speed` | Playback rate for synthesized audio; `1.0` is unmodified. Sent as `session.audio.output.speed`. |
 | `turn_detection` | Sent as `session.audio.input.turn_detection`. |
 | `input_audio_transcription` | Sent as `session.audio.input.transcription`. |
 | `input_audio_noise_reduction` | Sent as `session.audio.input.noise_reduction`. |

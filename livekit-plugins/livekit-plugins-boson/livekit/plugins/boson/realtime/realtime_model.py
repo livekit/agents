@@ -27,12 +27,14 @@ from urllib.parse import urlparse
 
 import aiohttp
 from openai.types.realtime import (
+    AudioTranscription,
     ConversationItemAdded,
     ConversationItemCreateEvent,
     ConversationItemDeleteEvent,
     ConversationItemInputAudioTranscriptionCompletedEvent,
     InputAudioBufferSpeechStartedEvent,
     InputAudioBufferSpeechStoppedEvent,
+    RealtimeConversationItemFunctionCall,
     RealtimeErrorEvent,
     ResponseAudioDeltaEvent,
     ResponseAudioDoneEvent,
@@ -388,10 +390,12 @@ class RealtimeModel(openai_rt.RealtimeModel):
         temperature: NotGivenOr[float] = NOT_GIVEN,
         max_output_tokens: NotGivenOr[int | Literal["inf"] | None] = NOT_GIVEN,
     ) -> None:
-        """Change the defaults new sessions start from.
+        """Change the defaults new sessions start from, and apply the change to
+        the sessions already open.
 
-        Sessions already open keep their own copy and are unaffected. Omitted
-        arguments are left alone.
+        Omitted arguments are left alone. ``turn_detection``,
+        ``input_audio_transcription`` and ``input_audio_noise_reduction`` dicts
+        are merged into the current ones, key by key, as the server merges them.
 
         Args:
             voice: Output voice name.
@@ -429,18 +433,27 @@ class RealtimeModel(openai_rt.RealtimeModel):
         if is_given(speed):
             self._boson_opts.speed = speed
             self._opts.speed = speed
+        # Merged as each open session merges them (see RealtimeSession.update_options),
+        # so new sessions start from what the open ones hold and the capabilities
+        # computed here describe them too.
         if is_given(turn_detection):
-            self._boson_opts.turn_detection = _copy_dict_or_none(turn_detection)
+            self._boson_opts.turn_detection = _merge_session_value(
+                self._boson_opts.turn_detection, _copy_dict_or_none(turn_detection)
+            )
             self._capabilities.turn_detection = self._boson_opts.turn_detection is not None
         if is_given(input_audio_transcription):
-            self._boson_opts.input_audio_transcription = _normalize_input_audio_transcription(
-                input_audio_transcription
+            self._boson_opts.input_audio_transcription = _merge_session_value(
+                self._boson_opts.input_audio_transcription,
+                _normalize_input_audio_transcription(input_audio_transcription),
             )
             self._capabilities.user_transcription = _input_audio_transcription_enabled(
                 self._boson_opts.input_audio_transcription
             )
         if is_given(input_audio_noise_reduction):
-            self._boson_opts.noise_reduction = _build_noise_reduction(input_audio_noise_reduction)
+            self._boson_opts.noise_reduction = _merge_session_value(
+                self._boson_opts.noise_reduction,
+                _build_noise_reduction(input_audio_noise_reduction),
+            )
         # Unlike turn_detection/noise_reduction, `truncation` does not accept
         # `null` on the wire: sending one is rejected hard enough to end the
         # whole session, not just the one request. Guard against `None` the
@@ -512,6 +525,7 @@ class RealtimeSession(openai_rt.RealtimeSession):
         # the server just ended.
         self._server_terminal_reason: str | None = None
         super().__init__(realtime_model)
+        self._sync_base_transcription_opts()
         # The base recv loop dispatches OpenAI event types to _handle_* methods
         # and re-emits every raw event on this hook; Boson-specific events are
         # handled off it instead of forking the whole dispatch.
@@ -542,6 +556,20 @@ class RealtimeSession(openai_rt.RealtimeSession):
         since the server treats every connection as a new session.
         """
         return self._session_id
+
+    def _sync_base_transcription_opts(self) -> None:
+        # The transcription config lives in _boson_opts as the raw wire dict;
+        # the base keeps its own typed copy at None (see RealtimeModel.__init__).
+        # Two base paths read that copy: the transcription metrics, for the
+        # model name, and this session's capabilities. Point both at it.
+        transcription = self._boson_opts.input_audio_transcription
+        enabled = _input_audio_transcription_enabled(transcription)
+        self._opts.input_audio_transcription = (
+            AudioTranscription(model=transcription["model"])
+            if enabled and is_given(transcription)
+            else None
+        )
+        self._capabilities.user_transcription = enabled
 
     async def _main_task(self) -> None:
         # The base task owns connect/retry/reconnect (including the chat-context
@@ -688,6 +716,8 @@ class RealtimeSession(openai_rt.RealtimeSession):
                 turn_started_at=self._input_speech_started_at.get(event.item_id),
             ),
         )
+
+        self._emit_transcription_metrics(event)
 
     def _create_session_update_event(self) -> dict[str, Any]:
         return self._build_session_update_event("session_update_")
@@ -1084,6 +1114,7 @@ class RealtimeSession(openai_rt.RealtimeSession):
                 if is_given(self._boson_opts.input_audio_transcription)
                 else None
             )
+            self._sync_base_transcription_opts()
         if is_given(input_audio_noise_reduction):
             self._boson_opts.noise_reduction = _merge_session_value(
                 self._boson_opts.noise_reduction,
@@ -1326,6 +1357,18 @@ class RealtimeSession(openai_rt.RealtimeSession):
 
     def _handle_response_output_item_done(self, event: ResponseOutputItemDoneEvent) -> None:
         if self._is_stale_response_scoped_event(event.response_id):
+            # The base's first step, which it takes even for a discarded
+            # response: conversation.item.added carried the call before its
+            # arguments were generated, and a reconnect replays the mirror, so
+            # a superseded response's call still needs them recorded.
+            if (
+                isinstance(event.item, RealtimeConversationItemFunctionCall)
+                and event.item.id
+                and event.item.arguments is not None
+                and (remote_item := self._remote_chat_ctx.get(event.item.id))
+                and isinstance(remote_item.item, llm.FunctionCall)
+            ):
+                remote_item.item.arguments = event.item.arguments
             return
         super()._handle_response_output_item_done(event)
 

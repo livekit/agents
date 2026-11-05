@@ -698,21 +698,79 @@ async def test_boson_realtime_reconnect_config_carries_every_partial_update(monk
 
 
 @pytest.mark.asyncio
-async def test_boson_realtime_model_options_replace_dicts_for_new_sessions(monkeypatch):
-    # Only an open session's server holds a config to merge into. The model's
-    # options seed sessions that start from nothing, so a dict there replaces
-    # the old one instead of inheriting its keys.
+async def test_boson_realtime_model_options_merge_dicts_like_sessions(monkeypatch):
+    # An open session merges a partial dict into what its server holds, so the
+    # model has to merge it too: otherwise its capabilities, and every session
+    # opened after the change, disagree with the sessions already open.
     monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
 
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    model.update_options(turn_detection={"type": "semantic_vad", "eagerness": "low"})
-    session = model.session()
+    model = realtime.RealtimeModel(
+        url="ws://localhost:8000/v1/realtime/",
+        api_key="test-key",
+        input_audio_transcription_model="higgs-stt-3.1",
+    )
+    open_session = model.session()
     try:
-        event = await session._msg_ch.recv()
-        assert event["session"]["audio"]["input"]["turn_detection"] == {
-            "type": "semantic_vad",
-            "eagerness": "low",
-        }
+        await open_session._msg_ch.recv()  # initial session.update
+        model.update_options(
+            input_audio_transcription={"language": "fr"},
+            turn_detection={"threshold": 0.7},
+        )
+        await open_session._msg_ch.recv()  # the same change, merged by the server
+
+        assert model.capabilities.user_transcription is True
+        assert open_session.capabilities.user_transcription is True
+        new_session = model.session()
+        try:
+            audio_input = (await new_session._msg_ch.recv())["session"]["audio"]["input"]
+            assert audio_input["transcription"] == {"model": "higgs-stt-3.1", "language": "fr"}
+            assert audio_input["turn_detection"]["type"] == "server_vad"
+            assert audio_input["turn_detection"]["threshold"] == 0.7
+            assert audio_input["turn_detection"]["silence_duration_ms"] == 500
+        finally:
+            await new_session.aclose()
+    finally:
+        await open_session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.asyncio
+async def test_boson_realtime_transcription_emits_stt_metrics_with_the_model(monkeypatch):
+    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+
+    model = realtime.RealtimeModel(
+        url="ws://localhost:8000/v1/realtime/",
+        api_key="test-key",
+        input_audio_transcription_model="higgs-stt-3.1",
+    )
+    session = model.session()
+    metrics = []
+    session.on("metrics_collected", metrics.append)
+    try:
+        await session._msg_ch.recv()  # initial session.update
+
+        def transcribed(item_id: str) -> None:
+            _server_event(session, _user_item_added(item_id, []))
+            _server_event(
+                session,
+                {
+                    "type": "conversation.item.input_audio_transcription.completed",
+                    "event_id": f"event_{item_id}",
+                    "item_id": item_id,
+                    "content_index": 0,
+                    "transcript": "hello",
+                    "logprobs": None,
+                    "usage": {"type": "duration", "seconds": 1.5},
+                },
+            )
+
+        transcribed("user_1")
+        session.update_options(input_audio_transcription={"model": "higgs-stt-4"})
+        transcribed("user_2")
+
+        assert [m.metadata.model_name for m in metrics] == ["higgs-stt-3.1", "higgs-stt-4"]
+        assert [m.audio_duration for m in metrics] == [1.5, 1.5]
+        assert metrics[0].request_id == "event_user_1"
     finally:
         await session.aclose()
         await model.aclose()
@@ -1219,6 +1277,61 @@ async def test_boson_realtime_discarded_response_without_active_generation_is_sk
             },
         )
         assert session._current_generation is None
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.asyncio
+async def test_boson_realtime_superseded_response_still_records_call_arguments(monkeypatch):
+    # conversation.item.added carries a call before its arguments exist; only
+    # output_item.done fills them in. If that arrives after the next response
+    # took over, a reconnect must still replay the call with its arguments.
+    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+
+    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
+    session = model.session()
+    try:
+        await session._msg_ch.recv()  # initial session.update
+        call_item = {
+            "id": "call_item_a",
+            "object": "realtime.item",
+            "type": "function_call",
+            "status": "in_progress",
+            "call_id": "call_a",
+            "name": "lookup_weather",
+            "arguments": "",
+        }
+        _server_event(
+            session,
+            {"type": "response.created", "response": {"id": "resp_a", "status": "in_progress"}},
+        )
+        _server_event(
+            session,
+            {"type": "conversation.item.added", "previous_item_id": None, "item": call_item},
+        )
+        _server_event(
+            session,
+            {"type": "response.created", "response": {"id": "resp_b", "status": "in_progress"}},
+        )
+        generation_b = session._current_generation
+
+        _server_event(
+            session,
+            {
+                "type": "response.output_item.done",
+                "response_id": "resp_a",
+                "output_index": 0,
+                "item": {**call_item, "status": "completed", "arguments": '{"city": "Paris"}'},
+            },
+        )
+
+        remote_item = session._remote_chat_ctx.get("call_item_a")
+        assert remote_item is not None
+        assert remote_item.item.arguments == '{"city": "Paris"}'
+        # Recorded only: the superseded call is not handed to B to run.
+        assert session._current_generation is generation_b
+        assert generation_b.function_ch.qsize() == 0
     finally:
         await session.aclose()
         await model.aclose()
