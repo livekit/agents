@@ -97,10 +97,16 @@ class _BaseStreamingTurnDetectorStream:
 
     @dataclass
     class _StartOfTurnSentinel:
+        """The user turn started ``elapsed`` seconds before the end of the frames queued
+        before it."""
+
         elapsed: float
 
     @dataclass
     class _InferenceSentinel:
+        """An inference request, run after the frames queued before it; ``chat_ctx`` holds
+        the items as of ``predict()``."""
+
         request_id: str
         chat_ctx: ChatContext | None
 
