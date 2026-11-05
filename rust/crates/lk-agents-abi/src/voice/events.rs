@@ -883,11 +883,7 @@ pub struct CloseEvent {
     hook = "function_tools_cancel_agent_handoff"
 ))]
 #[python(property(name = "has_tool_reply", ret = "bool", hook = "function_tools_has_tool_reply"))]
-#[python(property(
-    name = "has_agent_handoff",
-    ret = "bool",
-    getter = "_handoff_required"
-))]
+#[python(property(name = "has_agent_handoff", ret = "bool", getter = "_handoff_required"))]
 pub struct FunctionToolsExecutedEvent {
     pub function_calls: Vec<crate::FunctionCall>,
     pub function_call_outputs: Vec<crate::FunctionCallOutput>,
