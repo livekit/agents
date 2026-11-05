@@ -702,13 +702,11 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         *,
         effects: tuple[_fsm.Effect, ...] = (),
         state_changed: bool = False,
-        corrects_stage: bool = False,
     ) -> None:
         event = AMDPredictionEvent(
             turn_id=turn.turn_id,
             category=self._category,
             stage=self._state,
-            corrects_stage=corrects_stage,
             reason=reason,
             transcript=turn.transcript.transcript,
             speech_duration=turn.speech_duration,
@@ -728,7 +726,6 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
                 update={
                     "turn_id": later.turn_id,
                     "reason": AMDReason.REUSED,
-                    "corrects_stage": False,
                     "transcript": later.transcript.transcript,
                     "speech_duration": later.speech_duration,
                     "delay": time.monotonic() - later.committed_at,
@@ -847,7 +844,6 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
                     AMDReason.PREDICTION,
                     effects=effects,
                     state_changed=state_changed,
-                    corrects_stage=result.corrects_stage,
                 )
 
             _accept_prediction(turn, response)

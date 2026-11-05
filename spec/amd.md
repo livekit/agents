@@ -142,7 +142,6 @@ Model rules:
 | `turn_id` | AMD's turn ID. IDs can skip numbers (section 7.4). |
 | `category` | The prediction for this turn. |
 | `stage` | The stage after this prediction. Never `wait`. |
-| `corrects_stage` | `True` when the prediction is not in the stage's recommended list (section 9.3). |
 | `reason` | `prediction`, `reused`, `inference_timeout`, or `inference_error`. |
 | `transcript` | The session transcript, else AMD's transcript. |
 | `speech_duration` | Participant speech in this turn, in seconds. |
@@ -324,7 +323,7 @@ An empty turn adds no message to classifier history and starts no request.
 - If a request is pending, the turn waits for it. When the result arrives, each
   waiting empty turn gets a copy with `reason="reused"`.
 - If no request is pending, the turn reuses the latest prediction at once with
-  `reason="reused"`. A reused event has `corrects_stage=False`.
+  `reason="reused"`.
 - A reused event does not change the latest prediction. The next request still sends
   the last classified prediction as `previous_prediction`.
 
@@ -434,8 +433,8 @@ usual effect (section 9.5).
 ### 9.3 Stage corrections
 
 A prediction outside the stage's recommended list corrects the stage, for example
-`machine-screening` in `machine-vm`. AMD accepts any valid category and sets
-`corrects_stage`. Only the prompt asks for evidence (section 8.3). A prediction in
+`machine-screening` in `machine-vm`. AMD accepts any valid category. Events do not
+mark a correction. Only the prompt asks for evidence (section 8.3). A prediction in
 the initial stage never corrects, because that stage recommends all categories. A
 correction applies to the current turn and later turns. It uses the same deadline,
 silence hold, and stale-request rules as other predictions. It does not rewrite
@@ -644,7 +643,7 @@ AgentSession forwards each `amd_prediction` and the `amd_completed` result to th
 remote session host. Each category maps to its own protocol category. A prediction
 carries its turn ID, stage, and inference duration. The inference duration is unset
 when the turn ran no inference. The completion carries the last prediction, which is
-unset when the run ended before one. The protocol does not carry `corrects_stage` or
+unset when the run ended before one. The protocol does not carry
 `amd_menu_observed`.
 
 ## 14. Invariants

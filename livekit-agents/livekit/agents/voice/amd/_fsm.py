@@ -63,21 +63,18 @@ class Effect(Enum):
 class Transition:
     next_state: AMDCategory
     effects: tuple[Effect, ...] = ()
-    corrects_stage: bool = False
-    """Whether the prediction left the recommended transitions."""
 
 
 def transition(state: AMDCategory, prediction: AMDCategory) -> Transition:
     # terminal stages complete AMD, so nothing follows them
     if not RECOMMENDED[state]:
         raise ValueError(f"invalid AMD transition: {state} -> {prediction}")
-    corrects_stage = prediction not in RECOMMENDED[state]
     match prediction:
         case AMDCategory.HUMAN | AMDCategory.MACHINE_UNAVAILABLE:
-            return Transition(prediction, (Effect.COMPLETE,), corrects_stage)
+            return Transition(prediction, (Effect.COMPLETE,))
         case AMDCategory.MACHINE_IVR:
-            return Transition(prediction, (Effect.EXTRACT_MENU,), corrects_stage)
+            return Transition(prediction, (Effect.EXTRACT_MENU,))
         case AMDCategory.UNCERTAIN | AMDCategory.WAIT:
             return Transition(state)
         case _:
-            return Transition(prediction, (), corrects_stage)
+            return Transition(prediction)

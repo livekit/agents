@@ -67,8 +67,6 @@ class AMDPredictionEvent(BaseModel):
     turn_id: int = 0
     stage: AMDCategory = AMDCategory.UNCERTAIN
     """Stage after this prediction. Never ``wait``."""
-    corrects_stage: bool = False
-    """Whether this prediction left the recommended transitions to correct an earlier stage."""
     inference_duration: float | None = None
 
     @property

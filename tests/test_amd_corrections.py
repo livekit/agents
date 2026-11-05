@@ -90,7 +90,6 @@ async def test_correction_uses_current_turn_and_persists(
         assert context.items[-1].text_content == instructions
         prediction = detector._turns[current_turn].prediction
         assert prediction.reason == AMDReason.PREDICTION
-        assert prediction.corrects_stage
         assert prediction.stage is corrected
         assert detector._previous_stage is initial
         assert prediction.inference_duration is not None
@@ -127,11 +126,10 @@ async def test_correction_ignores_model_supplied_correction_fields(
         prediction = detector._turns[2].prediction
         assert prediction.reason == AMDReason.PREDICTION
         assert prediction.stage == AMDCategory.MACHINE_SCREENING
-        assert prediction.corrects_stage
         assert detector.lifecycle == AMDLifecycle.ACTIVE
 
 
-async def test_reused_turns_do_not_repeat_a_correction() -> None:
+async def test_reused_turns_keep_the_corrected_stage() -> None:
     async with running() as (detector, session, classifier, _):
         first = await commit(detector, session, classifier)
         classifier.prediction(1, AMDCategory.MACHINE_VM)
@@ -141,14 +139,13 @@ async def test_reused_turns_do_not_repeat_a_correction() -> None:
         classifier.prediction(2, AMDCategory.MACHINE_SCREENING)
         assert not await correction.should_reply(llm.ChatContext())
         assert await empty.should_reply(llm.ChatContext())
-        assert detector._turns[2].prediction.corrects_stage
+        assert detector._turns[2].prediction.stage == AMDCategory.MACHINE_SCREENING
         empty = commit_turn(detector, end_of_turn(""))
         assert await empty.should_reply(llm.ChatContext())
         for turn_id in (3, 4):
             prediction = detector._turns[turn_id].prediction
             assert prediction.reason == AMDReason.REUSED
             assert prediction.stage == AMDCategory.MACHINE_SCREENING
-            assert not prediction.corrects_stage
         assert classifier.requests.empty()
 
 
@@ -179,4 +176,3 @@ async def test_correction_preserves_delivered_voicemail_and_dtmf_history() -> No
         assert detector._voicemail_message_played
         assert model.calls.empty()
         assert detector._turns[3].prediction.stage == AMDCategory.MACHINE_VM
-        assert not detector._turns[3].prediction.corrects_stage

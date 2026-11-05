@@ -60,7 +60,6 @@ def test_stage_transitions(current: Category, category: Category) -> None:
             fsm.transition(state, event)
         return
     result = fsm.transition(state, event)
-    assert result.corrects_stage == (category not in recommended[current])
     if category in {Category.UNCERTAIN, Category.WAIT}:
         assert result.next_state is current
     else:
@@ -88,8 +87,7 @@ def test_wait_and_uncertain_keep_the_stage(
     intermediate = fsm.transition(initial, bridge)
     assert intermediate.next_state is initial
     assert intermediate.effects == ()
-    assert not intermediate.corrects_stage
-    assert fsm.transition(intermediate.next_state, corrected).corrects_stage
+    assert fsm.transition(intermediate.next_state, corrected).next_state is corrected
 
 
 def test_same_ivr_state_extracts_each_menu() -> None:
@@ -112,25 +110,13 @@ def test_leaving_the_recommendations_corrects_the_stage(
 ) -> None:
     assert corrected not in fsm.RECOMMENDED[initial]
     result = fsm.transition(initial, corrected)
-    assert result.corrects_stage
     assert result.next_state == corrected
     assert result.effects == (
         (fsm.Effect.EXTRACT_MENU,) if corrected == Category.MACHINE_IVR else ()
     )
 
 
-@pytest.mark.parametrize("category", list(Category))
-def test_initial_predictions_are_never_corrections(category: Category) -> None:
-    assert not fsm.transition(Category.UNCERTAIN, category).corrects_stage
-
-
 @pytest.mark.parametrize("stage", [Category.HUMAN, Category.MACHINE_UNAVAILABLE])
 def test_terminal_stages_cannot_reopen_detection(stage: Category) -> None:
     with pytest.raises(ValueError, match="invalid AMD transition"):
         fsm.transition(stage, Category.MACHINE_SCREENING)
-
-
-def test_normal_progression_is_not_a_correction() -> None:
-    result = fsm.transition(Category.MACHINE_VM, Category.MACHINE_IVR)
-    assert result.next_state is Category.MACHINE_IVR
-    assert not result.corrects_stage
