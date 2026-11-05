@@ -186,7 +186,7 @@ class _StreamingV2Backend:
         self._warn_unused_vad()
 
     def _warn_unused_vad(self) -> None:
-        # Under client_flush no silence ends a turn, so these are never sent.
+        """Warn about VAD settings that `client_flush` never sends: no silence ends its turns."""
         if self._opts.segmentation_mode != "client_flush":
             return
         for name, value in (
