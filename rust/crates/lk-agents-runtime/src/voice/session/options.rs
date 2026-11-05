@@ -5,8 +5,8 @@
 use lk_agents_abi::HostRef;
 use lk_agents_abi::Maybe;
 use lk_agents_abi::voice::session_options::{
-    Expressive, ResolvedSessionOptions, SessionConnOptions, SessionKwargs, SessionLegs,
-    UpdateKwargs,
+    Expressive, InterruptionMode, ResolvedSessionOptions, SessionConnOptions, SessionKwargs,
+    SessionLegs, TurnDetection, UpdateKwargs,
 };
 use lk_agents_voice::agent_activity::options::{
     ConfigStack, OverrideLayer, resolved_session_options, session_layer, update_layer,
@@ -124,6 +124,14 @@ impl lk_agents_abi::voice::session::SessionOptions for SessionOptions {
         let layers = self.state().layers.clone();
         resolved_session_options(&layers.resolve(&legs), &layers.session)
     }
+
+    fn turn_detection(&self) -> Option<TurnDetection> {
+        self.state().layers.session.turn.detection.filter(|mode| *mode != TurnDetection::Auto)
+    }
+
+    fn interruption_mode(&self) -> Option<InterruptionMode> {
+        self.state().layers.session.turn.interruption.mode
+    }
 }
 
 // VoiceRuntime retention of host provider objects selected by the voice core.
@@ -192,7 +200,7 @@ impl ProviderRegistry {
 mod tests {
     use super::*;
     use lk_agents_abi::voice::session::SessionOptions as _;
-    use lk_agents_abi::voice::session_options::{TurnDetection, TurnDetectionKwarg};
+    use lk_agents_abi::voice::session_options::TurnDetectionKwarg;
 
     #[test]
     fn replaced_provider_references_are_released_outside_the_options_lock() {

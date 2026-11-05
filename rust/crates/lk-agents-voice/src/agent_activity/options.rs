@@ -21,9 +21,8 @@ use std::time::Duration;
 /// Session mode selection is immutable after construction, including pre-start updates.
 pub fn validate_session_update(
     update: &UpdateKwargs,
-    mode_given: bool,
 ) -> Result<(), lk_agents_abi::voice::session::CommandRefused> {
-    if mode_given || update.interruption.as_ref().is_some_and(|settings| settings.mode.is_some()) {
+    if update.interruption.as_ref().is_some_and(|settings| settings.mode.is_given()) {
         return Err(lk_agents_abi::voice::session::CommandRefused::Invalid(
             "interruption takes no mode here: the interruption mode is set with VoiceSession(turn_handling=)".to_owned(),
         ));
@@ -35,7 +34,7 @@ pub fn validate_session_update(
 pub fn running_layer(
     update: &UpdateKwargs,
 ) -> Result<AgentSessionOptions, lk_agents_abi::voice::session::CommandRefused> {
-    validate_session_update(update, false)?;
+    validate_session_update(update)?;
     if let Maybe::Given(TurnDetectionKwarg::Detector { .. }) = update.turn_detection {
         return Err(lk_agents_abi::voice::session::CommandRefused::Invalid(
             "update_options(turn_detection=) takes a mode on a running session; a turn detector object is set with VoiceSession(turn_handling=)".to_owned(),

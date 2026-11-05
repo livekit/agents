@@ -1376,7 +1376,7 @@ impl InferenceLlm {
                 crate::generated::records::from_representation::<
                     ::lk_agents_abi::ToolChoice,
                     ::serde_json::Value,
-                >(crate::py_values::value_from_py(v.as_any(), "\"tool_choice\"")?)
+                >(crate::py_values::value_from_py(v.as_any(), "tool_choice")?)
             })
             .transpose()?;
         let response_format = response_format

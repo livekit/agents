@@ -166,7 +166,7 @@ pub(crate) fn endpointing_options(kw: &EndpointingKwargs) -> EndpointingOptions 
 pub(crate) fn interruption_options(kw: &InterruptionKwargs) -> InterruptionOptions {
     InterruptionOptions {
         enabled: kw.enabled,
-        mode: kw.mode,
+        mode: kw.mode.given().flatten(),
         detection_enabled: None,
         by_audio_activity: None,
         discard_audio_if_uninterruptible: kw.discard_audio_if_uninterruptible,

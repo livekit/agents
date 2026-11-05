@@ -63,7 +63,7 @@ class InterruptionOptions(TypedDict, total=False):
 
     enabled: bool
     """Whether interruptions are enabled. Defaults to ``True``."""
-    mode: InterruptionMode
+    mode: InterruptionMode | None
     """Interruption handling strategy. ``"adaptive"`` for ML-based
     detection, ``"vad"`` for simple voice-activity detection.
     Absent means auto-detect.

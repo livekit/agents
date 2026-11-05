@@ -4,10 +4,20 @@ use std::sync::Arc;
 
 use crate::{BoxFuture, errors::HostError};
 
-#[crate::host(record(module = "session_owner", emit))]
-pub struct SessionOverride {
-    pub layer: u64,
-    pub providers: std::collections::BTreeMap<String, Option<crate::HostRef>>,
+/// `update_options` or `override_options` refused: its arguments or the session, or the host
+/// failing to bind a changed provider, raised as itself.
+#[crate::host(error(kind = "ValueError"))]
+#[derive(Debug, thiserror::Error)]
+pub enum OptionsRefused {
+    #[error(transparent)]
+    #[host(delegate)]
+    Command(#[from] super::session::CommandRefused),
+    #[error(transparent)]
+    #[host(delegate)]
+    Session(#[from] super::session::SessionRefused),
+    #[error(transparent)]
+    #[host(delegate)]
+    Host(#[from] HostError),
 }
 
 /// The job a session runs in: its trace is the job's, and its `agent_session` repeats the job's
@@ -70,6 +80,13 @@ pub trait SessionHost: Send + Sync {
     fn started(&self, cx: &crate::telemetry::Cx) -> BoxFuture<'_, Result<(), HostError>>;
     #[host(await, name = "closed")]
     fn closed(&self, cx: &crate::telemetry::Cx) -> BoxFuture<'_, ()>;
+    /// The running session's bindings of `providers`, the slots whose effective provider changed
+    /// (`None`: removed), each under the current agent's node for its leg.
+    #[host(call, name = "bind_providers")]
+    fn bind_providers(
+        &self,
+        providers: std::collections::BTreeMap<String, Option<crate::HostRef>>,
+    ) -> Result<ProviderBindings, HostError>;
 }
 
 #[crate::host(class(name = "_core_SessionOwner"))]
@@ -132,33 +149,63 @@ pub trait SessionOwner: Send + Sync + Sized + 'static {
         frame: Option<super::session::UpdateAgentArgs>,
         #[host(kw, default = None)] chat_ctx: Option<Vec<crate::ChatItem>>,
     ) -> Result<(), super::session::SessionRefused>;
+    /// `update_options(..)`: change only the supplied settings. A replaced `stt`, `tts` or `vad`
+    /// is installed in place on a running session, without restarting the call or interrupting
+    /// speech; a setting an `override_options` layer holds takes the new value once the layer is
+    /// released. `interruption` merges over the session's and takes no `mode`, which is set with
+    /// `VoiceSession(turn_handling=)`.
     #[host(call)]
+    #[host(facade(
+        module = "session_commands",
+        class = "SessionCommands",
+        target = "_owner",
+        annotation(
+            stt = "..stt.STT | str | None",
+            tts = "..tts.TTS | str | None",
+            vad = ".vad.VAD | None",
+            tts_text_transforms = "collections.abc.Sequence[..voice._session_bindings.TextTransforms] | None",
+            expressive = "bool | .expressive.ExpressiveOptions"
+        ),
+        resolve(
+            stt = "..voice._session_bindings._stt_model",
+            tts = "..voice._session_bindings._tts_model"
+        )
+    ))]
+    #[allow(clippy::too_many_arguments)]
     fn update_options(
         &self,
-        update: super::session_options::UpdateKwargs,
-        providers: std::collections::BTreeMap<String, Option<crate::HostRef>>,
-        #[host(kw, default = false)] interruption_mode_given: bool,
-    ) -> Result<
-        std::collections::BTreeMap<String, Option<crate::HostRef>>,
-        super::session::CommandRefused,
-    >;
+        #[host(kw)] stt: crate::Maybe<Option<crate::HostRef>>,
+        tts: crate::Maybe<Option<crate::HostRef>>,
+        vad: crate::Maybe<Option<crate::HostRef>>,
+        turn_detection: crate::Maybe<super::session_options::TurnDetectionKwarg>,
+        endpointing_opts: crate::Maybe<super::session_options::EndpointingKwargs>,
+        interruption: crate::Maybe<super::session_options::InterruptionKwargs>,
+        min_consecutive_speech_delay: crate::Maybe<f64>,
+        tts_text_transforms: crate::Maybe<Option<super::session_options::TextTransformSet>>,
+        expressive: crate::Maybe<super::session_options::Expressive>,
+        keyterms: crate::Maybe<Vec<String>>,
+    ) -> Result<(), OptionsRefused>;
+    /// `override_options(..)` entered: a layer over the session's settings and providers, each
+    /// taking its value from the topmost layer that sets it, named by the id returned, refused as
+    /// `update_options` refuses.
     #[host(call)]
+    #[allow(clippy::too_many_arguments)]
     fn override_options(
         &self,
-        update: super::session_options::UpdateKwargs,
-        providers: std::collections::BTreeMap<String, Option<crate::HostRef>>,
-        #[host(kw, default = false)] interruption_mode_given: bool,
-    ) -> Result<SessionOverride, super::session::CommandRefused>;
+        #[host(kw)] stt: crate::Maybe<Option<crate::HostRef>>,
+        tts: crate::Maybe<Option<crate::HostRef>>,
+        vad: crate::Maybe<Option<crate::HostRef>>,
+        turn_detection: crate::Maybe<super::session_options::TurnDetectionKwarg>,
+        endpointing_opts: crate::Maybe<super::session_options::EndpointingKwargs>,
+        interruption: crate::Maybe<super::session_options::InterruptionKwargs>,
+        min_consecutive_speech_delay: crate::Maybe<f64>,
+        tts_text_transforms: crate::Maybe<Option<super::session_options::TextTransformSet>>,
+    ) -> Result<u64, OptionsRefused>;
+    /// The `override_options` block ended, however it ended: its settings are released and the
+    /// providers it changed restored. On a closed session the settings still release and the
+    /// restore is refused (`SessionClosing`); there is nothing left to restore.
     #[host(call)]
-    fn release_override(
-        &self,
-        layer: u64,
-    ) -> std::collections::BTreeMap<String, Option<crate::HostRef>>;
-    #[host(call)]
-    fn install_providers(
-        &self,
-        bindings: ProviderBindings,
-    ) -> Result<(), super::session::SessionRefused>;
+    fn release_override(&self, layer: u64) -> Result<(), OptionsRefused>;
     #[host(call)]
     fn resolved_options(
         &self,

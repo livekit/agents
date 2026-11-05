@@ -374,6 +374,15 @@ pub trait SessionOptions: Clone + Send + Sync + Sized + 'static {
     /// before `start()`.
     #[host(call)]
     fn resolved(&self, legs: SessionLegs) -> ResolvedSessionOptions;
+
+    /// The turn detection mode the session's own settings name (the constructor's and every
+    /// `update_options` before `start()`); `None` when automatic or a detector object.
+    #[host(getter)]
+    fn turn_detection(&self) -> Option<crate::voice::session_options::TurnDetection>;
+
+    /// The interruption mode `VoiceSession(turn_handling=)` set; `None` when the session picks.
+    #[host(getter)]
+    fn interruption_mode(&self) -> Option<crate::voice::session_options::InterruptionMode>;
 }
 
 /// `voice/agent_session.py`'s `AgentSession`: assembled at construction, started at `start()`,

@@ -19,6 +19,16 @@ from ..voice._session_callbacks import _origin
 from collections.abc import AsyncIterable
 from .rtc_frames import AudioFrame
 from .usage import Usage
+from livekit.agents.voice.io import TurnDetectionMode
+from .turn import EndpointingOptions
+from .turn import InterruptionOptions
+from ..stt import STT
+from ..voice._session_bindings import _stt_model
+from ..tts import TTS
+from ..voice._session_bindings import _tts_model
+from .vad import VAD
+from ..voice._session_bindings import TextTransforms
+from .expressive import ExpressiveOptions
 
 
 class SessionCommands:
@@ -132,3 +142,36 @@ class SessionCommands:
     def keyterms(self) -> list[str]:
         """No keyterms are applied before a voice driver exists."""
         return self._owner.keyterms
+
+    def update_options(
+        self,
+        *,
+        stt: NotGivenOr[STT | str | None] = NOT_GIVEN,
+        tts: NotGivenOr[TTS | str | None] = NOT_GIVEN,
+        vad: NotGivenOr[VAD | None] = NOT_GIVEN,
+        turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
+        endpointing_opts: NotGivenOr[EndpointingOptions] = NOT_GIVEN,
+        interruption: NotGivenOr[InterruptionOptions] = NOT_GIVEN,
+        min_consecutive_speech_delay: NotGivenOr[float] = NOT_GIVEN,
+        tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None] = NOT_GIVEN,
+        expressive: NotGivenOr[bool | ExpressiveOptions] = NOT_GIVEN,
+        keyterms: NotGivenOr[Sequence[str]] = NOT_GIVEN,
+    ) -> None:
+        """`update_options(..)`: change only the supplied settings. A replaced `stt`, `tts` or `vad`
+        is installed in place on a running session, without restarting the call or interrupting
+        speech; a setting an `override_options` layer holds takes the new value once the layer is
+        released. `interruption` merges over the session's and takes no `mode`, which is set with
+        `VoiceSession(turn_handling=)`.
+        """
+        return self._owner.update_options(
+            stt=_stt_model(stt) if is_given(stt) else stt,
+            tts=_tts_model(tts) if is_given(tts) else tts,
+            vad=vad,
+            turn_detection=turn_detection,
+            endpointing_opts=endpointing_opts,
+            interruption=interruption,
+            min_consecutive_speech_delay=min_consecutive_speech_delay,
+            tts_text_transforms=tts_text_transforms,
+            expressive=expressive,
+            keyterms=keyterms,
+        )

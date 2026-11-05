@@ -156,17 +156,16 @@ fn an_agents_turn_detection_none_is_automatic_selection() {
 
 #[test]
 fn updates_cannot_reselect_interruption_mode_even_before_start() {
-    let empty = UpdateKwargs::default();
-    assert!(validate_session_update(&empty, false).is_ok());
-    // A host's explicit null still counts as supplying the construction-only key.
-    assert!(validate_session_update(&empty, true).is_err());
-    let update = UpdateKwargs {
-        interruption: Some(lk_agents_abi::voice::session_options::InterruptionKwargs {
-            mode: Some(InterruptionMode::Vad),
-            ..Default::default()
-        }),
+    use lk_agents_abi::voice::session_options::InterruptionKwargs;
+    let with_mode = |mode| UpdateKwargs {
+        interruption: Some(InterruptionKwargs { mode, ..Default::default() }),
         ..Default::default()
     };
-    assert!(validate_session_update(&update, false).is_err());
+    assert!(validate_session_update(&UpdateKwargs::default()).is_ok());
+    assert!(validate_session_update(&with_mode(Maybe::NotGiven)).is_ok());
+    // A host's explicit null still counts as supplying the construction-only key.
+    assert!(validate_session_update(&with_mode(Maybe::Given(None))).is_err());
+    let update = with_mode(Maybe::Given(Some(InterruptionMode::Vad)));
+    assert!(validate_session_update(&update).is_err());
     assert!(running_layer(&update).is_err());
 }

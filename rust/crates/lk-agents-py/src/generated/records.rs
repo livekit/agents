@@ -12962,39 +12962,6 @@ pub mod session_owner {
     use pyo3::prelude::*;
 
     // Declared in rust/crates/lk-agents-abi/src/voice/session_owner.rs.
-    static SESSION_OVERRIDE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn session_override_to_py<'py>(
-        py: Python<'py>,
-        value: ::lk_agents_abi::voice::session_owner::SessionOverride,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let ::lk_agents_abi::voice::session_owner::SessionOverride { layer, providers } = value;
-        let kwargs = ::pyo3::types::PyDict::new(py);
-        kwargs.set_item("layer", ::pyo3::IntoPyObjectExt::into_bound_py_any(layer, py)?)?;
-        kwargs.set_item("providers", {
-            let d = ::pyo3::types::PyDict::new(py);
-            for (k, x) in providers {
-                d.set_item(
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(k, py)?,
-                    match x {
-                        None => py.None().into_bound(py),
-                        Some(x) => crate::py_objects::object_ref_to_py(py, x)?,
-                    },
-                )?;
-            }
-            d.into_any()
-        })?;
-        crate::py_calls::call(
-            SESSION_OVERRIDE
-                .import(py, "livekit.agents._generated.session_owner", "SessionOverride")?
-                .as_any(),
-            (),
-            Some(&kwargs),
-        )
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/voice/session_owner.rs.
     static SESSION_JOB_INFO: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -20402,6 +20369,17 @@ pub mod turn {
         }
     }
 
+    pub fn interruption_mode_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::voice::session_options::InterruptionMode,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let value = match value {
+            ::lk_agents_abi::voice::session_options::InterruptionMode::Adaptive => "adaptive",
+            ::lk_agents_abi::voice::session_options::InterruptionMode::Vad => "vad",
+        };
+        ::pyo3::PyResult::Ok(::pyo3::types::PyString::new(py, value).into_any())
+    }
+
     // Declared in rust/crates/lk-agents-abi/src/voice/session_options.rs.
 
     pub fn endpointing_options_from_py(
@@ -20459,10 +20437,20 @@ pub mod turn {
                 _ => None,
             },
             mode: match obj.get_item("mode")? {
-                Some(v) if !v.is_none() && !crate::py_values::is_not_given(&v)? => {
-                    Some((crate::generated::records::turn::interruption_mode_from_py(v.as_any()))?)
+                Some(v) => {
+                    (if crate::py_values::is_not_given(v.as_any())? {
+                        Ok(::lk_agents_abi::Maybe::NotGiven)
+                    } else {
+                        (if v.as_any().is_none() {
+                            Ok(None)
+                        } else {
+                            (crate::generated::records::turn::interruption_mode_from_py(v.as_any()))
+                                .map(Some)
+                        })
+                        .map(::lk_agents_abi::Maybe::Given)
+                    })?
                 }
-                _ => None,
+                None => ::lk_agents_abi::Maybe::NotGiven,
             },
             discard_audio_if_uninterruptible: match obj
                 .get_item("discard_audio_if_uninterruptible")?

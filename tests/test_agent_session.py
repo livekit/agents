@@ -1,5 +1,6 @@
 import asyncio
 from collections.abc import AsyncIterable, Callable
+from typing import Literal
 
 import pytest
 
@@ -32,6 +33,57 @@ def test_pre_start_provider_updates_and_views_need_no_event_loop() -> None:
     assert session.options["endpointing"]["min_delay"] == 0.4
     assert session.keyterms == []
     assert session.usage == VoiceSession(vad=None).usage
+
+
+class _CountedTTS(FakeTTS):
+    def __init__(self) -> None:
+        super().__init__(fake_audio_duration=0.1)
+        self.bound = 0
+
+    def _core_leg(self) -> object:
+        self.bound += 1
+        return super()._core_leg()
+
+
+async def test_a_provider_update_binds_only_on_a_running_session() -> None:
+    early, late = _CountedTTS(), _CountedTTS()
+    async with _voiced_session(FakeTTS(fake_audio_duration=0.1)) as session:
+        session.update_options(tts=early)
+        assert early.bound == 0, "before start() the session opens on the options' providers"
+        await session.start(Agent(instructions="Welcome the caller.", name="reception"))
+        bound = early.bound
+        session.update_options(endpointing_opts={"min_delay": 0.4})
+        assert early.bound == bound, "a settings-only update rebinds no provider"
+        session.update_options(tts=late)
+        assert late.bound == 1
+        await asyncio.wait_for(session.say("One moment."), timeout=5)
+        assert _synthesized(late) == 1
+
+
+@pytest.mark.parametrize("mode", [None, "vad"])
+async def test_the_interruption_mode_is_set_only_at_construction(
+    mode: Literal["vad"] | None,
+) -> None:
+    async with VoiceSession(vad=None, turn_detection="manual") as session:
+        with pytest.raises(ValueError, match="takes no mode"):
+            session.update_options(interruption={"mode": mode, "min_duration": 1.5})
+        assert session.options["interruption"]["min_duration"] != 1.5, "nothing applies"
+        with pytest.raises(ValueError, match="takes no mode"):
+            async with session.override_options(interruption={"mode": mode}):
+                pass
+
+
+def test_the_detector_gate_reads_the_session_modes_from_the_native_options() -> None:
+    plain = VoiceSession(vad=None)
+    assert plain._options.turn_detection is None
+    assert plain._options.interruption_mode is None
+    chosen = VoiceSession(
+        vad=None, turn_detection="manual", turn_handling={"interruption": {"mode": "vad"}}
+    )
+    assert chosen._options.turn_detection == "manual"
+    assert chosen._options.interruption_mode == "vad"
+    chosen.update_options(turn_detection=None)
+    assert chosen._options.turn_detection is None
 
 
 async def test_agent_switch_preserves_the_conversation_history() -> None:

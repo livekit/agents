@@ -103,6 +103,37 @@ impl SessionHost for FailingHost {
             self.closed.fetch_add(1, Ordering::SeqCst);
         })
     }
+    fn bind_providers(
+        &self,
+        _providers: std::collections::BTreeMap<String, Option<HostRef>>,
+    ) -> Result<lk_agents_abi::voice::session_owner::ProviderBindings, HostError> {
+        panic!("a session that is not running binds no provider")
+    }
+}
+
+// Catches: a provider update binding host legs while the session is still opening, before the
+// voice loop it would install them on exists.
+#[tokio::test]
+async fn option_updates_while_the_session_opens_stay_on_the_options() {
+    let owner = owner();
+    let host = Arc::new(FailingHost::default());
+    let storage = Arc::new(SessionStorage::new(
+        &ProcessEnv::current_runtime(),
+        None,
+        None,
+        "frontdesk".into(),
+        "frontdesk".into(),
+        None,
+    ));
+    let opening =
+        owner.start(storage, host.clone(), None, lk_agents_abi::telemetry::Cx::NONE).unwrap();
+    host.preparing.notified().await;
+    use Maybe::NotGiven as N;
+    owner.update_options(Maybe::Given(None), N, N, N, N, N, N, N, N, N).unwrap();
+    let layer = owner.override_options(N, Maybe::Given(None), N, N, N, N, N, N).unwrap();
+    owner.release_override(layer).unwrap();
+    host.release.notify_one();
+    assert!(opening.await.is_err());
 }
 
 #[tokio::test]

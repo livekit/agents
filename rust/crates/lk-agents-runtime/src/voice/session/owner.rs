@@ -1,24 +1,28 @@
 //! Executes admitted lifetime operations. The owner exists before any room or provider opens;
 //! cancelling a host waiter does not abandon startup or finalization.
 
-use super::{SessionOptions, VoiceSession, storage::SessionStorage};
+use super::{SessionOptions, VoiceSession, options::Providers, storage::SessionStorage};
 use crate::telemetry;
-use lk_agents_abi::BoxFuture;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::recorder::{AudioRecorder, RecordingFailure};
 use lk_agents_abi::voice::events::CloseReason;
 use lk_agents_abi::voice::events::{HostWire, SessionErrorWire};
 use lk_agents_abi::voice::session::{
-    CommandRefused, SessionOptions as _, SessionRefused, UnknownCloseReason, VoiceSession as _,
+    SessionOptions as _, SessionRefused, UnknownCloseReason, VoiceSession as _,
 };
 use lk_agents_abi::voice::session_effects::{DeliveredState, SessionEvents};
-use lk_agents_abi::voice::session_options::{ResolvedSessionOptions, SessionLegs, UpdateKwargs};
+use lk_agents_abi::voice::session_options::{
+    EndpointingKwargs, Expressive, InterruptionKwargs, ResolvedSessionOptions, SessionLegs,
+    TextTransformSet, TurnDetectionKwarg, UpdateKwargs,
+};
 use lk_agents_abi::voice::session_owner::SessionOwner as _;
 use lk_agents_abi::voice::session_owner::{
-    ProviderBindings, SessionBindings, SessionBindingsPort, SessionHost, SessionOverride,
+    OptionsRefused, SessionBindings, SessionBindingsPort, SessionHost,
 };
 use lk_agents_abi::voice::session_storage::SessionStorage as _;
+use lk_agents_abi::{BoxFuture, HostRef, Maybe};
 use lk_agents_net::{env::ProcessEnv, task::TaskSet};
+use lk_agents_voice::agent_activity::options::validate_session_update;
 use lk_agents_voice::agent_session::lifecycle::{CloseOwner, OwnerLifecycle, StartOwner};
 use parking_lot::Mutex;
 use std::sync::{Arc, OnceLock, Weak};
@@ -207,6 +211,27 @@ impl Inner {
         host.started(&in_session).await
     }
 
+    /// Bind the providers whose effective value changed to the running session; before it runs,
+    /// the session opens on the options' providers instead.
+    fn install(&self, changed: Providers) -> Result<(), OptionsRefused> {
+        let (Some(session), Some(startup)) = (self.session.get(), self.startup.get()) else {
+            return Ok(());
+        };
+        if changed.is_empty() {
+            return Ok(());
+        }
+        let bindings = startup.host.bind_providers(changed)?;
+        Ok(session.update_models(
+            Maybe::NotGiven,
+            bindings.tts,
+            bindings.stt,
+            bindings.vad,
+            None,
+            bindings.tts_node,
+            bindings.stt_node,
+        )?)
+    }
+
     async fn finish_recording(&self) -> Result<(), RecordingFailure> {
         let Some(recorder) = self.recorder.get() else { return Ok(()) };
         self.recording.get_or_init(|| recorder.finish()).await.clone()
@@ -229,6 +254,17 @@ impl Inner {
             log::warn!("the session recording could not finish: {error}");
         }
     }
+}
+
+fn providers(
+    stt: Maybe<Option<HostRef>>,
+    tts: Maybe<Option<HostRef>>,
+    vad: Maybe<Option<HostRef>>,
+) -> Providers {
+    [("stt", stt), ("tts", tts), ("vad", vad)]
+        .into_iter()
+        .filter_map(|(slot, provider)| Some((slot.to_owned(), provider.given()?)))
+        .collect()
 }
 
 async fn opened(
@@ -381,67 +417,75 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
 
     fn update_options(
         &self,
-        update: UpdateKwargs,
-        providers: std::collections::BTreeMap<String, Option<lk_agents_abi::HostRef>>,
-        interruption_mode_given: bool,
-    ) -> Result<std::collections::BTreeMap<String, Option<lk_agents_abi::HostRef>>, CommandRefused>
-    {
-        lk_agents_voice::agent_activity::options::validate_session_update(
-            &update,
-            interruption_mode_given,
-        )?;
+        stt: Maybe<Option<HostRef>>,
+        tts: Maybe<Option<HostRef>>,
+        vad: Maybe<Option<HostRef>>,
+        turn_detection: Maybe<TurnDetectionKwarg>,
+        endpointing_opts: Maybe<EndpointingKwargs>,
+        interruption: Maybe<InterruptionKwargs>,
+        min_consecutive_speech_delay: Maybe<f64>,
+        tts_text_transforms: Maybe<Option<TextTransformSet>>,
+        expressive: Maybe<Expressive>,
+        keyterms: Maybe<Vec<String>>,
+    ) -> Result<(), OptionsRefused> {
+        let update = UpdateKwargs {
+            endpointing_opts: endpointing_opts.given(),
+            turn_detection,
+            expressive,
+            keyterms: keyterms.given(),
+            interruption: interruption.given(),
+            min_consecutive_speech_delay: min_consecutive_speech_delay.given(),
+            tts_text_transforms,
+        };
+        validate_session_update(&update)?;
         if let Some(session) = self.0.session.get() {
             session.update_turn_options(update)?;
         } else {
             self.0.options.update(update);
         }
-        Ok(self.0.options.update_providers(providers))
+        self.0.install(self.0.options.update_providers(providers(stt, tts, vad)))
     }
 
     fn override_options(
         &self,
-        update: UpdateKwargs,
-        providers: std::collections::BTreeMap<String, Option<lk_agents_abi::HostRef>>,
-        interruption_mode_given: bool,
-    ) -> Result<SessionOverride, CommandRefused> {
-        lk_agents_voice::agent_activity::options::validate_session_update(
-            &update,
-            interruption_mode_given,
-        )?;
+        stt: Maybe<Option<HostRef>>,
+        tts: Maybe<Option<HostRef>>,
+        vad: Maybe<Option<HostRef>>,
+        turn_detection: Maybe<TurnDetectionKwarg>,
+        endpointing_opts: Maybe<EndpointingKwargs>,
+        interruption: Maybe<InterruptionKwargs>,
+        min_consecutive_speech_delay: Maybe<f64>,
+        tts_text_transforms: Maybe<Option<TextTransformSet>>,
+    ) -> Result<u64, OptionsRefused> {
+        let update = UpdateKwargs {
+            endpointing_opts: endpointing_opts.given(),
+            turn_detection,
+            interruption: interruption.given(),
+            min_consecutive_speech_delay: min_consecutive_speech_delay.given(),
+            tts_text_transforms,
+            ..UpdateKwargs::default()
+        };
+        validate_session_update(&update)?;
         let layer = match self.0.session.get() {
             Some(session) => session.override_options(update)?,
             None => self.0.options.override_options(update),
         };
-        Ok(SessionOverride {
-            layer,
-            providers: self.0.options.override_providers(layer, providers),
-        })
+        let installed =
+            self.0.install(self.0.options.override_providers(layer, providers(stt, tts, vad)));
+        if let Err(error) = installed {
+            // The block never opens: its layer is not left held.
+            let _ = self.release_override(layer);
+            return Err(error);
+        }
+        Ok(layer)
     }
 
-    fn release_override(
-        &self,
-        layer: u64,
-    ) -> std::collections::BTreeMap<String, Option<lk_agents_abi::HostRef>> {
+    fn release_override(&self, layer: u64) -> Result<(), OptionsRefused> {
         match self.0.session.get() {
             Some(session) => session.release_override(layer),
             None => self.0.options.release_override(layer),
         }
-        self.0.options.release_providers(layer)
-    }
-
-    fn install_providers(&self, bindings: ProviderBindings) -> Result<(), SessionRefused> {
-        match self.0.session.get() {
-            Some(session) => session.update_models(
-                lk_agents_abi::Maybe::NotGiven,
-                bindings.tts,
-                bindings.stt,
-                bindings.vad,
-                None,
-                bindings.tts_node,
-                bindings.stt_node,
-            ),
-            None => Ok(()),
-        }
+        self.0.install(self.0.options.release_providers(layer))
     }
 
     fn resolved_options(&self, legs: SessionLegs) -> ResolvedSessionOptions {

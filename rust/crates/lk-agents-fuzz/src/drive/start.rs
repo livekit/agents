@@ -570,7 +570,7 @@ fn session_kwargs(setup: &Setup) -> SessionKwargs {
             }),
             interruption: setup.interruption.then(|| InterruptionKwargs {
                 enabled: Some(true),
-                mode: Some(InterruptionMode::Adaptive),
+                mode: lk_agents_abi::Maybe::Given(Some(InterruptionMode::Adaptive)),
                 ..InterruptionKwargs::default()
             }),
             preemptive_generation: setup.preemptive.then(|| PreemptiveKwargs {

@@ -67,7 +67,13 @@ class ThreadReads:
         `status` when given. Pass the page's `next_page_token` to read the next; a token is bound
         to its listing.
         """
-        return await self._native.list_tasks(agent=agent, status=status, order=order, page_token=page_token, limit=limit)
+        return await self._native.list_tasks(
+            agent=agent,
+            status=status,
+            order=order,
+            page_token=page_token,
+            limit=limit,
+        )
 
     async def task(self, task_id: str) -> TaskRecord | None:
         """One task record, `None` when this thread has none of that id."""

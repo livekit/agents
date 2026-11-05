@@ -16,23 +16,16 @@ from livekit.agents.voice.avatar import DataStreamAudioOutput
 pytestmark = pytest.mark.unit
 
 
-def test_provider_updates_bind_only_the_changed_legs_and_their_nodes(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_provider_updates_bind_only_the_changed_legs_and_their_nodes() -> None:
     from types import SimpleNamespace
 
     from livekit.agents.types import NOT_GIVEN
-    from livekit.agents.voice._session_bindings import SessionAdapter
+    from livekit.agents.voice._session_bindings import SessionHost
 
-    installed = []
     stt_node, tts_node = object(), object()
-    session = SimpleNamespace(
-        _core=object(),
-        current_agent=object(),
-        _owner=SimpleNamespace(install_providers=installed.append),
-    )
-    adapter = SessionAdapter(session)
-    monkeypatch.setattr(adapter, "_nodes", lambda _: {"stt_node": stt_node, "tts_node": tts_node})
+    adapter = SimpleNamespace(_nodes=lambda _: {"stt_node": stt_node, "tts_node": tts_node})
+    host = SessionHost.__new__(SessionHost)
+    host.session = SimpleNamespace(current_agent=object(), _adapter=adapter)
 
     class Provider:
         def __init__(self) -> None:
@@ -43,24 +36,16 @@ def test_provider_updates_bind_only_the_changed_legs_and_their_nodes(
             self.resolutions += 1
             return self.native
 
-    adapter._install_models({"stt": None})
-    first = installed.pop()
+    first = host.bind_providers({"stt": None})
     assert first.stt is None and first.tts is NOT_GIVEN and first.vad is NOT_GIVEN
     assert first.stt_node is stt_node and first.tts_node is None
 
     speaker, detector = Provider(), Provider()
-    adapter._install_models({"tts": speaker, "vad": detector})
-    second = installed.pop()
+    second = host.bind_providers({"tts": speaker, "vad": detector})
     assert second.stt is NOT_GIVEN and second.tts is speaker.native
     assert second.vad is detector.native
     assert second.stt_node is None and second.tts_node is tts_node
     assert speaker.resolutions == detector.resolutions == 1
-
-    session._core = None
-    microphone = Provider()
-    adapter._install_models({"stt": microphone})
-    assert microphone.resolutions == 0, "a session not running binds nothing"
-    assert installed == []
 
 
 def test_provider_bridge_preserves_authored_overrides_and_inherited_native_paths(

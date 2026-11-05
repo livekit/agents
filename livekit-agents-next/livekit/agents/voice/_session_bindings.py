@@ -4,11 +4,10 @@ adaptation to native arguments, session startup and the remote session protocol.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import contextvars
 import dataclasses
 from collections import deque
-from collections.abc import AsyncIterable, AsyncIterator, Callable, Coroutine
+from collections.abc import AsyncIterable, Callable, Coroutine
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from typing_extensions import TypeVar
@@ -49,7 +48,7 @@ from .events import (
 
 if TYPE_CHECKING:
     from .._core import VoiceAgent as _NativeAgent
-    from .._generated.session_options import SessionLegs, UpdateKwargs
+    from .._generated.session_options import SessionLegs
     from ..storage import Thread
     from .agent_session import VoiceSession
     from .io import EndpointingOptions, TurnDetectionMode
@@ -127,7 +126,6 @@ _OPTION_KEYS = (SessionKwargs.__required_keys__ | SessionKwargs.__optional_keys_
     "conn_options"
 }
 _NODES = ("llm_node", "tts_node", "stt_node", "transcription_node")
-_MODELS = ("stt", "tts", "vad")
 
 
 def initialize(
@@ -202,8 +200,6 @@ def initialize(
         if isinstance(detection, inference.TurnDetector)
         else TurnDetector(detection)
     )
-    session._turn_detection_mode = detection if isinstance(detection, str) else None
-    session._interruption_mode = (turn_handling.get("interruption") or {}).get("mode")
     session._video_sampler = (
         video_sampler if is_given(video_sampler) else VoiceActivityVideoSampler()
     )
@@ -264,6 +260,7 @@ class SessionAdapter:
         stt_caps = session.stt.capabilities if session.stt is not None else None
         has_vad = session.vad is not None
         realtime = isinstance(model, RealtimeModel)
+        options = session._options
         verdict = _core.resolve_interruption_detector(
             stt_aligned_transcript=bool(stt_caps.aligned_transcript) if stt_caps else None,
             stt_streaming=stt_caps.streaming if stt_caps else None,
@@ -273,15 +270,15 @@ class SessionAdapter:
                 caps_turn_detection=model.capabilities.turn_detection,
                 can_disable_turn_detection=model.capabilities.can_disable_turn_detection,
                 vad=has_vad,
-                turn_detection=session._turn_detection_mode,
+                turn_detection=options.turn_detection,
                 streaming_detector=session._turn_detector is not None,
-                interruption_given=bool(session._interruption_mode),
+                interruption_given=options.interruption_mode is not None,
             ),
             has_vad=has_vad,
-            turn_detection=session._turn_detection_mode,
+            turn_detection=options.turn_detection,
             allow_interruptions=session.options["interruption"]["enabled"],
             agent_mode=None,
-            session_mode=session._interruption_mode,
+            session_mode=options.interruption_mode,
             hosted=is_hosted(),
             dev_mode=is_dev_mode(),
         )
@@ -377,33 +374,6 @@ class SessionAdapter:
         session = self.session
         return session._default_vad is not None and session.vad is session._default_vad
 
-    def _install_models(self, models: dict[str, Any]) -> None:
-        """Bind the providers whose effective value changed (``models``, as the native options
-        returned them) to the running session, under the agent's nodes."""
-        session = self.session
-        stt_model: NotGivenOr[stt.STT | None] = models.get("stt", NOT_GIVEN)
-        tts_model: NotGivenOr[tts.TTS | None] = models.get("tts", NOT_GIVEN)
-        vad_model: NotGivenOr[VAD | None] = models.get("vad", NOT_GIVEN)
-        # Plugin proxies capture the running host loop. Before startup, retain only SDK objects;
-        # the startup adapter binds their effective values when the native owner asks for them.
-        if models and session._core is not None:
-            nodes = self._nodes(session.current_agent)
-            session._owner.install_providers(
-                ProviderBindings(
-                    stt=_bindings.core_leg(stt_model) if is_given(stt_model) else NOT_GIVEN,
-                    tts=_bindings.core_leg(tts_model) if is_given(tts_model) else NOT_GIVEN,
-                    vad=_bindings.core_leg(vad_model) if is_given(vad_model) else NOT_GIVEN,
-                    stt_node=nodes.get("stt_node") if is_given(stt_model) else None,
-                    tts_node=nodes.get("tts_node") if is_given(tts_model) else None,
-                )
-            )
-
-    @staticmethod
-    def _split(options: dict[str, Any]) -> tuple[dict[str, Any], UpdateKwargs]:
-        """``options`` as its providers and its settings."""
-        models = {k: v for k, v in options.items() if k in _MODELS}
-        return models, cast("UpdateKwargs", {k: v for k, v in options.items() if k not in _MODELS})
-
     async def _start_ivr_detection(self, transcript: str | None = None) -> None:
         """Start IVR detection: the DTMF tool joins the session's tools and the core's navigator
         runs, counting ``transcript`` (AMD's greeting) as heard."""
@@ -417,52 +387,6 @@ class SessionAdapter:
         )
         if transcript is not None:
             session._running.ivr_final(transcript)
-
-    def configure(self, **options: Any) -> None:
-        session = self.session
-        models, turn = self._split(_provider_options(options))
-        self._install_models(
-            session._owner.update_options(
-                turn, models, interruption_mode_given="mode" in (turn.get("interruption") or {})
-            )
-        )
-
-    @contextlib.asynccontextmanager
-    async def override(self, **options: Any) -> AsyncIterator[None]:
-        session = self.session
-        models, turn = self._split(_provider_options(options))
-        # One override identity for turn settings and runtime-owned provider references.
-        layer = None
-        failure: BaseException | None = None
-        try:
-            override = session._owner.override_options(
-                turn, models, interruption_mode_given="mode" in (turn.get("interruption") or {})
-            )
-            layer = override.layer
-            self._install_models(override.providers)
-            yield
-        except BaseException as error:
-            failure = error
-            raise
-        finally:
-            # a release never raises: a closed session has nothing left to restore
-            if layer is not None:
-                try:
-                    self._install_models(session._owner.release_override(layer))
-                except _core.SessionClosing as refused:
-                    # a closed session has nothing left to restore; the block's own error is the
-                    # one to raise
-                    if failure is not None:
-                        failure.add_note(f"restoring the overridden providers: {refused}")
-
-
-def _provider_options(options: dict[str, Any]) -> dict[str, Any]:
-    options = _given(**options)
-    if "stt" in options:
-        options["stt"] = _stt_model(options["stt"])
-    if "tts" in options:
-        options["tts"] = _tts_model(options["tts"])
-    return options
 
 
 def _given(**options: Any) -> dict[str, Any]:
@@ -639,6 +563,21 @@ class SessionHost:
         rtc_room = _RtcRoom.of(room) if room is not None else None
         return _core._core_SessionBindings(
             room=_core._core_create_room_session(rtc_room), args=args, recorder=session._recorder
+        )
+
+    def bind_providers(self, providers: dict[str, Any]) -> ProviderBindings:
+        session = self.session
+        nodes = session._adapter._nodes(session.current_agent)
+
+        def leg(slot: str) -> Any:
+            return _bindings.core_leg(providers[slot]) if slot in providers else NOT_GIVEN
+
+        return ProviderBindings(
+            stt=leg("stt"),
+            tts=leg("tts"),
+            vad=leg("vad"),
+            stt_node=nodes.get("stt_node") if "stt" in providers else None,
+            tts_node=nodes.get("tts_node") if "tts" in providers else None,
         )
 
     async def started(self) -> None:

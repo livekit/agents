@@ -15,7 +15,7 @@ import copy
 from collections import deque
 from collections.abc import AsyncIterator, Callable, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Generic, Literal, cast, overload
+from typing import TYPE_CHECKING, Any, Generic, cast, overload
 
 from livekit import rtc
 
@@ -52,6 +52,8 @@ from ._session_bindings import (
     UserTurnExceededHook as UserTurnExceededHook,
     VoiceActivityVideoSampler as VoiceActivityVideoSampler,
     _CallbackT,
+    _stt_model,
+    _tts_model,
     initialize,
 )
 from ._session_callbacks import (
@@ -105,8 +107,6 @@ class VoiceSession(SessionCommands, rtc.EventEmitter[EventTypes], Generic[Contex
     _tools: list[llm.Tool | llm.Toolset]
     _default_vad: VAD | None
     _turn_detector: Any
-    _turn_detection_mode: str | None
-    _interruption_mode: Literal["adaptive", "vad"] | None
     _video_sampler: VoiceActivityVideoSampler | None
     _input: io.AgentInput
     _output: io.AgentOutput
@@ -420,38 +420,6 @@ class VoiceSession(SessionCommands, rtc.EventEmitter[EventTypes], Generic[Contex
         """The driving agent's own context, as the core keeps it."""
         return ChatContext(list(self._running.agent_chat_ctx()))
 
-    def update_options(
-        self,
-        *,
-        stt: NotGivenOr[STT | str | None] = NOT_GIVEN,
-        tts: NotGivenOr[TTS | str | None] = NOT_GIVEN,
-        vad: NotGivenOr[VAD | None] = NOT_GIVEN,
-        turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
-        endpointing_opts: NotGivenOr[EndpointingOptions] = NOT_GIVEN,
-        interruption: NotGivenOr[InterruptionOptions] = NOT_GIVEN,
-        min_consecutive_speech_delay: NotGivenOr[float] = NOT_GIVEN,
-        tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None] = NOT_GIVEN,
-        expressive: NotGivenOr[bool | ExpressiveOptions] = NOT_GIVEN,
-        keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
-    ) -> None:
-        """Change only the supplied settings of the session. A replaced STT, TTS or VAD is
-        installed in place, without restarting the call or interrupting speech; a setting an
-        ``override_options`` layer holds takes the new value once the layer is released.
-        ``interruption`` merges over the session's, except its ``mode``, which is set at
-        construction."""
-        self._adapter.configure(
-            stt=stt,
-            tts=tts,
-            vad=vad,
-            turn_detection=turn_detection,
-            endpointing_opts=endpointing_opts,
-            interruption=interruption,
-            min_consecutive_speech_delay=min_consecutive_speech_delay,
-            tts_text_transforms=tts_text_transforms,
-            expressive=expressive,
-            keyterms=keyterms,
-        )
-
     @contextlib.asynccontextmanager
     async def override_options(
         self,
@@ -467,18 +435,31 @@ class VoiceSession(SessionCommands, rtc.EventEmitter[EventTypes], Generic[Contex
     ) -> AsyncIterator[None]:
         """Layer settings over the session's for the block: each takes its value from the
         topmost layer that sets it, else from the base, and the layer is released when the
-        block ends, however it ends."""
-        async with self._adapter.override(
-            stt=stt,
-            tts=tts,
+        block ends, however it ends. Refused as ``update_options`` refuses."""
+        layer = self._owner.override_options(
+            stt=_stt_model(stt),
+            tts=_tts_model(tts),
             vad=vad,
             turn_detection=turn_detection,
             endpointing_opts=endpointing_opts,
             interruption=interruption,
             min_consecutive_speech_delay=min_consecutive_speech_delay,
             tts_text_transforms=tts_text_transforms,
-        ):
+        )
+        failure: BaseException | None = None
+        try:
             yield
+        except BaseException as error:
+            failure = error
+            raise
+        finally:
+            try:
+                self._owner.release_override(layer)
+            except _core.SessionClosing as refused:
+                # a closed session has nothing left to restore; the block's own error is the one
+                # to raise
+                if failure is not None:
+                    failure.add_note(f"restoring the overridden providers: {refused}")
 
     # --- frames --------------------------------------------------------------------------
 

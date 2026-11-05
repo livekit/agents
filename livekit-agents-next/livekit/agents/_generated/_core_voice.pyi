@@ -10,15 +10,22 @@ from datetime import date
 from typing import Any, Self
 
 from livekit.agents import VAD
+from livekit.agents._generated.expressive import ExpressiveOptions
 from livekit.agents.beta.workflows import _TransferHost
 from livekit.agents.llm import LLM
 from livekit.agents.llm.tool_context import ToolChoice
 from livekit.agents.stt import STT
 from livekit.agents.tts import TTS
 from livekit.agents.voice._session_bindings import SessionHost
-from livekit.agents.voice.agent_session import _SessionNodes
+from livekit.agents.voice.agent_session import TextTransforms, _SessionNodes
 from livekit.agents.voice.avatar import AudioReceiver, VideoGenerator
-from livekit.agents.voice.io import AudioInput, AudioOutput, TextOutput, VideoInput
+from livekit.agents.voice.io import (
+    AudioInput,
+    AudioOutput,
+    TextOutput,
+    TurnDetectionMode,
+    VideoInput,
+)
 from livekit.agents.voice.room_io import RemoteParticipant, Room, TrackPublication
 
 from .._core import SessionRecorder, Storage, VoiceAgent, _core_ContextActivation, _core_VoiceStore
@@ -44,7 +51,7 @@ from .session_options import (
     SessionLegs,
     UpdateKwargs,
 )
-from .session_owner import ProviderBindings, SessionJobInfo, SessionOverride
+from .session_owner import SessionJobInfo
 from .session_wire import (
     DefaultModelPlan,
     ExceededTurnReply,
@@ -58,7 +65,7 @@ from .telemetry import SessionReport, SpanContext
 from .tool_options import ToolSpec
 from .tool_report import ToolReport
 from .transcript import TranscriptChunk
-from .turn import InterruptionMode
+from .turn import EndpointingOptions, InterruptionMode, InterruptionOptions
 from .usage import Usage
 from .voice_session import (
     DtmfTaskOptions,
@@ -462,6 +469,14 @@ class SessionOptions:
         """The resolved configuration over the host-supplied legs, as the dict `session.options` reads
         before `start()`.
         """
+    @property
+    def turn_detection(self) -> str | None:
+        """The turn detection mode the session's own settings name (the constructor's and every
+        `update_options` before `start()`); `None` when automatic or a detector object.
+        """
+    @property
+    def interruption_mode(self) -> InterruptionMode | None:
+        """The interruption mode `VoiceSession(turn_handling=)` set; `None` when the session picks."""
 
 class VoiceSession:
     """`voice/agent_session.py`'s `AgentSession`: assembled at construction, started at `start()`,
@@ -866,20 +881,45 @@ class _core_SessionOwner:
         """
     def update_options(
         self,
-        update: UpdateKwargs,
-        providers: Mapping[str, object | None],
         *,
-        interruption_mode_given: bool = False,
-    ) -> dict[str, object | None]: ...
+        stt: NotGivenOr[object | None] = ...,
+        tts: NotGivenOr[object | None] = ...,
+        vad: NotGivenOr[object | None] = ...,
+        turn_detection: NotGivenOr[TurnDetectionMode | None] = ...,
+        endpointing_opts: NotGivenOr[EndpointingOptions] = ...,
+        interruption: NotGivenOr[InterruptionOptions] = ...,
+        min_consecutive_speech_delay: NotGivenOr[float] = ...,
+        tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None] = ...,
+        expressive: NotGivenOr[bool | ExpressiveOptions | None] = ...,
+        keyterms: NotGivenOr[Sequence[str]] = ...,
+    ) -> None:
+        """`update_options(..)`: change only the supplied settings. A replaced `stt`, `tts` or `vad`
+        is installed in place on a running session, without restarting the call or interrupting
+        speech; a setting an `override_options` layer holds takes the new value once the layer is
+        released. `interruption` merges over the session's and takes no `mode`, which is set with
+        `VoiceSession(turn_handling=)`.
+        """
     def override_options(
         self,
-        update: UpdateKwargs,
-        providers: Mapping[str, object | None],
         *,
-        interruption_mode_given: bool = False,
-    ) -> SessionOverride: ...
-    def release_override(self, layer: int) -> dict[str, object | None]: ...
-    def install_providers(self, bindings: ProviderBindings) -> None: ...
+        stt: NotGivenOr[object | None] = ...,
+        tts: NotGivenOr[object | None] = ...,
+        vad: NotGivenOr[object | None] = ...,
+        turn_detection: NotGivenOr[TurnDetectionMode | None] = ...,
+        endpointing_opts: NotGivenOr[EndpointingOptions] = ...,
+        interruption: NotGivenOr[InterruptionOptions] = ...,
+        min_consecutive_speech_delay: NotGivenOr[float] = ...,
+        tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None] = ...,
+    ) -> int:
+        """`override_options(..)` entered: a layer over the session's settings and providers, each
+        taking its value from the topmost layer that sets it, named by the id returned, refused as
+        `update_options` refuses.
+        """
+    def release_override(self, layer: int) -> None:
+        """The `override_options` block ended, however it ended: its settings are released and the
+        providers it changed restored. On a closed session the settings still release and the
+        restore is refused (`SessionClosing`); there is nothing left to restore.
+        """
     def resolved_options(self, legs: SessionLegs) -> ResolvedSessionOptions: ...
     async def aclose(self, reason: str, drain: bool = False) -> None: ...
     def shutdown(self, reason: str, drain: bool = False) -> None: ...

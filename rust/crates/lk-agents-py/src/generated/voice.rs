@@ -1258,7 +1258,7 @@ pub fn llm_node(
             crate::generated::records::from_representation::<
                 ::lk_agents_abi::ToolChoice,
                 ::serde_json::Value,
-            >(crate::py_values::value_from_py(v.as_any(), "\"tool_choice\"")?)
+            >(crate::py_values::value_from_py(v.as_any(), "tool_choice")?)
         })
         .transpose()?;
     let conn_options = conn_options
@@ -2509,6 +2509,34 @@ impl SessionOptions {
         });
         crate::generated::records::session_options::resolved_session_options_to_py(py, out)
     }
+
+    /// The turn detection mode the session's own settings name (the constructor's and every
+    /// `update_options` before `start()`); `None` when automatic or a detector object.
+    #[getter]
+    fn turn_detection<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| {
+            <SessionOptionsImpl as ::lk_agents_abi::voice::session::SessionOptions>::turn_detection(
+                &self.0,
+            )
+        });
+        out.map(|value| ::pyo3::IntoPyObjectExt::into_bound_py_any(value.as_str(), py)).transpose()
+    }
+
+    /// The interruption mode `VoiceSession(turn_handling=)` set; `None` when the session picks.
+    #[getter]
+    fn interruption_mode<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
+        crate::py_calls::check_pid()?;
+        let out = py.detach(|| <SessionOptionsImpl as ::lk_agents_abi::voice::session::SessionOptions>::interruption_mode(&self.0));
+        out.map(|value| crate::generated::records::turn::interruption_mode_to_py(py, value))
+            .transpose()
+    }
 }
 
 // Declared in rust/crates/lk-agents-abi/src/voice/session.rs.
@@ -3140,7 +3168,7 @@ impl VoiceSession {
                 crate::generated::records::from_representation::<
                     ::lk_agents_abi::ToolChoice,
                     ::serde_json::Value,
-                >(crate::py_values::value_from_py(v.as_any(), "\"tool_choice\"")?)
+                >(crate::py_values::value_from_py(v.as_any(), "tool_choice")?)
             })
             .transpose()?;
         let chat_ctx = chat_ctx
@@ -4044,112 +4072,192 @@ impl CoreSessionOwner {
         Ok(())
     }
 
-    #[pyo3(signature = (update, providers, *, interruption_mode_given = false))]
-    fn update_options<'py>(
+    /// `update_options(..)`: change only the supplied settings. A replaced `stt`, `tts` or `vad`
+    /// is installed in place on a running session, without restarting the call or interrupting
+    /// speech; a setting an `override_options` layer holds takes the new value once the layer is
+    /// released. `interruption` merges over the session's and takes no `mode`, which is set with
+    /// `VoiceSession(turn_handling=)`.
+    #[pyo3(signature = (*, stt = crate::py_values::Omittable::NOT_GIVEN, tts = crate::py_values::Omittable::NOT_GIVEN, vad = crate::py_values::Omittable::NOT_GIVEN, turn_detection = crate::py_values::Omittable::NOT_GIVEN, endpointing_opts = crate::py_values::Omittable::NOT_GIVEN, interruption = crate::py_values::Omittable::NOT_GIVEN, min_consecutive_speech_delay = crate::py_values::Omittable::NOT_GIVEN, tts_text_transforms = crate::py_values::Omittable::NOT_GIVEN, expressive = crate::py_values::Omittable::NOT_GIVEN, keyterms = crate::py_values::Omittable::NOT_GIVEN))]
+    fn update_options(
         &self,
-        py: Python<'py>,
-        update: Bound<'_, PyAny>,
-        providers: Bound<'_, PyAny>,
-        interruption_mode_given: bool,
-    ) -> PyResult<Bound<'py, PyAny>> {
+        py: Python<'_>,
+        stt: crate::py_values::Omittable<'_>,
+        tts: crate::py_values::Omittable<'_>,
+        vad: crate::py_values::Omittable<'_>,
+        turn_detection: crate::py_values::Omittable<'_>,
+        endpointing_opts: crate::py_values::Omittable<'_>,
+        interruption: crate::py_values::Omittable<'_>,
+        min_consecutive_speech_delay: crate::py_values::Omittable<'_>,
+        tts_text_transforms: crate::py_values::Omittable<'_>,
+        expressive: crate::py_values::Omittable<'_>,
+        keyterms: crate::py_values::Omittable<'_>,
+    ) -> PyResult<()> {
         crate::py_calls::check_pid()?;
-        let update =
-            crate::generated::records::session_options::update_kwargs_from_py(update.as_any())?;
-        let providers = providers
-            .cast::<::pyo3::types::PyDict>()
-            .map_err(::pyo3::PyErr::from)
-            .and_then(|dict| {
-                dict.iter()
-                    .map(|(key, item)| {
-                        Ok((
-                            key.extract::<::std::string::String>()?,
-                            if item.is_none() {
-                                Ok(None)
-                            } else {
-                                (crate::py_objects::object_ref_from_py(item.as_any())).map(Some)
-                            }?,
-                        ))
-                    })
-                    .collect::<PyResult<::std::collections::BTreeMap<_, _>>>()
-            })?;
-        let out = py.detach(|| <CoreSessionOwnerImpl as ::lk_agents_abi::voice::session_owner::SessionOwner>::update_options(&self.0, update, providers, interruption_mode_given)).map_err(|e: ::lk_agents_abi::voice::session::CommandRefused| <::lk_agents_abi::voice::session::CommandRefused as crate::py_errors::HostException>::to_py_err(&e))?;
-        ::pyo3::PyResult::Ok({
-            let d = ::pyo3::types::PyDict::new(py);
-            for (k, x) in out {
-                d.set_item(
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(k, py)?,
-                    match x {
-                        None => py.None().into_bound(py),
-                        Some(x) => crate::py_objects::object_ref_to_py(py, x)?,
-                    },
-                )?;
+        let stt = stt.map(|value| {
+            if value.is_none() {
+                Ok(None)
+            } else {
+                (crate::py_objects::object_ref_from_py(value.as_any())).map(Some)
             }
-            d.into_any()
-        })
-    }
-
-    #[pyo3(signature = (update, providers, *, interruption_mode_given = false))]
-    fn override_options<'py>(
-        &self,
-        py: Python<'py>,
-        update: Bound<'_, PyAny>,
-        providers: Bound<'_, PyAny>,
-        interruption_mode_given: bool,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        crate::py_calls::check_pid()?;
-        let update =
-            crate::generated::records::session_options::update_kwargs_from_py(update.as_any())?;
-        let providers = providers
-            .cast::<::pyo3::types::PyDict>()
-            .map_err(::pyo3::PyErr::from)
-            .and_then(|dict| {
-                dict.iter()
-                    .map(|(key, item)| {
-                        Ok((
-                            key.extract::<::std::string::String>()?,
-                            if item.is_none() {
-                                Ok(None)
-                            } else {
-                                (crate::py_objects::object_ref_from_py(item.as_any())).map(Some)
-                            }?,
-                        ))
+        })?;
+        let tts = tts.map(|value| {
+            if value.is_none() {
+                Ok(None)
+            } else {
+                (crate::py_objects::object_ref_from_py(value.as_any())).map(Some)
+            }
+        })?;
+        let vad = vad.map(|value| {
+            if value.is_none() {
+                Ok(None)
+            } else {
+                (crate::py_objects::object_ref_from_py(value.as_any())).map(Some)
+            }
+        })?;
+        let turn_detection = turn_detection
+            .map(|value| crate::py_values::turn_detection_kwarg_from_py(value.as_any()))?;
+        let endpointing_opts = endpointing_opts.map(|value| {
+            crate::generated::records::turn::endpointing_options_from_py(value.as_any())
+        })?;
+        let interruption = interruption.map(|value| {
+            crate::generated::records::turn::interruption_options_from_py(value.as_any())
+        })?;
+        let min_consecutive_speech_delay = min_consecutive_speech_delay.map(|value| {
+            crate::py_values::number_from_py::<f64>(value.as_any(), "min_consecutive_speech_delay")
+        })?;
+        let tts_text_transforms = tts_text_transforms.map(|value| {
+            if value.is_none() {
+                Ok(None)
+            } else {
+                (crate::generated::records::from_representation::<
+                    ::lk_agents_abi::voice::session_options::TextTransformSet,
+                    ::std::vec::Vec<::std::string::String>,
+                >(if value.as_any().is_instance_of::<::pyo3::types::PyList>()
+                    || value.as_any().is_instance_of::<::pyo3::types::PyTuple>()
+                {
+                    value
+                        .as_any()
+                        .try_iter()?
+                        .map(|item| {
+                            let item = &item?;
+                            item.extract::<::std::string::String>()
+                        })
+                        .collect::<PyResult<Vec<_>>>()
+                } else {
+                    Err(::pyo3::exceptions::PyTypeError::new_err(
+                        "tts_text_transforms: expected a list or tuple",
+                    ))
+                }?))
+                .map(Some)
+            }
+        })?;
+        let expressive =
+            expressive.map(|value| crate::py_values::expressive_from_py(value.as_any()))?;
+        let keyterms = keyterms.map(|value| {
+            value.try_iter().and_then(|items| {
+                items
+                    .map(|item| {
+                        let item = item?;
+                        item.extract::<::std::string::String>()
                     })
-                    .collect::<PyResult<::std::collections::BTreeMap<_, _>>>()
-            })?;
-        let out = py.detach(|| <CoreSessionOwnerImpl as ::lk_agents_abi::voice::session_owner::SessionOwner>::override_options(&self.0, update, providers, interruption_mode_given)).map_err(|e: ::lk_agents_abi::voice::session::CommandRefused| <::lk_agents_abi::voice::session::CommandRefused as crate::py_errors::HostException>::to_py_err(&e))?;
-        crate::generated::records::session_owner::session_override_to_py(py, out)
+                    .collect::<PyResult<Vec<_>>>()
+            })
+        })?;
+        py.detach(|| <CoreSessionOwnerImpl as ::lk_agents_abi::voice::session_owner::SessionOwner>::update_options(&self.0, stt, tts, vad, turn_detection, endpointing_opts, interruption, min_consecutive_speech_delay, tts_text_transforms, expressive, keyterms)).map_err(|e: ::lk_agents_abi::voice::session_owner::OptionsRefused| <::lk_agents_abi::voice::session_owner::OptionsRefused as crate::py_errors::HostException>::to_py_err(&e))?;
+        Ok(())
     }
 
-    #[pyo3(signature = (layer))]
-    fn release_override<'py>(
+    /// `override_options(..)` entered: a layer over the session's settings and providers, each
+    /// taking its value from the topmost layer that sets it, named by the id returned, refused as
+    /// `update_options` refuses.
+    #[pyo3(signature = (*, stt = crate::py_values::Omittable::NOT_GIVEN, tts = crate::py_values::Omittable::NOT_GIVEN, vad = crate::py_values::Omittable::NOT_GIVEN, turn_detection = crate::py_values::Omittable::NOT_GIVEN, endpointing_opts = crate::py_values::Omittable::NOT_GIVEN, interruption = crate::py_values::Omittable::NOT_GIVEN, min_consecutive_speech_delay = crate::py_values::Omittable::NOT_GIVEN, tts_text_transforms = crate::py_values::Omittable::NOT_GIVEN))]
+    fn override_options(
         &self,
-        py: Python<'py>,
+        py: Python<'_>,
+        stt: crate::py_values::Omittable<'_>,
+        tts: crate::py_values::Omittable<'_>,
+        vad: crate::py_values::Omittable<'_>,
+        turn_detection: crate::py_values::Omittable<'_>,
+        endpointing_opts: crate::py_values::Omittable<'_>,
+        interruption: crate::py_values::Omittable<'_>,
+        min_consecutive_speech_delay: crate::py_values::Omittable<'_>,
+        tts_text_transforms: crate::py_values::Omittable<'_>,
+    ) -> PyResult<u64> {
+        crate::py_calls::check_pid()?;
+        let stt = stt.map(|value| {
+            if value.is_none() {
+                Ok(None)
+            } else {
+                (crate::py_objects::object_ref_from_py(value.as_any())).map(Some)
+            }
+        })?;
+        let tts = tts.map(|value| {
+            if value.is_none() {
+                Ok(None)
+            } else {
+                (crate::py_objects::object_ref_from_py(value.as_any())).map(Some)
+            }
+        })?;
+        let vad = vad.map(|value| {
+            if value.is_none() {
+                Ok(None)
+            } else {
+                (crate::py_objects::object_ref_from_py(value.as_any())).map(Some)
+            }
+        })?;
+        let turn_detection = turn_detection
+            .map(|value| crate::py_values::turn_detection_kwarg_from_py(value.as_any()))?;
+        let endpointing_opts = endpointing_opts.map(|value| {
+            crate::generated::records::turn::endpointing_options_from_py(value.as_any())
+        })?;
+        let interruption = interruption.map(|value| {
+            crate::generated::records::turn::interruption_options_from_py(value.as_any())
+        })?;
+        let min_consecutive_speech_delay = min_consecutive_speech_delay.map(|value| {
+            crate::py_values::number_from_py::<f64>(value.as_any(), "min_consecutive_speech_delay")
+        })?;
+        let tts_text_transforms = tts_text_transforms.map(|value| {
+            if value.is_none() {
+                Ok(None)
+            } else {
+                (crate::generated::records::from_representation::<
+                    ::lk_agents_abi::voice::session_options::TextTransformSet,
+                    ::std::vec::Vec<::std::string::String>,
+                >(if value.as_any().is_instance_of::<::pyo3::types::PyList>()
+                    || value.as_any().is_instance_of::<::pyo3::types::PyTuple>()
+                {
+                    value
+                        .as_any()
+                        .try_iter()?
+                        .map(|item| {
+                            let item = &item?;
+                            item.extract::<::std::string::String>()
+                        })
+                        .collect::<PyResult<Vec<_>>>()
+                } else {
+                    Err(::pyo3::exceptions::PyTypeError::new_err(
+                        "tts_text_transforms: expected a list or tuple",
+                    ))
+                }?))
+                .map(Some)
+            }
+        })?;
+        let out = py.detach(|| <CoreSessionOwnerImpl as ::lk_agents_abi::voice::session_owner::SessionOwner>::override_options(&self.0, stt, tts, vad, turn_detection, endpointing_opts, interruption, min_consecutive_speech_delay, tts_text_transforms)).map_err(|e: ::lk_agents_abi::voice::session_owner::OptionsRefused| <::lk_agents_abi::voice::session_owner::OptionsRefused as crate::py_errors::HostException>::to_py_err(&e))?;
+        ::pyo3::PyResult::Ok(out)
+    }
+
+    /// The `override_options` block ended, however it ended: its settings are released and the
+    /// providers it changed restored. On a closed session the settings still release and the
+    /// restore is refused (`SessionClosing`); there is nothing left to restore.
+    #[pyo3(signature = (layer))]
+    fn release_override(
+        &self,
+        py: Python<'_>,
         #[pyo3(from_py_with = _extract_session_owner_release_override_layer)]
         layer: SessionOwnerReleaseOverrideLayerInput,
-    ) -> PyResult<Bound<'py, PyAny>> {
+    ) -> PyResult<()> {
         crate::py_calls::check_pid()?;
-        let out = py.detach(|| <CoreSessionOwnerImpl as ::lk_agents_abi::voice::session_owner::SessionOwner>::release_override(&self.0, layer));
-        ::pyo3::PyResult::Ok({
-            let d = ::pyo3::types::PyDict::new(py);
-            for (k, x) in out {
-                d.set_item(
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(k, py)?,
-                    match x {
-                        None => py.None().into_bound(py),
-                        Some(x) => crate::py_objects::object_ref_to_py(py, x)?,
-                    },
-                )?;
-            }
-            d.into_any()
-        })
-    }
-
-    #[pyo3(signature = (bindings))]
-    fn install_providers(&self, py: Python<'_>, bindings: Bound<'_, PyAny>) -> PyResult<()> {
-        crate::py_calls::check_pid()?;
-        let bindings =
-            crate::generated::records::session_owner::provider_bindings_from_py(bindings.as_any())?;
-        py.detach(|| <CoreSessionOwnerImpl as ::lk_agents_abi::voice::session_owner::SessionOwner>::install_providers(&self.0, bindings)).map_err(|e: ::lk_agents_abi::voice::session::SessionRefused| <::lk_agents_abi::voice::session::SessionRefused as crate::py_errors::HostException>::to_py_err(&e))?;
+        py.detach(|| <CoreSessionOwnerImpl as ::lk_agents_abi::voice::session_owner::SessionOwner>::release_override(&self.0, layer)).map_err(|e: ::lk_agents_abi::voice::session_owner::OptionsRefused| <::lk_agents_abi::voice::session_owner::OptionsRefused as crate::py_errors::HostException>::to_py_err(&e))?;
         Ok(())
     }
 
@@ -11128,6 +11236,61 @@ impl ::lk_agents_abi::voice::session_owner::SessionHost for SessionHostProxy {
             }
         })
     }
+
+    fn bind_providers(
+        &self,
+        providers: ::std::collections::BTreeMap<
+            ::std::string::String,
+            ::std::option::Option<::lk_agents_abi::HostRef>,
+        >,
+    ) -> ::std::result::Result<
+        ::lk_agents_abi::voice::session_owner::ProviderBindings,
+        ::lk_agents_abi::errors::HostError,
+    > {
+        let host = ::std::sync::Arc::clone(&self.host);
+        let providers_arg = providers;
+        let out = ::lk_agents_runtime::host::call_now(
+            &crate::py_calls::Entry,
+            ::std::boxed::Box::new(move |py| {
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [{
+                    let d = ::pyo3::types::PyDict::new(py);
+                    for (k, x) in providers_arg {
+                        d.set_item(
+                            ::pyo3::IntoPyObjectExt::into_bound_py_any(k, py)?,
+                            match x {
+                                None => py.None().into_bound(py),
+                                Some(x) => crate::py_objects::object_ref_to_py(py, x)?,
+                            },
+                        )?;
+                    }
+                    d.into_any()
+                }];
+                Ok((
+                    host.bind(py).getattr("bind_providers")?,
+                    ::pyo3::types::PyTuple::new(py, args)?,
+                    None,
+                ))
+            }),
+        );
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.value.bind(py);
+            let out = (crate::generated::records::session_owner::provider_bindings_from_py(
+                o.as_any(),
+            ))
+            .map_err(|e| {
+                <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(
+                    py, &e,
+                )
+            })?;
+            Ok(out)
+        })
+    }
 }
 
 // Declared in rust/crates/lk-agents-abi/src/voice/workflows/warm_transfer.rs.
@@ -11918,6 +12081,20 @@ impl crate::py_errors::HostException for ::lk_agents_abi::voice::session::Commit
             "CancelledError",
             ::std::string::ToString::to_string(self),
         )
+    }
+}
+
+impl crate::py_errors::HostException for ::lk_agents_abi::voice::session_owner::OptionsRefused {
+    fn to_py_err(&self) -> ::pyo3::PyErr {
+        #[allow(unreachable_patterns)]
+        match self {
+            Self::Command(inner) => crate::py_errors::HostException::to_py_err(inner),
+            Self::Session(inner) => crate::py_errors::HostException::to_py_err(inner),
+            Self::Host(inner) => crate::py_errors::HostException::to_py_err(inner),
+            _ => {
+                ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
+            }
+        }
     }
 }
 

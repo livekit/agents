@@ -102,6 +102,23 @@ fn argument(
         Some(resolve) => format!("{resolve}({name})"),
         None => name.clone(),
     };
+    if let Ty::Maybe(inner) = &parameter.ty {
+        // Omission is the native argument's own state: `NOT_GIVEN` passes through unchanged.
+        imports.add("..types", "NOT_GIVEN");
+        imports.add("..types", "NotGivenOr");
+        let inner = annotation.unwrap_or_else(|| {
+            crate::class_stub::annotation(&class.name, inner, crate::class_stub::Dir::In, imports)
+        });
+        let parameter = Some(format!("{name}: NotGivenOr[{inner}] = NOT_GIVEN"));
+        let value = match &resolve {
+            Some(resolve) => {
+                imports.add("..utils", "is_given");
+                format!("{resolve}({name}) if is_given({name}) else {name}")
+            }
+            None => name.clone(),
+        };
+        return Ok(Argument { name, parameter, keyword, value });
+    }
     let defaults_none =
         parameter.default.as_ref().map(crate::class_stub::py_literal).as_deref() == Some("None");
     if let (true, true, Ty::Optional(inner)) = (facade.not_given, defaults_none, &parameter.ty) {
@@ -221,10 +238,14 @@ fn delegate(
     } else if method.kind == MethodKind::Await && facade.discard {
         ret = "None".into();
         format!("await {call}")
-    } else if method.kind == MethodKind::Await {
-        format!("return await {call}")
     } else {
-        format!("return {call}")
+        let prefix = if method.kind == MethodKind::Await { "return await" } else { "return" };
+        if 8 + prefix.len() + 1 + call.len() <= 100 {
+            format!("{prefix} {call}")
+        } else {
+            let lines = sent.iter().map(|a| format!("            {a},\n")).collect::<String>();
+            format!("{prefix} {target}(\n{lines}        )")
+        }
     };
     let signature_line =
         format!("    {prefix}def {}({}) -> {ret}:\n", method.name, signature.join(", "));
@@ -325,7 +346,7 @@ mod tests {
             "def reply(self, *, instructions: NotGivenOr[str] = NOT_GIVEN, add: bool = True)"
         ));
         assert!(output.contains(
-            "self._running.reply(instructions=instructions if is_given(instructions) else None, add=add)"
+            "return self._running.reply(\n            instructions=instructions if is_given(instructions) else None,\n            add=add,\n        )"
         ));
         assert!(output.contains("from ..types import NOT_GIVEN\n"));
         assert!(output.contains("from ..utils import is_given\n"));
@@ -376,6 +397,26 @@ mod tests {
         assert!(output.contains("context=_items(context) if is_given(context) else None"));
         assert!(output.contains("from ..llm import ChatContext\n"));
         assert!(!output.contains("Sequence"));
+    }
+
+    // Catches: an omittable argument rendered with the stub's `...` default, or resolved while
+    // omitted.
+    #[test]
+    fn an_omittable_argument_defaults_to_not_given_and_passes_through() {
+        let declarations = declarations(
+            r#"
+            #[host(call, facade(module = "commands", class = "Commands", target = "_owner", annotation(voice = "..tts.TTS | str | None"), resolve(voice = "..voice.calls._voice")))]
+            fn update(&self, #[host(kw)] voice: crate::utils::maybe::Maybe<Option<crate::utils::host_ref::HostRef>>, speech_delay_seconds: crate::utils::maybe::Maybe<f64>);
+        "#,
+        );
+        let output = super::emit(&declarations).unwrap().remove(0).text;
+        assert!(output.contains("voice: NotGivenOr[TTS | str | None] = NOT_GIVEN,"));
+        assert!(output.contains("speech_delay_seconds: NotGivenOr[float] = NOT_GIVEN,"));
+        assert!(output.contains(
+            "return self._owner.update(\n            voice=_voice(voice) if is_given(voice) else voice,\n            speech_delay_seconds=speech_delay_seconds,\n        )"
+        ));
+        assert!(output.contains("from ..tts import TTS\n"));
+        assert!(!output.contains("= ..."));
     }
 
     #[test]

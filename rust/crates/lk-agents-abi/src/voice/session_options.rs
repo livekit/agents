@@ -115,7 +115,7 @@ pub enum EndpointingMode {
 }
 
 /// ``"adaptive"`` for ML-based detection, ``"vad"`` for simple voice-activity detection.
-#[crate::host(record(module = "turn", extract))]
+#[crate::host(record(module = "turn", extract, emit))]
 #[crate::host(wire_strs(err = UnknownLiteral, msg = UnknownLiteral {
     what: "interruption mode",
     value: s.to_owned(),
@@ -256,8 +256,9 @@ pub struct InterruptionKwargs {
     /// Interruption handling strategy. ``"adaptive"`` for ML-based
     /// detection, ``"vad"`` for simple voice-activity detection.
     /// Absent means auto-detect.
-    #[host(default = None)]
-    pub mode: Option<InterruptionMode>,
+    //
+    // A given `None` is kept apart: `update_options` refuses the construction-only key either way.
+    pub mode: Maybe<Option<InterruptionMode>>,
     /// Drop buffered audio while the agent speaks and cannot be
     /// interrupted. Defaults to ``True``.
     #[host(default = None)]
@@ -462,8 +463,8 @@ macro_rules! debug_record {
 }
 
 debug_record!(InterruptionKwargs {
-    enabled, mode, discard_audio_if_uninterruptible, min_duration, min_words, resume_false_interruption;
-    false_interruption_timeout, backchannel_boundary
+    enabled, discard_audio_if_uninterruptible, min_duration, min_words, resume_false_interruption;
+    mode, false_interruption_timeout, backchannel_boundary
 });
 
 debug_record!(UserTurnLimitKwargs { ; max_words, max_duration });

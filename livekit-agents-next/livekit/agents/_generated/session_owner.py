@@ -24,12 +24,6 @@ if TYPE_CHECKING:
 
 
 @dataclass(kw_only=True, slots=True)
-class SessionOverride:
-    layer: int
-    providers: dict[str, object | None]
-
-
-@dataclass(kw_only=True, slots=True)
 class SessionJobInfo:
     """The job a session runs in: its trace is the job's, and its `agent_session` repeats the job's
     dispatch, worker and agent ids.

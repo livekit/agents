@@ -158,6 +158,13 @@ does not itself interrupt speech, reset history, or restart the agent.
 Provider connection setup can take time; an immediate configuration update does
 not promise zero-latency model replacement.
 
+A replaced provider is installed in place under the current agent's nodes; only
+the providers whose effective value changed are rebound. Before `start()` the
+session opens on the updated settings and providers. `interruption` merges over
+the session's settings and takes no `mode`, not even `None`: the interruption
+mode is set with `VoiceSession(turn_handling=)` and refused with a `ValueError`
+anywhere else. An update refused for its arguments changes nothing.
+
 `update_agent` changes the agent's instructions, tools, and reasoning behavior.
 It preserves the session's audio settings. VoiceTask activation and restoration also
 preserve those settings. The application calls `update_options` when a routing
@@ -180,7 +187,9 @@ own. Overrides sit above the active agent's settings, including an agent or
 `VoiceTask` that takes over inside the block. Base changes made during an
 override persist: they show through at once on the settings no override sets,
 and on the others once the override is removed. The layer belongs to the block that opened it and is
-released when that block ends, on success, failure or cancellation. Transfer,
+released when that block ends, on success, failure or cancellation. When the
+session closed inside the block the release has nothing to restore: it ends
+quietly, or, when the block raised, adds a note to that error. Transfer,
 DTMF and `VoiceTask` interactions use the same mechanism; a task opens its
 overrides inside its own code and they are released when the task ends.
 

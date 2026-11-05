@@ -910,7 +910,9 @@ pub(crate) fn from_object(v: &str, ty: &Ty, path: &str, at: &str) -> Result<Stri
             format!("{}_from_py({v}.as_any())", crate::records::converted(r))
         }
         Ty::Record(Record { host: HostForm::Via { .. }, .. }) => {
-            crate::records::read(ty, &format!("{v}.as_any()"), path)?
+            // `path` is a Rust literal here; the record reader names the value by its text.
+            let text = syn::parse_str::<syn::LitStr>(path).map_or(path.to_owned(), |l| l.value());
+            crate::records::read(ty, &format!("{v}.as_any()"), &text)?
         }
         Ty::Record(Record { host: HostForm::Str | HostForm::Wire, .. }) => {
             format!("crate::py_values::str_from_py({v}.as_any())")
