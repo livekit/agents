@@ -10,13 +10,11 @@ if TYPE_CHECKING:
         GPTVoiceSession,
         ResponsesDelegationOptions,
     )
-    from .inference_realtime_model import InferenceRealtimeModel
     from .realtime_model import RealtimeModel, RealtimeSession
 
 
 _EXPORTS = {
     "gpt_live_types": ("gpt_live_types", None),
-    "InferenceRealtimeModel": ("inference_realtime_model", "InferenceRealtimeModel"),
     "RealtimeModel": ("realtime_model", "RealtimeModel"),
     "RealtimeSession": ("realtime_model", "RealtimeSession"),
     **{
@@ -48,7 +46,6 @@ def __dir__() -> list[str]:
 
 
 __all__ = [
-    "InferenceRealtimeModel",
     "RealtimeSession",
     "RealtimeModel",
     "GPTLiveModel",

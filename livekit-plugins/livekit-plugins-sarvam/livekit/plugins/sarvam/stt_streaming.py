@@ -1373,9 +1373,3 @@ class RealtimeSpeechStream(stt.RecognizeStream):
                 recognition_usage=stt.RecognitionUsage(audio_duration=duration),
             )
         )
-
-
-# Deprecated compatibility aliases. Prefer the endpoint-specific realtime names above.
-STTStreaming = STTRealtime
-StreamingSpeechStream = RealtimeSpeechStream
-StreamingSTTOptions = RealtimeSTTOptions

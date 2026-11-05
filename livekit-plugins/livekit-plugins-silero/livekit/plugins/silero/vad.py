@@ -14,8 +14,6 @@
 
 from __future__ import annotations
 
-from typing import Literal
-
 from livekit import agents
 from livekit.agents import inference
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
@@ -36,12 +34,11 @@ class VAD(inference.VAD):
         prefix_padding_duration: float = 0.5,
         max_buffered_speech: float = 60.0,
         activation_threshold: float = 0.5,
-        sample_rate: Literal[8000, 16000] = 16000,
-        force_cpu: bool = True,
         deactivation_threshold: NotGivenOr[float] = NOT_GIVEN,
     ) -> VAD:
         """The Silero VAD. The model is the core's, loaded once per process (where the job
-        processes share it, before they fork), so this is cheap to call per session.
+        processes share it, before they fork), so this is cheap to call per session. It
+        accepts audio at any input rate.
 
         Args:
             min_speech_duration: Minimum duration of speech to start a new speech chunk.
@@ -50,16 +47,9 @@ class VAD(inference.VAD):
                 chunk.
             max_buffered_speech: Maximum duration of speech to keep in the buffer (in seconds).
             activation_threshold: Threshold to consider a frame as speech.
-            sample_rate: Kept for compatibility: the model runs at 16 kHz, on any input rate.
-            force_cpu: Kept for compatibility: the model runs on the CPU.
             deactivation_threshold: The probability below which speech ends;
                 ``max(activation_threshold - 0.15, 0.01)`` by default.
-
-        Raises:
-            ValueError: If an unsupported sample rate is provided.
         """
-        if sample_rate not in (8000, 16000):
-            raise ValueError("Silero VAD only supports 8KHz and 16KHz sample rates")
         return cls(
             min_speech_duration=min_speech_duration,
             min_silence_duration=min_silence_duration,

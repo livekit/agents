@@ -51,7 +51,7 @@ _ENV_INGRESS_ENDPOINT = "SPATIUS_INGRESS_ENDPOINT"
 _AUTO_REGION = "auto"
 
 
-def prewarm(proc: object = None, *, prefetch_session_token: bool = True) -> None:
+def prewarm(*, prefetch_session_token: bool = True) -> None:
     """Warm Spatius connection state for this process.
 
     Call it at the module level of the agent file. Reads the same SPATIUS_*
@@ -62,7 +62,6 @@ def prewarm(proc: object = None, *, prefetch_session_token: bool = True) -> None
     both HTTPS round trips.
 
     Args:
-        proc: Unused; a 1.x ``prewarm_fnc`` passes the job process.
         prefetch_session_token: Prefetch and cache a session token. Assumes the
             Spatius backend allows a token to back more than one session; pass
             False if tokens are single-use.

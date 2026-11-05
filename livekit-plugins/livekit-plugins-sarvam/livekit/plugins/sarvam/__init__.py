@@ -31,17 +31,10 @@ from .stt_streaming import RealtimeSpeechStream, STTRealtime
 from .tts import TTS
 from .version import __version__
 
-# Deprecated compatibility aliases. Prefer `STTRealtime` and
-# `RealtimeSpeechStream`.
-STTStreaming = STTRealtime
-StreamingSpeechStream = RealtimeSpeechStream
-
 __all__ = [
     "STT",
     "STTRealtime",
     "RealtimeSpeechStream",
-    "STTStreaming",
-    "StreamingSpeechStream",
     "TTS",
     "LLM",
     "SarvamLLMModels",
