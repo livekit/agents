@@ -30,13 +30,23 @@ from livekit.plugins.boson import realtime
 
 pytestmark = pytest.mark.unit
 
+_URL = "ws://localhost:8000/v1/realtime/"
+_DEFAULT_TURN_DETECTION = realtime.realtime_model._DEFAULT_TURN_DETECTION
+
 
 async def _idle_run(_session):
     await asyncio.Future()
 
 
+async def lookup_policy() -> str:
+    return "ok"
+
+
 class _FakeWebSocket:
-    def __init__(self, close_message=None) -> None:
+    """Delivers any scripted `messages`, then waits for close_event and closes."""
+
+    def __init__(self, close_message=None, messages=()) -> None:
+        self.messages = list(messages)
         self.closed = False
         self.sent: list[str] = []
         self.close_event = asyncio.Event()
@@ -51,6 +61,8 @@ class _FakeWebSocket:
         raise StopAsyncIteration
 
     async def receive(self):
+        if self.messages:
+            return self.messages.pop(0)
         await self.close_event.wait()
         if self.close_message is not None:
             self.close_code = self.close_message.data
@@ -65,27 +77,6 @@ class _FakeWebSocket:
 
     def exception(self):
         return None
-
-
-class _FakeHTTPClient:
-    def __init__(self, ws: _FakeWebSocket) -> None:
-        self.ws = ws
-
-    async def ws_connect(self, *_args, **_kwargs):
-        return self.ws
-
-
-class _ScriptedFakeWebSocket(_FakeWebSocket):
-    """A _FakeWebSocket that first delivers scripted messages, then behaves normally."""
-
-    def __init__(self, messages=None, close_message=None) -> None:
-        super().__init__(close_message)
-        self.messages = list(messages or [])
-
-    async def receive(self):
-        if self.messages:
-            return self.messages.pop(0)
-        return await super().receive()
 
 
 class _SequencedHTTPClient:
@@ -103,6 +94,120 @@ class _SequencedHTTPClient:
         if isinstance(outcome, Exception):
             raise outcome
         return outcome
+
+
+def _ws_text(event: dict) -> aiohttp.WSMessage:
+    return aiohttp.WSMessage(aiohttp.WSMsgType.TEXT, json.dumps(event), None)
+
+
+def _ws_close(code: int, reason: str) -> aiohttp.WSMessage:
+    return aiohttp.WSMessage(aiohttp.WSMsgType.CLOSE, code, reason)
+
+
+def _dropped_ws(messages=(), close_message=None) -> _FakeWebSocket:
+    """A socket that delivers `messages` and then closes on its own."""
+    ws = _FakeWebSocket(close_message, messages)
+    ws.close_event.set()
+    return ws
+
+
+def _sent_response_create(ws: _FakeWebSocket) -> bool:
+    return any('"type": "response.create"' in sent for sent in ws.sent)
+
+
+async def _eventually(predicate, timeout: float = 2.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        if time.monotonic() > deadline:
+            return False
+        await asyncio.sleep(0.01)
+    return True
+
+
+def _model(**kwargs) -> realtime.RealtimeModel:
+    return realtime.RealtimeModel(**{"url": _URL, "api_key": "test-key", **kwargs})
+
+
+async def _close_all(sessions: list) -> None:
+    for session in reversed(sessions):
+        await session.aclose()
+        await session.realtime_model.aclose()
+
+
+@pytest.fixture
+async def open_session(monkeypatch):
+    """Open a session with no socket behind it; events are injected with _server_event.
+
+    By default the initial session.update is drained so the queue starts empty.
+    """
+    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+    opened: list = []
+
+    async def _open(*, drain: bool = True, **kwargs):
+        session = _model(**kwargs).session()
+        opened.append(session)
+        if drain:
+            await session._msg_ch.recv()
+        return session
+
+    yield _open
+    await _close_all(opened)
+
+
+@pytest.fixture
+async def socket_session():
+    """Open a session that really runs its connection loop against a fake client."""
+    opened: list = []
+
+    def _open(client, *, max_retry: int = 3, **kwargs):
+        conn_options = APIConnectOptions(max_retry=max_retry, retry_interval=0.01, timeout=1.0)
+        session = _model(http_session=client, conn_options=conn_options, **kwargs).session()
+        opened.append(session)
+        return session
+
+    yield _open
+    await _close_all(opened)
+
+
+def _collect(session, event: str) -> list:
+    received: list = []
+    session.on(event, received.append)
+    return received
+
+
+def _capture_warnings(monkeypatch) -> list[str]:
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        realtime.realtime_model.logger, "warning", lambda msg, *a, **k: warnings.append(str(msg))
+    )
+    return warnings
+
+
+def _reported_item_ids(caplog) -> list[str]:
+    return [item_id for record in caplog.records for item_id in getattr(record, "item_ids", [])]
+
+
+_ABSENT = object()
+_TEXT_PART = {"type": "text", "text": ""}
+
+
+def _at(payload: dict, path: str):
+    """Look up a dotted path, or _ABSENT if any step is missing."""
+    for key in path.split("."):
+        if key not in payload:
+            return _ABSENT
+        payload = payload[key]
+    return payload
+
+
+def _ctx(*items) -> llm.ChatContext:
+    """A ChatContext from (id, role, content) triples; a str content is one text part."""
+    return llm.ChatContext(
+        [
+            llm.ChatMessage(id=item_id, role=role, content=[c] if isinstance(c, str) else c)
+            for item_id, role, c in items
+        ]
+    )
 
 
 # type -> (RealtimeSession handler, event model), mirroring the dispatch in the
@@ -136,1847 +241,1263 @@ _SERVER_EVENT_HANDLERS = {
 }
 
 
-def _server_event(session, event: dict) -> None:
-    """Inject a server event as if it had been received on the socket."""
-    session.emit("openai_server_event_received", event)
-    entry = _SERVER_EVENT_HANDLERS.get(event["type"])
-    if entry is not None:
-        method, event_cls = entry
-        getattr(session, method)(event_cls.construct(**event))
+def _server_event(session, *events: dict) -> None:
+    """Inject server events as if they had been received on the socket."""
+    for event in events:
+        session.emit("openai_server_event_received", event)
+        entry = _SERVER_EVENT_HANDLERS.get(event["type"])
+        if entry is not None:
+            method, event_cls = entry
+            getattr(session, method)(event_cls.construct(**event))
 
 
-@pytest.mark.asyncio
-async def test_boson_realtime_session_sends_full_session_update(monkeypatch):
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    model = realtime.RealtimeModel(
-        url="ws://localhost:8000/v1/realtime/",
-        api_key="test-key",
-        model="test-model",
-        voice="coral",
-    )
-    session = model.session()
-    try:
-        event = await session._msg_ch.recv()
-        assert event["type"] == "session.update"
-        assert event["session"]["model"] == "test-model"
-        # The framework sends the Agent's instructions once the session starts;
-        # until then the server keeps its own default.
-        assert "instructions" not in event["session"]
-        assert event["session"]["audio"]["input"]["format"] == {"type": "audio/pcm", "rate": 24000}
-        assert event["session"]["audio"]["output"]["voice"] == "coral"
-        assert "transcription" not in event["session"]["audio"]["input"]
-        assert event["session"]["audio"]["input"]["turn_detection"]["type"] == "server_vad"
-        assert event["session"]["output_modalities"] == ["audio"]
-        assert "temperature" not in event["session"]
-        assert model.capabilities.audio_output is True
-        # The server preserves client-supplied item ids, so the base
-        # diff/create/delete chat-context synchronization works.
-        assert model.capabilities.mutable_chat_context is True
-        # item.create is a pure insert server-side; the framework must send
-        # response.create after tool outputs.
-        assert model.capabilities.auto_tool_reply_generation is False
-        # No transcription model set -> the server emits no user-transcript events.
-        assert model.capabilities.user_transcription is False
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_session_omits_explicit_none_transcription(monkeypatch):
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    model = realtime.RealtimeModel(
-        url="ws://localhost:8000/v1/realtime/",
-        api_key="test-key",
-        input_audio_transcription=None,
-    )
-    session = model.session()
-    try:
-        event = await session._msg_ch.recv()
-        assert "transcription" not in event["session"]["audio"]["input"]
-        assert model.capabilities.user_transcription is False
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_session_transcription_without_model_disables_user_transcription(
-    monkeypatch,
-):
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    # A transcription block without a `model` still runs ASR internally on the
-    # server but emits no client-facing transcription events.
-    model = realtime.RealtimeModel(
-        url="ws://localhost:8000/v1/realtime/",
-        api_key="test-key",
-        input_audio_transcription={"language": "english"},
-    )
-    session = model.session()
-    try:
-        event = await session._msg_ch.recv()
-        assert event["session"]["audio"]["input"]["transcription"] == {"language": "english"}
-        assert model.capabilities.user_transcription is False
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_session_sends_boson_options(monkeypatch):
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    turn_detection = {
-        "type": "server_vad",
-        "silence_duration_ms": 800,
-        "threshold": 0.6,
-        "prefix_padding_ms": 200,
-        "interrupt_response": False,
+def _item(item_id: str, item_type: str = "message", **fields) -> dict:
+    return {
+        "id": item_id,
+        "object": "realtime.item",
+        "type": item_type,
+        "status": "completed",
+        **fields,
     }
 
-    model = realtime.RealtimeModel(
-        url="ws://localhost:8000/v1/realtime/",
-        api_key="test-key",
-        model="llm-model",
-        voice="en_woman",
-        temperature=0.2,
-        input_audio_transcription={
-            "model": "asr-model",
-            "language": "english",
-            # `prompt` is not honored by the server; the wrapper drops it even
-            # from a raw transcription dict (see test below).
-            "prompt": "Transcribe names carefully.",
-            "temperature": 0.1,
-        },
-        turn_detection=turn_detection,
-    )
-    session = model.session()
-    try:
-        event = await session._msg_ch.recv()
-        session_update = event["session"]
-        assert session_update["audio"]["input"]["transcription"] == {
-            "model": "asr-model",
-            "language": "english",
-            "temperature": 0.1,
-        }
-        assert session_update["audio"]["input"]["turn_detection"] == turn_detection
-        assert session_update["audio"]["output"]["voice"] == "en_woman"
-        assert session_update["temperature"] == 0.2
-        assert model.capabilities.user_transcription is True
-    finally:
-        await session.aclose()
-        await model.aclose()
+
+def _item_added_echo(item: dict, previous_item_id: str | None = None) -> dict:
+    """The server's conversation.item.added echo for a client-created item."""
+    return {"type": "conversation.item.added", "previous_item_id": previous_item_id, "item": item}
 
 
-@pytest.mark.asyncio
-async def test_boson_realtime_session_can_disable_turn_detection(monkeypatch):
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    model = realtime.RealtimeModel(
-        url="ws://localhost:8000/v1/realtime/",
-        api_key="test-key",
-        turn_detection=None,
-    )
-    session = model.session()
-    try:
-        event = await session._msg_ch.recv()
-        assert event["session"]["audio"]["input"]["turn_detection"] is None
-        assert model.capabilities.turn_detection is False
-    finally:
-        await session.aclose()
-        await model.aclose()
+def _user_item_added(item_id: str, content: list[dict]) -> dict:
+    return _item_added_echo(_item(item_id, role="user", content=content))
 
 
-@pytest.mark.asyncio
-async def test_boson_realtime_session_turn_detection_false_disables_like_none(monkeypatch):
-    # README documents turn_detection=None/False as equivalent; False must
-    # not crash (dict(False) raises TypeError - bool isn't iterable).
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    model = realtime.RealtimeModel(
-        url="ws://localhost:8000/v1/realtime/",
-        api_key="test-key",
-        turn_detection=False,
-    )
-    session = model.session()
-    try:
-        event = await session._msg_ch.recv()
-        assert event["session"]["audio"]["input"]["turn_detection"] is None
-        assert model.capabilities.turn_detection is False
-    finally:
-        await session.aclose()
-        await model.aclose()
+def _user_text(item_id: str, text: str) -> dict:
+    return _user_item_added(item_id, [{"type": "input_text", "text": text}])
 
 
-@pytest.mark.asyncio
-async def test_boson_realtime_update_options_turn_detection_false_disables(monkeypatch):
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    try:
-        await session._msg_ch.recv()  # initial session.update
-        model.update_options(turn_detection=False)
-
-        event = await session._msg_ch.recv()
-        assert event["session"]["audio"]["input"]["turn_detection"] is None
-        assert model.capabilities.turn_detection is False
-    finally:
-        await session.aclose()
-        await model.aclose()
+def _deleted(item_id: str) -> dict:
+    return {"type": "conversation.item.deleted", "item_id": item_id}
 
 
-@pytest.mark.asyncio
-async def test_boson_realtime_text_only_modality_session_update(monkeypatch):
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+def _response_created(response_id: str, client_event_id: str | None = None) -> dict:
+    response: dict = {"id": response_id, "status": "in_progress"}
+    if client_event_id is not None:
+        response["metadata"] = {"client_event_id": client_event_id}
+    return {"type": "response.created", "response": response}
 
-    model = realtime.RealtimeModel(
-        url="ws://localhost:8000/v1/realtime/",
-        api_key="test-key",
-        output_modalities=["text"],
-    )
-    session = model.session()
-    try:
-        event = await session._msg_ch.recv()
-        assert event["session"]["output_modalities"] == ["text"]
-        assert model.capabilities.audio_output is False
-    finally:
-        await session.aclose()
-        await model.aclose()
+
+def _response_done(response_id: str, status: str = "completed") -> dict:
+    return {
+        "type": "response.done",
+        "response": {"id": response_id, "status": status, "usage": None},
+    }
+
+
+def _output_item(kind: str, response_id: str, item: dict | str) -> dict:
+    """response.output_item.{kind}; a str item is a message with that id."""
+    if isinstance(item, str):
+        item = {"id": item, "type": "message"}
+    return {
+        "type": f"response.output_item.{kind}",
+        "response_id": response_id,
+        "output_index": 0,
+        "item": item,
+    }
+
+
+def _content(kind: str, response_id: str, item_id: str, **fields) -> dict:
+    """A content-part-scoped response event, e.g. kind="output_text.delta"."""
+    return {
+        "type": f"response.{kind}",
+        "response_id": response_id,
+        "item_id": item_id,
+        "output_index": 0,
+        "content_index": 0,
+        **fields,
+    }
+
+
+def _transcribed(item_id: str, transcript: str, **fields) -> dict:
+    return {
+        "type": "conversation.item.input_audio_transcription.completed",
+        "item_id": item_id,
+        "content_index": 0,
+        "transcript": transcript,
+        "logprobs": None,
+        **fields,
+    }
+
+
+def _speech_started(item_id: str, event_id: str) -> dict:
+    return {
+        "type": "input_audio_buffer.speech_started",
+        "event_id": event_id,
+        "item_id": item_id,
+        "audio_start_ms": 0,
+    }
+
+
+def _error(error_type: str = "invalid_request_error", **fields) -> dict:
+    return {"type": "error", "error": {"type": error_type, **fields}}
+
+
+def _rejected(event_id: str) -> dict:
+    return _error(code="item_rejected", message="conversation item rejected", event_id=event_id)
+
+
+def _invalid_prev(missing: str, **fields) -> dict:
+    message = f"previous_item_id '{missing}' not found in conversation"
+    return _error("invalid_previous_item_id", message=message, **fields)
+
+
+async def _start_generation(session, response_id: str = "resp_1", **kwargs):
+    """generate_reply() and answer its response.create; returns (generation, response.create)."""
+    generation_fut = session.generate_reply(**kwargs)
+    response_create = await session._msg_ch.recv()
+    assert response_create["type"] == "response.create"
+    _server_event(session, _response_created(response_id, response_create["event_id"]))
+    return await generation_fut, response_create
+
+
+# --- model construction ------------------------------------------------------
 
 
 @pytest.mark.parametrize("output_modalities", [["text", "audio"], [], ["video"]])
 def test_boson_realtime_rejects_invalid_output_modalities(output_modalities):
     with pytest.raises(ValueError):
-        realtime.RealtimeModel(
-            url="ws://localhost:8000/v1/realtime/",
-            api_key="test-key",
-            output_modalities=output_modalities,
-        )
+        _model(output_modalities=output_modalities)
 
 
-def test_boson_realtime_defaults_to_the_hosted_endpoint(monkeypatch):
+@pytest.mark.parametrize(
+    ("kwargs", "attr", "expected"),
+    [
+        pytest.param({}, "url", "wss://api.boson.ai/v1/realtime", id="hosted-endpoint-default"),
+        pytest.param({"url": _URL}, "api_key", "env-key", id="key-from-environment"),
+        pytest.param(
+            {"url": _URL, "api_key": "passed-key"}, "api_key", "passed-key", id="explicit"
+        ),
+        # A local dev server with no auth. The environment must not be consulted:
+        # a key left over from another run would otherwise be sent to it silently.
+        pytest.param({"url": _URL, "api_key": None}, "api_key", None, id="explicit-none"),
+    ],
+)
+def test_boson_realtime_endpoint_and_api_key_resolution(monkeypatch, kwargs, attr, expected):
     monkeypatch.setenv("BOSON_API_KEY", "env-key")
-
-    model = realtime.RealtimeModel()
-
-    assert model._boson_opts.url == "wss://api.boson.ai/v1/realtime"
+    model = realtime.RealtimeModel(**kwargs)
+    assert getattr(model._boson_opts, attr) == expected
 
 
-def test_boson_realtime_reads_the_api_key_from_the_environment(monkeypatch):
-    monkeypatch.setenv("BOSON_API_KEY", "env-key")
-
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/")
-
-    assert model._boson_opts.api_key == "env-key"
-
-
-def test_boson_realtime_explicit_api_key_beats_the_environment(monkeypatch):
-    monkeypatch.setenv("BOSON_API_KEY", "env-key")
-
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="passed-key")
-
-    assert model._boson_opts.api_key == "passed-key"
-
-
-def test_boson_realtime_explicit_none_api_key_stays_unauthenticated(monkeypatch):
-    # A local dev server with no auth. The environment must not be consulted:
-    # a key left over from another run would otherwise be sent to it silently.
-    monkeypatch.setenv("BOSON_API_KEY", "env-key")
-
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key=None)
-
-    assert model._boson_opts.api_key is None
-
-
-def test_boson_realtime_requires_an_api_key(monkeypatch):
-    monkeypatch.delenv("BOSON_API_KEY", raising=False)
-
+# An empty value counts as unset: otherwise the session connects with no
+# credential and fails at the server, far from the blank line in the .env file.
+@pytest.mark.parametrize("env_key", [None, ""])
+def test_boson_realtime_requires_an_api_key(monkeypatch, env_key):
+    if env_key is None:
+        monkeypatch.delenv("BOSON_API_KEY", raising=False)
+    else:
+        monkeypatch.setenv("BOSON_API_KEY", env_key)
     with pytest.raises(ValueError, match="BOSON_API_KEY"):
-        realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/")
+        realtime.RealtimeModel(url=_URL)
 
 
-def test_boson_realtime_treats_an_empty_env_key_as_unset(monkeypatch):
-    # Otherwise the session connects with no credential and fails at the server,
-    # far from the blank line in the .env file that caused it.
-    monkeypatch.setenv("BOSON_API_KEY", "")
+@pytest.mark.parametrize(
+    ("kwargs", "expected"),
+    [
+        # As in the OpenAI plugin, well inside the server's own limit. The replay
+        # can put every user turn back, since each has a transcript.
+        ({"input_audio_transcription_model": "higgs-stt-3.1"}, 20 * 60),
+        ({"input_audio_transcription": {"model": "higgs-stt-3.1"}}, 20 * 60),
+        # Without transcripts a replay drops every user turn, so a recycle would
+        # make the model forget the user every 20 minutes.
+        ({}, None),
+        # An explicit value overrides the default either way.
+        ({"input_audio_transcription_model": "higgs-stt-3.1", "max_session_duration": None}, None),
+        ({"max_session_duration": 600}, 600),
+    ],
+)
+def test_boson_realtime_max_session_duration_default(kwargs, expected):
+    model = realtime.RealtimeModel(api_key="test-key", **kwargs)
+    assert model._opts.max_session_duration == expected
 
-    with pytest.raises(ValueError, match="BOSON_API_KEY"):
-        realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/")
+
+@pytest.mark.parametrize("max_session_duration", [0, -1.0, float("nan")])
+def test_boson_realtime_rejects_a_non_positive_max_session_duration(max_session_duration):
+    # The base would recycle at once, every time: a reconnect loop.
+    with pytest.raises(ValueError, match="max_session_duration"):
+        realtime.RealtimeModel(api_key="test-key", max_session_duration=max_session_duration)
 
 
-@pytest.mark.asyncio
-async def test_boson_realtime_text_only_generation_streams_text(monkeypatch):
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+# --- session.update ----------------------------------------------------------
 
-    model = realtime.RealtimeModel(
-        url="ws://localhost:8000/v1/realtime/",
-        api_key="test-key",
-        output_modalities=["text"],
-    )
-    session = model.session()
-    try:
-        await session._msg_ch.recv()  # initial session.update
-        generation_fut = session.generate_reply()
-        response_create = await session._msg_ch.recv()
+_BOSON_TURN_DETECTION = {
+    "type": "server_vad",
+    "silence_duration_ms": 800,
+    "threshold": 0.6,
+    "prefix_padding_ms": 200,
+    "interrupt_response": False,
+}
 
-        _server_event(
-            session,
+
+def _assert_session_update(session, event: dict, expected: dict) -> None:
+    """Check dotted paths into the session.update; "caps.*" reads the model's capabilities."""
+    assert event["type"] == "session.update"
+    observed = {**event["session"], "caps": vars(session.realtime_model.capabilities)}
+    assert {path: _at(observed, path) for path in expected} == expected
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "expected"),
+    [
+        pytest.param(
+            {"model": "test-model", "voice": "coral"},
             {
-                "type": "response.created",
-                "response": {
-                    "id": "resp_1",
-                    "status": "in_progress",
-                    "metadata": {"client_event_id": response_create["event_id"]},
+                "model": "test-model",
+                # The framework sends the Agent's instructions once the session
+                # starts; until then the server keeps its own default.
+                "instructions": _ABSENT,
+                "audio.input.format": {"type": "audio/pcm", "rate": 24000},
+                "audio.output.voice": "coral",
+                "audio.input.transcription": _ABSENT,
+                "audio.input.turn_detection.type": "server_vad",
+                "audio.input.noise_reduction": _ABSENT,
+                "output_modalities": ["audio"],
+                "temperature": _ABSENT,
+                "truncation": "auto",
+                "caps.audio_output": True,
+                # The server preserves client-supplied item ids, so the base
+                # diff/create/delete chat-context synchronization works.
+                "caps.mutable_chat_context": True,
+                # item.create is a pure insert server-side; the framework must
+                # send response.create after tool outputs.
+                "caps.auto_tool_reply_generation": False,
+                # No transcription model set -> no user-transcript events.
+                "caps.user_transcription": False,
+                # No per-response override: the framework must scope
+                # tool_choice/tools at the session level around generate_reply()
+                # instead of embedding them in response.create.
+                "caps.per_response_tool_choice": False,
+            },
+            id="defaults",
+        ),
+        pytest.param(
+            {
+                "model": "llm-model",
+                "voice": "en_woman",
+                "temperature": 0.2,
+                "input_audio_transcription": {
+                    "model": "asr-model",
+                    "language": "english",
+                    # `prompt` is not honored by the server; the wrapper drops it
+                    # even from a raw transcription dict.
+                    "prompt": "Transcribe names carefully.",
+                    "temperature": 0.1,
                 },
+                "turn_detection": _BOSON_TURN_DETECTION,
+                "input_audio_noise_reduction": "near_field",
+                "tool_choice": {"type": "function", "function": {"name": "lookup_policy"}},
+                "truncation": "disabled",
             },
-        )
-        generation = await generation_fut
-
-        _server_event(
-            session,
             {
-                "type": "response.output_item.added",
-                "response_id": "resp_1",
-                "output_index": 0,
-                "item": {"id": "item_1", "type": "message"},
+                "audio.input.transcription": {
+                    "model": "asr-model",
+                    "language": "english",
+                    "temperature": 0.1,
+                },
+                "audio.input.turn_detection": _BOSON_TURN_DETECTION,
+                "audio.output.voice": "en_woman",
+                "temperature": 0.2,
+                "audio.input.noise_reduction": {"type": "near_field"},
+                "tool_choice": {"type": "function", "name": "lookup_policy"},
+                "truncation": "disabled",
+                "caps.user_transcription": True,
             },
-        )
-        message = await generation.message_stream.recv()
-
-        _server_event(
-            session,
+            id="boson-options",
+        ),
+        pytest.param(
+            {"input_audio_transcription": None},
+            {"audio.input.transcription": _ABSENT, "caps.user_transcription": False},
+            id="transcription-none",
+        ),
+        # A transcription block without a `model` still runs ASR internally on
+        # the server but emits no client-facing transcription events.
+        pytest.param(
+            {"input_audio_transcription": {"language": "english"}},
             {
-                "type": "response.content_part.added",
-                "response_id": "resp_1",
-                "item_id": "item_1",
-                "output_index": 0,
-                "content_index": 0,
-                "part": {"type": "text", "text": ""},
+                "audio.input.transcription": {"language": "english"},
+                "caps.user_transcription": False,
             },
-        )
-        assert await message.modalities == ["text"]
+            id="transcription-without-model",
+        ),
+        pytest.param(
+            {"turn_detection": None},
+            {"audio.input.turn_detection": None, "caps.turn_detection": False},
+            id="turn-detection-none",
+        ),
+        # README documents turn_detection=None/False as equivalent; False must
+        # not crash (dict(False) raises TypeError - bool isn't iterable).
+        pytest.param(
+            {"turn_detection": False},
+            {"audio.input.turn_detection": None, "caps.turn_detection": False},
+            id="turn-detection-false",
+        ),
+        pytest.param(
+            {"output_modalities": ["text"]},
+            {"output_modalities": ["text"], "caps.audio_output": False},
+            id="text-only",
+        ),
+        pytest.param(
+            {"input_audio_noise_reduction": {"type": "far_field"}},
+            {"audio.input.noise_reduction": {"type": "far_field"}},
+            id="noise-reduction-dict",
+        ),
+    ],
+)
+async def test_boson_realtime_initial_session_update(open_session, kwargs, expected):
+    session = await open_session(drain=False, **kwargs)
+    _assert_session_update(session, await session._msg_ch.recv(), expected)
 
-        _server_event(
-            session,
+
+@pytest.mark.parametrize(
+    ("kwargs", "update", "expected"),
+    [
+        pytest.param(
+            {},
             {
-                "type": "response.output_text.delta",
-                "response_id": "resp_1",
-                "item_id": "item_1",
-                "output_index": 0,
-                "content_index": 0,
-                "delta": "Hi there.",
+                # `prompt` is dropped here too.
+                "input_audio_transcription": {"model": "asr-v2", "prompt": "ASR hints."},
+                "input_audio_noise_reduction": "near_field",
+                "turn_detection": {"type": "server_vad", "silence_duration_ms": 900},
             },
-        )
-        assert await message.text_stream.recv() == "Hi there."
-
-        _server_event(
-            session,
             {
-                "type": "response.output_text.done",
-                "response_id": "resp_1",
-                "item_id": "item_1",
-                "output_index": 0,
-                "content_index": 0,
-                "text": "Hi there.",
+                "audio.input.transcription": {"model": "asr-v2"},
+                "audio.input.turn_detection": {
+                    **_DEFAULT_TURN_DETECTION,
+                    "silence_duration_ms": 900,
+                },
+                "audio.input.noise_reduction": {"type": "near_field"},
+                "caps.user_transcription": True,
             },
-        )
-        _server_event(
-            session,
-            {
-                "type": "response.output_item.done",
-                "response_id": "resp_1",
-                "output_index": 0,
-                "item": {"id": "item_1", "type": "message"},
-            },
-        )
-        _server_event(
-            session,
-            {
-                "type": "response.done",
-                "response": {"id": "resp_1", "status": "completed", "usage": None},
-            },
-        )
-        assert session._current_generation is None
-    finally:
-        await session.aclose()
-        await model.aclose()
+            id="boson-options",
+        ),
+        # An update with no audio fields carries no `audio` block at all.
+        pytest.param(
+            {},
+            {"truncation": "disabled"},
+            {"truncation": "disabled", "audio": _ABSENT},
+            id="no-audio",
+        ),
+        # The server merges session.update, so leaving `transcription` out would
+        # keep the old config; clearing it has to say so explicitly.
+        pytest.param(
+            {"input_audio_transcription": {"model": "asr-v1"}},
+            {"input_audio_transcription": None},
+            {"audio.input": {"transcription": None}, "caps.user_transcription": False},
+            id="clear-transcription-with-null",
+        ),
+        pytest.param(
+            {},
+            {"turn_detection": False},
+            {"audio.input.turn_detection": None, "caps.turn_detection": False},
+            id="turn-detection-false",
+        ),
+        # Unlike turn_detection/noise_reduction, the server's `truncation` field is
+        # non-Optional ("auto"/"disabled" only); sending null would fail server
+        # validation and tear down the whole session. `None` must be a no-op here,
+        # not forwarded to the wire.
+        pytest.param(
+            {"truncation": "disabled"},
+            {"truncation": None, "voice": "coral"},
+            {"truncation": _ABSENT, "audio.output.voice": "coral"},
+            id="none-truncation-is-ignored",
+        ),
+    ],
+)
+async def test_boson_realtime_update_options_session_update(open_session, kwargs, update, expected):
+    session = await open_session(**kwargs)
+    session.realtime_model.update_options(**update)
+    _assert_session_update(session, await session._msg_ch.recv(), expected)
 
 
-@pytest.mark.asyncio
-async def test_boson_realtime_noise_reduction_string_normalized(monkeypatch):
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    model = realtime.RealtimeModel(
-        url="ws://localhost:8000/v1/realtime/",
-        api_key="test-key",
-        input_audio_noise_reduction="near_field",
-    )
-    session = model.session()
-    try:
-        event = await session._msg_ch.recv()
-        assert event["session"]["audio"]["input"]["noise_reduction"] == {"type": "near_field"}
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_noise_reduction_dict_passthrough(monkeypatch):
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    model = realtime.RealtimeModel(
-        url="ws://localhost:8000/v1/realtime/",
-        api_key="test-key",
-        input_audio_noise_reduction={"type": "far_field"},
-    )
-    session = model.session()
-    try:
-        event = await session._msg_ch.recv()
-        assert event["session"]["audio"]["input"]["noise_reduction"] == {"type": "far_field"}
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_noise_reduction_omitted_by_default(monkeypatch):
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    try:
-        event = await session._msg_ch.recv()
-        assert "noise_reduction" not in event["session"]["audio"]["input"]
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_update_options_sends_boson_options(monkeypatch):
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    model = realtime.RealtimeModel(
-        url="ws://localhost:8000/v1/realtime/",
-        api_key="test-key",
-    )
-    session = model.session()
-    try:
-        await session._msg_ch.recv()
-        model.update_options(
-            # `prompt` is not honored by the server; the wrapper drops it even
-            # from a raw transcription dict.
-            input_audio_transcription={"model": "asr-v2", "prompt": "ASR hints."},
-            input_audio_noise_reduction="near_field",
-            turn_detection={"type": "server_vad", "silence_duration_ms": 900},
-        )
-
-        event = await session._msg_ch.recv()
-        assert event["type"] == "session.update"
-        assert event["session"]["audio"]["input"]["transcription"] == {"model": "asr-v2"}
-        assert event["session"]["audio"]["input"]["turn_detection"] == {
-            **realtime.realtime_model._DEFAULT_TURN_DETECTION,
-            "silence_duration_ms": 900,
-        }
-        assert event["session"]["audio"]["input"]["noise_reduction"] == {"type": "near_field"}
-        assert model.capabilities.user_transcription is True
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_update_options_clears_transcription_with_null(monkeypatch):
-    # The server merges session.update, so leaving `transcription` out would
-    # keep the old config; clearing it has to say so explicitly.
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    model = realtime.RealtimeModel(
-        url="ws://localhost:8000/v1/realtime/",
-        api_key="test-key",
-        input_audio_transcription={"model": "asr-v1"},
-    )
-    session = model.session()
-    try:
-        initial_event = await session._msg_ch.recv()
-        assert initial_event["session"]["audio"]["input"]["transcription"] == {"model": "asr-v1"}
-
-        model.update_options(input_audio_transcription=None)
-
-        event = await session._msg_ch.recv()
-        assert event["type"] == "session.update"
-        assert event["session"]["audio"]["input"] == {"transcription": None}
-        assert model.capabilities.user_transcription is False
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_session_updates_send_only_what_changed(monkeypatch):
+async def test_boson_realtime_session_updates_send_only_what_changed(open_session):
     # The server merges session.update into the config it holds, so a change
     # carries only its own fields.
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+    session = await open_session(input_audio_noise_reduction="near_field")
 
-    async def lookup_policy():
-        return "ok"
+    await session.update_tools([llm.function_tool(lookup_policy)])
+    event = await session._msg_ch.recv()
+    assert set(event["session"]) == {"type", "tools"}
+    assert [tool["name"] for tool in event["session"]["tools"]] == ["lookup_policy"]
 
-    model = realtime.RealtimeModel(
-        url="ws://localhost:8000/v1/realtime/",
-        api_key="test-key",
-    )
-    session = model.session()
-    try:
-        await session._msg_ch.recv()  # initial session.update
+    await session.update_instructions("Be thorough.")
+    event = await session._msg_ch.recv()
+    assert event["session"] == {"type": "realtime", "instructions": "Be thorough."}
 
-        await session.update_tools([llm.function_tool(lookup_policy)])
-        event = await session._msg_ch.recv()
-        assert set(event["session"]) == {"type", "tools"}
-        assert [tool["name"] for tool in event["session"]["tools"]] == ["lookup_policy"]
+    session.update_options(voice="coral", temperature=0.5)
+    event = await session._msg_ch.recv()
+    assert event["session"] == {
+        "type": "realtime",
+        "temperature": 0.5,
+        "audio": {"output": {"voice": "coral"}},
+    }
 
-        await session.update_instructions("Be thorough.")
-        event = await session._msg_ch.recv()
-        assert event["session"] == {"type": "realtime", "instructions": "Be thorough."}
+    # Under merge, an omitted field keeps its old value; turning something off
+    # has to send the empty value itself.
+    await session.update_tools([])
+    assert (await session._msg_ch.recv())["session"]["tools"] == []
 
-        session.update_options(voice="coral", temperature=0.5)
-        event = await session._msg_ch.recv()
-        assert event["session"] == {
-            "type": "realtime",
-            "temperature": 0.5,
-            "audio": {"output": {"voice": "coral"}},
-        }
-    finally:
-        await session.aclose()
-        await model.aclose()
+    session.update_options(input_audio_noise_reduction=None)
+    event = await session._msg_ch.recv()
+    assert event["session"]["audio"] == {"input": {"noise_reduction": None}}
 
 
-@pytest.mark.asyncio
-async def test_boson_realtime_reconnect_config_carries_every_partial_update(monkeypatch):
+async def test_boson_realtime_reconnect_config_carries_every_partial_update(open_session):
     # Partial updates only work while the server holds the rest. A reconnect
     # starts a session that holds nothing, so the config it sends first must
     # still include everything changed piecemeal before.
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    async def lookup_policy():
-        return "ok"
-
-    model = realtime.RealtimeModel(
-        url="ws://localhost:8000/v1/realtime/",
-        api_key="test-key",
-        input_audio_transcription={"model": "asr-v1", "language": "en"},
+    session = await open_session(input_audio_transcription={"model": "asr-v1", "language": "en"})
+    await session.update_tools([llm.function_tool(lookup_policy)])
+    await session.update_instructions("Be thorough.")
+    session.update_options(voice="coral", truncation="disabled")
+    # Dicts are merged into what the server holds, not swapped for it: the
+    # server keeps the threshold and the language left out here.
+    session.update_options(
+        turn_detection={"type": "server_vad", "create_response": False},
+        input_audio_transcription={"model": "asr-v2"},
     )
-    session = model.session()
-    try:
-        await session._msg_ch.recv()  # initial session.update
-        await session.update_tools([llm.function_tool(lookup_policy)])
-        await session.update_instructions("Be thorough.")
-        session.update_options(voice="coral", truncation="disabled")
-        # Dicts are merged into what the server holds, not swapped for it: the
-        # server keeps the threshold and the language left out here.
-        session.update_options(
-            turn_detection={"type": "server_vad", "create_response": False},
-            input_audio_transcription={"model": "asr-v2"},
-        )
 
-        full = session._create_session_update_event()["session"]
-        assert full["instructions"] == "Be thorough."
-        assert [tool["name"] for tool in full["tools"]] == ["lookup_policy"]
-        assert full["audio"]["output"]["voice"] == "coral"
-        assert full["truncation"] == "disabled"
-        assert full["audio"]["input"]["turn_detection"] == {
-            **realtime.realtime_model._DEFAULT_TURN_DETECTION,
-            "create_response": False,
-        }
-        assert full["audio"]["input"]["transcription"] == {"model": "asr-v2", "language": "en"}
-    finally:
-        await session.aclose()
-        await model.aclose()
+    full = session._create_session_update_event()["session"]
+    assert full["instructions"] == "Be thorough."
+    assert [tool["name"] for tool in full["tools"]] == ["lookup_policy"]
+    assert full["audio"]["output"]["voice"] == "coral"
+    assert full["truncation"] == "disabled"
+    assert full["audio"]["input"]["turn_detection"] == {
+        **_DEFAULT_TURN_DETECTION,
+        "create_response": False,
+    }
+    assert full["audio"]["input"]["transcription"] == {"model": "asr-v2", "language": "en"}
 
 
-@pytest.mark.asyncio
-async def test_boson_realtime_model_options_merge_dicts_like_sessions(monkeypatch):
+async def test_boson_realtime_model_options_merge_dicts_like_sessions(open_session):
     # An open session merges a partial dict into what its server holds, so the
     # model has to merge it too: otherwise its capabilities, and every session
     # opened after the change, disagree with the sessions already open.
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    model = realtime.RealtimeModel(
-        url="ws://localhost:8000/v1/realtime/",
-        api_key="test-key",
-        input_audio_transcription_model="higgs-stt-3.1",
+    first = await open_session(input_audio_transcription_model="higgs-stt-3.1")
+    model = first.realtime_model
+    model.update_options(
+        input_audio_transcription={"language": "fr"},
+        turn_detection={"threshold": 0.7},
     )
-    open_session = model.session()
+    await first._msg_ch.recv()  # the same change, merged by the server
+
+    assert model.capabilities.user_transcription is True
+    assert first.capabilities.user_transcription is True
+    new_session = model.session()
     try:
-        await open_session._msg_ch.recv()  # initial session.update
-        model.update_options(
-            input_audio_transcription={"language": "fr"},
-            turn_detection={"threshold": 0.7},
-        )
-        await open_session._msg_ch.recv()  # the same change, merged by the server
-
-        assert model.capabilities.user_transcription is True
-        assert open_session.capabilities.user_transcription is True
-        new_session = model.session()
-        try:
-            audio_input = (await new_session._msg_ch.recv())["session"]["audio"]["input"]
-            assert audio_input["transcription"] == {"model": "higgs-stt-3.1", "language": "fr"}
-            assert audio_input["turn_detection"]["type"] == "server_vad"
-            assert audio_input["turn_detection"]["threshold"] == 0.7
-            assert audio_input["turn_detection"]["silence_duration_ms"] == 500
-        finally:
-            await new_session.aclose()
+        audio_input = (await new_session._msg_ch.recv())["session"]["audio"]["input"]
+        assert audio_input["transcription"] == {"model": "higgs-stt-3.1", "language": "fr"}
+        assert audio_input["turn_detection"]["type"] == "server_vad"
+        assert audio_input["turn_detection"]["threshold"] == 0.7
+        assert audio_input["turn_detection"]["silence_duration_ms"] == 500
     finally:
-        await open_session.aclose()
-        await model.aclose()
+        await new_session.aclose()
 
 
-@pytest.mark.asyncio
-async def test_boson_realtime_transcription_emits_stt_metrics_with_the_model(monkeypatch):
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    model = realtime.RealtimeModel(
-        url="ws://localhost:8000/v1/realtime/",
-        api_key="test-key",
-        input_audio_transcription_model="higgs-stt-3.1",
-    )
-    session = model.session()
-    metrics = []
-    session.on("metrics_collected", metrics.append)
-    try:
-        await session._msg_ch.recv()  # initial session.update
-
-        def transcribed(item_id: str) -> None:
-            _server_event(session, _user_item_added(item_id, []))
-            _server_event(
-                session,
-                {
-                    "type": "conversation.item.input_audio_transcription.completed",
-                    "event_id": f"event_{item_id}",
-                    "item_id": item_id,
-                    "content_index": 0,
-                    "transcript": "hello",
-                    "logprobs": None,
-                    "usage": {"type": "duration", "seconds": 1.5},
-                },
-            )
-
-        transcribed("user_1")
-        session.update_options(input_audio_transcription={"model": "higgs-stt-4"})
-        transcribed("user_2")
-
-        assert [m.metadata.model_name for m in metrics] == ["higgs-stt-3.1", "higgs-stt-4"]
-        assert [m.audio_duration for m in metrics] == [1.5, 1.5]
-        assert metrics[0].request_id == "event_user_1"
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_session_updates_clear_with_explicit_empties(monkeypatch):
-    # Under merge, an omitted field keeps its old value; turning something off
-    # has to send the empty value itself.
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    async def lookup_policy():
-        return "ok"
-
-    model = realtime.RealtimeModel(
-        url="ws://localhost:8000/v1/realtime/",
-        api_key="test-key",
-        input_audio_noise_reduction="near_field",
-    )
-    session = model.session()
-    try:
-        await session._msg_ch.recv()  # initial session.update
-        await session.update_tools([llm.function_tool(lookup_policy)])
-        await session._msg_ch.recv()
-
-        await session.update_tools([])
-        event = await session._msg_ch.recv()
-        assert event["session"]["tools"] == []
-
-        session.update_options(input_audio_noise_reduction=None)
-        event = await session._msg_ch.recv()
-        assert event["session"]["audio"] == {"input": {"noise_reduction": None}}
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_tool_choice_uses_boson_shape(monkeypatch):
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    model = realtime.RealtimeModel(
-        url="ws://localhost:8000/v1/realtime/",
-        api_key="test-key",
-        tool_choice={"type": "function", "function": {"name": "lookup_policy"}},
-    )
-    session = model.session()
-    try:
-        event = await session._msg_ch.recv()
-        assert event["session"]["tool_choice"] == {"type": "function", "name": "lookup_policy"}
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_unsupported_tool_type_warns_once(monkeypatch):
+async def test_boson_realtime_unsupported_tool_type_warns_once(open_session, monkeypatch):
     # A tool the wire has no shape for is left out of session.update. Doing that
     # silently means a tool the caller registered never reaches the model and
     # leaves no trace anywhere; the framework gaining a new tool kind is exactly
     # when that would happen.
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
     class _UnknownTool:
         pass
 
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    warnings: list[str] = []
-    monkeypatch.setattr(
-        realtime.realtime_model.logger, "warning", lambda msg, *a, **k: warnings.append(str(msg))
-    )
-    try:
-        await session._msg_ch.recv()  # initial session.update
+    session = await open_session()
+    warnings = _capture_warnings(monkeypatch)
 
-        await session.update_tools([_UnknownTool()])  # type: ignore[list-item]
-        event = await session._msg_ch.recv()
-        assert event["session"]["tools"] == []
-        assert len(warnings) == 1
+    await session.update_tools([_UnknownTool()])  # type: ignore[list-item]
+    assert (await session._msg_ch.recv())["session"]["tools"] == []
+    assert len(warnings) == 1
 
-        # Warned once per session, not once per session.update.
-        await session.update_tools([_UnknownTool()])  # type: ignore[list-item]
-        await session._msg_ch.recv()
-        assert len(warnings) == 1
-    finally:
-        await session.aclose()
-        await model.aclose()
+    # Warned once per session, not once per session.update.
+    await session.update_tools([_UnknownTool()])  # type: ignore[list-item]
+    await session._msg_ch.recv()
+    assert len(warnings) == 1
 
 
-@pytest.mark.asyncio
-async def test_boson_realtime_raw_function_tool_schema_uses_boson_shape(monkeypatch):
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+async def test_boson_realtime_raw_function_tool_schema_uses_boson_shape(open_session):
+    schema = {
+        "name": "lookup_policy",
+        "description": "Lookup a policy.",
+        "parameters": {"type": "object", "properties": {}},
+    }
+    tool = llm.function_tool(lookup_policy, raw_schema={**schema, "meta": {"provider": "test"}})
 
-    async def lookup_policy():
-        return "ok"
-
-    tool = llm.function_tool(
-        lookup_policy,
-        raw_schema={
-            "name": "lookup_policy",
-            "description": "Lookup a policy.",
-            "parameters": {"type": "object", "properties": {}},
-            "meta": {"provider": "test"},
-        },
-    )
-
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    try:
-        await session._msg_ch.recv()  # initial session.update
-        await session.update_tools([tool])
-        event = await session._msg_ch.recv()
-
-        assert event["session"]["tools"] == [
-            {
-                "type": "function",
-                "name": "lookup_policy",
-                "description": "Lookup a policy.",
-                "parameters": {"type": "object", "properties": {}},
-            }
-        ]
-    finally:
-        await session.aclose()
-        await model.aclose()
+    session = await open_session()
+    await session.update_tools([tool])
+    event = await session._msg_ch.recv()
+    assert event["session"]["tools"] == [{"type": "function", **schema}]
 
 
-@pytest.mark.asyncio
-async def test_boson_realtime_generation_audio_mapping(monkeypatch):
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+async def test_boson_realtime_transcription_emits_stt_metrics_with_the_model(open_session):
+    session = await open_session(input_audio_transcription_model="higgs-stt-3.1")
+    metrics = _collect(session, "metrics_collected")
 
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    try:
-        await session._msg_ch.recv()  # initial session.update
-        generation_fut = session.generate_reply()
-        response_create = await session._msg_ch.recv()
-        assert response_create["type"] == "response.create"
+    def transcribed(item_id: str) -> None:
+        usage = {"type": "duration", "seconds": 1.5}
+        done = _transcribed(item_id, "hello", event_id=f"event_{item_id}", usage=usage)
+        _server_event(session, _user_item_added(item_id, []), done)
 
-        _server_event(
-            session,
-            {
-                "type": "response.created",
-                "response": {
-                    "id": "resp_1",
-                    "status": "in_progress",
-                    "metadata": {"client_event_id": response_create["event_id"]},
-                },
-            },
-        )
-        generation = await generation_fut
-        assert generation.response_id == "resp_1"
-        assert generation.user_initiated is True
+    transcribed("user_1")
+    session.update_options(input_audio_transcription={"model": "higgs-stt-4"})
+    transcribed("user_2")
 
-        _server_event(
-            session,
-            {
-                "type": "response.output_item.added",
-                "response_id": "resp_1",
-                "output_index": 0,
-                "item": {"id": "item_1", "type": "message"},
-            },
-        )
-        message = await generation.message_stream.recv()
-        assert message.message_id == "item_1"
+    assert [m.metadata.model_name for m in metrics] == ["higgs-stt-3.1", "higgs-stt-4"]
+    assert [m.audio_duration for m in metrics] == [1.5, 1.5]
+    assert metrics[0].request_id == "event_user_1"
 
-        _server_event(
-            session,
-            {
-                "type": "response.content_part.added",
-                "response_id": "resp_1",
-                "item_id": "item_1",
-                "output_index": 0,
-                "content_index": 0,
-                "part": {"type": "audio", "transcript": ""},
-            },
-        )
-        assert await message.modalities == ["audio", "text"]
 
-        pcm = b"\x00\x00" * 240
-        _server_event(
-            session,
-            {
-                "type": "response.output_audio.delta",
-                "response_id": "resp_1",
-                "item_id": "item_1",
-                "output_index": 0,
-                "content_index": 0,
-                "delta": base64.b64encode(pcm).decode("utf-8"),
-            },
-        )
+# --- generations -------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "part", "modalities"),
+    [
+        pytest.param({"output_modalities": ["text"]}, _TEXT_PART, ["text"], id="text-only"),
+        pytest.param({}, {"type": "audio", "transcript": ""}, ["audio", "text"], id="audio"),
+    ],
+)
+async def test_boson_realtime_generation_streams_output(open_session, kwargs, part, modalities):
+    session = await open_session(**kwargs)
+    generation, _ = await _start_generation(session)
+    assert generation.response_id == "resp_1"
+    assert generation.user_initiated is True
+
+    _server_event(session, _output_item("added", "resp_1", "item_1"))
+    message = await generation.message_stream.recv()
+    assert message.message_id == "item_1"
+
+    _server_event(session, _content("content_part.added", "resp_1", "item_1", part=part))
+    assert await message.modalities == modalities
+
+    if "audio" in modalities:
+        delta = base64.b64encode(b"\x00\x00" * 240).decode("utf-8")
+        _server_event(session, _content("output_audio.delta", "resp_1", "item_1", delta=delta))
         frame = await message.audio_stream.recv()
-        assert frame.sample_rate == 24000
-        assert frame.num_channels == 1
-        assert frame.samples_per_channel == 240
+        assert (frame.sample_rate, frame.num_channels, frame.samples_per_channel) == (24000, 1, 240)
+    else:
+        _server_event(session, _content("output_text.delta", "resp_1", "item_1", delta="Hi."))
+        assert await message.text_stream.recv() == "Hi."
+        _server_event(session, _content("output_text.done", "resp_1", "item_1", text="Hi."))
 
-        _server_event(
-            session,
-            {
-                "type": "response.output_item.done",
-                "response_id": "resp_1",
-                "output_index": 0,
-                "item": {"id": "item_1", "type": "message"},
-            },
-        )
-        _server_event(
-            session,
-            {
-                "type": "response.done",
-                "response": {"id": "resp_1", "status": "completed", "usage": None},
-            },
-        )
-        assert session._current_generation is None
-    finally:
-        await session.aclose()
-        await model.aclose()
+    _server_event(session, _output_item("done", "resp_1", "item_1"), _response_done("resp_1"))
+    assert session._current_generation is None
 
 
-@pytest.mark.asyncio
-async def test_boson_realtime_generate_reply_uses_response_metadata(monkeypatch):
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+async def test_boson_realtime_generate_reply_uses_response_metadata(open_session):
+    session = await open_session()
+    generation_fut = session.generate_reply()
+    response_create = await session._msg_ch.recv()
+    event_id = response_create["event_id"]
+    assert response_create["response"]["metadata"]["client_event_id"] == event_id
 
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    try:
-        await session._msg_ch.recv()  # initial session.update
-        generation_fut = session.generate_reply()
-        response_create = await session._msg_ch.recv()
-        event_id = response_create["event_id"]
+    _server_event(session, _response_created("resp_auto"))
+    assert not generation_fut.done()
+    assert event_id in session._response_created_futures
 
-        assert response_create["response"]["metadata"]["client_event_id"] == event_id
-
-        _server_event(
-            session,
-            {
-                "type": "response.created",
-                "response": {"id": "resp_auto", "status": "in_progress"},
-            },
-        )
-        assert not generation_fut.done()
-        assert event_id in session._response_created_futures
-
-        _server_event(
-            session,
-            {
-                "type": "response.created",
-                "response": {
-                    "id": "resp_manual",
-                    "status": "in_progress",
-                    "metadata": {"client_event_id": event_id},
-                },
-            },
-        )
-        generation = await generation_fut
-        assert generation.response_id == "resp_manual"
-        assert generation.user_initiated is True
-        assert session._response_created_futures == {}
-    finally:
-        await session.aclose()
-        await model.aclose()
+    _server_event(session, _response_created("resp_manual", event_id))
+    generation = await generation_fut
+    assert generation.response_id == "resp_manual"
+    assert generation.user_initiated is True
+    assert session._response_created_futures == {}
 
 
-@pytest.mark.asyncio
-async def test_boson_realtime_capabilities_disable_per_response_tool_choice(monkeypatch):
-    # Boson has no per-response override: the framework must scope
-    # tool_choice/tools at the session level around generate_reply() instead
-    # of embedding them in response.create.
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    try:
-        assert model.capabilities.per_response_tool_choice is False
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_generate_reply_instructions_ride_in_response_create(monkeypatch):
+async def test_boson_realtime_generate_reply_instructions_ride_in_response_create(open_session):
     # A per-response `instructions` goes in response.create, and the session
     # config around it is left untouched — no scoping session.update before it,
     # none after.
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+    session = await open_session()
+    await session.update_instructions("Base instructions.")
+    await session._msg_ch.recv()
 
-    model = realtime.RealtimeModel(
-        url="ws://localhost:8000/v1/realtime/",
-        api_key="test-key",
-    )
-    session = model.session()
-    try:
-        await session._msg_ch.recv()  # initial session.update
-        await session.update_instructions("Base instructions.")
-        await session._msg_ch.recv()
+    _, response_create = await _start_generation(session, instructions="Greet the user.")
+    # As with OpenAI, the server uses this in place of the session
+    # instructions, so the event carries both.
+    assert response_create["response"]["instructions"] == "Base instructions.\nGreet the user."
 
-        generation_fut = session.generate_reply(instructions="Greet the user.")
-
-        response_create = await session._msg_ch.recv()
-        assert response_create["type"] == "response.create"
-        # As with OpenAI, the server uses this in place of the session
-        # instructions, so the event carries both.
-        assert response_create["response"]["instructions"] == "Base instructions.\nGreet the user."
-
-        _server_event(
-            session,
-            {
-                "type": "response.created",
-                "response": {
-                    "id": "resp_1",
-                    "status": "in_progress",
-                    "metadata": {"client_event_id": response_create["event_id"]},
-                },
-            },
-        )
-        await generation_fut
-
-        # Nothing to restore: the session was never reconfigured.
-        assert session._msg_ch.empty()
-        assert session._instructions == "Base instructions."
-    finally:
-        await session.aclose()
-        await model.aclose()
+    # Nothing to restore: the session was never reconfigured.
+    assert session._msg_ch.empty()
+    assert session._instructions == "Base instructions."
 
 
-@pytest.mark.asyncio
-async def test_boson_realtime_generate_reply_ignores_per_response_tools(monkeypatch):
+async def test_boson_realtime_generate_reply_ignores_per_response_tools(open_session, monkeypatch):
     # The server accepts per-response tools/tool_choice and ignores them, so
     # forwarding them would look like they applied. The framework scopes them at
     # the session level instead (per_response_tool_choice is False); a caller
     # reaching this session directly gets a warning and no wire change.
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+    session = await open_session()
+    warnings = _capture_warnings(monkeypatch)
 
-    async def _tool() -> str:
-        return "ok"
+    session.generate_reply(tool_choice="none", tools=[llm.function_tool(lookup_policy)])
+    response_create = await session._msg_ch.recv()
+    assert response_create["type"] == "response.create"
+    assert "tool_choice" not in response_create["response"]
+    assert "tools" not in response_create["response"]
+    # No session.update either — the session config is untouched.
+    assert session._msg_ch.empty()
+    assert len(warnings) == 1
 
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    warnings: list[str] = []
-    monkeypatch.setattr(
-        realtime.realtime_model.logger, "warning", lambda msg, *a, **k: warnings.append(msg)
-    )
-    try:
-        await session._msg_ch.recv()  # initial session.update
-
-        session.generate_reply(
-            tool_choice="none",
-            tools=[llm.function_tool(_tool, name="lookup_policy", description="Lookup.")],
-        )
-
-        response_create = await session._msg_ch.recv()
-        assert response_create["type"] == "response.create"
-        assert "tool_choice" not in response_create["response"]
-        assert "tools" not in response_create["response"]
-        # No session.update either — the session config is untouched.
-        assert session._msg_ch.empty()
-        assert len(warnings) == 1
-
-        # Warned once per session, not once per call.
-        session.generate_reply(tool_choice="none")
-        await session._msg_ch.recv()
-        assert len(warnings) == 1
-    finally:
-        await session.aclose()
-        await model.aclose()
+    # Warned once per session, not once per call.
+    session.generate_reply(tool_choice="none")
+    await session._msg_ch.recv()
+    assert len(warnings) == 1
 
 
-@pytest.mark.asyncio
-async def test_boson_realtime_new_response_closes_previous_generation(monkeypatch):
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+async def test_boson_realtime_new_response_closes_previous_generation(open_session):
+    session = await open_session()
+    _server_event(session, _response_created("resp_1"))
+    first_generation = session._current_generation
+    assert first_generation is not None
 
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    try:
-        await session._msg_ch.recv()  # initial session.update
-        _server_event(
-            session,
-            {
-                "type": "response.created",
-                "response": {"id": "resp_1", "status": "in_progress"},
-            },
-        )
-        first_generation = session._current_generation
-        assert first_generation is not None
-
-        _server_event(
-            session,
-            {
-                "type": "response.created",
-                "response": {"id": "resp_2", "status": "in_progress"},
-            },
-        )
-        assert first_generation.message_ch.closed
-        assert first_generation.function_ch.closed
-        assert session._current_generation is not first_generation
-    finally:
-        await session.aclose()
-        await model.aclose()
+    _server_event(session, _response_created("resp_2"))
+    assert first_generation.message_ch.closed
+    assert first_generation.function_ch.closed
+    assert session._current_generation is not first_generation
 
 
-@pytest.mark.asyncio
-async def test_boson_realtime_discarded_response_keeps_active_generation_streams(monkeypatch):
+async def test_boson_realtime_discarded_response_keeps_active_generation_streams(open_session):
     # A response that timed out before the server created it must be discarded
     # without cutting off the streams of a newer in-progress generation.
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+    session = await open_session()
+    session._discarded_event_ids.add("evt_stale")
 
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    try:
-        await session._msg_ch.recv()  # initial session.update
-        session._discarded_event_ids.add("evt_stale")
+    _server_event(session, _response_created("resp_active"))
+    active_generation = session._current_generation
+    assert active_generation is not None
 
-        _server_event(
-            session,
-            {
-                "type": "response.created",
-                "response": {"id": "resp_active", "status": "in_progress"},
-            },
-        )
-        active_generation = session._current_generation
-        assert active_generation is not None
+    _server_event(session, _response_created("resp_stale", "evt_stale"))
+    # the active generation's streams stay open and interrupt() still
+    # targets the active response, not the discarded one
+    assert not active_generation.message_ch.closed
+    assert not active_generation.function_ch.closed
+    assert session._current_generation is active_generation
+    assert session._current_response_id == "resp_active"
 
-        _server_event(
-            session,
-            {
-                "type": "response.created",
-                "response": {
-                    "id": "resp_stale",
-                    "status": "in_progress",
-                    "metadata": {"client_event_id": "evt_stale"},
-                },
-            },
-        )
+    # the base cancelled the stale response by id
+    cancel_event = await session._msg_ch.recv()
+    assert cancel_event["type"] == "response.cancel"
+    assert cancel_event["response_id"] == "resp_stale"
 
-        # the active generation's streams stay open and interrupt() still
-        # targets the active response, not the discarded one
-        assert not active_generation.message_ch.closed
-        assert not active_generation.function_ch.closed
-        assert session._current_generation is active_generation
-        assert session._current_response_id == "resp_active"
+    # the stale response's terminal event must not close the active
+    # generation either
+    _server_event(session, _response_done("resp_stale", "cancelled"))
+    assert not active_generation.message_ch.closed
+    assert session._current_generation is active_generation
+    assert session._current_response_id == "resp_active"
 
-        # the base cancelled the stale response by id
-        cancel_event = await session._msg_ch.recv()
-        assert cancel_event["type"] == "response.cancel"
-        assert cancel_event["response_id"] == "resp_stale"
-
-        # the stale response's terminal event must not close the active
-        # generation either
-        _server_event(
-            session,
-            {
-                "type": "response.done",
-                "response": {"id": "resp_stale", "status": "cancelled", "usage": None},
-            },
-        )
-        assert not active_generation.message_ch.closed
-        assert session._current_generation is active_generation
-        assert session._current_response_id == "resp_active"
-
-        # the active response still completes normally afterwards
-        _server_event(
-            session,
-            {
-                "type": "response.done",
-                "response": {"id": "resp_active", "status": "completed", "usage": None},
-            },
-        )
-        assert session._current_generation is None
-        assert session._current_response_id is None
-    finally:
-        await session.aclose()
-        await model.aclose()
+    # the active response still completes normally afterwards
+    _server_event(session, _response_done("resp_active"))
+    assert session._current_generation is None
+    assert session._current_response_id is None
 
 
-@pytest.mark.asyncio
-async def test_boson_realtime_discarded_response_without_active_generation_is_skipped(monkeypatch):
+async def test_boson_realtime_discarded_response_without_active_generation_is_skipped(
+    open_session,
+):
     # With no generation in progress, the base discard marker must stay in the
     # slot so the stale response's trailing events are eaten.
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+    session = await open_session()
+    session._discarded_event_ids.add("evt_stale")
 
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    try:
-        await session._msg_ch.recv()  # initial session.update
-        session._discarded_event_ids.add("evt_stale")
+    _server_event(session, _response_created("resp_stale", "evt_stale"))
+    assert session._current_generation is not None  # the discard marker
+    assert session._current_response_id is None
 
-        _server_event(
-            session,
-            {
-                "type": "response.created",
-                "response": {
-                    "id": "resp_stale",
-                    "status": "in_progress",
-                    "metadata": {"client_event_id": "evt_stale"},
-                },
-            },
-        )
-        assert session._current_generation is not None  # the discard marker
-        assert session._current_response_id is None
-
-        _server_event(
-            session,
-            {
-                "type": "response.done",
-                "response": {"id": "resp_stale", "status": "cancelled", "usage": None},
-            },
-        )
-        assert session._current_generation is None
-    finally:
-        await session.aclose()
-        await model.aclose()
+    _server_event(session, _response_done("resp_stale", "cancelled"))
+    assert session._current_generation is None
 
 
-@pytest.mark.asyncio
-async def test_boson_realtime_superseded_response_still_records_call_arguments(monkeypatch):
+async def test_boson_realtime_superseded_response_still_records_call_arguments(open_session):
     # conversation.item.added carries a call before its arguments exist; only
     # output_item.done fills them in. If that arrives after the next response
     # took over, a reconnect must still replay the call with its arguments.
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+    session = await open_session()
+    call_item = _item("call_item_a", "function_call", call_id="call_a", name="lookup_weather")
+    call_item.update(status="in_progress", arguments="")
+    _server_event(
+        session,
+        _response_created("resp_a"),
+        _item_added_echo(call_item),
+        _response_created("resp_b"),
+    )
+    generation_b = session._current_generation
 
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    try:
-        await session._msg_ch.recv()  # initial session.update
-        call_item = {
-            "id": "call_item_a",
-            "object": "realtime.item",
-            "type": "function_call",
-            "status": "in_progress",
-            "call_id": "call_a",
-            "name": "lookup_weather",
-            "arguments": "",
-        }
-        _server_event(
-            session,
-            {"type": "response.created", "response": {"id": "resp_a", "status": "in_progress"}},
-        )
-        _server_event(
-            session,
-            {"type": "conversation.item.added", "previous_item_id": None, "item": call_item},
-        )
-        _server_event(
-            session,
-            {"type": "response.created", "response": {"id": "resp_b", "status": "in_progress"}},
-        )
-        generation_b = session._current_generation
+    done_item = {**call_item, "status": "completed", "arguments": '{"city": "Paris"}'}
+    _server_event(session, _output_item("done", "resp_a", done_item))
 
-        _server_event(
-            session,
-            {
-                "type": "response.output_item.done",
-                "response_id": "resp_a",
-                "output_index": 0,
-                "item": {**call_item, "status": "completed", "arguments": '{"city": "Paris"}'},
-            },
-        )
-
-        remote_item = session._remote_chat_ctx.get("call_item_a")
-        assert remote_item is not None
-        assert remote_item.item.arguments == '{"city": "Paris"}'
-        # Recorded only: the superseded call is not handed to B to run.
-        assert session._current_generation is generation_b
-        assert generation_b.function_ch.qsize() == 0
-    finally:
-        await session.aclose()
-        await model.aclose()
+    remote_item = session._remote_chat_ctx.get("call_item_a")
+    assert remote_item is not None
+    assert remote_item.item.arguments == '{"city": "Paris"}'
+    # Recorded only: the superseded call is not handed to B to run.
+    assert session._current_generation is generation_b
+    assert generation_b.function_ch.qsize() == 0
 
 
-@pytest.mark.asyncio
-async def test_boson_realtime_stale_response_done_does_not_corrupt_new_generation(monkeypatch):
+async def test_boson_realtime_stale_response_done_does_not_corrupt_new_generation(open_session):
     # A's response.done can legitimately arrive after B's response.created:
     # A's terminal cleanup is queued behind its own buffered audio output on
     # the server, while B's response.created is emitted immediately on a
     # separate path. Every response-scoped handler must ignore events whose
     # response_id isn't the current one, not just response.done.
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+    session = await open_session()
+    _server_event(session, _response_created("resp_a"), _output_item("added", "resp_a", "item_a"))
 
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    try:
-        await session._msg_ch.recv()  # initial session.update
+    # B supersedes A before A's response.done arrives.
+    _server_event(session, _response_created("resp_b"))
+    generation_b = session._current_generation
+    assert generation_b is not None
+    assert session._current_response_id == "resp_b"
 
-        _server_event(
-            session,
-            {"type": "response.created", "response": {"id": "resp_a", "status": "in_progress"}},
-        )
-        _server_event(
-            session,
-            {
-                "type": "response.output_item.added",
-                "response_id": "resp_a",
-                "output_index": 0,
-                "item": {"id": "item_a", "type": "message"},
-            },
-        )
+    _server_event(session, _output_item("added", "resp_b", "item_b"))
+    message_b = await generation_b.message_ch.recv()
+    assert message_b.message_id == "item_b"
 
-        # B supersedes A before A's response.done arrives.
-        _server_event(
-            session,
-            {"type": "response.created", "response": {"id": "resp_b", "status": "in_progress"}},
-        )
-        generation_b = session._current_generation
-        assert generation_b is not None
-        assert session._current_response_id == "resp_b"
+    _server_event(session, _content("content_part.added", "resp_b", "item_b", part=_TEXT_PART))
+    assert await message_b.modalities == ["text"]
 
-        _server_event(
-            session,
-            {
-                "type": "response.output_item.added",
-                "response_id": "resp_b",
-                "output_index": 0,
-                "item": {"id": "item_b", "type": "message"},
-            },
-        )
-        message_b = await generation_b.message_ch.recv()
-        assert message_b.message_id == "item_b"
+    # A's late trailing delta targets an item that only exists on A's
+    # (already-discarded) generation; it must be dropped before it can
+    # even be looked up against B's, not silently misapplied to B.
+    _server_event(session, _content("output_text.delta", "resp_a", "item_a", delta="stale from A"))
 
-        _server_event(
-            session,
-            {
-                "type": "response.content_part.added",
-                "response_id": "resp_b",
-                "item_id": "item_b",
-                "output_index": 0,
-                "content_index": 0,
-                "part": {"type": "text", "text": ""},
-            },
-        )
-        assert await message_b.modalities == ["text"]
+    # A's late response.done must not close B.
+    _server_event(session, _response_done("resp_a"))
+    assert session._current_generation is generation_b
+    assert session._current_response_id == "resp_b"
+    assert not generation_b.message_ch.closed
+    assert not generation_b.function_ch.closed
 
-        # A's late trailing delta targets an item that only exists on A's
-        # (already-discarded) generation; it must be dropped before it can
-        # even be looked up against B's, not silently misapplied to B.
-        _server_event(
-            session,
-            {
-                "type": "response.output_text.delta",
-                "response_id": "resp_a",
-                "item_id": "item_a",
-                "output_index": 0,
-                "content_index": 0,
-                "delta": "stale from A",
-            },
-        )
+    # B keeps streaming and completes normally afterwards.
+    _server_event(session, _content("output_text.delta", "resp_b", "item_b", delta="hello from B"))
+    assert await message_b.text_stream.recv() == "hello from B"
 
-        # A's late response.done must not close B.
-        _server_event(
-            session,
-            {
-                "type": "response.done",
-                "response": {"id": "resp_a", "status": "completed", "usage": None},
-            },
-        )
-        assert session._current_generation is generation_b
-        assert session._current_response_id == "resp_b"
-        assert not generation_b.message_ch.closed
-        assert not generation_b.function_ch.closed
-
-        # B keeps streaming and completes normally afterwards.
-        _server_event(
-            session,
-            {
-                "type": "response.output_text.delta",
-                "response_id": "resp_b",
-                "item_id": "item_b",
-                "output_index": 0,
-                "content_index": 0,
-                "delta": "hello from B",
-            },
-        )
-        assert await message_b.text_stream.recv() == "hello from B"
-
-        _server_event(
-            session,
-            {
-                "type": "response.done",
-                "response": {"id": "resp_b", "status": "completed", "usage": None},
-            },
-        )
-        assert session._current_generation is None
-        assert session._current_response_id is None
-    finally:
-        await session.aclose()
-        await model.aclose()
+    _server_event(session, _response_done("resp_b"))
+    assert session._current_generation is None
+    assert session._current_response_id is None
 
 
-@pytest.mark.asyncio
-async def test_boson_realtime_late_event_after_generation_finished_is_dropped(monkeypatch):
+async def test_boson_realtime_late_event_after_generation_finished_is_dropped(open_session):
     # Trailing events for a superseded response can still arrive after the
     # response that superseded it has itself finished, leaving no generation
     # in the slot. Filtering must not depend on one being there: every
     # response-scoped handler in the base except response.done asserts on a
     # missing generation, so letting these through raises instead of dropping.
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+    session = await open_session()
+    _server_event(session, _response_created("resp_a"), _output_item("added", "resp_a", "item_a"))
 
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    try:
-        await session._msg_ch.recv()  # initial session.update
+    # B supersedes A, then runs to completion — clearing the slot.
+    _server_event(session, _response_created("resp_b"), _response_done("resp_b"))
+    assert session._current_generation is None
+    assert session._current_response_id is None
 
-        _server_event(
-            session,
-            {"type": "response.created", "response": {"id": "resp_a", "status": "in_progress"}},
-        )
-        _server_event(
-            session,
-            {
-                "type": "response.output_item.added",
-                "response_id": "resp_a",
-                "output_index": 0,
-                "item": {"id": "item_a", "type": "message"},
-            },
-        )
-
-        # B supersedes A, then runs to completion — clearing the slot.
-        _server_event(
-            session,
-            {"type": "response.created", "response": {"id": "resp_b", "status": "in_progress"}},
-        )
-        _server_event(
-            session,
-            {
-                "type": "response.done",
-                "response": {"id": "resp_b", "status": "completed", "usage": None},
-            },
-        )
-        assert session._current_generation is None
-        assert session._current_response_id is None
-
-        # Every response-scoped event for A must now be dropped, not forwarded.
-        assert session._is_stale_response_scoped_event("resp_a") is True
-        for late_event in (
-            {
-                "type": "response.output_text.delta",
-                "response_id": "resp_a",
-                "item_id": "item_a",
-                "output_index": 0,
-                "content_index": 0,
-                "delta": "stale from A",
-            },
-            {
-                "type": "response.output_audio.delta",
-                "response_id": "resp_a",
-                "item_id": "item_a",
-                "output_index": 0,
-                "content_index": 0,
-                "delta": base64.b64encode(b"\x00\x00").decode(),
-            },
-            {
-                "type": "response.output_item.added",
-                "response_id": "resp_a",
-                "output_index": 0,
-                "item": {"id": "item_a", "type": "message"},
-            },
-            {
-                "type": "response.output_item.done",
-                "response_id": "resp_a",
-                "output_index": 0,
-                "item": {"id": "item_a", "type": "message"},
-            },
-        ):
-            _server_event(session, late_event)
-
-        assert session._current_generation is None
-    finally:
-        await session.aclose()
-        await model.aclose()
+    # Every response-scoped event for A must now be dropped, not forwarded.
+    assert session._is_stale_response_scoped_event("resp_a") is True
+    silence = base64.b64encode(b"\x00\x00").decode()
+    _server_event(
+        session,
+        _content("output_text.delta", "resp_a", "item_a", delta="stale from A"),
+        _content("output_audio.delta", "resp_a", "item_a", delta=silence),
+        _output_item("added", "resp_a", "item_a"),
+        _output_item("done", "resp_a", "item_a"),
+    )
+    assert session._current_generation is None
 
 
-@pytest.mark.asyncio
-async def test_boson_realtime_discarded_response_trailing_event_after_active_done(monkeypatch):
+async def test_boson_realtime_discarded_response_trailing_event_after_active_done(open_session):
     # A response discarded on arrival (its generate_reply timed out or was
     # interrupted first) does not get the base's discard placeholder parked in
     # the slot when a real generation is already streaming there — it is
     # filtered by response id instead. Once that real response finishes and
     # empties the slot, the discarded response's own trailing events must
     # still be dropped rather than forwarded to a missing generation.
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+    session = await open_session()
+    _server_event(session, _response_created("resp_a"))
+    generation_a = session._current_generation
 
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    try:
-        await session._msg_ch.recv()  # initial session.update
+    session._discarded_event_ids.add("evt_discarded")
+    _server_event(session, _response_created("resp_d", "evt_discarded"))
+    # A keeps the slot; the discarded response never becomes current.
+    assert session._current_generation is generation_a
+    assert session._current_response_id == "resp_a"
+    assert (await session._msg_ch.recv())["type"] == "response.cancel"
 
-        _server_event(
-            session,
-            {"type": "response.created", "response": {"id": "resp_a", "status": "in_progress"}},
-        )
-        generation_a = session._current_generation
+    _server_event(session, _response_done("resp_a"))
+    assert session._current_generation is None
 
-        session._discarded_event_ids.add("evt_discarded")
-        _server_event(
-            session,
-            {
-                "type": "response.created",
-                "response": {
-                    "id": "resp_d",
-                    "status": "in_progress",
-                    "metadata": {"client_event_id": "evt_discarded"},
-                },
-            },
-        )
-        # A keeps the slot; the discarded response never becomes current.
-        assert session._current_generation is generation_a
-        assert session._current_response_id == "resp_a"
-        assert (await session._msg_ch.recv())["type"] == "response.cancel"
-
-        _server_event(
-            session,
-            {
-                "type": "response.done",
-                "response": {"id": "resp_a", "status": "completed", "usage": None},
-            },
-        )
-        assert session._current_generation is None
-
-        _server_event(
-            session,
-            {
-                "type": "response.output_item.added",
-                "response_id": "resp_d",
-                "output_index": 0,
-                "item": {"id": "item_d", "type": "message"},
-            },
-        )
-        assert session._current_generation is None
-    finally:
-        await session.aclose()
-        await model.aclose()
+    _server_event(session, _output_item("added", "resp_d", "item_d"))
+    assert session._current_generation is None
 
 
-@pytest.mark.asyncio
-async def test_boson_realtime_remote_items_are_not_recreated(monkeypatch):
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+@pytest.mark.parametrize(
+    ("kwargs", "server_vad"),
+    [
+        pytest.param({}, True, id="server-vad"),
+        # `interrupt_response` in the turn_detection payload does not currently
+        # change Higgs Realtime's actual auto-interrupt behavior: server VAD always
+        # auto-cancels the active response on speech start regardless of this
+        # field. The client must suppress its own duplicate response.cancel
+        # whenever server VAD is enabled at all, even if the caller set
+        # `interrupt_response: False` expecting it to disable auto-interrupt.
+        pytest.param(
+            {"turn_detection": {"type": "server_vad", "interrupt_response": False}},
+            True,
+            id="interrupt-response-false",
+        ),
+        pytest.param({"turn_detection": None}, False, id="client-side"),
+    ],
+)
+async def test_boson_realtime_interrupt_sends_response_cancel_unless_server_did(
+    open_session, kwargs, server_vad
+):
+    session = await open_session(**kwargs)
+    await _start_generation(session)
 
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    try:
-        await session._msg_ch.recv()  # initial session.update
-        _server_event(
-            session,
-            {
-                "type": "conversation.item.added",
-                "previous_item_id": None,
-                "item": {
-                    "id": "user_1",
-                    "object": "realtime.item",
-                    "type": "message",
-                    "role": "user",
-                    "status": "completed",
-                    "content": [{"type": "input_text", "text": "hello"}],
-                },
-            },
-        )
-
-        await session.update_chat_ctx(
-            llm.ChatContext([llm.ChatMessage(id="user_1", role="user", content=["hello"])])
-        )
-
+    if server_vad:
+        # The server already cancelled on speech start: no duplicate cancel.
+        session.on("input_speech_started", lambda _event: session.interrupt())
+        _server_event(session, {"type": "input_audio_buffer.speech_started"})
         assert session._msg_ch.empty()
-    finally:
-        await session.aclose()
-        await model.aclose()
+
+    # Only the one cancel the server already made is skipped.
+    session.interrupt()
+    cancel_event = await session._msg_ch.recv()
+    assert cancel_event["type"] == "response.cancel"
+    assert cancel_event["response_id"] == "resp_1"
 
 
-def _user_item_added(item_id: str, content: list[dict]) -> dict:
-    return {
-        "type": "conversation.item.added",
-        "previous_item_id": None,
-        "item": {
-            "id": item_id,
-            "object": "realtime.item",
-            "type": "message",
-            "role": "user",
-            "status": "completed",
-            "content": content,
-        },
-    }
+async def test_boson_realtime_commit_audio_skips_short_buffers(open_session):
+    session = await open_session()
+
+    session._pushed_duration_s = 0.05
+    session.commit_audio()
+    assert session._msg_ch.empty()
+    assert session._pushed_duration_s == 0.05
+
+    session._pushed_duration_s = 0.11
+    session.commit_audio()
+    assert (await session._msg_ch.recv())["type"] == "input_audio_buffer.commit"
+    assert session._pushed_duration_s == 0.0
 
 
-def _item_added_echo(item: dict, previous_item_id: str | None = None) -> dict:
-    """The server's conversation.item.added echo for a client-created item."""
-    return {
-        "type": "conversation.item.added",
-        "previous_item_id": previous_item_id,
-        "item": item,
-    }
+# --- remote conversation mirror and transcripts --------------------------------
 
 
-@pytest.mark.asyncio
-async def test_boson_realtime_merged_item_readd_updates_text(monkeypatch):
-    # The server merges consecutive same-role turns into one item and re-emits
-    # conversation.item.added with the same id and cumulative content.
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    try:
-        await session._msg_ch.recv()  # initial session.update
-        _server_event(
-            session, _user_item_added("user_1", [{"type": "input_text", "text": "what's"}])
-        )
-        _server_event(
-            session,
-            _user_item_added("user_1", [{"type": "input_text", "text": "what's the weather"}]),
-        )
-
-        assert len(session.chat_ctx.items) == 1
-        remote_item = session._remote_chat_ctx.get("user_1")
-        assert remote_item is not None
-        assert remote_item.item.content == ["what's the weather"]
-    finally:
-        await session.aclose()
-        await model.aclose()
+_AUDIO_ONLY_TURN = _user_item_added("user_1", [{"type": "input_audio", "audio": ""}])
 
 
-@pytest.mark.asyncio
-async def test_boson_realtime_merged_item_readd_without_text_keeps_transcript(monkeypatch):
-    # Audio-input configs re-add the merged item with an empty input_audio part;
-    # a transcript already applied by input_audio_transcription.completed must
-    # not be wiped.
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+@pytest.mark.parametrize(
+    ("events", "content"),
+    [
+        # The server merges consecutive same-role turns into one item and
+        # re-emits conversation.item.added with the same id and cumulative content.
+        pytest.param(
+            [_user_text("user_1", "what's"), _user_text("user_1", "what's the weather")],
+            ["what's the weather"],
+            id="merged-readd-updates-text",
+        ),
+        # Audio-input configs re-add the merged item with an empty input_audio
+        # part; a transcript already applied by input_audio_transcription.completed
+        # must not be wiped.
+        pytest.param(
+            [_AUDIO_ONLY_TURN, _transcribed("user_1", "hello there"), _AUDIO_ONLY_TURN],
+            ["hello there"],
+            id="merged-readd-without-text-keeps-transcript",
+        ),
+        pytest.param(
+            [_user_text("user_1", "hello"), _transcribed("user_1", "hello world")],
+            ["hello world"],
+            id="transcription-replaces-text",
+        ),
+    ],
+)
+async def test_boson_realtime_remote_item_text_follows_the_server(open_session, events, content):
+    session = await open_session()
+    completed = _collect(session, "input_audio_transcription_completed")
+    _server_event(session, *events)
 
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    try:
-        await session._msg_ch.recv()  # initial session.update
-        _server_event(session, _user_item_added("user_1", [{"type": "input_audio", "audio": ""}]))
-        _server_event(
-            session,
-            {
-                "type": "conversation.item.input_audio_transcription.completed",
-                "item_id": "user_1",
-                "content_index": 0,
-                "transcript": "hello there",
-                "logprobs": None,
-            },
-        )
-        _server_event(session, _user_item_added("user_1", [{"type": "input_audio", "audio": ""}]))
+    assert len(session.chat_ctx.items) == 1
+    remote_item = session._remote_chat_ctx.get("user_1")
+    assert remote_item is not None
+    assert remote_item.item.content == content
+    # Each transcription also reaches the app as a final transcript.
+    transcripts = [e["transcript"] for e in events if "transcript" in e]
+    assert [(c.transcript, c.is_final) for c in completed] == [(t, True) for t in transcripts]
 
-        remote_item = session._remote_chat_ctx.get("user_1")
-        assert remote_item is not None
-        assert remote_item.item.content == ["hello there"]
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_input_transcription_replaces_remote_item_text(monkeypatch):
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    completed = []
-    session.on("input_audio_transcription_completed", completed.append)
-    try:
-        await session._msg_ch.recv()  # initial session.update
-        _server_event(
-            session,
-            {
-                "type": "conversation.item.added",
-                "previous_item_id": None,
-                "item": {
-                    "id": "user_1",
-                    "object": "realtime.item",
-                    "type": "message",
-                    "role": "user",
-                    "status": "completed",
-                    "content": [{"type": "input_text", "text": "hello"}],
-                },
-            },
-        )
-        _server_event(
-            session,
-            {
-                "type": "conversation.item.input_audio_transcription.completed",
-                "item_id": "user_1",
-                "content_index": 0,
-                "transcript": "hello world",
-                "logprobs": None,
-            },
-        )
-
-        remote_item = session._remote_chat_ctx.get("user_1")
-        assert remote_item is not None
-        assert remote_item.item.content == ["hello world"]
-        assert completed
-        assert completed[-1].transcript == "hello world"
-        assert completed[-1].is_final is True
-    finally:
-        await session.aclose()
-        await model.aclose()
+    # What the server already holds is not recreated by the next sync.
+    await session.update_chat_ctx(_ctx(("user_1", "user", content[0])))
+    assert session._msg_ch.empty()
 
 
-@pytest.mark.asyncio
-async def test_boson_realtime_transcription_carries_the_turn_start(monkeypatch):
+async def test_boson_realtime_transcription_carries_the_turn_start(open_session):
     # The framework stamps the user's message with turn_started_at
     # (agent_activity._on_input_audio_transcription_completed) so a late
     # transcript cannot land after the reply it prompted. Without it the message
     # is dated when the text arrived.
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    completed = []
-    session.on("input_audio_transcription_completed", completed.append)
-    try:
-        await session._msg_ch.recv()  # initial session.update
-        before = time.time()
-        _server_event(
-            session,
-            {
-                "type": "input_audio_buffer.speech_started",
-                "event_id": "evt_speech_1",
-                "item_id": "user_1",
-                "audio_start_ms": 0,
-            },
-        )
-        after = time.time()
-        _server_event(session, _user_item_added("user_1", [{"type": "input_audio"}]))
-        _server_event(
-            session,
-            {
-                "type": "conversation.item.input_audio_transcription.completed",
-                "item_id": "user_1",
-                "content_index": 0,
-                "transcript": "hello world",
-                "logprobs": None,
-            },
-        )
-
-        assert completed
-        assert completed[-1].turn_started_at is not None
-        assert before <= completed[-1].turn_started_at <= after
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_merged_turn_keeps_the_first_fragments_start(monkeypatch):
+    #
     # The server merges consecutive user speech into one item: speech_started
     # fires once per fragment under the same id, and the item is re-transcribed
     # with its accumulated text each time. Every revision describes the same
     # turn, so every one of them has to report the turn's own beginning -- not
     # the latest fragment's, and not None once the first revision consumed it.
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+    session = await open_session()
+    completed = _collect(session, "input_audio_transcription_completed")
+    first = "so, these thought experiments"
+    merged = f"{first} would go against quantum physics?"
 
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    completed = []
-    session.on("input_audio_transcription_completed", completed.append)
-    try:
-        await session._msg_ch.recv()  # initial session.update
+    before = time.time()
+    _server_event(session, _speech_started("user_1", "evt_speech_1"))
+    after = time.time()
+    turn_start = session._input_speech_started_at["user_1"]
+    assert before <= turn_start <= after
+    _server_event(
+        session,
+        _user_item_added("user_1", [{"type": "input_audio"}]),
+        _transcribed("user_1", first),
+    )
+    # second fragment of the same turn, merged into the same item
+    _server_event(
+        session, _speech_started("user_1", "evt_speech_2"), _transcribed("user_1", merged)
+    )
 
-        def speech_started(event_id: str) -> None:
-            _server_event(
-                session,
-                {
-                    "type": "input_audio_buffer.speech_started",
-                    "event_id": event_id,
-                    "item_id": "user_1",
-                    "audio_start_ms": 0,
-                },
-            )
-
-        def transcribed(transcript: str) -> None:
-            _server_event(
-                session,
-                {
-                    "type": "conversation.item.input_audio_transcription.completed",
-                    "item_id": "user_1",
-                    "content_index": 0,
-                    "transcript": transcript,
-                    "logprobs": None,
-                },
-            )
-
-        speech_started("evt_speech_1")
-        turn_start = session._input_speech_started_at["user_1"]
-        _server_event(session, _user_item_added("user_1", [{"type": "input_audio"}]))
-        transcribed("so, these thought experiments")
-
-        # second fragment of the same turn, merged into the same item
-        speech_started("evt_speech_2")
-        transcribed("so, these thought experiments would go against quantum physics?")
-
-        assert [c.transcript for c in completed] == [
-            "so, these thought experiments",
-            "so, these thought experiments would go against quantum physics?",
-        ]
-        assert [c.turn_started_at for c in completed] == [turn_start, turn_start]
-    finally:
-        await session.aclose()
-        await model.aclose()
+    assert [c.transcript for c in completed] == [first, merged]
+    assert [c.turn_started_at for c in completed] == [turn_start, turn_start]
 
 
-@pytest.mark.asyncio
-async def test_boson_realtime_chat_ctx_message_schema_uses_boson_shape(monkeypatch):
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+async def test_boson_realtime_tracks_server_assigned_session_id(open_session):
+    session = await open_session(drain=False)
+    assert session.session_id is None
+    _server_event(
+        session,
+        {
+            "type": "session.created",
+            "event_id": "evt_1",
+            "session": {"id": "sess_server123", "object": "realtime.session"},
+        },
+    )
+    assert session.session_id == "sess_server123"
 
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    try:
-        await session._msg_ch.recv()  # initial session.update
-        update_task = asyncio.create_task(
-            session.update_chat_ctx(
-                llm.ChatContext(
-                    [llm.ChatMessage(id="asst_1", role="assistant", content=["Assistant note."])]
-                )
+
+# --- chat context sync -------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("message", "expected_item"),
+    [
+        pytest.param(
+            ("asst_1", "assistant", "Assistant note."),
+            {"role": "assistant", "content": [{"type": "text", "text": "Assistant note."}]},
+            id="assistant-text",
+        ),
+        pytest.param(
+            ("user_audio_1", "user", [llm.AudioContent(frame=[], transcript="hello from audio")]),
+            {"role": "user", "content": [{"type": "input_text", "text": "hello from audio"}]},
+            id="audio-uses-transcript",
+        ),
+    ],
+)
+async def test_boson_realtime_chat_ctx_item_uses_boson_shape(open_session, message, expected_item):
+    session = await open_session()
+    update_task = asyncio.create_task(session.update_chat_ctx(_ctx(message)))
+    create_event = await session._msg_ch.recv()
+
+    assert create_event["type"] == "conversation.item.create"
+    assert create_event["previous_item_id"] is None
+    assert create_event["item"]["id"] == message[0]
+    assert {key: create_event["item"][key] for key in expected_item} == expected_item
+
+    # update_chat_ctx resolves once the server echoes the created item
+    # (the echo carries the client-supplied id).
+    assert not update_task.done()
+    _server_event(session, _item_added_echo(create_event["item"]))
+    await asyncio.wait_for(update_task, timeout=1.0)
+
+
+@pytest.mark.parametrize(
+    "dropped",
+    [
+        # The server's conversation store only accepts role "assistant"/"user"
+        # (add_resource_item raises ValueError otherwise); system/developer items
+        # would never see their conversation.item.added echo.
+        pytest.param(
+            [("sys_1", "system", "System note."), ("dev_1", "developer", "Developer note.")],
+            id="system-and-developer",
+        ),
+        # Nor can it store an item with no text content.
+        pytest.param(
+            [("img_1", "user", [llm.ImageContent(image="https://example.com/a.png")])],
+            id="textless",
+        ),
+    ],
+)
+async def test_boson_realtime_chat_ctx_skips_unsendable_items_and_remaps_prev(
+    open_session, dropped
+):
+    # Unsendable items are dropped client-side instead of sending a create the
+    # server rejects, and a previous_item_id pointing at one is remapped to its
+    # predecessor so the server never sees an unknown previous_item_id.
+    session = await open_session()
+    update_task = asyncio.create_task(
+        session.update_chat_ctx(
+            _ctx(("user_1", "user", "first"), *dropped, ("user_2", "user", "second"))
+        )
+    )
+    first_event = await session._msg_ch.recv()
+    second_event = await session._msg_ch.recv()
+    assert session._msg_ch.empty()
+
+    assert first_event["item"]["id"] == "user_1"
+    assert second_event["item"]["id"] == "user_2"
+    assert second_event["previous_item_id"] == "user_1"
+
+    _server_event(
+        session,
+        _item_added_echo(first_event["item"]),
+        _item_added_echo(second_event["item"], "user_1"),
+    )
+    await asyncio.wait_for(update_task, timeout=1.0)
+
+
+async def test_boson_realtime_update_chat_ctx_deletes_removed_items(open_session):
+    # Client-supplied item ids are preserved by the server, so removed items
+    # are addressable: the base diff issues conversation.item.delete for them.
+    session = await open_session()
+    _server_event(session, _user_text("user_1", "hi"), _user_text("user_2", "again"))
+
+    update_task = asyncio.create_task(session.update_chat_ctx(_ctx(("user_1", "user", "hi"))))
+    delete_event = await session._msg_ch.recv()
+    assert delete_event["type"] == "conversation.item.delete"
+    assert delete_event["item_id"] == "user_2"
+    assert session._msg_ch.empty()
+
+    _server_event(session, _deleted("user_2"))
+    await asyncio.wait_for(update_task, timeout=1.0)
+    assert session._remote_chat_ctx.get("user_2") is None
+
+
+async def test_boson_realtime_update_chat_ctx_rebuilds_on_head_insert(open_session):
+    # The server has no insert-at-head primitive (previous_item_id=None only
+    # means append-at-tail). Prepending a new item ahead of turns the server
+    # already has (e.g. a context summary) must not be silently mapped to
+    # append-at-tail, which would misorder the conversation — it must rebuild
+    # the remote conversation in the target order instead.
+    session = await open_session()
+    asst = _item("asst_1", role="assistant", content=[{"type": "text", "text": "hello"}])
+    _server_event(session, _user_text("user_1", "hi"), _item_added_echo(asst, "user_1"))
+    assert len(session.chat_ctx.items) == 2
+
+    update_task = asyncio.create_task(
+        session.update_chat_ctx(
+            _ctx(
+                ("summary_1", "assistant", "Summary."),
+                ("user_1", "user", "hi"),
+                ("asst_1", "assistant", "hello"),
             )
         )
-        assistant_event = await session._msg_ch.recv()
+    )
+    deletes = [await session._msg_ch.recv() for _ in range(2)]
+    assert [e["type"] for e in deletes] == ["conversation.item.delete"] * 2
+    assert {e["item_id"] for e in deletes} == {"user_1", "asst_1"}
 
-        assert assistant_event["item"]["role"] == "assistant"
-        assert assistant_event["item"]["content"] == [{"type": "text", "text": "Assistant note."}]
-        assert assistant_event["previous_item_id"] is None
+    creates = [await session._msg_ch.recv() for _ in range(3)]
+    assert session._msg_ch.empty()
+    assert [(e["item"]["id"], e["previous_item_id"]) for e in creates] == [
+        ("summary_1", None),
+        ("user_1", "summary_1"),
+        ("asst_1", "user_1"),
+    ]
 
-        # update_chat_ctx resolves once the server echoes the created item
-        # (the echo carries the client-supplied id).
-        assert not update_task.done()
-        _server_event(session, _item_added_echo(assistant_event["item"]))
-        await asyncio.wait_for(update_task, timeout=1.0)
-    finally:
-        await session.aclose()
-        await model.aclose()
+    _server_event(session, *(_deleted(e["item_id"]) for e in deletes))
+    _server_event(session, *(_item_added_echo(e["item"], e["previous_item_id"]) for e in creates))
+    await asyncio.wait_for(update_task, timeout=1.0)
 
 
-@pytest.mark.asyncio
-async def test_boson_realtime_chat_ctx_drops_system_and_developer_items(monkeypatch):
-    # The server's conversation store only accepts role "assistant"/"user"
-    # (add_resource_item raises ValueError otherwise); system/developer items
-    # would never see their conversation.item.added echo. The plugin must
-    # drop them client-side instead of sending a create the server rejects,
-    # and remap surrounding previous_item_id links around the drop.
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+async def test_boson_realtime_unsupported_role_at_head_does_not_rebuild(open_session):
+    # A system/developer item is never sent, so it never lands in the remote
+    # context — which means the diff would see it as missing remotely on every
+    # single sync. At the head of the context that reads as an insert before
+    # everything else and triggers the full delete/recreate rebuild, forever,
+    # for an item that is dropped either way. Unsupported roles must be
+    # filtered before the diff, not while walking its output.
+    session = await open_session()
+    _server_event(session, _user_text("user_1", "hi"))
 
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    try:
-        await session._msg_ch.recv()  # initial session.update
-        update_task = asyncio.create_task(
-            session.update_chat_ctx(
-                llm.ChatContext(
-                    [
-                        llm.ChatMessage(id="user_1", role="user", content=["hi"]),
-                        llm.ChatMessage(id="sys_1", role="system", content=["System note."]),
-                        llm.ChatMessage(id="dev_1", role="developer", content=["Developer note."]),
-                        llm.ChatMessage(id="user_2", role="user", content=["again"]),
-                    ]
-                )
-            )
-        )
-        first_event = await session._msg_ch.recv()
-        second_event = await session._msg_ch.recv()
+    system = ("sys_1", "system", "You are helpful.")
+    target = _ctx(system, ("user_1", "user", "hi"))
+    # Already in sync apart from the undeliverable system item: nothing to do.
+    assert session._create_update_chat_ctx_events(target) == []
+    # And still nothing to do on the next sync of the same context.
+    assert session._create_update_chat_ctx_events(target) == []
+
+    # A genuine head insert of a *supported* item still rebuilds.
+    events = session._create_update_chat_ctx_events(
+        _ctx(system, ("summary_1", "assistant", "Summary."), ("user_1", "user", "hi"))
+    )
+    assert [ev.type for ev in events] == [
+        "conversation.item.delete",
+        "conversation.item.create",
+        "conversation.item.create",
+    ]
+    assert events[0].item_id == "user_1"
+    assert (events[1].item.id, events[1].previous_item_id) == ("summary_1", None)
+    assert (events[2].item.id, events[2].previous_item_id) == ("user_1", "summary_1")
+
+
+async def test_boson_realtime_head_text_change_rebuilds_rather_than_reorders(open_session):
+    # Editing the text of the item at the head is not an insert, but it reaches
+    # the rebuild for the same reason one does: the base expresses a content
+    # change as a delete and a create, and that create carries "root". Sending it
+    # incrementally would map "root" to None, which appends -- putting the head
+    # item after the turns it used to precede, since the delete just removed it
+    # from its position. Narrowing the trigger to "genuine inserts" reintroduces
+    # exactly that, so the behaviour is pinned here.
+    session = await open_session()
+    # Chained after user_1: _user_text always reports no predecessor, which the
+    # remote mirror reads as insert-at-head and would leave the two in reverse
+    # order.
+    second = _user_text("user_2", "again")
+    second["previous_item_id"] = "user_1"
+    _server_event(session, _user_text("user_1", "hi"), second)
+
+    target = _ctx(("user_1", "user", "hello there"), ("user_2", "user", "again"))
+    update_task = asyncio.create_task(session.update_chat_ctx(target))
+    # Bounded: a narrower trigger sends two events rather than four, and this
+    # has to fail rather than block waiting for the other two.
+    events = []
+    with contextlib.suppress(asyncio.TimeoutError):
+        while True:
+            events.append(await asyncio.wait_for(session._msg_ch.recv(), timeout=0.5))
+
+    # Everything torn down, then re-sent in target order -- not a delete and
+    # an append of user_1 alone, which would leave it behind user_2.
+    assert [e["type"] for e in events] == [
+        "conversation.item.delete",
+        "conversation.item.delete",
+        "conversation.item.create",
+        "conversation.item.create",
+    ]
+    assert [e["item_id"] for e in events[:2]] == ["user_1", "user_2"]
+    assert [(e["item"]["id"], e["previous_item_id"]) for e in events[2:]] == [
+        ("user_1", None),
+        ("user_2", "user_1"),
+    ]
+
+    _server_event(session, _deleted("user_1"), _deleted("user_2"))
+    _server_event(session, _user_text("user_1", "x"), _user_text("user_2", "y"))
+    await asyncio.wait_for(update_task, timeout=1.0)
+
+
+async def test_boson_realtime_rebuild_warns_about_turns_it_cannot_put_back(open_session, caplog):
+    # Inserting ahead of what the server holds rebuilds the whole conversation,
+    # which deletes every remote item and recreates only the ones with text. A
+    # user turn still waiting on its transcript has none, so the delete takes it
+    # away and nothing puts it back until a later sync. That is inherent -- no
+    # audio is kept client-side -- but it must not happen silently.
+    session = await open_session()
+    # An audio turn whose transcription has not arrived: the server holds it,
+    # the local mirror has it with no content.
+    _server_event(session, _user_item_added("user_1", [{"type": "input_audio"}]))
+    assert session._remote_chat_ctx.get("user_1").item.content == []
+
+    with caplog.at_level(logging.WARNING, logger="livekit.plugins.boson"):
+        target = _ctx(("summary", "user", "so far: ..."), ("user_1", "user", []))
+        update_task = asyncio.create_task(session.update_chat_ctx(target))
+        events = [await session._msg_ch.recv(), await session._msg_ch.recv()]
         assert session._msg_ch.empty()
 
-        assert first_event["item"]["id"] == "user_1"
-        assert second_event["item"]["id"] == "user_2"
-        assert second_event["previous_item_id"] == "user_1"
+    assert [e["type"] for e in events] == ["conversation.item.delete", "conversation.item.create"]
+    assert events[0]["item_id"] == "user_1"
+    # Deleted, and not among the recreates.
+    assert events[1]["item"]["id"] == "summary"
+    assert "user_1" in _reported_item_ids(caplog)
 
-        _server_event(session, _item_added_echo(first_event["item"]))
-        _server_event(session, _item_added_echo(second_event["item"], "user_1"))
-        await asyncio.wait_for(update_task, timeout=1.0)
-    finally:
-        await session.aclose()
-        await model.aclose()
+    _server_event(session, _deleted("user_1"), _user_text("summary", "s"))
+    await asyncio.wait_for(update_task, timeout=1.0)
 
 
-@pytest.mark.asyncio
-async def test_boson_realtime_server_error_fails_pending_generate_reply(monkeypatch):
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+async def test_boson_realtime_emptied_turn_is_deleted_loudly(open_session, caplog):
+    # The base states a content change as a delete plus a create under one id.
+    # When the new content has no text there is no create to send -- the server
+    # stores nothing for a textless item -- so only the delete goes out and the
+    # turn leaves the conversation instead of being updated in place. The delete
+    # is the honest translation of "this text is no longer in the context", but
+    # losing the turn outright is a bigger outcome than emptying it, so it is
+    # reported the same way the rebuild path reports what it cannot put back.
+    session = await open_session()
+    # Each added item goes in at the head, so this leaves the server holding
+    # [user_1, user_2] -- user_2 is not at the head, which is what keeps this
+    # on the incremental path instead of the rebuild one.
+    _server_event(session, _user_text("user_2", "there"), _user_text("user_1", "hi"))
+    assert [item.id for item in session._remote_chat_ctx.to_chat_ctx().items] == [
+        "user_1",
+        "user_2",
+    ]
 
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    try:
-        await session._msg_ch.recv()  # initial session.update
-        generation_fut = session.generate_reply()
-        response_create = await session._msg_ch.recv()
+    with caplog.at_level(logging.WARNING, logger="livekit.plugins.boson"):
+        update_task = asyncio.create_task(
+            session.update_chat_ctx(_ctx(("user_1", "user", "hi"), ("user_2", "user", [])))
+        )
+        events = [await session._msg_ch.recv()]
+        assert session._msg_ch.empty()
 
-        _server_event(
-            session,
-            {
-                "type": "error",
-                "error": {
-                    "type": "invalid_request_error",
-                    "code": "bad_request",
-                    "message": "response.create failed",
-                    "event_id": response_create["event_id"],
-                },
-            },
+    assert [e["type"] for e in events] == ["conversation.item.delete"]
+    assert events[0]["item_id"] == "user_2"
+    assert "user_2" in _reported_item_ids(caplog)
+
+    _server_event(session, _deleted("user_2"))
+    await asyncio.wait_for(update_task, timeout=1.0)
+    # Gone from the mirror too, so the turn comes back as a create -- after
+    # the predecessor it still sits behind -- once it has text again.
+    assert session._remote_chat_ctx.get("user_2") is None
+    events = session._create_update_chat_ctx_events(
+        _ctx(("user_1", "user", "hi"), ("user_2", "user", "there again"))
+    )
+    assert [ev.type for ev in events] == ["conversation.item.create"]
+    assert events[0].item.id == "user_2"
+    assert events[0].previous_item_id == "user_1"
+
+
+async def test_boson_realtime_untouched_turn_is_not_reported_as_deleted(open_session, caplog):
+    # The warning must key on a delete actually going out for the same id, not
+    # on a create being dropped: an item the conversion cannot express but that
+    # the server never held is no loss and must stay quiet.
+    session = await open_session()
+    _server_event(session, _user_text("user_1", "hi"))
+
+    with caplog.at_level(logging.WARNING, logger="livekit.plugins.boson"):
+        events = session._create_update_chat_ctx_events(
+            _ctx(("user_1", "user", "hi"), ("sys_1", "system", "Be brief."))
         )
 
-        with pytest.raises(llm.RealtimeError, match="response.create failed"):
-            await generation_fut
-        assert session._response_created_futures == {}
-    finally:
-        await session.aclose()
-        await model.aclose()
+    assert events == []
+    assert not [record for record in caplog.records if hasattr(record, "item_ids")]
+
+
+# --- server errors -----------------------------------------------------------
+
+
+async def test_boson_realtime_server_error_fails_pending_generate_reply(open_session):
+    session = await open_session()
+    generation_fut = session.generate_reply()
+    response_create = await session._msg_ch.recv()
+
+    event_id = response_create["event_id"]
+    _server_event(session, _error(code="bad_request", message="create failed", event_id=event_id))
+    with pytest.raises(llm.RealtimeError, match="create failed"):
+        await generation_fut
+    assert session._response_created_futures == {}
 
 
 @pytest.mark.parametrize(
     "code",
     ["insufficient_quota", "monthly_cap_reached", "contract_ended", "no_billing_account"],
 )
-@pytest.mark.asyncio
-async def test_boson_realtime_entitlement_refusal_is_not_recoverable(monkeypatch, code):
+async def test_boson_realtime_entitlement_refusal_is_not_recoverable(open_session, code):
     # The server sends this error just before closing with 4429, which
     # _NON_RETRYABLE_CLOSE_CODES already ends the session on. Emitting the error
     # ahead of it as recoverable would promise the application a recovery the
@@ -1987,566 +1508,170 @@ async def test_boson_realtime_entitlement_refusal_is_not_recoverable(monkeypatch
     # Note all four carry type "insufficient_quota" but only one of the codes
     # matches the base's own fatal set, which reads code ahead of type -- hence a
     # Boson-specific set rather than deferring to it.
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+    session = await open_session()
+    errors = _collect(session, "error")
 
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    errors = []
-    session.on("error", errors.append)
-    try:
-        await session._msg_ch.recv()  # initial session.update
-
-        with pytest.raises(APIError) as exc_info:
-            _server_event(
-                session,
-                {
-                    "type": "error",
-                    "error": {
-                        "type": "insufficient_quota",
-                        "code": code,
-                        "message": "monthly cap reached",
-                    },
-                },
-            )
-        assert exc_info.value.retryable is False
-        # Raised, not emitted: emitting here is what would have labelled it
-        # recoverable. _main_task emits it with recoverable=False as it unwinds.
-        assert errors == []
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_ordinary_error_stays_recoverable(monkeypatch):
-    # The counterpart to the refusal above: an error that is merely a bad request
-    # must not end the session.
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    errors = []
-    session.on("error", errors.append)
-    try:
-        await session._msg_ch.recv()  # initial session.update
+    with pytest.raises(APIError) as exc_info:
         _server_event(
-            session,
-            {
-                "type": "error",
-                "error": {
-                    "type": "invalid_request_error",
-                    "code": "bad_request",
-                    "message": "unknown field",
-                },
-            },
+            session, _error("insufficient_quota", code=code, message="monthly cap reached")
         )
-        assert [e.recoverable for e in errors] == [True]
-    finally:
-        await session.aclose()
-        await model.aclose()
+    assert exc_info.value.retryable is False
+    # Raised, not emitted: emitting here is what would have labelled it
+    # recoverable. _main_task emits it with recoverable=False as it unwinds.
+    assert errors == []
 
 
-@pytest.mark.asyncio
-async def test_boson_realtime_empty_commit_under_server_vad_is_not_an_error(monkeypatch):
-    # commit_user_turn() commits the buffer whether or not server VAD is on, so
-    # with it on the commit routinely lands on a buffer the server already
-    # emptied. Reporting that to the app makes ordinary manual turn-taking look
-    # like a failure.
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    errors = []
-    session.on("error", errors.append)
-    try:
-        await session._msg_ch.recv()  # initial session.update
-        _server_event(
-            session,
-            {
-                "type": "error",
-                "error": {
-                    "type": "invalid_request_error",
-                    "code": "input_audio_buffer_commit_empty",
-                    "message": "buffer is empty",
-                },
-            },
-        )
-        assert errors == []
-    finally:
-        await session.aclose()
-        await model.aclose()
+_EMPTY_COMMIT = _error(code="input_audio_buffer_commit_empty", message="buffer is empty")
 
 
-@pytest.mark.asyncio
-async def test_boson_realtime_empty_commit_without_server_vad_still_reports(monkeypatch):
-    # The counterpart: with turn detection off the client owns every commit, so
-    # an empty one is a genuine client bug and must not be swallowed.
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    model = realtime.RealtimeModel(
-        url="ws://localhost:8000/v1/realtime/", api_key="test-key", turn_detection=None
-    )
-    session = model.session()
-    errors = []
-    session.on("error", errors.append)
-    try:
-        await session._msg_ch.recv()  # initial session.update
-        _server_event(
-            session,
-            {
-                "type": "error",
-                "error": {
-                    "type": "invalid_request_error",
-                    "code": "input_audio_buffer_commit_empty",
-                    "message": "buffer is empty",
-                },
-            },
-        )
-        assert [e.recoverable for e in errors] == [True]
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_unrelated_error_does_not_fail_pending_generate_reply(monkeypatch):
-    # An error whose event_id can't be correlated to a pending generate_reply()
-    # (e.g. it belongs to an unrelated conversation.item.create) must not
-    # blanket-fail every other in-flight generate_reply() call.
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    errors = []
-    session.on("error", errors.append)
-    try:
-        await session._msg_ch.recv()  # initial session.update
-        generation_fut = session.generate_reply()
-        await session._msg_ch.recv()  # response.create
-
-        _server_event(
-            session,
-            {
-                "type": "error",
-                "error": {
-                    "type": "invalid_request_error",
-                    "code": "bad_request",
-                    "message": "conversation.item.create failed",
-                    "event_id": "chat_ctx_create_unrelated",
-                },
-            },
-        )
-
-        # The session-level error still surfaces (so it isn't silently lost)...
-        assert errors
-        # ...but the unrelated pending generate_reply() is left alone.
-        assert not generation_fut.done()
-        assert generation_fut in session._response_created_futures.values()
-    finally:
-        generation_fut.cancel()
-        await session.aclose()
-        await model.aclose()
+@pytest.mark.parametrize(
+    ("kwargs", "error", "recoverable"),
+    [
+        # An error that is merely a bad request must not end the session.
+        pytest.param(
+            {}, _error(code="bad_request", message="unknown field"), [True], id="bad-request"
+        ),
+        # commit_user_turn() commits the buffer whether or not server VAD is on,
+        # so with it on the commit routinely lands on a buffer the server already
+        # emptied. Reporting that to the app makes ordinary manual turn-taking
+        # look like a failure.
+        pytest.param({}, _EMPTY_COMMIT, [], id="empty-commit-under-server-vad"),
+        # With turn detection off the client owns every commit, so an empty one
+        # is a genuine client bug and must not be swallowed.
+        pytest.param(
+            {"turn_detection": None}, _EMPTY_COMMIT, [True], id="empty-commit-without-server-vad"
+        ),
+        # A redundant response.cancel (nothing active) must not surface as a
+        # user-facing recoverable error, matching Boson's own client (pipecat).
+        pytest.param(
+            {},
+            _error(
+                code="response_not_active",
+                message="No active response to cancel.",
+                event_id="evt_cancel_1",
+            ),
+            [],
+            id="response-not-active",
+        ),
+    ],
+)
+async def test_boson_realtime_error_reporting(open_session, kwargs, error, recoverable):
+    session = await open_session(**kwargs)
+    errors = _collect(session, "error")
+    _server_event(session, error)
+    assert [e.recoverable for e in errors] == recoverable
 
 
-@pytest.mark.asyncio
-async def test_boson_realtime_truncation_defaults_to_auto(monkeypatch):
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+@pytest.mark.parametrize(
+    ("error", "reported"),
+    [
+        # An error whose event_id belongs to something else (e.g. an unrelated
+        # conversation.item.create) still surfaces, so it isn't silently lost...
+        pytest.param(
+            _error(code="bad_request", message="item.create failed", event_id="chat_ctx_create_1"),
+            True,
+            id="unrelated-event-id",
+        ),
+        # ...while this one, raised without an event_id/code the client can
+        # correlate, is swallowed.
+        pytest.param(_invalid_prev("user_9"), False, id="invalid-previous-item-id"),
+    ],
+)
+async def test_boson_realtime_uncorrelated_error_does_not_fail_pending_generate_reply(
+    open_session, error, reported
+):
+    # Either way, an error that can't be correlated to a pending
+    # generate_reply() must not blanket-fail every in-flight call.
+    session = await open_session()
+    errors = _collect(session, "error")
+    generation_fut = session.generate_reply()
+    await session._msg_ch.recv()  # response.create
 
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    try:
-        event = await session._msg_ch.recv()
-        assert event["session"]["truncation"] == "auto"
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_truncation_can_be_disabled(monkeypatch):
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    model = realtime.RealtimeModel(
-        url="ws://localhost:8000/v1/realtime/",
-        api_key="test-key",
-        truncation="disabled",
-    )
-    session = model.session()
-    try:
-        event = await session._msg_ch.recv()
-        assert event["session"]["truncation"] == "disabled"
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_update_options_sends_truncation(monkeypatch):
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    try:
-        await session._msg_ch.recv()  # initial session.update
-        model.update_options(truncation="disabled")
-
-        event = await session._msg_ch.recv()
-        assert event["session"]["truncation"] == "disabled"
-    finally:
-        await session.aclose()
-        await model.aclose()
+    _server_event(session, error)
+    assert bool(errors) is reported
+    assert not generation_fut.done()
+    assert generation_fut in session._response_created_futures.values()
+    generation_fut.cancel()
 
 
-@pytest.mark.asyncio
-async def test_boson_realtime_update_options_ignores_none_truncation(monkeypatch):
-    # Unlike turn_detection/noise_reduction, the server's `truncation` field is
-    # non-Optional ("auto"/"disabled" only); sending null would fail server
-    # validation and tear down the whole session. `None` must be a no-op here,
-    # not forwarded to the wire.
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    model = realtime.RealtimeModel(
-        url="ws://localhost:8000/v1/realtime/",
-        api_key="test-key",
-        truncation="disabled",
-    )
-    session = model.session()
-    try:
-        await session._msg_ch.recv()  # initial session.update
-        model.update_options(truncation=None, voice="coral")
-
-        event = await session._msg_ch.recv()
-        assert "truncation" not in event["session"]
-        assert event["session"]["audio"]["output"]["voice"] == "coral"
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_non_retryable_billing_refusal_close_code_is_terminal():
-    # 4429 (WS_CLOSE_CODE_ENTITLEMENT_REFUSED) is a permanent billing refusal;
-    # reconnecting cannot fix it.
-    ws = _FakeWebSocket(aiohttp.WSMessage(aiohttp.WSMsgType.CLOSE, 4429, "insufficient_quota"))
-    ws.close_event.set()
-    client = _SequencedHTTPClient([ws, _FakeWebSocket()])
-    model = realtime.RealtimeModel(
-        url="ws://localhost:8000/v1/realtime/",
-        api_key="test-key",
-        http_session=client,
-        conn_options=APIConnectOptions(max_retry=3, retry_interval=0.01, timeout=1.0),
-    )
-    session = model.session()
-    errors = []
-    session.on("error", errors.append)
-    try:
-        for _ in range(200):
-            if session._closed:
-                break
-            await asyncio.sleep(0.01)
-        assert session._closed is True
-        assert len(client.connect_urls) == 1  # no reconnect attempt
-        assert errors
-        assert errors[0].recoverable is False
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_nonfatal_response_not_active_error_is_swallowed(monkeypatch):
-    # A redundant response.cancel (nothing active) must not surface as a
-    # user-facing recoverable error, matching Boson's own client (pipecat).
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    errors = []
-    session.on("error", errors.append)
-    try:
-        await session._msg_ch.recv()  # initial session.update
-        _server_event(
-            session,
-            {
-                "type": "error",
-                "error": {
-                    "type": "invalid_request_error",
-                    "code": "response_not_active",
-                    "message": "No active response to cancel.",
-                    "event_id": "evt_cancel_1",
-                },
-            },
-        )
-        assert errors == []
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_nonfatal_invalid_previous_item_id_is_swallowed(monkeypatch):
-    # Raised without an event_id/code the client can correlate; must not
-    # blanket-fail unrelated pending generate_reply() futures.
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    errors = []
-    session.on("error", errors.append)
-    try:
-        await session._msg_ch.recv()  # initial session.update
-        generation_fut = session.generate_reply()
-        await session._msg_ch.recv()
-
-        _server_event(
-            session,
-            {
-                "type": "error",
-                "error": {
-                    "type": "invalid_previous_item_id",
-                    "message": "previous_item_id 'user_9' not found in conversation",
-                },
-            },
-        )
-        assert errors == []
-        assert not generation_fut.done()
-    finally:
-        generation_fut.cancel()
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_invalid_previous_item_id_fails_update_chat_ctx_fast(monkeypatch):
+@pytest.mark.parametrize("with_event_id", [False, True])
+async def test_boson_realtime_invalid_previous_item_id_fails_update_chat_ctx_fast(
+    open_session, with_event_id
+):
     # An older server reports neither its own event id nor, in the message, the
     # rejected item's -- only the missing previous_item_id. Attribution then rests
     # entirely on the item_id field, and without it update_chat_ctx() would sit
     # until the base's 5s timeout and raise a generic "timed out" in place of this
-    # specific, immediate error. The current server also sends event_id; see the
-    # test below.
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    try:
-        await session._msg_ch.recv()  # initial session.update
-        _server_event(session, _user_item_added("user_1", [{"type": "input_text", "text": "hi"}]))
-
-        # user_2 chains onto user_1 as its previous_item_id.
-        update_task = asyncio.create_task(
-            session.update_chat_ctx(
-                llm.ChatContext(
-                    [
-                        llm.ChatMessage(id="user_1", role="user", content=["hi"]),
-                        llm.ChatMessage(id="user_2", role="user", content=["again"]),
-                    ]
-                )
-            )
-        )
-        create_event = await session._msg_ch.recv()
-        assert create_event["item"]["id"] == "user_2"
-        assert create_event["previous_item_id"] == "user_1"
-
-        _server_event(
-            session,
-            {
-                "type": "error",
-                "error": {
-                    "type": "invalid_previous_item_id",
-                    "message": "previous_item_id 'user_1' not found in conversation",
-                    "item_id": "user_2",
-                },
-            },
-        )
-
-        with pytest.raises(llm.RealtimeError, match="previous_item_id 'user_1' not found"):
-            await asyncio.wait_for(update_task, timeout=0.5)
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_invalid_previous_item_id_still_raises_with_an_event_id(monkeypatch):
-    # The current server names both ids on this error, so the generic event-id
-    # lookup reaches the create's future before the invalid_previous_item_id
-    # branch does. Both find the same object, so whichever arrives second sees it
+    # specific, immediate error.
+    #
+    # The current server also names the event id, so the generic event-id lookup
+    # reaches the create's future before the invalid_previous_item_id branch
+    # does. Both find the same object, so whichever arrives second sees it
     # already settled -- and if escalating depended on being the one to settle it,
     # update_chat_ctx() would return success for a sync the server refused, on
     # exactly the servers that report the most detail.
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+    session = await open_session()
+    _server_event(session, _user_text("user_1", "hi"))
 
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    try:
-        await session._msg_ch.recv()  # initial session.update
-        _server_event(session, _user_item_added("user_1", [{"type": "input_text", "text": "hi"}]))
+    # user_2 chains onto user_1 as its previous_item_id.
+    update_task = asyncio.create_task(
+        session.update_chat_ctx(_ctx(("user_1", "user", "hi"), ("user_2", "user", "again")))
+    )
+    create_event = await session._msg_ch.recv()
+    assert create_event["item"]["id"] == "user_2"
+    assert create_event["previous_item_id"] == "user_1"
+    assert create_event["event_id"]
 
-        update_task = asyncio.create_task(
-            session.update_chat_ctx(
-                llm.ChatContext(
-                    [
-                        llm.ChatMessage(id="user_1", role="user", content=["hi"]),
-                        llm.ChatMessage(id="user_2", role="user", content=["again"]),
-                    ]
-                )
-            )
-        )
-        create_event = await session._msg_ch.recv()
-        assert create_event["item"]["id"] == "user_2"
-        assert create_event["event_id"]
+    event_id = {"event_id": create_event["event_id"]} if with_event_id else {}
+    _server_event(session, _invalid_prev("user_1", item_id="user_2", **event_id))
 
-        _server_event(
-            session,
-            {
-                "type": "error",
-                "error": {
-                    "type": "invalid_previous_item_id",
-                    "message": "previous_item_id 'user_1' not found in conversation",
-                    "event_id": create_event["event_id"],
-                    "item_id": "user_2",
-                },
-            },
-        )
-
-        with pytest.raises(llm.RealtimeError, match="previous_item_id 'user_1' not found"):
-            await asyncio.wait_for(update_task, timeout=0.5)
-    finally:
-        await session.aclose()
-        await model.aclose()
+    with pytest.raises(llm.RealtimeError, match="previous_item_id 'user_1' not found"):
+        await asyncio.wait_for(update_task, timeout=0.5)
 
 
-@pytest.mark.asyncio
-async def test_boson_realtime_rejected_item_settles_its_own_create(monkeypatch):
+@pytest.mark.parametrize("fatal", [False, True], ids=["item-rejected", "fatal-refusal"])
+async def test_boson_realtime_rejected_item_settles_its_own_create(open_session, fatal):
     # Every other rejection of a conversation.item.create names the client event
     # id it answers, and never sends the conversation.item.added the create's
     # future waits on. Matching the two is what keeps update_chat_ctx() from
     # sitting out the base's 5s timeout and reporting a generic one; the base
     # then treats the rejected item as a warning rather than a failed turn.
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+    session = await open_session()
+    errors = _collect(session, "error")
 
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    try:
-        await session._msg_ch.recv()  # initial session.update
+    update_task = asyncio.create_task(session.update_chat_ctx(_ctx(("user_1", "user", "hi"))))
+    create_event = await session._msg_ch.recv()
+    assert create_event["item"]["id"] == "user_1"
+    assert create_event["event_id"]
 
-        update_task = asyncio.create_task(
-            session.update_chat_ctx(
-                llm.ChatContext([llm.ChatMessage(id="user_1", role="user", content=["hi"])])
-            )
-        )
-        create_event = await session._msg_ch.recv()
-        assert create_event["item"]["id"] == "user_1"
-        assert create_event["event_id"]
-
-        _server_event(
-            session,
-            {
-                "type": "error",
-                "error": {
-                    "type": "invalid_request_error",
-                    "code": "item_rejected",
-                    "message": "conversation item rejected",
-                    "event_id": create_event["event_id"],
-                },
-            },
-        )
-
-        # Resolves on the error rather than 5s later, and does not raise: a
-        # single rejected item is not worth failing the turn over.
-        await asyncio.wait_for(update_task, timeout=0.5)
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_rejected_item_is_not_also_a_session_error(monkeypatch):
-    # The rejection already reaches the caller through the future settled above,
-    # where it is downgraded to a warning. Emitting a session error for the same
-    # event would have the plugin call one server message both harmless and a
-    # failure, and would put a false alarm in front of applications during
-    # ordinary chat-context syncing.
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    errors = []
-    session.on("error", errors.append)
-    try:
-        await session._msg_ch.recv()  # initial session.update
-
-        update_task = asyncio.create_task(
-            session.update_chat_ctx(
-                llm.ChatContext([llm.ChatMessage(id="user_1", role="user", content=["hi"])])
-            )
-        )
-        create_event = await session._msg_ch.recv()
-
-        _server_event(
-            session,
-            {
-                "type": "error",
-                "error": {
-                    "type": "invalid_request_error",
-                    "code": "item_rejected",
-                    "message": "conversation item rejected",
-                    "event_id": create_event["event_id"],
-                },
-            },
-        )
-
-        await asyncio.wait_for(update_task, timeout=0.5)
-        assert errors == []
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_fatal_error_ends_the_session_even_naming_an_item(monkeypatch):
-    # The counterpart: settling a chat-ctx future must not swallow a refusal that
-    # has to end the session. Which client event the server happened to be
-    # answering says nothing about whether the account can continue.
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    try:
-        await session._msg_ch.recv()  # initial session.update
-
-        update_task = asyncio.create_task(
-            session.update_chat_ctx(
-                llm.ChatContext([llm.ChatMessage(id="user_1", role="user", content=["hi"])])
-            )
-        )
-        create_event = await session._msg_ch.recv()
-
+    if fatal:
+        # The counterpart: settling a chat-ctx future must not swallow a refusal
+        # that has to end the session. Which client event the server happened to
+        # be answering says nothing about whether the account can continue.
+        # _main_task is what turns the raise into a stopped session.
         with pytest.raises(APIError) as exc_info:
             _server_event(
                 session,
-                {
-                    "type": "error",
-                    "error": {
-                        "type": "insufficient_quota",
-                        "code": "monthly_cap_reached",
-                        "message": "monthly cap reached",
-                        "event_id": create_event["event_id"],
-                    },
-                },
+                _error(
+                    "insufficient_quota",
+                    code="monthly_cap_reached",
+                    message="monthly cap reached",
+                    event_id=create_event["event_id"],
+                ),
             )
         assert exc_info.value.retryable is False
+    else:
+        _server_event(session, _rejected(create_event["event_id"]))
+    # Resolves on the error rather than 5s later, and does not raise: a
+    # single rejected item is not worth failing the turn over.
+    await asyncio.wait_for(update_task, timeout=0.5)
+    # Nor is a rejection also a session error: that would call one server
+    # message both harmless and a failure, and put a false alarm in front of
+    # applications during ordinary chat-context syncing.
+    assert errors == []
 
-        # The waiter is settled either way; what matters is that raising still
-        # happened. _main_task is what turns this into a stopped session.
-        await asyncio.wait_for(update_task, timeout=0.5)
-    finally:
-        await session.aclose()
-        await model.aclose()
 
-
-@pytest.mark.asyncio
-async def test_boson_realtime_rejected_item_survives_a_later_echo(monkeypatch):
+async def test_boson_realtime_rejected_item_survives_a_later_echo(open_session):
     # A rejected create stays registered in _item_create_future -- the error
     # paths settle the future without removing the entry, and only
     # update_chat_ctx() clears it. If the server then echoes the item anyway,
@@ -2554,1297 +1679,289 @@ async def test_boson_realtime_rejected_item_survives_a_later_echo(monkeypatch):
     # exception. Resolving it there would raise InvalidStateError, which the
     # base recv loop swallows as "failed to handle event" after abandoning the
     # rest of this event's handling.
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+    session = await open_session()
+    _server_event(session, _user_text("user_1", "hi"))
 
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    try:
-        await session._msg_ch.recv()  # initial session.update
-        _server_event(session, _user_item_added("user_1", [{"type": "input_text", "text": "hi"}]))
+    # Changing an item's content sends a delete and a create under its id.
+    update_task = asyncio.create_task(session.update_chat_ctx(_ctx(("user_1", "user", "changed"))))
+    events = [await session._msg_ch.recv(), await session._msg_ch.recv()]
+    create_event = next(e for e in events if e["type"] == "conversation.item.create")
 
-        # Changing an item's content sends a delete and a create under its id.
-        update_task = asyncio.create_task(
-            session.update_chat_ctx(
-                llm.ChatContext([llm.ChatMessage(id="user_1", role="user", content=["changed"])])
-            )
-        )
-        events = [await session._msg_ch.recv(), await session._msg_ch.recv()]
-        create_event = next(e for e in events if e["type"] == "conversation.item.create")
+    _server_event(session, _rejected(create_event["event_id"]))
+    # The echo the server should not have sent. Handling it must not raise.
+    _server_event(session, _user_text("user_1", "hi"))
 
-        _server_event(
-            session,
-            {
-                "type": "error",
-                "error": {
-                    "type": "invalid_request_error",
-                    "code": "item_rejected",
-                    "message": "conversation item rejected",
-                    "event_id": create_event["event_id"],
-                },
-            },
-        )
-
-        # The echo the server should not have sent. Handling it must not raise.
-        _server_event(session, _user_item_added("user_1", [{"type": "input_text", "text": "hi"}]))
-
-        _server_event(session, {"type": "conversation.item.deleted", "item_id": "user_1"})
-        await asyncio.wait_for(update_task, timeout=1.0)
-    finally:
-        await session.aclose()
-        await model.aclose()
+    _server_event(session, _deleted("user_1"))
+    await asyncio.wait_for(update_task, timeout=1.0)
 
 
-@pytest.mark.asyncio
-async def test_boson_realtime_unattributable_invalid_previous_item_id_blames_nobody(monkeypatch):
-    # A server that predates the rejected item's id in this error reports
-    # nothing the failure can be attributed to. The turn must degrade to
-    # update_chat_ctx()'s own timeout rather than pin the error on whichever
-    # create happens to be pending.
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+@pytest.mark.parametrize(
+    "error",
+    [
+        # A server that predates the rejected item's id in this error reports
+        # nothing the failure can be attributed to. The turn must degrade to
+        # update_chat_ctx()'s own timeout rather than pin the error on whichever
+        # create happens to be pending.
+        pytest.param(
+            _error("invalid_previous_item_id", message="the item you referenced does not exist"),
+            id="unattributable",
+        ),
+        # A late error for a create that's no longer pending (its update_chat_ctx()
+        # call already timed out and the base cleaned it up) names its own item,
+        # which no longer has a future to fail. It must not be misattributed to a
+        # different in-flight call just because something happens to be pending.
+        pytest.param(_invalid_prev("root_1", item_id="user_stale"), id="stale-item"),
+    ],
+)
+async def test_boson_realtime_unmatched_invalid_previous_item_id_blames_nobody(open_session, error):
+    session = await open_session()
+    assert "user_stale" not in session._item_create_future
 
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    try:
-        await session._msg_ch.recv()  # initial session.update
+    # An append onto an empty remote context: previous_item_id is None.
+    update_task = asyncio.create_task(session.update_chat_ctx(_ctx(("user_1", "user", "hi"))))
+    create_event = await session._msg_ch.recv()
+    assert create_event["item"]["id"] == "user_1"
+    assert create_event["previous_item_id"] is None
 
-        # An append onto an empty remote context: previous_item_id is None.
-        update_task = asyncio.create_task(
-            session.update_chat_ctx(
-                llm.ChatContext([llm.ChatMessage(id="user_1", role="user", content=["hi"])])
-            )
-        )
-        create_event = await session._msg_ch.recv()
-        assert create_event["item"]["id"] == "user_1"
-        assert create_event["previous_item_id"] is None
+    _server_event(session, error)
+    # The append is untouched: no exception pinned on it, still pending.
+    assert not session._item_create_future["user_1"].done()
+    assert session._chat_ctx_sync_error is None
+    assert not update_task.done()
 
-        # Same error type, from a server that does not name the rejected item.
-        _server_event(
-            session,
-            {
-                "type": "error",
-                "error": {
-                    "type": "invalid_previous_item_id",
-                    "message": "the item you referenced does not exist",
-                },
-            },
-        )
-
-        # The append is untouched: no exception pinned on it, still pending.
-        fut = session._item_create_future["user_1"]
-        assert not fut.done()
-        assert session._chat_ctx_sync_error is None
-        assert not update_task.done()
-
-        # It still resolves normally when its own echo arrives.
-        _server_event(session, _user_item_added("user_1", [{"type": "input_text", "text": "hi"}]))
-        await asyncio.wait_for(update_task, timeout=0.5)
-    finally:
-        await session.aclose()
-        await model.aclose()
+    # It still resolves normally when its own echo arrives.
+    _server_event(session, _item_added_echo(create_event["item"]))
+    await asyncio.wait_for(update_task, timeout=1.0)
 
 
-@pytest.mark.asyncio
-async def test_boson_realtime_concurrent_update_chat_ctx_keeps_sync_error(monkeypatch):
+async def test_boson_realtime_concurrent_update_chat_ctx_keeps_sync_error(open_session):
     # The sync error travels through a single session-level slot, and the base
     # gathers its item futures with return_exceptions=True — so that slot is
     # the only channel a per-item failure has. A second update_chat_ctx()
     # entering while the first is parked inside the base must not clear the
     # slot out from under it, or the first call reports success for a sync
     # that actually failed.
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
+    session = await open_session()
+    _server_event(session, _user_text("user_1", "hi"))
 
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    second_task: asyncio.Task | None = None
+    first_task = asyncio.create_task(
+        session.update_chat_ctx(_ctx(("user_1", "user", "hi"), ("user_2", "user", "again")))
+    )
+    create_event = await session._msg_ch.recv()
+    assert create_event["item"]["id"] == "user_2"
+
+    # Queued before the error lands, so its body runs before the first
+    # call gets to look at the slot.
+    second_task = asyncio.create_task(session.update_chat_ctx(_ctx(("user_1", "user", "hi"))))
     try:
-        await session._msg_ch.recv()  # initial session.update
-        _server_event(session, _user_item_added("user_1", [{"type": "input_text", "text": "hi"}]))
-
-        first_task = asyncio.create_task(
-            session.update_chat_ctx(
-                llm.ChatContext(
-                    [
-                        llm.ChatMessage(id="user_1", role="user", content=["hi"]),
-                        llm.ChatMessage(id="user_2", role="user", content=["again"]),
-                    ]
-                )
-            )
-        )
-        create_event = await session._msg_ch.recv()
-        assert create_event["item"]["id"] == "user_2"
-
-        # Queued before the error lands, so its body runs before the first
-        # call gets to look at the slot.
-        second_task = asyncio.create_task(
-            session.update_chat_ctx(
-                llm.ChatContext([llm.ChatMessage(id="user_1", role="user", content=["hi"])])
-            )
-        )
-
-        _server_event(
-            session,
-            {
-                "type": "error",
-                "error": {
-                    "type": "invalid_previous_item_id",
-                    "message": "previous_item_id 'user_1' not found in conversation",
-                    "item_id": "user_2",
-                },
-            },
-        )
-
+        _server_event(session, _invalid_prev("user_1", item_id="user_2"))
         with pytest.raises(llm.RealtimeError, match="previous_item_id 'user_1' not found"):
             await asyncio.wait_for(first_task, timeout=0.5)
     finally:
-        if second_task is not None:
-            await utils.aio.cancel_and_wait(second_task)
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_unsupported_role_at_head_does_not_rebuild(monkeypatch):
-    # A system/developer item is never sent, so it never lands in the remote
-    # context — which means the diff would see it as missing remotely on every
-    # single sync. At the head of the context that reads as an insert before
-    # everything else and triggers the full delete/recreate rebuild, forever,
-    # for an item that is dropped either way. Unsupported roles must be
-    # filtered before the diff, not while walking its output.
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    try:
-        await session._msg_ch.recv()  # initial session.update
-        _server_event(session, _user_item_added("user_1", [{"type": "input_text", "text": "hi"}]))
-
-        target = llm.ChatContext(
-            [
-                llm.ChatMessage(id="sys_1", role="system", content=["You are helpful."]),
-                llm.ChatMessage(id="user_1", role="user", content=["hi"]),
-            ]
-        )
-        # Already in sync apart from the undeliverable system item: nothing to do.
-        assert session._create_update_chat_ctx_events(target) == []
-        # And still nothing to do on the next sync of the same context.
-        assert session._create_update_chat_ctx_events(target) == []
-
-        # A genuine head insert of a *supported* item still rebuilds.
-        with_summary = llm.ChatContext(
-            [
-                llm.ChatMessage(id="sys_1", role="system", content=["You are helpful."]),
-                llm.ChatMessage(id="summary_1", role="assistant", content=["Summary."]),
-                llm.ChatMessage(id="user_1", role="user", content=["hi"]),
-            ]
-        )
-        events = session._create_update_chat_ctx_events(with_summary)
-        assert [ev.type for ev in events] == [
-            "conversation.item.delete",
-            "conversation.item.create",
-            "conversation.item.create",
-        ]
-        assert events[0].item_id == "user_1"
-        assert events[1].item.id == "summary_1"
-        assert events[1].previous_item_id is None
-        assert events[2].item.id == "user_1"
-        assert events[2].previous_item_id == "summary_1"
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_invalid_previous_item_id_does_not_affect_unrelated_call(monkeypatch):
-    # A late invalid_previous_item_id error for a create that's no longer
-    # pending (its update_chat_ctx() call already gave up and returned) must
-    # not be misattributed to a different, currently in-flight update_chat_ctx()
-    # call just because something happens to be pending right now.
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    try:
-        await session._msg_ch.recv()  # initial session.update
-
-        # Call 1 has already timed out and been cleaned up by the base class,
-        # so nothing is left keyed under its item id.
-        assert "user_stale" not in session._item_create_future
-
-        # Call 2 is a genuinely different, currently in-flight sync.
-        update_task = asyncio.create_task(
-            session.update_chat_ctx(
-                llm.ChatContext([llm.ChatMessage(id="user_9", role="user", content=["hi"])])
-            )
-        )
-        create_event = await session._msg_ch.recv()
-        assert create_event["item"]["id"] == "user_9"
-
-        # Call 1's stale error arrives late, naming its own item -- which no
-        # longer has a future to fail.
-        _server_event(
-            session,
-            {
-                "type": "error",
-                "error": {
-                    "type": "invalid_previous_item_id",
-                    "message": "previous_item_id 'root_1' not found in conversation",
-                    "item_id": "user_stale",
-                },
-            },
-        )
-        assert not update_task.done()
-
-        # Call 2 completes normally, unaffected by call 1's stale error.
-        _server_event(session, _item_added_echo(create_event["item"]))
-        await asyncio.wait_for(update_task, timeout=1.0)
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_server_vad_interrupt_skips_duplicate_response_cancel(monkeypatch):
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    try:
-        await session._msg_ch.recv()  # initial session.update
-        generation_fut = session.generate_reply()
-        response_create = await session._msg_ch.recv()
-        _server_event(
-            session,
-            {
-                "type": "response.created",
-                "response": {
-                    "id": "resp_1",
-                    "status": "in_progress",
-                    "metadata": {"client_event_id": response_create["event_id"]},
-                },
-            },
-        )
-        await generation_fut
-
-        session.on("input_speech_started", lambda _event: session.interrupt())
-        _server_event(session, {"type": "input_audio_buffer.speech_started"})
-        assert session._msg_ch.empty()
-
-        session.interrupt()
-        cancel_event = await session._msg_ch.recv()
-        assert cancel_event["type"] == "response.cancel"
-        assert cancel_event["response_id"] == "resp_1"
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_interrupt_response_false_still_skips_duplicate_cancel(monkeypatch):
-    # `interrupt_response` in the turn_detection payload does not currently
-    # change Higgs Realtime's actual auto-interrupt behavior: server VAD always
-    # auto-cancels the active response on speech start regardless of this
-    # field. The client must suppress its own duplicate response.cancel
-    # whenever server VAD is enabled at all, even if the caller set
-    # `interrupt_response: False` expecting it to disable auto-interrupt.
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    model = realtime.RealtimeModel(
-        url="ws://localhost:8000/v1/realtime/",
-        api_key="test-key",
-        turn_detection={"type": "server_vad", "interrupt_response": False},
-    )
-    session = model.session()
-    try:
-        await session._msg_ch.recv()  # initial session.update
-        generation_fut = session.generate_reply()
-        response_create = await session._msg_ch.recv()
-        _server_event(
-            session,
-            {
-                "type": "response.created",
-                "response": {
-                    "id": "resp_1",
-                    "status": "in_progress",
-                    "metadata": {"client_event_id": response_create["event_id"]},
-                },
-            },
-        )
-        await generation_fut
-
-        session.on("input_speech_started", lambda _event: session.interrupt())
-        _server_event(session, {"type": "input_audio_buffer.speech_started"})
-        assert session._msg_ch.empty()
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_client_side_interrupt_sends_response_cancel(monkeypatch):
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    model = realtime.RealtimeModel(
-        url="ws://localhost:8000/v1/realtime/",
-        api_key="test-key",
-        turn_detection=None,
-    )
-    session = model.session()
-    try:
-        await session._msg_ch.recv()  # initial session.update
-        generation_fut = session.generate_reply()
-        response_create = await session._msg_ch.recv()
-        _server_event(
-            session,
-            {
-                "type": "response.created",
-                "response": {
-                    "id": "resp_1",
-                    "status": "in_progress",
-                    "metadata": {"client_event_id": response_create["event_id"]},
-                },
-            },
-        )
-        await generation_fut
-
-        session.interrupt()
-        cancel_event = await session._msg_ch.recv()
-        assert cancel_event["type"] == "response.cancel"
-        assert cancel_event["response_id"] == "resp_1"
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_chat_ctx_audio_content_uses_transcript(monkeypatch):
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    try:
-        await session._msg_ch.recv()  # initial session.update
-        chat_ctx = llm.ChatContext(
-            [
-                llm.ChatMessage(
-                    id="user_audio_1",
-                    role="user",
-                    content=[llm.AudioContent(frame=[], transcript="hello from audio")],
-                )
-            ]
-        )
-
-        update_task = asyncio.create_task(session.update_chat_ctx(chat_ctx))
-        create_event = await session._msg_ch.recv()
-
-        assert create_event["type"] == "conversation.item.create"
-        assert create_event["item"]["id"] == "user_audio_1"
-        assert create_event["item"]["content"] == [
-            {"type": "input_text", "text": "hello from audio"}
-        ]
-
-        _server_event(session, _item_added_echo(create_event["item"]))
-        await asyncio.wait_for(update_task, timeout=1.0)
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_head_text_change_rebuilds_rather_than_reorders(monkeypatch):
-    # Editing the text of the item at the head is not an insert, but it reaches
-    # the rebuild for the same reason one does: the base expresses a content
-    # change as a delete and a create, and that create carries "root". Sending it
-    # incrementally would map "root" to None, which appends -- putting the head
-    # item after the turns it used to precede, since the delete just removed it
-    # from its position. Narrowing the trigger to "genuine inserts" reintroduces
-    # exactly that, so the behaviour is pinned here.
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    try:
-        await session._msg_ch.recv()  # initial session.update
-        _server_event(session, _user_item_added("user_1", [{"type": "input_text", "text": "hi"}]))
-        # Chained after user_1: _user_item_added always reports no predecessor,
-        # which the remote mirror reads as insert-at-head and would leave the two
-        # in reverse order.
-        second = _user_item_added("user_2", [{"type": "input_text", "text": "again"}])
-        second["previous_item_id"] = "user_1"
-        _server_event(session, second)
-
-        update_task = asyncio.create_task(
-            session.update_chat_ctx(
-                llm.ChatContext(
-                    [
-                        llm.ChatMessage(id="user_1", role="user", content=["hello there"]),
-                        llm.ChatMessage(id="user_2", role="user", content=["again"]),
-                    ]
-                )
-            )
-        )
-        # Bounded: a narrower trigger sends two events rather than four, and this
-        # has to fail rather than block waiting for the other two.
-        events = []
-        with contextlib.suppress(asyncio.TimeoutError):
-            while True:
-                events.append(await asyncio.wait_for(session._msg_ch.recv(), timeout=0.5))
-
-        # Everything torn down, then re-sent in target order -- not a delete and
-        # an append of user_1 alone, which would leave it behind user_2.
-        assert [e["type"] for e in events] == [
-            "conversation.item.delete",
-            "conversation.item.delete",
-            "conversation.item.create",
-            "conversation.item.create",
-        ]
-        assert [e["item_id"] for e in events[:2]] == ["user_1", "user_2"]
-        assert [(e["item"]["id"], e["previous_item_id"]) for e in events[2:]] == [
-            ("user_1", None),
-            ("user_2", "user_1"),
-        ]
-
-        for item_id in ("user_1", "user_2"):
-            _server_event(session, {"type": "conversation.item.deleted", "item_id": item_id})
-        _server_event(session, _user_item_added("user_1", [{"type": "input_text", "text": "x"}]))
-        _server_event(session, _user_item_added("user_2", [{"type": "input_text", "text": "y"}]))
-        await asyncio.wait_for(update_task, timeout=1.0)
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_rebuild_warns_about_turns_it_cannot_put_back(monkeypatch, caplog):
-    # Inserting ahead of what the server holds rebuilds the whole conversation,
-    # which deletes every remote item and recreates only the ones with text. A
-    # user turn still waiting on its transcript has none, so the delete takes it
-    # away and nothing puts it back until a later sync. That is inherent -- no
-    # audio is kept client-side -- but it must not happen silently.
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    try:
-        await session._msg_ch.recv()  # initial session.update
-        # An audio turn whose transcription has not arrived: the server holds it,
-        # the local mirror has it with no content.
-        _server_event(session, _user_item_added("user_1", [{"type": "input_audio"}]))
-        assert session._remote_chat_ctx.get("user_1").item.content == []
-
-        with caplog.at_level(logging.WARNING, logger="livekit.plugins.boson"):
-            update_task = asyncio.create_task(
-                session.update_chat_ctx(
-                    llm.ChatContext(
-                        [
-                            llm.ChatMessage(id="summary", role="user", content=["so far: ..."]),
-                            llm.ChatMessage(id="user_1", role="user", content=[]),
-                        ]
-                    )
-                )
-            )
-            events = [await session._msg_ch.recv(), await session._msg_ch.recv()]
-            assert session._msg_ch.empty()
-
-        assert [e["type"] for e in events] == [
-            "conversation.item.delete",
-            "conversation.item.create",
-        ]
-        assert events[0]["item_id"] == "user_1"
-        # Deleted, and not among the recreates.
-        assert events[1]["item"]["id"] == "summary"
-
-        assert "user_1" in [
-            item_id for record in caplog.records for item_id in getattr(record, "item_ids", [])
-        ]
-
-        _server_event(session, {"type": "conversation.item.deleted", "item_id": "user_1"})
-        _server_event(session, _user_item_added("summary", [{"type": "input_text", "text": "s"}]))
-        await asyncio.wait_for(update_task, timeout=1.0)
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_emptied_turn_is_deleted_loudly(monkeypatch, caplog):
-    # The base states a content change as a delete plus a create under one id.
-    # When the new content has no text there is no create to send -- the server
-    # stores nothing for a textless item -- so only the delete goes out and the
-    # turn leaves the conversation instead of being updated in place. The delete
-    # is the honest translation of "this text is no longer in the context", but
-    # losing the turn outright is a bigger outcome than emptying it, so it is
-    # reported the same way the rebuild path reports what it cannot put back.
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    try:
-        await session._msg_ch.recv()  # initial session.update
-        # Each added item goes in at the head, so this leaves the server holding
-        # [user_1, user_2] -- user_2 is not at the head, which is what keeps this
-        # on the incremental path instead of the rebuild one.
-        _server_event(
-            session, _user_item_added("user_2", [{"type": "input_text", "text": "there"}])
-        )
-        _server_event(session, _user_item_added("user_1", [{"type": "input_text", "text": "hi"}]))
-        assert [item.id for item in session._remote_chat_ctx.to_chat_ctx().items] == [
-            "user_1",
-            "user_2",
-        ]
-
-        with caplog.at_level(logging.WARNING, logger="livekit.plugins.boson"):
-            update_task = asyncio.create_task(
-                session.update_chat_ctx(
-                    llm.ChatContext(
-                        [
-                            llm.ChatMessage(id="user_1", role="user", content=["hi"]),
-                            llm.ChatMessage(id="user_2", role="user", content=[]),
-                        ]
-                    )
-                )
-            )
-            events = [await session._msg_ch.recv()]
-            assert session._msg_ch.empty()
-
-        assert [e["type"] for e in events] == ["conversation.item.delete"]
-        assert events[0]["item_id"] == "user_2"
-        assert "user_2" in [
-            item_id for record in caplog.records for item_id in getattr(record, "item_ids", [])
-        ]
-
-        _server_event(session, {"type": "conversation.item.deleted", "item_id": "user_2"})
-        await asyncio.wait_for(update_task, timeout=1.0)
-        # Gone from the mirror too, so the turn comes back as a create -- after
-        # the predecessor it still sits behind -- once it has text again.
-        assert session._remote_chat_ctx.get("user_2") is None
-        events = session._create_update_chat_ctx_events(
-            llm.ChatContext(
-                [
-                    llm.ChatMessage(id="user_1", role="user", content=["hi"]),
-                    llm.ChatMessage(id="user_2", role="user", content=["there again"]),
-                ]
-            )
-        )
-        assert [ev.type for ev in events] == ["conversation.item.create"]
-        assert events[0].item.id == "user_2"
-        assert events[0].previous_item_id == "user_1"
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_untouched_turn_is_not_reported_as_deleted(monkeypatch, caplog):
-    # The warning must key on a delete actually going out for the same id, not
-    # on a create being dropped: an item the conversion cannot express but that
-    # the server never held is no loss and must stay quiet.
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    try:
-        await session._msg_ch.recv()  # initial session.update
-        _server_event(session, _user_item_added("user_1", [{"type": "input_text", "text": "hi"}]))
-
-        with caplog.at_level(logging.WARNING, logger="livekit.plugins.boson"):
-            events = session._create_update_chat_ctx_events(
-                llm.ChatContext(
-                    [
-                        llm.ChatMessage(id="user_1", role="user", content=["hi"]),
-                        llm.ChatMessage(id="sys_1", role="system", content=["Be brief."]),
-                    ]
-                )
-            )
-
-        assert events == []
-        assert not [record for record in caplog.records if hasattr(record, "item_ids")]
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_update_chat_ctx_deletes_removed_items(monkeypatch):
-    # Client-supplied item ids are preserved by the server, so removed items
-    # are addressable: the base diff issues conversation.item.delete for them.
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    try:
-        await session._msg_ch.recv()  # initial session.update
-        _server_event(session, _user_item_added("user_1", [{"type": "input_text", "text": "hi"}]))
-        _server_event(
-            session, _user_item_added("user_2", [{"type": "input_text", "text": "again"}])
-        )
-
-        update_task = asyncio.create_task(
-            session.update_chat_ctx(
-                llm.ChatContext([llm.ChatMessage(id="user_1", role="user", content=["hi"])])
-            )
-        )
-        delete_event = await session._msg_ch.recv()
-        assert delete_event["type"] == "conversation.item.delete"
-        assert delete_event["item_id"] == "user_2"
-        assert session._msg_ch.empty()
-
-        _server_event(session, {"type": "conversation.item.deleted", "item_id": "user_2"})
-        await asyncio.wait_for(update_task, timeout=1.0)
-        assert session._remote_chat_ctx.get("user_2") is None
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_update_chat_ctx_skips_textless_items_and_remaps_prev(monkeypatch):
-    # Items the server cannot store (no text content) are not sent, and any
-    # previous_item_id pointing at one is remapped to its predecessor so the
-    # server never sees an unknown previous_item_id.
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    try:
-        await session._msg_ch.recv()  # initial session.update
-        update_task = asyncio.create_task(
-            session.update_chat_ctx(
-                llm.ChatContext(
-                    [
-                        llm.ChatMessage(id="user_1", role="user", content=["first"]),
-                        llm.ChatMessage(
-                            id="img_1",
-                            role="user",
-                            content=[llm.ImageContent(image="https://example.com/a.png")],
-                        ),
-                        llm.ChatMessage(id="user_2", role="user", content=["second"]),
-                    ]
-                )
-            )
-        )
-        first_event = await session._msg_ch.recv()
-        second_event = await session._msg_ch.recv()
-        assert session._msg_ch.empty()
-
-        assert first_event["item"]["id"] == "user_1"
-        assert second_event["item"]["id"] == "user_2"
-        assert second_event["previous_item_id"] == "user_1"
-
-        _server_event(session, _item_added_echo(first_event["item"]))
-        _server_event(session, _item_added_echo(second_event["item"], "user_1"))
-        await asyncio.wait_for(update_task, timeout=1.0)
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_update_chat_ctx_rebuilds_on_head_insert(monkeypatch):
-    # The server has no insert-at-head primitive (previous_item_id=None only
-    # means append-at-tail). Prepending a new item ahead of turns the server
-    # already has (e.g. a context summary) must not be silently mapped to
-    # append-at-tail, which would misorder the conversation — it must rebuild
-    # the remote conversation in the target order instead.
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    try:
-        await session._msg_ch.recv()  # initial session.update
-        _server_event(session, _user_item_added("user_1", [{"type": "input_text", "text": "hi"}]))
-        _server_event(
-            session,
-            _item_added_echo(
-                {
-                    "id": "asst_1",
-                    "object": "realtime.item",
-                    "type": "message",
-                    "role": "assistant",
-                    "status": "completed",
-                    "content": [{"type": "text", "text": "hello"}],
-                },
-                "user_1",
-            ),
-        )
-        assert len(session.chat_ctx.items) == 2
-
-        update_task = asyncio.create_task(
-            session.update_chat_ctx(
-                llm.ChatContext(
-                    [
-                        llm.ChatMessage(id="summary_1", role="assistant", content=["Summary."]),
-                        llm.ChatMessage(id="user_1", role="user", content=["hi"]),
-                        llm.ChatMessage(id="asst_1", role="assistant", content=["hello"]),
-                    ]
-                )
-            )
-        )
-
-        delete_1 = await session._msg_ch.recv()
-        delete_2 = await session._msg_ch.recv()
-        assert delete_1["type"] == "conversation.item.delete"
-        assert delete_2["type"] == "conversation.item.delete"
-        assert {delete_1["item_id"], delete_2["item_id"]} == {"user_1", "asst_1"}
-
-        create_summary = await session._msg_ch.recv()
-        create_user = await session._msg_ch.recv()
-        create_asst = await session._msg_ch.recv()
-        assert session._msg_ch.empty()
-
-        assert create_summary["item"]["id"] == "summary_1"
-        assert create_summary["previous_item_id"] is None
-        assert create_user["item"]["id"] == "user_1"
-        assert create_user["previous_item_id"] == "summary_1"
-        assert create_asst["item"]["id"] == "asst_1"
-        assert create_asst["previous_item_id"] == "user_1"
-
-        _server_event(
-            session, {"type": "conversation.item.deleted", "item_id": delete_1["item_id"]}
-        )
-        _server_event(
-            session, {"type": "conversation.item.deleted", "item_id": delete_2["item_id"]}
-        )
-        _server_event(session, _item_added_echo(create_summary["item"]))
-        _server_event(session, _item_added_echo(create_user["item"], "summary_1"))
-        _server_event(session, _item_added_echo(create_asst["item"], "user_1"))
-        await asyncio.wait_for(update_task, timeout=1.0)
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_commit_audio_skips_short_buffers(monkeypatch):
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    try:
-        await session._msg_ch.recv()  # initial session.update
-
-        session._pushed_duration_s = 0.05
-        session.commit_audio()
-        assert session._msg_ch.empty()
-        assert session._pushed_duration_s == 0.05
-
-        session._pushed_duration_s = 0.11
-        session.commit_audio()
-        commit_event = await session._msg_ch.recv()
-        assert commit_event["type"] == "input_audio_buffer.commit"
-        assert session._pushed_duration_s == 0.0
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_run_ws_cancellation_preserves_cancelled_error(monkeypatch):
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    ws = _FakeWebSocket()
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    run_task = asyncio.create_task(session._run_ws(ws))
-    try:
-        await asyncio.sleep(0)
-        run_task.cancel()
-
-        with pytest.raises(asyncio.CancelledError):
-            await run_task
-    finally:
-        run_task.cancel()
-        await asyncio.gather(run_task, return_exceptions=True)
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_websocket_close_fails_pending_generate_reply():
-    ws = _FakeWebSocket()
-    model = realtime.RealtimeModel(
-        url="ws://localhost:8000/v1/realtime/",
-        api_key="test-key",
-        http_session=_FakeHTTPClient(ws),
-        conn_options=APIConnectOptions(max_retry=0, retry_interval=0.01, timeout=1.0),
-    )
-    session = model.session()
-    errors = []
-    session.on("error", errors.append)
-    try:
-        generation_fut = session.generate_reply()
-        for _ in range(100):
-            if any('"type": "response.create"' in sent for sent in ws.sent):
-                break
-            await asyncio.sleep(0.01)
-        assert any('"type": "response.create"' in sent for sent in ws.sent)
-
-        ws.close_event.set()
-
-        # The point is that the future is resolved at all rather than left to time
-        # out. Its message comes from the base's session-loop teardown, which fails
-        # every pending generate_reply with one generic reason; the close detail is
-        # on the error event instead, asserted below.
-        with pytest.raises(llm.RealtimeError):
-            await asyncio.wait_for(generation_fut, timeout=1.0)
-        assert session._closed is True
-        queued_before = session._msg_ch.qsize()
-        session.send_event({"type": "input_audio_buffer.clear"})
-        assert session._msg_ch.qsize() == queued_before
-        assert errors
-        assert errors[0].recoverable is False
-        assert "closed unexpectedly" in str(errors[0].error)
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_websocket_close_includes_close_code():
-    ws = _FakeWebSocket(aiohttp.WSMessage(aiohttp.WSMsgType.CLOSE, 3000, "Invalid API key"))
-    model = realtime.RealtimeModel(
-        url="ws://localhost:8000/v1/realtime/",
-        api_key="bad-key",
-        http_session=_FakeHTTPClient(ws),
-        conn_options=APIConnectOptions(max_retry=0, retry_interval=0.01, timeout=1.0),
-    )
-    session = model.session()
-    errors = []
-    session.on("error", errors.append)
-    try:
-        generation_fut = session.generate_reply()
-        for _ in range(100):
-            if any('"type": "response.create"' in sent for sent in ws.sent):
-                break
-            await asyncio.sleep(0.01)
-        assert any('"type": "response.create"' in sent for sent in ws.sent)
-
-        ws.close_event.set()
-
-        with pytest.raises(llm.RealtimeError):
-            await asyncio.wait_for(generation_fut, timeout=1.0)
-        # The close code travels on the error event, not on the pending
-        # generate_reply future -- see the note in the test above.
-        assert errors
-        assert "close_code=3000" in str(errors[0].error)
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_reconnects_and_replays_chat_ctx_after_ws_drop():
-    # First connection delivers one conversation item, then drops.
-    item_added = {
-        "type": "conversation.item.added",
-        "previous_item_id": None,
-        "item": {
-            "id": "user_1",
-            "object": "realtime.item",
-            "type": "message",
-            "role": "user",
-            "status": "completed",
-            "content": [{"type": "input_text", "text": "hello"}],
-        },
-    }
-    ws1 = _ScriptedFakeWebSocket(
-        messages=[aiohttp.WSMessage(aiohttp.WSMsgType.TEXT, json.dumps(item_added), None)]
-    )
-    ws1.close_event.set()
+        await utils.aio.cancel_and_wait(second_task)
+
+
+# --- connection lifecycle (real connection loop) -------------------------------
+
+
+async def test_boson_realtime_run_ws_cancellation_preserves_cancelled_error(open_session):
+    session = await open_session(drain=False)
+    run_task = asyncio.create_task(session._run_ws(_FakeWebSocket()))
+    await asyncio.sleep(0)
+    run_task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await run_task
+
+
+@pytest.mark.parametrize(
+    ("close_message", "detail"),
+    [
+        pytest.param(None, "closed unexpectedly", id="no-close-code"),
+        pytest.param(_ws_close(3000, "Invalid API key"), "close_code=3000", id="close-code"),
+    ],
+)
+async def test_boson_realtime_websocket_close_fails_pending_generate_reply(
+    socket_session, close_message, detail
+):
+    ws = _FakeWebSocket(close_message)
+    session = socket_session(_SequencedHTTPClient([ws]), max_retry=0)
+    errors = _collect(session, "error")
+
+    generation_fut = session.generate_reply()
+    assert await _eventually(lambda: _sent_response_create(ws))
+    ws.close_event.set()
+
+    # The point is that the future is resolved at all rather than left to time
+    # out. Its message comes from the base's session-loop teardown, which fails
+    # every pending generate_reply with one generic reason; the close detail
+    # (and close code) travels on the error event instead.
+    with pytest.raises(llm.RealtimeError):
+        await asyncio.wait_for(generation_fut, timeout=1.0)
+    assert session._closed is True
+    queued_before = session._msg_ch.qsize()
+    session.send_event({"type": "input_audio_buffer.clear"})
+    assert session._msg_ch.qsize() == queued_before
+    assert errors
+    assert errors[0].recoverable is False
+    assert detail in str(errors[0].error)
+
+
+_IDLE_TIMEOUT = {"type": "session.idle_timeout", "seconds_idle": 120}
+_MAX_DURATION_REACHED = {"type": "session.max_duration_reached", "max_duration_sec": 7200}
+
+
+@pytest.mark.parametrize(
+    ("outcomes", "connects", "recoverable", "detail"),
+    [
+        # 4429 (WS_CLOSE_CODE_ENTITLEMENT_REFUSED) is a permanent billing refusal;
+        # reconnecting cannot fix it.
+        pytest.param(
+            lambda: [_dropped_ws(close_message=_ws_close(4429, "insufficient_quota"))],
+            1,
+            [False],
+            "close_code=4429",
+            id="billing-refusal-close-code",
+        ),
+        pytest.param(
+            lambda: [_dropped_ws(close_message=_ws_close(3000, "Invalid API key"))],
+            1,
+            [False],
+            "close_code=3000",
+            id="invalid-api-key-close-code",
+        ),
+        # The server announces these and then closes: it ended the session, so
+        # there is no reconnect.
+        pytest.param(
+            lambda: [_dropped_ws([_ws_text(_IDLE_TIMEOUT)])],
+            1,
+            [False],
+            "idle timeout",
+            id="idle-timeout",
+        ),
+        pytest.param(
+            lambda: [_dropped_ws([_ws_text(_MAX_DURATION_REACHED)])],
+            1,
+            [False],
+            "max session duration",
+            id="max-duration-reached",
+        ),
+        # The initial attempt plus max_retry=2, then give up.
+        pytest.param(
+            lambda: [aiohttp.ClientConnectionError("refused") for _ in range(3)],
+            3,
+            [True, True, False],
+            "",
+            id="retries-exhausted",
+        ),
+    ],
+)
+async def test_boson_realtime_terminal_connection_failure_closes_the_session(
+    socket_session, outcomes, connects, recoverable, detail
+):
+    # A spare connection is scripted after each case, so an unwanted reconnect
+    # would succeed (and show up in connect_urls) rather than fail.
+    client = _SequencedHTTPClient([*outcomes(), _FakeWebSocket()])
+    session = socket_session(client, max_retry=2)
+    errors = _collect(session, "error")
+
+    assert await _eventually(lambda: session._closed)
+    assert len(client.connect_urls) == connects
+    assert [e.recoverable for e in errors] == recoverable
+    assert detail in str(errors[-1].error)
+    assert session._msg_ch.closed
+
+
+async def test_boson_realtime_reconnect_replays_chat_ctx_after_ws_drop(socket_session):
+    # The first connection delivers a user turn and a tool call with its result,
+    # then drops. The server keeps no state across connections, so all of it is
+    # replayed; a replay without the call would let the model repeat it.
+    call = _item("call_item_1", "function_call", call_id="call_1", name="lookup_weather")
+    call["arguments"] = '{"location": "Paris"}'
+    output = _item("output_item_1", "function_call_output", call_id="call_1", output="sunny")
+    items = [
+        (_item("user_1", role="user", content=[{"type": "input_text", "text": "hello"}]), None),
+        (call, "user_1"),
+        (output, "call_item_1"),
+    ]
     ws2 = _FakeWebSocket()
-    client = _SequencedHTTPClient([ws1, ws2])
-    model = realtime.RealtimeModel(
-        url="ws://localhost:8000/v1/realtime/",
-        api_key="test-key",
-        http_session=client,
-        conn_options=APIConnectOptions(max_retry=3, retry_interval=0.01, timeout=1.0),
+    client = _SequencedHTTPClient(
+        [_dropped_ws([_ws_text(_item_added_echo(item, prev)) for item, prev in items]), ws2]
     )
-    session = model.session()
+    session = socket_session(client)
     # A response active on the first connection when it drops never sees its
     # response.done on the new connection; reconnection must not carry the id
     # over as "current" (it can no longer match anything real).
     session._current_response_id = "resp_stale"
-    errors = []
-    reconnected = []
-    session.on("error", errors.append)
-    session.on("session_reconnected", reconnected.append)
-    try:
-        for _ in range(200):
-            if reconnected:
-                break
-            await asyncio.sleep(0.01)
-        assert reconnected
-        assert len(client.connect_urls) == 2
-        assert session._current_response_id is None
+    errors = _collect(session, "error")
+    reconnected = _collect(session, "session_reconnected")
 
-        # The session config is re-sent first on the new connection, then the
-        # local chat-context mirror is replayed via conversation.item.create
-        # (the server keeps no state across connections).
-        assert ws2.sent
-        reconnect_update = json.loads(ws2.sent[0])
-        assert reconnect_update["type"] == "session.update"
-        replayed = [
-            json.loads(sent)
-            for sent in ws2.sent
-            if json.loads(sent)["type"] == "conversation.item.create"
-        ]
-        assert len(replayed) == 1
-        assert replayed[0]["item"]["id"] == "user_1"
-        assert replayed[0]["item"]["content"] == [{"type": "input_text", "text": "hello"}]
+    assert await _eventually(lambda: reconnected)
+    assert len(client.connect_urls) == 2
+    assert session._current_response_id is None
 
-        # The drop surfaced as a recoverable error and the session stayed usable.
-        assert errors
-        assert errors[0].recoverable is True
-        assert session._closed is False
-        assert not session._msg_ch.closed
-    finally:
-        await session.aclose()
-        await model.aclose()
+    # The session config is re-sent first on the new connection, then the
+    # local chat-context mirror is replayed via conversation.item.create.
+    sent = [json.loads(s) for s in ws2.sent]
+    assert sent[0]["type"] == "session.update"
+    replayed = [e["item"] for e in sent if e["type"] == "conversation.item.create"]
+    assert [item["id"] for item in replayed] == ["user_1", "call_item_1", "output_item_1"]
+    assert replayed[0]["content"] == [{"type": "input_text", "text": "hello"}]
+    assert replayed[1]["type"] == "function_call"
+    assert replayed[1]["name"] == "lookup_weather"
+    assert replayed[1]["arguments"] == '{"location": "Paris"}'
+    assert replayed[2]["type"] == "function_call_output"
+    assert replayed[2]["output"] == "sunny"
+
+    # The drop surfaced as a recoverable error and the session stayed usable.
+    assert errors
+    assert errors[0].recoverable is True
+    assert session._closed is False
+    assert not session._msg_ch.closed
 
 
-@pytest.mark.asyncio
-async def test_boson_realtime_reconnect_replays_tool_calls_and_results():
-    # A replay without them would let the model repeat a call it already made.
-    def item_added(item: dict, previous_item_id: str | None) -> aiohttp.WSMessage:
-        event = {
-            "type": "conversation.item.added",
-            "previous_item_id": previous_item_id,
-            "item": {"object": "realtime.item", "status": "completed", **item},
-        }
-        return aiohttp.WSMessage(aiohttp.WSMsgType.TEXT, json.dumps(event), None)
-
-    ws1 = _ScriptedFakeWebSocket(
-        messages=[
-            item_added(
-                {
-                    "id": "user_1",
-                    "type": "message",
-                    "role": "user",
-                    "content": [{"type": "input_text", "text": "weather in Paris?"}],
-                },
-                None,
-            ),
-            item_added(
-                {
-                    "id": "call_item_1",
-                    "type": "function_call",
-                    "call_id": "call_1",
-                    "name": "lookup_weather",
-                    "arguments": '{"location": "Paris"}',
-                },
-                "user_1",
-            ),
-            item_added(
-                {
-                    "id": "output_item_1",
-                    "type": "function_call_output",
-                    "call_id": "call_1",
-                    "output": "sunny",
-                },
-                "call_item_1",
-            ),
-        ]
-    )
-    ws1.close_event.set()
-    ws2 = _FakeWebSocket()
-    client = _SequencedHTTPClient([ws1, ws2])
-    model = realtime.RealtimeModel(
-        url="ws://localhost:8000/v1/realtime/",
-        api_key="test-key",
-        http_session=client,
-        conn_options=APIConnectOptions(max_retry=3, retry_interval=0.01, timeout=1.0),
-    )
-    session = model.session()
-    reconnected = []
-    session.on("session_reconnected", reconnected.append)
-    try:
-        for _ in range(200):
-            if reconnected:
-                break
-            await asyncio.sleep(0.01)
-        assert reconnected
-
-        replayed = [
-            json.loads(sent)["item"]
-            for sent in ws2.sent
-            if json.loads(sent)["type"] == "conversation.item.create"
-        ]
-        assert [item["id"] for item in replayed] == ["user_1", "call_item_1", "output_item_1"]
-        assert replayed[1]["type"] == "function_call"
-        assert replayed[1]["name"] == "lookup_weather"
-        assert replayed[1]["arguments"] == '{"location": "Paris"}'
-        assert replayed[2]["type"] == "function_call_output"
-        assert replayed[2]["output"] == "sunny"
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.parametrize(
-    "transcription",
-    [
-        {"input_audio_transcription_model": "higgs-stt-3.1"},
-        {"input_audio_transcription": {"model": "higgs-stt-3.1"}},
-    ],
-)
-def test_boson_realtime_recycles_every_20_minutes_when_user_turns_have_text(transcription):
-    # As in the OpenAI plugin, well inside the server's own limit. The replay
-    # can put every user turn back, since each has a transcript.
-    model = realtime.RealtimeModel(api_key="test-key", **transcription)
-    assert model._opts.max_session_duration == 20 * 60
-
-
-def test_boson_realtime_keeps_one_connection_when_user_turns_have_no_text():
-    # Without transcripts a replay drops every user turn, so a recycle would
-    # make the model forget the user every 20 minutes.
-    model = realtime.RealtimeModel(api_key="test-key")
-    assert model._opts.max_session_duration is None
-
-
-def test_boson_realtime_explicit_max_session_duration_overrides_the_default():
-    with_text = realtime.RealtimeModel(
-        api_key="test-key",
-        input_audio_transcription_model="higgs-stt-3.1",
-        max_session_duration=None,
-    )
-    assert with_text._opts.max_session_duration is None
-    without_text = realtime.RealtimeModel(api_key="test-key", max_session_duration=600)
-    assert without_text._opts.max_session_duration == 600
-
-
-@pytest.mark.parametrize("max_session_duration", [0, -1.0, float("nan")])
-def test_boson_realtime_rejects_a_non_positive_max_session_duration(max_session_duration):
-    # The base would recycle at once, every time: a reconnect loop.
-    with pytest.raises(ValueError, match="max_session_duration"):
-        realtime.RealtimeModel(api_key="test-key", max_session_duration=max_session_duration)
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_recycles_the_connection_after_max_session_duration():
+async def test_boson_realtime_recycles_the_connection_after_max_session_duration(socket_session):
     ws1 = _FakeWebSocket()  # stays open: only the timer ends it
     ws2 = _FakeWebSocket()
     client = _SequencedHTTPClient([ws1, ws2])
-    model = realtime.RealtimeModel(
-        url="ws://localhost:8000/v1/realtime/",
-        api_key="test-key",
-        http_session=client,
-        max_session_duration=0.05,
-        conn_options=APIConnectOptions(max_retry=3, retry_interval=0.01, timeout=1.0),
-    )
-    session = model.session()
-    errors = []
-    reconnected = []
+    session = socket_session(client, max_session_duration=0.05)
+    errors = _collect(session, "error")
+    reconnected: list = []
 
     def on_reconnected(event):
         # One recycle is enough; stop the timer before the new connection runs.
         session._opts.max_session_duration = None
         reconnected.append(event)
 
-    session.on("error", errors.append)
     session.on("session_reconnected", on_reconnected)
-    try:
-        await session.update_instructions("Be thorough.")
-        for _ in range(200):
-            if reconnected:
-                break
-            await asyncio.sleep(0.01)
-        assert reconnected
-        assert ws1.closed
-        assert len(client.connect_urls) == 2
-        # A planned recycle, not a failure.
-        assert errors == []
-        # The new connection holds nothing, so it gets the whole config again.
-        reconnect_update = json.loads(ws2.sent[0])
-        assert reconnect_update["type"] == "session.update"
-        assert reconnect_update["session"]["instructions"] == "Be thorough."
-    finally:
-        await session.aclose()
-        await model.aclose()
+
+    await session.update_instructions("Be thorough.")
+    assert await _eventually(lambda: reconnected)
+    assert ws1.closed
+    assert len(client.connect_urls) == 2
+    # A planned recycle, not a failure.
+    assert errors == []
+    # The new connection holds nothing, so it gets the whole config again.
+    reconnect_update = json.loads(ws2.sent[0])
+    assert reconnect_update["type"] == "session.update"
+    assert reconnect_update["session"]["instructions"] == "Be thorough."
 
 
-@pytest.mark.asyncio
-async def test_boson_realtime_tracks_server_assigned_session_id(monkeypatch):
-    monkeypatch.setattr(realtime.RealtimeSession, "_main_task", _idle_run)
-
-    model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
-    session = model.session()
-    try:
-        assert session.session_id is None
-        _server_event(
-            session,
-            {
-                "type": "session.created",
-                "event_id": "evt_1",
-                "session": {"id": "sess_server123", "object": "realtime.session"},
-            },
-        )
-        assert session.session_id == "sess_server123"
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_non_retryable_close_code_is_terminal():
-    ws = _FakeWebSocket(aiohttp.WSMessage(aiohttp.WSMsgType.CLOSE, 3000, "Invalid API key"))
-    ws.close_event.set()
-    client = _SequencedHTTPClient([ws, _FakeWebSocket()])
-    model = realtime.RealtimeModel(
-        url="ws://localhost:8000/v1/realtime/",
-        api_key="bad-key",
-        http_session=client,
-        conn_options=APIConnectOptions(max_retry=3, retry_interval=0.01, timeout=1.0),
-    )
-    session = model.session()
-    errors = []
-    session.on("error", errors.append)
-    try:
-        for _ in range(200):
-            if session._closed:
-                break
-            await asyncio.sleep(0.01)
-        assert session._closed is True
-        assert len(client.connect_urls) == 1  # no reconnect attempt
-        assert errors
-        assert errors[0].recoverable is False
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_retries_exhausted_is_terminal():
-    client = _SequencedHTTPClient(
-        [
-            aiohttp.ClientConnectionError("refused"),
-            aiohttp.ClientConnectionError("refused"),
-            aiohttp.ClientConnectionError("refused"),
-        ]
-    )
-    model = realtime.RealtimeModel(
-        url="ws://localhost:8000/v1/realtime/",
-        api_key="test-key",
-        http_session=client,
-        conn_options=APIConnectOptions(max_retry=2, retry_interval=0.01, timeout=1.0),
-    )
-    session = model.session()
-    errors = []
-    session.on("error", errors.append)
-    try:
-        for _ in range(200):
-            if session._closed:
-                break
-            await asyncio.sleep(0.01)
-        assert session._closed is True
-        assert len(client.connect_urls) == 3  # initial attempt + max_retry
-        assert [e.recoverable for e in errors] == [True, True, False]
-        assert session._msg_ch.closed
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_idle_timeout_close_is_terminal():
-    idle_event = {"type": "session.idle_timeout", "seconds_idle": 120}
-    ws = _ScriptedFakeWebSocket(
-        messages=[aiohttp.WSMessage(aiohttp.WSMsgType.TEXT, json.dumps(idle_event), None)]
-    )
-    ws.close_event.set()  # server closes right after announcing the idle timeout
-    client = _SequencedHTTPClient([ws, _FakeWebSocket()])
-    model = realtime.RealtimeModel(
-        url="ws://localhost:8000/v1/realtime/",
-        api_key="test-key",
-        http_session=client,
-        conn_options=APIConnectOptions(max_retry=3, retry_interval=0.01, timeout=1.0),
-    )
-    session = model.session()
-    errors = []
-    session.on("error", errors.append)
-    try:
-        for _ in range(200):
-            if session._closed:
-                break
-            await asyncio.sleep(0.01)
-        assert session._closed is True
-        assert len(client.connect_urls) == 1  # the server ended the session; no reconnect
-        assert errors
-        assert errors[0].recoverable is False
-        assert "idle timeout" in str(errors[0].error)
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_max_duration_close_is_terminal():
-    max_duration_event = {"type": "session.max_duration_reached", "max_duration_sec": 7200}
-    ws = _ScriptedFakeWebSocket(
-        messages=[aiohttp.WSMessage(aiohttp.WSMsgType.TEXT, json.dumps(max_duration_event), None)]
-    )
-    ws.close_event.set()  # server closes right after announcing the max duration
-    client = _SequencedHTTPClient([ws, _FakeWebSocket()])
-    model = realtime.RealtimeModel(
-        url="ws://localhost:8000/v1/realtime/",
-        api_key="test-key",
-        http_session=client,
-        conn_options=APIConnectOptions(max_retry=3, retry_interval=0.01, timeout=1.0),
-    )
-    session = model.session()
-    errors = []
-    session.on("error", errors.append)
-    try:
-        for _ in range(200):
-            if session._closed:
-                break
-            await asyncio.sleep(0.01)
-        assert session._closed is True
-        assert len(client.connect_urls) == 1  # the server ended the session; no reconnect
-        assert errors
-        assert errors[0].recoverable is False
-        assert "max session duration" in str(errors[0].error)
-    finally:
-        await session.aclose()
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_boson_realtime_pending_reply_fails_recoverably_on_reconnect():
+async def test_boson_realtime_pending_reply_fails_recoverably_on_reconnect(socket_session):
     ws1 = _FakeWebSocket()
-    ws2 = _FakeWebSocket()
-    client = _SequencedHTTPClient([ws1, ws2])
-    model = realtime.RealtimeModel(
-        url="ws://localhost:8000/v1/realtime/",
-        api_key="test-key",
-        http_session=client,
-        conn_options=APIConnectOptions(max_retry=3, retry_interval=0.01, timeout=1.0),
-    )
-    session = model.session()
-    reconnected = []
-    session.on("session_reconnected", reconnected.append)
-    try:
-        generation_fut = session.generate_reply()
-        for _ in range(100):
-            if any('"type": "response.create"' in sent for sent in ws1.sent):
-                break
-            await asyncio.sleep(0.01)
-        assert any('"type": "response.create"' in sent for sent in ws1.sent)
+    session = socket_session(_SequencedHTTPClient([ws1, _FakeWebSocket()]))
+    reconnected = _collect(session, "session_reconnected")
 
-        ws1.close_event.set()  # drop the connection with the reply in flight
+    generation_fut = session.generate_reply()
+    assert await _eventually(lambda: _sent_response_create(ws1))
+    ws1.close_event.set()  # drop the connection with the reply in flight
 
-        with pytest.raises(llm.RealtimeError, match="session reconnection"):
-            await asyncio.wait_for(generation_fut, timeout=2.0)
-        for _ in range(200):
-            if reconnected:
-                break
-            await asyncio.sleep(0.01)
-        assert reconnected
-        assert session._closed is False
-    finally:
-        await session.aclose()
-        await model.aclose()
+    with pytest.raises(llm.RealtimeError, match="session reconnection"):
+        await asyncio.wait_for(generation_fut, timeout=2.0)
+    assert await _eventually(lambda: reconnected)
+    assert session._closed is False
 
 
-@pytest.mark.asyncio
 async def test_boson_realtime_aclose_does_not_report_the_main_task_error_twice(monkeypatch):
     # aclose cancels the main task instead of awaiting it, so closing never waits
     # out a retry backoff or a connect in flight. _main_task re-raises on terminal
@@ -3868,13 +1985,9 @@ async def test_boson_realtime_aclose_does_not_report_the_main_task_error_twice(m
     reports: list[str] = []
     loop.set_exception_handler(lambda _loop, ctx: reports.append(ctx.get("message", "")))
     try:
-        model = realtime.RealtimeModel(url="ws://localhost:8000/v1/realtime/", api_key="test-key")
+        model = _model()
         session = model.session()
-        for _ in range(50):
-            if session._main_atask.done():
-                break
-            await asyncio.sleep(0.01)
-        assert session._main_atask.done()
+        assert await _eventually(session._main_atask.done)
 
         await session.aclose()
         await model.aclose()
