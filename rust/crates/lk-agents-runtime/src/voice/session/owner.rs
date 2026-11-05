@@ -136,7 +136,9 @@ impl Inner {
             Some(thread) => trace.with_conversation(Some(&thread)),
             None => trace,
         };
-        let bindings = host.prepare(&telemetry::Cx::NONE).await?.bindings();
+        // Startup work runs under `session_start`, reserved before the driver opens it.
+        let starting = trace.clone().under::<telemetry::SessionStart>(opening.start.context);
+        let bindings = host.prepare(&starting).await?.bindings();
         if let Some(recorder) = bindings.recorder {
             // Retain it before waiting for readiness: even a failed open must be finalized.
             let _ = self.recorder.set(recorder.clone());
@@ -145,7 +147,6 @@ impl Inner {
         let mut args = bindings.args;
         if let Some(hooks) = args.hooks.clone() {
             // The first agent's activity starts here: its toolsets are set up inside it.
-            let starting = trace.clone().under::<telemetry::SessionStart>(opening.start.context);
             let activity = telemetry::reserve::<telemetry::StartAgentActivity>(&starting);
             opening.activity = Some(activity);
             let span = starting.under::<telemetry::StartAgentActivity>(activity.context);
@@ -177,6 +178,7 @@ impl Inner {
                 .map_err(|error| HostError::new(error.to_string()))?,
         );
         session.attach_recorder(self.recorder.get().cloned());
+        let in_session = trace.clone().under::<telemetry::AgentSession>(opening.session.context);
         session.trace_under(trace, job_ids, opening);
         let _ = self.session.set(session.clone());
         let initial = self.select(initial_agent);
@@ -186,7 +188,7 @@ impl Inner {
             lk_agents_abi::voice::session::StartFailed::Host(error) => error,
             error => HostError::new(error.to_string()),
         })?;
-        host.started(&telemetry::Cx::NONE).await
+        host.started(&in_session).await
     }
 
     async fn finish_recording(&self) -> Result<(), RecordingFailure> {

@@ -401,9 +401,9 @@ TELEMETRY_ITEM_USE = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?use\s+[\w:]*\btel
 
 
 def telemetry_module(path: str) -> bool:
-    """A telemetry module: under a `telemetry` directory, or a `telemetry.rs` or `spans.rs` file."""
+    """A telemetry module: under a `telemetry` directory, or a `telemetry.rs` file."""
     parts = Path(path).parts
-    return "telemetry" in parts[:-1] or parts[-1] in ("telemetry.rs", "spans.rs")
+    return "telemetry" in parts[:-1] or parts[-1] == "telemetry.rs"
 
 
 def telemetry_spelling_violations(root: Path, paths: list[str]) -> set[str]:

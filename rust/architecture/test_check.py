@@ -406,7 +406,11 @@ class HostCallContracts(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             files = {
-                # Violations: an item, and a group, imported by short name in logic code.
+                # Violations: an item, and a group, imported by short name in logic code; an
+                # entity's span code is logic code too.
+                "rust/crates/lk-agents-voice/src/agent_activity/spans.rs": (
+                    "use crate::telemetry::Stt;\n"
+                ),
                 "rust/crates/lk-agents-voice/src/turn.rs": (
                     "use lk_agents_abi::telemetry::spans::user_turn::UserTurnOutcome;\n"
                 ),
@@ -421,9 +425,6 @@ class HostCallContracts(unittest.TestCase):
                 ),
                 "rust/crates/lk-agents-voice/src/telemetry/user_turn.rs": (
                     "use lk_agents_abi::telemetry::spans::user_turn::UserTurn;\n"
-                ),
-                "rust/crates/lk-agents-voice/src/agent_activity/spans.rs": (
-                    "use crate::telemetry::Stt;\n"
                 ),
                 "rust/crates/lk-agents-voice/src/speech_tests.rs": (
                     "use lk_agents_core::telemetry::span::Trace;\n"
@@ -464,6 +465,7 @@ class HostCallContracts(unittest.TestCase):
             self.assertEqual(
                 telemetry_spelling_violations(root, list(files)),
                 {
+                    "telemetry-use:rust/crates/lk-agents-voice/src/agent_activity/spans.rs",
                     "telemetry-use:rust/crates/lk-agents-voice/src/turn.rs",
                     "telemetry-use:rust/crates/lk-agents-core/src/run.rs",
                     "telemetry-use:rust/crates/lk-agents-runtime/src/voice/io.rs",
