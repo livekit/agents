@@ -23,11 +23,6 @@ classifiers = [
 ]
 dependencies = [
     "livekit-agents-next[openai]>=1.8.6",
-    # SDK 3.x sends requests through httpx2, where _PayloadTransport re-encodes them.
-    "openai>=3.19,<4",
-    "httpx2>=2.12,<3",
-    "msgpack>=1.0",
-    "msgpack-types>=0.7.0",
 ]
 
 [project.urls]

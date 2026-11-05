@@ -1,16 +1,14 @@
 from __future__ import annotations
 
-import gzip
 from typing import Any
 
-import httpx2 as httpx
 import msgpack
-import openai
 import pytest
 
 from livekit.agents import llm
 from livekit.plugins.cerebras import LLM
-from livekit.plugins.cerebras.llm import _PayloadTransport
+
+from .utils.chat_completions import Received, serve
 
 pytestmark = pytest.mark.unit
 
@@ -24,82 +22,52 @@ data: [DONE]
 """
 
 
-class _MockChatCompletionsTransport(httpx.AsyncBaseTransport):
-    def __init__(self) -> None:
-        self.requests: list[httpx.Request] = []
-
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        await request.aread()
-        self.requests.append(request)
-        return httpx.Response(
-            200,
-            headers={"content-type": "text/event-stream"},
-            content=_STREAM_RESPONSE,
-            request=request,
-        )
-
-
-async def _capture_chat_request(max_completion_tokens: int | None = None) -> httpx.Request:
-    transport = _MockChatCompletionsTransport()
-    # The request goes through the SDK's per-request `with_options` copy, which must keep the
-    # payload encoding.
-    client = openai.AsyncClient(
-        api_key="test-key",
-        base_url="https://api.cerebras.ai/v1",
-        http_client=httpx.AsyncClient(
-            transport=_PayloadTransport(transport, use_msgpack=True, use_gzip=True)
-        ),
-    )
-    if max_completion_tokens is None:
-        model = LLM(model="gpt-oss-120b", api_key="test-key", client=client)
-    else:
-        model = LLM(
-            model="gpt-oss-120b",
-            api_key="test-key",
-            client=client,
-            max_completion_tokens=max_completion_tokens,
-        )
-
-    chat_ctx = llm.ChatContext()
-    chat_ctx.add_message(role="user", content="hi")
-    try:
-        stream = model.chat(chat_ctx=chat_ctx)
+async def _capture_chat_request(**options: Any) -> Received:
+    async with serve(_STREAM_RESPONSE) as (base_url, received):
+        model = LLM(model="gpt-oss-120b", api_key="test-key", base_url=base_url, **options)
+        chat_ctx = llm.ChatContext()
+        chat_ctx.add_message(role="user", content="hi")
         try:
-            async for _ in stream:
-                pass
+            async with model.chat(chat_ctx=chat_ctx) as stream:
+                async for _ in stream:
+                    pass
         finally:
-            await stream.aclose()
-    finally:
-        await model.aclose()
-        await client.close()
-
-    assert len(transport.requests) == 1
-    return transport.requests[0]
+            await model.aclose()
+    assert len(received) == 1
+    return received[0]
 
 
-def _request_payload(request: httpx.Request) -> dict[str, Any]:
-    body = gzip.decompress(request.content)
-    payload = msgpack.unpackb(body, raw=False)
+def _payload(request: Received) -> dict[str, Any]:
+    payload = msgpack.unpackb(request.body, raw=False)
     assert isinstance(payload, dict)
     return payload
 
 
+# Catches: the Cerebras defaults (gzip and msgpack) not reaching the native request, or an
+# option missing from the encoded body.
 @pytest.mark.asyncio
 async def test_max_completion_tokens_reaches_compressed_msgpack_request() -> None:
     request = await _capture_chat_request(max_completion_tokens=321)
 
     assert request.headers["content-type"] == "application/vnd.msgpack"
     assert request.headers["content-encoding"] == "gzip"
-    assert _request_payload(request)["max_completion_tokens"] == 321
+    assert request.headers["authorization"] == "Bearer test-key"
+    assert _payload(request)["max_completion_tokens"] == 321
 
 
 @pytest.mark.asyncio
 async def test_omitted_max_completion_tokens_does_not_change_request() -> None:
-    request_without_limit = await _capture_chat_request()
-    request_with_limit = await _capture_chat_request(max_completion_tokens=321)
-    payload_without_limit = _request_payload(request_without_limit)
-    payload_with_limit = _request_payload(request_with_limit)
+    without_limit = _payload(await _capture_chat_request())
+    with_limit = _payload(await _capture_chat_request(max_completion_tokens=321))
 
-    assert "max_completion_tokens" not in payload_without_limit
-    assert payload_with_limit.pop("max_completion_tokens") == 321
-    assert payload_with_limit == payload_without_limit
+    assert "max_completion_tokens" not in without_limit
+    assert with_limit.pop("max_completion_tokens") == 321
+    assert with_limit == without_limit
+
+
+@pytest.mark.asyncio
+async def test_plain_json_when_both_encodings_are_off() -> None:
+    request = await _capture_chat_request(gzip_compression=False, msgpack_encoding=False)
+
+    assert request.headers["content-type"] == "application/json"
+    assert "content-encoding" not in request.headers

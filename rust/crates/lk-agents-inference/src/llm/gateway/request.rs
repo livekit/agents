@@ -1,8 +1,9 @@
-//! Gateway request composition over the shared agent core's formatting algorithms.
+//! The `chat.completions.create` request, over the shared agent core's formatting algorithms:
+//! to the LiveKit Inference gateway, or straight to a provider with its own key.
 
 use crate::headers::{Headers, identification_headers};
 use crate::llm::request::ChatArgs;
-use crate::llm::{LlmOptions, models, request};
+use crate::llm::{Auth, BodyEncoding, LlmOptions, models, request};
 use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::llm::provider_format::ImageResolver;
 use lk_agents_abi::{ChatContext, ToolSpec};
@@ -11,13 +12,21 @@ use serde_json::Value;
 #[cfg(test)]
 use serde_json::json;
 
-/// `ToolContext.parse_function_tools("openai", strict=True)`; the gateway always uses strict.
-pub fn tool_schemas(tools: &[ToolSpec]) -> Result<Vec<Value>, ApiError> {
+/// `ToolContext.parse_function_tools("openai", strict=strict)`. Chat completions take client
+/// functions only: a provider's server-side tools belong to its own APIs.
+pub fn tool_schemas(tools: &[ToolSpec], strict: bool) -> Result<Vec<Value>, ApiError> {
     tools
         .iter()
-        // The inference gateway's chat-completions endpoint supports client functions only.
         .filter(|tool| tool.provider_tool.is_none())
         .map(|tool| {
+            if !strict {
+                return Ok(Value::Object(lk_agents_core::llm::schema::build_legacy_openai_schema(
+                    &tool.name,
+                    Some(&tool.description),
+                    tool.json_schema.clone(),
+                    false,
+                )));
+            }
             lk_agents_core::llm::schema::build_strict_openai_schema(
                 &tool.name,
                 Some(&tool.description),
@@ -30,8 +39,9 @@ pub fn tool_schemas(tools: &[ToolSpec]) -> Result<Vec<Value>, ApiError> {
 }
 
 /// The `chat.completions.create` exchange for one request: the body from the conversation, the
-/// tools and the composed kwargs; the headers from `extra_headers`, the job's identification, the
-/// provider pin and `bearer`, the gateway token the runtime signed.
+/// tools and the composed kwargs (`extra_body` merged into it, `extra_query` onto the URL); the
+/// headers from `extra_headers`, then, on the gateway, the job's identification and the provider
+/// pin, and `bearer`.
 pub fn build_request(
     opts: &LlmOptions,
     identification: Option<&Headers>,
@@ -46,36 +56,74 @@ pub fn build_request(
     // tool list as passed to `chat()`.
     models::drop_unsupported_params(&opts.model, &mut extra, !tools.is_empty());
     let extra_headers = extra.remove("extra_headers");
+    let extra_body = extra.remove("extra_body");
+    let extra_query = extra.remove("extra_query");
 
     let formatted = lk_agents_core::llm::provider_format::openai::to_chat_ctx(chat_ctx, images)
         .map_err(|e| ApiError::new(format!("failed to format chat context: {e}")))?;
-    let schemas = tool_schemas(tools)?;
-    let body = request::build_body(&opts.model, formatted.messages, &schemas, extra);
+    let schemas = tool_schemas(tools, opts.strict_tools)?;
+    let mut body = request::build_body(&opts.model, formatted.messages, &schemas, extra);
+    if let Some(Value::Object(fields)) = extra_body {
+        body.extend(fields);
+    }
 
     // `extra_headers` (the composed kwarg, so the instance's replaces the call's), overlaid
-    // with the job's identification, the provider pin and the bearer.
+    // with the gateway's identification and provider pin, and the bearer.
     let mut headers: Headers = match extra_headers {
-        Some(serde_json::Value::Object(map)) => map
-            .into_iter()
-            .map(|(k, v)| (k, v.as_str().map_or_else(|| v.to_string(), str::to_owned)))
-            .collect(),
+        Some(Value::Object(map)) => map.into_iter().map(|(k, v)| (k, text(v))).collect(),
         _ => Headers::new(),
     };
-    let class = args.inference_class.as_deref().or(opts.inference_class.as_deref());
-    for (name, value) in
-        identification_headers(identification, class, opts.provider.as_deref()).into_vec()
-    {
-        headers.set(name, value);
+    if let Auth::Gateway { .. } = opts.auth {
+        let class = args.inference_class.as_deref().or(opts.inference_class.as_deref());
+        for (name, value) in
+            identification_headers(identification, class, opts.provider.as_deref()).into_vec()
+        {
+            headers.set(name, value);
+        }
     }
     headers.set("Authorization", format!("Bearer {bearer}"));
-    headers.set("Content-Type", "application/json");
+    let body = encode_body(&Value::Object(body), opts.body, &mut headers)?;
 
+    let mut url = url::Url::parse(&request::completions_url(&opts.base_url))
+        .map_err(|e| ApiError::new(format!("invalid base_url {:?}: {e}", opts.base_url)))?;
+    if let Some(Value::Object(query)) = extra_query {
+        url.query_pairs_mut().extend_pairs(query.into_iter().map(|(k, v)| (k, text(v))));
+    }
     Ok(HttpRequest {
-        url: request::completions_url(&opts.base_url),
+        url: url.into(),
         headers: headers.into_vec(),
-        body: serde_json::to_vec(&serde_json::Value::Object(body))
-            .map_err(|e| ApiError::new(e.to_string()))?,
+        body,
     })
+}
+
+/// The body's bytes as `encoding` asks, with the headers that name it.
+fn encode_body(
+    body: &Value,
+    encoding: BodyEncoding,
+    headers: &mut Headers,
+) -> Result<Vec<u8>, ApiError> {
+    use std::io::Write;
+
+    let invalid = |e: String| ApiError::new(format!("cannot encode the request: {e}"));
+    let mut bytes = if encoding.msgpack {
+        headers.set("Content-Type", "application/vnd.msgpack");
+        rmp_serde::to_vec_named(body).map_err(|e| invalid(e.to_string()))?
+    } else {
+        headers.set("Content-Type", "application/json");
+        serde_json::to_vec(body).map_err(|e| invalid(e.to_string()))?
+    };
+    if encoding.gzip {
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::new(5));
+        gz.write_all(&bytes).map_err(|e| invalid(e.to_string()))?;
+        bytes = gz.finish().map_err(|e| invalid(e.to_string()))?;
+        headers.set("Content-Encoding", "gzip");
+    }
+    Ok(bytes)
+}
+
+/// A header or query value: a string as itself, anything else as its JSON.
+fn text(value: Value) -> String {
+    value.as_str().map_or_else(|| value.to_string(), str::to_owned)
 }
 
 #[cfg(test)]
@@ -88,9 +136,11 @@ mod tests {
             model: "openai/gpt-4o".into(),
             provider: None,
             base_url: "https://gw/v1".into(),
-            api_key: "k".into(),
-            api_secret: "s".into(),
+            auth: Auth::Gateway { api_key: "k".into(), api_secret: "s".into() },
             inference_class: None,
+            strict_tools: true,
+            body: Default::default(),
+            label: "llm".into(),
             extra_kwargs: Default::default(),
         }
     }
@@ -166,6 +216,80 @@ mod tests {
         assert_eq!(header(&request, "X-LiveKit-Inference-Provider"), Some("openai"));
     }
 
+    // Catches: a LiveKit header or gateway token reaching a provider, `extra_body` sent as a
+    // field instead of merged, `extra_query` dropped, or a strict schema a provider refuses.
+    #[test]
+    fn a_provider_key_request_is_plain_chat_completions() {
+        let opts = LlmOptions {
+            base_url: "https://api.example.com/v1".into(),
+            auth: Auth::ProviderKey("sk".into()),
+            provider: Some("openai".into()),
+            strict_tools: false,
+            extra_kwargs: [
+                ("extra_body".to_owned(), json!({"provider": {"order": ["a"]}})),
+                ("extra_query".to_owned(), json!({"api-version": "1"})),
+                ("extra_headers".to_owned(), json!({"X-Title": "app"})),
+            ]
+            .into_iter()
+            .collect(),
+            ..opts()
+        };
+        let ident: Headers = [("X-LiveKit-Job-ID".to_owned(), "AJ_1".to_owned())].into_iter().collect();
+        let tool = ToolSpec {
+            provider_tool: None,
+            name: "lookup".into(),
+            description: String::new(),
+            json_schema: json!({"type": "object", "properties": {"q": {"type": "string"}}}),
+            flags: Default::default(),
+        };
+        let request = build_request(
+            &opts,
+            Some(&ident),
+            &NoImages,
+            &ChatContext::default(),
+            &[tool],
+            ChatArgs::default(),
+            &opts.auth.bearer().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(request.url, "https://api.example.com/v1/chat/completions?api-version=1");
+        assert_eq!(header(&request, "Authorization"), Some("Bearer sk"));
+        assert_eq!(header(&request, "X-Title"), Some("app"));
+        assert!(request.headers.iter().all(|(k, _)| !k.starts_with("X-LiveKit")));
+        let body: Value = serde_json::from_slice(&request.body).unwrap();
+        assert_eq!(body["provider"], json!({"order": ["a"]}));
+        assert!(body.get("extra_body").is_none() && body.get("extra_query").is_none());
+        assert!(body["tools"][0]["function"].get("strict").is_none());
+    }
+
+    // Catches: a compressed or msgpack body sent under a JSON content type (or the reverse),
+    // or a body that does not decode back to the request.
+    #[test]
+    fn an_encoded_body_names_its_encoding_and_round_trips() {
+        let opts = LlmOptions { body: BodyEncoding { msgpack: true, gzip: true }, ..opts() };
+        let request = build_request(
+            &opts,
+            None,
+            &NoImages,
+            &ChatContext::default(),
+            &[],
+            ChatArgs::default(),
+            "t",
+        )
+        .unwrap();
+        assert_eq!(header(&request, "Content-Type"), Some("application/vnd.msgpack"));
+        assert_eq!(header(&request, "Content-Encoding"), Some("gzip"));
+        let mut packed = Vec::new();
+        std::io::Read::read_to_end(
+            &mut flate2::read::GzDecoder::new(request.body.as_slice()),
+            &mut packed,
+        )
+        .unwrap();
+        let body: Value = rmp_serde::from_slice(&packed).unwrap();
+        assert_eq!(body["model"], json!("openai/gpt-4o"));
+        assert_eq!(body["stream"], json!(true));
+    }
+
     #[test]
     fn gateway_chat_completions_ignores_all_server_side_provider_declarations() {
         for family in [None, Some("openai"), Some("xai"), Some("gemini"), Some("mistral")] {
@@ -179,7 +303,7 @@ mod tests {
                     payload: json!({"type": "web_search"}),
                 }),
             };
-            assert!(tool_schemas(&[declaration]).unwrap().is_empty());
+            assert!(tool_schemas(&[declaration], true).unwrap().is_empty());
         }
     }
 
@@ -193,7 +317,7 @@ mod tests {
             json_schema: json!({"type": "object", "properties": {"q": {"type": "string"}}}),
             flags: Default::default(),
         };
-        let built = tool_schemas(std::slice::from_ref(&tool)).expect("a usable schema");
+        let built = tool_schemas(std::slice::from_ref(&tool), true).expect("a usable schema");
         assert_eq!(built.len(), 1);
         assert_eq!(built[0]["type"], json!("function"));
         assert_eq!(built[0]["function"]["name"], json!("lookup"));
@@ -201,6 +325,6 @@ mod tests {
         assert_eq!(built[0]["function"]["description"], json!("look it up"));
         assert_eq!(built[0]["function"]["parameters"]["additionalProperties"], json!(false));
         assert_eq!(built[0]["function"]["parameters"]["required"], json!(["q"]));
-        assert!(tool_schemas(&[]).unwrap().is_empty());
+        assert!(tool_schemas(&[], true).unwrap().is_empty());
     }
 }

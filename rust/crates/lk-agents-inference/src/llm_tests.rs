@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use lk_agents_abi::errors::{ApiErrorKind, TimeoutPhase};
 use lk_agents_abi::{ChatContext, Clock, Closed};
-use lk_agents_inference::llm::LlmOptions;
+use lk_agents_inference::llm::{Auth, LlmOptions};
 use lk_agents_inference::llm::gateway::{GatewayLlm, LlmChunks};
 use lk_agents_inference::llm::machine::RequestPolicy;
 use lk_agents_net::clock::RealClock;
@@ -145,10 +145,12 @@ fn llm(peer: &Peer) -> GatewayLlm {
     let opts = LlmOptions {
         model: "openai/gpt-4o".into(),
         base_url: peer.url.clone(),
-        api_key: "key".into(),
-        api_secret: "secret".into(),
+        auth: Auth::Gateway { api_key: "key".into(), api_secret: "secret".into() },
         provider: None,
         inference_class: None,
+        strict_tools: true,
+        body: Default::default(),
+        label: "llm".into(),
         extra_kwargs: Default::default(),
     };
     let http = Arc::new(GatewayHttp::new().unwrap());

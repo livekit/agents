@@ -14,16 +14,14 @@
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import platform
-
-import httpx2 as httpx
-import openai
-from openai.types import ReasoningEffort
-from openai.types.chat import completion_create_params
+from typing import Any
 
 from livekit.agents import __version__ as livekit_version, llm
-from livekit.agents.llm import ChatContext, ToolChoice, utils as llm_utils
+from livekit.agents.inference.llm import ReasoningEffort
+from livekit.agents.llm import ChatContext, ToolChoice
 from livekit.agents.llm.chat_context import ImageContent
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -32,7 +30,7 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
-from livekit.plugins.openai.llm import LLM as OpenAILLM, LLMStream
+from livekit.plugins.openai.llm import LLM as OpenAILLM
 
 from .models import SarvamLLMModels
 
@@ -162,7 +160,6 @@ class LLM(OpenAILLM):
         model: str | SarvamLLMModels = "sarvam-105b",
         api_key: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
-        client: openai.AsyncClient | None = None,
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
@@ -177,7 +174,6 @@ class LLM(OpenAILLM):
         presence_penalty: NotGivenOr[float] = NOT_GIVEN,
         extra_headers: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         extra_body: NotGivenOr[dict[str, object]] = NOT_GIVEN,
-        timeout: httpx.Timeout | None = None,
     ) -> None:
         """
         Create a new instance of Sarvam LLM.
@@ -234,7 +230,6 @@ class LLM(OpenAILLM):
             model=validated_model,
             api_key=sarvam_api_key,
             base_url=resolved_base_url,
-            client=client,
             user=user,
             temperature=temperature,
             top_p=top_p,
@@ -242,7 +237,6 @@ class LLM(OpenAILLM):
             reasoning_effort=effective_reasoning_effort,
             extra_headers=merged_headers,
             extra_body=filtered_body if filtered_body else NOT_GIVEN,
-            timeout=timeout,
         )
 
         # Track the API key and version for runtime model switching
@@ -252,10 +246,6 @@ class LLM(OpenAILLM):
     # ------------------------------------------------------------------
     # Public overrides
     # ------------------------------------------------------------------
-
-    @property
-    def model(self) -> str:
-        return self._opts.model
 
     @property
     def provider(self) -> str:
@@ -278,16 +268,15 @@ class LLM(OpenAILLM):
         new_model = _validate_model(model)
         new_version = _api_version(new_model)
 
-        if new_version != self._sarvam_api_version:
-            # Endpoint changed — recreate the client pointing at the new URL
-            new_base_url = _resolve_base_url(new_model)
-            self._client = _create_sarvam_client(
-                api_key=self._sarvam_api_key,
-                base_url=new_base_url,
-            )
-            self._sarvam_api_version = new_version
-
-        self._opts.model = new_model
+        if new_version == self._sarvam_api_version:
+            super().update_options(model=new_model)
+            return
+        # Endpoint changed: the next chat builds the client for the new URL
+        assert self._endpoint is not None
+        self._endpoint = dataclasses.replace(self._endpoint, base_url=_resolve_base_url(new_model))
+        self._model_name = new_model
+        self._sarvam_api_version = new_version
+        self.__dict__.pop("_native", None)
 
     def chat(
         self,
@@ -297,11 +286,9 @@ class LLM(OpenAILLM):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
-        response_format: NotGivenOr[
-            completion_create_params.ResponseFormat | type[llm_utils.ResponseFormatT]
-        ] = NOT_GIVEN,
+        response_format: NotGivenOr[Any] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, object]] = NOT_GIVEN,
-    ) -> LLMStream:
+    ) -> llm.LLMStream:
         """Build a chat-completion stream with Sarvam-specific param stripping.
 
         * Strips ``stream_options``, ``max_completion_tokens``, ``service_tier``
@@ -311,7 +298,7 @@ class LLM(OpenAILLM):
         * Rejects ``tool_choice`` without a non-empty ``tools`` array.
         * Strips function calls from the history when the turn declares no tools.
         """
-        model = self._opts.model
+        model = self.model
 
         # --- Image rejection on non-vision models ---
         if model not in _VISION_MODELS and _has_image_content(chat_ctx):
@@ -323,7 +310,11 @@ class LLM(OpenAILLM):
         # --- tool_choice without tools ---
         # 'none' and 'auto' are always valid (they don't require tools).
         # 'required' and named-function tool_choice require a non-empty tools array.
-        effective_tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
+        effective_tool_choice = (
+            tool_choice
+            if is_given(tool_choice)
+            else self._extra_kwargs.get("tool_choice", NOT_GIVEN)
+        )
         effective_tools = tools or []
         if is_given(effective_tool_choice) and not effective_tools:
             if effective_tool_choice not in ("none", "auto"):
@@ -361,29 +352,3 @@ class LLM(OpenAILLM):
             response_format=response_format,
             extra_kwargs=merged_extra if merged_extra else NOT_GIVEN,
         )
-
-
-def _create_sarvam_client(
-    *,
-    api_key: str,
-    base_url: str,
-) -> openai.AsyncClient:
-    """Create an ``openai.AsyncClient`` with Sarvam auth headers."""
-    return openai.AsyncClient(
-        api_key=api_key,
-        base_url=base_url,
-        max_retries=0,
-        default_headers={
-            "api-subscription-key": api_key,
-            "User-Agent": USER_AGENT,
-        },
-        http_client=httpx.AsyncClient(
-            timeout=httpx.Timeout(connect=15.0, read=60.0, write=5.0, pool=5.0),
-            follow_redirects=True,
-            limits=httpx.Limits(
-                max_connections=50,
-                max_keepalive_connections=50,
-                keepalive_expiry=120,
-            ),
-        ),
-    )

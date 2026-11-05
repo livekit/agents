@@ -15,30 +15,20 @@
 from __future__ import annotations
 
 import os
-from dataclasses import asdict, dataclass
-from typing import Any, Literal
+from dataclasses import asdict
+from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import urlparse
 
-import httpx2 as httpx
-
-import openai
-from livekit.agents import llm
-from livekit.agents.inference.llm import LLMStream as LLMStream
-from livekit.agents.llm import (
-    ChatContext,
-    ToolChoice,
-    utils as llm_utils,
-)
+from livekit.agents import inference, llm
+from livekit.agents.inference.llm import LLMStream as LLMStream, ProviderEndpoint, ReasoningEffort
+from livekit.agents.llm import ChatContext, ToolChoice, utils as llm_utils
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     APIConnectOptions,
-    NotGiven,
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
-from openai.types import ReasoningEffort
-from openai.types.chat import ChatCompletionToolChoiceOptionParam, completion_create_params
 
 from .models import (
     CerebrasChatModels,
@@ -56,44 +46,49 @@ from .models import (
     XAIChatModels,
     supports_reasoning_effort,
 )
-from .utils import AsyncAzureADTokenProvider, http_timeout
+from .utils import AsyncAzureADTokenProvider, get_base_url
 
-lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
+if TYPE_CHECKING:
+    import httpx2 as httpx
+
+    import openai
 
 Verbosity = Literal["low", "medium", "high"]
 PromptCacheRetention = Literal["in_memory", "24h"]
 
-
-@dataclass
-class _LLMOptions:
-    model: str | ChatModels
-    user: NotGivenOr[str]
-    safety_identifier: NotGivenOr[str]
-    prompt_cache_key: NotGivenOr[str]
-    temperature: NotGivenOr[float]
-    top_p: NotGivenOr[float]
-    parallel_tool_calls: NotGivenOr[bool]
-    tool_choice: NotGivenOr[ToolChoice]
-    store: NotGivenOr[bool]
-    metadata: NotGivenOr[dict[str, str]]
-    max_completion_tokens: NotGivenOr[int]
-    service_tier: NotGivenOr[str]
-    reasoning_effort: NotGivenOr[ReasoningEffort]
-    verbosity: NotGivenOr[Verbosity]
-    prompt_cache_retention: NotGivenOr[PromptCacheRetention]
-    extra_body: NotGivenOr[dict[str, Any]]
-    extra_headers: NotGivenOr[dict[str, str]]
-    extra_query: NotGivenOr[dict[str, str]]
+_REASONING_NONE = (
+    "gpt-5.1",
+    "gpt-5.2",
+    "gpt-5.4",
+    "gpt-5.4-mini",
+    "gpt-5.5",
+    "gpt-5.6-luna",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+)
 
 
-class LLM(llm.LLM):
+def _request_options(model: str, **options: Any) -> dict[str, Any]:
+    """The given options as chat-completions kwargs: a named tool choice in its wire form, and a
+    reasoning model's lowest effort when none is given."""
+    kwargs = {name: value for name, value in options.items() if is_given(value)}
+    if "reasoning_effort" not in kwargs and supports_reasoning_effort(model):
+        kwargs["reasoning_effort"] = "none" if model in _REASONING_NONE else "minimal"
+    if "tool_choice" in kwargs:
+        kwargs["tool_choice"] = _tool_choice(kwargs["tool_choice"])
+    return kwargs
+
+
+class LLM(inference.LLM):
+    """OpenAI, or an OpenAI-compatible provider, over chat completions with the provider's own
+    key, on the core's client."""
+
     def __init__(
         self,
         *,
         model: str | ChatModels = "gpt-4.1",
         api_key: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
-        client: openai.AsyncClient | None = None,
         user: NotGivenOr[str] = NOT_GIVEN,
         safety_identifier: NotGivenOr[str] = NOT_GIVEN,
         prompt_cache_key: NotGivenOr[str] = NOT_GIVEN,
@@ -104,8 +99,6 @@ class LLM(llm.LLM):
         store: NotGivenOr[bool] = NOT_GIVEN,
         metadata: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
-        timeout: httpx.Timeout | None = None,
-        max_retries: NotGivenOr[int] = NOT_GIVEN,
         service_tier: NotGivenOr[str] = NOT_GIVEN,
         reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
         verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
@@ -114,34 +107,29 @@ class LLM(llm.LLM):
         extra_headers: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         extra_query: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         _strict_tool_schema: bool = True,
+        _gzip_body: bool = False,
+        _msgpack_body: bool = False,
     ) -> None:
         """
         Create a new instance of OpenAI LLM.
 
         ``api_key`` must be set to your OpenAI API key, either using the argument or by setting the
-        ``OPENAI_API_KEY`` environmental variable.
+        ``OPENAI_API_KEY`` environmental variable. ``base_url`` defaults to ``OPENAI_BASE_URL``,
+        else ``https://api.openai.com/v1``.
         """
-        super().__init__()
-
-        if not is_given(reasoning_effort) and supports_reasoning_effort(model):
-            if model in [
-                "gpt-5.1",
-                "gpt-5.2",
-                "gpt-5.4",
-                "gpt-5.4-mini",
-                "gpt-5.5",
-                "gpt-5.6-luna",
-                "gpt-5.6-sol",
-                "gpt-5.6-terra",
-            ]:
-                reasoning_effort = "none"
-            else:
-                reasoning_effort = "minimal"
-
-        self._opts = _LLMOptions(
-            model=model,
+        key = api_key if is_given(api_key) else os.environ.get("OPENAI_API_KEY")
+        if not key:
+            raise ValueError(
+                "OpenAI API key is required, either as argument or set"
+                " OPENAI_API_KEY environment variable"
+            )
+        options = _request_options(
+            model,
             user=user,
+            safety_identifier=safety_identifier,
+            prompt_cache_key=prompt_cache_key,
             temperature=temperature,
+            top_p=top_p,
             parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
             store=store,
@@ -149,57 +137,28 @@ class LLM(llm.LLM):
             max_completion_tokens=max_completion_tokens,
             service_tier=service_tier,
             reasoning_effort=reasoning_effort,
-            safety_identifier=safety_identifier,
-            prompt_cache_key=prompt_cache_key,
-            top_p=top_p,
             verbosity=verbosity,
             prompt_cache_retention=prompt_cache_retention,
             extra_body=extra_body,
             extra_headers=extra_headers,
             extra_query=extra_query,
         )
-        if is_given(api_key) and not api_key:
-            raise ValueError(
-                "OpenAI API key is required, either as argument or set"
-                " OPENAI_API_KEY environment variable"
-            )
-
-        self._strict_tool_schema = _strict_tool_schema
-        self._owns_client = client is None
-        self._client = client or openai.AsyncClient(
-            api_key=api_key if is_given(api_key) else None,
-            base_url=base_url if is_given(base_url) else None,
-            max_retries=max_retries if is_given(max_retries) else 0,
-            http_client=httpx.AsyncClient(
-                timeout=timeout
-                if timeout
-                else httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
-                follow_redirects=True,
-                limits=httpx.Limits(
-                    max_connections=50,
-                    max_keepalive_connections=50,
-                    keepalive_expiry=120,
-                ),
+        self._base_url = base_url if is_given(base_url) else get_base_url(None)
+        super().__init__(
+            model,
+            extra_kwargs=options,
+            _endpoint=ProviderEndpoint(
+                base_url=self._base_url,
+                api_key=key,
+                strict_tool_schema=_strict_tool_schema,
+                gzip_body=_gzip_body,
+                msgpack_body=_msgpack_body,
             ),
         )
 
-    async def _prewarm_impl(self) -> None:
-        # token-free request supported by openai and openai-compatible servers
-        await self._client.models.list()
-
-    async def aclose(self) -> None:
-        await super().aclose()
-
-        if self._owns_client:
-            await self._client.close()
-
-    @property
-    def model(self) -> str:
-        return self._opts.model
-
     @property
     def provider(self) -> str:
-        return self._client.base_url.netloc.decode("utf-8")
+        return urlparse(self._base_url).netloc
 
     @staticmethod
     def with_azure(
@@ -225,7 +184,7 @@ class LLM(llm.LLM):
         top_p: NotGivenOr[float] = NOT_GIVEN,
         verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
         max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
-    ) -> LLM:
+    ) -> llm.LLM:
         """
         This automatically infers the following arguments from their corresponding environment variables if they are not provided:
         - `api_key` from `AZURE_OPENAI_API_KEY`
@@ -236,7 +195,11 @@ class LLM(llm.LLM):
         - `azure_endpoint` from `AZURE_OPENAI_ENDPOINT`
         """  # noqa: E501
 
-        azure_client = openai.AsyncAzureOpenAI(
+        import httpx2 as httpx
+
+        import openai
+
+        client = openai.AsyncAzureOpenAI(
             max_retries=0,
             azure_endpoint=azure_endpoint,
             azure_deployment=azure_deployment,
@@ -251,10 +214,8 @@ class LLM(llm.LLM):
             if timeout
             else httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
         )  # type: ignore
-
-        llm = LLM(
-            model=model,
-            client=azure_client,
+        options = _request_options(
+            model,
             user=user,
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
@@ -266,8 +227,7 @@ class LLM(llm.LLM):
             verbosity=verbosity,
             max_completion_tokens=max_completion_tokens,
         )
-        llm._owns_client = True
-        return llm
+        return _AzureLLM(client, model, options)
 
     @staticmethod
     def with_cerebras(
@@ -275,7 +235,6 @@ class LLM(llm.LLM):
         model: str | CerebrasChatModels = "gpt-oss-120b",
         api_key: str | None = None,
         base_url: str = "https://api.cerebras.ai/v1",
-        client: openai.AsyncClient | None = None,
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
@@ -302,7 +261,6 @@ class LLM(llm.LLM):
             model=model,
             api_key=api_key,
             base_url=base_url,
-            client=client,
             user=user,
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
@@ -320,7 +278,6 @@ class LLM(llm.LLM):
         model: str | SambaNovaChatModels = "DeepSeek-R1-0528",
         api_key: str | None = None,
         base_url: str = "https://api.sambanova.ai/v1",
-        client: openai.AsyncClient | None = None,
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
@@ -347,7 +304,6 @@ class LLM(llm.LLM):
             model=model,
             api_key=api_key,
             base_url=base_url,
-            client=client,
             user=user,
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
@@ -365,7 +321,6 @@ class LLM(llm.LLM):
         model: str = "accounts/fireworks/models/llama-v3p3-70b-instruct",
         api_key: str | None = None,
         base_url: str = "https://api.fireworks.ai/inference/v1",
-        client: openai.AsyncClient | None = None,
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
@@ -392,7 +347,6 @@ class LLM(llm.LLM):
             model=model,
             api_key=api_key,
             base_url=base_url,
-            client=client,
             user=user,
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
@@ -409,7 +363,6 @@ class LLM(llm.LLM):
         model: str | XAIChatModels = "grok-3-fast",
         api_key: str | None = None,
         base_url: str = "https://api.x.ai/v1",
-        client: openai.AsyncClient | None = None,
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
@@ -435,7 +388,6 @@ class LLM(llm.LLM):
             model=model,
             api_key=api_key,
             base_url=base_url,
-            client=client,
             user=user,
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
@@ -453,7 +405,6 @@ class LLM(llm.LLM):
         model: str = "auto",
         api_key: str | None = None,
         base_url: str = "https://openrouter.ai/api/v1",
-        client: openai.AsyncClient | None = None,
         site_url: str | None = None,
         app_name: str | None = None,
         fallback_models: list[str] | None = None,
@@ -467,7 +418,6 @@ class LLM(llm.LLM):
         safety_identifier: NotGivenOr[str] = NOT_GIVEN,
         prompt_cache_key: NotGivenOr[str] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
-        timeout: httpx.Timeout | None = None,
     ) -> LLM:
         """
         Create a new instance of OpenRouter LLM.
@@ -504,7 +454,6 @@ class LLM(llm.LLM):
         return LLM(
             model=model,
             api_key=api_key,
-            client=client,
             base_url=base_url,
             user=user,
             temperature=temperature,
@@ -516,7 +465,6 @@ class LLM(llm.LLM):
             top_p=top_p,
             extra_body=or_body,
             extra_headers=default_headers,
-            timeout=timeout,
         )
 
     @staticmethod
@@ -525,7 +473,6 @@ class LLM(llm.LLM):
         model: str | DeepSeekChatModels = "deepseek-chat",
         api_key: str | None = None,
         base_url: str = "https://api.deepseek.com/v1",
-        client: openai.AsyncClient | None = None,
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
@@ -552,7 +499,6 @@ class LLM(llm.LLM):
             model=model,
             api_key=api_key,
             base_url=base_url,
-            client=client,
             user=user,
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
@@ -569,7 +515,6 @@ class LLM(llm.LLM):
         model: str | CometAPIChatModels = "gpt-5-chat-latest",
         api_key: str | None = None,
         base_url: str = "https://api.cometapi.com/v1/",
-        client: openai.AsyncClient | None = None,
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
@@ -602,7 +547,6 @@ class LLM(llm.LLM):
             model=model,
             api_key=api_key,
             base_url=base_url,
-            client=client,
             user=user,
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
@@ -619,7 +563,6 @@ class LLM(llm.LLM):
         model: str | OctoChatModels = "llama-2-13b-chat",
         api_key: str | None = None,
         base_url: str = "https://text.octoai.run/v1",
-        client: openai.AsyncClient | None = None,
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
@@ -646,7 +589,6 @@ class LLM(llm.LLM):
             model=model,
             api_key=api_key,
             base_url=base_url,
-            client=client,
             user=user,
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
@@ -662,7 +604,6 @@ class LLM(llm.LLM):
         *,
         model: str = "llama3.1",
         base_url: str = "http://localhost:11434/v1",
-        client: openai.AsyncClient | None = None,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: ToolChoice = "auto",
@@ -679,7 +620,6 @@ class LLM(llm.LLM):
             model=model,
             api_key="ollama",
             base_url=base_url,
-            client=client,
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
@@ -695,7 +635,6 @@ class LLM(llm.LLM):
         model: str = "gpt-oss-120b",
         api_key: str | None = None,
         base_url: str = "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1",
-        client: openai.AsyncClient | None = None,
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
@@ -722,7 +661,6 @@ class LLM(llm.LLM):
             model=model,
             api_key=api_key,
             base_url=base_url,
-            client=client,
             user=user,
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
@@ -739,7 +677,6 @@ class LLM(llm.LLM):
         model: str | PerplexityChatModels = "llama-3.1-sonar-small-128k-chat",
         api_key: str | None = None,
         base_url: str = "https://api.perplexity.ai",
-        client: openai.AsyncClient | None = None,
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
@@ -766,7 +703,6 @@ class LLM(llm.LLM):
             model=model,
             api_key=api_key,
             base_url=base_url,
-            client=client,
             user=user,
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
@@ -783,7 +719,6 @@ class LLM(llm.LLM):
         model: str | TogetherChatModels = "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
         api_key: str | None = None,
         base_url: str = "https://api.together.xyz/v1",
-        client: openai.AsyncClient | None = None,
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
@@ -810,7 +745,6 @@ class LLM(llm.LLM):
             model=model,
             api_key=api_key,
             base_url=base_url,
-            client=client,
             user=user,
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
@@ -827,7 +761,6 @@ class LLM(llm.LLM):
         model: str | TelnyxChatModels = "meta-llama/Meta-Llama-3.1-70B-Instruct",
         api_key: str | None = None,
         base_url: str = "https://api.telnyx.com/v2/ai",
-        client: openai.AsyncClient | None = None,
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
@@ -854,7 +787,6 @@ class LLM(llm.LLM):
             model=model,
             api_key=api_key,
             base_url=base_url,
-            client=client,
             user=user,
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
@@ -871,7 +803,6 @@ class LLM(llm.LLM):
         model: str | NebiusChatModels = "meta-llama/Meta-Llama-3.1-70B-Instruct",
         api_key: str | None = None,
         base_url: str = "https://api.studio.nebius.com/v1/",
-        client: openai.AsyncClient | None = None,
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
@@ -898,7 +829,6 @@ class LLM(llm.LLM):
             model=model,
             api_key=api_key,
             base_url=base_url,
-            client=client,
             user=user,
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
@@ -945,12 +875,43 @@ class LLM(llm.LLM):
             model=agent_id,
             api_key=api_key,
             base_url=base_url,
-            client=None,
             user=NOT_GIVEN,
             temperature=NOT_GIVEN,
             parallel_tool_calls=NOT_GIVEN,
             tool_choice=NOT_GIVEN,
         )
+
+
+def _tool_choice(choice: ToolChoice) -> Any:
+    """A tool choice in its chat-completions form."""
+    if isinstance(choice, str):
+        return choice
+    return {"type": "function", "function": {"name": choice["function"]["name"]}}
+
+
+class _AzureLLM(llm.LLM):
+    """Azure OpenAI over the openai SDK's client, whose ``api-key`` header, ``api-version`` and
+    Azure AD tokens it keeps."""
+
+    def __init__(
+        self, client: openai.AsyncAzureOpenAI, model: str, options: dict[str, Any]
+    ) -> None:
+        super().__init__()
+        self._client = client
+        self._model_name = model
+        self._options = options
+
+    @property
+    def model(self) -> str:
+        return self._model_name
+
+    @property
+    def provider(self) -> str:
+        return self._client.base_url.netloc.decode("utf-8")
+
+    async def aclose(self) -> None:
+        await super().aclose()
+        await self._client.close()
 
     def chat(
         self,
@@ -960,87 +921,21 @@ class LLM(llm.LLM):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
-        response_format: NotGivenOr[
-            completion_create_params.ResponseFormat | type[llm_utils.ResponseFormatT]
-        ] = NOT_GIVEN,
+        response_format: NotGivenOr[Any] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> LLMStream:
-        extra: dict[str, Any] = {}
-        if is_given(extra_kwargs):
-            extra.update(extra_kwargs)
-
-        if is_given(self._opts.extra_body):
-            extra["extra_body"] = self._opts.extra_body
-
-        if is_given(self._opts.extra_headers):
-            extra["extra_headers"] = self._opts.extra_headers
-
-        if is_given(self._opts.extra_query):
-            extra["extra_query"] = self._opts.extra_query
-
-        if is_given(self._opts.metadata):
-            extra["metadata"] = self._opts.metadata
-
-        if is_given(self._opts.user):
-            extra["user"] = self._opts.user
-
-        if is_given(self._opts.max_completion_tokens):
-            extra["max_completion_tokens"] = self._opts.max_completion_tokens
-
-        if is_given(self._opts.temperature):
-            extra["temperature"] = self._opts.temperature
-
-        if is_given(self._opts.service_tier):
-            extra["service_tier"] = self._opts.service_tier
-
-        if is_given(self._opts.reasoning_effort):
-            extra["reasoning_effort"] = self._opts.reasoning_effort
-
-        if is_given(self._opts.safety_identifier):
-            extra["safety_identifier"] = self._opts.safety_identifier
-
-        if is_given(self._opts.prompt_cache_key):
-            extra["prompt_cache_key"] = self._opts.prompt_cache_key
-
-        if is_given(self._opts.top_p):
-            extra["top_p"] = self._opts.top_p
-
-        if is_given(self._opts.verbosity):
-            extra["verbosity"] = self._opts.verbosity
-
-        if is_given(self._opts.prompt_cache_retention):
-            extra["prompt_cache_retention"] = self._opts.prompt_cache_retention
-
-        parallel_tool_calls = (
-            parallel_tool_calls if is_given(parallel_tool_calls) else self._opts.parallel_tool_calls
-        )
+        # the call's kwargs, the instance's over them, the call's explicit choices over both
+        extra = {**(extra_kwargs if is_given(extra_kwargs) else {}), **self._options}
         if is_given(parallel_tool_calls):
             extra["parallel_tool_calls"] = parallel_tool_calls
-
-        tool_choice = (
-            tool_choice if not isinstance(tool_choice, NotGiven) else self._opts.tool_choice
-        )
-        if not isinstance(tool_choice, NotGiven):
-            oai_tool_choice: ChatCompletionToolChoiceOptionParam
-            if not isinstance(tool_choice, str):
-                oai_tool_choice = {
-                    "type": "function",
-                    "function": {"name": tool_choice["function"]["name"]},
-                }
-                extra["tool_choice"] = oai_tool_choice
-            elif tool_choice in ("auto", "required", "none"):
-                oai_tool_choice = tool_choice
-                extra["tool_choice"] = oai_tool_choice
-
+        if is_given(tool_choice):
+            extra["tool_choice"] = _tool_choice(tool_choice)
         if is_given(response_format):
-            extra["response_format"] = llm_utils.to_openai_response_format(response_format)  # type: ignore
-
-        if conn_options.total_timeout is not None:
-            http_timeout(conn_options)
+            extra["response_format"] = llm_utils.to_openai_response_format(response_format)
         return LLMStream(
             self,
-            model=self._opts.model,
-            strict_tool_schema=self._strict_tool_schema,
+            model=self._model_name,
+            strict_tool_schema=True,
             client=self._client.with_options(max_retries=0),
             chat_ctx=chat_ctx,
             tools=tools or [],

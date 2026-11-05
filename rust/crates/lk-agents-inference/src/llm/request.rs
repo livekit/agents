@@ -28,31 +28,22 @@ pub struct ChatArgs {
     pub inference_class: Option<String>,
 }
 
-/// `LLM.chat()`'s `extra` composition. The last step is `extra.update(self._opts.extra_kwargs)`:
-/// the instance kwargs override everything passed to this call.
+/// `LLM.chat()`'s `extra` composition: the call's `extra_kwargs`, overridden by the instance's,
+/// overridden in turn by the call's explicit `parallel_tool_calls`, `tool_choice` and
+/// `response_format` (the framework's per-turn decisions, such as forbidding tools).
 pub fn compose_extra(args: &ChatArgs, opts_extra: &Map<String, Value>) -> Map<String, Value> {
     let mut extra = args.extra_kwargs.clone().unwrap_or_default();
-
-    // `parallel_tool_calls if is_given(...) else self._opts.extra_kwargs.get(..., NOT_GIVEN)`.
-    let parallel = args
-        .parallel_tool_calls
-        .or_else(|| opts_extra.get("parallel_tool_calls").and_then(Value::as_bool));
-    if let Some(parallel) = parallel {
-        extra.insert("parallel_tool_calls".into(), json!(parallel));
-    }
-
-    // Only the per-call tool choice is read: the reference's normalisation of an instance-level
-    // one is overwritten by the raw value below, so it reaches the wire verbatim.
-    if let Some(choice) = args.tool_choice.clone() {
-        extra.insert("tool_choice".into(), tool_choice_to_json(&choice));
-    }
-
-    if let Some(fmt) = args.response_format.clone() {
-        extra.insert("response_format".into(), fmt);
-    }
-
     for (k, v) in opts_extra {
         extra.insert(k.clone(), v.clone());
+    }
+    if let Some(parallel) = args.parallel_tool_calls {
+        extra.insert("parallel_tool_calls".into(), json!(parallel));
+    }
+    if let Some(choice) = &args.tool_choice {
+        extra.insert("tool_choice".into(), tool_choice_to_json(choice));
+    }
+    if let Some(fmt) = args.response_format.clone() {
+        extra.insert("response_format".into(), fmt);
     }
     extra
 }
@@ -122,20 +113,27 @@ mod tests {
         pairs.iter().map(|(k, v)| ((*k).to_owned(), v.clone())).collect()
     }
 
-    // Catches: "fixing" the precedence so per-call arguments win.
+    // Catches: an instance `tool_choice` overriding the framework's per-call one (forbidding
+    // tools while draining), or a call's `extra_kwargs` overriding the instance's.
     #[test]
-    fn the_instance_kwargs_override_the_per_call_ones() {
+    fn explicit_per_call_choices_win_and_the_instance_kwargs_beat_the_calls() {
         let args = ChatArgs {
             extra_kwargs: Some(opts(&[("temperature", json!(0.9))])),
-            tool_choice: Some(ToolChoice::Required),
+            tool_choice: Some(ToolChoice::Forbidden),
+            parallel_tool_calls: Some(false),
             ..Default::default()
         };
         let extra = compose_extra(
             &args,
-            &opts(&[("temperature", json!(0.1)), ("tool_choice", json!("none"))]),
+            &opts(&[
+                ("temperature", json!(0.1)),
+                ("tool_choice", json!("required")),
+                ("parallel_tool_calls", json!(true)),
+            ]),
         );
         assert_eq!(extra["temperature"], json!(0.1));
         assert_eq!(extra["tool_choice"], json!("none"));
+        assert_eq!(extra["parallel_tool_calls"], json!(false));
     }
 
     // Catches: passing the caller's tool_choice dict through unmodified.

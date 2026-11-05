@@ -2,21 +2,18 @@ from __future__ import annotations
 
 import anthropic
 import httpx2 as httpx
-import openai
 import pytest
 
 from livekit.agents import APIConnectOptions, APIError, APIStatusError, llm
 from livekit.plugins.anthropic import LLM as AnthropicLLM
 from livekit.plugins.google.utils import genai_http_options
 from livekit.plugins.mistralai._http import request_timeout_ms
-from livekit.plugins.openai import LLM as OpenAILLM
 
 pytestmark = pytest.mark.unit
 
 
-@pytest.mark.parametrize("provider", ["anthropic", "openai"])
 @pytest.mark.asyncio
-async def test_injected_sdk_client_sends_one_attempt_and_keeps_its_policy(provider: str) -> None:
+async def test_injected_sdk_client_sends_one_attempt_and_keeps_its_policy() -> None:
     requests: list[httpx.Request] = []
 
     async def respond(request: httpx.Request) -> httpx.Response:
@@ -24,14 +21,8 @@ async def test_injected_sdk_client_sends_one_attempt_and_keeps_its_policy(provid
         return httpx.Response(503, json={"error": {"type": "overloaded_error", "message": "busy"}})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as transport:
-        client: anthropic.AsyncClient | openai.AsyncClient
-        model: llm.LLM
-        if provider == "anthropic":
-            client = anthropic.AsyncClient(api_key="test", max_retries=4, http_client=transport)
-            model = AnthropicLLM(client=client)
-        else:
-            client = openai.AsyncClient(api_key="test", max_retries=4, http_client=transport)
-            model = OpenAILLM(client=client)
+        client = anthropic.AsyncClient(api_key="test", max_retries=4, http_client=transport)
+        model = AnthropicLLM(client=client)
         try:
             stream = model.chat(
                 chat_ctx=llm.ChatContext.empty(),

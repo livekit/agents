@@ -3,13 +3,9 @@ from __future__ import annotations
 import os
 from typing import Any
 
-import httpx2 as httpx
-import openai
-from openai.types import ReasoningEffort
-from openai.types.chat import completion_create_params
-
 from livekit.agents import llm
-from livekit.agents.llm import ChatContext, ToolChoice, utils as llm_utils
+from livekit.agents.inference.llm import ReasoningEffort
+from livekit.agents.llm import ChatContext, ToolChoice
 from livekit.agents.llm.utils import convert_mid_conversation_instructions
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -18,7 +14,7 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
-from livekit.plugins.openai import LLM as OpenAILLM, LLMStream
+from livekit.plugins.openai import LLM as OpenAILLM
 
 from .models import LLMModels
 
@@ -59,8 +55,6 @@ class LLM(OpenAILLM):
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
         base_url: NotGivenOr[str] = "https://inference.baseten.co/v1",
-        client: openai.AsyncClient | None = None,
-        timeout: httpx.Timeout | None = None,
         inline_mid_conversation_instructions: NotGivenOr[bool] = NOT_GIVEN,
     ):
         """
@@ -96,7 +90,6 @@ class LLM(OpenAILLM):
             model=model,
             api_key=api_key,
             base_url=base_url,
-            client=client,
             user=user,
             safety_identifier=safety_identifier,
             prompt_cache_key=prompt_cache_key,
@@ -104,13 +97,8 @@ class LLM(OpenAILLM):
             top_p=top_p,
             parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
-            timeout=timeout,
             reasoning_effort=reasoning_effort,
         )
-
-    @property
-    def model(self) -> str:
-        return self._opts.model
 
     @property
     def provider(self) -> str:
@@ -124,11 +112,9 @@ class LLM(OpenAILLM):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
-        response_format: NotGivenOr[
-            completion_create_params.ResponseFormat | type[llm_utils.ResponseFormatT]
-        ] = NOT_GIVEN,
+        response_format: NotGivenOr[Any] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
-    ) -> LLMStream:
+    ) -> llm.LLMStream:
         if self._inline_mid_conversation_instructions:
             # Rewrite mid-conversation system messages before the OpenAI serializer sees
             # them. It passes system messages through as-is, so with none left after the

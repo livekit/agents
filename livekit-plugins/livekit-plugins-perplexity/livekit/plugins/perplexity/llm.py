@@ -16,9 +16,6 @@ from __future__ import annotations
 
 import os
 
-import httpx2 as httpx
-import openai
-
 from livekit.agents.llm import ToolChoice
 from livekit.agents.types import (
     NOT_GIVEN,
@@ -41,13 +38,11 @@ class LLM(OpenAILLM):
         model: str | PerplexityChatModels = "sonar-pro",
         api_key: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = PERPLEXITY_BASE_URL,
-        client: openai.AsyncClient | None = None,
         user: NotGivenOr[str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
-        timeout: httpx.Timeout | None = None,
     ):
         """
         Create a new instance of Perplexity LLM.
@@ -66,20 +61,14 @@ class LLM(OpenAILLM):
             model=model,
             api_key=api_key,
             base_url=base_url,
-            client=client,
             user=user,
             temperature=temperature,
             parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
             top_p=top_p,
-            timeout=timeout,
             extra_headers=_ATTRIBUTION_HEADER,
             _strict_tool_schema=False,
         )
-
-    @property
-    def model(self) -> str:
-        return self._opts.model
 
     @property
     def provider(self) -> str:

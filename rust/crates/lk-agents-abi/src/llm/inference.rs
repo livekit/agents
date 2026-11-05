@@ -19,7 +19,11 @@ pub trait InferenceLlm: Send + Sync + Sized + 'static {
     #[host(source(item = LlmChunk, class = "InferenceLlmChunks"))]
     type Chunks: StreamOutput<LlmChunk> + 'static;
 
-    /// A client of `model` on the gateway at `base_url`. Starts nothing.
+    /// A client of `model` at `base_url`. Starts nothing. With `api_secret`, `base_url` is the
+    /// LiveKit Inference gateway; without, `api_key` is an OpenAI-compatible provider's own key,
+    /// sent as the bearer with no LiveKit header. `label` is the host class it reports as.
+    /// `strict_tool_schema`, `gzip_body` and `msgpack_body` suit a provider that refuses strict
+    /// tool schemas or accepts compressed or msgpack bodies.
     #[host(new)]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -28,8 +32,12 @@ pub trait InferenceLlm: Send + Sync + Sized + 'static {
         #[host(kw, default = None)] provider: Option<String>,
         base_url: String,
         api_key: String,
-        api_secret: String,
+        api_secret: Option<String>,
+        label: String,
         #[host(default = None)] inference_class: Option<String>,
+        #[host(kw, default = true)] strict_tool_schema: bool,
+        #[host(kw, default = false)] gzip_body: bool,
+        #[host(kw, default = false)] msgpack_body: bool,
         #[host(default = None)] extra_kwargs: Option<Extra>,
     ) -> Result<Self, ApiError>;
 

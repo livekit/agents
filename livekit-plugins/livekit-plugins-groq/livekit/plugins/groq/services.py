@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import os
 
-import httpx2 as httpx
 import openai
-from openai.types import ReasoningEffort
 
+from livekit.agents.inference.llm import ReasoningEffort
 from livekit.agents.llm import ToolChoice
 from livekit.agents.types import (
     NOT_GIVEN,
@@ -35,9 +34,6 @@ class LLM(OpenAILLM):
         max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
         reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
         service_tier: NotGivenOr[str] = NOT_GIVEN,
-        timeout: httpx.Timeout | None = None,
-        max_retries: NotGivenOr[int] = NOT_GIVEN,
-        client: openai.AsyncClient | None = None,
     ):
         """
         Create a new instance of Groq LLM.
@@ -56,7 +52,6 @@ class LLM(OpenAILLM):
             model=model,
             api_key=_get_api_key(api_key),
             base_url=base_url,
-            client=client,
             user=user,
             safety_identifier=safety_identifier,
             prompt_cache_key=prompt_cache_key,
@@ -66,8 +61,6 @@ class LLM(OpenAILLM):
             tool_choice=tool_choice,
             reasoning_effort=reasoning_effort,
             service_tier=service_tier,
-            timeout=timeout,
-            max_retries=max_retries,
             metadata=metadata,
             max_completion_tokens=max_completion_tokens,
         )

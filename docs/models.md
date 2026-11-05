@@ -129,6 +129,13 @@ plugin's classes, not these bases.
 | `livekit.agents.voice.avatar` | `AvatarSession` (its join wait, metrics and close: [Avatars](voice-session.md#avatars)), `DataStreamAudioOutput`; an avatar replaces the call's audio with `session.output.replace_audio_tail(sink)`. The avatar worker's side: `AvatarRunner`, `AvatarOptions`, `VideoGenerator`, `AudioReceiver`/`DataStreamAudioReceiver`, `AudioSegmentEnd`, `QueueAudioOutput`; it publishes on the agent's behalf (`livekit.agents.types.ATTRIBUTE_PUBLISH_ON_BEHALF`) |
 | `livekit.agents.types` | the TTS audio frame `userdata` keys: `USERDATA_TIMED_TRANSCRIPT` (the frame's `TranscriptChunk` words) and `USERDATA_TTS_STARTED_TIME` |
 
+An OpenAI-compatible chat-completions provider (Groq, Cerebras, Baseten and the like)
+subclasses `livekit.plugins.openai.LLM` with its `base_url` and key: its requests run on
+the core's client with the provider's own key and no LiveKit header, not on the
+`openai` SDK. Its instance options are the request's kwargs; a call's
+`tool_choice`, `parallel_tool_calls` and `response_format` override them, so the
+framework can forbid tools on a turn.
+
 A TTS plugin whose provider reports what it billed passes it on with
 `output_emitter.report_usage(usage, characters_count=...)`: tokens as a
 `TokenUsage`, billed characters as a count, each report one provider request's

@@ -7,23 +7,22 @@ messages as ``<instructions>``-wrapped user messages. Every other model id, incl
 other Gemma and Qwen ids, must keep receiving the request untouched unless the caller
 opts in.
 
-These tests capture the JSON body the plugin would POST, so they exercise the real
-serializer path without network access.
+These tests capture the JSON body the plugin POSTs to a local endpoint, so they exercise the
+real serializer path without network access.
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator
 from typing import Any, cast
 
-import httpx2 as httpx
-import openai
 import pytest
 
 from livekit.agents.llm import ChatContext, FunctionCall, FunctionCallOutput
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.plugins.baseten import LLM
+
+from .utils.chat_completions import serve
 
 pytestmark = pytest.mark.unit
 
@@ -49,58 +48,33 @@ PASSTHROUGH_MODELS = [
 # ---------------------------------------------------------------------------
 
 
-class _OneTokenStream(httpx.AsyncByteStream):
-    """A minimal successful chat.completions SSE stream."""
-
-    async def __aiter__(self) -> AsyncIterator[bytes]:
-        chunk = {
-            "id": "chatcmpl-1",
-            "object": "chat.completion.chunk",
-            "created": 0,
-            "model": "test",
-            "choices": [
-                {"index": 0, "delta": {"role": "assistant", "content": "ok"}, "finish_reason": None}
-            ],
-        }
-        yield f"data: {json.dumps(chunk)}\n\n".encode()
-        yield b"data: [DONE]\n\n"
-
-
-def _llm(model: str, *, inline: NotGivenOr[bool] = NOT_GIVEN) -> tuple[LLM, list[dict[str, Any]]]:
-    """Build a Baseten LLM whose HTTP layer records every request body."""
-    requests: list[dict[str, Any]] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        requests.append(json.loads(request.content))
-        return httpx.Response(
-            200, headers={"content-type": "text/event-stream"}, stream=_OneTokenStream()
-        )
-
-    client = openai.AsyncClient(
-        api_key="test",
-        base_url="http://baseten.test/v1",
-        max_retries=0,
-        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
-    )
-    llm_model = LLM(
-        model=model, api_key="test", client=client, inline_mid_conversation_instructions=inline
-    )
-    return llm_model, requests
+_ONE_TOKEN = (
+    b'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":0,"model":"test",'
+    b'"choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":null}]}'
+    b"\n\ndata: [DONE]\n\n"
+)
 
 
 async def _sent_messages(
     model: str, chat_ctx: ChatContext, *, inline: NotGivenOr[bool] = NOT_GIVEN
 ) -> list[dict[str, Any]]:
-    llm_model, requests = _llm(model, inline=inline)
-    try:
-        async with llm_model.chat(chat_ctx=chat_ctx) as stream:
-            async for _ in stream:
-                pass
-    finally:
-        await llm_model.aclose()
+    """The messages a Baseten LLM sends for `chat_ctx`, recorded by a local endpoint."""
+    async with serve(_ONE_TOKEN) as (base_url, received):
+        llm_model = LLM(
+            model=model,
+            api_key="test",
+            base_url=base_url,
+            inline_mid_conversation_instructions=inline,
+        )
+        try:
+            async with llm_model.chat(chat_ctx=chat_ctx) as stream:
+                async for _ in stream:
+                    pass
+        finally:
+            await llm_model.aclose()
 
-    assert len(requests) == 1
-    return cast(list[dict[str, Any]], requests[0]["messages"])
+    assert len(received) == 1
+    return cast(list[dict[str, Any]], json.loads(received[0].body)["messages"])
 
 
 def _per_turn_ctx() -> ChatContext:

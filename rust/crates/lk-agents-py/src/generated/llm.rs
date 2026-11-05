@@ -1220,17 +1220,25 @@ pub struct InferenceLlm(pub(crate) ::std::sync::Arc<InferenceLlmImpl>);
 
 #[pymethods]
 impl InferenceLlm {
-    /// A client of `model` on the gateway at `base_url`. Starts nothing.
+    /// A client of `model` at `base_url`. Starts nothing. With `api_secret`, `base_url` is the
+    /// LiveKit Inference gateway; without, `api_key` is an OpenAI-compatible provider's own key,
+    /// sent as the bearer with no LiveKit header. `label` is the host class it reports as.
+    /// `strict_tool_schema`, `gzip_body` and `msgpack_body` suit a provider that refuses strict
+    /// tool schemas or accepts compressed or msgpack bodies.
     #[new]
-    #[pyo3(signature = (model, *, provider = None, base_url, api_key, api_secret, inference_class = None, extra_kwargs = None))]
+    #[pyo3(signature = (model, *, provider = None, base_url, api_key, api_secret, label, inference_class = None, strict_tool_schema = true, gzip_body = false, msgpack_body = false, extra_kwargs = None))]
     fn new(
         py: Python<'_>,
         model: ::std::string::String,
         provider: ::std::option::Option<::std::string::String>,
         base_url: ::std::string::String,
         api_key: ::std::string::String,
-        api_secret: ::std::string::String,
+        api_secret: ::std::option::Option<::std::string::String>,
+        label: ::std::string::String,
         inference_class: ::std::option::Option<::std::string::String>,
+        strict_tool_schema: bool,
+        gzip_body: bool,
+        msgpack_body: bool,
         extra_kwargs: Option<Bound<'_, PyAny>>,
     ) -> PyResult<InferenceLlm> {
         crate::py_calls::check_pid()?;
@@ -1253,7 +1261,11 @@ impl InferenceLlm {
                     base_url,
                     api_key,
                     api_secret,
+                    label,
                     inference_class,
+                    strict_tool_schema,
+                    gzip_body,
+                    msgpack_body,
                     extra_kwargs,
                 )
             })

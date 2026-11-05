@@ -46,6 +46,7 @@ if TYPE_CHECKING:
 __all__ = [
     "LLM",
     "LLMStream",
+    "ProviderEndpoint",
     "LLMModels",
     "ChatCompletionOptions",
     "OpenAIModels",
@@ -101,6 +102,21 @@ def min_reasoning_effort(model: str) -> ReasoningEffort | None:
     return cast("ReasoningEffort | None", _core.min_reasoning_effort(model))
 
 
+@dataclasses.dataclass(frozen=True)
+class ProviderEndpoint:
+    """An OpenAI-compatible provider the core's client calls directly with the provider's own
+    key, in place of the LiveKit Inference gateway; no LiveKit header is sent."""
+
+    base_url: str
+    api_key: str
+    strict_tool_schema: bool = True
+    """Tool schemas in OpenAI's strict form; some OpenAI-compatible providers refuse it."""
+    gzip_body: bool = False
+    """Gzip-compressed request bodies, for a provider that accepts them."""
+    msgpack_body: bool = False
+    """Msgpack request bodies, for a provider that accepts them."""
+
+
 class LLM(llm.LLM):
     """LiveKit Inference LLM over the core's gateway client (``_core.InferenceLlm``)."""
 
@@ -114,23 +130,40 @@ class LLM(llm.LLM):
         api_secret: str | None = None,
         inference_class: InferenceClass | None = None,
         extra_kwargs: ChatCompletionOptions | dict[str, Any] | None = None,
+        _endpoint: ProviderEndpoint | None = None,
     ) -> None:
+        """``_endpoint``: a provider plugin's own endpoint in place of the gateway."""
         super().__init__()
         self._model_name = model
         self._provider_name = provider
-        self._creds = Credentials.resolve(base_url, api_key, api_secret)
+        self._endpoint = _endpoint
+        self._creds = None if _endpoint else Credentials.resolve(base_url, api_key, api_secret)
         self._inference_class = inference_class
         self._extra_kwargs: dict[str, object] = dict(extra_kwargs or {})
 
     @functools.cached_property
     def _native(self) -> _core.InferenceLlm:
         # built on first use, after a fork: nothing of the core starts at construction
+        if (endpoint := self._endpoint) is not None:
+            return _core.InferenceLlm(
+                self._model_name,
+                base_url=endpoint.base_url,
+                api_key=endpoint.api_key,
+                api_secret=None,
+                label=self.label,
+                strict_tool_schema=endpoint.strict_tool_schema,
+                gzip_body=endpoint.gzip_body,
+                msgpack_body=endpoint.msgpack_body,
+                extra_kwargs=self._extra_kwargs,
+            )
+        assert self._creds is not None
         return _core.InferenceLlm(
             self._model_name,
             provider=self._provider_name,
             base_url=self._creds.base_url,
             api_key=self._creds.api_key,
             api_secret=self._creds.api_secret,
+            label=self.label,
             inference_class=self._inference_class,
             extra_kwargs=self._extra_kwargs,
         )
@@ -227,7 +260,7 @@ class _GatewayStream(llm.LLMStream):
 
 
 class LLMStream(llm.LLMStream):
-    """A streamed OpenAI-compatible chat completion; the OpenAI and Google plugins run theirs
+    """A streamed OpenAI-compatible chat completion; Azure OpenAI and the Google plugin run theirs
     on it with their own client."""
 
     def __init__(

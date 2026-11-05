@@ -2486,7 +2486,6 @@ name = "livekit-plugins-baseten"
 source = { editable = "livekit-plugins/livekit-plugins-baseten" }
 dependencies = [
     { name = "aiohttp" },
-    { name = "httpx2" },
     { name = "livekit" },
     { name = "livekit-agents-next", extra = ["openai"] },
 ]
@@ -2494,7 +2493,6 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "aiohttp" },
-    { name = "httpx2", specifier = ">=2.12,<3" },
     { name = "livekit" },
     { name = "livekit-agents-next", extras = ["openai"], editable = "livekit-agents-next" },
 ]
@@ -2582,21 +2580,11 @@ requires-dist = [{ name = "livekit-agents-next", editable = "livekit-agents-next
 name = "livekit-plugins-cerebras"
 source = { editable = "livekit-plugins/livekit-plugins-cerebras" }
 dependencies = [
-    { name = "httpx2" },
     { name = "livekit-agents-next", extra = ["openai"] },
-    { name = "msgpack" },
-    { name = "msgpack-types" },
-    { name = "openai" },
 ]
 
 [package.metadata]
-requires-dist = [
-    { name = "httpx2", specifier = ">=2.12,<3" },
-    { name = "livekit-agents-next", extras = ["openai"], editable = "livekit-agents-next" },
-    { name = "msgpack", specifier = ">=1.0" },
-    { name = "msgpack-types", specifier = ">=0.7.0" },
-    { name = "openai", specifier = ">=3.19,<4" },
-]
+requires-dist = [{ name = "livekit-agents-next", extras = ["openai"], editable = "livekit-agents-next" }]
 
 [[package]]
 name = "livekit-plugins-clova"
@@ -3169,7 +3157,6 @@ requires-dist = [{ name = "livekit-agents-next", editable = "livekit-agents-next
 name = "livekit-plugins-sarvam"
 source = { editable = "livekit-plugins/livekit-plugins-sarvam" }
 dependencies = [
-    { name = "httpx2" },
     { name = "livekit-agents-next", extra = ["openai"] },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
@@ -3177,7 +3164,6 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "httpx2", specifier = ">=2.12,<3" },
     { name = "livekit-agents-next", extras = ["openai"], editable = "livekit-agents-next" },
     { name = "numpy", specifier = ">=1.26" },
 ]
@@ -3673,19 +3659,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/2f/e1/aab6c946570496b78e67804721f3d5e2d62a93081b9b37df77764ef56347/msgpack-1.2.1-cp314-cp314t-win32.whl", hash = "sha256:c1c79a604a2969a868a78b6ebd27a887e00c624f14f66b3038e0590cb23332d1", size = 70914, upload-time = "2026-06-18T16:13:49.385Z" },
     { url = "https://files.pythonhosted.org/packages/13/0a/e608956488a2af014cfe6e3d665e090b8ee42aa14b07f8f95b8880d66b09/msgpack-1.2.1-cp314-cp314t-win_amd64.whl", hash = "sha256:f12038a35fabd52e56a3547bab42401af49a45caa6dd00b34c44de235bc93ee2", size = 77999, upload-time = "2026-06-18T16:13:50.467Z" },
     { url = "https://files.pythonhosted.org/packages/d2/8a/27e2e57055176e366a46b85d02d68e7a5bcfbdd8474c9706375d965f24d3/msgpack-1.2.1-cp314-cp314t-win_arm64.whl", hash = "sha256:0adcf06ffde0777c0e1a9b771a2b1c4226ba1bbf748c8efcc02fcdeca3299107", size = 71160, upload-time = "2026-06-18T16:13:51.498Z" },
-]
-
-[[package]]
-name = "msgpack-types"
-version = "0.8.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "msgpack" },
-    { name = "typing-extensions" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/7e/9c/be18c810a806aef89937a7691a4bbc8be05fd81ab70869b4bd3b92ae71c6/msgpack_types-0.8.0.tar.gz", hash = "sha256:19e2c65865b6e9f0ec5d269256ac318d0f58dd17ac3c57bae5bf3130240d3f0b", size = 6406, upload-time = "2026-06-29T22:18:37.348Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/b3/a9/eeb1a422a4fbb170ea62365f0d2447b48aa7c2d94ce2222352f496a59cfd/msgpack_types-0.8.0-py3-none-any.whl", hash = "sha256:b1e428940addcb8a5362ecbb4565b51507e1826c82aaecd62a4f1f7b0f18468c", size = 8229, upload-time = "2026-06-29T22:18:36.473Z" },
 ]
 
 [[package]]

@@ -11,8 +11,8 @@ def test_attribution_header_attached(monkeypatch: pytest.MonkeyPatch) -> None:
     """X-Pplx-Integration must be attached on every outgoing chat request."""
     monkeypatch.setenv("PERPLEXITY_API_KEY", "test-key")
     llm = LLM()
-    extra_headers = llm._opts.extra_headers
-    assert extra_headers is not None
+    extra_headers = llm._extra_kwargs["extra_headers"]
+    assert isinstance(extra_headers, dict)
     assert extra_headers["X-Pplx-Integration"] == f"livekit-agents/{__version__}"
 
 

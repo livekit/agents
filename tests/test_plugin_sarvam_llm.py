@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-from typing import Any, cast
-from unittest.mock import MagicMock
+from typing import Any
 
-import openai
 import pytest
 
 from livekit.agents.llm import ChatContext, FunctionCall, FunctionCallOutput, ImageContent
-from livekit.agents.utils import is_given
 from livekit.plugins.sarvam.llm.client import (
     LLM as SarvamLLM,
     SARVAM_LLM_BASE_URL_V1,
@@ -23,8 +20,9 @@ pytestmark = pytest.mark.unit
 # ---------------------------------------------------------------------------
 
 
-def _fake_async_client() -> openai.AsyncClient:
-    return cast(openai.AsyncClient, MagicMock())
+def _sent_kwargs(llm: SarvamLLM, stream: Any) -> dict[str, Any]:
+    """The kwargs a chat sends: the call's, with the instance's over them."""
+    return {**(stream._request["extra_kwargs"] or {}), **llm._extra_kwargs}
 
 
 def _chat_ctx(text: str = "hello") -> ChatContext:
@@ -55,7 +53,6 @@ def test_constructor_rejects_unsupported_model() -> None:
         SarvamLLM(
             model="sarvam-unknown",
             api_key="sk_test",
-            client=_fake_async_client(),
         )
 
 
@@ -67,14 +64,13 @@ def test_constructor_rejects_unsupported_model() -> None:
 def test_custom_headers_merged() -> None:
     llm = SarvamLLM(
         api_key="sk_test",
-        client=_fake_async_client(),
         extra_headers={
             "api-subscription-key": "override_attempt",
             "User-Agent": "override_attempt",
             "X-Custom": "kept",
         },
     )
-    headers = llm._opts.extra_headers
+    headers = llm._extra_kwargs["extra_headers"]
     # Sarvam headers override caller values on conflict
     assert headers["api-subscription-key"] == "sk_test"
     assert headers["User-Agent"] == USER_AGENT
@@ -90,7 +86,6 @@ def test_custom_headers_merged() -> None:
 def test_filters_unsupported_extra_body_fields() -> None:
     llm = SarvamLLM(
         api_key="sk_test",
-        client=_fake_async_client(),
         extra_body={
             "max_tokens": 64,
             "wiki_grounding": True,
@@ -98,7 +93,7 @@ def test_filters_unsupported_extra_body_fields() -> None:
             "unknown_field": "drop-me",
         },
     )
-    assert llm._opts.extra_body == {
+    assert llm._extra_kwargs["extra_body"] == {
         "max_tokens": 64,
         "wiki_grounding": True,
     }
@@ -113,7 +108,6 @@ def test_image_rejected_on_non_vision_model() -> None:
     llm = SarvamLLM(
         model="sarvam-105b",
         api_key="sk_test",
-        client=_fake_async_client(),
     )
     with pytest.raises(ValueError, match="Image input is not supported"):
         llm.chat(chat_ctx=_chat_ctx_with_image())
@@ -123,7 +117,6 @@ def test_image_rejected_on_glm52() -> None:
     llm = SarvamLLM(
         model="glm5.2",
         api_key="sk_test",
-        client=_fake_async_client(),
     )
     with pytest.raises(ValueError, match="Image input is not supported"):
         llm.chat(chat_ctx=_chat_ctx_with_image())
@@ -134,7 +127,6 @@ async def test_image_accepted_on_vision_model() -> None:
     llm = SarvamLLM(
         model="gemma4",
         api_key="sk_test",
-        client=_fake_async_client(),
     )
     # Should not raise
     stream = llm.chat(chat_ctx=_chat_ctx_with_image())
@@ -154,7 +146,6 @@ async def test_vision_validation_skips_non_dict_messages() -> None:
     llm = SarvamLLM(
         model="sarvam-105b",
         api_key="sk_test",
-        client=_fake_async_client(),
     )
     # Should not raise
     stream = llm.chat(chat_ctx=ctx)
@@ -167,14 +158,14 @@ async def test_vision_validation_skips_non_dict_messages() -> None:
 
 
 def test_tool_choice_without_tools_raises() -> None:
-    llm = SarvamLLM(api_key="sk_test", client=_fake_async_client())
+    llm = SarvamLLM(api_key="sk_test")
     with pytest.raises(ValueError, match="tool_choice requires a non-empty tools array"):
         llm.chat(chat_ctx=_chat_ctx(), tool_choice="required")
 
 
 @pytest.mark.asyncio
 async def test_tool_choice_none_without_tools_ok() -> None:
-    llm = SarvamLLM(api_key="sk_test", client=_fake_async_client())
+    llm = SarvamLLM(api_key="sk_test")
     # Should not raise
     stream = llm.chat(chat_ctx=_chat_ctx(), tool_choice="none")
     assert stream is not None
@@ -183,7 +174,7 @@ async def test_tool_choice_none_without_tools_ok() -> None:
 
 @pytest.mark.asyncio
 async def test_tool_choice_auto_without_tools_ok() -> None:
-    llm = SarvamLLM(api_key="sk_test", client=_fake_async_client())
+    llm = SarvamLLM(api_key="sk_test")
     stream = llm.chat(chat_ctx=_chat_ctx(), tool_choice="auto")
     assert stream is not None
     await stream.aclose()
@@ -191,7 +182,7 @@ async def test_tool_choice_auto_without_tools_ok() -> None:
 
 @pytest.mark.asyncio
 async def test_tool_choice_with_tools_allowed() -> None:
-    llm = SarvamLLM(api_key="sk_test", client=_fake_async_client())
+    llm = SarvamLLM(api_key="sk_test")
     from livekit.agents.llm import function_tool
 
     @function_tool
@@ -234,7 +225,7 @@ async def _tool_messages(stream: Any) -> list[dict[str, Any]]:
 @pytest.mark.asyncio
 async def test_tool_history_stripped_when_turn_has_no_tools() -> None:
     """Sarvam 400s on tool messages with no `tools` array, poisoning the session."""
-    llm = SarvamLLM(api_key="sk_test", client=_fake_async_client())
+    llm = SarvamLLM(api_key="sk_test")
     stream = llm.chat(chat_ctx=_chat_ctx_with_tool_call())
     assert await _tool_messages(stream) == []
     await stream.aclose()
@@ -249,7 +240,7 @@ async def test_tool_history_kept_when_turn_has_tools() -> None:
     def get_weather(city: str) -> str:
         return "sunny"
 
-    llm = SarvamLLM(api_key="sk_test", client=_fake_async_client())
+    llm = SarvamLLM(api_key="sk_test")
     stream = llm.chat(
         chat_ctx=_chat_ctx_with_tool_call(),
         tools=[get_weather],
@@ -266,10 +257,10 @@ async def test_tool_history_kept_when_turn_has_tools() -> None:
 
 @pytest.mark.asyncio
 async def test_unsupported_fields_stripped_from_stream() -> None:
-    llm = SarvamLLM(api_key="sk_test", client=_fake_async_client())
+    llm = SarvamLLM(api_key="sk_test")
     stream = llm.chat(chat_ctx=_chat_ctx())
     for field in ("stream_options", "max_completion_tokens", "service_tier"):
-        assert field not in stream._extra_kwargs
+        assert field not in _sent_kwargs(llm, stream)
     await stream.aclose()
 
 
@@ -285,7 +276,7 @@ def test_missing_api_key_raises() -> None:
     old = os.environ.pop("SARVAM_API_KEY", None)
     try:
         with pytest.raises(ValueError, match="SARVAM_API_KEY is required"):
-            SarvamLLM(client=_fake_async_client())
+            SarvamLLM()
     finally:
         if old:
             os.environ["SARVAM_API_KEY"] = old
@@ -298,7 +289,7 @@ def test_missing_api_key_raises() -> None:
 
 def test_conversations_resolves_to_v1_endpoint() -> None:
     llm = SarvamLLM(model="sarvam-105b-conversations", api_key="sk_test")
-    assert str(llm._client._base_url).rstrip("/") == SARVAM_LLM_BASE_URL_V1.rstrip("/")
+    assert llm._endpoint.base_url.rstrip("/") == SARVAM_LLM_BASE_URL_V1.rstrip("/")
     import asyncio
 
     asyncio.get_event_loop().run_until_complete(llm.aclose())
@@ -308,7 +299,7 @@ def test_v2_models_resolve_to_v2_endpoint() -> None:
     """Non-conversations models resolve to /v2."""
     for model in ["sarvam-105b", "gemma4", "glm5.2"]:
         llm = SarvamLLM(model=model, api_key="sk_test")
-        assert str(llm._client._base_url).rstrip("/") == SARVAM_LLM_BASE_URL_V2.rstrip("/")
+        assert llm._endpoint.base_url.rstrip("/") == SARVAM_LLM_BASE_URL_V2.rstrip("/")
         import asyncio
 
         asyncio.get_event_loop().run_until_complete(llm.aclose())
@@ -319,10 +310,9 @@ def test_conversations_strips_reasoning_effort() -> None:
     llm = SarvamLLM(
         model="sarvam-105b-conversations",
         api_key="sk_test",
-        client=_fake_async_client(),
         reasoning_effort="high",
     )
-    assert not is_given(llm._opts.reasoning_effort)
+    assert "reasoning_effort" not in llm._extra_kwargs
 
 
 @pytest.mark.asyncio
@@ -331,10 +321,9 @@ async def test_conversations_strips_reasoning_effort_from_stream() -> None:
     llm = SarvamLLM(
         model="sarvam-105b-conversations",
         api_key="sk_test",
-        client=_fake_async_client(),
     )
     stream = llm.chat(chat_ctx=_chat_ctx())
-    assert "reasoning_effort" not in stream._extra_kwargs
+    assert "reasoning_effort" not in _sent_kwargs(llm, stream)
     await stream.aclose()
 
 
@@ -343,11 +332,9 @@ def test_conversations_strips_wiki_grounding() -> None:
     llm = SarvamLLM(
         model="sarvam-105b-conversations",
         api_key="sk_test",
-        client=_fake_async_client(),
         wiki_grounding=True,
     )
-    if is_given(llm._opts.extra_body):
-        assert "wiki_grounding" not in llm._opts.extra_body
+    assert "wiki_grounding" not in llm._extra_kwargs.get("extra_body", {})
 
 
 def test_conversations_rejects_image_input() -> None:
@@ -355,7 +342,6 @@ def test_conversations_rejects_image_input() -> None:
     llm = SarvamLLM(
         model="sarvam-105b-conversations",
         api_key="sk_test",
-        client=_fake_async_client(),
     )
     with pytest.raises(ValueError, match="Image input is not supported"):
         llm.chat(chat_ctx=_chat_ctx_with_image())
@@ -367,7 +353,6 @@ async def test_conversations_supports_tool_calling() -> None:
     llm = SarvamLLM(
         model="sarvam-105b-conversations",
         api_key="sk_test",
-        client=_fake_async_client(),
     )
     from livekit.agents.llm import function_tool
 
@@ -392,7 +377,7 @@ def test_explicit_base_url_overrides_conversations_v1() -> None:
         api_key="sk_test",
         base_url=custom,
     )
-    assert str(llm._client._base_url).rstrip("/") == custom.rstrip("/")
+    assert llm._endpoint.base_url.rstrip("/") == custom.rstrip("/")
     import asyncio
 
     asyncio.get_event_loop().run_until_complete(llm.aclose())

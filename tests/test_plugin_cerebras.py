@@ -2,13 +2,10 @@ from __future__ import annotations
 
 import os
 
-import httpx2 as httpx
-import openai
 import pytest
 
-from livekit.agents import Agent, RunContext, llm
+from livekit.agents import Agent, RunContext
 from livekit.plugins.cerebras import LLM
-from livekit.plugins.cerebras.llm import _PayloadTransport
 
 pytestmark = pytest.mark.plugin("cerebras")
 
@@ -18,21 +15,6 @@ if not os.environ.get("CEREBRAS_API_KEY"):
 # gpt-oss-120b supports both basic chat and function calling.
 CHAT_MODEL = "gpt-oss-120b"
 TOOL_MODEL = "gpt-oss-120b"
-
-
-class HeaderCapturingTransport(httpx.AsyncBaseTransport):
-    """Wraps a real transport, capturing outgoing request headers for assertion."""
-
-    def __init__(self) -> None:
-        self._inner = httpx.AsyncHTTPTransport()
-        self.captured_requests: list[httpx.Request] = []
-
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        self.captured_requests.append(request)
-        return await self._inner.handle_async_request(request)
-
-    async def aclose(self) -> None:
-        await self._inner.aclose()
 
 
 def _cerebras_llm(**kwargs) -> LLM:
@@ -58,9 +40,12 @@ def _weather_agent(model: LLM) -> Agent:
 
 
 @pytest.mark.asyncio
-async def test_chat():
-    """Basic chat completion returns a non-empty assistant message."""
-    async with _cerebras_llm() as model:
+@pytest.mark.parametrize(
+    ("gzip", "msgpack"), [(True, True), (True, False), (False, True), (False, False)]
+)
+async def test_chat(gzip: bool, msgpack: bool):
+    """Basic chat completion returns an assistant message, with each request body encoding."""
+    async with _cerebras_llm(gzip_compression=gzip, msgpack_encoding=msgpack) as model:
         result = await _assistant(model).run("Say hello in exactly one word.")
         result.expect.next_event().is_message(role="assistant")
         result.expect.no_more_events()
@@ -79,89 +64,3 @@ async def test_function_call():
         )
         result.expect.next_event().is_message(role="assistant")
         result.expect.no_more_events()
-
-
-def _cerebras_llm_with_transport(
-    *, use_gzip: bool, use_msgpack: bool
-) -> tuple[LLM, HeaderCapturingTransport]:
-    transport = HeaderCapturingTransport()
-    payload = _PayloadTransport(transport, use_msgpack=use_msgpack, use_gzip=use_gzip)
-    client = openai.AsyncClient(
-        api_key=os.environ["CEREBRAS_API_KEY"],
-        base_url="https://api.cerebras.ai/v1",
-        http_client=httpx.AsyncClient(transport=payload),
-    )
-    return LLM(model=CHAT_MODEL, client=client), transport
-
-
-@pytest.mark.asyncio
-async def test_gzip_only_headers():
-    """Gzip-only sends Content-Encoding: gzip with JSON content type."""
-    model, transport = _cerebras_llm_with_transport(use_gzip=True, use_msgpack=False)
-    async with model:
-        result = await _assistant(model).run("Say hello in exactly one word.")
-        result.expect.next_event().is_message(role="assistant")
-        result.expect.no_more_events()
-
-    chat_reqs = [r for r in transport.captured_requests if "/chat/completions" in str(r.url)]
-    assert len(chat_reqs) > 0
-    assert chat_reqs[0].headers["content-type"] == "application/json"
-    assert chat_reqs[0].headers["content-encoding"] == "gzip"
-
-
-@pytest.mark.asyncio
-async def test_msgpack_only_headers():
-    """Msgpack-only sends Content-Type: application/vnd.msgpack without gzip."""
-    model, transport = _cerebras_llm_with_transport(use_gzip=False, use_msgpack=True)
-    async with model:
-        result = await _assistant(model).run("Say hello in exactly one word.")
-        result.expect.next_event().is_message(role="assistant")
-        result.expect.no_more_events()
-
-    chat_reqs = [r for r in transport.captured_requests if "/chat/completions" in str(r.url)]
-    assert len(chat_reqs) > 0
-    assert chat_reqs[0].headers["content-type"] == "application/vnd.msgpack"
-    assert "content-encoding" not in chat_reqs[0].headers
-
-
-@pytest.mark.asyncio
-async def test_msgpack_and_gzip_headers():
-    """Both flags send msgpack content type with gzip encoding."""
-    model, transport = _cerebras_llm_with_transport(use_gzip=True, use_msgpack=True)
-    async with model:
-        result = await _assistant(model).run("Say hello in exactly one word.")
-        result.expect.next_event().is_message(role="assistant")
-        result.expect.no_more_events()
-
-    chat_reqs = [r for r in transport.captured_requests if "/chat/completions" in str(r.url)]
-    assert len(chat_reqs) > 0
-    assert chat_reqs[0].headers["content-type"] == "application/vnd.msgpack"
-    assert chat_reqs[0].headers["content-encoding"] == "gzip"
-
-
-@pytest.mark.asyncio
-async def test_no_compression_headers():
-    """With both flags off, sends standard JSON without gzip."""
-    async with _cerebras_llm(gzip_compression=False, msgpack_encoding=False) as model:
-        result = await _assistant(model).run("Say hello in exactly one word.")
-        result.expect.next_event().is_message(role="assistant")
-        result.expect.no_more_events()
-
-
-@pytest.mark.asyncio
-async def test_streaming():
-    """Streaming chat returns content via the LLM directly."""
-    async with _cerebras_llm() as model:
-        chat_ctx = llm.ChatContext()
-        chat_ctx.add_message(role="system", content="You are a helpful assistant.")
-        chat_ctx.add_message(role="user", content="Count from 1 to 5.")
-
-        stream = model.chat(chat_ctx=chat_ctx)
-        text = ""
-        async for chunk in stream:
-            if chunk.delta and chunk.delta.content:
-                text += chunk.delta.content
-        await stream.aclose()
-
-        assert len(text) > 0, "Expected non-empty streaming response"
-        assert "3" in text, "Expected the count to include '3'"

@@ -14,7 +14,7 @@ use parking_lot::Mutex;
 use crate::headers::{Headers, identification_headers};
 use crate::llm::machine::{LlmRequest, LlmRequestEvent, LlmRequestId, RequestPolicy};
 use crate::llm::request::ChatArgs;
-use crate::llm::{LlmOptions, models};
+use crate::llm::{Auth, BodyEncoding, LlmOptions, models};
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::{
@@ -115,7 +115,7 @@ impl GatewayLlm {
         // The host serialized every image onto its item already.
         let images = PreResolved::from_pairs(Vec::<(String, _)>::new());
         let identification = identification.or(self.identity.as_ref());
-        let bearer = lk_agents_net::token::inference_bearer(&opts.api_key, &opts.api_secret)?;
+        let bearer = opts.auth.bearer()?;
         let request =
             build_request(&opts, identification, &images, chat_ctx, tools, args, &bearer)?;
         let id = LlmRequestId(self.requests.fetch_add(1, Ordering::Relaxed));
@@ -154,8 +154,12 @@ impl lk_agents_abi::llm::inference::InferenceLlm for GatewayLlm {
         provider: Option<String>,
         base_url: String,
         api_key: String,
-        api_secret: String,
+        api_secret: Option<String>,
+        label: String,
         inference_class: Option<String>,
+        strict_tool_schema: bool,
+        gzip_body: bool,
+        msgpack_body: bool,
         extra_kwargs: Option<Extra>,
     ) -> Result<Self, ApiError> {
         let unavailable = |e: String| ApiError::new(e).with_retryable(false);
@@ -164,10 +168,15 @@ impl lk_agents_abi::llm::inference::InferenceLlm for GatewayLlm {
         let opts = LlmOptions {
             model,
             base_url,
-            api_key,
-            api_secret,
+            auth: match api_secret {
+                Some(api_secret) => Auth::Gateway { api_key, api_secret },
+                None => Auth::ProviderKey(api_key),
+            },
             provider,
             inference_class,
+            strict_tools: strict_tool_schema,
+            body: BodyEncoding { msgpack: msgpack_body, gzip: gzip_body },
+            label,
             extra_kwargs: extra_kwargs.unwrap_or_default(),
         };
         Ok(GatewayLlm::new(opts, http, runtime, env.clock.clone()))
@@ -236,7 +245,7 @@ impl Llm for GatewayLlm {
     }
 
     fn label(&self) -> String {
-        "livekit.agents.inference.llm.LLM".into()
+        self.opts.lock().label.clone()
     }
 
     fn model(&self) -> String {
@@ -247,18 +256,27 @@ impl Llm for GatewayLlm {
         lk_agents_abi::ProviderId {
             label: self.label(),
             model: self.model(),
-            provider: "livekit".into(),
+            provider: match self.options() {
+                LlmOptions { auth: Auth::Gateway { .. }, .. } => "livekit".into(),
+                // the provider's host, as the Python plugins name it
+                LlmOptions { base_url, .. } => url::Url::parse(&base_url)
+                    .ok()
+                    .and_then(|url| url.host_str().map(str::to_owned))
+                    .unwrap_or(base_url),
+            },
         }
     }
 
     /// Opens a connection in the background so the first request finds it pooled.
     fn prewarm(&self) {
         let opts = self.options();
-        let Ok(bearer) = lk_agents_net::token::inference_bearer(&opts.api_key, &opts.api_secret)
-        else {
+        let Ok(bearer) = opts.auth.bearer() else {
             return;
         };
-        let mut headers = identification_headers(self.identity.as_ref(), None, None);
+        let mut headers = match opts.auth {
+            Auth::Gateway { .. } => identification_headers(self.identity.as_ref(), None, None),
+            Auth::ProviderKey(_) => Headers::new(),
+        };
         headers.set("Authorization", format!("Bearer {bearer}"));
         let (http, url) =
             (self.http.clone(), format!("{}/models", opts.base_url.trim_end_matches('/')));

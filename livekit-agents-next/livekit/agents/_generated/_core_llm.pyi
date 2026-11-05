@@ -228,11 +228,20 @@ class InferenceLlm:
         provider: str | None = None,
         base_url: str,
         api_key: str,
-        api_secret: str,
+        api_secret: str | None,
+        label: str,
         inference_class: str | None = None,
+        strict_tool_schema: bool = True,
+        gzip_body: bool = False,
+        msgpack_body: bool = False,
         extra_kwargs: dict[str, object] | None = None,
     ) -> Self:
-        """A client of `model` on the gateway at `base_url`. Starts nothing."""
+        """A client of `model` at `base_url`. Starts nothing. With `api_secret`, `base_url` is the
+        LiveKit Inference gateway; without, `api_key` is an OpenAI-compatible provider's own key,
+        sent as the bearer with no LiveKit header. `label` is the host class it reports as.
+        `strict_tool_schema`, `gzip_body` and `msgpack_body` suit a provider that refuses strict
+        tool schemas or accepts compressed or msgpack bodies.
+        """
     def identified(
         self,
         headers: Sequence[tuple[str, str]],
