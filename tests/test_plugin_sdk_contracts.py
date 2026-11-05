@@ -14,7 +14,12 @@ class PublicSDKClient:
     base_url = httpx.URL("https://provider.example:8443/v1")
 
 
-@pytest.mark.parametrize("factory", [openai.LLM, openai.STT, openai.TTS, anthropic.LLM])
+@pytest.mark.parametrize("factory", [openai.STT, openai.TTS, anthropic.LLM])
 def test_provider_identity_uses_the_sdk_public_base_url(factory: Callable) -> None:
     model = factory(api_key="test", client=PublicSDKClient())
+    assert model.provider == "provider.example:8443"
+
+
+def test_a_native_openai_compatible_llm_is_named_by_its_base_url_host() -> None:
+    model = openai.LLM(api_key="test", base_url="https://provider.example:8443/v1")
     assert model.provider == "provider.example:8443"

@@ -2,6 +2,8 @@
 
 Each request path runs against a transport that records the attempt and fails it, so a
 provider that refuses its own defaults (or the all-disabled policy) fails before any I/O.
+Providers on the core's native clients (``inference.*``, ``openai.LLM`` and the LLMs built on
+it) open no Python socket; the Rust client tests cover their connection options.
 """
 
 from __future__ import annotations
@@ -110,7 +112,6 @@ MODELS = {
     "murf.TTS": _model("murf.TTS"),
     "nabrah.STT": _model("nabrah.STT"),
     "neuphonic.TTS": _model("neuphonic.TTS"),
-    "openai.LLM": _model("openai.LLM"),
     "openai.STT": _model("openai.STT"),
     "openai.TTS": _model("openai.TTS"),
     "palabra.STT": _model("palabra.STT"),

@@ -4,6 +4,7 @@ import os
 from typing import Any
 
 from livekit.agents import llm
+from livekit.agents.inference import InferenceClass
 from livekit.agents.inference.llm import ReasoningEffort
 from livekit.agents.llm import ChatContext, ToolChoice
 from livekit.agents.llm.utils import convert_mid_conversation_instructions
@@ -113,6 +114,7 @@ class LLM(OpenAILLM):
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         response_format: NotGivenOr[Any] = NOT_GIVEN,
+        inference_class: NotGivenOr[InferenceClass] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> llm.LLMStream:
         if self._inline_mid_conversation_instructions:
@@ -129,5 +131,6 @@ class LLM(OpenAILLM):
             parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
             response_format=response_format,
+            inference_class=inference_class,
             extra_kwargs=extra_kwargs,
         )

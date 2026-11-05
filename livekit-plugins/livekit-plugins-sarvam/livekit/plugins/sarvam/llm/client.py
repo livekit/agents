@@ -20,6 +20,7 @@ import platform
 from typing import Any
 
 from livekit.agents import __version__ as livekit_version, llm
+from livekit.agents.inference import InferenceClass
 from livekit.agents.inference.llm import ReasoningEffort
 from livekit.agents.llm import ChatContext, ToolChoice
 from livekit.agents.llm.chat_context import ImageContent
@@ -255,13 +256,16 @@ class LLM(OpenAILLM):
         self,
         *,
         model: NotGivenOr[str] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> None:
-        """Update the model at runtime.
+        """Update the model at runtime; ``extra_kwargs`` replaces the persistent kwargs.
 
         Validates the new model and recreates the underlying client when the
         API version changes (``/v1`` ↔ ``/v2``).  When both old and new models
         share the same endpoint, the client is **not** recreated.
         """
+        if is_given(extra_kwargs):
+            super().update_options(extra_kwargs=extra_kwargs)
         if not is_given(model):
             return
 
@@ -287,7 +291,8 @@ class LLM(OpenAILLM):
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         response_format: NotGivenOr[Any] = NOT_GIVEN,
-        extra_kwargs: NotGivenOr[dict[str, object]] = NOT_GIVEN,
+        inference_class: NotGivenOr[InferenceClass] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> llm.LLMStream:
         """Build a chat-completion stream with Sarvam-specific param stripping.
 
@@ -332,7 +337,7 @@ class LLM(OpenAILLM):
             chat_ctx = chat_ctx.copy(exclude_function_call=True)
 
         # --- Strip unsupported fields from caller-provided extra_kwargs ---
-        merged_extra: dict[str, object] = {}
+        merged_extra: dict[str, Any] = {}
         if is_given(extra_kwargs):
             merged_extra.update(extra_kwargs)
 
@@ -350,5 +355,6 @@ class LLM(OpenAILLM):
             parallel_tool_calls=parallel_tool_calls,
             tool_choice=tool_choice,
             response_format=response_format,
+            inference_class=inference_class,
             extra_kwargs=merged_extra if merged_extra else NOT_GIVEN,
         )
