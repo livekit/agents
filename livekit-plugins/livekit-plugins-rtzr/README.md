@@ -21,15 +21,7 @@ RTZR_CLIENT_ID=<your_client_id>
 RTZR_CLIENT_SECRET=<your_client_secret>
 ```
 
-```
-# Override base HTTP API URL (used for token issuance)
-RTZR_API_BASE=https://openapi.vito.ai
-
-# Override WebSocket URL (used for live streaming)
-RTZR_WEBSOCKET_URL=wss://openapi.vito.ai
-```
-
-If `RTZR_WEBSOCKET_URL` is not set, the plugin will derive it from `RTZR_API_BASE` by replacing the scheme with `wss://`.
+The plugin connects to `https://openapi.vito.ai` for token issuance and `wss://openapi.vito.ai` for streaming.
 
 ## Usage
 

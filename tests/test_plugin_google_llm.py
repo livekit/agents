@@ -658,3 +658,10 @@ class TestThinkingConfigRequestConstruction:
         assert thinking_config is not None
         assert thinking_config.thinking_budget == 1024
         assert thinking_config.thinking_level is None
+
+
+def test_default_model_is_not_a_retired_one():
+    # gemini-2.5-* stopped being served on Vertex AI on 2026-10-20
+    retired = {"gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash", "gemini-2.0-flash-001"}
+
+    assert LLM(api_key="test-key").model not in retired

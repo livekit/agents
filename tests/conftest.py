@@ -307,6 +307,14 @@ def _is_ignorable_task(task) -> bool:
         coro_name = getattr(coro, "__qualname__", "") or type(coro).__name__
         if "async_generator_athrow" in coro_name:
             return True
+        # google-genai's client __del__ methods schedule aclose() on the running loop whenever
+        # GC collects a client (even one that is already closed), so this lands in whichever
+        # test happens to trigger GC
+        frame = getattr(coro, "cr_frame", None)
+        if coro_name.endswith(".aclose") and frame is not None:
+            owner = frame.f_locals.get("self")
+            if type(owner).__module__.startswith("google.genai"):
+                return True
         mod = getattr(coro, "__module__", "")
         if "pytest" in mod or "pytest_asyncio" in mod:
             return True

@@ -60,7 +60,9 @@ def _make_full_recognition_for_eou() -> AudioRecognition:
     ar._stt = None
     ar._stt_pipeline = None
     ar._stt_flush_requested = False
+    ar._stt_turn_ended = False
     ar._audio_interim_transcript = ""
+    ar._audio_preflight_transcript = ""
     ar._turn_backchannel_over_agent = False
     ar._transcription_timeout_handle = None
     ar._audio_transcript = ""
