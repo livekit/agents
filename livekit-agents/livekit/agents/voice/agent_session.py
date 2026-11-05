@@ -1089,7 +1089,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
                 if hosting:
                     # only the primary session can have a session host
-                    self._attach_session_host(lambda: SessionHost(RoomSessionTransport(room)))
+                    self._attach_session_host(
+                        lambda: SessionHost(RoomSessionTransport(room)), room=room
+                    )
 
                 text_input_opts = room_options.get_text_input_options()
                 if text_input_opts:
@@ -1247,11 +1249,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             return run_state
 
-    def _attach_session_host(self, make_host: Callable[[], SessionHost]) -> None:
-        # under a job, the job owns the host so it outlives this session; without one,
-        # the session is the only owner there is
+    def _attach_session_host(
+        self, make_host: Callable[[], SessionHost], *, room: rtc.Room | None = None
+    ) -> None:
+        # under a job, the job owns the host so it outlives this session and the simulator
+        # can still finalize over the job's room. A session in any other room, or outside a
+        # job, owns its own host: the job's host is bound to the job's room.
         job_ctx = get_job_context(required=False)
-        if job_ctx is None:
+        if job_ctx is None or (room is not None and room is not job_ctx.room):
             self._session_host = make_host()
             self._owns_session_host = True
         else:

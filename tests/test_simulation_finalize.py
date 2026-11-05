@@ -53,6 +53,24 @@ class TestJobOwnedSessionHost:
         assert not first._owns_session_host
         assert host.session is second
 
+    def test_session_in_another_room_owns_its_host(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # the job's host is bound to the job's room; a session elsewhere can't share it
+        job_room, other_room = _FakeRoom(), _FakeRoom()
+        job_ctx = SimpleNamespace(_session_host=None, room=job_room)
+        monkeypatch.setattr(
+            "livekit.agents.voice.agent_session.get_job_context", lambda required=True: job_ctx
+        )
+        in_job_room, elsewhere = AgentSession(), AgentSession()
+        job_host, other_host = _host(), _host()
+
+        in_job_room._attach_session_host(lambda: job_host, room=cast(rtc.Room, job_room))
+        elsewhere._attach_session_host(lambda: other_host, room=cast(rtc.Room, other_room))
+
+        assert job_ctx._session_host is job_host
+        assert elsewhere._session_host is other_host
+        assert elsewhere._owns_session_host
+        assert job_host.session is in_job_room
+
     def test_session_owns_the_host_outside_a_job(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
             "livekit.agents.voice.agent_session.get_job_context", lambda required=True: None
