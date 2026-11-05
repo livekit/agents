@@ -77,6 +77,78 @@ fn reply_required() -> bool {
     true
 }
 
+impl Item {
+    fn shared_message(message: &ChatMessage, sharing: &HistorySharing) -> Self {
+        let content = message
+            .content
+            .iter()
+            .filter_map(|content| match content {
+                ChatContent::Text(text) => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        Item::Message {
+            id: message.id.clone(),
+            role: message.role,
+            content,
+            created_at: unix_secs(message.created_at),
+            interrupted: message.interrupted,
+            extra: selected_extra(&message.extra, sharing),
+        }
+    }
+
+    fn shared_call(call: &FunctionCall, sharing: &HistorySharing) -> Self {
+        Item::FunctionCall {
+            id: call.id.clone(),
+            call_id: call.call_id.clone(),
+            name: call.name.clone(),
+            arguments: call.arguments.clone(),
+            created_at: unix_secs(call.created_at),
+            group_id: call.group_id.clone(),
+            extra: selected_extra(&call.extra, sharing),
+        }
+    }
+
+    fn shared_output(output: &FunctionCallOutput) -> Self {
+        Item::FunctionCallOutput {
+            id: output.id.clone(),
+            call_id: output.call_id.clone(),
+            output: output.output.clone(),
+            is_error: output.is_error,
+            created_at: unix_secs(output.created_at),
+            name: (!output.name.is_empty()).then(|| output.name.clone()),
+            reply_required: output.reply_required,
+        }
+    }
+}
+
+/// The call ids whose output follows the call, without the unresolved invoking call. A call id
+/// seen twice is an error.
+fn finished_calls<'a>(
+    items: &'a [ChatItem],
+    unresolved_call_id: Option<&str>,
+) -> Result<BTreeSet<&'a str>, HistoryError> {
+    let mut calls = BTreeMap::new();
+    let mut complete = BTreeSet::new();
+    for (index, item) in items.iter().enumerate() {
+        match item {
+            ChatItem::FunctionCall(call) => {
+                if calls.insert(call.call_id.as_str(), index).is_some() {
+                    return Err(HistoryError(format!("duplicate call {}", call.call_id)));
+                }
+            }
+            ChatItem::FunctionCallOutput(output) if calls.contains_key(output.call_id.as_str()) => {
+                complete.insert(output.call_id.as_str());
+            }
+            _ => {}
+        }
+    }
+    if let Some(call_id) = unresolved_call_id {
+        complete.remove(call_id);
+    }
+    Ok(complete)
+}
+
 mod role {
     use super::Role;
     use serde::{Deserialize, Deserializer, Serializer};
@@ -135,77 +207,27 @@ impl CallerHistory {
         unresolved_call_id: Option<&str>,
         sharing: &HistorySharing,
     ) -> Result<Self, HistoryError> {
-        let mut calls = BTreeMap::new();
-        let mut complete = BTreeSet::new();
-        for (index, item) in items.iter().enumerate() {
-            match item {
-                ChatItem::FunctionCall(call) => {
-                    if calls.insert(call.call_id.as_str(), index).is_some() {
-                        return Err(HistoryError(format!("duplicate call {}", call.call_id)));
-                    }
-                }
-                ChatItem::FunctionCallOutput(output)
-                    if calls.contains_key(output.call_id.as_str()) =>
-                {
-                    complete.insert(output.call_id.as_str());
-                }
-                _ => {}
-            }
-        }
-        if let Some(call_id) = unresolved_call_id {
-            complete.remove(call_id);
-        }
-        let mut selected = Vec::new();
-        for item in items {
-            let item = match item {
+        let complete = finished_calls(items, unresolved_call_id)?;
+        let selected = items
+            .iter()
+            .filter_map(|item| match item {
                 ChatItem::Message(message)
                     if sharing.include_instructions
                         || !matches!(message.role, Role::System | Role::Developer) =>
                 {
-                    Item::Message {
-                        id: message.id.clone(),
-                        role: message.role,
-                        content: message
-                            .content
-                            .iter()
-                            .filter_map(|content| match content {
-                                ChatContent::Text(text) => Some(text.clone()),
-                                _ => None,
-                            })
-                            .collect(),
-                        created_at: unix_secs(message.created_at),
-                        interrupted: message.interrupted,
-                        extra: selected_extra(&message.extra, sharing),
-                    }
+                    Some(Item::shared_message(message, sharing))
                 }
                 ChatItem::FunctionCall(call) if complete.contains(call.call_id.as_str()) => {
-                    Item::FunctionCall {
-                        id: call.id.clone(),
-                        call_id: call.call_id.clone(),
-                        name: call.name.clone(),
-                        arguments: call.arguments.clone(),
-                        created_at: unix_secs(call.created_at),
-                        group_id: call.group_id.clone(),
-                        extra: selected_extra(&call.extra, sharing),
-                    }
+                    Some(Item::shared_call(call, sharing))
                 }
                 ChatItem::FunctionCallOutput(output)
                     if complete.contains(output.call_id.as_str()) =>
                 {
-                    Item::FunctionCallOutput {
-                        id: output.id.clone(),
-                        call_id: output.call_id.clone(),
-                        output: output.output.clone(),
-                        is_error: output.is_error,
-                        created_at: unix_secs(output.created_at),
-                        name: (!output.name.is_empty()).then(|| output.name.clone()),
-                        reply_required: output.reply_required,
-                    }
+                    Some(Item::shared_output(output))
                 }
-                _ => continue,
-            };
-            selected.push(item);
-        }
+                _ => None,
+            })
+            .collect();
         let history = Self { items: selected };
         history.validate()?;
         Ok(history)

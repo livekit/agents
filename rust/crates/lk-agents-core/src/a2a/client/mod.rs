@@ -466,62 +466,61 @@ impl ReplyState {
                     event.metadata.map(|m| m.into_iter().collect()).unwrap_or_default(),
                 )
             }
-            StreamResponse::ArtifactUpdate(event) => {
-                self.identify(&event.task_id, &event.context_id)?;
-                let existing =
-                    self.artifacts.iter_mut().find(|a| a.artifact_id == event.artifact.artifact_id);
-                match existing {
-                    Some(artifact) if event.append == Some(true) => {
-                        artifact.parts.extend(event.artifact.parts);
-                        if event.artifact.name.is_some() {
-                            artifact.name = event.artifact.name;
-                        }
-                        if event.artifact.description.is_some() {
-                            artifact.description = event.artifact.description;
-                        }
-                        if event.artifact.metadata.is_some() {
-                            artifact.metadata = event.artifact.metadata;
-                        }
-                    }
-                    Some(artifact) => *artifact = event.artifact,
-                    None => self.artifacts.push(event.artifact),
-                }
-                Ok(None)
-            }
-            StreamResponse::Message(message) => {
-                if self.task.is_some() {
-                    return Err(malformed("a task stream cannot turn into an unrelated message"));
-                }
-                if self
-                    .expected_context
-                    .as_ref()
-                    .is_some_and(|context| Some(context) != message.context_id.as_ref())
-                {
-                    return Err(malformed("the message belongs to another context"));
-                }
-                self.settled = true;
-                let text = parts_text(&message.parts);
-                let artifacts = vec![Artifact {
-                    artifact_id: message.message_id,
-                    name: None,
-                    description: None,
-                    parts: message.parts,
-                    metadata: None,
-                    extensions: None,
-                }];
-                Ok(Some(TaskUpdate {
-                    state: TaskState::Completed,
-                    text,
-                    task_id: message.task_id.unwrap_or_default(),
-                    context_id: message.context_id.unwrap_or_default(),
-                    metadata: short_metadata(
-                        message.metadata.map(|m| m.into_iter().collect()).unwrap_or_default(),
-                    ),
-                    artifacts,
-                    follow_task: None,
-                }))
-            }
+            StreamResponse::ArtifactUpdate(event) => self.artifact_update(event),
+            StreamResponse::Message(message) => self.direct_reply(message),
         }
+    }
+
+    fn artifact_update(
+        &mut self,
+        event: a2a::TaskArtifactUpdateEvent,
+    ) -> Result<Option<TaskUpdate>, ClientError> {
+        self.identify(&event.task_id, &event.context_id)?;
+        let existing =
+            self.artifacts.iter_mut().find(|a| a.artifact_id == event.artifact.artifact_id);
+        match existing {
+            Some(artifact) if event.append == Some(true) => {
+                append_artifact(artifact, event.artifact)
+            }
+            Some(artifact) => *artifact = event.artifact,
+            None => self.artifacts.push(event.artifact),
+        }
+        Ok(None)
+    }
+
+    /// A message instead of a task: the remote answered at once and the reply is settled.
+    fn direct_reply(&mut self, message: Message) -> Result<Option<TaskUpdate>, ClientError> {
+        if self.task.is_some() {
+            return Err(malformed("a task stream cannot turn into an unrelated message"));
+        }
+        if self
+            .expected_context
+            .as_ref()
+            .is_some_and(|context| Some(context) != message.context_id.as_ref())
+        {
+            return Err(malformed("the message belongs to another context"));
+        }
+        self.settled = true;
+        let text = parts_text(&message.parts);
+        let artifacts = vec![Artifact {
+            artifact_id: message.message_id,
+            name: None,
+            description: None,
+            parts: message.parts,
+            metadata: None,
+            extensions: None,
+        }];
+        Ok(Some(TaskUpdate {
+            state: TaskState::Completed,
+            text,
+            task_id: message.task_id.unwrap_or_default(),
+            context_id: message.context_id.unwrap_or_default(),
+            metadata: short_metadata(
+                message.metadata.map(|m| m.into_iter().collect()).unwrap_or_default(),
+            ),
+            artifacts,
+            follow_task: None,
+        }))
     }
 
     /// Transport EOF is an observation, never evidence that remote work completed.
@@ -595,6 +594,20 @@ impl ReplyState {
             artifacts: self.artifacts.clone(),
             follow_task,
         }))
+    }
+}
+
+/// An appended chunk adds its parts and replaces only the descriptive fields it carries.
+fn append_artifact(into: &mut Artifact, update: Artifact) {
+    into.parts.extend(update.parts);
+    if update.name.is_some() {
+        into.name = update.name;
+    }
+    if update.description.is_some() {
+        into.description = update.description;
+    }
+    if update.metadata.is_some() {
+        into.metadata = update.metadata;
     }
 }
 

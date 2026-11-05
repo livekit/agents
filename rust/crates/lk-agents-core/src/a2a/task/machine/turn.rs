@@ -62,11 +62,14 @@ impl TaskMachine {
         &mut self,
         batch: Vec<Message>,
         task_ids: Vec<String>,
-        drain: bool,
+        path: Path,
         now: Duration,
     ) -> Operation {
+        let drain = path == Path::Drain;
         let wall = self.epoch + now.as_secs_f64();
-        let at = if self.history_end >= wall { self.history_end + 2e-6 } else { wall };
+        // two steps past the loaded history, so an item placed one step before `at` follows it
+        let after_history = self.history_end + 2.0 * crate::a2a::outcome::ITEM_ORDER_STEP;
+        let at = if self.history_end >= wall { after_history } else { wall };
         let named = batch.last().and_then(|m| m.task_id.clone());
         let answer_task = task_ids.last().cloned().unwrap_or_default();
         self.turn = Some(Turning {

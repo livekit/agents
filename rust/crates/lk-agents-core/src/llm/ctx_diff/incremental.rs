@@ -66,156 +66,182 @@ impl ChatContextDiff {
     pub fn advance(&mut self, old: &ChatContext, new: &ChatContext, budget: usize) -> bool {
         for _ in 0..budget {
             match self.phase {
-                Phase::Prefix => match (old.items.get(self.cursor), new.items.get(self.cursor)) {
-                    (Some(a), Some(b)) if a.id() == b.id() => {
-                        self.kept.insert(a.id().to_owned());
-                        self.cursor += 1;
-                    }
-                    _ => {
-                        self.prefix = self.cursor;
-                        self.cursor = 0;
-                        self.phase = Phase::OldIndex;
-                    }
-                },
-                Phase::OldIndex => {
-                    if let Some(item) = old.items.get(self.cursor) {
-                        self.old_by_id.insert(item.id().to_owned(), self.cursor);
-                        self.cursor += 1;
-                    } else {
-                        self.cursor = self.prefix;
-                        self.phase = Phase::NewIndex;
-                    }
-                }
-                Phase::NewIndex => {
-                    if let Some(item) = new.items.get(self.cursor) {
-                        self.duplicate_new |=
-                            self.positions.insert(item.id().to_owned(), self.cursor).is_some();
-                        self.cursor += 1;
-                    } else if self.duplicate_new {
-                        self.repeated.push(RepeatedRange {
-                            old_start: self.prefix,
-                            old_end: old.len(),
-                            new_start: self.prefix,
-                            new_end: new.len(),
-                        });
-                        self.phase = Phase::Repeated;
-                    } else {
-                        self.cursor = self.prefix;
-                        self.phase = Phase::Subsequence;
-                    }
-                }
-                Phase::Subsequence => {
-                    if let Some(item) = old.items.get(self.cursor) {
-                        let mut predecessor = None;
-                        if let Some(&position) = self.positions.get(item.id()) {
-                            let length = self.tails.partition_point(|&tail| tail < position);
-                            predecessor = length.checked_sub(1).map(|i| self.tail_items[i]);
-                            if length == self.tails.len() {
-                                self.tails.push(position);
-                                self.tail_items.push(self.cursor);
-                            } else {
-                                self.tails[length] = position;
-                                self.tail_items[length] = self.cursor;
-                            }
-                        }
-                        self.previous.push(predecessor);
-                        self.cursor += 1;
-                    } else {
-                        self.trace = self.tail_items.last().copied();
-                        self.phase = Phase::Trace;
-                    }
-                }
-                Phase::Trace => {
-                    if let Some(index) = self.trace {
-                        self.kept.insert(old.items[index].id().to_owned());
-                        self.trace = self.previous[index - self.prefix];
-                    } else {
-                        self.cursor = 0;
-                        self.phase = Phase::Remove;
-                    }
-                }
-                Phase::Repeated => {
-                    if let Some(rows) = &mut self.row {
-                        if rows.advance(old, new) {
-                            let rows = self.row.take().unwrap();
-                            let range = rows.range;
-                            let middle = range.old_start + (range.old_end - range.old_start) / 2;
-                            let split = range.new_start + rows.split;
-                            self.spare_rows = Some(rows.storage);
-                            self.repeated.push(RepeatedRange {
-                                old_start: middle,
-                                old_end: range.old_end,
-                                new_start: split,
-                                new_end: range.new_end,
-                            });
-                            self.repeated.push(RepeatedRange {
-                                old_start: range.old_start,
-                                old_end: middle,
-                                new_start: range.new_start,
-                                new_end: split,
-                            });
-                        }
-                    } else if let Some(range) = self.repeated.pop() {
-                        if range.old_start == range.old_end || range.new_start == range.new_end {
-                            continue;
-                        }
-                        if range.old_end - range.old_start == 1 {
-                            let id = old.items[range.old_start].id();
-                            if new.items[range.new_start].id() == id {
-                                self.kept.insert(id.to_owned());
-                            } else if range.new_start + 1 < range.new_end {
-                                self.repeated.push(RepeatedRange {
-                                    new_start: range.new_start + 1,
-                                    ..range
-                                });
-                            }
-                        } else {
-                            let storage = self.spare_rows.take().unwrap_or_else(|| {
-                                RowsStorage::new(range.new_end - range.new_start + 1)
-                            });
-                            self.row = Some(RepeatedRows::new(range, storage));
-                        }
-                    } else {
-                        self.cursor = 0;
-                        self.phase = Phase::Remove;
-                    }
-                }
-                Phase::Remove => {
-                    if let Some(item) = old.items.get(self.cursor) {
-                        if !self.kept.contains(item.id()) {
-                            self.operations.to_remove.push(item.id().to_owned());
-                        }
-                        self.cursor += 1;
-                    } else {
-                        self.cursor = 0;
-                        self.phase = Phase::Create;
-                    }
-                }
-                Phase::Create => {
-                    if let Some(item) = new.items.get(self.cursor) {
-                        if !self.kept.contains(item.id()) {
-                            self.operations
-                                .to_create
-                                .push((self.previous_id.clone(), item.id().to_owned()));
-                        } else if self
-                            .old_by_id
-                            .get(item.id())
-                            .is_some_and(|&at| item_changed(&old.items[at], item))
-                        {
-                            self.operations
-                                .to_update
-                                .push((self.previous_id.clone(), item.id().to_owned()));
-                        }
-                        self.previous_id = Some(item.id().to_owned());
-                        self.cursor += 1;
-                    } else {
-                        self.phase = Phase::Done;
-                    }
-                }
+                Phase::Prefix => self.step_prefix(old, new),
+                Phase::OldIndex => self.index_old(old),
+                Phase::NewIndex => self.index_new(old, new),
+                Phase::Subsequence => self.step_subsequence(old),
+                Phase::Trace => self.step_trace(old),
+                Phase::Repeated => self.step_repeated(old, new),
+                Phase::Remove => self.step_remove(old),
+                Phase::Create => self.step_create(old, new),
                 Phase::Done => return true,
             }
         }
         matches!(self.phase, Phase::Done)
+    }
+
+    /// The common prefix of ids is kept as is.
+    fn step_prefix(&mut self, old: &ChatContext, new: &ChatContext) {
+        match (old.items.get(self.cursor), new.items.get(self.cursor)) {
+            (Some(a), Some(b)) if a.id() == b.id() => {
+                self.kept.insert(a.id().to_owned());
+                self.cursor += 1;
+            }
+            _ => {
+                self.prefix = self.cursor;
+                self.cursor = 0;
+                self.phase = Phase::OldIndex;
+            }
+        }
+    }
+
+    fn index_old(&mut self, old: &ChatContext) {
+        let Some(item) = old.items.get(self.cursor) else {
+            self.cursor = self.prefix;
+            self.phase = Phase::NewIndex;
+            return;
+        };
+        self.old_by_id.insert(item.id().to_owned(), self.cursor);
+        self.cursor += 1;
+    }
+
+    /// Unique new ids take the subsequence path; a repeated one takes the row-by-row split.
+    fn index_new(&mut self, old: &ChatContext, new: &ChatContext) {
+        if let Some(item) = new.items.get(self.cursor) {
+            self.duplicate_new |=
+                self.positions.insert(item.id().to_owned(), self.cursor).is_some();
+            self.cursor += 1;
+        } else if self.duplicate_new {
+            self.repeated.push(RepeatedRange {
+                old_start: self.prefix,
+                old_end: old.len(),
+                new_start: self.prefix,
+                new_end: new.len(),
+            });
+            self.phase = Phase::Repeated;
+        } else {
+            self.cursor = self.prefix;
+            self.phase = Phase::Subsequence;
+        }
+    }
+
+    /// One old item of the patience longest-increasing-subsequence over new positions.
+    fn step_subsequence(&mut self, old: &ChatContext) {
+        let Some(item) = old.items.get(self.cursor) else {
+            self.trace = self.tail_items.last().copied();
+            self.phase = Phase::Trace;
+            return;
+        };
+        let mut predecessor = None;
+        if let Some(&position) = self.positions.get(item.id()) {
+            let length = self.tails.partition_point(|&tail| tail < position);
+            predecessor = length.checked_sub(1).map(|i| self.tail_items[i]);
+            if length == self.tails.len() {
+                self.tails.push(position);
+                self.tail_items.push(self.cursor);
+            } else {
+                self.tails[length] = position;
+                self.tail_items[length] = self.cursor;
+            }
+        }
+        self.previous.push(predecessor);
+        self.cursor += 1;
+    }
+
+    fn step_trace(&mut self, old: &ChatContext) {
+        let Some(index) = self.trace else {
+            self.cursor = 0;
+            self.phase = Phase::Remove;
+            return;
+        };
+        self.kept.insert(old.items[index].id().to_owned());
+        self.trace = self.previous[index - self.prefix];
+    }
+
+    /// One cell of the open range's rows, else the next range, else on to removal.
+    fn step_repeated(&mut self, old: &ChatContext, new: &ChatContext) {
+        if let Some(rows) = &mut self.row {
+            if rows.advance(old, new) {
+                let rows = self.row.take().expect("rows were open");
+                self.finish_split(rows);
+            }
+        } else if let Some(range) = self.repeated.pop() {
+            self.open_range(range, old, new);
+        } else {
+            self.cursor = 0;
+            self.phase = Phase::Remove;
+        }
+    }
+
+    /// Splits the range at its best middle; the left half is pushed last so it is taken first.
+    fn finish_split(&mut self, rows: RepeatedRows) {
+        let range = rows.range;
+        let middle = range.old_start + (range.old_end - range.old_start) / 2;
+        let split = range.new_start + rows.split;
+        self.spare_rows = Some(rows.storage);
+        self.repeated.push(RepeatedRange {
+            old_start: middle,
+            old_end: range.old_end,
+            new_start: split,
+            new_end: range.new_end,
+        });
+        self.repeated.push(RepeatedRange {
+            old_start: range.old_start,
+            old_end: middle,
+            new_start: range.new_start,
+            new_end: split,
+        });
+    }
+
+    fn open_range(&mut self, range: RepeatedRange, old: &ChatContext, new: &ChatContext) {
+        if range.old_start == range.old_end || range.new_start == range.new_end {
+            return;
+        }
+        if range.old_end - range.old_start > 1 {
+            let storage = self
+                .spare_rows
+                .take()
+                .unwrap_or_else(|| RowsStorage::new(range.new_end - range.new_start + 1));
+            self.row = Some(RepeatedRows::new(range, storage));
+            return;
+        }
+        let id = old.items[range.old_start].id();
+        if new.items[range.new_start].id() == id {
+            self.kept.insert(id.to_owned());
+        } else if range.new_start + 1 < range.new_end {
+            self.repeated.push(RepeatedRange { new_start: range.new_start + 1, ..range });
+        }
+    }
+
+    fn step_remove(&mut self, old: &ChatContext) {
+        let Some(item) = old.items.get(self.cursor) else {
+            self.cursor = 0;
+            self.phase = Phase::Create;
+            return;
+        };
+        if !self.kept.contains(item.id()) {
+            self.operations.to_remove.push(item.id().to_owned());
+        }
+        self.cursor += 1;
+    }
+
+    fn step_create(&mut self, old: &ChatContext, new: &ChatContext) {
+        let Some(item) = new.items.get(self.cursor) else {
+            self.phase = Phase::Done;
+            return;
+        };
+        let entry = (self.previous_id.clone(), item.id().to_owned());
+        if !self.kept.contains(item.id()) {
+            self.operations.to_create.push(entry);
+        } else if self
+            .old_by_id
+            .get(item.id())
+            .is_some_and(|&at| item_changed(&old.items[at], item))
+        {
+            self.operations.to_update.push(entry);
+        }
+        self.previous_id = Some(item.id().to_owned());
+        self.cursor += 1;
     }
 
     pub fn take_operations(&mut self) -> DiffOps {

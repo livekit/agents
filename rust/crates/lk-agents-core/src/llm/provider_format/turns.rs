@@ -9,7 +9,9 @@ use crate::llm::provider_format::group::{
 };
 use crate::llm::provider_format::openai::resolve;
 use crate::llm::provider_format::{ImageResolver, SerializedImage};
-use lk_agents_abi::{ChatContent, ChatContext, FunctionCall, FunctionCallOutput, Role};
+use lk_agents_abi::{
+    ChatContent, ChatContext, ChatMessage, FunctionCall, FunctionCallOutput, Role,
+};
 use serde_json::Value;
 use std::borrow::Cow;
 
@@ -53,29 +55,19 @@ pub(crate) fn merge_turns(
     let flush = |role: &'static str, content: Vec<Value>, turns: &mut Vec<Value>| {
         if !content.is_empty() {
             let mut turn = serde_json::Map::new();
-            turn.insert("role".into(), role.into());
+            turn.insert(ROLE_KEY.into(), role.into());
             turn.insert(dialect.key.into(), Value::Array(content));
             turns.push(Value::Object(turn));
         }
     };
 
     for item in grouping.groups.iter().flat_map(|g| g.flatten()) {
-        let role = match item {
-            // Only `role == "system"` with truthy text is hoisted; `developer` and an empty
-            // system message fall through to a user turn, as in the reference.
-            GroupItem::Message(m) if m.role == Role::System => {
-                match m.raw_text_content().filter(|t| !t.is_empty()) {
-                    Some(text) => {
-                        system_messages.push(text);
-                        continue;
-                    }
-                    None => "user",
-                }
+        let role = match placement(item, dialect) {
+            Placement::System(text) => {
+                system_messages.push(text);
+                continue;
             }
-            GroupItem::Message(m) if m.role == Role::Assistant => dialect.assistant,
-            GroupItem::Message(_) => "user",
-            GroupItem::Call(_) => dialect.assistant,
-            GroupItem::Output(_) => dialect.output,
+            Placement::Turn(role) => role,
         };
 
         if Some(role) != current_role {
@@ -87,21 +79,7 @@ pub(crate) fn merge_turns(
         }
 
         match item {
-            GroupItem::Message(m) => {
-                for part in &m.content {
-                    match part {
-                        ChatContent::Image(image) => {
-                            content.push((dialect.image)(&resolve(image, images)?)?);
-                        }
-                        ChatContent::Audio(_) => {}
-                        // `elif c:`: empty parts are dropped, the rest stay separate blocks.
-                        ChatContent::Text(text) if !text.is_empty() => {
-                            content.push((dialect.text)(text));
-                        }
-                        ChatContent::Text(_) => {}
-                    }
-                }
-            }
+            GroupItem::Message(m) => push_message_blocks(m, images, dialect, &mut content)?,
             GroupItem::Call(call) => content.push((dialect.call)(call)?),
             GroupItem::Output(output) => content.push((dialect.result)(output)),
         }
@@ -112,4 +90,49 @@ pub(crate) fn merge_turns(
     }
 
     Ok(Turns { turns, system_messages, last_role: current_role, dropped: grouping.dropped })
+}
+
+/// The turn's role field and a user message's role, the same in every dialect.
+const ROLE_KEY: &str = "role";
+const USER_ROLE: &str = "user";
+
+/// Where an item goes: the hoisted system prompt, or a turn of that role.
+enum Placement {
+    System(String),
+    Turn(&'static str),
+}
+
+fn placement(item: GroupItem<'_>, dialect: &Dialect<'_>) -> Placement {
+    match item {
+        // Only `role == "system"` with truthy text is hoisted; `developer` and an empty
+        // system message fall through to a user turn, as in the reference.
+        GroupItem::Message(m) if m.role == Role::System => {
+            match m.raw_text_content().filter(|t| !t.is_empty()) {
+                Some(text) => Placement::System(text),
+                None => Placement::Turn(USER_ROLE),
+            }
+        }
+        GroupItem::Message(m) if m.role == Role::Assistant => Placement::Turn(dialect.assistant),
+        GroupItem::Message(_) => Placement::Turn(USER_ROLE),
+        GroupItem::Call(_) => Placement::Turn(dialect.assistant),
+        GroupItem::Output(_) => Placement::Turn(dialect.output),
+    }
+}
+
+fn push_message_blocks(
+    message: &ChatMessage,
+    images: &dyn ImageResolver,
+    dialect: &Dialect<'_>,
+    content: &mut Vec<Value>,
+) -> Result<(), FormatError> {
+    for part in &message.content {
+        match part {
+            ChatContent::Image(image) => content.push((dialect.image)(&resolve(image, images)?)?),
+            ChatContent::Audio(_) => {}
+            // `elif c:`: empty parts are dropped, the rest stay separate blocks.
+            ChatContent::Text(text) if !text.is_empty() => content.push((dialect.text)(text)),
+            ChatContent::Text(_) => {}
+        }
+    }
+    Ok(())
 }

@@ -83,101 +83,8 @@ fn convert_expr(provider: Provider, text: &str) -> String {
     }
 
     // An unsupported marker lowers to `""`; `dedup_removal_space` avoids a double space.
-    let text = sub_expr(&EXPR_WRAP_RE, text, |m| {
-        let marker_type = attr(m, "type");
-        let label = py_strip(&attr(m, "label")).to_lowercase();
-        let inner = &m["inner"];
-        if marker_type == "spell" {
-            return if provider == Provider::Cartesia {
-                format!("<spell>{inner}</spell>")
-            } else {
-                inner.to_string()
-            };
-        }
-        // prosody: native wrapping tags exist only for xAI
-        match provider {
-            Provider::Xai => {
-                let native = label.replace(' ', "-");
-                if XAI_WRAPPING.contains(&native.as_str()) {
-                    format!("<{native}>{inner}</{native}>")
-                } else {
-                    inner.to_string()
-                }
-            }
-            // not advertised for Inworld; salvage a stray one as a delivery hint
-            Provider::Inworld => format!("<expression value=\"{label}\"/>{inner}"),
-            // wrapping form of the point controls: apply before the span
-            Provider::Cartesia => format!("{}{inner}", cartesia_prosody(&label).unwrap_or("")),
-            Provider::FishAudio => {
-                if label == "emphasis" {
-                    format!("<emphasis>{inner}</emphasis>")
-                } else if FISHAUDIO_TONES.contains(&label.as_str()) {
-                    // tone controls are prefix markers: `[whispering]` steers the words after it
-                    format!("[{label}] {inner}")
-                } else {
-                    inner.to_string()
-                }
-            }
-            // capitalizing is Gemini's one in-text stress control
-            Provider::Gemini if label == "emphasis" => inner.to_uppercase(),
-            Provider::Gemini => inner.to_string(),
-        }
-    });
-
-    let text = sub_expr(&EXPR_SELF_RE, &text, |m| {
-        let marker_type = attr(m, "type");
-        let label = attr(m, "label");
-        if provider == Provider::Gemini && marker_type == "expression" {
-            let pre = m.name("pre").map_or(0, |p| p.as_str().len());
-            return m[0][pre..].to_string();
-        }
-        match marker_type.as_str() {
-            "expression" => match provider {
-                // Cartesia's discrete emotion vocabulary (instructions list it)
-                Provider::Cartesia => format!("<emotion value=\"{label}\"/>"),
-                Provider::Inworld | Provider::FishAudio => {
-                    format!("<expression value=\"{label}\"/>")
-                }
-                // xAI has no free-form delivery descriptions
-                Provider::Xai | Provider::Gemini => String::new(),
-            },
-            "sound" => match provider {
-                // no non-verbal sound support
-                Provider::Cartesia => String::new(),
-                Provider::Xai => {
-                    let l = xai_sound_alias(&label.to_lowercase()).map_or(label, str::to_string);
-                    format!("<sound value=\"{l}\"/>")
-                }
-                Provider::FishAudio => {
-                    let l =
-                        fishaudio_sound_alias(&label.to_lowercase()).map_or(label, str::to_string);
-                    format!("<sound value=\"{l}\"/>")
-                }
-                Provider::Inworld => format!("<sound value=\"{label}\"/>"),
-                Provider::Gemini => {
-                    let l = py_strip(&label).to_lowercase();
-                    let l = gemini_sound_alias(&l).unwrap_or(&l);
-                    if GEMINI_SOUNDS.contains(&l) { format!("<{l}>") } else { String::new() }
-                }
-            },
-            "break" if provider == Provider::Gemini => format!("<{GEMINI_PAUSE}>"),
-            "break" => format!("<break time=\"{label}\"/>"),
-            // Cartesia prosody is a self-closing point control (speed/volume)
-            "prosody" if provider == Provider::Cartesia => {
-                cartesia_prosody(&py_strip(&label).to_lowercase()).unwrap_or("").to_string()
-            }
-            // Fish's native form is a prefix marker: keep a self-closing one as-is.
-            "prosody" if provider == Provider::FishAudio => {
-                let tone = py_strip(&label).to_lowercase();
-                if FISHAUDIO_TONES.contains(&tone.as_str()) {
-                    format!("[{tone}]")
-                } else {
-                    String::new()
-                }
-            }
-            _ => String::new(),
-        }
-    });
+    let text = sub_expr(&EXPR_WRAP_RE, text, |m| wrapping_marker(provider, m));
+    let text = sub_expr(&EXPR_SELF_RE, &text, |m| point_marker(provider, m));
 
     // A stray unpaired expr tag must never reach the TTS: drop the delimiters, keep the words.
     // Gemini's standing style markers would match the opening pattern; only closers go there.
@@ -187,6 +94,130 @@ fn convert_expr(provider: Provider, text: &str) -> String {
         sub_expr(&EXPR_OPEN_RE, &text, |_| String::new())
     };
     sub_expr(&EXPR_CLOSE_RE, &text, |_| String::new())
+}
+
+/// The `type` of an `<expr>` marker; anything else is a hallucination.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MarkerType {
+    Expression,
+    Sound,
+    Break,
+    Prosody,
+    Spell,
+}
+
+impl MarkerType {
+    fn of(m: &Captures) -> Option<Self> {
+        match attr(m, "type").as_str() {
+            "expression" => Some(Self::Expression),
+            "sound" => Some(Self::Sound),
+            "break" => Some(Self::Break),
+            "prosody" => Some(Self::Prosody),
+            "spell" => Some(Self::Spell),
+            _ => None,
+        }
+    }
+}
+
+/// The prosody label every provider with a stress control understands.
+const EMPHASIS: &str = "emphasis";
+
+/// A spell or prosody wrapper in `provider`'s syntax; its inner words always stay.
+fn wrapping_marker(provider: Provider, m: &Captures) -> String {
+    let label = py_strip(&attr(m, "label")).to_lowercase();
+    let inner = &m["inner"];
+    if MarkerType::of(m) == Some(MarkerType::Spell) {
+        return if provider == Provider::Cartesia {
+            format!("<spell>{inner}</spell>")
+        } else {
+            inner.to_string()
+        };
+    }
+    // prosody: native wrapping tags exist only for xAI
+    match provider {
+        Provider::Xai => {
+            let native = label.replace(' ', "-");
+            if XAI_WRAPPING.contains(&native.as_str()) {
+                format!("<{native}>{inner}</{native}>")
+            } else {
+                inner.to_string()
+            }
+        }
+        // not advertised for Inworld; salvage a stray one as a delivery hint
+        Provider::Inworld => format!("<expression value=\"{label}\"/>{inner}"),
+        // wrapping form of the point controls: apply before the span
+        Provider::Cartesia => format!("{}{inner}", cartesia_prosody(&label).unwrap_or("")),
+        Provider::FishAudio if label == EMPHASIS => format!("<emphasis>{inner}</emphasis>"),
+        // tone controls are prefix markers: `[whispering]` steers the words after it
+        Provider::FishAudio if FISHAUDIO_TONES.contains(&label.as_str()) => {
+            format!("[{label}] {inner}")
+        }
+        Provider::FishAudio => inner.to_string(),
+        // capitalizing is Gemini's one in-text stress control
+        Provider::Gemini if label == EMPHASIS => inner.to_uppercase(),
+        Provider::Gemini => inner.to_string(),
+    }
+}
+
+/// A self-closing marker in `provider`'s syntax. Gemini keeps its `expression` marker as is.
+fn point_marker(provider: Provider, m: &Captures) -> String {
+    let marker_type = MarkerType::of(m);
+    let label = attr(m, "label");
+    if provider == Provider::Gemini && marker_type == Some(MarkerType::Expression) {
+        let pre = m.name("pre").map_or(0, |p| p.as_str().len());
+        return m[0][pre..].to_string();
+    }
+    match marker_type {
+        Some(MarkerType::Expression) => expression_marker(provider, &label),
+        Some(MarkerType::Sound) => sound_marker(provider, label),
+        Some(MarkerType::Break) if provider == Provider::Gemini => format!("<{GEMINI_PAUSE}>"),
+        Some(MarkerType::Break) => format!("<break time=\"{label}\"/>"),
+        // Cartesia prosody is a self-closing point control (speed/volume)
+        Some(MarkerType::Prosody) if provider == Provider::Cartesia => {
+            cartesia_prosody(&py_strip(&label).to_lowercase()).unwrap_or("").to_string()
+        }
+        // Fish's native form is a prefix marker: keep a self-closing one as-is.
+        Some(MarkerType::Prosody) if provider == Provider::FishAudio => {
+            let tone = py_strip(&label).to_lowercase();
+            if FISHAUDIO_TONES.contains(&tone.as_str()) {
+                format!("[{tone}]")
+            } else {
+                String::new()
+            }
+        }
+        _ => String::new(),
+    }
+}
+
+fn expression_marker(provider: Provider, label: &str) -> String {
+    match provider {
+        // Cartesia's discrete emotion vocabulary (instructions list it)
+        Provider::Cartesia => format!("<emotion value=\"{label}\"/>"),
+        Provider::Inworld | Provider::FishAudio => format!("<expression value=\"{label}\"/>"),
+        // xAI has no free-form delivery descriptions
+        Provider::Xai | Provider::Gemini => String::new(),
+    }
+}
+
+fn sound_marker(provider: Provider, label: String) -> String {
+    match provider {
+        // no non-verbal sound support
+        Provider::Cartesia => String::new(),
+        Provider::Xai => {
+            let l = xai_sound_alias(&label.to_lowercase()).map_or(label, str::to_string);
+            format!("<sound value=\"{l}\"/>")
+        }
+        Provider::FishAudio => {
+            let l = fishaudio_sound_alias(&label.to_lowercase()).map_or(label, str::to_string);
+            format!("<sound value=\"{l}\"/>")
+        }
+        Provider::Inworld => format!("<sound value=\"{label}\"/>"),
+        Provider::Gemini => {
+            let l = py_strip(&label).to_lowercase();
+            let l = gemini_sound_alias(&l).unwrap_or(&l);
+            if GEMINI_SOUNDS.contains(&l) { format!("<{l}>") } else { String::new() }
+        }
+    }
 }
 
 // --- native-tag rewrites ---------------------------------------------------------------------

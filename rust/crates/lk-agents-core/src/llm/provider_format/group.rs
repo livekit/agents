@@ -80,6 +80,19 @@ impl<'a> ChatItemGroup<'a> {
     pub fn is_empty(&self) -> bool {
         self.message.is_none() && self.tool_calls.is_empty() && self.tool_outputs.is_empty()
     }
+
+    /// `utils.py:117`'s assert; reachable when two messages share a `/`-prefix.
+    fn set_assistant_message(
+        &mut self,
+        message: &'a ChatMessage,
+        group_id: &str,
+    ) -> Result<(), FormatError> {
+        if self.message.is_some() {
+            return Err(FormatError::MultipleMessagesInGroup { group_id: group_id.to_string() });
+        }
+        self.message = Some(message);
+        Ok(())
+    }
 }
 
 /// The binding logs the reference's warnings (`utils.py:99`, `:140`, `:152`).
@@ -121,14 +134,7 @@ pub fn group_tool_calls<'a>(
             ChatItem::Message(m) if m.role == Role::Assistant => {
                 // The `/`-prefix key puts `item_7` with `item_7/0`, `item_7/1`.
                 let group_id = m.id.split('/').next().unwrap_or(&m.id);
-                let slot = upsert(&mut keys, &mut index, group_id);
-                if slot.message.is_some() {
-                    // `utils.py:117`'s assert; reachable when two messages share a `/`-prefix.
-                    return Err(FormatError::MultipleMessagesInGroup {
-                        group_id: group_id.to_string(),
-                    });
-                }
-                slot.message = Some(m);
+                upsert(&mut keys, &mut index, group_id).set_assistant_message(m, group_id)?;
             }
             ChatItem::FunctionCall(f) => {
                 let group_id = match &f.group_id {
@@ -150,16 +156,30 @@ pub fn group_tool_calls<'a>(
         }
     }
 
+    attach_outputs(&mut keys, tool_outputs, &mut dropped);
+    for group in &mut keys {
+        remove_invalid_tool_calls(group, &mut dropped);
+    }
+
+    Ok(Grouping { groups: keys, dropped })
+}
+
+/// Each output joins the group holding its call; one without a call is dropped.
+fn attach_outputs<'a>(
+    groups: &mut [ChatItemGroup<'a>],
+    outputs: Vec<&'a FunctionCallOutput>,
+    dropped: &mut Vec<Dropped>,
+) {
     // One flat `call_id -> group` map first, so with a shared `call_id` the last group wins.
     let mut call_id_to_group: BTreeMap<&str, usize> = BTreeMap::new();
-    for (i, group) in keys.iter().enumerate() {
+    for (i, group) in groups.iter().enumerate() {
         for call in &group.tool_calls {
             call_id_to_group.insert(call.call_id.as_str(), i);
         }
     }
-    for output in tool_outputs {
+    for output in outputs {
         match call_id_to_group.get(output.call_id.as_str()) {
-            Some(&i) => keys[i].tool_outputs.push(output),
+            Some(&i) => groups[i].tool_outputs.push(output),
             None => dropped.push(Dropped {
                 reason: DropReason::OutputWithoutCall,
                 call_id: output.call_id.clone(),
@@ -167,12 +187,6 @@ pub fn group_tool_calls<'a>(
             }),
         }
     }
-
-    for group in &mut keys {
-        remove_invalid_tool_calls(group, &mut dropped);
-    }
-
-    Ok(Grouping { groups: keys, dropped })
 }
 
 fn upsert<'g, 'a>(

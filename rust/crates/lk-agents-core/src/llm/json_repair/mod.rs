@@ -44,6 +44,37 @@ fn same(a: &Value, b: &Value) -> bool {
         _ => false,
     }
 }
+/// The span of an object's two braces; a longer empty object had a body it could not read.
+const BRACES: usize = 2;
+/// A `[` where a key was expected continues `prev`, the previous value's array. When `prev`'s
+/// arrays share one width, its trailing scalars are regrouped into rows of that width.
+fn merge_into_previous_array(prev: &mut Vec<Value>, next: Vec<Value>) {
+    let lengths: Vec<usize> = prev.iter().filter_map(|v| v.as_array().map(Vec::len)).collect();
+    let width = lengths.first().copied().filter(|n| *n > 0 && lengths.iter().all(|x| x == n));
+    let Some(width) = width else {
+        if next.len() == 1 && next[0].is_array() {
+            prev.extend(next[0].as_array().unwrap().clone());
+        } else {
+            prev.extend(next);
+        }
+        return;
+    };
+    let tail_start = prev.iter().rposition(Value::is_array).map(|i| i + 1).unwrap_or(0);
+    let tail = prev.split_off(tail_start);
+    if tail.len() % width == 0 {
+        prev.extend(tail.chunks(width).map(|c| Value::Array(c.to_vec())));
+    } else {
+        prev.extend(tail);
+    }
+    if next.is_empty() {
+        return;
+    }
+    if next.iter().all(Value::is_array) {
+        prev.extend(next);
+    } else {
+        prev.push(Value::Array(next));
+    }
+}
 fn quote(c: char) -> bool {
     matches!(c, '"' | '\'' | '“' | '”')
 }
@@ -155,22 +186,12 @@ impl Parser {
                     }
                 }
                 (Some('/'), Some('/')) => {
-                    self.index += 2;
+                    self.index += "//".len();
                     while self.at(0).is_some_and(|c| !matches!(c, '\n' | '\r')) {
                         self.index += 1;
                     }
                 }
-                (Some('/'), Some('*')) => {
-                    self.index += 2;
-                    while self.at(0).is_some() {
-                        let done = self.at(0) == Some('*') && self.at(1) == Some('/');
-                        self.index += 1;
-                        if done {
-                            self.index += 1;
-                            break;
-                        }
-                    }
-                }
+                (Some('/'), Some('*')) => self.skip_block_comment(),
                 _ => self.index += 1,
             }
             if self.current().is_some() {
@@ -180,6 +201,17 @@ impl Parser {
             if !matches!(self.at(0), Some('#' | '/')) {
                 return self.json();
             }
+        }
+    }
+    /// From `/*` past the closing `*/`, or to the end of input.
+    fn skip_block_comment(&mut self) {
+        self.index += "/*".len();
+        while self.at(0).is_some() {
+            if self.at(0) == Some('*') && self.at(1) == Some('/') {
+                self.index += "*/".len();
+                return;
+            }
+            self.index += 1;
         }
     }
     fn number(&mut self) -> Value {
@@ -291,87 +323,18 @@ impl Parser {
             }
             let mut rollback = self.index;
             let key = self
-                .in_context(Context::Key, |p| {
-                    loop {
-                        rollback = p.index;
-                        if p.at(0) == Some('[')
-                            && !obj.is_empty()
-                            && let Some(Value::Array(prev)) = obj.values_mut().last()
-                        {
-                            p.index += 1;
-                            if let Value::Array(next) = p.array(']') {
-                                let lengths: Vec<usize> = prev
-                                    .iter()
-                                    .filter_map(|v| v.as_array().map(Vec::len))
-                                    .collect();
-                                let width = lengths
-                                    .first()
-                                    .copied()
-                                    .filter(|n| *n > 0 && lengths.iter().all(|x| x == n));
-                                if let Some(width) = width {
-                                    let tail_start = prev
-                                        .iter()
-                                        .rposition(Value::is_array)
-                                        .map(|i| i + 1)
-                                        .unwrap_or(0);
-                                    let tail = prev.split_off(tail_start);
-                                    if tail.len() % width == 0 {
-                                        prev.extend(
-                                            tail.chunks(width).map(|c| Value::Array(c.to_vec())),
-                                        );
-                                    } else {
-                                        prev.extend(tail);
-                                    }
-                                    if !next.is_empty() {
-                                        if next.iter().all(Value::is_array) {
-                                            prev.extend(next);
-                                        } else {
-                                            prev.push(Value::Array(next));
-                                        }
-                                    }
-                                } else {
-                                    if next.len() == 1 && next[0].is_array() {
-                                        prev.extend(next[0].as_array().unwrap().clone());
-                                    } else {
-                                        prev.extend(next);
-                                    }
-                                }
-                            }
-                            p.ws();
-                            if p.at(0) == Some(',') {
-                                p.index += 1;
-                            }
-                            p.ws();
-                            continue;
-                        }
-                        let key = p.string();
-                        if key == empty() {
-                            p.ws();
-                        }
-                        if key != empty() || matches!(p.at(0), Some(':' | '}')) || p.at(0).is_none()
-                        {
-                            break key;
-                        }
-                        p.ws();
-                    }
-                })
+                .in_context(Context::Key, |p| p.object_key(&mut obj, &mut rollback))
                 .as_str()
                 .unwrap_or("")
                 .to_owned();
-            if self.has(Context::Array) && parent != Some(Context::Value) && obj.contains_key(&key)
+            if self.has(Context::Array)
+                && parent != Some(Context::Value)
+                && obj.contains_key(&key)
+                && self.repeated_key_opens_object(rollback)
             {
-                let mut prev = rollback as isize - self.index as isize - 1;
-                while self.at(prev).is_some_and(char::is_whitespace) {
-                    prev -= 1;
-                }
-                if !(self.chars.get(rollback).copied().is_some_and(quote)
-                    && self.at(prev) == Some(',')
-                    && self.at(self.scroll(0)) == Some(':'))
-                {
-                    self.chars.insert(rollback, '{');
-                    self.index = rollback.saturating_sub(1);
-                    break;
-                }
+                self.chars.insert(rollback, '{');
+                self.index = rollback.saturating_sub(1);
+                break;
             }
             self.ws();
             if self.at(0).is_none() || self.at(0) == Some('}') {
@@ -396,49 +359,97 @@ impl Parser {
             }
         }
         self.index += 1;
-        if obj.is_empty() && self.index.saturating_sub(start) > 2 {
-            let body = self.slice(start, self.index.saturating_sub(1));
-            if body.trim_start().starts_with("\\\"") {
-                let normalized = self
-                    .slice(start.saturating_sub(1), self.index)
-                    .replace("\\\"", "\"")
-                    .replace("\\'", "'");
-                return match repair(&normalized) {
-                    Ok(v) => v,
-                    Err(_) => {
-                        self.limit_hit = true;
-                        empty()
-                    }
-                };
-            }
-
-            if !body.contains(':')
-                && !body.trim().is_empty()
-                && !body.trim().starts_with(['#', '/'])
-            {
-                self.index = start;
-                let result = self.in_context(Context::Key, |p| p.array(']'));
-                self.contexts.push(Context::Key);
-                return result;
-            }
+        if obj.is_empty()
+            && self.index.saturating_sub(start) > BRACES
+            && let Some(value) = self.reread_empty_object(start)
+        {
+            return value;
         }
+        self.close_object(&mut obj);
+        Value::Object(obj)
+    }
+    /// Reads a key. A `[` where a key was expected continues the previous value's array.
+    fn object_key(&mut self, obj: &mut Map<String, Value>, rollback: &mut usize) -> Value {
+        loop {
+            *rollback = self.index;
+            if self.at(0) == Some('[')
+                && !obj.is_empty()
+                && let Some(Value::Array(prev)) = obj.values_mut().last()
+            {
+                self.index += 1;
+                if let Value::Array(next) = self.array(']') {
+                    merge_into_previous_array(prev, next);
+                }
+                self.ws();
+                if self.at(0) == Some(',') {
+                    self.index += 1;
+                }
+                self.ws();
+                continue;
+            }
+            let key = self.string();
+            if key == empty() {
+                self.ws();
+            }
+            if key != empty() || matches!(self.at(0), Some(':' | '}')) || self.at(0).is_none() {
+                return key;
+            }
+            self.ws();
+        }
+    }
+    /// A key repeated inside an array starts the next object, unless a quoted key follows a
+    /// comma and precedes a colon.
+    fn repeated_key_opens_object(&self, rollback: usize) -> bool {
+        let mut prev = rollback as isize - self.index as isize - 1;
+        while self.at(prev).is_some_and(char::is_whitespace) {
+            prev -= 1;
+        }
+        !(self.chars.get(rollback).copied().is_some_and(quote)
+            && self.at(prev) == Some(',')
+            && self.at(self.scroll(0)) == Some(':'))
+    }
+    /// An empty object's body read again: an escaped object (`{\"a\": 1}`), or bare values that
+    /// are an array.
+    fn reread_empty_object(&mut self, start: usize) -> Option<Value> {
+        let body = self.slice(start, self.index.saturating_sub(1));
+        if body.trim_start().starts_with("\\\"") {
+            let normalized = self
+                .slice(start.saturating_sub(1), self.index)
+                .replace("\\\"", "\"")
+                .replace("\\'", "'");
+            return Some(repair(&normalized).unwrap_or_else(|_| {
+                self.limit_hit = true;
+                empty()
+            }));
+        }
+        if body.contains(':') || body.trim().is_empty() || body.trim().starts_with(['#', '/']) {
+            return None;
+        }
+        self.index = start;
+        let result = self.in_context(Context::Key, |p| p.array(']'));
+        self.contexts.push(Context::Key);
+        Some(result)
+    }
+    /// Past the closing brace: inside a container a stray `}` is consumed; at the top level a
+    /// comma and another quoted object continue this one.
+    fn close_object(&mut self, obj: &mut Map<String, Value>) {
         if let Some(context) = self.current() {
             if self.at(0) == Some('}') && !matches!(context, Context::Key | Context::Value) {
                 self.index += 1;
             }
-        } else {
-            self.ws();
-            if self.at(0) == Some(',') {
-                self.index += 1;
-                self.ws();
-                if self.at(0).is_some_and(quote)
-                    && let Value::Object(add) = self.object()
-                {
-                    obj.extend(add);
-                }
-            }
+            return;
         }
-        Value::Object(obj)
+        self.ws();
+        if self.at(0) != Some(',') {
+            return;
+        }
+        self.index += 1;
+        self.ws();
+        if self.at(0).is_some_and(quote)
+            && let Value::Object(add) = self.object()
+        {
+            obj.extend(add);
+        }
     }
     fn parse(&mut self) -> Value {
         let first = self.json();

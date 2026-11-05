@@ -123,75 +123,79 @@ impl RunEvents {
 
     /// `index` when its event meets `expected`, else the first mismatch.
     fn check(&self, index: usize, expected: &EventExpectation) -> Result<usize, AssertionFailure> {
-        let event = &self.events[index];
-        let fail = |message: String| Err(self.fail(&message, Some(index)));
-        match (expected, event) {
+        let outcome = match (expected, &self.events[index]) {
             (EventExpectation::Message { role }, ChatItem::Message(message)) => {
-                if let Some(role) = role
-                    && role != message.role.as_str()
-                {
-                    return fail(format!(
-                        "Expected role '{role}', got '{}'",
-                        message.role.as_str()
-                    ));
-                }
+                expect_role(role.as_deref(), message.role.as_str())
             }
             (EventExpectation::FunctionCall { name, arguments }, ChatItem::FunctionCall(call)) => {
-                if let Some(name) = name
-                    && *name != call.name
-                {
-                    return fail(format!("Expected call name '{name}', got '{}'", call.name));
-                }
-                if let Some(expected) = arguments {
-                    let Some(expected) = expected.as_object() else {
-                        return fail(format!(
-                            "Expected arguments must be an object, got {expected}"
-                        ));
-                    };
-                    let actual = match serde_json::from_str::<Value>(&call.arguments) {
-                        Ok(Value::Object(actual)) => actual,
-                        _ => {
-                            return fail(format!(
-                                "The call's arguments are not a JSON object: {}",
-                                python_repr(&call.arguments)
-                            ));
-                        }
-                    };
-                    for (key, value) in expected {
-                        match actual.get(key) {
-                            Some(found) if json_eq(found, value) => {}
-                            found => {
-                                let found = found.map_or("None".to_owned(), Value::to_string);
-                                return fail(format!(
-                                    "For key '{key}', expected {value}, got {found}"
-                                ));
-                            }
-                        }
-                    }
-                }
+                expect_call(call, name.as_deref(), arguments.as_ref())
             }
             (
                 EventExpectation::FunctionCallOutput { output, is_error },
                 ChatItem::FunctionCallOutput(out),
-            ) => {
-                if let Some(output) = output
-                    && *output != out.output
-                {
-                    return fail(format!("Expected output '{output}', got '{}'", out.output));
-                }
-                if let Some(is_error) = is_error
-                    && *is_error != out.is_error
-                {
-                    return fail(format!(
-                        "Expected is_error={}, got {}",
-                        py_bool(*is_error),
-                        py_bool(out.is_error)
-                    ));
-                }
-            }
-            (expected, _) => return fail(format!("Expected {}", kind_name(expected))),
+            ) => expect_output(out, output.as_deref(), *is_error),
+            (expected, _) => Err(format!("Expected {}", kind_name(expected))),
+        };
+        outcome.map(|()| index).map_err(|message| self.fail(&message, Some(index)))
+    }
+}
+
+fn expect_role(expected: Option<&str>, actual: &str) -> Result<(), String> {
+    match expected {
+        Some(role) if role != actual => Err(format!("Expected role '{role}', got '{actual}'")),
+        _ => Ok(()),
+    }
+}
+
+fn expect_call(
+    call: &lk_agents_abi::FunctionCall,
+    name: Option<&str>,
+    arguments: Option<&Value>,
+) -> Result<(), String> {
+    if let Some(name) = name
+        && name != call.name
+    {
+        return Err(format!("Expected call name '{name}', got '{}'", call.name));
+    }
+    arguments.map_or(Ok(()), |expected| expect_arguments(expected, &call.arguments))
+}
+
+/// Every key of `expected` is in the call's `actual` arguments with an equal value; the first
+/// mismatch in key order is reported.
+fn expect_arguments(expected: &Value, actual: &str) -> Result<(), String> {
+    let expected = expected
+        .as_object()
+        .ok_or_else(|| format!("Expected arguments must be an object, got {expected}"))?;
+    let Ok(Value::Object(actual_object)) = serde_json::from_str::<Value>(actual) else {
+        return Err(format!("The call's arguments are not a JSON object: {}", python_repr(actual)));
+    };
+    let mismatch = expected
+        .iter()
+        .find(|(key, value)| !actual_object.get(*key).is_some_and(|found| json_eq(found, value)));
+    match mismatch {
+        Some((key, value)) => {
+            let found = actual_object.get(key).map_or("None".to_owned(), Value::to_string);
+            Err(format!("For key '{key}', expected {value}, got {found}"))
         }
-        Ok(index)
+        None => Ok(()),
+    }
+}
+
+fn expect_output(
+    out: &lk_agents_abi::FunctionCallOutput,
+    output: Option<&str>,
+    is_error: Option<bool>,
+) -> Result<(), String> {
+    if let Some(output) = output
+        && output != out.output
+    {
+        return Err(format!("Expected output '{output}', got '{}'", out.output));
+    }
+    match is_error {
+        Some(is_error) if is_error != out.is_error => {
+            Err(format!("Expected is_error={}, got {}", py_bool(is_error), py_bool(out.is_error)))
+        }
+        _ => Ok(()),
     }
 }
 

@@ -32,6 +32,8 @@ pub const DEFAULT_DEBOUNCE: [(&str, Duration); 5] = [
 ];
 
 pub const INTERRUPTION_NEW_MESSAGE: &str = "new-message";
+/// The run reason when a client canceled the task with `tasks/cancel`.
+pub const CLIENT_CANCEL_REASON: &str = "client-cancel";
 pub const A2A_CHANNEL: &str = "a2a";
 pub const DELEGATION_CHANNEL: &str = "delegation";
 

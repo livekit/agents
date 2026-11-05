@@ -1,5 +1,6 @@
 //! Translation of parse_string.py and parse_string_helpers from the attributed upstream.
 use super::*;
+use std::ops::ControlFlow;
 impl Parser {
     fn member(&self, mut i: isize) -> bool {
         if self.at(i).is_some_and(quote) {
@@ -19,34 +20,34 @@ impl Parser {
         }
         self.at(self.scroll(i)) == Some(':')
     }
-    fn comma_kind(&self) -> u8 {
+    fn comma_kind(&self) -> Comma {
         let i = self.scroll(1);
         match self.at(i) {
-            None | Some('}') => return 1,
-            Some('{' | '[') => return 2,
+            None | Some('}') => return Comma::EndsValue,
+            Some('{' | '[') => return Comma::OpensContainer,
             _ => {}
         }
         if self.at(i).is_some_and(quote) {
             let q = self.at(i).unwrap();
             let end = self.skip(&[q], i + 1);
             return if self.at(end).is_some() && self.at(self.scroll(end + 1)) == Some(':') {
-                1
+                Comma::EndsValue
             } else {
-                0
+                Comma::InText
             };
         }
         if self.member(if self.at(i) == Some('`') { i + 1 } else { i }) {
-            return 1;
+            return Comma::EndsValue;
         }
         let q = self.skip(&['"', '\'', '“', '”'], i);
         let c = self.skip(&['{', '['], i);
         if self.at(c).is_some() && c < q {
-            return 0;
+            return Comma::InText;
         }
         if self.at(i).is_some_and(quote) {
-            return 0;
+            return Comma::InText;
         }
-        if self.member(q) { 1 } else { 0 }
+        if self.member(q) { Comma::EndsValue } else { Comma::InText }
     }
     pub(super) fn string(&mut self) -> Value {
         if matches!(self.at(0), Some('#' | '/')) {
@@ -127,343 +128,352 @@ impl Parser {
                 }
             }
         }
-        let mut out = String::new();
-        let mut unmatched = false;
-        let mut low = false;
-        let mut pending = false;
-        let mut stack = Vec::new();
+        let mut scan = StringScan {
+            left,
+            right,
+            missing,
+            doubled,
+            out: String::new(),
+            unmatched: false,
+            low: false,
+            pending: false,
+            stack: Vec::new(),
+        };
         while let Some(c) = self.at(0) {
-            if c == right && !low {
+            if self.string_step(&mut scan, c).is_break() {
                 break;
-            }
-            if missing
-                && ((self.current() == Some(Context::Key) && (c == ':' || c.is_whitespace()))
-                    || (self.current() == Some(Context::Array) && matches!(c, ']' | ',')))
-            {
-                break;
-            }
-            if c == '„' && !out.ends_with('\\') {
-                low = true;
-                out.push(c);
-                self.index += 1;
-                continue;
-            }
-            if low && c == '”' {
-                low = false;
-                out.push(c);
-                self.index += 1;
-                continue;
-            }
-            if pending
-                && matches!(c, '[' | '{' | '(')
-                && let Some(end) = self.inline_end(0)
-            {
-                out.push_str(&self.slice(self.index, self.index + end as usize));
-                self.index += end as usize;
-                pending = false;
-                stack.clear();
-                continue;
-            }
-            if self.current() == Some(Context::Value) && c == ',' && !pending && stack.is_empty() {
-                match self.comma_kind() {
-                    1 => break,
-                    2 => pending = true,
-                    _ => {}
-                }
-                out.push(c);
-                self.index += 1;
-                continue;
-            }
-            if matches!(c, '{' | '[') {
-                if pending {
-                    stack.push(c);
-                    pending = false;
-                } else if !stack.is_empty() {
-                    stack.push(c);
-                }
-            }
-            if matches!((c, stack.last()), ('}', Some('{')) | (']', Some('['))) {
-                stack.pop();
-                out.push(c);
-                self.index += 1;
-                continue;
-            }
-            if self.current() == Some(Context::Value) && c == '}' && !out.ends_with(right) {
-                let mut balance = 0;
-                let mut literal = false;
-                for x in out.chars().rev() {
-                    if x == '}' {
-                        balance += 1;
-                    } else if x == '{' {
-                        if balance == 0 {
-                            literal = true;
-                            break;
-                        }
-                        balance -= 1;
-                    }
-                }
-                if literal {
-                    out.push(c);
-                    self.index += 1;
-                    continue;
-                }
-                let mut missing_right = true;
-                if self.at(1) == Some('\\') {
-                    missing_right = false;
-                }
-                let mut i = self.skip(&[right], 1);
-                if self.at(i).is_some() {
-                    i = self.scroll(i + 1);
-                    if matches!(self.at(i), None | Some(',' | '}')) {
-                        missing_right = false;
-                    } else {
-                        i = self.skip(&[left], i);
-                        if self.at(i).is_none() {
-                            missing_right = false;
-                        } else {
-                            i = self.scroll(i + 1);
-                            if self.at(i).is_some_and(|c| c != ':') {
-                                missing_right = false;
-                            }
-                        }
-                    }
-                } else {
-                    if self.at(self.skip(&[':'], 1)).is_some() {
-                        break;
-                    }
-                    i = self.scroll(1);
-                    let j = self.skip(&['}'], i);
-                    if j - i > 1 {
-                        missing_right = false;
-                    }
-                }
-                if missing_right {
-                    break;
-                }
-            }
-            if c == ']'
-                && self.has(Context::Array)
-                && !out.ends_with(right)
-                && self.at(self.skip(&[right], 0)).is_none()
-            {
-                break;
-            }
-            if self.current() == Some(Context::Value) && c == '}' {
-                let i = self.scroll(1);
-                if self.at(i).is_none() {
-                    break;
-                }
-                if self.at(i) == Some('`')
-                    && self.at(i + 1) == Some('`')
-                    && self.at(i + 2) == Some('`')
-                {
-                    let mut start = self.comment_scroll(i + 3);
-                    let mut keep_container = false;
-                    if self.at(start).is_some_and(|c| matches!(c, '[' | '{' | '('))
-                        && let Some(end) = self.inline_end(start)
-                    {
-                        let after = self.scroll(end);
-                        let ch = self.at(after);
-                        if matches!(ch, None | Some('}'))
-                            || ch == Some(',')
-                                && (self
-                                    .at(self.comment_scroll(after + 1))
-                                    .is_none_or(|c| c == '}')
-                                    || self.member(self.comment_scroll(after + 1)))
-                        {
-                            break;
-                        }
-                        keep_container = true;
-                        start = end;
-                    }
-                    let mut q = self.skip(&[right], start);
-                    while self.at(q).is_some() {
-                        if matches!(self.at(self.scroll(q + 1)), None | Some(',' | '}' | ']')) {
-                            break;
-                        }
-                        q = self.skip(&[right], q + 1);
-                    }
-                    if self.at(q).is_none() {
-                        break;
-                    }
-                    if keep_container {
-                        pending = true;
-                    }
-                }
-            }
-            out.push(c);
-            self.index += 1;
-            if out.ends_with('\\')
-                && let Some(e) = self.at(0)
-            {
-                if matches!(e, 't' | 'n' | 'r' | 'b' | '\\') || e == right || quote(e) || e == '„'
-                {
-                    out.pop();
-                    out.push(match e {
-                        't' => '\t',
-                        'n' => '\n',
-                        'r' => '\r',
-                        'b' => '\u{8}',
-                        _ => e,
-                    });
-                    self.index += 1;
-                    while out.ends_with('\\') && self.at(0).is_some_and(|c| c == right || c == '\\')
-                    {
-                        out.pop();
-                        out.push(self.at(0).unwrap());
-                        self.index += 1;
-                    }
-                    continue;
-                }
-                if e == 'u' || e == 'x' {
-                    let n = if e == 'u' { 4 } else { 2 };
-                    let code = self.slice(self.index + 1, self.index + 1 + n);
-                    if code.len() == n && code.chars().all(|c| c.is_ascii_hexdigit()) {
-                        let u = u32::from_str_radix(&code, 16).unwrap();
-                        if (0xD800..=0xDBFF).contains(&u)
-                            && self.at((n + 1) as isize) == Some('\\')
-                            && self.at((n + 2) as isize) == Some('u')
-                        {
-                            let tail = self.slice(self.index + n + 3, self.index + n + 7);
-                            if let Ok(low) = u32::from_str_radix(&tail, 16)
-                                && (0xDC00..=0xDFFF).contains(&low)
-                            {
-                                out.pop();
-                                out.push(
-                                    char::from_u32(0x10000 + ((u - 0xD800) << 10) + (low - 0xDC00))
-                                        .unwrap(),
-                                );
-                                self.index += n + 7;
-                                continue;
-                            }
-                        }
-
-                        if let Some(ch) = char::from_u32(u) {
-                            out.pop();
-                            out.push(ch);
-                            self.index += 1 + n;
-                            continue;
-                        }
-                    }
-                }
-            }
-            if self.at(0) == Some(':') && !missing && self.current() == Some(Context::Key) {
-                let i = self.skip(&[left], 1);
-                if self.at(i).is_none() {
-                    break;
-                }
-                let i = self.skip(&[right], i + 1);
-                if self.at(i).is_some() && matches!(self.at(self.scroll(i + 1)), Some(',' | '}')) {
-                    break;
-                }
-            }
-            if low && self.at(0) == Some('"') {
-                low = false;
-                out.push('"');
-                self.index += 1;
-                continue;
-            }
-            if self.at(0) == Some(right) && !out.ends_with('\\') {
-                if doubled && self.at(1) == Some(right) {
-                    self.index += 1;
-                    continue;
-                }
-                if missing && self.current() == Some(Context::Value) {
-                    let i = self.skip(&[right, left], 1);
-                    if self.at(i).is_some() && self.at(self.scroll(i + 1)) == Some(':') {
-                        self.index = self.index.saturating_sub(1);
-                        break;
-                    }
-                    continue;
-                }
-                if unmatched {
-                    unmatched = false;
-                    out.push(right);
-                    self.index += 1;
-                    continue;
-                }
-                let mut i = 1;
-                let mut check_comma = true;
-                while self.at(i).is_some_and(|c| c != right && c != left) {
-                    let ch = self.at(i).unwrap();
-                    if check_comma && ch.is_alphabetic() {
-                        check_comma = false;
-                    }
-                    if self.has(Context::Key) && matches!(ch, ':' | '}')
-                        || self.has(Context::Value) && ch == '}'
-                        || self.has(Context::Array) && matches!(ch, ']' | ',')
-                        || check_comma && self.current() == Some(Context::Value) && ch == ','
-                    {
-                        break;
-                    }
-                    i += 1;
-                }
-                let next = self.at(i);
-                if next == Some(',') && self.current() == Some(Context::Value) {
-                    i = self.skip(&[right], i + 1);
-                    if matches!(self.at(self.scroll(i + 1)), Some('}' | ',')) {
-                        out.push(right);
-                        self.index += 1;
-                        continue;
-                    }
-                } else if next == Some(right) && self.at(i - 1) != Some('\\') {
-                    let follows = |p: &Self, j: isize| {
-                        let c = p.scroll(j + 1);
-                        p.at(c) == Some(',') && p.member(p.comment_scroll(c + 1))
-                    };
-                    if (1..i).all(|j| self.at(j).is_none_or(char::is_whitespace))
-                        && !(self.current() == Some(Context::Value) && follows(self, i))
-                    {
-                        break;
-                    }
-                    if self.current() == Some(Context::Value) {
-                        if follows(self, i) {
-                            out.push(right);
-                            self.index += 1;
-                            continue;
-                        }
-                        i = self.skip(&[right], i + 1) + 1;
-                        while self.at(i).is_some_and(|c| c != ':') {
-                            let ch = self.at(i).unwrap();
-                            if matches!(ch, ',' | ']' | '}')
-                                || (ch == right && self.at(i - 1) != Some('\\'))
-                            {
-                                break;
-                            }
-                            i += 1;
-                        }
-                        if self.at(i) != Some(':') {
-                            unmatched = !unmatched;
-                            out.push(right);
-                            self.index += 1;
-                            continue;
-                        }
-                    } else if self.current() == Some(Context::Array) {
-                        let mut even = true;
-                        while self.at(i) == Some(right) {
-                            i = self.skip(&[right, ']'], i + 1);
-                            if self.at(i) != Some(right) {
-                                even = false;
-                                break;
-                            }
-                            i = self.skip(&[right, ']'], i + 1);
-                        }
-                        if even {
-                            unmatched = !unmatched;
-                            out.push(right);
-                            self.index += 1;
-                            continue;
-                        }
-                        break;
-                    } else if self.current() == Some(Context::Key) {
-                        out.push(right);
-                        self.index += 1;
-                        continue;
-                    }
-                }
             }
         }
-        if missing
+        self.finish_string(scan)
+    }
+    /// One character of a string's body. The cases run in upstream's order; `Continue` moves on
+    /// to the next character, `Break` ends the string.
+    fn string_step(&mut self, s: &mut StringScan, c: char) -> ControlFlow<()> {
+        if c == s.right && !s.low || self.bare_word_ends(s, c) {
+            return ControlFlow::Break(());
+        }
+        if c == '„' && !s.out.ends_with('\\') || s.low && c == '”' {
+            s.low = c == '„';
+            return s.keep(self, c);
+        }
+        if s.pending
+            && matches!(c, '[' | '{' | '(')
+            && let Some(end) = self.inline_end(0)
+        {
+            s.out.push_str(&self.slice(self.index, self.index + end as usize));
+            self.index += end as usize;
+            s.pending = false;
+            s.stack.clear();
+            return ControlFlow::Continue(());
+        }
+        if let Some(flow) = self.value_comma(s, c) {
+            return flow;
+        }
+        s.track_nesting(c);
+        if matches!((c, s.stack.last()), ('}', Some('{')) | (']', Some('['))) {
+            s.stack.pop();
+            return s.keep(self, c);
+        }
+        if let Some(flow) = self.brace_in_value(s, c) {
+            return flow;
+        }
+        if c == ']'
+            && self.has(Context::Array)
+            && !s.out.ends_with(s.right)
+            && self.at(self.skip(&[s.right], 0)).is_none()
+        {
+            return ControlFlow::Break(());
+        }
+        if self.fenced_value_ends(s, c) {
+            return ControlFlow::Break(());
+        }
+        s.out.push(c);
+        self.index += 1;
+        if let Some(flow) = self.escape(s) {
+            return flow;
+        }
+        if self.colon_ends_key(s) {
+            return ControlFlow::Break(());
+        }
+        if s.low && self.at(0) == Some('"') {
+            s.low = false;
+            return s.keep(self, '"');
+        }
+        self.closing_quote(s).unwrap_or(ControlFlow::Continue(()))
+    }
+    /// An unquoted key ends at a colon or space, an unquoted array item at `]` or `,`.
+    fn bare_word_ends(&self, s: &StringScan, c: char) -> bool {
+        s.missing
+            && ((self.current() == Some(Context::Key) && (c == ':' || c.is_whitespace()))
+                || (self.current() == Some(Context::Array) && matches!(c, ']' | ',')))
+    }
+    /// A comma in a value: it ends the value, opens a container, or is text.
+    fn value_comma(&mut self, s: &mut StringScan, c: char) -> Option<ControlFlow<()>> {
+        if self.current() != Some(Context::Value) || c != ',' || s.pending || !s.stack.is_empty() {
+            return None;
+        }
+        match self.comma_kind() {
+            Comma::EndsValue => return Some(ControlFlow::Break(())),
+            Comma::OpensContainer => s.pending = true,
+            Comma::InText => {}
+        }
+        Some(s.keep(self, c))
+    }
+    /// A `}` in a value: text when it closes a `{` of the text, else possibly the object's end.
+    fn brace_in_value(&mut self, s: &mut StringScan, c: char) -> Option<ControlFlow<()>> {
+        if self.current() != Some(Context::Value) || c != '}' || s.out.ends_with(s.right) {
+            return None;
+        }
+        if opens_literal_brace(&s.out) {
+            return Some(s.keep(self, c));
+        }
+        self.brace_ends_value(s).then_some(ControlFlow::Break(()))
+    }
+    /// Whether the `}` ends a value whose closing quote is missing.
+    fn brace_ends_value(&self, s: &StringScan) -> bool {
+        let escaped = self.at(1) == Some('\\');
+        let i = self.skip(&[s.right], 1);
+        if self.at(i).is_none() {
+            if self.at(self.skip(&[':'], 1)).is_some() {
+                return true;
+            }
+            let i = self.scroll(1);
+            // more than one character before the next `}` means the text goes on
+            return !escaped && self.skip(&['}'], i) - i <= 1;
+        }
+        if escaped {
+            return false;
+        }
+        let i = self.scroll(i + 1);
+        if matches!(self.at(i), None | Some(',' | '}')) {
+            return false;
+        }
+        let i = self.skip(&[s.left], i);
+        if self.at(i).is_none() {
+            return false;
+        }
+        !self.at(self.scroll(i + 1)).is_some_and(|c| c != ':')
+    }
+    /// A `}` in a value at the end of input, or before a code fence the value does not run
+    /// past. A container right after the fence is kept as text.
+    fn fenced_value_ends(&self, s: &mut StringScan, c: char) -> bool {
+        if self.current() != Some(Context::Value) || c != '}' {
+            return false;
+        }
+        let i = self.scroll(1);
+        if self.at(i).is_none() {
+            return true;
+        }
+        if !FENCE.chars().zip(i..).all(|(f, j)| self.at(j) == Some(f)) {
+            return false;
+        }
+        let mut start = self.comment_scroll(i + FENCE.len() as isize);
+        let mut keep_container = false;
+        if self.at(start).is_some_and(|c| matches!(c, '[' | '{' | '('))
+            && let Some(end) = self.inline_end(start)
+        {
+            let after = self.scroll(end);
+            let ch = self.at(after);
+            let next = self.comment_scroll(after + 1);
+            if matches!(ch, None | Some('}'))
+                || ch == Some(',') && (self.at(next).is_none_or(|c| c == '}') || self.member(next))
+            {
+                return true;
+            }
+            keep_container = true;
+            start = end;
+        }
+        let mut q = self.skip(&[s.right], start);
+        while self.at(q).is_some() {
+            if matches!(self.at(self.scroll(q + 1)), None | Some(',' | '}' | ']')) {
+                break;
+            }
+            q = self.skip(&[s.right], q + 1);
+        }
+        if self.at(q).is_none() {
+            return true;
+        }
+        if keep_container {
+            s.pending = true;
+        }
+        false
+    }
+    /// A backslash just kept, followed by an escape: the pair becomes the character it names.
+    fn escape(&mut self, s: &mut StringScan) -> Option<ControlFlow<()>> {
+        if !s.out.ends_with('\\') {
+            return None;
+        }
+        let e = self.at(0)?;
+        if !(matches!(e, 't' | 'n' | 'r' | 'b' | '\\') || e == s.right || quote(e) || e == '„') {
+            return self.unicode_escape(s, e);
+        }
+        s.out.pop();
+        s.out.push(match e {
+            't' => '\t',
+            'n' => '\n',
+            'r' => '\r',
+            'b' => '\u{8}',
+            _ => e,
+        });
+        self.index += 1;
+        while s.out.ends_with('\\') && self.at(0).is_some_and(|c| c == s.right || c == '\\') {
+            s.out.pop();
+            s.out.push(self.at(0).unwrap());
+            self.index += 1;
+        }
+        Some(ControlFlow::Continue(()))
+    }
+    /// `\uXXXX` (a surrogate pair when two follow) or `\xXX`.
+    fn unicode_escape(&mut self, s: &mut StringScan, e: char) -> Option<ControlFlow<()>> {
+        let n = match e {
+            'u' => UNICODE_ESCAPE_DIGITS,
+            'x' => HEX_ESCAPE_DIGITS,
+            _ => return None,
+        };
+        let code = self.slice(self.index + 1, self.index + 1 + n);
+        if code.len() != n || !code.chars().all(|c| c.is_ascii_hexdigit()) {
+            return None;
+        }
+        let u = u32::from_str_radix(&code, 16).unwrap();
+        if HIGH_SURROGATES.contains(&u)
+            && self.at((n + 1) as isize) == Some('\\')
+            && self.at((n + 2) as isize) == Some('u')
+        {
+            let low_at = self.index + 1 + n + "\\u".len();
+            let low_end = low_at + UNICODE_ESCAPE_DIGITS;
+            if let Ok(low) = u32::from_str_radix(&self.slice(low_at, low_end), 16)
+                && let Some(ch) = surrogate_pair(u, low)
+            {
+                s.out.pop();
+                s.out.push(ch);
+                self.index = low_end;
+                return Some(ControlFlow::Continue(()));
+            }
+        }
+        let ch = char::from_u32(u)?;
+        s.out.pop();
+        s.out.push(ch);
+        self.index += 1 + n;
+        Some(ControlFlow::Continue(()))
+    }
+    /// In a quoted key, a colon ends the key unless a quoted key-value pair follows it.
+    fn colon_ends_key(&self, s: &StringScan) -> bool {
+        if self.at(0) != Some(':') || s.missing || self.current() != Some(Context::Key) {
+            return false;
+        }
+        let i = self.skip(&[s.left], 1);
+        if self.at(i).is_none() {
+            return true;
+        }
+        let i = self.skip(&[s.right], i + 1);
+        self.at(i).is_some() && matches!(self.at(self.scroll(i + 1)), Some(',' | '}'))
+    }
+    /// The closing quote character: the string's end, or a quote inside its text.
+    fn closing_quote(&mut self, s: &mut StringScan) -> Option<ControlFlow<()>> {
+        if self.at(0) != Some(s.right) || s.out.ends_with('\\') {
+            return None;
+        }
+        if s.doubled && self.at(1) == Some(s.right) {
+            self.index += 1;
+            return Some(ControlFlow::Continue(()));
+        }
+        if s.missing && self.current() == Some(Context::Value) {
+            let i = self.skip(&[s.right, s.left], 1);
+            if self.at(i).is_some() && self.at(self.scroll(i + 1)) == Some(':') {
+                self.index = self.index.saturating_sub(1);
+                return Some(ControlFlow::Break(()));
+            }
+            return Some(ControlFlow::Continue(()));
+        }
+        if s.unmatched {
+            s.unmatched = false;
+            return Some(s.keep(self, s.right));
+        }
+        let i = self.quote_lookahead(s);
+        let next = self.at(i);
+        if next == Some(',') && self.current() == Some(Context::Value) {
+            let i = self.skip(&[s.right], i + 1);
+            if matches!(self.at(self.scroll(i + 1)), Some('}' | ',')) {
+                return Some(s.keep(self, s.right));
+            }
+            return None;
+        }
+        if next != Some(s.right) || self.at(i - 1) == Some('\\') {
+            return None;
+        }
+        if (1..i).all(|j| self.at(j).is_none_or(char::is_whitespace))
+            && !(self.current() == Some(Context::Value) && self.member_follows_comma(i))
+        {
+            return Some(ControlFlow::Break(()));
+        }
+        match self.current() {
+            Some(Context::Value) => self.quote_in_value(s, i),
+            Some(Context::Array) => Some(self.quote_in_array(s, i)),
+            Some(Context::Key) => Some(s.keep(self, s.right)),
+            None => None,
+        }
+    }
+    /// The offset after a quote where a quote, or a delimiter of the current context, stops it.
+    fn quote_lookahead(&self, s: &StringScan) -> isize {
+        let mut i = 1;
+        let mut comma_ends_value = true;
+        while self.at(i).is_some_and(|c| c != s.right && c != s.left) {
+            let ch = self.at(i).unwrap();
+            if comma_ends_value && ch.is_alphabetic() {
+                comma_ends_value = false;
+            }
+            if self.has(Context::Key) && matches!(ch, ':' | '}')
+                || self.has(Context::Value) && ch == '}'
+                || self.has(Context::Array) && matches!(ch, ']' | ',')
+                || comma_ends_value && self.current() == Some(Context::Value) && ch == ','
+            {
+                break;
+            }
+            i += 1;
+        }
+        i
+    }
+    /// After the quote at offset `j`, a comma and then another member.
+    fn member_follows_comma(&self, j: isize) -> bool {
+        let c = self.scroll(j + 1);
+        self.at(c) == Some(',') && self.member(self.comment_scroll(c + 1))
+    }
+    /// A quote in a value followed by another quote at `i`: text unless a key follows.
+    fn quote_in_value(&mut self, s: &mut StringScan, i: isize) -> Option<ControlFlow<()>> {
+        if self.member_follows_comma(i) {
+            return Some(s.keep(self, s.right));
+        }
+        let mut i = self.skip(&[s.right], i + 1) + 1;
+        while self.at(i).is_some_and(|c| c != ':') {
+            let ch = self.at(i).unwrap();
+            if matches!(ch, ',' | ']' | '}') || (ch == s.right && self.at(i - 1) != Some('\\')) {
+                break;
+            }
+            i += 1;
+        }
+        if self.at(i) == Some(':') {
+            return None;
+        }
+        s.unmatched = !s.unmatched;
+        Some(s.keep(self, s.right))
+    }
+    /// A quote in an array item: text when the quotes after it pair up, else the item's end.
+    fn quote_in_array(&mut self, s: &mut StringScan, mut i: isize) -> ControlFlow<()> {
+        while self.at(i) == Some(s.right) {
+            i = self.skip(&[s.right, ']'], i + 1);
+            if self.at(i) != Some(s.right) {
+                return ControlFlow::Break(());
+            }
+            i = self.skip(&[s.right, ']'], i + 1);
+        }
+        s.unmatched = !s.unmatched;
+        s.keep(self, s.right)
+    }
+    /// After the body: an unquoted key not followed by `:` or `,` is no key; trailing space of an
+    /// unterminated or unquoted string is dropped.
+    fn finish_string(&mut self, s: StringScan) -> Value {
+        let mut out = s.out;
+        if s.missing
             && self.current() == Some(Context::Key)
             && self.at(0).is_some_and(char::is_whitespace)
         {
@@ -472,16 +482,97 @@ impl Parser {
                 return empty();
             }
         }
-        if self.at(0) != Some(right) {
+        if self.at(0) != Some(s.right) {
             out = out.trim_end().to_owned();
         } else {
             self.index += 1;
         }
-        if missing || out.ends_with('\n') {
+        if s.missing || out.ends_with('\n') {
             out = out.trim_end().to_owned();
         }
         Value::String(out)
     }
+}
+
+/// What a comma inside a value's text means.
+enum Comma {
+    InText,
+    EndsValue,
+    OpensContainer,
+}
+
+/// The state of one string's scan.
+struct StringScan {
+    left: char,
+    right: char,
+    /// The string had no opening quote.
+    missing: bool,
+    /// The string opened with a doubled quote.
+    doubled: bool,
+    out: String,
+    /// A quote inside the text is waiting for its pair.
+    unmatched: bool,
+    /// Inside a German low-high quotation („...”).
+    low: bool,
+    /// A comma announced a container that is part of the text.
+    pending: bool,
+    /// The open brackets of a container in the text.
+    stack: Vec<char>,
+}
+
+impl StringScan {
+    /// `c` joins the string's text.
+    fn keep(&mut self, p: &mut Parser, c: char) -> ControlFlow<()> {
+        self.out.push(c);
+        p.index += 1;
+        ControlFlow::Continue(())
+    }
+    fn track_nesting(&mut self, c: char) {
+        if !matches!(c, '{' | '[') {
+            return;
+        }
+        if self.pending {
+            self.stack.push(c);
+            self.pending = false;
+        } else if !self.stack.is_empty() {
+            self.stack.push(c);
+        }
+    }
+}
+
+/// A code fence, which may close a value written as a fenced block.
+const FENCE: &str = "```";
+const UNICODE_ESCAPE_DIGITS: usize = 4;
+const HEX_ESCAPE_DIGITS: usize = 2;
+const HIGH_SURROGATES: std::ops::RangeInclusive<u32> = 0xD800..=0xDBFF;
+const LOW_SURROGATES: std::ops::RangeInclusive<u32> = 0xDC00..=0xDFFF;
+/// The first code point past the Basic Multilingual Plane, where surrogate pairs start.
+const SUPPLEMENTARY_PLANES: u32 = 0x10000;
+/// The bits each surrogate half carries.
+const SURROGATE_BITS: u32 = 10;
+
+/// The character a UTF-16 surrogate pair encodes.
+fn surrogate_pair(high: u32, low: u32) -> Option<char> {
+    if !HIGH_SURROGATES.contains(&high) || !LOW_SURROGATES.contains(&low) {
+        return None;
+    }
+    let offset =
+        ((high - HIGH_SURROGATES.start()) << SURROGATE_BITS) + (low - LOW_SURROGATES.start());
+    char::from_u32(SUPPLEMENTARY_PLANES + offset)
+}
+
+/// Whether the last `{` of `out` is unclosed, so a `}` closes it as text.
+fn opens_literal_brace(out: &str) -> bool {
+    let mut balance = 0;
+    for x in out.chars().rev() {
+        match x {
+            '}' => balance += 1,
+            '{' if balance == 0 => return true,
+            '{' => balance -= 1,
+            _ => {}
+        }
+    }
+    false
 }
 impl Parser {
     pub(super) fn explicit_tuple(&self) -> bool {
@@ -513,15 +604,8 @@ impl Parser {
         !content
     }
     pub(super) fn top_paren(&self) -> bool {
-        let mut i = -1;
-        while let Some(c) = self.at(i) {
-            if matches!(c, '\n' | '\r') {
-                break;
-            }
-            if !c.is_whitespace() {
-                return false;
-            }
-            i -= 1;
+        if !self.line_blank_before() {
+            return false;
         }
         let first = self.at(self.scroll(1));
         if !first.is_some_and(|c| {
@@ -532,7 +616,7 @@ impl Parser {
             return false;
         }
         let mut depth = 0;
-        i = 1;
+        let mut i = 1;
         while let Some(c) = self.at(i) {
             if quote(c) {
                 i = self.skip(&[c], i + 1);
@@ -540,19 +624,36 @@ impl Parser {
                 depth += 1;
             } else if c == ')' {
                 if depth == 0 {
-                    i += 1;
-                    while let Some(t) = self.at(i) {
-                        if matches!(t, '\n' | '\r') {
-                            return true;
-                        }
-                        if !t.is_whitespace() {
-                            return false;
-                        }
-                        i += 1;
-                    }
-                    return true;
+                    return self.rest_of_line_blank(i + 1);
                 }
                 depth -= 1;
+            }
+            i += 1;
+        }
+        true
+    }
+    /// Only whitespace between the line's start and the current character.
+    fn line_blank_before(&self) -> bool {
+        let mut i = -1;
+        while let Some(c) = self.at(i) {
+            if matches!(c, '\n' | '\r') {
+                return true;
+            }
+            if !c.is_whitespace() {
+                return false;
+            }
+            i -= 1;
+        }
+        true
+    }
+    /// Only whitespace from offset `i` to the end of the line or of the input.
+    fn rest_of_line_blank(&self, mut i: isize) -> bool {
+        while let Some(c) = self.at(i) {
+            if matches!(c, '\n' | '\r') {
+                return true;
+            }
+            if !c.is_whitespace() {
+                return false;
             }
             i += 1;
         }

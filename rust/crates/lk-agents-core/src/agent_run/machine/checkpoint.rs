@@ -58,22 +58,26 @@ impl AgentRun {
         let Phase::Checkpoint(pending) = std::mem::replace(&mut self.phase, Phase::Idle) else {
             unreachable!()
         };
-        match result {
-            Ok(false) => match pending.next {
-                Next::Request { purpose, dynamic } => {
-                    if let Some(tools) = tools {
-                        self.agent.tools = tools;
-                        if let Err(error) = crate::agent::validate(&self.agent) {
-                            return self
-                                .finish_now(Err(RunError::Host(error.to_string())), effects);
-                        }
-                    }
-                    self.start_request(purpose, dynamic, now, effects)
-                }
-                Next::Finish(result) => self.finish_now(Ok(*result), effects),
+        match (result, pending.next) {
+            (Ok(false), Next::Request { purpose, dynamic }) => match self.replace_tools(tools) {
+                Ok(()) => self.start_request(purpose, dynamic, now, effects),
+                Err(error) => self.finish_now(Err(error), effects),
             },
-            Ok(true) => self.complete_interrupted(effects),
-            Err(error) => self.finish_now(Err(RunError::Host(error)), effects),
+            (Ok(false), Next::Finish(result)) => self.finish_now(Ok(*result), effects),
+            (Ok(true), _) => self.complete_interrupted(effects),
+            (Err(error), _) => self.finish_now(Err(RunError::Host(error)), effects),
         }
+    }
+
+    /// Installs the tool list a checkpoint returned and validates the agent against it.
+    fn replace_tools(
+        &mut self,
+        tools: Option<Vec<lk_agents_abi::agent::FunctionToolInfo>>,
+    ) -> Result<(), RunError> {
+        let Some(tools) = tools else {
+            return Ok(());
+        };
+        self.agent.tools = tools;
+        crate::agent::validate(&self.agent).map_err(|error| RunError::Host(error.to_string()))
     }
 }

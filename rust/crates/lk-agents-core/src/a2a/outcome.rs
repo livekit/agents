@@ -20,7 +20,13 @@ use lk_agents_abi::storage::thread::{
 };
 use lk_agents_abi::storage::{Ask, StorageError, TaskState};
 
-use crate::a2a::{HandlerOutput, INTERRUPTION_NEW_MESSAGE, Message, TurnResult, chat_message};
+use crate::a2a::{
+    CLIENT_CANCEL_REASON, HandlerOutput, INTERRUPTION_NEW_MESSAGE, Message, TurnResult,
+    chat_message,
+};
+
+/// One microsecond, in Unix seconds: how far apart items made in the same instant are ordered.
+pub(crate) const ITEM_ORDER_STEP: f64 = 1e-6;
 
 /// The metadata of a `canceled` row the server interrupted, as the turn writes it.
 pub fn interrupted_metadata() -> Map<String, Value> {
@@ -153,7 +159,7 @@ pub fn answer_pending(
             call_id,
             output: last.text(),
             is_error: false,
-            created_at: Some(timestamp(now - 1e-6)),
+            created_at: Some(timestamp(now - ITEM_ORDER_STEP)),
         })),
     });
     if last.task_id.as_deref() == Some(pending.task_id.as_str()) {
@@ -240,37 +246,8 @@ pub struct Settle<'a> {
 pub fn settle(s: Settle<'_>) -> Result<Settlement, StorageError> {
     let out = s.out;
     let last = s.batch.last().ok_or_else(|| StorageError::Invalid("an empty batch".into()))?;
-    let mut edits = Vec::new();
-    if !out.new_items.is_empty() {
-        for payload in &out.new_items {
-            let kind = payload.item.clone().ok_or_else(|| {
-                StorageError::Invalid("the handler returned an empty chat item".into())
-            })?;
-            let user = matches!(&kind, chat_item::Item::Message(m) if m.role() == ChatRole::User);
-            // a user item carries the A2A `messageId` it came from: the idempotency key on `items`
-            let message_id = user.then(|| last.message_id.clone());
-            edits.push(HistoryEdit::Add { item: ItemRow::new(kind), message_id });
-        }
-    } else {
-        let user = ItemRow { message_id: Some(last.message_id.clone()), ..s.user_message };
-        edits.push(HistoryEdit::Add { item: user, message_id: None });
-        if let Some(text) = out.output.as_ref().and_then(Value::as_str)
-            && !text.is_empty()
-            && out.error.is_none()
-            && out.status.is_none()
-            && !out.interrupted
-        {
-            let item = chat_message(
-                ChatRole::Assistant,
-                vec![text.to_owned()],
-                s.now + 1e-6,
-                s.ids.assistant_item,
-            );
-            edits.push(HistoryEdit::Add { item, message_id: None });
-        }
-    }
     let mut settled = Settlement {
-        edits,
+        edits: history_edits(out, last, s.user_message, s.now, s.ids.assistant_item)?,
         transitions: Vec::new(),
         outcome: RunOutcome::Completed,
         reason: None,
@@ -284,41 +261,9 @@ pub fn settle(s: Settle<'_>) -> Result<Settlement, StorageError> {
         interrupted: s.stop.is_some() || out.interrupted,
     };
     let answer = s.answer_task.to_owned();
-    let n = s.batch.len();
-    for (tid, m) in s.task_ids[..n - 1].iter().zip(&s.batch[..n - 1]) {
-        settled.transitions.push(TaskTransition {
-            task_id: tid.clone(),
-            status: TaskState::Completed,
-            patch: TaskPatch {
-                message_id: Some(m.message_id.clone()),
-                history: Some(vec![m.to_a2a()]),
-                metadata: Some(merged_into(&answer)),
-                ..TaskPatch::default()
-            },
-        });
-    }
+    settled.merge_batch(s.batch, s.task_ids, &answer);
     if s.stop == Some(Stop::ClientCanceled) || (settled.interrupted && s.answer_canceled) {
-        // the answer row is the client's; the history keeps what ran, the run says why it ended
-        if !s.answer_canceled {
-            let transition = match s.continued {
-                // the client canceled the reply continuing it: its question waits again
-                Some(ask) => TaskTransition {
-                    task_id: answer,
-                    status: TaskState::InputRequired,
-                    patch: TaskPatch { ask: Some(ask.clone()), ..TaskPatch::default() },
-                },
-                // nothing to put back: the row ends canceled, so no row is left `working`
-                None => TaskTransition {
-                    task_id: answer,
-                    status: TaskState::Canceled,
-                    patch: TaskPatch::default(),
-                },
-            };
-            settled.transitions.push(transition);
-        }
-        settled.outcome = RunOutcome::Canceled;
-        settled.reason = Some("client-cancel".into());
-        return Ok(settled);
+        return Ok(settled.client_canceled(answer, s.answer_canceled, s.continued));
     }
     // a continued task (an answer to its pending question) keeps its own message and the
     // history `answer_pending` gave it: the message is the receipt row's
@@ -332,31 +277,152 @@ pub fn settle(s: Settle<'_>) -> Result<Settlement, StorageError> {
         false => TaskPatch::default(),
     };
     if let Some(err) = &out.error {
-        settled.transitions.push(TaskTransition {
-            task_id: answer.clone(),
-            status: TaskState::Failed,
-            patch: TaskPatch {
-                status_message: Some(agent_text(&answer, err, s.ids.status_message)),
-                ..base
-            },
-        });
-        settled.events.push(JournalEvent::Error { error: err.clone() });
-        settled.outcome = RunOutcome::Failed;
-        settled.reason = Some(err.clone());
-        return Ok(settled);
+        return Ok(settled.failed(answer, err, base, s.ids.status_message));
     }
     if settled.interrupted {
-        settled.transitions.push(TaskTransition {
+        return Ok(settled.canceled_by_new_message(answer, base));
+    }
+    let metadata = Some(out.metadata.clone()).filter(|m| !m.is_empty());
+    if let Some(question) = &out.input_required {
+        let asked = Asked { question, lane_question: s.lane_question, metadata };
+        return Ok(settled.input_required(out, answer, asked, base, s.ids.status_message));
+    }
+    let output = out.output.clone().filter(|o| !o.is_null());
+    let text = output.as_ref().and_then(Value::as_str).filter(|t| !t.is_empty());
+    let status_message = text.map(|t| agent_text(&answer, t, s.ids.status_message.clone()));
+    let patch = TaskPatch { status_message, metadata, ..base };
+    if let Some(status) = out.status {
+        return settled.transport_status(status, answer, patch);
+    }
+    Ok(settled.completed(answer, output, patch, s.ids.artifact))
+}
+
+/// The runs' new items, else the batch's user message and a text answer no run stored.
+fn history_edits(
+    out: &HandlerOutput,
+    last: &Message,
+    user_message: ItemRow,
+    now: f64,
+    assistant_item: String,
+) -> Result<Vec<HistoryEdit>, StorageError> {
+    if !out.new_items.is_empty() {
+        return out
+            .new_items
+            .iter()
+            .map(|payload| {
+                let kind = payload.item.clone().ok_or_else(|| {
+                    StorageError::Invalid("the handler returned an empty chat item".into())
+                })?;
+                let user =
+                    matches!(&kind, chat_item::Item::Message(m) if m.role() == ChatRole::User);
+                // a user item carries the A2A `messageId` it came from: the idempotency key
+                let message_id = user.then(|| last.message_id.clone());
+                Ok(HistoryEdit::Add { item: ItemRow::new(kind), message_id })
+            })
+            .collect();
+    }
+    let user = ItemRow { message_id: Some(last.message_id.clone()), ..user_message };
+    let mut edits = vec![HistoryEdit::Add { item: user, message_id: None }];
+    if let Some(text) = out.output.as_ref().and_then(Value::as_str)
+        && !text.is_empty()
+        && out.error.is_none()
+        && out.status.is_none()
+        && !out.interrupted
+    {
+        let at = now + ITEM_ORDER_STEP;
+        let item = chat_message(ChatRole::Assistant, vec![text.to_owned()], at, assistant_item);
+        edits.push(HistoryEdit::Add { item, message_id: None });
+    }
+    Ok(edits)
+}
+
+/// The question a turn ended on and how its answer row records it.
+struct Asked<'a> {
+    question: &'a str,
+    lane_question: bool,
+    metadata: Option<Map<String, Value>>,
+}
+
+impl Settlement {
+    /// Every earlier message of the batch completes merged into the answer.
+    fn merge_batch(&mut self, batch: &[Message], task_ids: &[String], answer: &str) {
+        let n = batch.len();
+        for (tid, m) in task_ids[..n - 1].iter().zip(&batch[..n - 1]) {
+            self.transitions.push(TaskTransition {
+                task_id: tid.clone(),
+                status: TaskState::Completed,
+                patch: TaskPatch {
+                    message_id: Some(m.message_id.clone()),
+                    history: Some(vec![m.to_a2a()]),
+                    metadata: Some(merged_into(answer)),
+                    ..TaskPatch::default()
+                },
+            });
+        }
+    }
+
+    /// The answer row is the client's; the history keeps what ran, the run says why it ended.
+    fn client_canceled(
+        mut self,
+        answer: String,
+        answer_canceled: bool,
+        continued: Option<&Ask>,
+    ) -> Self {
+        if !answer_canceled {
+            let (status, patch) = match continued {
+                // the client canceled the reply continuing it: its question waits again
+                Some(ask) => (
+                    TaskState::InputRequired,
+                    TaskPatch { ask: Some(ask.clone()), ..TaskPatch::default() },
+                ),
+                // nothing to put back: the row ends canceled, so no row is left `working`
+                None => (TaskState::Canceled, TaskPatch::default()),
+            };
+            self.transitions.push(TaskTransition { task_id: answer, status, patch });
+        }
+        self.outcome = RunOutcome::Canceled;
+        self.reason = Some(CLIENT_CANCEL_REASON.into());
+        self
+    }
+
+    fn failed(
+        mut self,
+        answer: String,
+        err: &str,
+        base: TaskPatch,
+        status_message: String,
+    ) -> Self {
+        let status_message = Some(agent_text(&answer, err, status_message));
+        self.transitions.push(TaskTransition {
+            task_id: answer,
+            status: TaskState::Failed,
+            patch: TaskPatch { status_message, ..base },
+        });
+        self.events.push(JournalEvent::Error { error: err.to_owned() });
+        self.outcome = RunOutcome::Failed;
+        self.reason = Some(err.to_owned());
+        self
+    }
+
+    fn canceled_by_new_message(mut self, answer: String, base: TaskPatch) -> Self {
+        self.transitions.push(TaskTransition {
             task_id: answer,
             status: TaskState::Canceled,
             patch: TaskPatch { metadata: Some(interrupted_metadata()), ..base },
         });
-        settled.outcome = RunOutcome::Canceled;
-        settled.reason = Some(INTERRUPTION_NEW_MESSAGE.into());
-        return Ok(settled);
+        self.outcome = RunOutcome::Canceled;
+        self.reason = Some(INTERRUPTION_NEW_MESSAGE.into());
+        self
     }
-    let metadata = Some(out.metadata.clone()).filter(|m| !m.is_empty());
-    if let Some(question) = &out.input_required {
+
+    fn input_required(
+        mut self,
+        out: &HandlerOutput,
+        answer: String,
+        asked: Asked<'_>,
+        base: TaskPatch,
+        status_message: String,
+    ) -> Self {
         let call = out.pending_call.as_ref();
         let wait = WaitOptions {
             tool: call.map(|c| c.name.clone()),
@@ -364,29 +430,31 @@ pub fn settle(s: Settle<'_>) -> Result<Settlement, StorageError> {
             answer_tool: call.and_then(|c| c.answer_tool.clone()),
             ..WaitOptions::default()
         };
-        let asked = wait_patch(&answer, question, wait, s.ids.status_message);
-        settled.transitions.push(TaskTransition {
+        let waiting = wait_patch(&answer, asked.question, wait, status_message);
+        let patch = TaskPatch {
+            metadata: asked.metadata,
+            ask: waiting.ask.filter(|_| asked.lane_question),
+            status_message: waiting.status_message,
+            ..base
+        };
+        self.transitions.push(TaskTransition {
             task_id: answer,
             status: TaskState::InputRequired,
-            patch: TaskPatch {
-                metadata,
-                ..TaskPatch {
-                    ask: asked.ask.filter(|_| s.lane_question),
-                    status_message: asked.status_message,
-                    ..base
-                }
-            },
+            patch,
         });
-        settled.outcome = RunOutcome::InputRequired;
-        settled.output = out.output.clone();
-        return Ok(settled);
+        self.outcome = RunOutcome::InputRequired;
+        self.output = out.output.clone();
+        self
     }
-    let output = out.output.clone().filter(|o| !o.is_null());
-    let text = output.as_ref().and_then(Value::as_str).filter(|t| !t.is_empty());
-    let status_message = text.map(|t| agent_text(&answer, t, s.ids.status_message.clone()));
-    if let Some(status) = out.status {
-        // a transport transition: its text is the status message, never an artifact
-        settled.outcome = match status {
+
+    /// A transport transition: its text is the status message, never an artifact.
+    fn transport_status(
+        mut self,
+        status: TaskState,
+        answer: String,
+        patch: TaskPatch,
+    ) -> Result<Self, StorageError> {
+        self.outcome = match status {
             TaskState::Rejected => RunOutcome::Rejected,
             TaskState::Working => RunOutcome::Completed,
             other => {
@@ -395,19 +463,27 @@ pub fn settle(s: Settle<'_>) -> Result<Settlement, StorageError> {
                 )));
             }
         };
-        let answered = status == TaskState::Working;
-        let patch = TaskPatch { status_message, metadata, answered, ..base };
-        settled.transitions.push(TaskTransition { task_id: answer, status, patch });
-        return Ok(settled);
+        let patch = TaskPatch { answered: status == TaskState::Working, ..patch };
+        self.transitions.push(TaskTransition { task_id: answer, status, patch });
+        Ok(self)
     }
-    let artifacts = output.iter().map(|o| artifact(o, s.ids.artifact.clone())).collect();
-    settled.transitions.push(TaskTransition {
-        task_id: answer,
-        status: TaskState::Completed,
-        patch: TaskPatch { artifacts: Some(artifacts), status_message, metadata, ..base },
-    });
-    settled.output = output;
-    Ok(settled)
+
+    fn completed(
+        mut self,
+        answer: String,
+        output: Option<Value>,
+        patch: TaskPatch,
+        artifact_id: String,
+    ) -> Self {
+        let artifacts = output.iter().map(|o| artifact(o, artifact_id.clone())).collect();
+        self.transitions.push(TaskTransition {
+            task_id: answer,
+            status: TaskState::Completed,
+            patch: TaskPatch { artifacts: Some(artifacts), ..patch },
+        });
+        self.output = output;
+        self
+    }
 }
 
 /// The metadata of a row answered by the task it was merged into.

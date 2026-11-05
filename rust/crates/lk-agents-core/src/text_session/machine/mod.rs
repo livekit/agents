@@ -14,7 +14,10 @@ use crate::approval;
 use crate::llm::history::ChatContextExt;
 use crate::usage::Ledger;
 use lk_agents_abi::agent::ArgumentIdentity;
-use lk_agents_abi::agent::run::{Output, RunError, RunOutcome, RunResult, ValidationId};
+use lk_agents_abi::agent::run::{
+    Output, RunError, RunOutcome, RunResult, StreamEvent, ValidationId,
+};
+use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::usage::Usage;
 use lk_agents_abi::{ChatContext, CopyOptions, Role};
 use lk_agents_abi::{ChatItem, ChatMessage, FunctionCall, Ts, WallAnchor};
@@ -414,28 +417,13 @@ impl TextSession {
         if let agent_run::AgentRunEvent::ToolPrepared { call, prepared, identity } = &event
             && let Some(child) = invocation.children.get_mut(call)
             && child.identity.is_none()
+            && let Err(failure) = accept_child_arguments(child, identity)
         {
-            match identity {
-                ArgumentIdentity::Json(value) if value.is_object() => {
-                    child.identity = Some(approval::canonical(identity));
-                    child.arguments = Some(value.clone());
-                }
-                _ => {
-                    effects.push(TextSessionEffect::Run {
-                        invocation_id: invocation.id.clone(),
-                        effect: agent_run::AgentRunEffect::ToolArgumentsRelease {
-                            prepared: *prepared,
-                        },
-                    });
-                    event = agent_run::AgentRunEvent::ToolPrepareFailed {
-                        call: *call,
-                        failure: crate::tool_calls::PrepareFailure::Refused(
-                            "local agent arguments must have a serializable validated JSON object"
-                                .into(),
-                        ),
-                    };
-                }
-            }
+            effects.push(TextSessionEffect::Run {
+                invocation_id: invocation.id.clone(),
+                effect: agent_run::AgentRunEffect::ToolArgumentsRelease { prepared: *prepared },
+            });
+            event = agent_run::AgentRunEvent::ToolPrepareFailed { call: *call, failure };
         }
         let run_effects = invocation.run.handle(event, now);
         self.run_effects(run_effects, now, effects);
@@ -448,95 +436,143 @@ impl TextSession {
         effects: &mut Vec<TextSessionEffect>,
     ) {
         for effect in run_effects {
-            let Some(invocation) = self.invocation.as_mut() else {
+            let Some(invocation) = self.invocation.as_ref() else {
                 break;
             };
             let frame_id = invocation.frame_id.clone();
             let invocation_id = invocation.id.clone();
-            let frame = &self.state.frames[&frame_id];
             match effect {
                 agent_run::AgentRunEffect::Emit(event) => {
-                    self.sequence += 1;
-                    effects.push(TextSessionEffect::Emit {
-                        sequence: self.sequence,
-                        frame_id,
-                        invocation_id,
-                        agent_name: frame.agent_name.clone(),
-                        event,
-                    });
+                    self.emit(frame_id, invocation_id, event, effects)
                 }
                 agent_run::AgentRunEffect::ToolPrepare { call, ref function_call, .. } => {
-                    if self.config.agents[&frame.agent_name]
-                        .agent_tools
-                        .contains_key(&function_call.name)
-                    {
-                        invocation.children.insert(
-                            call,
-                            PreparedChild {
-                                function_call: function_call.clone(),
-                                arguments: None,
-                                identity: None,
-                                executing: false,
-                            },
-                        );
-                    }
+                    self.prepare_child(call, function_call);
                     effects.push(TextSessionEffect::Run { invocation_id, effect });
                 }
                 agent_run::AgentRunEffect::ToolExecute {
                     call, prepared, function_call, ..
                 } if invocation.children.contains_key(&call) => {
-                    let child = invocation.children.get_mut(&call).unwrap();
-                    child.function_call = function_call;
-                    child.executing = true;
-                    effects.push(TextSessionEffect::Run {
-                        invocation_id,
-                        effect: agent_run::AgentRunEffect::ToolArgumentsRelease { prepared },
-                    });
+                    self.execute_child(call, function_call, invocation_id, prepared, effects)
                 }
                 agent_run::AgentRunEffect::ToolCancel { call }
                     if invocation.children.get(&call).is_some_and(|c| c.executing) =>
                 {
-                    invocation.children.get_mut(&call).unwrap().executing = false;
-                    let settled = invocation.run.handle(
-                        agent_run::AgentRunEvent::ToolSettled {
-                            call,
-                            outcome: lk_agents_abi::llm::tool_executor::ToolOutcome::Cancelled,
-                        },
-                        now,
-                    );
-                    self.run_effects(settled, now, effects);
+                    self.cancel_child(call, now, effects)
                 }
-                agent_run::AgentRunEffect::Finished { result, input_requirements } => match *result
-                {
-                    Err(error) => {
-                        self.failure_input_requirements = input_requirements;
-                        self.finish(Err(TextSessionError::Run(error)), effects);
-                    }
-                    Ok(result) => {
-                        let invocation = self.invocation.as_ref().unwrap();
-                        let output = match &result.outcome {
-                            RunOutcome::Completed { output: Output::Validated(id) } => {
-                                invocation.outputs.get(id).cloned()
-                            }
-                            RunOutcome::Completed { output: Output::Text(text) } => {
-                                Some(Value::String(text.clone()))
-                            }
-                            _ => None,
-                        };
-                        let approvals = self.approvals(invocation, &result);
-                        effects.push(TextSessionEffect::InvocationSettled {
-                            frame_id,
-                            invocation_id,
-                            result: result.clone(),
-                        });
-                        self.invocation.as_mut().unwrap().release =
-                            Some(InvocationRelease::Settled(Box::new(result), output, approvals));
-                    }
-                },
+                agent_run::AgentRunEffect::Finished { result, input_requirements } => self
+                    .invocation_finished(
+                        frame_id,
+                        invocation_id,
+                        *result,
+                        input_requirements,
+                        effects,
+                    ),
                 other => effects.push(TextSessionEffect::Run { invocation_id, effect: other }),
             }
         }
         self.park(now, effects);
+    }
+
+    fn emit(
+        &mut self,
+        frame_id: FrameId,
+        invocation_id: String,
+        event: StreamEvent,
+        effects: &mut Vec<TextSessionEffect>,
+    ) {
+        self.sequence += 1;
+        let agent_name = self.state.frames[&frame_id].agent_name.clone();
+        effects.push(TextSessionEffect::Emit {
+            sequence: self.sequence,
+            frame_id,
+            invocation_id,
+            agent_name,
+            event,
+        });
+    }
+
+    /// A call of an agent tool becomes a child the session runs itself.
+    fn prepare_child(&mut self, call: CallId, function_call: &FunctionCall) {
+        let Some(invocation) = self.invocation.as_mut() else {
+            return;
+        };
+        let agent_name = &self.state.frames[&invocation.frame_id].agent_name;
+        if !self.config.agents[agent_name].agent_tools.contains_key(&function_call.name) {
+            return;
+        }
+        let child = PreparedChild {
+            function_call: function_call.clone(),
+            arguments: None,
+            identity: None,
+            executing: false,
+        };
+        invocation.children.insert(call, child);
+    }
+
+    fn execute_child(
+        &mut self,
+        call: CallId,
+        function_call: FunctionCall,
+        invocation_id: String,
+        prepared: ResourceId,
+        effects: &mut Vec<TextSessionEffect>,
+    ) {
+        let child = self
+            .invocation
+            .as_mut()
+            .and_then(|invocation| invocation.children.get_mut(&call))
+            .expect("an executing child was prepared in the current invocation");
+        child.function_call = function_call;
+        child.executing = true;
+        effects.push(TextSessionEffect::Run {
+            invocation_id,
+            effect: agent_run::AgentRunEffect::ToolArgumentsRelease { prepared },
+        });
+    }
+
+    fn cancel_child(&mut self, call: CallId, now: Ts, effects: &mut Vec<TextSessionEffect>) {
+        let invocation =
+            self.invocation.as_mut().expect("a canceled child runs in the current invocation");
+        invocation
+            .children
+            .get_mut(&call)
+            .expect("a canceled child was prepared in the current invocation")
+            .executing = false;
+        let settled = invocation.run.handle(
+            agent_run::AgentRunEvent::ToolSettled {
+                call,
+                outcome: lk_agents_abi::llm::tool_executor::ToolOutcome::Cancelled,
+            },
+            now,
+        );
+        self.run_effects(settled, now, effects);
+    }
+
+    fn invocation_finished(
+        &mut self,
+        frame_id: FrameId,
+        invocation_id: String,
+        result: Result<RunResult, RunError>,
+        input_requirements: Vec<lk_agents_abi::agent::run::RunInputRequirement>,
+        effects: &mut Vec<TextSessionEffect>,
+    ) {
+        let result = match result {
+            Ok(result) => result,
+            Err(error) => {
+                self.failure_input_requirements = input_requirements;
+                return self.finish(Err(TextSessionError::Run(error)), effects);
+            }
+        };
+        let invocation = self.invocation.as_ref().expect("a run finishes in its invocation");
+        let output = validated_output(invocation, &result.outcome);
+        let approvals = self.approvals(invocation, &result);
+        effects.push(TextSessionEffect::InvocationSettled {
+            frame_id,
+            invocation_id,
+            result: result.clone(),
+        });
+        self.invocation.as_mut().expect("a run finishes in its invocation").release =
+            Some(InvocationRelease::Settled(Box::new(result), output, approvals));
     }
 
     fn pending(
@@ -722,6 +758,34 @@ impl TextSession {
             result,
             input_requirements: std::mem::take(&mut self.failure_input_requirements),
         });
+    }
+}
+
+/// Records a child's validated arguments when they are a JSON object, else refuses them.
+fn accept_child_arguments(
+    child: &mut PreparedChild,
+    identity: &ArgumentIdentity,
+) -> Result<(), crate::tool_calls::PrepareFailure> {
+    match identity {
+        ArgumentIdentity::Json(value) if value.is_object() => {
+            child.identity = Some(approval::canonical(identity));
+            child.arguments = Some(value.clone());
+            Ok(())
+        }
+        _ => Err(crate::tool_calls::PrepareFailure::Refused(
+            "local agent arguments must have a serializable validated JSON object".into(),
+        )),
+    }
+}
+
+/// The output a completed run hands its parent: the validated value or the text.
+fn validated_output(invocation: &Invocation, outcome: &RunOutcome) -> Option<Value> {
+    match outcome {
+        RunOutcome::Completed { output: Output::Validated(id) } => {
+            invocation.outputs.get(id).cloned()
+        }
+        RunOutcome::Completed { output: Output::Text(text) } => Some(Value::String(text.clone())),
+        _ => None,
     }
 }
 

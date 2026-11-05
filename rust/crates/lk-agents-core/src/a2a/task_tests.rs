@@ -373,7 +373,7 @@ fn batch_waits_past_the_polling_budget_without_answering_submitted() {
     m.poll(Duration::ZERO);
     m.poll(Duration::from_secs(120));
     assert_eq!(m.wake_at(), Some(Duration::from_secs(121)));
-    assert!(matches!(m.phase, Phase::Poll { stale: false, .. }));
+    assert!(matches!(m.phase, Phase::Poll { wake: PollWake::Observe, .. }));
 }
 
 #[test]

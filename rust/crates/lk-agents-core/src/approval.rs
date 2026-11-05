@@ -39,38 +39,35 @@ pub fn canonical(identity: &ArgumentIdentity) -> String {
 
 /// Compact JSON with object keys sorted at every depth.
 pub fn canonical_json(value: &Value) -> String {
-    fn write(value: &Value, out: &mut String) {
-        match value {
-            Value::Object(map) => {
-                let mut keys: Vec<&String> = map.keys().collect();
-                keys.sort();
-                out.push('{');
-                for (i, key) in keys.into_iter().enumerate() {
-                    if i > 0 {
-                        out.push(',');
-                    }
-                    out.push_str(&Value::String(key.clone()).to_string());
-                    out.push(':');
-                    write(&map[key], out);
-                }
-                out.push('}');
-            }
-            Value::Array(values) => {
-                out.push('[');
-                for (i, v) in values.iter().enumerate() {
-                    if i > 0 {
-                        out.push(',');
-                    }
-                    write(v, out);
-                }
-                out.push(']');
-            }
-            scalar => out.push_str(&scalar.to_string()),
-        }
-    }
     let mut out = String::new();
-    write(value, &mut out);
+    write_canonical(value, &mut out);
     out
+}
+
+fn write_canonical(value: &Value, out: &mut String) {
+    match value {
+        Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            out.push('{');
+            for (i, key) in keys.into_iter().enumerate() {
+                out.extend((i > 0).then_some(','));
+                out.push_str(&Value::String(key.clone()).to_string());
+                out.push(':');
+                write_canonical(&map[key], out);
+            }
+            out.push('}');
+        }
+        Value::Array(values) => {
+            out.push('[');
+            for (i, v) in values.iter().enumerate() {
+                out.extend((i > 0).then_some(','));
+                write_canonical(v, out);
+            }
+            out.push(']');
+        }
+        scalar => out.push_str(&scalar.to_string()),
+    }
 }
 
 /// Whether a call of `tool` with `identity` repeats the latest read-back of that tool, answered

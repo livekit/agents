@@ -5,6 +5,7 @@
 //! owns atomic admission and fencing; this machine decides which operation follows each outcome.
 //! The runtime executes one [`Operation`] at a time and feeds its typed result back.
 
+mod drain;
 #[cfg(test)]
 #[path = "../../task_tests.rs"]
 mod tests;
@@ -279,11 +280,8 @@ enum Phase {
         path: Path,
         step: RunStep,
     },
-    /// The run, ended by the turn's error, is being abandoned; with `fail_task` its tasks already
-    /// failed with it.
-    Abandon {
-        fail_task: bool,
-    },
+    /// The run, ended by the turn's error, is being abandoned.
+    Abandon(AfterAbandon),
     /// A run that could not be saved fails its own task once the rows its drain picked up failed.
     FailRun,
     /// A run that could not be saved failed its tasks; an ended turn's run is abandoned next.
@@ -295,7 +293,7 @@ enum Phase {
     Observe,
     Poll {
         at: Duration,
-        stale: bool,
+        wake: PollWake,
     },
     Inbox,
     Release,
@@ -313,9 +311,42 @@ enum Path {
     Main,
     /// A batch inbox's, under the kept lease.
     Drain,
-    /// Failing what a dead holder left; `stale` first fails this message's `submitted` row.
-    Recovery { stale: bool },
+    /// Failing what a dead holder left.
+    Recovery(Recovery),
 }
+
+/// What a recovery run fails besides a dead holder's `working` rows.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Recovery {
+    /// First this message's own `submitted` row: its waiter died before taking the lane.
+    StaleSubmitted,
+    /// Only the dead holder's rows.
+    Orphans,
+}
+
+/// What a lane poll does when it wakes.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum PollWake {
+    /// Reads the task again.
+    Observe,
+    /// The task's waiter is gone: a recovery run fails its `submitted` row.
+    RecoverStale,
+}
+
+/// What follows abandoning a run its turn's error ended.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum AfterAbandon {
+    /// Its tasks already failed: the answer is the failed task.
+    AnswerFailedTask,
+    /// Nothing was failed: the caller hears the run's error.
+    RaiseError,
+}
+
+/// How long a lane poll pauses between tries.
+const LANE_POLL_PAUSE: Duration = Duration::from_secs(1);
+
+/// The reason of an answer whose row this worker did not write.
+const REASON_NOT_WRITTEN: &str = "not-written";
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum RunStep {
@@ -478,9 +509,10 @@ impl TaskMachine {
             }
             A2aTaskEvent::Wake => match self.phase {
                 Phase::Debounce { at, next } if now >= at => Ok(Some(self.next(next))),
-                Phase::Poll { at, stale } if now >= at => {
-                    Ok(Some(if stale { self.recovery_open(true) } else { self.observe() }))
-                }
+                Phase::Poll { at, wake } if now >= at => Ok(Some(match wake {
+                    PollWake::RecoverStale => self.recovery_open(Recovery::StaleSubmitted),
+                    PollWake::Observe => self.observe(),
+                })),
                 _ => Ok(None),
             },
             A2aTaskEvent::Completed { id, result } if self.pending == Some(id) => {
@@ -564,36 +596,32 @@ impl TaskMachine {
         Operation::ReadTask(self.task_id.clone())
     }
 
-    fn read_inbox(&mut self) -> Operation {
-        self.phase = Phase::Inbox;
-        Operation::ReadInbox
-    }
-
     /// Waits for the task. A `batch` receipt is never abandoned: the inbox drains it. A
     /// `concurrent` task has no lane to tell a live run from a dead one: once the wait ran out the
     /// request answers the task as it stands. Any other task still unanswered once the lane could
     /// have taken it is a dead waiter's (`stale`).
     fn poll(&mut self, now: Duration) -> Option<Operation> {
         let poll = self.poll.get_or_insert_with(|| LanePoll::new(now, self.wait_timeout));
-        let (at, stale) = match poll.next(now) {
-            Some(at) => (at, false),
+        let (at, wake) = match poll.next(now) {
+            Some(at) => (at, PollWake::Observe),
             None => {
                 *poll = LanePoll::new(now, self.wait_timeout);
                 if self.policy == Policy::Concurrent {
                     return Some(self.answer_task(None));
                 }
                 let waiting = self.waiter_gone_at.is_some_and(|gone| now < gone);
-                (now + Duration::from_secs(1), self.policy != Policy::Batch && !waiting)
+                let stale = self.policy != Policy::Batch && !waiting;
+                let wake = if stale { PollWake::RecoverStale } else { PollWake::Observe };
+                (now + LANE_POLL_PAUSE, wake)
             }
         };
-        self.phase = Phase::Poll { at, stale };
+        self.phase = Phase::Poll { at, wake };
         None
     }
 
-    /// Takes the lane without waiting, to fail what a dead holder left: its `working` rows, and
-    /// with `stale` this message's own `submitted` row.
-    fn recovery_open(&mut self, stale: bool) -> Operation {
-        self.phase = Phase::Run { path: Path::Recovery { stale }, step: RunStep::Open };
+    /// Takes the lane without waiting, to fail what a dead holder left.
+    fn recovery_open(&mut self, recovery: Recovery) -> Operation {
+        self.phase = Phase::Run { path: Path::Recovery(recovery), step: RunStep::Open };
         Operation::Open {
             run_id: self.mint("recover"),
             task_id: self.task_id.clone(),
@@ -617,18 +645,6 @@ impl TaskMachine {
     fn close(&mut self, after: After) -> Operation {
         self.phase = Phase::Closing(after);
         Operation::CloseRun
-    }
-
-    fn drain_pickup(&mut self) -> Operation {
-        if self.index < self.rows.len() {
-            self.phase = Phase::Run { path: Path::Drain, step: RunStep::Pickup };
-            Operation::Pickup(self.rows[self.index].task_id.clone())
-        } else if self.batch.is_empty() {
-            self.drain_commit()
-        } else {
-            let skip = self.rows.iter().map(|r| r.task_id.clone()).collect();
-            self.fail_orphans(skip, Phase::Run { path: Path::Drain, step: RunStep::Recover })
-        }
     }
 
     fn resolve_later(&mut self) -> Operation {
@@ -717,15 +733,6 @@ impl TaskMachine {
         Ok(Some(self.failed(reason, task_ids)))
     }
 
-    fn drain_commit(&mut self) -> Operation {
-        self.phase = Phase::Run { path: Path::Drain, step: RunStep::Commit };
-        Operation::Commit {
-            answer_task: None,
-            keep_lease: true,
-            drained_id: self.rows.last().map(|r| r.id),
-        }
-    }
-
     fn complete(
         &mut self,
         completion: Completion,
@@ -734,266 +741,327 @@ impl TaskMachine {
         if let Completion::Opened { history_end, .. } = completion {
             self.history_end = history_end;
         }
-        if let Phase::Turn(step) = self.phase {
-            return self.turn_step(step, completion, now);
+        match self.phase {
+            Phase::Turn(step) => self.turn_step(step, completion, now),
+            Phase::Failing => self.failing_step(completion, now),
+            Phase::Receipt => self.on_receipt(completion),
+            Phase::Target => self.on_target(completion),
+            Phase::Submit | Phase::RejectSubmit => self.on_submitted(completion),
+            Phase::Closing(after) => self.on_closed(after, completion),
+            Phase::Receive => self.on_received(completion),
+            Phase::Accepted(_) | Phase::RejectAccepted => self.on_accepted(completion, now),
+            Phase::Run { path, step } => self.on_run(path, step, completion, now),
+            Phase::FailRun | Phase::RunFailed | Phase::Abandon(_) => {
+                self.on_run_failure(completion)
+            }
+            Phase::Resolve | Phase::Answer { .. } => self.on_answered(completion),
+            Phase::Observe => self.on_observed(completion, now),
+            Phase::Inbox => self.on_inbox(completion, now),
+            Phase::Release => self.on_released(completion),
+            Phase::Refused => self.on_refused(completion),
+            Phase::New | Phase::Debounce { .. } | Phase::Poll { .. } | Phase::Finished => {
+                Err(self.unexpected(completion))
+            }
         }
-        if self.phase == Phase::Failing {
-            return self.failing_step(completion, now);
-        }
-        let operation = match (self.phase, completion) {
-            (Phase::Receipt, Completion::Task(Some(row))) => {
+    }
+
+    /// A completion the current phase does not expect.
+    fn unexpected(&self, completion: Completion) -> Finish {
+        let phase = self.phase;
+        Finish::Error(StorageError::Invalid(format!(
+            "unexpected A2A operation outcome {completion:?} in {phase:?}"
+        )))
+    }
+
+    /// An earlier send of this `messageId`: its task answers this one.
+    fn on_receipt(&mut self, completion: Completion) -> Result<Option<Operation>, Finish> {
+        match completion {
+            Completion::Task(Some(row)) => {
                 self.task_id = row.task_id.clone();
                 if answered(&row) {
-                    return Err(Finish::Answer(Box::new(Answer::row(
-                        row.task_id.clone(),
-                        Some(row),
-                        None,
-                    ))));
+                    let answer = Answer::row(row.task_id.clone(), Some(row), None);
+                    return Err(Finish::Answer(Box::new(answer)));
                 }
-                self.observe()
+                Ok(Some(self.observe()))
             }
-            (Phase::Receipt, Completion::Task(None)) => match &self.message.task_id {
+            Completion::Task(None) => Ok(Some(match &self.message.task_id {
                 Some(target) => {
                     self.phase = Phase::Target;
                     Operation::FindTarget(target.clone())
                 }
                 None => self.arrive(),
-            },
-            (Phase::Target, Completion::Task(Some(row))) if row.lane == self.lane => {
+            })),
+            other => Err(self.unexpected(other)),
+        }
+    }
+
+    /// The task a continuation names must be an open task of this lane.
+    fn on_target(&mut self, completion: Completion) -> Result<Option<Operation>, Finish> {
+        match completion {
+            Completion::Task(Some(row)) if row.lane == self.lane => {
                 if row.terminal() {
                     return Err(Finish::Error(StorageError::Invalid(
                         "a follow-up to a terminal task must start a new task".into(),
                     )));
                 }
-                self.arrive()
+                Ok(Some(self.arrive()))
             }
-            (Phase::Target, Completion::Task(_)) => {
-                return Err(Finish::Error(StorageError::NotFound(
-                    "the addressed task is not in this lane".into(),
-                )));
-            }
+            Completion::Task(_) => Err(Finish::Error(StorageError::NotFound(
+                "the addressed task is not in this lane".into(),
+            ))),
+            other => Err(self.unexpected(other)),
+        }
+    }
+
+    /// The early `submitted` row: written, or a resend that raced its first send, which is then
+    /// answered by the first send's task.
+    fn on_submitted(&mut self, completion: Completion) -> Result<Option<Operation>, Finish> {
+        let operation = match (self.phase, completion) {
             (Phase::Submit, Completion::Submitted(true)) => {
                 self.phase = Phase::Accepted(Next::Open);
                 Operation::Accepted(self.task_id.clone())
             }
-            (Phase::Submit, Completion::Submitted(false))
-            | (Phase::Closing(After::Receipt), Completion::Done) => {
-                self.phase = Phase::Receipt;
-                Operation::FindReceipt(self.message.message_id.clone())
-            }
-            (Phase::Receive, Completion::Received { duplicate: Some(task_id), .. }) => {
-                self.task_id = task_id;
-                self.observe()
-            }
-            (Phase::Receive, Completion::Received { duplicate: None, leased }) => {
-                self.leased = leased;
-                self.phase = Phase::Accepted(if leased { Next::Drain } else { Next::Open });
-                Operation::Accepted(self.task_id.clone())
-            }
-            (Phase::Accepted(next), Completion::Done) => {
-                if self.policy == Policy::Batch && !self.leased {
-                    self.observe()
-                } else {
-                    return Ok(self.after_accepted(next, now));
-                }
-            }
-            (
-                Phase::Run { path, step: RunStep::Open },
-                Completion::Opened { closed, picked_up, .. },
-            ) => {
-                match path {
-                    Path::Main if closed => self.close(After::Observe),
-                    Path::Main if self.policy == Policy::Reject => {
-                        // the row is written under the lease: a refused message leaves none
-                        self.phase = Phase::RejectSubmit;
-                        Operation::Submit(self.submitted())
-                    }
-                    // a client canceled the task before its turn: nothing runs
-                    Path::Main if !picked_up => self.close(After::Observe),
-                    Path::Main => self.recover(now),
-                    Path::Drain => {
-                        self.leased = true;
-                        self.drain_pickup()
-                    }
-                    // still `submitted` with the lane free: its waiter died before the lane
-                    Path::Recovery { stale: true } => {
-                        let then = Phase::Run { path, step: RunStep::Orphan };
-                        self.fail_task(self.task_id.clone(), REASON_WORKER_LOST, then)
-                    }
-                    Path::Recovery { stale: false } => {
-                        self.fail_orphans(Vec::new(), Phase::Run { path, step: RunStep::Recover })
-                    }
-                }
-            }
+            (Phase::Submit, Completion::Submitted(false)) => self.find_receipt(),
             (Phase::RejectSubmit, Completion::Submitted(true)) => {
                 self.phase = Phase::RejectAccepted;
                 Operation::Accepted(self.task_id.clone())
             }
-            (Phase::RejectSubmit, Completion::Submitted(false)) => {
-                // a resend that raced its first send: answered by the first send's task
-                self.close(After::Receipt)
+            (Phase::RejectSubmit, Completion::Submitted(false)) => self.close(After::Receipt),
+            (_, other) => return Err(self.unexpected(other)),
+        };
+        Ok(Some(operation))
+    }
+
+    fn find_receipt(&mut self) -> Operation {
+        self.phase = Phase::Receipt;
+        Operation::FindReceipt(self.message.message_id.clone())
+    }
+
+    fn on_closed(
+        &mut self,
+        after: After,
+        completion: Completion,
+    ) -> Result<Option<Operation>, Finish> {
+        if !matches!(completion, Completion::Done) {
+            return Err(self.unexpected(completion));
+        }
+        Ok(Some(match after {
+            After::Receipt => self.find_receipt(),
+            After::Observe => self.observe(),
+        }))
+    }
+
+    /// The `batch` receipt: a duplicate is watched, a new one drains under the lease it took.
+    fn on_received(&mut self, completion: Completion) -> Result<Option<Operation>, Finish> {
+        match completion {
+            Completion::Received { duplicate: Some(task_id), .. } => {
+                self.task_id = task_id;
+                Ok(Some(self.observe()))
             }
-            (Phase::RejectAccepted, Completion::Done) => self.next(Next::Pickup),
-            (Phase::Run { path: Path::Main, step: RunStep::Pickup }, Completion::Picked(was)) => {
-                if was.is_some() {
-                    self.recover(now)
-                } else {
-                    self.close(After::Observe)
-                }
+            Completion::Received { duplicate: None, leased } => {
+                self.leased = leased;
+                self.phase = Phase::Accepted(if leased { Next::Drain } else { Next::Open });
+                Ok(Some(Operation::Accepted(self.task_id.clone())))
             }
-            (Phase::Run { path, step: RunStep::Recover }, Completion::Done) => match path {
-                Path::Main => self.single_turn(now),
-                Path::Drain => {
-                    self.start_turn(self.batch.clone(), self.task_ids.clone(), true, now)
-                }
-                Path::Recovery { .. } => self.close(After::Observe),
+            other => Err(self.unexpected(other)),
+        }
+    }
+
+    fn on_accepted(
+        &mut self,
+        completion: Completion,
+        now: Duration,
+    ) -> Result<Option<Operation>, Finish> {
+        match (self.phase, completion) {
+            (Phase::Accepted(_), Completion::Done)
+                if self.policy == Policy::Batch && !self.leased =>
+            {
+                Ok(Some(self.observe()))
+            }
+            (Phase::Accepted(next), Completion::Done) => Ok(self.after_accepted(next, now)),
+            (Phase::RejectAccepted, Completion::Done) => Ok(Some(self.next(Next::Pickup))),
+            (_, other) => Err(self.unexpected(other)),
+        }
+    }
+
+    fn on_run(
+        &mut self,
+        path: Path,
+        step: RunStep,
+        completion: Completion,
+        now: Duration,
+    ) -> Result<Option<Operation>, Finish> {
+        let operation = match (path, step, completion) {
+            (path, RunStep::Open, Completion::Opened { closed, picked_up, .. }) => {
+                self.on_run_opened(path, closed, picked_up, now)
+            }
+            (Path::Main, RunStep::Pickup, Completion::Picked(was)) => match was {
+                Some(_) => self.recover(now),
+                None => self.close(After::Observe),
             },
-            (
-                Phase::Run { path: Path::Main, step: RunStep::Commit },
-                Completion::Committed { task, run_id },
-            ) => {
-                let (task_id, output) = self.answer.take().unwrap_or_default();
-                return Err(Finish::Answer(Box::new(Answer {
-                    output,
-                    answered_by: Some(task_id.clone()),
-                    run_id: Some(run_id),
-                    ..Answer::row(task_id, task, Some("not-written"))
-                })));
+            (Path::Drain, RunStep::Pickup, Completion::Picked(was)) => {
+                return self.on_drain_picked(was);
             }
-            (Phase::FailRun, Completion::Done) => self.fail_run(),
-            (Phase::RunFailed, Completion::Done) => match self.ended.take() {
-                Some((outcome, reason)) => {
-                    self.phase = Phase::Abandon { fail_task: true };
-                    Operation::Abandon { outcome, reason }
-                }
-                None => self.answer_task(Some(REASON_STORAGE_UNAVAILABLE)),
-            },
-            (Phase::Abandon { fail_task: true }, Completion::Done) => {
-                self.answer_task(Some(REASON_STORAGE_UNAVAILABLE))
+            (path, RunStep::Recover, Completion::Done) => self.on_recovered(path, now),
+            (Path::Main, RunStep::Commit, Completion::Committed { task, run_id }) => {
+                return Err(self.on_committed(task, run_id));
             }
-            (Phase::Abandon { fail_task: false }, Completion::Done) => {
-                return Err(Finish::Error(self.error.take().unwrap_or_else(|| {
-                    StorageError::Invalid("a run was abandoned without its cause".into())
-                })));
-            }
-            (Phase::Resolve, Completion::Done) => self.answer_task(None),
-            (Phase::Answer { reason }, Completion::Done) => self.answer_task(reason),
-            (Phase::Answer { .. }, Completion::Task(None)) if self.error.is_some() => {
-                // the failed run's message has no row (a `reject` lane writes it with `Submit`
-                // under the lease, before the turn): a failure would name a task no row holds,
-                // so the client hears the error
-                return Err(Finish::Error(self.error.take().expect("the run's error")));
-            }
-            (Phase::Answer { reason }, Completion::Task(task)) => {
-                let answer = Answer::row(self.answering(), task, reason);
-                return Err(Finish::Answer(Box::new(Answer {
-                    run_id: self.run_id.take(),
-                    ..answer
-                })));
-            }
-            (Phase::Observe, Completion::Task(Some(row))) if answered(&row) => {
-                let answer = Answer::row(row.task_id.clone(), Some(row), Some("not-written"));
-                return Err(Finish::Answer(Box::new(Answer {
-                    run_id: self.run_id.take(),
-                    ..answer
-                })));
-            }
-            (Phase::Observe, Completion::Task(row)) => {
-                // timed on this machine's clock, not the row's: the database's may disagree.
-                // The waiter's last try may come one lane-poll pause after its wait ran out.
-                let submitted = row.as_ref().is_some_and(|r| r.status == TaskState::Submitted);
-                let gone = now + self.debounce + self.wait_timeout + Duration::from_secs(1);
-                self.waiter_gone_at = submitted.then(|| self.waiter_gone_at.unwrap_or(gone));
-                if self.policy == Policy::Batch {
-                    self.read_inbox()
-                } else if row.as_ref().is_some_and(|r| r.status == TaskState::Working)
-                    && self.policy != Policy::Concurrent
-                {
-                    // the row's holder may have died: whoever takes the lane fails it
-                    self.recovery_open(false)
-                } else {
-                    return Ok(self.poll(now));
-                }
-            }
-            (Phase::Inbox, Completion::Inbox(rows)) if rows.is_empty() => {
-                if self.leased {
-                    self.phase = Phase::Release;
-                    Operation::ReleaseDrained
-                } else {
-                    return Ok(self.poll(now));
-                }
-            }
-            (Phase::Inbox, Completion::Inbox(rows)) => {
-                let run_id = self.mint("drain");
-                let last = rows.last().expect("nonempty inbox");
-                let task_id = last.task_id.clone();
-                let channel = Some(crate::a2a::channel_of(&last.message));
-                self.rows = rows;
-                self.index = 0;
-                self.batch.clear();
-                self.task_ids.clear();
-                self.phase = Phase::Run { path: Path::Drain, step: RunStep::Open };
-                let access = if self.leased {
-                    Access::Kept
-                } else {
-                    Access::Exclusive { wait: false, interrupt: false }
-                };
-                Operation::Open { run_id, task_id, channel, access, pickup: false }
-            }
-            (Phase::Run { path: Path::Drain, step: RunStep::Pickup }, Completion::Picked(was)) => {
-                let row = &self.rows[self.index];
-                match was {
-                    Some(TaskState::Working) => {
-                        // a dead holder's: the pickup took it, it fails worker-lost
-                        let task_id = row.task_id.clone();
-                        self.phase = Phase::Run { path: Path::Drain, step: RunStep::Orphan };
-                        return Ok(Some(self.failed(REASON_WORKER_LOST, vec![task_id])));
-                    }
-                    Some(_) => {
-                        // the receipt's id stays apart from the client's continuation target
-                        let message = Message::from_a2a(&row.message, row.received_at as f64, None)
-                            .map_err(Finish::Error)?;
-                        self.batch.push(message);
-                        self.task_ids.push(row.task_id.clone());
-                    }
-                    None => {}
-                }
-                self.index += 1;
-                self.drain_pickup()
-            }
-            (Phase::Run { path, step: RunStep::Orphan }, Completion::Done) => match path {
-                Path::Drain => {
-                    self.index += 1;
-                    self.drain_pickup()
-                }
-                // a recovery's stale row: the dead holder's `working` rows follow
-                _ => self.fail_orphans(Vec::new(), Phase::Run { path, step: RunStep::Recover }),
-            },
-            (
-                Phase::Run { path: Path::Drain, step: RunStep::Commit },
-                Completion::Committed { run_id, .. },
-            ) => {
+            (Path::Drain, RunStep::Commit, Completion::Committed { run_id, .. }) => {
                 self.run_id = Some(run_id);
                 self.phase = Phase::Release;
                 Operation::ReleaseDrained
             }
-            (Phase::Release, Completion::Released(released)) => {
-                self.leased = !released;
-                if released { self.observe() } else { self.read_inbox() }
+            (Path::Drain, RunStep::Orphan, Completion::Done) => {
+                self.index += 1;
+                self.drain_pickup()
             }
-            (Phase::Closing(After::Observe), Completion::Done) => self.observe(),
-            (Phase::Refused, Completion::Runs(runs)) => {
-                let running_task_id =
-                    runs.into_iter().find(|r| r.interrupted).and_then(|r| r.task_id);
-                return Err(Finish::Error(StorageError::Rejected { running_task_id }));
+            // a recovery's stale row: the dead holder's `working` rows follow
+            (path, RunStep::Orphan, Completion::Done) => {
+                self.fail_orphans(Vec::new(), Phase::Run { path, step: RunStep::Recover })
             }
-            (phase, completion) => {
-                return Err(Finish::Error(StorageError::Invalid(format!(
-                    "unexpected A2A operation outcome {completion:?} in {phase:?}"
-                ))));
-            }
+            (_, _, other) => return Err(self.unexpected(other)),
         };
         Ok(Some(operation))
+    }
+
+    fn on_run_opened(
+        &mut self,
+        path: Path,
+        closed: bool,
+        picked_up: bool,
+        now: Duration,
+    ) -> Operation {
+        match path {
+            Path::Main if closed => self.close(After::Observe),
+            Path::Main if self.policy == Policy::Reject => {
+                // the row is written under the lease: a refused message leaves none
+                self.phase = Phase::RejectSubmit;
+                Operation::Submit(self.submitted())
+            }
+            // a client canceled the task before its turn: nothing runs
+            Path::Main if !picked_up => self.close(After::Observe),
+            Path::Main => self.recover(now),
+            Path::Drain => {
+                self.leased = true;
+                self.drain_pickup()
+            }
+            // still `submitted` with the lane free: its waiter died before the lane
+            Path::Recovery(Recovery::StaleSubmitted) => {
+                let then = Phase::Run { path, step: RunStep::Orphan };
+                self.fail_task(self.task_id.clone(), REASON_WORKER_LOST, then)
+            }
+            Path::Recovery(Recovery::Orphans) => {
+                self.fail_orphans(Vec::new(), Phase::Run { path, step: RunStep::Recover })
+            }
+        }
+    }
+
+    /// A dead holder's rows failed: the turn follows, or a recovery run closes.
+    fn on_recovered(&mut self, path: Path, now: Duration) -> Operation {
+        match path {
+            Path::Main => self.single_turn(now),
+            Path::Drain => self.start_turn(self.batch.clone(), self.task_ids.clone(), path, now),
+            Path::Recovery(_) => self.close(After::Observe),
+        }
+    }
+
+    /// This message's turn committed: the answer is its reply.
+    fn on_committed(&mut self, task: Option<TaskRow>, run_id: String) -> Finish {
+        let (task_id, output) = self.answer.take().unwrap_or_default();
+        Finish::Answer(Box::new(Answer {
+            output,
+            answered_by: Some(task_id.clone()),
+            run_id: Some(run_id),
+            ..Answer::row(task_id, task, Some(REASON_NOT_WRITTEN))
+        }))
+    }
+
+    /// The failure path of a run whose save could not be written, after each step is done.
+    fn on_run_failure(&mut self, completion: Completion) -> Result<Option<Operation>, Finish> {
+        if !matches!(completion, Completion::Done) {
+            return Err(self.unexpected(completion));
+        }
+        let operation = match self.phase {
+            Phase::FailRun => self.fail_run(),
+            Phase::RunFailed => match self.ended.take() {
+                Some((outcome, reason)) => {
+                    self.phase = Phase::Abandon(AfterAbandon::AnswerFailedTask);
+                    Operation::Abandon { outcome, reason }
+                }
+                None => self.answer_task(Some(REASON_STORAGE_UNAVAILABLE)),
+            },
+            Phase::Abandon(AfterAbandon::AnswerFailedTask) => {
+                self.answer_task(Some(REASON_STORAGE_UNAVAILABLE))
+            }
+            Phase::Abandon(AfterAbandon::RaiseError) => {
+                return Err(Finish::Error(self.error.take().unwrap_or_else(|| {
+                    StorageError::Invalid("a run was abandoned without its cause".into())
+                })));
+            }
+            _ => return Err(self.unexpected(completion)),
+        };
+        Ok(Some(operation))
+    }
+
+    fn on_answered(&mut self, completion: Completion) -> Result<Option<Operation>, Finish> {
+        match (self.phase, completion) {
+            (Phase::Resolve, Completion::Done) => Ok(Some(self.answer_task(None))),
+            (Phase::Answer { reason }, Completion::Done) => Ok(Some(self.answer_task(reason))),
+            (Phase::Answer { .. }, Completion::Task(None)) if self.error.is_some() => {
+                // the failed run's message has no row (a `reject` lane writes it with `Submit`
+                // under the lease, before the turn): a failure would name a task no row holds,
+                // so the client hears the error
+                Err(Finish::Error(self.error.take().expect("the run's error")))
+            }
+            (Phase::Answer { reason }, Completion::Task(task)) => {
+                let answer = Answer::row(self.answering(), task, reason);
+                Err(Finish::Answer(Box::new(Answer { run_id: self.run_id.take(), ..answer })))
+            }
+            (_, other) => Err(self.unexpected(other)),
+        }
+    }
+
+    /// The watched task: answered, drained by the inbox, recovered from a dead holder, or polled.
+    fn on_observed(
+        &mut self,
+        completion: Completion,
+        now: Duration,
+    ) -> Result<Option<Operation>, Finish> {
+        let row = match completion {
+            Completion::Task(Some(row)) if answered(&row) => {
+                let answer = Answer::row(row.task_id.clone(), Some(row), Some(REASON_NOT_WRITTEN));
+                return Err(Finish::Answer(Box::new(Answer {
+                    run_id: self.run_id.take(),
+                    ..answer
+                })));
+            }
+            Completion::Task(row) => row,
+            other => return Err(self.unexpected(other)),
+        };
+        // timed on this machine's clock, not the row's: the database's may disagree.
+        // The waiter's last try may come one lane-poll pause after its wait ran out.
+        let submitted = row.as_ref().is_some_and(|r| r.status == TaskState::Submitted);
+        let gone = now + self.debounce + self.wait_timeout + LANE_POLL_PAUSE;
+        self.waiter_gone_at = submitted.then(|| self.waiter_gone_at.unwrap_or(gone));
+        if self.policy == Policy::Batch {
+            return Ok(Some(self.read_inbox()));
+        }
+        if row.as_ref().is_some_and(|r| r.status == TaskState::Working)
+            && self.policy != Policy::Concurrent
+        {
+            // the row's holder may have died: whoever takes the lane fails it
+            return Ok(Some(self.recovery_open(Recovery::Orphans)));
+        }
+        Ok(self.poll(now))
+    }
+
+    fn on_refused(&mut self, completion: Completion) -> Result<Option<Operation>, Finish> {
+        let runs = match completion {
+            Completion::Runs(runs) => runs,
+            other => return Err(self.unexpected(other)),
+        };
+        let running_task_id = runs.into_iter().find(|r| r.interrupted).and_then(|r| r.task_id);
+        Err(Finish::Error(StorageError::Rejected { running_task_id }))
     }
 
     /// Under the lease, a dead holder's `working` rows fail before the turn; a `concurrent` run
@@ -1008,7 +1076,7 @@ impl TaskMachine {
 
     /// This message's own turn.
     fn single_turn(&mut self, now: Duration) -> Operation {
-        self.start_turn(vec![self.message.clone()], vec![self.task_id.clone()], false, now)
+        self.start_turn(vec![self.message.clone()], vec![self.task_id.clone()], Path::Main, now)
     }
 
     fn arrive(&mut self) -> Operation {
@@ -1085,7 +1153,7 @@ impl TaskMachine {
                     self.ended = Some((outcome, reason));
                     self.fail_run()
                 } else {
-                    self.phase = Phase::Abandon { fail_task };
+                    self.phase = Phase::Abandon(AfterAbandon::RaiseError);
                     Operation::Abandon { outcome, reason }
                 }
             }

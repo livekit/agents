@@ -67,91 +67,91 @@ impl Projection {
             }
         }
     }
+    /// A text view shows only deltas: each fragment, or the message's text so far.
     fn render(&self, envelope: Envelope, view: View) -> Option<Item> {
-        let Envelope { sequence, agent_name, invocation_id, frame_id, event } = envelope;
-        let sequence = sequence.unwrap_or(self.sequence + 1);
-        if view == View::Result {
-            return None;
-        }
-        if let StreamEvent::TextDelta { message_id, delta } = &event {
-            if let View::Text { delta: fragments } = view {
-                let text = if fragments || self.message.as_ref() != Some(message_id) {
-                    delta.clone()
+        let sequence = envelope.sequence.unwrap_or(self.sequence + 1);
+        match (view, &envelope.event) {
+            (View::Result, _) => None,
+            (View::Text { delta: fragments }, StreamEvent::TextDelta { message_id, delta }) => {
+                if fragments || self.message.as_ref() != Some(message_id) {
+                    Some(Item::Text(delta.clone()))
                 } else {
-                    let mut text = self.text.clone();
-                    text.push_str(delta);
-                    text
-                };
-                return Some(Item::Text(text));
+                    Some(Item::Text(format!("{}{delta}", self.text)))
+                }
             }
-        } else if matches!(view, View::Text { .. }) {
-            return None;
+            (View::Text { .. }, _) => None,
+            _ => Some(Item::Event(Box::new(present(envelope, sequence)))),
         }
-        Some(Item::Event(Box::new(match event {
-            StreamEvent::TextDelta { message_id, delta } => {
-                PresentedEvent::TextDelta(TextDeltaEvent {
-                    sequence,
-                    agent_name,
-                    invocation_id,
-                    frame_id,
-                    message_id,
-                    delta,
-                })
-            }
-            StreamEvent::TextEnd { message_id, interrupted } => {
-                PresentedEvent::TextEnd(TextEndEvent {
-                    sequence,
-                    agent_name,
-                    invocation_id,
-                    frame_id,
-                    message_id,
-                    interrupted,
-                })
-            }
-            StreamEvent::ToolCall { call_id, tool_name, arguments } => {
-                PresentedEvent::ToolCall(ToolCallEvent {
-                    sequence,
-                    agent_name,
-                    invocation_id,
-                    frame_id,
-                    call_id,
-                    tool_name,
-                    arguments: if arguments.is_null() { serde_json::json!({}) } else { arguments },
-                })
-            }
-            StreamEvent::ToolResult { call_id, tool_name, status, output } => {
-                let failed = status == ToolResultStatus::Failed;
-                PresentedEvent::ToolResult(ToolResultEvent {
-                    sequence,
-                    agent_name,
-                    invocation_id,
-                    frame_id,
-                    call_id,
-                    tool_name,
-                    outcome: status,
-                    output: if failed {
-                        serde_json::Value::Null
-                    } else {
-                        serde_json::Value::String(output.clone())
-                    },
-                    error: failed.then_some(output),
-                })
-            }
-            StreamEvent::Progress { call_id, tool_name, message } => {
-                PresentedEvent::Progress(ProgressEvent {
-                    sequence,
-                    agent_name,
-                    invocation_id,
-                    frame_id,
-                    call_id: Some(call_id),
-                    tool_name: Some(tool_name),
-                    message,
-                })
-            }
-        })))
     }
     pub fn release(&mut self) -> BTreeMap<String, String> {
         std::mem::take(&mut self.presented)
+    }
+}
+
+/// The public event for `envelope`'s stream event, numbered `sequence`.
+fn present(envelope: Envelope, sequence: u64) -> PresentedEvent {
+    let Envelope { agent_name, invocation_id, frame_id, event, .. } = envelope;
+    match event {
+        StreamEvent::TextDelta { message_id, delta } => PresentedEvent::TextDelta(TextDeltaEvent {
+            sequence,
+            agent_name,
+            invocation_id,
+            frame_id,
+            message_id,
+            delta,
+        }),
+        StreamEvent::TextEnd { message_id, interrupted } => PresentedEvent::TextEnd(TextEndEvent {
+            sequence,
+            agent_name,
+            invocation_id,
+            frame_id,
+            message_id,
+            interrupted,
+        }),
+        StreamEvent::ToolCall { call_id, tool_name, arguments } => {
+            let arguments = match arguments {
+                serde_json::Value::Null => serde_json::Value::Object(serde_json::Map::new()),
+                arguments => arguments,
+            };
+            PresentedEvent::ToolCall(ToolCallEvent {
+                sequence,
+                agent_name,
+                invocation_id,
+                frame_id,
+                call_id,
+                tool_name,
+                arguments,
+            })
+        }
+        StreamEvent::ToolResult { call_id, tool_name, status, output } => {
+            let failed = status == ToolResultStatus::Failed;
+            let shown = match failed {
+                true => serde_json::Value::Null,
+                false => serde_json::Value::String(output.clone()),
+            };
+            PresentedEvent::ToolResult(ToolResultEvent {
+                sequence,
+                agent_name,
+                invocation_id,
+                frame_id,
+                call_id,
+                tool_name,
+                outcome: status,
+                output: shown,
+                error: failed.then_some(output),
+            })
+        }
+        StreamEvent::Progress { call_id, tool_name, message } => {
+            PresentedEvent::Progress(ProgressEvent {
+                sequence,
+                agent_name,
+                invocation_id,
+                frame_id,
+                call_id: Some(call_id),
+                tool_name: Some(tool_name),
+                message,
+            })
+        }
     }
 }
 
