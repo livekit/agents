@@ -79,22 +79,6 @@ class GnaniSTTOptions:
     use_streaming: bool = True
 
 
-_DEPRECATED_STT_KWARGS = frozenset(("organization_id", "user_id", "http_session"))
-
-
-def _check_deprecated_args(kwargs: dict[str, object], *, caller: str = "STT.__init__") -> None:
-    """Warn about deprecated kwargs and raise on truly unknown ones."""
-    for name in _DEPRECATED_STT_KWARGS:
-        if name in kwargs:
-            logger.warning(f"`{name}` is deprecated and no longer used")
-
-    unknown = set(kwargs) - _DEPRECATED_STT_KWARGS
-    if unknown:
-        raise TypeError(
-            f"{caller}() got unexpected keyword argument(s): {', '.join(sorted(unknown))}"
-        )
-
-
 class STT(stt.STT):
     """Gnani Vachana Speech-to-Text implementation.
 
@@ -126,7 +110,6 @@ class STT(stt.STT):
         format: GnaniSTTFormat = "verbatim",
         itn_native_numerals: bool = False,
         use_streaming: bool = True,
-        **kwargs: object,
     ) -> None:
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -135,8 +118,6 @@ class STT(stt.STT):
                 aligned_transcript=False,
             )
         )
-
-        _check_deprecated_args(kwargs)
 
         self._api_key = api_key or os.environ.get("GNANI_API_KEY")
         if not self._api_key:

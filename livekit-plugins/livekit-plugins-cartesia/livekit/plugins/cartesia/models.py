@@ -4,13 +4,6 @@ from typing import Literal
 #                                    TTS                                      #
 ###############################################################################
 
-TTSEncoding = Literal["pcm_s16le"]
-"""
-.. deprecated::
-    1.5.5 Encoding should not be parameterized.
-    Only `pcm_s16le`is allowed. Prefer using `AUDIO_ENCODING` from constants.py.
-"""
-
 TTSModels = Literal["sonic", "sonic-2", "sonic-lite", "sonic-preview", "sonic-turbo", "sonic-3"]
 """See [the docs](https://docs.cartesia.ai/build-with-cartesia/tts-models/latest) for all options."""
 
@@ -87,13 +80,6 @@ TTSVoiceEmotion = Literal[
 ###############################################################################
 #                                    STT                                      #
 ###############################################################################
-
-STTEncoding = Literal["pcm_s16le"]
-"""
-.. deprecated::
-    1.5.5 Encoding should not be parameterized.
-    Only `pcm_s16le`is allowed. Prefer using `AUDIO_ENCODING` from constants.py.
-"""
 
 TurnDetectingSTTModel = Literal["ink-2"]
 """

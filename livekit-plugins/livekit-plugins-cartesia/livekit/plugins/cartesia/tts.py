@@ -46,6 +46,7 @@ from .constants import (
     API_VERSION,
     API_VERSION_HEADER,
     API_VERSION_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS,
+    AUDIO_ENCODING,
     MODEL_ID_WITH_EMBEDDINGS_AND_EXPERIMENTAL_CONTROLS,
     REQUEST_ID_HEADER,
     USER_AGENT,
@@ -53,7 +54,6 @@ from .constants import (
 from .log import logger
 from .models import (
     TTSDefaultVoiceId,
-    TTSEncoding,
     TTSModels,
     TTSVoiceEmotion,
     TTSVoiceSpeed,
@@ -67,7 +67,6 @@ def _is_sonic_3(model: str) -> bool:
 @dataclass
 class _TTSOptions:
     model: TTSModels | str
-    encoding: TTSEncoding
     sample_rate: int
     voice: str | list[float]
     speed: TTSVoiceSpeed | float | None
@@ -94,7 +93,6 @@ class TTS(tts.TTS):
         api_key: str | None = None,
         model: TTSModels | str = "sonic-3",
         language: str | None = "en",
-        encoding: TTSEncoding = "pcm_s16le",
         voice: str | list[float] = TTSDefaultVoiceId,
         speed: TTSVoiceSpeed | float | None = None,
         emotion: TTSVoiceEmotion | str | list[TTSVoiceEmotion | str] | None = None,
@@ -116,7 +114,6 @@ class TTS(tts.TTS):
         Args:
             model (TTSModels, optional): The Cartesia TTS model to use. Defaults to "sonic-3".
             language (str, optional): The language code for synthesis. Defaults to "en".
-            encoding (TTSEncoding, optional): The audio encoding format. Defaults to "pcm_s16le".
             voice (str | list[float], optional): The voice ID or embedding array.
             speed (TTSVoiceSpeed | float, optional): Speed of speech, with sonic-3, the value is valid between 0.6 and 2.0 (https://docs.cartesia.ai/api-reference/tts/bytes#body-generation-config-speed)
             emotion (list[TTSVoiceEmotion], optional): Emotion of the speech (https://docs.cartesia.ai/api-reference/tts/bytes#body-generation-config-emotion)
@@ -152,7 +149,6 @@ class TTS(tts.TTS):
         self._opts = _TTSOptions(
             model=model,
             language=LanguageCode(language) if language else None,
-            encoding=encoding,
             sample_rate=sample_rate,
             voice=voice,
             speed=speed,
@@ -639,7 +635,7 @@ def _to_cartesia_options(opts: _TTSOptions, *, streaming: bool) -> dict[str, Any
         "voice": voice,
         "output_format": {
             "container": "raw",
-            "encoding": opts.encoding,
+            "encoding": AUDIO_ENCODING,
             "sample_rate": opts.sample_rate,
         },
         "language": opts.language.language if opts.language else None,

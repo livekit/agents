@@ -21,7 +21,7 @@ https://docs.speechify.ai for API details.
 from livekit.agents import Plugin
 
 from .log import logger
-from .models import TTSEncoding, TTSModels
+from .models import TTSModels
 from .tts import DEFAULT_MODEL, DEFAULT_VOICE_ID, TTS, ChunkedStream, SynthesizeStream, Voice
 from .version import __version__
 
@@ -30,7 +30,6 @@ __all__ = [
     "ChunkedStream",
     "SynthesizeStream",
     "Voice",
-    "TTSEncoding",
     "TTSModels",
     "DEFAULT_VOICE_ID",
     "DEFAULT_MODEL",

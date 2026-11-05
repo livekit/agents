@@ -35,6 +35,7 @@ from ..constants import (
     API_AUTH_HEADER,
     API_VERSION,
     API_VERSION_HEADER,
+    AUDIO_ENCODING,
     REQUEST_ID_HEADER,
     USER_AGENT,
 )
@@ -49,7 +50,7 @@ if TYPE_CHECKING:
     from livekit.agents import APIConnectOptions
     from livekit.agents.types import NotGivenOr
 
-    from ..models import STTEncoding, STTLanguages, STTModels
+    from ..models import STTLanguages, STTModels
 
     class STTWord(TypedDict):
         """Word-level timestamp from Cartesia STT.
@@ -145,7 +146,6 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
         stt: stt.STT,
         conn_options: APIConnectOptions,
         sample_rate: int,
-        encoding: STTEncoding,
         audio_chunk_duration_ms: int,
         model: STTModels | str,
         api_key: str,
@@ -154,7 +154,6 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
         language: LanguageCode | None,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=sample_rate)
-        self._encoding = encoding
         self._sample_rate = sample_rate
         self._audio_chunk_duration_ms = audio_chunk_duration_ms
         self._model = model
@@ -303,7 +302,7 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
         params = {
             "model": self._model,
             "sample_rate": str(self._sample_rate),
-            "encoding": self._encoding,
+            "encoding": AUDIO_ENCODING,
         }
 
         if self._language is not None:
@@ -446,20 +445,12 @@ class LegacyRecognizeStream(CartesiaRecognizeStream):
         self,
         *,
         language: NotGivenOr[STTLanguages | str] = NOT_GIVEN,
-        model: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         """Change Cartesia STT options. Use sparingly; this will interrupt transcription.
 
         Args:
             language: Used to change the language to match what the user is speaking.
-            model: Deprecated. This is a no-op. Construct a new STT instance to change the model.
         """
-        # not changing the model and reconnecting since that is likely unexpected behavior
-        if utils.is_given(model) and model != self._model:
-            logger.warning(
-                "Cartesia STT update_options() ignores the model kwarg. Construct a new STT instance to change the model."
-            )
-
         if utils.is_given(language):
             language_code = LanguageCode(language)
 

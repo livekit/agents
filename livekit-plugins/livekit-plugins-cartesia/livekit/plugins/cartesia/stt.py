@@ -17,7 +17,6 @@ from __future__ import annotations
 import asyncio
 import os
 import weakref
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import aiohttp
@@ -34,7 +33,6 @@ from livekit.agents.types import NOT_GIVEN
 from ._recognize_streams.auto_finalize_recognize_stream import AutoFinalizeRecognizeStream
 from ._recognize_streams.cartesia_recognize_stream import CartesiaRecognizeStream
 from ._recognize_streams.legacy_recognize_stream import LegacyRecognizeStream
-from .constants import AUDIO_ENCODING
 from .log import logger
 
 if TYPE_CHECKING:
@@ -43,7 +41,7 @@ if TYPE_CHECKING:
     from livekit.agents import APIConnectOptions
     from livekit.agents.types import NotGivenOr
 
-    from .models import STTEncoding, STTLanguages, STTModels
+    from .models import STTLanguages, STTModels
 
     _ResolvedFinalTranscriptMode = Literal["auto", "legacy"]
 
@@ -102,7 +100,6 @@ class STT(stt.STT):
         http_session: aiohttp.ClientSession | None = None,
         base_url: str = "https://api.cartesia.ai",
         language: STTLanguages | str | None = None,
-        encoding: STTEncoding = AUDIO_ENCODING,
         turn_start_threshold: NotGivenOr[float] = NOT_GIVEN,
         turn_eager_end_threshold: NotGivenOr[float] = NOT_GIVEN,
         turn_end_threshold: NotGivenOr[float] = NOT_GIVEN,
@@ -138,7 +135,6 @@ class STT(stt.STT):
                 Defaults to ``https://api.cartesia.ai``.
             language: The language code for recognition.
                 This plugin only supports ``en`` for ``ink-2``.
-            encoding: The audio encoding format. Must be ``pcm_s16le``.
             turn_start_threshold: Likelihood above which the model starts a turn.
                 Range 0.5-0.9, Cartesia default 0.8. Must stay above
                 ``turn_eager_end_threshold``. Turn-detecting models (e.g. ``ink-2``) only.
@@ -230,7 +226,6 @@ class STT(stt.STT):
         self._api_key = resolved_api_key
         self._audio_chunk_duration_ms = audio_chunk_duration_ms
         self._final_transcript_mode: _ResolvedFinalTranscriptMode = resolved_final_transcript_mode
-        self._encoding: STTEncoding = encoding
         self._language = language_code
         self._model = resolved_model
         self._sample_rate = sample_rate
@@ -293,7 +288,6 @@ class STT(stt.STT):
                     stt=self,
                     conn_options=conn_options,
                     sample_rate=self._sample_rate,
-                    encoding=self._encoding,
                     audio_chunk_duration_ms=self._audio_chunk_duration_ms,
                     model=self._model,
                     api_key=self._api_key,
@@ -311,7 +305,6 @@ class STT(stt.STT):
                     stt=self,
                     conn_options=conn_options,
                     sample_rate=self._sample_rate,
-                    encoding=self._encoding,
                     audio_chunk_duration_ms=self._audio_chunk_duration_ms,
                     model=self._model,
                     api_key=self._api_key,
@@ -343,7 +336,6 @@ class STT(stt.STT):
         self,
         *,
         language: NotGivenOr[STTLanguages | str] = NOT_GIVEN,
-        model: NotGivenOr[STTModels | str] = NOT_GIVEN,
     ) -> None:
         """Change Cartesia STT options.
 
@@ -352,19 +344,12 @@ class STT(stt.STT):
         Args:
             language: Used to change the language to match what the user is speaking.
                 Ink 2 does not have multi-lingual support yet and only works with English.
-            model: Deprecated. This is a no-op. Construct a new STT instance to change the model.
         """
-        if utils.is_given(model) and model != self._model:
-            logger.warning(
-                "Cartesia STT update_options() ignores the model kwarg. Construct a new STT instance to change the model."
-            )
-
         if utils.is_given(language):
             self._language = LanguageCode(language)
             self._warn_on_unexpected_args(language=self._language)
 
         for stream in self._streams:
-            # do not update model since this is likely user error
             stream.update_options(language=language)
 
     def _warn_on_unexpected_args(self, language: LanguageCode | None) -> None:
@@ -376,27 +361,6 @@ class STT(stt.STT):
             logger.warning(
                 f'Cartesia STT model="{self._model}" currently only supports English. You provided {language}, which may produce unexpected results.'
             )
-
-
-@dataclass
-class STTOptions:
-    """
-    .. deprecated::
-        1.5.12 Not used anymore. Kept for backward compatibility.
-    """
-
-    model: STTModels | str
-    language: LanguageCode | None
-    encoding: STTEncoding
-    sample_rate: int
-    api_key: str
-    base_url: str
-
-    def get_http_url(self, path: str) -> str:
-        return f"{self.base_url}{path}"
-
-    def get_ws_url(self, path: str) -> str:
-        return f"{_base_url_to_ws_base_url(self.base_url)}{path}"
 
 
 SpeechStream = CartesiaRecognizeStream

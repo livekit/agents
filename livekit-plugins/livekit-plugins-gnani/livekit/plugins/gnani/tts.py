@@ -64,22 +64,6 @@ GnaniTTSSynthesizeMethod = Literal["rest", "sse", "websocket"]
 SUPPORTED_SAMPLE_RATES = (8000, 16000, 22050, 44100)
 
 
-_DEPRECATED_TTS_KWARGS = frozenset(("http_session",))
-
-
-def _check_deprecated_tts_args(kwargs: dict[str, object], *, caller: str = "TTS.__init__") -> None:
-    """Warn about deprecated kwargs and raise on truly unknown ones."""
-    for name in _DEPRECATED_TTS_KWARGS:
-        if name in kwargs:
-            logger.warning(f"`{name}` is deprecated and no longer used")
-
-    unknown = set(kwargs) - _DEPRECATED_TTS_KWARGS
-    if unknown:
-        raise TypeError(
-            f"{caller}() got unexpected keyword argument(s): {', '.join(sorted(unknown))}"
-        )
-
-
 @dataclass
 class GnaniTTSOptions:
     api_key: str
@@ -129,10 +113,7 @@ class TTS(tts.TTS):
         api_key: str | None = None,
         base_url: str = GNANI_TTS_BASE_URL,
         synthesize_method: GnaniTTSSynthesizeMethod = "rest",
-        **kwargs: object,
     ) -> None:
-        _check_deprecated_tts_args(kwargs)
-
         if sample_rate not in SUPPORTED_SAMPLE_RATES:
             raise ValueError(
                 f"sample_rate must be one of {SUPPORTED_SAMPLE_RATES}, got {sample_rate}"
@@ -213,10 +194,7 @@ class TTS(tts.TTS):
         voice: GnaniTTSVoices | str | None = None,
         model: GnaniTTSModels | str | None = None,
         language: GnaniTTSLanguages | str | None = None,
-        **kwargs: object,
     ) -> None:
-        _check_deprecated_tts_args(kwargs, caller="TTS.update_options")
-
         if voice is not None:
             self._opts.voice = voice
         if model is not None:

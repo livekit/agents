@@ -35,6 +35,7 @@ from ..constants import (
     API_AUTH_HEADER,
     API_VERSION,
     API_VERSION_HEADER,
+    AUDIO_ENCODING,
     REQUEST_ID_HEADER,
     USER_AGENT,
 )
@@ -49,7 +50,7 @@ if TYPE_CHECKING:
     from livekit.agents import APIConnectOptions
     from livekit.agents.types import NotGivenOr
 
-    from ..models import STTEncoding, STTLanguages, TurnDetectingSTTModel
+    from ..models import STTLanguages, TurnDetectingSTTModel
 
     class STTConnectedEvent(TypedDict):
         """Fires once when the WebSocket connection is established.
@@ -210,7 +211,6 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
         stt: stt.STT,
         conn_options: APIConnectOptions,
         sample_rate: int,
-        encoding: STTEncoding,
         audio_chunk_duration_ms: int,
         model: TurnDetectingSTTModel | str,
         api_key: str,
@@ -224,7 +224,6 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
         keyterm: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=sample_rate)
-        self._encoding = encoding
         self._sample_rate = sample_rate
         self._audio_chunk_duration_ms = audio_chunk_duration_ms
         self._model = model
@@ -372,7 +371,7 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
         params: list[tuple[str, str]] = [
             ("model", str(self._model)),
             ("sample_rate", str(self._sample_rate)),
-            ("encoding", str(self._encoding)),
+            ("encoding", AUDIO_ENCODING),
         ]
         if utils.is_given(self._turn_start_threshold):
             params.append(("turn_start_threshold", str(self._turn_start_threshold)))
@@ -525,19 +524,16 @@ class AutoFinalizeRecognizeStream(CartesiaRecognizeStream):
         self,
         *,
         language: NotGivenOr[STTLanguages | str] = NOT_GIVEN,
-        model: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         """Change Cartesia STT options.
 
         Args:
             language: Changes the language emitted in :class:`~stt.SpeechData`.
                 Ink 2 does not have multi-lingual support yet and only works with English.
-            model: Deprecated. This is a no-op. Construct a new STT instance to change the model.
         """
         if utils.is_given(language):
             self._language = LanguageCode(language)
 
-        # not changing the model and reconnecting since that is likely unexpected behavior
         logger.warning(
             f"Cartesia STT model={self._model} does not currently support update_options()."
         )

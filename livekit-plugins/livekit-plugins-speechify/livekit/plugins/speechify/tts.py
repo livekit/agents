@@ -117,7 +117,6 @@ class TTS(tts.TTS):
         base_url: NotGivenOr[str] = NOT_GIVEN,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         client: AsyncSpeechify | None = None,
-        **kwargs: object,
     ) -> None:
         """Create a new instance of Speechify TTS.
 
@@ -154,8 +153,6 @@ class TTS(tts.TTS):
             tokenizer: Sentence tokenizer used to chunk input in ``stream()``.
             client: A preconfigured ``AsyncSpeechify`` client. When provided,
                 ``api_key`` and ``base_url`` are ignored.
-            **kwargs: Catches deprecated parameters. A warning is logged for
-                any recognised deprecated name.
         """
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True, aligned_transcript=True),
@@ -198,7 +195,6 @@ class TTS(tts.TTS):
             text_normalization=text_normalization,
         )
 
-        _check_deprecated_args(kwargs)
         _warn_voice_model_compat(self._opts.voice_id, self._opts.model)
 
     @property
@@ -478,18 +474,6 @@ def _raise_from(e: Exception) -> None:
     if isinstance(e, (ConnectionError, httpx.TransportError)):
         raise APIConnectionError() from e
     raise e
-
-
-def _check_deprecated_args(kwargs: dict[str, object]) -> None:
-    """Warn about kwargs from earlier plugin versions that no longer apply."""
-    removed = {
-        "encoding": "output is fixed to 24 kHz PCM",
-        "http_session": "the official Speechify SDK owns the HTTP client",
-        "follow_redirects": "the official Speechify SDK handles redirects",
-    }
-    for name, reason in removed.items():
-        if name in kwargs:
-            logger.warning(f"`{name}` is deprecated and no longer used ({reason})")
 
 
 class ChunkedStream(tts.ChunkedStream):

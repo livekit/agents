@@ -22,5 +22,4 @@ class CartesiaRecognizeStream(stt.RecognizeStream):
         self,
         *,
         language: NotGivenOr[STTLanguages | str] = NOT_GIVEN,
-        model: NotGivenOr[str] = NOT_GIVEN,
     ) -> None: ...
