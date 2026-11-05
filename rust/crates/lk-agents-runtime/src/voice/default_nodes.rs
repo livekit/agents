@@ -290,7 +290,7 @@ impl<I, O> Request<I, O> for () {}
 /// The default `tts_node`'s `tts_request`: the text fed, and its 1.8.10 metrics.
 struct Synthesis {
     trace: telemetry::TtsTrace,
-    attempt: telemetry::ScopedSpan<telemetry::TtsRequestRun>,
+    attempt: Option<telemetry::ScopedSpan<telemetry::TtsRequestRun>>,
     started: f64,
     text: String,
     metrics: TtsMetricState,
@@ -308,7 +308,7 @@ impl Synthesis {
 
     /// What the provider's stream runs under: an adapter's own requests open there.
     fn attempt_cx(&self) -> &telemetry::Cx {
-        self.attempt.cx()
+        self.attempt.as_ref().map_or(self.trace.cx(), |a| a.cx())
     }
 
     fn now(cx: &telemetry::Cx) -> f64 {

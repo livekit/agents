@@ -10,7 +10,7 @@ use lk_agents_abi::{
 use lk_agents_net::telemetry::{Cx, Tracer};
 use parking_lot::Mutex;
 
-use super::{FALLBACK_LLM_LABEL, LlmTrace};
+use super::{LlmTrace, RequestSpan};
 use crate::fallback::{ChainPolicy, FallbackLlm};
 use crate::testkit::fallback::{boom, parts};
 
@@ -193,8 +193,8 @@ impl Llm for Node {
     fn label(&self) -> String {
         self.0.label()
     }
-    fn is_node(&self) -> bool {
-        true
+    fn request_span(&self) -> RequestSpan {
+        RequestSpan::Node
     }
     fn chat<'a>(
         &'a self,
@@ -235,7 +235,7 @@ async fn a_fallback_adapter_records_one_request_per_entry_under_its_span() {
     ];
     let chain = FallbackLlm::new(entries, ChainPolicy::llm_defaults(), clock, spawner, obs)
         .expect("entries");
-    assert_eq!(chain.label(), FALLBACK_LLM_LABEL);
+    assert_eq!(chain.request_span(), RequestSpan::FallbackAdapter);
     let req = request();
     let trace = LlmTrace::start(&cx, &chain, &req);
     assert_eq!(trace.cx().span(), cx.span(), "the adapter runs under the caller's context");
@@ -354,7 +354,8 @@ async fn a_tts_fallback_adapter_records_each_instance_under_its_attempt() {
     let chain = FallbackTts::new(entries, None, policy, clock, spawner, obs).expect("entries");
     let mut trace = super::TtsTrace::start(&cx, &chain, true);
     let attempt = trace.attempt();
-    let (sink, mut source) = chain.stream(attempt.cx(), false).await.expect("opens").split();
+    let attempt_cx = attempt.as_ref().expect("a request").cx();
+    let (sink, mut source) = chain.stream(attempt_cx, false).await.expect("opens").split();
     sink.push("hello".into()).expect("pushed");
     sink.end_input();
     while source.next().await.expect("serves").is_some() {}

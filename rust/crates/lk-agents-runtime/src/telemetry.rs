@@ -42,7 +42,7 @@ pub(crate) use lk_agents_abi::telemetry::spans::agent_turn::{
 };
 pub(crate) use lk_agents_abi::telemetry::spans::common::{GenAiOperation, OutputType, ToolType};
 pub(crate) use lk_agents_abi::telemetry::spans::inference::{
-    RealtimeResponse, RealtimeUsage, TtsRequestRun, UtcInstant,
+    RealtimeResponse, RealtimeUsage, RequestSpan, TtsRequestRun, UtcInstant,
 };
 pub(crate) use lk_agents_abi::telemetry::spans::job::{
     FirstFrame, PreConnectAudio, PublishAudioOutput, PublishAudioOutputEnd, TrackSubscribed,

@@ -10,7 +10,6 @@ use lk_agents_abi::voice::rtc::RtcRoom;
 use lk_agents_abi::{
     AudioFrame, FunctionToolCall, HostRef, Llm, SpeechEvent, StreamInput, Stt, TimerSet, Ts,
 };
-use lk_agents_core::metrics::provider::LlmMetricState;
 use lk_agents_net::task::TaskSet;
 use lk_agents_voice::agent_session::{
     AmdSpan, Command, IvrCommand, SpeechCommand, SystemTap, TurnCommand, VoiceCommandOrigin,
@@ -675,7 +674,6 @@ async fn classify(
     mut cancelled: tokio::sync::watch::Receiver<bool>,
     cx: telemetry::Cx,
 ) {
-    let started_at = time.wall_secs();
     let mut trace = telemetry::LlmTrace::start(&cx, llm.as_ref(), &request);
     let mut attempt = Some(trace.attempt());
     let mut stream = match llm.chat(trace.cx(), &request).await {
@@ -688,8 +686,6 @@ async fn classify(
             return;
         }
     };
-    let id = llm.id();
-    let mut fold = LlmMetricState::new(started_at, id.label.clone(), Some(id.metadata()));
     let mut calls: Vec<FunctionToolCall> = Vec::new();
     let mut failed = false;
     let mut aborted = false;
@@ -713,7 +709,6 @@ async fn classify(
         match next {
             Ok(Some(chunk)) => {
                 trace.observe(&chunk);
-                fold.observe(&chunk, || time.wall_secs());
                 if let Some(delta) = &chunk.delta {
                     calls.extend(delta.tool_calls.iter().cloned());
                 }
@@ -727,20 +722,17 @@ async fn classify(
             }
         }
     }
-    // A cancelled classification's request ends as cancelled when dropped.
-    if !aborted && let Some(attempt) = attempt.take() {
-        trace.end_attempt(attempt, None);
-        trace.end(false, None);
-    }
     // Always, on every path: dropping does not cancel a host stream, and `close` consumes it.
     let deadline = time.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
     let _ = stream.close(deadline).await;
+    // A cancelled classification's request ends as cancelled when dropped.
     if aborted {
         return;
     }
-    let now = time.wall_secs();
-    let metrics = fold.finish(failed, now, now, false);
-    let metrics = metrics.map(Box::new);
+    if let Some(attempt) = attempt.take() {
+        trace.end_attempt(attempt, None);
+    }
+    let metrics = trace.end(false, None).map(Box::new);
     let _ = tx.send(Msg::Answer { req, transcript, calls, failed, metrics });
 }
 

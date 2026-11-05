@@ -177,17 +177,32 @@ impl StreamInput<String> for LoggingSink {
 // The backend
 // ---------------------------------------------------------------------------------------------
 
+/// `cx`: where each instance's `tts_request` opens (the adapter request's attempt).
 #[derive(Clone)]
 pub enum TtsReq {
-    OneShot {
-        text: Arc<str>,
-    },
-    /// `cx`: where each instance's `tts_request` opens (the adapter request's attempt).
-    Stream {
-        log: Arc<TokenLog>,
-        expressive: bool,
-        cx: telemetry::Cx,
-    },
+    OneShot { text: Arc<str>, cx: telemetry::Cx },
+    Stream { log: Arc<TokenLog>, expressive: bool, cx: telemetry::Cx },
+}
+
+impl TtsReq {
+    fn cx(&self) -> &telemetry::Cx {
+        match self {
+            TtsReq::OneShot { cx, .. } | TtsReq::Stream { cx, .. } => cx,
+        }
+    }
+
+    /// The text the request synthesized: all of it for a one-shot, what was pushed for a stream.
+    fn spoken(&self) -> String {
+        match self {
+            TtsReq::OneShot { text, .. } => text.to_string(),
+            TtsReq::Stream { log, .. } => (log.snapshot().0.into_iter())
+                .filter_map(|t| match t {
+                    Token::Text(text) => Some(text),
+                    Token::Flush => None,
+                })
+                .collect(),
+        }
+    }
 }
 
 pub struct TtsBackend {
@@ -248,37 +263,33 @@ impl Backend for TtsBackend {
         conn: &ApiConnectOptions,
     ) -> Result<Self::Session, ProviderError> {
         let tts = self.provider(conn);
-        match req {
-            TtsReq::OneShot { text } => tts.synthesize(&telemetry::Cx::NONE, text).await,
-            TtsReq::Stream { log, expressive, cx } => {
-                // This instance's `tts_request`, under the adapter request's attempt.
-                let mut traced = cx.span().map(|_| {
-                    let mut request = telemetry::TtsTrace::start(cx, &*tts, true);
-                    let run = request.attempt();
-                    (request, run)
-                });
-                let inner = traced.as_ref().map(|(_, run)| run.cx().clone());
-                match tts.stream(inner.as_ref().unwrap_or(&telemetry::Cx::NONE), *expressive).await
-                {
-                    Ok(stream) => {
-                        let (sink, source) = stream.split();
-                        log.set_main(sink);
-                        Ok(match traced.take() {
-                            Some(traced) => {
-                                Box::new(Traced { source, log: log.clone(), trace: Some(traced) })
-                                    as TtsSource
-                            }
-                            None => source,
-                        })
-                    }
-                    Err(error) => {
-                        if let Some((mut request, run)) = traced {
-                            request.end_attempt(run, Some(&error));
-                            request.fail(&error);
-                        }
-                        Err(error)
-                    }
+        let cx = req.cx();
+        // This instance's `tts_request`, under the adapter request's attempt.
+        let streaming = matches!(req, TtsReq::Stream { .. });
+        let mut request = cx.span().map(|_| telemetry::TtsTrace::start(cx, &*tts, streaming));
+        let run = request.as_mut().and_then(telemetry::TtsTrace::attempt);
+        let inner = run.as_ref().map_or(cx, |run| run.cx());
+        let opened = match req {
+            TtsReq::OneShot { text, .. } => tts.synthesize(inner, text).await,
+            TtsReq::Stream { log, expressive, .. } => {
+                tts.stream(inner, *expressive).await.map(|s| {
+                    let (sink, source) = s.split();
+                    log.set_main(sink);
+                    source
+                })
+            }
+        };
+        match (opened, request) {
+            (Ok(source), Some(request)) => {
+                Ok(Box::new(Traced { source, req: req.clone(), request: Some(request), run }))
+            }
+            (Ok(source), None) => Ok(source),
+            (Err(error), request) => {
+                if let Some(mut request) = request {
+                    request.end_attempt(run, Some(&error));
+                    request.fail(&error);
                 }
+                Err(error)
             }
         }
     }
@@ -291,15 +302,18 @@ impl Backend for TtsBackend {
         stop: tokio::sync::watch::Receiver<bool>,
     ) -> Result<Recovery, ProviderError> {
         let tts = self.provider(conn);
+        // A probe runs in the background, past the request it recovers for: in its job, under no
+        // span.
+        let cx = req.cx().clone().continuing(None);
         let source = match req {
-            TtsReq::OneShot { text } => tts.synthesize(&telemetry::Cx::NONE, text).await?,
+            TtsReq::OneShot { text, .. } => tts.synthesize(&cx, text).await?,
             TtsReq::Stream { log, expressive, .. } => {
                 let tokens = log.settled_tokens().await;
                 if tokens.is_empty() {
                     // `tts:504-506`: a probe needs text, and the request pushed none.
                     return Ok(Recovery::NotYet);
                 }
-                let (sink, source) = tts.stream(&telemetry::Cx::NONE, *expressive).await?.split();
+                let (sink, source) = tts.stream(&cx, *expressive).await?.split();
                 // A private replay channel; unlike STT, the probe does not join the live leg.
                 for t in &tokens {
                     send(sink.as_ref(), t);
@@ -316,8 +330,10 @@ impl Backend for TtsBackend {
 /// adapter was given, on its error, or as cancelled when closed before either.
 struct Traced {
     source: TtsSource,
-    log: Arc<TokenLog>,
-    trace: Option<(telemetry::TtsTrace, telemetry::ScopedSpan<telemetry::TtsRequestRun>)>,
+    req: TtsReq,
+    /// `None` once ended.
+    request: Option<telemetry::TtsTrace>,
+    run: Option<telemetry::ScopedSpan<telemetry::TtsRequestRun>>,
 }
 
 impl StreamOutput<SynthesizedAudio> for Traced {
@@ -326,23 +342,19 @@ impl StreamOutput<SynthesizedAudio> for Traced {
             let next = self.source.next().await;
             match &next {
                 Ok(Some(audio)) => {
-                    if let Some((request, _)) = &mut self.trace {
+                    if let Some(request) = &mut self.request {
                         request.observe(audio);
                     }
                 }
                 Ok(None) => {
-                    if let Some((mut request, run)) = self.trace.take() {
-                        request.end_attempt(run, None);
-                        let text = self.log.snapshot().0.into_iter().filter_map(|t| match t {
-                            Token::Text(text) => Some(text),
-                            Token::Flush => None,
-                        });
-                        request.end(text.collect(), None);
+                    if let Some(mut request) = self.request.take() {
+                        request.end_attempt(self.run.take(), None);
+                        request.end(self.req.spoken(), None);
                     }
                 }
                 Err(error) => {
-                    if let Some((mut request, run)) = self.trace.take() {
-                        request.end_attempt(run, Some(error));
+                    if let Some(mut request) = self.request.take() {
+                        request.end_attempt(self.run.take(), Some(error));
                         request.fail(error);
                     }
                 }
@@ -629,6 +641,10 @@ impl Tts for FallbackTts {
         "tts.FallbackAdapter".into()
     }
 
+    fn request_span(&self) -> telemetry::RequestSpan {
+        telemetry::RequestSpan::FallbackAdapter
+    }
+
     /// The **active** member's identity (L-25: adapters are transparent to the metrics).
     fn id(&self) -> lk_agents_abi::ProviderId {
         self.active().id()
@@ -654,12 +670,13 @@ impl Tts for FallbackTts {
 
     fn synthesize<'a>(
         &'a self,
-        _cx: &telemetry::Cx,
+        cx: &telemetry::Cx,
         text: &'a str,
     ) -> lk_agents_abi::BoxFuture<'a, Result<TtsSource, ProviderError>> {
+        let cx = cx.clone();
         Box::pin(async move {
             Ok(self.spawn_pump(
-                TtsReq::OneShot { text: Arc::from(text) },
+                TtsReq::OneShot { text: Arc::from(text), cx },
                 RecoveryMode::OneShot,
                 None,
             ))

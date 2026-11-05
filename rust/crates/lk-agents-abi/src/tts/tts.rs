@@ -212,11 +212,9 @@ pub trait Tts: Send + Sync {
     #[host(notify, name = "_core_failed")]
     fn failed(&self, _error: ProviderError, _recoverable: bool) {}
 
-    // Native only: a session's registered `tts_node` standing in for the provider. It makes no
-    // request itself, so its caller opens no `tts_request` around it; the default node it may
-    // run does.
-    fn is_node(&self) -> bool {
-        false
+    // Native only: what a request to this TTS records as.
+    fn request_span(&self) -> crate::telemetry::spans::inference::RequestSpan {
+        crate::telemetry::spans::inference::RequestSpan::Request
     }
 
     /// Synthesize `text`, its attempts retried per `conn_options`.

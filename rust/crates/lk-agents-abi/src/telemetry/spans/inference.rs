@@ -10,6 +10,20 @@ use crate::telemetry::decl::{
 use crate::telemetry::instruments::GenAiTimeToFirstChunk;
 use crate::telemetry::semconv::otel;
 
+/// What a request to a provider records as: the provider says, its caller never guesses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequestSpan {
+    /// `llm_request` or `tts_request`.
+    Request,
+    /// A fallback adapter: the LLM chain records its own spans; a TTS request is a
+    /// `tts_fallback_adapter`.
+    FallbackAdapter,
+    /// A sentence stream adapter: a TTS request is a `tts_stream_adapter`.
+    StreamAdapter,
+    /// A session's registered node: it makes its own request, if any, so its caller opens none.
+    Node,
+}
+
 /// One request to an LLM provider, retries included, wherever it is made.
 #[span(
     name = "llm_request",

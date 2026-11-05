@@ -55,8 +55,7 @@ pub(super) async fn perform_tts_inference(
         SynthesisAttempt::new(&shared.conn.tts.unwrap_or_default(), first, shared.time.now());
     // The segment's `tts_request`, one `tts_request_run` per open. A registered `tts_node` runs
     // under the node span and makes its own request, if any.
-    let mut trace =
-        (!tts.is_node()).then(|| telemetry::TtsTrace::start(node.cx(shared), tts, true));
+    let mut trace = telemetry::TtsTrace::start(node.cx(shared), tts, true);
     loop {
         if let Some(lost) = state.before_open(handle.interrupted(), *shared.closing.borrow()) {
             return Err(Box::new(lost));
@@ -75,12 +74,12 @@ pub(super) async fn perform_tts_inference(
             provider: id.provider,
             model: id.model,
         });
-        let attempt = trace.as_mut().map(telemetry::TtsTrace::attempt);
+        let attempt = trace.attempt();
         // An adapter's own requests open under this attempt.
-        let context = attempt.as_ref().map_or_else(|| node.cx(shared), |a| a.cx()).clone();
+        let context = attempt.as_ref().map_or(trace.cx(), |a| a.cx()).clone();
         let (error, produced) = match tts.stream(&context, expressive).await {
             Err(error) => {
-                end_attempt(&mut trace, attempt, Some(&error));
+                trace.end_attempt(attempt, Some(&error));
                 (DriverError::Provider(error), false)
             }
             Ok(stream) => {
@@ -111,15 +110,11 @@ pub(super) async fn perform_tts_inference(
                 match synthesize(shared, handle, streaming, playback, &mut done).await {
                     (Ok(heard), _) => {
                         node.first_audio(done.metrics.as_ref().and_then(|m| m.ttfb));
-                        if let Some(mut trace) = trace {
-                            if let Some(id) = done.metrics.as_ref().map(|m| m.request_id.clone()) {
-                                trace.request_id(id);
-                            }
-                            if let Some(attempt) = attempt {
-                                trace.end_attempt(attempt, None);
-                            }
-                            trace.end(done.text, done.metrics.as_ref());
+                        if let Some(id) = done.metrics.as_ref().map(|m| m.request_id.clone()) {
+                            trace.request_id(id);
                         }
+                        trace.end_attempt(attempt, None);
+                        trace.end(done.text, done.metrics.as_ref());
                         return Ok(heard);
                     }
                     (Err(failed), done) => {
@@ -127,7 +122,7 @@ pub(super) async fn perform_tts_inference(
                             DriverError::Provider(error) => Some(error.clone()),
                             _ => None,
                         };
-                        end_attempt(&mut trace, attempt, provider.as_ref());
+                        trace.end_attempt(attempt, provider.as_ref());
                         state.stream_failed(failed.words, done, failed.synchronized, failed.heard);
                         (failed.error, failed.produced)
                     }
@@ -137,7 +132,7 @@ pub(super) async fn perform_tts_inference(
         let error = match state.failed(error, produced) {
             AttemptFailure::Retry(error) => error,
             AttemptFailure::Stop(lost) => {
-                fail(trace.as_mut(), &lost);
+                fail(&mut trace, &lost);
                 return Err(Box::new(lost));
             }
         };
@@ -150,27 +145,16 @@ pub(super) async fn perform_tts_inference(
                 Retried::GiveUp => RetryOutcome::Exhausted,
             };
         if let Some(lost) = state.after_retry(outcome) {
-            fail(trace.as_mut(), &lost);
+            fail(&mut trace, &lost);
             return Err(Box::new(lost));
         }
     }
 }
 
 /// A lost voice fails its request with the provider's error.
-fn fail(trace: Option<&mut telemetry::TtsTrace>, lost: &Lost) {
-    if let (Some(trace), Some(DriverError::Provider(error))) = (trace, &lost.failure) {
+fn fail(trace: &mut telemetry::TtsTrace, lost: &Lost) {
+    if let Some(DriverError::Provider(error)) = &lost.failure {
         trace.fail(error);
-    }
-}
-
-/// Ends an attempt of the segment's request, when it has one.
-fn end_attempt(
-    trace: &mut Option<telemetry::TtsTrace>,
-    attempt: Option<telemetry::ScopedSpan<telemetry::TtsRequestRun>>,
-    failed: Option<&ProviderError>,
-) {
-    if let (Some(trace), Some(attempt)) = (trace.as_mut(), attempt) {
-        trace.end_attempt(attempt, failed);
     }
 }
 

@@ -1,14 +1,14 @@
 //! Model request spans (docs/internals/telemetry-reference.md "Span trees"): one `llm_request` or
 //! `tts_request` per request wherever it is made, an `llm_request_run` or `tts_request_run` per
-//! attempt, and the request's usage, timing and 1.8.10 metrics summary recorded as it ends. A fallback
-//! adapter records its own spans, and a registered `llm_node` makes its own request: the caller
-//! opens none and calls it under its own context instead. A request that failed ends failed, also
-//! when it is dropped.
+//! attempt, and the request's usage, timing and 1.8.10 metrics summary recorded as it ends. The
+//! provider's `request_span` names what its request records as: an LLM fallback adapter records its
+//! own spans and a registered node makes its own request, so the caller opens none and calls it
+//! under its own context instead. A request that failed ends failed, also when it is dropped.
 
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 use lk_agents_abi::errors::ProviderError;
-use lk_agents_abi::metrics::base::{Metadata, TtsMetrics};
+use lk_agents_abi::metrics::base::{LlmMetrics, Metadata, TtsMetrics};
 use lk_agents_abi::telemetry::decl::{Content, Json, Label, Measured, Seconds};
 use lk_agents_abi::telemetry::instruments::{
     GenAiLabels, GenAiOperationDuration, GenAiTokenUsage, ModelLabels, TokenType,
@@ -27,6 +27,7 @@ use lk_agents_core::telemetry::gen_ai;
 
 // What the crate's logic names, spelled `telemetry::` there (`telemetry.md`, rule 4).
 pub(crate) use lk_agents_abi::telemetry::decl::GenAiContent;
+pub use lk_agents_abi::telemetry::spans::inference::RequestSpan;
 pub(crate) use lk_agents_abi::telemetry::spans::inference::{
     Attempt, LlmFallbackAdapter, LlmFallbackChoice, LlmRequestRun, TtsRequestRun,
 };
@@ -34,15 +35,6 @@ pub(crate) use lk_agents_abi::telemetry::spans::text::{
     JudgeEvaluation, JudgeEvaluationEnd, JudgeVerdict,
 };
 pub(crate) use lk_agents_net::telemetry::{Cx, ErrorType, Failed, Failure, ScopedSpan, end, start};
-
-/// `llm.FallbackAdapter`'s label: an LLM that records its own `llm_fallback_adapter` spans.
-pub const FALLBACK_LLM_LABEL: &str = "llm.FallbackAdapter";
-
-/// `tts.FallbackAdapter`'s label: its request is a `tts_fallback_adapter`.
-pub const FALLBACK_TTS_LABEL: &str = "tts.FallbackAdapter";
-
-/// What a stream adapter's label starts with: its request is a `tts_stream_adapter`.
-pub const STREAM_ADAPTER_LABEL: &str = "StreamAdapter[";
 
 /// The GenAI registry's spelling of a provider, `unknown` when it has none.
 pub fn provider_name(provider: &str) -> String {
@@ -62,7 +54,8 @@ fn captured<T>(values: Vec<T>) -> Option<GenAiContent<Json<Vec<T>>>> {
     (!values.is_empty()).then(|| GenAiContent(Json(values)))
 }
 
-/// One LLM request, retries included: its span and what its chunks reported.
+/// One LLM request, retries included: its span and what its chunks reported, folded once into
+/// its metrics.
 pub struct LlmTrace {
     /// `None` for an LLM that records its own spans (a fallback adapter) or makes no request (a
     /// registered `llm_node`).
@@ -102,11 +95,9 @@ impl LlmTrace {
     fn open(cx: &Cx, llm: &dyn Llm, req: &ChatRequest, recovery: Option<bool>) -> Self {
         let id = llm.id();
         let capture = cx.capture_content();
-        let span = if llm.is_node() || llm.label() == FALLBACK_LLM_LABEL {
-            None
-        } else {
+        let span = (llm.request_span() == RequestSpan::Request).then(|| {
             let items = &req.chat_ctx.items;
-            Some(lk_agents_net::telemetry::start(
+            lk_agents_net::telemetry::start(
                 cx,
                 LlmRequest {
                     operation: GenAiOperation::Chat,
@@ -121,8 +112,8 @@ impl LlmTrace {
                         .filter(|_| capture),
                     recovery,
                 },
-            ))
-        };
+            )
+        });
         let cx = span.as_ref().map_or_else(|| cx.clone(), |span| span.cx().clone());
         let started = cx.now_nanos();
         LlmTrace {
@@ -237,10 +228,17 @@ impl LlmTrace {
         &self.calls
     }
 
-    /// Ends the request with its usage, timing and metrics, and records its measurements.
-    /// `interrupted`: the reader stopped before the response ended.
-    pub fn end(mut self, interrupted: bool, speech_id: Option<&str>) {
-        let Some(span) = self.span.take() else { return };
+    /// Ends the request with its usage, timing and metrics, records its measurements, and returns
+    /// its metrics. `interrupted`: the reader stopped before the response ended.
+    pub fn end(mut self, interrupted: bool, speech_id: Option<&str>) -> Option<LlmMetrics> {
+        let now = self.cx.now_nanos();
+        let at = now as f64 / 1e9;
+        let failed = self.failure.is_some();
+        let metrics = self.fold.finish(failed, at, at, interrupted).map(|mut m| {
+            m.speech_id = speech_id.map(str::to_owned);
+            m
+        });
+        let Some(span) = self.span.take() else { return metrics };
         let cx = span.cx();
         let usage = self.usage.clone().unwrap_or_default();
         let provider = provider_name(&self.id.provider);
@@ -250,7 +248,6 @@ impl LlmTrace {
             model: Label(self.id.model.clone()),
             response_model: Some(Label(self.id.model.clone())),
         };
-        let now = cx.now_nanos();
         lk_agents_net::telemetry::measure(
             cx,
             &GenAiOperationDuration { operation: labels() },
@@ -265,12 +262,7 @@ impl LlmTrace {
                 count,
             );
         }
-        let now = now as f64 / 1e9;
-        let metrics = self.fold.finish(false, now, now, interrupted);
-        let summary = metrics.map(|mut m| {
-            m.speech_id = speech_id.map(str::to_owned);
-            Json(LlmMetricsSummary::from(&m))
-        });
+        let summary = metrics.as_ref().map(|m| Json(LlmMetricsSummary::from(m)));
         let finish = gen_ai::finish_reason(!self.calls.is_empty(), interrupted);
         let output = self
             .capture
@@ -302,6 +294,7 @@ impl LlmTrace {
         } else {
             lk_agents_net::telemetry::end(span, end);
         }
+        metrics
     }
 }
 
@@ -316,11 +309,11 @@ impl Drop for LlmTrace {
 
 /// One TTS request (a segment's synthesis), retries included. A request to an adapter is named
 /// for it (`tts_fallback_adapter`, `tts_stream_adapter`), as 1.8.10 named it; the adapter's own
-/// requests open under its attempts.
+/// requests open under its attempts. A registered node makes its own request: none opens.
 pub struct TtsTrace {
-    /// `None` once ended.
+    /// `None` once ended, or for a registered node.
     span: Option<TtsRequestSpan>,
-    /// The `cx` of its span, kept past its end for calls made after it.
+    /// The `cx` of its span (the caller's for a node), kept past its end for calls made after it.
     cx: Cx,
     id: ProviderId,
     attempts: u32,
@@ -379,40 +372,40 @@ impl TtsTrace {
     /// Opens the request's span under `cx`'s current span.
     pub fn start(cx: &Cx, tts: &dyn Tts, streaming: bool) -> Self {
         let id = tts.id();
-        let label = tts.label();
         let target = TtsTarget {
             streaming,
-            label: label.clone(),
+            label: tts.label(),
             provider: provider_name(&id.provider),
             model: id.model.clone(),
         };
-        let span = if label == FALLBACK_TTS_LABEL {
-            TtsRequestSpan::Fallback(lk_agents_net::telemetry::start(
-                cx,
-                TtsFallbackAdapter { target },
-            ))
-        } else if label.starts_with(STREAM_ADAPTER_LABEL) {
-            TtsRequestSpan::Stream(lk_agents_net::telemetry::start(cx, TtsStreamAdapter { target }))
-        } else {
-            TtsRequestSpan::Request(lk_agents_net::telemetry::start(
-                cx,
-                TtsRequest { target, recovery: None },
-            ))
+        use lk_agents_net::telemetry::start;
+        let span = match tts.request_span() {
+            RequestSpan::Request => {
+                Some(TtsRequestSpan::Request(start(cx, TtsRequest { target, recovery: None })))
+            }
+            RequestSpan::FallbackAdapter => {
+                Some(TtsRequestSpan::Fallback(start(cx, TtsFallbackAdapter { target })))
+            }
+            RequestSpan::StreamAdapter => {
+                Some(TtsRequestSpan::Stream(start(cx, TtsStreamAdapter { target })))
+            }
+            RequestSpan::Node => None,
         };
-        let cx = span.cx().clone();
-        TtsTrace { span: Some(span), cx, id, attempts: 0, request_ids: Vec::new(), failure: None }
+        let cx = span.as_ref().map_or(cx, TtsRequestSpan::cx).clone();
+        TtsTrace { span, cx, id, attempts: 0, request_ids: Vec::new(), failure: None }
     }
 
     pub fn cx(&self) -> &Cx {
         &self.cx
     }
 
-    /// Opens the next attempt's span; the caller ends it with [`TtsTrace::end_attempt`].
-    pub fn attempt(&mut self) -> ScopedSpan<TtsRequestRun> {
+    /// Opens the next attempt's span, ended with [`TtsTrace::end_attempt`]; `None` for a node.
+    pub fn attempt(&mut self) -> Option<ScopedSpan<TtsRequestRun>> {
         let retry_count = self.attempts;
         self.attempts += 1;
         self.request_ids.clear();
-        lk_agents_net::telemetry::start(
+        self.span.as_ref()?;
+        Some(lk_agents_net::telemetry::start(
             &self.cx,
             TtsRequestRun {
                 attempt: Attempt {
@@ -421,7 +414,7 @@ impl TtsTrace {
                     retry_count,
                 },
             },
-        )
+        ))
     }
 
     /// A frame's provider request id, for the attempt in flight.
@@ -436,7 +429,12 @@ impl TtsTrace {
         }
     }
 
-    pub fn end_attempt(&mut self, span: ScopedSpan<TtsRequestRun>, failed: Option<&ProviderError>) {
+    pub fn end_attempt(
+        &mut self,
+        span: Option<ScopedSpan<TtsRequestRun>>,
+        failed: Option<&ProviderError>,
+    ) {
+        let Some(span) = span else { return };
         let end = AttemptEnd::new(std::mem::take(&mut self.request_ids));
         if let Some(error) = failed {
             lk_agents_net::telemetry::end(span, Failed { end, error });

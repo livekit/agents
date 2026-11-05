@@ -704,8 +704,8 @@ impl Llm for Node<dyn Llm> {
         self.below.failed(error, recoverable);
     }
 
-    fn is_node(&self) -> bool {
-        true
+    fn request_span(&self) -> telemetry::RequestSpan {
+        telemetry::RequestSpan::Node
     }
 
     fn chat<'a>(
@@ -742,8 +742,8 @@ impl Tts for Node<dyn Tts> {
         self.below.failed(error, recoverable);
     }
 
-    fn is_node(&self) -> bool {
-        true
+    fn request_span(&self) -> telemetry::RequestSpan {
+        telemetry::RequestSpan::Node
     }
 
     fn sample_rate(&self) -> u32 {

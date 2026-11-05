@@ -98,6 +98,10 @@ impl Tts for StreamAdapter {
         format!("StreamAdapter[{}]", self.tts.label())
     }
 
+    fn request_span(&self) -> telemetry::RequestSpan {
+        telemetry::RequestSpan::StreamAdapter
+    }
+
     /// The adapter is transparent to the metrics.
     fn id(&self) -> ProviderId {
         self.tts.id()

@@ -285,11 +285,9 @@ pub trait Llm: Send + Sync {
     #[host(notify, name = "_core_failed")]
     fn failed(&self, _error: ProviderError, _recoverable: bool) {}
 
-    // Native only: a session's registered `llm_node` standing in for the provider. It makes no
-    // request itself, so its caller opens no `llm_request` around it; the default node it may
-    // run does.
-    fn is_node(&self) -> bool {
-        false
+    // Native only: what a request to this LLM records as.
+    fn request_span(&self) -> crate::telemetry::spans::inference::RequestSpan {
+        crate::telemetry::spans::inference::RequestSpan::Request
     }
 
     /// Open a completion of `chat_ctx`, its attempts retried per `conn_options`.

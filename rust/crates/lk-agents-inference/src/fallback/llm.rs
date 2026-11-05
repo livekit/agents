@@ -306,6 +306,10 @@ impl Llm for FallbackLlm {
         "llm.FallbackAdapter".into()
     }
 
+    fn request_span(&self) -> telemetry::RequestSpan {
+        telemetry::RequestSpan::FallbackAdapter
+    }
+
     /// The active member's identity: metrics name the instance that served (L-25).
     fn id(&self) -> lk_agents_abi::ProviderId {
         self.active().id()
