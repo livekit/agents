@@ -254,6 +254,16 @@ fn transport_for(routes: bool) -> TransportConfig {
 }
 
 /// A manifest route as the register message carries it.
+/// A text door's route: the worker serves its card and JSON-RPC methods under its name.
+fn door_route(name: &str) -> EndpointRoute {
+    EndpointRoute {
+        path: format!("/{name}/{{path:path}}"),
+        methods: ["GET", "HEAD", "POST"].map(str::to_owned).to_vec(),
+        kind: EndpointKind::Http,
+        public: false,
+    }
+}
+
 fn manifest_entry(route: EndpointRoute) -> livekit_protocol::agent_http::AgentEndpoint {
     let kind = match route.kind {
         EndpointKind::Http => AgentEndpointKind::AekHttp,
@@ -334,7 +344,8 @@ impl ServerRuntime for AgentServerRuntime {
         text_doors: Vec<Arc<dyn TextEndpoint>>,
         context: CallContext,
     ) -> Result<(), WorkerError> {
-        let routes = routes.into_iter().map(manifest_entry).collect::<Vec<_>>();
+        let door_routes = text_doors.iter().map(|door| door_route(door.name()));
+        let routes = door_routes.chain(routes).map(manifest_entry).collect::<Vec<_>>();
         let text = TextDoors {
             doors: text_doors,
             settings: self.settings.clone(),
@@ -450,5 +461,14 @@ mod tests {
         assert_eq!(http.methods, vec!["GET", "HEAD"]);
         assert!(http.public);
         assert!(matches!(transport_for(true), TransportConfig::WebTransport { .. }));
+    }
+
+    // Catches: a text door unrouted, routed publicly, or without its POST.
+    #[test]
+    fn a_text_door_is_routed_privately_under_its_name() {
+        let entry = manifest_entry(door_route("support"));
+        assert_eq!(entry.path, "/support/{path:path}");
+        assert_eq!(entry.methods, vec!["GET", "HEAD", "POST"]);
+        assert!(!entry.public && entry.kind == AgentEndpointKind::AekHttp as i32);
     }
 }

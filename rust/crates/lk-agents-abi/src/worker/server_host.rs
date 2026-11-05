@@ -150,9 +150,10 @@ pub trait ServerRuntime: Send + Sync + Sized + 'static {
     fn http_port(&self) -> u16;
 
     /// Start the job processes and the health listener and, unless `unregistered`, register;
-    /// return once closed. The worker serves each `text` route with its door from `text_doors`,
-    /// whose handlers run in the context this call captured; `endpoints` receives every other
-    /// stream for `routes`.
+    /// return once closed. The worker routes `/<name>/...` of each of `text_doors` to that door
+    /// (its card and JSON-RPC methods; private, before `routes`), and serves each `text` route
+    /// with its door, whose handlers run in the context this call captured; `endpoints`
+    /// receives every other stream for `routes`.
     #[host(await)]
     #[allow(clippy::too_many_arguments)]
     async fn run(

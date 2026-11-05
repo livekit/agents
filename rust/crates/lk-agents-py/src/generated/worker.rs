@@ -1334,9 +1334,10 @@ impl ServerRuntime {
     }
 
     /// Start the job processes and the health listener and, unless `unregistered`, register;
-    /// return once closed. The worker serves each `text` route with its door from `text_doors`,
-    /// whose handlers run in the context this call captured; `endpoints` receives every other
-    /// stream for `routes`.
+    /// return once closed. The worker routes `/<name>/...` of each of `text_doors` to that door
+    /// (its card and JSON-RPC methods; private, before `routes`), and serves each `text` route
+    /// with its door, whose handlers run in the context this call captured; `endpoints`
+    /// receives every other stream for `routes`.
     #[pyo3(signature = (*, devmode, unregistered, has_rtc, has_text_doors, routes, has_load_fnc, endpoints, text_doors))]
     fn run<'py>(
         &self,

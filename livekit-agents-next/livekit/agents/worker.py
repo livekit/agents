@@ -18,7 +18,7 @@ from livekit.protocol import models
 
 from . import _core, ipc, telemetry, utils
 from ._generated.worker_options import ServerOptions
-from ._generated.worker_server import EndpointRoute, ProcessStartOptions, RunningJobInfo
+from ._generated.worker_server import ProcessStartOptions, RunningJobInfo
 from .evals import SimulationContext
 from .http import AgentRoutes
 from .ipc import preload_module_names
@@ -320,17 +320,7 @@ class AgentServer(AgentHandler):
                 unregistered=unregistered,
                 has_rtc=self._rtc is not None,
                 has_text_doors=bool(self._a2a_endpoints),
-                routes=[
-                    # the worker serves each text door itself: its card and its JSON-RPC methods
-                    EndpointRoute(
-                        path=f"/{name}/{{path:path}}",
-                        methods=["GET", "HEAD", "POST"],
-                        kind="http",
-                        public=False,
-                    )
-                    for name in self._a2a_endpoints
-                ]
-                + self._http.manifest(),
+                routes=self._http.manifest(),
                 has_load_fnc=self._load_fnc is not None,
                 endpoints=self._http._server,
                 text_doors=[await door.service.native() for door in self._a2a_endpoints.values()],
