@@ -193,6 +193,93 @@ async def test_interrupt_racing_the_generation_event_cancels_the_response() -> N
         assert model.active_session.interrupted
 
 
+async def test_queued_reply_interrupted_before_playout_leaves_server_history() -> None:
+    # the server already holds a reply that waits behind the current speech; interrupted
+    # before it is authorized, the user never hears it, so the server must not keep it
+    async with _speaking_reply() as (session, rt_session, _, _, function_ch):
+        queued: list[SpeechHandle] = []
+        session.on("speech_created", lambda ev: queued.append(ev.speech_handle))
+
+        rt_session._chat_ctx = rt_session.chat_ctx.copy()
+        rt_session._chat_ctx.add_message(role="assistant", content="never heard", id="unplayed")
+
+        b_message_ch = utils.aio.Chan[llm.MessageGeneration]()
+        b_function_ch = utils.aio.Chan[llm.FunctionCall]()
+        b_message_ch.close()
+        b_function_ch.close()
+        rt_session.emit(
+            "generation_created",
+            llm.GenerationCreatedEvent(
+                message_stream=b_message_ch,
+                function_stream=b_function_ch,
+                user_initiated=False,
+                response_id="response-b",
+            ),
+        )
+        await asyncio.sleep(0.1)
+
+        assert len(queued) == 1
+        queued[0].interrupt(force=True)
+        await asyncio.sleep(0.1)
+        function_ch.close()
+
+        assert rt_session.chat_ctx.get_by_id("unplayed") is None
+
+
+async def test_queued_reply_interrupted_before_playout_drops_its_placeholder() -> None:
+    # remote_item_added copies the reply into the local context, and the sync only deletes what
+    # the local context lacks, so a surviving placeholder keeps the reply on the server
+    async with _speaking_reply() as (session, rt_session, _, _, function_ch):
+        queued: list[SpeechHandle] = []
+        session.on("speech_created", lambda ev: queued.append(ev.speech_handle))
+
+        reply = llm.ChatMessage(role="assistant", content=[], id="unplayed")
+        rt_session._chat_ctx = rt_session.chat_ctx.copy()
+        rt_session._chat_ctx.items.append(reply)
+
+        text_ch = utils.aio.Chan[str]()
+        audio_ch = utils.aio.Chan[rtc.AudioFrame]()
+        text_ch.close()
+        audio_ch.close()
+        modalities = asyncio.Future[list[str]]()
+        modalities.set_result(["audio", "text"])
+
+        b_message_ch = utils.aio.Chan[llm.MessageGeneration]()
+        b_function_ch = utils.aio.Chan[llm.FunctionCall]()
+        b_message_ch.send_nowait(
+            llm.MessageGeneration(
+                message_id="unplayed",
+                text_stream=text_ch,
+                audio_stream=audio_ch,
+                modalities=modalities,
+            )
+        )
+        b_message_ch.close()
+        b_function_ch.close()
+        rt_session.emit(
+            "generation_created",
+            llm.GenerationCreatedEvent(
+                message_stream=b_message_ch,
+                function_stream=b_function_ch,
+                user_initiated=False,
+                response_id="response-b",
+            ),
+        )
+        rt_session.emit(
+            "remote_item_added", llm.RemoteItemAddedEvent(previous_item_id=None, item=reply)
+        )
+        await asyncio.sleep(0.1)
+
+        assert session.current_agent._chat_ctx.get_by_id("unplayed") is not None
+        assert len(queued) == 1
+        queued[0].interrupt(force=True)
+        await asyncio.sleep(0.1)
+        function_ch.close()
+
+        assert session.current_agent._chat_ctx.get_by_id("unplayed") is None
+        assert rt_session.chat_ctx.get_by_id("unplayed") is None
+
+
 async def test_interrupting_a_finished_speech_spares_the_newer_reply() -> None:
     # the older handle stays alive for its tool while the next reply generates, and the cancel
     # it would send is the one that reply is running on

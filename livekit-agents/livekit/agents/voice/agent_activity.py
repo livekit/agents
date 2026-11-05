@@ -4438,9 +4438,11 @@ class AgentActivity(RecognitionHooks):
             async for fnc in fnc_stream_for_tracing:
                 function_calls.append(fnc)
 
+        generated_message_ids: set[str] = set()
+
         async def _drain_msg_stream() -> None:
-            async for _ in msg_stream_to_drain:
-                pass
+            async for msg in msg_stream_to_drain:
+                generated_message_ids.add(msg.message_id)
 
         async def _watch_generation_end() -> None:
             # the provider closes both streams when it ends the response
@@ -4472,9 +4474,24 @@ class AgentActivity(RecognitionHooks):
             await utils.aio.cancel_and_wait(*authorization_tasks, *tasks)
             for tee in tees:
                 await tee.aclose()
+            # the server may already hold the reply the user never heard, and the sync only
+            # deletes what the local context lacks, so its placeholders have to go first
+            if self.llm.capabilities.mutable_chat_context:
+                local_chat_ctx = self._agent._chat_ctx
+                local_chat_ctx.items[:] = [
+                    item for item in local_chat_ctx.items if item.id not in generated_message_ids
+                ]
+                try:
+                    async with self._rt_chat_ctx_lock:
+                        await self._rt_session.update_chat_ctx(self._agent._chat_ctx)
+                except llm.RealtimeError as e:
+                    logger.warning(
+                        "failed to sync chat context to remove never-played messages",
+                        extra={"error": str(e)},
+                    )
             current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
             _record_interruption(speech_handle)
-            return  # TODO(theomonnom): remove the message from the serverside history
+            return
 
         started_speaking_at: float | None = None
         stopped_speaking_at: float | None = None
