@@ -27,6 +27,9 @@ HEADER_WORKER_TOKEN = "X-LiveKit-Worker-Token"
 HEADER_INFERENCE_PROVIDER = "X-LiveKit-Inference-Provider"
 HEADER_INFERENCE_PRIORITY = "X-LiveKit-Inference-Priority"
 HEADER_REQUEST_ID = "X-LiveKit-Request-Id"
+# Names the SDK feature that made a request (e.g. "AMD"), so the gateway can measure
+# feature traffic apart from the agent's own. Absent on ordinary agent requests.
+HEADER_CLIENT_FEATURE = "X-LiveKit-Client-Feature"
 
 # Quota telemetry headers the inference gateway stamps on LLM completions
 # responses (including 429 rejections). RPM/TPM are per-minute rate limits;
