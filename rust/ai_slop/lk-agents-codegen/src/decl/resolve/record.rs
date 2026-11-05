@@ -578,6 +578,7 @@ impl Resolver<'_> {
                     "hidden",
                     "omit_empty",
                     "key_error",
+                    "call",
                     "getter",
                     "kw_only",
                     "hide_repr",
@@ -678,6 +679,7 @@ impl Resolver<'_> {
             let conversion = FieldConversion {
                 getter: voc::find(&entries, "getter").is_some(),
                 key_error: voc::find(&entries, "key_error").is_some(),
+                call: voc::text(&at, &entries, "call")?,
                 source,
                 hidden: voc::find(&entries, "hidden").is_some(),
                 omit_empty: voc::find(&entries, "omit_empty").is_some(),

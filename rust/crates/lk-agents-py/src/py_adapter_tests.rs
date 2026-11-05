@@ -9,7 +9,7 @@ mod models {
     use pyo3::prelude::*;
 
     #[test]
-    fn room_options_are_read_from_resolved_objects_without_a_dictionary_wire() {
+    fn room_options_are_read_from_the_public_options_without_a_dictionary_wire() {
         use _core::generated::records::room_options::room_io_config_from_py;
         use lk_agents_abi::voice::room_io::RoomIoConfig;
         use lk_agents_abi::voice::rtc::TrackSource;
@@ -37,6 +37,10 @@ mod models {
             assert!(disabled.audio_input.is_none() && disabled.audio_output.is_none());
             assert!(disabled.text_output.is_none());
             assert!(!disabled.text_input && !disabled.video_input);
+            assert!(read("default").unwrap().audio_input.unwrap().auto_gain_control);
+            assert!(read("selector").unwrap().audio_input.unwrap().auto_gain_control);
+            let given = read("agc_given").unwrap();
+            assert!(given.audio_input.unwrap().auto_gain_control && given.video_input);
             assert!(read("invalid_participant_kind").is_err());
         });
     }

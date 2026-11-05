@@ -110,34 +110,29 @@ class RoomOptions:
     """Delete the room when the VoiceSession is closed, default to False"""
 
     def get_text_input_options(self) -> TextInputOptions | None:
-        from .. import _bindings
-
-        return _bindings.room_options_get_text_input_options(self)
+        if isinstance(self.text_input, TextInputOptions):
+            return self.text_input
+        return TextInputOptions() if self.text_input is not False else None
 
     def get_audio_input_options(self) -> AudioInputOptions | None:
-        from .. import _bindings
-
-        return _bindings.room_options_get_audio_input_options(self)
+        if isinstance(self.audio_input, AudioInputOptions):
+            return self.audio_input
+        return AudioInputOptions() if self.audio_input is not False else None
 
     def get_video_input_options(self) -> VideoInputOptions | None:
-        from .. import _bindings
-
-        return _bindings.room_options_get_video_input_options(self)
+        if isinstance(self.video_input, VideoInputOptions):
+            return self.video_input
+        return VideoInputOptions() if self.video_input is True else None
 
     def get_audio_output_options(self) -> AudioOutputOptions | None:
-        from .. import _bindings
-
-        return _bindings.room_options_get_audio_output_options(self)
+        if isinstance(self.audio_output, AudioOutputOptions):
+            return self.audio_output
+        return AudioOutputOptions() if self.audio_output is not False else None
 
     def get_text_output_options(self) -> TextOutputOptions | None:
-        from .. import _bindings
-
-        return _bindings.room_options_get_text_output_options(self)
-
-    def _to_core(self) -> RoomOptions:
-        from .. import _bindings
-
-        return _bindings.room_options_to_core(self)
+        if isinstance(self.text_output, TextOutputOptions):
+            return self.text_output
+        return TextOutputOptions() if self.text_output is not False else None
 
 
 TextInputOptions.__module__ = "livekit.agents.voice.room_io"

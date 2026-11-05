@@ -11195,9 +11195,7 @@ pub mod room_options {
                 }
             })?;
         let auto_gain_control =
-            crate::py_values::attr_with(obj, "AudioInputConfig", "auto_gain_control", |v| {
-                v.extract::<bool>()
-            })?;
+            (crate::py_values::auto_gain_control(obj, "AudioInputConfig.auto_gain_control"))?;
         let pre_connect_audio =
             crate::py_values::attr_with(obj, "AudioInputConfig", "pre_connect_audio", |v| {
                 v.extract::<bool>()
@@ -11280,31 +11278,36 @@ pub mod room_options {
     ) -> pyo3::PyResult<::lk_agents_abi::voice::room_io::RoomIoConfig> {
         let participant_identity = ::lk_agents_abi::voice::room_io::participant_identity_from_wire(
             crate::py_values::attr_with(obj, "RoomIoConfig", "participant_identity", |v| {
-                if v.is_none() {
-                    Ok(None)
+                if crate::py_values::is_not_given(v)? {
+                    Ok(::lk_agents_abi::Maybe::NotGiven)
                 } else {
-                    (v.extract::<::std::string::String>()).map(Some)
+                    (v.extract::<::std::string::String>()).map(::lk_agents_abi::Maybe::Given)
                 }
             })?,
         );
         let participant_kinds = ::lk_agents_abi::voice::room_io::participant_kinds_from_wire(
             crate::py_values::attr_with(obj, "RoomIoConfig", "participant_kinds", |v| {
-                if v.is_instance_of::<::pyo3::types::PyList>()
-                    || v.is_instance_of::<::pyo3::types::PyTuple>()
-                {
-                    v.try_iter()?
-                        .map(|item| {
-                            let item = &item?;
-                            crate::py_values::number_from_py::<i32>(
-                                item,
-                                "RoomIoConfig.participant_kinds",
-                            )
-                        })
-                        .collect::<PyResult<Vec<_>>>()
+                if crate::py_values::is_not_given(v)? {
+                    Ok(::lk_agents_abi::Maybe::NotGiven)
                 } else {
-                    Err(::pyo3::exceptions::PyTypeError::new_err(
-                        "RoomIoConfig.participant_kinds: expected a list or tuple",
-                    ))
+                    (if v.is_instance_of::<::pyo3::types::PyList>()
+                        || v.is_instance_of::<::pyo3::types::PyTuple>()
+                    {
+                        v.try_iter()?
+                            .map(|item| {
+                                let item = &item?;
+                                crate::py_values::number_from_py::<i32>(
+                                    item,
+                                    "RoomIoConfig.participant_kinds",
+                                )
+                            })
+                            .collect::<PyResult<Vec<_>>>()
+                    } else {
+                        Err(::pyo3::exceptions::PyTypeError::new_err(
+                            "RoomIoConfig.participant_kinds: expected a list or tuple",
+                        ))
+                    })
+                    .map(::lk_agents_abi::Maybe::Given)
                 }
             })?,
         )
@@ -11317,33 +11320,52 @@ pub mod room_options {
             crate::py_values::attr_with(obj, "RoomIoConfig", "delete_room_on_close", |v| {
                 v.extract::<bool>()
             })?;
-        let text_input = crate::py_values::attr_with(obj, "RoomIoConfig", "text_input", |v| {
-            v.extract::<bool>()
-        })?;
-        let video_input = crate::py_values::attr_with(obj, "RoomIoConfig", "video_input", |v| {
-            v.extract::<bool>()
-        })?;
-        let audio_input = crate::py_values::attr_with(obj, "RoomIoConfig", "audio_input", |v| {
-            if v.is_none() {
+        let text_input = ::lk_agents_abi::voice::room_io::leg_enabled({
+            let member = crate::py_calls::call(&obj.getattr("get_text_input_options")?, (), None)?;
+            let v = &member;
+            (if v.is_none() {
+                Ok(None)
+            } else {
+                (crate::py_objects::object_ref_from_py(v)).map(Some)
+            })?
+        });
+        let video_input = ::lk_agents_abi::voice::room_io::leg_enabled({
+            let member = crate::py_calls::call(&obj.getattr("get_video_input_options")?, (), None)?;
+            let v = &member;
+            (if v.is_none() {
+                Ok(None)
+            } else {
+                (crate::py_objects::object_ref_from_py(v)).map(Some)
+            })?
+        });
+        let audio_input = {
+            let member = crate::py_calls::call(&obj.getattr("get_audio_input_options")?, (), None)?;
+            let v = &member;
+            (if v.is_none() {
                 Ok(None)
             } else {
                 (crate::generated::records::room_options::audio_input_config_from_py(v)).map(Some)
-            }
-        })?;
-        let audio_output = crate::py_values::attr_with(obj, "RoomIoConfig", "audio_output", |v| {
-            if v.is_none() {
+            })?
+        };
+        let audio_output = {
+            let member =
+                crate::py_calls::call(&obj.getattr("get_audio_output_options")?, (), None)?;
+            let v = &member;
+            (if v.is_none() {
                 Ok(None)
             } else {
                 (crate::generated::records::room_options::audio_output_config_from_py(v)).map(Some)
-            }
-        })?;
-        let text_output = crate::py_values::attr_with(obj, "RoomIoConfig", "text_output", |v| {
-            if v.is_none() {
+            })?
+        };
+        let text_output = {
+            let member = crate::py_calls::call(&obj.getattr("get_text_output_options")?, (), None)?;
+            let v = &member;
+            (if v.is_none() {
                 Ok(None)
             } else {
                 (crate::generated::records::room_options::text_output_config_from_py(v)).map(Some)
-            }
-        })?;
+            })?
+        };
         let value = ::lk_agents_abi::voice::room_io::RoomIoConfig {
             participant_identity,
             participant_kinds,

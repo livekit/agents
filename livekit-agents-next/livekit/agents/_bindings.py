@@ -40,14 +40,6 @@ if TYPE_CHECKING:
     from ._generated.llm import ChatChunk
     from ._generated.llm_fallback import AvailabilityChanged
     from ._generated.overlap import OverlappingSpeechEvent
-    from ._generated.room_api import (
-        AudioInputOptions,
-        AudioOutputOptions,
-        RoomOptions,
-        TextInputOptions,
-        TextOutputOptions,
-        VideoInputOptions,
-    )
     from ._generated.session_events import ErrorEvent, FunctionToolsExecutedEvent
     from ._generated.stt import STT, SpeechData, SpeechEvent
     from ._generated.tool_options import ProviderToolDeclaration, ToolSpec
@@ -416,89 +408,6 @@ def session_error_serialize(event: ErrorEvent, handler: SerializerFunctionWrapHa
     else:
         encoded_source = source.model_dump() if isinstance(source, BaseModel) else repr(source)
     return handler(event.model_copy(update={"error": error, "source": encoded_source}))
-
-
-def room_options_get_text_input_options(self: RoomOptions) -> TextInputOptions | None:
-    from ._generated.room_api import (
-        TextInputOptions,
-    )
-
-    if isinstance(self.text_input, TextInputOptions):
-        return self.text_input
-    return TextInputOptions() if self.text_input is not False else None
-
-
-def room_options_get_audio_input_options(self: RoomOptions) -> AudioInputOptions | None:
-    from ._generated.room_api import (
-        AudioInputOptions,
-    )
-
-    if isinstance(self.audio_input, AudioInputOptions):
-        return self.audio_input
-    return AudioInputOptions() if self.audio_input is not False else None
-
-
-def room_options_get_video_input_options(self: RoomOptions) -> VideoInputOptions | None:
-    from ._generated.room_api import (
-        VideoInputOptions,
-    )
-
-    if isinstance(self.video_input, VideoInputOptions):
-        return self.video_input
-    return VideoInputOptions() if self.video_input is True else None
-
-
-def room_options_get_audio_output_options(self: RoomOptions) -> AudioOutputOptions | None:
-    from ._generated.room_api import (
-        AudioOutputOptions,
-    )
-
-    if isinstance(self.audio_output, AudioOutputOptions):
-        return self.audio_output
-    return AudioOutputOptions() if self.audio_output is not False else None
-
-
-def room_options_get_text_output_options(self: RoomOptions) -> TextOutputOptions | None:
-    from ._generated.room_api import (
-        TextOutputOptions,
-    )
-
-    if isinstance(self.text_output, TextOutputOptions):
-        return self.text_output
-    return TextOutputOptions() if self.text_output is not False else None
-
-
-def room_options_to_core(self: RoomOptions) -> RoomOptions:
-    """Resolve host-only defaults on a private copy; generated extraction reads the fields.
-
-    The resolved view uses ``None`` for disabled legs rather than authoring booleans. It never
-    escapes as public RoomOptions or changes the caller's options/SDK objects.
-    """
-    from copy import copy
-
-    from .utils import is_given
-
-    audio_in = self.get_audio_input_options()
-    if audio_in is not None:
-        audio_in = copy(audio_in)
-        if not is_given(audio_in.auto_gain_control):
-            audio_in.auto_gain_control = audio_in.noise_cancellation is None or callable(
-                audio_in.noise_cancellation
-            )
-    # The boundary view intentionally differs from the public authoring union for disabled legs.
-    resolved = cast(Any, copy(self))
-    resolved.participant_identity = (
-        self.participant_identity if is_given(self.participant_identity) else None
-    )
-    resolved.participant_kinds = (
-        list(self.participant_kinds) if is_given(self.participant_kinds) else []
-    )
-    resolved.text_input = self.get_text_input_options() is not None
-    resolved.video_input = self.get_video_input_options() is not None
-    resolved.audio_input = audio_in
-    resolved.audio_output = self.get_audio_output_options()
-    resolved.text_output = self.get_text_output_options()
-    return cast("RoomOptions", resolved)
 
 
 async def default_text_input_cb(sess: VoiceSession, ev: TextInputEvent) -> None:

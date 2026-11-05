@@ -36,12 +36,22 @@ def room_options_for_native(case):
         options = RoomOptions(
             audio_input=False, audio_output=False, text_input=False, text_output=False
         )
+    elif case == "selector":
+        options = RoomOptions(audio_input=AudioInputOptions(noise_cancellation=lambda _: None))
+    elif case == "agc_given":
+        options = RoomOptions(
+            audio_input=AudioInputOptions(
+                noise_cancellation=rtc.NoiseCancellationOptions(module_id="test", options={}),
+                auto_gain_control=True,
+            ),
+            video_input=True,
+        )
     elif case == "invalid_participant_kind":
         options = RoomOptions(participant_kinds=[-1])
     else:
         assert case == "default"
         options = RoomOptions()
-    return options._to_core()
+    return options
 
 
 def generated_module(name):

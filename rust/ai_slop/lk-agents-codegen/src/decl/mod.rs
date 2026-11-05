@@ -62,6 +62,10 @@ pub struct Member {
     /// `core = "fn"`: a view computed in Rust, `_core.fn(self, args..)`, the record crossing as
     /// its extracted value.
     pub core: Option<String>,
+    /// `toggle = "field", opt_in`: the options a `NotGivenOr[Options | bool]` field enables, the
+    /// return annotation's class: the field's own options, a default one when the field is
+    /// `True` (or, without `opt_in`, not given), else `None`.
+    pub toggle: Option<(String, bool)>,
 }
 
 #[derive(Debug, Clone)]
@@ -392,6 +396,9 @@ pub struct FieldSource {
 pub struct FieldConversion {
     pub getter: bool,
     pub key_error: bool,
+    /// `call = "method"`: read from what the host object's method returns, called with no
+    /// arguments, instead of the attribute.
+    pub call: Option<String>,
     pub source: Option<FieldSource>,
     pub hidden: bool,
     pub omit_empty: bool,

@@ -576,12 +576,13 @@ async def test_transcript_record_roundtrip_keeps_metadata_without_timestamps() -
         output.close()
 
 
-def test_generated_room_options_preserve_sdk_defaults_and_resolution() -> None:
+def test_generated_room_options_preserve_sdk_defaults_and_their_legs() -> None:
     from livekit.agents.voice.room_io import (
         AudioInputOptions,
         AudioOutputOptions,
         RoomOptions,
         TextInputOptions,
+        VideoInputOptions,
     )
 
     first, second = AudioOutputOptions(), AudioOutputOptions()
@@ -590,39 +591,13 @@ def test_generated_room_options_preserve_sdk_defaults_and_resolution() -> None:
     assert TextInputOptions().text_input_cb is TextInputOptions().text_input_cb
     options = RoomOptions()
     assert options.get_video_input_options() is None
-    assert options._to_core().audio_input.auto_gain_control is True
-    nc = rtc.NoiseCancellationOptions(module_id="test", options={})
-    options.audio_input = AudioInputOptions(noise_cancellation=nc)
-    assert options._to_core().audio_input.auto_gain_control is False
-    options.audio_input.auto_gain_control = True
-    assert options._to_core().audio_input.auto_gain_control is True
-    options.audio_output = False
-    assert options._to_core().audio_output is None
-
-
-def test_room_resolution_preserves_authored_objects_and_sdk_identity() -> None:
-    from livekit.agents import NOT_GIVEN
-    from livekit.agents.voice.room_io import AudioInputOptions, AudioOutputOptions, RoomOptions
-
-    def selector(_: object) -> None:
-        return None
-
-    microphone = AudioInputOptions(noise_cancellation=selector, sample_rate=48000)
-    speaker = AudioOutputOptions()
-    options = RoomOptions(audio_input=microphone, audio_output=speaker)
-    resolved = options._to_core()
-    assert resolved is not options
-    assert resolved.audio_input is not microphone
-    assert resolved.audio_input.noise_cancellation is selector
-    assert resolved.audio_input.auto_gain_control is True
-    assert resolved.audio_input.sample_rate == 48000
-    assert microphone.auto_gain_control is NOT_GIVEN
-    assert resolved.audio_output is speaker
-    assert resolved.audio_output.track_publish_options is speaker.track_publish_options
-    assert resolved.participant_identity is None
-    assert resolved.participant_kinds == []
-    assert options.participant_identity is NOT_GIVEN
-    assert options.participant_kinds is NOT_GIVEN
+    assert options.get_audio_input_options() == AudioInputOptions()
+    microphone = AudioInputOptions(sample_rate=48000)
+    options = RoomOptions(audio_input=microphone, audio_output=False, video_input=True)
+    assert options.get_audio_input_options() is microphone
+    assert options.get_audio_output_options() is None
+    assert options.get_video_input_options() == VideoInputOptions()
+    assert options.get_text_output_options() is not None
 
 
 def test_generated_session_events_validate_and_preserve_control_and_serialization() -> None:

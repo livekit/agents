@@ -480,7 +480,7 @@ class SessionHost:
             session_toolsets=hooks._core_toolset_resources(session._tools),
             tools_host=frame["tools_host"],
             voice_agent=frame["voice_agent"],
-            room_io_config=options._to_core(),
+            room_io_config=options,
             video_sampler=(sampler.speaking_fps, sampler.silent_fps) if sampler else None,
             using_default_vad=session._adapter._using_default_vad(),
             turn_detector=session._turn_detector,

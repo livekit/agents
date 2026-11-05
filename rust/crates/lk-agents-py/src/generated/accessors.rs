@@ -379,6 +379,26 @@ impl AgentsTypesModule {
     }
 }
 
+/// Python interface: `livekit.agents.voice.room_io.AudioInputOptions`.
+pub use crate::py_values::interfaces::AudioInputOptions;
+impl AudioInputOptions {
+    pub fn import(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+        static CLASS: pyo3::sync::PyOnceLock<Py<pyo3::types::PyType>> =
+            pyo3::sync::PyOnceLock::new();
+        Ok(CLASS.import(py, "livekit.agents.voice.room_io", "AudioInputOptions")?.as_any().clone())
+    }
+    pub fn auto_gain_control<'py>(
+        obj: &Bound<'py, impl pyo3::PyTypeInfo>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        obj.as_any().getattr("auto_gain_control")
+    }
+    pub fn noise_cancellation<'py>(
+        obj: &Bound<'py, impl pyo3::PyTypeInfo>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        obj.as_any().getattr("noise_cancellation")
+    }
+}
+
 /// Python interface: `time`.
 pub use crate::py_values::interfaces::TimeModule;
 impl TimeModule {

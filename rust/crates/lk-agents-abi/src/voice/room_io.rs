@@ -13,8 +13,7 @@ use std::time::Duration;
 #[crate::host(file(module = "room_io", path = "livekit.agents.voice.room_io"))]
 const _: () = ();
 
-// Resolved legs of the public RoomOptions. Generated models own their fields; explicit
-// host hooks resolve SDK defaults and callbacks before these boundary converters read them.
+// The public RoomOptions as the core reads it: each leg through its `get_*_options()`.
 
 /// A normalized `AudioInputOptions` view. Generated extraction reads its declared attributes.
 #[crate::host(record(
@@ -31,8 +30,10 @@ pub struct AudioInputConfig {
     pub frame_size_ms: u32,
     /// A [`HostRef`](lk_agents_abi::HostRef) so the side-table entry lives as long as the config.
     pub noise_cancellation: Option<lk_agents_abi::HostRef>,
-    /// Resolved by `_to_core`, applied host-side (`rtc.AudioProcessingModule`), forwarded as
+    /// Not given: on unless a noise canceller is configured directly (a selector keeps it on).
+    /// Applied host-side (`rtc.AudioProcessingModule`), forwarded as
     /// [`AudioStreamOptions::auto_gain_control`](crate::voice::rtc::AudioStreamOptions).
+    #[host(own_value, extract_with = "py_values::auto_gain_control")]
     pub auto_gain_control: bool,
     pub pre_connect_audio: bool,
     /// Seconds on the wire, clamped at zero.
@@ -94,8 +95,8 @@ impl Default for TextOutputConfig {
     }
 }
 
-/// After `get_*_options()` resolved every `NotGivenOr`; `None` means a leg is off. Read by
-/// the generated room-I/O boundary converter.
+/// The public `RoomOptions`, each leg read through its `get_*_options()`; `None` means a leg is
+/// off.
 #[crate::host(record(
     module = "room_options",
     host_type = "livekit.agents.voice.room_io.RoomOptions",
@@ -105,18 +106,23 @@ impl Default for TextOutputConfig {
 #[derive(Debug, Clone, PartialEq)]
 pub struct RoomIoConfig {
     /// `None` links to the first acceptable one.
-    #[host(read_as = Option<String>, normalize = crate::voice::room_io::participant_identity_from_wire)]
+    #[host(read_as = crate::Maybe<String>, normalize = crate::voice::room_io::participant_identity_from_wire)]
     pub participant_identity: Option<ParticipantIdentity>,
     /// Empty means `DEFAULT_PARTICIPANT_KINDS` (`[]` is falsy in the reference). A malformed value
     /// is refused, never read as empty.
-    #[host(read_as = Vec<i32>, try_normalize = crate::voice::room_io::participant_kinds_from_wire)]
+    #[host(read_as = crate::Maybe<Vec<i32>>, try_normalize = crate::voice::room_io::participant_kinds_from_wire)]
     pub participant_kinds: Vec<ParticipantKind>,
     pub close_on_disconnect: bool,
     pub delete_room_on_close: bool,
+    #[host(call = "get_text_input_options", read_as = Option<crate::HostRef>, normalize = crate::voice::room_io::leg_enabled)]
     pub text_input: bool,
+    #[host(call = "get_video_input_options", read_as = Option<crate::HostRef>, normalize = crate::voice::room_io::leg_enabled)]
     pub video_input: bool,
+    #[host(call = "get_audio_input_options")]
     pub audio_input: Option<AudioInputConfig>,
+    #[host(call = "get_audio_output_options")]
     pub audio_output: Option<AudioOutputConfig>,
+    #[host(call = "get_text_output_options")]
     pub text_output: Option<TextOutputConfig>,
 }
 
@@ -242,18 +248,23 @@ pub fn publish_options_from_wire(
     })
 }
 
+/// A leg whose options carry nothing the core reads: on when its `get_*_options()` gives any.
+pub fn leg_enabled(options: Option<crate::HostRef>) -> bool {
+    options.is_some()
+}
+
 pub fn sync_transcription_from_wire(value: crate::Maybe<bool>) -> Option<bool> {
     value.given()
 }
 
-pub fn participant_identity_from_wire(value: Option<String>) -> Option<ParticipantIdentity> {
-    value.map(ParticipantIdentity)
+pub fn participant_identity_from_wire(value: crate::Maybe<String>) -> Option<ParticipantIdentity> {
+    value.given().map(ParticipantIdentity)
 }
 
 pub fn participant_kinds_from_wire(
-    values: Vec<i32>,
+    values: crate::Maybe<Vec<i32>>,
 ) -> Result<Vec<ParticipantKind>, RoomOptionsError> {
-    values.into_iter().map(|value| ParticipantKind::try_from(value).map_err(|error| RoomOptionsError(format!(
+    values.given().unwrap_or_default().into_iter().map(|value| ParticipantKind::try_from(value).map_err(|error| RoomOptionsError(format!(
         "{error}: it would widen the auto-link accept list to the default rather than narrow it, so it is refused instead"
     )))).collect()
 }
@@ -408,29 +419,29 @@ pub struct TextOutputOptions {
 #[python(method(
     name = "get_text_input_options",
     ret = "TextInputOptions | None",
-    hook = "room_options_get_text_input_options"
+    toggle = "text_input"
 ))]
 #[python(method(
     name = "get_audio_input_options",
     ret = "AudioInputOptions | None",
-    hook = "room_options_get_audio_input_options"
+    toggle = "audio_input"
 ))]
 #[python(method(
     name = "get_video_input_options",
     ret = "VideoInputOptions | None",
-    hook = "room_options_get_video_input_options"
+    toggle = "video_input",
+    opt_in
 ))]
 #[python(method(
     name = "get_audio_output_options",
     ret = "AudioOutputOptions | None",
-    hook = "room_options_get_audio_output_options"
+    toggle = "audio_output"
 ))]
 #[python(method(
     name = "get_text_output_options",
     ret = "TextOutputOptions | None",
-    hook = "room_options_get_text_output_options"
+    toggle = "text_output"
 ))]
-#[python(method(name = "_to_core", ret = "RoomOptions", hook = "room_options_to_core"))]
 pub struct RoomOptions {
     /// The text input options. If not provided, default to True.
     #[host(annotation = "..types.NotGivenOr[TextInputOptions | bool]")]

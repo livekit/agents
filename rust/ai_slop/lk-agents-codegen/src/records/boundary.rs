@@ -185,7 +185,11 @@ fn field_read(r: &RecordDecl, f: &Field, owner: &str) -> Result<String, String> 
                 "if {condition} && !v.is_none() {{ {reader} }} else {{ Ok(Default::default()) }}"
             );
         }
-        if r.dict_keys {
+        if let Some(method) = &c.call {
+            format!(
+                "{{ let member = crate::py_calls::call(&obj.getattr({method:?})?, (), None)?; let v = &member; ({reader})? }}"
+            )
+        } else if r.dict_keys {
             format!(
                 "{{ let member = obj.cast::<pyo3::types::PyDict>()?.get_item({key:?})?.ok_or_else(|| pyo3::exceptions::PyKeyError::new_err({path:?}))?; let v = &member; ({reader})? }}"
             )

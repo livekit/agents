@@ -36,6 +36,7 @@
 //! | boundary record | `classes(by = "field", some = "module.Class", none = "module.Other")` | select a declared SDK constructor from an optional native field |
 //! | boundary field | `read_as = T, normalize = path` / `try_normalize = path`, `flatten` | decode declared wire data and normalize it in native code; flattening reads the nested record from the same dictionary |
 //! | boundary field | `extract_with = "module::codec"`, `emit_with = "module::codec"`, `late` | one-value host representation codecs; late reads validate scalars before retaining/copying a buffer |
+//! | boundary field | `call = "method"` | read from what the host object's method returns (called with no arguments), not an attribute |
 //! | boundary field | `lenient`, `missing_default`, `own_value`, `omit_none`, `omit_empty` | declared extraction/presence behavior, including string subclasses |
 //! | boundary field | `hidden, source(attrs(frame, userdata), constant = "module.KEY")` | SDK metadata paths and constant keys are schema, never inferred by handwritten business logic |
 //! | boundary field | `when(field = "kind", variant = path), none_default` | conditionally decode a value from an earlier declared field; unused values retain their native default |
@@ -79,6 +80,7 @@
 //! | dispatched variant | `emits = "Model"` | the public event (that record's model and `type`) the host's behaviour for this member emits |
 //! | record | `#[python(property(name = "x", ret = "int", getter = "a.b"))]` | a model property answering the record's attribute along that path, with no host hook |
 //! | record | `#[python(property(name = "x", ret = "bool", core = "_core_fn"))]`, `method(.., core = ..)` | a view computed in Rust: `_core._core_fn(self, args..)`, the record crossing as its extracted value (the record declares `extract`) |
+//! | record | `#[python(method(name = "get_x_options", ret = "X | None", toggle = "x", opt_in))]` | the options a `NotGivenOr[X \| bool]` field enables: its own `X`, `X()` when it is `True` (without `opt_in`: anything but `False`), else `None` |
 //! | record struct | `record(.., default)` | Rust `Default` from the fields' `default = <literal>` (a `Maybe` field: not given): one list of defaults for both languages; the one Rust the record marker expands to |
 //! | record struct | `record(.., persisted)` | application-saved state: the model gains private `_to_json()`/`_from_json()` through the record's serde codec in Rust (it derives `Serialize`/`Deserialize`) |
 //! | record field, tuple variant | `default = <literal>` | the model's default: an omitted keyword only; `None` stays a value an `Option` field takes and any other refuses |

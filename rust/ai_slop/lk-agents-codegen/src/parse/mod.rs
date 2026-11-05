@@ -62,7 +62,11 @@ pub fn members(attrs: &[syn::Attribute], outer: &str, owner: &str) -> Result<Vec
             continue;
         }
         let keys = &entry.nested;
-        voc::only(owner, keys, &["name", "args", "ret", "doc", "hook", "getter", "core"])?;
+        voc::only(
+            owner,
+            keys,
+            &["name", "args", "ret", "doc", "hook", "getter", "core", "toggle", "opt_in"],
+        )?;
         let name = required(owner, keys, "name")?;
         let getter = voc::text(owner, keys, "getter")?;
         let core = voc::text(owner, keys, "core")?;
@@ -80,6 +84,18 @@ pub fn members(attrs: &[syn::Attribute], outer: &str, owner: &str) -> Result<Vec
                 "{owner}.{name}: getter = \"a.b\" is a property's attribute path, without a hook"
             ));
         }
+        let toggle = voc::text(owner, keys, "toggle")?;
+        if toggle.is_some()
+            && (entry.key != "method"
+                || core.is_some()
+                || getter.is_some()
+                || voc::find(keys, "hook").is_some())
+        {
+            return Err(format!(
+                "{owner}.{name}: toggle = \"field\" is a method answering that field's options, without a hook"
+            ));
+        }
+        let toggle = toggle.map(|field| (field, voc::find(keys, "opt_in").is_some()));
         let args = voc::text(owner, keys, "args")?.unwrap_or_default();
         out.push(Member {
             hook: voc::text(owner, keys, "hook")?
@@ -92,6 +108,7 @@ pub fn members(attrs: &[syn::Attribute], outer: &str, owner: &str) -> Result<Vec
             doc: voc::text(owner, keys, "doc")?.unwrap_or_default(),
             getter,
             core,
+            toggle,
         });
     }
     Ok(out)

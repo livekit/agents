@@ -865,6 +865,14 @@ fn properties(r: &RecordDecl, runtime: &mut Imports) -> String {
             s.push_str(&format!("        return self.{path}\n"));
             continue;
         }
+        if let Some((field, opt_in)) = &member.toggle {
+            let class = member.ret.trim_end_matches(" | None");
+            let on = if *opt_in { "is True" } else { "is not False" };
+            s.push_str(&format!(
+                "        if isinstance(self.{field}, {class}):\n            return self.{field}\n        return {class}() if self.{field} {on} else None\n"
+            ));
+            continue;
+        }
         if let Some(function) = &member.core {
             s.push_str(&format!(
                 "        from .. import _core\n\n        return _core.{function}(self{arguments})\n"

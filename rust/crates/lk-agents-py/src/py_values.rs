@@ -18,6 +18,12 @@ pub mod interfaces {
     ))]
     pub struct AgentsTypesModule;
 
+    #[lk_agents_abi::host(interface(
+        host = "livekit.agents.voice.room_io.AudioInputOptions",
+        attrs(auto_gain_control, noise_cancellation)
+    ))]
+    pub struct AudioInputOptions;
+
     #[lk_agents_abi::host(interface(module = "time", attrs(time, perf_counter)))]
     pub struct TimeModule;
 
@@ -454,6 +460,17 @@ pub fn wall_to_perf(py: Python<'_>, value: f64) -> PyResult<Bound<'_, PyAny>> {
 
 pub fn exception_message(value: &Bound<'_, PyAny>, _path: &str) -> PyResult<String> {
     Ok(value.to_string())
+}
+
+/// `AudioInputOptions.auto_gain_control`: as given, else on unless a noise canceller is
+/// configured directly (none, or a selector called per participant, keeps it on).
+pub fn auto_gain_control(options: &Bound<'_, PyAny>, _path: &str) -> PyResult<bool> {
+    let given = access::AudioInputOptions::auto_gain_control(options)?;
+    if !is_not_given(&given)? {
+        return given.extract();
+    }
+    let noise_cancellation = access::AudioInputOptions::noise_cancellation(options)?;
+    Ok(noise_cancellation.is_none() || noise_cancellation.is_callable())
 }
 
 /// Of a detector object only whether it streams crosses; the check mirrors `runtime_checkable`:
