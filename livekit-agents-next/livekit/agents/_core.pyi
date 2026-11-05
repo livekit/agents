@@ -165,7 +165,6 @@ from ._generated._core_telemetry import (
     Tagger as Tagger,
     TelemetrySpan as TelemetrySpan,
     _core_event_loop_blocked as _core_event_loop_blocked,
-    _core_EventRetention as _core_EventRetention,
     _core_set_capture_content as _core_set_capture_content,
     _core_telemetry_configure as _core_telemetry_configure,
     _core_telemetry_conflict as _core_telemetry_conflict,

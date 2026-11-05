@@ -371,9 +371,7 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
             started_at: OnceLock::new(),
             recording_options: OnceLock::new(),
             audio: OnceLock::new(),
-            retention: Mutex::new(
-                <Retention as lk_agents_abi::telemetry::report::EventRetention>::new(env),
-            ),
+            retention: Mutex::new(Retention::process()),
             tasks: Arc::new(TaskSet::default()),
             opened: watch::channel(None).0,
             closed: watch::channel(false).0,
@@ -398,10 +396,7 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
             StartOwner::Start => {
                 if let Some(job) = &job {
                     // The report belongs to the job the session first started in.
-                    <Retention as lk_agents_abi::telemetry::report::EventRetention>::claim(
-                        &mut self.0.retention.lock(),
-                        job.id.clone(),
-                    );
+                    self.0.retention.lock().claim(job.id.clone());
                 }
                 let (job, job_ids) = match job {
                     Some(job) => (
@@ -638,29 +633,20 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
     }
 
     fn allows_report(&self, job_id: String) -> bool {
-        <Retention as lk_agents_abi::telemetry::report::EventRetention>::allows_read(
-            &self.0.retention.lock(),
-            job_id,
-        )
+        self.0.retention.lock().allows_read(&job_id)
     }
 
     fn accepts_event(&self, kind: String) -> bool {
         let redaction = self.recording_options().redaction;
-        <Retention as lk_agents_abi::telemetry::report::EventRetention>::accepts(
-            &self.0.retention.lock(),
-            kind,
-            redaction,
-        )
+        self.0.retention.lock().accepts(&kind, redaction)
     }
 
     fn admit_event(&self, kind: String) -> bool {
         let redaction = self.recording_options().redaction;
         let mut retention = self.0.retention.lock();
-        let accepted = <Retention as lk_agents_abi::telemetry::report::EventRetention>::accepts(
-            &retention, kind, redaction,
-        );
+        let accepted = retention.accepts(&kind, redaction);
         if accepted {
-            <Retention as lk_agents_abi::telemetry::report::EventRetention>::admit(&mut retention);
+            retention.admit();
         }
         accepted
     }

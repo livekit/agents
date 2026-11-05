@@ -410,31 +410,3 @@ pub struct RecordingOptionsPatch {
     #[host(annotation = "bool")]
     pub redaction: crate::Maybe<bool>,
 }
-
-/// A session report's host event snapshots: which are accepted and how many are kept. The adapter
-/// owns the snapshots.
-#[crate::host(class(name = "_core_EventRetention"))]
-pub trait EventRetention: Send + Sized + 'static {
-    /// What the hosting process lends the class.
-    #[host(env)]
-    type Env;
-
-    #[host(new)]
-    fn new(env: &Self::Env) -> Self;
-
-    /// Bind report access to the first job that starts the session. Ownership cannot transfer.
-    #[host(call)]
-    fn claim(&mut self, job_id: String);
-
-    /// Sessions started outside a job retain their existing application-owned access contract.
-    #[host(call)]
-    fn allows_read(&self, job_id: String) -> bool;
-
-    /// Reject content of a redacted session, unknown schemas and live-object events.
-    #[host(call)]
-    fn accepts(&self, kind: String, redaction: bool) -> bool;
-
-    /// Counts one retained event; every accepted event is kept.
-    #[host(call)]
-    fn admit(&mut self);
-}

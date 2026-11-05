@@ -87,7 +87,6 @@ impl super::Implementations for Selected {
     type HostSpan = ::lk_agents_runtime::net::telemetry::host::HostSpan;
     type Telemetry = ::lk_agents_runtime::telemetry::Telemetry;
     type Tagger = ::lk_agents_runtime::net::telemetry::session_report::tagger::Tagger;
-    type EventRetention = ::lk_agents_runtime::net::telemetry::session_report::EventRetention;
     type TextSessionRunner = ::lk_agents_runtime::text_session::Runner;
     type TokenizeFunctions = ::lk_agents_runtime::cores::SpeechTokenizer;
     type HostTokenization = ::lk_agents_runtime::cores::HostTokenizer;

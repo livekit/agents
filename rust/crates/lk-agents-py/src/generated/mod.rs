@@ -131,7 +131,6 @@ pub trait Implementations: 'static {
     type HostSpan: ::lk_agents_abi::telemetry::host::HostSpan;
     type Telemetry: ::lk_agents_abi::telemetry::host::Telemetry;
     type Tagger: ::lk_agents_abi::telemetry::report::Tagger;
-    type EventRetention: ::lk_agents_abi::telemetry::report::EventRetention;
     type TextSessionRunner: ::lk_agents_abi::text_session::TextSessionRunner<
             Stream = Self::RunStream,
             Resources = Self::RunResources,
@@ -372,7 +371,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(telemetry::_core_telemetry_shutdown, m)?)?;
     m.add_function(wrap_pyfunction!(telemetry::_core_event_loop_blocked, m)?)?;
     m.add_class::<telemetry::Tagger>()?;
-    m.add_class::<telemetry::CoreEventRetention>()?;
     m.add_class::<text_session::TextSessionRunner>()?;
     m.add_class::<text_session::TextSessionUpdates>()?;
     m.add_function(wrap_pyfunction!(tokenize::split_words, m)?)?;

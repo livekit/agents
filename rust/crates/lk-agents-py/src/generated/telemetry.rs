@@ -487,69 +487,6 @@ impl Tagger {
     }
 }
 
-// Declared in rust/crates/lk-agents-abi/src/telemetry/report/mod.rs.
-type CoreEventRetentionImpl =
-    <crate::generated::implementations::Selected as super::Implementations>::EventRetention;
-
-/// A session report's host event snapshots: which are accepted and how many are kept. The adapter
-/// owns the snapshots.
-#[pyclass(name = "_core_EventRetention", module = "livekit.agents._core")]
-pub struct CoreEventRetention(pub(crate) CoreEventRetentionImpl);
-
-#[pymethods]
-impl CoreEventRetention {
-    #[new]
-    fn new(py: Python<'_>) -> PyResult<CoreEventRetention> {
-        crate::py_calls::check_pid()?;
-        let env = crate::process::env();
-        let out = py.detach(|| {
-            <CoreEventRetentionImpl as ::lk_agents_abi::telemetry::report::EventRetention>::new(
-                &env,
-            )
-        });
-        ::pyo3::PyResult::Ok(CoreEventRetention(out))
-    }
-
-    /// Bind report access to the first job that starts the session. Ownership cannot transfer.
-    #[pyo3(signature = (job_id))]
-    fn claim(&mut self, job_id: ::std::string::String) -> PyResult<()> {
-        crate::py_calls::check_pid()?;
-        <CoreEventRetentionImpl as ::lk_agents_abi::telemetry::report::EventRetention>::claim(
-            &mut self.0,
-            job_id,
-        );
-        Ok(())
-    }
-
-    /// Sessions started outside a job retain their existing application-owned access contract.
-    #[pyo3(signature = (job_id))]
-    fn allows_read(&self, job_id: ::std::string::String) -> PyResult<bool> {
-        crate::py_calls::check_pid()?;
-        let out = <CoreEventRetentionImpl as ::lk_agents_abi::telemetry::report::EventRetention>::allows_read(&self.0, job_id);
-        ::pyo3::PyResult::Ok(out)
-    }
-
-    /// Reject content of a redacted session, unknown schemas and live-object events.
-    #[pyo3(signature = (kind, redaction))]
-    fn accepts(&self, kind: ::std::string::String, redaction: bool) -> PyResult<bool> {
-        crate::py_calls::check_pid()?;
-        let out =
-            <CoreEventRetentionImpl as ::lk_agents_abi::telemetry::report::EventRetention>::accepts(
-                &self.0, kind, redaction,
-            );
-        ::pyo3::PyResult::Ok(out)
-    }
-
-    /// Counts one retained event; every accepted event is kept.
-    fn admit(&mut self) -> PyResult<()> {
-        crate::py_calls::check_pid()?;
-        <CoreEventRetentionImpl as ::lk_agents_abi::telemetry::report::EventRetention>::admit(
-            &mut self.0,
-        );
-        Ok(())
-    }
-}
-
 impl crate::py_errors::HostException for ::lk_agents_abi::telemetry::host::TelemetryConfigError {
     fn to_py_err(&self) -> ::pyo3::PyErr {
         ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
