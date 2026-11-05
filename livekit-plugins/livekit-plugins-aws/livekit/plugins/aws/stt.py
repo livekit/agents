@@ -210,7 +210,11 @@ class STT(stt.STT):
     ) -> SpeechStream:
         opts = self._config
         # language_code cannot be combined with automatic language identification
-        if language and not (opts.identify_language or opts.identify_multiple_languages):
+        if language and (opts.identify_language or opts.identify_multiple_languages):
+            logger.warning(
+                "language is ignored when identify_language or identify_multiple_languages is enabled"
+            )
+        elif language:
             opts = replace(opts, language=LanguageCode(language))
         return SpeechStream(
             stt=self,
