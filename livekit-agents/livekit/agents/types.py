@@ -9,6 +9,12 @@ from pydantic_core import CoreSchema, core_schema
 ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID = "lk.segment_id"
 ATTRIBUTE_TRANSCRIPTION_TRACK_ID = "lk.transcribed_track_id"
 ATTRIBUTE_TRANSCRIPTION_FINAL = "lk.transcription_final"
+ATTRIBUTE_TRANSCRIPTION_LANGUAGE = "lk.transcription_language"
+"""
+The language a transcription segment is in, as a code such as ``"es"``, when it is known.
+Set where one track carries transcripts in more than one language, such as a speaker's own
+words and their translation.
+"""
 ATTRIBUTE_TRANSCRIPTION_EXPRESSION = "lk.expression"
 """
 The expression (delivery/emotion) the agent used for a transcription segment, surfaced so

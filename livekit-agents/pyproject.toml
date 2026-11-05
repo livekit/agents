@@ -30,7 +30,7 @@ dependencies = [
     "livekit==1.2.0",
     "livekit-api>=1.2.2,<2",
     "livekit-local-inference>=0.2.7",
-    "livekit-protocol>=1.1.29,<2",
+    "livekit-protocol>=1.1.31,<2",
     "livekit-blingfire~=1.1,<2",
     "protobuf>=3",
     "pyjwt>=2.0",
@@ -65,7 +65,10 @@ dependencies = [
 [project.optional-dependencies]
 mcp = ["mcp>=2.2, <3"]
 codecs = ["numpy>=1.26.0"]
-images = ["pillow>=10.3.0"]
+images = [
+    "pillow>=10.3.0; python_version < '3.11'",
+    "pillow>=13.0.0; python_version >= '3.11'",
+]
 anam = ["livekit-plugins-anam>=1.8.10"]
 anthropic = ["livekit-plugins-anthropic>=1.8.10"]
 assemblyai = ["livekit-plugins-assemblyai>=1.8.10"]
@@ -96,6 +99,7 @@ groq = ["livekit-plugins-groq>=1.8.10"]
 hamming = ["livekit-plugins-hamming>=1.8.10"]
 hume = ["livekit-plugins-hume>=1.8.10"]
 inworld = ["livekit-plugins-inworld>=1.8.10"]
+kalpa = ["livekit-plugins-kalpa>=1.8.10"]
 keyframe = ["livekit-plugins-keyframe>=1.8.10"]
 langchain = ["livekit-plugins-langchain>=1.8.10"]
 lemonslice = ["livekit-plugins-lemonslice>=1.8.10"]
