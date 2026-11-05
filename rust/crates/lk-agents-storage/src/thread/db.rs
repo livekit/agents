@@ -400,129 +400,189 @@ pub(crate) async fn commit(
             "context writes require an exclusive managed turn".into(),
         ));
     }
+    let fence = fenced.as_ref().map(|fenced| fenced.fence);
     let mut b = Batch::default();
-    if !c.app_writes.is_empty() {
-        if let Some(Fenced { fence, .. }) = &fenced {
-            // arbitrary SQL cannot be made conditional on the fence: abort the batch instead
-            b.add(AssertFence { lane, version: fence.version, token: fence.token.as_str() });
-        }
-        for write in &c.app_writes {
-            b.0.push(crate::context::transaction::statement(write)?);
-        }
+    add_app_writes(&mut b, lane, c, fence)?;
+    match fence {
+        Some(fence) => add_fenced_rows(&mut b, lane, fence, c)?,
+        None => add_unfenced_rows(&mut b, lane, c),
     }
-    match &fenced {
-        Some(Fenced { fence, .. }) => {
-            let (version, token) = (fence.version, fence.token.as_str());
-            for write in &c.scope_writes {
-                b.0.push(crate::context::db::write(lane, write, Some(fence))?);
-            }
-            for item in &c.items {
-                b.add(InsertItem {
-                    lane,
-                    version,
-                    token,
-                    id: &item.id,
-                    message_id: item.message_id.as_deref(),
-                    payload: SqlValue::json(&item.payload),
-                });
-            }
-            for id in &c.delete_items {
-                b.add(DeleteItem { lane, version, token, id });
-            }
-            for e in c.events.iter().chain([&c.run_ended]) {
-                b.add(InsertEvent {
-                    lane,
-                    version,
-                    token,
-                    ts_ms: e.ts_ms,
-                    run_id: &c.run_id,
-                    event_type: &e.r#type,
-                    payload: SqlValue::json(&e.payload),
-                });
-            }
-            for t in &c.tasks {
-                b.add(UpsertTask {
-                    lane,
-                    version,
-                    token,
-                    task_id: &t.task_id,
-                    name: t.name.as_deref(),
-                    message_id: t.message_id.as_deref(),
-                    status: t.status.as_str(),
-                    data: SqlValue::json(&t.data),
-                    internal: SqlValue::opt_json(t.internal.as_ref()),
-                });
-            }
-        }
-        None => {
-            // no lease was taken, so nothing created the lane row yet
-            b.add(InsertLane { lane });
-            for item in &c.items {
-                b.add(InsertItemUnfenced {
-                    lane,
-                    id: &item.id,
-                    message_id: item.message_id.as_deref(),
-                    payload: SqlValue::json(&item.payload),
-                });
-            }
-            for id in &c.delete_items {
-                b.add(DeleteItemUnfenced { lane, id });
-            }
-            for e in c.events.iter().chain([&c.run_ended]) {
-                b.add(InsertEventUnfenced {
-                    lane,
-                    ts_ms: e.ts_ms,
-                    run_id: &c.run_id,
-                    event_type: &e.r#type,
-                    payload: SqlValue::json(&e.payload),
-                });
-            }
-            for t in &c.tasks {
-                b.add(UpsertTaskUnfenced {
-                    lane,
-                    task_id: &t.task_id,
-                    name: t.name.as_deref(),
-                    message_id: t.message_id.as_deref(),
-                    status: t.status.as_str(),
-                    data: SqlValue::json(&t.data),
-                    internal: SqlValue::opt_json(t.internal.as_ref()),
-                });
-            }
-        }
+    let reads = add_lane_commit(&mut b, lane, c, fenced.as_ref());
+    let out = conn.batch(b.0).await?;
+    reads.committed(&out, lane, fence)
+}
+
+/// The application's own statements, first, behind a fence check when the run holds one.
+fn add_app_writes(
+    b: &mut Batch,
+    lane: &str,
+    c: &Commit,
+    fence: Option<&Fence>,
+) -> Result<(), StorageError> {
+    if c.app_writes.is_empty() {
+        return Ok(());
     }
-    let lane_row = match &fenced {
-        Some(Fenced { fence, keep }) => {
-            let (version, token) = (fence.version, fence.token.as_str());
-            let state = SqlValue::opt_json(c.state.as_ref());
-            let drained_id = c.drained_id;
-            match *keep {
-                Some(lease_secs) => {
-                    b.add(CommitAndExtend { lane, version, token, state, drained_id, lease_secs })
-                }
-                None => b.add(CommitAndRelease { lane, version, token, state, drained_id }),
-            }
-        }
+    if let Some(fence) = fence {
+        // arbitrary SQL cannot be made conditional on the fence: abort the batch instead
+        b.add(AssertFence { lane, version: fence.version, token: fence.token.as_str() });
+    }
+    for write in &c.app_writes {
+        b.0.push(crate::context::transaction::statement(write)?);
+    }
+    Ok(())
+}
+
+/// Context writes, items, deletions, events (`run_ended` last) and tasks, each on the fence.
+fn add_fenced_rows(
+    b: &mut Batch,
+    lane: &str,
+    fence: &Fence,
+    c: &Commit,
+) -> Result<(), StorageError> {
+    let (version, token) = (fence.version, fence.token.as_str());
+    for write in &c.scope_writes {
+        b.0.push(crate::context::db::write(lane, write, Some(fence))?);
+    }
+    for item in &c.items {
+        b.add(InsertItem {
+            lane,
+            version,
+            token,
+            id: &item.id,
+            message_id: item.message_id.as_deref(),
+            payload: SqlValue::json(&item.payload),
+        });
+    }
+    for id in &c.delete_items {
+        b.add(DeleteItem { lane, version, token, id });
+    }
+    for e in c.events.iter().chain([&c.run_ended]) {
+        b.add(InsertEvent {
+            lane,
+            version,
+            token,
+            ts_ms: e.ts_ms,
+            run_id: &c.run_id,
+            event_type: &e.r#type,
+            payload: SqlValue::json(&e.payload),
+        });
+    }
+    for t in &c.tasks {
+        b.add(UpsertTask {
+            lane,
+            version,
+            token,
+            task_id: &t.task_id,
+            name: t.name.as_deref(),
+            message_id: t.message_id.as_deref(),
+            status: t.status.as_str(),
+            data: SqlValue::json(&t.data),
+            internal: SqlValue::opt_json(t.internal.as_ref()),
+        });
+    }
+    Ok(())
+}
+
+/// The append-only rows of a run without a lease, after creating the lane row.
+fn add_unfenced_rows(b: &mut Batch, lane: &str, c: &Commit) {
+    // no lease was taken, so nothing created the lane row yet
+    b.add(InsertLane { lane });
+    for item in &c.items {
+        b.add(InsertItemUnfenced {
+            lane,
+            id: &item.id,
+            message_id: item.message_id.as_deref(),
+            payload: SqlValue::json(&item.payload),
+        });
+    }
+    for id in &c.delete_items {
+        b.add(DeleteItemUnfenced { lane, id });
+    }
+    for e in c.events.iter().chain([&c.run_ended]) {
+        b.add(InsertEventUnfenced {
+            lane,
+            ts_ms: e.ts_ms,
+            run_id: &c.run_id,
+            event_type: &e.r#type,
+            payload: SqlValue::json(&e.payload),
+        });
+    }
+    for t in &c.tasks {
+        b.add(UpsertTaskUnfenced {
+            lane,
+            task_id: &t.task_id,
+            name: t.name.as_deref(),
+            message_id: t.message_id.as_deref(),
+            status: t.status.as_str(),
+            data: SqlValue::json(&t.data),
+            internal: SqlValue::opt_json(t.internal.as_ref()),
+        });
+    }
+}
+
+/// The lane row's update (fenced: commit, then extend or release the lease) or read, then
+/// the answer task's read.
+fn add_lane_commit(
+    b: &mut Batch,
+    lane: &str,
+    c: &Commit,
+    fenced: Option<&Fenced<'_>>,
+) -> CommitReads {
+    let state = || SqlValue::opt_json(c.state.as_ref());
+    let lane_row = match fenced {
+        Some(Fenced { fence, keep: Some(lease_secs) }) => b.add(CommitAndExtend {
+            lane,
+            version: fence.version,
+            token: fence.token.as_str(),
+            state: state(),
+            drained_id: c.drained_id,
+            lease_secs: *lease_secs,
+        }),
+        Some(Fenced { fence, keep: None }) => b.add(CommitAndRelease {
+            lane,
+            version: fence.version,
+            token: fence.token.as_str(),
+            state: state(),
+            drained_id: c.drained_id,
+        }),
         None => b.add(SelectLane { lane }),
     };
-    let read_task = c.read_task.as_ref().map(|id| b.add(SelectTask { lane, task_id: id }));
-    let out = conn.batch(b.0).await?;
+    let task = c.read_task.as_ref().map(|id| b.add(SelectTask { lane, task_id: id }));
+    CommitReads { lane_row, task }
+}
 
-    let version = match fenced {
-        Some(_) => out.at(lane_row)?.first_int(),
-        None => {
-            out.at(lane_row)?.rows().first().map(LaneRow::from_row).transpose()?.map(|l| l.version)
+/// Where a commit's batch answers with the lane's new version and the answer task.
+struct CommitReads {
+    lane_row: usize,
+    task: Option<usize>,
+}
+
+impl CommitReads {
+    fn committed(
+        self,
+        out: &BatchResult,
+        lane: &str,
+        fence: Option<&Fence>,
+    ) -> Result<Committed, StorageError> {
+        let version = match fence {
+            Some(_) => out.at(self.lane_row)?.first_int(),
+            None => {
+                let row = out.at(self.lane_row)?.rows().first();
+                row.map(LaneRow::from_row).transpose()?.map(|l| l.version)
+            }
+        };
+        let task = match self.task {
+            Some(i) => out.at(i)?.rows().first().map(TaskRow::from_row).transpose()?,
+            None => None,
+        };
+        match (fence, version) {
+            (_, Some(version)) => Ok(Committed { version, task }),
+            (Some(fence), None) => Err(StorageError::VersionConflict {
+                lane: lane.to_owned(),
+                expected: fence.version,
+            }),
+            (None, None) => Err(StorageError::Unavailable("commit: no lane row".into())),
         }
-    };
-    let task = match read_task {
-        Some(i) => out.at(i)?.rows().first().map(TaskRow::from_row).transpose()?,
-        None => None,
-    };
-    match (fenced, version) {
-        (_, Some(version)) => Ok(Committed { version, task }),
-        (Some(Fenced { fence, .. }), None) => {
-            Err(StorageError::VersionConflict { lane: lane.to_owned(), expected: fence.version })
-        }
-        (None, None) => Err(StorageError::Unavailable("commit: no lane row".into())),
     }
 }
 

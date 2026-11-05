@@ -707,33 +707,40 @@ impl Run {
     pub async fn commit(&mut self, opts: CommitOptions) -> Result<Committed, StorageError> {
         self.finish()?;
         let version = self.version();
-        match &self.lease {
-            Some(lease) if self.closed => {
-                lease.release(None).await?;
-                Ok(Committed { version, task: None })
-            }
-            _ => {
-                if self.lease.is_none() {
-                    self.lane.thread.ensure_schema().await?;
-                }
-                let keep = opts.keep_lease;
-                let commit = self.writes(opts)?;
-                match self.send(&commit, keep).await {
-                    Err(StorageError::Uncertain(why)) => {
-                        log::warn!(target: "livekit.agents", lane = self.lane.name(), runId = self.run_id.as_str(); "commit acknowledgment lost, resolving: {why}");
-                        let resolved = self.resolve(&commit, keep, RESOLVE_WAIT).await;
-                        if matches!(resolved, Err(StorageError::Uncertain(_))) {
-                            self.unresolved = Some((commit, keep));
-                        }
-                        resolved
-                    }
-                    Err(StorageError::Invalid(why)) if !commit.app_writes.is_empty() => {
-                        Err(self.refused_commit(&commit, why).await)
-                    }
-                    out => out,
-                }
-            }
+        if let Some(lease) = &self.lease
+            && self.closed
+        {
+            lease.release(None).await?;
+            return Ok(Committed { version, task: None });
         }
+        if self.lease.is_none() {
+            self.lane.thread.ensure_schema().await?;
+        }
+        let keep = opts.keep_lease;
+        let commit = self.writes(opts)?;
+        match self.send(&commit, keep).await {
+            Err(StorageError::Uncertain(why)) => self.resolve_lost_ack(commit, keep, why).await,
+            Err(StorageError::Invalid(why)) if !commit.app_writes.is_empty() => {
+                Err(self.refused_commit(&commit, why).await)
+            }
+            out => out,
+        }
+    }
+
+    /// Resolves a commit whose acknowledgment was lost, keeping it for a later resolution
+    /// while the answer is still uncertain.
+    async fn resolve_lost_ack(
+        &mut self,
+        commit: Commit,
+        keep: bool,
+        why: String,
+    ) -> Result<Committed, StorageError> {
+        log::warn!(target: "livekit.agents", lane = self.lane.name(), runId = self.run_id.as_str(); "commit acknowledgment lost, resolving: {why}");
+        let resolved = self.resolve(&commit, keep, RESOLVE_WAIT).await;
+        if matches!(resolved, Err(StorageError::Uncertain(_))) {
+            self.unresolved = Some((commit, keep));
+        }
+        resolved
     }
 
     /// A commit carrying application SQL the database refused: a lane that moved on aborted it

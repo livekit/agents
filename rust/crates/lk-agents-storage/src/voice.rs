@@ -290,7 +290,35 @@ impl VoiceStore {
             }
         }
     }
+
+    fn settle_in_background(self: &Arc<Self>, speech: u64, history: Vec<ChatItem>, events: Events) {
+        let store = self.clone();
+        self.tasks.spawn(&TokioSpawner::current(), "voice storage settle", async move {
+            let result = store.finish(speech, history).await;
+            let lease_lost = store.lease_lost();
+            let _ = events.push(VoiceStorageEvent::Settled { speech, result, lease_lost });
+        });
+    }
+
+    fn abandon_in_background(self: &Arc<Self>, speech: u64, events: Events) {
+        let store = self.clone();
+        self.tasks.spawn(&TokioSpawner::current(), "voice storage abort", async move {
+            let result = store.abandon(speech).await;
+            let _ = events.push(VoiceStorageEvent::Abandoned { speech, result });
+        });
+    }
+
+    fn report_lease_loss(&self, speech: u64, events: Events) {
+        let observation = self.observe_loss();
+        self.tasks.spawn(&TokioSpawner::current(), "voice lease loss", async move {
+            if observation.await.unwrap_or(false) {
+                let _ = events.push(VoiceStorageEvent::LeaseLost { speech });
+            }
+        });
+    }
 }
+
+type Events = Arc<dyn lk_agents_abi::StreamInput<VoiceStorageEvent>>;
 
 impl VoiceStorage for VoiceStore {
     fn dispatch(
@@ -302,34 +330,15 @@ impl VoiceStorage for VoiceStore {
         if *closing {
             return Err(StorageError::Invalid("the voice store has closed".into()));
         }
+        // Each task is spawned while `closing` is held, so none starts after close.
         match command {
             VoiceStorageCommand::Settle { speech, history } => {
-                let store = self.clone();
-                self.tasks.spawn(&TokioSpawner::current(), "voice storage settle", async move {
-                    let result = store.finish(speech, history).await;
-                    let _ = events.push(VoiceStorageEvent::Settled {
-                        speech,
-                        result,
-                        lease_lost: store.lease_lost(),
-                    });
-                });
+                self.settle_in_background(speech, history, events)
             }
-            VoiceStorageCommand::Abort { speech } => {
-                let store = self.clone();
-                self.tasks.spawn(&TokioSpawner::current(), "voice storage abort", async move {
-                    let result = store.abandon(speech).await;
-                    let _ = events.push(VoiceStorageEvent::Abandoned { speech, result });
-                });
-            }
-            VoiceStorageCommand::ObserveLoss { speech } => {
-                let observation = self.observe_loss();
-                self.tasks.spawn(&TokioSpawner::current(), "voice lease loss", async move {
-                    if observation.await.unwrap_or(false) {
-                        let _ = events.push(VoiceStorageEvent::LeaseLost { speech });
-                    }
-                });
-            }
+            VoiceStorageCommand::Abort { speech } => self.abandon_in_background(speech, events),
+            VoiceStorageCommand::ObserveLoss { speech } => self.report_lease_loss(speech, events),
         }
+        drop(closing);
         Ok(())
     }
 

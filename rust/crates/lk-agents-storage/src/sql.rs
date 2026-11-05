@@ -402,63 +402,112 @@ pub(crate) use {json_cell, statement};
 
 /// Split table/index DDL into statements for an atomic connection batch.
 pub fn schema_statements(schema: &str) -> impl Iterator<Item = &str> {
-    let bytes = schema.as_bytes();
-    let (mut start, mut i) = (0, 0);
-    let mut quote = None;
-    let (mut line_comment, mut block_comment, mut has_sql) = (false, false, false);
-    std::iter::from_fn(move || {
-        while i < bytes.len() {
-            let byte = bytes[i];
-            let next = bytes.get(i + 1).copied();
-            i += 1;
-            if line_comment {
-                line_comment = byte != b'\n';
-            } else if block_comment {
-                if byte == b'*' && next == Some(b'/') {
-                    block_comment = false;
-                    i += 1;
-                }
-            } else if let Some(end) = quote {
-                if byte == end {
-                    if end != b']' && next == Some(end) {
-                        i += 1;
-                    } else {
-                        quote = None;
-                    }
-                }
-            } else {
-                match (byte, next) {
-                    (b'-', Some(b'-')) => {
-                        line_comment = true;
-                        i += 1;
-                    }
-                    (b'/', Some(b'*')) => {
-                        block_comment = true;
-                        i += 1;
-                    }
-                    (b'\'' | b'"' | b'`' | b'[', _) => {
-                        quote = Some(if byte == b'[' { b']' } else { byte });
-                        has_sql = true;
-                    }
-                    (b';', _) => {
-                        let statement = &schema[start..i];
-                        start = i;
-                        if has_sql {
-                            has_sql = false;
-                            return Some(statement.trim());
-                        }
-                    }
-                    _ => has_sql |= !byte.is_ascii_whitespace(),
-                }
+    SchemaStatements { schema, start: 0, i: 0, lex: Lex::Code, has_sql: false }
+}
+
+/// What the DDL splitter is reading.
+#[derive(Clone, Copy)]
+enum Lex {
+    Code,
+    LineComment,
+    BlockComment,
+    /// Inside a quoted string or name, ending at this byte.
+    Quoted(u8),
+}
+
+struct SchemaStatements<'a> {
+    schema: &'a str,
+    /// Where the current statement starts.
+    start: usize,
+    /// The next byte to read.
+    i: usize,
+    lex: Lex,
+    /// The current statement holds more than whitespace and comments.
+    has_sql: bool,
+}
+
+impl<'a> Iterator for SchemaStatements<'a> {
+    type Item = &'a str;
+
+    fn next(&mut self) -> Option<&'a str> {
+        let bytes = self.schema.as_bytes();
+        while self.i < bytes.len() {
+            let byte = bytes[self.i];
+            let next = bytes.get(self.i + 1).copied();
+            self.i += 1;
+            if let Some(statement) = self.step(byte, next) {
+                return Some(statement);
             }
         }
-        if has_sql {
-            has_sql = false;
-            Some(schema[start..].trim())
-        } else {
-            None
+        if !self.has_sql {
+            return None;
         }
-    })
+        self.has_sql = false;
+        let schema = self.schema;
+        Some(schema[self.start..].trim())
+    }
+}
+
+impl<'a> SchemaStatements<'a> {
+    /// Reads one byte; a `;` outside comments and quotes ends a statement.
+    fn step(&mut self, byte: u8, next: Option<u8>) -> Option<&'a str> {
+        match self.lex {
+            Lex::Code => return self.code(byte, next),
+            Lex::LineComment if byte == b'\n' => self.lex = Lex::Code,
+            Lex::LineComment => {}
+            Lex::BlockComment if byte == b'*' && next == Some(b'/') => {
+                self.lex = Lex::Code;
+                self.i += 1;
+            }
+            Lex::BlockComment => {}
+            Lex::Quoted(end) => self.quoted(byte, next, end),
+        }
+        None
+    }
+
+    fn code(&mut self, byte: u8, next: Option<u8>) -> Option<&'a str> {
+        match (byte, next) {
+            (b'-', Some(b'-')) => {
+                self.lex = Lex::LineComment;
+                self.i += 1;
+            }
+            (b'/', Some(b'*')) => {
+                self.lex = Lex::BlockComment;
+                self.i += 1;
+            }
+            (b'\'' | b'"' | b'`' | b'[', _) => {
+                self.lex = Lex::Quoted(if byte == b'[' { b']' } else { byte });
+                self.has_sql = true;
+            }
+            (b';', _) => return self.end_statement(),
+            _ => self.has_sql |= !byte.is_ascii_whitespace(),
+        }
+        None
+    }
+
+    /// A doubled closing quote escapes itself, except in a bracketed name.
+    fn quoted(&mut self, byte: u8, next: Option<u8>, end: u8) {
+        if byte != end {
+            return;
+        }
+        if end != b']' && next == Some(end) {
+            self.i += 1;
+        } else {
+            self.lex = Lex::Code;
+        }
+    }
+
+    /// Ends the statement at the `;` just read; one of only comments and whitespace is skipped.
+    fn end_statement(&mut self) -> Option<&'a str> {
+        let schema = self.schema;
+        let statement = &schema[self.start..self.i];
+        self.start = self.i;
+        if !self.has_sql {
+            return None;
+        }
+        self.has_sql = false;
+        Some(statement.trim())
+    }
 }
 
 #[cfg(test)]

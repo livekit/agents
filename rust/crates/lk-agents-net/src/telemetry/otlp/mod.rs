@@ -23,7 +23,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime};
 
-use lk_agents_abi::telemetry::record::{JobKey, Record, RecordSink};
+use lk_agents_abi::telemetry::record::{JobKey, Record, RecordSink, SpanRecord};
 use lk_agents_abi::{Clock, OwnedTask, Spawner, SpawnerExt as _, Ts, before, timeout};
 use parking_lot::Mutex;
 use tokio::sync::Notify;
@@ -34,7 +34,7 @@ pub use config::{
     Temporality,
 };
 pub use destination::Limits;
-use destination::{App, Batch, Cloud, State, Take};
+use destination::{App, AppSpan, Batch, Cloud, State, Take};
 use lk_agents_core::telemetry::policy::ContentPolicy;
 
 const SPAN_INTERVAL: Duration = Duration::from_secs(1);
@@ -329,28 +329,7 @@ impl Shared {
         match batch {
             Batch::Cloud { identity, recording, payload, .. } => {
                 let Some(cloud) = cloud else { return Outcome::Sent };
-                let resource = encode::cloud_resource(&process, &identity);
-                let stamp = encode::cloud_stamp(&process, &identity, &recording);
-                let policy = ContentPolicy::cloud(recording.redaction);
-                let (signal, body) = match payload {
-                    Cloud::Spans(mut spans) => {
-                        for span in &mut spans {
-                            policy.span(span);
-                            encode::stamp(&mut span.attributes, &stamp);
-                        }
-                        ("traces", encode::body(&encode::traces_request(resource, &spans), true))
-                    }
-                    Cloud::Logs(mut logs) => {
-                        for log in &mut logs {
-                            policy.log(log);
-                            encode::stamp(&mut log.attributes, &stamp);
-                        }
-                        ("logs", encode::body(&encode::logs_request(resource, &logs), true))
-                    }
-                    Cloud::Metrics(metrics) => {
-                        ("metrics", encode::body(&encode::metrics_request(resource, metrics), true))
-                    }
-                };
+                let (signal, body) = cloud_request(&process, &identity, &recording, payload);
                 let body = match body {
                     Ok(body) => body,
                     Err(error) => return Outcome::Failed(error),
@@ -361,53 +340,93 @@ impl Shared {
                     Err(error) => Outcome::Failed(error.to_string()),
                 }
             }
-            Batch::App { config, payload } => {
-                let resource = encode::app_resource(&process, &config.resource);
-                let (url, body) = match payload {
-                    App::Spans(spans) => {
-                        let policy = ContentPolicy::application(config.allow_pii);
-                        let spans: Vec<_> = spans
-                            .into_iter()
-                            .map(|mut queued| {
-                                policy.span(&mut queued.span);
-                                if let Some(job) = &queued.job {
-                                    let mut stamp = encode::app_stamp(&process, job);
-                                    policy.attributes(&mut stamp);
-                                    encode::stamp(&mut queued.span.attributes, &stamp);
-                                }
-                                encode::stamp(&mut queued.span.attributes, &config.metadata);
-                                queued.span
-                            })
-                            .collect();
-                        let body =
-                            encode::body(&encode::traces_request(resource, &spans), config.gzip);
-                        (&config.traces_endpoint, body)
-                    }
-                    App::Metrics(metrics) => {
-                        let request = encode::metrics_request(resource, metrics);
-                        (&config.metrics_endpoint, encode::body(&request, config.gzip))
-                    }
-                };
-                let Some(url) = url else { return Outcome::Sent };
-                let body = match body {
-                    Ok(body) => body,
-                    Err(error) => return Outcome::Failed(error),
-                };
-                let client = match cloud::client().await {
-                    Ok(client) => client,
-                    Err(error) => return Outcome::Failed(error),
-                };
-                let mut request = body.attach(client.post(url));
-                for (key, value) in &config.headers {
-                    request = request.header(key, value);
-                }
-                match request.send().await {
-                    Ok(response) => Outcome::of(cloud::answer(response, false).await, url),
-                    Err(error) => Outcome::Failed(error.to_string()),
-                }
-            }
+            Batch::App { config, payload } => export_app(&process, &config, payload).await,
         }
     }
+}
+
+/// One job's Cloud request, under Cloud's content policy and the job's identity stamp, and
+/// the signal it is posted as.
+fn cloud_request(
+    process: &ProcessIdentity,
+    identity: &JobIdentity,
+    recording: &CloudRecording,
+    payload: Cloud,
+) -> (&'static str, Result<encode::Body, String>) {
+    let resource = encode::cloud_resource(process, identity);
+    let stamp = encode::cloud_stamp(process, identity, recording);
+    let policy = ContentPolicy::cloud(recording.redaction);
+    match payload {
+        Cloud::Spans(mut spans) => {
+            for span in &mut spans {
+                policy.span(span);
+                encode::stamp(&mut span.attributes, &stamp);
+            }
+            ("traces", encode::body(&encode::traces_request(resource, &spans), true))
+        }
+        Cloud::Logs(mut logs) => {
+            for log in &mut logs {
+                policy.log(log);
+                encode::stamp(&mut log.attributes, &stamp);
+            }
+            ("logs", encode::body(&encode::logs_request(resource, &logs), true))
+        }
+        Cloud::Metrics(metrics) => {
+            ("metrics", encode::body(&encode::metrics_request(resource, metrics), true))
+        }
+    }
+}
+
+async fn export_app(process: &ProcessIdentity, config: &AppConfig, payload: App) -> Outcome {
+    let resource = encode::app_resource(process, &config.resource);
+    let (url, body) = match payload {
+        App::Spans(spans) => {
+            let spans = stamp_app_spans(process, config, spans);
+            let body = encode::body(&encode::traces_request(resource, &spans), config.gzip);
+            (&config.traces_endpoint, body)
+        }
+        App::Metrics(metrics) => {
+            let request = encode::metrics_request(resource, metrics);
+            (&config.metrics_endpoint, encode::body(&request, config.gzip))
+        }
+    };
+    let Some(url) = url else { return Outcome::Sent };
+    let body = match body {
+        Ok(body) => body,
+        Err(error) => return Outcome::Failed(error),
+    };
+    let client = match cloud::client().await {
+        Ok(client) => client,
+        Err(error) => return Outcome::Failed(error),
+    };
+    let mut request = body.attach(client.post(url));
+    for (key, value) in &config.headers {
+        request = request.header(key, value);
+    }
+    match request.send().await {
+        Ok(response) => Outcome::of(cloud::answer(response, false).await, url),
+        Err(error) => Outcome::Failed(error.to_string()),
+    }
+}
+
+/// The application's content policy, then its job stamp and metadata, on each span.
+fn stamp_app_spans(
+    process: &ProcessIdentity,
+    config: &AppConfig,
+    spans: Vec<AppSpan>,
+) -> Vec<SpanRecord> {
+    let policy = ContentPolicy::application(config.allow_pii);
+    let stamped = spans.into_iter().map(|mut queued| {
+        policy.span(&mut queued.span);
+        if let Some(job) = &queued.job {
+            let mut stamp = encode::app_stamp(process, job);
+            policy.attributes(&mut stamp);
+            encode::stamp(&mut queued.span.attributes, &stamp);
+        }
+        encode::stamp(&mut queued.span.attributes, &config.metadata);
+        queued.span
+    });
+    stamped.collect()
 }
 
 impl Outcome {

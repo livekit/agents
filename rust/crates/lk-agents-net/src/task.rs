@@ -12,8 +12,8 @@ use parking_lot::Mutex;
 use std::task::Poll;
 
 use lk_agents_abi::{
-    BoxFuture, Clock, Launch, OwnedTask, Spawner, SpawnerExt, TaskControl, TaskError, TaskOutcome,
-    Ts,
+    BoxFuture, Clock, Launch, OwnedTask, Settle, Spawner, SpawnerExt, TaskControl, TaskError,
+    TaskOutcome, Ts,
 };
 use tokio::runtime::Handle;
 use tokio::sync::{Notify, oneshot, watch};
@@ -35,51 +35,64 @@ impl TaskControl for Control {
 /// outcome is reported last; a panic is reported, then resumed into the executor.
 pub fn launch(task: Launch) -> (BoxFuture<'static, ()>, OwnedTask<Box<dyn Any + Send>>) {
     let Launch { work, settled, site: _ } = task;
-    let (cancel, mut cancelled) = watch::channel(false);
+    let (cancel, cancelled) = watch::channel(false);
     let (report, done) = oneshot::channel();
-    let run = async move {
-        let mut panic = None;
-        let result = {
-            let mut work = work;
-            // A dropped control without a request is detached work: it runs on.
-            let mut requested = std::pin::pin!(async {
-                if cancelled.wait_for(|requested| *requested).await.is_err() {
-                    std::future::pending::<()>().await;
-                }
-            });
-            std::future::poll_fn(|cx| {
-                if requested.as_mut().poll(cx).is_ready() {
-                    return Poll::Ready(Err(TaskError::Cancelled));
-                }
-                match std::panic::catch_unwind(AssertUnwindSafe(|| work.as_mut().poll(cx))) {
-                    Ok(Poll::Pending) => Poll::Pending,
-                    Ok(Poll::Ready(value)) => Poll::Ready(Ok(value)),
-                    Err(payload) => {
-                        let message = payload
-                            .downcast_ref::<&str>()
-                            .map(|m| (*m).to_owned())
-                            .or_else(|| payload.downcast_ref::<String>().cloned())
-                            .unwrap_or_else(|| "non-string payload".to_owned());
-                        panic = Some(payload);
-                        Poll::Ready(Err(TaskError::Panicked(message)))
-                    }
-                }
-            })
-            .await
-        };
-        if let Some(settled) = settled {
-            let outcome =
-                result.as_ref().map_or_else(TaskError::outcome, |_| TaskOutcome::Completed);
-            settled(outcome).await;
-        }
-        let _ = report.send(result);
-        drop(cancelled);
-        if let Some(payload) = panic {
-            std::panic::resume_unwind(payload);
-        }
-    };
+    let run = run_launched(work, settled, cancelled, report);
     let output = Box::pin(async move { done.await.unwrap_or(Err(TaskError::Cancelled)) });
     (Box::pin(run), OwnedTask::new(Arc::new(Control(cancel)), output))
+}
+
+type Launched = Box<dyn Any + Send>;
+
+async fn run_launched(
+    work: BoxFuture<'static, Launched>,
+    settled: Option<Settle>,
+    mut cancelled: watch::Receiver<bool>,
+    report: oneshot::Sender<Result<Launched, TaskError>>,
+) {
+    let mut panic = None;
+    let result = {
+        // The work is dropped at the end of this block, before `settled` runs.
+        let mut work = work;
+        // A dropped control without a request is detached work: it runs on.
+        let mut requested = std::pin::pin!(async {
+            if cancelled.wait_for(|requested| *requested).await.is_err() {
+                std::future::pending::<()>().await;
+            }
+        });
+        std::future::poll_fn(|cx| {
+            if requested.as_mut().poll(cx).is_ready() {
+                return Poll::Ready(Err(TaskError::Cancelled));
+            }
+            match std::panic::catch_unwind(AssertUnwindSafe(|| work.as_mut().poll(cx))) {
+                Ok(Poll::Pending) => Poll::Pending,
+                Ok(Poll::Ready(value)) => Poll::Ready(Ok(value)),
+                Err(payload) => {
+                    let message = panic_message(&*payload);
+                    panic = Some(payload);
+                    Poll::Ready(Err(TaskError::Panicked(message)))
+                }
+            }
+        })
+        .await
+    };
+    if let Some(settled) = settled {
+        let outcome = result.as_ref().map_or_else(TaskError::outcome, |_| TaskOutcome::Completed);
+        settled(outcome).await;
+    }
+    let _ = report.send(result);
+    drop(cancelled);
+    if let Some(payload) = panic {
+        std::panic::resume_unwind(payload);
+    }
+}
+
+fn panic_message(payload: &(dyn Any + Send)) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .map(|m| (*m).to_owned())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "non-string payload".to_owned())
 }
 
 /// Never builds a runtime: an import-time thread would not survive the forkserver's `fork()`.
@@ -242,15 +255,14 @@ impl TaskSet {
             if self.is_empty() {
                 return true;
             }
-            match deadline {
-                None => notified.await,
-                Some(at) => {
-                    tokio::select! {
-                        biased;
-                        _ = &mut notified => {}
-                        _ = clock.wait_until(at) => return self.is_empty(),
-                    }
-                }
+            let Some(at) = deadline else {
+                notified.await;
+                continue;
+            };
+            tokio::select! {
+                biased;
+                _ = &mut notified => {}
+                _ = clock.wait_until(at) => return self.is_empty(),
             }
         }
     }

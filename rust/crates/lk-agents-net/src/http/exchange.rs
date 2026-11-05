@@ -129,12 +129,7 @@ impl Exchange {
     pub async fn next(&mut self) -> Result<HttpEvent, ApiError> {
         let expecting = self.response_expected.then(|| self.reporter.clock.now());
         loop {
-            // Observations already queued precede a wall-clock wake. This matters when a
-            // consumer briefly stops pulling: transport progress keeps its original time.
-            while let Ok(observed) = self.observations.try_recv() {
-                self.observed(observed, expecting);
-            }
-            self.wake(self.reporter.clock.now(), expecting);
+            self.catch_up(expecting);
             if let Some(error) = self.error.take() {
                 return Err(error);
             }
@@ -156,45 +151,80 @@ impl Exchange {
                 Some(observed) = self.observations.recv() => self.observed(observed, expecting),
                 () = async { clock.wait_until(wake.unwrap_or(Ts::from_nanos(u64::MAX))).await }, if wake.is_some() => {},
                 result = async { sending.as_mut().expect("sending guarded").await }, if is_sending => {
-                    self.sending = None;
-                    while let Ok(observed) = self.observations.try_recv() {
-                        self.observed(observed, expecting);
-                    }
-                    let now = self.reporter.clock.now();
-                    self.wake(now, expecting);
-                    if self.core.current().is_none() { continue; }
-                    match result {
-                        Ok(response) => {
-                            self.core.progress(self.core.current().expect("active attempt"), now);
-                            self.status = Some(response.status());
-                            let headers = response.headers().clone();
-                            self.body = Some(Box::pin(response.bytes_stream()));
-                            return Ok(HttpEvent::Headers(headers));
-                        }
-                        Err(failure) => self.failed(failure, now),
+                    if let Some(event) = self.on_response(result, expecting) {
+                        return Ok(event);
                     }
                 },
                 chunk = async { body.as_mut().expect("body guarded").next().await }, if is_reading => {
-                    let now = self.reporter.clock.now();
-                    self.wake(now, expecting);
-                    let Some(attempt) = self.core.current() else { continue; };
-                    match chunk {
-                        Some(Ok(bytes)) => {
-                            self.core.progress(attempt, now);
-                            return Ok(HttpEvent::Bytes(bytes));
-                        }
-                        Some(Err(error)) => self.failed(AttemptFailure::Connection(error_chain(&error)), now),
-                        None => {
-                            self.core.succeeded(attempt, now);
-                            let mut steps = Vec::new();
-                            self.core.closed(attempt, now, &mut steps);
-                            self.apply(steps);
-                            self.body = None;
-                            self.ended = true;
-                            return Ok(HttpEvent::End);
-                        }
+                    if let Some(event) = self.on_chunk(chunk, expecting) {
+                        return Ok(event);
                     }
                 },
+            }
+        }
+    }
+
+    /// Observations already queued precede a wall-clock wake. This matters when a consumer
+    /// briefly stops pulling: transport progress keeps its original time.
+    fn catch_up(&mut self, expecting: Option<Ts>) -> Ts {
+        while let Ok(observed) = self.observations.try_recv() {
+            self.observed(observed, expecting);
+        }
+        let now = self.reporter.clock.now();
+        self.wake(now, expecting);
+        now
+    }
+
+    /// `None` keeps waiting: the attempt failed, or it is no longer the current one.
+    fn on_response(
+        &mut self,
+        result: Result<reqwest::Response, AttemptFailure>,
+        expecting: Option<Ts>,
+    ) -> Option<HttpEvent> {
+        self.sending = None;
+        let now = self.catch_up(expecting);
+        let attempt = self.core.current()?;
+        match result {
+            Ok(response) => {
+                self.core.progress(attempt, now);
+                self.status = Some(response.status());
+                let headers = response.headers().clone();
+                self.body = Some(Box::pin(response.bytes_stream()));
+                Some(HttpEvent::Headers(headers))
+            }
+            Err(failure) => {
+                self.failed(failure, now);
+                None
+            }
+        }
+    }
+
+    /// `None` keeps waiting: the read failed, or its attempt is no longer the current one.
+    fn on_chunk(
+        &mut self,
+        chunk: Option<Result<Bytes, reqwest::Error>>,
+        expecting: Option<Ts>,
+    ) -> Option<HttpEvent> {
+        let now = self.reporter.clock.now();
+        self.wake(now, expecting);
+        let attempt = self.core.current()?;
+        match chunk {
+            Some(Ok(bytes)) => {
+                self.core.progress(attempt, now);
+                Some(HttpEvent::Bytes(bytes))
+            }
+            Some(Err(error)) => {
+                self.failed(AttemptFailure::Connection(error_chain(&error)), now);
+                None
+            }
+            None => {
+                self.core.succeeded(attempt, now);
+                let mut steps = Vec::new();
+                self.core.closed(attempt, now, &mut steps);
+                self.apply(steps);
+                self.body = None;
+                self.ended = true;
+                Some(HttpEvent::End)
             }
         }
     }
@@ -249,34 +279,8 @@ impl Exchange {
     fn apply(&mut self, steps: Vec<AttemptStep>) {
         for step in steps {
             match step {
-                AttemptStep::Launch(attempt) => {
-                    let http = self.http.clone();
-                    let request = self.request.clone();
-                    let reporter = self.reporter.clone();
-                    let method = self.method.clone();
-                    let policy = self.response_policy;
-                    self.status = None;
-                    self.sending = Some(Box::pin(async move {
-                        match policy {
-                            ResponsePolicy::Successful => {
-                                http.send_method(method, request, &reporter, |sent| (attempt, sent))
-                                    .await
-                            }
-                            ResponsePolicy::Protocol => {
-                                http.send_raw(method, request, &reporter, |sent| (attempt, sent))
-                                    .await
-                            }
-                        }
-                    }));
-                    self.started = true;
-                }
-                AttemptStep::Stop(attempt) => {
-                    self.sending = None;
-                    self.body = None;
-                    let mut released = Vec::new();
-                    self.core.closed(attempt, self.now, &mut released);
-                    self.apply(released);
-                }
+                AttemptStep::Launch(attempt) => self.launch(attempt),
+                AttemptStep::Stop(attempt) => self.stop(attempt),
                 AttemptStep::GiveUp(error) => self.error = Some(error),
                 AttemptStep::Retry { .. } => {}
                 AttemptStep::CleanupIncomplete(_) | AttemptStep::Unresolved => {
@@ -284,5 +288,32 @@ impl Exchange {
                 }
             }
         }
+    }
+
+    fn launch(&mut self, attempt: u32) {
+        let http = self.http.clone();
+        let request = self.request.clone();
+        let reporter = self.reporter.clone();
+        let method = self.method.clone();
+        let policy = self.response_policy;
+        self.status = None;
+        self.sending = Some(Box::pin(async move {
+            let tag = |sent| (attempt, sent);
+            match policy {
+                ResponsePolicy::Successful => {
+                    http.send_method(method, request, &reporter, tag).await
+                }
+                ResponsePolicy::Protocol => http.send_raw(method, request, &reporter, tag).await,
+            }
+        }));
+        self.started = true;
+    }
+
+    fn stop(&mut self, attempt: u32) {
+        self.sending = None;
+        self.body = None;
+        let mut released = Vec::new();
+        self.core.closed(attempt, self.now, &mut released);
+        self.apply(released);
     }
 }

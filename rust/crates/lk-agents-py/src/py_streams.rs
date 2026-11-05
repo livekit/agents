@@ -395,14 +395,7 @@ impl<I: Send + Sync + 'static> StreamInput<I> for HostSink<I> {
             let started = Python::attach(|py| {
                 let (target, to_host) = (shared.target.clone_ref(py), shared.to_host);
                 start_in(py, shared.event_loop.bind(py), shared.ctx.bind(py), move |py| {
-                    let target = target.bind(py);
-                    match entry {
-                        Entry::Item(item) => {
-                            access::StreamInput::push(target)?.call1((to_host(py, item)?,))
-                        }
-                        Entry::Flush => access::StreamInput::flush(target)?.call0(),
-                        Entry::EndInput => access::StreamInput::end_input(target)?.call0(),
-                    }
+                    call_input(py, target.bind(py), to_host, entry)
                 })
             });
             let sent = match started {
@@ -415,6 +408,20 @@ impl<I: Send + Sync + 'static> StreamInput<I> for HostSink<I> {
                 e
             })
         })
+    }
+}
+
+/// Calls the host input's method for `entry`, returning what it returned (maybe awaitable).
+fn call_input<'py, I>(
+    py: Python<'py>,
+    target: &Bound<'py, PyAny>,
+    to_host: ToHost<I>,
+    entry: Entry<I>,
+) -> PyResult<Bound<'py, PyAny>> {
+    match entry {
+        Entry::Item(item) => access::StreamInput::push(target)?.call1((to_host(py, item)?,)),
+        Entry::Flush => access::StreamInput::flush(target)?.call0(),
+        Entry::EndInput => access::StreamInput::end_input(target)?.call0(),
     }
 }
 

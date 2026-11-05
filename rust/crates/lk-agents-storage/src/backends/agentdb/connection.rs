@@ -309,6 +309,29 @@ struct Socket {
     ping_interval: Duration,
 }
 
+impl Socket {
+    /// An error when the writer stopped, nothing (not even a pong) arrived within the read
+    /// deadline, or the socket ended or failed.
+    async fn next_message(&mut self) -> Result<Message, WsdbError> {
+        let next = async {
+            match self.read_deadline {
+                Some(d) => tokio::time::timeout(d, self.read.next()).await.ok(),
+                None => Some(self.read.next().await),
+            }
+        };
+        let next = tokio::select! {
+            next = next => next,
+            _ = &mut self.writer_gone => return Err(WsdbError::Io("the socket stopped sending".into())),
+        };
+        match next {
+            None => Err(WsdbError::Timeout), // not even a pong within the deadline
+            Some(Some(Ok(message))) => Ok(message),
+            Some(None) => Err(WsdbError::Io("socket closed".into())),
+            Some(Some(Err(e))) => Err(WsdbError::Io(e.to_string())),
+        }
+    }
+}
+
 impl Conn {
     /// Dials, says `Hello`, and starts the supervisor on `runtime`.
     pub async fn dial(
@@ -482,37 +505,30 @@ impl Conn {
 
     async fn read_loop(&self, socket: &mut Socket) -> WsdbError {
         loop {
-            let next = async {
-                match socket.read_deadline {
-                    Some(d) => tokio::time::timeout(d, socket.read.next()).await.ok(),
-                    None => Some(socket.read.next().await),
-                }
+            let routed = match socket.next_message().await {
+                Ok(Message::Binary(bytes)) => self.route_response(bytes.as_ref()),
+                Ok(Message::Close(_)) => Err(WsdbError::Io("socket closed".into())),
+                Ok(_) => Ok(()),
+                Err(error) => Err(error),
             };
-            let next = tokio::select! {
-                next = next => next,
-                _ = &mut socket.writer_gone => return WsdbError::Io("the socket stopped sending".into()),
-            };
-            let Some(next) = next else {
-                return WsdbError::Timeout; // not even a pong within the deadline
-            };
-            match next {
-                Some(Ok(Message::Binary(bytes))) => match pb::ServerMessage::decode(bytes.as_ref())
-                {
-                    Ok(resp)
-                        if matches!(resp.message, Some(pb::server_message::Message::Pong(_))) => {}
-                    Ok(resp) => {
-                        let st = self.0.state.lock();
-                        if let Some(ch) = st.pending.get(&resp.request_id) {
-                            let _ = ch.send(resp);
-                        }
-                    }
-                    Err(e) => return WsdbError::Protocol(e.to_string()),
-                },
-                Some(Ok(Message::Close(_))) | None => return WsdbError::Io("socket closed".into()),
-                Some(Ok(_)) => {}
-                Some(Err(e)) => return WsdbError::Io(e.to_string()),
+            if let Err(error) = routed {
+                return error;
             }
         }
+    }
+
+    /// Hands a response to the request awaiting it; a pong only proves the socket is alive.
+    fn route_response(&self, bytes: &[u8]) -> Result<(), WsdbError> {
+        let resp =
+            pb::ServerMessage::decode(bytes).map_err(|e| WsdbError::Protocol(e.to_string()))?;
+        if matches!(resp.message, Some(pb::server_message::Message::Pong(_))) {
+            return Ok(());
+        }
+        let st = self.0.state.lock();
+        if let Some(ch) = st.pending.get(&resp.request_id) {
+            let _ = ch.send(resp);
+        }
+        Ok(())
     }
 
     /// Fails everything in flight and closes the ready gate. Only after the read loop returned, so

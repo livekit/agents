@@ -247,21 +247,23 @@ fn drain(entries: Receiver<Entry>) {
     IN_DRAIN.set(true);
     for entry in entries {
         match entry {
-            Entry::Line(line) => Python::attach(|py| {
-                let dropped = forwarder().dropped.swap(0, Ordering::Relaxed);
-                if dropped > 0 {
-                    let note = format!("{dropped} log lines were dropped: the queue was full");
-                    let _ =
-                        emit(py, &Line { level: Level::Warn, message: note, ..line.clone_meta() });
-                }
-                if let Err(error) = emit(py, &line) {
-                    error.print(py);
-                }
-            }),
+            Entry::Line(line) => Python::attach(|py| forward_line(py, &line)),
             Entry::Flush(done) => {
                 let _ = done.send(());
             }
         }
+    }
+}
+
+/// Emits the line, preceded by a note of the lines dropped since the last one.
+fn forward_line(py: Python<'_>, line: &Line) {
+    let dropped = forwarder().dropped.swap(0, Ordering::Relaxed);
+    if dropped > 0 {
+        let note = format!("{dropped} log lines were dropped: the queue was full");
+        let _ = emit(py, &Line { level: Level::Warn, message: note, ..line.clone_meta() });
+    }
+    if let Err(error) = emit(py, line) {
+        error.print(py);
     }
 }
 

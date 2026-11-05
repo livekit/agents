@@ -6,6 +6,9 @@ pub mod host;
 pub mod remote;
 
 use std::collections::BTreeMap;
+use std::future::Future;
+use std::ops::ControlFlow;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 
@@ -23,13 +26,17 @@ use crate::env::ProcessEnv;
 use crate::http::GatewayHttp;
 use crate::http::exchange::{Exchange, HttpEvent};
 use crate::source::{PullError, Pulled, SharedStream};
-use crate::sse::SseDecoder;
+use crate::sse::{SseDecoder, SseEvent};
 use crate::task::TokioSpawner;
 use lk_agents_abi::{OwnedTask, SpawnerExt, TaskOutcome};
 use parking_lot::Mutex;
 
 const RESPONSE_LIMIT: usize = 8 * 1024 * 1024;
 const UPDATE_QUEUE: usize = 16;
+/// The reason sent when the caller's exit or a failed exchange cancels the remote task.
+const CALLER_CANCELED: &str = "caller-canceled";
+/// The media type of a streamed (SSE) reply.
+const EVENT_STREAM: &str = "text/event-stream";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CleanupObservation {
@@ -189,148 +196,41 @@ impl AgentClient {
 
     async fn start(&self, id: u64, request: Request) -> Result<Reply, ClientError> {
         self.inner.ensure_open()?;
-        let expected = request.task.clone();
-        let (tx, rx) = mpsc::channel(UPDATE_QUEUE);
+        let (updates, rx) = mpsc::channel(UPDATE_QUEUE);
         let (ack, acknowledged) = oneshot::channel();
         let (admit, admitted) = oneshot::channel();
         let (done, settled) = watch::channel(false);
-        let (cancel, mut cancelled) = watch::channel(false);
-        let (delivered, mut delivery) = watch::channel(false);
-        let (known, mut known_task) = watch::channel(expected.clone());
-        let remote = known_task.clone();
+        let (cancel, cancelled) = watch::channel(false);
+        let (delivered, consumed) = watch::channel(false);
+        let (known, identity) = watch::channel(request.task.clone());
+        let remote = identity.clone();
         let terminal = Arc::new(AtomicBool::new(false));
-        let work_inner = self.inner.clone();
-        let work_terminal = terminal.clone();
-        let cleanup_inner = self.inner.clone();
-        let task_response = request.task_response;
-        let work = async move {
-            if admitted.await.is_err() {
-                return;
-            }
-            let mut ack = Some(ack);
-            let result = {
-                let exchange =
-                    exchange(&work_inner, request, &mut ack, &tx, &work_terminal, &known);
-                tokio::pin!(exchange);
-                tokio::select! {
-                    biased;
-                    _ = cancelled.changed() => {
-                        let cleanup = async {
-                            if task_response {
-                                if let Err(error) = exchange.as_mut().await
-                                    && let Some(task) = known_task.borrow().clone()
-                                {
-                                    work_inner.observe(CleanupObservation::CancelUncertain {
-                                        task,
-                                        error: error.to_string(),
-                                    });
-                                }
-                                return;
-                            }
-                            // Keep the original send alive until its ack; resending a business
-                            // request just to discover its task could duplicate a remote effect.
-                            let task = loop {
-                                if let Some(task) = known_task.borrow_and_update().clone() {
-                                    break Some(task);
-                                }
-                                tokio::select! {
-                                    _ = known_task.changed() => {},
-                                    _ = &mut exchange => break known_task.borrow().clone(),
-                                }
-                            };
-                            match task {
-                                Some(task) if !work_terminal.load(Ordering::Acquire) => {
-                                    let reason = Some("caller-canceled");
-                                    let cancel = work_inner.cancel_remote(&task, reason);
-                                    if let Err(error) = cancel.await {
-                                        work_inner.observe(CleanupObservation::CancelUncertain {
-                                            task,
-                                            error: error.to_string(),
-                                        });
-                                    }
-                                }
-                                Some(_) => {},
-                                None => work_inner.observe(
-                                    CleanupObservation::UnacknowledgedRequest { request: id },
-                                ),
-                            }
-                        };
-                        tokio::pin!(cleanup);
-                        let teardown = tokio::time::timeout(HOST_TEARDOWN_TIMEOUT, &mut cleanup);
-                        if teardown.await.is_err() {
-                            let requests = vec![id];
-                            work_inner.observe(CleanupObservation::Incomplete { requests });
-                            cleanup.await;
-                        }
-                        Err(ClientError::Closed)
-                    },
-                    result = &mut exchange => result,
-                }
-            };
-            if result.is_ok() && !work_terminal.load(Ordering::Acquire) && !*delivery.borrow() {
-                // Until the recipient consumes a buffered question, abandoning its reply
-                // still owes cancellation of the nonterminal remote task.
-                tokio::select! {
-                    _ = delivery.changed() => {},
-                    _ = cancelled.changed() => {},
-                }
-                if !*delivery.borrow() {
-                    let task = known_task.borrow().clone();
-                    if let Some(task) = task {
-                        work_inner.cancel_owned(&task).await;
-                    }
-                }
-            }
-            if let Err(error) = result {
-                if let Some(ack) = ack.take() {
-                    let _ = ack.send(Err(error.clone()));
-                }
-                if !*cancelled.borrow() {
-                    if !work_terminal.load(Ordering::Acquire) {
-                        let task = known_task.borrow().clone();
-                        if let Some(task) = task {
-                            if task_response {
-                                work_inner.observe(CleanupObservation::CancelUncertain {
-                                    task,
-                                    error: error.to_string(),
-                                });
-                            } else {
-                                work_inner.cancel_owned(&task).await;
-                            }
-                        } else if !matches!(error, ClientError::Rpc { .. }) {
-                            work_inner
-                                .observe(CleanupObservation::UnacknowledgedRequest { request: id });
-                        }
-                    }
-                    tokio::select! {
-                        _ = tx.send(Err(error)) => {},
-                        _ = cancelled.changed() => {},
-                    }
-                }
-            }
+        let call = RemoteCall {
+            delivery: Delivery {
+                inner: self.inner.clone(),
+                ack: Some(ack),
+                updates,
+                identity: known,
+                terminal: terminal.clone(),
+            },
+            task: RemoteTask {
+                inner: self.inner.clone(),
+                id,
+                task_response: request.task_response,
+                identity,
+                terminal: terminal.clone(),
+            },
+            cancelled,
+            consumed,
         };
+        let inner = self.inner.clone();
         let task = TokioSpawner::new(self.inner.runtime.clone()).spawn_settled(
-            work,
+            call.run(request, admitted),
             move |outcome| async move {
-                {
-                    let inner = cleanup_inner;
-                    if outcome != TaskOutcome::Completed && !terminal.load(Ordering::Acquire) {
-                        let task = remote.borrow().clone();
-                        match task {
-                            Some(task) => {
-                                inner.cancel_owned(&task).await;
-                            }
-                            None => inner
-                                .observe(CleanupObservation::UnacknowledgedRequest { request: id }),
-                        }
-                    }
-                    let mut operations = inner.operations.lock();
-                    operations.remove(&id);
-                    // One scope: no exchange settles between the check and the close.
-                    if operations.is_empty() && inner.closed.load(Ordering::Acquire) {
-                        inner.core.lock().close();
-                    }
-                }
+                inner.cancel_unfinished_call(id, outcome, &terminal, &remote).await;
+                inner.forget_call(id);
+                // The client is released before the call is announced settled.
+                drop(inner);
                 done.send_replace(true);
             },
         );
@@ -489,7 +389,7 @@ impl Inner {
     }
 
     async fn cancel_owned(&self, task: &TaskRef) {
-        let cancellation = self.cancel_remote(task, Some("caller-canceled"));
+        let cancellation = self.cancel_remote(task, Some(CALLER_CANCELED));
         tokio::pin!(cancellation);
         let result = match tokio::time::timeout(HOST_TEARDOWN_TIMEOUT, &mut cancellation).await {
             Ok(result) => result,
@@ -504,6 +404,217 @@ impl Inner {
                 error: error.to_string(),
             });
         }
+    }
+
+    /// A call whose task did not complete still owes its nonterminal remote task a cancel.
+    async fn cancel_unfinished_call(
+        &self,
+        id: u64,
+        outcome: TaskOutcome,
+        terminal: &AtomicBool,
+        remote: &watch::Receiver<Option<TaskRef>>,
+    ) {
+        if outcome == TaskOutcome::Completed || terminal.load(Ordering::Acquire) {
+            return;
+        }
+        let task = remote.borrow().clone();
+        match task {
+            Some(task) => self.cancel_owned(&task).await,
+            None => self.observe(CleanupObservation::UnacknowledgedRequest { request: id }),
+        }
+    }
+
+    fn forget_call(&self, id: u64) {
+        let mut operations = self.operations.lock();
+        operations.remove(&id);
+        // One scope: no exchange settles between the check and the close.
+        if operations.is_empty() && self.closed.load(Ordering::Acquire) {
+            self.core.lock().close();
+        }
+    }
+}
+
+/// One request's exchange, run as an owned task. It delivers the reply's updates and owes the
+/// remote task cleanup when the caller leaves or the exchange fails.
+struct RemoteCall {
+    delivery: Delivery,
+    task: RemoteTask,
+    cancelled: watch::Receiver<bool>,
+    consumed: watch::Receiver<bool>,
+}
+
+impl RemoteCall {
+    async fn run(mut self, request: Request, admitted: oneshot::Receiver<()>) {
+        if admitted.await.is_err() {
+            return;
+        }
+        match self.exchange_unless_cancelled(request).await {
+            Ok(()) => self.cancel_unread_question().await,
+            Err(error) => self.report_failure(error).await,
+        }
+    }
+
+    async fn exchange_unless_cancelled(&mut self, request: Request) -> Result<(), ClientError> {
+        let Self { delivery, task, cancelled, .. } = self;
+        let exchange = exchange(request, delivery);
+        tokio::pin!(exchange);
+        tokio::select! {
+            biased;
+            _ = cancelled.changed() => task.cancel_on_caller_exit(exchange.as_mut()).await,
+            result = &mut exchange => result,
+        }
+    }
+
+    /// Until the recipient consumes a buffered question, abandoning its reply still owes
+    /// cancellation of the nonterminal remote task.
+    async fn cancel_unread_question(&mut self) {
+        if self.task.terminal.load(Ordering::Acquire) || *self.consumed.borrow() {
+            return;
+        }
+        tokio::select! {
+            _ = self.consumed.changed() => {},
+            _ = self.cancelled.changed() => {},
+        }
+        if *self.consumed.borrow() {
+            return;
+        }
+        let task = self.task.identity.borrow().clone();
+        if let Some(task) = task {
+            self.task.inner.cancel_owned(&task).await;
+        }
+    }
+
+    async fn report_failure(&mut self, error: ClientError) {
+        if let Some(ack) = self.delivery.ack.take() {
+            let _ = ack.send(Err(error.clone()));
+        }
+        if *self.cancelled.borrow() {
+            return;
+        }
+        self.task.cancel_after_failure(&error).await;
+        tokio::select! {
+            _ = self.delivery.updates.send(Err(error)) => {},
+            _ = self.cancelled.changed() => {},
+        }
+    }
+}
+
+/// The remote task a call created, as far as it is known here, and the cleanup it is owed.
+struct RemoteTask {
+    inner: Arc<Inner>,
+    id: u64,
+    task_response: bool,
+    identity: watch::Receiver<Option<TaskRef>>,
+    terminal: Arc<AtomicBool>,
+}
+
+impl RemoteTask {
+    /// Cleanup runs within the teardown bound; past it, the overrun is recorded and cleanup
+    /// is still awaited.
+    async fn cancel_on_caller_exit(
+        &self,
+        exchange: Pin<&mut impl Future<Output = Result<(), ClientError>>>,
+    ) -> Result<(), ClientError> {
+        let cleanup = self.cancel_abandoned(exchange);
+        tokio::pin!(cleanup);
+        if tokio::time::timeout(HOST_TEARDOWN_TIMEOUT, &mut cleanup).await.is_err() {
+            self.inner.observe(CleanupObservation::Incomplete { requests: vec![self.id] });
+            cleanup.await;
+        }
+        Err(ClientError::Closed)
+    }
+
+    async fn cancel_abandoned(
+        &self,
+        exchange: Pin<&mut impl Future<Output = Result<(), ClientError>>>,
+    ) {
+        if self.task_response {
+            if let Err(error) = exchange.await
+                && let Some(task) = self.identity.borrow().clone()
+            {
+                self.inner.observe(CleanupObservation::CancelUncertain {
+                    task,
+                    error: error.to_string(),
+                });
+            }
+            return;
+        }
+        match self.await_identity(exchange).await {
+            Some(task) if !self.terminal.load(Ordering::Acquire) => {
+                if let Err(error) = self.inner.cancel_remote(&task, Some(CALLER_CANCELED)).await {
+                    self.inner.observe(CleanupObservation::CancelUncertain {
+                        task,
+                        error: error.to_string(),
+                    });
+                }
+            }
+            Some(_) => {}
+            None => {
+                self.inner.observe(CleanupObservation::UnacknowledgedRequest { request: self.id })
+            }
+        }
+    }
+
+    /// Keeps the original send alive until its ack; resending a business request just to
+    /// discover its task could duplicate a remote effect.
+    async fn await_identity(
+        &self,
+        mut exchange: Pin<&mut impl Future<Output = Result<(), ClientError>>>,
+    ) -> Option<TaskRef> {
+        let mut identity = self.identity.clone();
+        loop {
+            if let Some(task) = identity.borrow_and_update().clone() {
+                return Some(task);
+            }
+            tokio::select! {
+                _ = identity.changed() => {},
+                _ = &mut exchange => return identity.borrow().clone(),
+            }
+        }
+    }
+
+    /// A failed exchange cancels its nonterminal remote task, or records why it cannot.
+    async fn cancel_after_failure(&self, error: &ClientError) {
+        if self.terminal.load(Ordering::Acquire) {
+            return;
+        }
+        let task = self.identity.borrow().clone();
+        let Some(task) = task else {
+            if !matches!(error, ClientError::Rpc { .. }) {
+                self.inner.observe(CleanupObservation::UnacknowledgedRequest { request: self.id });
+            }
+            return;
+        };
+        if self.task_response {
+            self.inner
+                .observe(CleanupObservation::CancelUncertain { task, error: error.to_string() });
+        } else {
+            self.inner.cancel_owned(&task).await;
+        }
+    }
+}
+
+/// Hands a call's decoded updates to its caller; the first one acknowledges the call.
+struct Delivery {
+    inner: Arc<Inner>,
+    ack: Option<oneshot::Sender<Result<TaskRef, ClientError>>>,
+    updates: mpsc::Sender<Result<TaskUpdate, ClientError>>,
+    identity: watch::Sender<Option<TaskRef>>,
+    terminal: Arc<AtomicBool>,
+}
+
+impl Delivery {
+    async fn deliver(&mut self, update: TaskUpdate) -> Result<(), ClientError> {
+        let task = TaskRef { id: update.task_id.clone(), context_id: update.context_id.clone() };
+        if !task.id.is_empty() {
+            self.identity.send_replace(Some(task.clone()));
+        }
+        self.terminal.store(update.state.is_terminal(), Ordering::Release);
+        if let Some(ack) = self.ack.take() {
+            self.inner.core.lock().acknowledge(&update)?;
+            let _ = ack.send(Ok(task));
+        }
+        self.updates.send(Ok(update)).await.map_err(|_| ClientError::Closed)
     }
 }
 
@@ -587,74 +698,129 @@ impl StreamOutput<TaskUpdate> for ReplyUpdates {
     }
 }
 
-async fn exchange(
-    inner: &Inner,
-    request: Request,
-    ack: &mut Option<oneshot::Sender<Result<TaskRef, ClientError>>>,
-    tx: &mpsc::Sender<Result<TaskUpdate, ClientError>>,
-    terminal: &AtomicBool,
-    known: &watch::Sender<Option<TaskRef>>,
-) -> Result<(), ClientError> {
-    let id =
-        request.id.clone().ok_or_else(|| ClientError::InvalidInput("an RPC needs an id".into()))?;
-    let mut exchange = inner.exchange(&request);
-    let mut state = ReplyState::for_request(&request);
-    let mut decoder = SseDecoder::new();
-    let mut body = Vec::new();
-    let mut sse = false;
-    let mut events = Vec::new();
+async fn exchange(request: Request, delivery: &mut Delivery) -> Result<(), ClientError> {
+    let mut reader = ReplyReader::new(&request)?;
+    let mut exchange = delivery.inner.exchange(&request);
     loop {
         match exchange.next().await.map_err(ClientError::Transport)? {
-            HttpEvent::Started => {
-                state = ReplyState::for_request(&request);
-                decoder = SseDecoder::new();
-                body.clear();
-                events.clear();
-            }
-            HttpEvent::Headers(headers) => {
-                sse = headers.get("content-type").and_then(|h| h.to_str().ok()).is_some_and(|v| {
-                    v.split(';').next().is_some_and(|v| v.trim() == "text/event-stream")
-                });
-            }
-            HttpEvent::Bytes(bytes) if sse => {
-                decoder
-                    .feed(&bytes, &mut events)
-                    .map_err(|error| ClientError::InvalidResponse(error.to_string()))?;
-                for event in events.drain(..) {
-                    if let Some(update) = state.decode(event.data.as_bytes(), &id)? {
-                        exchange.delivered();
-                        exchange
-                            .wait_for_consumer(deliver(inner, update, ack, tx, terminal, known))
-                            .await
-                            .map_err(ClientError::Transport)??;
-                    }
-                    if state.settled() {
-                        return state.finish();
-                    }
+            HttpEvent::Started => reader.restart(),
+            HttpEvent::Headers(headers) => reader.framing = ReplyFraming::of(&headers),
+            HttpEvent::Bytes(bytes) if reader.framing == ReplyFraming::EventStream => {
+                if reader.read_events(&bytes, &mut exchange, delivery).await?.is_break() {
+                    return reader.state.finish();
                 }
             }
-            HttpEvent::Bytes(bytes) => append_body(&mut body, &bytes)?,
-            HttpEvent::End => {
-                if sse {
-                    decoder
-                        .finish()
-                        .map_err(|error| ClientError::InvalidResponse(error.to_string()))?;
-                } else {
-                    let update = if request.task_response {
-                        Some(state.decode_task(&body, &id)?)
-                    } else {
-                        state.decode(&body, &id)?
-                    };
-                    if let Some(update) = update {
-                        exchange
-                            .wait_for_consumer(deliver(inner, update, ack, tx, terminal, known))
-                            .await
-                            .map_err(ClientError::Transport)??;
-                    }
-                }
-                return state.finish();
+            HttpEvent::Bytes(bytes) => append_body(&mut reader.body, &bytes)?,
+            HttpEvent::End => return reader.finish(&mut exchange, delivery).await,
+        }
+    }
+}
+
+/// How a reply body is framed, read from its content type.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ReplyFraming {
+    Json,
+    EventStream,
+}
+
+impl ReplyFraming {
+    fn of(headers: &reqwest::header::HeaderMap) -> Self {
+        let media_type = headers
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.split(';').next());
+        if media_type.is_some_and(|value| value.trim() == EVENT_STREAM) {
+            Self::EventStream
+        } else {
+            Self::Json
+        }
+    }
+}
+
+/// Decodes one call's reply; each retried attempt starts it over.
+struct ReplyReader<'a> {
+    request: &'a Request,
+    id: JsonRpcId,
+    state: ReplyState,
+    framing: ReplyFraming,
+    decoder: SseDecoder,
+    events: Vec<SseEvent>,
+    body: Vec<u8>,
+}
+
+impl<'a> ReplyReader<'a> {
+    fn new(request: &'a Request) -> Result<Self, ClientError> {
+        let id = request
+            .id
+            .clone()
+            .ok_or_else(|| ClientError::InvalidInput("an RPC needs an id".into()))?;
+        Ok(Self {
+            request,
+            id,
+            state: ReplyState::for_request(request),
+            framing: ReplyFraming::Json,
+            decoder: SseDecoder::new(),
+            events: Vec::new(),
+            body: Vec::new(),
+        })
+    }
+
+    fn restart(&mut self) {
+        self.state = ReplyState::for_request(self.request);
+        self.decoder = SseDecoder::new();
+        self.body.clear();
+        self.events.clear();
+    }
+
+    /// Delivers each event's update in order; breaks as soon as the reply has settled.
+    async fn read_events(
+        &mut self,
+        bytes: &[u8],
+        exchange: &mut Exchange,
+        delivery: &mut Delivery,
+    ) -> Result<ControlFlow<()>, ClientError> {
+        self.decoder
+            .feed(bytes, &mut self.events)
+            .map_err(|error| ClientError::InvalidResponse(error.to_string()))?;
+        for event in self.events.drain(..) {
+            if let Some(update) = self.state.decode(event.data.as_bytes(), &self.id)? {
+                exchange.delivered();
+                exchange
+                    .wait_for_consumer(delivery.deliver(update))
+                    .await
+                    .map_err(ClientError::Transport)??;
+            }
+            if self.state.settled() {
+                return Ok(ControlFlow::Break(()));
             }
         }
+        Ok(ControlFlow::Continue(()))
+    }
+
+    /// An event stream must end cleanly; a JSON body carries the reply's one update.
+    async fn finish(
+        mut self,
+        exchange: &mut Exchange,
+        delivery: &mut Delivery,
+    ) -> Result<(), ClientError> {
+        if self.framing == ReplyFraming::EventStream {
+            self.decoder
+                .finish()
+                .map_err(|error| ClientError::InvalidResponse(error.to_string()))?;
+            return self.state.finish();
+        }
+        let update = if self.request.task_response {
+            Some(self.state.decode_task(&self.body, &self.id)?)
+        } else {
+            self.state.decode(&self.body, &self.id)?
+        };
+        if let Some(update) = update {
+            exchange
+                .wait_for_consumer(delivery.deliver(update))
+                .await
+                .map_err(ClientError::Transport)??;
+        }
+        self.state.finish()
     }
 }
 
@@ -666,26 +832,6 @@ fn append_body(body: &mut Vec<u8>, bytes: &[u8]) -> Result<(), ClientError> {
     }
     body.extend_from_slice(bytes);
     Ok(())
-}
-
-async fn deliver(
-    inner: &Inner,
-    update: TaskUpdate,
-    ack: &mut Option<oneshot::Sender<Result<TaskRef, ClientError>>>,
-    tx: &mpsc::Sender<Result<TaskUpdate, ClientError>>,
-    terminal: &AtomicBool,
-    known: &watch::Sender<Option<TaskRef>>,
-) -> Result<(), ClientError> {
-    let task = TaskRef { id: update.task_id.clone(), context_id: update.context_id.clone() };
-    if !task.id.is_empty() {
-        known.send_replace(Some(task.clone()));
-    }
-    terminal.store(update.state.is_terminal(), Ordering::Release);
-    if let Some(ack) = ack.take() {
-        inner.core.lock().acknowledge(&update)?;
-        let _ = ack.send(Ok(task));
-    }
-    tx.send(Ok(update)).await.map_err(|_| ClientError::Closed)
 }
 
 fn checked_url(url: &str) -> Result<url::Url, ClientError> {

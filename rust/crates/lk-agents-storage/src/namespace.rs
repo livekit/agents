@@ -40,6 +40,75 @@ enum Config {
     Cloud { opts: AgentDbOptions, minter: TokenMinter, env: ProcessEnv },
 }
 
+/// The project a local store without options belongs to.
+const DEFAULT_PROJECT_ID: &str = "default";
+/// The bare project-id prefix, refused as an id of its own.
+const PROJECT_ID_PREFIX: &str = "p_";
+/// The longest project id accepted.
+const MAX_PROJECT_ID_LEN: usize = 128;
+
+impl Config {
+    fn local(
+        options: Option<host::LocalStorageOptions>,
+        lease: LeaseTiming,
+    ) -> Result<Self, StorageError> {
+        let host::LocalStorageOptions { directory, project_id } =
+            options.unwrap_or(host::LocalStorageOptions {
+                directory: None,
+                project_id: DEFAULT_PROJECT_ID.into(),
+            });
+        check_project_id(&project_id)?;
+        let directory = match directory {
+            Some(directory) => PathBuf::from(directory),
+            None => default_directory(&project_id)?,
+        };
+        let directory = std::path::absolute(&directory)
+            .map_err(|e| StorageError::Invalid(format!("storage directory: {e}")))?;
+        Ok(Config::Local { directory, lease, project_id })
+    }
+
+    fn cloud(
+        url: &str,
+        key: String,
+        secret: String,
+        lease: LeaseTiming,
+        env: &ProcessEnv,
+    ) -> Result<Self, StorageError> {
+        let mut opts = AgentDbOptions::new(url);
+        opts.lease = lease;
+        if !opts.url.starts_with("http://") && !opts.url.starts_with("https://") {
+            return Err(StorageError::Invalid(format!(
+                "agentstore url {} is not http(s)",
+                opts.url
+            )));
+        }
+        Ok(Config::Cloud { opts, minter: TokenMinter::new(key, secret)?, env: env.clone() })
+    }
+}
+
+fn check_project_id(project_id: &str) -> Result<(), StorageError> {
+    let allowed = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b'-';
+    if project_id.is_empty()
+        || project_id == PROJECT_ID_PREFIX
+        || project_id.len() > MAX_PROJECT_ID_LEN
+        || !project_id.bytes().all(allowed)
+    {
+        return Err(StorageError::Invalid(
+            "project_id must contain letters, digits, - or _".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// `~/.livekit/agent-threads/<project_id>`.
+fn default_directory(project_id: &str) -> Result<PathBuf, StorageError> {
+    let home = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+    let home = std::env::var_os(home).filter(|value| !value.is_empty()).ok_or_else(|| {
+        StorageError::Invalid("home directory is unavailable; configure directory=".into())
+    })?;
+    Ok(PathBuf::from(home).join(".livekit").join("agent-threads").join(project_id))
+}
+
 enum Backend {
     Local(Arc<SqliteStorage>),
     Cloud(Arc<AgentDbStorage>),
@@ -283,51 +352,9 @@ impl HostStorageClass for Namespace {
             seconds(renew_interval, default.renew_interval, "renew_interval")?,
         )?;
         let config = match (local, url, api_key, api_secret) {
-            (local, None, None, None) => {
-                let host::LocalStorageOptions { directory, project_id } =
-                    local.unwrap_or(host::LocalStorageOptions {
-                        directory: None,
-                        project_id: "default".into(),
-                    });
-                if project_id.is_empty()
-                    || project_id == "p_"
-                    || project_id.len() > 128
-                    || !project_id
-                        .bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-                {
-                    return Err(StorageError::Invalid(
-                        "project_id must contain letters, digits, - or _".into(),
-                    ));
-                }
-                let directory = match directory {
-                    Some(directory) => PathBuf::from(directory),
-                    None => {
-                        let home = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
-                        let home = std::env::var_os(home)
-                            .filter(|value| !value.is_empty())
-                            .ok_or_else(|| {
-                                StorageError::Invalid(
-                                    "home directory is unavailable; configure directory=".into(),
-                                )
-                            })?;
-                        PathBuf::from(home).join(".livekit").join("agent-threads").join(&project_id)
-                    }
-                };
-                let directory = std::path::absolute(&directory)
-                    .map_err(|e| StorageError::Invalid(format!("storage directory: {e}")))?;
-                Config::Local { directory, lease, project_id }
-            }
+            (local, None, None, None) => Config::local(local, lease)?,
             (None, Some(url), Some(key), Some(secret)) => {
-                let mut opts = AgentDbOptions::new(&url);
-                opts.lease = lease;
-                if !opts.url.starts_with("http://") && !opts.url.starts_with("https://") {
-                    return Err(StorageError::Invalid(format!(
-                        "agentstore url {} is not http(s)",
-                        opts.url
-                    )));
-                }
-                Config::Cloud { opts, minter: TokenMinter::new(key, secret)?, env: env.clone() }
+                Config::cloud(&url, key, secret, lease, env)?
             }
             _ => {
                 return Err(StorageError::Invalid(

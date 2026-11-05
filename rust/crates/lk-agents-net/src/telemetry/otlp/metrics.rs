@@ -1,6 +1,7 @@
 //! Measurement aggregation per destination: counter sums and explicit-bucket histograms, read out
 //! with delta or cumulative temporality.
 
+use super::proto::common::v1::KeyValue;
 use super::proto::metrics::v1 as proto;
 use lk_agents_abi::telemetry::record::{InstrumentKind, KeyValues, Measurement, Number};
 
@@ -121,72 +122,16 @@ impl Aggregator {
             Temporality::Delta => proto::AggregationTemporality::Delta,
             Temporality::Cumulative => proto::AggregationTemporality::Cumulative,
         } as i32;
-        let start = self.start_unix_nanos;
-        let attributes = |labels: &KeyValues| {
-            let mut all = labels.clone();
-            super::encode::stamp(&mut all, stamp);
-            key_values(&all)
-        };
+        let interval = Interval { start: self.start_unix_nanos, now: now_unix_nanos, stamp };
         let metrics = self
             .instruments
             .iter()
             .filter(|i| !i.series.is_empty())
-            .map(|instrument| {
-                let data = match instrument.kind {
-                    InstrumentKind::Counter => proto::metric::Data::Sum(proto::Sum {
-                        aggregation_temporality: temporality,
-                        is_monotonic: true,
-                        data_points: instrument
-                            .series
-                            .iter()
-                            .filter_map(|(labels, point)| match point {
-                                Point::Sum(total) => Some(proto::NumberDataPoint {
-                                    attributes: attributes(labels),
-                                    start_time_unix_nano: start,
-                                    time_unix_nano: now_unix_nanos,
-                                    value: Some(match *total {
-                                        Number::Int(v) => proto::number_data_point::Value::AsInt(v),
-                                        Number::Double(v) => {
-                                            proto::number_data_point::Value::AsDouble(v)
-                                        }
-                                    }),
-                                    ..Default::default()
-                                }),
-                                Point::Histogram { .. } => None,
-                            })
-                            .collect(),
-                    }),
-                    InstrumentKind::Histogram => proto::metric::Data::Histogram(proto::Histogram {
-                        aggregation_temporality: temporality,
-                        data_points: instrument
-                            .series
-                            .iter()
-                            .filter_map(|(labels, point)| match point {
-                                Point::Histogram { count, sum, min, max, buckets } => {
-                                    Some(proto::HistogramDataPoint {
-                                        attributes: attributes(labels),
-                                        start_time_unix_nano: start,
-                                        time_unix_nano: now_unix_nanos,
-                                        count: *count,
-                                        sum: Some(*sum),
-                                        bucket_counts: buckets.clone(),
-                                        explicit_bounds: instrument.bounds.to_vec(),
-                                        min: Some(*min),
-                                        max: Some(*max),
-                                        ..Default::default()
-                                    })
-                                }
-                                Point::Sum(_) => None,
-                            })
-                            .collect(),
-                    }),
-                };
-                proto::Metric {
-                    name: instrument.name.to_owned(),
-                    unit: instrument.unit.to_owned(),
-                    data: Some(data),
-                    ..Default::default()
-                }
+            .map(|instrument| proto::Metric {
+                name: instrument.name.to_owned(),
+                unit: instrument.unit.to_owned(),
+                data: Some(instrument.data(temporality, &interval)),
+                ..Default::default()
             })
             .collect();
         if self.temporality == Temporality::Delta {
@@ -195,6 +140,74 @@ impl Aggregator {
             self.start_unix_nanos = now_unix_nanos;
         }
         metrics
+    }
+}
+
+/// What every data point of one collection carries: its interval and the destination's stamp.
+struct Interval<'a> {
+    start: u64,
+    now: u64,
+    stamp: &'a KeyValues,
+}
+
+impl Interval<'_> {
+    fn attributes(&self, labels: &KeyValues) -> Vec<KeyValue> {
+        let mut all = labels.clone();
+        super::encode::stamp(&mut all, self.stamp);
+        key_values(&all)
+    }
+}
+
+impl Instrument {
+    fn data(&self, temporality: i32, interval: &Interval) -> proto::metric::Data {
+        match self.kind {
+            InstrumentKind::Counter => proto::metric::Data::Sum(proto::Sum {
+                aggregation_temporality: temporality,
+                is_monotonic: true,
+                data_points: self.sum_points(interval),
+            }),
+            InstrumentKind::Histogram => proto::metric::Data::Histogram(proto::Histogram {
+                aggregation_temporality: temporality,
+                data_points: self.histogram_points(interval),
+            }),
+        }
+    }
+
+    fn sum_points(&self, interval: &Interval) -> Vec<proto::NumberDataPoint> {
+        let points = self.series.iter().filter_map(|(labels, point)| {
+            let Point::Sum(total) = point else { return None };
+            let value = match *total {
+                Number::Int(v) => proto::number_data_point::Value::AsInt(v),
+                Number::Double(v) => proto::number_data_point::Value::AsDouble(v),
+            };
+            Some(proto::NumberDataPoint {
+                attributes: interval.attributes(labels),
+                start_time_unix_nano: interval.start,
+                time_unix_nano: interval.now,
+                value: Some(value),
+                ..Default::default()
+            })
+        });
+        points.collect()
+    }
+
+    fn histogram_points(&self, interval: &Interval) -> Vec<proto::HistogramDataPoint> {
+        let points = self.series.iter().filter_map(|(labels, point)| {
+            let Point::Histogram { count, sum, min, max, buckets } = point else { return None };
+            Some(proto::HistogramDataPoint {
+                attributes: interval.attributes(labels),
+                start_time_unix_nano: interval.start,
+                time_unix_nano: interval.now,
+                count: *count,
+                sum: Some(*sum),
+                bucket_counts: buckets.clone(),
+                explicit_bounds: self.bounds.to_vec(),
+                min: Some(*min),
+                max: Some(*max),
+                ..Default::default()
+            })
+        });
+        points.collect()
     }
 }
 

@@ -4,6 +4,7 @@
 //! worker ([`FileConnection`]), so no query blocks the executor.
 
 use std::collections::HashMap;
+use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -56,54 +57,18 @@ impl FileConnection {
         create: bool,
         thread: Option<(PathBuf, String)>,
     ) -> Result<Self, StorageError> {
-        let (tx, mut rx) = mpsc::channel::<Request>(QUEUE);
+        let (tx, rx) = mpsc::channel::<Request>(QUEUE);
         let (ready, opened) = oneshot::channel();
         std::thread::Builder::new()
             .name("lk-agents-sqlite".into())
-            .spawn(move || {
-                let access = thread
-                    .map(|(directory, id)| lifecycle::Access::open(&directory, id))
-                    .transpose();
-                let access = match access {
-                    Ok(access) => access,
-                    Err(error) => {
-                        let _ = ready.send(Err(error));
-                        return;
-                    }
-                };
-                let mut conn =
-                    match lifecycle::with_access(access.as_ref(), || connect(&path, create)) {
-                        Ok(conn) => {
-                            let _ = ready.send(Ok(()));
-                            conn
-                        }
-                        Err(e) => {
-                            let _ = ready.send(Err(e));
-                            return;
-                        }
-                    };
-                while let Some(request) = rx.blocking_recv() {
-                    match request {
-                        Request::Query(s, reply) => {
-                            let _ = reply
-                                .send(lifecycle::with_access(access.as_ref(), || query(&conn, &s)));
-                        }
-                        Request::Batch(statements, reply) => {
-                            let _ = reply.send(lifecycle::with_access(access.as_ref(), || {
-                                batch(&mut conn, &statements)
-                            }));
-                        }
-                        Request::DeleteThread(directory, id, reply) => {
-                            let _ = reply.send(lifecycle::delete(&mut conn, &directory, &id));
-                        }
-                        Request::Close(done) => {
-                            lifecycle::close(conn, access.as_ref());
-                            let _ = done.send(());
-                            return;
-                        }
-                    }
+            .spawn(move || match SqliteThread::open(&path, create, thread) {
+                Ok(sqlite) => {
+                    let _ = ready.send(Ok(()));
+                    sqlite.serve(rx);
                 }
-                lifecycle::close(conn, access.as_ref());
+                Err(error) => {
+                    let _ = ready.send(Err(error));
+                }
             })
             .map_err(|e| StorageError::Unavailable(format!("sqlite thread: {e}")))?;
         opened.await.map_err(|_| closed())??;
@@ -120,6 +85,56 @@ impl FileConnection {
         let (reply, answer) = oneshot::channel();
         self.tx.send(request(reply)).await.map_err(|_| closed())?;
         answer.await.map_err(|_| closed())?
+    }
+}
+
+/// The thread that owns one SQLite connection and serves its requests in order.
+struct SqliteThread {
+    conn: rusqlite::Connection,
+    access: Option<lifecycle::Access>,
+}
+
+impl SqliteThread {
+    fn open(
+        path: &Path,
+        create: bool,
+        thread: Option<(PathBuf, String)>,
+    ) -> Result<Self, StorageError> {
+        let access =
+            thread.map(|(directory, id)| lifecycle::Access::open(&directory, id)).transpose()?;
+        let conn = lifecycle::with_access(access.as_ref(), || connect(path, create))?;
+        Ok(Self { conn, access })
+    }
+
+    /// Serves until a close request or until every sender is gone; closes the connection once.
+    fn serve(mut self, mut rx: mpsc::Receiver<Request>) {
+        while let Some(request) = rx.blocking_recv() {
+            if let ControlFlow::Break(done) = self.handle(request) {
+                lifecycle::close(self.conn, self.access.as_ref());
+                let _ = done.send(());
+                return;
+            }
+        }
+        lifecycle::close(self.conn, self.access.as_ref());
+    }
+
+    /// Breaks with the close request's reply, sent once the connection has closed.
+    fn handle(&mut self, request: Request) -> ControlFlow<oneshot::Sender<()>> {
+        let access = self.access.as_ref();
+        match request {
+            Request::Query(s, reply) => {
+                let _ = reply.send(lifecycle::with_access(access, || query(&self.conn, &s)));
+            }
+            Request::Batch(statements, reply) => {
+                let run = || batch(&mut self.conn, &statements);
+                let _ = reply.send(lifecycle::with_access(access, run));
+            }
+            Request::DeleteThread(directory, id, reply) => {
+                let _ = reply.send(lifecycle::delete(&mut self.conn, &directory, &id));
+            }
+            Request::Close(done) => return ControlFlow::Break(done),
+        }
+        ControlFlow::Continue(())
     }
 }
 

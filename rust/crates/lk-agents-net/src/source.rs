@@ -85,38 +85,48 @@ impl<T: Send + 'static> SharedStream<T> {
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
             .map_err(|_| PullError::Overlap)?;
         let _reading = Reading(&self.inner.reading);
-        let pending = {
-            let mut state = self.inner.state.lock();
-            match state.take().expect("a stream always owns its state") {
-                State::Ready(source) => {
-                    let mut closing = self.inner.closing.subscribe();
-                    let pending = async move {
-                        let mut source = source;
-                        let item = tokio::select! {
-                            biased;
-                            changed = closing.wait_for(|closed| *closed) => { let _ = changed; None },
-                            item = source.next() => Some(item),
-                        };
-                        Arc::new(Mutex::new(Read { source: Some(source), item }))
-                    }.boxed().shared();
-                    *state = Some(State::Reading(pending.clone()));
-                    pending
-                }
-                State::Reading(pending) => {
-                    *state = Some(State::Reading(pending.clone()));
-                    pending
-                }
-                State::Closing(cleanup) => {
-                    *state = Some(State::Closing(cleanup));
-                    return Ok(Pulled::End);
-                }
-            }
+        let Some(pending) = self.inner.begin_read() else {
+            return Ok(Pulled::End);
         };
         // No state lock is held while polling the source, which may enter a language runtime.
         let completed = pending.await;
+        self.inner.finish_read(&completed)
+    }
+
+    pub async fn aclose(&self) -> Closed {
+        self.close(self.inner.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT)).await
+    }
+
+    /// The first close owns the deadline. Every caller waits for the same cleanup outcome;
+    /// abandoning a waiter leaves the pending work available to the next waiter.
+    pub async fn close(&self, deadline: Ts) -> Closed {
+        self.inner.closing.send_replace(true);
+        let cleanup = self.inner.begin_close(deadline);
+        cleanup.await
+    }
+}
+
+impl<T: Send + 'static> Inner<T> {
+    /// Joins the read in flight or starts one; `None` once the stream is closing.
+    fn begin_read(&self) -> Option<Pending<T>> {
+        let mut state = self.state.lock();
+        let pending = match state.take().expect("a stream always owns its state") {
+            State::Ready(source) => read_next(source, self.closing.subscribe()),
+            State::Reading(pending) => pending,
+            State::Closing(cleanup) => {
+                *state = Some(State::Closing(cleanup));
+                return None;
+            }
+        };
+        *state = Some(State::Reading(pending.clone()));
+        Some(pending)
+    }
+
+    /// Hands the source back for the next read, unless a close won while it was read.
+    fn finish_read(&self, completed: &Mutex<Read<T>>) -> Result<Pulled<T>, PullError> {
         let (item, previous) = {
-            let mut state = self.inner.state.lock();
-            if self.is_closed() {
+            let mut state = self.state.lock();
+            if *self.closing.borrow() {
                 return Ok(Pulled::Cancelled);
             }
             let mut completed = completed.lock();
@@ -129,58 +139,61 @@ impl<T: Send + 'static> SharedStream<T> {
         match item {
             Some(Ok(Some(item))) => Ok(Pulled::Item(item)),
             Some(Ok(None)) => {
-                self.inner.closing.send_replace(true);
+                self.closing.send_replace(true);
                 Ok(Pulled::End)
             }
             Some(Err(error)) => {
-                self.inner.closing.send_replace(true);
+                self.closing.send_replace(true);
                 Err(error.into())
             }
             None => Ok(Pulled::Cancelled),
         }
     }
 
-    pub async fn aclose(&self) -> Closed {
-        self.close(self.inner.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT)).await
-    }
-
-    /// The first close owns the deadline. Every caller waits for the same cleanup outcome;
-    /// abandoning a waiter leaves the pending work available to the next waiter.
-    pub async fn close(&self, deadline: Ts) -> Closed {
-        self.inner.closing.send_replace(true);
-        let cleanup = {
-            let mut state = self.inner.state.lock();
-            match state.take().expect("a stream always owns its state") {
-                State::Closing(cleanup) => {
-                    *state = Some(State::Closing(cleanup.clone()));
-                    cleanup
-                }
-                previous => {
-                    let clock = self.inner.clock.clone();
-                    let cleanup = async move {
-                        let mut outcome = Closed::Clean;
-                        let bounded = Closed::bounded(&*clock, deadline, async {
-                            let source = match previous {
-                                State::Ready(source) => Some(source),
-                                State::Reading(pending) => pending.await.lock().source.take(),
-                                State::Closing(_) => unreachable!("cleanup already installed"),
-                            };
-                            if let Some(source) = source {
-                                outcome = source.close(deadline).await;
-                            }
-                        })
-                        .await;
-                        outcome.and(bounded)
-                    }
-                    .boxed()
-                    .shared();
-                    *state = Some(State::Closing(cleanup.clone()));
-                    cleanup
-                }
-            }
+    /// Installs the one cleanup every closer awaits; the first close owns its deadline.
+    fn begin_close(&self, deadline: Ts) -> Cleanup {
+        let mut state = self.state.lock();
+        let cleanup = match state.take().expect("a stream always owns its state") {
+            State::Closing(cleanup) => cleanup,
+            previous => close_source(previous, self.clock.clone(), deadline).boxed().shared(),
         };
-        cleanup.await
+        *state = Some(State::Closing(cleanup.clone()));
+        cleanup
     }
+}
+
+/// One shared read of the source's next item; a close wins over an item ready at once.
+fn read_next<T: Send + 'static>(
+    mut source: Box<dyn StreamOutput<T>>,
+    mut closing: watch::Receiver<bool>,
+) -> Pending<T> {
+    async move {
+        let item = tokio::select! {
+            biased;
+            _ = closing.wait_for(|closed| *closed) => None,
+            item = source.next() => Some(item),
+        };
+        Arc::new(Mutex::new(Read { source: Some(source), item }))
+    }
+    .boxed()
+    .shared()
+}
+
+/// Closes the source once any read in flight hands it back, within the deadline.
+async fn close_source<T>(previous: State<T>, clock: Arc<dyn Clock>, deadline: Ts) -> Closed {
+    let mut outcome = Closed::Clean;
+    let bounded = Closed::bounded(&*clock, deadline, async {
+        let source = match previous {
+            State::Ready(source) => Some(source),
+            State::Reading(pending) => pending.await.lock().source.take(),
+            State::Closing(_) => unreachable!("cleanup already installed"),
+        };
+        if let Some(source) = source {
+            outcome = source.close(deadline).await;
+        }
+    })
+    .await;
+    outcome.and(bounded)
 }
 
 #[cfg(test)]

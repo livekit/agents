@@ -2,6 +2,7 @@
 //! task holds only the database and the fence, never the lease itself, so dropping the last
 //! [`Lease`] handle stops it. A waiter paces its acquire attempts with [`LanePoll`].
 
+use std::ops::ControlFlow;
 use std::sync::Arc;
 
 use lk_agents_abi::{OwnedTask, SpawnerExt};
@@ -138,48 +139,12 @@ impl Lease {
         if renewal.is_some() || self.check().is_err() {
             return;
         }
-        let (db, fence, ownership) =
-            (self.inner.db.clone(), self.inner.fence.clone(), self.inner.ownership.clone());
-        let work = async move {
-            let LeaseTiming { ttl, renew_interval: interval } = db.timing;
-            let mut next = *ownership.deadline.lock() - ttl + interval;
-            loop {
-                let deadline = *ownership.deadline.lock();
-                tokio::time::sleep_until(next.min(deadline)).await;
-                if ownership.check().is_err() {
-                    return;
-                }
-                let started = Instant::now();
-                next = started + interval;
-                let extend = db.exec(extend(&fence, db.timing.secs()));
-                let outcome =
-                    tokio::time::timeout_at(next.min(deadline), extend).await.unwrap_or_else(
-                        |_| Err(StorageError::Unavailable("the extend timed out".into())),
-                    );
-                if ownership.check().is_err() {
-                    return;
-                }
-                match outcome {
-                    Ok(rows) if rows > 0 => {
-                        if ownership.renewed(started, ttl).is_err() {
-                            return;
-                        }
-                    }
-                    Ok(_) => {
-                        ownership.lose("the lease was taken or released".into());
-                        return;
-                    }
-                    Err(error) if error.retryable() => {
-                        log::debug!(target: "livekit.agents", lane = fence.lane.as_str(); "lease extend failed, retrying: {error}");
-                    }
-                    Err(error) => {
-                        ownership.lose(format!("lease renewal failed: {error}"));
-                        return;
-                    }
-                }
-            }
+        let work = LeaseRenewal {
+            db: self.inner.db.clone(),
+            fence: self.inner.fence.clone(),
+            ownership: self.inner.ownership.clone(),
         };
-        *renewal = Some(TokioSpawner::current().spawn(work));
+        *renewal = Some(TokioSpawner::current().spawn(work.run()));
     }
 
     /// Ends the renewal; the lease itself is released by the commit or a release.
@@ -244,6 +209,67 @@ impl Lease {
 }
 
 /// Pushes the lease out while its token is still this one.
+/// The lease's renewal task; it holds the ownership, not the lease handle.
+struct LeaseRenewal {
+    db: Thread,
+    fence: Fence,
+    ownership: Arc<Ownership>,
+}
+
+impl LeaseRenewal {
+    async fn run(self) {
+        let LeaseTiming { ttl, renew_interval: interval } = self.db.timing;
+        let mut next = *self.ownership.deadline.lock() - ttl + interval;
+        loop {
+            let deadline = *self.ownership.deadline.lock();
+            tokio::time::sleep_until(next.min(deadline)).await;
+            if self.ownership.check().is_err() {
+                return;
+            }
+            let started = Instant::now();
+            next = started + interval;
+            if self.renew_once(started, next.min(deadline), ttl).await.is_break() {
+                return;
+            }
+        }
+    }
+
+    /// One extend, bounded by `until`; breaks once ownership is lost.
+    async fn renew_once(
+        &self,
+        started: Instant,
+        until: Instant,
+        ttl: std::time::Duration,
+    ) -> ControlFlow<()> {
+        let extend = self.db.exec(extend(&self.fence, self.db.timing.secs()));
+        let outcome = tokio::time::timeout_at(until, extend)
+            .await
+            .unwrap_or_else(|_| Err(StorageError::Unavailable("the extend timed out".into())));
+        if self.ownership.check().is_err() {
+            return ControlFlow::Break(());
+        }
+        match outcome {
+            Ok(rows) if rows > 0 => {
+                if self.ownership.renewed(started, ttl).is_err() {
+                    return ControlFlow::Break(());
+                }
+            }
+            Ok(_) => {
+                self.ownership.lose("the lease was taken or released".into());
+                return ControlFlow::Break(());
+            }
+            Err(error) if error.retryable() => {
+                log::debug!(target: "livekit.agents", lane = self.fence.lane.as_str(); "lease extend failed, retrying: {error}");
+            }
+            Err(error) => {
+                self.ownership.lose(format!("lease renewal failed: {error}"));
+                return ControlFlow::Break(());
+            }
+        }
+        ControlFlow::Continue(())
+    }
+}
+
 fn extend(fence: &Fence, lease_secs: i64) -> ExtendLease<'_> {
     ExtendLease { lane: &fence.lane, holder: &fence.holder, token: &fence.token, lease_secs }
 }
