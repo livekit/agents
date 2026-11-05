@@ -1,0 +1,21 @@
+livekit-agents/livekit/agents/inference/eot/base.py
+  s_9dc60d915e2121::t_4e033b1eb5f336 100-102,107-109
+livekit-agents/livekit/agents/inference/eot/transports.py
+  s_9dc60d915e2121::t_11e81de273a713 157,468
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4aff21ffa4a0f0e23f5b9fa2602555ad83dc919b",
+  "prompts": {},
+  "sessions": {
+    "s_9dc60d915e2121": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3bb7b518-e716-431d-8b0e-9b5f73deb748",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
