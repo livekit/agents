@@ -53,6 +53,14 @@ _ReceiverEventT = TypeVar("_ReceiverEventT", default=Never, contravariant=True)
 class AudioReceiver(
     ABC, rtc.EventEmitter[Literal["clear_buffer"] | _ReceiverEventT], Generic[_ReceiverEventT]
 ):
+    """The avatar worker's audio from the agent, which ``AvatarRunner`` feeds its generator.
+
+    A subclass iterates the audio: frames, then ``AudioSegmentEnd`` at each segment's end.
+    The runner keys each segment from its first frame to its end, or to a ``"clear_buffer"``
+    the receiver emits, which cuts it; ``notify_playback_started`` and
+    ``notify_playback_finished`` receive that segment's key.
+    """
+
     _core_audio_epoch = 0
 
     async def start(self) -> None:
@@ -88,7 +96,8 @@ class AudioReceiver(
     async def _core_next_audio(
         self,
     ) -> tuple[int, bool, AvatarPlaybackSegment | None, rtc.AudioFrame | AudioSegmentEnd | None]:
-        raise RuntimeError("a custom audio receiver must supply a keyed audio receipt")
+        item = await anext(self._core_audio, None)
+        return self._core_audio_epoch, False, None, item
 
     async def _core_notify_playback_started(self, segment: AvatarPlaybackSegment) -> None:
         await _maybe_await(self.notify_playback_started(segment=segment))

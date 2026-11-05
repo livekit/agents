@@ -384,6 +384,13 @@ skipped; any other failure is logged and does not fail the close. Concurrent
 closes wait for the same close, a later one does nothing, and `start()` again
 begins a new lifecycle.
 
+On the avatar worker, an `AvatarRunner` feeds an `AudioReceiver`'s audio to a
+`VideoGenerator` and publishes what it generates. `DataStreamAudioReceiver`
+receives the agent's stream; a custom receiver iterates frames and an
+`AudioSegmentEnd` at each segment's end. The runner keys each segment from
+its first frame to its end, or to the receiver's `"clear_buffer"`, which cuts
+it, and reports its playback to the receiver with that key.
+
 ## The call's thread
 
 On a server with storage, the door resolves the call's thread before the

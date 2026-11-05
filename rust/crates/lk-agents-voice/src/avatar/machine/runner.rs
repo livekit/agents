@@ -23,7 +23,7 @@ const NOT_PLAYED: f64 = 0.0;
 // ----------------------------------------------------------------------------- the host's side
 
 pub use lk_agents_abi::voice::avatar::{AvatarAudioReceiver, AvatarMedia, AvatarVideoGenerator};
-use lk_agents_abi::voice::io::AvatarPlaybackSegment;
+use lk_agents_abi::voice::io::{AvatarPlaybackSegment, PlaybackSegment};
 
 // ----------------------------------------------------------------------------- the core
 
@@ -194,6 +194,8 @@ pub struct RunnerCore {
     /// the generator, where it reports the next segment finished before it played.
     stale_end: bool,
     next_clear: u64,
+    /// The last segment key minted for a receiver that keys none.
+    unkeyed: u64,
     /// An audio frame is on its way into the generator. A clear waits for it:
     /// issued alongside, the push could land after the clear and play the cut audio.
     audio_pushing: bool,
@@ -243,6 +245,7 @@ impl RunnerCore {
             frame_pull_paused: false,
             stale_end: false,
             next_clear: 0,
+            unkeyed: 0,
             audio_pushing: false,
             clears_waiting: Vec::new(),
             finished: 0,
@@ -370,7 +373,7 @@ impl RunnerCore {
     }
 
     /// One read from the receiver. The arm order is the decision: stale epoch, stale segment
-    /// end, held while clearing or reporting, no segment identity, push, end.
+    /// end, held while clearing or reporting, push, end.
     fn audio_received(
         &mut self,
         result: Result<
@@ -396,12 +399,7 @@ impl RunnerCore {
             {
                 self.held_audio = Some((epoch, starts_segment, segment, item));
             }
-            Ok((_, _, None, Some(_))) => {
-                let error =
-                    lk_agents_abi::errors::ApiError::new("avatar audio has no segment identity");
-                self.loop_ended(Loop::ReadAudio, Err(error.into()), out);
-            }
-            Ok((_, _, Some(segment), Some(item))) => self.push_audio(segment, item, out),
+            Ok((_, _, segment, Some(item))) => self.push_audio(segment, item, out),
             Ok((_, _, _, None)) => self.loop_ended(Loop::ReadAudio, Ok(()), out),
             Err(e) => self.loop_ended(Loop::ReadAudio, Err(e), out),
         }
@@ -422,15 +420,29 @@ impl RunnerCore {
         }
     }
 
+    /// A segment's key, minted for a receiver that keys none (a custom `AudioReceiver`
+    /// iterating plain frames): one per segment, from its first audio to its end, or to a clear
+    /// that cuts it.
+    fn segment_key(&mut self, segment: Option<AvatarPlaybackSegment>) -> AvatarPlaybackSegment {
+        segment.unwrap_or_else(|| {
+            self.unkeyed += 1;
+            AvatarPlaybackSegment {
+                playback: PlaybackSegment { attachment: 0, segment: self.unkeyed },
+                stream_id: None,
+            }
+        })
+    }
+
     fn push_audio(
         &mut self,
-        segment: AvatarPlaybackSegment,
+        segment: Option<AvatarPlaybackSegment>,
         item: AudioReceiverFrame,
         out: &mut Vec<AvatarEffect>,
     ) {
         let frame = match item {
             AudioReceiverFrame::Audio(frame) => {
                 if !std::mem::replace(&mut self.reading, true) {
+                    let segment = self.segment_key(segment);
                     self.owed.push_back(segment);
                 }
                 self.stale_end = false;

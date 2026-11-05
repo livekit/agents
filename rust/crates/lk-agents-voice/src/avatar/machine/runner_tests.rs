@@ -501,3 +501,43 @@ fn a_room_stream_failure_settles_pending_start_and_completion() {
         vec![AvatarEffect::Answer { call: 3, result: Err(failed) }]
     );
 }
+
+// Catches: a receiver that keys no segments (a custom `AudioReceiver`) failing the read loop, or
+// two of its segments, or one cut by a clear and the audio after it, sharing a key.
+#[test]
+fn unkeyed_audio_is_keyed_per_segment_and_per_clear() {
+    let unkeyed = |core: &RunnerCore, frame| {
+        AvatarEvent::Audio(Ok((core.clear_epoch, false, None, Some(frame))))
+    };
+    let owed = |core: &RunnerCore| core.owed.back().map(|segment| segment.playback.segment);
+    let mut core = running();
+    let first = core.handle(unkeyed(&core, AudioReceiverFrame::Audio(pcm(1, 0.1))), Ts::ZERO);
+    assert_eq!(
+        ops(&first),
+        vec![AvatarIoOperation::PushAudio(Some(MediaFrame::Audio(pcm(1, 0.1))))]
+    );
+    core.handle(AvatarEvent::AudioPushed(Ok(())), Ts::ZERO);
+    core.handle(unkeyed(&core, AudioReceiverFrame::Audio(pcm(2, 0.1))), Ts::ZERO);
+    core.handle(AvatarEvent::AudioPushed(Ok(())), Ts::ZERO);
+    assert_eq!((core.owed.len(), owed(&core)), (1, Some(1)), "one segment until its end");
+    core.handle(unkeyed(&core, AudioReceiverFrame::SegmentEnd), Ts::ZERO);
+    core.handle(AvatarEvent::AudioPushed(Ok(())), Ts::ZERO);
+    core.handle(unkeyed(&core, AudioReceiverFrame::Audio(pcm(3, 0.1))), Ts::ZERO);
+    core.handle(AvatarEvent::AudioPushed(Ok(())), Ts::ZERO);
+    assert_eq!(owed(&core), Some(2));
+    core.handle(AvatarEvent::ClearBuffer { epoch: core.clear_epoch + 1 }, Ts::ZERO);
+    let cleared = core.handle(AvatarEvent::GeneratorCleared { clear: 0, result: Ok(()) }, Ts::ZERO);
+    let reported = core.handle(AvatarEvent::Reported { finished: true, result: Ok(()) }, Ts::ZERO);
+    let finished: Vec<_> = [cleared, reported]
+        .iter()
+        .flat_map(|effects| ops(effects))
+        .filter_map(|op| match op {
+            AvatarIoOperation::ReportFinished { segment, .. } => Some(segment.playback.segment),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(finished, vec![1, 2]);
+    core.handle(AvatarEvent::Reported { finished: true, result: Ok(()) }, Ts::ZERO);
+    core.handle(unkeyed(&core, AudioReceiverFrame::Audio(pcm(4, 0.1))), Ts::ZERO);
+    assert_eq!(owed(&core), Some(3), "a clear ends the segment");
+}
