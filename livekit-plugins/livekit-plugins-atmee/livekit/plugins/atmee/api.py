@@ -40,6 +40,7 @@ from livekit.agents import (
     NotGivenOr,
     utils,
 )
+from livekit.agents.utils import is_given
 
 from .log import logger
 
@@ -123,6 +124,15 @@ _RETRYABLE_START_CODES = frozenset({"avatar_warming", "avatar_start_interrupted"
 class AtmeeAvatarNotReadyError(AtmeeException):
     """The avatar cannot be rendered yet (HTTP 409 ``avatar_not_renderable``):
     it has no portrait, or its appearance is still being processed."""
+
+
+def _warn_avatar_version(avatar_version: NotGivenOr[str]) -> None:
+    # Accepted for code written against earlier releases; the avatar decides.
+    if is_given(avatar_version):
+        logger.warning(
+            "avatar_version is deprecated and ignored, the avatar's own engine decides how it "
+            "renders"
+        )
 
 
 def _check_wait_for(wait_for: str) -> None:
@@ -229,6 +239,7 @@ class AtmeeAPI:
         max_duration_seconds: int | None = None,
         metadata: dict[str, Any] | None = None,
         wait_for: WaitFor = "initializing",
+        avatar_version: NotGivenOr[str] = NOT_GIVEN,
     ) -> AvatarSessionInfo:
         """Render ``avatar_id`` into the room ``livekit_token`` grants.
 
@@ -247,6 +258,7 @@ class AtmeeAPI:
         billed) it asks again after the ``Retry-After`` given.
         """
         _check_wait_for(wait_for)
+        _warn_avatar_version(avatar_version)
         payload: dict[str, Any] = {"livekitUrl": livekit_url, "livekitToken": livekit_token}
         if agent_identity:
             payload["agentIdentity"] = agent_identity
@@ -320,6 +332,7 @@ class AtmeeAPI:
         *,
         description: str | None = None,
         content_type: str | None = None,
+        avatar_version: NotGivenOr[str] = NOT_GIVEN,
     ) -> str:
         """Create a render-only **v1 avatar** from a single portrait and return its id.
 
@@ -331,6 +344,7 @@ class AtmeeAPI:
         A v2 avatar also needs a voice and a take built over minutes: create
         one in the Atmee studio, CLI or MCP server, and render it here by id.
         """
+        _warn_avatar_version(avatar_version)
         info = await self.create_avatar_info(
             name, image, description=description, content_type=content_type
         )
@@ -343,8 +357,10 @@ class AtmeeAPI:
         *,
         description: str | None = None,
         content_type: str | None = None,
+        avatar_version: NotGivenOr[str] = NOT_GIVEN,
     ) -> AvatarInfo:
         """Like :meth:`create_avatar`, returning the whole response."""
+        _warn_avatar_version(avatar_version)
         if isinstance(image, str) and _is_url(image):
             manifest: dict[str, Any] = {
                 "schemaVersion": 1,

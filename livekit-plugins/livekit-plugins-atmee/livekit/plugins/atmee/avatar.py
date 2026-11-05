@@ -33,7 +33,14 @@ from livekit.agents import (
 from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 
-from .api import AtmeeAPI, AtmeeException, AvatarSessionInfo, WaitFor, _check_wait_for
+from .api import (
+    AtmeeAPI,
+    AtmeeException,
+    AvatarSessionInfo,
+    WaitFor,
+    _check_wait_for,
+    _warn_avatar_version,
+)
 from .log import logger
 
 # The rendering worker resamples nothing: it consumes 16 kHz mono PCM over the
@@ -83,6 +90,7 @@ class AvatarSession(BaseAvatarSession[Literal["avatar_disconnected"]]):
         wait_for: WaitFor = "initializing",
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         http_session: aiohttp.ClientSession | None = None,
+        avatar_version: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         """
         Args:
@@ -103,8 +111,11 @@ class AvatarSession(BaseAvatarSession[Literal["avatar_disconnected"]]):
             http_session: an aiohttp session to reuse; the job's shared one by
                 default, or a private one outside a job (released by
                 :meth:`aclose`).
+            avatar_version: deprecated and ignored; the avatar's own engine
+                decides how it renders.
         """
         _check_wait_for(wait_for)
+        _warn_avatar_version(avatar_version)
         if not avatar_id:
             raise AtmeeException("avatar_id is required")
         super().__init__()

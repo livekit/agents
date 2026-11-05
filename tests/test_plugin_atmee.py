@@ -361,6 +361,23 @@ async def test_bad_arguments_are_refused_before_anything_happens(fake: FakeAtmee
     assert fake.requests == []
 
 
+async def test_avatar_version_is_accepted_but_ignored(
+    fake: FakeAtmee, caplog: pytest.LogCaptureFixture
+) -> None:
+    # code written for releases that took avatar_version keeps working
+    fake.script("POST", START, 202, STARTED, times=2)
+    fake.script("POST", "/v1/avatars", 201, {"avatarId": AVATAR_ID, "status": "ready"})
+    avatar = _avatar(http_session=fake.session, avatar_version="v2")
+    await avatar.start(FakeAgentSession(), FakeRoom())  # type: ignore[arg-type]
+    api = AtmeeAPI(session=fake.session, conn_options=FAST)
+    await _start(api, avatar_version="v1")
+    await api.create_avatar("Val", "https://cdn.example/v.jpg", avatar_version="v1")
+    assert [r.message for r in caplog.records].count(
+        "avatar_version is deprecated and ignored, the avatar's own engine decides how it renders"
+    ) == 3
+    assert all("avatarVersion" not in c.json for c in fake.requests)
+
+
 @pytest.mark.parametrize("trigger", ["avatar_left", "agent_session_closed"])
 async def test_the_render_ends_once(fake: FakeAtmee, trigger: str) -> None:
     fake.script("POST", START, 202, STARTED)
