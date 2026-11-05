@@ -12,9 +12,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use lk_agents_abi::{ChatContext, Role};
-use lk_agents_inference::llm::{Auth, LlmOptions};
 use lk_agents_inference::llm::gateway::GatewayLlm;
 use lk_agents_inference::llm::machine::RequestPolicy;
+use lk_agents_inference::llm::{Auth, LlmOptions};
 use lk_agents_net::clock::RealClock;
 use lk_agents_net::http::GatewayHttp;
 

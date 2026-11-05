@@ -89,11 +89,7 @@ pub fn build_request(
     if let Some(Value::Object(query)) = extra_query {
         url.query_pairs_mut().extend_pairs(query.into_iter().map(|(k, v)| (k, text(v))));
     }
-    Ok(HttpRequest {
-        url: url.into(),
-        headers: headers.into_vec(),
-        body,
-    })
+    Ok(HttpRequest { url: url.into(), headers: headers.into_vec(), body })
 }
 
 /// The body's bytes as `encoding` asks, with the headers that name it.
@@ -234,7 +230,8 @@ mod tests {
             .collect(),
             ..opts()
         };
-        let ident: Headers = [("X-LiveKit-Job-ID".to_owned(), "AJ_1".to_owned())].into_iter().collect();
+        let ident: Headers =
+            [("X-LiveKit-Job-ID".to_owned(), "AJ_1".to_owned())].into_iter().collect();
         let tool = ToolSpec {
             provider_tool: None,
             name: "lookup".into(),
