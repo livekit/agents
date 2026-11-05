@@ -1661,21 +1661,14 @@ _MAX_DURATION_REACHED = {"type": "session.max_duration_reached", "max_duration_s
             "close_code=3000",
             id="invalid-api-key-close-code",
         ),
-        # The server announces these and then closes: it ended the session, so
-        # there is no reconnect.
+        # The server announces this and then closes: it reclaimed a session
+        # nobody was using, so there is no reconnect.
         pytest.param(
             lambda: [_dropped_ws([_ws_text(_IDLE_TIMEOUT)])],
             1,
             [False],
             "idle timeout",
             id="idle-timeout",
-        ),
-        pytest.param(
-            lambda: [_dropped_ws([_ws_text(_MAX_DURATION_REACHED)])],
-            1,
-            [False],
-            "max session duration",
-            id="max-duration-reached",
         ),
         # The initial attempt plus max_retry=2, then give up.
         pytest.param(
@@ -1775,6 +1768,28 @@ async def test_boson_realtime_recycles_the_connection_after_max_session_duration
     reconnect_update = json.loads(ws2.sent[0])
     assert reconnect_update["type"] == "session.update"
     assert reconnect_update["session"]["instructions"] == "Be thorough."
+
+
+async def test_boson_realtime_server_max_duration_recycles_the_connection(socket_session):
+    # The server's cap bounds one connection, not the conversation. The close that
+    # follows its notice is recycled like max_session_duration: no error, and no
+    # retry spent, so it reconnects even with max_retry=0.
+    user = _item("user_1", role="user", content=[{"type": "input_text", "text": "hello"}])
+    ws2 = _FakeWebSocket()
+    client = _SequencedHTTPClient(
+        [_dropped_ws([_ws_text(_item_added_echo(user)), _ws_text(_MAX_DURATION_REACHED)]), ws2]
+    )
+    session = socket_session(client, max_retry=0)
+    errors = _collect(session, "error")
+    reconnected = _collect(session, "session_reconnected")
+
+    assert await _eventually(lambda: reconnected)
+    assert len(client.connect_urls) == 2
+    assert errors == []
+    assert session._closed is False
+    sent = [json.loads(s) for s in ws2.sent]
+    assert sent[0]["type"] == "session.update"
+    assert [e["item"]["id"] for e in sent if e["type"] == "conversation.item.create"] == ["user_1"]
 
 
 async def test_boson_realtime_aclose_does_not_report_the_main_task_error_twice(monkeypatch):

@@ -233,8 +233,8 @@ class RealtimeModel(openai_rt.RealtimeModel):
                 it is off, since every recycle would then drop all of the user's
                 turns. The choice is made here, from the transcription settings
                 given; later changes to them do not revisit it. ``None`` keeps one
-                connection, which ends the session when the server's own limit
-                is reached.
+                connection until the server's own limit, which is recycled the
+                same way.
             http_session: ``aiohttp`` session to connect on. One is created and
                 owned by the model if omitted.
             conn_options: Connect timeout and retry policy. Retries stop early on
@@ -519,11 +519,13 @@ class RealtimeSession(openai_rt.RealtimeSession):
         # The server does not persist sessions: every connection is a fresh
         # session, so reconnection replays the local chat context instead.
         self._session_id: str | None = None
-        # Set when the server announces it is ending the session on purpose
-        # (session.idle_timeout / session.max_duration_reached); the following
-        # close must not trigger a reconnect, which would restart the session
-        # the server just ended.
+        # Set when the server announces session.idle_timeout: it reclaims a
+        # session nobody is using, so the following close must not reconnect.
         self._server_terminal_reason: str | None = None
+        # Set when the server announces session.max_duration_reached. That cap
+        # bounds one connection, not the conversation, so the following close
+        # recycles the connection like max_session_duration does.
+        self._server_max_duration_reached = False
         super().__init__(realtime_model)
         self._sync_base_transcription_opts()
         # The base recv loop dispatches OpenAI event types to _handle_* methods
@@ -608,6 +610,7 @@ class RealtimeSession(openai_rt.RealtimeSession):
             raise APIConnectionError("Boson realtime connection timed out") from exc
 
     async def _run_ws(self, ws_conn: aiohttp.ClientWebSocketResponse) -> None:
+        self._server_max_duration_reached = False
         try:
             await super()._run_ws(ws_conn)
         except APIConnectionError as exc:
@@ -618,6 +621,15 @@ class RealtimeSession(openai_rt.RealtimeSession):
                     f"Boson realtime session ended by server: {self._server_terminal_reason}",
                     retryable=False,
                 ) from exc
+            if self._server_max_duration_reached:
+                # Return as the base does after max_session_duration: its loop
+                # opens a new connection and replays the chat context, without
+                # reporting an error or spending a retry.
+                logger.info(
+                    "Boson realtime connection reached the server's max duration, reconnecting",
+                    extra={"session_id": self._session_id},
+                )
+                return
             close_code = ws_conn.close_code
             if close_code is not None:
                 raise APIConnectionError(
@@ -643,7 +655,7 @@ class RealtimeSession(openai_rt.RealtimeSession):
             )
         elif event_type == "session.max_duration_reached":
             max_duration_sec = event.get("max_duration_sec")
-            self._server_terminal_reason = f"max session duration reached ({max_duration_sec}s)"
+            self._server_max_duration_reached = True
             logger.info(
                 "Boson realtime session max duration announced by server",
                 extra={"session_id": self._session_id, "max_duration_sec": max_duration_sec},
