@@ -28,7 +28,7 @@ METRICS:
 AgentSession emits a metrics_collected event with detailed metrics including VAD metrics like idle time and inference duration, STT metrics like audio duration, EOU metrics like end of utterance delay and transcription delay, LLM metrics like token counts and time to first token, and TTS metrics like audio duration and time to first byte. Total conversation latency can be approximated as end_of_utterance_delay plus LLM time to first token plus TTS time to first byte. You can also use UsageCollector to aggregate LLM, TTS, and STT usage for cost estimation.
 
 OPENTELEMETRY:
-The Python SDK supports OpenTelemetry integration. You can set a tracer provider to export spans to any OpenTelemetry-compatible backend like LangFuse.
+The Python SDK supports OpenTelemetry integration. You can set a tracer provider to export spans to any OpenTelemetry-compatible backend, including Arize AX, Langfuse, Jaeger, Grafana Tempo, and Honeycomb.
 
 SHARING WITH SUPPORT:
 You can share specific session insights with LiveKit support on Ship plan or higher. Enable sharing from the session's Agent Insights tab to generate a link you can email to support.
