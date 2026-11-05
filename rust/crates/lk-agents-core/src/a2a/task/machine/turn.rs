@@ -41,7 +41,8 @@ pub(super) struct Turning {
     task_ids: Vec<String>,
     /// A batch inbox's drain, under the runner's kept lease.
     pub(super) drain: bool,
-    interrupt: bool,
+    /// A checkpoint's answer while another holder waits for the lane: `Yield` under `interrupt`.
+    on_waiter: Verdict,
     /// Unix seconds: after everything the run loaded.
     at: f64,
     answer_task: String,
@@ -76,7 +77,11 @@ impl TaskMachine {
             batch,
             task_ids,
             drain,
-            interrupt: !drain && self.policy == Policy::Interrupt,
+            on_waiter: if !drain && self.policy == Policy::Interrupt {
+                Verdict::Yield
+            } else {
+                Verdict::Continue
+            },
             at,
             answer_task,
             answer_tool: None,
@@ -134,7 +139,7 @@ impl TaskMachine {
                 });
                 let canceled = rows.iter().any(|(_, status)| *status == Some(TaskState::Canceled));
                 let turn = self.turning();
-                turn.stop = checkpoint_stop(turn.interrupt, other_waiting, canceled);
+                turn.stop = checkpoint_stop(turn.on_waiter, other_waiting, canceled);
                 let verdict = if turn.stop.is_some() { Verdict::Yield } else { Verdict::Continue };
                 self.phase = Phase::Turn(Step::Next);
                 Operation::Next(Some(verdict))

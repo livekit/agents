@@ -458,6 +458,7 @@ impl Lane {
         Ok(Run {
             lane: self.clone(),
             lease,
+            access: opts.access,
             holder: holder.to_owned(),
             run_id: opts.run_id,
             task_id: opts.task_id,
@@ -617,6 +618,7 @@ pub struct Run {
     lane: Lane,
     /// The lease the run holds; `None` under the `concurrent` policy, which takes none.
     lease: Option<Lease>,
+    access: LaneAccess,
     pub holder: String,
     pub run_id: String,
     pub task_id: String,
@@ -663,7 +665,7 @@ impl Run {
             run_id: &self.run_id,
             task_id: &self.task_id,
             channel: self.channel.as_deref(),
-            exclusive: self.lease.is_some(),
+            access: self.access,
             history: &self.history,
             loaded: &self.loaded,
             state: self.state.as_ref(),

@@ -6,11 +6,11 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 
-use crate::StorageError;
 use crate::TaskWrite;
 use crate::thread::db::{Commit, EventWrite};
 use crate::thread::schema::EventRow;
 pub use crate::thread::schema::{ItemRow, LaneRow, TaskRow};
+use crate::{LaneAccess, StorageError};
 use livekit_protocol::agent::chat_context::ChatItem;
 use lk_agents_abi::storage::journal::{JournalEvent, RunEnded, RunStarted};
 
@@ -29,8 +29,8 @@ pub struct RunWrites<'a> {
     pub run_id: &'a str,
     pub task_id: &'a str,
     pub channel: Option<&'a str>,
-    /// Under a lease; `false` is the `concurrent` policy's append-only write.
-    pub exclusive: bool,
+    /// How the run took its lane; `Concurrent` writes append-only.
+    pub access: LaneAccess,
     pub history: &'a [ItemRow],
     /// What was loaded, by id, in order.
     pub loaded: &'a [(String, ChatItem)],
@@ -55,7 +55,8 @@ pub struct RunWrites<'a> {
 /// no state and may only add items: editing or deleting a loaded one is refused.
 pub fn run_commit(w: RunWrites<'_>) -> Result<Commit, StorageError> {
     let (items, delete_items) = item_changes(w.history, w.loaded);
-    if !w.exclusive {
+    let concurrent = w.access == LaneAccess::Concurrent;
+    if concurrent {
         let edited = items.iter().find(|i| w.loaded.iter().any(|(id, _)| *id == i.id));
         if let Some(id) = edited.map(|i| &i.id).or(delete_items.first()) {
             return Err(StorageError::Invalid(format!(
@@ -64,11 +65,12 @@ pub fn run_commit(w: RunWrites<'_>) -> Result<Commit, StorageError> {
         }
     }
     let mut events = Vec::new();
-    if !w.exclusive {
+    if concurrent {
         let started = RunStarted {
             task_id: Some(w.task_id.to_owned()),
             stream_id: Some(w.task_id.to_owned()),
             channel: w.channel.map(str::to_owned),
+            // the journal's spelling of a `concurrent` run
             exclusive: Some(false),
         };
         events.push(EventWrite::new(w.now_ms, JournalEvent::RunStarted(started)));
@@ -89,12 +91,12 @@ pub fn run_commit(w: RunWrites<'_>) -> Result<Commit, StorageError> {
         items,
         events,
         tasks: w.tasks.to_vec(),
-        state: w.state.filter(|s| w.exclusive && Some(*s) != w.loaded_state).cloned(),
+        state: w.state.filter(|s| !concurrent && Some(*s) != w.loaded_state).cloned(),
         loaded_state: w.loaded_state.cloned(),
         context_scopes: Vec::new(),
         scope_writes: Vec::new(),
         app_writes: Vec::new(),
-        drained_id: w.drained_id.filter(|_| w.exclusive),
+        drained_id: w.drained_id.filter(|_| !concurrent),
         run_ended: EventWrite::new(
             w.now_ms,
             JournalEvent::RunEnded(RunEnded {
