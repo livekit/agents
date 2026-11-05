@@ -13,8 +13,8 @@ from openai.types.responses import ResponseInputItem, ResponseTextConfigParam
 from openai.types.shared_params import Reasoning
 from pydantic import model_serializer
 
-DelegationTarget = Literal["responses", "client"]
-"""``responses`` hands delegated work to a backend model; ``client`` hands it to the application."""
+DelegationTarget = Literal["responses", "client", "decisions"]
+"""Run delegated work through Responses, Decisions, or the client application."""
 InputRole = Literal["developer", "user", "assistant"]
 """The roles startup history accepts; there is no ``system``."""
 ServiceTier = Literal["auto", "default", "flex", "priority", "ultrafast"]
@@ -75,11 +75,36 @@ class ResponsesConfig(BaseModel):
     max_output_tokens: int | None = None
 
 
+class DecisionsConfig(BaseModel):
+    model: str | None = None
+    questions: list[dict[str, Any]] | None = None
+
+
+class DecisionsTrigger(BaseModel):
+    type: Literal["decisions"] = "decisions"
+    event_type: str
+    decisions: DecisionsConfig
+
+
+class DecisionEventEnvelope(BaseModel):
+    """An upstream decision event, including its answers and usage when present."""
+
+    type: Literal["decision.event"] = "decision.event"
+    event_id: str | None = None
+    event: dict[str, Any]
+
+
+class DecisionCreateEvent(BaseModel):
+    type: Literal["decision.create"] = "decision.create"
+    event_id: str | None = None
+
+
 class Delegation(BaseModel):
-    """Chosen at startup; the type is immutable, the responses settings are not."""
+    """Chosen at startup; the type is immutable, the backend settings are not."""
 
     type: DelegationTarget = "responses"
     responses: ResponsesConfig | None = None
+    decisions: DecisionsConfig | None = None
 
 
 class SessionConfig(BaseModel):
@@ -90,6 +115,7 @@ class SessionConfig(BaseModel):
     input: list[InputItem] | None = None
     audio: AudioConfig | None = None
     delegation: Delegation | None = None
+    triggers: list[DecisionsTrigger] | None = None
 
 
 class SessionUpdateConfig(BaseModel):
@@ -196,6 +222,7 @@ ClientEvent = (
     | ResponseItemCreateEvent
     | ResponseCreateEvent
     | SessionCloseEvent
+    | DecisionCreateEvent
 )
 
 

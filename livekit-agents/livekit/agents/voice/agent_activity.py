@@ -102,7 +102,12 @@ from .generation import (
     update_instructions,
 )
 from .speech_handle import DEFAULT_INPUT_DETAILS, InputDetails, InterruptionSource, SpeechHandle
-from .tool_executor import _resolve_async_tool_options, _RunningTasks, _ToolExecutor
+from .tool_executor import (
+    _reply_tool_choice,
+    _resolve_async_tool_options,
+    _RunningTasks,
+    _ToolExecutor,
+)
 from .turn import (
     EndpointingOptions,
     PreemptiveGenerationOptions,
@@ -172,7 +177,7 @@ class _OnEnterData:
     agent: Agent
 
 
-_OnEnterContextVar = contextvars.ContextVar["_OnEnterData"]("agents_activity_on_enter")
+_OnEnterContextVar = contextvars.ContextVar["_OnEnterData | None"]("agents_activity_on_enter")
 
 
 @dataclass
@@ -344,10 +349,14 @@ class AgentActivity(RecognitionHooks):
         # one awaited inline AgentTask may pause this activity at a time
         self._inline_task_lock = asyncio.Lock()
         self._tool_choice: llm.ToolChoice | None = None
+        # the realtime session holds an ask's tool_choice instead of _tool_choice until restored
+        self._rt_tool_choice_overridden = False
 
         self._started = False
         self._closed = False
         self._scheduling_paused = True
+        # set while scheduling runs, and once the activity has closed
+        self._scheduling_resumed = asyncio.Event()
         self._new_turns_blocked = False
 
         self._current_speech: SpeechHandle | None = None
@@ -1214,6 +1223,17 @@ class AgentActivity(RecognitionHooks):
     async def _start_session(self, *, reuse_resources: _ReusableResources | None = None) -> None:
         assert self._lock.locked(), "_start_session should only be used when locked."
 
+        # session-long tasks must not inherit the on_enter marker of whoever started this activity
+        tk = _OnEnterContextVar.set(None)
+        try:
+            await self._start_session_impl(reuse_resources=reuse_resources)
+        finally:
+            _OnEnterContextVar.reset(tk)
+
+    async def _start_session_impl(
+        self, *, reuse_resources: _ReusableResources | None = None
+    ) -> None:
+        """Hook up the models and start the scheduling and audio-recognition tasks."""
         if isinstance(self.llm, llm.LLM):
             self.llm.on("metrics_collected", self._on_metrics_collected)
             self.llm.on("error", self._on_error)
@@ -1426,6 +1446,7 @@ class AgentActivity(RecognitionHooks):
         await self._session._keyterm_detector.aclose()
 
         self._scheduling_paused = True
+        self._scheduling_resumed.clear()
         # a parked preemptive generation is never scheduled, so the wait below would never
         # end. drop it here rather than in the callers: the flag above is what stops a new
         # one from being created, and it is only true from this point on.
@@ -1515,6 +1536,7 @@ class AgentActivity(RecognitionHooks):
         self._scheduling_atask = asyncio.create_task(
             self._scheduling_task(), name="_scheduling_task"
         )
+        self._scheduling_resumed.set()
 
     async def resume(
         self,
@@ -1646,6 +1668,7 @@ class AgentActivity(RecognitionHooks):
                 return
 
             self._closed = True
+            self._scheduling_resumed.set()
             self._cancel_preemptive_generation()
             await self._session._keyterm_detector.aclose()
 
@@ -2802,8 +2825,8 @@ class AgentActivity(RecognitionHooks):
         # When the audio recognition detects the end of a user turn:
         #  - check if realtime model server-side turn detection is enabled
         #  - check if there is no current generation happening
-        #  - cancel the current generation if it allows interruptions (otherwise skip this current
-        #  turn)
+        #  - cancel the current generation if it allows interruptions (otherwise skip the reply
+        #  but keep the user message)
         #  - generate a reply to the user input
 
         # interrupt all background speeches and wait for them to finish to update the chat context
@@ -2845,6 +2868,15 @@ class AgentActivity(RecognitionHooks):
                     "skipping reply to user input, current speech generation cannot be interrupted",
                     extra={"lk.pii.user_input": info.new_transcript},
                 )
+                # only the reply is skipped: if the user audio was kept, keep the message too
+                # (realtime models add their own transcript, the STT copy would duplicate it)
+                if (
+                    info.new_transcript != ""
+                    and not self._session.options.interruption["discard_audio_if_uninterruptible"]
+                    and not isinstance(self.llm, llm.RealtimeModel)
+                ):
+                    self._agent._chat_ctx.items.append(user_message)
+                    self._session._conversation_item_added(user_message)
                 return
             await self._cancel_speech_pause(self._cancel_speech_pause_task)
 
@@ -4150,7 +4182,12 @@ class AgentActivity(RecognitionHooks):
                             # a final text response instead of silently stopping.
                             tool_choice="none"
                             if max_steps_reached or draining or model_settings.tool_choice == "none"
-                            else "auto",
+                            else _reply_tool_choice(
+                                out.reply_tool_choice
+                                for out in tool_output.output
+                                if out.fnc_call_out.reply_required
+                            )
+                            or "auto",
                         ),
                         # the tool reply answers whatever user turn is still unanswered: this
                         # one if the reply only generated tools, or the last turn of a
@@ -4237,7 +4274,6 @@ class AgentActivity(RecognitionHooks):
             tool_ctx._exclude(on_enter_ignored)
             turn_tools = tool_ctx.flatten()
 
-        ori_tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN
         ori_tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN
         try:
             if not (
@@ -4249,7 +4285,7 @@ class AgentActivity(RecognitionHooks):
                     is_given(model_settings.tool_choice)
                     and model_settings.tool_choice != self._tool_choice
                 ):
-                    ori_tool_choice = self._tool_choice
+                    self._rt_tool_choice_overridden = True
                     self._rt_session.update_options(tool_choice=model_settings.tool_choice)
 
                 if is_given(turn_tools):
@@ -4295,17 +4331,23 @@ class AgentActivity(RecognitionHooks):
             )
         finally:
             # reset tool_choice and tools
-            if is_given(ori_tool_choice):
-                try:
-                    self._rt_session.update_options(tool_choice=ori_tool_choice)
-                except Exception:
-                    logger.exception("failed to reset tool_choice")
+            self._restore_rt_tool_choice()
 
             if is_given(ori_tools):
                 try:
                     await self._rt_session.update_tools(ori_tools)
                 except Exception:
                     logger.exception("failed to reset tools")
+
+    def _restore_rt_tool_choice(self) -> None:
+        """Put the activity's tool_choice back on the realtime session after an ask overrode it."""
+        if not self._rt_tool_choice_overridden or self._rt_session is None:
+            return
+        self._rt_tool_choice_overridden = False
+        try:
+            self._rt_session.update_options(tool_choice=self._tool_choice)
+        except Exception:
+            logger.exception("failed to reset tool_choice")
 
     @utils.log_exceptions(logger=logger)
     async def _realtime_generation_task(
@@ -4900,6 +4942,11 @@ class AgentActivity(RecognitionHooks):
                     task = asyncio.create_task(_wait_for_auto_tool_reply())
                     run_state._watch_handle(task)
 
+                # a model that replies to tool output itself does so under the session's
+                # tool_choice, so an ask's forced one must not outlive the call that answered it
+                if self._rt_session.capabilities.auto_tool_reply_generation:
+                    self._restore_rt_tool_choice()
+
                 try:
                     async with self._rt_chat_ctx_lock:
                         chat_ctx = self._rt_session.chat_ctx.copy()
@@ -4934,7 +4981,12 @@ class AgentActivity(RecognitionHooks):
                             # passing tool response back to the LLM
                             tool_choice="none"
                             if max_steps_reached or draining or model_settings.tool_choice == "none"
-                            else "auto",
+                            else _reply_tool_choice(
+                                out.reply_tool_choice
+                                for out in tool_output.output
+                                if out.fnc_call_out.reply_required
+                            )
+                            or "auto",
                         ),
                         tool_reply=True,
                     ),

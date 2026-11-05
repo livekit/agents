@@ -1,7 +1,7 @@
 import pytest
 
 from livekit import rtc
-from livekit.agents.stt import SpeechData
+from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType
 from livekit.agents.stt.multi_speaker_adapter import (
     PrimarySpeakerDetectionOptions,
     _PrimarySpeakerDetector,
@@ -47,6 +47,40 @@ def _push_speech(
     detector.push_audio(_constant_frame(amplitude))
     detector.push_audio(_constant_frame(amplitude))
     detector._update_primary_speaker(_speech_data(speaker_id, start_time, start_time + 0.2))
+
+
+@pytest.mark.parametrize("speaker_id", ["A", "B"])
+@pytest.mark.parametrize("suppress_background", [False, True])
+def test_timed_endpoint_is_forwarded_without_formatting(
+    speaker_id: str, suppress_background: bool
+) -> None:
+    detector = _PrimarySpeakerDetector(
+        suppress_background_speaker=suppress_background,
+        primary_detection_options=PrimarySpeakerDetectionOptions(min_rms_samples=1),
+        primary_format="primary: {text}",
+        background_format="background: {text}",
+    )
+    _push_speech(detector, "A", amplitude=3000, start_time=0.0)
+    _push_speech(detector, "B", amplitude=50, start_time=0.2)
+
+    final = SpeechEvent(
+        type=SpeechEventType.FINAL_TRANSCRIPT,
+        alternatives=[_speech_data(speaker_id, 0.2, 0.4)],
+    )
+    updated_final = detector.on_stt_event(final)
+    if speaker_id == "B" and suppress_background:
+        assert updated_final is None
+    else:
+        assert updated_final is final
+        prefix = "primary" if speaker_id == "A" else "background"
+        assert final.alternatives[0].text == f"{prefix}: hello"
+
+    final_text = final.alternatives[0].text
+    endpoint = SpeechEvent(type=SpeechEventType.END_OF_SPEECH, alternatives=final.alternatives)
+
+    assert detector.on_stt_event(endpoint) is endpoint
+    assert endpoint.alternatives[0].end_time == 0.4
+    assert final.alternatives[0].text == final_text
 
 
 class TestPrimarySpeakerReset:

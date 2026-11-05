@@ -17,14 +17,14 @@ pytestmark = pytest.mark.unit
 PCM = b"\x00\x01" * 4800  # 200ms of 16-bit mono at 24kHz
 
 
-def _tts(handler, *, model: str, response_format: str = "pcm") -> TTS:
+def _tts(handler, *, model: str, response_format: str = "pcm", sample_rate: int = 24000) -> TTS:
     client = openai.AsyncClient(
         api_key="test",
         base_url="https://compatible.example.com/v1",
         max_retries=0,
         http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
     )
-    return TTS(model=model, client=client, response_format=response_format)
+    return TTS(model=model, client=client, response_format=response_format, sample_rate=sample_rate)
 
 
 async def _synthesize(tts: TTS) -> bytes:
@@ -33,6 +33,45 @@ async def _synthesize(tts: TTS) -> bytes:
         async for ev in stream:
             audio += ev.frame.data.tobytes()
     return audio
+
+
+@pytest.mark.parametrize(
+    "sample_rate", [-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10.5, float("nan"), float("inf")]
+)
+def test_rejects_invalid_sample_rate_before_synthesis(sample_rate: float) -> None:
+    with pytest.raises(ValueError, match="sample_rate must be an integer of at least 10 Hz"):
+        TTS(api_key="test", sample_rate=sample_rate)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("sample_rate", "expected_rate"),
+    [(None, 24000), (10, 10), (44100, 44100)],
+)
+async def test_preserves_pcm_and_frame_metadata_for_sample_rate(
+    sample_rate: int | None, expected_rate: int
+) -> None:
+    samples = bytes(i % 256 for i in range((expected_rate // 5 + 1) * 2))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=samples, headers={"content-type": "audio/pcm"})
+
+    kwargs = {} if sample_rate is None else {"sample_rate": sample_rate}
+    tts = _tts(handler, model="tts-1", **kwargs)
+    events = []
+    async with tts.synthesize("hello") as stream:
+        async for event in stream:
+            events.append(event)
+
+    assert tts.sample_rate == expected_rate
+    frames = [event.frame for event in events]
+    assert frames
+    assert all(frame.sample_rate == expected_rate for frame in frames)
+    assert all(frame.num_channels == 1 for frame in frames)
+    audio = b"".join(frame.data.tobytes() for frame in frames)
+    assert audio[: len(samples)] == samples
+    assert not any(audio[len(samples) :])
+    assert not any(event.is_final for event in events[:-1])
+    assert events[-1].is_final
 
 
 @pytest.mark.parametrize("model", ["hexgrad/Kokoro-82M", "gpt-4o-mini-tts"])

@@ -18,6 +18,8 @@ from .interruption import (
     OverlappingSpeechEvent,
 )
 from .llm import LLM, LLMModels, LLMStream, llm_from_model_string
+
+from . import responses  # isort: skip  # must follow .llm
 from .stt import STT, STTModels
 from .tts import TTS, TTSModels
 from .vad import VAD, VADModels
@@ -77,4 +79,5 @@ __all__ = [
     "is_realtime_model",
     "is_duplex_model",
     "llm_from_model_string",
+    "responses",
 ]

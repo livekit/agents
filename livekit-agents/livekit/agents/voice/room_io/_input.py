@@ -48,6 +48,9 @@ class _ParticipantInputStream(Generic[T], ABC):
         self._track: rtc.RemoteTrack | None = None
         self._stream: rtc.VideoStream | rtc.AudioStream | None = None
         self._participant_identity: str | None = None
+        # when set, only this exact publication is accepted, rather than any track of the
+        # linked participant whose source is accepted
+        self._track_sid: str | None = None
         self._attached = True
         self._closed = False
 
@@ -109,6 +112,25 @@ class _ParticipantInputStream(Generic[T], ABC):
             },
         )
         self._attached = False
+
+    def set_track_sid(self, track_sid: str | None) -> None:
+        """Pin the stream to one publication of the linked participant.
+
+        ``None`` restores the default, which takes any track whose source is accepted.
+        """
+        if self._track_sid == track_sid:
+            return
+
+        self._track_sid = track_sid
+        self._close_stream()
+
+        if (identity := self._participant_identity) is None:
+            return
+
+        if (participant := self._room.remote_participants.get(identity)) is not None:
+            for publication in participant.track_publications.values():
+                if publication.track:
+                    self._on_track_available(publication.track, publication, participant)
 
     def set_participant(self, participant: rtc.RemoteParticipant | str | None) -> None:
         # set_participant can be called before the participant is connected
@@ -257,6 +279,7 @@ class _ParticipantInputStream(Generic[T], ABC):
             self._closed
             or self._participant_identity != participant.identity
             or publication.source not in self._accepted_sources
+            or (self._track_sid is not None and publication.sid != self._track_sid)
             or (
                 self._publication is not None
                 and self._publication.sid == publication.sid
@@ -342,11 +365,13 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
         auto_gain_control: bool = True,
         pre_connect_audio_handler: PreConnectAudioHandler | None,
         frame_size_ms: int = 50,
+        track_source: rtc.TrackSource.ValueType
+        | list[rtc.TrackSource.ValueType] = rtc.TrackSource.SOURCE_MICROPHONE,
     ) -> None:
         _ParticipantInputStream.__init__(
             self,
             room=room,
-            track_source=rtc.TrackSource.SOURCE_MICROPHONE,
+            track_source=track_source,
             processor=(
                 noise_cancellation if isinstance(noise_cancellation, rtc.FrameProcessor) else None
             ),
