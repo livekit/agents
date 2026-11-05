@@ -15,6 +15,8 @@ from ..llm import (
     DuplexModel,
     DuplexRealtimeAdapter,
     FunctionCall,
+    FunctionTool,
+    RawFunctionTool,
     RealtimeModel,
     ToolError,
     find_function_tools,
@@ -938,8 +940,9 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         self._preserve_function_call_history = preserve_function_call_history
 
         self._old_agent: Agent | None = None
-        # the tool call this task is awaited in, if any
+        # the tool call this task is awaited in, if any, and the tool that runs it
         self._awaiting_call: FunctionCall | None = None
+        self._awaiting_tool: FunctionTool | RawFunctionTool | None = None
         self.__awaiter: tuple[SpeechHandle | None, asyncio.Task[Any]] | None = None
 
     def done(self) -> bool:
@@ -1008,6 +1011,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                 f"{self.__class__.__name__} should only be awaited inside tool_functions or the on_enter/on_exit methods of an Agent"  # noqa: E501
             )
         self._awaiting_call = task_info.function_call
+        self._awaiting_tool = task_info.function_tool
 
         # imported at call time: agent_activity imports Agent at module scope, so the reverse can't
         from .agent_activity import _AgentActivityContextVar, _SpeechHandleContextVar
@@ -1172,6 +1176,8 @@ class AgentTask(Agent, Generic[TaskResult_T]):
 @dataclass
 class _ActivityTaskInfo:
     function_call: llm.FunctionCall | None = None
+    # the tool that runs function_call
+    function_tool: llm.FunctionTool | llm.RawFunctionTool | None = None
     speech_handle: SpeechHandle | None = None
     inline_task: bool = False
 
@@ -1180,6 +1186,7 @@ def _set_activity_task_info(
     task: asyncio.Task[Any],
     *,
     function_call: NotGivenOr[llm.FunctionCall | None] = NOT_GIVEN,
+    function_tool: NotGivenOr[llm.FunctionTool | llm.RawFunctionTool | None] = NOT_GIVEN,
     speech_handle: NotGivenOr[SpeechHandle | None] = NOT_GIVEN,
     inline_task: NotGivenOr[bool] = NOT_GIVEN,
 ) -> None:
@@ -1187,6 +1194,9 @@ def _set_activity_task_info(
 
     if is_given(function_call):
         info.function_call = function_call
+
+    if is_given(function_tool):
+        info.function_tool = function_tool
 
     if is_given(speech_handle):
         info.speech_handle = speech_handle

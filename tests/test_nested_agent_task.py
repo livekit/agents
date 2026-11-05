@@ -208,6 +208,56 @@ async def test_awaited_session_tool_stays_shown_as_running() -> None:
     assert _shown_as_running(seen, "payment_greeting") == ["start_payment"]
 
 
+class FinishTask(AgentTask):
+    def __init__(self) -> None:
+        super().__init__(instructions="finish task")
+
+    async def on_enter(self) -> None:
+        await self.session.generate_reply(instructions="finish_greeting")
+
+    @function_tool
+    async def finish(self, ctx: RunContext) -> str:
+        """Completes the task."""
+        self.complete(None)
+        return "done"
+
+
+class RootWithFinish(Agent):
+    def __init__(self) -> None:
+        super().__init__(instructions="root agent")
+
+    @function_tool
+    async def finish(self, ctx: RunContext) -> str:
+        """Hands over to FinishTask."""
+        await FinishTask()
+        return "finished"
+
+
+@pytest.mark.asyncio
+async def test_awaiting_tool_named_like_a_task_tool_is_hidden() -> None:
+    """The task's own `finish` is another tool than the parent's `finish` awaiting it: a
+    placeholder for the parent's call would tell the task its `finish` is already running."""
+    llm = FakeLLM(
+        fake_responses=[
+            FakeLLMResponse(
+                input="go",
+                content="",
+                ttft=0,
+                duration=0,
+                tool_calls=[FunctionToolCall(name="finish", arguments="{}", call_id="call_fin")],
+            ),
+            FakeLLMResponse(input="finish_greeting", content="hi", ttft=0, duration=0),
+        ]
+    )
+    seen = _record_llm_inputs(llm)
+
+    async with AgentSession(llm=llm) as sess:
+        await sess.start(RootWithFinish())
+        await asyncio.wait_for(sess.run(user_input="go"), timeout=5.0)
+
+    assert _shown_as_running(seen, "finish_greeting") == []
+
+
 class SimpleTask(AgentTask):
     """A task that needs a user turn to complete (user must trigger 'finish')."""
 
