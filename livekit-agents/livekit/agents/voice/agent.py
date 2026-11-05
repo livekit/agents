@@ -14,6 +14,7 @@ from ..llm import (
     ChatContext,
     DuplexModel,
     DuplexRealtimeAdapter,
+    FunctionCall,
     RealtimeModel,
     ToolError,
     find_function_tools,
@@ -937,6 +938,8 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         self._preserve_function_call_history = preserve_function_call_history
 
         self._old_agent: Agent | None = None
+        # the tool call this task is awaited in, if any
+        self._awaiting_call: FunctionCall | None = None
         self.__awaiter: tuple[SpeechHandle | None, asyncio.Task[Any]] | None = None
 
     def done(self) -> bool:
@@ -1004,6 +1007,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
             raise RuntimeError(
                 f"{self.__class__.__name__} should only be awaited inside tool_functions or the on_enter/on_exit methods of an Agent"  # noqa: E501
             )
+        self._awaiting_call = task_info.function_call
 
         # imported at call time: agent_activity imports Agent at module scope, so the reverse can't
         from .agent_activity import _AgentActivityContextVar, _SpeechHandleContextVar

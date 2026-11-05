@@ -77,12 +77,7 @@ async def test_nested_agent_task_no_deadlock():
         assert second_result is not None
 
 
-@pytest.mark.asyncio
-async def test_awaited_task_is_not_shown_its_parent_tool_as_running() -> None:
-    """A task awaited inside a tool can't call that tool, so its LLM must not get an
-    in-progress pair for it: the model calls the tool anyway and gets "unknown function"
-    back, an extra LLM round before the task's first question (livekit/livekit#5139)."""
-    llm = _build_fake_llm()
+def _record_llm_inputs(llm: FakeLLM) -> list[ChatContext]:
     seen: list[ChatContext] = []
     chat = llm.chat
 
@@ -91,27 +86,84 @@ async def test_awaited_task_is_not_shown_its_parent_tool_as_running() -> None:
         return chat(**kwargs)
 
     llm.chat = _recording_chat  # type: ignore[method-assign]
+    return seen
+
+
+def _shown_as_running(seen: list[ChatContext], instructions: str) -> list[str] | None:
+    """Names of the in-progress pairs in the turn generated for ``instructions``."""
+    for ctx in seen:
+        last = ctx.items[-1]
+        if last.type == "message" and last.text_content == instructions:
+            return [
+                item.name
+                for item in ctx.items
+                if item.type == "function_call" and item.extra.get(_RUNNING_PLACEHOLDER_KEY)
+            ]
+    return None
+
+
+@pytest.mark.asyncio
+async def test_awaited_task_is_not_shown_its_parent_tool_as_running() -> None:
+    """A task awaited inside a tool can't call that tool, so its LLM must not get an
+    in-progress pair for it: the model calls the tool anyway and gets "unknown function"
+    back, an extra LLM round before the task's first question (livekit/livekit#5139)."""
+    llm = _build_fake_llm()
+    seen = _record_llm_inputs(llm)
 
     async with AgentSession(llm=llm) as sess:
         await sess.start(RootAgent())
         await asyncio.wait_for(sess.run(user_input="go"), timeout=5.0)
 
-    # OuterTask's on_enter reply runs while start_outer awaits it; InnerTask's while
-    # start_inner awaits it. Neither task has the tool that is awaiting it.
-    task_turns = {
-        ctx.items[-1].text_content: ctx
-        for ctx in seen
-        if ctx.items[-1].type == "message"
-        and ctx.items[-1].text_content in ("outer_greeting", "inner_greeting")
-    }
-    assert "outer_greeting" in task_turns
-    for greeting, ctx in task_turns.items():
-        running = [
-            item.name
-            for item in ctx.items
-            if item.type == "function_call" and item.extra.get(_RUNNING_PLACEHOLDER_KEY)
+    # OuterTask's on_enter reply runs while start_outer awaits it, InnerTask's while
+    # start_inner and start_outer await it
+    assert _shown_as_running(seen, "outer_greeting") == []
+    assert _shown_as_running(seen, "inner_greeting") == []
+
+
+class RootWithBackgroundJob(Agent):
+    def __init__(self) -> None:
+        super().__init__(instructions="root agent")
+
+    @function_tool
+    async def start_outer(self, ctx: RunContext) -> str:
+        """Transitions into OuterTask."""
+        await OuterTask()
+        return "outer completed"
+
+    @function_tool
+    async def background_job(self, ctx: RunContext) -> str:
+        """Runs a long job."""
+        await asyncio.sleep(1.0)
+        return "job done"
+
+
+@pytest.mark.asyncio
+async def test_awaited_task_still_sees_other_running_tools() -> None:
+    """Only the calls awaiting the task are hidden from it. Another running call keeps its
+    in-progress pair even if the task doesn't list that tool: a custom llm_node can add
+    tools on every turn, so the listed tools can't tell what the model may re-issue."""
+    llm = FakeLLM(
+        fake_responses=[
+            FakeLLMResponse(
+                input="go",
+                content="",
+                ttft=0,
+                duration=0,
+                tool_calls=[
+                    FunctionToolCall(name="background_job", arguments="{}", call_id="call_job"),
+                    FunctionToolCall(name="start_outer", arguments="{}", call_id="call_outer"),
+                ],
+            ),
+            FakeLLMResponse(input="outer_greeting", content="hi", ttft=0, duration=0),
         ]
-        assert running == [], f"{greeting} turn was shown {running} as running"
+    )
+    seen = _record_llm_inputs(llm)
+
+    async with AgentSession(llm=llm) as sess:
+        await sess.start(RootWithBackgroundJob())
+        await asyncio.wait_for(sess.run(user_input="go"), timeout=5.0)
+
+    assert _shown_as_running(seen, "outer_greeting") == ["background_job"]
 
 
 class SimpleTask(AgentTask):
