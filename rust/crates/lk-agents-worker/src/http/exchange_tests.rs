@@ -812,7 +812,7 @@ impl lk_agents_abi::a2a::door::TextEndpoint for Door {
 
 // Catches: an A2A route reaching the binding, or a door served without the worker's settings.
 #[tokio::test]
-async fn a_text_route_is_served_by_its_door_and_everything_else_by_the_binding() {
+async fn a_door_route_is_served_by_its_door_and_everything_else_by_the_binding() {
     let settings = crate::server::ServerSettings {
         api_key: "key".into(),
         api_secret: "secret".into(),
@@ -840,18 +840,16 @@ async fn a_text_route_is_served_by_its_door_and_everything_else_by_the_binding()
     )
     .with_text(text);
     let raw = b"GET /desk/v1 HTTP/1.1\r\nHost: x\r\n\r\n";
-    let request = |route: &str, kind| EndpointRequest { route: route.into(), kind, ..preamble() };
-    let text = lk_agents_abi::worker::http::EndpointKind::Text;
-    let (out, _) = exchange_with(&server, raw, request("/desk/{path:path}", text)).await;
+    let request = |route: &str| EndpointRequest { route: route.into(), ..preamble() };
+    let (out, _) = exchange_with(&server, raw, request("/desk/{path:path}")).await;
     assert_eq!(
         String::from_utf8(parse(&out).body).unwrap(),
         "/desk/{path:path} Some(\"/agents/front/default/desk\") \
          Some((\"key\", \"secret\")) front"
     );
-    let http = lk_agents_abi::worker::http::EndpointKind::Http;
-    for (route, kind) in [("/desk/{path:path}", http), ("/other/{path:path}", text)] {
-        let (out, _) = exchange_with(&server, raw, request(route, kind)).await;
-        assert_eq!(parse(&out).body, b"binding", "{route} {kind:?}");
+    for route in ["/other/{path:path}", "/desk", "/desk/{id}", "/desk/v1/{path:path}"] {
+        let (out, _) = exchange_with(&server, raw, request(route)).await;
+        assert_eq!(parse(&out).body, b"binding", "{route}");
     }
 }
 

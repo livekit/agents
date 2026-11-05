@@ -192,7 +192,7 @@ Native storage/runtime own transactions, revisions, thread resolution and run-re
 
 ### A2A and HTTP adapters
 
-Keep ASGI request/response adaptation for the application's HTTP routes and authored route/handler registration. A2A endpoints are served natively: the worker hands each `text` route's exchange to the runtime's A2A door, which owns route matching, authentication, the payload budget, extension negotiation, the card and JSON/SSE framing; Python supplies only the handler. Core/net/runtime own authentication decisions, routing state, exchange lifecycle and cancellation; generate configuration and native projections.
+Keep ASGI request/response adaptation for the application's HTTP routes and authored route/handler registration. A2A endpoints are served natively: the worker registers each endpoint's `/<endpoint>/{path:path}` route as an ordinary HTTP route and hands its exchanges to the runtime's A2A door, which owns route matching, authentication, the payload budget, extension negotiation, the card and JSON/SSE framing; Python supplies only the handler. Core/net/runtime own authentication decisions, routing state, exchange lifecycle and cancellation; generate configuration and native projections.
 
 | File | Lines |
 | --- | ---: |

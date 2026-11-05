@@ -325,7 +325,7 @@ class AgentServer(AgentHandler):
                     EndpointRoute(
                         path=f"/{name}/{{path:path}}",
                         methods=["GET", "HEAD", "POST"],
-                        kind="text",
+                        kind="http",
                         public=False,
                     )
                     for name in self._a2a_endpoints

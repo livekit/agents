@@ -163,12 +163,9 @@ pub struct TextDoors {
 }
 
 impl TextDoors {
-    /// The door of a `text` route (`/<endpoint>/{path:path}`) and its request's serving.
+    /// The door of a door route (`/<endpoint>/{path:path}`) and its request's serving.
     fn route(&self, request: &RequestMetadata) -> Option<(&Arc<dyn TextEndpoint>, TextServing)> {
-        if request.kind != EndpointKind::Text {
-            return None;
-        }
-        let name = request.route.trim_start_matches('/').split('/').next()?;
+        let name = request.route.strip_prefix('/')?.strip_suffix("/{path:path}")?;
         let door = self.doors.iter().find(|door| door.name() == name)?;
         let serving = self.serving.lock().clone();
         let settings = self.settings.lock();
