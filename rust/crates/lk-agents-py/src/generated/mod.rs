@@ -104,7 +104,6 @@ pub trait Implementations: 'static {
     type ImageFunctions: ::lk_agents_abi::media::images::ImageFunctions;
     type AudioEmitter: ::lk_agents_abi::media::emitter::AudioEmitter;
     type AudioDecoder: ::lk_agents_abi::media::codecs::AudioDecoder;
-    type StreamBuffer: ::lk_agents_abi::media::codecs::StreamBuffer;
     type MediaTokenization: ::lk_agents_abi::media::codecs::MediaTokenization;
     type RuntimeLoad: ::lk_agents_abi::metrics::RuntimeLoad;
     type MetricsRecords: ::lk_agents_abi::metrics::MetricsRecords;
@@ -338,7 +337,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(media::serialize_image_url, m)?)?;
     m.add_class::<media::AudioEmitter>()?;
     m.add_class::<media::AudioDecoder>()?;
-    m.add_class::<media::StreamBuffer>()?;
     m.add_function(wrap_pyfunction!(media::split_sentences, m)?)?;
     m.add_function(wrap_pyfunction!(metrics::runtime_busy_seconds, m)?)?;
     m.add_function(wrap_pyfunction!(metrics::metrics_log_fields, m)?)?;

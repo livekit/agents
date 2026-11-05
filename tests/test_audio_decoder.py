@@ -4,8 +4,6 @@ import io
 import logging
 import os
 import struct
-import subprocess
-import sys
 import time
 
 import pytest
@@ -191,42 +189,6 @@ async def test_aborted_read_does_not_signal_end_of_input(monkeypatch: pytest.Mon
 
     assert pushes, "the reader never ran, so the abort was never exercised"
     assert ends == []
-
-
-def test_native_pipe_read_releases_gil_for_its_writer() -> None:
-    # Isolate the deliberate blocked read: retaining the GIL would deadlock its writer.
-    subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            """
-import threading
-import time
-from livekit.agents import _core
-
-pipe = _core.StreamBuffer()
-started = threading.Event()
-received = []
-def read():
-    started.set()
-    received.append(pipe.read(4))
-reader = threading.Thread(target=read, daemon=True)
-reader.start()
-assert started.wait(1)
-time.sleep(0.01)
-payload = bytearray(b"tail")
-pipe.write(memoryview(payload))
-payload[:] = b"gone"
-reader.join(1)
-assert not reader.is_alive()
-assert received == [b"tail"]
-pipe.end_input()
-assert pipe.read() == b""
-""",
-        ],
-        check=True,
-        timeout=10,
-    )
 
 
 @pytest.mark.asyncio

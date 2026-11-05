@@ -14,9 +14,6 @@ __all__ = [
 ]
 
 
-StreamBuffer = _core.StreamBuffer
-
-
 class AudioStreamDecoder:
     """A class that can be used to decode audio stream into PCM AudioFrames.
 

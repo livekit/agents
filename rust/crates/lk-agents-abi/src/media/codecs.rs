@@ -40,28 +40,6 @@ pub trait AudioDecoder: Send + Sync + Sized + 'static {
     async fn aclose(&self) -> Result<(), CodecFailure>;
 }
 
-/// A byte pipe: normal EOF drains buffered bytes; close discards them immediately.
-#[crate::host(class(name = "StreamBuffer"))]
-pub trait StreamBuffer: Send + Sync + Sized + 'static {
-    #[host(new)]
-    fn new() -> Self;
-    #[host(call)]
-    fn write(&self, data: &[u8]);
-    #[host(call)]
-    fn end_input(&self);
-    #[host(call)]
-    fn close(&self);
-    #[host(call, name = "__len__")]
-    fn len(&self) -> usize;
-    /// Whether the pipe has no buffered bytes.
-    #[host(call)]
-    fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-    #[host(call)]
-    fn read(&self, #[host(default = -1)] size: isize) -> Vec<u8>;
-}
-
 /// Native sentence tokenization shared by buffered TTS token streams.
 #[crate::host(functions(pid = false))]
 pub trait MediaTokenization: Send + Sync + Sized + 'static {

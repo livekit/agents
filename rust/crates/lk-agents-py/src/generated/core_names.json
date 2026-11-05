@@ -79,7 +79,6 @@
     "SpeechHandle",
     "StaleHandle",
     "Storage",
-    "StreamBuffer",
     "SttAdapterStream",
     "SttNodeEvents",
     "SttStreamAdapter",

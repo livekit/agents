@@ -1,6 +1,6 @@
-//! `StreamBuffer` (`utils/codecs/decoder.py:65-142`), public via `utils.codecs.__all__`: a blocking
-//! pipe giving a decode job a blocking `read`. `end_input` drains then EOFs; `close` EOFs at once
-//! even with bytes unread, which is how the decode job tells a teardown from a failure.
+//! `StreamBuffer`: a blocking pipe giving a decode job a blocking `read`. `end_input` drains then
+//! EOFs; `close` EOFs at once even with bytes unread, which is how the decode job tells a teardown
+//! from a failure.
 
 use std::collections::VecDeque;
 use std::thread::Thread;
@@ -20,10 +20,7 @@ struct Inner {
     readers: Vec<Thread>,
 }
 
-/// A thread-safe buffer that behaves like an IO stream.
-///
-/// A byte pipe: write from one thread, read from another. The first paragraph is the class's
-/// `__doc__`, and the same sentence heads the impl's doc, which the `.pyi` is written from.
+/// A byte pipe: write from one thread, read from another.
 #[derive(Default)]
 pub struct StreamBuffer {
     inner: Mutex<Inner>,
@@ -118,18 +115,6 @@ impl StreamBuffer {
         self.inner.lock().len
     }
 
-    /// `read(size=-1)`: blocks (the binding releases the GIL) until data is available, EOF is
-    /// signalled, or the buffer is closed. `-1` reads what is available now, not the whole stream.
-    pub fn read_up_to(&self, size: isize) -> Vec<u8> {
-        if size == 0 {
-            return Vec::new();
-        }
-        let mut buf = vec![0u8; if size < 0 { self.len().max(1) } else { size as usize }];
-        let n = self.read(&mut buf);
-        buf.truncate(n);
-        buf
-    }
-
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -149,27 +134,6 @@ impl Inner {
             self.chunks.pop_front();
             self.offset = 0;
         }
-    }
-}
-
-impl lk_agents_abi::media::codecs::StreamBuffer for StreamBuffer {
-    fn new() -> Self {
-        Self::new()
-    }
-    fn write(&self, data: &[u8]) {
-        self.write(data);
-    }
-    fn end_input(&self) {
-        self.end_input();
-    }
-    fn close(&self) {
-        self.close();
-    }
-    fn len(&self) -> usize {
-        self.len()
-    }
-    fn read(&self, size: isize) -> Vec<u8> {
-        self.read_up_to(size)
     }
 }
 

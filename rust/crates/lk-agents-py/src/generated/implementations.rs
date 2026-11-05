@@ -66,7 +66,6 @@ impl super::Implementations for Selected {
     type ImageFunctions = ::lk_agents_runtime::inference::images::ImageFunctions;
     type AudioEmitter = ::lk_agents_runtime::inference::tts::emitter::AudioEmitter;
     type AudioDecoder = ::lk_agents_runtime::inference::codecs::StreamDecoder;
-    type StreamBuffer = ::lk_agents_runtime::inference::codecs::StreamBuffer;
     type MediaTokenization = ::lk_agents_runtime::media::blingfire::MediaTokenization;
     type RuntimeLoad = ::lk_agents_runtime::process::RuntimeLoad;
     type MetricsRecords = ::lk_agents_runtime::cores::MetricsRecords;
