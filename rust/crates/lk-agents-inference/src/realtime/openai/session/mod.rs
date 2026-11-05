@@ -18,9 +18,11 @@ use tokio::sync::{Mutex, mpsc};
 
 use crate::headers::BoundIdentity;
 use crate::realtime::dialect::{Dialect, Protocol, TurnDetection};
+use crate::realtime::machine::connection::RealtimeConnection;
 use crate::realtime::machine::{OptionsPatch, RealtimeMachine, SessionOptions, Step};
 use crate::realtime::openai::wire::{self, Azure, IdGen, RandomIds, WireShape};
 use lk_agents_abi::llm::realtime::{Event, RealtimeCapabilities};
+use std::ops::ControlFlow;
 
 /// How a connection authenticates.
 pub enum Auth {
@@ -481,61 +483,42 @@ impl Pump {
     }
 
     async fn run_loop(&self, mut commands: media_queue::AudioReceiver<Cmd>) {
-        use crate::realtime::machine::connection::RealtimeConnection;
         let mut connection = RealtimeConnection::new(&self.connect.conn, self.clock.now());
         let mut effects = connection.start(self.clock.now());
-        let mut reconnecting = false;
+        let mut attempt = ConnectAttempt::First;
         loop {
             let mut follow_up = Vec::new();
             for effect in effects {
-                match effect {
+                let flow = match effect {
                     RealtimeConnectionEffect::Connect { generation } => {
-                        let outcome = self
-                            .connect_and_run(
-                                &mut commands,
-                                reconnecting,
-                                &mut connection,
-                                generation,
-                            )
-                            .await;
-                        reconnecting = true;
-                        match outcome {
-                            Ok(Outcome::Closed) => {
-                                let _ = connection.close(self.clock.now());
-                                let _ = connection.released(generation, self.clock.now());
-                                return;
-                            }
-                            Ok(Outcome::Fatal(error)) => {
-                                let _ = self.events.send(Event::Error(error));
-                                let _ = connection.close(self.clock.now());
-                                let _ = connection.released(generation, self.clock.now());
-                                self.close().await;
-                                return;
-                            }
-                            Ok(Outcome::ConnectionEffects(effects)) => follow_up.extend(effects),
-                            Ok(Outcome::Recycle) => follow_up.extend(connection.failed(
-                                generation,
-                                self.clock.now(),
-                                self.lost(),
-                            )),
-                            Err(error) => follow_up.extend(connection.failed(
-                                generation,
-                                self.clock.now(),
-                                error,
-                            )),
-                        }
-                        follow_up.extend(connection.released(generation, self.clock.now()));
+                        let run = self.connect_and_run(
+                            &mut commands,
+                            attempt,
+                            &mut connection,
+                            generation,
+                        );
+                        let outcome = run.await;
+                        attempt = ConnectAttempt::Reconnect;
+                        self.settle_connection(outcome, &mut connection, generation, &mut follow_up)
+                            .await
                     }
-                    RealtimeConnectionEffect::Retry { error } => self.emit_error(error, true),
+                    RealtimeConnectionEffect::Retry { error } => {
+                        self.emit_error(error, Recovery::Retrying);
+                        ControlFlow::Continue(())
+                    }
                     RealtimeConnectionEffect::Failed { error } => {
-                        self.emit_error(error, false);
+                        self.emit_error(error, Recovery::GivenUp);
                         self.close().await;
-                        return;
+                        ControlFlow::Break(())
                     }
-                    RealtimeConnectionEffect::Close { .. } => {}
+                    RealtimeConnectionEffect::Close { .. } => ControlFlow::Continue(()),
                     effect @ RealtimeConnectionEffect::CleanupIncomplete { .. } => {
-                        self.observe_cleanup(effect)
+                        self.observe_cleanup(effect);
+                        ControlFlow::Continue(())
                     }
+                };
+                if flow.is_break() {
+                    return;
                 }
             }
             if !follow_up.is_empty() {
@@ -557,13 +540,60 @@ impl Pump {
         }
     }
 
+    /// Hands a finished connection's outcome to the connection policy. A close or a fatal error
+    /// ends the session; anything else queues the policy's follow-up effects.
+    async fn settle_connection(
+        &self,
+        outcome: Result<Outcome, ApiError>,
+        connection: &mut RealtimeConnection,
+        generation: u64,
+        follow_up: &mut Vec<RealtimeConnectionEffect>,
+    ) -> ControlFlow<()> {
+        let effects = match outcome {
+            Ok(Outcome::Closed) => {
+                let _ = connection.close(self.clock.now());
+                let _ = connection.released(generation, self.clock.now());
+                return ControlFlow::Break(());
+            }
+            Ok(Outcome::Fatal(error)) => {
+                let _ = self.events.send(Event::Error(error));
+                let _ = connection.close(self.clock.now());
+                let _ = connection.released(generation, self.clock.now());
+                self.close().await;
+                return ControlFlow::Break(());
+            }
+            Ok(Outcome::ConnectionEffects(effects)) => effects,
+            Ok(Outcome::Recycle) => connection.failed(generation, self.clock.now(), self.lost()),
+            Err(error) => connection.failed(generation, self.clock.now(), error),
+        };
+        follow_up.extend(effects);
+        follow_up.extend(connection.released(generation, self.clock.now()));
+        ControlFlow::Continue(())
+    }
+
+    /// Ticks the connection policy. Anything beyond cleanup diagnostics ends the connection with
+    /// those effects; cleanup diagnostics are observed here.
+    fn tick_connection(&self, connection: &mut RealtimeConnection) -> ControlFlow<Outcome> {
+        let effects = connection.tick(self.clock.now());
+        if effects
+            .iter()
+            .any(|effect| !matches!(effect, RealtimeConnectionEffect::CleanupIncomplete { .. }))
+        {
+            return ControlFlow::Break(Outcome::ConnectionEffects(effects));
+        }
+        for effect in effects {
+            self.observe_cleanup(effect);
+        }
+        ControlFlow::Continue(())
+    }
+
     /// One connection: open, replay on a reconnect, run until it ends. `Err` is the attempt's
     /// failure, retryable or not.
     async fn connect_and_run(
         &self,
         commands: &mut media_queue::AudioReceiver<Cmd>,
-        reconnecting: bool,
-        connection: &mut crate::realtime::machine::connection::RealtimeConnection,
+        attempt: ConnectAttempt,
+        connection: &mut RealtimeConnection,
         generation: u64,
     ) -> Result<Outcome, ApiError> {
         let t0 = self.clock.now();
@@ -576,11 +606,9 @@ impl Pump {
                 biased;
                 () = self.shared.closing.notified() => { self.close().await; return Ok(Outcome::Closed); }
                 () = async { match deadline { Some(at) => self.clock.wait_until(at).await, None => std::future::pending().await } } => {
-                    let effects = connection.tick(self.clock.now());
-                    if effects.iter().any(|effect| !matches!(effect, crate::effects::RealtimeConnectionEffect::CleanupIncomplete { .. })) {
-                        return Ok(Outcome::ConnectionEffects(effects));
+                    if let ControlFlow::Break(outcome) = self.tick_connection(connection) {
+                        return Ok(outcome);
                     }
-                    for effect in effects { self.observe_cleanup(effect); }
                 }
                 result = &mut connect => match result {
                     Ok(pair) => break pair,
@@ -596,7 +624,10 @@ impl Pump {
         let step = {
             let mut m = self.shared.machine.lock().await;
             let now = self.clock.now();
-            if reconnecting { m.reconnect(now) } else { m.open(now) }
+            match attempt {
+                ConnectAttempt::First => m.open(now),
+                ConnectAttempt::Reconnect => m.reconnect(now),
+            }
         };
         if !connection.connected(generation, self.clock.now()) {
             self.close_sender(sender, generation).await;
@@ -613,35 +644,28 @@ impl Pump {
         sender: Arc<dyn lk_agents_net::transport::WsSender>,
         mut receiver: Box<dyn lk_agents_net::transport::WsReceiver>,
         initial: Step,
-        connection: &mut crate::realtime::machine::connection::RealtimeConnection,
+        connection: &mut RealtimeConnection,
     ) -> Result<Outcome, ApiError> {
         let generation = self.shared.machine.lock().await.connection_generation();
-        let (sent, mut receipts) = mpsc::channel(super::writer::RESPONSE_RECEIPTS);
+        let (receipts_tx, mut receipts) = mpsc::channel(super::writer::RESPONSE_RECEIPTS);
         let (outgoing, writes) = mpsc::channel(super::writer::WRITE_BACKLOG);
-        let writer = super::writer::run(
-            writes,
+        let writer = super::writer::Writer {
             sender,
-            self.shape.clone(),
-            self.connect.conn,
-            self.clock.clone(),
-            self.images.clone(),
+            shape: self.shape.clone(),
+            conn: self.connect.conn,
+            clock: self.clock.clone(),
+            images: self.images.clone(),
             generation,
-            sent,
-        );
+            receipts: receipts_tx,
+        }
+        .run(writes);
         tokio::pin!(writer);
         // Every step is taken under a write permit, so no local backlog can fail the session.
         let mut permit = outgoing.try_reserve().ok();
         self.dispatch(initial, &mut permit)?;
-        let mut decoding: Option<
-            lk_agents_abi::BoxFuture<'static, Result<wire::Incoming, ApiError>>,
-        > = None;
+        let mut decoding: Option<Decoding> = None;
         loop {
-            {
-                let mut machine = self.shared.machine.lock().await;
-                while let Ok(sent) = receipts.try_recv() {
-                    machine.response_sent(sent.generation, sent.at, &sent.req_id, sent.is_say);
-                }
-            }
+            record_receipts(&mut *self.shared.machine.lock().await, &mut receipts);
 
             // The machine owns every deadline; the driver only asks how long to sleep.
             let (deadline, pages_pending, continuation_ready) = {
@@ -669,17 +693,15 @@ impl Pump {
                     continue;
                 },
                 () = async { match sleep { Some(s) => s.await, None => std::future::pending().await } }, if writable => {
-                    let effects = connection.tick(self.clock.now());
-                    if effects.iter().any(|effect| !matches!(effect, crate::effects::RealtimeConnectionEffect::CleanupIncomplete { .. })) {
-                        return Ok(Outcome::ConnectionEffects(effects));
+                    if let ControlFlow::Break(outcome) = self.tick_connection(connection) {
+                        return Ok(outcome);
                     }
-                    for effect in effects { self.observe_cleanup(effect); }
-                    let mut m = self.shared.machine.lock().await;
-                    m.tick(self.clock.now())
+                    self.shared.machine.lock().await.tick(self.clock.now())
                 },
                 () = &mut context_wake => continue,
                 Some(sent) = receipts.recv() => {
-                    self.shared.machine.lock().await.response_sent(sent.generation, sent.at, &sent.req_id, sent.is_say);
+                    let mut machine = self.shared.machine.lock().await;
+                    machine.response_sent(sent.generation, sent.at, &sent.req_id, sent.kind);
                     continue;
                 },
                 decoded = async { match decoding.as_mut() {
@@ -689,43 +711,18 @@ impl Pump {
                     decoding = None;
                     let incoming = decoded?;
                     let mut machine = self.shared.machine.lock().await;
-                    while let Ok(sent) = receipts.try_recv() { machine.response_sent(sent.generation, sent.at, &sent.req_id, sent.is_say); }
+                    record_receipts(&mut machine, &mut receipts);
                     machine.incoming_on(generation, self.clock.now(), incoming)
                 },
-                msg = receiver.recv(), if decoding.is_none() => match msg {
-                    Ok(WsMessage::Text(text)) => {
-                        if text.len() > 16 * 1024 * 1024 {
-                            return Err(ApiError::new("realtime message exceeds 16 MiB").with_retryable(false));
-                        }
-                        let shape = self.shape.clone();
-                        let created_at = self.clock.wall();
-                        decoding = Some(Box::pin(async move {
-                            let worker = lk_agents_media::pool::media_pool().try_spawn(lk_agents_media::pool::JobClass::Decoder, move || {
-                                wire::decode_text(&text, &shape, created_at)
-                            }).map_err(|error| ApiError::new(error.to_string()).with_retryable(false))?;
-                            worker.await.map_err(|error| ApiError::new(format!("realtime decoder worker failed: {error}")).with_retryable(false))?
-                                .map_err(|error| { let mut api = ApiError::new(error.to_string()).with_retryable(false); api.request_id = error.event_id; api })
-                        }));
-                        continue;
-                    }
-                    Ok(WsMessage::Closed) => return Err(self.lost()),
-                    Ok(WsMessage::Binary(_) | WsMessage::Other) => continue,
-                    Err(TransportError::Timeout) => continue,
-                    Err(_) => return Err(self.lost()),
+                msg = receiver.recv(), if decoding.is_none() => {
+                    decoding = self.start_decode(msg)?;
+                    continue;
                 },
                 // Context pages go out before the input after them.
                 () = std::future::ready(()), if can_continue => {
                     self.shared.machine.lock().await.continue_context(self.clock.now())
                 },
-                // Input waits in its channel until the writer has nothing else queued: this task
-                // is the only sender, so the queue is still empty when the item is taken.
-                item = async {
-                    match outgoing.reserve_many(super::writer::WRITE_BACKLOG - 1).await {
-                        Ok(empty) => drop(empty),
-                        Err(_) => std::future::pending().await,
-                    }
-                    input.recv().await
-                }, if writable && !pages_pending => match self.apply(item).await {
+                item = next_input(&outgoing, input), if writable && !pages_pending => match self.apply(item).await {
                     Some(step) => step,
                     None => {
                         self.close().await;
@@ -744,6 +741,28 @@ impl Pump {
                 log::debug!("recycling the {} connection", self.provider_label);
                 return Ok(Outcome::Recycle);
             }
+        }
+    }
+
+    /// A text message starts decoding on the media pool; other frames are skipped, and a closed
+    /// or failed socket is a lost connection.
+    fn start_decode(
+        &self,
+        msg: Result<WsMessage, TransportError>,
+    ) -> Result<Option<Decoding>, ApiError> {
+        match msg {
+            Ok(WsMessage::Text(text)) => {
+                if text.len() > MAX_MESSAGE_BYTES {
+                    return Err(
+                        ApiError::new("realtime message exceeds 16 MiB").with_retryable(false)
+                    );
+                }
+                Ok(Some(decode_off_thread(text, self.shape.clone(), self.clock.wall())))
+            }
+            Ok(WsMessage::Closed) => Err(self.lost()),
+            Ok(WsMessage::Binary(_) | WsMessage::Other) => Ok(None),
+            Err(TransportError::Timeout) => Ok(None),
+            Err(_) => Err(self.lost()),
         }
     }
 
@@ -843,12 +862,12 @@ impl Pump {
         }
     }
 
-    fn emit_error(&self, err: ApiError, recoverable: bool) {
+    fn emit_error(&self, err: ApiError, recovery: Recovery) {
         let event = Event::Error(lk_agents_abi::llm::realtime::RealtimeModelError {
             timestamp: self.clock.now(),
             label: self.label.clone(),
             message: err.message.clone(),
-            recoverable,
+            recoverable: matches!(recovery, Recovery::Retrying),
             req_id: None,
             code: None,
             provider_error: Some(err.clone()),
@@ -857,6 +876,71 @@ impl Pump {
             self.events.fail(self.clock.now(), &self.label, err);
         }
     }
+}
+
+/// The largest server message decoded; a larger one fails the session.
+const MAX_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
+
+/// A server message being decoded on the media pool.
+type Decoding = lk_agents_abi::BoxFuture<'static, Result<wire::Incoming, ApiError>>;
+
+fn decode_off_thread(
+    text: String,
+    shape: WireShape,
+    created_at: std::time::SystemTime,
+) -> Decoding {
+    Box::pin(async move {
+        let worker = lk_agents_media::pool::media_pool()
+            .try_spawn(lk_agents_media::pool::JobClass::Decoder, move || {
+                wire::decode_text(&text, &shape, created_at)
+            })
+            .map_err(|error| ApiError::new(error.to_string()).with_retryable(false))?;
+        let decoded = worker.await.map_err(|error| {
+            ApiError::new(format!("realtime decoder worker failed: {error}")).with_retryable(false)
+        })?;
+        decoded.map_err(|error| {
+            let mut api = ApiError::new(error.to_string()).with_retryable(false);
+            api.request_id = error.event_id;
+            api
+        })
+    })
+}
+
+/// Input waits in its channel until the writer has nothing else queued: this task is the only
+/// sender, so the queue is still empty when the item is taken.
+async fn next_input(
+    outgoing: &mpsc::Sender<Vec<crate::realtime::machine::Outgoing>>,
+    input: &mut media_queue::AudioReceiver<Cmd>,
+) -> Option<Item<AudioFrame, Cmd>> {
+    match outgoing.reserve_many(super::writer::WRITE_BACKLOG - 1).await {
+        Ok(empty) => drop(empty),
+        Err(_) => std::future::pending().await,
+    }
+    input.recv().await
+}
+
+/// Hands the machine every write receipt already in.
+fn record_receipts(
+    machine: &mut RealtimeMachine,
+    receipts: &mut mpsc::Receiver<super::writer::ResponseSent>,
+) {
+    while let Ok(sent) = receipts.try_recv() {
+        machine.response_sent(sent.generation, sent.at, &sent.req_id, sent.kind);
+    }
+}
+
+/// Whether a connection opens the session or replays it after a lost one.
+#[derive(Debug, Clone, Copy)]
+enum ConnectAttempt {
+    First,
+    Reconnect,
+}
+
+/// Whether the session retries after a connection error or has given up.
+#[derive(Debug, Clone, Copy)]
+enum Recovery {
+    Retrying,
+    GivenUp,
 }
 
 enum Outcome {

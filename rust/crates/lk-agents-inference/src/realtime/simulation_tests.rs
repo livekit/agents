@@ -20,7 +20,8 @@ use lk_agents_abi::{
     llm::realtime::{Event, RealtimeModelError},
 };
 use lk_agents_inference::realtime::{
-    INFERENCE, Outgoing, RealtimeConnection, RealtimeMachine, SessionOptions, Step, TurnDetection,
+    INFERENCE, Outgoing, RealtimeConnection, RealtimeMachine, ReplyKind, SessionOptions, Step,
+    TurnDetection,
 };
 use lk_agents_media::AudioByteStream;
 use lk_agents_net::transport::{TransportError, connect_error};
@@ -414,10 +415,11 @@ impl Sim {
                         // The writer's receipt: the request is on the wire.
                         match &frame {
                             Outgoing::ResponseCreate { req_id, .. } => {
-                                self.machine.response_sent(generation, now, req_id, false);
+                                let kind = ReplyKind::Generated;
+                                self.machine.response_sent(generation, now, req_id, kind);
                             }
                             Outgoing::ForceMessage { req_id, .. } => {
-                                self.machine.response_sent(generation, now, req_id, true);
+                                self.machine.response_sent(generation, now, req_id, ReplyKind::Say);
                             }
                             _ => {}
                         }

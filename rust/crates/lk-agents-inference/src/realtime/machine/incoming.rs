@@ -7,7 +7,10 @@ use std::collections::BTreeMap;
 use lk_agents_abi::ChatItem;
 use lk_agents_abi::Ts;
 
-use crate::realtime::protocol::{Incoming, TranscriptionCompleted};
+use super::context::CtxOp;
+use crate::realtime::protocol::{
+    CANCELLATION_FAILED, Incoming, OutputItemKind, TranscriptionCompleted, error_code,
+};
 use lk_agents_abi::llm::realtime::{
     AudioDelta, Event, GenerateReplyFailed, GenerationCreated, GenerationDone, GenerationStatus,
     InputSpeechStopped, InputTranscription, MessageDone, MessageModalities, MessageStarted,
@@ -21,33 +24,13 @@ impl RealtimeMachine {
             return Step::default();
         }
         match msg {
-            Incoming::SpeechStarted { item_id } => {
-                let mut step = Step::default();
-                // xAI: a new turn began while another item's transcript was held; finalise it now
-                // or it is lost.
-                if self.dialect.defer_transcript_finalization
-                    && self.held.as_ref().is_some_and(|h| Some(&h.item_id) != item_id.as_ref())
-                {
-                    step.merge(self.flush_held_transcript(now));
-                }
-                if let Some(id) = item_id {
-                    // xAI re-announces onset for an item; keep the original start time.
-                    self.speech_started_at.entry(id).or_insert(now);
-                }
-                self.user_speaking = true;
-                step.events.push(Event::InputSpeechStarted(
-                    lk_agents_abi::llm::realtime::InputSpeechStarted {},
-                ));
-                step
-            }
-
+            Incoming::SpeechStarted { item_id } => self.on_speech_started(now, item_id),
             Incoming::SpeechStopped => {
                 self.user_speaking = false;
                 Step::event(Event::InputSpeechStopped(InputSpeechStopped {
                     user_transcription_enabled: self.opts.transcription.is_some(),
                 }))
             }
-
             Incoming::ResponseCreated { response_id, client_event_id } => {
                 let step = self.on_response_created(response_id, client_event_id);
                 if matches!(self.generation, Generation::Active { .. }) {
@@ -56,191 +39,36 @@ impl RealtimeMachine {
                 }
                 step
             }
-
-            Incoming::OutputItemAdded { item_id, item_type } => {
-                if item_type != "message" {
-                    return Step::default();
-                }
-                let Generation::Active { response_id, messages, order, .. } = &mut self.generation
-                else {
-                    return Step::default();
-                };
-                let response_id = Some(response_id.clone());
-                messages.insert(item_id.clone(), MessageState { open: true, ..Default::default() });
-                order.push(item_id.clone());
-                if self.spoken.len() == SPOKEN_REMEMBERED {
-                    self.spoken.pop_front();
-                }
-                self.spoken.push_back(item_id.clone());
-                let mut step = Step::event(Event::MessageStarted(MessageStarted {
-                    message_id: item_id.clone(),
-                    response_id: response_id.clone(),
-                }));
-                if !self.caps.audio_output {
-                    // Text-only: settle modalities now, no audio can arrive.
-                    if let Generation::Active { messages, .. } = &mut self.generation
-                        && let Some(m) = messages.get_mut(&item_id)
-                    {
-                        m.modalities = Some(Modalities::TextOnly);
-                    }
-                    step.events.push(Event::MessageModalities(MessageModalities {
-                        message_id: item_id,
-                        response_id,
-                        modalities: Modalities::TextOnly,
-                    }));
-                }
-                step
+            Incoming::OutputItemAdded { item_id, kind: OutputItemKind::Message } => {
+                self.on_message_added(item_id)
             }
-
-            Incoming::ContentPartAdded { item_id, part_type } => {
-                let modalities = if part_type == "text" {
-                    Modalities::TextOnly
-                } else {
-                    Modalities::AudioAndText
-                };
+            Incoming::OutputItemAdded { .. } => Step::default(),
+            Incoming::ContentPartAdded { item_id, modalities } => {
                 self.settle_modalities(&item_id, modalities)
             }
-
             Incoming::ItemAdded { previous_item_id, item } => {
                 self.on_item_added(now, previous_item_id, item)
             }
-
-            Incoming::ItemDeleted { mut item_id } => {
-                // xAI acks a delete with `item_id: ""`: resolve it against the oldest in-flight
-                // delete, or `update_chat_ctx` burns its 5 s timeout.
-                if item_id.is_empty() && self.dialect.repair_empty_delete_item_id {
-                    let oldest =
-                        self.ctx_update.as_ref().and_then(|c| c.awaiting_delete.first().cloned());
-                    match oldest {
-                        Some(id) => item_id = id,
-                        None => return Step::default(),
-                    }
-                }
-                self.transcript_acc.remove(&item_id);
-                self.speech_started_at.remove(&item_id);
-                let awaiting = self
-                    .ctx_update
-                    .as_ref()
-                    .is_some_and(|update| update.awaiting_delete.contains(&item_id));
-                if !awaiting && let Ok(item) = self.desired.delete(&item_id) {
-                    self.discard_context_item(item);
-                }
-                if let Ok(item) = self.remote.delete(&item_id) {
-                    self.discard_context_item(item);
-                }
-                self.settle_ctx_item(true, &item_id)
-            }
-
+            Incoming::ItemDeleted { item_id } => self.on_item_deleted(item_id),
             Incoming::TranscriptionDelta { item_id, content_index, delta } => {
-                if delta.is_empty() {
-                    return Step::default();
-                }
-                let acc = self.transcript_acc.entry(item_id.clone()).or_default();
-                let text = acc.entry(content_index).or_default();
-                text.push_str(&delta);
-                let transcript = text.clone();
-                Step::event(Event::InputTranscription(InputTranscription {
-                    item_id,
-                    transcript,
-                    is_final: false,
-                    confidence: None,
-                    turn_started_at: None,
-                }))
+                self.on_transcription_delta(item_id, content_index, &delta)
             }
-
             Incoming::TranscriptionUpdated { item_id, transcript } => {
                 // xAI-only, and never final: it is the whole transcript so far, re-sent.
                 if item_id.is_empty() || transcript.is_empty() {
                     return Step::default();
                 }
-                Step::event(Event::InputTranscription(InputTranscription {
-                    item_id,
-                    transcript,
-                    is_final: false,
-                    confidence: None,
-                    turn_started_at: None,
-                }))
+                partial_transcription(item_id, transcript)
             }
-
             Incoming::TranscriptionCompleted(t) => self.on_transcription_completed(now, t),
-
             Incoming::TranscriptionFailed { item_id, content_index } => {
-                // Close any open partial stream so a consumer waiting for `is_final` does not
-                // hang. With nothing accumulated nothing is emitted.
-                let partial = self.take_accumulated(&item_id, content_index);
-                let turn_started_at =
-                    self.speech_started_at.remove(&item_id).map(|t| self.wall_secs(t));
-                match partial {
-                    None => Step::default(),
-                    Some(transcript) => {
-                        Step::event(Event::InputTranscription(InputTranscription {
-                            item_id,
-                            transcript,
-                            is_final: true,
-                            confidence: None,
-                            turn_started_at,
-                        }))
-                    }
-                }
+                self.on_transcription_failed(item_id, content_index)
             }
-
-            Incoming::TextDelta { item_id, delta } => {
-                if self.stale(&item_id) {
-                    return Step::default();
-                }
-                self.first_token(now);
-                let mut step = self.on_output(now, &item_id);
-                let response_id = self.response_id();
-                if let Generation::Active { messages, .. } = &mut self.generation {
-                    let Some(m) = messages.get_mut(&item_id) else { return step };
-                    m.transcript.push_str(&delta);
-                }
-                step.events.push(Event::TextDelta(TextDelta {
-                    message_id: item_id,
-                    response_id,
-                    delta,
-                    start_time: None,
-                }));
-                step
-            }
-
+            Incoming::TextDelta { item_id, delta } => self.on_text_delta(now, item_id, delta),
             Incoming::AudioTranscriptDelta { item_id, delta, start_time } => {
-                if matches!(self.generation, Generation::Discarded | Generation::None)
-                    || self.stale(&item_id)
-                {
-                    return Step::default();
-                }
-                if let Generation::Active { messages, .. } = &mut self.generation
-                    && let Some(m) = messages.get_mut(&item_id)
-                {
-                    m.transcript.push_str(&delta);
-                }
-                let response_id = self.response_id();
-                Step::event(Event::TextDelta(TextDelta {
-                    message_id: item_id,
-                    response_id,
-                    delta,
-                    start_time,
-                }))
+                self.on_audio_transcript_delta(item_id, delta, start_time)
             }
-
-            Incoming::AudioDelta { item_id, frame } => {
-                if self.stale(&item_id) {
-                    return Step::default();
-                }
-                self.first_token(now);
-                let mut step = self.on_output(now, &item_id);
-                step.merge(self.settle_modalities(&item_id, Modalities::AudioAndText));
-                if matches!(self.generation, Generation::Active { .. }) {
-                    step.events.push(Event::AudioDelta(AudioDelta {
-                        message_id: item_id,
-                        response_id: self.response_id(),
-                        frame,
-                    }));
-                }
-                step
-            }
-
+            Incoming::AudioDelta { item_id, frame } => self.on_audio_delta(now, item_id, frame),
             Incoming::OutputItemDone { item } => self.on_output_item_done(item),
 
             Incoming::ResponseDone(done) => self.on_response_done(now, done),
@@ -251,6 +79,179 @@ impl RealtimeMachine {
             Incoming::IdleTimeoutTriggered | Incoming::SessionCreated { .. } => Step::default(),
             Incoming::Unhandled { .. } => Step::default(),
         }
+    }
+
+    fn on_speech_started(&mut self, now: Ts, item_id: Option<String>) -> Step {
+        let mut step = Step::default();
+        // xAI: a new turn began while another item's transcript was held; finalise it now
+        // or it is lost.
+        if self.dialect.defer_transcript_finalization
+            && self.held.as_ref().is_some_and(|h| Some(&h.item_id) != item_id.as_ref())
+        {
+            step.merge(self.flush_held_transcript(now));
+        }
+        if let Some(id) = item_id {
+            // xAI re-announces onset for an item; keep the original start time.
+            self.speech_started_at.entry(id).or_insert(now);
+        }
+        self.user_speaking = true;
+        step.events
+            .push(Event::InputSpeechStarted(lk_agents_abi::llm::realtime::InputSpeechStarted {}));
+        step
+    }
+
+    /// A message of the active generation starts; text-only output settles its modalities now.
+    fn on_message_added(&mut self, item_id: String) -> Step {
+        let Generation::Active { response_id, messages, order, .. } = &mut self.generation else {
+            return Step::default();
+        };
+        let response_id = Some(response_id.clone());
+        messages.insert(item_id.clone(), MessageState { open: true, ..Default::default() });
+        order.push(item_id.clone());
+        if self.spoken.len() == SPOKEN_REMEMBERED {
+            self.spoken.pop_front();
+        }
+        self.spoken.push_back(item_id.clone());
+        let mut step = Step::event(Event::MessageStarted(MessageStarted {
+            message_id: item_id.clone(),
+            response_id: response_id.clone(),
+        }));
+        if self.caps.audio_output {
+            return step;
+        }
+        // Text-only: settle modalities now, no audio can arrive.
+        if let Generation::Active { messages, .. } = &mut self.generation
+            && let Some(m) = messages.get_mut(&item_id)
+        {
+            m.modalities = Some(Modalities::TextOnly);
+        }
+        step.events.push(Event::MessageModalities(MessageModalities {
+            message_id: item_id,
+            response_id,
+            modalities: Modalities::TextOnly,
+        }));
+        step
+    }
+
+    fn on_item_deleted(&mut self, mut item_id: String) -> Step {
+        // xAI acks a delete with `item_id: ""`: resolve it against the oldest in-flight
+        // delete, or `update_chat_ctx` burns its 5 s timeout.
+        if item_id.is_empty() && self.dialect.repair_empty_delete_item_id {
+            let oldest = self.ctx_update.as_ref().and_then(|c| c.awaiting_delete.first().cloned());
+            let Some(id) = oldest else { return Step::default() };
+            item_id = id;
+        }
+        self.transcript_acc.remove(&item_id);
+        self.speech_started_at.remove(&item_id);
+        let awaiting = self
+            .ctx_update
+            .as_ref()
+            .is_some_and(|update| update.awaiting_delete.contains(&item_id));
+        if !awaiting && let Ok(item) = self.desired.delete(&item_id) {
+            self.discard_context_item(item);
+        }
+        if let Ok(item) = self.remote.delete(&item_id) {
+            self.discard_context_item(item);
+        }
+        self.settle_ctx_item(CtxOp::Delete, &item_id)
+    }
+
+    fn on_transcription_delta(
+        &mut self,
+        item_id: String,
+        content_index: usize,
+        delta: &str,
+    ) -> Step {
+        if delta.is_empty() {
+            return Step::default();
+        }
+        let acc = self.transcript_acc.entry(item_id.clone()).or_default();
+        let text = acc.entry(content_index).or_default();
+        text.push_str(delta);
+        let transcript = text.clone();
+        partial_transcription(item_id, transcript)
+    }
+
+    /// Closes any open partial stream so a consumer waiting for `is_final` does not hang. With
+    /// nothing accumulated nothing is emitted.
+    fn on_transcription_failed(&mut self, item_id: String, content_index: usize) -> Step {
+        let partial = self.take_accumulated(&item_id, content_index);
+        let turn_started_at = self.speech_started_at.remove(&item_id).map(|t| self.wall_secs(t));
+        let Some(transcript) = partial else { return Step::default() };
+        Step::event(Event::InputTranscription(InputTranscription {
+            item_id,
+            transcript,
+            is_final: true,
+            confidence: None,
+            turn_started_at,
+        }))
+    }
+
+    fn on_text_delta(&mut self, now: Ts, item_id: String, delta: String) -> Step {
+        if self.stale(&item_id) {
+            return Step::default();
+        }
+        self.first_token(now);
+        let mut step = self.on_output(now, &item_id);
+        let response_id = self.response_id();
+        if let Generation::Active { messages, .. } = &mut self.generation {
+            let Some(m) = messages.get_mut(&item_id) else { return step };
+            m.transcript.push_str(&delta);
+        }
+        step.events.push(Event::TextDelta(TextDelta {
+            message_id: item_id,
+            response_id,
+            delta,
+            start_time: None,
+        }));
+        step
+    }
+
+    fn on_audio_transcript_delta(
+        &mut self,
+        item_id: String,
+        delta: String,
+        start_time: Option<f64>,
+    ) -> Step {
+        if matches!(self.generation, Generation::Discarded | Generation::None)
+            || self.stale(&item_id)
+        {
+            return Step::default();
+        }
+        if let Generation::Active { messages, .. } = &mut self.generation
+            && let Some(m) = messages.get_mut(&item_id)
+        {
+            m.transcript.push_str(&delta);
+        }
+        let response_id = self.response_id();
+        Step::event(Event::TextDelta(TextDelta {
+            message_id: item_id,
+            response_id,
+            delta,
+            start_time,
+        }))
+    }
+
+    fn on_audio_delta(
+        &mut self,
+        now: Ts,
+        item_id: String,
+        frame: lk_agents_abi::AudioFrame,
+    ) -> Step {
+        if self.stale(&item_id) {
+            return Step::default();
+        }
+        self.first_token(now);
+        let mut step = self.on_output(now, &item_id);
+        step.merge(self.settle_modalities(&item_id, Modalities::AudioAndText));
+        if matches!(self.generation, Generation::Active { .. }) {
+            step.events.push(Event::AudioDelta(AudioDelta {
+                message_id: item_id,
+                response_id: self.response_id(),
+                frame,
+            }));
+        }
+        step
     }
 
     fn on_response_created(
@@ -357,7 +358,7 @@ impl RealtimeMachine {
         if added && !awaiting && self.desired.get(&id).is_none() {
             step.merge(self.place_server_item(_now, &id));
         }
-        step.merge(self.settle_ctx_item(false, &id));
+        step.merge(self.settle_ctx_item(CtxOp::Create, &id));
         step
     }
 
@@ -544,62 +545,24 @@ impl RealtimeMachine {
         let fatal = self.dialect.is_fatal(err.code.as_deref(), err.type_.as_deref());
 
         if let Some(event_id) = &err.event_id {
-            // A rejected item event gets no `deleted`/`added` reply; settle it here or
-            // `update_chat_ctx` stalls.
-            if let Some(update) = &mut self.ctx_update
-                && let Some((is_delete, item_id, sequence)) = update.by_event_id.remove(event_id)
-            {
-                if err.code.as_deref() != Some("item_create_duplicate_item_id") {
-                    step.merge(self.reject_ctx_item(now, is_delete, &item_id, sequence));
-                }
-                let confirmed = if !is_delete
-                    && err.code.as_deref() == Some("item_create_duplicate_item_id")
-                    && self.ctx_event_is_latest(&item_id, sequence)
-                    && self.remote.get(&item_id).is_none()
-                {
-                    self.desired.get(&item_id).map(|item| {
-                        (self.desired.previous_id(&item_id).map(str::to_owned), item.clone())
-                    })
-                } else {
-                    None
-                };
-                if let Some((previous, item)) = confirmed {
-                    // A duplicate rejection confirms existence even when the original added
-                    // acknowledgement was lost. Install it before settling the desired state.
-                    if self.remote.insert(previous.as_deref(), item.clone()).is_ok() {
-                        step.events.push(Event::RemoteItemAdded(
-                            lk_agents_abi::llm::realtime::RemoteItemAdded {
-                                previous_item_id: previous,
-                                item: Box::new(item),
-                            },
-                        ));
-                    }
-                }
-                step.merge(self.settle_ctx_event(is_delete, &item_id, Some(sequence)));
+            let rejected =
+                self.ctx_update.as_mut().and_then(|update| update.by_event_id.remove(event_id));
+            if let Some(rejected) = rejected {
+                step.merge(self.settle_rejected_item(now, rejected, err.code.as_deref()));
                 if !fatal {
                     return step;
                 }
             } else if self.pending_replies.remove(event_id) {
-                self.reply_deadlines.remove(event_id);
-                self.reply_frames.remove(event_id);
-                self.say_frames.remove(event_id);
-                self.forget_deferred_reply(event_id);
-                // A rejected `response.create` never gets `response.created`; fail it now rather
-                // than at the 10 s timeout.
-                self.say_tags.retain(|t| t != event_id);
-                step.events.push(Event::GenerateReplyFailed(GenerateReplyFailed {
-                    req_id: event_id.clone(),
-                    error: RealtimeError::with_code(err.message.clone(), err.code.clone()),
-                }));
+                step.merge(self.fail_rejected_reply(event_id, &err));
             }
         }
 
-        // "Cancellation failed": a cancel raced a finished response. Nothing went wrong.
-        if err.message.starts_with("Cancellation failed") {
+        // A cancel raced a finished response. Nothing went wrong.
+        if err.message.starts_with(CANCELLATION_FAILED) {
             return step;
         }
         // The server VAD commits each segment itself, so our commit lands on an emptied buffer.
-        if err.code.as_deref() == Some("input_audio_buffer_commit_empty")
+        if err.code.as_deref() == Some(error_code::COMMIT_EMPTY)
             && self.opts.turn_detection.is_some()
         {
             return step;
@@ -624,4 +587,78 @@ impl RealtimeMachine {
         }
         step
     }
+
+    /// A rejected item event gets no `deleted`/`added` reply; it is settled here or
+    /// `update_chat_ctx` stalls. A duplicate create confirms the item exists.
+    fn settle_rejected_item(
+        &mut self,
+        now: Ts,
+        (op, item_id, sequence): (CtxOp, String, u64),
+        code: Option<&str>,
+    ) -> Step {
+        let mut step = Step::default();
+        let duplicate = code == Some(error_code::DUPLICATE_ITEM_ID);
+        if !duplicate {
+            step.merge(self.reject_ctx_item(now, op, &item_id, sequence));
+        }
+        // A duplicate rejection confirms existence even when the original added
+        // acknowledgement was lost. Install it before settling the desired state.
+        if op == CtxOp::Create
+            && duplicate
+            && let Some((previous, item)) = self.confirmed_duplicate(&item_id, sequence)
+            && self.remote.insert(previous.as_deref(), item.clone()).is_ok()
+        {
+            step.events.push(Event::RemoteItemAdded(
+                lk_agents_abi::llm::realtime::RemoteItemAdded {
+                    previous_item_id: previous,
+                    item: Box::new(item),
+                },
+            ));
+        }
+        step.merge(self.settle_ctx_event(op, &item_id, Some(sequence)));
+        step
+    }
+
+    /// The desired item and its predecessor, when the latest create of `item_id` was rejected as
+    /// a duplicate the remote mirror does not hold yet.
+    fn confirmed_duplicate(
+        &self,
+        item_id: &str,
+        sequence: u64,
+    ) -> Option<(Option<String>, ChatItem)> {
+        if !self.ctx_event_is_latest(item_id, sequence) || self.remote.get(item_id).is_some() {
+            return None;
+        }
+        let item = self.desired.get(item_id)?;
+        Some((self.desired.previous_id(item_id).map(str::to_owned), item.clone()))
+    }
+
+    /// A rejected `response.create` never gets `response.created`; it fails now rather than at
+    /// the 10 s timeout.
+    fn fail_rejected_reply(
+        &mut self,
+        event_id: &str,
+        err: &crate::realtime::protocol::ServerError,
+    ) -> Step {
+        self.reply_deadlines.remove(event_id);
+        self.reply_frames.remove(event_id);
+        self.say_frames.remove(event_id);
+        self.forget_deferred_reply(event_id);
+        self.say_tags.retain(|t| t != event_id);
+        Step::event(Event::GenerateReplyFailed(GenerateReplyFailed {
+            req_id: event_id.to_owned(),
+            error: RealtimeError::with_code(err.message.clone(), err.code.clone()),
+        }))
+    }
+}
+
+/// An interim transcript of the user's input.
+fn partial_transcription(item_id: String, transcript: String) -> Step {
+    Step::event(Event::InputTranscription(InputTranscription {
+        item_id,
+        transcript,
+        is_final: false,
+        confidence: None,
+        turn_started_at: None,
+    }))
 }

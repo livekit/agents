@@ -421,19 +421,9 @@ impl AvatarSessionLifecycle {
         let Some(kind) = self.requests.get(&request).map(|r| r.kind) else { return };
         for step in steps {
             match step {
-                AttemptStep::Launch(attempt) => effects.push(match kind {
-                    Kind::Create => AvatarSessionEffect::AvatarSessionCreate {
-                        request,
-                        attempt,
-                        avatar: self.avatar,
-                    },
-                    Kind::Terminate => AvatarSessionEffect::AvatarSessionTerminate {
-                        request,
-                        attempt,
-                        avatar: self.avatar,
-                        session: self.terminating[&request].clone(),
-                    },
-                }),
+                AttemptStep::Launch(attempt) => {
+                    effects.push(self.launch_effect(request, kind, attempt));
+                }
                 AttemptStep::Stop(attempt) => {
                     effects.push(AvatarSessionEffect::AvatarRequestCancel { request, attempt })
                 }
@@ -446,25 +436,55 @@ impl AvatarSessionLifecycle {
                 AttemptStep::Unresolved => {
                     effects.push(AvatarSessionEffect::RetirementIncomplete { request })
                 }
-                AttemptStep::GiveUp(error) => match kind {
-                    Kind::Create => {
-                        if let Some(creating) = self.creating.take_if(|c| c.request == request)
-                            && creating.caller
-                        {
-                            effects.push(AvatarSessionEffect::CreateFinished(Err(
-                                CreateFailure::Api(error),
-                            )));
-                        }
-                        // The caller has its error; what the gateway may have made is retired.
-                        self.retire(request, now, effects);
-                    }
-                    Kind::Terminate => {
-                        if let Some(session) = self.terminating.remove(&request) {
-                            self.held.push(session.clone());
-                            effects.push(AvatarSessionEffect::TerminateFailed { session, error });
-                        }
-                    }
-                },
+                AttemptStep::GiveUp(error) => self.give_up(request, kind, error, now, effects),
+            }
+        }
+    }
+
+    /// The provider call one attempt of `request` makes.
+    fn launch_effect(
+        &self,
+        request: AvatarRequestId,
+        kind: Kind,
+        attempt: u32,
+    ) -> AvatarSessionEffect {
+        match kind {
+            Kind::Create => {
+                AvatarSessionEffect::AvatarSessionCreate { request, attempt, avatar: self.avatar }
+            }
+            Kind::Terminate => AvatarSessionEffect::AvatarSessionTerminate {
+                request,
+                attempt,
+                avatar: self.avatar,
+                session: self.terminating[&request].clone(),
+            },
+        }
+    }
+
+    /// `request` failed for good: a create reports to its caller and retires what the gateway may
+    /// have made; a terminate holds the session again.
+    fn give_up(
+        &mut self,
+        request: AvatarRequestId,
+        kind: Kind,
+        error: ApiError,
+        now: Ts,
+        effects: &mut Vec<AvatarSessionEffect>,
+    ) {
+        match kind {
+            Kind::Create => {
+                if let Some(creating) = self.creating.take_if(|c| c.request == request)
+                    && creating.caller
+                {
+                    effects
+                        .push(AvatarSessionEffect::CreateFinished(Err(CreateFailure::Api(error))));
+                }
+                self.retire(request, now, effects);
+            }
+            Kind::Terminate => {
+                let Some(session) = self.terminating.remove(&request) else { return };
+                self.held.push(session.clone());
+                effects.push(AvatarSessionEffect::TerminateFailed { session, error });
             }
         }
     }

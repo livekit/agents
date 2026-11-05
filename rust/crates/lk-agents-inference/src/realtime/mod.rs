@@ -19,7 +19,7 @@ pub use lk_agents_abi::llm::realtime::{
 };
 pub use machine::connection::RealtimeConnection;
 pub use machine::{
-    ContextRetirement, OptionsPatch, Outgoing, RealtimeMachine, SessionOptions, Step,
+    ContextRetirement, OptionsPatch, Outgoing, RealtimeMachine, ReplyKind, SessionOptions, Step,
 };
 pub use protocol::Incoming;
 pub use remote::{RemoteChatContext, RemoteError};

@@ -140,7 +140,7 @@ pub enum Incoming {
 /// Decode one text frame. `provider` selects Cartesia's re-added trailing space on word alignment
 /// (`f"{w['word']} "`).
 pub fn decode(text: &str, provider: &str) -> Option<Incoming> {
-    if text.len() > 1024 * 1024 {
+    if text.len() > MAX_FRAME_BYTES {
         return Some(Incoming::Malformed { detail: "TTS gateway frame exceeds its limit".into() });
     }
     let value: Value = serde_json::from_str(text).ok()?;
@@ -153,17 +153,7 @@ pub fn decode(text: &str, provider: &str) -> Option<Incoming> {
 
     Some(match obj.get("type").and_then(Value::as_str) {
         Some("session.created") => Incoming::SessionCreated { session_id },
-        Some("output_audio") => Incoming::OutputAudio {
-            session_id,
-            audio: match obj.get("audio").and_then(Value::as_str) {
-                Some(audio) => audio.to_owned(),
-                None => {
-                    return Some(Incoming::Malformed {
-                        detail: "TTS output_audio requires an audio string".into(),
-                    });
-                }
-            },
-        },
+        Some("output_audio") => output_audio(obj, session_id),
         Some("output_alignment") => match alignment_tokens(obj, provider) {
             Some(tokens) => Incoming::OutputAlignment { session_id, tokens },
             None => Incoming::Malformed { detail: "TTS returned malformed alignment".into() },
@@ -172,6 +162,16 @@ pub fn decode(text: &str, provider: &str) -> Option<Incoming> {
         Some("error") => Incoming::Error { raw: text.to_owned() },
         _ => Incoming::Unknown { session_id },
     })
+}
+
+/// The largest gateway frame decoded; a larger one is malformed.
+const MAX_FRAME_BYTES: usize = 1024 * 1024;
+
+fn output_audio(obj: &Map<String, Value>, session_id: Option<String>) -> Incoming {
+    match obj.get("audio").and_then(Value::as_str) {
+        Some(audio) => Incoming::OutputAudio { session_id, audio: audio.to_owned() },
+        None => Incoming::Malformed { detail: "TTS output_audio requires an audio string".into() },
+    }
 }
 
 fn alignment_tokens(obj: &Map<String, Value>, provider: &str) -> Option<Vec<TranscriptChunk>> {

@@ -2,6 +2,7 @@
 //! recurrent resets stay on the same worker; callers only enqueue audio on a `Now` media queue and
 //! pull events. A gap in the queue resets the detector, as a flush does.
 
+use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -15,8 +16,8 @@ use parking_lot::Mutex;
 use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
-use super::VadModelFactory;
 use super::machine::{VadMachine, VadOptions, VadOutput, VadPredict, VadResult};
+use super::{VadModel, VadModelFactory};
 
 /// A decision on old audio is a wrong one: past 500 ms of lag the detector restarts on the newest.
 const INPUT_POLICY: Policy = Policy::Now(Duration::from_millis(500));
@@ -130,16 +131,98 @@ impl StreamOutput<VadOutput> for Output {
 
 impl lk_agents_abi::utils::stream::ProviderStream<VadOutput> for Output {}
 
-/// `false` once the stream is cancelled or its reader is gone.
+/// Breaks once the stream is cancelled or its reader is gone.
 async fn emit(
     stop: &CancellationToken,
     output: &mpsc::Sender<VadOutput>,
     event: VadOutput,
-) -> bool {
-    tokio::select! {
+) -> ControlFlow<()> {
+    let sent = tokio::select! {
         biased;
-        () = stop.cancelled() => false,
-        result = output.send(event) => result.is_ok(),
+        () = stop.cancelled() => return ControlFlow::Break(()),
+        result = output.send(event) => result,
+    };
+    if sent.is_err() { ControlFlow::Break(()) } else { ControlFlow::Continue(()) }
+}
+
+/// One detection on its admitted worker: the model and the machine's recurrent state, from
+/// construction to settlement.
+struct Detection {
+    machine: VadMachine,
+    model: Box<dyn VadModel>,
+    options: watch::Receiver<VadOptions>,
+    input: AudioReceiver<Flush>,
+    output: mpsc::Sender<VadOutput>,
+    stop: CancellationToken,
+    catch_up: Arc<AudioDrops>,
+    clock: Arc<dyn Clock>,
+}
+
+impl Detection {
+    async fn run(mut self) -> Result<(), ProviderError> {
+        loop {
+            self.catch_up.catching_up(self.input.head(), self.clock.now());
+            let item = tokio::select! {
+                biased;
+                () = self.stop.cancelled() => return Ok(()),
+                item = self.input.recv() => item,
+            };
+            let Some(item) = item else { return Ok(()) };
+            let ControlFlow::Continue(next) = self.admit(item).await else { return Ok(()) };
+            if self.predict_windows(next).await.is_break() {
+                return Ok(());
+            }
+        }
+    }
+
+    /// One input item through the machine, under the latest options: audio may complete a
+    /// window, and a gap or flush resets the detector. An invalid frame is dropped.
+    async fn admit(
+        &mut self,
+        item: Item<AudioFrame, Flush>,
+    ) -> ControlFlow<(), Option<VadPredict>> {
+        if self.options.has_changed().unwrap_or(false) {
+            self.machine.update_options(*self.options.borrow_and_update());
+        }
+        match item {
+            Item::Media(frame) => match self.machine.push(frame) {
+                Ok(next) => ControlFlow::Continue(next),
+                Err(error) => {
+                    log::warn!(target: "livekit.agents", "dropping invalid VAD frame: {error}");
+                    ControlFlow::Continue(None)
+                }
+            },
+            Item::Gap(_) | Item::Event(Flush) => {
+                let ended = self.machine.reset();
+                self.model.reset();
+                if let Some(event) = ended
+                    && emit(&self.stop, &self.output, event).await.is_break()
+                {
+                    return ControlFlow::Break(());
+                }
+                ControlFlow::Continue(None)
+            }
+        }
+    }
+
+    /// Predicts every window the machine asks for, emitting its events; a cancel is checked
+    /// before each prediction.
+    async fn predict_windows(&mut self, mut next: Option<VadPredict>) -> ControlFlow<()> {
+        while let Some(VadPredict { window, samples }) = next {
+            if self.stop.is_cancelled() {
+                return ControlFlow::Break(());
+            }
+            let (probability, inference_duration) = self.model.predict(&samples);
+            let (events, following) =
+                self.machine.predicted(VadResult { window, probability, inference_duration });
+            for event in events {
+                if emit(&self.stop, &self.output, event).await.is_break() {
+                    return ControlFlow::Break(());
+                }
+            }
+            next = following;
+        }
+        ControlFlow::Continue(())
     }
 }
 
@@ -158,7 +241,7 @@ pub(super) fn open(
     cx: &telemetry::Cx,
 ) -> Result<DetectionStream, ProviderError> {
     let cancelled = CancellationToken::new();
-    let (sink, mut input) = Input::open(cancelled.clone(), cx);
+    let (sink, input) = Input::open(cancelled.clone(), cx);
     let (output, events) = mpsc::channel(OUTPUT_CAPACITY);
     let (catch_up, worker_clock) = (sink.drops.clone(), clock.clone());
     let stop = cancelled.clone();
@@ -166,63 +249,19 @@ pub(super) fn open(
     // queued audio. The same worker owns the recurrent state until settlement.
     let worker = media_pool
         .try_spawn(JobClass::VadModel, move || {
-            let mut machine = VadMachine::new(*options.borrow_and_update());
-            let mut model = models.create();
-            runtime.block_on(async move {
-                loop {
-                    catch_up.catching_up(input.head(), worker_clock.now());
-                    let item = tokio::select! {
-                        biased;
-                        () = stop.cancelled() => return Ok(()),
-                        item = input.recv() => match item {
-                            Some(item) => item,
-                            None => return Ok(()),
-                        },
-                    };
-                    if options.has_changed().unwrap_or(false) {
-                        machine.update_options(*options.borrow_and_update());
-                    }
-                    let mut next = match item {
-                        Item::Media(frame) => match machine.push(frame) {
-                            Ok(next) => next,
-                            Err(error) => {
-                                log::warn!(
-                                    target: "livekit.agents",
-                                    "dropping invalid VAD frame: {error}"
-                                );
-                                continue;
-                            }
-                        },
-                        Item::Gap(_) | Item::Event(Flush) => {
-                            let ended = machine.reset();
-                            model.reset();
-                            if let Some(event) = ended
-                                && !emit(&stop, &output, event).await
-                            {
-                                return Ok(());
-                            }
-                            None
-                        }
-                    };
-                    while let Some(VadPredict { window, samples }) = next {
-                        if stop.is_cancelled() {
-                            return Ok(());
-                        }
-                        let (probability, inference_duration) = model.predict(&samples);
-                        let (events, following) = machine.predicted(VadResult {
-                            window,
-                            probability,
-                            inference_duration,
-                        });
-                        for event in events {
-                            if !emit(&stop, &output, event).await {
-                                return Ok(());
-                            }
-                        }
-                        next = following;
-                    }
-                }
-            })
+            let machine = VadMachine::new(*options.borrow_and_update());
+            let model = models.create();
+            let detection = Detection {
+                machine,
+                model,
+                options,
+                input,
+                output,
+                stop,
+                catch_up,
+                clock: worker_clock,
+            };
+            runtime.block_on(detection.run())
         })
         .map_err(|error| failed(error.to_string()))?;
     Ok(lk_agents_abi::DuplexStream::new(

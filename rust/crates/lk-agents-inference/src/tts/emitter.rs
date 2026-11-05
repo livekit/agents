@@ -338,14 +338,7 @@ impl Inner {
                     open.input.push(&data).map_err(decode_error)?;
                 }
                 op @ (Op::EndSegment | Op::EndInput) => {
-                    if let Some(mut open) = segment.take() {
-                        open.input.end_input();
-                        while open.decoding {
-                            open.decoding = self.frame(open.output.next().await)?;
-                        }
-                        *locked(&queue.segment) = None;
-                        open.output.close().await.map_err(decode_error)?;
-                    }
+                    self.end_segment(queue, segment).await?;
                     let end = matches!(op, Op::EndInput);
                     self.apply_now(op)?;
                     if end {
@@ -355,6 +348,21 @@ impl Inner {
                 op => self.apply_now(op)?,
             }
         }
+    }
+
+    /// Ends the open segment's input and frames the rest of its audio before closing it.
+    async fn end_segment(
+        self: &Arc<Self>,
+        queue: &Queue,
+        segment: &mut Option<Segment>,
+    ) -> Result<(), EmitterError> {
+        let Some(mut open) = segment.take() else { return Ok(()) };
+        open.input.end_input();
+        while open.decoding {
+            open.decoding = self.frame(open.output.next().await)?;
+        }
+        *locked(&queue.segment) = None;
+        open.output.close().await.map_err(decode_error)
     }
 
     fn open_segment(&self, queue: &Queue) -> Result<Segment, EmitterError> {

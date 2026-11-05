@@ -196,41 +196,61 @@ impl HostRealtimeLeg {
                     continue;
                 }
             };
-            if leg.requests.lock().cancelled.remove(&req_id) {
-                continue;
+            leg.request_reply(req_id, cmd, &events).await;
+        }
+    }
+
+    /// Sends a reply request unless it was cancelled, and drains its generation in its own task.
+    async fn request_reply(
+        &self,
+        req_id: String,
+        cmd: RealtimeCommand,
+        events: &tokio::sync::mpsc::UnboundedSender<Event>,
+    ) {
+        if self.requests.lock().cancelled.remove(&req_id) {
+            return;
+        }
+        let request = match self.host.request(cmd).await {
+            Ok(request) => request,
+            Err(error) => {
+                let _ =
+                    events.send(Event::GenerateReplyFailed(GenerateReplyFailed { req_id, error }));
+                return;
             }
-            let request = match leg.host.request(cmd).await {
-                Ok(request) => request,
-                Err(error) => {
-                    let _ = events
-                        .send(Event::GenerateReplyFailed(GenerateReplyFailed { req_id, error }));
-                    continue;
-                }
-            };
-            // Cancelled while it was being sent: the future is cancelled instead of awaited.
-            if leg.requests.lock().cancelled.remove(&req_id) {
-                leg.host.cancel(request).await;
-                continue;
+        };
+        // Cancelled while it was being sent: the future is cancelled instead of awaited.
+        if self.requests.lock().cancelled.remove(&req_id) {
+            self.host.cancel(request).await;
+            return;
+        }
+        self.requests.lock().pending.insert(req_id.clone(), request.clone());
+        self.spawn(Self::deliver_reply(
+            Arc::clone(&self.host),
+            Arc::clone(&self.requests),
+            events.clone(),
+            req_id,
+            request,
+        ));
+    }
+
+    /// Awaits the request's generation and drains it; a failure is reported unless cancelled.
+    async fn deliver_reply(
+        host: Arc<dyn HostRealtimeSession>,
+        requests: Arc<parking_lot::Mutex<Requests>>,
+        events: tokio::sync::mpsc::UnboundedSender<Event>,
+        req_id: String,
+        request: lk_agents_abi::HostRef,
+    ) {
+        let generation = host.generation(request).await;
+        // Gone from `pending`: cancelled, and a cancelled request reports nothing.
+        let asked = requests.lock().pending.remove(&req_id).is_some();
+        match generation {
+            Ok(generation) => host.drain(generation, Some(req_id)).await,
+            Err(error) if asked => {
+                let _ =
+                    events.send(Event::GenerateReplyFailed(GenerateReplyFailed { req_id, error }));
             }
-            leg.requests.lock().pending.insert(req_id.clone(), request.clone());
-            let host = Arc::clone(&leg.host);
-            let requests = Arc::clone(&leg.requests);
-            let events = events.clone();
-            leg.spawn(async move {
-                let generation = host.generation(request).await;
-                // Gone from `pending`: cancelled, and a cancelled request reports nothing.
-                let asked = requests.lock().pending.remove(&req_id).is_some();
-                match generation {
-                    Ok(generation) => host.drain(generation, Some(req_id)).await,
-                    Err(error) if asked => {
-                        let _ = events.send(Event::GenerateReplyFailed(GenerateReplyFailed {
-                            req_id,
-                            error,
-                        }));
-                    }
-                    Err(_) => {}
-                }
-            });
+            Err(_) => {}
         }
     }
 }

@@ -12,14 +12,13 @@ use lk_agents_abi::llm::inference::InvalidPayload;
 use lk_agents_abi::{BoxFuture, Spawner};
 use lk_agents_abi::{ChatRequest, Closed, Llm, LlmStream, StreamOutput, ToolChoice, Ts};
 use lk_agents_abi::{Clock, HOST_TEARDOWN_TIMEOUT};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 use crate::fallback::ChainPolicy;
 use crate::fallback::chain::{
-    Attempt, Backend, ChainCall, ChainObserver, ChainOutcome, FallbackChain, NoBackends, Recovery,
-    RecoveryMode,
+    Attempt, Backend, ChainCall, ChainObserver, FallbackChain, NoBackends, Recovery, RecoveryMode,
 };
-use crate::fallback::channel::{ChainTask, ChannelSource, drain_probe, forward};
+use crate::fallback::channel::{ServeAttempt, drain_probe, forward};
 use crate::telemetry;
 use lk_agents_net::env::ProcessEnv;
 
@@ -334,65 +333,45 @@ impl Llm for FallbackLlm {
     ) -> lk_agents_abi::BoxFuture<'a, Result<LlmStream, ProviderError>> {
         let span = self.adapter_span(cx);
         Box::pin(async move {
-            // Bounded, so a slow reader backpressures the provider; the text leg may not drop (§1.2d).
-            let (tx, rx) = mpsc::channel::<Result<LlmChunk, ProviderError>>(32);
-
-            let chain = Arc::clone(&self.chain);
-            let drain_chain = Arc::clone(&self.chain);
             let req = LlmAttempt { req: req.clone(), cx: span.cx().clone() };
             let call = ChainCall {
                 conn_options: req.req.conn_options,
                 accepted_at: self.chain.clock().now(),
                 slot: RecoveryMode::OneShot,
             };
-
-            let (stop_rx, done_tx, chain_task) = ChainTask::pair(chain.clock());
-            let handle = self.chain.spawn_stream(async move {
-                let mut tx = tx;
-                let result = chain
-                    .run_cancellable(
-                        &req,
-                        call,
-                        &mut tx,
-                        stop_rx,
-                        move |index, _backend, mut stream, tx, mut stop| {
-                            let chain = Arc::clone(&drain_chain);
-                            Box::pin(async move {
-                                // Only `has_response()` chunks count as output (`llm:281-285`);
-                                // usage-only chunks do not block a retry.
-                                let outcome = forward(
-                                    &chain,
-                                    index,
-                                    stream.as_mut(),
-                                    &mut stop,
-                                    tx,
-                                    LlmChunk::has_response,
-                                )
-                                .await;
-                                stream
-                                    .close(
-                                        chain.clock().now().saturating_add(HOST_TEARDOWN_TIMEOUT),
-                                    )
-                                    .await;
-                                outcome
-                            }) as BoxFuture<'_, Attempt<()>>
-                        },
-                    )
-                    .await;
-
+            let settled = move |chain: &FallbackChain<LlmBackend>,
+                                result: Result<(), &ProviderError>| {
                 match result {
-                    Ok(ChainOutcome::Served(())) => {
-                        telemetry::end(span, Some(served(&chain)));
-                    }
-                    Err(e) => {
-                        telemetry::end(span, &e);
-                        let _ = tx.send(Err(e)).await;
-                    }
+                    Ok(()) => telemetry::end(span, Some(served(chain))),
+                    Err(error) => telemetry::end(span, error),
                 }
-                let _ = done_tx.send(());
-            });
+            };
+            let source = self.chain.serve_stream(req, call, Arc::new(LlmLeg), settled, ());
+            Ok(Box::new(source) as LlmStream)
+        })
+    }
+}
 
-            Ok(Box::new(ChannelSource { rx, task: Some(handle), chain: chain_task }) as LlmStream)
+/// An entry's attempt: its chunks forwarded until the stream ends, then the stream closed.
+struct LlmLeg;
+
+impl ServeAttempt<LlmBackend, LlmChunk> for LlmLeg {
+    fn serve<'a>(
+        self: Arc<Self>,
+        chain: Arc<FallbackChain<LlmBackend>>,
+        index: usize,
+        mut stream: LlmStream,
+        tx: &'a mut mpsc::Sender<Result<LlmChunk, ProviderError>>,
+        mut stop: watch::Receiver<bool>,
+    ) -> BoxFuture<'a, Attempt<()>> {
+        Box::pin(async move {
+            // Only `has_response()` chunks count as output (`llm:281-285`); usage-only chunks do
+            // not block a retry.
+            let outcome =
+                forward(&chain, index, stream.as_mut(), &mut stop, tx, LlmChunk::has_response)
+                    .await;
+            stream.close(chain.clock().now().saturating_add(HOST_TEARDOWN_TIMEOUT)).await;
+            outcome
         })
     }
 }

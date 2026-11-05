@@ -281,7 +281,7 @@ impl<B: Backend> FallbackChain<B> {
         req: &B::Req,
         call: ChainCall,
         state: &mut S,
-        mut cancel: watch::Receiver<bool>,
+        cancel: watch::Receiver<bool>,
         attempt: F,
     ) -> Result<ChainOutcome<T>, ProviderError>
     where
@@ -299,8 +299,18 @@ impl<B: Backend> FallbackChain<B> {
             + Sync
             + 'static,
     {
-        let ChainCall { conn_options, accepted_at: started, slot } = call;
-        let caller_conn = &conn_options;
+        self.admit(req, call, cancel)?.drive(state, attempt).await
+    }
+
+    /// Opens one request: refuses it when stopped or past its deadline, refreshes health, builds
+    /// the request's machine and probes every unavailable entry.
+    fn admit<'c, T, S>(
+        &'c self,
+        req: &'c B::Req,
+        call: ChainCall,
+        cancel: watch::Receiver<bool>,
+    ) -> Result<ChainRun<'c, B, T, S>, ProviderError> {
+        let ChainCall { conn_options: caller_conn, accepted_at: started, slot } = call;
         let deadline = caller_conn
             .total_timeout
             .map(|seconds| started.saturating_add(Duration::from_secs_f64(seconds)));
@@ -310,199 +320,70 @@ impl<B: Backend> FallbackChain<B> {
         if deadline.is_some_and(|at| self.clock.now() >= at) {
             return Err(ApiError::timed_out(lk_agents_abi::errors::TimeoutPhase::Total).into());
         }
-        let all_failed = {
-            let mut status = self.status.lock();
-            let priority: Vec<_> = status.backends.iter().map(|entry| entry.resource).collect();
-            status.health.refresh(&priority, self.clock.now());
-            status.backends.iter().all(|entry| !status.health.is_available(entry.resource))
-        };
-        if all_failed {
+        if self.refresh_health() {
             self.observer.all_unavailable();
         }
-        let (mut request, recovery_order) = {
-            let status = self.status.lock();
-            let priority: Vec<_> = status.backends.iter().map(|entry| entry.resource).collect();
-            let entries = status
-                .backends
-                .iter()
-                .enumerate()
-                .map(|(index, backend)| (index, backend.resource, self.labels[index].clone()))
-                .collect();
-            let policy = ChainPolicy {
-                retry_interval: Some(
-                    self.policy.retry_interval.unwrap_or(caller_conn.retry_interval),
-                ),
-                ..self.policy
-            };
-            (
-                ChainRequest::new(entries, policy, deadline, &status.health),
-                status.health.order(&priority, false),
-            )
-        };
-        let mut effects: VecDeque<_> = request.handle(ChainEvent::Wake, started).into();
-        let mut active: Option<(u64, usize, u64, RunningAttempt<T, S>)> = None;
-        let mut served = None;
-        let recover_conn = conn_options_for_attempt(caller_conn, &self.policy);
+        let (mut request, recovery_order) = self.chain_request(&caller_conn, deadline);
+        let effects = request.handle(ChainEvent::Wake, started).into();
+        let recover_conn = conn_options_for_attempt(&caller_conn, &self.policy);
         for index in recovery_order {
             if !self.is_available(index) {
                 self.try_recovery(index, slot, req, &recover_conn, deadline);
             }
         }
-        loop {
-            let Some(effect) = effects.pop_front() else {
-                let Some((id, index, attempt_id, running)) = active.as_mut() else {
-                    effects.extend(request.handle(ChainEvent::Wake, self.clock.now()));
-                    continue;
-                };
-                let mut closed = self.stop.subscribe();
-                let observation =
-                    running.observe(self.clock.as_ref(), deadline, &mut cancel, &mut closed).await;
-                let event = match observation {
-                    AttemptObservation::Interrupted(event) => event,
-                    AttemptObservation::Completed(outcome, updated_state) => {
-                        if let Some(updated_state) = updated_state {
-                            *state = updated_state;
-                        }
-                        match outcome {
-                            Attempt::Served(value) => {
-                                served = Some((value, *index, *attempt_id));
-                                if self.closed.load(Ordering::SeqCst) || *cancel.borrow() {
-                                    ChainEvent::Cancel
-                                } else {
-                                    ChainEvent::Succeeded { attempt: *id }
-                                }
-                            }
-                            Attempt::Failed { error, produced_output } => {
-                                let failed = !(error.api_kind() == Some(ApiErrorKind::Timeout)
-                                    && deadline.is_some_and(|at| self.clock.now() >= at))
-                                    && self.observe_result(*index, Err(&error));
-                                if failed {
-                                    self.select(*index, 0);
-                                }
-                                if failed
-                                    && !produced_output
-                                    && !self.closed.load(Ordering::SeqCst)
-                                    && !*cancel.borrow()
-                                {
-                                    self.try_recovery(*index, slot, req, &recover_conn, deadline);
-                                }
-                                ChainEvent::Failed { attempt: *id, error, produced_output }
-                            }
-                        }
-                    }
-                };
-                if matches!(event, ChainEvent::Succeeded { .. } | ChainEvent::Failed { .. })
-                    || served.is_some()
-                {
-                    active = None;
-                }
-                effects.extend(request.handle(event, self.clock.now()));
-                continue;
-            };
-            match effect {
-                FallbackChainEffect::Finished(result) => {
-                    result?;
-                    let (value, index, attempt_id) =
-                        served.take().expect("successful attempt outcome");
-                    self.mark_serving(index);
-                    self.select(index, attempt_id);
-                    self.observe_result(index, Ok(()));
-                    return Ok(ChainOutcome::Served(value));
-                }
-                FallbackChainEffect::WakeAt(at) => {
-                    let mut closed = self.stop.subscribe();
-                    let clock = self.clock.clone();
-                    let wake = wait_until(clock.as_ref(), at, &mut cancel, &mut closed).await;
-                    effects.extend(request.handle(
-                        if wake { ChainEvent::Wake } else { ChainEvent::Cancel },
-                        self.clock.now(),
-                    ));
-                }
-                FallbackChainEffect::Start { attempt: id, index, .. } => {
-                    if self.closed.load(Ordering::SeqCst) || *cancel.borrow() {
-                        effects.extend(request.handle(ChainEvent::Cancel, self.clock.now()));
-                        continue;
-                    }
-                    // Recheck supplied time immediately before executing an authorized launch.
-                    if deadline.is_some_and(|at| self.clock.now() >= at) {
-                        effects.extend(request.handle(ChainEvent::Wake, self.clock.now()));
-                        continue;
-                    }
-                    let attempt_id = self.attempts.fetch_add(1, Ordering::Relaxed) + 1;
-                    self.select(index, attempt_id);
-                    let mut conn = conn_options_for_attempt(caller_conn, &self.policy);
-                    let clock = self.clock.clone();
-                    let closed = self.stop.subscribe();
-                    let backend = Arc::clone(&self.entries[index]);
-                    let request_input = req.clone();
-                    let mut attempt_state = state.clone();
-                    let attempt_fn = attempt.clone();
-                    let (stop_tx, stop_rx) = watch::channel(false);
-                    let (result_tx, result_rx) = oneshot::channel();
-                    let task = self.spawner.spawn(async move {
-                        // Admission can outlive its authorization while the executor is busy.
-                        let now = clock.now();
-                        let outcome = if *stop_rx.borrow() || *closed.borrow() {
-                            Attempt::Failed {
-                                error: ApiError::status("fallback cancelled", 499, None, None)
-                                    .into(),
-                                produced_output: false,
-                            }
-                        } else if deadline.is_some_and(|at| now >= at) {
-                            Attempt::Failed {
-                                error: ApiError::timed_out(
-                                    lk_agents_abi::errors::TimeoutPhase::Total,
-                                )
-                                .with_retryable(false)
-                                .into(),
-                                produced_output: false,
-                            }
-                        } else {
-                            let remaining =
-                                deadline.map(|at| at.saturating_duration_since(now).as_secs_f64());
-                            conn.total_timeout = match (conn.total_timeout, remaining) {
-                                (Some(attempt), Some(total)) => Some(attempt.min(total)),
-                                (attempt, total) => attempt.or(total),
-                            };
-                            match backend.open(&request_input, &conn).await {
-                                Ok(session) => {
-                                    attempt_fn(
-                                        index,
-                                        backend.as_ref(),
-                                        session,
-                                        &mut attempt_state,
-                                        stop_rx,
-                                    )
-                                    .await
-                                }
-                                Err(error) => Attempt::Failed { error, produced_output: false },
-                            }
-                        };
-                        let _ = result_tx.send((outcome, attempt_state));
-                    });
-                    {
-                        let mut statuses = self.status.lock();
-                        let active = &mut statuses.backends[index].active;
-                        active.retain(|probe| !probe.task.is_finished());
-                        active.push(Probe { task });
-                    }
-                    active = Some((
-                        id,
-                        index,
-                        attempt_id,
-                        RunningAttempt { result: result_rx, stop: stop_tx },
-                    ));
-                }
-                FallbackChainEffect::Cancel { attempt } => {
-                    if let Some((id, _, _, running)) = active.as_mut()
-                        && *id == attempt
-                        && let Some(updated_state) = running.cancel(self.clock.as_ref()).await
-                    {
-                        *state = updated_state;
-                    }
-                }
-            }
-        }
+        Ok(ChainRun {
+            chain: self,
+            req,
+            caller_conn,
+            recover_conn,
+            slot,
+            deadline,
+            cancel,
+            request,
+            effects,
+            active: None,
+            served: None,
+        })
+    }
+
+    /// Ages every entry's health to now; true when none is available.
+    fn refresh_health(&self) -> bool {
+        let mut status = self.status.lock();
+        let priority: Vec<_> = status.backends.iter().map(|entry| entry.resource).collect();
+        status.health.refresh(&priority, self.clock.now());
+        status.backends.iter().all(|entry| !status.health.is_available(entry.resource))
+    }
+
+    /// The request's machine over the entries as they stand, and the order to probe them in.
+    fn chain_request(
+        &self,
+        caller_conn: &ApiConnectOptions,
+        deadline: Option<Ts>,
+    ) -> (ChainRequest, Vec<usize>) {
+        let status = self.status.lock();
+        let priority: Vec<_> = status.backends.iter().map(|entry| entry.resource).collect();
+        let entries = status
+            .backends
+            .iter()
+            .enumerate()
+            .map(|(index, backend)| (index, backend.resource, self.labels[index].clone()))
+            .collect();
+        let policy = ChainPolicy {
+            retry_interval: Some(self.policy.retry_interval.unwrap_or(caller_conn.retry_interval)),
+            ..self.policy
+        };
+        (
+            ChainRequest::new(entries, policy, deadline, &status.health),
+            status.health.order(&priority, false),
+        )
+    }
+
+    /// Holds a launched attempt under its entry until it settles; finished ones are pruned.
+    fn track_attempt(&self, index: usize, task: OwnedTask) {
+        let mut statuses = self.status.lock();
+        let active = &mut statuses.backends[index].active;
+        active.retain(|probe| !probe.task.is_finished());
+        active.push(Probe { task });
     }
 
     /// Unless a live probe is already on `slot`.
@@ -518,87 +399,38 @@ impl<B: Backend> FallbackChain<B> {
             // `tts:218-220,499-502`. Nothing would cancel a probe started from here.
             return;
         }
-
-        let generation = {
-            let s = self.status.lock();
-            let Some(status) = s.backends.get(index) else { return };
-            if status.closed {
-                return;
-            }
-            if status.recovery[slot as usize].as_ref().is_some_and(|p| !p.task.is_finished()) {
-                return;
-            }
-            s.health.probe_generation(status.resource)
+        let Some(generation) = self.free_probe_slot(index, slot) else { return };
+        let probe = RecoveryProbe {
+            backend: Arc::clone(&self.entries[index]),
+            label: self.labels[index].clone(),
+            req: req.clone(),
+            conn: *conn,
+            observer: Arc::clone(&self.observer),
+            status: Arc::clone(&self.status),
+            closed: self.stop.subscribe(),
+            clock: self.clock.clone(),
+            deadline,
+            slot,
+            index,
+            generation,
         };
+        let task = self.spawner.spawn(probe.run());
+        self.register_probe(index, slot, generation, task);
+    }
 
-        let backend = Arc::clone(&self.entries[index]);
-        let label = self.labels[index].clone();
-        let req = req.clone();
-        let mut conn = *conn;
-        let observer = Arc::clone(&self.observer);
-        let status_for_task = Arc::clone(&self.status);
-        let mut closed = self.stop.subscribe();
-        let clock = self.clock.clone();
-        let task = self.spawner.spawn(async move {
-            if *closed.borrow() || deadline.is_some_and(|at| clock.now() >= at) {
-                return;
-            }
-            conn.total_timeout = deadline.map(|at| {
-                at.saturating_duration_since(clock.now()).as_secs_f64()
-            });
-            let (stop, stopped) = watch::channel(false);
-            let recovery = backend.recover(&req, &conn, slot, stopped);
-            let limit = async {
-                match deadline {
-                    Some(at) => clock.wait_until(at).await,
-                    None => std::future::pending().await,
-                }
-            };
-            use futures_util::future::{Either, select};
-            let interruption = select(Box::pin(limit), Box::pin(closed.changed()));
-            let outcome = match select(Box::pin(recovery), Box::pin(interruption)).await {
-                Either::Left((outcome, _)) => outcome,
-                Either::Right((_, mut recovery)) => {
-                    let _ = stop.send(true);
-                    let cleanup = lk_agents_abi::Closed::bounded(
-                        clock.as_ref(), clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT),
-                        async { let _ = (&mut recovery).await; },
-                    ).await;
-                    if cleanup == lk_agents_abi::Closed::TimedOut {
-                        log::error!("fallback probe cleanup incomplete; task retains ownership until settlement");
-                        let _ = recovery.await;
-                    }
-                    return;
-                }
-            };
-            if *closed.borrow() || deadline.is_some_and(|at| clock.now() >= at) {
-                return;
-            }
-            match outcome {
-                Ok(Recovery::Recovered) => {
-                    let changed = {
-                        let mut s = status_for_task.lock();
-                        match s.backends.get(index) {
-                            Some(st) if !st.closed => {
-                                let resource = st.resource;
-                                s.health.recovered(resource, generation)
-                            }
-                            _ => false,
-                        }
-                    };
-                    if changed {
-                        observer.availability_changed(AvailabilityChanged {
-                            index,
-                            label,
-                            available: true,
-                        });
-                    }
-                }
-                // Both are "still down"; the next request schedules another probe.
-                Ok(Recovery::NotYet) | Err(_) => {}
-            }
-        });
+    /// The entry's probe generation, when the entry is open and `slot` has no live probe.
+    fn free_probe_slot(&self, index: usize, slot: RecoveryMode) -> Option<u64> {
+        let s = self.status.lock();
+        let status = s.backends.get(index).filter(|status| !status.closed)?;
+        if status.recovery[slot as usize].as_ref().is_some_and(|p| !p.task.is_finished()) {
+            return None;
+        }
+        Some(s.health.probe_generation(status.resource))
+    }
 
+    /// A probe whose entry closed or whose generation went stale while it spawned is still owned
+    /// by the entry, but no longer holds `slot`.
+    fn register_probe(&self, index: usize, slot: RecoveryMode, generation: u64, task: OwnedTask) {
         let mut s = self.status.lock();
         let stale = s.backends.get(index).is_some_and(|status| {
             status.closed || s.health.probe_generation(status.resource) != generation
@@ -690,6 +522,345 @@ impl<B: Backend> FallbackChain<B> {
     }
 }
 
+/// One request's loop: it runs the request machine's effects and settles each attempt it launches.
+struct ChainRun<'c, B: Backend, T, S> {
+    chain: &'c FallbackChain<B>,
+    req: &'c B::Req,
+    caller_conn: ApiConnectOptions,
+    recover_conn: ApiConnectOptions,
+    slot: RecoveryMode,
+    deadline: Option<Ts>,
+    cancel: watch::Receiver<bool>,
+    request: ChainRequest,
+    effects: VecDeque<FallbackChainEffect>,
+    active: Option<RunningAttempt<T, S>>,
+    /// The served value with its entry and selection id, until the machine finishes.
+    served: Option<(T, usize, u64)>,
+}
+
+impl<B: Backend, T: Send + 'static, S: Clone + Send + 'static> ChainRun<'_, B, T, S> {
+    async fn drive<F>(mut self, state: &mut S, attempt: F) -> Result<ChainOutcome<T>, ProviderError>
+    where
+        F: for<'a> Fn(
+                usize,
+                &'a B,
+                B::Session,
+                &'a mut S,
+                watch::Receiver<bool>,
+            ) -> BoxFuture<'a, Attempt<T>>
+            + Clone
+            + Send
+            + Sync
+            + 'static,
+    {
+        loop {
+            let Some(effect) = self.effects.pop_front() else {
+                self.await_active(state).await;
+                continue;
+            };
+            match effect {
+                FallbackChainEffect::Finished(result) => return self.finish(result),
+                FallbackChainEffect::WakeAt(at) => self.sleep_until(at).await,
+                FallbackChainEffect::Start { attempt: id, index, .. } => {
+                    self.launch(id, index, state, &attempt)
+                }
+                FallbackChainEffect::Cancel { attempt: id } => self.cancel(id, state).await,
+            }
+        }
+    }
+
+    fn handle(&mut self, event: ChainEvent) {
+        self.effects.extend(self.request.handle(event, self.chain.clock.now()));
+    }
+
+    /// Waits for the running attempt to settle or be interrupted; with none running the machine
+    /// is woken to decide what comes next.
+    async fn await_active(&mut self, state: &mut S) {
+        let Some(mut active) = self.active.take() else {
+            self.handle(ChainEvent::Wake);
+            return;
+        };
+        let mut closed = self.chain.stop.subscribe();
+        let clock = self.chain.clock.as_ref();
+        let observation = active.observe(clock, self.deadline, &mut self.cancel, &mut closed).await;
+        let event = match observation {
+            AttemptObservation::Interrupted(event) => event,
+            AttemptObservation::Completed(outcome, updated_state) => {
+                if let Some(updated_state) = updated_state {
+                    *state = updated_state;
+                }
+                match outcome {
+                    Attempt::Served(value) => self.served(&active, value),
+                    Attempt::Failed { error, produced_output } => {
+                        self.failed(&active, error, produced_output)
+                    }
+                }
+            }
+        };
+        let settled = matches!(event, ChainEvent::Succeeded { .. } | ChainEvent::Failed { .. });
+        if !settled && self.served.is_none() {
+            self.active = Some(active);
+        }
+        self.handle(event);
+    }
+
+    fn served(&mut self, active: &RunningAttempt<T, S>, value: T) -> ChainEvent {
+        self.served = Some((value, active.index, active.attempt_id));
+        if self.chain.closed.load(Ordering::SeqCst) || *self.cancel.borrow() {
+            ChainEvent::Cancel
+        } else {
+            ChainEvent::Succeeded { attempt: active.id }
+        }
+    }
+
+    /// A timeout at the request's own deadline is not the entry's fault; any other failure marks
+    /// it down and, unless output already reached the consumer, starts its recovery probe.
+    fn failed(
+        &self,
+        active: &RunningAttempt<T, S>,
+        error: ProviderError,
+        produced_output: bool,
+    ) -> ChainEvent {
+        let (chain, index) = (self.chain, active.index);
+        let failed = !(error.api_kind() == Some(ApiErrorKind::Timeout)
+            && self.deadline.is_some_and(|at| chain.clock.now() >= at))
+            && chain.observe_result(index, Err(&error));
+        if failed {
+            chain.select(index, 0);
+        }
+        if failed
+            && !produced_output
+            && !chain.closed.load(Ordering::SeqCst)
+            && !*self.cancel.borrow()
+        {
+            chain.try_recovery(index, self.slot, self.req, &self.recover_conn, self.deadline);
+        }
+        ChainEvent::Failed { attempt: active.id, error, produced_output }
+    }
+
+    fn finish(
+        &mut self,
+        result: Result<(), ProviderError>,
+    ) -> Result<ChainOutcome<T>, ProviderError> {
+        result?;
+        let (value, index, attempt_id) =
+            self.served.take().expect("the machine succeeds only after an attempt served");
+        self.chain.mark_serving(index);
+        self.chain.select(index, attempt_id);
+        self.chain.observe_result(index, Ok(()));
+        Ok(ChainOutcome::Served(value))
+    }
+
+    async fn sleep_until(&mut self, at: Ts) {
+        let mut closed = self.chain.stop.subscribe();
+        let clock = self.chain.clock.clone();
+        let wake = wait_until(clock.as_ref(), at, &mut self.cancel, &mut closed).await;
+        self.handle(if wake { ChainEvent::Wake } else { ChainEvent::Cancel });
+    }
+
+    /// Spawns entry `index`'s attempt, rechecking the stop and the deadline first: the machine
+    /// authorized it at an earlier instant.
+    fn launch<F>(&mut self, id: u64, index: usize, state: &S, serve: &F)
+    where
+        F: for<'a> Fn(
+                usize,
+                &'a B,
+                B::Session,
+                &'a mut S,
+                watch::Receiver<bool>,
+            ) -> BoxFuture<'a, Attempt<T>>
+            + Clone
+            + Send
+            + Sync
+            + 'static,
+    {
+        let chain = self.chain;
+        if chain.closed.load(Ordering::SeqCst) || *self.cancel.borrow() {
+            return self.handle(ChainEvent::Cancel);
+        }
+        // Recheck supplied time immediately before executing an authorized launch.
+        if self.deadline.is_some_and(|at| chain.clock.now() >= at) {
+            return self.handle(ChainEvent::Wake);
+        }
+        let attempt_id = chain.attempts.fetch_add(1, Ordering::Relaxed) + 1;
+        chain.select(index, attempt_id);
+        let (stop, stop_rx) = watch::channel(false);
+        let (result_tx, result) = oneshot::channel();
+        let launch = AttemptLaunch {
+            backend: Arc::clone(&chain.entries[index]),
+            req: self.req.clone(),
+            conn: conn_options_for_attempt(&self.caller_conn, &chain.policy),
+            deadline: self.deadline,
+            clock: chain.clock.clone(),
+            closed: chain.stop.subscribe(),
+            stop: stop_rx,
+            state: state.clone(),
+            serve: serve.clone(),
+            index,
+        };
+        let task = chain.spawner.spawn(async move {
+            let _ = result_tx.send(launch.run().await);
+        });
+        chain.track_attempt(index, task);
+        self.active = Some(RunningAttempt { id, index, attempt_id, result, stop });
+    }
+
+    async fn cancel(&mut self, attempt: u64, state: &mut S) {
+        let Some(running) = self.active.as_mut().filter(|running| running.id == attempt) else {
+            return;
+        };
+        if let Some(updated_state) = running.cancel(self.chain.clock.as_ref()).await {
+            *state = updated_state;
+        }
+    }
+}
+
+/// One attempt's task: it opens its entry and serves the session, handing back its outcome and
+/// the state it served with.
+struct AttemptLaunch<B: Backend, S, F> {
+    backend: Arc<B>,
+    req: B::Req,
+    conn: ApiConnectOptions,
+    deadline: Option<Ts>,
+    clock: Arc<dyn Clock>,
+    closed: watch::Receiver<bool>,
+    stop: watch::Receiver<bool>,
+    state: S,
+    serve: F,
+    index: usize,
+}
+
+impl<B: Backend, S, F> AttemptLaunch<B, S, F> {
+    async fn run<T>(mut self) -> (Attempt<T>, S)
+    where
+        F: for<'a> Fn(
+            usize,
+            &'a B,
+            B::Session,
+            &'a mut S,
+            watch::Receiver<bool>,
+        ) -> BoxFuture<'a, Attempt<T>>,
+    {
+        // Admission can outlive its authorization while the executor is busy.
+        let now = self.clock.now();
+        if let Some(error) = self.refusal(now) {
+            return (Attempt::Failed { error, produced_output: false }, self.state);
+        }
+        let remaining = self.deadline.map(|at| at.saturating_duration_since(now).as_secs_f64());
+        self.conn.total_timeout = match (self.conn.total_timeout, remaining) {
+            (Some(attempt), Some(total)) => Some(attempt.min(total)),
+            (attempt, total) => attempt.or(total),
+        };
+        let session = match self.backend.open(&self.req, &self.conn).await {
+            Ok(session) => session,
+            Err(error) => return (Attempt::Failed { error, produced_output: false }, self.state),
+        };
+        let outcome =
+            (self.serve)(self.index, self.backend.as_ref(), session, &mut self.state, self.stop)
+                .await;
+        (outcome, self.state)
+    }
+
+    /// Why an attempt admitted late must not open: it was stopped, or its deadline passed.
+    fn refusal(&self, now: Ts) -> Option<ProviderError> {
+        if *self.stop.borrow() || *self.closed.borrow() {
+            return Some(ApiError::status("fallback cancelled", 499, None, None).into());
+        }
+        self.deadline.is_some_and(|at| now >= at).then(|| {
+            ApiError::timed_out(lk_agents_abi::errors::TimeoutPhase::Total)
+                .with_retryable(false)
+                .into()
+        })
+    }
+}
+
+/// A background recovery probe of one entry: it replays the request and, when the entry
+/// answers, marks it available again.
+struct RecoveryProbe<B: Backend> {
+    backend: Arc<B>,
+    label: String,
+    req: B::Req,
+    conn: ApiConnectOptions,
+    observer: Arc<dyn ChainObserver>,
+    status: Arc<Mutex<ChainState>>,
+    closed: watch::Receiver<bool>,
+    clock: Arc<dyn Clock>,
+    deadline: Option<Ts>,
+    slot: RecoveryMode,
+    index: usize,
+    generation: u64,
+}
+
+impl<B: Backend> RecoveryProbe<B> {
+    async fn run(mut self) {
+        if *self.closed.borrow() || self.deadline.is_some_and(|at| self.clock.now() >= at) {
+            return;
+        }
+        self.conn.total_timeout =
+            self.deadline.map(|at| at.saturating_duration_since(self.clock.now()).as_secs_f64());
+        let Some(outcome) = self.until_interrupted().await else { return };
+        if *self.closed.borrow() || self.deadline.is_some_and(|at| self.clock.now() >= at) {
+            return;
+        }
+        // `NotYet` and an error are both "still down"; the next request schedules another probe.
+        if let Ok(Recovery::Recovered) = outcome {
+            self.mark_recovered();
+        }
+    }
+
+    /// The probe's verdict, or `None` when the deadline or the chain's close came first: the
+    /// probe is then told to stop and awaited, bounded, to close what it opened.
+    async fn until_interrupted(&mut self) -> Option<Result<Recovery, ProviderError>> {
+        use futures_util::future::{Either, select};
+        let (stop, stopped) = watch::channel(false);
+        let recovery = self.backend.recover(&self.req, &self.conn, self.slot, stopped);
+        let limit = crate::wait_for_deadline(self.clock.as_ref(), self.deadline);
+        let interruption = select(Box::pin(limit), Box::pin(self.closed.changed()));
+        let mut recovery = match select(Box::pin(recovery), Box::pin(interruption)).await {
+            Either::Left((outcome, _)) => return Some(outcome),
+            Either::Right((_, recovery)) => recovery,
+        };
+        let _ = stop.send(true);
+        let cleanup = lk_agents_abi::Closed::bounded(
+            self.clock.as_ref(),
+            self.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT),
+            async {
+                let _ = (&mut recovery).await;
+            },
+        )
+        .await;
+        if cleanup == lk_agents_abi::Closed::TimedOut {
+            log::error!(
+                "fallback probe cleanup incomplete; task retains ownership until settlement"
+            );
+            let _ = recovery.await;
+        }
+        None
+    }
+
+    /// Unless the entry closed or a newer generation superseded this probe; the observer hears
+    /// it with no lock held.
+    fn mark_recovered(self) {
+        let changed = {
+            let mut s = self.status.lock();
+            match s.backends.get(self.index) {
+                Some(st) if !st.closed => {
+                    let resource = st.resource;
+                    s.health.recovered(resource, self.generation)
+                }
+                _ => false,
+            }
+        };
+        if changed {
+            self.observer.availability_changed(AvailabilityChanged {
+                index: self.index,
+                label: self.label,
+                available: true,
+            });
+        }
+    }
+}
+
 async fn wait_until(
     clock: &dyn Clock,
     at: Ts,
@@ -711,6 +882,11 @@ enum AttemptObservation<T, S> {
 
 /// The runtime owns an exchange until settlement; only a core Cancel effect signals its stop.
 struct RunningAttempt<T, S> {
+    /// The machine's id for the attempt.
+    id: u64,
+    index: usize,
+    /// The selection id it was chosen under.
+    attempt_id: u64,
     result: oneshot::Receiver<(Attempt<T>, S)>,
     stop: watch::Sender<bool>,
 }
@@ -727,12 +903,7 @@ impl<T, S> RunningAttempt<T, S> {
         if *cancel.borrow() || *closed.borrow() {
             return AttemptObservation::Interrupted(ChainEvent::Cancel);
         }
-        let limit = async {
-            match deadline {
-                Some(at) => clock.wait_until(at).await,
-                None => std::future::pending().await,
-            }
-        };
+        let limit = crate::wait_for_deadline(clock, deadline);
         let cancellation = select(Box::pin(cancel.changed()), Box::pin(closed.changed()));
         let interruption = select(Box::pin(limit), Box::pin(cancellation));
         match select(Box::pin(&mut self.result), Box::pin(interruption)).await {

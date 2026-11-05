@@ -378,36 +378,13 @@ impl AdapterSource {
 
     async fn raw_next(&mut self) -> Result<Option<SynthesizedAudio>, ProviderError> {
         loop {
-            if let Some(cur) = self.current.as_mut() {
-                match cur.next().await {
-                    Ok(Some(a)) => {
-                        self.sentence_audio = true;
-                        let clock = Arc::clone(&self.clock);
-                        if let Some(call) = self.ledger().call.as_mut() {
-                            let start = call.start;
-                            call.fold
-                                .observe(&a, || lk_agents_abi::unix_secs(clock.wall()) - start);
-                        }
-                        return Ok(Some(a));
-                    }
-                    Ok(None) => {
-                        self.ledger().end_call(false);
-                        // Dropping a host stream does not cancel its task; close it, bounded.
-                        self.close_current().await;
-                        continue;
-                    }
-                    // Close a failed inner source too, or it counts as open after the retry
-                    // decision.
-                    Err(e) => {
-                        self.ledger().call = None;
-                        self.close_current().await;
-                        self.retry_sentence(e).await?;
-                        continue;
-                    }
+            if self.current.is_some() {
+                if let Some(audio) = self.read_sentence_audio().await? {
+                    return Ok(Some(audio));
                 }
+                continue;
             }
             let Some(sentence) = self.next_sentence().await else { return Ok(None) };
-
             // The transcript uses the unstripped token and precedes the empty check
             // (`stream_adapter.py:125`).
             self.pending_transcript.push(TranscriptChunk {
@@ -415,17 +392,7 @@ impl AdapterSource {
                 start_time: Some(self.duration),
                 ..TranscriptChunk::default()
             });
-            // Whitespace-only is falsy in Python; several plugins raise on empty input.
-            let mut text = sentence
-                .trim_matches(|c| lk_agents_abi::utils::strings::PYTHON_WHITESPACE.contains(&c))
-                .to_owned();
-            if let Some(markup) = &self.lowering {
-                // Re-normalized: a marker split across two input chunks escaped the push's pass.
-                text = markup
-                    .convert(&markup.normalize(&text))
-                    .trim_matches(|c| lk_agents_abi::utils::strings::PYTHON_WHITESPACE.contains(&c))
-                    .to_owned();
-            }
+            let text = self.speakable(&sentence);
             if text.is_empty() {
                 continue;
             }
@@ -433,6 +400,45 @@ impl AdapterSource {
             self.sentence_audio = false;
             self.open_sentence().await?;
         }
+    }
+
+    /// The current sentence's next audio; `None` once the sentence ended or was retried.
+    async fn read_sentence_audio(&mut self) -> Result<Option<SynthesizedAudio>, ProviderError> {
+        let Some(current) = self.current.as_mut() else { return Ok(None) };
+        match current.next().await {
+            Ok(Some(audio)) => {
+                self.sentence_audio = true;
+                let clock = Arc::clone(&self.clock);
+                if let Some(call) = self.ledger().call.as_mut() {
+                    let start = call.start;
+                    call.fold.observe(&audio, || lk_agents_abi::unix_secs(clock.wall()) - start);
+                }
+                Ok(Some(audio))
+            }
+            Ok(None) => {
+                self.ledger().end_call(false);
+                // Dropping a host stream does not cancel its task; close it, bounded.
+                self.close_current().await;
+                Ok(None)
+            }
+            // Close a failed inner source too, or it counts as open after the retry decision.
+            Err(error) => {
+                self.ledger().call = None;
+                self.close_current().await;
+                self.retry_sentence(error).await?;
+                Ok(None)
+            }
+        }
+    }
+
+    /// The sentence as spoken: whitespace-only is falsy in Python, and several plugins raise on
+    /// empty input. Markup is re-normalized: a marker split across two input chunks escaped the
+    /// push's pass.
+    fn speakable(&self, sentence: &str) -> String {
+        let text = trim_python_whitespace(sentence);
+        let Some(markup) = &self.lowering else { return text.to_owned() };
+        let lowered = markup.convert(&markup.normalize(text));
+        trim_python_whitespace(&lowered).to_owned()
     }
 
     /// The current sentence's synthesis, retried while its open fails within the budget.
@@ -480,6 +486,50 @@ impl AdapterSource {
         self.clock.wait_until(at).await;
         Box::pin(self.open_sentence()).await
     }
+
+    /// The inner frame as this stream's: input drained first, then its duration counted, its ids
+    /// ours, and the pending transcript on it. A sentence boundary is not a segment boundary
+    /// (`tts/tts.py:1183`): the inner provider's ids and `is_final` are not ours.
+    fn stamp(&mut self, mut frame: SynthesizedAudio) -> SynthesizedAudio {
+        self.drain_input();
+        self.duration += frame.frame.duration();
+        frame.is_final = false;
+        frame.request_id.clone_from(&self.request_id);
+        frame.segment_id.clone_from(&self.segment_id);
+        if !self.pending_transcript.is_empty() {
+            frame.timed_transcript = std::mem::take(&mut self.pending_transcript);
+        }
+        frame
+    }
+
+    /// The frame to hand out now: the inner frame, stamped, while more audio can come. Once no
+    /// further audio can arrive the last frame is held to be marked final, and the one held
+    /// before it goes out.
+    fn pass_or_hold(&mut self, frame: SynthesizedAudio) -> Option<SynthesizedAudio> {
+        let frame = self.stamp(frame);
+        if self.more_audio_coming() {
+            return Some(frame);
+        }
+        self.held.replace(frame)
+    }
+
+    /// A queued whitespace-only sentence is not audio. Once false it stays false.
+    fn more_audio_coming(&self) -> bool {
+        !self.input_done || self.pending.iter().any(|s| !trim_python_whitespace(s).is_empty())
+    }
+
+    /// The held last frame, final. Alignment for trailing sentences that produced no audio rides
+    /// on it (no silence marker, which is `AudioEmitter`'s job).
+    fn finish_held(&mut self) -> Option<SynthesizedAudio> {
+        let mut last = self.held.take()?;
+        last.is_final = true;
+        last.timed_transcript.append(&mut self.pending_transcript);
+        Some(last)
+    }
+}
+
+fn trim_python_whitespace(text: &str) -> &str {
+    text.trim_matches(|c| lk_agents_abi::utils::strings::PYTHON_WHITESPACE.contains(&c))
 }
 
 impl StreamOutput<SynthesizedAudio> for AdapterSource {
@@ -489,46 +539,11 @@ impl StreamOutput<SynthesizedAudio> for AdapterSource {
         Box::pin(async move {
             loop {
                 match self.raw_next().await {
-                    Ok(Some(mut frame)) => {
-                        self.drain_input();
-                        self.duration += frame.frame.duration();
-                        // A sentence boundary is not a segment boundary (`tts/tts.py:1183`): the inner
-                        // provider's ids and `is_final` are not ours.
-                        frame.is_final = false;
-                        frame.request_id.clone_from(&self.request_id);
-                        frame.segment_id.clone_from(&self.segment_id);
-                        if !self.pending_transcript.is_empty() {
-                            frame.timed_transcript = std::mem::take(&mut self.pending_transcript);
-                        }
-                        // Hold only once no further audio can arrive; a queued whitespace-only sentence
-                        // is not audio. Once true it stays true.
-                        let more_audio_coming = !self.input_done
-                            || self.pending.iter().any(|s| {
-                                !s.trim_matches(|c| {
-                                    lk_agents_abi::utils::strings::PYTHON_WHITESPACE.contains(&c)
-                                })
-                                .is_empty()
-                            });
-                        if !more_audio_coming {
-                            if let Some(previous) = self.held.replace(frame) {
-                                return Ok(Some(previous));
-                            }
-                            continue;
-                        }
-                        return Ok(Some(frame));
-                    }
-                    Ok(None) => {
-                        return match self.held.take() {
-                            Some(mut last) => {
-                                last.is_final = true;
-                                // Alignment for trailing sentences that produced no audio rides on the
-                                // real last frame (no silence marker, which is `AudioEmitter`'s job).
-                                last.timed_transcript.append(&mut self.pending_transcript);
-                                Ok(Some(last))
-                            }
-                            None => Ok(None),
-                        };
-                    }
+                    Ok(Some(frame)) => match self.pass_or_hold(frame) {
+                        Some(frame) => return Ok(Some(frame)),
+                        None => continue,
+                    },
+                    Ok(None) => return Ok(self.finish_held()),
                     Err(e) => {
                         // Drop the hold and report now: `FallbackChain` needs the error to decide
                         // `retry_on_chunk_sent`.

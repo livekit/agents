@@ -180,84 +180,104 @@ impl InterruptionMachine {
         wall: f64,
     ) -> Result<Vec<InterruptionEffect>, StreamError> {
         match event {
-            InterruptionEvent::ConnectionOpened => {
-                let pending = self.next_deadline().is_some();
-                let request = self.overlap_request;
-                self.connection += 1;
-                self.cache.clear();
-                if pending {
-                    self.reset_state();
-                    return Err(StreamError {
-                        request,
-                        error: ApiError::new(
-                            "connection replaced with pending interruption inference".to_owned(),
-                        )
-                        .with_retryable(false),
-                        body: None,
-                    });
-                }
-                Ok(Vec::new())
-            }
-            InterruptionEvent::Input(input) => {
-                let request = self.overlap_request;
-                let outcome = self.on_input(input, wall).map_err(|error| StreamError {
-                    request: None,
-                    error: ApiError::new(error.to_string()).with_retryable(false),
-                    body: None,
-                })?;
-                Ok(match outcome {
-                    Some(InputOutcome::Infer(samples)) => {
-                        if self.cache.iter().count() == CACHE_MAXSIZE
-                            && self
-                                .cache
-                                .iter()
-                                .next()
-                                .is_some_and(|(_, request)| request.entry.total_duration.is_none())
-                        {
-                            let request = self.overlap_request;
-                            self.reset_state();
-                            return Err(StreamError {
-                                request,
-                                error: ApiError::new(
-                                    "too many pending interruption inferences".to_owned(),
-                                )
-                                .with_retryable(false),
-                                body: None,
-                            });
-                        }
-                        let request_id = now.as_nanos().max(self.last_request_id + 1);
-                        self.last_request_id = request_id;
-                        let identity = self.record_request_at(request_id, now, samples.clone());
-                        vec![InterruptionEffect::InterruptionInference { identity, samples }]
-                    }
-                    Some(InputOutcome::Overlap(event)) => {
-                        vec![InterruptionEffect::Overlap { request, event }]
-                    }
-                    None => Vec::new(),
-                })
-            }
+            InterruptionEvent::ConnectionOpened => self.on_connection_opened(),
+            InterruptionEvent::Input(input) => self.on_input_event(input, now, wall),
             InterruptionEvent::ServerMessage { connection, message } => {
-                if connection != self.connection {
-                    return Ok(Vec::new());
-                }
-                match self.on_server_message(message, now, wall)? {
-                    RecvOutcome::Detected(event) => Ok(vec![InterruptionEffect::Overlap {
-                        request: self.overlap_request,
-                        event,
-                    }]),
-                    RecvOutcome::Ignored => Ok(Vec::new()),
-                }
+                self.on_server_event(connection, message, now, wall)
             }
-            InterruptionEvent::Deadline => {
-                if let Err(mut error) = self.check_inflight_timeout(now) {
-                    error.request = self.overlap_request;
-                    // A timeout hands interruption back to the caller's fallback policy.
-                    // It must not fabricate a verdict for this or a later overlap.
-                    self.reset_state();
-                    return Err(error);
-                }
-                Ok(Vec::new())
+            InterruptionEvent::Deadline => self.on_deadline(now),
+        }
+    }
+
+    /// A new connection drops the cache; one replaced under a pending inference fails it.
+    fn on_connection_opened(&mut self) -> Result<Vec<InterruptionEffect>, StreamError> {
+        let pending = self.next_deadline().is_some();
+        self.connection += 1;
+        self.cache.clear();
+        if pending {
+            return Err(self.abandon("connection replaced with pending interruption inference"));
+        }
+        Ok(Vec::new())
+    }
+
+    fn on_input_event(
+        &mut self,
+        input: InputEvent,
+        now: Ts,
+        wall: f64,
+    ) -> Result<Vec<InterruptionEffect>, StreamError> {
+        let request = self.overlap_request;
+        let outcome = self.on_input(input, wall).map_err(|error| StreamError {
+            request: None,
+            error: ApiError::new(error.to_string()).with_retryable(false),
+            body: None,
+        })?;
+        match outcome {
+            Some(InputOutcome::Infer(samples)) => self.admit_inference(samples, now),
+            Some(InputOutcome::Overlap(event)) => {
+                Ok(vec![InterruptionEffect::Overlap { request, event }])
             }
+            None => Ok(Vec::new()),
+        }
+    }
+
+    /// Records one inference request, unless the cache is full of unanswered ones.
+    fn admit_inference(
+        &mut self,
+        samples: Vec<i16>,
+        now: Ts,
+    ) -> Result<Vec<InterruptionEffect>, StreamError> {
+        let oldest_pending = self
+            .cache
+            .iter()
+            .next()
+            .is_some_and(|(_, request)| request.entry.total_duration.is_none());
+        if self.cache.iter().count() == CACHE_MAXSIZE && oldest_pending {
+            return Err(self.abandon("too many pending interruption inferences"));
+        }
+        let request_id = now.as_nanos().max(self.last_request_id + 1);
+        self.last_request_id = request_id;
+        let identity = self.record_request_at(request_id, now, samples.clone());
+        Ok(vec![InterruptionEffect::InterruptionInference { identity, samples }])
+    }
+
+    fn on_server_event(
+        &mut self,
+        connection: u64,
+        message: ServerMessage,
+        now: Ts,
+        wall: f64,
+    ) -> Result<Vec<InterruptionEffect>, StreamError> {
+        if connection != self.connection {
+            return Ok(Vec::new());
+        }
+        match self.on_server_message(message, now, wall)? {
+            RecvOutcome::Detected(event) => {
+                Ok(vec![InterruptionEffect::Overlap { request: self.overlap_request, event }])
+            }
+            RecvOutcome::Ignored => Ok(Vec::new()),
+        }
+    }
+
+    fn on_deadline(&mut self, now: Ts) -> Result<Vec<InterruptionEffect>, StreamError> {
+        if let Err(mut error) = self.check_inflight_timeout(now) {
+            error.request = self.overlap_request;
+            // A timeout hands interruption back to the caller's fallback policy.
+            // It must not fabricate a verdict for this or a later overlap.
+            self.reset_state();
+            return Err(error);
+        }
+        Ok(Vec::new())
+    }
+
+    /// Fails the current overlap's request for good and resets the overlap state.
+    fn abandon(&mut self, message: &str) -> StreamError {
+        let request = self.overlap_request;
+        self.reset_state();
+        StreamError {
+            request,
+            error: ApiError::new(message.to_owned()).with_retryable(false),
+            body: None,
         }
     }
 

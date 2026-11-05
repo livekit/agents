@@ -6,7 +6,9 @@ use crate::effects::SttStreamEffect;
 use crate::telemetry;
 use gaps::Gaps;
 use lk_agents_abi::metrics::base::ConnectionAcquired;
+use lk_agents_media::Frame;
 use lk_agents_media::media_queue::{self, Item};
+use std::ops::ControlFlow;
 
 pub(super) struct SttStreamExecutor {
     pub(super) ws: Arc<dyn WsTransport>,
@@ -110,26 +112,7 @@ impl SttStreamExecutor {
 
     /// One connection. `Ok` when the stream ended, the caller gone or the input finished.
     async fn attempt(&mut self) -> Result<(), ApiError> {
-        let headers = gateway_headers(
-            self.identification
-                .as_ref()
-                .map(|h| {
-                    let mut h = h.clone();
-                    h.set(HEADER_SESSION_ID, crate::ids::shortuuid("inference_"));
-                    h
-                })
-                .as_ref(),
-            None,
-            None,
-            &self.opts.api_key,
-            &self.opts.api_secret,
-        )?;
-        // The reference reads the session id back out of the header map (a job's
-        // `inference_headers` cannot override it) and uses it as the request id.
-        let request_id = headers
-            .get(HEADER_SESSION_ID)
-            .map(str::to_owned)
-            .unwrap_or_else(|| crate::ids::shortuuid("stt_request_"));
+        let (headers, request_id) = self.connection_headers()?;
         let url = format!(
             "{}/stt?model={}",
             to_ws_url(&self.opts.base_url),
@@ -149,13 +132,7 @@ impl SttStreamExecutor {
         )));
         let opening = machine.lock().handle(SttStreamEvent::Start, self.clock.now());
         if !opening.iter().any(|effect| matches!(effect, SttStreamEffect::OpenSttStream { .. })) {
-            return opening
-                .into_iter()
-                .find_map(|effect| match effect {
-                    SttStreamEffect::Finished(result) => Some(result),
-                    _ => None,
-                })
-                .unwrap_or(Ok(()));
+            return finished(opening).unwrap_or(Ok(()));
         }
         let acquiring = self.clock.now();
         let (sender, mut receiver) = open_ws(
@@ -172,47 +149,45 @@ impl SttStreamExecutor {
         let connection = ConnectionAcquired { acquire_time, reused: false };
 
         // Built before the loops so the send half can push into it while the finalize half drains it.
-        let vad_stream = match self.vad.as_ref() {
-            Some(vad) => vad.stream(&telemetry::Cx::NONE).await.ok(),
-            None => None,
-        };
-        let (vad_sink, mut vad_source) = match vad_stream {
-            Some(stream) => {
-                let (sink, source) = stream.split();
-                (Some(sink), Some(source))
-            }
-            None => (None, None),
-        };
+        let (vad_sink, mut vad_source) = self.open_vad().await;
 
         // Wakes the settlement timer whenever the input or a message moves its deadline.
         let rearm = Arc::new(tokio::sync::Notify::new());
         let gaps = Arc::new(Mutex::new(Gaps::starting(self.offset)));
-        let send = Self::send_loop(
-            sender.clone(),
-            &mut self.audio_rx,
-            &mut self.update_rx,
-            gaps.clone(),
+        let sample_rate = self.opts.sample_rate;
+        let uplink = AudioUplink {
+            sender: sender.clone(),
+            gaps: gaps.clone(),
             vad_sink,
-            self.opts.sample_rate,
-            machine.clone(),
-            self.clock.clone(),
-            rearm.clone(),
-        );
-        let recv = Self::recv_loop(
-            receiver.as_mut(),
-            machine.clone(),
-            RecvCtx {
-                event_tx: self.event_tx.clone(),
-                deferred: self.deferred.clone(),
-                update_tx: self.update_tx.clone(),
-                clock: self.clock.clone(),
-                ack_deadline: self.opts.conn_options.read_deadline(self.clock.now()),
-                offset: self.offset,
-                gaps,
-                rearm: rearm.clone(),
-                connection: Some(connection),
-            },
-        );
+            vad_push_warned: false,
+            sample_rate,
+            machine: machine.clone(),
+            clock: self.clock.clone(),
+            rearm: rearm.clone(),
+            bstream: AudioByteStream::new(
+                sample_rate,
+                GATEWAY_CHANNELS,
+                Some(sample_rate / FRAMES_PER_SECOND),
+                false,
+            ),
+            // `RecognizeStream.push_frame` resamples to the rate the gateway was told.
+            resampler: AudioResampler::new(sample_rate, Quality::High, OnChange::Drain),
+            audio: String::new(),
+        };
+        let send = uplink.run(&mut self.audio_rx, &mut self.update_rx);
+        let recv = RecvCtx {
+            event_tx: self.event_tx.clone(),
+            deferred: self.deferred.clone(),
+            update_tx: self.update_tx.clone(),
+            clock: self.clock.clone(),
+            ack_deadline: self.opts.conn_options.read_deadline(self.clock.now()),
+            offset: self.offset,
+            gaps,
+            rearm: rearm.clone(),
+            connection: Some(connection),
+            awaiting_ack: true,
+        }
+        .run(receiver.as_mut(), machine.clone());
         let finalize = Self::vad_finalize_loop(sender.clone(), &mut vad_source);
 
         let settle = async {
@@ -230,10 +205,7 @@ impl SttStreamExecutor {
                     _ = wait => {}
                 }
                 let effects = machine.lock().handle(SttStreamEvent::Wake, self.clock.now());
-                if let Some(result) = effects.into_iter().find_map(|effect| match effect {
-                    SttStreamEffect::Finished(result) => Some(result),
-                    _ => None,
-                }) {
+                if let Some(result) = finished(effects) {
                     return result;
                 }
             }
@@ -257,231 +229,38 @@ impl SttStreamExecutor {
         })
     }
 
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "Keep the operation’s existing explicit arguments"
-    )]
-    async fn send_loop(
-        sender: Arc<dyn WsSender>,
-        audio_rx: &mut media_queue::AudioReceiver<Flush>,
-        update_rx: &mut mpsc::UnboundedReceiver<serde_json::Value>,
-        gaps: Arc<Mutex<Gaps>>,
-        mut vad_sink: Option<crate::abi::VadSink>,
-        sample_rate: u32,
-        machine: Arc<Mutex<SttStream>>,
-        clock: Arc<dyn Clock>,
-        rearm: Arc<tokio::sync::Notify>,
-    ) -> Result<(), ApiError> {
-        // 50 ms frames: `samples_per_channel=self._opts.sample_rate // 20`.
-        let mut bstream = AudioByteStream::new(sample_rate, 1, Some(sample_rate / 20), false);
-        // `RecognizeStream.push_frame` resamples to the rate the gateway was told.
-        let mut resampler = AudioResampler::new(sample_rate, Quality::High, OnChange::Drain);
-
-        let mut ending = false;
-        let mut vad_push_warned = false;
-        let mut audio = String::new();
-        loop {
-            let item = tokio::select! {
-                // Biased so a pending `session.update` is not starved by continuous audio.
-                biased;
-                Some(frame) = update_rx.recv() => {
-                    // "failed to send session.update, ws may be closing" -- swallowed, as in the
-                    // reference.
-                    if !sender.is_closed() {
-                        let _ = sender.send_text(frame.to_string()).await;
-                    }
-                    continue;
-                }
-                item = audio_rx.recv() => item,
-            };
-
-            let frames = match item {
-                Some(Item::Media(frame)) => {
-                    gaps.lock().audio(lk_agents_abi::voice::rtc::frame_duration(&frame));
-                    if let Some(sink) = vad_sink.as_mut()
-                        && let Err(error) = sink.push(frame.clone())
-                        && !vad_push_warned
-                    {
-                        vad_push_warned = true;
-                        log::warn!(
-                            target: "livekit.agents",
-                            "STT VAD refused audio: {error}; suppressing repeats"
-                        );
-                    }
-                    let samples = usize::try_from(frame.sample_rate / 20).unwrap_or(0).max(1);
-                    let stride = usize::from(frame.num_channels) * 2;
-                    if stride == 0 || frame.sample_rate == 0 || frame.data.len() % stride != 0 {
-                        return Err(ApiError::new("Invalid STT audio frame").with_retryable(false));
-                    }
-                    let mut frames = Vec::new();
-                    for start in (0..frame.data.len()).step_by(samples * stride) {
-                        let end = frame.data.len().min(start + samples * stride);
-                        let bytes = frame.data.slice(start..end);
-                        let chunk = AudioFrame::new(
-                            bytes.clone(),
-                            frame.sample_rate,
-                            frame.num_channels,
-                            (bytes.len() / stride) as u32,
-                        );
-                        let resampled = resampler.push_frame(&chunk).map_err(|error| {
-                            ApiError::new(error.to_string()).with_retryable(false)
-                        })?;
-                        frames.extend(resampled.iter().flat_map(|frame| bstream.push(&frame.data)));
-                        tokio::task::yield_now().await;
-                    }
-                    frames
-                }
-                Some(Item::Gap(gap)) => {
-                    gaps.lock().gap(gap);
-                    continue;
-                }
-                Some(Item::Event(Flush)) => {
-                    let tail = resampler
-                        .flush()
-                        .map_err(|error| ApiError::new(error.to_string()).with_retryable(false))?;
-                    let mut frames: Vec<_> =
-                        tail.iter().flat_map(|f| bstream.push(&f.data)).collect();
-                    frames.extend(bstream.flush());
-                    frames
-                }
-                // `end_input()` or a dropped sink: the queue's end ends the send half.
-                None => {
-                    ending = true;
-                    let tail = resampler
-                        .flush()
-                        .map_err(|error| ApiError::new(error.to_string()).with_retryable(false))?;
-                    let mut frames: Vec<_> =
-                        tail.iter().flat_map(|frame| bstream.push(&frame.data)).collect();
-                    frames.extend(bstream.flush());
-                    frames
-                }
-            };
-
-            for frame in frames {
-                machine.lock().handle(
-                    SttStreamEvent::AudioWritten(
-                        f64::from(frame.samples_per_channel) / f64::from(sample_rate),
-                    ),
-                    clock.now(),
-                );
-                audio.clear();
-                base64::engine::general_purpose::STANDARD.encode_string(&frame.data, &mut audio);
-                if let Err(err) = sender.send_text(wire::input_audio(&audio).to_string()).await {
-                    return Err(match err {
-                        TransportError::Closed => ApiError::connection(Some(format!(
-                            "{WHAT} connection closed unexpectedly"
-                        ))),
-                        other => ApiError::connection(Some(other.to_string())),
-                    });
-                }
-            }
-            if ending {
-                break;
-            }
-        }
-
-        if let Some(sink) = vad_sink.as_mut() {
-            sink.end_input();
-        }
-        let effects = machine.lock().handle(SttStreamEvent::InputEnded, clock.now());
-        if effects.iter().any(|effect| matches!(effect, SttStreamEffect::SttFinalize { .. })) {
-            sender
-                .send_text(wire::session_finalize().to_string())
-                .await
-                .map_err(|error| connect_error(WHAT, error))?;
-        }
-        rearm.notify_one();
-        // Completion is an acknowledgment or a quiet period: the receive half and the settlement
-        // timer observe it.
-        std::future::pending().await
+    /// The connection's gateway headers under a fresh session id, and the request id. The
+    /// reference reads the session id back out of the header map (a job's `inference_headers`
+    /// cannot override it) and uses it as the request id.
+    fn connection_headers(&self) -> Result<(Headers, String), ApiError> {
+        let identification = self.identification.as_ref().map(|h| {
+            let mut h = h.clone();
+            h.set(HEADER_SESSION_ID, crate::ids::shortuuid(crate::ids::SESSION_ID_PREFIX));
+            h
+        });
+        let headers = gateway_headers(
+            identification.as_ref(),
+            None,
+            None,
+            &self.opts.api_key,
+            &self.opts.api_secret,
+        )?;
+        let request_id = headers
+            .get(HEADER_SESSION_ID)
+            .map(str::to_owned)
+            .unwrap_or_else(|| crate::ids::shortuuid(crate::ids::STT_REQUEST_ID_PREFIX));
+        Ok((headers, request_id))
     }
 
-    async fn recv_loop(
-        receiver: &mut dyn lk_agents_net::transport::WsReceiver,
-        machine: Arc<Mutex<SttStream>>,
-        ctx: RecvCtx,
-    ) -> Result<(), ApiError> {
-        let RecvCtx {
-            event_tx,
-            deferred,
-            update_tx,
-            clock,
-            ack_deadline,
-            offset,
-            gaps,
-            rearm,
-            mut connection,
-        } = ctx;
-        // Only the first read (the `session.create` ack) is a response the session waits for;
-        // later silence is the user's.
-        let mut awaiting_first = true;
-        loop {
-            let recv = receiver.recv();
-            let received =
-                if awaiting_first { within(&*clock, ack_deadline, recv).await } else { recv.await };
-            let msg = match received {
-                Ok(msg) => msg,
-                Err(TransportError::Timeout) if awaiting_first => {
-                    return Err(ApiError::timed_out(lk_agents_abi::errors::TimeoutPhase::Read));
-                }
-                Err(err) => return Err(connect_error(WHAT, err)),
-            };
-            match msg {
-                WsMessage::Closed => {
-                    let effects = machine.lock().handle(SttStreamEvent::ServerEof, clock.now());
-                    return effects
-                        .into_iter()
-                        .find_map(|effect| match effect {
-                            SttStreamEffect::Finished(result) => Some(result),
-                            _ => None,
-                        })
-                        .unwrap_or(Ok(()));
-                }
-                // "unexpected LiveKit Inference STT message type" -- logged and skipped.
-                WsMessage::Binary(_) | WsMessage::Other => continue,
-                WsMessage::Text(text) => {
-                    let incoming = wire::decode(&text).ok_or_else(|| {
-                        ApiError::new("Malformed STT gateway message").with_retryable(false)
-                    })?;
-                    if matches!(incoming, wire::Incoming::SessionCreated) {
-                        awaiting_first = false;
-                    }
-                    let effects = {
-                        let mut machine = machine.lock();
-                        let effects = machine
-                            .handle(SttStreamEvent::Message(Box::new(incoming)), clock.now());
-                        deferred
-                            .speaking
-                            .store(machine.is_speaking(), std::sync::atomic::Ordering::SeqCst);
-                        effects
-                    };
-                    rearm.notify_one();
-                    for effect in effects {
-                        match effect {
-                            SttStreamEffect::Deliver(mut event) => {
-                                if let Some(usage) = &mut event.recognition_usage {
-                                    usage.connection = connection.take();
-                                }
-                                let event = gaps.lock().shift(shifted(event, offset));
-                                if event_tx.send(Ok(event)).await.is_err() {
-                                    return Ok(());
-                                }
-                            }
-                            SttStreamEffect::EndOfSpeech => {
-                                let extra = deferred.pending.lock().take();
-                                if let Some(extra) = extra
-                                    && let Some(frame) =
-                                        wire::session_update(None, None, Some(&extra))
-                                {
-                                    let _ = update_tx.send(frame);
-                                }
-                            }
-                            SttStreamEffect::Finished(result) => return result,
-                            _ => {}
-                        }
-                    }
-                }
+    /// The client-side VAD's stream halves, when a VAD is set and its stream opens.
+    async fn open_vad(&self) -> (Option<crate::abi::VadSink>, Option<crate::abi::VadSource>) {
+        let Some(vad) = self.vad.as_ref() else { return (None, None) };
+        match vad.stream(&telemetry::Cx::NONE).await {
+            Ok(stream) => {
+                let (sink, source) = stream.split();
+                (Some(sink), Some(source))
             }
+            Err(_) => (None, None),
         }
     }
 
@@ -511,6 +290,169 @@ impl SttStreamExecutor {
     }
 }
 
+/// The gateway takes audio in 50 ms frames: `samples_per_channel=self._opts.sample_rate // 20`.
+const FRAMES_PER_SECOND: u32 = 20;
+
+/// The gateway takes mono audio.
+const GATEWAY_CHANNELS: u16 = 1;
+
+/// The bytes of one 16-bit PCM sample.
+const PCM_SAMPLE_BYTES: usize = std::mem::size_of::<i16>();
+
+/// The machine's verdict, when `effects` end the stream.
+fn finished(effects: impl IntoIterator<Item = SttStreamEffect>) -> Option<Result<(), ApiError>> {
+    effects.into_iter().find_map(|effect| match effect {
+        SttStreamEffect::Finished(result) => Some(result),
+        _ => None,
+    })
+}
+
+/// The send half of one connection: the input re-framed, resampled and written to the gateway,
+/// with `session.update`s going ahead of the audio.
+struct AudioUplink {
+    sender: Arc<dyn WsSender>,
+    /// Where this attempt's input dropped audio.
+    gaps: Arc<Mutex<Gaps>>,
+    vad_sink: Option<crate::abi::VadSink>,
+    vad_push_warned: bool,
+    sample_rate: u32,
+    machine: Arc<Mutex<SttStream>>,
+    clock: Arc<dyn Clock>,
+    rearm: Arc<tokio::sync::Notify>,
+    bstream: AudioByteStream,
+    resampler: AudioResampler,
+    /// The base64 buffer each frame is encoded into.
+    audio: String,
+}
+
+impl AudioUplink {
+    async fn run(
+        mut self,
+        audio_rx: &mut media_queue::AudioReceiver<Flush>,
+        update_rx: &mut mpsc::UnboundedReceiver<serde_json::Value>,
+    ) -> Result<(), ApiError> {
+        loop {
+            let item = tokio::select! {
+                // Biased so a pending `session.update` is not starved by continuous audio.
+                biased;
+                Some(frame) = update_rx.recv() => {
+                    self.send_update(frame).await;
+                    continue;
+                }
+                item = audio_rx.recv() => item,
+            };
+            let frames = match item {
+                Some(Item::Media(frame)) => self.chunk_media(frame).await?,
+                Some(Item::Gap(gap)) => {
+                    self.gaps.lock().gap(gap);
+                    continue;
+                }
+                Some(Item::Event(Flush)) => self.drain_tail()?,
+                // `end_input()` or a dropped sink: the queue's end ends the send half.
+                None => {
+                    let frames = self.drain_tail()?;
+                    self.send_frames(frames).await?;
+                    break;
+                }
+            };
+            self.send_frames(frames).await?;
+        }
+        self.finish_input().await
+    }
+
+    /// "failed to send session.update, ws may be closing" -- swallowed, as in the reference.
+    async fn send_update(&mut self, frame: serde_json::Value) {
+        if !self.sender.is_closed() {
+            let _ = self.sender.send_text(frame.to_string()).await;
+        }
+    }
+
+    /// One input frame, to the VAD and cut into 50 ms chunks at the gateway's rate.
+    async fn chunk_media(&mut self, frame: AudioFrame) -> Result<Vec<Frame>, ApiError> {
+        self.gaps.lock().audio(lk_agents_abi::voice::rtc::frame_duration(&frame));
+        if let Some(sink) = self.vad_sink.as_mut()
+            && let Err(error) = sink.push(frame.clone())
+            && !self.vad_push_warned
+        {
+            self.vad_push_warned = true;
+            log::warn!(target: "livekit.agents", "STT VAD refused audio: {error}; suppressing repeats");
+        }
+        let samples = usize::try_from(frame.sample_rate / FRAMES_PER_SECOND).unwrap_or(0).max(1);
+        let stride = usize::from(frame.num_channels) * PCM_SAMPLE_BYTES;
+        if stride == 0 || frame.sample_rate == 0 || frame.data.len() % stride != 0 {
+            return Err(ApiError::new("Invalid STT audio frame").with_retryable(false));
+        }
+        let mut frames = Vec::new();
+        for start in (0..frame.data.len()).step_by(samples * stride) {
+            let end = frame.data.len().min(start + samples * stride);
+            let bytes = frame.data.slice(start..end);
+            let chunk = AudioFrame::new(
+                bytes.clone(),
+                frame.sample_rate,
+                frame.num_channels,
+                (bytes.len() / stride) as u32,
+            );
+            let resampled = self
+                .resampler
+                .push_frame(&chunk)
+                .map_err(|error| ApiError::new(error.to_string()).with_retryable(false))?;
+            frames.extend(resampled.iter().flat_map(|frame| self.bstream.push(&frame.data)));
+            tokio::task::yield_now().await;
+        }
+        Ok(frames)
+    }
+
+    /// What the resampler and the framer still hold.
+    fn drain_tail(&mut self) -> Result<Vec<Frame>, ApiError> {
+        let tail = self
+            .resampler
+            .flush()
+            .map_err(|error| ApiError::new(error.to_string()).with_retryable(false))?;
+        let mut frames: Vec<_> =
+            tail.iter().flat_map(|frame| self.bstream.push(&frame.data)).collect();
+        frames.extend(self.bstream.flush());
+        Ok(frames)
+    }
+
+    async fn send_frames(&mut self, frames: Vec<Frame>) -> Result<(), ApiError> {
+        for frame in frames {
+            let duration = f64::from(frame.samples_per_channel) / f64::from(self.sample_rate);
+            self.machine.lock().handle(SttStreamEvent::AudioWritten(duration), self.clock.now());
+            self.audio.clear();
+            base64::engine::general_purpose::STANDARD.encode_string(&frame.data, &mut self.audio);
+            let sent = self.sender.send_text(wire::input_audio(&self.audio).to_string()).await;
+            if let Err(err) = sent {
+                return Err(match err {
+                    TransportError::Closed => {
+                        ApiError::connection(Some(format!("{WHAT} connection closed unexpectedly")))
+                    }
+                    other => ApiError::connection(Some(other.to_string())),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// The input ended: the VAD hears it, the machine may ask the gateway to finalize, and the
+    /// settlement timer re-arms. Completion is an acknowledgment or a quiet period: the receive
+    /// half and the settlement timer observe it.
+    async fn finish_input(mut self) -> Result<(), ApiError> {
+        if let Some(sink) = self.vad_sink.as_mut() {
+            sink.end_input();
+        }
+        let effects = self.machine.lock().handle(SttStreamEvent::InputEnded, self.clock.now());
+        if effects.iter().any(|effect| matches!(effect, SttStreamEffect::SttFinalize { .. })) {
+            self.sender
+                .send_text(wire::session_finalize().to_string())
+                .await
+                .map_err(|error| connect_error(WHAT, error))?;
+        }
+        self.rearm.notify_one();
+        std::future::pending().await
+    }
+}
+
+/// The receive half of one connection: gateway messages through the machine, transcripts out.
 struct RecvCtx {
     event_tx: mpsc::Sender<Result<SpeechEvent, ApiError>>,
     deferred: Arc<DeferredExtra>,
@@ -524,6 +466,117 @@ struct RecvCtx {
     rearm: Arc<tokio::sync::Notify>,
     /// The connection, until the first usage report it delivers carries it.
     connection: Option<ConnectionAcquired>,
+    /// Only the first read (the `session.create` ack) is a response the session waits for;
+    /// later silence is the user's.
+    awaiting_ack: bool,
+}
+
+impl RecvCtx {
+    async fn run(
+        mut self,
+        receiver: &mut dyn lk_agents_net::transport::WsReceiver,
+        machine: Arc<Mutex<SttStream>>,
+    ) -> Result<(), ApiError> {
+        loop {
+            let effects = match self.read(receiver).await? {
+                WsMessage::Closed => {
+                    let effects =
+                        machine.lock().handle(SttStreamEvent::ServerEof, self.clock.now());
+                    return finished(effects).unwrap_or(Ok(()));
+                }
+                // "unexpected LiveKit Inference STT message type" -- logged and skipped.
+                WsMessage::Binary(_) | WsMessage::Other => continue,
+                WsMessage::Text(text) => self.handle_text(&machine, &text)?,
+            };
+            if let Some(result) = self.apply(effects).await {
+                return result;
+            }
+        }
+    }
+
+    /// The next message; the acknowledgement must arrive within its read deadline.
+    async fn read(
+        &self,
+        receiver: &mut dyn lk_agents_net::transport::WsReceiver,
+    ) -> Result<WsMessage, ApiError> {
+        let recv = receiver.recv();
+        let received = if self.awaiting_ack {
+            within(&*self.clock, self.ack_deadline, recv).await
+        } else {
+            recv.await
+        };
+        match received {
+            Ok(msg) => Ok(msg),
+            Err(TransportError::Timeout) if self.awaiting_ack => {
+                Err(ApiError::timed_out(lk_agents_abi::errors::TimeoutPhase::Read))
+            }
+            Err(err) => Err(connect_error(WHAT, err)),
+        }
+    }
+
+    /// A gateway message through the machine; the settlement timer re-arms after the lock.
+    fn handle_text(
+        &mut self,
+        machine: &Mutex<SttStream>,
+        text: &str,
+    ) -> Result<Vec<SttStreamEffect>, ApiError> {
+        let incoming = wire::decode(text)
+            .ok_or_else(|| ApiError::new("Malformed STT gateway message").with_retryable(false))?;
+        if matches!(incoming, wire::Incoming::SessionCreated) {
+            self.awaiting_ack = false;
+        }
+        let effects = {
+            let mut machine = machine.lock();
+            let effects =
+                machine.handle(SttStreamEvent::Message(Box::new(incoming)), self.clock.now());
+            self.deferred
+                .speaking
+                .store(machine.is_speaking(), std::sync::atomic::Ordering::SeqCst);
+            effects
+        };
+        self.rearm.notify_one();
+        Ok(effects)
+    }
+
+    /// Carries out the machine's effects; `Some` ends the stream.
+    async fn apply(&mut self, effects: Vec<SttStreamEffect>) -> Option<Result<(), ApiError>> {
+        for effect in effects {
+            match effect {
+                SttStreamEffect::Deliver(event) => {
+                    if self.deliver(event).await.is_break() {
+                        return Some(Ok(()));
+                    }
+                }
+                SttStreamEffect::EndOfSpeech => self.send_deferred_update(),
+                SttStreamEffect::Finished(result) => return Some(result),
+                _ => {}
+            }
+        }
+        None
+    }
+
+    /// Sends a transcript on the caller's timeline; the first usage report carries the
+    /// connection. Breaks once the caller is gone.
+    async fn deliver(&mut self, mut event: SpeechEvent) -> ControlFlow<()> {
+        if let Some(usage) = &mut event.recognition_usage {
+            usage.connection = self.connection.take();
+        }
+        let event = self.gaps.lock().shift(shifted(event, self.offset));
+        if self.event_tx.send(Ok(event)).await.is_err() {
+            return ControlFlow::Break(());
+        }
+        ControlFlow::Continue(())
+    }
+
+    /// An end of speech releases the options update deferred until it.
+    fn send_deferred_update(&self) {
+        let extra = self.deferred.pending.lock().take();
+        if let Some(extra) = extra
+            && let Some(frame) = wire::session_update(None, None, Some(&extra))
+        {
+            let _ = self.update_tx.send(frame);
+        }
+    }
 }
 
 /// The event on the caller's timeline: every alternative's and word's times moved by `offset`.

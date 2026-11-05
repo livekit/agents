@@ -257,69 +257,84 @@ impl CloudTransport {
         self.state.lock().connected = true;
 
         let closing = AtomicBool::new(false);
-
-        let sender = async {
-            loop {
-                self.drops.catching_up(send_rx.head(), self.clock.now());
-                let Some(item) = send_rx.recv().await else { break };
-                let message = match item {
-                    Item::Media(frame) => Message::InputAudio(proto::InputAudio {
-                        audio: frame.data.to_vec(),
-                        created_at: Some(now_timestamp()),
-                        num_samples: frame.samples_per_channel,
-                    }),
-                    // The audio the gateway holds no longer leads up to now: start it over.
-                    Item::Gap(_) => Message::SessionFlush(proto::SessionFlush {}),
-                    Item::Event(message) => message,
-                };
-                if matches!(message, Message::SessionClose(_)) {
-                    closing.store(true, Ordering::SeqCst);
-                }
-                let msg = proto::ClientMessage {
-                    created_at: Some(now_timestamp()),
-                    message: Some(message),
-                };
-                // A send failure while closing is not an error (`sender_task` swallows it).
-                if ws_sink.send_binary(msg.encode_to_vec()).await.is_err() {
-                    return Ok(());
-                }
-            }
-            Ok(())
-        };
-
-        let receiver = async {
-            loop {
-                match ws_stream.recv().await.map_err(socket_error)? {
-                    WsMessage::Binary(data) => {
-                        let msg = proto::ServerMessage::decode(data.as_slice()).map_err(|e| {
-                            ApiError::new(format!("malformed turn detector message: {e}"))
-                                .with_retryable(false)
-                        })?;
-                        self.process_message(msg)?;
-                    }
-                    // Text, ping and pong are skipped (tungstenite answers pings).
-                    WsMessage::Text(_) | WsMessage::Other => {}
-                    WsMessage::Closed => {
-                        if closing.load(Ordering::SeqCst) {
-                            return Ok(());
-                        }
-                        return Err(ApiError::status(
-                            "turn detector connection closed unexpectedly",
-                            close_status(ws_stream.close_code()),
-                            None,
-                            Some(false),
-                        ));
-                    }
-                }
-            }
-        };
-
-        let result = tokio::try_join!(sender, receiver).map(|_| ());
+        let result = tokio::try_join!(
+            self.send_audio(&mut send_rx, &*ws_sink, &closing),
+            self.receive_predictions(&mut *ws_stream, &closing),
+        )
+        .map(|_| ());
         let mut state = self.state.lock();
         state.send = None;
         state.connected = false;
         state.session_id = None;
         result
+    }
+
+    /// Writes the queue to the gateway until it ends. A send failure ends the sender quietly:
+    /// while closing it is not an error (`sender_task` swallows it).
+    async fn send_audio(
+        &self,
+        send_rx: &mut AudioReceiver<Message>,
+        ws_sink: &dyn WsSender,
+        closing: &AtomicBool,
+    ) -> Result<(), ApiError> {
+        loop {
+            self.drops.catching_up(send_rx.head(), self.clock.now());
+            let Some(item) = send_rx.recv().await else { return Ok(()) };
+            let message = client_message(item);
+            if matches!(message, Message::SessionClose(_)) {
+                closing.store(true, Ordering::SeqCst);
+            }
+            let msg =
+                proto::ClientMessage { created_at: Some(now_timestamp()), message: Some(message) };
+            if ws_sink.send_binary(msg.encode_to_vec()).await.is_err() {
+                return Ok(());
+            }
+        }
+    }
+
+    /// Reads the gateway's predictions until the socket closes; a close this side asked for ends
+    /// it cleanly.
+    async fn receive_predictions(
+        &self,
+        ws_stream: &mut dyn WsReceiver,
+        closing: &AtomicBool,
+    ) -> Result<(), ApiError> {
+        loop {
+            match ws_stream.recv().await.map_err(socket_error)? {
+                WsMessage::Binary(data) => {
+                    let msg = proto::ServerMessage::decode(data.as_slice()).map_err(|e| {
+                        ApiError::new(format!("malformed turn detector message: {e}"))
+                            .with_retryable(false)
+                    })?;
+                    self.process_message(msg)?;
+                }
+                // Text, ping and pong are skipped (tungstenite answers pings).
+                WsMessage::Text(_) | WsMessage::Other => {}
+                WsMessage::Closed if closing.load(Ordering::SeqCst) => return Ok(()),
+                WsMessage::Closed => {
+                    return Err(ApiError::status(
+                        "turn detector connection closed unexpectedly",
+                        close_status(ws_stream.close_code()),
+                        None,
+                        Some(false),
+                    ));
+                }
+            }
+        }
+    }
+}
+
+/// The wire message for one queued item.
+fn client_message(item: Item<AudioFrame, Message>) -> Message {
+    match item {
+        Item::Media(frame) => Message::InputAudio(proto::InputAudio {
+            audio: frame.data.to_vec(),
+            created_at: Some(now_timestamp()),
+            num_samples: frame.samples_per_channel,
+        }),
+        // The audio the gateway holds no longer leads up to now: start it over.
+        Item::Gap(_) => Message::SessionFlush(proto::SessionFlush {}),
+        Item::Event(message) => message,
     }
 }
 

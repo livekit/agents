@@ -137,7 +137,7 @@ impl BoundIdentity {
 
     pub fn for_connection(&self) -> Option<Headers> {
         let mut headers = self.0.lock().clone()?;
-        headers.set(HEADER_SESSION_ID, crate::ids::shortuuid("inference_"));
+        headers.set(HEADER_SESSION_ID, crate::ids::shortuuid(crate::ids::SESSION_ID_PREFIX));
         Some(headers)
     }
 }

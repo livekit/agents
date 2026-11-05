@@ -2,6 +2,12 @@
 
 pub use lk_agents_net::strings::shortuuid;
 
+/// The prefix of a gateway connection's session id.
+pub const SESSION_ID_PREFIX: &str = "inference_";
+
+/// The prefix of an STT stream's request id when the connection has no session id.
+pub const STT_REQUEST_ID_PREFIX: &str = "stt_request_";
+
 /// Which kind of logical request an id is minted for (`Literal["tts", "eot"]`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RequestKind {

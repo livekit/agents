@@ -487,7 +487,7 @@ fn realtime_pending_response_deadline_is_owned_by_the_core() {
             tool_choice: None,
         }),
     );
-    m.response_sent(m.connection_generation(), at(0), "pending", false);
+    m.response_sent(m.connection_generation(), at(0), "pending", ReplyKind::Generated);
     assert_eq!(m.next_deadline(), Some(at(5)));
     let step = m.tick(at(5));
     assert!(step.events.iter().any(|event| matches!(event,
@@ -768,7 +768,7 @@ fn queued_responses_start_the_read_deadline_only_after_the_write_receipt() {
     assert!(
         matches!(sent.frames.last(), Some(Outgoing::ResponseCreate { req_id, .. }) if req_id == "queued")
     );
-    m.response_sent(m.connection_generation(), at(12), "queued", false);
+    m.response_sent(m.connection_generation(), at(12), "queued", ReplyKind::Generated);
     assert_eq!(m.next_deadline(), Some(at(17)));
     assert!(m.tick(at(17)).events.iter().any(|event| matches!(event,
         Event::GenerateReplyFailed(failure) if failure.req_id == "queued")));
@@ -792,7 +792,7 @@ fn canceled_unsent_say_stays_identifiable_after_a_delayed_write_receipt() {
     );
     m.command(at(0), Command::CancelReply(CancelReply { req_id: "canceled".into() }));
     assert!(!m.tick(at(20)).recycle, "an unsent say has no stale-wire timeout");
-    m.response_sent(m.connection_generation(), at(20), "canceled", true);
+    m.response_sent(m.connection_generation(), at(20), "canceled", ReplyKind::Say);
     let late = m.incoming_on(
         m.connection_generation(),
         at(21),
@@ -819,7 +819,7 @@ fn expiring_a_sent_say_tombstone_recycles_before_processing_old_socket_traffic()
             add_to_chat_ctx: true,
         }),
     );
-    m.response_sent(m.connection_generation(), at(0), "canceled", true);
+    m.response_sent(m.connection_generation(), at(0), "canceled", ReplyKind::Say);
     m.command(at(0), Command::CancelReply(CancelReply { req_id: "canceled".into() }));
     let old_generation = m.connection_generation();
     let late = m.incoming_on(

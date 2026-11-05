@@ -91,13 +91,8 @@ impl RealtimeMachine {
             .expect("valid fixture effects")
             .into_iter()
             .map(|frame| {
-                if let Some((req_id, is_say)) = frame.response {
-                    self.core.response_sent(
-                        self.core.connection_generation(),
-                        now,
-                        &req_id,
-                        is_say,
-                    );
+                if let Some((req_id, kind)) = frame.response {
+                    self.core.response_sent(self.core.connection_generation(), now, &req_id, kind);
                 }
                 serde_json::from_str(&frame.text).expect("encoded JSON")
             })

@@ -435,19 +435,19 @@ async fn run(ctx: &StreamContext, input_rx: &mut InputRx) -> Result<(), StreamEr
     };
     loop {
         let socket = connect_ws(ctx).await?;
-        if !run_once(ctx, input_rx, &core, socket).await? {
+        if run_once(ctx, input_rx, &core, socket).await? == ConnectionEnd::InputEnded {
             return Ok(());
         }
     }
 }
 
-/// One connection's lifetime. `Ok(true)` means "reconnect", `Ok(false)` means "the input ended".
+/// One connection's lifetime.
 async fn run_once(
     ctx: &StreamContext,
     input_rx: &mut InputRx,
     core: &Arc<Mutex<InterruptionMachine>>,
     socket: Socket,
-) -> Result<bool, StreamError> {
+) -> Result<ConnectionEnd, StreamError> {
     let Socket { sender: sink, receiver: mut source } = socket;
     let opened =
         core.lock().handle(InterruptionEvent::ConnectionOpened, ctx.clock.now(), ctx.wall());
@@ -496,48 +496,20 @@ async fn run_once(
                 let status = close_status(source.close_code());
                 match handle_incoming(ctx, core, connection, msg, status, &closing) {
                     Err(error) => break Err(error),
-                    Ok(Incoming::Continue) => {}
+                    Ok(Incoming::Continue) => (),
                     // The gateway closed after we asked it to: this is the orderly end.
-                    Ok(Incoming::Closed) => break Ok(false),
+                    Ok(Incoming::Closed) => break Ok(ConnectionEnd::InputEnded),
                 }
             }
             joined = &mut send_task => {
                 send_finished = true;
-                break match joined {
-                    Ok(Ok(())) => Ok(false),
-                    Ok(Err(e)) => Err(e),
-                    Err(e) => Err(StreamError {
-                        request: None,
-                        error: ApiError::new(format!("interruption send task panicked: {e}")),
-                        body: None,
-                    }),
-                };
+                break send_outcome(joined);
             }
-            _ = ctx.reconnect.notified() => break Ok(true),
+            _ = ctx.reconnect.notified() => break Ok(ConnectionEnd::Reconnect),
             ev = input_rx.recv(), if input_open => match ev {
-                Some(item) => {
-                    let ev = match item {
-                        Item::Media(frame) => InputEvent::Audio(frame),
-                        Item::Gap(_) => InputEvent::Gap,
-                        Item::Event(ev) => ev,
-                    };
-                    let wall = ctx.wall();
-                    let outcome = {
-                        let mut core = core.lock();
-                        core.handle(InterruptionEvent::Input(ev), ctx.clock.now(), wall)
-                    };
-                    match outcome {
-                        Ok(effects) => {
-                            for effect in effects {
-                                if let Some(request) = ctx.emit_effect(effect)
-                                    && let Some(tx) = &data_tx {
-                                    let _ = tx.send(request);
-                                }
-                            }
-                        }
-                        Err(error) => break Err(error),
-                    }
-                }
+                Some(item) => if let Err(error) = forward_input(ctx, core, item, data_tx.as_ref()) {
+                    break Err(error);
+                },
                 // `output_ch.close()` at the end of `_forward_data`: the send task drains what is
                 // queued, writes `session.close`, and the gateway closes back.
                 None => {
@@ -559,6 +531,55 @@ async fn run_once(
         }
         error
     })
+}
+
+/// Hands one input item to the core and carries out its effects; an inference request goes to
+/// the send task while the input is open.
+fn forward_input(
+    ctx: &StreamContext,
+    core: &Arc<Mutex<InterruptionMachine>>,
+    item: Item<AudioFrame, InputEvent>,
+    data_tx: Option<&mpsc::UnboundedSender<(RequestIdentity, Vec<i16>)>>,
+) -> Result<(), StreamError> {
+    let ev = match item {
+        Item::Media(frame) => InputEvent::Audio(frame),
+        Item::Gap(_) => InputEvent::Gap,
+        Item::Event(ev) => ev,
+    };
+    let wall = ctx.wall();
+    let effects = core.lock().handle(InterruptionEvent::Input(ev), ctx.clock.now(), wall)?;
+    for effect in effects {
+        if let Some(request) = ctx.emit_effect(effect)
+            && let Some(tx) = data_tx
+        {
+            let _ = tx.send(request);
+        }
+    }
+    Ok(())
+}
+
+/// How one connection ended without failing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConnectionEnd {
+    /// `update_options` asked for a new connection.
+    Reconnect,
+    /// The input ended and the gateway closed back.
+    InputEnded,
+}
+
+/// The send task ending ends the connection: cleanly as the input's end, or with its failure.
+fn send_outcome(
+    joined: Result<Result<(), StreamError>, TaskError>,
+) -> Result<ConnectionEnd, StreamError> {
+    match joined {
+        Ok(Ok(())) => Ok(ConnectionEnd::InputEnded),
+        Ok(Err(e)) => Err(e),
+        Err(e) => Err(StreamError {
+            request: None,
+            error: ApiError::new(format!("interruption send task panicked: {e}")),
+            body: None,
+        }),
+    }
 }
 
 enum Incoming {

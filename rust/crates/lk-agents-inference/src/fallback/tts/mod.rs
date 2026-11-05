@@ -6,7 +6,7 @@
 use crate::fallback::chain::{
     Attempt, Backend, ChainCall, ChainObserver, FallbackChain, NoBackends, Recovery, RecoveryMode,
 };
-use crate::fallback::channel::{ChainTask, ChannelSource, drain_probe, next_or_stop};
+use crate::fallback::channel::{ServeAttempt, drain_probe, next_or_stop};
 use crate::fallback::{ChainPolicy, resampling_plan};
 use crate::telemetry;
 use crate::tts::sentence_adapter::StreamAdapter;
@@ -470,158 +470,169 @@ impl FallbackTts {
     }
 
     fn spawn_pump(&self, req: TtsReq, slot: RecoveryMode, log: Option<Arc<TokenLog>>) -> TtsSource {
-        let (tx, rx) = mpsc::channel::<Result<SynthesizedAudio, ProviderError>>(32);
-        let chain = Arc::clone(&self.chain);
-        let drain_chain = Arc::clone(&self.chain);
         let call = ChainCall {
             conn_options: self.caller_conn,
             accepted_at: self.chain.clock().now(),
             slot,
         };
-        let needs = Arc::clone(&self.needs_resampling);
-        let rates = Arc::clone(&self.entry_rates);
-        let target = self.sample_rate;
-        let channels = self.num_channels;
+        let leg = Arc::new(TtsLeg {
+            needs_resampling: Arc::clone(&self.needs_resampling),
+            entry_rates: Arc::clone(&self.entry_rates),
+            target: self.sample_rate,
+            channels: self.num_channels,
+            log: log.clone(),
+            started: Mutex::default(),
+        });
+        // Dropped with the task, so an aborted request still releases its probes.
+        let source = self.chain.serve_stream(req, call, leg, |_, _| {}, FinishOnDrop(log));
+        Box::new(source) as TtsSource
+    }
+}
 
-        // The streamed request is measured as one TTS node (`tts:350-355`): its started time is
-        // the first attempt's that handed text to a provider, kept across a failover.
-        let started: Arc<Mutex<Option<f64>>> = Arc::default();
-        let (stop_rx, done_tx, chain_task) = ChainTask::pair(chain.clock());
-        let handle = self.chain.spawn_stream(async move {
-            // Dropped with the task, so an aborted request still releases its probes.
-            let _finish = FinishOnDrop(log.clone());
-            let mut tx = tx;
-            let result = chain
-                .run_cancellable(
-                    &req,
-                    call,
-                    &mut tx,
-                    stop_rx,
-                    move |index, _b, session, tx, mut stop| {
-                        let chain = Arc::clone(&drain_chain);
-                        let needs = Arc::clone(&needs);
-                        let rates = Arc::clone(&rates);
-                        let log = log.clone();
-                        let started = Arc::clone(&started);
-                        Box::pin(async move {
-                            let mut source = session;
-                            let streamed = log.is_some();
-                            let capture = |source: &TtsSource| -> Option<f64> {
-                                let mut anchor = started.lock();
-                                if streamed && anchor.is_none() {
-                                    *anchor = source.started_time();
-                                }
-                                *anchor
-                            };
-                            // One resampler per attempt (`tts:262-269`): no history crosses a failover.
-                            // Built from the entry's declared rate, which every frame is read as.
-                            let mut resampler = if needs.get(index).copied().unwrap_or(false) {
-                                let from = rates.get(index).copied().unwrap_or(target);
-                                match AudioResampler::fixed(
-                                    AudioFormat::new(from, channels),
-                                    target,
-                                    Quality::Medium,
-                                ) {
-                                    Ok(r) => Some(r),
-                                    Err(e) => {
-                                        source
-                                            .close(
-                                                chain
-                                                    .clock()
-                                                    .now()
-                                                    .saturating_add(HOST_TEARDOWN_TIMEOUT),
-                                            )
-                                            .await;
-                                        return Attempt::Failed {
-                                            error: ProviderError::Local(ApiError::new(format!(
-                                                "resampler: {e}"
-                                            ))),
-                                            produced_output: false,
-                                        };
-                                    }
-                                }
-                            } else {
-                                None
-                            };
+/// One request's attempts: each resamples its entry's audio to the adapter's rate.
+struct TtsLeg {
+    needs_resampling: Arc<Vec<bool>>,
+    entry_rates: Arc<Vec<u32>>,
+    target: u32,
+    channels: u16,
+    /// The streamed request's text; `None` for a one-shot.
+    log: Option<Arc<TokenLog>>,
+    /// The streamed request is measured as one TTS node (`tts:350-355`): its started time is the
+    /// first attempt's that handed text to a provider, kept across a failover.
+    started: Mutex<Option<f64>>,
+}
 
-                            let mut produced = false;
-                            let outcome = loop {
-                                match next_or_stop(source.as_mut(), &mut stop).await {
-                                    Ok(None) => break Attempt::Served(()),
-                                    Ok(Some(mut audio)) => {
-                                        if !produced {
-                                            produced = true;
-                                            chain.mark_serving(index);
-                                        }
-                                        if let Some(at) = capture(&source) {
-                                            audio.started_time = Some(at);
-                                        }
-                                        let out = match resampler.as_mut() {
-                                            None => Some(audio.clone()),
-                                            Some(r) => match r.push_frame(&audio.frame) {
-                                                Ok(ready) => {
-                                                    ready.into_iter().next().map(|frame| {
-                                                        let mut a = audio.clone();
-                                                        a.frame = frame;
-                                                        a
-                                                    })
-                                                }
-                                                Err(e) => {
-                                                    break Attempt::Failed {
-                                                        error: ProviderError::Local(ApiError::new(
-                                                            format!("resample: {e}"),
-                                                        )),
-                                                        produced_output: produced,
-                                                    };
-                                                }
-                                            },
-                                        };
-                                        // `tts:464-466`: drain the filter tail at every `is_final`.
-                                        let is_final = audio.is_final;
-                                        if let Some(a) = out
-                                            && tx.send(Ok(a)).await.is_err()
-                                        {
-                                            break Attempt::Served(());
-                                        }
-                                        if is_final
-                                            && let Some(r) = resampler.as_mut()
-                                            && let Ok(Some(tail)) = r.flush()
-                                        {
-                                            let mut a = audio.clone();
-                                            a.frame = tail;
-                                            if tx.send(Ok(a)).await.is_err() {
-                                                break Attempt::Served(());
-                                            }
-                                        }
-                                    }
-                                    Err(error) => {
-                                        break Attempt::Failed { error, produced_output: produced };
-                                    }
-                                }
-                            };
-                            if let Some(log) = log.as_ref() {
-                                log.clear_main();
-                            }
-                            // An attempt that failed before any audio still anchors the request.
-                            capture(&source);
-                            source
-                                .close(chain.clock().now().saturating_add(HOST_TEARDOWN_TIMEOUT))
-                                .await;
-                            outcome
-                        }) as BoxFuture<'_, Attempt<()>>
-                    },
-                )
-                .await;
-            match result {
-                Ok(_) => {}
-                Err(e) => {
-                    let _ = tx.send(Err(e)).await;
+/// What became of one frame handed to the consumer.
+enum Delivery {
+    Delivered,
+    ConsumerGone,
+    Failed(ProviderError),
+}
+
+impl ServeAttempt<TtsBackend, SynthesizedAudio> for TtsLeg {
+    fn serve<'a>(
+        self: Arc<Self>,
+        chain: Arc<FallbackChain<TtsBackend>>,
+        index: usize,
+        mut source: TtsSource,
+        tx: &'a mut mpsc::Sender<Result<SynthesizedAudio, ProviderError>>,
+        mut stop: watch::Receiver<bool>,
+    ) -> BoxFuture<'a, Attempt<()>> {
+        Box::pin(async move {
+            let resampler = match self.resampler_for(index) {
+                Ok(resampler) => resampler,
+                Err(error) => {
+                    source.close(chain.clock().now().saturating_add(HOST_TEARDOWN_TIMEOUT)).await;
+                    return Attempt::Failed { error, produced_output: false };
+                }
+            };
+            let outcome =
+                self.forward_audio(&chain, index, &mut source, resampler, tx, &mut stop).await;
+            if let Some(log) = self.log.as_ref() {
+                log.clear_main();
+            }
+            // An attempt that failed before any audio still anchors the request.
+            self.anchor_started(&source);
+            source.close(chain.clock().now().saturating_add(HOST_TEARDOWN_TIMEOUT)).await;
+            outcome
+        })
+    }
+}
+
+impl TtsLeg {
+    /// One resampler per attempt (`tts:262-269`): no history crosses a failover. Built from the
+    /// entry's declared rate, which every frame is read as.
+    fn resampler_for(&self, index: usize) -> Result<Option<AudioResampler>, ProviderError> {
+        if !self.needs_resampling.get(index).copied().unwrap_or(false) {
+            return Ok(None);
+        }
+        let from = self.entry_rates.get(index).copied().unwrap_or(self.target);
+        AudioResampler::fixed(AudioFormat::new(from, self.channels), self.target, Quality::Medium)
+            .map(Some)
+            .map_err(|e| ProviderError::Local(ApiError::new(format!("resampler: {e}"))))
+    }
+
+    async fn forward_audio(
+        &self,
+        chain: &FallbackChain<TtsBackend>,
+        index: usize,
+        source: &mut TtsSource,
+        mut resampler: Option<AudioResampler>,
+        tx: &mut mpsc::Sender<Result<SynthesizedAudio, ProviderError>>,
+        stop: &mut watch::Receiver<bool>,
+    ) -> Attempt<()> {
+        let mut produced = false;
+        loop {
+            let mut audio = match next_or_stop(source.as_mut(), stop).await {
+                Ok(Some(audio)) => audio,
+                Ok(None) => return Attempt::Served(()),
+                Err(error) => return Attempt::Failed { error, produced_output: produced },
+            };
+            if !produced {
+                produced = true;
+                chain.mark_serving(index);
+            }
+            if let Some(at) = self.anchor_started(source) {
+                audio.started_time = Some(at);
+            }
+            match Self::deliver(audio, resampler.as_mut(), tx).await {
+                Delivery::Delivered => {}
+                Delivery::ConsumerGone => return Attempt::Served(()),
+                Delivery::Failed(error) => {
+                    return Attempt::Failed { error, produced_output: produced };
                 }
             }
-            let _ = done_tx.send(());
-        });
+        }
+    }
 
-        Box::new(ChannelSource { rx, task: Some(handle), chain: chain_task }) as TtsSource
+    /// Sends `audio` at the adapter's rate; at every `is_final` the filter's tail follows it
+    /// (`tts:464-466`).
+    async fn deliver(
+        audio: SynthesizedAudio,
+        resampler: Option<&mut AudioResampler>,
+        tx: &mut mpsc::Sender<Result<SynthesizedAudio, ProviderError>>,
+    ) -> Delivery {
+        let Some(resampler) = resampler else {
+            return match tx.send(Ok(audio)).await {
+                Ok(()) => Delivery::Delivered,
+                Err(_) => Delivery::ConsumerGone,
+            };
+        };
+        let ready = match resampler.push_frame(&audio.frame) {
+            Ok(ready) => ready,
+            Err(e) => {
+                return Delivery::Failed(ProviderError::Local(ApiError::new(format!(
+                    "resample: {e}"
+                ))));
+            }
+        };
+        let with_frame = |frame| SynthesizedAudio { frame, ..audio.clone() };
+        if let Some(frame) = ready.into_iter().next()
+            && tx.send(Ok(with_frame(frame))).await.is_err()
+        {
+            return Delivery::ConsumerGone;
+        }
+        if audio.is_final
+            && let Ok(Some(tail)) = resampler.flush()
+            && tx.send(Ok(with_frame(tail))).await.is_err()
+        {
+            return Delivery::ConsumerGone;
+        }
+        Delivery::Delivered
+    }
+
+    /// The request's started time, anchored by the first streamed attempt that reports one. The
+    /// source is asked with no lock held: a host stream answers under the GIL.
+    fn anchor_started(&self, source: &TtsSource) -> Option<f64> {
+        if self.log.is_none() {
+            return None;
+        }
+        // `started_time` is a plain read, so concurrent attempts settle the anchor under the lock.
+        let mut anchor = self.started.lock();
+        if anchor.is_none() {
+            *anchor = source.started_time();
+        }
+        *anchor
     }
 }
 

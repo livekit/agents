@@ -43,6 +43,14 @@ pub mod tts;
 pub mod vad;
 
 pub use ids::{RequestKind, create_inference_request_id, shortuuid};
+
+/// Resolves at `at` on `clock`; with no deadline it never resolves.
+pub(crate) async fn wait_for_deadline(clock: &dyn abi::Clock, at: Option<abi::Ts>) {
+    match at {
+        Some(at) => clock.wait_until(at).await,
+        None => std::future::pending().await,
+    }
+}
 pub use llm::models::{drop_unsupported_params, min_reasoning_effort};
 
 /// This crate, under the name every other crate calls it by, so `#[derive(Host)]` paths resolve

@@ -304,7 +304,7 @@ impl Exchange {
         let mut request = self.request.clone();
         for (name, value) in &mut request.headers {
             if name.eq_ignore_ascii_case(crate::headers::HEADER_SESSION_ID) {
-                *value = crate::ids::shortuuid("inference_");
+                *value = crate::ids::shortuuid(crate::ids::SESSION_ID_PREFIX);
             }
         }
         request
@@ -432,26 +432,7 @@ impl LlmChunks {
     fn apply(&mut self, effects: Vec<LlmRequestEffect>) {
         for effect in effects {
             match effect {
-                LlmRequestEffect::LlmRequestStart { attempt, .. } => {
-                    let (exchange, reporter) = (self.exchange.clone(), self.reporter.clone());
-                    let closed = self.reporter.clone();
-                    let work = async move {
-                        send_attempt(&exchange.http, exchange.attempt(), attempt, reporter).await
-                    };
-                    let task = TokioSpawner::new(self.runtime.clone()).spawn_settled(work, move |outcome| async move {
-                        if outcome == TaskOutcome::Panicked {
-                            log::error!(target: "livekit.agents", attempt; "LLM request attempt panicked");
-                        }
-                        let _ = closed
-                            .tx
-                            .send(Stamped {
-                                at: closed.clock.now(),
-                                event: LlmRequestEvent::AttemptClosed { attempt },
-                            })
-                            .await;
-                    });
-                    self.attempts.insert(attempt, task);
-                }
+                LlmRequestEffect::LlmRequestStart { attempt, .. } => self.start_attempt(attempt),
                 LlmRequestEffect::LlmRequestCancel { attempt, .. } => {
                     if let Some(task) = self.attempts.get_mut(&attempt) {
                         task.cancel();
@@ -471,6 +452,23 @@ impl LlmChunks {
                 }
             }
         }
+    }
+
+    /// Spawns one attempt; however it settles, the request hears that the attempt closed.
+    fn start_attempt(&mut self, attempt: u32) {
+        let (exchange, reporter) = (self.exchange.clone(), self.reporter.clone());
+        let closed = self.reporter.clone();
+        let work = async move {
+            send_attempt(&exchange.http, exchange.attempt(), attempt, reporter).await
+        };
+        let settle = move |outcome| async move {
+            if outcome == TaskOutcome::Panicked {
+                log::error!(target: "livekit.agents", attempt; "LLM request attempt panicked");
+            }
+            closed.report(LlmRequestEvent::AttemptClosed { attempt }).await;
+        };
+        let task = TokioSpawner::new(self.runtime.clone()).spawn_settled(work, settle);
+        self.attempts.insert(attempt, task);
     }
 }
 

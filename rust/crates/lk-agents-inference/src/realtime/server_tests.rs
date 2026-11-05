@@ -38,11 +38,12 @@ use std::{collections::BTreeMap, time::SystemTime};
 use fastrand::Rng;
 use lk_agents_abi::{
     AudioFrame, ChatItem, ChatMessage, FunctionCall, Role, ToolChoice, Ts,
-    llm::realtime::GenerationStatus, usage::TokenUsage,
+    llm::realtime::{GenerationStatus, Modalities},
+    usage::TokenUsage,
 };
 use lk_agents_inference::realtime::{
     Incoming, TurnDetection,
-    protocol::{ResponseDone, TranscriptionCompleted, TranscriptionUsage},
+    protocol::{OutputItemKind, ResponseDone, TranscriptionCompleted, TranscriptionUsage},
 };
 
 #[path = "client_tests.rs"]
@@ -471,10 +472,10 @@ impl Server {
                     resp.told_created = Some(now);
                     self.told_active = Some(r);
                 }
-                Incoming::OutputItemAdded { item_type, .. } if item_type == "message" => {
+                Incoming::OutputItemAdded { kind: OutputItemKind::Message, .. } => {
                     resp.announced = true;
                 }
-                Incoming::OutputItemAdded { item_type, .. } if item_type == "function_call" => {
+                Incoming::OutputItemAdded { kind: OutputItemKind::FunctionCall, .. } => {
                     resp.call_announced = true;
                 }
                 Incoming::OutputItemDone { item: ChatItem::Message(_) } => resp.closed = true,
@@ -596,8 +597,8 @@ impl Server {
         // Its place in the conversation is taken when the item is added (`pop`): a client item
         // arriving before then, a tool output or a commit, comes before it, as on the real server.
         let mut t = later(at, self.rng.u64(210..=730));
-        let item_type = "message".to_owned();
-        self.put(t, Some(r), Incoming::OutputItemAdded { item_id: item.clone(), item_type });
+        let kind = OutputItemKind::Message;
+        self.put(t, Some(r), Incoming::OutputItemAdded { item_id: item.clone(), kind });
         let assistant = message(&item, Role::Assistant);
         self.put(t, Some(r), Incoming::ItemAdded { previous_item_id: None, item: assistant });
         // The first audio, after the item as measured; the content part and the
@@ -606,8 +607,8 @@ impl Server {
         let first_audio = later(item_at, self.rng.u64(210..=400));
         t = later(item_at, 15).min(first_audio);
         let audio = self.config.audio;
-        let part_type = if audio { "audio" } else { "text" }.to_owned();
-        self.put(t, Some(r), Incoming::ContentPartAdded { item_id: item.clone(), part_type });
+        let modalities = if audio { Modalities::AudioAndText } else { Modalities::TextOnly };
+        self.put(t, Some(r), Incoming::ContentPartAdded { item_id: item.clone(), modalities });
 
         // The words, as transcript (or text) deltas, and the audio they become.
         let per_char = self.rng.u64(40..=61) as f64;
@@ -661,8 +662,8 @@ impl Server {
             let fc = self.mint_item("fc");
             self.responses[r as usize].function_call = Some((fc.clone(), name.clone()));
             t = later(t, 30);
-            let item_type = "function_call".to_owned();
-            self.put(t, Some(r), Incoming::OutputItemAdded { item_id: fc.clone(), item_type });
+            let kind = OutputItemKind::FunctionCall;
+            self.put(t, Some(r), Incoming::OutputItemAdded { item_id: fc.clone(), kind });
             let call = function_call(&fc, &name, "");
             self.put(t, Some(r), Incoming::ItemAdded { previous_item_id: Some(item), item: call });
             self.put(t, Some(r), unhandled("response.function_call_arguments.delta"));
@@ -758,9 +759,9 @@ impl Server {
                 }
                 let created = matches!(&p.body, Body::Event(event) if matches!(event.as_ref(), Incoming::ResponseCreated { .. }));
                 let kept = (*due < t && streams(p)) || (keep_created && created);
-                if kept && let Body::Event(event) = &p.body && let Incoming::OutputItemAdded { item_type, .. } = event.as_ref() {
-                    opened |= item_type == "message";
-                    called |= item_type == "function_call";
+                if kept && let Body::Event(event) = &p.body && let Incoming::OutputItemAdded { kind, .. } = event.as_ref() {
+                    opened |= *kind == OutputItemKind::Message;
+                    called |= *kind == OutputItemKind::FunctionCall;
                 }
                 !kept
             })

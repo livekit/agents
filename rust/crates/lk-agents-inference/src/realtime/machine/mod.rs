@@ -347,7 +347,7 @@ impl RealtimeMachine {
     }
 
     /// The runtime acknowledges a flushed response command before delivering its responses.
-    pub fn response_sent(&mut self, generation: u64, now: Ts, req_id: &str, is_say: bool) {
+    pub fn response_sent(&mut self, generation: u64, now: Ts, req_id: &str, kind: ReplyKind) {
         if self.closing || generation != self.connection_generation {
             return;
         }
@@ -356,7 +356,9 @@ impl RealtimeMachine {
         {
             self.reply_deadlines.entry(req_id.to_owned()).or_insert(now.saturating_add(timeout));
         }
-        if is_say && (self.pending_replies.contains(req_id) || self.discarded.contains(req_id)) {
+        if kind == ReplyKind::Say
+            && (self.pending_replies.contains(req_id) || self.discarded.contains(req_id))
+        {
             if !self.say_tags.iter().any(|id| id == req_id) {
                 self.say_tags.push_back(req_id.to_owned());
             }
@@ -1006,6 +1008,13 @@ impl RealtimeMachine {
             provider_error: None,
         }
     }
+}
+
+/// What a sent response command asks for: a generated reply, or a forced message (`say`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReplyKind {
+    Generated,
+    Say,
 }
 
 #[derive(Debug, Clone, Default)]

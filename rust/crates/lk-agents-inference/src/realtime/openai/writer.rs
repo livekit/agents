@@ -3,7 +3,7 @@
 
 use super::wire::WireShape;
 use crate::realtime::dialect::{NUM_CHANNELS, SAMPLE_RATE};
-use crate::realtime::machine::Outgoing;
+use crate::realtime::machine::{Outgoing, ReplyKind};
 use lk_agents_abi::errors::{ApiError, TimeoutPhase};
 use lk_agents_abi::llm::provider_format::ImageResolver;
 use lk_agents_abi::{ApiConnectOptions, Clock, Elapsed, Ts};
@@ -23,12 +23,18 @@ pub(super) struct ResponseSent {
     pub(super) generation: u64,
     pub(super) at: Ts,
     pub(super) req_id: String,
-    pub(super) is_say: bool,
+    pub(super) kind: ReplyKind,
 }
 
 pub(super) struct PreparedFrame {
     pub(super) text: String,
-    pub(super) response: Option<(String, bool)>,
+    pub(super) response: Option<(String, ReplyKind)>,
+}
+
+impl PreparedFrame {
+    fn audio(text: String) -> Self {
+        Self { text, response: None }
+    }
 }
 
 pub(super) struct Encoder {
@@ -53,102 +59,136 @@ impl Encoder {
         let mut frames = Vec::new();
         for effect in effects {
             match effect {
-                Outgoing::AudioAppend { frame } => {
-                    for frame in
-                        self.resampler.push_frame(&frame).map_err(|error| error.to_string())?
-                    {
-                        for chunk in self.bstream.push(&frame.data) {
-                            frames.push(PreparedFrame {
-                                text: super::wire::input_audio_buffer_append(&chunk.data)
-                                    .to_string(),
-                                response: None,
-                            });
-                        }
-                    }
-                }
-                Outgoing::AudioClear => {
-                    self.bstream = AudioByteStream::new(SAMPLE_RATE, NUM_CHANNELS, None, false);
-                    self.resampler =
-                        AudioResampler::new(SAMPLE_RATE, Quality::Medium, OnChange::Discard);
-                    frames.push(PreparedFrame {
-                        text: super::wire::input_audio_buffer_clear().to_string(),
-                        response: None,
-                    });
-                }
-                other => {
-                    let response = match &other {
-                        Outgoing::ResponseCreate { req_id, .. } => Some((req_id.clone(), false)),
-                        Outgoing::ForceMessage { req_id, .. } => Some((req_id.clone(), true)),
-                        _ => None,
-                    };
-                    let mut frame = super::encode::encode(other, images)?;
-                    shape.outbound(&mut frame);
-                    frames.push(PreparedFrame { text: frame.to_string(), response });
-                }
+                Outgoing::AudioAppend { frame } => self.append_audio(&frame, &mut frames)?,
+                Outgoing::AudioClear => frames.push(self.clear_audio()),
+                other => frames.push(encode_control(other, images, shape)?),
             }
         }
         Ok(frames)
     }
+
+    /// Resamples `frame` to the wire rate and cuts it into append frames.
+    fn append_audio(
+        &mut self,
+        frame: &lk_agents_abi::AudioFrame,
+        frames: &mut Vec<PreparedFrame>,
+    ) -> Result<(), String> {
+        for frame in self.resampler.push_frame(frame).map_err(|error| error.to_string())? {
+            frames.extend(self.bstream.push(&frame.data).iter().map(|chunk| {
+                PreparedFrame::audio(
+                    super::wire::input_audio_buffer_append(&chunk.data).to_string(),
+                )
+            }));
+        }
+        Ok(())
+    }
+
+    /// Drops the audio held back for framing and resampling, then clears the server's buffer.
+    fn clear_audio(&mut self) -> PreparedFrame {
+        *self = Encoder::new();
+        PreparedFrame::audio(super::wire::input_audio_buffer_clear().to_string())
+    }
 }
 
-#[allow(
-    clippy::too_many_arguments,
-    reason = "Each argument supplies one writer runtime dependency"
-)]
-pub(super) async fn run(
-    mut effects: mpsc::Receiver<Vec<Outgoing>>,
-    sender: Arc<dyn WsSender>,
-    shape: WireShape,
-    conn: ApiConnectOptions,
-    clock: Arc<dyn Clock>,
-    images: Arc<dyn ImageResolver + Send + Sync>,
-    generation: u64,
-    receipts: mpsc::Sender<ResponseSent>,
-) -> Result<(), ApiError> {
-    let mut encoder = Encoder::new();
-    while let Some(batch) = effects.recv().await {
-        let worker_images = images.clone();
-        let worker_shape = shape.clone();
-        let class = if batch.iter().any(|effect| matches!(effect,
-            Outgoing::ItemCreate { item: lk_agents_abi::ChatItem::Message(message), .. }
-                if message.content.iter().any(|content| matches!(content, lk_agents_abi::ChatContent::Image(_))))) {
-            lk_agents_media::pool::JobClass::Image
-        } else {
-            lk_agents_media::pool::JobClass::Decoder
-        };
+/// A control frame; a response command carries its request id for the write receipt.
+fn encode_control(
+    effect: Outgoing,
+    images: &dyn ImageResolver,
+    shape: &WireShape,
+) -> Result<PreparedFrame, String> {
+    let response = match &effect {
+        Outgoing::ResponseCreate { req_id, .. } => Some((req_id.clone(), ReplyKind::Generated)),
+        Outgoing::ForceMessage { req_id, .. } => Some((req_id.clone(), ReplyKind::Say)),
+        _ => None,
+    };
+    let mut frame = super::encode::encode(effect, images)?;
+    shape.outbound(&mut frame);
+    Ok(PreparedFrame { text: frame.to_string(), response })
+}
+
+/// One connection's socket writer: encodes each batch on the media pool and writes its frames
+/// in order, receipting every response command once it is on the wire.
+pub(super) struct Writer {
+    pub(super) sender: Arc<dyn WsSender>,
+    pub(super) shape: WireShape,
+    pub(super) conn: ApiConnectOptions,
+    pub(super) clock: Arc<dyn Clock>,
+    pub(super) images: Arc<dyn ImageResolver + Send + Sync>,
+    pub(super) generation: u64,
+    pub(super) receipts: mpsc::Sender<ResponseSent>,
+}
+
+impl Writer {
+    pub(super) async fn run(
+        self,
+        mut effects: mpsc::Receiver<Vec<Outgoing>>,
+    ) -> Result<(), ApiError> {
+        let mut encoder = Encoder::new();
+        while let Some(batch) = effects.recv().await {
+            let (next_encoder, frames) = self.prepare(encoder, batch).await?;
+            encoder = next_encoder;
+            for frame in frames {
+                self.write(frame).await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Encodes `batch` on the media pool; the encoder goes there and comes back with the frames.
+    async fn prepare(
+        &self,
+        mut encoder: Encoder,
+        batch: Vec<Outgoing>,
+    ) -> Result<(Encoder, Vec<PreparedFrame>), ApiError> {
+        let images = self.images.clone();
+        let shape = self.shape.clone();
         let prepared = lk_agents_media::pool::media_pool()
-            .try_spawn(class, move || {
-                let frames = encoder.encode(batch, worker_images.as_ref(), &worker_shape);
+            .try_spawn(batch_class(&batch), move || {
+                let frames = encoder.encode(batch, images.as_ref(), &shape);
                 (encoder, frames)
             })
             .map_err(|error| ApiError::new(error.to_string()).with_retryable(false))?;
-        let (next_encoder, frames) = prepared.await.map_err(|error| {
+        let (encoder, frames) = prepared.await.map_err(|error| {
             ApiError::new(format!("realtime frame worker failed: {error}")).with_retryable(false)
         })?;
-        encoder = next_encoder;
         let frames = frames.map_err(|error| ApiError::new(error).with_retryable(false))?;
-        for frame in frames {
-            let deadline = conn.write_deadline(clock.now());
-            match lk_agents_abi::before(clock.as_ref(), deadline, sender.send_text(frame.text))
-                .await
-            {
-                Ok(Ok(())) => {
-                    if let Some((req_id, is_say)) = frame.response {
-                        receipts
-                            .send(ResponseSent { generation, at: clock.now(), req_id, is_say })
-                            .await
-                            .map_err(|_| {
-                                ApiError::new("realtime write receipt consumer closed")
-                                    .with_retryable(false)
-                            })?;
-                    }
-                }
-                Ok(Err(error)) => {
-                    return Err(lk_agents_net::transport::connect_error("realtime writer", error));
-                }
-                Err(Elapsed) => return Err(ApiError::timed_out(TimeoutPhase::Write)),
-            }
-        }
+        Ok((encoder, frames))
     }
-    Ok(())
+
+    /// Writes one frame within the write deadline, then receipts a response command.
+    async fn write(&self, frame: PreparedFrame) -> Result<(), ApiError> {
+        let deadline = self.conn.write_deadline(self.clock.now());
+        match lk_agents_abi::before(
+            self.clock.as_ref(),
+            deadline,
+            self.sender.send_text(frame.text),
+        )
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                return Err(lk_agents_net::transport::connect_error("realtime writer", error));
+            }
+            Err(Elapsed) => return Err(ApiError::timed_out(TimeoutPhase::Write)),
+        }
+        let Some((req_id, kind)) = frame.response else { return Ok(()) };
+        let sent = ResponseSent { generation: self.generation, at: self.clock.now(), req_id, kind };
+        self.receipts.send(sent).await.map_err(|_| {
+            ApiError::new("realtime write receipt consumer closed").with_retryable(false)
+        })
+    }
+}
+
+/// A batch that creates a message with an image is encoded as image work.
+fn batch_class(batch: &[Outgoing]) -> lk_agents_media::pool::JobClass {
+    let has_image = batch.iter().any(|effect| {
+        matches!(effect,
+            Outgoing::ItemCreate { item: lk_agents_abi::ChatItem::Message(message), .. }
+                if message.content.iter().any(|content| matches!(content, lk_agents_abi::ChatContent::Image(_))))
+    });
+    if has_image {
+        lk_agents_media::pool::JobClass::Image
+    } else {
+        lk_agents_media::pool::JobClass::Decoder
+    }
 }

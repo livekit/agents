@@ -20,14 +20,14 @@ use parking_lot::Mutex;
 
 use lk_agents_abi::llm::inference::InvalidPayload;
 use lk_agents_net::env::ProcessEnv;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 use crate::fallback::ChainPolicy;
 use crate::fallback::chain::{
     Attempt, Backend, ChainCall, ChainObserver, ChainOutcome, FallbackChain, NoBackends, Recovery,
     RecoveryMode,
 };
-use crate::fallback::channel::{ChainTask, ChannelSource, forward, probe_next};
+use crate::fallback::channel::{ServeAttempt, forward, probe_next};
 
 // ---------------------------------------------------------------------------------------------
 // The live input tee
@@ -253,6 +253,16 @@ pub enum SttSession {
     Stream(SttSource),
 }
 
+impl SttSession {
+    /// A batch request's attempt: the transcript it opened with.
+    fn into_batch(self) -> Attempt<SpeechEvent> {
+        match self {
+            SttSession::Batch(ev) => Attempt::Served(ev),
+            SttSession::Stream(_) => unreachable!("a Batch request opens Batch"),
+        }
+    }
+}
+
 pub struct SttBackend {
     inner: Arc<dyn Stt>,
     clock: Arc<dyn Clock>,
@@ -314,7 +324,7 @@ impl Backend for SttBackend {
         req: &Self::Req,
         conn: &ApiConnectOptions,
         slot: RecoveryMode,
-        mut stop: tokio::sync::watch::Receiver<bool>,
+        stop: tokio::sync::watch::Receiver<bool>,
     ) -> Result<Recovery, ProviderError> {
         let stt = self.inner.with_conn_options(conn).unwrap_or_else(|| self.inner.clone());
         match (req, slot) {
@@ -324,33 +334,47 @@ impl Backend for SttBackend {
                 stt.recognize(&cx.clone().continuing(None), frames, language.as_ref()).await?;
                 Ok(Recovery::Recovered)
             }
-            // A probe's timestamps are never read, and the reference leaves its offset at 0.
             (SttReq::Stream { language, tee, cx, .. }, _) => {
-                let (sink, mut source) = stt
-                    .stream(cx, language.as_ref(), None)
-                    .await?
-                    .ok_or_else(|| no_duplex(&self.inner.label()))?
-                    .split();
-                // Read until a non-empty final transcript; a clean drain with none is `NotYet` (`stt:465-466`).
-                let id = tee.add_probe(sink);
-                let verdict = loop {
-                    match probe_next(source.as_mut(), &mut stop).await {
-                        None | Some(Ok(None)) => break Ok(Recovery::NotYet),
-                        Some(Ok(Some(ev))) => {
-                            if ev.kind == SpeechEventType::FinalTranscript
-                                && ev.alternatives.first().is_some_and(|a| !a.text.is_empty())
-                            {
-                                break Ok(Recovery::Recovered);
-                            }
-                        }
-                        Some(Err(e)) => break Err(e),
-                    }
-                };
-                tee.remove_probe(id);
-                source.close(self.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT)).await;
-                verdict
+                self.probe_stream(stt.as_ref(), language.as_ref(), tee, cx, stop).await
             }
         }
+    }
+}
+
+impl SttBackend {
+    /// A probe stream joined to the live tee, read until a non-empty final transcript; a clean
+    /// drain with none is `NotYet` (`stt:465-466`). A probe's timestamps are never read, and the
+    /// reference leaves its offset at 0.
+    async fn probe_stream(
+        &self,
+        stt: &dyn Stt,
+        language: Option<&LanguageCode>,
+        tee: &InputTee,
+        cx: &telemetry::Cx,
+        mut stop: tokio::sync::watch::Receiver<bool>,
+    ) -> Result<Recovery, ProviderError> {
+        let (sink, mut source) = stt
+            .stream(cx, language, None)
+            .await?
+            .ok_or_else(|| no_duplex(&self.inner.label()))?
+            .split();
+        let id = tee.add_probe(sink);
+        let verdict = loop {
+            match probe_next(source.as_mut(), &mut stop).await {
+                None | Some(Ok(None)) => break Ok(Recovery::NotYet),
+                Some(Ok(Some(ev)))
+                    if ev.kind == SpeechEventType::FinalTranscript
+                        && ev.alternatives.first().is_some_and(|a| !a.text.is_empty()) =>
+                {
+                    break Ok(Recovery::Recovered);
+                }
+                Some(Ok(Some(_))) => {}
+                Some(Err(e)) => break Err(e),
+            }
+        };
+        tee.remove_probe(id);
+        source.close(self.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT)).await;
+        verdict
     }
 }
 
@@ -591,28 +615,17 @@ impl Stt for FallbackStt {
         Box::pin(async move {
             let req = SttReq::Batch { frames: Arc::from(buffer), language: language.clone(), cx };
             let mut unused = ();
-            let out = self
+            let ChainOutcome::Served(ev) = self
                 .chain
                 .run(
                     &req,
                     &self.caller_conn,
                     RecoveryMode::OneShot,
                     &mut unused,
-                    |_i, _b, session, _s| {
-                        Box::pin(async move {
-                            match session {
-                                SttSession::Batch(ev) => Attempt::Served(ev),
-                                SttSession::Stream(_) => {
-                                    unreachable!("a Batch request opens Batch")
-                                }
-                            }
-                        }) as BoxFuture<'_, Attempt<SpeechEvent>>
-                    },
+                    |_i, _b, session, _s| Box::pin(std::future::ready(session.into_batch())),
                 )
                 .await?;
-            match out {
-                ChainOutcome::Served(ev) => Ok(ev),
-            }
+            Ok(ev)
         })
     }
 
@@ -633,66 +646,45 @@ impl Stt for FallbackStt {
             let opened = self.chain.clock().now();
             let offset =
                 start_time_offset.map(|start_time_offset| LegOffset { start_time_offset, opened });
-            let (tx, rx) = mpsc::channel::<Result<SpeechEvent, ProviderError>>(32);
-
-            let chain = Arc::clone(&self.chain);
-            let drain_chain = Arc::clone(&self.chain);
-            let req = SttReq::Stream {
-                language: language.clone(),
-                tee: Arc::clone(&tee),
-                offset,
-                cx: cx.clone(),
-            };
+            let req = SttReq::Stream { language, tee: Arc::clone(&tee), offset, cx };
             let call = ChainCall {
                 conn_options: self.caller_conn,
                 accepted_at: opened,
                 slot: RecoveryMode::Streaming,
             };
-            let tee_for_task = Arc::clone(&tee);
-
-            let (stop_rx, done_tx, chain_task) = ChainTask::pair(chain.clock());
-            let handle = self.chain.spawn_stream(async move {
-                let mut tx = tx;
-                let result = chain
-                    .run_cancellable(
-                        &req,
-                        call,
-                        &mut tx,
-                        stop_rx,
-                        move |index, _b, session, tx, mut stop| {
-                            let chain = Arc::clone(&drain_chain);
-                            let tee = Arc::clone(&tee_for_task);
-                            Box::pin(async move {
-                                let SttSession::Stream(mut source) = session else {
-                                    unreachable!("a Stream request opens Stream")
-                                };
-                                let outcome =
-                                    forward(&chain, index, source.as_mut(), &mut stop, tx, |_| {
-                                        true
-                                    })
-                                    .await;
-                                // The dead stream leaves the tee before the next entry installs its own.
-                                tee.clear_main();
-                                source
-                                    .close(
-                                        chain.clock().now().saturating_add(HOST_TEARDOWN_TIMEOUT),
-                                    )
-                                    .await;
-                                outcome
-                            }) as BoxFuture<'_, Attempt<()>>
-                        },
-                    )
-                    .await;
-                if let Err(e) = result {
-                    let _ = tx.send(Err(e)).await;
-                }
-                let _ = done_tx.send(());
-            });
-
+            let leg = Arc::new(SttLeg { tee: Arc::clone(&tee) });
+            let source = self.chain.serve_stream(req, call, leg, |_, _| {}, ());
             Ok(Some(lk_agents_abi::DuplexStream::new(
                 Box::new(TeeSink(tee)) as SttSink,
-                Box::new(ChannelSource { rx, task: Some(handle), chain: chain_task }) as SttSource,
+                Box::new(source) as SttSource,
             )))
+        })
+    }
+}
+
+/// An entry's attempt: its transcripts forwarded while it holds the live tee.
+struct SttLeg {
+    tee: Arc<InputTee>,
+}
+
+impl ServeAttempt<SttBackend, SpeechEvent> for SttLeg {
+    fn serve<'a>(
+        self: Arc<Self>,
+        chain: Arc<FallbackChain<SttBackend>>,
+        index: usize,
+        session: SttSession,
+        tx: &'a mut mpsc::Sender<Result<SpeechEvent, ProviderError>>,
+        mut stop: watch::Receiver<bool>,
+    ) -> BoxFuture<'a, Attempt<()>> {
+        Box::pin(async move {
+            let SttSession::Stream(mut source) = session else {
+                unreachable!("a Stream request opens Stream")
+            };
+            let outcome = forward(&chain, index, source.as_mut(), &mut stop, tx, |_| true).await;
+            // The dead stream leaves the tee before the next entry installs its own.
+            self.tee.clear_main();
+            source.close(chain.clock().now().saturating_add(HOST_TEARDOWN_TIMEOUT)).await;
+            outcome
         })
     }
 }

@@ -565,6 +565,31 @@ pub struct SynthesisOutput {
     clock: Arc<dyn Clock>,
 }
 
+impl SynthesisOutput {
+    /// The next audio or failure; what is already queued goes first, then whichever of audio or
+    /// a published failure comes first.
+    async fn next_item(&mut self) -> Option<Result<SynthesizedAudio, ApiError>> {
+        if let Ok(item) = self.audio.try_recv() {
+            return Some(item);
+        }
+        let audio = match select(pin!(self.audio.recv()), pin!(self.failed.changed())).await {
+            Either::Left((next, _)) => Some(next),
+            Either::Right(_) => None,
+        };
+        audio.unwrap_or_else(|| self.failed.borrow().clone().map(Err))
+    }
+
+    /// The pump's terminal outcome once the audio ended.
+    async fn settle(&mut self) -> Result<Option<SynthesizedAudio>, ProviderError> {
+        let Some(settled) = self.settled.take() else { return Ok(None) };
+        match settled.await {
+            Ok(Ok(())) => Ok(None),
+            Ok(Err(error)) => Err(error.into()),
+            Err(_) => Err(ApiError::new("TTS pump ended without a terminal outcome").into()),
+        }
+    }
+}
+
 impl StreamOutput<SynthesizedAudio> for SynthesisOutput {
     fn next(
         &mut self,
@@ -573,21 +598,7 @@ impl StreamOutput<SynthesizedAudio> for SynthesisOutput {
             if self.done {
                 return Ok(None);
             }
-            let next = if let Ok(item) = self.audio.try_recv() {
-                Some(item)
-            } else {
-                let received = {
-                    match select(pin!(self.audio.recv()), pin!(self.failed.changed())).await {
-                        Either::Left((next, _)) => Ok(next),
-                        Either::Right(_) => Err(()),
-                    }
-                };
-                match received {
-                    Ok(next) => next,
-                    Err(()) => self.failed.borrow().clone().map(Err),
-                }
-            };
-            match next {
+            match self.next_item().await {
                 Some(Ok(audio)) => Ok(Some(audio)),
                 Some(Err(error)) => {
                     self.done = true;
@@ -595,17 +606,7 @@ impl StreamOutput<SynthesizedAudio> for SynthesisOutput {
                 }
                 None => {
                     self.done = true;
-                    match self.settled.take() {
-                        Some(settled) => match settled.await {
-                            Ok(Ok(())) => Ok(None),
-                            Ok(Err(error)) => Err(error.into()),
-                            Err(_) => {
-                                Err(ApiError::new("TTS pump ended without a terminal outcome")
-                                    .into())
-                            }
-                        },
-                        None => Ok(None),
-                    }
+                    self.settle().await
                 }
             }
         })

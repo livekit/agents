@@ -1,5 +1,27 @@
 //! Typed realtime inputs decoded by the runtime before dispatch.
 
+/// The `previous_item_id` that places an item first in the conversation.
+pub const ROOT_ITEM: &str = "root";
+
+/// How the message of a cancel that raced a finished response starts.
+pub const CANCELLATION_FAILED: &str = "Cancellation failed";
+
+/// Server error codes the session acts on.
+pub mod error_code {
+    /// A create for an item the server already holds.
+    pub const DUPLICATE_ITEM_ID: &str = "item_create_duplicate_item_id";
+    /// A commit of an input buffer the server's own VAD already emptied.
+    pub const COMMIT_EMPTY: &str = "input_audio_buffer_commit_empty";
+}
+
+/// What a `response.output_item.added` announces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputItemKind {
+    Message,
+    FunctionCall,
+    Other,
+}
+
 /// One decoded server message. Covers xAI's extra types for every dialect.
 #[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]
 pub enum Incoming {
@@ -13,11 +35,12 @@ pub enum Incoming {
     },
     OutputItemAdded {
         item_id: String,
-        item_type: String,
+        kind: OutputItemKind,
     },
+    /// The part's modalities: a text part is text-only, any other carries audio.
     ContentPartAdded {
         item_id: String,
-        part_type: String,
+        modalities: lk_agents_abi::llm::realtime::Modalities,
     },
     ItemAdded {
         previous_item_id: Option<String>,

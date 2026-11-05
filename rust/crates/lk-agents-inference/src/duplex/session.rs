@@ -202,6 +202,17 @@ impl DuplexSession {
         };
         self.apply(step);
     }
+
+    /// The host's event stream ending ends the output and closes the session.
+    fn on_host_output(&self, ev: Option<DuplexEvent>) {
+        match ev {
+            Some(ev) => self.on_host_event(ev),
+            None => {
+                self.on_host_event(DuplexEvent::OutputEnded { error: None });
+                self.close_core();
+            }
+        }
+    }
 }
 
 impl RealtimeSession for DuplexSession {
@@ -306,13 +317,7 @@ impl RealtimeSession for DuplexSession {
                         let events = self.lock().seg.tick(self.clock.now());
                         self.apply(events);
                     },
-                    ev = self.host.next_event() => match ev {
-                        Some(ev) => self.on_host_event(ev),
-                        None => {
-                            self.on_host_event(DuplexEvent::OutputEnded { error: None });
-                            self.close_core();
-                        },
-                    },
+                    ev = self.host.next_event() => self.on_host_output(ev),
                 }
             }
         })

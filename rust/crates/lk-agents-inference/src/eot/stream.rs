@@ -16,8 +16,8 @@ use parking_lot::Mutex;
 use tokio::sync::{oneshot, watch};
 
 use crate::eot::{
-    AudioRingBuffer, CLIENT_BUFFER_SAMPLES, CancelReason, EotAction, EotRequestId, EotSession,
-    EotWarning, MountedTransport, SinkEvent, TransportPrediction,
+    AudioRingBuffer, CLIENT_BUFFER_SAMPLES, CancelReason, EotAction, EotRequestId, EotResolve,
+    EotSession, EotWarning, MountedTransport, SinkEvent, TransportPrediction,
 };
 
 /// Mounts the transport for a model: the gateway for `turn-detector-v1`, the mini model otherwise.
@@ -158,20 +158,7 @@ impl EotStream {
         let mut warnings = Vec::new();
         for action in actions {
             match action {
-                EotAction::Resolve(r) => {
-                    if inner.replacement_request.as_ref().is_some_and(|(id, _)| id == &r.id) {
-                        inner.replacement_request = None;
-                    }
-                    if let Some(tx) = inner.waiters.remove(r.id.as_str()) {
-                        let _ = tx.send(EotPrediction {
-                            end_of_turn_probability: r.end_of_turn_probability,
-                            last_speaking_time: r.last_speaking_time,
-                            detection_delay: r.detection_delay,
-                            inference_duration: r.inference_duration,
-                            backchannel_probability: r.backchannel_probability,
-                        });
-                    }
-                }
+                EotAction::Resolve(r) => Self::resolve_waiter(inner, r),
                 EotAction::StartInference(s) => {
                     if let Some(shell) = &inner.shell {
                         shell.transport.run_inference(&s.id);
@@ -196,6 +183,21 @@ impl EotStream {
             }
         }
         warnings
+    }
+
+    /// Answers the `predict()` waiting on `r`, and drops a replacement request it settles.
+    fn resolve_waiter(inner: &mut Inner, r: EotResolve) {
+        if inner.replacement_request.as_ref().is_some_and(|(id, _)| id == &r.id) {
+            inner.replacement_request = None;
+        }
+        let Some(tx) = inner.waiters.remove(r.id.as_str()) else { return };
+        let _ = tx.send(EotPrediction {
+            end_of_turn_probability: r.end_of_turn_probability,
+            last_speaking_time: r.last_speaking_time,
+            detection_delay: r.detection_delay,
+            inference_duration: r.inference_duration,
+            backchannel_probability: r.backchannel_probability,
+        });
     }
 
     fn warn(warnings: Vec<EotWarning>) {
@@ -252,112 +254,142 @@ impl EotStream {
             if closed {
                 return;
             }
-            let Some(shell) = shell else {
-                let make = self.make.clone();
-                let (send, receive) = oneshot::channel();
-                let admitted = self.media_pool.try_spawn(JobClass::EotModel, move || {
-                    let _ = send.send(make(model));
-                });
-                let replacement = match admitted {
-                    Ok(worker) => match worker.await {
-                        Ok(()) => receive.await.map_err(|error| error.to_string()),
-                        Err(error) => Err(error.to_string()),
-                    },
-                    Err(error @ MediaPoolError::Exhausted(_)) => {
-                        let warnings = {
-                            let mut inner = self.lock();
-                            if inner.session.is_closed() {
-                                return;
-                            }
-                            let actions =
-                                inner.session.construction_refused(now(), &error.to_string());
-                            let warnings = self.apply(&mut inner, actions);
-                            swaps.borrow_and_update();
-                            warnings
-                        };
-                        Self::warn(warnings);
-                        // Another prediction retries; returning capacity alone queues no work.
-                        if swaps.changed().await.is_err() {
-                            return;
-                        }
-                        continue;
-                    }
-                    Err(error) => Err(error.to_string()),
-                };
-                match replacement {
-                    Ok(shell) => {
-                        let mut inner = self.lock();
-                        if inner.session.is_closed() {
-                            drop(inner);
-                            shell.detach();
-                            return;
-                        }
-                        if let Some((id, audio)) = inner.replacement_request.take() {
-                            shell.transport.push_frame(&pcm_frame(audio, self.rate, 1));
-                            shell.transport.run_inference(&id);
-                            shell.transport.flush();
-                        }
-                        let audio = inner.replacement_audio.read();
-                        inner.replacement_audio.clear();
-                        if !audio.is_empty() {
-                            shell.transport.push_frame(&pcm_frame(audio, self.rate, 1));
-                        }
-                        inner.shell = Some(shell);
-                    }
-                    Err(error) => {
-                        let mut inner = self.lock();
-                        let actions = inner.session.construction_failed(now(), &error);
-                        let warnings = self.apply(&mut inner, actions);
-                        drop(inner);
-                        Self::warn(warnings);
-                        return;
-                    }
-                }
-                continue;
+            let next = match shell {
+                None => self.build_replacement(&mut swaps, model).await,
+                Some(shell) => self.serve(shell, &mut swaps).await,
             };
-            let events = async {
-                while let Some(ev) = shell.next_event().await {
-                    self.on_event(&shell, ev);
-                }
-                std::future::pending::<()>().await
-            };
-            let outcome = tokio::select! {
-                r = shell.run() => Some(r),
-                _ = swaps.changed() => None,
-                () = events => None,
-            };
-            match outcome {
-                // swapped: remount
-                None => {
-                    shell.detach();
-                    continue;
-                }
-                Some(Ok(())) => {
-                    if swaps.has_changed().unwrap_or(false) {
-                        continue;
-                    }
-                    return;
-                }
-                Some(Err(ApiError { message, .. })) => {
-                    let mut inner = self.lock();
-                    if !inner.shell.as_ref().is_some_and(|current| Arc::ptr_eq(current, &shell)) {
-                        drop(inner);
-                        shell.detach();
-                        continue;
-                    }
-                    let actions = inner.session.transport_failed(now(), &message);
-                    let warnings = self.apply(&mut inner, actions);
-                    let replaced = inner.shell.is_none();
-                    drop(inner);
-                    Self::warn(warnings);
-                    shell.detach();
-                    if !replaced {
-                        return;
-                    }
-                }
+            if matches!(next, Next::Stop) {
+                return;
             }
         }
     }
+
+    /// Constructs the local model on the media pool and mounts it.
+    async fn build_replacement(
+        &self,
+        swaps: &mut watch::Receiver<u64>,
+        model: TurnDetectorModel,
+    ) -> Next {
+        let make = self.make.clone();
+        let (send, receive) = oneshot::channel();
+        let admitted = self.media_pool.try_spawn(JobClass::EotModel, move || {
+            let _ = send.send(make(model));
+        });
+        let replacement = match admitted {
+            Ok(worker) => match worker.await {
+                Ok(()) => receive.await.map_err(|error| error.to_string()),
+                Err(error) => Err(error.to_string()),
+            },
+            Err(error @ MediaPoolError::Exhausted(_)) => {
+                return self.construction_refused(swaps, &error).await;
+            }
+            Err(error) => Err(error.to_string()),
+        };
+        let error = match replacement {
+            Ok(shell) => return self.adopt_replacement(shell),
+            Err(error) => error,
+        };
+        let mut inner = self.lock();
+        let actions = inner.session.construction_failed(now(), &error);
+        let warnings = self.apply(&mut inner, actions);
+        drop(inner);
+        Self::warn(warnings);
+        Next::Stop
+    }
+
+    /// The pool had no room: warn, then wait for a swap or prediction to try again.
+    async fn construction_refused(
+        &self,
+        swaps: &mut watch::Receiver<u64>,
+        error: &MediaPoolError,
+    ) -> Next {
+        let warnings = {
+            let mut inner = self.lock();
+            if inner.session.is_closed() {
+                return Next::Stop;
+            }
+            let actions = inner.session.construction_refused(now(), &error.to_string());
+            let warnings = self.apply(&mut inner, actions);
+            swaps.borrow_and_update();
+            warnings
+        };
+        Self::warn(warnings);
+        // Another prediction retries; returning capacity alone queues no work.
+        if swaps.changed().await.is_err() {
+            return Next::Stop;
+        }
+        Next::Remount
+    }
+
+    /// Mounts the constructed model, replaying the request and audio held while it loaded.
+    fn adopt_replacement(&self, shell: Arc<MountedTransport>) -> Next {
+        let mut inner = self.lock();
+        if inner.session.is_closed() {
+            drop(inner);
+            shell.detach();
+            return Next::Stop;
+        }
+        if let Some((id, audio)) = inner.replacement_request.take() {
+            shell.transport.push_frame(&pcm_frame(audio, self.rate, 1));
+            shell.transport.run_inference(&id);
+            shell.transport.flush();
+        }
+        let audio = inner.replacement_audio.read();
+        inner.replacement_audio.clear();
+        if !audio.is_empty() {
+            shell.transport.push_frame(&pcm_frame(audio, self.rate, 1));
+        }
+        inner.shell = Some(shell);
+        Next::Remount
+    }
+
+    /// Runs the mounted transport until it ends, fails or is swapped.
+    async fn serve(&self, shell: Arc<MountedTransport>, swaps: &mut watch::Receiver<u64>) -> Next {
+        let events = async {
+            while let Some(ev) = shell.next_event().await {
+                self.on_event(&shell, ev);
+            }
+            std::future::pending::<()>().await
+        };
+        let outcome = tokio::select! {
+            r = shell.run() => Some(r),
+            _ = swaps.changed() => None,
+            () = events => None,
+        };
+        match outcome {
+            // swapped: remount
+            None => {
+                shell.detach();
+                Next::Remount
+            }
+            Some(Ok(())) if swaps.has_changed().unwrap_or(false) => Next::Remount,
+            Some(Ok(())) => Next::Stop,
+            Some(Err(ApiError { message, .. })) => self.on_transport_error(&shell, &message),
+        }
+    }
+
+    /// A failed transport that is still mounted is replaced or ends the stream.
+    fn on_transport_error(&self, shell: &Arc<MountedTransport>, message: &str) -> Next {
+        let mut inner = self.lock();
+        if !inner.shell.as_ref().is_some_and(|current| Arc::ptr_eq(current, shell)) {
+            drop(inner);
+            shell.detach();
+            return Next::Remount;
+        }
+        let actions = inner.session.transport_failed(now(), message);
+        let warnings = self.apply(&mut inner, actions);
+        let replaced = inner.shell.is_none();
+        drop(inner);
+        Self::warn(warnings);
+        shell.detach();
+        if replaced { Next::Remount } else { Next::Stop }
+    }
+}
+
+/// What the run loop does after one step.
+enum Next {
+    Remount,
+    Stop,
 }
 
 /// `_core.EotStream`: a stream the detector opened, shared with its run loop.

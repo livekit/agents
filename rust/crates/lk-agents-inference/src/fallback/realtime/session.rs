@@ -10,6 +10,33 @@ pub(super) struct OpenGeneration {
     messages: Vec<(String, bool)>,
 }
 
+/// The events a swap may queue for the consumer before the session fails instead.
+const EVENT_BACKLOG: usize = 256;
+
+/// The error code of a reply the held backlog refused during a swap.
+const BACKLOG_EXCEEDED_CODE: &str = "realtime_fallback_backlog_exceeded";
+
+/// The error code of a session failed because its event queue filled during a swap.
+const EVENT_BACKLOG_EXCEEDED_CODE: &str = "realtime_fallback_event_backlog_exceeded";
+
+/// Where `send` takes a command.
+enum Routed {
+    /// To this session, in this order.
+    Dispatch(Arc<dyn RealtimeSession>, Vec<RealtimeCommand>),
+    /// Held, cancelled or dropped here; an event for the consumer was queued.
+    EventQueued,
+    /// Held, cancelled or dropped here, with nothing to tell the consumer.
+    Kept,
+}
+
+/// What a fatal child error changed: the model to swap to, the models that recovered meanwhile,
+/// and the failed one when the failure changed its availability.
+struct Failover {
+    target: Option<usize>,
+    recovered: Vec<ResourceId>,
+    failed: Option<ResourceId>,
+}
+
 pub(super) struct SessionState {
     pub(super) active: Arc<dyn RealtimeSession>,
     pub(super) policy: FallbackPolicy,
@@ -105,135 +132,272 @@ impl FallbackSession {
             Arc::clone(&st.active)
         };
         old.aclose().await;
-        let mut request = {
-            let st = self.lock();
-            let mut order: Vec<_> = (0..self.children.len()).collect();
-            order.remove(target);
-            order.insert(0, target);
-            let entries = order
-                .into_iter()
-                .map(|index| (index, self.priority[index], self.children[index].label()))
-                .collect();
-            ChainRequest::new(
-                entries,
-                ChainPolicy {
-                    max_retry_per_backend: 0,
-                    attempt_timeout: None,
-                    retry_interval: None,
-                    sticky: false,
-                },
-                None,
-                &st.policy,
-            )
-        };
+        let mut request = self.swap_request(target);
         let mut effects: VecDeque<_> = request.handle(ChainEvent::Wake, self.clock.now()).into();
         let mut opened: Option<(u64, Arc<dyn RealtimeSession>)> = None;
         let mut target = target;
         let outcome = loop {
             let Some(effect) = effects.pop_front() else { unreachable!("fallback must settle") };
-            match effect {
+            let event = match effect {
                 FallbackChainEffect::Start { attempt, index, .. } => {
-                    if self.lock().closed {
-                        effects.extend(request.handle(ChainEvent::Cancel, self.clock.now()));
-                        continue;
-                    }
-                    let event = match self.children[index]
-                        .open(
-                            self.turn_detection_disabled,
-                            self.anchor,
-                            &*self.clock,
-                            self.attempt_timeout,
-                        )
-                        .await
-                    {
-                        Ok(session) => {
-                            target = index;
-                            opened = Some((attempt, session));
-                            if self.lock().closed {
-                                ChainEvent::Cancel
-                            } else {
-                                ChainEvent::Succeeded { attempt }
-                            }
-                        }
-                        Err(error) => {
-                            let backend = self.priority[index];
-                            let (closed, changed) = {
-                                let mut st = self.lock();
-                                let closed = st.closed;
-                                let changed = if closed {
-                                    None
-                                } else {
-                                    st.policy.failed(
-                                        backend,
-                                        error.api_kind(),
-                                        Some(self.clock.now().saturating_add(self.cooldown)),
-                                    )
-                                };
-                                (closed, changed)
-                            };
-                            if closed {
-                                effects
-                                    .extend(request.handle(ChainEvent::Cancel, self.clock.now()));
-                                continue;
-                            }
-                            if changed == Some(true) {
-                                self.announce(vec![backend], false);
-                            }
-                            ChainEvent::Failed { attempt, error, produced_output: false }
-                        }
-                    };
-                    effects.extend(request.handle(event, self.clock.now()));
+                    self.open_child(attempt, index, &mut opened, &mut target).await
                 }
                 FallbackChainEffect::WakeAt(at) => {
                     self.clock.wait_until(at).await;
-                    effects.extend(request.handle(ChainEvent::Wake, self.clock.now()));
+                    ChainEvent::Wake
                 }
                 FallbackChainEffect::Finished(outcome) => break outcome,
                 FallbackChainEffect::Cancel { attempt } => {
-                    if opened.as_ref().is_some_and(|(id, _)| *id == attempt) {
-                        let (_, session) = opened.take().expect("matching opened session");
+                    if let Some((_, session)) = opened.take_if(|(id, _)| *id == attempt) {
                         session.aclose().await;
                     }
+                    continue;
                 }
-            }
+            };
+            effects.extend(request.handle(event, self.clock.now()));
         };
-        // Adoption and close share the state lock. A late session is released outside it.
-        let late = {
+        if let Some(late) = self.adopt(outcome, opened, target) {
+            late.aclose().await;
+        }
+    }
+
+    /// The swap's machine: `target` first, then the others in priority order, each tried once.
+    fn swap_request(&self, target: usize) -> ChainRequest {
+        let st = self.lock();
+        let mut order: Vec<_> = (0..self.children.len()).collect();
+        order.remove(target);
+        order.insert(0, target);
+        let entries = order
+            .into_iter()
+            .map(|index| (index, self.priority[index], self.children[index].label()))
+            .collect();
+        ChainRequest::new(
+            entries,
+            ChainPolicy {
+                max_retry_per_backend: 0,
+                attempt_timeout: None,
+                retry_interval: None,
+                sticky: false,
+            },
+            None,
+            &st.policy,
+        )
+    }
+
+    /// Opens child `index`; a session that opens becomes the swap's target. Once the adapter has
+    /// closed, the attempt is cancelled instead.
+    async fn open_child(
+        &self,
+        attempt: u64,
+        index: usize,
+        opened: &mut Option<(u64, Arc<dyn RealtimeSession>)>,
+        target: &mut usize,
+    ) -> ChainEvent {
+        if self.lock().closed {
+            return ChainEvent::Cancel;
+        }
+        let child = &self.children[index];
+        let open = child.open(
+            self.turn_detection_disabled,
+            self.anchor,
+            &*self.clock,
+            self.attempt_timeout,
+        );
+        let error = match open.await {
+            Ok(session) => {
+                *target = index;
+                *opened = Some((attempt, session));
+                let closed = self.lock().closed;
+                return if closed { ChainEvent::Cancel } else { ChainEvent::Succeeded { attempt } };
+            }
+            Err(error) => error,
+        };
+        let backend = self.priority[index];
+        let changed = {
             let mut st = self.lock();
             if st.closed {
-                opened.take().map(|(_, session)| session)
-            } else {
-                st.swapping = false;
-                match outcome {
-                    Ok(()) => {
-                        st.active = opened.take().expect("successful realtime open").1;
-                        if let Some(cx) = st.audio.clone() {
-                            st.active.observe(cx);
-                        }
-                        st.active_index = target;
-                        self.model_active.store(target, std::sync::atomic::Ordering::Relaxed);
-                        st.events.push_back(Event::SessionSwapped {
-                            regenerate: self.regenerate_on_swap,
-                        });
-                    }
-                    Err(error) => {
-                        st.events.push_back(Event::Error(RealtimeModelError {
-                            timestamp: lk_agents_abi::Ts::ZERO,
-                            label: "livekit.agents.llm.realtime.RealtimeModelFallbackAdapter".to_owned(),
-                            message: error.to_string(),
-                            recoverable: false,
-                            req_id: None,
-                            code: None,
-                            provider_error: Some(error.attempt_error()),
-                        }));
-                    }
-                }
-                None
+                return ChainEvent::Cancel;
             }
+            let until = Some(self.clock.now().saturating_add(self.cooldown));
+            st.policy.failed(backend, error.api_kind(), until)
         };
-        if let Some(session) = late {
-            session.aclose().await;
+        if changed == Some(true) {
+            self.announce(vec![backend], false);
         }
+        ChainEvent::Failed { attempt, error, produced_output: false }
+    }
+
+    /// Adoption and close share the state lock: a session that opened after the close is handed
+    /// back, to be released outside it.
+    fn adopt(
+        &self,
+        outcome: Result<(), ProviderError>,
+        opened: Option<(u64, Arc<dyn RealtimeSession>)>,
+        target: usize,
+    ) -> Option<Arc<dyn RealtimeSession>> {
+        let mut st = self.lock();
+        if st.closed {
+            return opened.map(|(_, session)| session);
+        }
+        st.swapping = false;
+        match outcome {
+            Ok(()) => {
+                st.active = opened.expect("successful realtime open").1;
+                if let Some(cx) = st.audio.clone() {
+                    st.active.observe(cx);
+                }
+                st.active_index = target;
+                self.model_active.store(target, std::sync::atomic::Ordering::Relaxed);
+                st.events.push_back(Event::SessionSwapped { regenerate: self.regenerate_on_swap });
+            }
+            Err(error) => st.events.push_back(Event::Error(RealtimeModelError {
+                timestamp: lk_agents_abi::Ts::ZERO,
+                label: "livekit.agents.llm.realtime.RealtimeModelFallbackAdapter".to_owned(),
+                message: error.to_string(),
+                recoverable: false,
+                req_id: None,
+                code: None,
+                provider_error: Some(error.attempt_error()),
+            })),
+        }
+        None
+    }
+
+    /// Where a command goes. Outside a swap it goes to the serving session; during one only the
+    /// new session's frame does, and replies are held until the tools end the frame.
+    fn route(st: &mut SessionState, cmd: RealtimeCommand) -> Routed {
+        if !st.swapping && !st.fresh {
+            return Routed::Dispatch(Arc::clone(&st.active), vec![cmd]);
+        }
+        match cmd {
+            // The frame, onto the new session; the tools end it, and what was held goes after.
+            RealtimeCommand::UpdateInstructions(_) | RealtimeCommand::UpdateChatCtx(_)
+                if !st.swapping =>
+            {
+                Routed::Dispatch(Arc::clone(&st.active), vec![cmd])
+            }
+            RealtimeCommand::UpdateTools(_) if !st.swapping => {
+                st.fresh = false;
+                let mut commands = vec![cmd];
+                commands.extend(st.held.take());
+                Routed::Dispatch(Arc::clone(&st.active), commands)
+            }
+            RealtimeCommand::GenerateReply(_) | RealtimeCommand::Say(_) => {
+                FallbackSession::hold_reply(st, cmd)
+            }
+            RealtimeCommand::CancelReply(c) => {
+                st.held.cancel(&c.req_id);
+                Routed::Kept
+            }
+            // The old session's (an interrupt, a truncation, its audio), or superseded by the
+            // frame (a pushed item is in the conversation the driver gives).
+            _ => Routed::Kept,
+        }
+    }
+
+    /// Holds a reply for the new session. One the backlog refuses is answered with its failure;
+    /// when the event queue is full too, the session fails.
+    fn hold_reply(st: &mut SessionState, cmd: RealtimeCommand) -> Routed {
+        let Err((reason, rejected)) = st.held.hold(cmd) else { return Routed::Kept };
+        if st.events.len() < EVENT_BACKLOG {
+            st.events.push_back(Event::GenerateReplyFailed(
+                lk_agents_abi::llm::realtime::GenerateReplyFailed {
+                    req_id: rejected.req_id().unwrap_or_default().to_owned(),
+                    error: lk_agents_abi::llm::realtime::RealtimeError::with_code(
+                        reason.to_string(),
+                        Some(BACKLOG_EXCEEDED_CODE.into()),
+                    ),
+                },
+            ));
+            return Routed::EventQueued;
+        }
+        st.closed = true;
+        st.held.clear();
+        st.events.clear();
+        st.events.push_back(Event::Error(RealtimeModelError {
+            timestamp: lk_agents_abi::Ts::ZERO,
+            label: "RealtimeModelFallbackAdapter".into(),
+            message: "realtime fallback event backlog exceeded".into(),
+            recoverable: false,
+            req_id: None,
+            code: Some(EVENT_BACKLOG_EXCEEDED_CODE.into()),
+            provider_error: None,
+        }));
+        Routed::EventQueued
+    }
+
+    /// A restart the driver asked for: a swap to the serving model, or with `switch_model` to the
+    /// first other available one.
+    async fn restart(
+        &self,
+        changed: Result<(), tokio::sync::watch::error::RecvError>,
+        restart_rx: &mut tokio::sync::watch::Receiver<bool>,
+    ) {
+        if changed.is_err() {
+            return;
+        }
+        let switch_model = *restart_rx.borrow_and_update();
+        let (target, changes) = {
+            let mut st = self.lock();
+            let changes = st.policy.refresh(&self.priority, self.clock.now());
+            let serving = st.active_index;
+            let target = if switch_model {
+                (st.policy.candidates(&self.priority, false).into_iter())
+                    .find(|&index| self.priority[index] != self.priority[serving])
+                    .unwrap_or(serving)
+            } else {
+                serving
+            };
+            (target, changes)
+        };
+        self.announce(changes, true);
+        self.swap(target).await;
+    }
+
+    /// What the consumer gets for a child's event; `None` loops again, after a superseded
+    /// child's end or a swap away from a failed one.
+    async fn on_child_event(
+        &self,
+        active: &Arc<dyn RealtimeSession>,
+        ev: Option<Event>,
+    ) -> Option<Option<Event>> {
+        match ev {
+            None if !Arc::ptr_eq(active, &self.lock().active) => None,
+            None => Some(None),
+            Some(Event::Error(e)) if !e.recoverable => self.fail_over(e).await.map(Some),
+            Some(ev) => Some(Some(self.observe(&mut self.lock(), ev))),
+        }
+    }
+
+    /// A fatal child error marks its model down and swaps to the best remaining one, the error
+    /// passed on as recoverable; `None` once swapped. With no model left the error stays fatal.
+    async fn fail_over(&self, e: RealtimeModelError) -> Option<Event> {
+        let Some(failover) = self.mark_failed(&e) else { return Some(Event::Error(e)) };
+        self.announce(failover.recovered, true);
+        self.announce(failover.failed.into_iter().collect(), false);
+        let Some(target) = failover.target else { return Some(Event::Error(e)) };
+        // While a fallback remains the error is recoverable.
+        self.lock().events.push_back(Event::Error(RealtimeModelError { recoverable: true, ..e }));
+        self.swap(target).await;
+        None
+    }
+
+    /// Marks the serving model failed; `None` when the policy ignores the failure.
+    fn mark_failed(&self, e: &RealtimeModelError) -> Option<Failover> {
+        let mut st = self.lock();
+        let now = self.clock.now();
+        let backend = self.priority[st.active_index];
+        let failed = st.policy.failed(
+            backend,
+            e.provider_error.as_ref().map(|error| error.kind),
+            Some(now.saturating_add(self.cooldown)),
+        )?;
+        // A zero cooldown applies to the next pass, not the failure just observed.
+        let recovery_priority: Vec<_> =
+            self.priority.iter().copied().filter(|id| *id != backend).collect();
+        let recovered = st.policy.refresh(&recovery_priority, now);
+        let target = st.policy.candidates(&self.priority, false).first().copied();
+        Some(Failover { target, recovered, failed: failed.then_some(backend) })
     }
 
     /// Track the generation in flight, so a swap can close it.
@@ -282,76 +446,17 @@ impl RealtimeSession for FallbackSession {
     }
 
     fn send(&self, cmd: RealtimeCommand) {
-        let mut queued_event = false;
-        let dispatch = {
+        let routed = {
             let mut st = self.lock();
             if st.closed {
                 return;
             }
-            if !st.swapping && !st.fresh {
-                Some((Arc::clone(&st.active), vec![cmd]))
-            } else {
-                match cmd {
-                    // The frame, onto the new session; the tools end it, and what was held goes after.
-                    RealtimeCommand::UpdateInstructions(_) | RealtimeCommand::UpdateChatCtx(_)
-                        if !st.swapping =>
-                    {
-                        Some((Arc::clone(&st.active), vec![cmd]))
-                    }
-                    RealtimeCommand::UpdateTools(_) if !st.swapping => {
-                        st.fresh = false;
-                        let mut commands = vec![cmd];
-                        commands.extend(st.held.take());
-                        Some((Arc::clone(&st.active), commands))
-                    }
-                    RealtimeCommand::GenerateReply(_) | RealtimeCommand::Say(_) => {
-                        if let Err((reason, rejected)) = st.held.hold(cmd) {
-                            queued_event = true;
-                            if st.events.len() < 256 {
-                                st.events.push_back(Event::GenerateReplyFailed(
-                                    lk_agents_abi::llm::realtime::GenerateReplyFailed {
-                                        req_id: rejected.req_id().unwrap_or_default().to_owned(),
-                                        error:
-                                            lk_agents_abi::llm::realtime::RealtimeError::with_code(
-                                                reason.to_string(),
-                                                Some("realtime_fallback_backlog_exceeded".into()),
-                                            ),
-                                    },
-                                ));
-                            } else {
-                                st.closed = true;
-                                st.held.clear();
-                                st.events.clear();
-                                st.events.push_back(Event::Error(RealtimeModelError {
-                                    timestamp: lk_agents_abi::Ts::ZERO,
-                                    label: "RealtimeModelFallbackAdapter".into(),
-                                    message: "realtime fallback event backlog exceeded".into(),
-                                    recoverable: false,
-                                    req_id: None,
-                                    code: Some("realtime_fallback_event_backlog_exceeded".into()),
-                                    provider_error: None,
-                                }));
-                            }
-                        }
-                        None
-                    }
-                    RealtimeCommand::CancelReply(c) => {
-                        st.held.cancel(&c.req_id);
-                        None
-                    }
-                    // The old session's (an interrupt, a truncation, its audio), or superseded by the
-                    // frame (a pushed item is in the conversation the driver gives).
-                    _ => None,
-                }
-            }
+            FallbackSession::route(&mut st, cmd)
         };
-        if queued_event {
-            self.changed.notify_one();
-        }
-        if let Some((active, commands)) = dispatch {
-            for command in commands {
-                active.send(command);
-            }
+        match routed {
+            Routed::Dispatch(active, commands) => commands.into_iter().for_each(|c| active.send(c)),
+            Routed::EventQueued => self.changed.notify_one(),
+            Routed::Kept => {}
         }
     }
 
@@ -381,71 +486,18 @@ impl RealtimeSession for FallbackSession {
                     Arc::clone(&st.active)
                 };
                 let mut restart_rx = self.restart_rx.lock().await;
+                // The consumer's lock on the restart signal stays held across a restart's swap.
                 let ev = tokio::select! {
                     biased;
                     () = self.changed.notified() => continue,
                     changed = restart_rx.changed() => {
-                        if changed.is_err() { continue; }
-                        let switch_model = *restart_rx.borrow_and_update();
-                        let (target, changes) = {
-                            let mut st = self.lock();
-                            let changes = st.policy.refresh(&self.priority, self.clock.now());
-                            let target = if switch_model {
-                                st.policy.candidates(&self.priority, false).into_iter()
-                                    .find(|&index| self.priority[index] != self.priority[st.active_index]).unwrap_or(st.active_index)
-                            } else { st.active_index };
-                            (target, changes)
-                        };
-                        self.announce(changes, true);
-                        self.swap(target).await;
+                        self.restart(changed, &mut restart_rx).await;
                         continue;
                     }
                     ev = active.next_event() => ev,
                 };
-                match ev {
-                    None => {
-                        if !Arc::ptr_eq(&active, &self.lock().active) {
-                            continue;
-                        }
-                        return None;
-                    }
-                    Some(Event::Error(e)) if !e.recoverable => {
-                        let (target, recovered, failed) = {
-                            let mut st = self.lock();
-                            let now = self.clock.now();
-                            let backend = self.priority[st.active_index];
-                            let Some(failed) = st.policy.failed(
-                                backend,
-                                e.provider_error.as_ref().map(|error| error.kind),
-                                Some(now.saturating_add(self.cooldown)),
-                            ) else {
-                                return Some(Event::Error(e));
-                            };
-                            // A zero cooldown applies to the next pass, not the failure just observed.
-                            let recovery_priority: Vec<_> =
-                                self.priority.iter().copied().filter(|id| *id != backend).collect();
-                            let recovered = st.policy.refresh(&recovery_priority, now);
-                            (
-                                st.policy.candidates(&self.priority, false).first().copied(),
-                                recovered,
-                                failed.then_some(backend),
-                            )
-                        };
-                        self.announce(recovered, true);
-                        self.announce(failed.into_iter().collect(), false);
-                        match target {
-                            Some(target) => {
-                                // While a fallback remains the error is recoverable.
-                                self.lock().events.push_back(Event::Error(RealtimeModelError {
-                                    recoverable: true,
-                                    ..e
-                                }));
-                                self.swap(target).await;
-                            }
-                            None => return Some(Event::Error(e)),
-                        }
-                    }
-                    Some(ev) => return Some(self.observe(&mut self.lock(), ev)),
+                if let Some(out) = self.on_child_event(&active, ev).await {
+                    return out;
                 }
             }
         })

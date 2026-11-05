@@ -13,6 +13,8 @@ use serde_json::{Map, Value, json};
 use std::time::SystemTime;
 
 use crate::realtime::dialect::{NUM_CHANNELS, Protocol, SAMPLE_RATE};
+use crate::realtime::protocol::OutputItemKind;
+use lk_agents_abi::llm::realtime::{GenerationStatus, Modalities};
 
 /// Azure's deployment, for the URL.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -404,32 +406,7 @@ pub fn to_wire_item(item: &ChatItem, images: &dyn ImageResolver) -> Result<Value
                 Role::Assistant => ("assistant", "output_text"),
                 Role::User => ("user", "input_text"),
             };
-            let mut content = Vec::new();
-            for c in &m.content {
-                match c {
-                    ChatContent::Text(t) => {
-                        content.push(json!({"type": text_type, "text": t}));
-                    }
-                    // Images and audio are user-only in the reference; other roles drop them
-                    // silently.
-                    ChatContent::Image(img) if m.role == Role::User => {
-                        let s = images.resolve(img)?;
-                        if s.external_url.is_some() {
-                            return Err("realtime images require an inline data URL; external URLs are unsupported".into());
-                        }
-                        let Some(bytes) = s.data_bytes else { continue };
-                        let mime = s.mime_type.as_deref().unwrap_or("image/jpeg");
-                        let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-                        content.push(json!({
-                            "type": "input_image",
-                            "image_url": format!("data:{mime};base64,{b64}"),
-                        }));
-                    }
-                    // `AudioContent` needs the host's `rtc.combine_audio_frames` (§1.11); only a
-                    // context replayed from another provider carries one.
-                    ChatContent::Audio(_) | ChatContent::Image(_) => continue,
-                }
-            }
+            let content = wire_content(m, text_type, images)?;
             out.insert("id".into(), json!(m.id));
             out.insert("type".into(), json!("message"));
             out.insert("role".into(), json!(role));
@@ -440,6 +417,50 @@ pub fn to_wire_item(item: &ChatItem, images: &dyn ImageResolver) -> Result<Value
     }
     Ok(Value::Object(out))
 }
+
+/// A message's content parts. Images and audio are user-only in the reference; other roles drop
+/// them silently.
+fn wire_content(
+    m: &ChatMessage,
+    text_type: &str,
+    images: &dyn ImageResolver,
+) -> Result<Vec<Value>, String> {
+    let mut content = Vec::new();
+    for c in &m.content {
+        let part = match c {
+            ChatContent::Text(t) => Some(json!({"type": text_type, "text": t})),
+            ChatContent::Image(img) if m.role == Role::User => wire_image(img, images)?,
+            // `AudioContent` needs the host's `rtc.combine_audio_frames` (§1.11); only a
+            // context replayed from another provider carries one.
+            ChatContent::Audio(_) | ChatContent::Image(_) => None,
+        };
+        content.extend(part);
+    }
+    Ok(content)
+}
+
+/// An image as an inline data URL part; an image without bytes is dropped.
+fn wire_image(
+    img: &lk_agents_abi::ImageContent,
+    images: &dyn ImageResolver,
+) -> Result<Option<Value>, String> {
+    let s = images.resolve(img)?;
+    if s.external_url.is_some() {
+        return Err(
+            "realtime images require an inline data URL; external URLs are unsupported".into()
+        );
+    }
+    let Some(bytes) = s.data_bytes else { return Ok(None) };
+    let mime = s.mime_type.as_deref().unwrap_or(DEFAULT_IMAGE_MIME);
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    Ok(Some(json!({
+        "type": "input_image",
+        "image_url": format!("data:{mime};base64,{b64}"),
+    })))
+}
+
+/// The MIME type of an image that names none.
+const DEFAULT_IMAGE_MIME: &str = "image/jpeg";
 
 /// `openai_item_to_livekit_item`. `created_at` is a parameter: the pure tier holds no clock.
 pub fn from_wire_item(item: &Value, created_at: SystemTime) -> Result<ChatItem, String> {
@@ -462,49 +483,46 @@ pub fn from_wire_item(item: &Value, created_at: SystemTime) -> Result<ChatItem, 
             created_at,
         ))),
         Some("message") => {
-            let role = match item.get("role").and_then(Value::as_str) {
-                Some("system") => Role::System,
-                Some("developer") => Role::Developer,
-                Some("assistant") => Role::Assistant,
-                Some("user") => Role::User,
-                other => return Err(format!("unsupported role: {other:?}")),
-            };
+            let role = role_from_wire(item)?;
             let mut content = Vec::new();
             for part in item.get("content").and_then(Value::as_array).into_iter().flatten() {
-                let ty = part.get("type").and_then(Value::as_str).unwrap_or("");
-                match ty {
-                    // `input_audio` contributes its transcript; the frames stay server-side.
-                    "input_audio" => {
-                        if let Some(t) = part.get("transcript").and_then(Value::as_str) {
-                            content.push(ChatContent::Text(t.to_owned()));
-                        }
-                    }
-                    "input_image" => {
-                        if let Some(url) = part.get("image_url").and_then(Value::as_str) {
-                            content.push(ChatContent::Image(lk_agents_abi::ImageContent {
-                                id: format!("img_{id}_{}", content.len()),
-                                image: lk_agents_abi::ImageSource::Url(url.to_owned()),
-                                inference_width: None,
-                                inference_height: None,
-                                inference_detail: Default::default(),
-                                mime_type: None,
-                            }));
-                        }
-                    }
-                    // Everything else contributes a non-empty `text`, as the reference's three
-                    // role branches do.
-                    _ => {
-                        if let Some(t) = part.get("text").and_then(Value::as_str)
-                            && !t.is_empty()
-                        {
-                            content.push(ChatContent::Text(t.to_owned()));
-                        }
-                    }
-                }
+                content.extend(part_from_wire(part, &id, content.len()));
             }
             Ok(ChatItem::Message(ChatMessage::new(id, role, content, created_at)))
         }
         other => Err(format!("unsupported item type: {other:?}")),
+    }
+}
+
+fn role_from_wire(item: &Value) -> Result<Role, String> {
+    match item.get("role").and_then(Value::as_str) {
+        Some("system") => Ok(Role::System),
+        Some("developer") => Ok(Role::Developer),
+        Some("assistant") => Ok(Role::Assistant),
+        Some("user") => Ok(Role::User),
+        other => Err(format!("unsupported role: {other:?}")),
+    }
+}
+
+/// One content part of message `id`; `kept` counts the parts kept before it and names an image.
+fn part_from_wire(part: &Value, id: &str, kept: usize) -> Option<ChatContent> {
+    let field = |name: &str| part.get(name).and_then(Value::as_str);
+    match part.get("type").and_then(Value::as_str).unwrap_or("") {
+        // `input_audio` contributes its transcript; the frames stay server-side.
+        "input_audio" => field("transcript").map(|t| ChatContent::Text(t.to_owned())),
+        "input_image" => field("image_url").map(|url| {
+            ChatContent::Image(lk_agents_abi::ImageContent {
+                id: format!("img_{id}_{kept}"),
+                image: lk_agents_abi::ImageSource::Url(url.to_owned()),
+                inference_width: None,
+                inference_height: None,
+                inference_detail: Default::default(),
+                mime_type: None,
+            })
+        }),
+        // Everything else contributes a non-empty `text`, as the reference's three
+        // role branches do.
+        _ => field("text").filter(|t| !t.is_empty()).map(|t| ChatContent::Text(t.to_owned())),
     }
 }
 
@@ -648,134 +666,150 @@ pub fn decode(ev: &Value) -> Incoming {
 /// The `if/elif` chain of `_recv_task`, as a total function.
 pub fn decode_at(ev: &Value, created_at: SystemTime) -> Result<Incoming, DecodeError> {
     let ty = required_string(ev, "type").map_err(|cause| DecodeError::at(ev, cause))?;
+    decode_event(ev, &ty, created_at).map_err(|cause| DecodeError::at(ev, cause))
+}
 
-    (|| -> Result<Incoming, String> {
-        Ok(match ty.as_str() {
-            "input_audio_buffer.speech_started" => {
-                Incoming::SpeechStarted { item_id: s(ev, "item_id") }
+/// One event of type `ty`.
+fn decode_event(ev: &Value, ty: &str, created_at: SystemTime) -> Result<Incoming, String> {
+    Ok(match ty {
+        "input_audio_buffer.speech_started" => {
+            Incoming::SpeechStarted { item_id: s(ev, "item_id") }
+        }
+        "input_audio_buffer.speech_stopped" => Incoming::SpeechStopped,
+        "response.created" => {
+            let response = ev.get("response").unwrap_or(&Value::Null);
+            Incoming::ResponseCreated {
+                response_id: required_string(response, "id")?,
+                client_event_id: response
+                    .get("metadata")
+                    .and_then(|m| m.get("client_event_id"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
             }
-            "input_audio_buffer.speech_stopped" => Incoming::SpeechStopped,
-            "response.created" => {
-                let response = ev.get("response").unwrap_or(&Value::Null);
-                Incoming::ResponseCreated {
-                    response_id: required_string(response, "id")?,
-                    client_event_id: response
-                        .get("metadata")
-                        .and_then(|m| m.get("client_event_id"))
-                        .and_then(Value::as_str)
-                        .map(str::to_owned),
-                }
-            }
-            "response.output_item.added" => {
-                let item = ev.get("item").unwrap_or(&Value::Null);
-                Incoming::OutputItemAdded {
-                    item_id: required_string(item, "id")?,
-                    item_type: required_string(item, "type")?,
-                }
-            }
-            "response.content_part.added" => Incoming::ContentPartAdded {
-                item_id: required_string(ev, "item_id")?,
-                part_type: required_string(ev.get("part").unwrap_or(&Value::Null), "type")?,
+        }
+        "response.output_item.added" => {
+            let item = ev.get("item").unwrap_or(&Value::Null);
+            let item_id = required_string(item, "id")?;
+            let kind = match required_string(item, "type")?.as_str() {
+                "message" => OutputItemKind::Message,
+                "function_call" => OutputItemKind::FunctionCall,
+                _ => OutputItemKind::Other,
+            };
+            Incoming::OutputItemAdded { item_id, kind }
+        }
+        "response.content_part.added" => Incoming::ContentPartAdded {
+            item_id: required_string(ev, "item_id")?,
+            modalities: match required_string(ev.get("part").unwrap_or(&Value::Null), "type")?
+                .as_str()
+            {
+                "text" => Modalities::TextOnly,
+                _ => Modalities::AudioAndText,
             },
-            "conversation.item.added" => Incoming::ItemAdded {
-                previous_item_id: s(ev, "previous_item_id"),
-                item: from_wire_item(ev.get("item").unwrap_or(&Value::Null), created_at)?,
-            },
-            "conversation.item.deleted" => {
-                Incoming::ItemDeleted { item_id: required_string(ev, "item_id")? }
-            }
-            "conversation.item.input_audio_transcription.delta" => Incoming::TranscriptionDelta {
-                item_id: required_string(ev, "item_id")?,
-                content_index: u(ev, &["content_index"])? as usize,
-                delta: required_string(ev, "delta")?,
-            },
-            "conversation.item.input_audio_transcription.completed" => {
-                Incoming::TranscriptionCompleted(TranscriptionCompleted {
-                    item_id: required_string(ev, "item_id")?,
-                    content_index: u(ev, &["content_index"])? as usize,
-                    transcript: required_string(ev, "transcript")?,
-                    confidence: confidence_from_logprobs(
-                        ev.get("logprobs").and_then(Value::as_array),
-                    ),
-                    in_progress: ev.get("status").and_then(Value::as_str) == Some("in_progress"),
-                    event_id: s(ev, "event_id").unwrap_or_default(),
-                    usage: transcription_usage(ev.get("usage"))?,
-                })
-            }
-            "conversation.item.input_audio_transcription.failed" => Incoming::TranscriptionFailed {
+        },
+        "conversation.item.added" => Incoming::ItemAdded {
+            previous_item_id: s(ev, "previous_item_id"),
+            item: from_wire_item(ev.get("item").unwrap_or(&Value::Null), created_at)?,
+        },
+        "conversation.item.deleted" => {
+            Incoming::ItemDeleted { item_id: required_string(ev, "item_id")? }
+        }
+        "conversation.item.input_audio_transcription.delta" => Incoming::TranscriptionDelta {
+            item_id: required_string(ev, "item_id")?,
+            content_index: u(ev, &["content_index"])? as usize,
+            delta: required_string(ev, "delta")?,
+        },
+        "conversation.item.input_audio_transcription.completed" => {
+            Incoming::TranscriptionCompleted(TranscriptionCompleted {
                 item_id: required_string(ev, "item_id")?,
                 content_index: u(ev, &["content_index"])? as usize,
-            },
-            "conversation.item.input_audio_transcription.updated" => {
-                Incoming::TranscriptionUpdated {
-                    item_id: required_string(ev, "item_id")?,
-                    transcript: required_string(ev, "transcript")?,
-                }
-            }
-            "response.output_text.delta" => Incoming::TextDelta {
-                item_id: required_string(ev, "item_id")?,
-                delta: required_string(ev, "delta")?,
-            },
-            "response.output_audio_transcript.delta" => Incoming::AudioTranscriptDelta {
-                item_id: required_string(ev, "item_id")?,
-                delta: required_string(ev, "delta")?,
-                start_time: ev.get("start_time").and_then(Value::as_f64),
-            },
-            "response.output_audio.delta" => Incoming::AudioDelta {
-                item_id: required_string(ev, "item_id")?,
-                frame: {
-                    let data = base64::engine::general_purpose::STANDARD
-                        .decode(required_string(ev, "delta")?)
-                        .map_err(|error| format!("invalid PCM base64: {error}"))?;
-                    if data.len() % 2 != 0 {
-                        return Err("PCM data ends in a partial i16 sample".into());
-                    }
-                    audio_frame(data)
-                },
-            },
-            "response.output_item.done" => Incoming::OutputItemDone {
-                item: from_wire_item(ev.get("item").unwrap_or(&Value::Null), created_at)?,
-            },
-            "response.done" => {
-                let r = ev.get("response").unwrap_or(&Value::Null);
-                let details = r.get("status_details");
-                let error = details.and_then(|d| d.get("error"));
-                Incoming::ResponseDone(ResponseDone {
-                    response_id: required_string(r, "id")?,
-                    status: match required_string(r, "status")?.as_str() {
-                        "completed" => lk_agents_abi::llm::realtime::GenerationStatus::Completed,
-                        "cancelled" => lk_agents_abi::llm::realtime::GenerationStatus::Cancelled,
-                        "incomplete" => lk_agents_abi::llm::realtime::GenerationStatus::Incomplete,
-                        "failed" => lk_agents_abi::llm::realtime::GenerationStatus::Failed,
-                        other => return Err(format!("unsupported response status: {other}")),
-                    },
-                    error_type: error.and_then(|e| s(e, "type")),
-                    error_code: error.and_then(|e| s(e, "code")),
-                    usage: response_usage(r)?,
-                })
-            }
-            "error" => {
-                let e = ev.get("error").unwrap_or(&Value::Null);
-                Incoming::Error(ServerError {
-                    event_id: s(e, "event_id"),
-                    code: s(e, "code"),
-                    type_: s(e, "type"),
-                    message: s(e, "message").unwrap_or_default(),
-                })
-            }
-            "input_audio_buffer.timeout_triggered" => Incoming::IdleTimeoutTriggered,
-            "session.created" => {
-                Incoming::SessionCreated { model: ev.get("session").and_then(|s_| s(s_, "model")) }
-            }
-            other => Incoming::Unhandled { event_type: other.to_owned() },
-        })
-    })()
-    .map_err(|cause| DecodeError::at(ev, cause))
+                transcript: required_string(ev, "transcript")?,
+                confidence: confidence_from_logprobs(ev.get("logprobs").and_then(Value::as_array)),
+                in_progress: ev.get("status").and_then(Value::as_str) == Some("in_progress"),
+                event_id: s(ev, "event_id").unwrap_or_default(),
+                usage: transcription_usage(ev.get("usage"))?,
+            })
+        }
+        "conversation.item.input_audio_transcription.failed" => Incoming::TranscriptionFailed {
+            item_id: required_string(ev, "item_id")?,
+            content_index: u(ev, &["content_index"])? as usize,
+        },
+        "conversation.item.input_audio_transcription.updated" => Incoming::TranscriptionUpdated {
+            item_id: required_string(ev, "item_id")?,
+            transcript: required_string(ev, "transcript")?,
+        },
+        "response.output_text.delta" => Incoming::TextDelta {
+            item_id: required_string(ev, "item_id")?,
+            delta: required_string(ev, "delta")?,
+        },
+        "response.output_audio_transcript.delta" => Incoming::AudioTranscriptDelta {
+            item_id: required_string(ev, "item_id")?,
+            delta: required_string(ev, "delta")?,
+            start_time: ev.get("start_time").and_then(Value::as_f64),
+        },
+        "response.output_audio.delta" => Incoming::AudioDelta {
+            item_id: required_string(ev, "item_id")?,
+            frame: decode_audio_delta(ev)?,
+        },
+        "response.output_item.done" => Incoming::OutputItemDone {
+            item: from_wire_item(ev.get("item").unwrap_or(&Value::Null), created_at)?,
+        },
+        "response.done" => Incoming::ResponseDone(decode_response_done(ev)?),
+        "error" => {
+            let e = ev.get("error").unwrap_or(&Value::Null);
+            Incoming::Error(ServerError {
+                event_id: s(e, "event_id"),
+                code: s(e, "code"),
+                type_: s(e, "type"),
+                message: s(e, "message").unwrap_or_default(),
+            })
+        }
+        "input_audio_buffer.timeout_triggered" => Incoming::IdleTimeoutTriggered,
+        "session.created" => {
+            Incoming::SessionCreated { model: ev.get("session").and_then(|s_| s(s_, "model")) }
+        }
+        other => Incoming::Unhandled { event_type: other.to_owned() },
+    })
+}
+
+/// The bytes of one 16-bit PCM sample.
+const PCM_SAMPLE_BYTES: usize = std::mem::size_of::<i16>();
+
+/// An audio delta's base64 PCM, whole samples only.
+fn decode_audio_delta(ev: &Value) -> Result<lk_agents_abi::AudioFrame, String> {
+    let data = base64::engine::general_purpose::STANDARD
+        .decode(required_string(ev, "delta")?)
+        .map_err(|error| format!("invalid PCM base64: {error}"))?;
+    if data.len() % PCM_SAMPLE_BYTES != 0 {
+        return Err("PCM data ends in a partial i16 sample".into());
+    }
+    Ok(audio_frame(data))
+}
+
+fn decode_response_done(ev: &Value) -> Result<ResponseDone, String> {
+    let r = ev.get("response").unwrap_or(&Value::Null);
+    let error = r.get("status_details").and_then(|d| d.get("error"));
+    Ok(ResponseDone {
+        response_id: required_string(r, "id")?,
+        status: generation_status(&required_string(r, "status")?)?,
+        error_type: error.and_then(|e| s(e, "type")),
+        error_code: error.and_then(|e| s(e, "code")),
+        usage: response_usage(r)?,
+    })
+}
+
+fn generation_status(status: &str) -> Result<GenerationStatus, String> {
+    match status {
+        "completed" => Ok(GenerationStatus::Completed),
+        "cancelled" => Ok(GenerationStatus::Cancelled),
+        "incomplete" => Ok(GenerationStatus::Incomplete),
+        "failed" => Ok(GenerationStatus::Failed),
+        other => Err(format!("unsupported response status: {other}")),
+    }
 }
 
 /// An `AudioDelta`'s PCM as an [`AudioFrame`](lk_agents_abi::AudioFrame) at the session rate.
 pub fn audio_frame(pcm: Vec<u8>) -> lk_agents_abi::AudioFrame {
-    let samples = (pcm.len() / 2) as u32;
+    let samples = (pcm.len() / PCM_SAMPLE_BYTES) as u32;
     lk_agents_abi::AudioFrame {
         data: pcm.into(),
         sample_rate: SAMPLE_RATE,

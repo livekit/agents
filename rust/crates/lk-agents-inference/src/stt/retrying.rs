@@ -4,6 +4,7 @@
 //! stream that survives the attempts.
 
 use crate::telemetry;
+use std::ops::ControlFlow;
 use std::sync::Arc;
 
 use super::gaps::Gaps;
@@ -412,60 +413,91 @@ impl RetrySource {
     async fn next_attempted(&mut self) -> Result<Option<SpeechEvent>, ProviderError> {
         loop {
             wake_attempts(&mut self.attempts, self.clock.now(), &*self.stt)?;
-            let error = match (self.failed.take(), self.current.as_mut()) {
-                (Some(error), _) => error,
-                (None, Some(source)) => match tokio::select! {
-                    biased;
-                    error = self.pump.run() => Err(error),
-                    event = source.next() => event,
-                } {
-                    Ok(Some(event)) => {
-                        if event.kind == SpeechEventType::FinalTranscript {
-                            // a recognition succeeded: the budget restarts
-                            self.attempts.reset_retries();
-                        }
-                        return Ok(Some(self.pump.gaps.shift(event)));
+            match self.read_current().await {
+                Read::Deliver(event) => return Ok(event),
+                Read::Failed(error) => {
+                    if self.reopen_after(error).await?.is_break() {
+                        return Ok(None);
                     }
-                    Ok(None) => return Ok(None),
-                    // The provider stopped its own stream: the recognition ends, unreported and
-                    // never retried.
-                    Err(error) if error.cancelled() => return Ok(None),
-                    Err(error) => error,
-                },
-                (None, None) => return Ok(None),
-            };
-            self.close_current().await;
-            if self.options.attempt_connected(
-                self.clock.now().saturating_duration_since(self.began).as_secs_f64(),
-                &error.attempt_error(),
-            ) {
-                self.attempts.reset_retries();
-            }
-            let failure = Failure {
-                kind: RequestKind::SttStream,
-                attempts: &mut self.attempts,
-                now: self.clock.now(),
-                error,
-                report: &*self.stt,
-                label: &self.label,
-                options: &self.options,
-            };
-            failure.decide(self.hook.as_ref())?;
-            wait_for_retry(&mut self.attempts, &*self.clock, &*self.stt).await?;
-            let now = self.clock.now();
-            self.offset += now.saturating_duration_since(self.began).as_secs_f64();
-            self.began = now;
-            match self.stt.stream(&self.cx, self.language.as_ref(), Some(self.offset)).await {
-                Ok(Some(stream)) => {
-                    let (sink, source) = stream.split();
-                    self.pump.install(sink, self.offset);
-                    self.current = Some(source);
                 }
-                Err(error) => self.failed = Some(error),
-                Ok(None) => return Ok(None),
             }
         }
     }
+
+    /// The current attempt's next event, or the failure of its open or of its stream.
+    async fn read_current(&mut self) -> Read {
+        let source = match (self.failed.take(), self.current.as_mut()) {
+            (Some(error), _) => return Read::Failed(error),
+            (None, Some(source)) => source,
+            (None, None) => return Read::Deliver(None),
+        };
+        let next = tokio::select! {
+            biased;
+            error = self.pump.run() => Err(error),
+            event = source.next() => event,
+        };
+        match next {
+            Ok(Some(event)) => {
+                if event.kind == SpeechEventType::FinalTranscript {
+                    // a recognition succeeded: the budget restarts
+                    self.attempts.reset_retries();
+                }
+                Read::Deliver(Some(self.pump.gaps.shift(event)))
+            }
+            Ok(None) => Read::Deliver(None),
+            // The provider stopped its own stream: the recognition ends, unreported and
+            // never retried.
+            Err(error) if error.cancelled() => Read::Deliver(None),
+            Err(error) => Read::Failed(error),
+        }
+    }
+
+    /// Closes the failed attempt and, when the policy allows, opens the next one after its wait.
+    /// Breaks when the provider has no stream to give.
+    async fn reopen_after(
+        &mut self,
+        error: ProviderError,
+    ) -> Result<ControlFlow<()>, ProviderError> {
+        self.close_current().await;
+        if self.options.attempt_connected(
+            self.clock.now().saturating_duration_since(self.began).as_secs_f64(),
+            &error.attempt_error(),
+        ) {
+            self.attempts.reset_retries();
+        }
+        let failure = Failure {
+            kind: RequestKind::SttStream,
+            attempts: &mut self.attempts,
+            now: self.clock.now(),
+            error,
+            report: &*self.stt,
+            label: &self.label,
+            options: &self.options,
+        };
+        failure.decide(self.hook.as_ref())?;
+        wait_for_retry(&mut self.attempts, &*self.clock, &*self.stt).await?;
+        let now = self.clock.now();
+        self.offset += now.saturating_duration_since(self.began).as_secs_f64();
+        self.began = now;
+        match self.stt.stream(&self.cx, self.language.as_ref(), Some(self.offset)).await {
+            Ok(Some(stream)) => {
+                let (sink, source) = stream.split();
+                self.pump.install(sink, self.offset);
+                self.current = Some(source);
+            }
+            Err(error) => self.failed = Some(error),
+            Ok(None) => return Ok(ControlFlow::Break(())),
+        }
+        Ok(ControlFlow::Continue(()))
+    }
+}
+
+/// What reading the current attempt gave.
+enum Read {
+    /// An event for the caller, or the end of the recognition.
+    Deliver(Option<SpeechEvent>),
+    /// The attempt failed: a retry may follow.
+    Failed(ProviderError),
 }
 
 impl StreamOutput<SpeechEvent> for RetrySource {
