@@ -5,7 +5,15 @@ from typing import Annotated, Any, Literal
 from unittest.mock import MagicMock
 
 import pytest
-from pydantic import AfterValidator, BaseModel, BeforeValidator, Field, PositiveInt, ValidationError
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    BeforeValidator,
+    Field,
+    PositiveInt,
+    ValidationError,
+    field_serializer,
+)
 
 from livekit.agents import Agent
 from livekit.agents.llm import (
@@ -2026,6 +2034,23 @@ class TestCheckDuplicate:
             await _cleanup_fakes(t)
 
 
+class _DuplicateJob(BaseModel):
+    model_config = {"extra": "allow"}
+
+    name: str = "notify"
+    recipient: str = Field(repr=False)
+    delivery_token: str = Field(default="default", repr=False, exclude=True)
+    metadata: dict[str, int] = Field(default_factory=dict)
+
+    @field_serializer("recipient")
+    def serialize_recipient(self, value: str) -> str:
+        return "redacted"
+
+
+class _AliasedDuplicateJob(_DuplicateJob):
+    recipient: str = Field(alias="to", repr=False)
+
+
 class TestDuplicateScopeThroughExecute:
     """scope="name_and_args" driven through execute(), where the key derivation
     order relative to the CONFIRM_DUPLICATE_PARAM pop matters."""
@@ -2118,6 +2143,160 @@ class TestDuplicateScopeThroughExecute:
         finally:
             gate.set()
             await _asyncio.gather(*calls, return_exceptions=True)
+
+    @pytest.mark.parametrize("mode", ["reject", "confirm", "replace"])
+    @pytest.mark.parametrize(
+        "model_type, field, raw_field, read_extra",
+        [
+            pytest.param(_DuplicateJob, "recipient", "recipient", False, id="hidden-recipient"),
+            pytest.param(
+                _DuplicateJob, "delivery_token", "delivery_token", False, id="excluded-token"
+            ),
+            pytest.param(_AliasedDuplicateJob, "recipient", "to", False, id="aliased-field"),
+            pytest.param(
+                _AliasedDuplicateJob, "recipient", "recipient", True, id="colliding-extra"
+            ),
+        ],
+    )
+    async def test_nested_model_distinct_values_are_not_duplicates(
+        self, mode, model_type, field, raw_field, read_extra, _clear_running_tasks
+    ):
+        """Presentation and serialization settings must not hide a tool's inputs."""
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        gate = asyncio.Event()
+        started = [asyncio.Event(), asyncio.Event()]
+        received = []
+
+        @function_tool(
+            on_duplicate=mode, duplicate_scope="name_and_args", flags=ToolFlag.CANCELLABLE
+        )
+        async def notify(jobs: dict[str, list[model_type]]) -> str:
+            job = jobs["pending"][0]
+            received.append(job)
+            started[len(received) - 1].set()
+            await gate.wait()
+            return job.model_extra[field] if read_extra else getattr(job, field)
+
+        executor = _ToolExecutor()
+        calls = []
+        try:
+            for index, value in enumerate(("first", "second")):
+                arguments = {"recipient": "someone"}
+                if model_type is _AliasedDuplicateJob:
+                    arguments = {"to": "someone", "recipient": "extra"}
+                arguments[raw_field] = value
+                calls.append(
+                    asyncio.create_task(
+                        executor.execute(
+                            tool=notify,
+                            run_ctx=_make_run_context(call_id=f"c{index}", name="notify"),
+                            raw_arguments={"jobs": {"pending": [arguments]}},
+                        )
+                    )
+                )
+                await asyncio.wait_for(started[index].wait(), timeout=5)
+
+            assert set(executor._running_tasks) == {"c0", "c1"}
+            assert all(not task.exe_task.done() for task in executor._running_tasks.values())
+            gate.set()
+            assert await asyncio.gather(*calls) == ["first", "second"]
+            assert [
+                job.model_extra[field] if read_extra else getattr(job, field) for job in received
+            ] == ["first", "second"]
+        finally:
+            gate.set()
+            await asyncio.gather(*calls, return_exceptions=True)
+            await executor.aclose()
+
+    @pytest.mark.parametrize("model_type", [_DuplicateJob, _AliasedDuplicateJob])
+    async def test_equivalent_nested_models_are_rejected(self, model_type, _clear_running_tasks):
+        """Validated defaults, coercion and nested mapping order still mean one call."""
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        gate = asyncio.Event()
+        started = asyncio.Event()
+        received = []
+
+        @function_tool(on_duplicate="reject", duplicate_scope="name_and_args")
+        async def notify(job: model_type) -> str:
+            received.append(job)
+            started.set()
+            await gate.wait()
+            return "done"
+
+        executor = _ToolExecutor()
+        recipient = {"recipient": "someone"}
+        if model_type is _AliasedDuplicateJob:
+            recipient = {"to": "someone", "recipient": "extra"}
+        first = asyncio.create_task(
+            executor.execute(
+                tool=notify,
+                run_ctx=_make_run_context(call_id="first", name="notify"),
+                raw_arguments={"job": {**recipient, "metadata": {"a": "1", "b": 2}}},
+            )
+        )
+        try:
+            await asyncio.wait_for(started.wait(), timeout=5)
+            result = await asyncio.wait_for(
+                executor.execute(
+                    tool=notify,
+                    run_ctx=_make_run_context(call_id="second", name="notify"),
+                    raw_arguments={
+                        "job": {
+                            "name": "notify",
+                            **recipient,
+                            "delivery_token": "default",
+                            "metadata": {"b": 2, "a": 1},
+                        }
+                    },
+                ),
+                timeout=5,
+            )
+            assert "already running" in result
+            assert len(received) == 1
+            assert set(executor._running_tasks) == {"first"}
+        finally:
+            gate.set()
+            await first
+            await executor.aclose()
+
+    def test_nested_model_keys_preserve_extra_arguments(self):
+        @function_tool(on_duplicate="reject", duplicate_scope="name_and_args")
+        async def notify(job: _DuplicateJob) -> str:
+            return "done"
+
+        def key(**extra):
+            return _key("notify", {"job": {"recipient": "someone", **extra}}, fnc=notify)
+
+        assert key(channel="email") != key(channel="sms")
+        assert key(channel="email", options={"a": 1, "b": 2}) == key(
+            options={"b": 2, "a": 1}, channel="email"
+        )
+
+    def test_nested_model_serialization_does_not_define_duplicate_keys(self):
+        """All three jobs serialize identically, but contain different tool inputs."""
+        jobs = [
+            _DuplicateJob(recipient="alice", delivery_token="first"),
+            _DuplicateJob(recipient="bob", delivery_token="first"),
+            _DuplicateJob(recipient="alice", delivery_token="second"),
+        ]
+        assert jobs[0].model_dump() == jobs[1].model_dump() == jobs[2].model_dump()
+        assert str(jobs[0]) == str(jobs[1]) == str(jobs[2])
+
+        @function_tool(on_duplicate="reject", duplicate_scope="name_and_args")
+        async def notify(job: _DuplicateJob) -> str:
+            return "done"
+
+        keys = {
+            _key(
+                "notify",
+                {"job": {"recipient": job.recipient, "delivery_token": job.delivery_token}},
+                fnc=notify,
+            )
+            for job in jobs
+        }
+        assert len(keys) == len(jobs)
 
 
 class TestCancelAll:

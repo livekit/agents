@@ -7,6 +7,7 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
+from pydantic import BaseModel
 from typing_extensions import TypedDict
 
 from .. import utils
@@ -217,7 +218,19 @@ def _canonical_args(raw_arguments: dict[str, Any]) -> str:
     can't make two identical calls look different. Lists stay order-sensitive —
     ``["a", "b"]`` and ``["b", "a"]`` are genuinely different arguments.
     """
-    return json.dumps(raw_arguments, sort_keys=True, default=str)
+
+    def encode(value: Any) -> Any:
+        if isinstance(value, BaseModel):
+            # Compare the values the tool receives. repr=False, exclude=True and
+            # custom serializers can all hide meaningful inputs from str/model_dump.
+            # An aliased field's name can also be an extra key; keep both values.
+            return {
+                "fields": {name: getattr(value, name) for name in type(value).model_fields},
+                "extra": value.model_extra or {},
+            }
+        return str(value)
+
+    return json.dumps(raw_arguments, sort_keys=True, default=encode)
 
 
 def _duplicate_key(
