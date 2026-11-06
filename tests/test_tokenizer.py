@@ -171,6 +171,36 @@ def test_sent_tokenizer_terminator_runs(
     assert tokenizer.tokenize(text=text) == expected
 
 
+ABBREVIATION_BEFORE_NUMBER_CASES = [
+    (
+        "The total amount you need to pay this month is Rs. 1,250 and it is due on Friday.",
+        ["The total amount you need to pay this month is Rs. 1,250 and it is due on Friday."],
+    ),
+    (
+        "Aapka bill is mahine Rs.2,499 hai, kripya jaldi bhugtan karein.",
+        ["Aapka bill is mahine Rs.2,499 hai, kripya jaldi bhugtan karein."],
+    ),
+    (
+        "Please call our office about the parcel with order No. 42 before noon.",
+        ["Please call our office about the parcel with order No. 42 before noon."],
+    ),
+    (
+        "The total amount you need to pay this month is Rs.  1,250 and it is due on Friday.",
+        ["The total amount you need to pay this month is Rs.  1,250 and it is due on Friday."],
+    ),
+    # not followed by a number, so the sentence still ends there
+    (
+        "When I asked him about it, he simply said No. Then he left the room.",
+        ["When I asked him about it, he simply said No.", "Then he left the room."],
+    ),
+]
+
+
+@pytest.mark.parametrize("text, expected", ABBREVIATION_BEFORE_NUMBER_CASES)
+def test_basic_sent_tokenizer_keeps_abbreviation_with_number(text: str, expected: list[str]):
+    assert basic.SentenceTokenizer().tokenize(text=text) == expected
+
+
 def test_basic_sent_tokenizer_keeps_terminator_runs_unspaced():
     # with the default min_sentence_len the pieces were merged back with spaces
     text = "That is amazing!!! I cannot believe it happened today."

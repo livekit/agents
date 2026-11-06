@@ -10,6 +10,7 @@ def split_sentences(
     """
     alphabets = r"([A-Za-z])"
     prefixes = r"(Mr|St|Mrs|Ms|Dr)[.]"
+    number_prefixes = r"\b(Rs|No)[.](?=\s*[0-9])"  # "Rs. 500", "No. 42"
     suffixes = r"(Inc|Ltd|Jr|Sr|Co)"
     starters = r"(Mr|Mrs|Ms|Dr|Prof|Capt|Cpt|Lt|He\s|She\s|It\s|They\s|Their\s|Our\s|We\s|But\s|However\s|That\s|This\s|Wherever)"  # noqa: E501
     acronyms = r"([A-Z][.][A-Z][.](?:[A-Z][.])?)"
@@ -24,6 +25,7 @@ def split_sentences(
         text = text.replace("\n"," ")
 
     text = re.sub(prefixes,"\\1<prd>", text)
+    text = re.sub(number_prefixes,"\\1<prd>", text)
     text = re.sub(websites,"<prd>\\1", text)
     # a number can hold several dot-separated groups ("1.2.3", "192.168.1.1"), and
     # re.sub skips overlapping matches, so protect every inner dot by lookaround
