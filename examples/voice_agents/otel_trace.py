@@ -102,7 +102,7 @@ class Kelly(Agent):
             llm=FallbackLLMAdapter(
                 llm=[
                     inference.LLM("openai/gpt-4.1-mini"),
-                    inference.LLM("google/gemini-2.5-flash"),
+                    inference.LLM("google/gemma-4-31b-it"),
                 ]
             ),
             stt=FallbackSTTAdapter(
