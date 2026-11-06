@@ -542,3 +542,17 @@ async def test_clear_fallback_releases_waiter_and_preserves_next_reply(
     _finish(output)
     event = await asyncio.wait_for(output.wait_for_playout(), timeout=1.0)
     assert not event.interrupted
+
+
+async def test_flush_close_failure_is_handled(
+    sink: tuple[ds.DataStreamAudioOutput, MagicMock], caplog: pytest.LogCaptureFixture
+) -> None:
+    output, room = sink
+    writer = room.local_participant.stream_bytes.return_value
+    writer.aclose.side_effect = rtc.StreamError("handle not found")
+
+    await output.capture_frame(_frame())
+    output.flush()
+    await asyncio.gather(*output._tasks)
+    writer.aclose.assert_awaited_once()
+    assert "failed to close the avatar audio stream" in caplog.text
