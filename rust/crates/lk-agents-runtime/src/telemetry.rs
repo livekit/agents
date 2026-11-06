@@ -270,12 +270,12 @@ pub struct LoopStall {
     /// The span current when the loop's watch opened.
     pub parent: Option<SpanContext>,
     pub job: Option<String>,
-    /// The loop thread's deepest frames, one a line, where they could be read.
-    pub stack: Option<String>,
+    /// The loop thread's deepest frames, where they could be read.
+    pub stack: Option<Vec<lk_agents_abi::telemetry::record::StackFrame>>,
     /// The file being imported during the stall.
     pub import: Option<String>,
     /// Still stuck: reported while it lasts, exempt from the rate limit.
-    pub ongoing: bool,
+    pub state: lk_agents_abi::telemetry::record::StallState,
 }
 
 /// Records `stall`: the job's sessions count it, and its span goes under the first one's
@@ -297,10 +297,10 @@ pub fn loop_stalled(stall: LoopStall) {
     event_loop_blocked(
         &cx,
         &PROCESS.blocked,
-        stall.duration.as_secs_f64(),
+        stall.duration,
         stall.stack,
         stall.import,
-        stall.ongoing,
+        stall.state,
     );
 }
 

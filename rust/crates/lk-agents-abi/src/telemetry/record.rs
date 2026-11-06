@@ -7,6 +7,21 @@ use std::borrow::Cow;
 /// The framework's instrumentation scope, and its `service.name` unless the application names one.
 pub const FRAMEWORK: &str = "livekit-agents";
 
+/// One sampled Python stack frame, innermost first in a stack.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StackFrame {
+    pub function: String,
+    pub file: String,
+    pub line: i64,
+}
+
+/// Whether a stall ended or reached the reporting cap while still stuck.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StallState {
+    Ended,
+    Ongoing,
+}
+
 /// An attribute key: a declared or semconv constant, or an application's own key.
 pub type Key = Cow<'static, str>;
 

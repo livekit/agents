@@ -169,18 +169,36 @@ fn event_loop_stalls_are_rate_limited() {
     let cx = tracer.root().continuing(Some(ENTRYPOINT));
     let blocked = crate::telemetry::Blocked::default();
     for _ in 0..32 {
-        crate::telemetry::event_loop_blocked(&cx, &blocked, 0.2, None, None, false);
+        crate::telemetry::event_loop_blocked(
+            &cx,
+            &blocked,
+            std::time::Duration::from_millis(200),
+            None,
+            None,
+            lk_agents_abi::telemetry::record::StallState::Ended,
+        );
     }
     crate::telemetry::event_loop_blocked(
         &cx,
         &blocked,
-        0.6,
-        Some("busy (app.py:7)".into()),
+        std::time::Duration::from_millis(600),
+        Some(vec![lk_agents_abi::telemetry::record::StackFrame {
+            function: "busy".into(),
+            file: "app.py".into(),
+            line: 7,
+        }]),
         None,
-        false,
+        lk_agents_abi::telemetry::record::StallState::Ended,
     );
     // a loop still stuck is reported past the limit
-    crate::telemetry::event_loop_blocked(&cx, &blocked, 5.0, None, None, true);
+    crate::telemetry::event_loop_blocked(
+        &cx,
+        &blocked,
+        std::time::Duration::from_secs(5),
+        None,
+        None,
+        lk_agents_abi::telemetry::record::StallState::Ongoing,
+    );
     let spans = records.spans();
     assert_eq!(spans.len(), 31, "30 a minute, and the still-stuck loop past them");
     assert!(spans.iter().all(|s| s.parent == Some(4)));
@@ -188,6 +206,54 @@ fn event_loop_stalls_are_rate_limited() {
     assert_eq!(durations.len(), 34);
     // the 33rd is over the rate limit: its stack rides no span
     assert_eq!(labels(&durations[32]), [("severity".to_owned(), Value::String("error".into()))]);
+}
+
+#[test]
+fn a_stall_span_keeps_its_formatted_stack_and_threshold() {
+    let records = Arc::new(Records::default());
+    let tracer = lk_agents_net::telemetry::Tracer::new(
+        records.clone(),
+        Arc::new(lk_agents_abi::VirtualClock::new()),
+        1,
+    );
+    crate::telemetry::event_loop_blocked(
+        &tracer.root(),
+        &crate::telemetry::Blocked::default(),
+        std::time::Duration::from_millis(500),
+        Some(vec![
+            lk_agents_abi::telemetry::record::StackFrame {
+                function: "busy".into(),
+                file: "/app/tools.py".into(),
+                line: 7,
+            },
+            lk_agents_abi::telemetry::record::StackFrame {
+                function: "<module>".into(),
+                file: "/app/main.py".into(),
+                line: 1,
+            },
+        ]),
+        Some("/app/tools.py".into()),
+        lk_agents_abi::telemetry::record::StallState::Ended,
+    );
+    let spans = records.spans();
+    let span = &spans[0];
+    assert_eq!(span.name, "event_loop_blocked");
+    for (key, expected) in [
+        ("lk.blocking.duration", Value::Double(0.5)),
+        ("lk.blocking.threshold", Value::Double(0.1)),
+        ("lk.blocking.severity", Value::String("error".into())),
+        (
+            "lk.blocking.stack",
+            Value::String("busy (/app/tools.py:7)\n<module> (/app/main.py:1)".into()),
+        ),
+        ("lk.blocking.import", Value::String("/app/tools.py".into())),
+    ] {
+        assert_eq!(
+            span.attributes.iter().find(|(name, _)| name == key).map(|(_, value)| value),
+            Some(&expected),
+            "{key}"
+        );
+    }
 }
 
 /// A job whose room connection records the span it ran under.
@@ -319,7 +385,7 @@ fn a_stall_reaches_the_sessions_of_its_job() {
         job: Some("AJ_stall".into()),
         stack: None,
         import: None,
-        ongoing: false,
+        state: lk_agents_abi::telemetry::record::StallState::Ended,
     };
     let (ours, theirs) = (watch("ours", "AJ_stall"), watch("theirs", "AJ_other"));
     crate::telemetry::loop_stalled(stall());

@@ -14,13 +14,12 @@ use std::thread::{self, Thread};
 use std::time::{Duration, Instant, SystemTime};
 
 use lk_agents_abi::telemetry;
+use lk_agents_abi::telemetry::record::{StackFrame as SampledFrame, StallState};
 use lk_agents_runtime::telemetry_export::profile::{self, Frame, Profile};
 use parking_lot::Mutex;
 
 /// How often the loop beats, and the detector checks.
 const TICK: Duration = Duration::from_millis(20);
-/// A beat this old is a stall.
-const THRESHOLD: Duration = Duration::from_millis(100);
 /// Stack samples of one stall: at detection, then this often, at most `SAMPLES`.
 const SAMPLE_EVERY: Duration = Duration::from_millis(100);
 const SAMPLES: usize = 5;
@@ -33,7 +32,6 @@ const CAP: Duration = Duration::from_secs(5);
 const FORWARDING_GRACE: Duration = Duration::from_millis(200);
 /// The recorded stack: its deepest frames, at most this long.
 const FRAMES: usize = 20;
-const STACK_BYTES: usize = 4096;
 
 static EPOCH: LazyLock<Instant> = LazyLock::new(Instant::now);
 
@@ -198,7 +196,8 @@ impl Detection {
         let t = now();
         // Late itself: the whole process was paused (SIGSTOP, throttling, a suspended machine),
         // not one loop. Every watch starts over from now.
-        let paused = t.saturating_sub(self.last_wake) >= nanos(THRESHOLD + TICK);
+        let paused =
+            t.saturating_sub(self.last_wake) >= nanos(telemetry::policy::BLOCKED_WARNING + TICK);
         self.last_wake = t;
         let profile = !self.watches.is_empty() && t >= self.next_profile;
         let stalled = self.watches.iter().any(|entry| entry.wants_sample(t));
@@ -248,12 +247,10 @@ fn add_samples(watches: &[Entry], threads: &[ThreadStack], at: u64, wall: i64) {
     }
 }
 
-/// The deepest frames of the thread `os_thread`, `function (file:line)`.
-fn frames_of(threads: &[ThreadStack], os_thread: u64) -> Option<Vec<String>> {
+/// The deepest frames of the thread `os_thread`.
+fn frames_of(threads: &[ThreadStack], os_thread: u64) -> Option<Vec<SampledFrame>> {
     let thread = threads.iter().find(|thread| thread.os_thread == Some(os_thread))?;
-    let frame =
-        |frame: &SampledFrame| format!("{} ({}:{})", frame.function, frame.file, frame.line);
-    Some(thread.frames.iter().take(FRAMES).map(frame).collect())
+    Some(thread.frames.iter().take(FRAMES).cloned().collect())
 }
 
 struct Entry {
@@ -278,7 +275,7 @@ struct Stall {
     /// The still-stuck report and when to see whether its log line was forwarded.
     unforwarded: Option<(u64, String)>,
     next_sample: u64,
-    samples: Vec<Vec<String>>,
+    samples: Vec<Vec<SampledFrame>>,
     recorded: bool,
 }
 
@@ -304,7 +301,7 @@ impl Entry {
             return checked;
         }
         let Some(stall) = self.stall.as_mut() else {
-            if !closed && t.saturating_sub(last) >= nanos(THRESHOLD) {
+            if !closed && t.saturating_sub(last) >= nanos(telemetry::policy::BLOCKED_WARNING) {
                 self.stall = Some(Stall {
                     since: last,
                     unforwarded: None,
@@ -318,7 +315,7 @@ impl Entry {
         let ended = last > stall.since;
         if ended || closed {
             let end = if ended { last.saturating_sub(nanos(TICK)) } else { t };
-            checked.record = stall.record(&self.watched, end, false);
+            checked.record = stall.record(&self.watched, end, StallState::Ended);
             self.stall = None;
             return checked;
         }
@@ -331,19 +328,18 @@ impl Entry {
             stall.next_sample = t.saturating_add(nanos(SAMPLE_EVERY));
         }
         if t.saturating_sub(stall.since) >= nanos(CAP) {
-            checked.record = stall.record(&self.watched, t, true);
+            checked.record = stall.record(&self.watched, t, StallState::Ongoing);
             if let Some(report) = &checked.record {
                 let message = lk_agents_runtime::telemetry::stall_message(
                     "livekit.agents: event loop still blocked after",
-                    report.duration.as_secs_f64(),
+                    report.duration,
                     report.stack.as_deref(),
                     report.import.as_deref(),
                 );
                 stall.unforwarded = Some((t.saturating_add(nanos(FORWARDING_GRACE)), message));
             }
         }
-        if stall.unforwarded.as_ref().is_some_and(|(due, _)| t >= *due) {
-            let (_, message) = stall.unforwarded.take().unwrap_or_default();
+        if let Some((_, message)) = stall.unforwarded.take_if(|(due, _)| t >= *due) {
             let blocked = crate::py_logging::forwarding_blocked(FORWARDING_GRACE);
             checked.stderr = blocked.then_some(message);
         }
@@ -352,18 +348,18 @@ impl Entry {
 }
 
 impl Stall {
-    /// The stall ending at `end` (`ongoing`: still stuck then), the first time only.
+    /// The stall ending at `end`, the first time only.
     fn record(
         &mut self,
         watched: &Watched,
         end: u64,
-        ongoing: bool,
+        state: StallState,
     ) -> Option<lk_agents_runtime::telemetry::LoopStall> {
         if std::mem::replace(&mut self.recorded, true) {
             return None;
         }
         let (stack, import) = match most_frequent(&self.samples) {
-            Some((frames, import)) => (Some(stack_text(frames)), import),
+            Some((frames, import)) => (Some(frames.to_vec()), import),
             None => (None, None),
         };
         Some(lk_agents_runtime::telemetry::LoopStall {
@@ -372,13 +368,13 @@ impl Stall {
             job: watched.job.clone(),
             stack,
             import,
-            ongoing,
+            state,
         })
     }
 }
 
 /// The sample seen most often (the latest of equals), with the file being imported, if any.
-fn most_frequent(samples: &[Vec<String>]) -> Option<(&[String], Option<String>)> {
+fn most_frequent(samples: &[Vec<SampledFrame>]) -> Option<(&[SampledFrame], Option<String>)> {
     let best = samples
         .iter()
         .rev()
@@ -387,27 +383,15 @@ fn most_frequent(samples: &[Vec<String>]) -> Option<(&[String], Option<String>)>
 }
 
 /// The file a stack is importing: its innermost module body under the import machinery.
-fn importing(frames: &[String]) -> Option<String> {
-    if !frames.iter().any(|frame| frame.contains("importlib._bootstrap")) {
+fn importing(frames: &[SampledFrame]) -> Option<String> {
+    if !frames.iter().any(|frame| {
+        frame.function.contains("importlib._bootstrap")
+            || frame.file.contains("importlib._bootstrap")
+    }) {
         return None;
     }
-    let module = frames.iter().find(|frame| frame.starts_with("<module> ("))?;
-    let file = module.trim_start_matches("<module> (").trim_end_matches(')');
-    Some(file.rsplit_once(':').map_or(file, |(file, _)| file).to_owned())
-}
-
-fn stack_text(frames: &[String]) -> String {
-    let mut text = String::new();
-    for frame in frames {
-        if text.len() + frame.len() + 1 > STACK_BYTES {
-            break;
-        }
-        if !text.is_empty() {
-            text.push('\n');
-        }
-        text.push_str(frame);
-    }
-    text
+    let module = frames.iter().find(|frame| frame.function == "<module>")?;
+    Some(module.file.clone())
 }
 
 pub(crate) use sampler::Sampler;
@@ -420,12 +404,6 @@ pub(crate) struct ThreadStack {
     pub(crate) active: bool,
     /// Innermost first.
     pub(crate) frames: Vec<SampledFrame>,
-}
-
-pub(crate) struct SampledFrame {
-    pub(crate) function: String,
-    pub(crate) file: String,
-    pub(crate) line: i64,
 }
 
 /// A thread waiting in Python's own idle calls: the loop's selector, a `threading` wait, a queue
@@ -570,7 +548,10 @@ mod tests {
         let stalled = e.check(440 * MS, false, None).record.expect("recorded on the next beat");
         assert_eq!(stalled.duration, Duration::from_millis(400));
         assert_eq!(stalled.job.as_deref(), Some("AJ_1"));
-        assert!(!stalled.ongoing && stalled.stack.is_none(), "no sample, no stack");
+        assert!(
+            stalled.state == StallState::Ended && stalled.stack.is_none(),
+            "no sample, no stack"
+        );
         assert!(e.check(460 * MS, false, None).record.is_none());
     }
 
@@ -585,7 +566,7 @@ mod tests {
         assert!(!e.wants_sample(160 * MS), "the next sample is 100 ms later");
         beat(&e, 300 * MS);
         let stalled = e.check(320 * MS, false, None).record.unwrap();
-        assert_eq!(stalled.stack.as_deref(), Some("busy (app.py:1)"));
+        assert_eq!(stalled.stack.unwrap(), threads[1].frames);
     }
 
     // Catches: a whole-process pause (the detector late too) reported as a loop stall, before
@@ -613,7 +594,7 @@ mod tests {
         assert!(e.check(120 * MS, false, None).record.is_none());
         let capped = e.check(5_020 * MS, false, None).record.expect("reported at the cap");
         assert_eq!(capped.duration, Duration::from_millis(5_020));
-        assert!(capped.ongoing);
+        assert_eq!(capped.state, StallState::Ongoing);
         let later = e.check(5_240 * MS, false, None);
         assert!(later.stderr.is_none(), "this test's log forwarding is not waiting for the GIL");
         beat(&e, 9_000 * MS);
@@ -632,23 +613,24 @@ mod tests {
         assert_eq!(checked.record.map(|x| x.duration), Some(Duration::from_millis(300)));
     }
 
-    // Catches: the stack not the most frequent sample, an import missed, or the 4 KB cap broken.
+    // Catches: the stack not the most frequent sample, or an import missed.
     #[test]
     fn the_recorded_stack_is_the_most_frequent_sample() {
         let import = vec![
-            "_build (slowmod.py:6)".to_owned(),
-            "<module> (slowmod.py:10)".to_owned(),
-            "_call_with_frames_removed (<frozen importlib._bootstrap>:488)".to_owned(),
+            SampledFrame { function: "_build".into(), file: "slowmod.py".into(), line: 6 },
+            SampledFrame { function: "<module>".into(), file: "slowmod.py".into(), line: 10 },
+            SampledFrame {
+                function: "_call_with_frames_removed".into(),
+                file: "<frozen importlib._bootstrap>".into(),
+                line: 488,
+            },
         ];
-        let other = vec!["busy (app.py:7)".to_owned()];
+        let other = vec![SampledFrame { function: "busy".into(), file: "app.py".into(), line: 7 }];
+        assert!(importing(&other).is_none());
         let samples = [import.clone(), other, import.clone()];
         let (frames, file) = most_frequent(&samples).expect("a sample");
         assert_eq!(frames, import.as_slice());
         assert_eq!(file.as_deref(), Some("slowmod.py"));
-        assert_eq!(stack_text(frames).lines().next(), Some("_build (slowmod.py:6)"));
-        assert!(importing(&["busy (app.py:7)".to_owned()]).is_none());
-        let long = vec!["f (x.py:1)".repeat(100); 20];
-        assert!(stack_text(&long).len() <= STACK_BYTES);
     }
 
     // Catches: a job's profile missing its loop thread while it waits, filled with idle pool

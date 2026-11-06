@@ -5,6 +5,9 @@
 
 /// Telemetry limits; the decisions are `lk_agents_core::telemetry::policy`'s.
 pub mod policy {
+    pub const BLOCKED_WARNING: std::time::Duration = std::time::Duration::from_millis(100);
+    pub const BLOCKED_ERROR: std::time::Duration = std::time::Duration::from_millis(500);
+
     /// The bound on a job's final telemetry flush.
     pub const SHUTDOWN_TIMEOUT_SECONDS: f64 = 10.0;
 
