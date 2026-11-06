@@ -124,12 +124,24 @@ impl TransferApi for ProjectApi {
 /// The run's shared state: who settles it, and what the tools reach.
 #[derive(Default)]
 struct Running {
-    host: Option<Arc<dyn TransferHost>>,
-    api: Option<Arc<dyn TransferApi>>,
-    caller: Option<Arc<dyn RtcRoom>>,
+    phase: RunPhase,
     core: Transfer,
     hold: Option<HostRef>,
     watcher: Option<TaskId>,
+}
+
+#[derive(Default)]
+enum RunPhase {
+    #[default]
+    Idle,
+    Active {
+        host: Arc<dyn TransferHost>,
+        api: Arc<dyn TransferApi>,
+        caller: Arc<dyn RtcRoom>,
+    },
+    Restoring {
+        host: Arc<dyn TransferHost>,
+    },
 }
 
 /// `_core.WarmTransfer`: the transfer's plan (its briefing instructions and tools, how it dials)
@@ -189,13 +201,15 @@ impl TransferRun {
     ) -> Result<String, TransferFailed> {
         {
             let mut running = self.lock();
-            if running.host.is_some() {
+            if !matches!(running.phase, RunPhase::Idle) {
                 return Err(HostError::new("this warm transfer is already running").into());
             }
             *running = Running {
-                host: Some(host.clone()),
-                api: Some(api.clone()),
-                caller: Some(caller.clone()),
+                phase: RunPhase::Active {
+                    host: host.clone(),
+                    api: api.clone(),
+                    caller: caller.clone(),
+                },
                 ..Running::default()
             };
         }
@@ -258,17 +272,22 @@ struct Restore(Arc<TransferRun>);
 
 impl Drop for Restore {
     fn drop(&mut self) {
-        let effects = {
+        let (effects, previous) = {
             let mut running = self.0.lock();
             if let Some(watcher) = running.watcher.take() {
                 self.0.tasks.cancel(watcher);
             }
-            running.caller = None;
-            running.api = None;
-            running.core.cancel()
+            let phase = match &running.phase {
+                RunPhase::Active { host, .. } => RunPhase::Restoring { host: host.clone() },
+                _ => return,
+            };
+            let previous = std::mem::replace(&mut running.phase, phase);
+            (running.core.cancel(), previous)
         };
+        drop(previous);
         self.0.perform(effects);
-        self.0.lock().host = None;
+        let previous = std::mem::take(&mut self.0.lock().phase);
+        drop(previous);
     }
 }
 
@@ -280,7 +299,11 @@ impl TransferRun {
     fn perform(&self, effects: TransferEffects) {
         let (host, hold) = {
             let mut running = self.lock();
-            (running.host.clone(), effects.stop_hold.then(|| running.hold.take()).flatten())
+            let host = match &running.phase {
+                RunPhase::Active { host, .. } | RunPhase::Restoring { host } => Some(host.clone()),
+                RunPhase::Idle => None,
+            };
+            (host, effects.stop_hold.then(|| running.hold.take()).flatten())
         };
         if let Some(host) = host {
             if let Some(drain) = effects.close_human {
@@ -410,10 +433,10 @@ impl TransferRun {
     async fn connect(self: &Arc<Self>) -> Result<(), TransferFailed> {
         let (api, caller) = {
             let running = self.lock();
-            let (Some(api), Some(caller)) = (running.api.clone(), running.caller.clone()) else {
+            let RunPhase::Active { api, caller, .. } = &running.phase else {
                 return Err(TransferFailed::NotRunning);
             };
-            (api, caller)
+            (api.clone(), caller.clone())
         };
         let caller_room = caller
             .name()

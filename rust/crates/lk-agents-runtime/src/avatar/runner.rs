@@ -97,7 +97,7 @@ struct RunnerLoop<F> {
 impl<F: FnMut(&VecDeque<AvatarEvent>) -> usize> RunnerLoop<F> {
     async fn run(mut self) {
         while let Some(event) = self.next_event().await {
-            for effect in self.core.handle(event, self.clock.now()) {
+            for effect in self.core.handle(event) {
                 match effect {
                     AvatarEffect::Io(op) => self.perform_io(op),
                     AvatarEffect::CancelIo => self.cancel_io(),

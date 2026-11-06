@@ -199,17 +199,23 @@ pub struct McpSession {
     init_timeout: Duration,
     request_timeout: Option<Duration>,
     read_timeout: Option<Duration>,
-    target: Mutex<Option<Target>>,
-    /// Set by `close`, cleared by a `connect_*`: a closed session never reconnects by itself.
-    closed: Mutex<bool>,
-    gate: Mutex<ReconnectGate>,
+    state: Mutex<State>,
     epoch: Instant,
-    connection: Mutex<Option<Arc<Connection>>>,
-    previous: Mutex<Option<Arc<Connection>>>,
-    initializing: Mutex<Option<Arc<TransportReceipt>>>,
+    /// Serializes connection attempts and teardown, including their awaits.
     connecting: tokio::sync::Mutex<()>,
-    cancel: Mutex<CancellationToken>,
-    listing: Mutex<ToolListing>,
+}
+
+#[derive(Default)]
+struct State {
+    target: Option<Target>,
+    /// Set by `close`, cleared by a `connect_*`: a closed session never reconnects by itself.
+    closed: bool,
+    gate: ReconnectGate,
+    connection: Option<Arc<Connection>>,
+    previous: Option<Arc<Connection>>,
+    initializing: Option<Arc<TransportReceipt>>,
+    cancel: CancellationToken,
+    listing: ToolListing,
 }
 
 impl McpSessionPort for McpSession {
@@ -227,20 +233,13 @@ impl McpSessionPort for McpSession {
             init_timeout: timeout_duration(McpTimeout::Init, init_timeout)?,
             request_timeout: limit(McpTimeout::Request, request_timeout)?,
             read_timeout: limit(McpTimeout::Read, read_timeout)?,
-            target: Mutex::default(),
-            closed: Mutex::new(false),
-            gate: Mutex::default(),
+            state: Mutex::default(),
             epoch: Instant::now(),
-            connection: Mutex::default(),
-            previous: Mutex::default(),
-            initializing: Mutex::default(),
             connecting: tokio::sync::Mutex::default(),
-            cancel: Mutex::new(CancellationToken::new()),
-            listing: Mutex::default(),
         })
     }
     fn connected(&self) -> bool {
-        self.connection.lock().as_ref().is_some_and(|c| c.alive())
+        self.live().is_some()
     }
     fn retry_in(&self) -> f64 {
         self.retry_delay().as_secs_f64()
@@ -272,7 +271,7 @@ impl McpSessionPort for McpSession {
             let connection = self.ensure(McpError::NotInitialized).await?;
             reached = true;
             let _call = connection.borrow()?;
-            let mut step = self.listing.lock().list();
+            let mut step = self.state.lock().listing.list();
             loop {
                 let (pages, cursor) = match step {
                     ListStep::Done(tools) => return Ok(tools),
@@ -294,7 +293,7 @@ impl McpSessionPort for McpSession {
                     .collect::<Result<_, _>>()
                     .map_err(|e| McpError::Decode(Arc::new(e)))?;
                 let closing = connection.cancel.is_cancelled();
-                step = self.listing.lock().page(pages, tools, page.next_cursor, closing);
+                step = self.state.lock().listing.page(pages, tools, page.next_cursor, closing);
             }
         };
         let result = match tokio::time::timeout(self.init_timeout, fetch).await {
@@ -302,11 +301,11 @@ impl McpSessionPort for McpSession {
             Err(_) => Err(timed_out(self.init_timeout)),
         };
         if result.is_err() && reached {
-            self.gate.lock().failed(self.epoch.elapsed());
+            self.state.lock().gate.failed(self.epoch.elapsed());
         }
         match result {
             Ok(tools) => Ok(tools.into()),
-            Err(error) => match self.listing.lock().last_known() {
+            Err(error) => match self.state.lock().listing.last_known() {
                 Some(tools) if !matches!(error, McpError::NotInitialized) => {
                     log::warn!("MCP tool listing failed, using the last listing: {error}");
                     Ok(tools.into())
@@ -362,17 +361,21 @@ impl McpSessionPort for McpSession {
         }
     }
     async fn close(&self) {
-        *self.closed.lock() = true;
-        self.cancel.lock().cancel();
+        let cancel = {
+            let mut state = self.state.lock();
+            state.closed = true;
+            state.cancel.clone()
+        };
+        cancel.cancel();
         let _connecting = self.connecting.lock().await;
         self.retire();
-        let previous = self.previous.lock().clone();
+        let previous = self.state.lock().previous.clone();
         if let Some(connection) = previous
             && tokio::time::timeout(HOST_TEARDOWN_TIMEOUT, connection.settled()).await.is_err()
         {
             log::error!("MCP incomplete cleanup; runtime retains ownership");
         }
-        let initializing = self.initializing.lock().clone();
+        let initializing = self.state.lock().initializing.clone();
         if let Some(receipt) = initializing
             && tokio::time::timeout(HOST_TEARDOWN_TIMEOUT, receipt.closed()).await.is_err()
         {
@@ -383,15 +386,20 @@ impl McpSessionPort for McpSession {
 
 impl McpSession {
     pub(super) fn retry_delay(&self) -> Duration {
-        self.gate.lock().wait(self.epoch.elapsed())
+        self.state.lock().gate.wait(self.epoch.elapsed())
     }
 
     async fn connect_to(&self, target: Target) -> Result<(), McpError> {
         let _connecting = self.connecting.lock().await;
         // New credentials replace the connection made with the old ones.
-        let same = self.target.lock().as_ref().is_some_and(|current| current.same_as(&target));
-        *self.target.lock() = Some(target);
-        *self.closed.lock() = false;
+        let (same, previous) = {
+            let mut state = self.state.lock();
+            let same = state.target.as_ref().is_some_and(|current| current.same_as(&target));
+            let previous = state.target.replace(target);
+            state.closed = false;
+            (same, previous)
+        };
+        drop(previous);
         if same && self.connected() {
             return Ok(());
         }
@@ -416,11 +424,14 @@ impl McpSession {
         if let Some(connection) = self.live() {
             return Ok(connection);
         }
-        if *self.closed.lock() || self.target.lock().is_none() {
-            return Err(missing);
-        }
-        if !self.gate.lock().wait(self.epoch.elapsed()).is_zero() {
-            return Err(McpError::Unavailable);
+        {
+            let state = self.state.lock();
+            if state.closed || state.target.is_none() {
+                return Err(missing);
+            }
+            if !state.gate.wait(self.epoch.elapsed()).is_zero() {
+                return Err(McpError::Unavailable);
+            }
         }
         self.connect().await?;
         self.live().ok_or(McpError::Unavailable)
@@ -429,9 +440,13 @@ impl McpSession {
     /// One bounded attempt on the target; the caller holds `connecting`.
     async fn connect(&self) -> Result<(), McpError> {
         self.retire();
-        let Some(target) = self.target.lock().clone() else { return Err(McpError::NotInitialized) };
         let cancel = CancellationToken::new();
-        *self.cancel.lock() = cancel.clone();
+        let target = {
+            let mut state = self.state.lock();
+            let Some(target) = state.target.clone() else { return Err(McpError::NotInitialized) };
+            state.cancel = cancel.clone();
+            target
+        };
         let receipt = Arc::new(TransportReceipt::default());
         let attempt = async {
             match target {
@@ -469,12 +484,13 @@ impl McpSession {
         let now = self.epoch.elapsed();
         match &result {
             Ok(()) => {
-                self.gate.lock().succeeded();
-                self.listing.lock().refresh();
+                let mut state = self.state.lock();
+                state.gate.succeeded();
+                state.listing.refresh();
             }
             Err(error) => {
                 log::warn!("MCP connection failed: {error}");
-                self.gate.lock().failed(now);
+                self.state.lock().gate.failed(now);
             }
         }
         result
@@ -482,9 +498,11 @@ impl McpSession {
 
     /// Close the current connection, alive or lost; `close` waits for the one retired last.
     fn retire(&self) {
-        if let Some(connection) = self.connection.lock().take() {
+        let connection = self.state.lock().connection.take();
+        if let Some(connection) = connection {
             connection.close();
-            *self.previous.lock() = Some(connection);
+            let previous = self.state.lock().previous.replace(connection);
+            drop(previous);
         }
     }
 
@@ -495,7 +513,8 @@ impl McpSession {
         cancel: CancellationToken,
     ) -> Result<(), McpError> {
         let progress = Progress::default();
-        *self.initializing.lock() = Some(receipt.clone());
+        let previous = self.state.lock().initializing.replace(receipt.clone());
+        drop(previous);
         let service = match serve_client_with_ct(
             progress.clone(),
             Observed::new(transport, receipt.clone()),
@@ -512,9 +531,8 @@ impl McpSession {
                 return Err(McpError::Initialization(Arc::new(error)));
             }
         };
-        *self.initializing.lock() = None;
         let peer = service.peer().clone();
-        *self.connection.lock() = Some(Arc::new(Connection {
+        let connection = Arc::new(Connection {
             peer,
             progress,
             cancel,
@@ -523,11 +541,17 @@ impl McpSession {
             changed: Notify::new(),
             receipt,
             closing: std::sync::OnceLock::new(),
-        }));
+        });
+        let (initializing, previous) = {
+            let mut state = self.state.lock();
+            (state.initializing.take(), state.connection.replace(connection))
+        };
+        drop((initializing, previous));
         Ok(())
     }
     fn live(&self) -> Option<Arc<Connection>> {
-        self.connection.lock().clone().filter(|c| c.alive())
+        let connection = self.state.lock().connection.clone();
+        connection.filter(|c| c.alive())
     }
     async fn request(
         &self,
@@ -551,8 +575,9 @@ fn options(timeout: Option<Duration>) -> PeerRequestOptions {
 
 impl Drop for McpSession {
     fn drop(&mut self) {
-        self.cancel.get_mut().cancel();
-        if let Some(connection) = self.connection.get_mut().take() {
+        let state = self.state.get_mut();
+        state.cancel.cancel();
+        if let Some(connection) = state.connection.take() {
             connection.close();
         }
     }

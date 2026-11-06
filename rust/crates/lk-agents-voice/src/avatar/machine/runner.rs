@@ -3,7 +3,7 @@
 //! `rtc.AVSynchronizer` (publishing the tracks on the first frame), and each segment's playback
 //! reported back.
 //!
-//! [`RunnerCore`] makes every decision as a state machine: `handle(event, now) -> effects`, no
+//! [`RunnerCore`] makes every decision as a state machine: `handle(event) -> effects`, no
 //! timers of its own. The frames are plain records ([`AvatarFrame`], [`MediaFrame`]): the core
 //! decides where each one goes, never what is in it. The shared runtime queue owner
 //! executes each [`AvatarIoOperation`] against the host proxies and answer it with an [`AvatarEvent`].
@@ -11,7 +11,6 @@
 use crate::avatar::effects::AvatarEffect;
 use std::collections::{BTreeMap, VecDeque};
 
-use lk_agents_abi::Ts;
 use lk_agents_abi::errors::ProviderError;
 pub use lk_agents_abi::utils::video::{AudioReceiverFrame, AvatarFrame, MediaFrame};
 
@@ -149,12 +148,71 @@ enum Publish {
     Done,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Closing {
-    /// The receiver is closing; the loops still run, as the reference's do.
-    Receiver,
-    Cancelling,
-    Media,
+#[derive(Debug, Clone)]
+enum RunPhase {
+    NotStarted,
+    Starting(CallId),
+    Running,
+    Complete,
+    Failed(RunnerError),
+}
+
+#[derive(Debug)]
+enum Lifecycle {
+    Open(RunPhase),
+    /// The receiver is closing; the loops still run.
+    ClosingReceiver {
+        call: CallId,
+        phase: RunPhase,
+    },
+    Cancelling {
+        call: CallId,
+        phase: RunPhase,
+    },
+    ClosingMedia {
+        call: CallId,
+        outcome: Result<(), RunnerError>,
+    },
+    Closed {
+        outcome: Result<(), RunnerError>,
+    },
+}
+
+impl Lifecycle {
+    fn phase(&self) -> Option<&RunPhase> {
+        match self {
+            Self::Open(phase)
+            | Self::ClosingReceiver { phase, .. }
+            | Self::Cancelling { phase, .. } => Some(phase),
+            Self::ClosingMedia { .. } | Self::Closed { .. } => None,
+        }
+    }
+
+    fn phase_mut(&mut self) -> Option<&mut RunPhase> {
+        match self {
+            Self::Open(phase)
+            | Self::ClosingReceiver { phase, .. }
+            | Self::Cancelling { phase, .. } => Some(phase),
+            Self::ClosingMedia { .. } | Self::Closed { .. } => None,
+        }
+    }
+
+    fn fail(&mut self, error: RunnerError) {
+        match self {
+            Self::Open(phase)
+            | Self::ClosingReceiver { phase, .. }
+            | Self::Cancelling { phase, .. } => {
+                if !matches!(phase, RunPhase::Failed(_)) {
+                    *phase = RunPhase::Failed(error);
+                }
+            }
+            Self::ClosingMedia { outcome, .. } | Self::Closed { outcome } => {
+                if outcome.is_ok() {
+                    *outcome = Err(error);
+                }
+            }
+        }
+    }
 }
 
 /// The runner's decisions, one event at a time.
@@ -164,9 +222,7 @@ pub struct RunnerCore {
     /// `_room_connected_fut`.
     connected: bool,
     publish: Publish,
-    /// The `start()` waiting on a publish.
-    start_call: Option<CallId>,
-    started: bool,
+    lifecycle: Lifecycle,
     read: Pump,
     forward: Pump,
     /// The frame the forward loop holds while the tracks publish, and its duration if audio.
@@ -184,7 +240,7 @@ pub struct RunnerCore {
     /// Each clear in flight and the actual segments read whose finishes it owes.
     clears: BTreeMap<u64, Clear>,
     clear_epoch: u64,
-    held_audio: Option<(u64, bool, Option<AvatarPlaybackSegment>, AudioReceiverFrame)>,
+    held_audio: Option<HeldAudio>,
     reporting: bool,
     // Pending finish I/O is bounded by the segments already read; new reads are held.
     reports: VecDeque<PendingReport>,
@@ -193,7 +249,6 @@ pub struct RunnerCore {
     /// audio, is the cut segment's, whose finish the clear reported. The reference pushes it on to
     /// the generator, where it reports the next segment finished before it played.
     stale_end: bool,
-    next_clear: u64,
     /// The last segment key minted for a receiver that keys none.
     unkeyed: u64,
     /// An audio frame is on its way into the generator. A clear waits for it:
@@ -201,18 +256,20 @@ pub struct RunnerCore {
     audio_pushing: bool,
     /// The clears waiting for that push to return.
     clears_waiting: Vec<u64>,
-    /// How the loops ended, as `asyncio.gather` sees them: the first failure, else both done.
-    finished: u8,
-    failed: Option<RunnerError>,
     waiting: Vec<CallId>,
-    closing: Option<(Closing, CallId)>,
-    closed: bool,
 }
 
 #[derive(Debug)]
 struct Clear {
-    epoch: u64,
     owed: VecDeque<AvatarPlaybackSegment>,
+}
+
+#[derive(Debug)]
+struct HeldAudio {
+    epoch: u64,
+    starts_segment: bool,
+    segment: Option<AvatarPlaybackSegment>,
+    frame: AudioReceiverFrame,
 }
 
 #[derive(Debug)]
@@ -228,8 +285,7 @@ impl RunnerCore {
             lazy_publish,
             connected: false,
             publish: Publish::Never,
-            start_call: None,
-            started: false,
+            lifecycle: Lifecycle::Open(RunPhase::NotStarted),
             read: Pump::Idle,
             forward: Pump::Idle,
             held: None,
@@ -244,24 +300,24 @@ impl RunnerCore {
             reports: VecDeque::new(),
             frame_pull_paused: false,
             stale_end: false,
-            next_clear: 0,
             unkeyed: 0,
             audio_pushing: false,
             clears_waiting: Vec::new(),
-            finished: 0,
-            failed: None,
             waiting: Vec::new(),
-            closing: None,
-            closed: false,
         }
     }
 
     /// Whether the loops are being cut: no answer moves them on any more.
     fn cut(&self) -> bool {
-        self.closed || matches!(self.closing, Some((Closing::Cancelling | Closing::Media, _)))
+        matches!(
+            self.lifecycle,
+            Lifecycle::Cancelling { .. }
+                | Lifecycle::ClosingMedia { .. }
+                | Lifecycle::Closed { .. }
+        )
     }
 
-    pub fn handle(&mut self, event: AvatarEvent, _now: Ts) -> Vec<AvatarEffect> {
+    pub fn handle(&mut self, event: AvatarEvent) -> Vec<AvatarEffect> {
         let mut effects = Vec::new();
         // an answer to an op the close cut
         if self.cut() && event.dropped_once_cut() {
@@ -299,7 +355,9 @@ impl RunnerCore {
             self.begin(out);
             out.push(AvatarEffect::Answer { call, result: Ok(()) });
         } else {
-            self.start_call = Some(call);
+            if let Some(phase) = self.lifecycle.phase_mut() {
+                *phase = RunPhase::Starting(call);
+            }
             self.ask_publish(out);
         }
     }
@@ -322,10 +380,11 @@ impl RunnerCore {
 
     fn room_failed(&mut self, error: ProviderError, out: &mut Vec<AvatarEffect>) {
         let error = RunnerError::Failed(error);
-        self.failed.get_or_insert(error.clone());
-        if let Some(call) = self.start_call.take() {
-            out.push(AvatarEffect::Answer { call, result: Err(error) });
+        if let Some(RunPhase::Starting(call)) = self.lifecycle.phase() {
+            let call = *call;
+            out.push(AvatarEffect::Answer { call, result: Err(error.clone()) });
         }
+        self.lifecycle.fail(error);
         self.answer_waiting(out);
     }
 
@@ -335,9 +394,8 @@ impl RunnerCore {
             return;
         }
         self.clear_epoch = epoch;
-        let clear = self.next_clear;
-        self.next_clear += 1;
-        self.clears.insert(clear, Clear { epoch, owed: std::mem::take(&mut self.owed) });
+        let clear = epoch;
+        self.clears.insert(clear, Clear { owed: std::mem::take(&mut self.owed) });
         self.stale_end = std::mem::take(&mut self.reading);
         if self.audio_pushing {
             self.clears_waiting.push(clear);
@@ -397,7 +455,7 @@ impl RunnerCore {
             Ok((epoch, starts_segment, segment, Some(item)))
                 if !self.clears.is_empty() || self.reporting =>
             {
-                self.held_audio = Some((epoch, starts_segment, segment, item));
+                self.held_audio = Some(HeldAudio { epoch, starts_segment, segment, frame: item });
             }
             Ok((_, _, segment, Some(item))) => self.push_audio(segment, item, out),
             Ok((_, _, _, None)) => self.loop_ended(Loop::ReadAudio, Ok(()), out),
@@ -414,8 +472,8 @@ impl RunnerCore {
         out: &mut Vec<AvatarEffect>,
     ) {
         let (position, interrupted) = (NOT_PLAYED, true);
-        match self.clears.values_mut().find(|clear| clear.epoch > epoch) {
-            Some(clear) => clear.owed.push_back(segment),
+        match self.clears.iter_mut().find(|(clear, _)| **clear > epoch) {
+            Some((_, clear)) => clear.owed.push_back(segment),
             None => self.report_finished(segment, position, interrupted, out),
         }
     }
@@ -504,7 +562,10 @@ impl RunnerCore {
 
     fn published(&mut self, result: Result<(), ProviderError>, out: &mut Vec<AvatarEffect>) {
         self.publish = if result.is_ok() { Publish::Done } else { Publish::Never };
-        if let Some(call) = self.start_call.take() {
+        if let Some(RunPhase::Starting(call)) = self.lifecycle.phase().cloned() {
+            if let Some(phase) = self.lifecycle.phase_mut() {
+                *phase = RunPhase::NotStarted;
+            }
             self.answer_start(call, result, out);
         } else if self.forward == Pump::Publishing {
             self.resume_held_frame(result, out);
@@ -573,7 +634,7 @@ impl RunnerCore {
             if finished {
                 // Delivery is unknown. Preserve the ordering barrier and held input
                 // until explicit close; a failed callback is not an acknowledgement.
-                self.failed.get_or_insert(RunnerError::Failed(error));
+                self.lifecycle.fail(RunnerError::Failed(error));
                 self.answer_waiting(out);
             }
             return;
@@ -589,37 +650,43 @@ impl RunnerCore {
     }
 
     fn close(&mut self, call: CallId, out: &mut Vec<AvatarEffect>) {
-        match self.closing {
-            _ if self.closed => out.push(AvatarEffect::Answer { call, result: Ok(()) }),
-            // a second close while one is under way waits for nothing more: the first answers
-            Some(_) => out.push(AvatarEffect::Answer { call, result: Ok(()) }),
-            None => {
-                self.closing = Some((Closing::Receiver, call));
+        match &self.lifecycle {
+            Lifecycle::Open(phase) => {
+                self.lifecycle = Lifecycle::ClosingReceiver { call, phase: phase.clone() };
                 out.push(AvatarEffect::Io(AvatarIoOperation::CloseReceiver));
             }
+            // A second close waits for nothing more: the first answers.
+            _ => out.push(AvatarEffect::Answer { call, result: Ok(()) }),
         }
     }
 
     fn receiver_closed(&mut self, result: Result<(), ProviderError>, out: &mut Vec<AvatarEffect>) {
-        let Some((Closing::Receiver, call)) = self.closing else {
+        let Lifecycle::ClosingReceiver { call, phase } = &self.lifecycle else {
             return;
         };
+        let (call, phase) = (*call, phase.clone());
         match result {
             Ok(()) => {
-                self.closing = Some((Closing::Cancelling, call));
+                self.lifecycle = Lifecycle::Cancelling { call, phase };
                 out.push(AvatarEffect::CancelIo);
             }
             // as the reference's `aclose`, which raises before cancelling anything
             Err(e) => {
-                self.closing = None;
+                self.lifecycle = Lifecycle::Open(phase);
                 out.push(AvatarEffect::Answer { call, result: Err(RunnerError::Failed(e)) });
             }
         }
     }
 
     fn io_cancelled(&mut self, out: &mut Vec<AvatarEffect>) {
-        let Some((Closing::Cancelling, call)) = self.closing else {
+        let Lifecycle::Cancelling { call, phase } = &self.lifecycle else {
             return;
+        };
+        let call = *call;
+        let outcome = match phase {
+            RunPhase::Failed(error) => Err(error.clone()),
+            RunPhase::Complete => Ok(()),
+            _ => Err(RunnerError::Closed),
         };
         self.held = None;
         self.held_audio = None;
@@ -629,30 +696,28 @@ impl RunnerCore {
         self.pushing = None;
         self.clears.clear();
         self.clears_waiting.clear();
-        for pump in [&mut self.read, &mut self.forward] {
-            if *pump != Pump::Done {
-                *pump = Pump::Done;
-                self.failed.get_or_insert(RunnerError::Closed);
-            }
-        }
-        if !self.started {
-            self.failed.get_or_insert(RunnerError::Closed);
-        }
+        self.read = Pump::Done;
+        self.forward = Pump::Done;
+        self.lifecycle = Lifecycle::ClosingMedia { call, outcome };
         self.answer_waiting(out);
-        self.closing = Some((Closing::Media, call));
         out.push(AvatarEffect::Io(AvatarIoOperation::CloseMedia));
     }
 
     fn media_closed(&mut self, result: Result<(), ProviderError>, out: &mut Vec<AvatarEffect>) {
-        if let Some((Closing::Media, call)) = self.closing.take() {
-            self.closed = true;
+        if let Lifecycle::ClosingMedia { call, outcome } = &self.lifecycle {
+            let call = *call;
+            self.lifecycle = Lifecycle::Closed { outcome: outcome.clone() };
             out.push(AvatarEffect::Answer { call, result: result.map_err(RunnerError::Failed) });
         }
     }
 
     /// Start both loops.
     fn begin(&mut self, out: &mut Vec<AvatarEffect>) {
-        self.started = true;
+        if let Some(phase) = self.lifecycle.phase_mut()
+            && !matches!(phase, RunPhase::Failed(_))
+        {
+            *phase = RunPhase::Running;
+        }
         self.read = Pump::Busy;
         self.forward = Pump::Busy;
         out.push(AvatarEffect::Io(AvatarIoOperation::OpenAudio));
@@ -691,15 +756,12 @@ impl RunnerCore {
     fn release_audio(&mut self, out: &mut Vec<AvatarEffect>) {
         if self.clears.is_empty() && !self.reporting {
             if let Some(observation) = self.held_audio.take() {
-                out.extend(self.handle(
-                    AvatarEvent::Audio(Ok((
-                        observation.0,
-                        observation.1,
-                        observation.2,
-                        Some(observation.3),
-                    ))),
-                    Ts::ZERO,
-                ));
+                out.extend(self.handle(AvatarEvent::Audio(Ok((
+                    observation.epoch,
+                    observation.starts_segment,
+                    observation.segment,
+                    Some(observation.frame),
+                )))));
             }
             if !self.reporting && self.frame_pull_paused {
                 self.frame_pull_paused = false;
@@ -750,10 +812,18 @@ impl RunnerCore {
         };
         *pump = Pump::Done;
         match result {
-            Ok(()) => self.finished += 1,
+            Ok(()) => {
+                if self.read == Pump::Done
+                    && self.forward == Pump::Done
+                    && let Some(phase) = self.lifecycle.phase_mut()
+                    && !matches!(phase, RunPhase::Failed(_))
+                {
+                    *phase = RunPhase::Complete;
+                }
+            }
             Err(e) => {
                 log_error(name, &e);
-                self.failed.get_or_insert(RunnerError::Failed(e));
+                self.lifecycle.fail(RunnerError::Failed(e));
             }
         }
         self.answer_waiting(out);
@@ -761,11 +831,16 @@ impl RunnerCore {
 
     /// `wait_for_complete`'s answers, once the outcome is known.
     fn answer_waiting(&mut self, out: &mut Vec<AvatarEffect>) {
-        let result = match &self.failed {
-            Some(e) => Err(e.clone()),
-            None if !self.started && self.start_call.is_none() => Err(RunnerError::NotStarted),
-            None if self.finished == 2 => Ok(()),
-            None => return,
+        let result = match &self.lifecycle {
+            Lifecycle::ClosingMedia { outcome, .. } | Lifecycle::Closed { outcome } => {
+                outcome.clone()
+            }
+            lifecycle => match lifecycle.phase() {
+                Some(RunPhase::Failed(error)) => Err(error.clone()),
+                Some(RunPhase::NotStarted) => Err(RunnerError::NotStarted),
+                Some(RunPhase::Complete) => Ok(()),
+                _ => return,
+            },
         };
         for call in self.waiting.drain(..) {
             out.push(AvatarEffect::Answer { call, result: result.clone() });
