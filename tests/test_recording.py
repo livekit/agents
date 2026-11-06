@@ -1057,9 +1057,9 @@ def test_exporters_only_upload_records_of_registered_jobs() -> None:
         "job-off": _JobTelemetry(attributes={}, traces_enabled=False, logs_enabled=False),
     }
 
-    recorded = SimpleNamespace(attributes={"room_id": "room-1", "job_id": "job-on"})
-    disabled = SimpleNamespace(attributes={"room_id": "room-2", "job_id": "job-off"})
-    released = SimpleNamespace(attributes={"room_id": "room-3", "job_id": "job-gone"})
+    recorded = SimpleNamespace(attributes={"lk.room_id": "room-1", "job_id": "job-on"})
+    disabled = SimpleNamespace(attributes={"lk.room_id": "room-2", "job_id": "job-off"})
+    released = SimpleNamespace(attributes={"lk.room_id": "room-3", "job_id": "job-gone"})
     unstamped = SimpleNamespace(attributes={"some": "attr"})
 
     inner = MagicMock()
@@ -1078,7 +1078,7 @@ def test_exporters_only_upload_records_of_registered_jobs() -> None:
         log_gate.export([_rec({"job_id": "job-off"}), _rec(None)]) is LogRecordExportResult.SUCCESS
     )
     inner.export.assert_not_called()
-    recorded_rec = _rec({"room_id": "room-1", "job_id": "job-on"})
+    recorded_rec = _rec({"lk.room_id": "room-1", "job_id": "job-on"})
     log_gate.export([_rec({"job_id": "job-gone"}), recorded_rec])
     inner.export.assert_called_once_with([recorded_rec])
 
@@ -1479,7 +1479,7 @@ def _make_telemetry_job_ctx(
     ctx.job.room.sid = room_id
     ctx._telemetry_state = (
         _JobTelemetry(
-            attributes={"room_id": room_id, "job_id": job_id, **(metadata or {})},
+            attributes={"lk.room_id": room_id, "job_id": job_id, **(metadata or {})},
             traces_enabled=traces,
             logs_enabled=logs,
         )
@@ -1490,7 +1490,7 @@ def _make_telemetry_job_ctx(
 
 
 @contextlib.contextmanager
-def _job_ctx_active(ctx: MagicMock) -> Iterator[None]:
+def _job_ctx_active(ctx: MagicMock | None) -> Iterator[None]:
     from livekit.agents.job import _JobContextVar
 
     token = _JobContextVar.set(ctx)
@@ -1550,7 +1550,7 @@ def test_spans_of_a_job_that_disabled_traces_are_not_uploaded() -> None:
     with _job_ctx_active(disabled_ctx):
         processor.on_start(span)
     # attribution is unconditional — the integrator's copy keeps room/job ids
-    span.set_attributes.assert_called_once_with({"room_id": "room-b", "job_id": "job-b"})
+    span.set_attributes.assert_called_once_with({"lk.room_id": "room-b", "job_id": "job-b"})
 
     export_jobs = {
         "job-a": _JobTelemetry(attributes={}, traces_enabled=True, logs_enabled=True),
@@ -1559,8 +1559,8 @@ def test_spans_of_a_job_that_disabled_traces_are_not_uploaded() -> None:
     inner = MagicMock()
     gate = _GatedSpanExporter(inner, export_jobs)
 
-    disabled_span = SimpleNamespace(attributes={"room_id": "room-b", "job_id": "job-b"})
-    recorded_span = SimpleNamespace(attributes={"room_id": "room-a", "job_id": "job-a"})
+    disabled_span = SimpleNamespace(attributes={"lk.room_id": "room-b", "job_id": "job-b"})
+    recorded_span = SimpleNamespace(attributes={"lk.room_id": "room-a", "job_id": "job-a"})
 
     gate.export([disabled_span])
     inner.export.assert_not_called()
@@ -1577,7 +1577,7 @@ def test_concurrent_jobs_stamp_their_own_identity_on_spans() -> None:
 
     processor = _MetadataSpanProcessor()
     # a second job configured after the first: the shared slot holds job B's data
-    processor.set_metadata({"room_id": "room-b", "job_id": "job-b"})
+    processor.set_metadata({"lk.room_id": "room-b", "job_id": "job-b"})
 
     ctx_a = _make_telemetry_job_ctx(
         room_id="room-a", job_id="job-a", metadata={"lk.simulation.enabled": True}
@@ -1586,13 +1586,13 @@ def test_concurrent_jobs_stamp_their_own_identity_on_spans() -> None:
     with _job_ctx_active(ctx_a):
         processor.on_start(span)
     span.set_attributes.assert_called_once_with(
-        {"room_id": "room-a", "job_id": "job-a", "lk.simulation.enabled": True}
+        {"lk.room_id": "room-a", "job_id": "job-a", "lk.simulation.enabled": True}
     )
 
     # outside any job context, the slot is still the fallback
     span = MagicMock()
     processor.on_start(span)
-    span.set_attributes.assert_called_once_with({"room_id": "room-b", "job_id": "job-b"})
+    span.set_attributes.assert_called_once_with({"lk.room_id": "room-b", "job_id": "job-b"})
 
 
 def test_logs_of_a_job_that_disabled_logs_are_not_uploaded() -> None:
@@ -1617,7 +1617,7 @@ def test_logs_of_a_job_that_disabled_logs_are_not_uploaded() -> None:
     # attribution is unconditional, recording options notwithstanding
     disabled_ctx = _make_telemetry_job_ctx(room_id="room-b", job_id="job-b", logs=False)
     attrs = _emit(disabled_ctx)
-    assert attrs["room_id"] == "room-b" and attrs["job_id"] == "job-b"
+    assert attrs["lk.room_id"] == "room-b" and attrs["job_id"] == "job-b"
 
     export_jobs = {
         "job-a": _JobTelemetry(attributes={}, traces_enabled=True, logs_enabled=True),
@@ -1627,7 +1627,7 @@ def test_logs_of_a_job_that_disabled_logs_are_not_uploaded() -> None:
     gate = _GatedLogExporter(inner, export_jobs)
     disabled = SimpleNamespace(log_record=SimpleNamespace(attributes=attrs))
     recorded = SimpleNamespace(
-        log_record=SimpleNamespace(attributes={"room_id": "room-a", "job_id": "job-a"})
+        log_record=SimpleNamespace(attributes={"lk.room_id": "room-a", "job_id": "job-a"})
     )
 
     gate.export([disabled])
@@ -1736,3 +1736,82 @@ async def test_upload_session_report_scopes_the_logger_by_lk_room_id() -> None:
     assert attrs["lk.room_id"] == "RM_1"
     assert "room_id" not in attrs
     assert "lk.room_sid" not in attrs
+
+
+@pytest.mark.parametrize("executor_kind", ["thread", "process"])
+@pytest.mark.parametrize("processor_kind", ["simple", "batch"])
+@pytest.mark.parametrize("stamp_source", ["context", "fallback", "none"])
+def test_executor_logs_export_only_canonical_room_id(
+    executor_kind: str, processor_kind: str, stamp_source: str
+) -> None:
+    """Executor log context survives the real OTLP encoding without legacy room keys."""
+    from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
+    from opentelemetry.proto.collector.logs.v1.logs_service_pb2 import ExportLogsServiceRequest
+    from opentelemetry.sdk._logs import LoggerProvider
+    from opentelemetry.sdk._logs.export import BatchLogRecordProcessor, SimpleLogRecordProcessor
+
+    from livekit.agents.ipc.job_proc_executor import ProcJobExecutor
+    from livekit.agents.ipc.job_thread_executor import ThreadJobExecutor
+    from livekit.agents.telemetry import traces as traces_mod
+    from livekit.agents.telemetry.pii import _PIIFilteringLogProcessor
+
+    # No threads/processes are started: exercise the actual extra producers, handler,
+    # processors, upload gate and protobuf encoder, intercepting only HTTP transport.
+    executor: Any
+    if executor_kind == "thread":
+        executor = object.__new__(ThreadJobExecutor)
+        executor._thread = None
+    else:
+        executor = object.__new__(ProcJobExecutor)
+        executor._pid = 123
+
+    state = traces_mod._JobTelemetry(attributes={}, traces_enabled=True, logs_enabled=True)
+    exporter = OTLPLogExporter(endpoint="http://localhost:4318/v1/logs")
+    provider = LoggerProvider(shutdown_on_exit=False)
+    provider.add_log_record_processor(_PIIFilteringLogProcessor())
+    metadata = traces_mod._MetadataLogProcessor()
+    provider.add_log_record_processor(metadata)
+    gate = traces_mod._GatedLogExporter(exporter, {"AJ_1": state, "AJ_2": state})
+    processor = (
+        SimpleLogRecordProcessor(gate)
+        if processor_kind == "simple"
+        else BatchLogRecordProcessor(gate)
+    )
+    provider.add_log_record_processor(processor)
+    handler = traces_mod._TraceLevelLoggingHandler(logger_provider=provider)
+    logger = logging.Logger("executor-room-id", level=logging.INFO)
+    logger.addHandler(handler)
+    try:
+        with patch.object(
+            exporter._client, "export", return_value=SimpleNamespace(success=True)
+        ) as send:
+            for job_id, room_sid in (("AJ_1", "RM_1"), ("AJ_2", "RM_2")):
+                ctx = _make_telemetry_job_ctx(room_id=room_sid, job_id=job_id)
+                executor._running_job = SimpleNamespace(job=ctx.job)
+                ctx.job.room.name = "test-room"
+                if stamp_source == "fallback":
+                    metadata.set_metadata(ctx._telemetry_state.attributes)
+                with _job_ctx_active(ctx if stamp_source == "context" else None):
+                    logger.info("job exiting", extra=executor.logging_extra())
+            assert provider.force_flush()
+
+        records = [
+            record
+            for call in send.call_args_list
+            for resource in ExportLogsServiceRequest.FromString(call.args[0]).resource_logs
+            for scope in resource.scope_logs
+            for record in scope.log_records
+        ]
+        assert len(records) == 2
+        for record, room_sid, job_id in zip(
+            records, ("RM_1", "RM_2"), ("AJ_1", "AJ_2"), strict=True
+        ):
+            attrs = {attr.key: attr.value.string_value for attr in record.attributes}
+            assert attrs["lk.room_id"] == room_sid
+            assert attrs["job_id"] == job_id
+            assert not {"room_id", "lk.room_sid", "lk.room.sid"} & attrs.keys()
+            assert not any(key.endswith("_sid") for key in attrs)
+    finally:
+        logger.removeHandler(handler)
+        handler.close()
+        provider.shutdown()

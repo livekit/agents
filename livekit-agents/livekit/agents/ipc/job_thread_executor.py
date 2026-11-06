@@ -12,6 +12,7 @@ from typing import Any
 from .. import utils
 from ..job import JobContext, JobProcess, RunningJobInfo
 from ..log import logger
+from ..telemetry import trace_types
 from ..utils.aio import duplex_unix
 from . import channel, job_proc_lazy_main, proto
 from .inference_executor import InferenceExecutor
@@ -366,6 +367,6 @@ class ThreadJobExecutor:
         if self._running_job:
             extra["job_id"] = self._running_job.job.id
             extra["room"] = self._running_job.job.room.name
-            extra["room_id"] = self._running_job.job.room.sid
+            extra[trace_types.ATTR_ROOM_ID] = self._running_job.job.room.sid
 
         return extra
