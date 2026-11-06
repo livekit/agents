@@ -333,9 +333,9 @@ class StreamedASGI(httpx.AsyncBaseTransport):
 
 @pytest.fixture
 async def expert(agentdb_storage: AgentDBStorage) -> AsyncIterator[Callable[..., A2ADelegate]]:
-    """``expert(handler, name=, announce=, tool=, streamed=)``: an ``A2ADelegate`` to an
-    expert's door, its own lane, on the same store; ``tool`` names its tool, and ``streamed``
-    hands the expert's progress on as it is made."""
+    """``expert(handler, name=, announce=, tool=, streamed=, answer_detector=)``: an
+    ``A2ADelegate`` to an expert's door, its own lane, on the same store; ``tool`` names its
+    tool, and ``streamed`` hands the expert's progress on as it is made."""
     clients: list[httpx.AsyncClient] = []
     delegates: list[A2ADelegate] = []
 
@@ -345,6 +345,7 @@ async def expert(agentdb_storage: AgentDBStorage) -> AsyncIterator[Callable[...,
         announce: bool = True,
         tool: str | None = None,
         streamed: bool = False,
+        answer_detector: Any = None,
         **kw: Any,
     ) -> A2ADelegate:
         server = AgentServer(
@@ -361,7 +362,15 @@ async def expert(agentdb_storage: AgentDBStorage) -> AsyncIterator[Callable[...,
             )
         )
         url = f"http://experts.test/{name}"
-        delegates.append(A2ADelegate(url, httpx_client=clients[-1], announce=announce, name=tool))
+        delegates.append(
+            A2ADelegate(
+                url,
+                httpx_client=clients[-1],
+                announce=announce,
+                name=tool,
+                answer_detector=answer_detector,
+            )
+        )
         return delegates[-1]
 
     yield make

@@ -493,7 +493,20 @@ async def test_the_experts_question_is_answered_through_the_delegates_tool(
                         ttft=0,
                         duration=0,
                     ),
-                    # the answer never reaches this model: its next input is the expert's reply
+                    # the model sends the answer to the expert that asked
+                    FakeLLMResponse(
+                        input="Aetna, member 12-345",
+                        content="",
+                        ttft=0,
+                        duration=0,
+                        tool_calls=[
+                            FunctionToolCall(
+                                name="ask",
+                                arguments='{"request": "Aetna, member 12-345"}',
+                                call_id="c2",
+                            )
+                        ],
+                    ),
                     FakeLLMResponse(
                         input="covered by Aetna 12-345",
                         content="You are covered.",

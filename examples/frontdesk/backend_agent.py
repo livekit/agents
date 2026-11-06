@@ -165,6 +165,7 @@ back_office = AgentHandler(lane="backend")
     state=Patient,
 )
 async def text(ctx: A2ASessionContext[Patient]) -> RunResult[str]:
+    # TODO: read the patient's own words on ctx.caller_lane once text stores them before delegating
     # the run as it is: its question while it waits, else its answer, none while work runs on
     return await backend.run(
         ctx.message, message_history=ctx.message_history, state=ctx.state, deps=cal

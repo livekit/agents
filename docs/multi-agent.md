@@ -127,7 +127,7 @@ conversation. The caller depends on nothing coming back
 but core A2A: the working statuses are the progress, the artifact is the
 answer. See [a2a.md](a2a.md), "Writing an expert in another framework".
 
-`A2ADelegate(url, token=None, httpx_client=None, name=None, announce=True, conn_options=DEFAULT_API_CONNECT_OPTIONS)`.
+`A2ADelegate(url, token=None, httpx_client=None, name=None, announce=True, answer_detector=False, conn_options=DEFAULT_API_CONNECT_OPTIONS)`.
 A dropped answer stream is read again up to `conn_options.max_retry` times. With no `token`, an
 expert on the project's own host (the host of `LIVEKIT_URL`) gets a project
 token minted from `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET`, which passes a
@@ -138,11 +138,14 @@ the question is the delegation's output, and the person's answer continues
 that task, read by the expert's own model. The delegate's tool returns the
 question as an `InputRequired` that keeps the expert's task, so the front
 desk asks it in its own words, or as written when the expert flagged it
-`livekit/verbatim`, and what the person says next is sent to the expert as the
-tool's next request, as they said it, with no model turn in between: on a
-call the framework runs the tool on the turn's transcript, in text on the
-next message, on whichever worker gets it. A
-delegation canceled on the caller's side, as when the person speaks over a
+`livekit/verbatim`, and the model sends the person's answer as the tool's next
+request, told so by the question's output, on a call and in text alike. That
+call continues the task of the open question the person spoke after that
+`answer_detector` picks (`True` for an `InputRequiredDetector`), else the
+one asked last; a reply it finds fits more than one sends nothing, and the
+model asks which. On a call the person's words are stored in the thread
+before the request goes out, so an expert that shares the thread reads them
+as said. A delegation canceled on the caller's side, as when the person speaks over a
 call, sends `tasks/cancel` to the expert with `livekit/reason:
 caller-canceled`.
 

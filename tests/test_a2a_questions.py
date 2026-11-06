@@ -97,6 +97,11 @@ def delegating(request: str) -> Reply:
     return Reply(tool_calls=[call("ask", "c1", request=request)])
 
 
+def relaying(text: str, call_id: str = "c2") -> Reply:
+    """The front's model sends the person's reply ``text`` to the expert."""
+    return Reply(tool_calls=[call("ask", call_id, request=text)], when=said(text))
+
+
 @pytest.mark.rule("R44", "R41", "B8", "B28")
 def test_a_question_names_no_tool_and_no_timeout() -> None:
     with pytest.raises(TypeError):
@@ -226,7 +231,7 @@ async def test_a_non_answer_goes_to_the_experts_model_in_the_same_task(
         Reply("Let me check.", tool_calls=[call("book", "e1")]),
         Reply("For the confirmation.", tool_calls=[call("book", "e2")], when=said("why?")),
     )
-    desk_agent = front_desk(expert(runs(specialist)), delegating("book a visit"))
+    desk_agent = front_desk(expert(runs(specialist)), delegating("book a visit"), relaying("why?"))
     desk = door(runs(desk_agent))
     thread = await desk.thread()
     asked = await desk.send("book me in", context_id=thread)
@@ -234,10 +239,12 @@ async def test_a_non_answer_goes_to_the_experts_model_in_the_same_task(
     tasks = {t["id"] for t in await desk.list_tasks(thread)}
 
     again = await desk.send("why?", context_id=thread)
-    assert again.task["id"] == asked.task["id"] and again.state == "input_required"
+    assert again.state == "input_required"
     assert user_texts(model_of(specialist).requests[1])[-1] == "why?"
-    assert {t["id"] for t in await desk.list_tasks(thread)} == tasks
-    assert len(model_of(desk_agent).requests) == 1
+    # the expert's task went on; the front's question closed into the message's own task
+    assert {t["id"] for t in await desk.list_tasks(thread)} == tasks | {again.task["id"]}
+    closed = await desk.get_task(asked.task["id"], thread)
+    assert metadata_from_wire(closed.get("metadata"))[MERGED_INTO] == again.task["id"]
 
 
 @pytest.mark.rule("R32", "R40")
@@ -249,8 +256,10 @@ async def test_a_nested_experts_question_is_answered_through_each_task(
         Reply(tool_calls=[call("book", "s2", email=EMAIL)], when=said(EMAIL)),
         booked=lambda email: ToolResult(f"Booked, {email}.", verbatim=True, reply_required=False),
     )
-    first = front_desk(expert(runs(second), "second"), delegating("book a cleaning"))
-    desk_agent = front_desk(expert(runs(first)), delegating("book a visit"))
+    first = front_desk(
+        expert(runs(second), "second"), delegating("book a cleaning"), relaying(EMAIL)
+    )
+    desk_agent = front_desk(expert(runs(first)), delegating("book a visit"), relaying(EMAIL))
     desk = door(runs(desk_agent))
     thread = await desk.thread()
     asked = await desk.send("book me in", context_id=thread)
@@ -259,12 +268,13 @@ async def test_a_nested_experts_question_is_answered_through_each_task(
     assert len(waiting) == 3, "one task per lane"
 
     done = await desk.send(EMAIL, context_id=thread)
-    assert done.task["id"] == asked.task["id"] and done.answer == "Booked, ana@example.com."
-    # each lane's task went on with the answer as said; no model step forwarded it
-    tasks = [await desk.get_task(t["id"], thread) for t in await desk.list_tasks(thread)]
-    assert {t["id"] for t in tasks} == waiting
-    assert all(t["history"][-1]["parts"][0]["text"] == EMAIL for t in tasks)
-    assert len(model_of(desk_agent).requests) == len(model_of(first).requests) == 1
+    assert done.answer == "Booked, ana@example.com."
+    # each expert's task went on with the answer its caller's model sent
+    tasks = {t["id"] for t in await desk.list_tasks(thread)}
+    assert tasks == waiting | {done.task["id"]}
+    for task_id in tasks - {asked.task["id"]}:
+        task = await desk.get_task(task_id, thread)
+        assert task["history"][-1]["parts"][0]["text"] == EMAIL
 
 
 @pytest.mark.rule("R32", "R40", "R38", "B37")
@@ -306,8 +316,8 @@ async def test_on_a_call_the_answer_to_an_experts_question_continues_its_task(
         await reply(FunctionCall(call_id="c1", name="ask", arguments='{"request": "book"}'))
         await reply()  # the question, in the model's words
         session.generate_reply(user_input=EMAIL)
-        # the model's wording of the call is replaced by what the person said
-        await reply(FunctionCall(call_id="c2", name="ask", arguments='{"request": "an email"}'))
+        # the model relays the answer: its call continues the expert's task
+        await reply(FunctionCall(call_id="c2", name="ask", arguments=f'{{"request": "{EMAIL}"}}'))
         while len(model_of(specialist).requests) < 3:
             await asyncio.sleep(0.01)
 

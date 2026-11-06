@@ -60,6 +60,7 @@ from ..llm.tool_context import (
     CUT_OFF_KEY,
     DELIVERED,
     TASK_KEY,
+    AskedQuestion,
     Completed,
     Failed,
     InputRequired,
@@ -77,7 +78,7 @@ from ..llm.tool_context import (
     is_transition,
     note_cut_off_replies,
 )
-from ..llm.utils import answer_arguments, parse_function_arguments
+from ..llm.utils import parse_function_arguments
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given
@@ -134,8 +135,8 @@ class RunHooks:
     what ``A2ADelegate`` sends as the expert's ``contextId`` (plan 7.5).
     ``agent_stack`` is the lane's stack as loaded and ``rebuild`` makes an agent of one entry,
     the server's registry; the run resolves them itself since only it knows the root.
-    ``answer_to`` are the tools whose question this message answers, each ``(tool, answer_ref)``
-    called with it before the model runs, with ``answer_ref`` on its ``RunContext``.
+    ``questions`` are the delegates' questions open on the lane, which a call of the delegate
+    may answer; ``answered`` collects those the turn's calls answered, for the door to close.
     ``delegated`` says the turn's message came from another agent: the run does not phrase its questions,
     the agent facing the person does. ``lane`` is the door's lane of the thread, what
     ``A2ADelegate`` names as the caller's. ``task_id`` marks what the run records
@@ -154,7 +155,8 @@ class RunHooks:
     thread_id: str | None = None
     agent_stack: Sequence[Ref] = ()
     rebuild: Callable[[Ref], Agent | None] | None = None
-    answer_to: Sequence[tuple[str, str]] = ()
+    questions: Sequence[AskedQuestion] = ()
+    answered: list[AskedQuestion] = field(default_factory=list)
     delegated: bool = False
     lane: str | None = None
     task_id: str | None = None
@@ -235,10 +237,19 @@ class TextTools:
         task.ctx._stop()
         await asyncio.wait({task.exe_task})
 
-    async def arguments(
-        self, tool: FunctionTool | RawFunctionTool, raw: dict[str, Any], ctx: RunContext[Any, Any]
-    ) -> dict[str, Any]:
-        return raw
+    async def questions(self, ctx: RunContext[Any, Any]) -> list[AskedQuestion]:
+        # in text the person wrote after every question shown to them
+        if (hooks := current_run_hooks()) is None:
+            return []
+        name = ctx.function_call.name
+        return [q for q in hooks.questions if q._record[1] == name and q not in hooks.answered]
+
+    def answering(self, ctx: RunContext[Any, Any], question: AskedQuestion) -> None:
+        if (hooks := current_run_hooks()) is not None:
+            hooks.answered.append(question)
+
+    async def record(self, ctx: RunContext[Any, Any]) -> None:
+        pass  # the turn commits the person's message with its reply
 
     def returned(self, ctx: RunContext[Any, Any], output: Any) -> Any:
         return output
@@ -735,8 +746,8 @@ class AgentRun(Generic[Run_T]):
             answer_to: Sequence[tuple[str, str]] | None = None,
         ) -> RunResult[Run_T]:
             """The task pauses on ``question`` from ``call``: as written when it is verbatim or
-            another agent asked, else in the agent's own words. ``answer_to`` are the tools that
-            take the answer, by default ``call``'s when the question carries a reference."""
+            another agent asked, else in the agent's own words. ``answer_to`` are the delegates'
+            questions it holds, each ``(tool, expert task)``, by default ``call``'s."""
             result._pending_call = call
             if answer_to is None:
                 ref = question._answer_ref
@@ -809,8 +820,7 @@ class AgentRun(Generic[Run_T]):
             fnc_call: FunctionCall, tool_ctx: ToolContext, typed: bool
         ) -> ToolExecutionOutput | AgentTask[Any, Any]:
             tool = tool_ctx.get_function_tool(fnc_call.name)
-            ref = forwarded.get(fnc_call.call_id)
-            out = await self._execute(tool, fnc_call, answer_ref=ref)
+            out = await self._execute(tool, fnc_call)
             # what the call sent so far goes out before the turn moves on
             await self._tools.sent(fnc_call.call_id)
             said = out.raw_output if not isinstance(out, AgentTask) else None
@@ -845,9 +855,6 @@ class AgentRun(Generic[Run_T]):
         )
         if taken is not None and (ended := await act(taken, None)) is not None:
             return ended
-        # the message answers a question whose tools take it: those calls come first, no model
-        answer_to = hooks.answer_to if hooks is not None else ()
-        forwarded: dict[str, str] = {}
 
         # a toolset whose setup failed is not tried again in this run; the next run tries again
         unready: set[Toolset] = set()
@@ -889,49 +896,41 @@ class AgentRun(Generic[Run_T]):
                 tools.append(self._final_result_tool())
             tool_ctx = ToolContext(tools)
 
-            handed = [
-                (c, ref) for name, ref in answer_to if (c := self._forward_answer(tool_ctx, name))
-            ]
-            answer_to = ()
-            forwarded = {c.call_id: ref for c, ref in handed}
-            if handed:
-                text, calls = "", [c for c, _ in handed]
-            else:
-                on_token = self._on_token or (hooks.on_token if hooks is not None else None)
-                request = _without_pending_calls(chat_ctx, self._hidden)
-                note_cut_off_replies(request)
-                if hint is not None:
-                    # as on a call: told last, next to what it is about, and not recorded
-                    request.add_message(role="system", content=[hint])
-                    hint = None
-                try:
-                    text, calls, usage = await self._infer(
-                        request,
-                        tool_ctx,
-                        on_token=on_token,
-                        tool_choice=tool_choice,
-                    )
-                except _ReplyInterrupted as e:
-                    # what was shown stays in the history, cut off; it is also the turn's answer
-                    if e.shown:
-                        record(ChatMessage(role="assistant", content=[e.shown], interrupted=True))
-                    for fnc in replies_to:
-                        fnc.extra[CUT_OFF_KEY] = "true"
-                    return finish(e.shown or None, interrupted=True)
-                self._usage._add_completion(usage)
-                if tool_choice == "none" and calls:
-                    logger.debug(
-                        "dropping tool calls made in the reply to a report",
-                        extra={"functions": [c.name for c in calls], "runId": self._id},
-                    )
-                    calls = []
-                if delivery and not text and not calls:
-                    # the answer carries the results, also when the model said nothing
-                    text = "\n\n".join(
-                        queued.fnc_call_out.output
-                        for queued in delivery
-                        if queued.fnc_call.call_id.endswith("_final")
-                    )
+            on_token = self._on_token or (hooks.on_token if hooks is not None else None)
+            request = _without_pending_calls(chat_ctx, self._hidden)
+            note_cut_off_replies(request)
+            if hint is not None:
+                # as on a call: told last, next to what it is about, and not recorded
+                request.add_message(role="system", content=[hint])
+                hint = None
+            try:
+                text, calls, usage = await self._infer(
+                    request,
+                    tool_ctx,
+                    on_token=on_token,
+                    tool_choice=tool_choice,
+                )
+            except _ReplyInterrupted as e:
+                # what was shown stays in the history, cut off; it is also the turn's answer
+                if e.shown:
+                    record(ChatMessage(role="assistant", content=[e.shown], interrupted=True))
+                for fnc in replies_to:
+                    fnc.extra[CUT_OFF_KEY] = "true"
+                return finish(e.shown or None, interrupted=True)
+            self._usage._add_completion(usage)
+            if tool_choice == "none" and calls:
+                logger.debug(
+                    "dropping tool calls made in the reply to a report",
+                    extra={"functions": [c.name for c in calls], "runId": self._id},
+                )
+                calls = []
+            if delivery and not text and not calls:
+                # the answer carries the results, also when the model said nothing
+                text = "\n\n".join(
+                    queued.fnc_call_out.output
+                    for queued in delivery
+                    if queued.fnc_call.call_id.endswith("_final")
+                )
             tool_choice = NOT_GIVEN
             replies_to = []
 
@@ -1205,32 +1204,13 @@ class AgentRun(Generic[Run_T]):
         self._stack_dirty = True
         return await task._enter(RunContext[Any, Any](function_call=fnc_call, run=self))
 
-    def _forward_answer(self, tool_ctx: ToolContext, name: str) -> FunctionCall | None:
-        """The call that forwards this run's message, the person's answer, to the tool whose
-        question it answers; ``None`` when that tool cannot take it."""
-        tool = tool_ctx.get_function_tool(name)
-        if tool is None:
-            logger.warning(
-                "the tool that takes the answer is not on the agent; the model reads it",
-                extra={"tool": name, "runId": self._id},
-            )
-            return None
-        arguments = answer_arguments(tool, self._message.text_content or "")
-        if arguments is None:
-            return None  # no string parameter: the model reads the answer
-        return FunctionCall(
-            name=name, arguments=json.dumps(arguments), call_id=utils.shortuuid("call_")
-        )
-
     async def _execute(
         self,
         tool: FunctionTool | RawFunctionTool | None,
         fnc_call: FunctionCall,
-        *,
-        answer_ref: str | None = None,
     ) -> ToolExecutionOutput | AgentTask[Any, Any]:
-        """Run one tool with a ``RunContext`` of this run and ``answer_ref``; the output is what
-        the model reads, or the ``AgentTask`` the tool awaited."""
+        """Run one tool with a ``RunContext`` of this run; the output is what the model reads, or
+        the ``AgentTask`` the tool awaited."""
         if tool is None:
             return make_tool_output(
                 fnc_call=fnc_call,
@@ -1245,7 +1225,6 @@ class AgentRun(Generic[Run_T]):
             return make_tool_output(fnc_call=fnc_call, output=None, exception=error)
         hooks = None if self._nested else _run_hooks.get()
         run_ctx = RunContext[Any, Any](function_call=fnc_call, run=self)
-        run_ctx._answer_ref = answer_ref
         executor = self._tools.executor
         executor.set_tool_options(self._tool_options())
         watching = None

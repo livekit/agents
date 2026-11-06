@@ -515,11 +515,10 @@ async def test_input_required_is_continued_by_the_answer_and_keeps_its_question(
 
     first = await run_turn(storage, sid, LANE, a2a("my car is damaged", "m1"), "interrupt", handler)
     assert first.task.status == "input-required"
-    assert first.task.internal is not None and first.task.internal.ask == {
-        "question": "Could you send a photo?",
-        "tool": "request_photo",
-        "call_id": "p1",
-    }
+    assert first.task.internal is not None
+    ask = dict(first.task.internal.ask)
+    assert isinstance(ask.pop("shown_at"), float), "when it was shown to the person"
+    assert ask == {"question": "Could you send a photo?", "tool": "request_photo", "call_id": "p1"}
     assert first.task.status_message["parts"][0]["text"] == "Could you send a photo?"
 
     answer = a2a("here it is", "m2", task_id=first.task.id)

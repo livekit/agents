@@ -442,14 +442,21 @@ class A2AService(Generic[S]):
 
     async def _continued(self, thread_id: str, message: StoredMessage) -> str | None:
         """The waiting task this message continues (plan 5.5): the one its ``taskId`` names, or
-        the oldest open question for the person's message with none; ``None`` for a new task."""
+        for the person's message with none, the question in front of them when a tool of the
+        agent asked it; ``None`` for a new task. A delegate's question stays open for the
+        model to answer through the delegate."""
         tasks = await Thread(self._storage, thread_id, agent_name=self.lane).tasks()
         named = str(message.get("taskId") or "")
         if not named:
             if metadata_from_wire(message.get("metadata")).get(KIND) == KIND_DELEGATION:
                 return None  # another agent names the task it continues
-            waiting = [r.id for r in tasks if r.status == "input-required"]
-            return waiting[-1] if waiting else None
+            for r in tasks:
+                ask = r.internal.ask if r.internal is not None else None
+                if r.status != "input-required" or not isinstance(ask, dict):
+                    continue
+                if not ask.get("passed") and not ask.get("answer_to"):
+                    return r.id
+            return None
 
         found = next((r for r in tasks if r.id == named), None)
         if found is None:

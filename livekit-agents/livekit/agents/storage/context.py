@@ -26,7 +26,14 @@ from .._generated.storage_turn import (
     PendingCall,
     TurnContext,
 )
-from ..llm import ChatContext, ChatItem, ChatMessage, FunctionCall, FunctionCallOutput
+from ..llm import (
+    AskedQuestion,
+    ChatContext,
+    ChatItem,
+    ChatMessage,
+    FunctionCall,
+    FunctionCallOutput,
+)
 from ..log import logger
 from ..voice.agent_run import RunHooks, TextTools, reset_run_hooks, set_run_hooks
 from ..voice.generation import ToolExecutionOutput
@@ -193,6 +200,18 @@ class TurnHost(Generic[S]):
         added: list[ChatItem] = []
         # a task that waited on the person and ended meanwhile holds nothing back any more
         self._waiting -= {r.id for r in ctx.tasks if r.status in TERMINAL_TASK_STATES}
+        # the delegates' questions open on the lane, oldest first; the task the message continues
+        # was taken to working for the turn
+        questions: list[AskedQuestion] = []
+        for row in reversed(ctx.tasks):
+            ask = row.internal.ask if row.internal is not None else None
+            waiting = row.status == "input-required" or row.id == ctx.task_id
+            if not waiting or not isinstance(ask, dict):
+                continue
+            for tool, ref in ask.get("answer_to", []):
+                question = str(ask.get("question", ""))
+                shown = float(ask.get("shown_at") or 0)
+                questions.append(AskedQuestion(question, ref, shown, _record=(row.id, tool)))
         hooks = RunHooks(
             boundary=boundary.check,
             on_result=results.append,
@@ -203,7 +222,7 @@ class TurnHost(Generic[S]):
             thread_id=self._thread.id,
             agent_stack=ctx.agent_stack,
             rebuild=self._agents.rebuild,
-            answer_to=ctx.answer_to,
+            questions=questions,
             delegated=bool(ctx.batch) and all(m.channel == "delegation" for m in ctx.batch),
             lane=ctx.lane,
             task_id=ctx.task_id,
@@ -259,6 +278,7 @@ class TurnHost(Generic[S]):
             hooks.close()
 
         handled_output = self._output(context, output, results)
+        handled_output.answered = [(q._record[0], q.ref) for q in hooks.answered]
         handled_output.new_items[:0] = [item_to_payload(item) for item in progress]
         return handled_output
 

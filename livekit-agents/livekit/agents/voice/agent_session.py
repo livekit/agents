@@ -1377,10 +1377,10 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 # the questions the call leaves open stay on its lane for the next door
                 left = [
                     OpenQuestion(
-                        q.transition.question,
-                        q.transition.verbatim,
+                        q.request.question,
+                        q.request.verbatim,
                         q.output,
-                        q.transition._answer_ref,
+                        q.request._answer_ref,
                     )
                     for q in (self._activity._questions if self._activity is not None else [])
                     if q.row is None

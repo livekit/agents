@@ -56,6 +56,7 @@ from .realtime_fallback_adapter import (
     RealtimeModelFallbackAdapter,
 )
 from .tool_context import (
+    AskedQuestion,
     Completed,
     DuplicateScope,
     Failed,
@@ -127,6 +128,7 @@ __all__ = [
     "Completed",
     "Failed",
     "Rejected",
+    "AskedQuestion",
     "InputRequired",
     "Working",
     "Transition",

@@ -167,11 +167,11 @@ that lost its connection resumes from any offset with `tasks/resubscribe`.
   as the reply. The next message in the thread answers it; see
   [human-in-the-loop.md](human-in-the-loop.md). One question is in front of
   the person: another task's question waits unshown, its task `working` with
-  `livekit/queued: true`, and the one queued first is asked when the one in
-  front is answered. Questions of several experts in one step take the one
-  answer each. Under `live` a question that a newer message cut off before it
-  was shown waits the same way: that message is a task of its own, and the
-  question is asked after its reply.
+  `livekit/queued: true`, and the one queued first is asked once the person
+  wrote after the one in front, answered or not. An expert's question stays
+  open until the model sends it an answer. Under `live` a question that a
+  newer message cut off before it was shown waits the same way: that message
+  is a task of its own, and the question is asked after its reply.
 - A message with the `taskId` of a terminal task fails with
   `UnsupportedOperationError`, unless it is a resend: a follow-up is a new
   task.
