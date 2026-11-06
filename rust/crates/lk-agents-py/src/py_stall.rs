@@ -497,7 +497,9 @@ mod sampler {
                 .frames
                 .into_iter()
                 .map(|frame| SampledFrame {
-                    file: frame.short_filename.unwrap_or(frame.filename),
+                    // The full path, as Python's tracebacks print it: a short one cannot tell
+                    // an installed package (`pydantic/main.py`) from the application's code.
+                    file: frame.filename,
                     function: frame.name,
                     line: i64::from(frame.line),
                 })
