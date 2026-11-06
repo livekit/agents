@@ -13,8 +13,12 @@ TokenizeCallable = Callable[[str], list[str] | list[tuple[str, int, int]]]
 
 # the tag name must start with a letter so "<5>" / "<3 wins>" are not counted as
 # tags — this keeps the depth counter consistent with the letter-start tail check
-# in _has_unclosed_xml_tags (all TTS markup tags are letter-named)
-_XML_TAG_RE = re.compile(r"<(/?)([A-Za-z]\w*)[^>]*?(/?)\s*>")
+# in _has_unclosed_xml_tags (all TTS markup tags are letter-named).
+# The name must also be followed by whitespace, "/" or ">", as it is in real markup:
+# without that, angle-bracketed prose like <https://lk.io> or <bob@example.com>
+# parses as an open tag and holds every later sentence until flush. Hyphens are part
+# of the name so xAI's <higher-pitch>/<build-intensity> still match.
+_XML_TAG_RE = re.compile(r"<(/?)([A-Za-z][\w-]*)(?=[\s/>])[^>]*?(/?)\s*>")
 
 
 def _has_unclosed_xml_tags(text: str) -> bool:
