@@ -79,6 +79,42 @@ async def test_cancelling_wait_for_idle_does_not_poison_user_turns() -> None:
 
 
 @pytest.mark.asyncio
+async def test_superseded_end_of_turn_task_waits_for_replacement() -> None:
+    """An agent-only idle wait must follow a superseded decision to its replacement.
+
+    ``_user_turn_exceeded_task`` waits with ``wait_for_idle(wait_for_user=False)``.
+    When a newer transcript/VAD event cancels decision A and installs B, observing
+    A's cancellation must not report idle while B is still pending — otherwise the
+    turn-limit callback fires before the turn actually ends.
+    """
+    session = AgentSession()
+    activity = AgentActivity(Agent(instructions="test"), session)
+
+    first = asyncio.create_task(asyncio.Event().wait())
+    replacement: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+    recognition = SimpleNamespace(_end_of_turn_task=first, _speaking=False)
+    activity._audio_recognition = cast(Any, recognition)
+
+    idle_waiter = asyncio.create_task(activity.wait_for_idle(wait_for_user=False))
+    await asyncio.sleep(0.01)  # let the waiter block on the first decision
+    assert not idle_waiter.done()
+
+    # supersede A with B before A completes
+    recognition._end_of_turn_task = replacement
+    first.cancel()
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+    assert not idle_waiter.done()
+
+    replacement.set_result(None)
+    await idle_waiter
+    assert idle_waiter.done()
+
+    await asyncio.gather(first, return_exceptions=True)
+
+
+@pytest.mark.asyncio
 async def test_cancelling_latest_user_turn_does_not_cancel_predecessor() -> None:
     session = AgentSession()
     activity = AgentActivity(Agent(instructions="test"), session)
