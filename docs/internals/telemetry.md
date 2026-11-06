@@ -148,13 +148,15 @@ Rust; Python only proves its loop is alive.
   a bad read is an error, never a crash. Only sampling takes a lock. The sampler is built at
   the first stall; py-spy is compiled where it supports the target (`lk-agents-py`).
 - **Record.** The stall is recorded once, when the beat resumes, the watch closes, or the stall
-  reaches 30 s (a deadlocked loop is reported while still stuck): the
+  reaches 5 s (a stuck loop is reported while still stuck): the
   `lk.agents.event_loop.blocked_duration` histogram, the session's `lk.blocking.*` counts and a
   rate-limited `event_loop_blocked` span whose `lk.blocking.stack` is the most frequent sample's
   20 deepest frames and `lk.blocking.import` the file being imported, if any, and, within the same
   limit, a `livekit.agents` warning naming the innermost frame (`event loop blocked for 395ms at
-  busy (app.py:42)`). A loop still stuck at 30 s may hold the GIL for good, and the core's log
-  lines reach Python's `logging` through the GIL: that report is also written to stderr directly.
+  busy (app.py:42)`), followed from 500 ms on by the whole stack, most recent call last. The core's log
+  lines reach Python's `logging` through the GIL: when a stuck loop's report has not been
+  forwarded 200 ms later because forwarding is waiting for the GIL (C code holding it), the report
+  is written to stderr directly.
 - **Never fatal.** When py-spy cannot start (permission, seccomp, an unknown CPython layout)
   one warning is logged and stacks are off for the process; a failed sample is skipped and a
   panic in it is caught. Stalls are always recorded with their duration; nothing on the loop

@@ -25,6 +25,7 @@ use lk_agents_abi::telemetry::record::Key;
 use lk_agents_abi::telemetry::spans::agent_turn::FunctionToolEnd;
 use lk_agents_telemetry::ExporterSlot;
 use lk_agents_telemetry::otlp::{AppConfig, Exporter, Limits, ProcessIdentity, SdkName};
+pub use lk_agents_telemetry::stall::stall_message;
 pub(crate) use lk_agents_telemetry::stall::{Blocked, event_loop_blocked};
 use parking_lot::Mutex;
 use serde_json::Value as JsonValue;

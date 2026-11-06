@@ -2,7 +2,7 @@
 //! loop's timer beats its [`LoopWatch`]; one detector thread per process notices a beat 100 ms
 //! old, reads the loop thread's Python stack with py-spy over the process's own memory (never
 //! the GIL) and records the stall once: when the loop beats again, when its watch closes, or at
-//! 30 s while it is still stuck. Beats and the detector's checks take no lock; the sampler is the
+//! 5 s while it is still stuck. Beats and the detector's checks take no lock; the sampler is the
 //! detector thread's own.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -24,7 +24,7 @@ const THRESHOLD: Duration = Duration::from_millis(100);
 const SAMPLE_EVERY: Duration = Duration::from_millis(100);
 const SAMPLES: usize = 5;
 /// A stall still going after this long is recorded while it lasts (a deadlocked loop).
-const CAP: Duration = Duration::from_secs(30);
+const CAP: Duration = Duration::from_secs(5);
 /// The recorded stack: its deepest frames, at most this long.
 const FRAMES: usize = 20;
 const STACK_BYTES: usize = 4096;
@@ -127,28 +127,17 @@ fn run(received: &Receiver<Arc<Watched>>) {
         let paused = t.saturating_sub(last_wake) >= nanos(THRESHOLD + TICK);
         last_wake = t;
         watches.retain_mut(|entry| {
-            let (keep, stalled) = entry.check(t, paused, &mut sampler);
-            if let Some(stall) = stalled {
-                if stall.duration >= CAP {
-                    still_stuck(&stall);
-                }
+            let checked = entry.check(t, paused, &mut sampler);
+            if let Some(stall) = checked.record {
                 lk_agents_runtime::telemetry::loop_stalled(stall);
             }
-            keep
+            if let Some(message) = checked.stderr {
+                use std::io::Write as _;
+                let _ = std::io::stderr().write_all(format!("{message}\n").as_bytes());
+            }
+            checked.keep
         });
     }
-}
-
-/// A loop still stuck at the cap may hold the GIL for good, and the core's log lines reach Python's
-/// `logging` only through the GIL: this one is written to stderr directly, so it is seen.
-fn still_stuck(stall: &LoopStall) {
-    use std::io::Write as _;
-    let at = stall.stack.as_deref().and_then(|stack| stack.lines().next()).unwrap_or("unknown");
-    let line = format!(
-        "livekit.agents: event loop still blocked after {}s at {at}\n",
-        stall.duration.as_secs()
-    );
-    let _ = std::io::stderr().write_all(line.as_bytes());
 }
 
 struct Entry {
@@ -158,8 +147,24 @@ struct Entry {
     stall: Option<Stall>,
 }
 
+/// What one check found.
+struct Checked {
+    /// No once the watch is closed and done with.
+    keep: bool,
+    record: Option<LoopStall>,
+    /// The still-stuck report, for stderr: the stall's log line could not reach Python's
+    /// `logging` (forwarding has waited for the GIL since the report).
+    stderr: Option<String>,
+}
+
+/// How long after a still-stuck report forwarding must have been waiting for the GIL for the
+/// report to go to stderr too.
+const FORWARDING_GRACE: Duration = Duration::from_millis(200);
+
 struct Stall {
     since: u64,
+    /// The still-stuck report and when to see whether its log line was forwarded.
+    unforwarded: Option<(u64, String)>,
     next_sample: u64,
     samples: Vec<Vec<String>>,
     recorded: bool,
@@ -170,29 +175,31 @@ impl Entry {
         Entry { watched, fresh_since: now(), stall: None }
     }
 
-    /// One check at `t`: whether to keep watching (no once closed), and the stall to record.
-    fn check(&mut self, t: u64, paused: bool, sampler: &mut Sampler) -> (bool, Option<LoopStall>) {
+    /// One check at `t`.
+    fn check(&mut self, t: u64, paused: bool, sampler: &mut Sampler) -> Checked {
         let closed = self.watched.closed.load(Ordering::Relaxed);
         let last = self.watched.last_beat.load(Ordering::Relaxed).max(self.fresh_since);
+        let mut checked = Checked { keep: !closed, record: None, stderr: None };
         let Some(stall) = self.stall.as_mut() else {
             if paused {
                 self.fresh_since = t;
             } else if !closed && t.saturating_sub(last) >= nanos(THRESHOLD) {
                 self.stall = Some(Stall {
                     since: last,
+                    unforwarded: None,
                     next_sample: t,
                     samples: Vec::new(),
                     recorded: false,
                 });
             }
-            return (!closed, None);
+            return checked;
         };
         let ended = last > stall.since;
         if ended || closed {
             let end = if ended { last.saturating_sub(nanos(TICK)) } else { t };
-            let stalled = stall.record(&self.watched, end);
+            checked.record = stall.record(&self.watched, end);
             self.stall = None;
-            return (!closed, stalled);
+            return checked;
         }
         if stall.samples.len() < SAMPLES && t >= stall.next_sample {
             if let Some(frames) = sampler.sample(self.watched.os_thread) {
@@ -200,8 +207,24 @@ impl Entry {
             }
             stall.next_sample = t.saturating_add(nanos(SAMPLE_EVERY));
         }
-        let capped = t.saturating_sub(stall.since) >= nanos(CAP);
-        (true, if capped { stall.record(&self.watched, t) } else { None })
+        if t.saturating_sub(stall.since) >= nanos(CAP) {
+            checked.record = stall.record(&self.watched, t);
+            if let Some(report) = &checked.record {
+                let message = lk_agents_runtime::telemetry::stall_message(
+                    "livekit.agents: event loop still blocked after",
+                    report.duration.as_secs_f64(),
+                    report.stack.as_deref(),
+                    report.import.as_deref(),
+                );
+                stall.unforwarded = Some((t.saturating_add(nanos(FORWARDING_GRACE)), message));
+            }
+        }
+        if stall.unforwarded.as_ref().is_some_and(|(due, _)| t >= *due) {
+            let (_, message) = stall.unforwarded.take().unwrap_or_default();
+            let blocked = crate::py_logging::forwarding_blocked(FORWARDING_GRACE);
+            checked.stderr = blocked.then_some(message);
+        }
+        checked
     }
 }
 
@@ -367,35 +390,38 @@ mod tests {
     #[test]
     fn a_stall_is_recorded_once_when_the_loop_beats_again() {
         let (mut e, mut s) = (entry("AJ_1"), Sampler::off());
-        assert_eq!(e.check(80 * MS, false, &mut s).1.map(|x| x.duration), None);
-        let (keep, stalled) = e.check(120 * MS, false, &mut s);
-        assert!(keep && stalled.is_none(), "detected, not yet recorded");
+        assert_eq!(e.check(80 * MS, false, &mut s).record.map(|x| x.duration), None);
+        let checked = e.check(120 * MS, false, &mut s);
+        assert!(checked.keep && checked.record.is_none(), "detected, not yet recorded");
         beat(&e, 420 * MS);
-        let stalled = e.check(440 * MS, false, &mut s).1.expect("recorded on the next beat");
+        let stalled = e.check(440 * MS, false, &mut s).record.expect("recorded on the next beat");
         assert_eq!(stalled.duration, Duration::from_millis(400));
         assert_eq!(stalled.job.as_deref(), Some("AJ_1"));
         assert!(stalled.stack.is_none(), "no sampler, no stack");
-        assert!(e.check(460 * MS, false, &mut s).1.is_none());
+        assert!(e.check(460 * MS, false, &mut s).record.is_none());
     }
 
     // Catches: a whole-process pause (the detector late too) reported as a loop stall.
     #[test]
     fn a_process_pause_is_not_a_stall() {
         let (mut e, mut s) = (entry("AJ_1"), Sampler::off());
-        assert!(e.check(5_000 * MS, true, &mut s).1.is_none());
+        assert!(e.check(5_000 * MS, true, &mut s).record.is_none());
         assert!(e.stall.is_none(), "watching starts over after the pause");
-        assert!(e.check(5_020 * MS, false, &mut s).1.is_none());
+        assert!(e.check(5_020 * MS, false, &mut s).record.is_none());
     }
 
-    // Catches: a deadlocked loop never reported, or reported again when it finally ends.
+    // Catches: a stuck loop never reported, reported again when it finally ends, or its report
+    // sent to stderr while log forwarding works.
     #[test]
     fn a_loop_stuck_past_the_cap_is_reported_while_stuck_and_once() {
         let (mut e, mut s) = (entry("AJ_1"), Sampler::off());
-        assert!(e.check(120 * MS, false, &mut s).1.is_none());
-        let capped = e.check(30_020 * MS, false, &mut s).1.expect("reported at the cap");
-        assert_eq!(capped.duration, Duration::from_millis(30_020));
-        beat(&e, 40_000 * MS);
-        assert!(e.check(40_020 * MS, false, &mut s).1.is_none(), "once");
+        assert!(e.check(120 * MS, false, &mut s).record.is_none());
+        let capped = e.check(5_020 * MS, false, &mut s).record.expect("reported at the cap");
+        assert_eq!(capped.duration, Duration::from_millis(5_020));
+        let later = e.check(5_240 * MS, false, &mut s);
+        assert!(later.stderr.is_none(), "this test's log forwarding is not waiting for the GIL");
+        beat(&e, 9_000 * MS);
+        assert!(e.check(9_020 * MS, false, &mut s).record.is_none(), "once");
         assert!(e.stall.is_none());
     }
 
@@ -403,11 +429,11 @@ mod tests {
     #[test]
     fn closing_records_the_stall_in_progress_and_stops_watching() {
         let (mut e, mut s) = (entry("AJ_1"), Sampler::off());
-        assert!(e.check(150 * MS, false, &mut s).1.is_none());
+        assert!(e.check(150 * MS, false, &mut s).record.is_none());
         e.watched.closed.store(true, Ordering::Relaxed);
-        let (keep, stalled) = e.check(300 * MS, false, &mut s);
-        assert!(!keep);
-        assert_eq!(stalled.map(|x| x.duration), Some(Duration::from_millis(300)));
+        let checked = e.check(300 * MS, false, &mut s);
+        assert!(!checked.keep);
+        assert_eq!(checked.record.map(|x| x.duration), Some(Duration::from_millis(300)));
     }
 
     // Catches: the stack not the most frequent sample, an import missed, or the 4 KB cap broken.

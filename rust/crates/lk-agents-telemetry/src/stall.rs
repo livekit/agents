@@ -64,15 +64,59 @@ pub fn event_loop_blocked(
     }
 }
 
-/// The stall's warning line, with the stack's innermost frame: the code that blocked.
+/// The stall's warning: one line naming the innermost frame (the code that blocked); from
+/// [`BLOCKED_ERROR`] on, the whole stack as well, most recent call last, as a traceback reads.
 fn log_stall(duration: f64, stack: Option<&str>, import: Option<&str>) {
-    let ms = (duration * 1e3).round();
-    let at = stack.and_then(|stack| stack.lines().next()).map(|frame| format!(" at {frame}"));
-    let importing = import.map(|file| format!(", importing {file}"));
-    log::warn!(
-        target: "livekit.agents",
-        "event loop blocked for {ms}ms{}{}",
-        at.unwrap_or_default(),
-        importing.unwrap_or_default()
-    );
+    let message = stall_message("event loop blocked for", duration, stack, import);
+    log::warn!(target: "livekit.agents", "{message}");
+}
+
+/// `{lead} {duration}ms at {innermost frame}[, importing {file}]`, and the stack below it when the
+/// stall lasted [`BLOCKED_ERROR`] or longer.
+pub fn stall_message(
+    lead: &str,
+    duration: f64,
+    stack: Option<&str>,
+    import: Option<&str>,
+) -> String {
+    let mut message = format!("{lead} {}ms", (duration * 1e3).round());
+    let frames: Vec<&str> = stack.map(|stack| stack.lines().collect()).unwrap_or_default();
+    if let Some(innermost) = frames.first() {
+        message.push_str(&format!(" at {innermost}"));
+    }
+    if let Some(file) = import {
+        message.push_str(&format!(", importing {file}"));
+    }
+    if duration >= BLOCKED_ERROR && frames.len() > 1 {
+        message.push_str("\nStack (most recent call last):");
+        for frame in frames.iter().rev() {
+            message.push_str(&format!("\n  {frame}"));
+        }
+    }
+    message
+}
+
+#[cfg(test)]
+mod tests {
+    use super::stall_message;
+
+    // Catches: a short stall logging its whole stack, or a long one hiding the caller frames.
+    #[test]
+    fn a_long_stall_logs_its_whole_stack_a_short_one_its_frame() {
+        let stack = "requests_get (http.py:9)\nlookup (tools.py:42)\nmain (app.py:7)";
+        assert_eq!(
+            stall_message("event loop blocked for", 0.2, Some(stack), None),
+            "event loop blocked for 200ms at requests_get (http.py:9)"
+        );
+        assert_eq!(
+            stall_message("event loop blocked for", 0.8, Some(stack), Some("slow.py")),
+            "event loop blocked for 800ms at requests_get (http.py:9), importing slow.py\n\
+             Stack (most recent call last):\n  main (app.py:7)\n  lookup (tools.py:42)\n  \
+             requests_get (http.py:9)"
+        );
+        assert_eq!(
+            stall_message("event loop blocked for", 0.8, None, None),
+            "event loop blocked for 800ms"
+        );
+    }
 }
