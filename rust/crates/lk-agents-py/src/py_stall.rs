@@ -152,13 +152,13 @@ struct Checked {
     /// No once the watch is closed and done with.
     keep: bool,
     record: Option<LoopStall>,
-    /// The still-stuck report, for stderr: the stall's log line could not reach Python's
-    /// `logging` (forwarding has waited for the GIL since the report).
+    /// The still-stuck report, for stderr: the core's log lines are not reaching Python's
+    /// `logging` (one has been on its way since the report: waiting for the GIL, or in a handler).
     stderr: Option<String>,
 }
 
-/// How long after a still-stuck report forwarding must have been waiting for the GIL for the
-/// report to go to stderr too.
+/// How long after a still-stuck report a log line must still be on its way for the report to go
+/// to stderr too.
 const FORWARDING_GRACE: Duration = Duration::from_millis(200);
 
 struct Stall {

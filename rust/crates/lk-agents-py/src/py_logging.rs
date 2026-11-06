@@ -243,19 +243,21 @@ impl<'kvs> log::kv::VisitSource<'kvs> for KeyValues<'_> {
     }
 }
 
-/// When the drain began waiting for the GIL to forward a line (nanoseconds since
-/// [`DRAIN_EPOCH`], plus one), or 0 while it is not waiting.
-static WAITING_FOR_GIL: AtomicU64 = AtomicU64::new(0);
+/// When the drain began forwarding the line in hand (nanoseconds since [`DRAIN_EPOCH`], plus
+/// one): from taking it, through waiting for the GIL, to Python's handlers returning; 0 between
+/// lines.
+static FORWARDING_SINCE: AtomicU64 = AtomicU64::new(0);
 static DRAIN_EPOCH: LazyLock<Instant> = LazyLock::new(Instant::now);
 
 fn since_epoch() -> u64 {
     u64::try_from(DRAIN_EPOCH.elapsed().as_nanos()).unwrap_or(u64::MAX).saturating_add(1)
 }
 
-/// Whether forwarding a line has waited for the GIL for `at_least`: the core's log lines are not
-/// reaching Python's `logging` (the event-loop stall detector writes to stderr then).
+/// Whether one line has been on its way to Python's `logging` for `at_least`, waiting for the GIL
+/// or in a handler: the core's log lines are not getting through (the event-loop stall detector
+/// writes to stderr then).
 pub fn forwarding_blocked(at_least: Duration) -> bool {
-    let since = WAITING_FOR_GIL.load(Ordering::Relaxed);
+    let since = FORWARDING_SINCE.load(Ordering::Relaxed);
     since != 0 && since_epoch().saturating_sub(since) >= at_least.as_nanos() as u64
 }
 
@@ -264,11 +266,9 @@ fn drain(entries: Receiver<Entry>) {
     for entry in entries {
         match entry {
             Entry::Line(line) => {
-                WAITING_FOR_GIL.store(since_epoch(), Ordering::Relaxed);
-                Python::attach(|py| {
-                    WAITING_FOR_GIL.store(0, Ordering::Relaxed);
-                    forward_line(py, &line)
-                })
+                FORWARDING_SINCE.store(since_epoch(), Ordering::Relaxed);
+                Python::attach(|py| forward_line(py, &line));
+                FORWARDING_SINCE.store(0, Ordering::Relaxed);
             }
             Entry::Flush(done) => {
                 let _ = done.send(());
