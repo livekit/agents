@@ -168,6 +168,12 @@ class LLM(llm.LLM):
         use_websocket: bool = False,
         reasoning: NotGivenOr[ReasoningSetting] = NOT_GIVEN,
     ) -> None:
+        """
+        Args:
+            provider: Deprecated. Provider pinning will no longer be supported on
+                March 1, 2027. Omit this argument to let LiveKit route requests and
+                use fallback providers.
+        """
         super().__init__()
 
         lk_api_key, lk_api_secret = resolve_credentials(api_key, api_secret)

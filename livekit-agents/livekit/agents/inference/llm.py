@@ -418,6 +418,9 @@ class LLM(llm.LLM):
     ) -> None:
         """
         Args:
+            provider: Deprecated. Provider pinning will no longer be supported on
+                March 1, 2027. Omit this argument to let LiveKit route requests and
+                use fallback providers.
             prompt_cache_breakpoints: Send each :class:`llm.CacheBreakpoint` in the chat
                 context as an OpenAI ``prompt_cache_breakpoint``. ``"auto"`` sends them
                 when :func:`supports_prompt_cache_breakpoints` accepts the current model;
