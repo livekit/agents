@@ -41,7 +41,17 @@ from .log import logger
 from .version import __version__
 
 _USER_AGENT = f"livekit-plugins-boson-avatar/{__version__}"
-_SESSION_OBJECT = "avatar.livekit.session"
+# Wire contract of the Boson API (https://docs.boson.ai/api-reference/avatar-realtime/overview):
+# `api_url` is the API root (e.g. `https://api.boson.ai/v1`); sessions live under
+# `/avatar/sessions` and the avatar catalog at `/avatars`.
+_SESSIONS_PATH = "/avatar/sessions"
+_AVATARS_PATH = "/avatars"
+_SESSION_OBJECT = "avatar.realtime.session"
+_AVATAR_LIST_OBJECT = "list"
+# DELETE answers `terminated` once the GPU confirmed the end, or `releasing` when the
+# release was accepted and the confirmation is still pending; both mean the session is over
+# for the caller.
+_ENDED_STATUSES = frozenset({"terminated", "releasing"})
 
 
 @dataclass(frozen=True)
@@ -69,7 +79,11 @@ class AvatarInfo:
 
 
 class BosonAvatarAPI:
-    """Async client for the hosted Boson LiveKit Avatar API."""
+    """Async client for the Boson realtime avatar API.
+
+    `api_url` is the API root, e.g. `https://api.boson.ai/v1`; the client appends
+    `/avatar/sessions` and `/avatars`.
+    """
 
     def __init__(
         self,
@@ -100,11 +114,11 @@ class BosonAvatarAPI:
         """List Avatars available to the authenticated Boson project."""
         _, payload = await self._json(
             "GET",
-            "/avatars",
+            _AVATARS_PATH,
             success_statuses=frozenset({200}),
         )
         raw_avatars = payload.get("data")
-        if payload.get("object") != "avatar.list" or not isinstance(raw_avatars, list):
+        if payload.get("object") != _AVATAR_LIST_OBJECT or not isinstance(raw_avatars, list):
             raise BosonAvatarException("Boson Avatar API returned an invalid Avatar list")
 
         avatars: list[AvatarInfo] = []
@@ -158,7 +172,7 @@ class BosonAvatarAPI:
 
         _, data = await self._json(
             "POST",
-            "/sessions",
+            _SESSIONS_PATH,
             json=body,
             headers={"Idempotency-Key": idempotency_key or str(uuid.uuid4())},
             success_statuses=frozenset({200, 201}),
@@ -212,7 +226,7 @@ class BosonAvatarAPI:
         """Idempotently stop a hosted Boson Avatar session."""
         status_code, data = await self._json(
             "DELETE",
-            f"/sessions/{session_id}",
+            f"{_SESSIONS_PATH}/{session_id}",
             allow_empty=True,
             success_statuses=frozenset({200, 204}),
         )
@@ -221,11 +235,11 @@ class BosonAvatarAPI:
             and (
                 data.get("id") != session_id
                 or data.get("object") != _SESSION_OBJECT
-                or data.get("status") != "terminated"
+                or data.get("status") not in _ENDED_STATUSES
             )
         )
         if invalid_response:
-            raise BosonAvatarException("Boson Avatar API returned an invalid terminated session")
+            raise BosonAvatarException("Boson Avatar API returned an invalid ended session")
 
     def _ensure_http_session(self) -> aiohttp.ClientSession:
         if self._session is None:
