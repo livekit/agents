@@ -346,7 +346,7 @@ impl Playing<'_> {
             }
             AudioPlaybackEffect::YieldForCutReceipt => {
                 crate::process::yield_now().await;
-                AudioPlaybackEvent::CutReceiptYielded { closing: *shared.closing.borrow() }
+                AudioPlaybackEvent::CutReceiptYielded { closing: shared.closing.is_cancelled() }
             }
             AudioPlaybackEffect::WaitForCutReceiptUntil(at) => {
                 let left = at.saturating_duration_since(shared.time.now());

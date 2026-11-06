@@ -60,7 +60,8 @@ pub(crate) struct Execution {
     pub(super) setup: RunSetup,
     runtime: tokio::runtime::Handle,
     events_tx: Reporter,
-    pub requests: BTreeMap<RequestId, Option<oneshot::Sender<()>>>,
+    /// Each model request's stop; a request dropped from here stops too.
+    pub requests: BTreeMap<RequestId, tokio_util::sync::DropGuard>,
     operations: BTreeMap<Work, u64>,
     calls: BTreeMap<CallId, FunctionCall>,
     prepared: BTreeMap<ResourceId, HostRef>,
@@ -137,8 +138,8 @@ impl Execution {
                 self.start_llm_request(request, chat_ctx, tools)
             }
             AgentRunEffect::LlmRequestCancel { request } => {
-                if let Some(cancel) = self.requests.get_mut(&request).and_then(Option::take) {
-                    let _ = cancel.send(());
+                if let Some(stop) = self.requests.get(&request) {
+                    stop.token().cancel();
                 }
             }
             AgentRunEffect::RenderInstructions { render } => self.render_instructions(render),
@@ -199,8 +200,8 @@ impl Execution {
         chat_ctx: ChatContext,
         tools: Vec<ToolSpec>,
     ) {
-        let (cancel, cancelled) = oneshot::channel();
-        self.requests.insert(request, Some(cancel));
+        let cancelled = CancellationToken::new();
+        self.requests.insert(request, cancelled.clone().drop_guard());
         self.descriptions = tools.iter().map(|t| (t.name.clone(), t.description.clone())).collect();
         let req = ChatRequest {
             tools_host: self.setup.tools_host.clone(),
@@ -516,13 +517,13 @@ async fn stream_request(
     llm: Arc<dyn Llm>,
     clock: Arc<dyn Clock>,
     events: Reporter,
-    mut cancelled: oneshot::Receiver<()>,
+    cancelled: CancellationToken,
     mut trace: telemetry::LlmTrace,
 ) {
     let attempt = trace.attempt();
     let opened = tokio::select! {
         biased;
-        _ = &mut cancelled => None,
+        () = cancelled.cancelled() => None,
         opened = llm.chat(trace.cx(), &req) => Some(opened),
     };
     let mut stream = match opened {
@@ -543,7 +544,7 @@ async fn stream_request(
     loop {
         let next = tokio::select! {
             biased;
-            _ = &mut cancelled => None,
+            () = cancelled.cancelled() => None,
             next = stream.next() => Some(next),
         };
         let report = match next {

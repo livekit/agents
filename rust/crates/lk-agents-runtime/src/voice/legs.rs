@@ -352,13 +352,13 @@ impl VoiceRuntime {
     /// Preserve the provider's event order, including failures and its final end notification.
     pub(super) fn pump_realtime(&self, session: Arc<dyn lk_agents_abi::RealtimeSession>) {
         let tx = self.reports.clone();
-        let mut closing = self.shared.closing.clone();
+        let closing = self.shared.closing.clone();
         self.spawn("realtime events", async move {
             use lk_agents_voice::agent_activity::realtime::RealtimeWake;
             loop {
                 let event = tokio::select! {
                     biased;
-                    _ = closing.wait_for(|closed| *closed) => return,
+                    () = closing.cancelled() => return,
                     () = tx.closed() => return,
                     event = session.next_event() => event,
                 };
@@ -388,7 +388,7 @@ impl VoiceRuntime {
     /// Drains an activated stream into the queue.
     pub(super) fn drain(&mut self, channel: AudioChannel, sink: ResourceId, stream: PendingLeg) {
         let shared = &self.shared;
-        let (time, closing) = (shared.time.clone(), super::audio::closing(shared.closing.clone()));
+        let (time, closing) = (shared.time.clone(), shared.closing.clone());
         match stream {
             PendingLeg::Stt(mut source) => {
                 source.report_retries(super::audio::report_to(self.reports.clone()));
@@ -420,7 +420,7 @@ impl VoiceRuntime {
         let closing = self.shared.closing.clone();
         let task = self.spawn("turn prediction", async move {
             let outcome = detector.predict(&telemetry::Cx::NONE, timeout).await;
-            if !*closing.borrow() {
+            if !closing.is_cancelled() {
                 let _ = queue.send(VoiceEvent::Eot(req, outcome, None));
             }
         });
@@ -432,12 +432,12 @@ impl VoiceRuntime {
     /// None is an error: the session goes on with VAD-only interruption.
     fn pump_verdicts(&self, detector: Arc<dyn InterruptionPort>) {
         let tx = self.reports.clone();
-        let mut closing = self.shared.closing.clone();
+        let closing = self.shared.closing.clone();
         self.spawn("interruption verdicts", async move {
             loop {
                 let ev = tokio::select! {
                     biased;
-                    _ = closing.wait_for(|c| *c) => break,
+                    () = closing.cancelled() => break,
                     ev = detector.next_event() => ev,
                 };
                 let closed = matches!(ev, LegEvent::Closed);
@@ -454,13 +454,13 @@ impl VoiceRuntime {
         mut rx: tokio::sync::mpsc::UnboundedReceiver<T>,
     ) {
         let tx = self.reports.clone();
-        let mut closing = self.shared.closing.clone();
+        let closing = self.shared.closing.clone();
         self.spawn("event forward", async move {
             loop {
                 let ev = tokio::select! {
                     biased;
                     ev = rx.recv() => ev,
-                    _ = closing.wait_for(|c| *c) => None,
+                    () = closing.cancelled() => None,
                 };
                 if ev.is_none_or(|ev| tx.send(ev).is_err()) {
                     break;

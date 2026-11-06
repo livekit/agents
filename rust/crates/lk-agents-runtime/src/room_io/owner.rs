@@ -34,6 +34,7 @@ use std::future::Future;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 use tokio::sync::{Notify, mpsc, watch};
+use tokio_util::sync::CancellationToken;
 
 const ROOM_EVENT_CAPACITY: usize = 64;
 
@@ -67,7 +68,8 @@ pub struct RoomIo {
     /// The close, which waits `tasks` out; it holds this object until it ends.
     closing: std::sync::OnceLock<lk_agents_abi::OwnedTask>,
     execution: Mutex<Execution>,
-    stopped: Notify,
+    /// Cancelled under the `execution` lock, so no work begins once the room closes.
+    stopped: CancellationToken,
     started: Notify,
     agent_state: watch::Sender<Option<String>>,
     chat_registered: Mutex<bool>,
@@ -81,7 +83,6 @@ struct Startup {
 }
 
 struct Execution {
-    closing: bool,
     starting: usize,
     cleanup: Closed,
 }
@@ -172,12 +173,8 @@ impl RoomIo {
             events_rx: Mutex::new(Some((events_rx, failures_rx))),
             tasks: Arc::default(),
             closing: std::sync::OnceLock::new(),
-            execution: Mutex::new(Execution {
-                closing: false,
-                starting: 0,
-                cleanup: Closed::Clean,
-            }),
-            stopped: Notify::new(),
+            execution: Mutex::new(Execution { starting: 0, cleanup: Closed::Clean }),
+            stopped: CancellationToken::new(),
             started: Notify::new(),
             agent_state: watch::channel(None).0,
             chat_registered: Mutex::new(false),
@@ -220,15 +217,9 @@ impl RoomIo {
                 self.connected.set(true);
             }
             loop {
-                let stopped = self.stopped.notified();
-                tokio::pin!(stopped);
-                stopped.as_mut().enable();
-                if self.is_closing() {
-                    return Ok(());
-                }
                 let event = tokio::select! {
                     biased;
-                    () = &mut stopped => return Ok(()),
+                    () = self.stopped.cancelled() => return Ok(()),
                     event = events.next() => event.map_err(IoError::from)?,
                 };
                 let Some(event) = event else {
@@ -236,7 +227,7 @@ impl RoomIo {
                 };
                 tokio::select! {
                     biased;
-                    () = &mut stopped => return Ok(()),
+                    () = self.stopped.cancelled() => return Ok(()),
                     result = self.handle_event(&event) => result?,
                 }
                 if matches!(
@@ -499,15 +490,9 @@ impl RoomIo {
 
     /// `_init_task`, unless the room stops first; a failed start fails the room.
     async fn run_startup(self: Arc<Self>) {
-        let stopped = self.stopped.notified();
-        tokio::pin!(stopped);
-        stopped.as_mut().enable();
-        if self.is_closing() {
-            return;
-        }
         let result = tokio::select! {
             biased;
-            () = &mut stopped => return,
+            () = self.stopped.cancelled() => return,
             result = Arc::clone(&self).init() => result,
         };
         if let Err(error) = result {
@@ -536,10 +521,7 @@ impl RoomIo {
     async fn write_agent_state(self: Arc<Self>) {
         let mut updates = self.agent_state.subscribe();
         loop {
-            let stopped = self.stopped.notified();
-            tokio::pin!(stopped);
-            stopped.as_mut().enable();
-            if self.is_closing() {
+            if self.stopped.is_cancelled() {
                 return;
             }
             let pending = updates.borrow_and_update().clone();
@@ -559,13 +541,13 @@ impl RoomIo {
             };
             tokio::select! {
                 biased;
-                () = &mut stopped => return,
+                () = self.stopped.cancelled() => return,
                 changed = updates.changed() => { if changed.is_err() { return; } continue; },
                 result = result => { if let Err(error) = result { self.fail(error); return; } },
             }
             tokio::select! {
                 biased;
-                () = &mut stopped => return,
+                () = self.stopped.cancelled() => return,
                 changed = updates.changed() => { if changed.is_err() { return; } },
             }
         }
@@ -593,15 +575,9 @@ impl RoomIo {
     ) {
         let result = async {
             loop {
-                let stopped = self.stopped.notified();
-                tokio::pin!(stopped);
-                stopped.as_mut().enable();
-                if self.is_closing() {
-                    return Ok(());
-                }
                 let stream = tokio::select! {
                     biased;
-                    () = &mut stopped => return Ok(()),
+                    () = self.stopped.cancelled() => return Ok(()),
                     stream = streams.next() => stream.map_err(IoError::from)?,
                 };
                 let Some(stream) = stream else {
@@ -641,17 +617,10 @@ impl RoomIo {
         attachment: u64,
         mut stream: lk_agents_abi::voice::rtc::TextStream,
     ) {
-        let stopped = self.stopped.notified();
-        tokio::pin!(stopped);
-        stopped.as_mut().enable();
-        let result = if self.is_closing() {
-            None
-        } else {
-            tokio::select! {
-                biased;
-                () = &mut stopped => None,
-                text = read_text(&mut stream.chunks) => Some(text),
-            }
+        let result = tokio::select! {
+            biased;
+            () = self.stopped.cancelled() => None,
+            text = read_text(&mut stream.chunks) => Some(text),
         };
         let sender = stream.sender.clone();
         let info = stream.info.clone();
@@ -692,7 +661,7 @@ impl RoomIo {
 
     fn begin_work(&self) -> bool {
         let mut state = self.execution.lock();
-        if state.closing {
+        if self.stopped.is_cancelled() {
             return false;
         }
         state.starting += 1;
@@ -709,10 +678,6 @@ impl RoomIo {
         self.finish_starting();
     }
 
-    fn is_closing(&self) -> bool {
-        self.execution.lock().closing
-    }
-
     fn record_cleanup(&self, outcome: Closed) {
         let mut state = self.execution.lock();
         state.cleanup = state.cleanup.and(outcome);
@@ -727,14 +692,13 @@ impl RoomIo {
 
     fn request_close(self: &Arc<Self>) {
         let closing = {
-            let mut execution = self.execution.lock();
-            if execution.closing {
+            let _execution = self.execution.lock();
+            if self.stopped.is_cancelled() {
                 return;
             }
-            execution.closing = true;
+            self.stopped.cancel();
             self.transition(RoomIoState::begin_close)
         };
-        self.stopped.notify_waiters();
         if closing {
             let owner = self.clone();
             let deadline = self.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
@@ -895,7 +859,7 @@ impl room_owner::RoomIo for RoomIo {
 
     /// Keep one ordered writer; a newer state cancels the pending older write.
     fn on_agent_state_changed(self: Arc<Self>, state: &str) {
-        if !self.is_closing() {
+        if !self.stopped.is_cancelled() {
             self.agent_state.send_replace(Some(state.to_owned()));
         }
     }
@@ -974,16 +938,12 @@ impl SessionEventForwarder {
     async fn run(mut self) {
         let owner = Arc::clone(&self.owner);
         loop {
-            let stopped = owner.stopped.notified();
-            tokio::pin!(stopped);
-            stopped.as_mut().enable();
-            if owner.is_closing() {
-                self.deliver_pending();
-                break;
-            }
             let flow = tokio::select! {
                 biased;
-                () = &mut stopped => ControlFlow::Continue(()),
+                () = owner.stopped.cancelled() => {
+                    self.deliver_pending();
+                    break;
+                }
                 event = self.events.recv() => self.deliver(event),
                 // Without an audio input nothing sends, and the arm is off.
                 Some(failure) = self.failures.recv() => self.deliver_failure(failure),

@@ -23,7 +23,8 @@ use lk_agents_core::agent_run::{
 };
 use lk_agents_core::tool_calls::PrepareFailure;
 use lk_agents_core::{AgentError, AgentRun, RunInput};
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{mpsc, watch};
+use tokio_util::sync::CancellationToken;
 
 pub(crate) mod execution;
 pub mod resources;
@@ -48,7 +49,7 @@ pub struct RunSetup {
 
 /// The running invocation. Dropping it cancels the run; its work still settles.
 pub struct ActiveRun {
-    cancel: Option<oneshot::Sender<()>>,
+    cancel: CancellationToken,
     progress: Progress,
     usage: watch::Receiver<Usage>,
     /// The driver's owner: dropping the handle cancels the run through `cancel`, and the driver
@@ -96,10 +97,8 @@ impl ActiveRun {
     }
 
     /// Requests cancellation; idempotent. The run settles once its work reported back.
-    pub fn cancel(&mut self) {
-        if let Some(cancel) = self.cancel.take() {
-            let _ = cancel.send(());
-        }
+    pub fn cancel(&self) {
+        self.cancel.cancel();
     }
 }
 
@@ -120,7 +119,7 @@ pub fn start(
 ) -> Result<(ActiveRun, mpsc::Receiver<RunUpdate>), AgentError> {
     let input_id = input.invocation_id.clone();
     let run = AgentRun::new(agent, input)?.with_checkpoints();
-    let (cancel, cancelled) = oneshot::channel();
+    let cancel = CancellationToken::new();
     let (update_tx, update_rx) = mpsc::channel(updates.max(1));
     let (events_tx, events) = mpsc::channel(EVENT_QUEUE);
     let (progress_tx, progress) = mpsc::channel(PROGRESS_QUEUE);
@@ -140,13 +139,8 @@ pub fn start(
     };
     let driving = Arc::new(TaskSet::default());
     let spawner = TokioSpawner::new(runtime.clone());
-    driving.spawn(&spawner, "agent run", driver.drive(events, progress, cancelled));
-    let handle = ActiveRun {
-        cancel: Some(cancel),
-        progress: Progress(progress_tx),
-        usage,
-        _driver: driving,
-    };
+    driving.spawn(&spawner, "agent run", driver.drive(events, progress, cancel.clone()));
+    let handle = ActiveRun { cancel, progress: Progress(progress_tx), usage, _driver: driving };
     Ok((handle, update_rx))
 }
 
@@ -166,7 +160,7 @@ impl Driver {
         mut self,
         mut events: mpsc::Receiver<(String, execution::Report)>,
         mut progress: mpsc::Receiver<(u64, String)>,
-        mut cancelled: oneshot::Receiver<()>,
+        cancelled: CancellationToken,
     ) {
         let mut cancel_seen = false;
         let mut effects = self.run.handle(AgentRunEvent::Start, self.work.setup.clock.now());
@@ -190,7 +184,7 @@ impl Driver {
             let event = tokio::select! {
                 biased;
                 () = wait(clock.as_ref(), wake) => AgentRunEvent::Wake,
-                _ = &mut cancelled, if !cancel_seen => { cancel_seen = true; AgentRunEvent::Cancel }
+                () = cancelled.cancelled(), if !cancel_seen => { cancel_seen = true; AgentRunEvent::Cancel }
                 Some((operation, message)) = progress.recv() => {
                     match self.work.progress(operation, message) {
                         Some(event) => event,

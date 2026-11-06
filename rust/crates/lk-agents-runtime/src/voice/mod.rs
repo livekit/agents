@@ -615,7 +615,7 @@ impl QueueOwner for VoiceRuntime {
 /// cores hold, as its finish would have.
 impl Drop for VoiceRuntime {
     fn drop(&mut self) {
-        self.publications.closing.send_replace(true);
+        self.publications.closing.token().cancel();
         drop(self.close_queue());
         self.release();
         self.pending_legs.clear();
@@ -636,7 +636,7 @@ impl Drop for VoiceRuntime {
 async fn read_audio(
     input: Arc<dyn AudioInput>,
     frames: tokio::sync::mpsc::Sender<InputFrame>,
-    mut closing: tokio::sync::watch::Receiver<bool>,
+    closing: tokio_util::sync::CancellationToken,
     queue: Tx,
 ) {
     // `biased` so an arrived frame is handed over first.
@@ -651,13 +651,13 @@ async fn read_audio(
                     break ChannelEndCause::Error;
                 }
             },
-            _ = closing.wait_for(|c| *c) => break ChannelEndCause::Closing,
+            () = closing.cancelled() => break ChannelEndCause::Closing,
         };
         // A queue owner that is gone is a session that has returned: nothing to report to.
         tokio::select! {
             biased;
             sent = frames.send(frame) => if sent.is_err() { return },
-            _ = closing.wait_for(|c| *c) => break ChannelEndCause::Closing,
+            () = closing.cancelled() => break ChannelEndCause::Closing,
         }
     };
     let end = ChannelEnd { leg: AUDIO_IN_LEG, cause, sink: None, closed: None, error: None };

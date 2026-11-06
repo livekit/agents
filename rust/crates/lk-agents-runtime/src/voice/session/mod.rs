@@ -127,7 +127,11 @@ const CLOSE_TICK_BUDGET: u32 = 30_000;
 
 enum Stage {
     Ready(Box<Ready>),
-    Opening { remote: Option<Arc<dyn SessionHosting>>, cancelled: tokio::sync::watch::Sender<bool> },
+    /// Leaving the stage cancels the opening.
+    Opening {
+        remote: Option<Arc<dyn SessionHosting>>,
+        cancelled: tokio_util::sync::DropGuard,
+    },
     Running(Box<Running>),
     Closed(Option<Arc<dyn SessionHosting>>),
 }
@@ -281,13 +285,16 @@ impl VoiceSession {
         remote: Option<Arc<dyn SessionHosting>>,
         drain: impl FnOnce(SessionRunner) -> BoxFuture<'static, ()> + Send + 'static,
     ) -> Result<impl Future<Output = Result<(), DriverError>> + Send + 'static, OpenRefused> {
-        let (cancel, cancelled) = tokio::sync::watch::channel(false);
+        let cancelled = tokio_util::sync::CancellationToken::new();
         let ready = {
             let mut stage = self.stage.lock();
             stage.lifecycle().open()?;
             let Stage::Ready(ready) = std::mem::replace(
                 &mut *stage,
-                Stage::Opening { remote: remote.clone(), cancelled: cancel },
+                Stage::Opening {
+                    remote: remote.clone(),
+                    cancelled: cancelled.clone().drop_guard(),
+                },
             ) else {
                 unreachable!("opening consumes ready resources under the same lock")
             };
@@ -326,7 +333,7 @@ impl VoiceSession {
             prepare_opening_legs(&mut builder, &nodes, &tts_adapter, &stt_adapter)?;
             let (cores, handle) = tokio::select! {
                 biased;
-                _ = admission.cancelled.wait_for(|cancelled| *cancelled) => {
+                () = admission.cancelled.cancelled() => {
                     return Err(DriverError::StartupClosed);
                 }
                 started = builder.start(&mut *executor) => started?,
@@ -632,7 +639,7 @@ impl VoiceSession {
                     None,
                 ),
                 (CloseAction::Opening, Stage::Opening { remote, cancelled }) => {
-                    cancelled.send_replace(true);
+                    cancelled.token().cancel();
                     let closed = Stage::Closed(remote.clone());
                     (None, Some(std::mem::replace(&mut *stage, closed)))
                 }

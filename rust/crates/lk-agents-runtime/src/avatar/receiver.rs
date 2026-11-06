@@ -39,6 +39,8 @@ struct RxInner {
     clock: Arc<dyn Clock>,
     on_clear: Option<Arc<dyn Fn() + Send + Sync>>,
     state: Mutex<ReceiverState>,
+    /// Cancelled once the receiver ends.
+    ended: tokio_util::sync::CancellationToken,
     out_ready: tokio::sync::Notify,
     streams: Mutex<std::collections::VecDeque<lk_agents_abi::voice::rtc::ByteStream>>,
     streams_ready: tokio::sync::Notify,
@@ -50,6 +52,7 @@ struct RxInner {
 impl RxInner {
     fn end(&self, end: ReceiverEnd) {
         self.state.lock().end(end);
+        self.ended.cancel();
         self.out_ready.notify_waiters();
         self.streams_ready.notify_waiters();
     }
@@ -184,9 +187,6 @@ impl RxInner {
         events: &mut Receiver<RoomEvent>,
     ) -> std::result::Result<String, ReceiverEnd> {
         loop {
-            let stopped = self.out_ready.notified();
-            tokio::pin!(stopped);
-            stopped.as_mut().enable();
             self.state.lock().check_open()?;
             let participants = self
                 .room
@@ -201,7 +201,7 @@ impl RxInner {
             }
             tokio::select! {
                 biased;
-                () = &mut stopped => {}
+                () = self.ended.cancelled() => {}
                 event = events.next() => room_still_open(event)?,
             }
         }
@@ -334,6 +334,7 @@ impl DataStreamAudioReceiver {
                 clock,
                 on_clear,
                 state: Mutex::default(),
+                ended: tokio_util::sync::CancellationToken::new(),
                 out_ready: tokio::sync::Notify::new(),
                 streams: Mutex::default(),
                 streams_ready: tokio::sync::Notify::new(),

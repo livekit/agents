@@ -31,7 +31,7 @@ struct Inner {
     toolsets: crate::toolsets::group::Group,
     hydration: Mutex<Hydration>,
     tasks: Arc<TaskSet>,
-    closing: watch::Sender<bool>,
+    closing: tokio_util::sync::CancellationToken,
     started: Reply,
     closed: Reply,
 }
@@ -118,33 +118,28 @@ impl Inner {
     }
 
     async fn run(self: Arc<Self>) {
-        let mut closing = self.closing.subscribe();
-        let mut result = if *closing.borrow_and_update() {
+        let mut result = if self.closing.is_cancelled() {
             Err(ResourceError::Cancelled)
         } else {
             self.acquire().await
         };
         if result.is_ok() {
-            if *closing.borrow_and_update() {
+            if self.closing.is_cancelled() {
                 result = Err(ResourceError::Cancelled);
             } else {
                 result = tokio::select! {
                     biased;
-                    _ = closing.changed() => Err(ResourceError::Cancelled),
+                    () = self.closing.cancelled() => Err(ResourceError::Cancelled),
                     result = self.toolsets.start() => result.map_err(ResourceError::Host),
                 };
             }
         }
         if result.is_ok() {
             self.started.send_replace(Some(Ok(())));
-            while !*closing.borrow_and_update() {
-                if closing.changed().await.is_err() {
-                    break;
-                }
-            }
+            self.closing.cancelled().await;
         } else {
             let _ = self.lifecycle.lock().close();
-            self.closing.send_replace(true);
+            self.closing.cancel();
         }
         let cleanup = self.cleanup().await;
         if self.started.borrow().is_none() {
@@ -156,7 +151,7 @@ impl Inner {
 
     fn request_close(self: &Arc<Self>) {
         let action = self.lifecycle.lock().close();
-        self.closing.send_replace(true);
+        self.closing.cancel();
         if let CloseOwner::Close { wait_start: false } = action {
             match (self.env.spawner)() {
                 Ok(spawner) => {
@@ -240,7 +235,7 @@ impl lk_agents_abi::agent::resources::RunResources for RunResources {
             toolsets: crate::toolsets::group::Group::new(env, toolsets),
             hydration: Mutex::default(),
             tasks: Arc::default(),
-            closing: watch::channel(false).0,
+            closing: tokio_util::sync::CancellationToken::new(),
             started: watch::channel(None).0,
             closed: watch::channel(None).0,
         })))

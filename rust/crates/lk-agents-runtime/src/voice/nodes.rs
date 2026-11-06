@@ -26,6 +26,7 @@ use lk_agents_net::task::TaskSet;
 use std::convert::Infallible;
 use std::time::Duration;
 use tokio::sync::{mpsc, watch};
+use tokio_util::sync::CancellationToken;
 
 /// The numbers in a node's chunk and request ids; nothing reads them but a trace.
 static NODE_IDS: AtomicU64 = AtomicU64::new(0);
@@ -57,7 +58,7 @@ impl NodeFactory for AgentNodes {
             completion: watch::channel(None).0,
             retained: Arc::new(Mutex::new(None)),
             started: AtomicBool::new(false),
-            cancelled: watch::channel(false).0,
+            cancelled: CancellationToken::new(),
             tasks: Arc::new(TaskSet::default()),
         }))
     }
@@ -179,7 +180,7 @@ impl Opener {
         deliver: D,
         done: impl FnOnce(Result<(), IoError>) + Send + 'static,
         tasks: Option<&Arc<TaskSet>>,
-        mut cancelled: Option<watch::Receiver<bool>>,
+        cancelled: CancellationToken,
     ) -> ChannelSink<I>
     where
         I: Send + 'static,
@@ -194,7 +195,7 @@ impl Opener {
         let drain = async move {
             let opened = tokio::select! {
                 biased;
-                () = node_cancelled(&mut cancelled) => return done(Ok(())),
+                () = cancelled.cancelled() => return done(Ok(())),
                 opened = call(host, input) => opened,
             };
             let mut out = match opened {
@@ -204,7 +205,7 @@ impl Opener {
             let outcome = loop {
                 let next = tokio::select! {
                     biased;
-                    () = node_cancelled(&mut cancelled) => break Ok(()),
+                    () = cancelled.cancelled() => break Ok(()),
                     next = out.next() => next,
                 };
                 let item = match next {
@@ -214,7 +215,7 @@ impl Opener {
                 };
                 let delivered = tokio::select! {
                     biased;
-                    () = node_cancelled(&mut cancelled) => break Ok(()),
+                    () = cancelled.cancelled() => break Ok(()),
                     delivered = deliver(item) => delivered,
                 };
                 match delivered {
@@ -243,15 +244,6 @@ impl Opener {
 type OpenNode<T> =
     lk_agents_abi::BoxFuture<'static, Result<Box<dyn StreamOutput<T>>, ProviderError>>;
 
-async fn node_cancelled(cancelled: &mut Option<watch::Receiver<bool>>) {
-    match cancelled {
-        Some(cancelled) => {
-            let _ = cancelled.wait_for(|value| *value).await;
-        }
-        None => std::future::pending().await,
-    }
-}
-
 /// `Agent.transcription_node`: one invocation per segment, opened by its first text and ended by
 /// its flush. What the node yields goes down the leg below, flushed once the node has ended.
 struct TranscriptionNode {
@@ -262,7 +254,7 @@ struct TranscriptionNode {
     completion: watch::Sender<Option<Result<(), IoError>>>,
     retained: Arc<Mutex<Option<Box<dyn Send>>>>,
     started: AtomicBool,
-    cancelled: watch::Sender<bool>,
+    cancelled: CancellationToken,
     tasks: Arc<TaskSet>,
 }
 
@@ -303,7 +295,7 @@ impl TranscriptionNode {
                     drop(owner);
                 },
                 Some(&self.tasks),
-                Some(self.cancelled.subscribe()),
+                self.cancelled.clone(),
             ));
         }
         if let Some(sink) = segment.as_ref() {
@@ -333,7 +325,7 @@ impl TextNode for TranscriptionNode {
     }
 
     fn cancel(&self) {
-        self.cancelled.send_replace(true);
+        self.cancelled.cancel();
     }
 
     fn drain(&self) -> lk_agents_abi::BoxFuture<'_, Result<(), IoError>> {

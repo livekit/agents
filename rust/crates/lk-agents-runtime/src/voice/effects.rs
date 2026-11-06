@@ -198,7 +198,7 @@ impl VoiceRuntime {
                 self.publications.view.send_replace(view);
             }
             E::Closing => {
-                self.publications.closing.send_replace(true);
+                self.publications.closing.token().cancel();
             }
             E::SttConversationItem { stt, role, text } => {
                 if let Some(stt) = self.shared.resources.stt(stt)
@@ -658,11 +658,11 @@ impl VoiceRuntime {
         let resources = self.shared.resources.clone();
         let spawner = self.shared.spawner.clone();
         let tasks = self.tasks.clone();
-        let mut closing = self.shared.closing.clone();
+        let closing = self.shared.closing.clone();
         self.spawn("stream open", async move {
             let outcome = tokio::select! {
                 biased;
-                _ = closing.wait_for(|c| *c) => return,
+                () = closing.cancelled() => return,
                 outcome = pending.open(resources, time, spawner) => outcome,
             };
             if let Err(opened) = tx.send_opened(StreamOpened { open, leg, outcome })

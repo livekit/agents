@@ -179,8 +179,8 @@ pub struct PeerHandle {
     pub spawner: Arc<dyn lk_agents_abi::Spawner>,
     pub(crate) watch: WatchHub,
     pub(crate) resources: crate::voice::resources::Resources,
-    /// Flips at `begin_closing`: a system's own drain ends on it like the driver's do.
-    pub closing: tokio::sync::watch::Receiver<bool>,
+    /// Cancelled at `begin_closing`: a system's own drain ends on it like the driver's do.
+    pub closing: tokio_util::sync::CancellationToken,
     /// The session's context, under its `agent_session`: where a system's spans open.
     pub session: telemetry::Cx,
 }
@@ -298,9 +298,9 @@ pub struct SessionShared {
     pub(in crate::voice) calls: Arc<Calls>,
     /// Every speech's live handle, which the core's updates keep current.
     pub(in crate::voice) speeches: Arc<crate::voice::speech_handle::Speeches>,
-    /// Flips once, when the legs close or the runtime is dropped: every forwarder, drain, pump and
-    /// reader selects on it, or one parked on an idle source would outlive the session.
-    pub(in crate::voice) closing: tokio::sync::watch::Receiver<bool>,
+    /// Cancelled once, when the legs close or the runtime is dropped: every forwarder, drain,
+    /// pump and reader selects on it, or one parked on an idle source would outlive the session.
+    pub(in crate::voice) closing: tokio_util::sync::CancellationToken,
     /// Never `tokio::spawn`.
     pub(in crate::voice) spawner: Arc<dyn Spawner>,
     /// A task cannot reach `AgentSession::mint`; the `g` prefix keeps the id spaces apart.
@@ -370,7 +370,8 @@ impl SessionShared {
 
 /// Only the queue owner publishes accepted decision state. Spawned work receives readers.
 pub(crate) struct Publications {
-    pub closing: tokio::sync::watch::Sender<bool>,
+    /// Dropping the publications cancels it too.
+    pub closing: tokio_util::sync::DropGuard,
     pub recorder: tokio::sync::watch::Sender<Option<crate::voice::recorder::RecorderTap>>,
     pub view: tokio::sync::watch::Sender<Arc<SessionView>>,
     pub output: tokio::sync::watch::Sender<Outputs>,

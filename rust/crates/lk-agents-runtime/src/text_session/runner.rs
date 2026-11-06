@@ -162,7 +162,7 @@ fn start(
     )
     .map_err(|e| InvalidRun(e.to_string()))?
     .with_checkpoints();
-    let (cancel, cancelled) = oneshot::channel();
+    let cancel = CancellationToken::new();
     let (updates, receiver) = mpsc::channel(UPDATE_QUEUE);
     let (events_tx, events) = mpsc::channel(64);
     let (progress_tx, progress) = mpsc::channel(32);
@@ -190,16 +190,16 @@ fn start(
     driving.spawn(
         &spawner,
         "text session",
-        driver.drive(message, events, progress, releases, cancelled),
+        driver.drive(message, events, progress, releases, cancel.clone()),
     );
     Ok((
-        Updates { cancel: Some(cancel), receiver, clock, _driver: driving },
+        Updates { cancel, receiver, clock, _driver: driving },
         Control { release: release_tx, progress: progress_tx, usage },
     ))
 }
 
 pub struct Updates {
-    cancel: Option<oneshot::Sender<()>>,
+    cancel: CancellationToken,
     receiver: mpsc::Receiver<TextSessionUpdate>,
     clock: Arc<dyn Clock>,
     /// The driver's owner: dropping the updates cancels the session through `cancel`, and the
@@ -209,9 +209,7 @@ pub struct Updates {
 
 impl Drop for Updates {
     fn drop(&mut self) {
-        if let Some(cancel) = self.cancel.take() {
-            let _ = cancel.send(());
-        }
+        self.cancel.cancel();
     }
 }
 
@@ -226,9 +224,7 @@ impl StreamOutput<TextSessionUpdate> for Updates {
     }
     fn close(mut self: Box<Self>, deadline: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
         Box::pin(async move {
-            if let Some(cancel) = self.cancel.take() {
-                let _ = cancel.send(());
-            }
+            self.cancel.cancel();
             let clock = self.clock.clone();
             Closed::bounded(&*clock, deadline, async move {
                 while self.receiver.recv().await.is_some() {}

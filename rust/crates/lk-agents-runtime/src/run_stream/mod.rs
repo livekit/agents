@@ -23,6 +23,7 @@ use lk_agents_net::{env::ProcessEnv, task::TaskSet};
 use parking_lot::Mutex;
 use std::sync::{Arc, OnceLock};
 use tokio::sync::{Mutex as AsyncMutex, watch};
+use tokio_util::sync::CancellationToken;
 
 type Outcome = Result<StreamOutcome, StreamError>;
 pub struct RunStream(Arc<Inner>);
@@ -36,7 +37,7 @@ struct Inner {
     spawner: OnceLock<Arc<dyn Spawner>>,
     usage: Mutex<Option<watch::Receiver<Usage>>>,
     terminal: Mutex<Option<Outcome>>,
-    closing: watch::Sender<bool>,
+    closing: CancellationToken,
     closed: watch::Sender<bool>,
     tasks: Arc<TaskSet>,
 }
@@ -74,7 +75,7 @@ impl Inner {
         if !self.policy.lock().close() {
             return;
         }
-        self.closing.send_replace(true);
+        self.closing.cancel();
         let inner = self.clone();
         let spawner = self.spawner.get().expect("bound stream owns its spawner");
         self.tasks.spawn(&**spawner, "run stream settlement", async move {
@@ -114,7 +115,7 @@ impl Inner {
     async fn pull(
         self: &Arc<Self>,
         consumer: u64,
-        cursor_closed: Option<&watch::Sender<bool>>,
+        cursor_closed: Option<&CancellationToken>,
     ) -> Result<Option<Item>, StreamError> {
         let (view, _reading) = if cursor_closed.is_some() {
             (self.policy.lock().read_view(consumer)?, None)
@@ -122,12 +123,11 @@ impl Inner {
             let view = self.policy.lock().begin_read(consumer)?;
             (view, Some(Reading { inner: self.clone(), consumer }))
         };
-        let mut cancelling = self.closing.subscribe();
         loop {
-            if cursor_closed.is_some_and(|closed| *closed.borrow()) {
+            if cursor_closed.is_some_and(CancellationToken::is_cancelled) {
                 return Ok(None);
             }
-            if *cancelling.borrow_and_update() {
+            if self.closing.is_cancelled() {
                 self.exhausted().await?;
                 return Ok(None);
             }
@@ -146,7 +146,7 @@ impl Inner {
             let next = tokio::select! {
                 biased;
                 _ = signal(cursor_closed) => return Ok(None),
-                _ = cancelling.changed() => { drop(input); self.exhausted().await?; return Ok(None); },
+                () = self.closing.cancelled() => { drop(input); self.exhausted().await?; return Ok(None); },
                 next = source.next() => next,
             };
             match next {
@@ -189,11 +189,9 @@ impl Inner {
     }
 }
 
-async fn signal(sender: Option<&watch::Sender<bool>>) {
-    match sender {
-        Some(sender) => {
-            let _ = sender.subscribe().wait_for(|closed| *closed).await;
-        }
+async fn signal(closed: Option<&CancellationToken>) {
+    match closed {
+        Some(closed) => closed.cancelled().await,
         None => std::future::pending::<()>().await,
     }
 }
@@ -226,7 +224,7 @@ impl stream::RunStream for RunStream {
             spawner: OnceLock::new(),
             usage: Mutex::default(),
             terminal: Mutex::default(),
-            closing: watch::channel(false).0,
+            closing: CancellationToken::new(),
             closed: watch::channel(false).0,
             tasks: Arc::default(),
         }))
@@ -299,18 +297,18 @@ impl stream::RunStream for RunStream {
 struct Cursor {
     inner: Arc<Inner>,
     consumer: u64,
-    closed: watch::Sender<bool>,
+    closed: CancellationToken,
 }
 impl Cursor {
     fn new(inner: Arc<Inner>, consumer: u64) -> Self {
-        Self { inner, consumer, closed: watch::channel(false).0 }
+        Self { inner, consumer, closed: CancellationToken::new() }
     }
     fn close(&self) {
-        self.closed.send_replace(true);
+        self.closed.cancel();
         self.inner.release(self.consumer);
     }
     fn begin_read(&self) -> Result<bool, StreamError> {
-        if *self.closed.borrow() {
+        if self.closed.is_cancelled() {
             return Ok(false);
         }
         self.inner.policy.lock().begin_read(self.consumer)?;
@@ -322,11 +320,11 @@ impl Cursor {
     }
     fn close_idle(&self) -> Result<(), StreamError> {
         self.inner.policy.lock().close_cursor(self.consumer)?;
-        self.closed.send_replace(true);
+        self.closed.cancel();
         Ok(())
     }
     async fn next(&self) -> Result<Option<Item>, StreamError> {
-        if *self.closed.borrow() {
+        if self.closed.is_cancelled() {
             return Ok(None);
         }
         let item = self.inner.pull(self.consumer, Some(&self.closed)).await;

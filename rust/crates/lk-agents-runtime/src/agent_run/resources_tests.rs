@@ -93,7 +93,7 @@ async fn cancelled_close_waiter_rejoins_cleanup_and_hydration_releases_once() {
     let hooks = Arc::new(Hooks { hold_close: true, ..Hooks::new() });
     let owner = resources(vec![hooks.clone()]);
     owner.open().unwrap().await.unwrap();
-    assert!(!*owner.0.closing.borrow(), "successful startup must keep resources open");
+    assert!(!owner.0.closing.is_cancelled(), "successful startup must keep resources open");
     assert_eq!(hooks.closes.load(Ordering::SeqCst), 0);
     let activation = owner.activation().unwrap();
     let releases = Arc::new(AtomicUsize::new(0));

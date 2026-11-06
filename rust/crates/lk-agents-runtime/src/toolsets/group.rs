@@ -10,6 +10,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 use tokio::sync::watch;
+use tokio_util::sync::CancellationToken;
 
 type Outcome = Result<(), HostError>;
 type Reply = watch::Sender<Option<Outcome>>;
@@ -20,7 +21,7 @@ struct Inner {
     env: ProcessEnv,
     entries: Mutex<Option<Vec<Entry>>>,
     launched: AtomicBool,
-    closing: watch::Sender<bool>,
+    closing: CancellationToken,
     started: Reply,
     closed: Reply,
     tasks: Arc<TaskSet>,
@@ -31,7 +32,7 @@ impl Group {
             env: env.clone(),
             entries: Mutex::new(Some(entries)),
             launched: AtomicBool::new(false),
-            closing: watch::channel(false).0,
+            closing: CancellationToken::new(),
             started: watch::channel(None).0,
             closed: watch::channel(None).0,
             tasks: Arc::default(),
@@ -40,7 +41,7 @@ impl Group {
 }
 impl Drop for Group {
     fn drop(&mut self) {
-        self.0.closing.send_replace(true);
+        self.0.closing.cancel();
     }
 }
 
@@ -80,7 +81,7 @@ struct OpeningWait {
 impl Drop for OpeningWait {
     fn drop(&mut self) {
         if self.armed {
-            self.inner.closing.send_replace(true);
+            self.inner.closing.cancel();
         }
     }
 }
@@ -118,17 +119,16 @@ impl Inner {
         }
     }
     async fn close(self: &Arc<Self>) -> Outcome {
-        self.closing.send_replace(true);
+        self.closing.cancel();
         self.ensure_driver();
         wait(&self.closed).await
     }
     async fn run(self: Arc<Self>) {
         let entries = self.entries.lock().take().unwrap_or_default();
-        let mut closing = self.closing.subscribe();
         let mut policy = Policy::new(entries.len());
         let mut leases: Vec<Arc<dyn Lease>> = Vec::new();
         let mut failure = None;
-        if *closing.borrow_and_update() {
+        if self.closing.is_cancelled() {
             policy.request_close();
         }
         while let Some(index) = policy.next() {
@@ -136,7 +136,7 @@ impl Inner {
             let ticket = lifetime.acquire(hooks.clone());
             let result = tokio::select! {
                 biased;
-                _ = closing.changed() => {
+                () = self.closing.cancelled() => {
                     policy.request_close();
                     let cancelled = ticket.cancel().await;
                     Err(cancelled.err().unwrap_or_else(|| HostError::new("toolset initialization was cancelled")))
@@ -150,17 +150,13 @@ impl Inner {
                     failure = Some(error);
                 }
             }
-            if *closing.borrow_and_update() {
+            if self.closing.is_cancelled() {
                 policy.request_close();
             }
         }
         if policy.ready() {
             self.started.send_replace(Some(Ok(())));
-            while !*closing.borrow_and_update() {
-                if closing.changed().await.is_err() {
-                    break;
-                }
-            }
+            self.closing.cancelled().await;
             policy.request_close();
         }
         // Closing every lease is an independent effect. Do not let one failure abandon siblings.

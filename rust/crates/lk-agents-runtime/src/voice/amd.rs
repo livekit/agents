@@ -163,7 +163,8 @@ pub struct AmdSystem {
     tools_host: Option<HostRef>,
     /// The detector's `amd` span: each classification is an `llm_request` under it.
     cx: telemetry::Cx,
-    inflight: Option<(u64, tokio::sync::watch::Sender<bool>)>,
+    /// The classification in flight; replacing or dropping it cancels the run.
+    inflight: Option<(u64, tokio_util::sync::DropGuard)>,
     stt: SttLeg,
     /// The session asked to close (or the machine was closed): nothing more is read.
     closed: bool,
@@ -179,7 +180,7 @@ impl AmdSystem {
     /// callee awaited off the loop. Past the close request nothing is attached and the handle
     /// drops what it is sent.
     pub fn spawn(peer: PeerHandle, setup: AmdSetup) -> AmdHandle {
-        if *peer.closing.borrow() {
+        if peer.closing.is_cancelled() {
             peer.journal(Step::Core(CoreStep::PortFailure("amd: attached after the close")));
             return AmdHandle::detached();
         }
@@ -251,11 +252,11 @@ impl AmdSystem {
     ) {
         let time = self.peer.time.clone();
         let api = self.peer.queue.clone();
-        let mut closing = self.peer.closing.clone();
+        let closing = self.peer.closing.clone();
         // The host may drop its handle: its channel then never yields, the feed still does.
         let mut host_open = true;
         while !self.closed {
-            if *closing.borrow() || api.is_closed() {
+            if closing.is_cancelled() || api.is_closed() {
                 break;
             }
             let deadline = self.timers.next_deadline();
@@ -265,7 +266,7 @@ impl AmdSystem {
             }
             tokio::select! {
                 biased;
-                _ = closing.wait_for(|closed| *closed) => break,
+                () = closing.cancelled() => break,
                 () = api.closed() => break,
                 () = time.wait_until_opt(deadline) => self.on_timers(time.now()),
                 item = rx.recv() => match item {
@@ -419,8 +420,8 @@ impl AmdSystem {
             self.peer.time.wall(),
             &req,
         );
-        let (cancel, cancelled) = tokio::sync::watch::channel(false);
-        self.inflight = Some((n, cancel));
+        let cancelled = tokio_util::sync::CancellationToken::new();
+        self.inflight = Some((n, cancelled.clone().drop_guard()));
         let llm = Arc::clone(&self.llm);
         let time = self.peer.time.clone();
         let tx = self.tx.clone();
@@ -434,9 +435,7 @@ impl AmdSystem {
 
     /// `end_input()` / `close()`: the run in flight is cancelled and reports nothing.
     fn cancel_classification(&mut self) {
-        if let Some((_, cancel)) = self.inflight.take() {
-            let _ = cancel.send(true);
-        }
+        self.inflight = None;
     }
 
     /// Perform every tool call the model answered with, in order. A bad label or a postpone with no
@@ -472,7 +471,7 @@ impl AmdSystem {
         let peer = self.peer.clone();
         let tasks = self.tasks.clone();
         let _ = self.tasks.try_spawn(self.peer.spawner.as_ref(), "amd tap open", async move {
-            if *peer.closing.borrow() || tx.is_closed() {
+            if peer.closing.is_cancelled() || tx.is_closed() {
                 return;
             }
             // Let an admitted host open settle so its successful result can acquire ownership.
@@ -625,7 +624,7 @@ fn spawn_tap_drain(
 
     tx: tokio::sync::mpsc::UnboundedSender<Msg>,
 ) -> bool {
-    let mut closing = peer.closing.clone();
+    let closing = peer.closing.clone();
     let spawner = peer.spawner.clone();
     tasks
         .try_spawn(spawner.as_ref(), "amd tap drain", async move {
@@ -633,7 +632,7 @@ fn spawn_tap_drain(
                 peer.remove_audio_tap(tap);
                 return;
             };
-            let cause = forward_transcripts(source, &mut closing, &tx).await;
+            let cause = forward_transcripts(source, &closing, &tx).await;
             peer.remove_audio_tap(tap);
             let closed = opened.close().await;
             peer.journal(Step::Input(InputStep::ChannelEnded { leg: TAP, cause }));
@@ -648,13 +647,13 @@ fn spawn_tap_drain(
 /// the source ends.
 async fn forward_transcripts(
     source: &mut lk_agents_abi::SttSource,
-    closing: &mut tokio::sync::watch::Receiver<bool>,
+    closing: &tokio_util::sync::CancellationToken,
     tx: &tokio::sync::mpsc::UnboundedSender<Msg>,
 ) -> ChannelEndCause {
     loop {
         let next = tokio::select! {
             biased;
-            _ = closing.wait_for(|c| *c) => return ChannelEndCause::Closing,
+            () = closing.cancelled() => return ChannelEndCause::Closing,
             () = tx.closed() => return ChannelEndCause::Closing,
             item = source.next() => item,
         };
@@ -682,7 +681,7 @@ async fn classify(
     request: lk_agents_abi::ChatRequest,
     req: u64,
     transcript: String,
-    mut cancelled: tokio::sync::watch::Receiver<bool>,
+    cancelled: tokio_util::sync::CancellationToken,
     cx: telemetry::Cx,
 ) {
     let mut trace = telemetry::LlmTrace::start(&cx, llm.as_ref(), &request);
@@ -701,14 +700,14 @@ async fn classify(
     let mut failed = false;
     let mut aborted = false;
     loop {
-        if *cancelled.borrow() {
+        if cancelled.is_cancelled() {
             aborted = true;
             break;
         }
         let next = if stream.cancel_safe() {
             tokio::select! {
                 biased;
-                _ = cancelled.wait_for(|c| *c) => {
+                () = cancelled.cancelled() => {
                     aborted = true;
                     break;
                 }
@@ -923,7 +922,7 @@ mod tests {
         let amd = telemetry::SpanContext { trace_id: 1, span_id: 2, sampled: true };
         let cx = tracer.root().under::<telemetry::Amd>(amd);
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        let (_cancel, cancelled) = tokio::sync::watch::channel(false);
+        let cancelled = tokio_util::sync::CancellationToken::new();
         let time = crate::voice::session::Timebase::from_virtual(clock);
         let request = lk_agents_abi::ChatRequest::default();
         let llm = Arc::new(Classifier) as Arc<dyn Llm>;

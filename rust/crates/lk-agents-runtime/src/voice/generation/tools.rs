@@ -320,11 +320,9 @@ impl ToolBody {
     ) -> ToolReport {
         let work = self.complete(span);
         tokio::pin!(work);
-        let mut closing = self.shared.closing.clone();
         tokio::select! { biased;
             report = &mut work => report,
-            // The watch guard is dropped inside: it must not live across the await below.
-            _ = async { let _ = closing.wait_for(|closing| *closing).await; } => {
+            () = self.shared.closing.cancelled() => {
                 if self.shared.tool_bodies.claim_cancellation(&self.invocation) {
                     self.host.cancel(&self.invocation);
                 }
@@ -350,7 +348,7 @@ impl ToolBody {
         // callable may eventually return successfully while it unwinds, but that must not start
         // a new callback under an operation already cancelled by the core.
         let tool_bodies = &self.shared.tool_bodies;
-        if tool_bodies.cancellation_requested(invocation) || *self.shared.closing.borrow() {
+        if tool_bodies.cancellation_requested(invocation) || self.shared.closing.is_cancelled() {
             return ToolOutcome::Cancelled.into();
         }
         if lk_agents_voice::tool_executor::validates_completion(self.completion, &report) {

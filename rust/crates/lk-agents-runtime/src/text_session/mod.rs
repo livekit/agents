@@ -21,7 +21,8 @@ use lk_agents_core::agent_run;
 use lk_agents_core::text_session::{
     TextSession, TextSessionConfig, TextSessionEffect, TextSessionEvent, TextSessionInput,
 };
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{mpsc, watch};
+use tokio_util::sync::CancellationToken;
 
 use crate::agent_run::RunSetup;
 use crate::agent_run::execution::{Execution, Report, Reporter};
@@ -73,7 +74,7 @@ impl Driver {
         mut events: mpsc::Receiver<(String, Report)>,
         mut progress: mpsc::Receiver<(String, u64, String)>,
         mut releases: mpsc::Receiver<Release>,
-        mut cancelled: oneshot::Receiver<()>,
+        cancelled: CancellationToken,
     ) {
         let mut cancel_seen = false;
         let mut effects: VecDeque<_> =
@@ -99,7 +100,7 @@ impl Driver {
             let event = tokio::select! {
                 biased;
                 () = crate::agent_run::wait(&*clock, wake) => Some(TextSessionEvent::Wake),
-                _ = &mut cancelled, if !cancel_seen => {
+                () = cancelled.cancelled(), if !cancel_seen => {
                     cancel_seen = true;
                     Some(TextSessionEvent::Cancel)
                 }

@@ -11,6 +11,7 @@ use lk_agents_media::pool::{JobClass, MediaPool};
 use lk_agents_net::task::TaskSet;
 use lk_agents_voice::room_io::machine::pre_connect_state::{PreConnectBuffer, PreConnectState};
 use tokio::sync::Notify;
+use tokio_util::sync::CancellationToken;
 
 use lk_agents_voice::room_io::PRE_CONNECT_AUDIO_BUFFER_STREAM;
 use lk_agents_voice::room_io::machine::pre_connect_state::{HeadBytes, HeadError, replayed};
@@ -20,7 +21,6 @@ struct State {
     core: PreConnectState,
     registering: bool,
     registered: bool,
-    closed: bool,
     cleanup: Option<Closed>,
 }
 
@@ -35,7 +35,8 @@ pub struct PreConnectAudioHandler {
     pool: Option<MediaPool>,
     state: Mutex<State>,
     changed: Notify,
-    stopped: Notify,
+    /// Cancelled under the state lock, so nothing registers once the handler closes.
+    stopped: CancellationToken,
     tasks: Arc<TaskSet>,
 }
 
@@ -57,7 +58,7 @@ impl PreConnectAudioHandler {
             pool,
             state: Mutex::new(State::default()),
             changed: Notify::new(),
-            stopped: Notify::new(),
+            stopped: CancellationToken::new(),
             tasks: Arc::default(),
         })
     }
@@ -65,7 +66,7 @@ impl PreConnectAudioHandler {
     pub fn register(self: &Arc<Self>) -> bool {
         {
             let mut state = self.state.lock();
-            if state.closed || state.registering || state.registered {
+            if self.stopped.is_cancelled() || state.registering || state.registered {
                 return false;
             }
             state.registering = true;
@@ -92,15 +93,9 @@ impl PreConnectAudioHandler {
 
     async fn listen(self: Arc<Self>, mut streams: Box<dyn StreamOutput<ByteStream>>) {
         loop {
-            let stopped = self.stopped.notified();
-            tokio::pin!(stopped);
-            stopped.as_mut().enable();
-            if self.state.lock().closed {
-                break;
-            }
             let stream = tokio::select! {
                 biased;
-                () = &mut stopped => break,
+                () = self.stopped.cancelled() => break,
                 next = streams.next() => next,
             };
             let stream = match stream {
@@ -170,18 +165,10 @@ impl PreConnectAudioHandler {
     }
 
     async fn read_stream(self: Arc<Self>, track: TrackSid, id: u64, mut stream: ByteStream) {
-        let stop = self.stopped.notified();
-        tokio::pin!(stop);
-        stop.as_mut().enable();
-        let receive = async {
-            if self.state.lock().closed {
-                return Err(HeadError::Closed);
-            }
-            receive_bytes(&mut stream).await
-        };
+        let receive = receive_bytes(&mut stream);
         let received = tokio::select! {
             biased;
-            () = &mut stop => Err(HeadError::Closed),
+            () = self.stopped.cancelled() => Err(HeadError::Closed),
             received = lk_agents_abi::timeout(self.clock.as_ref(), self.timeout, receive) => {
                 received.unwrap_or(Err(HeadError::Expired))
             },
@@ -205,10 +192,7 @@ impl PreConnectAudioHandler {
 
     /// On the media pool when there is one, abandoned at close.
     async fn decode(&self, head: HeadBytes) -> std::result::Result<Vec<AudioFrame>, HeadError> {
-        let stopped = self.stopped.notified();
-        tokio::pin!(stopped);
-        stopped.as_mut().enable();
-        if self.state.lock().closed {
+        if self.stopped.is_cancelled() {
             return Err(HeadError::Closed);
         }
         let format = self.format;
@@ -218,7 +202,7 @@ impl PreConnectAudioHandler {
             .map_err(|error| HeadError::Decode(error.to_string()))?;
         tokio::select! {
             biased;
-            () = &mut stopped => Err(HeadError::Closed),
+            () = self.stopped.cancelled() => Err(HeadError::Closed),
             decoded = job => decoded.map_err(|_| HeadError::Decode("the decoder panicked".into()))?,
         }
     }
@@ -231,10 +215,9 @@ impl PreConnectAudioHandler {
     pub async fn aclose(&self) -> Closed {
         {
             let mut state = self.state.lock();
-            state.closed = true;
+            self.stopped.cancel();
             state.core.close();
         }
-        self.stopped.notify_waiters();
         self.changed.notify_waiters();
         let deadline = self.clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
         loop {

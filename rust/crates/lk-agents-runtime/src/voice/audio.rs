@@ -8,6 +8,7 @@ use lk_agents_abi::{Closed, Spawner, StreamOutput};
 use lk_agents_voice::audio::{AudioChannel, ChannelEnd, Tagged};
 use lk_agents_voice::trace::ChannelEndCause;
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 const VIDEO_IN_LEG: &str = "video_in";
 
 struct TaggedSource<T> {
@@ -49,7 +50,7 @@ pub fn tagged<T: Send + 'static>(
 
 #[derive(Clone)]
 pub struct VideoForwarding {
-    pub closing: tokio::sync::watch::Receiver<bool>,
+    pub closing: CancellationToken,
     /// The loop's queue: the frames (the sampler runs in the loop, on the session clock) and the
     /// source's end.
     pub queue: Tx,
@@ -57,7 +58,7 @@ pub struct VideoForwarding {
 
 impl VideoForwarding {
     pub async fn pump(self, input: Arc<dyn lk_agents_abi::voice::io::VideoInput>) {
-        let mut p = self;
+        let p = self;
         let cause = loop {
             let frame = tokio::select! {
                 biased;
@@ -69,7 +70,7 @@ impl VideoForwarding {
                         break ChannelEndCause::Error;
                     }
                 },
-                _ = p.closing.wait_for(|c| *c) => break ChannelEndCause::Closing,
+                () = p.closing.cancelled() => break ChannelEndCause::Closing,
             };
             // A queue that is gone is a loop that has returned: nothing to report to.
             if p.queue.send(frame).is_err() {
@@ -87,13 +88,13 @@ impl VideoForwarding {
 pub fn spawn_drain<T: Into<crate::voice::VoiceRuntimeEvent> + Send + 'static>(
     (tasks, spawner): (&Arc<lk_agents_net::task::TaskSet>, &dyn Spawner),
     time: Timebase,
-    mut closing: lk_agents_abi::BoxFuture<'static, ()>,
+    closing: CancellationToken,
     mut source: Box<dyn StreamOutput<T>>,
     queue: Tx,
     (channel, sink): (AudioChannel, ResourceId),
 ) {
     tasks.spawn(spawner, "leg drain", async move {
-        let (cause, error) = forward_items(&mut *source, &mut closing, &queue).await;
+        let (cause, error) = forward_items(&mut *source, &closing, &queue).await;
         // Always, bounded on the session clock (dropping doesn't cancel a host stream).
         let deadline = time.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
         let closed = source.close(deadline).await;
@@ -107,7 +108,7 @@ pub fn spawn_drain<T: Into<crate::voice::VoiceRuntimeEvent> + Send + 'static>(
 /// closes.
 async fn forward_items<T: Into<crate::voice::VoiceRuntimeEvent> + Send + 'static>(
     source: &mut dyn StreamOutput<T>,
-    closing: &mut lk_agents_abi::BoxFuture<'static, ()>,
+    closing: &CancellationToken,
     queue: &Tx,
 ) -> (ChannelEndCause, Option<lk_agents_abi::errors::ProviderError>) {
     loop {
@@ -115,7 +116,7 @@ async fn forward_items<T: Into<crate::voice::VoiceRuntimeEvent> + Send + 'static
         let next = tokio::select! {
             biased;
             item = source.next() => item,
-            _ = &mut *closing => return (ChannelEndCause::Closing, None),
+            () = closing.cancelled() => return (ChannelEndCause::Closing, None),
         };
         match next {
             Ok(Some(item)) => {
@@ -133,14 +134,5 @@ async fn forward_items<T: Into<crate::voice::VoiceRuntimeEvent> + Send + 'static
 pub fn report_to(queue: Tx) -> lk_agents_abi::RetryReport {
     Arc::new(move |error, _, _| {
         let _ = queue.send(lk_agents_voice::agent_session::VoiceEvent::SttRetried(error));
-    })
-}
-
-/// A running session's closing signal, owned by one provider drain.
-pub fn closing(
-    mut closing: tokio::sync::watch::Receiver<bool>,
-) -> lk_agents_abi::BoxFuture<'static, ()> {
-    Box::pin(async move {
-        let _ = closing.wait_for(|closing| *closing).await;
     })
 }

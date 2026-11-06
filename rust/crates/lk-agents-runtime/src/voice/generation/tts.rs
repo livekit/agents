@@ -62,7 +62,9 @@ impl TtsInference<'_, '_, '_> {
         // runs under the node span and makes its own request, if any.
         let mut trace = telemetry::TtsTrace::start(self.node.cx(shared), tts, true);
         loop {
-            if let Some(lost) = state.before_open(handle.interrupted(), *shared.closing.borrow()) {
+            if let Some(lost) =
+                state.before_open(handle.interrupted(), shared.closing.is_cancelled())
+            {
                 return Err(Box::new(lost));
             }
             // The driver's TTS always streams (`tts_leg` adapts one that does not). A duplex
@@ -426,7 +428,7 @@ impl Streaming<'_, '_> {
         &mut self,
         tx: &mpsc::UnboundedSender<SynthesisEvent>,
         permits: &Arc<tokio::sync::Semaphore>,
-        stopped: &tokio::sync::Notify,
+        stopped: &tokio_util::sync::CancellationToken,
         handle: &SpeechHandle,
     ) {
         loop {
@@ -437,7 +439,7 @@ impl Streaming<'_, '_> {
             let (result, permit) = tokio::select! {
                 biased;
                 () = handle.wait_for_interrupted() => break,
-                () = stopped.notified() => break,
+                () = stopped.cancelled() => break,
                 v = next => v,
             };
             let ended = matches!(result, Ok(Next::End) | Err(_));
@@ -597,7 +599,7 @@ impl SynthesisPlayout<'_> {
         segment: &mut Streaming<'_, '_>,
     ) -> Result<Heard, Box<SourceFailed>> {
         let permits = Arc::new(tokio::sync::Semaphore::new(MAX_BUFFERED_TTS_FRAMES));
-        let stopped = tokio::sync::Notify::new();
+        let stopped = tokio_util::sync::CancellationToken::new();
         // A second sender of the same queue: the playout's own keeps it open either way.
         let tx = self.tx.clone();
         let produce = segment.produce_into(&tx, &permits, &stopped, handle);
@@ -605,7 +607,7 @@ impl SynthesisPlayout<'_> {
             let played = self.play(shared, handle).await;
             // A failed output stops synthesis too; the caller still ends input and closes the
             // source.
-            stopped.notify_one();
+            stopped.cancel();
             played
         };
         let (_, (result, started_at)) = tokio::join!(produce, consume);

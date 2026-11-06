@@ -205,12 +205,12 @@ async fn cancelling_one_validation_preserves_other_callbacks_until_speech_cancel
             .host_callbacks
             .contains_key(&(speech, HostCallbackId::OutputValidation(ValidationId(2))))
     );
-    assert!(!*runtime.shared.closing.borrow(), "callback cancellation closed the session");
+    assert!(!runtime.shared.closing.is_cancelled(), "callback cancellation closed the session");
 
     runtime.perform_voice_effect(VoiceEffect::CancelSpeech(speech));
     other.await_drop().await;
     assert!(runtime.host_callbacks.is_empty());
-    assert!(!*runtime.shared.closing.borrow());
+    assert!(!runtime.shared.closing.is_cancelled());
 }
 
 #[tokio::test(start_paused = true)]
@@ -241,7 +241,7 @@ async fn speech_cancellation_ends_refusal_rendering_but_preserves_deferred_reply
         !deferred.future_dropped.load(Ordering::SeqCst),
         "background tool reply lost its owner"
     );
-    assert!(!*runtime.shared.closing.borrow());
+    assert!(!runtime.shared.closing.is_cancelled());
 
     runtime.tasks.close();
     deferred.await_drop().await;
@@ -301,7 +301,10 @@ async fn cancelling_one_refusal_reports_its_receipt_and_preserves_other_renderer
     runtime.perform_voice_effect(VoiceEffect::CancelToolRefusal { speech, call });
     assert_eq!(first.cancellations.load(Ordering::SeqCst), 1, "cancellation is idempotent");
     assert!(runtime.queue.try_recv().is_err(), "one renderer reports one terminal receipt");
-    assert!(!*runtime.shared.closing.borrow(), "a call cancellation must not close the session");
+    assert!(
+        !runtime.shared.closing.is_cancelled(),
+        "a call cancellation must not close the session"
+    );
 
     runtime.tasks.close();
     for host in [&sibling, &another_speech, &deferred] {
@@ -355,7 +358,7 @@ async fn releasing_a_speech_cancels_its_callbacks_but_preserves_detached_tool_wo
     assert!(runtime.host_callbacks.is_empty());
     assert!(!deferred.future_dropped.load(Ordering::SeqCst));
     assert!(!body.future_dropped.load(Ordering::SeqCst), "release cancelled a detached tool body");
-    assert!(!*runtime.shared.closing.borrow());
+    assert!(!runtime.shared.closing.is_cancelled());
 
     runtime.tasks.close();
     deferred.await_drop().await;

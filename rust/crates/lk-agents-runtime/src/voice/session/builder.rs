@@ -324,7 +324,7 @@ impl DriverBuilder {
         let queue = Tx::new(queue_tx);
         let (ev_tx, ev_rx) = tokio::sync::mpsc::unbounded_channel::<VoiceHostEvent>();
         let watch = WatchHub::new();
-        let closing = tokio::sync::watch::channel(false).0;
+        let closing = tokio_util::sync::CancellationToken::new();
 
         let mut sinks = Sinks {
             by_channel: std::collections::BTreeMap::new(),
@@ -492,12 +492,12 @@ impl DriverBuilder {
     fn shared(
         &self,
         queue: &Tx,
-        closing: tokio::sync::watch::Sender<bool>,
+        closing: tokio_util::sync::CancellationToken,
         outputs: lk_agents_voice::agent_session::Outputs,
         session_id: String,
     ) -> (Arc<SessionShared>, super::shared::Publications) {
         let publications = super::shared::Publications {
-            closing,
+            closing: closing.clone().drop_guard(),
             recorder: tokio::sync::watch::channel(None).0,
             view: self.view.clone(),
             output: tokio::sync::watch::channel(outputs).0,
@@ -520,7 +520,7 @@ impl DriverBuilder {
             queue: queue.clone(),
             calls: Arc::new(Calls::default()),
             speeches: Arc::clone(&self.speeches),
-            closing: publications.closing.subscribe(),
+            closing,
             spawner: Arc::clone(&self.spawner),
             gen_ids: std::sync::atomic::AtomicU64::new(0),
             session_id,
@@ -730,7 +730,7 @@ pub(super) struct OpeningSession {
     tasks: Arc<lk_agents_net::task::TaskSet>,
     loop_tasks: Vec<lk_agents_net::task::TaskId>,
     resources: Resources,
-    pub(super) cancelled: tokio::sync::watch::Receiver<bool>,
+    pub(super) cancelled: tokio_util::sync::CancellationToken,
     installed: bool,
     spawner: Arc<dyn Spawner>,
     cleanup: Option<lk_agents_abi::BoxFuture<'static, ()>>,
@@ -739,7 +739,7 @@ pub(super) struct OpeningSession {
 impl OpeningSession {
     pub(super) fn new(
         session: &super::VoiceSession,
-        cancelled: tokio::sync::watch::Receiver<bool>,
+        cancelled: tokio_util::sync::CancellationToken,
     ) -> Self {
         Self {
             stage: session.stage.clone(),
