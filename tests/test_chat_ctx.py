@@ -192,6 +192,20 @@ def test_empty_mid_conversation_system_messages_are_dropped():
     assert [e["role"] for e in entries] == ["user"]
 
 
+@pytest.mark.parametrize("fmt", ["anthropic", "google", "aws"])
+def test_developer_preamble_becomes_the_system_prompt(fmt: str):
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="developer", content=["You are a helpful assistant."])
+    chat_ctx.add_message(role="user", content=["Hi!"])
+
+    messages, extra_data = chat_ctx.to_provider_format(format=fmt)
+
+    assert extra_data.system_messages == ["You are a helpful assistant."]
+    assert len(messages) == 1
+    blocks = messages[0].get("content") or messages[0].get("parts")
+    assert [block["text"] for block in blocks] == ["Hi!"]
+
+
 def test_chat_ctx_can_be_serialized_and_deserialized_with_defaults():
     from livekit.agents.llm import AgentHandoff, ChatContext, ChatMessage
 

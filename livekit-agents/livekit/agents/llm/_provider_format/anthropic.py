@@ -37,7 +37,11 @@ def to_chat_ctx(
         chat_items.extend(group.flatten())
 
     for msg in chat_items:
-        if msg.type == "message" and msg.role == "system" and (text := msg.raw_text_content):
+        if (
+            msg.type == "message"
+            and msg.role in ("system", "developer")
+            and (text := msg.raw_text_content)
+        ):
             system_messages.append(text)
             continue
 
