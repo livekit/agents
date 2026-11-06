@@ -180,3 +180,60 @@ class TestRoomIODeleteRoomOnClose:
         job_ctx, _ = self._close(monkeypatch, simulation=None)
         job_ctx.delete_room.assert_called_once_with(room_name="room")
         job_ctx.add_shutdown_callback.assert_not_called()
+
+
+class TestChoose:
+    _OPTIONS = {"gpt-5": "openai/gpt-5", "gemini": "google/gemini-2.5-flash"}
+
+    def _simulate(self, monkeypatch: pytest.MonkeyPatch, choices: dict[str, str]) -> Any:
+        from livekit.agents.simulation import SimulationContext, SimulationDispatch
+
+        sim = SimulationContext(
+            SimulationDispatch(simulation_run_id="run", choices=choices), MagicMock()
+        )
+        monkeypatch.setattr("livekit.agents.job.current_simulation", lambda: sim)
+        return sim
+
+    def test_defaults_outside_a_simulation(self) -> None:
+        from livekit.agents.simulation import choose
+
+        assert choose("llm", self._OPTIONS, default="gemini") == "google/gemini-2.5-flash"
+
+    @pytest.mark.parametrize("choices", [{}, {"llm": "gemini"}])
+    def test_rejects_an_unknown_default(
+        self, monkeypatch: pytest.MonkeyPatch, choices: dict[str, str]
+    ) -> None:
+        from livekit.agents.simulation import choose
+
+        if choices:
+            self._simulate(monkeypatch, choices)
+        with pytest.raises(ValueError, match=r"'claude'.*'llm'.*'gpt-5', 'gemini'"):
+            choose("llm", self._OPTIONS, default="claude")
+
+    def test_defaults_when_the_simulation_does_not_vary_the_knob(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from livekit.agents.simulation import choose
+
+        self._simulate(monkeypatch, {"tts": "cartesia"})
+        assert choose("llm", self._OPTIONS, default="gemini") == "google/gemini-2.5-flash"
+
+    def test_runs_the_dispatched_option(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from livekit.agents.simulation import choose
+
+        sim = self._simulate(monkeypatch, {"llm": "gemini"})
+        assert dict(sim.choices) == {"llm": "gemini"}
+        assert choose("llm", self._OPTIONS, default="gpt-5") == "google/gemini-2.5-flash"
+
+    def test_rejects_an_unknown_option(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from livekit.agents.simulation import choose
+
+        self._simulate(monkeypatch, {"llm": "claude"})
+        with pytest.raises(ValueError, match=r"'claude'.*'llm'.*'gpt-5', 'gemini'"):
+            choose("llm", self._OPTIONS, default="gpt-5")
+
+    def test_choices_are_empty_without_a_comparison(self) -> None:
+        from livekit.agents.simulation import SimulationContext, SimulationDispatch
+
+        sim = SimulationContext(SimulationDispatch(simulation_run_id="run"), MagicMock())
+        assert dict(sim.choices) == {}
