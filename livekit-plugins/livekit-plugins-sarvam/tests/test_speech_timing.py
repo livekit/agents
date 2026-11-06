@@ -39,10 +39,10 @@ def _make_stream_under_test(
     return instance, captured
 
 
-def _event(signal_type: str, *, occured_at: float | None = None) -> dict[str, Any]:
+def _event(signal_type: str, *, occurred_at: float | None = None) -> dict[str, Any]:
     data: dict[str, Any] = {"signal_type": signal_type, "request_id": "req-test"}
-    if occured_at is not None:
-        data["occured_at"] = occured_at
+    if occurred_at is not None:
+        data["occurred_at"] = occurred_at
     return {"type": "events", "data": data}
 
 
@@ -245,14 +245,14 @@ async def test_aclose_cancels_pending_eos_fallback(monkeypatch: pytest.MonkeyPat
     assert not _events_of_type(captured, stt.SpeechEventType.END_OF_SPEECH)
 
 
-async def test_occured_at_is_ignored() -> None:
-    # `occured_at` is a wall-clock epoch, not an audio-relative offset, so it is
+async def test_occurred_at_is_ignored() -> None:
+    # `occurred_at` is a wall-clock epoch, not an audio-relative offset, so it is
     # never used: EOS stays bare and the final's end_time falls back to 0.0, even
     # when END_SPEECH arrives before the final transcript.
     instance, captured = _make_stream_under_test()
 
     await instance._handle_events(_event("START_SPEECH"))
-    await instance._handle_events(_event("END_SPEECH", occured_at=1_700_000_000.0))
+    await instance._handle_events(_event("END_SPEECH", occurred_at=1_700_000_000.0))
     await instance._handle_transcript_data(_ws_message(speech_start=0.0, speech_end=0.0))
 
     final = _events_of_type(captured, stt.SpeechEventType.FINAL_TRANSCRIPT)[0]
