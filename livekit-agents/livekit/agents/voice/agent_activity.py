@@ -1165,6 +1165,9 @@ class AgentActivity(RecognitionHooks):
                     # detach: remove event listeners but don't close the session
                     self._rt_session.off("generation_created", self._on_generation_created)
                     self._rt_session.off("tool_reply_changed", self._on_tool_reply_changed)
+                    self._rt_session.off(
+                        "session_reconnected", self._on_realtime_session_reconnected
+                    )
                     self._rt_session.off("input_speech_started", self._on_input_speech_started)
                     self._rt_session.off("input_speech_stopped", self._on_input_speech_stopped)
                     self._rt_session.off(
@@ -1285,6 +1288,7 @@ class AgentActivity(RecognitionHooks):
                 self._rt_session = self.llm.session(turn_detection_disabled=turn_detection_disabled)
                 logger.debug("created new realtime session for activity, id=%s", self._rt_session)
 
+            self._rt_session.on("session_reconnected", self._on_realtime_session_reconnected)
             self._rt_session.on("tool_reply_changed", self._on_tool_reply_changed)
             self._rt_session.on("generation_created", self._on_generation_created)
             self._rt_session.on("input_speech_started", self._on_input_speech_started)
@@ -1619,6 +1623,7 @@ class AgentActivity(RecognitionHooks):
         if isinstance(self.llm, llm.RealtimeModel) and self._rt_session is not None:
             self._rt_session.off("generation_created", self._on_generation_created)
             self._rt_session.off("tool_reply_changed", self._on_tool_reply_changed)
+            self._rt_session.off("session_reconnected", self._on_realtime_session_reconnected)
             self._rt_session.off("input_speech_started", self._on_input_speech_started)
             self._rt_session.off("input_speech_stopped", self._on_input_speech_stopped)
             self._rt_session.off(
@@ -3276,6 +3281,15 @@ class AgentActivity(RecognitionHooks):
             and not self._has_pending_agent_work
         ):
             self._session._update_agent_state("listening")
+
+    def _on_realtime_session_reconnected(self, _: object) -> None:
+        """Abandon waits owned by the replaced connection, including a legacy fallback.
+
+        A new provider may not report pending replies at all, so its None property
+        cannot be used as a notification that the previous connection's wait ended.
+        """
+        self._clear_pending_auto_tool_replies()
+        self._update_agent_state_if_idle()
 
     def _on_tool_reply_changed(self) -> None:
         """Release provider-owned waits only after audio takes over or the reply is dropped."""

@@ -179,6 +179,8 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
         def _make_forwarder(event: EventTypes) -> Callable[[object], None]:
             # callbacks receive only the payload, so bind the event name per forwarder
             def _forward(ev: object = None) -> None:
+                if event == "tool_reply_changed" and self._swapping:
+                    return  # publish once startup and any regenerated speech are installed
                 self.emit(event, ev)
 
             return _forward
@@ -385,9 +387,6 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
                 )
                 return
 
-            # a swap is a reconnect from the caller's perspective
-            self.emit("session_reconnected", RealtimeSessionReconnectedEvent())
-
             # re-issue the interrupted reply on the new session
             if (
                 was_speaking
@@ -395,6 +394,12 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
                 and self._agent_session is not None
             ):
                 self._agent_session.generate_reply()
+
+            # Closing the old child happens after unbinding its events. Publish the
+            # replacement after installing any new speech, so cleanup cannot signal idle
+            # in the gap between abandoning the old reply and requesting its replacement.
+            self.emit("tool_reply_changed")
+            self.emit("session_reconnected", RealtimeSessionReconnectedEvent())
 
     @property
     def capabilities(self) -> RealtimeCapabilities:
@@ -413,6 +418,22 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
     @property
     def tools(self) -> ToolContext:
         return self._active.tools
+
+    async def _update_session(
+        self,
+        *,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
+        tools: NotGivenOr[list[Tool]] = NOT_GIVEN,
+    ) -> None:
+        """Configure the child as a whole, including providers that wait for startup config."""
+        if is_given(instructions):
+            self._instructions = instructions
+        if is_given(tools):
+            self._tools = tools
+        await self._active._update_session(
+            instructions=instructions, chat_ctx=chat_ctx, tools=tools
+        )
 
     async def update_instructions(self, instructions: str) -> None:
         self._instructions = instructions

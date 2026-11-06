@@ -405,6 +405,8 @@ class _DuplexRealtimeSession(RealtimeSession):
             burst = self._burst = self._burst or self._open_burst()
             if not burst.audio_ch.closed:
                 burst.audio_ch.send_nowait(f.frame)
+            # The generation owns this frame before a ready provider wait is released.
+            self._duplex._on_audio_output()
             self._audio_ms += round(f.frame.duration * 1000)
             burst.heard_ms = self._audio_ms
             self._attach_fragments(burst)
@@ -445,9 +447,6 @@ class _DuplexRealtimeSession(RealtimeSession):
             ev.user_initiated = True
             self._pending_reply.set_result(ev)
         self.emit("generation_created", ev)
-        if kind == "speech":
-            # Install the generation's speech task before releasing the provider wait.
-            self._duplex._on_speech_started()
         if kind != "tool":
             modalities: asyncio.Future[list[Literal["text", "audio"]]] = asyncio.Future()
             modalities.set_result(["audio", "text"])

@@ -11,10 +11,13 @@ import aiohttp
 import pytest
 from aiohttp import web
 
+from livekit import rtc
 from livekit.agents import Agent, AgentSession, function_tool, llm
 from livekit.agents.llm._realtime import gpt_live_types as wire
 from livekit.agents.llm._realtime.gpt_live import SAMPLE_RATE, GPTLiveModel
 from livekit.agents.voice import io
+
+from .fake_realtime import FakeRealtimeModel
 
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
 
@@ -38,10 +41,12 @@ class MemorySpeaker(io.AudioOutput):
             capabilities=io.AudioOutputCapabilities(pause=False),
         )
         self.duration = 0.0
+        self.captured = asyncio.Event()
 
     async def capture_frame(self, frame):
         await super().capture_frame(frame)
         self.duration += frame.duration
+        self.captured.set()
 
     def flush(self):
         super().flush()
@@ -98,6 +103,25 @@ class ProviderPeer:
                 if event["type"] == event_type:
                     return event
 
+    async def user_turn(self, realtime):
+        """Supply a real input turn so an earlier startup away timer cannot taint assertions."""
+        event = wire.TranscriptDeltaEvent(
+            type="session.input_transcript.delta", delta="Please check.", start_ms=0, end_ms=100
+        )
+        await self.send(event)
+        async with asyncio.timeout(TIMEOUT):
+            while (await self.processed.get()).get("type") != event.type:
+                pass
+        realtime.push_audio(
+            rtc.AudioFrame(
+                data=b"\x00\x00" * SAMPLE_RATE,
+                sample_rate=SAMPLE_RATE,
+                num_channels=1,
+                samples_per_channel=SAMPLE_RATE,
+            )
+        )
+        await self.receive(wire.InputAudioAppendEvent.model_fields["type"].default)
+
     async def backend(self, event_type, *, item=None, delegation_id="delegation"):
         event = wire.ResponseEventEnvelope(
             delegation_id=delegation_id,
@@ -113,9 +137,11 @@ class ProviderPeer:
                 ):
                     return
 
-    async def speech(self, session, speeches, text, **timestamps):
+    async def speech(self, session, speeches, text, *, speech_handle=None, **timestamps):
         index = len(speeches)
         created = asyncio.Event()
+        if speech_handle is not None:
+            created.set()
 
         def observe(event):
             if len(speeches) > index:
@@ -129,7 +155,8 @@ class ProviderPeer:
             for pcm in (b"\x00\x10" * AUDIBLE_SAMPLES, b"\x00\x00" * SAMPLE_RATE):
                 await self.send(wire.OutputAudioDeltaEvent(delta=base64.b64encode(pcm).decode()))
             await asyncio.wait_for(created.wait(), DEADLINE_SECONDS)
-            await asyncio.wait_for(speeches[index].wait_for_playout(), DEADLINE_SECONDS)
+            handle = speech_handle if speech_handle is not None else speeches[index]
+            await asyncio.wait_for(handle.wait_for_playout(), DEADLINE_SECONDS)
         finally:
             session.off("speech_created", observe)
 
@@ -153,6 +180,16 @@ class ProviderPeer:
         "unrelated_failure",
         "tool_only",
         "close",
+        "before_continuation",
+        "during_continuation",
+        "before_failed_continuation",
+        "partial_delivery",
+        "fallback_managed",
+        "fallback_legacy",
+        "fallback_regenerate",
+        "streaming_completion",
+        "later_response_failed",
+        "later_response_incomplete",
     ],
 )
 @pytest.mark.parametrize("with_run", [False, True])
@@ -190,7 +227,26 @@ async def test_gpt_live_pending_reply(case, with_run, expire_wait=False):
             base_url=url,
             http_session=http,
         )
-        session = AgentSession(llm=model, user_away_timeout=0.1)
+        session_model = model
+        if case.startswith("fallback_"):
+            primary = llm.DuplexRealtimeAdapter(model)
+            backup = (
+                llm.DuplexRealtimeAdapter(
+                    GPTLiveModel(
+                        model="gpt-live-1",
+                        delegation="responses",
+                        api_key="local-peer-not-a-key",
+                        base_url=url,
+                        http_session=http,
+                    )
+                )
+                if case in ("fallback_managed", "fallback_regenerate")
+                else FakeRealtimeModel(capabilities=primary.capabilities)
+            )
+            session_model = llm.RealtimeModelFallbackAdapter(
+                [primary, backup], regenerate_on_swap=case == "fallback_regenerate"
+            )
+        session = AgentSession(llm=session_model, user_away_timeout=0.1)
         user_states = []
         session.on("user_state_changed", lambda event: user_states.append(event.new_state))
         session.output.audio = MemorySpeaker()
@@ -198,7 +254,7 @@ async def test_gpt_live_pending_reply(case, with_run, expire_wait=False):
         try:
             start_task = asyncio.create_task(
                 session.start(
-                    ToolAgent(instructions="Answer briefly.", llm=model, tools=[lookup]),
+                    ToolAgent(instructions="Answer briefly.", llm=session_model, tools=[lookup]),
                     capture_run=with_run,
                 )
             )
@@ -207,7 +263,8 @@ async def test_gpt_live_pending_reply(case, with_run, expire_wait=False):
                 await start_task
             run = session._global_run_state if with_run else None
             activity = session._activity
-            live = activity.realtime_llm_session.duplex_session
+            realtime = activity.realtime_llm_session
+            live = (realtime._active if case.startswith("fallback_") else realtime).duplex_session
             live.on("openai_server_event_received", peer.processed.put_nowait)
             await peer.backend(RESPONSE_CREATED)
             for index in range(count):
@@ -228,6 +285,8 @@ async def test_gpt_live_pending_reply(case, with_run, expire_wait=False):
             await peer.speech(session, speeches, "Checking. ", start_ms=0, end_ms=100)
             await asyncio.wait_for(started.wait(), TIMEOUT)
             assert session.agent_state == "thinking"
+            await peer.user_turn(realtime)
+            assert session.user_state == "listening"
             if case == "orphan":
                 await peer.backend("response.failed")
             release.set()
@@ -237,17 +296,65 @@ async def test_gpt_live_pending_reply(case, with_run, expire_wait=False):
                 for _ in range(count):
                     await peer.receive(wire.ResponseItemCreateEvent.model_fields["type"].default)
                 await peer.receive(wire.ResponseCreateEvent.model_fields["type"].default)
+                if case == "before_continuation":
+                    await peer.speech(session, speeches, "Still checking.")
+                    assert live.pending_tool_reply
+                    assert session.agent_state == "thinking"
                 await peer.backend(RESPONSE_CREATED)
+                if case in ("during_continuation", "before_failed_continuation"):
+                    await peer.speech(session, speeches, "Still checking.")
+                    assert live.pending_tool_reply
+                    assert session.agent_state == "thinking"
+                if case == "streaming_completion":
+                    speaker = session.output.audio
+                    speaker.captured.clear()
+                    await peer.send(
+                        wire.TranscriptDeltaEvent(type=OUTPUT_TRANSCRIPT_DELTA, delta=ANSWER)
+                    )
+                    await peer.send(
+                        wire.OutputAudioDeltaEvent(
+                            delta=base64.b64encode(b"\x00\x10" * AUDIBLE_SAMPLES).decode()
+                        )
+                    )
+                    await asyncio.wait_for(speaker.captured.wait(), TIMEOUT)
+                    assert live.pending_tool_reply
+                    await peer.backend(RESPONSE_COMPLETED)
+                    speaker.captured.clear()
+                    await peer.send(
+                        wire.OutputAudioDeltaEvent(
+                            delta=base64.b64encode(b"\x00\x10" * AUDIBLE_SAMPLES).decode()
+                        )
+                    )
+                    await asyncio.wait_for(speaker.captured.wait(), TIMEOUT)
+                    assert not live.pending_tool_reply
+                    await peer.send(
+                        wire.OutputAudioDeltaEvent(
+                            delta=base64.b64encode(b"\x00\x00" * SAMPLE_RATE).decode()
+                        )
+                    )
+                    await asyncio.wait_for(speeches[-1].wait_for_playout(), TIMEOUT)
+                    release_enter.set()
+                    if activity._on_enter_task is not None:
+                        await activity._on_enter_task
+                    await asyncio.sleep(0)
+                    assert session.agent_state == "listening"
+                    assert any(
+                        getattr(item, "text_content", None) == ANSWER
+                        for item in session.history.items
+                    )
+                    if run is not None:
+                        await asyncio.wait_for(run, TIMEOUT)
+                    return
                 await peer.backend(
                     "response.failed"
-                    if case == "failed"
+                    if case in ("failed", "before_failed_continuation")
                     else "response.incomplete"
                     if case == "incomplete"
                     else RESPONSE_COMPLETED
                 )
             await asyncio.gather(*(asyncio.wait_for(speech, TIMEOUT) for speech in speeches))
             before = session.agent_state
-            if case in ("failed", "incomplete", "orphan"):
+            if case in ("failed", "incomplete", "orphan", "before_failed_continuation"):
                 print(
                     json.dumps(
                         {
@@ -286,6 +393,63 @@ async def test_gpt_live_pending_reply(case, with_run, expire_wait=False):
                     await asyncio.wait_for(run, TIMEOUT)
                 else:
                     assert not run.done()
+            if case.startswith("fallback_"):
+                states = []
+                session.on("agent_state_changed", lambda event: states.append(event.new_state))
+                await realtime.restart(switch_model=True)
+                assert activity._pending_auto_tool_reply_fut is None
+                if case == "fallback_regenerate":
+                    assert "listening" not in states
+                    if run is not None:
+                        assert not run.done()
+                    await peer.receive(wire.CommentaryAppendEvent.model_fields["type"].default)
+                    await peer.speech(session, speeches, ANSWER, speech_handle=speeches[-1])
+                assert session.agent_state == "listening"
+                if run is not None:
+                    await asyncio.wait_for(run, 1)
+                return
+            if case in ("later_response_failed", "later_response_incomplete"):
+                await peer.backend(RESPONSE_CREATED)
+                await peer.backend(
+                    RESPONSE_ITEM_DONE,
+                    item=wire.OutputItem(
+                        id="later",
+                        type="function_call",
+                        status="completed",
+                        call_id="later",
+                        name="lookup",
+                        arguments="{}",
+                    ),
+                )
+                await peer.receive(wire.ResponseItemCreateEvent.model_fields["type"].default)
+                await peer.backend(
+                    "response.failed" if case == "later_response_failed" else "response.incomplete"
+                )
+                assert live.pending_tool_reply
+                assert set(live._awaiting_tool_audio) == {"call-0"}
+            if case == "partial_delivery":
+                await peer.backend(RESPONSE_CREATED, delegation_id="other")
+                await peer.backend(
+                    RESPONSE_ITEM_DONE,
+                    delegation_id="other",
+                    item=wire.OutputItem(
+                        id="later",
+                        type="function_call",
+                        status="completed",
+                        call_id="later",
+                        name="lookup",
+                        arguments="{}",
+                    ),
+                )
+                await peer.receive(wire.ResponseItemCreateEvent.model_fields["type"].default)
+                await peer.speech(session, speeches, "First result.")
+                assert live.pending_tool_reply
+                assert session.agent_state == "thinking"
+                assert set(live._awaiting_tool_audio) == {"later"}
+                await peer.backend(RESPONSE_COMPLETED, delegation_id="other")
+                await peer.receive(wire.ResponseCreateEvent.model_fields["type"].default)
+                await peer.backend(RESPONSE_CREATED, delegation_id="other")
+                await peer.backend(RESPONSE_COMPLETED, delegation_id="other")
             if case == "unrelated_failure":
                 await peer.backend("response.failed", delegation_id="other")
                 assert live.pending_tool_reply
@@ -305,6 +469,8 @@ async def test_gpt_live_pending_reply(case, with_run, expire_wait=False):
                 await peer.backend(RESPONSE_COMPLETED)
                 await peer.receive(wire.ResponseCreateEvent.model_fields["type"].default)
                 assert live.pending_tool_reply
+                await peer.backend(RESPONSE_CREATED)
+                await peer.backend(RESPONSE_COMPLETED)
             if case == "interrupt":
                 await asyncio.wait_for(session.interrupt(), TIMEOUT)
             elif case == "late_transcript":

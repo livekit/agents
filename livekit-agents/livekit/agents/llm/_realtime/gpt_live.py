@@ -426,6 +426,10 @@ class GPTLiveSession(
         self._backend_response_pending = False
         self._tool_reply_delegations: dict[str, str | None] = {}
         self._awaiting_tool_audio: dict[str, str | None] = {}
+        # Snapshot results visible when a backend response starts. Only a completed
+        # continuation without more tool calls makes those results ready for speech.
+        self._backend_reply_candidates: dict[str | None, set[str]] = {}
+        self._tool_audio_ready: set[str] = set()
 
         # the newest history item the last ask was about, so an ask never repeats one
         self._asked_item_id: str | None = None
@@ -578,6 +582,8 @@ class GPTLiveSession(
         self._backend_response_pending = False
         self._tool_reply_delegations.clear()
         self._awaiting_tool_audio.clear()
+        self._backend_reply_candidates.clear()
+        self._tool_audio_ready.clear()
         self._usage_total = types.Usage()
         self._session_id = None
 
@@ -881,6 +887,9 @@ class GPTLiveSession(
 
         if event.type == "response.created":
             self._backend_running_responses[d_id] = set()
+            self._backend_reply_candidates[d_id] = {
+                call for call, delegation in self._awaiting_tool_audio.items() if delegation == d_id
+            }
 
         elif event.type == "response.output_item.done":
             # only the completed item carries the name, call id and arguments together
@@ -908,6 +917,8 @@ class GPTLiveSession(
             if item.call_id in calls:
                 return
             calls.add(item.call_id)
+            # A tool-only response extends the chain; it has not produced the answer.
+            self._backend_reply_candidates.pop(d_id, None)
 
             fnc_call = llm.FunctionCall(
                 id=item.id or utils.shortuuid("fc_"),
@@ -948,6 +959,9 @@ class GPTLiveSession(
                 )
             if (calls := self._backend_running_responses.pop(d_id, None)) is not None:
                 self._backend_open_calls |= calls
+            self._tool_audio_ready.update(
+                self._backend_reply_candidates.pop(d_id, set()) & self._awaiting_tool_audio.keys()
+            )
             self._maybe_continue_response()
 
         elif event.type in ("response.failed", "response.incomplete"):
@@ -971,8 +985,12 @@ class GPTLiveSession(
             self._awaiting_tool_audio = {
                 call: delegation
                 for call, delegation in self._awaiting_tool_audio.items()
-                if delegation != d_id
+                # An earlier completed response can still owe audio under the same
+                # delegation. A later failure must not discard that ready answer.
+                if delegation != d_id or call in self._tool_audio_ready
             }
+            self._backend_reply_candidates.pop(d_id, None)
+            self._tool_audio_ready.intersection_update(self._awaiting_tool_audio)
             self.emit("tool_reply_changed")
             self._maybe_continue_response()
 
@@ -1146,6 +1164,8 @@ class GPTLiveSession(
     async def aclose(self) -> None:
         await super().aclose()
         self._awaiting_tool_audio.clear()
+        self._backend_reply_candidates.clear()
+        self._tool_audio_ready.clear()
         self._tool_reply_delegations.clear()
         self.emit("tool_reply_changed")
         if not self._session_started_fut.done():
@@ -1159,10 +1179,16 @@ class GPTLiveSession(
         """Results accepted by the backend but not yet answered audibly or failed."""
         return bool(self._awaiting_tool_audio)
 
-    def _on_speech_started(self) -> None:
-        """One continuous audio answer can cover all results supplied before it starts."""
-        if self._awaiting_tool_audio:
-            self._awaiting_tool_audio.clear()
+    def _on_audio_output(self) -> None:
+        """Transfer only results whose backend continuation has completed to audible output.
+
+        Speech can continue independently of delegated work. Earlier audio cannot answer
+        results that the backend has not processed, and a newer batch may still be running.
+        """
+        if self._tool_audio_ready:
+            for call in self._tool_audio_ready:
+                self._awaiting_tool_audio.pop(call, None)
+            self._tool_audio_ready.clear()
             self.emit("tool_reply_changed")
 
     # framework hooks

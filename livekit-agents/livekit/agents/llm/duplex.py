@@ -171,8 +171,12 @@ class DuplexSession(ABC, rtc.EventEmitter[DuplexEventTypes | TEvent], Generic[TE
         self._closing = True
         self._configured.set()
 
-    def _on_speech_started(self) -> None:
-        """Transfer any answered tool results to the adapter's audible generation."""
+    def _on_audio_output(self) -> None:
+        """Observe an audible frame after the adapter installs its generation.
+
+        A provider can transfer results ready for speech to that generation. This is
+        called for each audible frame, since backend work may finish during a burst.
+        """
         pass
 
     # underscored until the shape settles: this is the framework's contract with the plugin, and
