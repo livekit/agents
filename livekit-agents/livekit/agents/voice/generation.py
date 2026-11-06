@@ -119,22 +119,44 @@ def _inject_running_tool_calls(
         )
 
 
-def _strip_assistant_markup(chat_ctx: ChatContext) -> None:
+# extra flag on an assistant message generated in an expressive turn. It survives
+# ChatContext.to_dict/from_dict, so restored history still says where its markup came from
+_EXPRESSIVE_MARKUP_KEY = "lk_expressive_markup"
+
+
+def _has_expressive_guide(chat_ctx: ChatContext) -> bool:
+    """Whether ``chat_ctx`` holds the expressive guide, e.g. restored from an expressive
+    session that persisted it."""
+    return any(
+        item.type == "message" and item.id == EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID
+        for item in chat_ctx.items
+    )
+
+
+def _strip_assistant_markup(chat_ctx: ChatContext, *, only_flagged: bool = False) -> None:
     """Remove expressive TTS markup from past assistant messages, in place.
 
     Called when a turn runs with expressive off (toggled off via
     ``session.update_options``, an agent-level override, or a handoff to a TTS
-    without a markup dialect): tags left in history would few-shot the LLM into
-    emitting markup that nothing downstream converts or strips, so an unsupported
-    tag would reach the TTS as literal text and be spoken. Mutates the stored
-    history: once a turn runs with expressive off, prior turns' markup is gone
-    even if expressive is re-enabled later (the re-injected instructions carry
+    without a markup dialect) after expressive was on: tags left in history would
+    few-shot the LLM into emitting markup that nothing downstream converts or strips,
+    so an unsupported tag would reach the TTS as literal text and be spoken. Mutates
+    the stored history: once a turn runs with expressive off, prior turns' markup is
+    gone even if expressive is re-enabled later (the re-injected instructions carry
     the style examples instead).
+
+    With ``only_flagged`` (expressive never ran in this session), only replies flagged
+    as generated in an expressive turn are scrubbed, so other assistant messages keep
+    a developer's own tags. Scrubbing a reply drops its flag: its markup is gone, so
+    later turns have nothing to scrub.
     """
     from ..tts._provider_format import strip_all_markup
 
     for item in chat_ctx.items:
         if item.type != "message" or item.role != "assistant":
+            continue
+        flagged = item.extra.pop(_EXPRESSIVE_MARKUP_KEY, None) is True
+        if only_flagged and not flagged:
             continue
         # markup is XML-only here: strip_all_markup leaves square-bracket spans alone
         if not any(isinstance(c, str) and "<" in c for c in item.content):
