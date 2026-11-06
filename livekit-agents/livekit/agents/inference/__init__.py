@@ -18,15 +18,14 @@ from .interruption import (
     InterruptionDetectionError,
     OverlappingSpeechEvent,
 )
-from .llm import LLM, LLMModels, LLMStream, llm_from_model_string
-
-from . import responses  # isort: skip  # must follow .llm
 from .stt import STT, STTModels
 from .tts import TTS, TTSModels
 from .vad import VAD, VADModels
 
 if TYPE_CHECKING:
+    from . import responses
     from .avatar import AvatarSession, LemonSliceOptions
+    from .llm import LLM, LLMModels, LLMStream, llm_from_model_string
     from .realtime import DuplexModel, DuplexSession, RealtimeModel, RealtimeSession
 
 
@@ -35,7 +34,20 @@ if TYPE_CHECKING:
 # inference), importing .avatar eagerly here would form a circular import. Load
 # it lazily on first attribute access, by which point voice is fully
 # initialized. See PEP 562.
+#
+# The LLM modules import the openai SDK (~100 ms), which a worker needs only once
+# a session builds an LLM. Load them on first use too, so starting a worker
+# does not pay for it.
 def __getattr__(name: str) -> Any:
+    if name in ("LLM", "LLMModels", "LLMStream", "llm_from_model_string"):
+        from . import llm
+
+        return getattr(llm, name)
+    if name == "responses":
+        # not `from . import responses`: that looks the name up here first and recurses
+        import importlib
+
+        return importlib.import_module(f"{__name__}.responses")
     if name in ("AvatarSession", "LemonSliceOptions"):
         from . import avatar
 

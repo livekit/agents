@@ -656,7 +656,7 @@ async def test_constant_bit_rate_without_libopus_warns(
         return av.Codec(name, mode)
 
     with (
-        patch.object(recorder_module.av, "Codec", side_effect=no_libopus),
+        patch.object(av, "Codec", side_effect=no_libopus),
         caplog.at_level("WARNING"),
     ):
         await _packet_sizes(tmp_path / "native.ogg", constant_bit_rate=True)

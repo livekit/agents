@@ -174,17 +174,39 @@ def test_preload_module_does_the_lazy_one_time_work(monkeypatch: pytest.MonkeyPa
     import importlib
     import sys
 
+    import livekit.agents.inference as inference
+
+    # a submodule imported before stays an attribute of its package, which `from . import`
+    # would reuse without importing it again
+    monkeypatch.delattr(inference, "llm", raising=False)
     for name in [
         m
         for m in sys.modules
-        if m.startswith("openai.resources") or m == "livekit.agents.ipc._preload"
+        if m.startswith("openai.resources")
+        or m in ("livekit.agents.ipc._preload", "livekit.agents.inference.llm")
     ]:
         monkeypatch.delitem(sys.modules, name)
     assert "openai.resources" not in sys.modules
     importlib.import_module("livekit.agents.ipc._preload")
     assert "openai.resources" in sys.modules
+    assert "livekit.agents.inference.llm" in sys.modules  # deferred by the worker, not jobs
     assert "livekit.local_inference" in sys.modules  # the local models are loaded
     assert "livekit.rtc._ffi_client" in sys.modules  # the native library is mapped
+
+
+def test_worker_startup_does_not_import_job_only_dependencies() -> None:
+    """A worker registers before it runs any session, so starting one must not pay for the
+    openai SDK (inference LLM) or PyAV (audio decoding, recording): ~160 ms on every start and
+    every dev reload. Job processes import them in the warm-up module instead."""
+    import subprocess
+    import sys
+
+    code = (
+        "import sys, livekit.agents, livekit.agents.cli.cli; "
+        "print(sorted({m.split('.')[0] for m in sys.modules} & {'openai', 'av'}))"
+    )
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
+    assert out.stdout.strip() == "[]", out.stderr
 
 
 def test_framework_callbacks_are_not_user_callbacks() -> None:

@@ -21,16 +21,17 @@ import struct
 import threading
 from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
-from typing import cast
-
-import av
-import av.container
+from typing import TYPE_CHECKING, cast
 
 from livekit import rtc
 
 from ...log import logger
 from .. import aio
 from ..audio import AudioByteStream
+
+if TYPE_CHECKING:
+    import av
+    import av.container
 
 
 def _mime_to_av_format(mime: str | None) -> str | None:
@@ -409,6 +410,11 @@ class AudioStreamDecoder:
             self._output_ch.close()
 
     def _decode_loop(self) -> None:
+        # PyAV costs ~60 ms to import; load it with the first stream to decode,
+        # not with every process that imports the SDK.
+        import av
+        import av.container
+
         container: av.container.InputContainer | None = None
         resampler: av.AudioResampler | None = None
         try:
