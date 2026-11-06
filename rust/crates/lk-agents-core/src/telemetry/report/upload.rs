@@ -3,8 +3,8 @@
 
 use lk_agents_abi::livekit_protocol::agent as proto;
 use lk_agents_abi::telemetry::report::{
-    ErrorCounts, RecordingHeader, RecordingOptions, SESSION_SUMMARY_BYTES, SessionReport,
-    SessionSummary, SummaryOptions,
+    CloudAgent, ErrorCounts, RecordingHeader, RecordingOptions, SESSION_SUMMARY_BYTES,
+    SessionReport, SessionSummary, SummaryOptions,
 };
 use lk_agents_abi::voice::events::CloseReason;
 use lk_agents_abi::{ChatItem, Role, ToDictHost, ToDictOptions};
@@ -27,11 +27,12 @@ pub struct RecordingUpload {
 
 /// The upload the report and its options make; `None` when there is nothing to upload (neither a
 /// transcript nor audio). A redacted session always uploads its transcript, so Cloud can rebuild
-/// it after redaction.
+/// it after redaction. The summary carries the agent's Cloud identity.
 pub fn upload(
     report: &SessionReport,
     options: &RecordingOptions,
     simulated: bool,
+    agent: &CloudAgent,
 ) -> Option<RecordingUpload> {
     let audio_path = report
         .audio_recording_path
@@ -54,7 +55,7 @@ pub fn upload(
         duration_millis: (report.duration.unwrap_or(0.0).max(0.0) * 1000.0) as u64,
         simulated,
         redaction_enabled: options.redaction,
-        session_summary: session_summary(report, omitted),
+        session_summary: session_summary(report, agent, omitted),
     };
     Some(RecordingUpload { header, chat_history, audio_path })
 }
@@ -91,7 +92,7 @@ fn chat_history(items: &[ChatItem]) -> Transcript {
 
 /// The summary agent evaluations read, within [`SESSION_SUMMARY_BYTES`]: past it, the options,
 /// then the tags, then the usage are left out.
-fn session_summary(report: &SessionReport, omitted_chat_items: u64) -> String {
+fn session_summary(report: &SessionReport, agent: &CloudAgent, omitted_chat_items: u64) -> String {
     let mut tags: Vec<String> = report.tags.iter().map(|t| t.name.clone()).collect();
     tags.sort();
     let mut summary = SessionSummary {
@@ -105,6 +106,8 @@ fn session_summary(report: &SessionReport, omitted_chat_items: u64) -> String {
         usage: (!report.usage.models.is_empty()).then(|| usage(&report.usage.models)),
         sdk_version: report.sdk_version.clone(),
         agent_name: report.agent_name.clone(),
+        cloud_agent_id: agent.id.clone(),
+        deployment_id: agent.deployment_id.clone(),
         tags,
         duration_ms: report.duration.map(|d| (d * 1000.0) as i64),
         user_turns: report

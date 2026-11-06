@@ -89,7 +89,8 @@ pub async fn export(
             return Ok(());
         }
     }
-    let upload = cloud.and_then(|_| report::upload(report, options, simulated));
+    let agent = exporter.map(Exporter::cloud_agent).unwrap_or_default();
+    let upload = cloud.and_then(|_| report::upload(report, options, simulated, &agent));
     let send_profile = UPLOAD_PROFILES && upload.is_some();
     let audio = report.audio_recording_path.clone();
     let profile = match crate::profile::take(key) {

@@ -212,6 +212,13 @@ pub struct RecordingHeader {
     pub session_summary: String,
 }
 
+/// The process's LiveKit Cloud identity: the agent and its deployment, `None` when self-hosted.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CloudAgent {
+    pub id: Option<String>,
+    pub deployment_id: Option<String>,
+}
+
 /// The header's `session_summary` bound.
 pub const SESSION_SUMMARY_BYTES: usize = 16 * 1024;
 
@@ -229,6 +236,12 @@ pub struct SessionSummary {
     pub usage: Option<Vec<Value>>,
     pub sdk_version: String,
     pub agent_name: String,
+    /// The agent's LiveKit Cloud identity, as its spans carry it (`lk.cloud_agent_id`,
+    /// `lk.deployment_id`); absent when self-hosted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cloud_agent_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deployment_id: Option<String>,
     pub tags: Vec<String>,
     pub duration_ms: Option<i64>,
     pub user_turns: u64,

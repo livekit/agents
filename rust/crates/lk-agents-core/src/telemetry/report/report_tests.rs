@@ -2,7 +2,8 @@ use super::*;
 use lk_agents_abi::telemetry::record::SpanContext;
 use lk_agents_abi::telemetry::record::{LogRecord, Value as Otlp};
 use lk_agents_abi::telemetry::report::{
-    EvaluationRecord, Outcome, RecordingOptions, ReportOutcome, ReportTag, SessionReport,
+    CloudAgent, EvaluationRecord, Outcome, RecordingOptions, ReportOutcome, ReportTag,
+    SessionReport,
 };
 use lk_agents_abi::usage::{LlmUsage, ModelUsage, TokenUsage, Usage};
 use lk_agents_abi::{
@@ -278,7 +279,7 @@ fn recording_options_decide_the_outputs() {
         assert_eq!(bodies.contains(&"chat item".to_owned()), items, "{options:?}");
         // Evaluations, tags and the outcome never depend on the recorded parts.
         assert!(bodies.ends_with(&["evaluation".into(), "tag".into(), "outcome".into()]));
-        let upload = upload(&report, &options, false);
+        let upload = upload(&report, &options, false, &CloudAgent::default());
         assert_eq!(
             upload.as_ref().is_some_and(|u| u.chat_history.is_some()),
             transcript,
@@ -296,7 +297,7 @@ fn recording_options_decide_the_outputs() {
 #[test]
 fn a_redacted_session_always_uploads_chat_history() {
     let options = RecordingOptions { transcript: false, redaction: true, ..Default::default() };
-    let upload = upload(&report(), &options, true).unwrap();
+    let upload = upload(&report(), &options, true, &CloudAgent::default()).unwrap();
     let history: Value = serde_json::from_str(upload.chat_history.as_ref().unwrap()).unwrap();
     assert_eq!(history["items"].as_array().unwrap().len(), 4);
     assert!(upload.header.redaction_enabled && upload.header.simulated);
@@ -306,7 +307,8 @@ fn a_redacted_session_always_uploads_chat_history() {
 // Catches: the transcript, header or summary drifting from the ingest contract.
 #[test]
 fn upload_matches_the_ingest_contract() {
-    let upload = upload(&report(), &RecordingOptions::default(), false).unwrap();
+    let agent = CloudAgent { id: Some("CA_1".into()), deployment_id: Some("AD_1".into()) };
+    let upload = upload(&report(), &RecordingOptions::default(), false, &agent).unwrap();
     let header = &upload.header;
     assert_eq!((header.room_id.as_str(), header.job_id.as_str()), ("RM_1", "AJ_1"));
     assert_eq!(header.start_time_millis, 1_700_000_000_250);
@@ -366,6 +368,8 @@ fn upload_matches_the_ingest_contract() {
             }],
             "sdk_version": "2.0.0",
             "agent_name": "front-desk",
+            "cloud_agent_id": "CA_1",
+            "deployment_id": "AD_1",
             "tags": ["a:1", "e:1", "z:1"],
             "duration_ms": 9_500,
             "user_turns": 1,
@@ -383,7 +387,8 @@ fn an_oversized_transcript_drops_its_oldest_items() {
     let big = "x".repeat(300 * 1024);
     report.chat_history =
         (0..10).map(|n| message(&format!("item_{n}"), Role::User, &big, n as f64)).collect();
-    let uploaded = upload(&report, &RecordingOptions::default(), false).unwrap();
+    let uploaded =
+        upload(&report, &RecordingOptions::default(), false, &CloudAgent::default()).unwrap();
     let json = uploaded.chat_history.unwrap();
     assert!(json.len() <= TRANSCRIPT_BYTES);
     let history: Value = serde_json::from_str(&json).unwrap();
@@ -399,7 +404,8 @@ fn an_oversized_transcript_drops_its_oldest_items() {
     many.chat_history = (0..TRANSCRIPT_ITEMS + 5)
         .map(|n| message(&format!("item_{n}"), Role::User, "hi", n as f64))
         .collect();
-    let upload = upload(&many, &RecordingOptions::default(), false).unwrap();
+    let upload =
+        upload(&many, &RecordingOptions::default(), false, &CloudAgent::default()).unwrap();
     let summary: Value = serde_json::from_str(&upload.header.session_summary).unwrap();
     assert_eq!(summary["omitted_chat_items"], 5);
 }
@@ -409,7 +415,8 @@ fn an_oversized_transcript_drops_its_oldest_items() {
 fn the_summary_stays_within_its_bound() {
     let mut report = report();
     report.options["recording_options"] = json!({"padding": "x".repeat(20_000)});
-    let upload = upload(&report, &RecordingOptions::default(), false).unwrap();
+    let upload =
+        upload(&report, &RecordingOptions::default(), false, &CloudAgent::default()).unwrap();
     let summary = &upload.header.session_summary;
     assert!(summary.len() <= lk_agents_abi::telemetry::report::SESSION_SUMMARY_BYTES);
     let summary: Value = serde_json::from_str(summary).unwrap();

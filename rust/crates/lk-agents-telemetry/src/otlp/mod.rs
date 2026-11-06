@@ -24,6 +24,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime};
 
 use lk_agents_abi::telemetry::record::{JobKey, Record, RecordSink, SpanRecord};
+use lk_agents_abi::telemetry::report::CloudAgent;
 use lk_agents_abi::{Clock, OwnedTask, Spawner, SpawnerExt as _, Ts, before, timeout};
 use parking_lot::Mutex;
 use tokio::sync::Notify;
@@ -126,6 +127,15 @@ impl Exporter {
         });
         let task = spawner.spawn(run(shared.clone()));
         Exporter { shared, task: Mutex::new(Some(task)) }
+    }
+
+    /// The process's LiveKit Cloud identity, as its spans carry it.
+    pub fn cloud_agent(&self) -> CloudAgent {
+        let state = self.shared.state.lock();
+        CloudAgent {
+            id: state.process.cloud_agent_id.clone(),
+            deployment_id: state.process.deployment_id.clone(),
+        }
     }
 
     /// Enables Cloud export. The first endpoint stays; a different one is a conflict.
