@@ -78,6 +78,10 @@ async def _drain(tasks: set[asyncio.Task[Any]], deadline: float) -> set[asyncio.
     return pending
 
 
+class _SessionTransportUnavailable(RuntimeError):
+    """The transport cannot currently deliver a notification or request."""
+
+
 class SessionTransport(ABC):
     @abstractmethod
     async def start(self) -> None: ...
@@ -151,13 +155,14 @@ class RoomSessionTransport(SessionTransport):
         # a dropped message is a request the caller waits out in full, so failures
         # are raised rather than logged: only the caller knows whether anyone is
         # waiting on this one
-        if self._recv_ch.closed or not self._room.isconnected():
-            raise RuntimeError("room session transport is closed")
+        self._check_connected()
 
         data = msg.SerializeToString()
         dest = [self._remote_identity] if self._remote_identity else None
         # one send at a time, so messages reach the receiver in the order they were sent
         async with self._send_lock:
+            # The room may have disconnected while a previous send held the lock.
+            self._check_connected()
             try:
                 await self._room.local_participant.send_bytes(
                     data,
@@ -166,7 +171,14 @@ class RoomSessionTransport(SessionTransport):
                     destination_identities=dest,
                 )
             except Exception as e:
+                if self._recv_ch.closed or not self._room.isconnected():
+                    raise _SessionTransportUnavailable("room session transport is closed") from e
                 raise RuntimeError(f"failed to send binary stream message: {e}") from e
+
+    def _check_connected(self) -> None:
+        """Let request callers detect an unavailable room without dropping their response."""
+        if self._recv_ch.closed or not self._room.isconnected():
+            raise _SessionTransportUnavailable("room session transport is closed")
 
     async def close(self) -> None:
         if self._recv_ch.closed:
@@ -507,6 +519,10 @@ class SessionHost:
         async for msg in event_ch:
             try:
                 await self._transport.send_message(msg)
+            except _SessionTransportUnavailable:
+                # Notifications have no waiting caller. Discard those with no
+                # connected recipient and keep draining if the room reconnects.
+                continue
             except Exception:
                 logger.warning("failed to send session event", exc_info=True)
 
