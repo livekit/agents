@@ -31,6 +31,7 @@ https://developers.zoom.us/docs/ai-services/scribe/fast-mode/
 from __future__ import annotations
 
 import asyncio
+import collections
 import contextlib
 import copy
 import dataclasses
@@ -344,7 +345,10 @@ class STT(stt.STT):
                 its turn detector) sends ``input_audio_buffer.commit``, for which Scribe
                 returns the final transcript. Use it with a VAD and
                 ``turn_handling={"turn_detection": "vad"}`` or a turn detector model, not
-                ``"stt"``: in this mode the STT sends no start or end of speech events.
+                ``"stt"``: in this mode the STT sends no start or end of speech events,
+                and finals have no ``speech_end_time`` (LiveKit's VAD times the turn).
+                Every flush gets one final; a flush after only digital silence gets an
+                empty one without a commit.
             silence_duration_ms: Live only: milliseconds of silence that end a turn in
                 Scribe's voice activity detection; not used with ``turn_detection="none"``.
                 Defaults to 350, tuned for voice agents;
@@ -634,7 +638,7 @@ class STT(stt.STT):
         Args:
             language: Scribe locale, e.g. ``"en-US"``.
             silence_duration_ms: Silence (ms) that ends a turn; ``None`` uses Scribe's
-                default.
+                default. Not used with ``turn_detection="none"``.
 
         A turn in progress keeps its session until Scribe's final transcript ends it (at
         most 10 s), so the reconnect doesn't lose it.
@@ -661,8 +665,19 @@ class SpeechStream(stt.SpeechStream):
         self._reconnect_event = asyncio.Event()
         self._audio_duration = 0.0
         self._speech_started = False
-        # turn_detection="none": a commit was sent and its final hasn't arrived yet.
-        self._commit_pending = False
+        # turn_detection="none" (manual commit) state:
+        # - flushes not answered yet, in order: True waits for Scribe's final for a commit,
+        #   False (a flush with only digital silence) needs no commit and is answered with an
+        #   empty final once the finals before it have arrived;
+        self._flushes: collections.deque[bool] = collections.deque()
+        # - non-silent audio sent to the current session since its last commit;
+        self._uncommitted = False
+        # - an options reconnect is waiting: input is held back instead of being sent;
+        self._draining = False
+        # - input held back while draining, sent first on the next session, in order.
+        self._held: list[rtc.AudioFrame | SpeechStream._FlushSentinel] = []
+        # Serializes sends with the drain commit, so no audio follows it on the old session.
+        self._send_lock = asyncio.Lock()
         self._tracking_id: str | None = None  # the current session's x-zm-trackingid
         self._session_updated = False  # Scribe accepted the current session's settings
         # Time between the start of this _run attempt and the current Scribe session.
@@ -683,7 +698,10 @@ class SpeechStream(stt.SpeechStream):
                 default.
 
         A turn in progress keeps its session until Scribe's final transcript ends it (at
-        most 10 s), so the reconnect doesn't lose it.
+        most 10 s), so the reconnect doesn't lose it. With ``turn_detection="none"``, audio
+        sent since the last flush is committed first, and input that arrives meanwhile is
+        sent to the new session; ``silence_duration_ms`` isn't used in that mode, so
+        changing only it doesn't reconnect.
         """
         if not is_given(language) and not is_given(silence_duration_ms):
             return
@@ -691,6 +709,12 @@ class SpeechStream(stt.SpeechStream):
             self._opts.language = _to_locale(language)
         if is_given(silence_duration_ms):
             self._opts.silence_duration_ms = silence_duration_ms
+            if self._manual_commit and not is_given(language):
+                logger.warning(
+                    'silence_duration_ms is not used with turn_detection="none"; '
+                    "the Zoom Scribe Live session is unchanged"
+                )
+                return
         self._reconnect_event.set()
 
     def _session_update(self) -> dict[str, Any]:
@@ -763,9 +787,48 @@ class SpeechStream(stt.SpeechStream):
     def _manual_commit(self) -> bool:
         return self._opts.turn_detection == "none"
 
+    @property
+    def _commits_pending(self) -> int:
+        """Commits sent whose final hasn't arrived yet."""
+        return sum(self._flushes)
+
     def _turn_open(self) -> bool:
         """A turn whose final transcript a reconnect would lose."""
-        return self._commit_pending if self._manual_commit else self._speech_started
+        return self._commits_pending > 0 if self._manual_commit else self._speech_started
+
+    def _send_empty_final(self) -> None:
+        """Answer a flush that has no transcript (turn_detection="none")."""
+        self._event_ch.send_nowait(
+            stt.SpeechEvent(
+                type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                alternatives=[
+                    stt.SpeechData(
+                        language=_reported_language(
+                            None, self._view.language_detection, self._opts.language
+                        ),
+                        text="",
+                    )
+                ],
+            )
+        )
+
+    async def _commit(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+        """Commit the audio sent since the last commit; Scribe answers with one final."""
+        self._flushes.append(True)
+        self._uncommitted = False
+        await ws.send_str(json.dumps({"type": "input_audio_buffer.commit"}))
+
+    async def _start_drain(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+        """Prepare a turn_detection="none" session for an options reconnect.
+
+        Audio sent since the last flush is committed so its final isn't lost (a commit
+        covering only digital silence is skipped), and further input is held back for the
+        next session. The reconnect then waits for every outstanding final.
+        """
+        async with self._send_lock:
+            self._draining = True
+            if self._uncommitted:
+                await self._commit(ws)
 
     async def _wait_for_turn_end(self) -> None:
         """Return once no turn is open, or after ``RECONNECT_HOLD_S``."""
@@ -775,8 +838,13 @@ class SpeechStream(stt.SpeechStream):
 
     def _end_open_utterance(self) -> None:
         """Close an utterance cut off by a reconnect so turn detection doesn't wait forever."""
-        # With turn_detection="none" LiveKit's VAD owns the turn, so there is none to close.
-        self._commit_pending = False
+        # With turn_detection="none", answer each commit the old session left unanswered
+        # with an empty final, so a flush (e.g. commit_user_turn()) doesn't wait for one.
+        for _ in self._flushes:
+            self._send_empty_final()
+        self._flushes.clear()
+        self._uncommitted = False  # audio not committed on the old session is gone with it
+        self._draining = False
         if self._speech_started:
             self._speech_started = False
             self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
@@ -793,31 +861,62 @@ class SpeechStream(stt.SpeechStream):
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing, last_audio_at, last_input_at, gap_filled, session_audio_s
             anchored = False
+
+            async def send(frame: rtc.AudioFrame | SpeechStream._FlushSentinel) -> None:
+                nonlocal last_audio_at, last_input_at, gap_filled, session_audio_s, anchored
+                if isinstance(frame, self._FlushSentinel):
+                    # LiveKit ended the user's speech. With Scribe's VAD off, commit the
+                    # audio so far for its final; otherwise Scribe's VAD ends the turn.
+                    if self._manual_commit:
+                        if self._uncommitted:
+                            await self._commit(ws)
+                        elif self._flushes:
+                            # Only digital silence since the last commit (e.g. end_input()
+                            # after a long pause): Scribe can return made-up text for
+                            # that, so this flush gets an empty final instead, after the
+                            # finals still due for earlier commits.
+                            self._flushes.append(False)
+                        else:
+                            self._send_empty_final()
+                    return
+                if not frame.samples_per_channel:
+                    return
+                # Each frame is sent as it arrives (10-20 ms in an agent). The docs suggest
+                # about 100 ms per message, but smaller messages end turns slightly sooner.
+                data = frame.data.tobytes()
+                self._audio_duration += frame.duration
+                await ws.send_bytes(data)
+                if self._manual_commit and not self._uncommitted and data.strip(b"\0"):
+                    self._uncommitted = True
+                last_audio_at = last_input_at = time.monotonic()
+                gap_filled = False
+                # Scribe's audio_*_ms count from the session's first audio. Audio queued
+                # while connecting goes out in a burst, so anchor that 0 ms at the
+                # earliest "now minus audio sent", which is when that audio was captured.
+                session_audio_s += frame.duration
+                captured_at = time.time() - session_audio_s
+                if not anchored or captured_at < self.start_time:
+                    self.start_time = captured_at
+                    anchored = True
+
             try:
+                # Input held back while the previous session drained goes out first.
+                held, self._held = self._held, []
+                for frame in held:
+                    await send(frame)
                 async for frame in self._input_ch:
-                    if isinstance(frame, self._FlushSentinel):
-                        # LiveKit ended the user's speech. With Scribe's VAD off, commit the
-                        # audio so far for its final; otherwise Scribe's VAD ends the turn.
-                        if self._manual_commit:
-                            self._commit_pending = True
-                            await ws.send_str(json.dumps({"type": "input_audio_buffer.commit"}))
-                        continue
-                    if not frame.samples_per_channel:
-                        continue
-                    # Each frame is sent as it arrives (10-20 ms in an agent). The docs suggest
-                    # about 100 ms per message, but smaller messages end turns slightly sooner.
-                    self._audio_duration += frame.duration
-                    await ws.send_bytes(frame.data.tobytes())
-                    last_audio_at = last_input_at = time.monotonic()
-                    gap_filled = False
-                    # Scribe's audio_*_ms count from the session's first audio. Audio queued
-                    # while connecting goes out in a burst, so anchor that 0 ms at the
-                    # earliest "now minus audio sent", which is when that audio was captured.
-                    session_audio_s += frame.duration
-                    captured_at = time.time() - session_audio_s
-                    if not anchored or captured_at < self.start_time:
-                        self.start_time = captured_at
-                        anchored = True
+                    async with self._send_lock:
+                        if self._draining:
+                            self._held.append(frame)  # for the next session
+                        else:
+                            await send(frame)
+                # Input ended while a reconnect was waiting: there is no next session, so
+                # send what was held to this one.
+                async with self._send_lock:
+                    self._draining = False
+                    held, self._held = self._held, []
+                    for frame in held:
+                        await send(frame)
                 closing = True
                 await ws.send_str(json.dumps({"type": "session.close"}))
             except (aiohttp.ClientError, ConnectionError) as e:
@@ -948,6 +1047,13 @@ class SpeechStream(stt.SpeechStream):
                         # Options changed: reconnect with the new config, once the turn in
                         # progress (if any) has its final transcript.
                         waiters.discard(wait_reconnect)
+                        if self._manual_commit:
+                            try:
+                                await self._start_drain(ws)
+                            except (aiohttp.ClientError, ConnectionError) as e:
+                                raise APIConnectionError(
+                                    "Zoom Scribe Live connection closed unexpectedly"
+                                ) from e
                         if not self._turn_open():
                             reconnect = True
                             break
@@ -974,8 +1080,12 @@ class SpeechStream(stt.SpeechStream):
         Scribe ends a segment after ``silence_duration_ms`` of silence, so ``audio_end_ms``
         is that much later than the end of speech. With ``silence_duration_ms=None`` the
         window is Scribe's, so ``audio_end_ms`` is used as is.
+
+        With ``turn_detection="none"`` the segment ends where the flush committed it, after
+        LiveKit's VAD silence (and any turn detector hold), not at the end of speech. Only
+        LiveKit's VAD knows when speech ended, so no time is reported.
         """
-        if not end_ms:
+        if not end_ms or self._manual_commit:
             return None
         silence_ms = self._view.silence_duration_ms or 0
         return self.start_time + max(0, end_ms - silence_ms) / 1000
@@ -1015,7 +1125,8 @@ class SpeechStream(stt.SpeechStream):
                 else:
                     speaker_id = ev.get("speaker") or None
             if self._manual_commit:
-                self._commit_pending = False
+                if self._flushes:
+                    self._flushes.popleft()  # this final answers the oldest commit
             elif text and not self._speech_started:
                 # No speech_started for this transcript (e.g. it was lost in a reconnect):
                 # open the turn so turn_detection="stt" still commits it.
@@ -1056,6 +1167,10 @@ class SpeechStream(stt.SpeechStream):
                         speech_end_time=self._speech_end_time(end_ms),
                     )
                 )
+            # Then answer the silence-only flushes that were waiting behind this commit.
+            while self._flushes and not self._flushes[0]:
+                self._flushes.popleft()
+                self._send_empty_final()
             # Scribe's final closes the utterance: end of speech comes after the transcript,
             # so turn_detection="stt" commits the turn with the text already in hand.
             if self._speech_started:
