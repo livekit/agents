@@ -192,6 +192,7 @@ class _RealtimeOptions:
     api_version: NotGivenOr[str] = NOT_GIVEN
     tool_behavior: NotGivenOr[types.Behavior] = NOT_GIVEN
     tool_response_scheduling: NotGivenOr[types.FunctionResponseScheduling] = NOT_GIVEN
+    use_parameters_json_schema: bool = False
     tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN
     thinking_config: NotGivenOr[types.ThinkingConfig] = NOT_GIVEN
     session_resumption: NotGivenOr[types.SessionResumptionConfig] = NOT_GIVEN
@@ -266,6 +267,7 @@ class RealtimeModel(llm.RealtimeModel):
         context_window_compression: NotGivenOr[types.ContextWindowCompressionConfig] = NOT_GIVEN,
         tool_behavior: NotGivenOr[types.Behavior] = NOT_GIVEN,
         tool_response_scheduling: NotGivenOr[types.FunctionResponseScheduling] = NOT_GIVEN,
+        use_parameters_json_schema: bool = False,
         session_resumption: NotGivenOr[types.SessionResumptionConfig] = NOT_GIVEN,
         api_version: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
@@ -310,6 +312,7 @@ class RealtimeModel(llm.RealtimeModel):
             context_window_compression (ContextWindowCompressionConfig, optional): The configuration for context window compression. Defaults to None.
             tool_behavior (Behavior, optional): The behavior for tool call. Defaults to NON_BLOCKING on models that declare it by default (Gemini 3.8 Live), and to the server default (BLOCKING) elsewhere.
             tool_response_scheduling (FunctionResponseScheduling, optional): The scheduling for tool response. Default scheduling is WHEN_IDLE.
+            use_parameters_json_schema (bool, optional): Whether to declare function tools with `parameters_json_schema` instead of the simplified Gemini schema in `parameters`. The JSON schema keeps keywords the simplified one drops, such as `additionalProperties` on free-form object arguments. Gemini 3.1 Flash Live and Gemini 3.8 Live accept it; older Live models may not. Defaults to False.
             session_resumption (SessionResumptionConfig, optional): The configuration for session resumption. Defaults to None.
             thinking_config (ThinkingConfig, optional): Native audio thinking configuration.
                 thinking_level is not supported by gemini-3.8-live on the Gemini API.
@@ -433,6 +436,7 @@ class RealtimeModel(llm.RealtimeModel):
             if is_given(tool_behavior)
             else _default_tool_behavior(model),
             tool_response_scheduling=tool_response_scheduling,
+            use_parameters_json_schema=use_parameters_json_schema,
             conn_options=conn_options,
             http_options=http_options,
             media_resolution=media_resolution,
@@ -1382,7 +1386,7 @@ class RealtimeSession(llm.RealtimeSession):
         tools_config, _ = create_tools_config(
             self._tools,
             tool_behavior=self._opts.tool_behavior,
-            use_parameters_json_schema=False,
+            use_parameters_json_schema=self._opts.use_parameters_json_schema,
         )
         conf = types.LiveConnectConfig(
             response_modalities=self._opts.response_modalities,
