@@ -1,137 +1,137 @@
-//! The turn-merging loop `anthropic.py`, `aws.py` and `google.py` each write out: hoist the system
-//! prompt, then coalesce consecutive items of one effective role into a single turn. Each dialect
-//! supplies a [`Dialect`] table of role names and leaf builders, and runs its own final pass.
+//! Coalesce by speaker, independently of a provider's wire role and message shape.
 
-use crate::llm::provider_format::FormatError;
-use crate::llm::provider_format::group::{
+use super::group::{
     DEFAULT_INLINE_INSTRUCTIONS_TEMPLATE, Dropped, GroupItem,
     convert_mid_conversation_instructions, group_tool_calls,
 };
-use crate::llm::provider_format::openai::resolve;
-use crate::llm::provider_format::{ImageResolver, SerializedImage};
+use super::openai::resolve;
+use super::{FormatError, ImageResolver, SerializedImage};
 use lk_agents_abi::{
     ChatContent, ChatContext, ChatMessage, FunctionCall, FunctionCallOutput, Role,
 };
-use serde_json::Value;
 use std::borrow::Cow;
 
-pub(crate) struct Dialect<'a> {
-    /// The role of an assistant message and of a tool call.
-    pub assistant: &'static str,
-    /// The role a tool result accumulates under (Gemini's synthetic `tool`).
-    pub output: &'static str,
-    /// `content` or `parts`.
-    pub key: &'static str,
-    pub text: fn(&str) -> Value,
-    pub image: fn(&SerializedImage) -> Result<Value, FormatError>,
-    pub call: &'a dyn Fn(&FunctionCall) -> Result<Value, FormatError>,
-    pub result: fn(&FunctionCallOutput) -> Value,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Speaker {
+    User,
+    Assistant,
+    ToolResults,
 }
 
-pub(crate) struct Turns {
-    pub turns: Vec<Value>,
+pub(crate) enum ResultsTurn {
+    WithUser,
+    Separate,
+}
+
+pub(crate) trait Dialect {
+    type Block;
+    const RESULTS: ResultsTurn;
+    const USER_IMAGES_ONLY: bool = false;
+    fn text(&self, text: &str) -> Self::Block;
+    fn image(&self, image: &SerializedImage) -> Result<Self::Block, FormatError>;
+    fn call(&self, call: &FunctionCall) -> Result<Self::Block, FormatError>;
+    fn result(&self, output: &FunctionCallOutput) -> Self::Block;
+}
+
+pub(crate) struct Turn<B> {
+    pub speaker: Speaker,
+    pub blocks: Vec<B>,
+}
+
+pub(crate) struct Turns<B> {
+    pub turns: Vec<Turn<B>>,
     pub system_messages: Vec<String>,
-    /// The last role seen, including one whose item contributed no blocks.
-    pub last_role: Option<&'static str>,
+    /// Includes the last item even when it contributed no blocks.
+    pub last_speaker: Option<Speaker>,
     pub dropped: Vec<Dropped>,
 }
 
-pub(crate) fn merge_turns(
+pub(crate) fn merge_turns<D: Dialect>(
     chat_ctx: &ChatContext,
     images: &dyn ImageResolver,
-    dialect: &Dialect<'_>,
-) -> Result<Turns, FormatError> {
+    dialect: &D,
+) -> Result<Turns<D::Block>, FormatError> {
     let converted = convert_mid_conversation_instructions(
         chat_ctx,
         Role::User,
         DEFAULT_INLINE_INSTRUCTIONS_TEMPLATE,
     );
     let grouping = group_tool_calls(converted.iter().map(Cow::as_ref))?;
-
-    let mut turns: Vec<Value> = Vec::new();
-    let mut system_messages: Vec<String> = Vec::new();
-    let mut current_role: Option<&'static str> = None;
-    let mut content: Vec<Value> = Vec::new();
-    let flush = |role: &'static str, content: Vec<Value>, turns: &mut Vec<Value>| {
-        if !content.is_empty() {
-            let mut turn = serde_json::Map::new();
-            turn.insert(ROLE_KEY.into(), role.into());
-            turn.insert(dialect.key.into(), Value::Array(content));
-            turns.push(Value::Object(turn));
-        }
-    };
+    let mut turns = Vec::new();
+    let mut system_messages = Vec::new();
+    let mut current_speaker = None;
+    let mut content = Vec::new();
 
     for item in grouping.groups.iter().flat_map(|g| g.flatten()) {
-        let role = match placement(item, dialect) {
+        let speaker = match placement(item) {
             Placement::System(text) => {
                 system_messages.push(text);
                 continue;
             }
-            Placement::Turn(role) => role,
+            Placement::Turn(Speaker::ToolResults)
+                if matches!(D::RESULTS, ResultsTurn::WithUser) =>
+            {
+                Speaker::User
+            }
+            Placement::Turn(speaker) => speaker,
         };
-
-        if Some(role) != current_role {
-            // An empty accumulator emits no turn but still flips `current_role`.
-            if let Some(previous) = current_role {
+        if Some(speaker) != current_speaker {
+            if let Some(previous) = current_speaker {
                 flush(previous, std::mem::take(&mut content), &mut turns);
             }
-            current_role = Some(role);
+            current_speaker = Some(speaker);
         }
-
         match item {
             GroupItem::Message(m) => push_message_blocks(m, images, dialect, &mut content)?,
-            GroupItem::Call(call) => content.push((dialect.call)(call)?),
-            GroupItem::Output(output) => content.push((dialect.result)(output)),
+            GroupItem::Call(call) => content.push(dialect.call(call)?),
+            GroupItem::Output(output) => content.push(dialect.result(output)),
         }
     }
-
-    if let Some(role) = current_role {
-        flush(role, content, &mut turns);
+    if let Some(speaker) = current_speaker {
+        flush(speaker, content, &mut turns);
     }
-
-    Ok(Turns { turns, system_messages, last_role: current_role, dropped: grouping.dropped })
+    Ok(Turns { turns, system_messages, last_speaker: current_speaker, dropped: grouping.dropped })
 }
 
-/// The turn's role field and a user message's role, the same in every dialect.
-const ROLE_KEY: &str = "role";
-const USER_ROLE: &str = "user";
+fn flush<B>(speaker: Speaker, blocks: Vec<B>, turns: &mut Vec<Turn<B>>) {
+    if !blocks.is_empty() {
+        turns.push(Turn { speaker, blocks });
+    }
+}
 
-/// Where an item goes: the hoisted system prompt, or a turn of that role.
 enum Placement {
     System(String),
-    Turn(&'static str),
+    Turn(Speaker),
 }
 
-fn placement(item: GroupItem<'_>, dialect: &Dialect<'_>) -> Placement {
+fn placement(item: GroupItem<'_>) -> Placement {
     match item {
-        // Only `role == "system"` with truthy text is hoisted; `developer` and an empty
-        // system message fall through to a user turn, as in the reference.
         GroupItem::Message(m) if m.role == Role::System => {
             match m.raw_text_content().filter(|t| !t.is_empty()) {
                 Some(text) => Placement::System(text),
-                None => Placement::Turn(USER_ROLE),
+                None => Placement::Turn(Speaker::User),
             }
         }
-        GroupItem::Message(m) if m.role == Role::Assistant => Placement::Turn(dialect.assistant),
-        GroupItem::Message(_) => Placement::Turn(USER_ROLE),
-        GroupItem::Call(_) => Placement::Turn(dialect.assistant),
-        GroupItem::Output(_) => Placement::Turn(dialect.output),
+        GroupItem::Message(m) if m.role == Role::Assistant => Placement::Turn(Speaker::Assistant),
+        GroupItem::Message(_) => Placement::Turn(Speaker::User),
+        GroupItem::Call(_) => Placement::Turn(Speaker::Assistant),
+        GroupItem::Output(_) => Placement::Turn(Speaker::ToolResults),
     }
 }
 
-fn push_message_blocks(
+fn push_message_blocks<D: Dialect>(
     message: &ChatMessage,
     images: &dyn ImageResolver,
-    dialect: &Dialect<'_>,
-    content: &mut Vec<Value>,
+    dialect: &D,
+    content: &mut Vec<D::Block>,
 ) -> Result<(), FormatError> {
     for part in &message.content {
         match part {
-            ChatContent::Image(image) => content.push((dialect.image)(&resolve(image, images)?)?),
-            ChatContent::Audio(_) => {}
-            // `elif c:`: empty parts are dropped, the rest stay separate blocks.
-            ChatContent::Text(text) if !text.is_empty() => content.push((dialect.text)(text)),
-            ChatContent::Text(_) => {}
+            ChatContent::Image(image) if !D::USER_IMAGES_ONLY || message.role == Role::User => {
+                content.push(dialect.image(&resolve(image, images)?)?);
+            }
+            ChatContent::Text(text) if !text.is_empty() => content.push(dialect.text(text)),
+            ChatContent::Audio(_) | ChatContent::Image(_) | ChatContent::Text(_) => {}
         }
     }
     Ok(())

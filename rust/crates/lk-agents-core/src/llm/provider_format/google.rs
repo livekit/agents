@@ -1,154 +1,237 @@
-//! `_provider_format/google.py`. Results accumulate under a synthetic `tool` role (so they never
-//! share a turn with a user message), later rewritten to `user`. Gemini needs a final user turn.
+//! Gemini contents. Function results occupy their own user turn.
 
-use crate::llm::provider_format::turns::{Dialect, Turns, merge_turns};
-use crate::llm::provider_format::{FormatError, Formatted, ToolSchema, is_truthy, parse_arguments};
-use crate::llm::provider_format::{ImageResolver, SerializedImage, bytes_value};
-use lk_agents_abi::ChatContext;
+use super::turns::{Dialect, ResultsTurn, Speaker, Turns, merge_turns};
+use super::wire::{FunctionDefinition, HostBytes};
+use super::{
+    FormatError, Formatted, ImageResolver, SerializedImage, ToolSchema, is_truthy, parse_arguments,
+};
+use lk_agents_abi::llm::provider_format::vocabulary::{
+    GeminiRole as ContentRole, GeminiToolBehavior as Behavior,
+};
+use lk_agents_abi::{ChatContext, FunctionCall, FunctionCallOutput};
+use serde::Serialize;
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 
-/// `google.py:15`.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct GoogleFormatData {
     pub system_messages: Vec<String>,
 }
 
-/// Keyed by `call_id`; the follow-up is rejected without them.
 pub type ThoughtSignatures = BTreeMap<String, Vec<u8>>;
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Content {
+    pub role: ContentRole,
+    pub parts: Vec<Part>,
+}
+
+// The Python SDK accepts its snake_case names and their REST camelCase aliases.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Part {
+    #[serde(flatten)]
+    pub data: PartData,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thought_signature: Option<HostBytes>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PartData {
+    Text(String),
+    InlineData(Blob),
+    FileData(FileData),
+    FunctionCall(FunctionCallPart),
+    FunctionResponse(FunctionResponse),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Blob {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<HostBytes>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct FileData {
+    pub file_uri: String,
+    pub mime_type: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct FunctionCallPart {
+    pub id: String,
+    pub name: String,
+    pub args: Map<String, Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct FunctionResponse {
+    pub id: String,
+    pub name: String,
+    pub response: FunctionResult,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FunctionResult {
+    Output(String),
+    Error(String),
+}
+
+struct Gemini<'a> {
+    thought_signatures: Option<&'a ThoughtSignatures>,
+}
+
+impl Dialect for Gemini<'_> {
+    type Block = Part;
+    const RESULTS: ResultsTurn = ResultsTurn::Separate;
+
+    fn text(&self, text: &str) -> Part {
+        Part { data: PartData::Text(text.into()), thought_signature: None }
+    }
+    fn image(&self, image: &SerializedImage) -> Result<Part, FormatError> {
+        Ok(to_image_part(image))
+    }
+    fn call(&self, call: &FunctionCall) -> Result<Part, FormatError> {
+        Ok(Part {
+            data: PartData::FunctionCall(FunctionCallPart {
+                id: call.call_id.clone(),
+                name: call.name.clone(),
+                args: parse_arguments(call),
+            }),
+            thought_signature: self
+                .thought_signatures
+                .and_then(|signatures| signatures.get(&call.call_id))
+                .filter(|signature| !signature.is_empty())
+                .cloned()
+                .map(HostBytes),
+        })
+    }
+    fn result(&self, output: &FunctionCallOutput) -> Part {
+        Part {
+            data: PartData::FunctionResponse(FunctionResponse {
+                id: output.call_id.clone(),
+                name: output.name.clone(),
+                response: if output.is_error {
+                    FunctionResult::Error(output.output.clone())
+                } else {
+                    FunctionResult::Output(output.output.clone())
+                },
+            }),
+            thought_signature: None,
+        }
+    }
+}
 
 pub fn to_chat_ctx(
     chat_ctx: &ChatContext,
     images: &dyn ImageResolver,
     inject_dummy_user_message: bool,
     thought_signatures: Option<&ThoughtSignatures>,
-) -> Result<Formatted<GoogleFormatData>, FormatError> {
-    let dialect = Dialect {
-        assistant: "model",
-        // "tool output shouldn't be mixed with other messages"
-        output: "tool",
-        key: "parts",
-        text: |text| serde_json::json!({ "text": text }),
-        image: |img| Ok(to_image_part(img)),
-        call: &|call| {
-            let mut fc = Map::new();
-            fc.insert(
-                "function_call".into(),
-                serde_json::json!({
-                    "id": call.call_id,
-                    "name": call.name,
-                    "args": parse_arguments(call),
-                }),
-            );
-            if let Some(sig) = thought_signatures
-                .and_then(|sigs| sigs.get(&call.call_id))
-                // An empty signature is falsy and is not echoed.
-                .filter(|sig| !sig.is_empty())
-            {
-                fc.insert("thought_signature".into(), bytes_value(sig));
-            }
-            Ok(Value::Object(fc))
-        },
-        result: |output| {
-            // Gemini marks a failed tool by the key inside `response`.
-            let response = if output.is_error {
-                serde_json::json!({ "error": output.output })
-            } else {
-                serde_json::json!({ "output": output.output })
-            };
-            serde_json::json!({
-                "function_response": {
-                    "id": output.call_id,
-                    "name": output.name,
-                    "response": response,
-                }
-            })
-        },
-    };
-    let Turns { mut turns, system_messages, last_role, dropped } =
+) -> Result<Formatted<Content, GoogleFormatData>, FormatError> {
+    let dialect = Gemini { thought_signatures };
+    let Turns { turns, system_messages, last_speaker, dropped } =
         merge_turns(chat_ctx, images, &dialect)?;
-
-    for turn in &mut turns {
-        if turn["role"] == "tool" {
-            turn["role"] = "user".into();
-        }
+    let mut messages: Vec<_> = turns
+        .into_iter()
+        .map(|turn| Content {
+            role: if turn.speaker == Speaker::Assistant {
+                ContentRole::Model
+            } else {
+                ContentRole::User
+            },
+            parts: turn.blocks,
+        })
+        .collect();
+    if inject_dummy_user_message
+        && !matches!(last_speaker, Some(Speaker::User | Speaker::ToolResults))
+    {
+        messages.push(Content { role: ContentRole::User, parts: vec![dialect.text(".")] });
     }
-
-    // Tests the last role seen, not the last turn emitted: a final item with no parts still counts.
-    if inject_dummy_user_message && !matches!(last_role, Some("user") | Some("tool")) {
-        turns.push(serde_json::json!({ "role": "user", "parts": [{ "text": "." }] }));
-    }
-
-    Ok(Formatted { messages: turns, data: GoogleFormatData { system_messages }, dropped })
+    Ok(Formatted { messages, data: GoogleFormatData { system_messages }, dropped })
 }
 
-/// `google.py:100`.
-fn to_image_part(img: &SerializedImage) -> Value {
-    if let Some(url) = &img.external_url {
-        // The reference logs at debug and defaults to jpeg.
-        let mime_type = img.mime_type.as_deref().filter(|m| !m.is_empty()).unwrap_or("image/jpeg");
-        return serde_json::json!({ "file_data": { "file_uri": url, "mime_type": mime_type } });
-    }
-    // No assert here, unlike other dialects: neither arm set emits `data: null`.
-    let data = match &img.data_bytes {
-        Some(bytes) => bytes_value(bytes),
-        None => Value::Null,
+fn to_image_part(image: &SerializedImage) -> Part {
+    let data = if let Some(url) = &image.external_url {
+        PartData::FileData(FileData {
+            file_uri: url.clone(),
+            mime_type: image
+                .mime_type
+                .clone()
+                .filter(|mime| !mime.is_empty())
+                .unwrap_or_else(|| "image/jpeg".into()),
+        })
+    } else {
+        PartData::InlineData(Blob {
+            data: image.data_bytes.clone().map(HostBytes),
+            mime_type: image.mime_type.clone(),
+        })
     };
-    serde_json::json!({ "inline_data": { "data": data, "mime_type": img.mime_type } })
+    Part { data, thought_signature: None }
 }
 
-/// `google.py:121`. An object schema without properties means no arguments. Gemini Live rejects
-/// `parameters_json_schema` (googleapis/python-genai#1147), so without `use_parameters_json_schema`
-/// the schema is simplified to Gemini's own `parameters`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct FunctionDeclaration {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parameters: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parameters_json_schema: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub behavior: Option<Behavior>,
+}
+
 pub fn to_fnc_ctx(
     tools: &[ToolSchema],
-    // `google.py:118`, checked by the caller.
     tool_behavior: Option<&str>,
     use_parameters_json_schema: bool,
-) -> Result<Vec<Value>, FormatError> {
-    let missing =
-        |key: &str| FormatError::MalformedToolSchema { detail: format!("missing {key:?}") };
-    let mut out = Vec::new();
+) -> Result<Vec<FunctionDeclaration>, FormatError> {
+    let behavior = tool_behavior
+        .map(|behavior| {
+            behavior
+                .parse::<Behavior>()
+                .map_err(|detail| FormatError::MalformedToolSchema { detail })
+        })
+        .transpose()?;
+    let mut declarations = Vec::new();
     for tool in tools {
-        let (name, description, json_schema) = match tool {
-            // A raw schema is author-written and goes through as it is.
-            ToolSchema::Raw { name, raw_schema } => (
-                Value::String(name.clone()),
-                raw_schema.get("description").cloned().unwrap_or_else(|| "".into()),
-                raw_schema.get("parameters").cloned().unwrap_or(Value::Null),
-            ),
-            ToolSchema::Legacy(built) => {
-                let parameters = built.get("parameters").cloned().unwrap_or(Value::Null);
-                let has_properties = parameters.get("properties").is_some_and(is_truthy);
-                (
-                    built.get("name").cloned().ok_or_else(|| missing("name"))?,
-                    // Not coerced to `""` as Anthropic and Bedrock do: null reaches Gemini as null.
-                    built.get("description").cloned().ok_or_else(|| missing("description"))?,
-                    if has_properties { parameters } else { Value::Null },
-                )
-            }
-            ToolSchema::Strict(_) | ToolSchema::Provider(_) => continue,
-        };
-        let mut schema = Map::new();
-        schema.insert("name".into(), name);
-        schema.insert("description".into(), description);
-        if use_parameters_json_schema {
-            schema.insert("parameters_json_schema".into(), none_if_falsy(json_schema));
+        if matches!(tool, ToolSchema::Strict(_) | ToolSchema::Provider(_)) {
+            continue;
+        }
+        let mut definition = FunctionDefinition::from_tool(tool)?;
+        if matches!(tool, ToolSchema::Legacy(_))
+            && !definition
+                .parameters
+                .as_ref()
+                .and_then(|schema| schema.get("properties"))
+                .is_some_and(is_truthy)
+        {
+            definition.parameters = None;
+        }
+        let schema = definition.parameters.filter(is_truthy);
+        let (parameters, parameters_json_schema) = if use_parameters_json_schema {
+            (None, schema)
         } else {
-            let json_schema =
-                if is_truthy(&json_schema) { json_schema } else { Value::Object(Map::new()) };
-            schema.insert("parameters".into(), none_if_falsy(simplify_schema(json_schema)?));
-        }
-        if let Some(behavior) = tool_behavior {
-            schema.insert("behavior".into(), behavior.into());
-        }
-        out.push(Value::Object(schema));
+            let simplified = simplify_schema(schema.unwrap_or_else(|| Value::Object(Map::new())))?;
+            (is_truthy(&simplified).then_some(simplified), None)
+        };
+        declarations.push(FunctionDeclaration {
+            name: definition.name,
+            description: if matches!(tool, ToolSchema::Raw { .. }) {
+                Some(definition.description.unwrap_or_default())
+            } else {
+                definition.description
+            },
+            parameters,
+            parameters_json_schema,
+            behavior,
+        });
     }
-    Ok(out)
-}
-
-fn none_if_falsy(value: Value) -> Value {
-    if is_truthy(&value) { value } else { Value::Null }
+    Ok(declarations)
 }
 
 /// Every key Gemini's `types.Schema` accepts (field name and camelCase alias), and the JSON Schema
@@ -352,27 +435,26 @@ mod tests {
 
     use super::*;
     use crate::llm::provider_format::testkit::{
-        call, ctx, image, inline_images, msg, msg_with, no_images, out, url_images,
+        call, ctx, image, inline_images, msg, msg_with, no_images, out, text_of, url_images,
     };
 
-    fn run(items: Vec<ChatItem>, images: &dyn ImageResolver) -> Formatted<GoogleFormatData> {
+    fn run(
+        items: Vec<ChatItem>,
+        images: &dyn ImageResolver,
+    ) -> Formatted<Content, GoogleFormatData> {
         to_chat_ctx(&ctx(items), images, true, None).unwrap()
     }
 
-    fn text_of(f: &Formatted<GoogleFormatData>) -> String {
-        serde_json::to_string(&f.messages).unwrap()
-    }
-
-    // Catches: leaving the synthetic `tool` role in the output, or never using it.
+    // Catches: merging tool responses with user content or emitting a non-Gemini role.
     #[test]
-    fn tool_results_get_their_own_turn_and_are_relabelled_user() {
+    fn tool_results_get_their_own_user_turn() {
         let items = vec![
             call("c", "c0", "f", "{}"),
             out("o", "c0", "f", "ok"),
             msg("u", Role::User, &["thanks"]),
         ];
         assert_eq!(
-            text_of(&run(items, &no_images())),
+            text_of(&run(items, &no_images()).messages),
             r#"[{"role":"model","parts":[{"function_call":{"id":"c0","name":"f","args":{}}}]},{"role":"user","parts":[{"function_response":{"id":"c0","name":"f","response":{"output":"ok"}}}]},{"role":"user","parts":[{"text":"thanks"}]}]"#
         );
     }
@@ -381,7 +463,7 @@ mod tests {
     #[test]
     fn the_dummy_turn_is_appended_not_prepended() {
         assert_eq!(
-            text_of(&run(vec![msg("a", Role::Assistant, &["hi"])], &no_images())),
+            text_of(&run(vec![msg("a", Role::Assistant, &["hi"])], &no_images()).messages),
             r#"[{"role":"model","parts":[{"text":"hi"}]},{"role":"user","parts":[{"text":"."}]}]"#
         );
     }
@@ -394,12 +476,12 @@ mod tests {
             msg("a", Role::Assistant, &[""]), // contributes no parts, emits no turn
         ];
         assert_eq!(
-            text_of(&run(items, &no_images())),
+            text_of(&run(items, &no_images()).messages),
             r#"[{"role":"user","parts":[{"text":"q"}]},{"role":"user","parts":[{"text":"."}]}]"#
         );
         // A tool role counts as user for this test -- "allow tool role since we update it above".
         let items = vec![call("c", "c0", "f", "{}"), out("o", "c0", "f", "ok")];
-        assert!(!text_of(&run(items, &no_images())).contains(r#"{"text":"."}"#));
+        assert!(!text_of(&run(items, &no_images()).messages).contains(r#"{"text":"."}"#));
     }
 
     // Catches: emitting `response: {"output": ...}` for a failed tool.
@@ -410,7 +492,9 @@ mod tests {
             x.is_error = true;
         }
         let items = vec![call("c", "c0", "f", "{}"), o];
-        assert!(text_of(&run(items, &no_images())).contains(r#""response":{"error":"boom"}"#));
+        assert!(
+            text_of(&run(items, &no_images()).messages).contains(r#""response":{"error":"boom"}"#)
+        );
     }
 
     // Catches: attaching an empty thought signature, or one to the wrong call.
@@ -440,7 +524,7 @@ mod tests {
     #[test]
     fn inline_images_are_raw_bytes_and_a_url_image_falls_back_to_jpeg() {
         let m = msg_with("m", Role::User, vec![image("i")]);
-        assert!(text_of(&run(vec![m.clone()], &inline_images(&["i"]))).contains(
+        assert!(text_of(&run(vec![m.clone()], &inline_images(&["i"])).messages).contains(
             r#"{"inline_data":{"data":{"$lk_bytes_b64":"/9j/"},"mime_type":"image/jpeg"}}"#
         ));
 
@@ -450,20 +534,21 @@ mod tests {
             r#"{"file_data":{"file_uri":"https://x/y","mime_type":"image/jpeg"}}"#
         );
         assert!(
-            text_of(&run(vec![m], &url_images(&["i"]))).contains(r#""mime_type":"image/png""#),
+            text_of(&run(vec![m], &url_images(&["i"])).messages)
+                .contains(r#""mime_type":"image/png""#),
             "a real mime type is not overwritten"
         );
     }
 
-    // Catches: coercing a null description to `""`, or `{}` instead of `null`.
+    // Catches: sending absent optional fields as null.
     #[test]
-    fn a_falsy_parameters_schema_becomes_null_and_a_null_description_stays_null() {
+    fn absent_parameters_and_description_are_omitted() {
         let legacy = ToolSchema::Legacy(
             serde_json::json!({ "name": "t", "description": null, "parameters": {} }),
         );
         assert_eq!(
             serde_json::to_string(&to_fnc_ctx(&[legacy], None, true).unwrap()).unwrap(),
-            r#"[{"name":"t","description":null,"parameters_json_schema":null}]"#
+            r#"[{"name":"t"}]"#
         );
     }
 
@@ -484,7 +569,7 @@ mod tests {
                 &to_fnc_ctx(std::slice::from_ref(&raw), Some("NON_BLOCKING"), false).unwrap()
             )
             .unwrap(),
-            r#"[{"name":"t","description":"d","parameters":null,"behavior":"NON_BLOCKING"}]"#
+            r#"[{"name":"t","description":"d","behavior":"NON_BLOCKING"}]"#
         );
     }
 
@@ -511,7 +596,7 @@ mod tests {
     #[test]
     fn empty_text_parts_are_dropped_rather_than_emitted_as_empty_parts() {
         assert_eq!(
-            text_of(&run(vec![msg("m", Role::User, &["a", "", "b"])], &no_images())),
+            text_of(&run(vec![msg("m", Role::User, &["a", "", "b"])], &no_images()).messages),
             r#"[{"role":"user","parts":[{"text":"a"},{"text":"b"}]}]"#
         );
     }
@@ -528,6 +613,7 @@ mod tests {
             "name": "g", "description": "d", "parameters": {"type": "object", "properties": {}},
         }));
         let tools = to_fnc_ctx(&[with, without], None, true).unwrap();
+        let tools = serde_json::to_value(tools).unwrap();
         assert_eq!(
             tools[0]["parameters_json_schema"],
             serde_json::json!({"type": "object", "properties": {"x": {"type": "string", "title": "X"}}})
@@ -555,6 +641,7 @@ mod tests {
             }}),
         };
         let tools = to_fnc_ctx(&[raw], Some("NON_BLOCKING"), false).unwrap();
+        let tools = serde_json::to_value(tools).unwrap();
         assert_eq!(
             tools[0],
             serde_json::json!({
@@ -574,7 +661,7 @@ mod tests {
             })
         );
         let empty = ToolSchema::Raw { name: "g".into(), raw_schema: serde_json::json!({}) };
-        assert_eq!(to_fnc_ctx(&[empty], None, false).unwrap()[0]["parameters"], Value::Null);
+        assert!(to_fnc_ctx(&[empty], None, false).unwrap()[0].parameters.is_none());
     }
 
     // Catches: a recursive model looping instead of failing.

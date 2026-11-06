@@ -62,7 +62,13 @@ pub fn build_request(
     let formatted = lk_agents_core::llm::provider_format::openai::to_chat_ctx(chat_ctx, images)
         .map_err(|e| ApiError::new(format!("failed to format chat context: {e}")))?;
     let schemas = tool_schemas(tools, opts.strict_tools)?;
-    let mut body = request::build_body(&opts.model, formatted.messages, &schemas, extra);
+    let messages = formatted
+        .messages
+        .into_iter()
+        .map(serde_json::to_value)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| ApiError::new(format!("failed to serialize chat context: {e}")))?;
+    let mut body = request::build_body(&opts.model, messages, &schemas, extra);
     if let Some(Value::Object(fields)) = extra_body {
         body.extend(fields);
     }

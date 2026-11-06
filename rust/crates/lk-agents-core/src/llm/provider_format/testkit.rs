@@ -7,6 +7,10 @@ use lk_agents_abi::{
 };
 use std::time::{Duration, SystemTime};
 
+pub fn text_of(value: &(impl serde::Serialize + ?Sized)) -> String {
+    serde_json::to_string(value).unwrap()
+}
+
 pub fn t(secs: u64) -> SystemTime {
     SystemTime::UNIX_EPOCH + Duration::from_secs(secs)
 }

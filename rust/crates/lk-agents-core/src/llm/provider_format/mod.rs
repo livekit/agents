@@ -15,7 +15,10 @@ pub mod host;
 mod strict;
 pub mod tools;
 mod turns;
+mod wire;
 
+#[cfg(test)]
+mod regression_tests;
 #[cfg(test)]
 mod testkit;
 
@@ -27,9 +30,9 @@ pub use lk_agents_abi::llm::provider_format::FormatError;
 pub use strict::{Object, StrictError, resolve_ref, to_strict_json_schema};
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Formatted<D> {
+pub struct Formatted<M, D> {
     /// `messages` / `contents` / `entries`, per provider.
-    pub messages: Vec<Value>,
+    pub messages: Vec<M>,
     /// `None` for OpenAI, the hoisted system prompt for the three that keep it out of band,
     /// `instructions` for Mistral.
     pub data: D,
@@ -63,22 +66,17 @@ pub fn is_truthy(value: &Value) -> bool {
     }
 }
 
-/// A missing key is the reference's `KeyError`.
-pub(crate) fn field<'v>(schema: &'v Value, key: &str) -> Result<&'v Value, FormatError> {
-    schema
-        .get(key)
-        .ok_or_else(|| FormatError::MalformedToolSchema { detail: format!("missing {key:?}") })
-}
-
 /// `parse_tool_call_arguments`: a stored call's arguments as the JSON object Anthropic, Bedrock and
 /// Gemini take, repaired when malformed. History the model never parsed (restored, or written by a
 /// custom `llm_node`) must not fail every later turn, so an unrecoverable one becomes `{}`.
-pub(crate) fn parse_arguments(call: &lk_agents_abi::FunctionCall) -> Value {
+pub(crate) fn parse_arguments(
+    call: &lk_agents_abi::FunctionCall,
+) -> serde_json::Map<String, Value> {
     if call.arguments.is_empty() {
-        return Value::Object(serde_json::Map::new());
+        return serde_json::Map::new();
     }
     match crate::llm::tool_arguments::parse_logged(&call.arguments) {
-        Ok(arguments) => Value::Object(arguments),
+        Ok(arguments) => arguments,
         Err(_) => {
             log::warn!(
                 target: "livekit.agents",
@@ -86,7 +84,7 @@ pub(crate) fn parse_arguments(call: &lk_agents_abi::FunctionCall) -> Value {
                 tool_name = call.name.as_str();
                 "could not parse stored tool call arguments as a JSON object, using empty arguments"
             );
-            Value::Object(serde_json::Map::new())
+            serde_json::Map::new()
         }
     }
 }
@@ -133,7 +131,7 @@ mod tests {
             else {
                 unreachable!()
             };
-            parse_arguments(&call)
+            Value::Object(parse_arguments(&call))
         };
         assert_eq!(args(""), serde_json::json!({}));
         assert_eq!(args("{\"a\":1}"), serde_json::json!({ "a": 1 }));
@@ -171,19 +169,13 @@ impl ImageResolver for PreResolved {
     }
 }
 
-/// Gemini's and Bedrock's image leaves are `bytes`: they emit `{"$lk_bytes_b64": "<base64>"}` and
-/// the binding materialises it.
-pub fn bytes_value(data: &[u8]) -> Value {
-    serde_json::json!({ BYTES_TAG: b64_encode(data) })
-}
-
 /// `base64.b64encode`.
 pub fn b64_encode(data: &[u8]) -> String {
     use base64::Engine as _;
     base64::engine::general_purpose::STANDARD.encode(data)
 }
 
-/// A `None` mime_type formats as the reference's `data:None;...`, which only a driver bug reaches.
+/// The image encoder produces JPEG when no MIME type was supplied.
 pub(crate) fn data_uri(mime_type: Option<&str>, data: &[u8]) -> String {
-    format!("data:{};base64,{}", mime_type.unwrap_or("None"), b64_encode(data))
+    format!("data:{};base64,{}", mime_type.unwrap_or("image/jpeg"), b64_encode(data))
 }

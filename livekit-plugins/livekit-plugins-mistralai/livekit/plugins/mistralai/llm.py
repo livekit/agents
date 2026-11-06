@@ -357,6 +357,12 @@ class LLMStream(llm.LLMStream):
 
         try:
             messages, _ = await self._chat_ctx.to_provider_format(format="openai")
+            for message in messages:
+                if message["role"] == "developer":
+                    message["role"] = "system"
+                message.pop("extra_content", None)
+                for call in message.get("tool_calls", []):
+                    call.pop("extra_content", None)
             tools_list = self._tool_ctx.parse_function_tools("openai", strict=True)
 
             extra_kwargs = dict(self._extra_kwargs)

@@ -3,7 +3,10 @@
 
 use std::collections::BTreeMap;
 
-use serde_json::{Value, json};
+use serde::Serialize;
+use serde_json::Value;
+#[cfg(test)]
+use serde_json::json;
 
 use super::{
     DropReason, Formatted, PreResolved, SerializedImage, ToolSchema, anthropic, aws, google,
@@ -24,24 +27,15 @@ pub fn to_provider_format(
     let ctx = ChatContext::new(items);
     let images = PreResolved::from_pairs(images.unwrap_or_default());
     let e = |e: super::FormatError| e.to_string();
-    let hoisted = |system_messages: &[String]| json!({ "system_messages": system_messages });
-    Ok(match format {
-        "openai" => finish(openai::to_chat_ctx(&ctx, &images).map_err(e)?, |_| Value::Null),
-        "openai.responses" => {
-            finish(openai::to_responses_chat_ctx(&ctx, &images).map_err(e)?, |_| Value::Null)
-        }
+    let formatted = match format {
+        "openai" => finish(openai::to_chat_ctx(&ctx, &images).map_err(e)?),
+        "openai.responses" => finish(openai::to_responses_chat_ctx(&ctx, &images).map_err(e)?),
         "anthropic" => {
             let opts =
                 anthropic::Options { inject_dummy_user_message, inject_trailing_user_message };
-            finish(anthropic::to_chat_ctx(&ctx, &images, opts).map_err(e)?, |d| {
-                hoisted(&d.system_messages)
-            })
+            finish(anthropic::to_chat_ctx(&ctx, &images, opts).map_err(e)?)
         }
-        "aws" => {
-            finish(aws::to_chat_ctx(&ctx, &images, inject_dummy_user_message).map_err(e)?, |d| {
-                hoisted(&d.system_messages)
-            })
-        }
+        "aws" => finish(aws::to_chat_ctx(&ctx, &images, inject_dummy_user_message).map_err(e)?),
         "google" => {
             let f = google::to_chat_ctx(
                 &ctx,
@@ -49,11 +43,11 @@ pub fn to_provider_format(
                 inject_dummy_user_message,
                 thought_signatures.as_ref(),
             );
-            finish(f.map_err(e)?, |d| hoisted(&d.system_messages))
+            finish(f.map_err(e)?)
         }
         "mistralai" => {
             let f = mistralai::to_conversations_ctx(&ctx, &images, inject_dummy_user_message);
-            finish(f.map_err(e)?, |d| json!({ "instructions": d.instructions }))
+            finish(f.map_err(e)?)
         }
         _ => {
             return Err(format!(
@@ -61,7 +55,8 @@ pub fn to_provider_format(
                  'anthropic', 'aws', 'google', 'mistralai'"
             ));
         }
-    })
+    };
+    formatted.map_err(|error| error.to_string())
 }
 
 /// `convert_mid_conversation_instructions(chat_ctx, role=, template=)` as `(index, rewritten)`: the
@@ -84,7 +79,9 @@ pub fn convert_mid_conversation_instructions(
         .collect()
 }
 
-fn finish<D>(f: Formatted<D>, data: impl FnOnce(&D) -> Value) -> (Vec<Value>, Value) {
+fn finish<M: Serialize, D: Serialize>(
+    f: Formatted<M, D>,
+) -> serde_json::Result<(Vec<Value>, Value)> {
     for d in &f.dropped {
         let message = match d.reason {
             DropReason::OutputWithoutCall => {
@@ -96,8 +93,12 @@ fn finish<D>(f: Formatted<D>, data: impl FnOnce(&D) -> Value) -> (Vec<Value>, Va
         };
         log::warn!(target: "livekit.agents", call_id = d.call_id.as_str(), function_name = d.tool_name.as_str(); "{message}");
     }
-    let data = data(&f.data);
-    (f.messages, data)
+    let data = serde_json::to_value(f.data)?;
+    Ok((serialize_list(&f.messages)?, data))
+}
+
+fn serialize_list<T: Serialize>(items: &[T]) -> serde_json::Result<Vec<Value>> {
+    items.iter().map(serde_json::to_value).collect()
 }
 
 /// `to_fnc_ctx(tools)` for a dialect; each tool is the host's `[kind, schema, name]` (`name` only for
@@ -112,27 +113,34 @@ pub fn to_fnc_ctx(
     let specs = tools.into_iter().map(tool_schema).collect::<Result<Vec<_>, _>>()?;
     let e = |e: super::FormatError| e.to_string();
     // Mistral has no rewrapper, and an unknown format gets the same message.
-    Ok(match format {
-        "openai" => openai::to_fnc_ctx(&specs),
+    let formatted = match format {
+        "openai" => serialize_list(&openai::to_fnc_ctx(&specs).map_err(e)?),
         // Not a flag: the Responses API spreads raw schemas flat and includes `ProviderTool`s.
-        "openai.responses" => openai::to_responses_fnc_ctx(&specs),
-        "anthropic" => anthropic::to_fnc_ctx(&specs).map_err(e)?,
-        "aws" => aws::to_fnc_ctx(&specs).map_err(e)?,
+        "openai.responses" => serialize_list(&openai::to_responses_fnc_ctx(&specs).map_err(e)?),
+        "anthropic" => serialize_list(&anthropic::to_fnc_ctx(&specs).map_err(e)?),
+        "aws" => serialize_list(&aws::to_fnc_ctx(&specs).map_err(e)?),
         "google" => {
             // `UNSPECIFIED` is spelled by omitting `tool_behavior`.
-            if let Some(b) = tool_behavior.filter(|b| !matches!(*b, "BLOCKING" | "NON_BLOCKING")) {
+            if let Some(b) = tool_behavior.filter(|b| {
+                lk_agents_abi::llm::provider_format::vocabulary::GeminiToolBehavior::from_wire(b)
+                    .is_none()
+            }) {
                 return Err(format!(
                     "unknown tool_behavior {b:?}: expected 'BLOCKING' or 'NON_BLOCKING'"
                 ));
             }
-            google::to_fnc_ctx(&specs, tool_behavior, use_parameters_json_schema).map_err(e)?
+            serialize_list(
+                &google::to_fnc_ctx(&specs, tool_behavior, use_parameters_json_schema)
+                    .map_err(e)?,
+            )
         }
         _ => {
             return Err(format!(
                 "{format:?} has no tool-schema rewrapper: Mistral takes the OpenAI shape verbatim"
             ));
         }
-    })
+    };
+    formatted.map_err(|error| error.to_string())
 }
 
 fn tool_schema(tool: Value) -> Result<ToolSchema, String> {

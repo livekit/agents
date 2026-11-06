@@ -1,140 +1,196 @@
-//! `_provider_format/openai.py`. `extra` is JSON because [`EXTRA_CONTENT_KEYS`] are inlined into
-//! the body and `extra["openai"]["phase"]` drives control flow.
+//! OpenAI Chat Completions and Responses request items.
 
-use crate::llm::provider_format::group::group_tool_calls;
-use crate::llm::provider_format::{FormatError, Formatted, is_truthy};
-use crate::llm::provider_format::{ImageResolver, SerializedImage, data_uri};
-use lk_agents_abi::{ChatContent, ChatContext, ChatMessage, Extra, FunctionCallOutput, Role};
-use serde_json::{Map, Value};
+use super::group::group_tool_calls;
+use super::wire::{Content, FunctionDefinition};
+use super::{
+    FormatError, Formatted, ImageResolver, SerializedImage, ToolSchema, data_uri, is_truthy,
+};
+use lk_agents_abi::llm::provider_format::vocabulary::ResponsesPhase as Phase;
+use lk_agents_abi::{ChatContent, ChatContext, ChatMessage, Extra, InferenceDetail, Role};
+use serde::Serialize;
+use serde_json::Value;
 
-/// `openai.py:13`, in the emitted key order.
-pub const EXTRA_CONTENT_KEYS: [&str; 3] = ["google", "livekit", "xai"];
+pub const EXTRA_CONTENT_KEYS: [&str; 4] = ["google", "livekit", "xai", "openai"];
 
-/// `openai.py:16`. Truthiness: `{}`, `None` and `0` are dropped, and an empty result emits no key.
-fn filter_extra(extra: &Extra) -> Map<String, Value> {
-    let mut out = Map::new();
-    for key in EXTRA_CONTENT_KEYS {
-        if let Some(value) = extra.get(key)
-            && is_truthy(value)
-        {
-            out.insert(key.to_string(), value.clone());
-        }
-    }
-    out
+/// Namespaced vendor extensions; their payloads are opaque to the chat schema.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct ExtraContent {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub google: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub livekit: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub xai: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub openai: Option<Value>,
 }
 
-/// `openai.py:18`. A group without a message still emits a bare `{"role": "assistant"}`.
+fn filter_extra(extra: &Extra) -> Option<ExtraContent> {
+    let [google, livekit, xai, openai] =
+        EXTRA_CONTENT_KEYS.map(|key| extra.get(key).filter(|value| is_truthy(value)).cloned());
+    let content = ExtraContent { google, livekit, xai, openai };
+    (content != ExtraContent::default()).then_some(content)
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "role", rename_all = "lowercase")]
+pub enum Message {
+    System {
+        content: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        extra_content: Option<ExtraContent>,
+    },
+    Developer {
+        content: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        extra_content: Option<ExtraContent>,
+    },
+    User {
+        content: Content<UserPart>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        extra_content: Option<ExtraContent>,
+    },
+    Assistant {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        content: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        extra_content: Option<ExtraContent>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        tool_calls: Vec<ToolCall>,
+    },
+    Tool {
+        tool_call_id: String,
+        content: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum UserPart {
+    Text { text: String },
+    ImageUrl { image_url: ImageUrl },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ImageUrl {
+    pub url: String,
+    #[serde(serialize_with = "super::wire::serialize_wire")]
+    pub detail: InferenceDetail,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ToolCall {
+    pub id: String,
+    #[serde(flatten)]
+    pub body: FunctionCallBody,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extra_content: Option<ExtraContent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum FunctionCallBody {
+    Function { function: FunctionCallArguments },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct FunctionCallArguments {
+    pub name: String,
+    pub arguments: String,
+}
+
 pub fn to_chat_ctx(
     chat_ctx: &ChatContext,
     images: &dyn ImageResolver,
-) -> Result<Formatted<()>, FormatError> {
+) -> Result<Formatted<Message, ()>, FormatError> {
     let grouping = group_tool_calls(&chat_ctx.items)?;
     let mut messages = Vec::new();
-
     for group in &grouping.groups {
         if group.is_empty() {
             continue;
         }
-
-        let mut msg = match group.message {
-            Some(m) => message_to_chat_item(m, images)?,
-            None => {
-                let mut m = Map::new();
-                m.insert("role".into(), "assistant".into());
-                m
-            }
+        let calls = group
+            .tool_calls
+            .iter()
+            .map(|call| ToolCall {
+                id: call.call_id.clone(),
+                body: FunctionCallBody::Function {
+                    function: FunctionCallArguments {
+                        name: call.name.clone(),
+                        arguments: call.arguments.clone(),
+                    },
+                },
+                extra_content: filter_extra(&call.extra),
+            })
+            .collect();
+        let message = match group.message {
+            Some(message) => message_to_chat_item(message, images, calls)?,
+            None => Message::Assistant { content: None, extra_content: None, tool_calls: calls },
         };
-
-        let mut tool_calls = Vec::new();
-        for call in &group.tool_calls {
-            let mut tc = Map::new();
-            tc.insert("id".into(), call.call_id.clone().into());
-            tc.insert("type".into(), "function".into());
-            tc.insert(
-                "function".into(),
-                serde_json::json!({ "name": call.name, "arguments": call.arguments }),
-            );
-            let extra_content = filter_extra(&call.extra);
-            if !extra_content.is_empty() {
-                tc.insert("extra_content".into(), Value::Object(extra_content));
-            }
-            tool_calls.push(Value::Object(tc));
-        }
-        if !tool_calls.is_empty() {
-            msg.insert("tool_calls".into(), Value::Array(tool_calls));
-        }
-        messages.push(Value::Object(msg));
-
-        for output in &group.tool_outputs {
-            messages.push(serde_json::json!({
-                "role": "tool",
-                "tool_call_id": output.call_id,
-                "content": output.output,
-            }));
-        }
+        messages.push(message);
+        messages.extend(group.tool_outputs.iter().map(|output| Message::Tool {
+            tool_call_id: output.call_id.clone(),
+            content: output.output.clone(),
+        }));
     }
-
     Ok(Formatted { messages, data: (), dropped: grouping.dropped })
 }
 
-/// `openai.py:49`; `to_chat_ctx` inlines the other arms.
 fn message_to_chat_item(
-    msg: &ChatMessage,
+    message: &ChatMessage,
     images: &dyn ImageResolver,
-) -> Result<Map<String, Value>, FormatError> {
-    let (list_content, text_content) = split_content(msg, images, to_image_content, "text")?;
-
-    let mut result = Map::new();
-    result.insert("role".into(), msg.role.as_str().into());
-    result.insert(
-        "content".into(),
-        match list_content {
-            // "certain providers require text-only content in a string vs a list. for
-            // max-compatibility, we will combine all text content into a single string."
-            None => Value::String(text_content),
-            Some(list) => Value::Array(list),
+    tool_calls: Vec<ToolCall>,
+) -> Result<Message, FormatError> {
+    let extra_content = filter_extra(&message.extra);
+    Ok(match message.role {
+        Role::System => Message::System { content: text_content(message), extra_content },
+        Role::Developer => Message::Developer { content: text_content(message), extra_content },
+        Role::User => Message::User {
+            content: split_content(message, images, to_image_content, |text| UserPart::Text {
+                text,
+            })?,
+            extra_content,
         },
-    );
-
-    let extra_content = filter_extra(&msg.extra);
-    if !extra_content.is_empty() {
-        result.insert("extra_content".into(), Value::Object(extra_content));
-    }
-    Ok(result)
+        Role::Assistant => {
+            Message::Assistant { content: Some(text_content(message)), extra_content, tool_calls }
+        }
+    })
 }
 
-/// Shared by both OpenAI dialects and Mistral. `None` for the list means "collapse to a bare
-/// string"; otherwise the text is one trailing part, after any images. Audio parts are skipped.
-pub(crate) fn split_content(
-    msg: &ChatMessage,
-    images: &dyn ImageResolver,
-    to_image: fn(&SerializedImage) -> Value,
-    text_part_type: &str,
-) -> Result<(Option<Vec<Value>>, String), FormatError> {
-    let mut list_content: Vec<Value> = Vec::new();
+pub(crate) fn text_content(message: &ChatMessage) -> String {
     let mut text_content = String::new();
-
-    for content in &msg.content {
-        match content {
-            ChatContent::Image(image) => list_content.push(to_image(&resolve(image, images)?)),
-            ChatContent::Audio(_) => {}
-            ChatContent::Text(text) => {
-                // Separator before the part: ["a", ""] becomes "a\n".
-                if !text_content.is_empty() {
-                    text_content.push('\n');
-                }
-                text_content.push_str(text);
+    for content in &message.content {
+        if let ChatContent::Text(text) = content {
+            if !text_content.is_empty() {
+                text_content.push('\n');
             }
+            text_content.push_str(text);
         }
     }
+    text_content
+}
 
-    if list_content.is_empty() {
-        return Ok((None, text_content));
+/// Images first, joined text last; a text-only message stays a string.
+pub(crate) fn split_content<P>(
+    message: &ChatMessage,
+    images: &dyn ImageResolver,
+    to_image: impl Fn(&SerializedImage) -> P,
+    to_text: impl Fn(String) -> P,
+) -> Result<Content<P>, FormatError> {
+    let mut parts = Vec::new();
+    for content in &message.content {
+        if let ChatContent::Image(image) = content {
+            parts.push(to_image(&resolve(image, images)?));
+        }
     }
-    if !text_content.is_empty() {
-        list_content.push(serde_json::json!({ "type": text_part_type, "text": text_content }));
+    let text = text_content(message);
+    if parts.is_empty() {
+        return Ok(Content::Text(text));
     }
-    Ok((Some(list_content), text_content))
+    if !text.is_empty() {
+        parts.push(to_text(text));
+    }
+    Ok(Content::Parts(parts))
 }
 
 pub(crate) fn resolve(
@@ -146,137 +202,152 @@ pub(crate) fn resolve(
         .map_err(|reason| FormatError::Image { image_id: image.id.clone(), reason })
 }
 
-/// `openai.py:104`.
-fn to_image_content(img: &SerializedImage) -> Value {
-    let url = match (&img.external_url, &img.data_bytes) {
-        (Some(url), _) => url.clone(),
-        // The reference asserts; an empty payload beats a panic.
-        (None, bytes) => data_uri(img.mime_type.as_deref(), bytes.as_deref().unwrap_or(&[])),
-    };
-    serde_json::json!({
-        "type": "image_url",
-        "image_url": { "url": url, "detail": img.inference_detail.as_str() },
+pub(crate) fn image_url(image: &SerializedImage) -> String {
+    image.external_url.clone().unwrap_or_else(|| {
+        data_uri(image.mime_type.as_deref(), image.data_bytes.as_deref().unwrap_or_default())
     })
 }
 
-/// `openai.py:122`. Flat, where Chat Completions nests.
-fn to_responses_image_content(img: &SerializedImage) -> Value {
-    let url = match (&img.external_url, &img.data_bytes) {
-        (Some(url), _) => url.clone(),
-        (None, bytes) => data_uri(img.mime_type.as_deref(), bytes.as_deref().unwrap_or(&[])),
-    };
-    serde_json::json!({
-        "type": "input_image",
-        "image_url": url,
-        "detail": img.inference_detail.as_str(),
-    })
+fn to_image_content(image: &SerializedImage) -> UserPart {
+    UserPart::ImageUrl {
+        image_url: ImageUrl { url: image_url(image), detail: image.inference_detail },
+    }
 }
 
-/// `openai.py:137`: tool calls are top-level items, no `extra_content`, text parts `input_text`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum InputItem {
+    // EasyInputMessage's type discriminator is optional.
+    Message {
+        #[serde(serialize_with = "super::wire::serialize_wire")]
+        role: Role,
+        content: Content<InputPart>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        phase: Option<Phase>,
+    },
+    Event(InputEvent),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum InputEvent {
+    FunctionCall { call_id: String, name: String, arguments: String },
+    FunctionCallOutput { call_id: String, output: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum InputPart {
+    InputText {
+        text: String,
+    },
+    InputImage {
+        image_url: String,
+        #[serde(serialize_with = "super::wire::serialize_wire")]
+        detail: InferenceDetail,
+    },
+}
+
+#[derive(serde::Deserialize)]
+struct ResponsesExtra {
+    phase: Option<Phase>,
+}
+
 pub fn to_responses_chat_ctx(
     chat_ctx: &ChatContext,
     images: &dyn ImageResolver,
-) -> Result<Formatted<()>, FormatError> {
+) -> Result<Formatted<InputItem, ()>, FormatError> {
     let grouping = group_tool_calls(&chat_ctx.items)?;
     let mut items = Vec::new();
-
     for group in &grouping.groups {
         if group.is_empty() {
             continue;
         }
-
         if let Some(message) = group.message {
-            items.push(Value::Object(message_to_responses_item(message, images)?));
+            let content = if message.role == Role::User {
+                split_content(
+                    message,
+                    images,
+                    |image| InputPart::InputImage {
+                        image_url: image_url(image),
+                        detail: image.inference_detail,
+                    },
+                    |text| InputPart::InputText { text },
+                )?
+            } else {
+                Content::Text(text_content(message))
+            };
+            let phase = (message.role == Role::Assistant)
+                .then(|| {
+                    message.extra.get("openai").cloned().and_then(|extra| {
+                        serde_json::from_value::<ResponsesExtra>(extra).ok()?.phase
+                    })
+                })
+                .flatten();
+            items.push(InputItem::Message { role: message.role, content, phase });
         }
-        for call in &group.tool_calls {
-            items.push(serde_json::json!({
-                "call_id": call.call_id,
-                "type": "function_call",
-                "name": call.name,
-                "arguments": call.arguments,
-            }));
-        }
-        for output in &group.tool_outputs {
-            items.push(output_to_responses_item(output));
-        }
+        items.extend(group.tool_calls.iter().map(|call| {
+            InputItem::Event(InputEvent::FunctionCall {
+                call_id: call.call_id.clone(),
+                name: call.name.clone(),
+                arguments: call.arguments.clone(),
+            })
+        }));
+        items.extend(group.tool_outputs.iter().map(|output| {
+            InputItem::Event(InputEvent::FunctionCallOutput {
+                call_id: output.call_id.clone(),
+                output: output.output.clone(),
+            })
+        }));
     }
-
     Ok(Formatted { messages: items, data: (), dropped: grouping.dropped })
 }
 
-fn message_to_responses_item(
-    msg: &ChatMessage,
-    images: &dyn ImageResolver,
-) -> Result<Map<String, Value>, FormatError> {
-    let (list_content, text_content) =
-        split_content(msg, images, to_responses_image_content, "input_text")?;
-
-    let mut item = Map::new();
-    item.insert("role".into(), msg.role.as_str().into());
-    item.insert(
-        "content".into(),
-        match list_content {
-            None => Value::String(text_content),
-            Some(list) => Value::Array(list),
-        },
-    );
-
-    // Re-attach the assistant `phase` (#5975): dropping it degrades gpt-5.3-codex. Assistant only.
-    if msg.role == Role::Assistant
-        && let Some(phase) = msg
-            .extra
-            .get("openai")
-            .and_then(Value::as_object)
-            .and_then(|openai| openai.get("phase"))
-        // An explicit null is `None` to the reference's `if phase is not None`.
-        && !phase.is_null()
-    {
-        item.insert("phase".into(), phase.clone());
-    }
-
-    Ok(item)
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "type", rename = "function")]
+pub struct ChatTool {
+    pub function: FunctionDefinition,
 }
 
-fn output_to_responses_item(output: &FunctionCallOutput) -> Value {
-    serde_json::json!({
-        "type": "function_call_output",
-        "call_id": output.call_id,
-        "output": output.output,
-    })
-}
-
-/// `openai.py:201`. Provider tools are not accepted.
-pub fn to_fnc_ctx(tools: &[crate::llm::provider_format::ToolSchema]) -> Vec<Value> {
+pub fn to_fnc_ctx(tools: &[ToolSchema]) -> Result<Vec<ChatTool>, FormatError> {
     tools
         .iter()
-        .filter_map(|tool| match tool {
-            crate::llm::provider_format::ToolSchema::Raw { raw_schema, .. } => {
-                Some(serde_json::json!({ "type": "function", "function": raw_schema }))
-            }
-            crate::llm::provider_format::ToolSchema::Legacy(schema)
-            | crate::llm::provider_format::ToolSchema::Strict(schema) => Some(schema.clone()),
-            crate::llm::provider_format::ToolSchema::Provider(_) => None,
-        })
+        .filter(|tool| !matches!(tool, ToolSchema::Provider(_)))
+        .map(|tool| Ok(ChatTool { function: FunctionDefinition::from_tool(tool)? }))
         .collect()
 }
 
-/// `openai.py:222`: a raw schema is spread flat and tagged `type: "function"`, function tools use
-/// the legacy build, and a `ProviderTool` contributes its `to_dict()`.
-pub fn to_responses_fnc_ctx(tools: &[crate::llm::provider_format::ToolSchema]) -> Vec<Value> {
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum ResponsesTool {
+    Function(ResponsesFunction),
+    Provider(Value),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "type", rename = "function")]
+pub struct ResponsesFunction {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub parameters: Option<Value>,
+    pub strict: Option<bool>,
+}
+
+pub fn to_responses_fnc_ctx(tools: &[ToolSchema]) -> Result<Vec<ResponsesTool>, FormatError> {
     tools
         .iter()
-        .map(|tool| match tool {
-            crate::llm::provider_format::ToolSchema::Raw { raw_schema, .. } => {
-                let mut schema = raw_schema
-                    .as_object()
-                    .cloned()
-                    .unwrap_or_else(|| Map::from_iter([("_".into(), raw_schema.clone())]));
-                schema.insert("type".into(), "function".into());
-                Value::Object(schema)
+        .map(|tool| {
+            if let ToolSchema::Provider(schema) = tool {
+                return Ok(ResponsesTool::Provider(schema.clone()));
             }
-            crate::llm::provider_format::ToolSchema::Legacy(schema)
-            | crate::llm::provider_format::ToolSchema::Strict(schema)
-            | crate::llm::provider_format::ToolSchema::Provider(schema) => schema.clone(),
+            let definition = FunctionDefinition::from_tool(tool)?;
+            Ok(ResponsesTool::Function(ResponsesFunction {
+                name: definition.name,
+                description: definition.description,
+                parameters: definition.parameters,
+                strict: definition.strict,
+            }))
         })
         .collect()
 }
@@ -286,20 +357,18 @@ mod tests {
     use super::*;
     use crate::llm::provider_format::ToolSchema;
     use crate::llm::provider_format::testkit::{
-        call, ctx, image, inline_images, msg, msg_with, no_images, out, url_images,
+        call, ctx, image, inline_images, msg, msg_with, no_images, out, text_of, url_images,
     };
 
-    fn chat(items: Vec<lk_agents_abi::ChatItem>, images: &dyn ImageResolver) -> Vec<Value> {
+    fn chat(items: Vec<lk_agents_abi::ChatItem>, images: &dyn ImageResolver) -> Vec<Message> {
         to_chat_ctx(&ctx(items), images).unwrap().messages
     }
 
-    fn responses(items: Vec<lk_agents_abi::ChatItem>, images: &dyn ImageResolver) -> Vec<Value> {
+    fn responses(
+        items: Vec<lk_agents_abi::ChatItem>,
+        images: &dyn ImageResolver,
+    ) -> Vec<InputItem> {
         to_responses_chat_ctx(&ctx(items), images).unwrap().messages
-    }
-
-    /// Tests compare serialized text: `IndexMap`'s `PartialEq` ignores key order.
-    fn text_of(v: &[Value]) -> String {
-        serde_json::to_string(v).unwrap()
     }
 
     // Catches: `_filter_extra` copying every key present, or emitting `extra_content` for `{}`.
@@ -427,7 +496,7 @@ mod tests {
         let items = vec![m, call("t/0", "c0", "f", "{}"), out("o", "c0", "f", "ok")];
         assert_eq!(
             text_of(&responses(items, &no_images())),
-            r#"[{"role":"assistant","content":"thinking"},{"call_id":"c0","type":"function_call","name":"f","arguments":"{}"},{"type":"function_call_output","call_id":"c0","output":"ok"}]"#
+            r#"[{"role":"assistant","content":"thinking"},{"type":"function_call","call_id":"c0","name":"f","arguments":"{}"},{"type":"function_call_output","call_id":"c0","output":"ok"}]"#
         );
     }
 
@@ -481,12 +550,13 @@ mod tests {
             raw_schema: serde_json::json!({ "name": "t", "parameters": {} }),
         };
         assert_eq!(
-            serde_json::to_string(&to_fnc_ctx(std::slice::from_ref(&raw))).unwrap(),
+            serde_json::to_string(&to_fnc_ctx(std::slice::from_ref(&raw)).unwrap()).unwrap(),
             r#"[{"type":"function","function":{"name":"t","parameters":{}}}]"#
         );
         assert_eq!(
-            serde_json::to_string(&to_responses_fnc_ctx(std::slice::from_ref(&raw))).unwrap(),
-            r#"[{"name":"t","parameters":{},"type":"function"}]"#
+            serde_json::to_string(&to_responses_fnc_ctx(std::slice::from_ref(&raw)).unwrap())
+                .unwrap(),
+            r#"[{"type":"function","name":"t","parameters":{},"strict":null}]"#
         );
     }
 
@@ -494,8 +564,11 @@ mod tests {
     #[test]
     fn provider_tools_reach_the_responses_dialect_only() {
         let tools = [ToolSchema::Provider(serde_json::json!({ "type": "web_search" }))];
-        assert!(to_fnc_ctx(&tools).is_empty());
-        assert_eq!(to_responses_fnc_ctx(&tools), [serde_json::json!({ "type": "web_search" })]);
+        assert!(to_fnc_ctx(&tools).unwrap().is_empty());
+        assert_eq!(
+            serde_json::to_value(to_responses_fnc_ctx(&tools).unwrap()).unwrap(),
+            serde_json::json!([{ "type": "web_search" }])
+        );
     }
 
     // Catches: reusing the Chat Completions image shape in Responses (flat `image_url` string).

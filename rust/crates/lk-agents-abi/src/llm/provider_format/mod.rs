@@ -2,6 +2,7 @@
 pub mod host;
 pub mod image;
 pub mod tools;
+pub mod vocabulary;
 pub use image::{BYTES_TAG, ImageResolver, SerializedImage};
 
 // Public data contracts. Python behavior remains in its adapters.

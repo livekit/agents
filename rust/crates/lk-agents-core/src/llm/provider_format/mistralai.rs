@@ -1,94 +1,111 @@
-//! `_provider_format/mistralai.py`: entries tagged by `type`, no coalescing, and the preamble as
-//! `instructions`.
+//! Mistral Conversations entries, with instructions out of band.
 
-use crate::llm::provider_format::group::{
+use super::group::{
     DEFAULT_INLINE_INSTRUCTIONS_TEMPLATE, convert_mid_conversation_instructions, group_tool_calls,
 };
-use crate::llm::provider_format::openai::split_content;
-use crate::llm::provider_format::{FormatError, Formatted};
-use crate::llm::provider_format::{ImageResolver, SerializedImage, data_uri};
+use super::openai::{image_url, split_content};
+use super::wire::Content;
+use super::{FormatError, Formatted, ImageResolver, SerializedImage};
+use lk_agents_abi::llm::provider_format::vocabulary::{
+    AssistantRole, MistralEntryObject as EntryObject, UserRole,
+};
 use lk_agents_abi::{ChatContent, ChatContext, ChatMessage, Role};
-use serde_json::Value;
+use serde::Serialize;
 use std::borrow::Cow;
 
-/// `mistralai.py:12`.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct MistralFormatData {
     pub instructions: Option<String>,
 }
 
-/// `mistralai.py:17`. Later instructions stay in place as user turns; a conversation ending on
-/// the assistant gets an `(empty)` user turn when `inject_dummy_user_message`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Entry {
+    pub object: EntryObject,
+    #[serde(flatten)]
+    pub data: EntryData,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "type")]
+pub enum EntryData {
+    #[serde(rename = "message.input")]
+    MessageInput { role: UserRole, content: Content<Chunk> },
+    #[serde(rename = "message.output")]
+    MessageOutput { role: AssistantRole, content: Content<Chunk> },
+    #[serde(rename = "function.call")]
+    FunctionCall { tool_call_id: String, name: String, arguments: String },
+    #[serde(rename = "function.result")]
+    FunctionResult { tool_call_id: String, result: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Chunk {
+    Text { text: String },
+    ImageUrl { image_url: String },
+}
+
 pub fn to_conversations_ctx(
     chat_ctx: &ChatContext,
     images: &dyn ImageResolver,
     inject_dummy_user_message: bool,
-) -> Result<Formatted<MistralFormatData>, FormatError> {
+) -> Result<Formatted<Entry, MistralFormatData>, FormatError> {
     let converted = convert_mid_conversation_instructions(
         chat_ctx,
         Role::User,
         DEFAULT_INLINE_INSTRUCTIONS_TEMPLATE,
     );
     let grouping = group_tool_calls(converted.iter().map(Cow::as_ref))?;
-    let mut entries: Vec<Value> = Vec::new();
-    let mut instructions: Option<String> = None;
-
+    let mut entries = Vec::new();
+    let mut instructions = None;
     for group in &grouping.groups {
         if group.is_empty() {
             continue;
         }
-
         if let Some(message) = group.message {
-            if message.role == Role::System || message.role == Role::Developer {
-                // Joins every non-media part; no text parts resets `instructions` to `None`.
+            if matches!(message.role, Role::System | Role::Developer) {
                 let text_parts: Vec<&str> = message
                     .content
                     .iter()
-                    .filter_map(|c| match c {
-                        ChatContent::Text(t) => Some(t.as_str()),
+                    .filter_map(|content| match content {
+                        ChatContent::Text(text) => Some(text.as_str()),
                         _ => None,
                     })
                     .collect();
-                instructions =
-                    if text_parts.is_empty() { None } else { Some(text_parts.join("\n")) };
-                // Skips the rest of the group, as the reference (unreachable: system messages get
-                // their own group).
+                instructions = (!text_parts.is_empty()).then(|| text_parts.join("\n"));
                 continue;
             }
-
-            if let Some(entry) = to_entry(message, images)? {
-                entries.push(entry);
+            if let Some(data) = to_entry(message, images)? {
+                entries.push(Entry { object: EntryObject::Entry, data });
             }
         }
-
-        for call in &group.tool_calls {
-            entries.push(serde_json::json!({
-                "object": "entry",
-                "type": "function.call",
-                "tool_call_id": call.call_id,
-                "name": call.name,
-                "arguments": call.arguments,
-            }));
-        }
-
-        for output in &group.tool_outputs {
-            entries.push(serde_json::json!({
-                "object": "entry",
-                "type": "function.result",
-                "tool_call_id": output.call_id,
-                "result": output.output,
-            }));
-        }
+        entries.extend(group.tool_calls.iter().map(|call| Entry {
+            object: EntryObject::Entry,
+            data: EntryData::FunctionCall {
+                tool_call_id: call.call_id.clone(),
+                name: call.name.clone(),
+                arguments: call.arguments.clone(),
+            },
+        }));
+        entries.extend(group.tool_outputs.iter().map(|output| Entry {
+            object: EntryObject::Entry,
+            data: EntryData::FunctionResult {
+                tool_call_id: output.call_id.clone(),
+                result: output.output.clone(),
+            },
+        }));
     }
-
     if inject_dummy_user_message
-        && entries
-            .last()
-            .is_some_and(|e| e.get("role").and_then(Value::as_str) == Some("assistant"))
+        && entries.last().is_some_and(|entry| matches!(entry.data, EntryData::MessageOutput { .. }))
     {
-        entries.push(serde_json::json!({"object": "entry", "type": "message.input", "role": "user", "content": "(empty)"}));
+        entries.push(Entry {
+            object: EntryObject::Entry,
+            data: EntryData::MessageInput {
+                role: UserRole::User,
+                content: Content::Text("(empty)".into()),
+            },
+        });
     }
-
     Ok(Formatted {
         messages: entries,
         data: MistralFormatData { instructions },
@@ -96,36 +113,23 @@ pub fn to_conversations_ctx(
     })
 }
 
-/// `mistralai.py:71`: `None` for a role other than user or assistant.
 fn to_entry(
     message: &ChatMessage,
     images: &dyn ImageResolver,
-) -> Result<Option<Value>, FormatError> {
-    let (entry_type, role) = match message.role {
-        Role::User => ("message.input", "user"),
-        Role::Assistant => ("message.output", "assistant"),
-        Role::System | Role::Developer => return Ok(None),
-    };
-
-    // OpenAI's content walk and `{"type": "text"}` part shape.
-    let (list_content, text_content) = split_content(message, images, to_image_content, "text")?;
-    let content = match list_content {
-        None => Value::String(text_content),
-        Some(list) => Value::Array(list),
-    };
-
-    Ok(Some(
-        serde_json::json!({ "object": "entry", "type": entry_type, "role": role, "content": content }),
-    ))
+) -> Result<Option<EntryData>, FormatError> {
+    if matches!(message.role, Role::System | Role::Developer) {
+        return Ok(None);
+    }
+    let content = split_content(message, images, to_image_content, |text| Chunk::Text { text })?;
+    Ok(Some(if message.role == Role::User {
+        EntryData::MessageInput { role: UserRole::User, content }
+    } else {
+        EntryData::MessageOutput { role: AssistantRole::Assistant, content }
+    }))
 }
 
-/// `mistralai.py:108`: `image_url` as a string, no `detail`.
-fn to_image_content(img: &SerializedImage) -> Value {
-    let url = match (&img.external_url, &img.data_bytes) {
-        (Some(url), _) => url.clone(),
-        (None, bytes) => data_uri(img.mime_type.as_deref(), bytes.as_deref().unwrap_or(&[])),
-    };
-    serde_json::json!({ "type": "image_url", "image_url": url })
+fn to_image_content(image: &SerializedImage) -> Chunk {
+    Chunk::ImageUrl { image_url: image_url(image) }
 }
 
 #[cfg(test)]
@@ -134,15 +138,14 @@ mod tests {
 
     use super::*;
     use crate::llm::provider_format::testkit::{
-        call, ctx, image, msg, msg_with, no_images, out, text_content, url_images,
+        call, ctx, image, msg, msg_with, no_images, out, text_content, text_of, url_images,
     };
 
-    fn run(items: Vec<ChatItem>, images: &dyn ImageResolver) -> Formatted<MistralFormatData> {
+    fn run(
+        items: Vec<ChatItem>,
+        images: &dyn ImageResolver,
+    ) -> Formatted<Entry, MistralFormatData> {
         to_conversations_ctx(&ctx(items), images, false).unwrap()
-    }
-
-    fn text_of(f: &Formatted<MistralFormatData>) -> String {
-        serde_json::to_string(&f.messages).unwrap()
     }
 
     // Catches: a later instruction replacing the preamble instead of keeping its place.
@@ -156,7 +159,7 @@ mod tests {
         let f = run(items, &no_images());
         assert_eq!(f.data.instructions.as_deref(), Some("first"));
         assert_eq!(
-            text_of(&f),
+            text_of(&f.messages),
             r#"[{"object":"entry","type":"message.input","role":"user","content":"hi"},{"object":"entry","type":"message.input","role":"user","content":"<instructions>\nsecond\n</instructions>"}]"#
         );
         // A textless later instruction is dropped and cannot erase the preamble.
@@ -173,8 +176,8 @@ mod tests {
         let items = vec![msg("u", Role::User, &["hi"]), msg("a", Role::Assistant, &["hello"])];
         let f = to_conversations_ctx(&ctx(items.clone()), &no_images(), true).unwrap();
         assert_eq!(
-            f.messages.last().unwrap(),
-            &serde_json::json!({"object": "entry", "type": "message.input", "role": "user", "content": "(empty)"})
+            serde_json::to_value(f.messages.last().unwrap()).unwrap(),
+            serde_json::json!({"object": "entry", "type": "message.input", "role": "user", "content": "(empty)"})
         );
         assert_eq!(run(items, &no_images()).messages.len(), 2);
     }
@@ -200,7 +203,7 @@ mod tests {
             out("o", "c0", "f", "ok"),
         ];
         assert_eq!(
-            text_of(&run(items, &no_images())),
+            text_of(&run(items, &no_images()).messages),
             r#"[{"object":"entry","type":"message.input","role":"user","content":"hi"},{"object":"entry","type":"message.output","role":"assistant","content":"hello"},{"object":"entry","type":"function.call","tool_call_id":"c0","name":"f","arguments":"{}"},{"object":"entry","type":"function.result","tool_call_id":"c0","result":"ok"}]"#
         );
     }
@@ -209,7 +212,7 @@ mod tests {
     #[test]
     fn call_arguments_stay_a_raw_string_and_malformed_ones_do_not_raise() {
         let items = vec![call("c", "c0", "f", "not json"), out("o", "c0", "f", "ok")];
-        assert!(text_of(&run(items, &no_images())).contains(r#""arguments":"not json""#));
+        assert!(text_of(&run(items, &no_images()).messages).contains(r#""arguments":"not json""#));
     }
 
     // Catches: emitting OpenAI's nested `image_url: {url, detail}` object.
@@ -217,7 +220,7 @@ mod tests {
     fn images_flatten_to_a_bare_image_url_string() {
         let m = msg_with("m", Role::User, vec![image("i")]);
         assert_eq!(
-            text_of(&run(vec![m], &url_images(&["i"]))),
+            text_of(&run(vec![m], &url_images(&["i"])).messages),
             r#"[{"object":"entry","type":"message.input","role":"user","content":[{"type":"image_url","image_url":"https://example.test/i.png"}]}]"#
         );
     }
