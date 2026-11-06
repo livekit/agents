@@ -5860,6 +5860,84 @@ class TestRealtime:
             assert session.chat_ctx.items[0].extra == {}
 
     @pytest.mark.parametrize("context_mode", ["shared", "strict"])
+    async def test_reply_spoken_before_its_tool_call_accepts_later_results(self, context_mode):
+        finish = asyncio.Event()
+
+        @function_tool
+        async def lookup(ctx: RunContext) -> str:
+            """Look up an order."""
+            await ctx.update("Searching")
+            await finish.wait()
+            return "The order shipped"
+
+        async with peer_model(context_mode=context_mode) as (peer, model, _):
+            async with AgentSession(llm=model) as owner:
+                owner.output.audio = FakeAudioOutput()
+                await owner.start(Agent(instructions="test", tools=[lookup]))
+                speech = owner.generate_reply()
+                response = await peer.start(await peer.next())
+                # Prism sends a reply's speech before its tool calls, so playback starts
+                # before the tool runs.
+                await peer.message(response, text="Let me check", seconds=0.2)
+                await wait_until(lambda: owner.agent_state == "speaking")
+                await peer.emit(
+                    "response.function_call_arguments.done",
+                    response_id=response,
+                    item_id="lookup-item",
+                    call_id="lookup-call",
+                    name="lookup",
+                    arguments="{}",
+                )
+                await peer.end(response)
+                replies = []
+
+                async def respond():
+                    while True:
+                        request = await peer.next()
+                        replies.append(request)
+                        response = await peer.start(request)
+                        await peer.message(response)
+                        await peer.end(response)
+
+                responder = asyncio.create_task(respond())
+                try:
+                    await asyncio.wait_for(speech.wait_for_playout(), 3)
+                    await asyncio.wait_for(owner.wait_for_idle(), 3)
+                    # Core dates the message from playback start and the call from when the
+                    # tool started, so its context has the message first. The plugin gains
+                    # the message when the reply ends, after the call.
+                    kinds = [
+                        i.type
+                        for i in owner.current_agent.chat_ctx.items
+                        if i.id in ("message-" + response, "lookup-item")
+                    ]
+                    assert kinds == ["message", "function_call"]
+                    finish.set()
+                    await wait_until(
+                        lambda: any(
+                            isinstance(i, llm.FunctionCallOutput)
+                            and i.call_id == "lookup-call_final"
+                            for i in model._session.chat_ctx.items
+                        )
+                    )
+                    await wait_until(
+                        lambda: any(
+                            "lookup-call_final" in req["response"].get("prism_instruction", "")
+                            for req in replies
+                        )
+                    )
+                    await asyncio.wait_for(owner.wait_for_idle(), 3)
+                    # Later updates that include the same items are still accepted.
+                    await owner.current_agent.update_chat_ctx(owner.current_agent.chat_ctx.copy())
+                    assert all(
+                        op["type"] != "conversation.item.delete" for op in peer.history_operations
+                    )
+                    assert peer.connections == 1
+                finally:
+                    responder.cancel()
+                    await asyncio.gather(responder, return_exceptions=True)
+
+    @pytest.mark.parametrize("context_mode", ["shared", "strict"])
     @pytest.mark.parametrize("silent", [False, True])
     @pytest.mark.parametrize("fails", [False, True])
     async def test_agent_session_tool_progress(self, context_mode, silent, fails):

@@ -112,6 +112,13 @@ def _wire(item: llm.ChatItem, *, validate_text: bool = True) -> r.HistoryItem:
     return result
 
 
+def _kind_order(items: list[llm.ChatItem]) -> tuple[list[str], list[str]]:
+    """Return the order of messages and of tool items, each among themselves."""
+    messages = [i.id for i in items if isinstance(i, llm.ChatMessage)]
+    tools = [i.id for i in items if not isinstance(i, llm.ChatMessage)]
+    return messages, tools
+
+
 class PrismHistory:
     """Keep local identity stable while applying changes through the actual SDK.
 
@@ -139,6 +146,8 @@ class PrismHistory:
         self._variants: dict[str, set[str]] = {}
         self._played: dict[str, str] = {}
         self._holds: dict[str, r.ResponseHold] = {}
+        # The reply that generated each message, for ordering it next to the reply's calls.
+        self._message_replies: dict[str, str] = {}
 
     @property
     def chat_ctx(self) -> llm.ChatContext:
@@ -312,6 +321,7 @@ class PrismHistory:
             )
         elif isinstance(payload, r.MessageStarted):
             self._ids[payload.output.item_id] = payload.output.item_id
+            self._message_replies[payload.output.item_id] = payload.output.response.response_id
             self._active.setdefault(payload.output.response.response_id, set()).add(
                 payload.output.item_id
             )
@@ -371,6 +381,72 @@ class PrismHistory:
             )
         return llm.ChatContext([*self._chat.items, *additions])
 
+    def _reply(self, item: llm.ChatItem) -> str | None:
+        """Return the reply of an unchanged generated message, call, or live result."""
+        previous = self._chat.get_by_id(item.id)
+        if previous is None:
+            return None
+        if isinstance(item, llm.ChatMessage):
+            if (
+                isinstance(previous, llm.ChatMessage)
+                and item.role == previous.role == "assistant"
+                and all(isinstance(c, str) for c in item.content)
+                and item.text_content in self._variants.get(item.id, set())
+            ):
+                return self._message_replies.get(item.id)
+            return None
+        if not isinstance(item, (llm.FunctionCall, llm.FunctionCallOutput)):
+            return None
+        recorded = self._calls.get(item.call_id)
+        if recorded is None or _wire(item, validate_text=False) != _wire(
+            previous, validate_text=False
+        ):
+            return None
+        if isinstance(item, llm.FunctionCall) and recorded[1].id != item.id:
+            return None
+        return recorded[0].response_id
+
+    def _reply_order(self, items: list[llm.ChatItem]) -> list[llm.ChatItem]:
+        """Restore acknowledged order between a reply's messages and its tool items.
+
+        Prism streams a reply's speech before the reply's tool calls. Core dates
+        the message from when playback starts and each call from when its tool
+        starts, while this record gains the message when the reply ends, after its
+        calls. Within an uninterrupted run of one reply's unchanged items, messages
+        may move relative to that reply's calls and results. Calls and results keep
+        their requested order among themselves, as do the messages.
+        """
+        replies = [self._reply(item) for item in items]
+        blocks: dict[str, int] = {}
+        acknowledged = {item.id: index for index, item in enumerate(self._chat.items)}
+        block = 0
+        previous: str | None = None
+        for item in self._chat.items:
+            reply = self._reply(item)
+            if reply is None or reply != previous:
+                block += 1
+            if reply is not None:
+                blocks[item.id] = block
+            previous = reply
+        result = list(items)
+        start = 0
+        while start < len(result):
+            end = start + 1
+            if replies[start] is not None:
+                group = blocks.get(result[start].id)
+                while (
+                    end < len(result)
+                    and replies[end] == replies[start]
+                    and blocks.get(result[end].id) == group
+                ):
+                    end += 1
+                current = result[start:end]
+                ordered = sorted(current, key=lambda item: acknowledged[item.id])
+                if _kind_order(current) == _kind_order(ordered):
+                    result[start:end] = ordered
+            start = end
+        return result
+
     def _progress_target(self, target: llm.ChatContext) -> llm.ChatContext:
         """Preserve acknowledged order for interleaved progress results.
 
@@ -384,6 +460,7 @@ class PrismHistory:
         requested = {item.id: item for item in items}
         if len(requested) != len(items):
             return target  # Leave duplicate-ID rejection to the normal validation.
+        items = self._reply_order(items)
         old = {item.id: item for item in self._chat.items}
         positions = {item.id: index for index, item in enumerate(items)}
         calls = {
@@ -679,6 +756,7 @@ class PrismHistory:
                 self._ids.pop(retired.id, None)
                 self._variants.pop(retired.id, None)
                 self._played.pop(retired.id, None)
+                self._message_replies.pop(retired.id, None)
                 if isinstance(retired, llm.FunctionCall):
                     self._calls.pop(retired.call_id, None)
             self._revision += 1
