@@ -7,6 +7,7 @@ use lk_agents_abi::voice::rtc::{
 };
 use lk_agents_abi::{AudioFrame, Clock, Spawner};
 use lk_agents_inference::codecs::{AudioDecoder, DecoderError, decoder_limits};
+use lk_agents_media::media_queue::{self, AudioReceiver, AudioSender, Item, Policy};
 use lk_agents_media::{Mixer, StreamId};
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::task::TaskSet;
@@ -16,7 +17,9 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::task::{Context, Poll};
 use std::time::Duration;
+use tokio_util::sync::CancellationToken;
 
 pub use lk_agents_voice::background_audio::{
     AUDIO_SOURCE_BUFFER_MS, BuiltinAudioClip, LoopingStreamError, Playback, PlayerPhase,
@@ -85,7 +88,7 @@ pub struct BackgroundAudioPlayer {
     spawner: Arc<dyn Spawner>,
     /// Pumps, stops and stream closes, which outlive a cancelled waiter.
     tasks: Arc<TaskSet>,
-    state: tokio::sync::Mutex<MixerState>,
+    state: Mutex<MixerState>,
 
     queued: Arc<Mutex<Vec<Source>>>,
 
@@ -158,12 +161,7 @@ impl BackgroundAudioPlayer {
             clock,
             spawner,
             tasks: Arc::default(),
-            state: tokio::sync::Mutex::new(MixerState {
-                mixer,
-                sources: BTreeMap::new(),
-                retired: Vec::new(),
-                queued: queued.clone(),
-            }),
+            state: Mutex::new(MixerState { mixer, sources: BTreeMap::new(), retired: Vec::new() }),
             queued,
             output: tokio::sync::Mutex::new(None),
             thinking: Mutex::new(None),
@@ -223,24 +221,69 @@ impl BackgroundAudioPlayer {
     pub async fn next_block(&self) -> Option<Vec<i16>> {
         while !self.closed.load(Ordering::Acquire) {
             let woken = self.wake.notified();
-            let idle = {
-                let mut state = self.state.lock().await;
-                if let Some(pcm) = state.round(self.timeout, self.clock.as_ref()).await {
-                    return Some(pcm);
+            let queued = std::mem::take(&mut *self.queued.lock());
+            let sources: Vec<_> =
+                queued.into_iter().map(|source| self.start_source(source)).collect();
+            {
+                let mut state = self.state.lock();
+                for source in sources {
+                    let id = state.mixer.add_stream();
+                    state.sources.insert(id, source);
                 }
-                state.sources.is_empty() && self.queued.lock().is_empty()
+            }
+            let round = std::future::poll_fn(|cx| self.state.lock().poll_round(cx));
+            let block = tokio::select! {
+                biased;
+                _ = woken => continue,
+                block = round => block,
             };
-            // Nothing to mix: wait for the next sound instead of polling. A play or close since
-            // `woken` was taken has left its permit.
-            if idle {
-                woken.await;
-            } else {
-                self.clock
-                    .wait_until(self.clock.now().saturating_add(Duration::from_millis(1)))
-                    .await;
+            std::future::poll_fn(|cx| self.state.lock().poll_retired(cx)).await;
+            if let Some(block) = block {
+                return Some(block);
             }
         }
         None
+    }
+
+    fn start_source(&self, mut source: Source) -> SourceReader {
+        let (audio, frames) = media_queue::audio(Policy::CatchUp(self.timeout));
+        let request = Arc::new(tokio::sync::Notify::new());
+        let stop = CancellationToken::new();
+        let (requested, stopped) = (request.clone(), stop.clone());
+        let clock = self.clock.clone();
+        let timeout = self.timeout;
+        let (rate, channels) = (self.sample_rate, self.num_channels);
+        let handle = source.handle.clone();
+        let playing = handle.clone();
+        let done = spawn_owned((&self.tasks, self.spawner.as_ref()), async move {
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = stopped.cancelled() => break,
+                    _ = playing.wait() => break,
+                    _ = requested.notified() => {},
+                }
+                let fetched = tokio::select! {
+                    biased;
+                    _ = stopped.cancelled() => break,
+                    _ = playing.wait() => break,
+                    fetched = source.next_pcm(rate, channels, timeout, clock.as_ref()) => fetched,
+                };
+                if !source.emit(fetched, &audio) {
+                    break;
+                }
+            }
+            source.close().await;
+        });
+        SourceReader {
+            frames,
+            request,
+            cancel_on_drop: stop.clone().drop_guard(),
+            stop,
+            done,
+            handle,
+            phase: ReadPhase::Idle,
+        }
     }
 
     async fn pump(
@@ -308,14 +351,17 @@ impl BackgroundAudioPlayer {
     }
 
     async fn stop_sounds(&self) {
-        let mut state = self.state.lock().await;
-        let mut sources: Vec<_> = std::mem::take(&mut state.sources).into_values().collect();
-        sources.extend(self.queued.lock().drain(..));
-        let retired = std::mem::take(&mut state.retired);
-        for id in state.mixer.stream_ids() {
-            state.mixer.remove_stream(id);
-        }
-        drop(state);
+        let retired = {
+            let mut state = self.state.lock();
+            for (_, source) in std::mem::take(&mut state.sources) {
+                state.retire(source);
+            }
+            for id in state.mixer.stream_ids() {
+                state.mixer.remove_stream(id);
+            }
+            std::mem::take(&mut state.retired)
+        };
+        let sources = std::mem::take(&mut *self.queued.lock());
         for task in retired {
             let _ = task.await;
         }
@@ -339,10 +385,30 @@ fn spawn_owned<T: Send + 'static>(
 
 struct MixerState {
     mixer: Mixer,
-    sources: BTreeMap<StreamId, Source>,
+    sources: BTreeMap<StreamId, SourceReader>,
     retired: Vec<tokio::sync::oneshot::Receiver<()>>,
+}
 
-    queued: Arc<Mutex<Vec<Source>>>,
+struct SourceReader {
+    frames: AudioReceiver<FetchedState>,
+    request: Arc<tokio::sync::Notify>,
+    stop: CancellationToken,
+    cancel_on_drop: tokio_util::sync::DropGuard,
+    done: tokio::sync::oneshot::Receiver<()>,
+    handle: Arc<PlaybackDone>,
+    phase: ReadPhase,
+}
+
+enum ReadPhase {
+    Idle,
+    Reading,
+    Ready,
+}
+
+enum FetchedState {
+    More,
+    Ended,
+    TimedOut,
 }
 
 type PendingFrame = Pin<Box<dyn Future<Output = Result<Option<AudioFrame>, ProviderError>> + Send>>;
@@ -363,66 +429,83 @@ enum Input {
 }
 
 impl MixerState {
-    async fn retire(&mut self, mut source: Source) {
+    fn poll_retired(&mut self, cx: &mut Context<'_>) -> Poll<()> {
+        self.retired.retain_mut(|task| Pin::new(task).poll(cx).is_pending());
+        if self.retired.is_empty() { Poll::Ready(()) } else { Poll::Pending }
+    }
+
+    fn retire(&mut self, source: SourceReader) {
         // Retain cleanup in mixer state so cancelling the pump cannot orphan a stream close.
         self.retired.retain_mut(|task| {
             matches!(task.try_recv(), Err(tokio::sync::oneshot::error::TryRecvError::Empty))
         });
-        self.retired.push(source.teardown());
-        let _ = self.retired.last_mut().unwrap().await;
-        self.retired.pop();
+        source.stop.cancel();
+        drop(source.cancel_on_drop);
+        self.retired.push(source.done);
     }
 
-    async fn round(&mut self, timeout: Duration, clock: &dyn Clock) -> Option<Vec<i16>> {
-        for source in self.queued.lock().drain(..) {
-            let id = self.mixer.add_stream();
-            self.sources.insert(id, source);
+    fn poll_round(&mut self, cx: &mut Context<'_>) -> Poll<Option<Vec<i16>>> {
+        if self.sources.is_empty() {
+            return Poll::Pending;
         }
+        let mut ready = true;
         for id in self.mixer.stream_ids() {
             if self.sources.get(&id).is_some_and(|s| s.handle.done()) {
                 self.mixer.remove_stream(id);
                 if let Some(source) = self.sources.remove(&id) {
-                    self.retire(source).await;
+                    self.retire(source);
                 }
                 continue;
             }
-            self.fill(id, timeout, clock).await;
+            ready &= self.poll_source(id, cx);
+        }
+        if !ready {
+            return Poll::Pending;
         }
         let block = self.mixer.mix();
         for id in self.mixer.drain_removals() {
             if let Some(source) = self.sources.remove(&id) {
-                self.retire(source).await;
+                self.retire(source);
             }
         }
-        block
+        for source in self.sources.values_mut() {
+            source.phase = ReadPhase::Idle;
+        }
+        Poll::Ready(block)
     }
 
-    /// Feeds stream `id` until the mixer has enough, its source times out or it ends.
-    async fn fill(&mut self, id: StreamId, timeout: Duration, clock: &dyn Clock) {
-        let (rate, channels) = (self.mixer.sample_rate(), self.mixer.num_channels());
-        while self.mixer.wants_more(id) {
-            let Some(source) = self.sources.get_mut(&id) else {
-                break;
-            };
-            let (pcm, rate, channels) = match source.next_pcm(rate, channels, timeout, clock).await
-            {
-                Fetched::Pcm(pcm, rate, channels) => (pcm, rate, channels),
-                Fetched::TimedOut => {
+    fn poll_source(&mut self, id: StreamId, cx: &mut Context<'_>) -> bool {
+        let Some(source) = self.sources.get_mut(&id) else { return true };
+        while !matches!(source.phase, ReadPhase::Ready) {
+            if matches!(source.phase, ReadPhase::Idle) {
+                if !self.mixer.wants_more(id) {
+                    source.phase = ReadPhase::Ready;
+                    break;
+                }
+                source.request.notify_one();
+                source.phase = ReadPhase::Reading;
+            }
+            let received = std::pin::pin!(source.frames.recv()).as_mut().poll(cx);
+            match received {
+                Poll::Pending => return false,
+                Poll::Ready(Some(Item::Media(frame))) => {
+                    self.mixer.push(id, &lk_agents_media::pcm_samples(&frame.data));
+                }
+                Poll::Ready(Some(Item::Event(FetchedState::More))) => {
+                    source.phase = ReadPhase::Idle
+                }
+                Poll::Ready(Some(Item::Event(FetchedState::TimedOut))) => {
                     self.mixer.note_timeout(id);
-                    break;
+                    source.phase = ReadPhase::Ready;
                 }
-                Fetched::Ended => {
+                Poll::Ready(None | Some(Item::Event(FetchedState::Ended))) => {
                     self.mixer.mark_exhausted(id);
-                    break;
+                    source.phase = ReadPhase::Ready;
                 }
-            };
-            let (pcm, last) = source.process(pcm, rate, channels);
-            self.mixer.push(id, &pcm);
-            if last {
-                self.mixer.mark_exhausted(id);
-                break;
+                Poll::Ready(Some(Item::Gap(_))) => {}
             }
         }
+        true
     }
 }
 
@@ -434,6 +517,21 @@ enum Fetched {
 }
 
 impl Source {
+    fn emit(&mut self, fetched: Fetched, audio: &AudioSender<FetchedState>) -> bool {
+        let state = match fetched {
+            Fetched::Pcm(pcm, rate, channels) => {
+                let (pcm, last) = self.process(pcm, rate, channels);
+                let samples = pcm.len() / usize::from(channels.max(1));
+                let data: Vec<u8> = pcm.iter().flat_map(|sample| sample.to_le_bytes()).collect();
+                audio.push(AudioFrame::new(data, rate, channels, samples as u32));
+                if last { FetchedState::Ended } else { FetchedState::More }
+            }
+            Fetched::Ended => FetchedState::Ended,
+            Fetched::TimedOut => FetchedState::TimedOut,
+        };
+        audio.event(state).is_ok() && !audio.is_closed()
+    }
+
     /// The next PCM block, at the mixer's format for a file and at the frame's own for a stream.
     async fn next_pcm(
         &mut self,
@@ -736,47 +834,5 @@ impl lk_agents_abi::voice::background_audio::BackgroundAudioPlayer for Backgroun
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    // Catches: a stop with a fade-out reporting the sound done at once (the generator would be closed
-    // mid-fade), or a stop on a finished sound reopening it.
-    #[tokio::test]
-    async fn a_stop_waits_out_the_fade() {
-        let fading = PlaybackDone::new(0.5);
-        assert!(!fading.stop());
-        assert!(fading.stop_requested() && !fading.done());
-        assert!(fading.finish());
-        assert!(!fading.finish());
-        fading.wait().await;
-        assert!(!fading.stop());
-
-        let abrupt = PlaybackDone::new(0.0);
-        assert!(abrupt.stop());
-        abrupt.wait().await;
-    }
-
-    // Catches: a builtin clip naming a file the package does not ship, which fails only when a call
-    // first plays it.
-    #[test]
-    fn every_builtin_clip_is_shipped() {
-        let resources = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../livekit-agents-next/livekit/agents/resources");
-        use BuiltinAudioClip as C;
-        for clip in [
-            C::CityAmbience,
-            C::ForestAmbience,
-            C::OfficeAmbience,
-            C::CrowdedRoom,
-            C::KeyboardTyping,
-            C::KeyboardTyping2,
-            C::HoldMusic,
-        ] {
-            assert!(
-                resources.join(clip.file_name()).is_file(),
-                "{clip:?}: {} is not shipped",
-                clip.file_name()
-            );
-        }
-    }
-}
+#[path = "background_audio_tests.rs"]
+mod tests;
