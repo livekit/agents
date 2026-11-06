@@ -99,11 +99,6 @@ class TurnContext(BaseModel):
     """A delegating caller's conversation when the message carried a `chat_ctx` data part (plan
     7.5), as the part's `data`.
     """
-    answer_to: list[tuple[str, str]]
-    """The tools the message is handed to before the model runs, each with what it continues
-    the answer with, such as an expert's task: the last turn's question came from their calls,
-    and this message is its answer.
-    """
     live: bool = False
     """The turn runs under `live`: a tool may go on in the background after its first update."""
 
@@ -115,8 +110,8 @@ class PendingCall(BaseModel):
     name: str
     call_id: str
     answer_to: list[tuple[str, str]] = Field(default_factory=list)
-    """The tools that take the answer, each with what it continues it with: the calls of the
-    step whose questions carry a reference.
+    """The delegates' questions the ask holds, each `(tool, the expert task the answer
+    continues)`: a later call of the tool may answer one.
     """
 
 
@@ -164,6 +159,10 @@ class HandlerOutput(BaseModel):
     """The handler raised: `"<TypeName>: <text>"`; the task fails with it."""
     events: list[HostEvent] = Field(default_factory=list)
     """Journal events the handler recorded, in order, written with the commit."""
+    answered: list[tuple[str, str]] = Field(default_factory=list)
+    """The delegates' questions the turn's calls answered, each `(task id, expert task)`: the
+    question closes, and its task completes once it holds none.
+    """
 
 
 class TurnResult(BaseModel):

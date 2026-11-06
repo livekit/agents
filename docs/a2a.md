@@ -95,8 +95,15 @@ writes it. The pending call stays in the history with a placeholder output,
 The answer continues the waiting task, on whatever worker takes it: the
 same task and stream, with the message added to its history. A message with
 the task's `taskId` continues it, and so does the person's message with none
-(the oldest open question of the lane); a delegation with none, or with the
-`taskId` of a running task, is a new task.
+when a tool of the agent asked the question in front of them; a delegation
+with none, or with the `taskId` of a running task, is a new task.
+
+A question an expert asked through a delegate is different: whether the
+person's next message answers it is decided inside the turn, so the message
+with no `taskId` starts a new task. When the delegate sends it to the expert,
+it goes with the expert's `taskId` and continues the expert's task, and the
+task that showed the question completes with `livekit/mergedInto` naming the
+new task, where the answer's turn runs.
 
 ```json
 {

@@ -25,6 +25,7 @@ from ..llm import (
 )
 from ..llm.chat_context import Instructions
 from ..llm.tool_context import (
+    RELAY_ANSWER,
     WAITING_PREFIX,
     Completed,
     Failed,
@@ -1191,6 +1192,8 @@ def _transition_output(fnc_call: llm.FunctionCall, transition: Transition) -> To
         output, is_error = transition.reason, True
     elif isinstance(transition, InputRequired):
         output = f"{WAITING_PREFIX}{transition.question}"
+        if transition._answer_ref is not None:
+            output += RELAY_ANSWER.format(name=fnc_call.name)
     else:
         output = transition.message or "working"
 

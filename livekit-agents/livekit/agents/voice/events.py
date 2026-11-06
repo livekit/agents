@@ -20,6 +20,7 @@ from ..language import LanguageCode
 from ..llm import (
     LLM,
     AgentHandoff,
+    AskedQuestion,
     ChatMessage,
     FunctionCall,
     FunctionCallOutput,
@@ -72,8 +73,6 @@ class RunContext(Generic[Deps_T, State_T]):
         self._speech_handle = speech_handle
         self._function_call = function_call
         self._run = run
-        # the answer reference of the question this call answers, when the framework made it
-        self._answer_ref: str | None = None
 
         self._initial_step_idx = speech_handle.num_steps - 1 if speech_handle is not None else 0
         self._filler_schedulers: list[_FillerScheduler] = []
@@ -342,6 +341,20 @@ class RunContext(Generic[Deps_T, State_T]):
         recorded = asyncio.Future[None]()
         recorded.set_result(None)  # it is on the result, recorded with it
         return recorded
+
+    async def _asked_questions(self) -> list[AskedQuestion]:
+        """This tool's open questions the person spoke after: a call may answer one of them."""
+        return await self._executor._sink.questions(self) if self._executor is not None else []
+
+    def _answering(self, question: AskedQuestion) -> None:
+        """This call continues ``question``'s task with the person's answer."""
+        if self._executor is not None:
+            self._executor._sink.answering(self, question)
+
+    async def _record(self) -> None:
+        """The conversation so far is stored before another agent reads it."""
+        if self._executor is not None:
+            await self._executor._sink.record(self)
 
     def say(self, text: str) -> asyncio.Future[None]:
         """Say ``text`` to the person exactly as written, now: spoken on a call, a flagged

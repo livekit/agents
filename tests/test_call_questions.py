@@ -13,7 +13,7 @@ import pytest
 
 from livekit.agents import Agent, InputRequired, LiveSession, RunContext
 from livekit.agents.a2a import A2ASessionContext
-from livekit.agents.delegation import A2ADelegate
+from livekit.agents.delegation import A2ADelegate, InputRequiredCheck
 from livekit.agents.llm import InputSpeechStartedEvent
 from livekit.agents.llm.tool_context import SAY_EXACTLY
 from livekit.agents.storage import AgentDBStorage
@@ -54,13 +54,18 @@ def asking(*questions: str, answer: str, heard: list[tuple[str, str]]) -> Callab
     return handler
 
 
+RELAYS = Reply(tool_calls=[call("ask", "a2", request="tuesday")], when=said("tuesday"))
+"""The model's step on the person's answer: it relays it to the delegate that asked."""
+
+
 @pytest.mark.rule("R38")
-async def test_the_answer_goes_to_the_tool_that_asked_with_no_model_step(
+async def test_the_models_call_of_the_delegate_that_asked_continues_its_task(
     expert: Callable[..., A2ADelegate],
 ) -> None:
     heard: list[tuple[str, str]] = []
     model = ScriptedLLM(
         Reply(tool_calls=[call("ask", "a1", request="change my visit")]),
+        RELAYS,
         Reply("You are booked for Tuesday.", when=lambda c: "Booked." in str(c.items[-1])),
     )
     delegate = expert(asking("Which day?", answer="Booked.", heard=heard), announce=False)
@@ -68,22 +73,157 @@ async def test_the_answer_goes_to_the_tool_that_asked_with_no_model_step(
         await session.start(Agent(instructions="front desk", tools=[delegate]))
         await session.run(user_input="change my visit")
         await soon(lambda: "Which day?" in spoken(session), "the question")
+        assert "call ask with their answer" in str(outputs(session.history)), "the model is told"
         await session.run(user_input="tuesday")
 
     (asked, _), (answered, text) = heard
     assert answered == asked and text == "tuesday"
-    assert not any(said("tuesday")(r) for r in model.requests), "no model step took the answer"
+    assert not isinstance(model.tool_choices[-2], dict), "the model is not forced"
     assert spoken(session) == ["Which day?", "You are booked for Tuesday."]
+
+
+@pytest.mark.rule("R38")
+async def test_a_turn_the_model_does_not_relay_leaves_the_question_open(
+    expert: Callable[..., A2ADelegate],
+) -> None:
+    heard: list[tuple[str, str]] = []
+    model = ScriptedLLM(
+        Reply(tool_calls=[call("ask", "a1", request="change my visit")]),
+        Reply("We open at nine.", when=said("when do you open?")),
+        RELAYS,
+        Reply("You are booked for Tuesday.", when=lambda c: "Booked." in str(c.items[-1])),
+    )
+    delegate = expert(asking("Which day?", answer="Booked.", heard=heard), announce=False)
+    async with LiveSession(llm=model) as session:
+        await session.start(Agent(instructions="front desk", tools=[delegate]))
+        await session.run(user_input="change my visit")
+        await soon(lambda: "Which day?" in spoken(session), "the question")
+        await session.run(user_input="when do you open?")
+        await session.run(user_input="tuesday")
+
+    (asked, _), (answered, text) = heard
+    assert answered == asked and text == "tuesday"
+
+
+@pytest.mark.rule("R37")
+async def test_a_question_the_person_passes_over_lets_the_next_be_asked(
+    expert: Callable[..., A2ADelegate],
+) -> None:
+    gate = asyncio.Event()
+    fares_heard: list[tuple[str, str]] = []
+    model = ScriptedLLM(
+        Reply(
+            tool_calls=[
+                call("fares", "f1", request="a flight"),
+                call("seats", "s1", request="a seat"),
+            ]
+        ),
+        Reply("We open at nine.", when=said("when do you open?")),
+        Reply(tool_calls=[call("fares", "f2", request="tuesday")], when=said("tuesday")),
+    )
+    fares = asking("Which date?", answer="Fare booked.", heard=fares_heard)
+    seats_agent = asking("Which seat?", answer="Seat booked.", heard=[])
+
+    async def seats(ctx: A2ASessionContext[Any]) -> Any:
+        await gate.wait()  # its question comes second
+        return await seats_agent(ctx)
+
+    desk = Agent(
+        instructions="front desk",
+        tools=[
+            expert(fares, "fares", tool="fares", announce=False),
+            expert(seats, "seats", tool="seats", announce=False),
+        ],
+    )
+    async with LiveSession(llm=model) as session:
+        await session.start(desk)
+        await session.run(user_input="book a flight and a seat")
+        await soon(lambda: "Which date?" in spoken(session), "the first question")
+        gate.set()
+        await asyncio.sleep(0.3)
+        assert "Which seat?" not in spoken(session), "one question at a time"
+        await session.run(user_input="when do you open?")
+        await soon(lambda: "Which seat?" in spoken(session), "the next question")
+        await session.run(user_input="tuesday")
+        await soon(lambda: len(fares_heard) > 1, "the answer")
+
+    (asked, _), (answered, text) = fares_heard
+    assert answered == asked and text == "tuesday", "the passed question still takes its answer"
+
+
+@pytest.mark.rule("R38")
+@pytest.mark.parametrize("verdict", ["first", "new", "unclear"])
+async def test_the_answer_detector_picks_the_question_a_call_answers(
+    expert: Callable[..., A2ADelegate], verdict: str
+) -> None:
+    heard: list[tuple[str, str]] = []
+    picked: list[str] = []
+
+    async def detector(check: InputRequiredCheck) -> Any:
+        picked.append(check.questions[0].ref)
+        return check.questions[0] if verdict == "first" else verdict
+
+    model = ScriptedLLM(
+        Reply(
+            tool_calls=[call("ask", "a1", request="a flight"), call("ask", "a2", request="a seat")]
+        ),
+        Reply(tool_calls=[call("ask", "a3", request="tuesday")], when=said("tuesday")),
+    )
+    delegate = expert(
+        asking("Which date?", "Which seat?", answer="Booked.", heard=heard),
+        announce=False,
+        answer_detector=detector,
+    )
+    async with LiveSession(llm=model) as session:
+        await session.start(Agent(instructions="front desk", tools=[delegate]))
+        await session.run(user_input="book a flight and a seat")
+        await soon(lambda: len([s for s in spoken(session) if s.endswith("?")]) == 1, "a question")
+        await session.run(user_input="hmm")  # passes over it: the other is asked
+        await soon(lambda: len([s for s in spoken(session) if s.endswith("?")]) == 2, "the next")
+        await session.run(user_input="tuesday")
+        await asyncio.sleep(0.3)
+
+    if verdict == "unclear":
+        assert len(heard) == 2, "nothing sent"
+        assert any("could answer more than one" in o for o in outputs(session.history))
+    else:
+        task, text = heard[-1]
+        assert text == "tuesday"
+        assert task == picked[0] if verdict == "first" else task not in {t for t, _ in heard[:2]}
+
+
+@pytest.mark.rule("R40")
+async def test_the_expert_reads_the_persons_words_in_the_thread(
+    door: Callable[..., Door], expert: Callable[..., A2ADelegate]
+) -> None:
+    read: list[str] = []
+
+    async def reads(ctx: A2ASessionContext[Any]) -> str:
+        history = await ctx.thread.chat_history(ctx.caller_lane)
+        read.append([i.text_content for i in history.items if i.type == "message"][-1] or "")
+        return "Noted."
+
+    model = ScriptedLLM(Reply(tool_calls=[call("ask", "a1", request="a visit on tuesday")]))
+    desk = door()
+    thread = await desk.thread()
+    lane = Thread(desk.storage, thread, agent_name=AGENT)
+    async with LiveSession(llm=model, thread=lane) as session:
+        await session.start(Agent(instructions="front desk", tools=[expert(reads, announce=False)]))
+        await session.run(user_input="book me for tuesday")
+        await soon(lambda: read, "the expert's turn")
+
+    assert read == ["book me for tuesday"]
 
 
 @pytest.mark.rule("B99")
 async def test_a_spoken_answer_on_a_pipeline_call_is_one_turn(
     expert: Callable[..., A2ADelegate],
 ) -> None:
-    """The STT's early transcript starts no relay: the committed turn is the one answer."""
+    """The STT's early transcript and the committed turn are one answer."""
     heard: list[tuple[str, str]] = []
     model = ScriptedLLM(
         Reply(tool_calls=[call("ask", "a1", request="change my visit")]),
+        RELAYS,
         Reply("You are booked for Tuesday.", when=lambda c: "Booked." in str(c.items[-1])),
     )
     delegate = expert(asking("Which day?", answer="Booked.", heard=heard), announce=False)
@@ -105,17 +245,28 @@ async def test_a_spoken_answer_on_a_pipeline_call_is_one_turn(
     assert answered == asked and text == "tuesday"
     users = [i for i in session.history.items if i.type == "message" and i.role == "user"]
     assert [i.text_content for i in users].count("tuesday") == 1
-    assert not any(said("tuesday")(r) for r in model.requests), "no model step took the answer"
 
 
 @pytest.mark.rule("R37")
+@pytest.mark.parametrize("progress", [False, True], ids=["at-once", "after-progress"])
 async def test_a_follow_up_of_the_answered_task_goes_before_the_queue(
-    expert: Callable[..., A2ADelegate],
+    expert: Callable[..., A2ADelegate], progress: bool
 ) -> None:
+    """Then its result is told before the queued question, also when progress lets the
+    answer's call run on in the background."""
     gate = asyncio.Event()
     fares_heard: list[tuple[str, str]] = []
     seats_heard: list[tuple[str, str]] = []
-    fares = asking("Which date?", "Morning or evening?", answer="Fare booked.", heard=fares_heard)
+    fares_agent = asking(
+        "Which date?", "Morning or evening?", answer="Fare booked.", heard=fares_heard
+    )
+
+    async def fares(ctx: A2ASessionContext[Any]) -> Any:
+        if progress and fares_heard:
+            await ctx.update("Checking fares.")
+            await asyncio.sleep(0.3)
+        return await fares_agent(ctx)
+
     seats_agent = asking("Which seat?", answer="Seat booked.", heard=seats_heard)
 
     async def seats(ctx: A2ASessionContext[Any]) -> Any:
@@ -130,7 +281,10 @@ async def test_a_follow_up_of_the_answered_task_goes_before_the_queue(
                 call("fares", "f1", request="a flight"),
                 call("seats", "s1", request="a seat"),
             ]
-        )
+        ),
+        Reply(tool_calls=[call("fares", "f2", request="tuesday")], when=said("tuesday")),
+        Reply(tool_calls=[call("fares", "f3", request="morning")], when=said("morning")),
+        Reply("Your fare is booked.", when=lambda c: "Fare booked." in str(c.items)),
     )
     desk = Agent(
         instructions="front desk",
@@ -150,8 +304,12 @@ async def test_a_follow_up_of_the_answered_task_goes_before_the_queue(
         await session.run(user_input="morning")
         await soon(lambda: "Which seat?" in spoken(session), "the queued question")
 
-    questions = [s for s in spoken(session) if s.endswith("?")]
-    assert questions == ["Which date?", "Morning or evening?", "Which seat?"]
+    assert spoken(session)[-4:] == [
+        "Which date?",
+        "Morning or evening?",
+        "Your fare is booked.",
+        "Which seat?",
+    ]
 
 
 @pytest.mark.rule("R42")
@@ -172,7 +330,9 @@ async def test_a_question_asked_by_text_is_answered_on_a_call(
     desk = door(handler)
     asked = await desk.send("change my visit")
     thread = asked.task["contextId"]
-    model = ScriptedLLM(Reply("You are booked.", when=lambda c: "Booked." in str(c.items[-1])))
+    model = ScriptedLLM(
+        RELAYS, Reply("You are booked.", when=lambda c: "Booked." in str(c.items[-1]))
+    )
     calling = Agent(instructions="front desk", tools=[delegate])
     async with LiveSession(llm=model, thread=Thread(desk.storage, thread, agent_name=AGENT)) as s:
         await s.start(calling)
@@ -196,7 +356,9 @@ async def test_a_question_asked_on_a_call_is_answered_by_text(
     delegate = expert(expert_of, announce=False)
     texting = Agent(
         instructions="front desk",
-        llm=ScriptedLLM(Reply("You are booked.", when=lambda c: "Booked." in str(c.items[-1]))),
+        llm=ScriptedLLM(
+            RELAYS, Reply("You are booked.", when=lambda c: "Booked." in str(c.items[-1]))
+        ),
         tools=[delegate],
     )
 
@@ -298,7 +460,7 @@ async def test_a_result_that_lands_while_a_question_waits_is_told_after_the_pers
 
 
 @pytest.mark.rule("B95")
-async def test_a_claimed_call_with_no_words_since_the_question_is_not_the_answer(
+async def test_a_call_with_no_words_since_the_question_is_a_new_request(
     expert: Callable[..., A2ADelegate],
 ) -> None:
     heard: list[tuple[str, str]] = []

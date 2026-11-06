@@ -75,12 +75,9 @@ class LaneQuestion(BaseModel):
     call_id: str = ""
     tool: str = ""
     answer_to: list[tuple[str, str]] = []
-    """The tools the answer goes to, each ``(tool, answer_ref)``."""
-
-    @property
-    def answer_ref(self) -> str | None:
-        """The expert task the answer continues: a call hands it to the first tool only."""
-        return self.answer_to[0][1] if self.answer_to else None
+    """The delegates' questions it holds, each ``(tool, the expert task the answer continues)``."""
+    passed: bool = False
+    """The person wrote after it was shown: it is no longer in front of them."""
 
 
 @dataclass
@@ -118,7 +115,7 @@ class LiveLane:
         self._answering: set[asyncio.Task[None]] = set()
         # the lane's open questions at the start, and those of them the call answered since
         self._questions: list[LaneQuestion] = []
-        self._answered: dict[str, TaskRow] = {}
+        self._answered: dict[str, tuple[TaskRow, set[str | None]]] = {}
         # failures nothing awaited, for the journal of the next commit
         self._errors: list[str] = []
         self._thread_id = thread_id
@@ -172,9 +169,10 @@ class LiveLane:
         questions, self._questions = self._questions, []
         return questions
 
-    def question_answered(self, row: TaskRow) -> None:
-        """The call answered a question of the lane: its task completes at the next commit."""
-        self._answered[row.task_id] = row
+    def question_answered(self, row: TaskRow, ref: str | None = None) -> None:
+        """The call answered a question of the lane, or with ``ref`` the one delegate's question
+        of it whose task is ``ref``: its task completes at the next commit once none is left."""
+        self._answered.setdefault(row.task_id, (row, set()))[1].add(ref)
 
     def error(self, text: str) -> None:
         """A failure on the call that nothing awaited: an ``error`` event of the next commit."""
@@ -188,6 +186,11 @@ class LiveLane:
         session's history and state were reloaded from it, else None.
         """
         return self._schedule(self._acquire())
+
+    def record(self) -> Awaitable[bool | None]:
+        """Commits what the call holds now and keeps the lane: an agent the turn delegates to
+        reads the person's last words before the turn ends."""
+        return self._schedule(self._commit(keep=True))
 
     def turn_ended(self) -> None:
         """The reply is done: commit what the call added; release without draining, or under
@@ -438,19 +441,20 @@ class LiveLane:
         self,
         *,
         release: bool = False,
+        keep: bool = False,
         tasks: Sequence[TaskWrite] = (),
         drained: int | None = None,
     ) -> bool:
         """Commits what the call added, with ``tasks`` and, under ``live``, the inbox cursor at
-        ``drained``; ``True`` once written. Under ``live`` the call keeps the lane until
-        ``release``."""
+        ``drained``; ``True`` once written. Under ``live``, or with ``keep``, the call keeps the
+        lane until ``release``."""
         if self._held is None:
             await self._acquire()
             if self._held is None:
                 return False
 
         held = self._held
-        keep = self._live and not release
+        keep = (self._live or keep) and not release
         if not keep:
             self._held = None
             self._cancel_hold_timer()
@@ -463,7 +467,7 @@ class LiveLane:
             for text in self._errors
         ]
         answered = dict(self._answered)
-        request.tasks = [*tasks, *(_completed(row) for row in answered.values())]
+        request.tasks = [*tasks, *(_closed(row, refs) for row, refs in answered.values())]
         request.drained_id = drained
         request.after = "renew" if keep else "release"
         try:
@@ -602,15 +606,23 @@ def _answered(
     )
 
 
-def _completed(row: TaskRow) -> TaskWrite:
-    """A question of the lane the call answered: its task completes as it stands."""
+def _closed(row: TaskRow, refs: set[str | None]) -> TaskWrite:
+    """A question of the lane the call answered: its task completes as it stands, or waits on
+    the delegates' questions of it not in ``refs``."""
+    ask = row.internal.get("ask") if isinstance(row.internal, dict) else None
+    left = [
+        pair
+        for pair in (ask or {}).get("answer_to", [])
+        if pair[1] not in refs and None not in refs
+    ]
     return TaskWrite(
         task_id=row.task_id,
-        status="completed",
+        status="input-required" if left else "completed",
         message_id=row.message_id,
         name=row.name,
         status_message=row.status_message,
         data=TaskData.model_validate(row.data or {}),
+        internal=TaskInternal(ask={**ask, "answer_to": left}) if left and ask else None,
     )
 
 

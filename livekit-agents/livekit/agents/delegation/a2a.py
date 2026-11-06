@@ -24,6 +24,7 @@ from pydantic import JsonValue
 
 from ..llm.chat_context import ChatContext, ChatItem, FunctionCall
 from ..llm.tool_context import (
+    AskedQuestion,
     FunctionTool,
     InputRequired,
     Tool,
@@ -40,6 +41,7 @@ from ..voice.run_result import RunUsage
 from .delegate import (
     CONTEXT_ID_KEY,
     ENDPOINT_KEY,
+    TASK_ID_KEY,
     Delegate,
     DelegationFailed,
     DelegationResult,
@@ -47,6 +49,12 @@ from .delegate import (
     answer_message,
     record_delegation,
     report,
+)
+from .input_required import (
+    InputRequiredCheck,
+    InputRequiredDetector,
+    InputRequiredDetectorFn,
+    InputRequiredVerdict,
 )
 
 ASK = (
@@ -72,6 +80,12 @@ DISPATCHED_SILENTLY = (
     "The request is with the expert. The answer is a separate entry, not this one."
 )
 """What the model reads on a call while the expert works under ``announce=False``, unanswered."""
+
+UNCLEAR = (
+    "Not sent: the person's reply could answer more than one of the expert's open questions: "
+    "{questions}. Ask them which one they meant, or whether it answers each."
+)
+"""What the model reads when the detector cannot tell which question the reply answers."""
 
 if TYPE_CHECKING:
     from ..a2a.client import AgentClient, Reply
@@ -99,6 +113,12 @@ class A2ADelegate(Delegate, Toolset):
     flagged reaches the person as written. On a call the turn goes on while the expert works, and
     ``announce`` has the model acknowledge it.
 
+    A question the expert asked stays open until a call answers it: the call goes to the question
+    ``answer_detector`` picks among the open ones the person spoke after, and continues its task;
+    ``True`` is an ``InputRequiredDetector`` on LiveKit Inference, and without one the call goes
+    to the question asked last. A call the detector finds fits more than one question sends
+    nothing, and the model asks the person which.
+
     An expert whose card offers the Live extension gets the caller's session id as the
     ``contextId`` and the caller's lane as ``livekit/callerLane``, and writes its own lane of
     that session; outside a turn, with no session to name, it gets the conversation as a
@@ -120,6 +140,7 @@ class A2ADelegate(Delegate, Toolset):
         httpx_client: httpx.AsyncClient | None = None,
         name: str | None = None,
         announce: bool = True,
+        answer_detector: InputRequiredDetectorFn | bool = False,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
         self._url = url.rstrip("/")
@@ -129,6 +150,12 @@ class A2ADelegate(Delegate, Toolset):
         self._client: AgentClient | None = None
         self._tool_name = name
         self._announce = announce
+        # TODO: default to True if a benchmark of the asked-last default, this detector, the
+        # detector started when the person's turn ends, and the model naming the question in the
+        # tool's arguments shows it the best; is the tool-argument routing worth an option?
+        self._answer_detector: InputRequiredDetectorFn | None = (
+            InputRequiredDetector() if answer_detector is True else answer_detector or None
+        )
         self._tool: FunctionTool | None = None
         # the tool names the expert only: its card could not be read yet
         self._unread = False
@@ -189,9 +216,23 @@ class A2ADelegate(Delegate, Toolset):
         else:
             assert ctx._run is not None
             history = ctx._run.chat_ctx
-        # the person's answer to the expert's question: it continues the expert's task
-        asked = ctx._answer_ref
-        if session is not None and asked is None:
+        # the reply to a question the expert asked continues its task
+        answered: AskedQuestion | None = None
+        if asked := await ctx._asked_questions():
+            check = InputRequiredCheck(request, asked, history)
+            try:
+                verdict = await (self._answer_detector or _asked_last)(check)
+            except Exception as e:
+                logger.warning("the answer detector failed", extra={"error": str(e)})
+                verdict = await _asked_last(check)
+            if verdict == "unclear":
+                return UNCLEAR.format(questions="; ".join(f'"{q.question}"' for q in asked))
+            if verdict != "new":
+                answered = verdict
+                ctx._answering(answered)
+        # the expert reads the person's own words in the thread
+        await ctx._record()
+        if session is not None and answered is None:
             # a barge-in drops the calls of the speech it cuts, so on a call the turn goes on
             if self._announce:
                 ctx.update(DISPATCHED)
@@ -206,7 +247,7 @@ class A2ADelegate(Delegate, Toolset):
                 message_history=history,
                 usage=ctx.usage,
                 caller_lane=session.thread.agent_name if session and session.thread else None,
-                task_id=asked,
+                task_id=answered.ref if answered is not None else None,
             )
         except DelegationFailed as e:
             raise ToolError(str(e) or "the delegation failed") from e
@@ -318,7 +359,8 @@ class A2ADelegate(Delegate, Toolset):
             metadata[CALLER_LANE] = caller_lane
         own = None
         if shared is None:
-            # the latest `FunctionCall` to this endpoint holds `lk.delegation.context_id` in `extra`
+            # the latest `FunctionCall` to this endpoint holds `lk.delegation.context_id` in
+            # `extra`; an answer goes to the context of the call whose task asked
             items = (
                 message_history.items
                 if isinstance(message_history, ChatContext)
@@ -331,6 +373,7 @@ class A2ADelegate(Delegate, Toolset):
                     if isinstance(item, FunctionCall)
                     and item.extra.get(ENDPOINT_KEY) == self._url
                     and item.extra.get(CONTEXT_ID_KEY)
+                    and task_id in (None, item.extra.get(TASK_ID_KEY))
                 ),
                 None,
             )
@@ -389,6 +432,11 @@ class A2ADelegate(Delegate, Toolset):
         from ..a2a.auth import Credentials
 
         return Credentials(api_key, api_secret).project_token(identity="delegate")
+
+
+async def _asked_last(check: InputRequiredCheck) -> InputRequiredVerdict:
+    """With no detector, the question asked last takes the reply."""
+    return max(check.questions, key=lambda q: q.asked_at)
 
 
 def _conversation(

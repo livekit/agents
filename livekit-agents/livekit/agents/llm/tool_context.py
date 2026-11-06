@@ -238,8 +238,21 @@ class InputRequired:
 
     question: str
     verbatim: bool = False
-    # set, the person's answer goes back to the tool that asked, which continues this with it
+    # the expert task waiting on the answer: the tool that asked sends the answer to it
     _answer_ref: str | None = None
+
+
+@dataclass(frozen=True, eq=False)
+class AskedQuestion:
+    """A delegate's question the person was asked and may have answered since: the tool's next
+    call may continue its task with the answer."""
+
+    question: str
+    ref: str
+    """The expert task the answer continues."""
+    asked_at: float
+    _record: Any = field(default=None, repr=False)
+    """What the door closes once a call answers it."""
 
 
 @dataclass(frozen=True)
@@ -462,6 +475,10 @@ def note_cut_off_replies(chat_ctx: ChatContext) -> None:
 WAITING_PREFIX = "waiting for the person's answer to: "
 """The output of a call that asked the person: its question. The answer is the person's next
 message, never this output."""
+
+RELAY_ANSWER = "\n\nWhen they answer it, call {name} with their answer."
+"""After a delegate's question in its call's output: the answer continues the delegate's task
+only when the model sends it."""
 
 
 def approval_granted(items: Sequence[Any], call: Any) -> bool:

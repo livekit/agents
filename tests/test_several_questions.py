@@ -14,6 +14,7 @@ import pytest
 
 from livekit.agents import Agent, AgentServer, InputRequired, RunContext
 from livekit.agents.a2a import A2ASessionContext
+from livekit.agents.a2a.extension import MERGED_INTO
 from livekit.agents.delegation import A2ADelegate
 from livekit.agents.storage import AgentDBStorage
 
@@ -100,6 +101,37 @@ async def test_one_question_is_in_front_and_the_next_waits(door: Callable[..., D
     assert later.task["id"] == next_asked.task["id"] and later.answer == "Tuesday at ten."
 
 
+@pytest.mark.rule("R36")
+async def test_a_question_the_person_wrote_past_does_not_hold_the_next(
+    door: Callable[..., Door], expert: Callable[..., A2ADelegate]
+) -> None:
+    fares_saw: list[str] = []
+    fares = expert(asking_expert("Which date?", "Fare booked.", fares_saw), "fares", tool="fares")
+    seats = expert(asking_expert("Which seat?", "Seat booked.", []), "seats", tool="seats")
+    front = Agent(
+        instructions="front desk",
+        tools=[fares, seats],
+        llm=ScriptedLLM(
+            Reply(tool_calls=[call("fares", "f1", request="a fare")], when=said("book a fare")),
+            Reply(tool_calls=[call("seats", "s1", request="a seat")], when=said("and a seat")),
+            Reply(tool_calls=[call("fares", "f2", request="friday")], when=said("friday")),
+            Reply("Your fare is booked."),
+        ),
+    )
+
+    async def handler(ctx: A2ASessionContext[Any]) -> Any:
+        return await front.run(ctx.message, message_history=ctx.message_history)
+
+    desk = door(handler)
+    thread = await desk.thread()
+    await asyncio.wait_for(desk.send("book a fare", context_id=thread), 20)
+    second = await asyncio.wait_for(desk.send("and a seat", context_id=thread), 20)
+    assert second.status_text == "Which seat?" and not second.metadata.get(QUEUED)
+
+    done = await asyncio.wait_for(desk.send("friday", context_id=thread), 20)
+    assert fares_saw[-1] == "friday" and done.answer == "Your fare is booked."
+
+
 @pytest.mark.rule("B41")
 @pytest.mark.xfail(
     strict=True,
@@ -158,6 +190,14 @@ async def test_one_answer_goes_to_each_expert_that_asked_in_one_step(
                     call("seats", "s1", request="a seat"),
                 ],
                 when=said("plan my trip"),
+            ),
+            # the model sends the one answer to each expert that asked
+            Reply(
+                tool_calls=[
+                    call("fares", "f2", request="friday"),
+                    call("seats", "s2", request="friday"),
+                ],
+                when=said("friday"),
             ),
             Reply("Both are booked."),
         ),
@@ -220,6 +260,7 @@ async def test_a_question_cut_off_by_a_waiting_message_is_asked_after_its_reply(
                 tool_calls=[call("ask", "c1", request="the first slot")], when=said("the first one")
             ),
             Reply("Sure, the second one.", when=said("yeah maybe the second"), hold=replied),
+            Reply(tool_calls=[call("ask", "c2", request="a@b.c")], when=said("a@b.c")),
             Reply("You are booked."),
         ),
     )
@@ -245,13 +286,15 @@ async def test_a_question_cut_off_by_a_waiting_message_is_asked_after_its_reply(
     replied.set()
     cut, answered = await asyncio.wait_for(asyncio.gather(first, second), 20)
 
-    # the message is a task of its own; the question is asked after its reply, and its answer
-    # goes to the expert the normal way
+    # the message is a task of its own; the question is asked after its reply, and the model
+    # sends its answer to the expert
     assert answered.task["id"] != cut.task["id"] and answered.answer == "Sure, the second one."
     assert cut.task["id"] == waiting["id"]
     assert cut.state == "input_required" and cut.status_text == question
     done = await asyncio.wait_for(desk.send("a@b.c", context_id=thread), 20)
-    assert done.task["id"] == cut.task["id"] and done.answer == "You are booked."
+    assert done.answer == "You are booked."
+    closed = next(t for t in await desk.list_tasks(thread) if t["id"] == cut.task["id"])
+    assert metadata_of(closed).get(MERGED_INTO) == done.task["id"]
     assert len(seen) == 2 and seen[-1] == "a@b.c"
 
 

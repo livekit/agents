@@ -48,7 +48,7 @@ impl Turn {
         let queued_at = |r: &TaskRecord| r.ask()?.get("queued_at")?.as_f64();
         let own = run.tasks.get(&ended.task_id).await?;
         if own.is_some_and(|r| r.state() == Some(TaskState::Working) && queued_at(&r).is_some())
-            || run.tasks.in_state(TaskState::InputRequired).await?.iter().any(facing_person)
+            || run.tasks.in_state(TaskState::InputRequired).await?.iter().any(in_front)
         {
             return Ok(ended);
         }
@@ -61,6 +61,7 @@ impl Turn {
         let question = ask.get("question").map(text_of).unwrap_or_default();
         if let Some(ask) = ask.as_object_mut() {
             ask.remove("queued_at");
+            ask.insert(SHOWN_AT.into(), Value::from(now_secs()));
         }
         let mut metadata = Map::new();
         metadata.insert(QUEUED_KEY.into(), Value::Bool(false));
@@ -99,19 +100,31 @@ impl Turn {
         }
 
         // the task this batch continues, when it waits on a question: the batch is the answer,
-        // recorded once as the person's message; the asking call keeps its question as its
-        // output, and the tools the question named, if any, take the answer first
-        // a turn that delivers what work in the background queued has no message, and answers
-        // no question
+        // recorded once as the person's message, and the asking call keeps its question as its
+        // output. A turn that delivers what work in the background queued has no message, and
+        // answers no question
         let delivery = batch
             .iter()
             .all(|m| m.metadata.get(KIND_KEY).and_then(Value::as_str) == Some(KIND_DELIVERY));
         let row = run.tasks.get(&answer_task).await?;
         let answered = row.as_ref().filter(|r| !delivery && r.ask().is_some());
-        let ask = answered.and_then(TaskRecord::ask);
-        let answer_to = ask
-            .and_then(|a| serde_json::from_value(a.get("answer_to")?.clone()).ok())
-            .unwrap_or_default();
+        // the person wrote after the questions shown to them: none is in front of them now, and
+        // the next one waiting may be asked. A message sent before a question was shown leaves it
+        if !delivery && last.channel != DELEGATION_CHANNEL {
+            for shown in run.tasks.in_state(TaskState::InputRequired).await? {
+                let shown_at = shown.ask().and_then(|a| a.get(SHOWN_AT)?.as_f64()).unwrap_or(0.0);
+                let sent_after = last.received_at >= shown_at;
+                if shown.id == answer_task || !in_front(&shown) || !sent_after {
+                    continue;
+                }
+                let mut ask = shown.ask().cloned().unwrap_or_default();
+                if let Some(ask) = ask.as_object_mut() {
+                    ask.insert("passed".into(), Value::Bool(true));
+                }
+                let patch = TaskPatch { ask: Some(ask), ..TaskPatch::default() };
+                run.tasks.write(&shown.id, TaskState::InputRequired, patch).await?;
+            }
+        }
         // a continued task keeps its first messageId and adds the batch to its history
         let row_message_id = (answered.is_none() && !delivery).then(|| last.message_id.clone());
         let history = (!delivery).then(|| {
@@ -149,7 +162,6 @@ impl Turn {
             tasks: run.tasks.recent(TASKS_IN_CONTEXT).await?,
             agent_stack: run.agents.refs().to_vec(),
             caller_history: ctx.caller_history.clone(),
-            answer_to,
             live: arrivals_after.is_some(),
             boundary: boundary.clone(),
         };
@@ -209,6 +221,32 @@ impl Turn {
         }
 
         run.answer_task = Some(answer_task.clone());
+        // the delegates' questions the turn's calls answered close, whatever the turn's end: the
+        // answer went to the expert. A task left with none completes into this one, which ends
+        // on its own
+        for (tid, reference) in out.answered.iter().filter(|(t, _)| *t != answer_task) {
+            let Some(row) = run.tasks.get(tid).await?.filter(|r| !r.terminal()) else {
+                continue;
+            };
+            let mut ask = row.ask().cloned().unwrap_or_default();
+            let left: Vec<Value> = ask
+                .get("answer_to")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter(|pair| pair.get(1).and_then(Value::as_str) != Some(reference))
+                .cloned()
+                .collect();
+            if left.is_empty() {
+                let patch =
+                    TaskPatch { metadata: Some(merged_into(&answer_task)), ..TaskPatch::default() };
+                run.tasks.write(tid, TaskState::Completed, patch).await?;
+            } else if let Some(fields) = ask.as_object_mut() {
+                fields.insert("answer_to".into(), Value::Array(left));
+                let patch = TaskPatch { ask: Some(ask), ..TaskPatch::default() };
+                run.tasks.write(tid, TaskState::InputRequired, patch).await?;
+            }
+        }
         // a question the handler stopped before showing, for a newer message, waits in line
         let cut_off = out.interrupted && out.input_required.is_some();
         let interrupted = (boundary.tripped() || out.interrupted) && !cut_off;
@@ -405,7 +443,7 @@ impl Turn {
                         .in_state(TaskState::InputRequired)
                         .await?
                         .iter()
-                        .any(|r| r.id != answer_task && facing_person(r)));
+                        .any(|r| r.id != answer_task && in_front(r)));
             let call = out.pending_call.as_ref();
             run.tasks
                 .wait(
@@ -425,7 +463,10 @@ impl Turn {
                 metadata.insert(QUEUED_KEY.into(), Value::Bool(true));
             }
             // the row keeps the ask `wait` wrote, which a write of `working` would clear
-            let ask = run.tasks.get(&answer_task).await?.and_then(|r| r.ask().cloned());
+            let mut ask = run.tasks.get(&answer_task).await?.and_then(|r| r.ask().cloned());
+            if let Some(fields) = ask.as_mut().and_then(Value::as_object_mut).filter(|_| !queued) {
+                fields.insert(SHOWN_AT.into(), Value::from(now_secs()));
+            }
             let state = if queued { TaskState::Working } else { TaskState::InputRequired };
             run.tasks
                 .write(
@@ -528,9 +569,15 @@ pub fn artifact_text(record: &TaskRecord) -> Option<Value> {
     None
 }
 
-/// A task the person started: its question is in front of them, not of an agent that delegated.
-fn facing_person(record: &TaskRecord) -> bool {
+/// When a question was shown to the person, in seconds, on its ask: only what they sent after
+/// it moves it out of the way.
+const SHOWN_AT: &str = "shown_at";
+
+/// A question in front of the person: of a task they started, not one an agent delegated, and
+/// shown with nothing written by them since.
+fn in_front(record: &TaskRecord) -> bool {
     channel_of_record(record).as_deref() != Some(DELEGATION_CHANNEL)
+        && record.ask().and_then(|a| a.get("passed")) != Some(&Value::Bool(true))
 }
 
 /// `_channel_of_record`: the channel of the message that started the task.

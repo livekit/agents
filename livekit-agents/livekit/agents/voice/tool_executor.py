@@ -18,6 +18,7 @@ from ..llm.chat_context import ChatContext, ChatItem, FunctionCall, FunctionCall
 from ..llm.tool_context import (
     CONFIRM_DUPLICATE_PARAM,
     DELIVERED,
+    AskedQuestion,
     DuplicateMode,
     DuplicateScope,
     FunctionTool,
@@ -326,9 +327,15 @@ class ToolSink(Protocol):
 
     async def stop(self, task: _RunningTask) -> None: ...
 
-    async def arguments(
-        self, tool: FunctionTool | RawFunctionTool, raw: dict[str, Any], ctx: RunContext
-    ) -> dict[str, Any]: ...
+    async def questions(self, ctx: RunContext) -> list[AskedQuestion]:
+        """The calling tool's questions the person was asked and spoke after, oldest first."""
+
+    def answering(self, ctx: RunContext, question: AskedQuestion) -> None:
+        """The call continues ``question``'s task with the answer: the question closes."""
+
+    async def record(self, ctx: RunContext) -> None:
+        """Stores the conversation so far, so an agent the call delegates to reads the person's
+        last words in the thread."""
 
     def returned(self, ctx: RunContext, output: Any) -> Any:
         """What the tool's output is to the turn that called it, when it ends before an update."""
@@ -344,7 +351,9 @@ class ToolSink(Protocol):
     ) -> asyncio.Future[None]:
         """Takes the update in call order; the future resolves once its output is recorded."""
 
-    def say(self, ctx: RunContext, text: str) -> asyncio.Future[None]: ...
+    def say(self, ctx: RunContext, text: str) -> asyncio.Future[None]:
+        """Takes text the tool wants the person to get exactly as written, such as an expert's
+        verbatim line; the future resolves once it is delivered."""
 
     async def ended(self, ctx: RunContext, output: Any) -> None:
         """The tool ended after its turn went on without it."""
@@ -449,9 +458,8 @@ class _ToolExecutor:
         # derives the call's single terminal entry from how the task ended
         async def _execute_tool() -> Any:
             try:
-                arguments = await sink.arguments(tool, raw_arguments, run_ctx)
                 fnc_args, fnc_kwargs = prepare_function_arguments(
-                    fnc=tool, json_arguments=arguments, call_ctx=run_ctx
+                    fnc=tool, json_arguments=raw_arguments, call_ctx=run_ctx
                 )
                 granted = isinstance(tool, FunctionTool) and tool.info.requires_approval
                 if granted:
@@ -720,17 +728,18 @@ class _CallSink:
             )
         await utils.aio.cancel_and_wait(task.exe_task)
 
-    async def arguments(
-        self, tool: FunctionTool | RawFunctionTool, raw: dict[str, Any], ctx: RunContext
-    ) -> dict[str, Any]:
+    async def questions(self, ctx: RunContext) -> list[AskedQuestion]:
         if (activity := self._owning_activity) is None:
-            return raw
-        # a call that answers a claimed question carries the person's words, and the history
-        # shows the call as it ran
-        arguments = await activity._answer_arguments(tool, raw, ctx)
-        if arguments is not raw:
-            ctx.function_call.arguments = json.dumps(arguments)
-        return arguments
+            return []
+        return await activity._asked_questions(ctx.function_call.name)
+
+    def answering(self, ctx: RunContext, question: AskedQuestion) -> None:
+        if (activity := self._owning_activity) is not None:
+            activity._answering(question, ctx.speech_handle)
+
+    async def record(self, ctx: RunContext) -> None:
+        if (activity := self._owning_activity) is not None:
+            await activity._record_turn()
 
     def returned(self, ctx: RunContext, output: Any) -> Any:
         if isinstance(output, ToolResult) and output.verbatim:

@@ -206,7 +206,6 @@ fn context_to_py<'py>(py: Python<'py>, ctx: &TurnContext) -> PyResult<(Py<PyAny>
         "tasks": ctx.tasks,
         "agent_stack": ctx.agent_stack,
         "caller_history": ctx.caller_history,
-        "answer_to": ctx.answer_to,
         "live": ctx.live,
     });
     let model = model(py, "storage_turn", "TurnContext", &record)?;
