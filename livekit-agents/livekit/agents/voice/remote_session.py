@@ -76,8 +76,8 @@ async def _drain(tasks: set[asyncio.Task[Any]], deadline: float) -> set[asyncio.
     return pending
 
 
-class _SessionTransportClosed(RuntimeError):
-    """The transport has ended and cannot deliver queued notifications."""
+class _SessionTransportUnavailable(RuntimeError):
+    """The transport cannot currently deliver a notification or request."""
 
 
 class SessionTransport(ABC):
@@ -105,8 +105,6 @@ class RoomSessionTransport(SessionTransport):
         # their messages swapped.
         self._incoming_ch: utils.aio.Chan[rtc.ByteStreamReader] = utils.aio.Chan()
         self._read_task: asyncio.Task[None] | None = None
-        self._room_disconnected = False
-        self._room.on("disconnected", self._on_disconnected)
 
     @property
     def remote_identity(self) -> str | None:
@@ -124,9 +122,6 @@ class RoomSessionTransport(SessionTransport):
         )
         self._room.register_byte_stream_handler(TOPIC_SESSION_MESSAGES, self._on_byte_stream)
         self._handler_registered = True
-
-    def _on_disconnected(self, *_args: Any) -> None:
-        self._room_disconnected = True
 
     def _on_byte_stream(self, reader: rtc.ByteStreamReader, participant_identity: str) -> None:
         if self._remote_identity and participant_identity != self._remote_identity:
@@ -174,23 +169,20 @@ class RoomSessionTransport(SessionTransport):
                     destination_identities=dest,
                 )
             except Exception as e:
-                if self._recv_ch.closed or self._room_disconnected:
-                    raise _SessionTransportClosed("room session transport is closed") from e
+                if self._recv_ch.closed or not self._room.isconnected():
+                    raise _SessionTransportUnavailable("room session transport is closed") from e
                 raise RuntimeError(f"failed to send binary stream message: {e}") from e
 
     def _check_connected(self) -> None:
-        """Distinguish terminal room closure from a reconnectable interruption."""
-        if self._recv_ch.closed or self._room_disconnected:
-            raise _SessionTransportClosed("room session transport is closed")
-        if not self._room.isconnected():
-            raise RuntimeError("room session transport is closed")
+        """Let request callers detect an unavailable room without dropping their response."""
+        if self._recv_ch.closed or not self._room.isconnected():
+            raise _SessionTransportUnavailable("room session transport is closed")
 
     async def close(self) -> None:
         if self._recv_ch.closed:
             return
         self._recv_ch.close()
         self._incoming_ch.close()
-        self._room.off("disconnected", self._on_disconnected)
         if self._read_task is not None:
             await utils.aio.cancel_and_wait(self._read_task)
             self._read_task = None
@@ -494,12 +486,10 @@ class SessionHost:
         async for msg in event_ch:
             try:
                 await self._transport.send_message(msg)
-            except _SessionTransportClosed:
-                # A deleted room has no recipient for the remaining notifications.
-                event_ch.close()
-                async for _ in event_ch:
-                    pass
-                return
+            except _SessionTransportUnavailable:
+                # Notifications have no waiting caller. Discard those with no
+                # connected recipient and keep draining if the room reconnects.
+                continue
             except Exception:
                 logger.warning("failed to send session event", exc_info=True)
 

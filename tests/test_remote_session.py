@@ -543,7 +543,7 @@ class _FailingTransport(PairedTransport):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("disconnect_at", ["before_start", "before_send", "during_send"])
-async def test_event_writer_stops_when_room_disconnects(
+async def test_event_writer_discards_notifications_while_room_disconnected(
     caplog: pytest.LogCaptureFixture, disconnect_at: str
 ) -> None:
     """A deleted room cannot receive queued events, including an in-flight send."""
@@ -552,25 +552,22 @@ async def test_event_writer_stops_when_room_disconnects(
     async def disconnect(*args: object, **kwargs: object) -> None:
         room.isconnected.return_value = False
         room.connection_state = rtc.ConnectionState.CONN_DISCONNECTED
-        room.on.call_args.args[1]()
         raise RuntimeError("room disconnected during send")
 
     room.local_participant.send_bytes = AsyncMock(side_effect=disconnect)
     host = SessionHost(RoomSessionTransport(room))
     if disconnect_at == "before_start":
         room.isconnected.return_value = False
-        room.on.call_args.args[1]()
     await host.start()
     if disconnect_at == "before_send":
         room.isconnected.return_value = False
-        room.on.call_args.args[1]()
     try:
         with caplog.at_level(logging.WARNING, logger="livekit.agents"):
             host._send_event(agent_pb.AgentSessionEvent())
             host._send_event(agent_pb.AgentSessionEvent())
-            assert host._write_task is not None
-            await asyncio.wait_for(host._write_task, timeout=1.0)
+            await asyncio.sleep(0)
             host._send_event(agent_pb.AgentSessionEvent())
+            await asyncio.sleep(0)
         assert host._event_ch.empty()
         assert not [r for r in caplog.records if "failed to send session event" in r.message]
         assert room.local_participant.send_bytes.await_count == int(disconnect_at == "during_send")
@@ -596,7 +593,7 @@ async def test_event_writer_resumes_after_room_connects(
     try:
         host._send_event(agent_pb.AgentSessionEvent())
         await asyncio.sleep(0)
-        assert [r for r in caplog.records if "failed to send session event" in r.message]
+        assert not [r for r in caplog.records if "failed to send session event" in r.message]
         room.isconnected.return_value = True
         room.connection_state = rtc.ConnectionState.CONN_CONNECTED
         host._send_event(agent_pb.AgentSessionEvent())
