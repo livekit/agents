@@ -91,6 +91,9 @@ class SessionTransport(ABC):
     async def __anext__(self) -> agent_pb.AgentSessionMessage: ...
 
 
+_MAX_MESSAGE_SIZE = 1 << 20
+
+
 class RoomSessionTransport(SessionTransport):
     def __init__(self, room: rtc.Room, remote_identity: str | None = None) -> None:
         self._room = room
@@ -136,7 +139,13 @@ class RoomSessionTransport(SessionTransport):
     async def _read_stream(self, reader: rtc.ByteStreamReader) -> None:
         try:
             chunks: list[bytes] = []
+            size = 0
             async for chunk in reader:
+                size += len(chunk)
+                if size > _MAX_MESSAGE_SIZE:
+                    reader.close()
+                    logger.warning("session message over %d bytes, dropped", _MAX_MESSAGE_SIZE)
+                    return
                 chunks.append(chunk)
             data = b"".join(chunks)
             msg = agent_pb.AgentSessionMessage()
@@ -191,7 +200,6 @@ class RoomSessionTransport(SessionTransport):
 
 
 _TCP_HEADER_SIZE = 4
-_TCP_MAX_MESSAGE_SIZE = 1 << 20
 
 
 class TcpSessionTransport(SessionTransport):
@@ -261,7 +269,7 @@ class TcpSessionTransport(SessionTransport):
             raise StopAsyncIteration from None
 
         length = struct.unpack(">I", header)[0]
-        if length > _TCP_MAX_MESSAGE_SIZE:
+        if length > _MAX_MESSAGE_SIZE:
             logger.error("TCP message too large: %d bytes", length)
             raise StopAsyncIteration
 
