@@ -654,3 +654,29 @@ async def test_emits_availability_changed_on_recovery() -> None:
     await session._swap_task
 
     assert any(e.realtime_model is primary and e.available is True for e in events)
+
+
+async def test_tool_reply_lifecycle_follows_active_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The wrapper must preserve lifecycle notifications and drop the old wait on swap."""
+    primary = FakeRealtimeModel()
+    backup = FakeRealtimeModel()
+    adapter = RealtimeModelFallbackAdapter([primary, backup])
+    session = adapter.session()
+    monkeypatch.setattr(
+        type(primary.active_session),
+        "pending_tool_reply",
+        property(lambda child: child is primary.active_session),
+    )
+    notifications = []
+    session.on("tool_reply_changed", lambda: notifications.append(True))
+    try:
+        assert session.pending_tool_reply is True
+        primary.active_session.emit("tool_reply_changed")
+        assert notifications == [True]
+        primary.active_session.emit_error(recoverable=False)
+        await session._swap_task
+        assert session.pending_tool_reply is False
+    finally:
+        await session.aclose()

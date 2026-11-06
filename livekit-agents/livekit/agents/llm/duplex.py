@@ -62,6 +62,7 @@ DuplexEventTypes = Literal[
     "input_speech_stopped",
     "input_audio_transcription_completed",
     "session_reconnected",
+    "tool_reply_changed",
     "metrics_collected",
     "error",
 ]
@@ -128,6 +129,16 @@ class DuplexSession(ABC, rtc.EventEmitter[DuplexEventTypes | TEvent], Generic[TE
         self._configured = asyncio.Event()
 
     @property
+    def pending_tool_reply(self) -> bool | None:
+        """Whether supplied tool results still await an answer from the provider.
+
+        None leaves tracking to the activity. Implementations reporting a bool emit
+        ``tool_reply_changed`` whenever this state changes, including abandonment.
+        Backend completion alone need not mean that the audible answer has started.
+        """
+        return None
+
+    @property
     def duplex_model(self) -> DuplexModel:
         return self._duplex_model
 
@@ -159,6 +170,10 @@ class DuplexSession(ABC, rtc.EventEmitter[DuplexEventTypes | TEvent], Generic[TE
         """
         self._closing = True
         self._configured.set()
+
+    def _on_speech_started(self) -> None:
+        """Transfer any answered tool results to the adapter's audible generation."""
+        pass
 
     # underscored until the shape settles: this is the framework's contract with the plugin, and
     # apps reach a plugin's own methods through Agent.duplex_session

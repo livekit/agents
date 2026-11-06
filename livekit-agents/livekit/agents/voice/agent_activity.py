@@ -479,8 +479,8 @@ class AgentActivity(RecognitionHooks):
         # speeches that audio playout finished but not done because of tool calls
         self._background_speeches: set[SpeechHandle] = set()
 
-        # Track each tool turn until a server generation arrives. Busy state
-        # outlives the bounded RunResult placeholder and applies without a run.
+        # For providers without continuation lifecycle reporting, track each tool turn
+        # until a reply generation arrives, independently of the bounded run wait.
         self._pending_auto_tool_replies: deque[SpeechHandle] = deque()
 
         # placeholder used to hold a RunResult open while waiting for a realtime
@@ -1164,6 +1164,7 @@ class AgentActivity(RecognitionHooks):
                 if reusable:
                     # detach: remove event listeners but don't close the session
                     self._rt_session.off("generation_created", self._on_generation_created)
+                    self._rt_session.off("tool_reply_changed", self._on_tool_reply_changed)
                     self._rt_session.off("input_speech_started", self._on_input_speech_started)
                     self._rt_session.off("input_speech_stopped", self._on_input_speech_stopped)
                     self._rt_session.off(
@@ -1284,6 +1285,7 @@ class AgentActivity(RecognitionHooks):
                 self._rt_session = self.llm.session(turn_detection_disabled=turn_detection_disabled)
                 logger.debug("created new realtime session for activity, id=%s", self._rt_session)
 
+            self._rt_session.on("tool_reply_changed", self._on_tool_reply_changed)
             self._rt_session.on("generation_created", self._on_generation_created)
             self._rt_session.on("input_speech_started", self._on_input_speech_started)
             self._rt_session.on("input_speech_stopped", self._on_input_speech_stopped)
@@ -1616,6 +1618,7 @@ class AgentActivity(RecognitionHooks):
 
         if isinstance(self.llm, llm.RealtimeModel) and self._rt_session is not None:
             self._rt_session.off("generation_created", self._on_generation_created)
+            self._rt_session.off("tool_reply_changed", self._on_tool_reply_changed)
             self._rt_session.off("input_speech_started", self._on_input_speech_started)
             self._rt_session.off("input_speech_stopped", self._on_input_speech_stopped)
             self._rt_session.off(
@@ -1971,7 +1974,8 @@ class AgentActivity(RecognitionHooks):
 
         if self._rt_session is not None:
             self._rt_session.interrupt()
-            self._clear_pending_auto_tool_replies()
+            if self._rt_session.pending_tool_reply is None:
+                self._clear_pending_auto_tool_replies()
 
         # _speech_q is a heap, so its list order is not the order it pops in
         for _, _, speech in sorted(self._speech_q, key=lambda item: (item[0], item[1])):
@@ -2371,14 +2375,16 @@ class AgentActivity(RecognitionHooks):
             name="AgentActivity.realtime_generation",
         )
 
-        if self._pending_auto_tool_replies:
+        if ev.is_tool_reply and self._pending_auto_tool_replies:
             # A generation takes over one pending turn; other turns can still
             # owe server replies after this speech plays out.
             self._pending_auto_tool_replies.popleft()
-        if (fut := self._pending_auto_tool_reply_fut) and not fut.done():
+        if ev.is_tool_reply and (fut := self._pending_auto_tool_reply_fut) and not fut.done():
             if (run_state := self._session._global_run_state) is not None and not run_state.done():
                 run_state._watch_handle(handle)
-            if not self._pending_auto_tool_replies:
+            if not self._pending_auto_tool_replies and (
+                self._rt_session is None or self._rt_session.pending_tool_reply is None
+            ):
                 self._pending_auto_tool_reply_fut = None
                 fut.set_result(None)
 
@@ -3217,7 +3223,8 @@ class AgentActivity(RecognitionHooks):
         from ..llm.async_toolset import AsyncToolset
 
         if (
-            self._pending_auto_tool_replies
+            (self._rt_session is not None and self._rt_session.pending_tool_reply)
+            or self._pending_auto_tool_replies
             or self._background_speeches
             or self._tool_executor.has_pending_replies
         ):
@@ -3269,6 +3276,12 @@ class AgentActivity(RecognitionHooks):
             and not self._has_pending_agent_work
         ):
             self._session._update_agent_state("listening")
+
+    def _on_tool_reply_changed(self) -> None:
+        """Release provider-owned waits only after audio takes over or the reply is dropped."""
+        if self._rt_session is not None and self._rt_session.pending_tool_reply is False:
+            self._clear_pending_auto_tool_replies()
+            self._update_agent_state_if_idle()
 
     def _clear_pending_auto_tool_replies(self) -> None:
         """Drop outstanding server replies and release their shared bounded run wait."""
@@ -4904,6 +4917,7 @@ class AgentActivity(RecognitionHooks):
                         chat_ctx = self._rt_session.chat_ctx.copy()
                         chat_ctx.items.extend(interrupted_fnc_outputs)
                         await self._rt_session.update_chat_ctx(chat_ctx)
+                    self._on_tool_reply_changed()
                 except llm.RealtimeError as e:
                     logger.warning(
                         "failed to sync the tool results of an interrupted generation",
@@ -4991,11 +5005,15 @@ class AgentActivity(RecognitionHooks):
                 if (
                     self._rt_session.capabilities.auto_tool_reply_generation
                     and fnc_executed_ev.has_tool_reply
+                    and self._rt_session.pending_tool_reply is None
                 ):
                     self._pending_auto_tool_replies.append(speech_handle)
                 if (
                     self._rt_session.capabilities.auto_tool_reply_generation
-                    and fnc_executed_ev.has_tool_reply
+                    and (
+                        fnc_executed_ev.has_tool_reply
+                        or self._rt_session.pending_tool_reply is not None
+                    )
                     and self._pending_auto_tool_reply_fut is None
                     and (run_state := self._session._global_run_state) is not None
                     and not run_state.done()
@@ -5024,6 +5042,7 @@ class AgentActivity(RecognitionHooks):
                         chat_ctx = self._rt_session.chat_ctx.copy()
                         chat_ctx.items.extend(new_fnc_outputs)
                         await self._rt_session.update_chat_ctx(chat_ctx)
+                    self._on_tool_reply_changed()
                 except llm.RealtimeError as e:
                     logger.warning(
                         "failed to update chat context before generating the function calls results",  # noqa: E501
@@ -5038,6 +5057,8 @@ class AgentActivity(RecognitionHooks):
                         self._clear_pending_auto_tool_replies()
 
             tool_reply_expected = fnc_executed_ev.has_tool_reply and not server_reply_failed
+            if self._rt_session.pending_tool_reply is not None:
+                tool_reply_expected = self._rt_session.pending_tool_reply
             if tool_reply_expected and not self._rt_session.capabilities.auto_tool_reply_generation:
                 self._rt_session.interrupt()
 

@@ -63,6 +63,7 @@ _FORWARDED_EVENTS: tuple[EventTypes, ...] = (
     "input_audio_transcription_completed",
     "generation_created",
     "session_reconnected",
+    "tool_reply_changed",
     "metrics_collected",
     "remote_item_added",
 )
@@ -177,7 +178,7 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
         # stable per-event forwarders so they can be detached on swap
         def _make_forwarder(event: EventTypes) -> Callable[[object], None]:
             # callbacks receive only the payload, so bind the event name per forwarder
-            def _forward(ev: object) -> None:
+            def _forward(ev: object = None) -> None:
                 self.emit(event, ev)
 
             return _forward
@@ -399,6 +400,11 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
     def capabilities(self) -> RealtimeCapabilities:
         # the active model's caps, so per-turn consumers see the model actually in use
         return self._active.realtime_model.capabilities
+
+    @property
+    def pending_tool_reply(self) -> bool | None:
+        """Follow the active provider's continuation lifecycle across fallback."""
+        return self._active.pending_tool_reply
 
     @property
     def chat_ctx(self) -> ChatContext:

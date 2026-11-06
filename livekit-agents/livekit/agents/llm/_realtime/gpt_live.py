@@ -424,6 +424,8 @@ class GPTLiveSession(
         self._backend_running_responses: dict[str | None, set[str]] = {}
         self._backend_open_calls: set[str] = set()
         self._backend_response_pending = False
+        self._tool_reply_delegations: dict[str, str | None] = {}
+        self._awaiting_tool_audio: dict[str, str | None] = {}
 
         # the newest history item the last ask was about, so an ask never repeats one
         self._asked_item_id: str | None = None
@@ -574,6 +576,8 @@ class GPTLiveSession(
         self._backend_running_responses.clear()
         self._backend_open_calls.clear()
         self._backend_response_pending = False
+        self._tool_reply_delegations.clear()
+        self._awaiting_tool_audio.clear()
         self._usage_total = types.Usage()
         self._session_id = None
 
@@ -911,6 +915,7 @@ class GPTLiveSession(
                 name=item.name,
                 arguments=item.arguments,
             )
+            self._tool_reply_delegations[item.call_id] = d_id
             self._history.insert(fnc_call)
             self.emit("function_call", fnc_call)
 
@@ -958,6 +963,17 @@ class GPTLiveSession(
             # the service discards a failed response's calls: an output for one is refused, so
             # it goes to the voice model as context instead
             self._backend_running_responses.pop(d_id, None)
+            self._tool_reply_delegations = {
+                call: delegation
+                for call, delegation in self._tool_reply_delegations.items()
+                if delegation != d_id
+            }
+            self._awaiting_tool_audio = {
+                call: delegation
+                for call, delegation in self._awaiting_tool_audio.items()
+                if delegation != d_id
+            }
+            self.emit("tool_reply_changed")
             self._maybe_continue_response()
 
     def _maybe_continue_response(self) -> None:
@@ -1129,11 +1145,25 @@ class GPTLiveSession(
 
     async def aclose(self) -> None:
         await super().aclose()
+        self._awaiting_tool_audio.clear()
+        self._tool_reply_delegations.clear()
+        self.emit("tool_reply_changed")
         if not self._session_started_fut.done():
             self._session_started_fut.cancel()
         self._msg_ch.close()
         with contextlib.suppress(asyncio.CancelledError):
             await self._main_atask
+
+    @property
+    def pending_tool_reply(self) -> bool:
+        """Results accepted by the backend but not yet answered audibly or failed."""
+        return bool(self._awaiting_tool_audio)
+
+    def _on_speech_started(self) -> None:
+        """One continuous audio answer can cover all results supplied before it starts."""
+        if self._awaiting_tool_audio:
+            self._awaiting_tool_audio.clear()
+            self.emit("tool_reply_changed")
 
     # framework hooks
 
@@ -1191,6 +1221,9 @@ class GPTLiveSession(
             self.append_thinking("\n".join(lines))
 
         for output in backend_outputs:
+            self._awaiting_tool_audio[output.call_id] = self._tool_reply_delegations.pop(
+                output.call_id, None
+            )
             self.send_event(
                 types.ResponseItemCreateEvent(
                     event_id=utils.shortuuid("tool_output_"),
@@ -1203,6 +1236,7 @@ class GPTLiveSession(
             for calls in self._backend_running_responses.values():
                 calls.discard(output.call_id)
         if backend_outputs:
+            self.emit("tool_reply_changed")
             if silenced := [o.name or o.call_id for o in backend_outputs if not o.reply_required]:
                 logger.warning(
                     "a tool result wants no reply, but GPT Live will answer it anyway: the "

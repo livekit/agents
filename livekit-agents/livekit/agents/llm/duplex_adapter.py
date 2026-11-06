@@ -335,6 +335,7 @@ class _DuplexRealtimeSession(RealtimeSession):
         # what a context update diffs against, and only what is new reaches the model
         self._chat_ctx = ChatContext.empty()
 
+        duplex.on("tool_reply_changed", lambda: self.emit("tool_reply_changed"))
         duplex.on("transcript_delta", self._on_transcript_delta)
         duplex.on("function_call", self._on_function_call)
         duplex.on("session_reconnected", self._on_session_reconnected)
@@ -436,6 +437,7 @@ class _DuplexRealtimeSession(RealtimeSession):
             function_stream=burst.function_ch,
             user_initiated=False,
             response_id=burst.id,
+            is_tool_reply=kind == "speech",
         )
         # the model answers on the one stream it has, so speech opening is the reply asked for; a
         # call on its own is not, nor is text for sound already played: the speech that follows is
@@ -443,6 +445,9 @@ class _DuplexRealtimeSession(RealtimeSession):
             ev.user_initiated = True
             self._pending_reply.set_result(ev)
         self.emit("generation_created", ev)
+        if kind == "speech":
+            # Install the generation's speech task before releasing the provider wait.
+            self._duplex._on_speech_started()
         if kind != "tool":
             modalities: asyncio.Future[list[Literal["text", "audio"]]] = asyncio.Future()
             modalities.set_result(["audio", "text"])
@@ -538,9 +543,15 @@ class _DuplexRealtimeSession(RealtimeSession):
         self._close_burst()
         self._last_burst = None
         self._fail_pending_reply("the session reconnected before the model replied")
+        self.emit("tool_reply_changed")
         self.emit("session_reconnected", ev)
 
     # RealtimeSession
+
+    @property
+    def pending_tool_reply(self) -> bool | None:
+        """Use the provider's continuation lifecycle when it reports one."""
+        return self._duplex.pending_tool_reply
 
     @property
     def duplex_session(self) -> DuplexSession:
