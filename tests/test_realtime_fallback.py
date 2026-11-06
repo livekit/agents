@@ -683,3 +683,16 @@ async def test_tool_reply_lifecycle_follows_active_provider(
         assert notifications == [True, True]
     finally:
         await session.aclose()
+
+
+async def test_payloadless_tool_reply_event_preserves_argument_count() -> None:
+    """Forward a notification with no arguments, rather than inventing a None payload."""
+    primary = FakeRealtimeModel()
+    session = RealtimeModelFallbackAdapter([primary]).session()
+    events: list[tuple[object, ...]] = []
+    session.on("tool_reply_changed", lambda *args: events.append(args))
+    try:
+        primary.active_session.emit("tool_reply_changed")
+        assert events == [()]
+    finally:
+        await session.aclose()

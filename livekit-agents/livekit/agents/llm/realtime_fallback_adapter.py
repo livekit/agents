@@ -176,16 +176,16 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
         self._tool_choice: NotGivenOr[ToolChoice | None] = NOT_GIVEN
 
         # stable per-event forwarders so they can be detached on swap
-        def _make_forwarder(event: EventTypes) -> Callable[[object], None]:
-            # callbacks receive only the payload, so bind the event name per forwarder
-            def _forward(ev: object = None) -> None:
+        def _make_forwarder(event: EventTypes) -> Callable[..., None]:
+            # Bind the event name while preserving both payloads and payloadless notifications.
+            def _forward(*args: object) -> None:
                 if event == "tool_reply_changed" and self._swapping:
                     return  # publish once startup and any regenerated speech are installed
-                self.emit(event, ev)
+                self.emit(event, *args)
 
             return _forward
 
-        self._forwarders: dict[EventTypes, Callable[[object], None]] = {
+        self._forwarders: dict[EventTypes, Callable[..., None]] = {
             event: _make_forwarder(event) for event in _FORWARDED_EVENTS
         }
         self._extra_forwarders: dict[str, Callable[..., None]] = {}

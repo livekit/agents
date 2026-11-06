@@ -113,6 +113,15 @@ class GPTLiveDelegation:
 
 
 @dataclass
+class _ToolReply:
+    """A delegated call, its submitted result, and eligibility for audio handoff."""
+
+    delegation_id: str | None
+    submitted: bool = False
+    ready: bool = False
+
+
+@dataclass
 class _ToolReplyCandidate:
     """Results visible to one backend response and the kinds of output it produced."""
 
@@ -433,12 +442,10 @@ class GPTLiveSession(
         self._backend_running_responses: dict[str | None, set[str]] = {}
         self._backend_open_calls: set[str] = set()
         self._backend_response_pending = False
-        self._tool_reply_delegations: dict[str, str | None] = {}
-        self._awaiting_tool_audio: dict[str, str | None] = {}
+        self._tool_replies: dict[str, _ToolReply] = {}
         # Snapshot results visible when a backend response starts. A continuation
         # can both answer those results and ask for more work.
         self._backend_reply_candidates: dict[str | None, _ToolReplyCandidate] = {}
-        self._tool_audio_ready: set[str] = set()
 
         # the newest history item the last ask was about, so an ask never repeats one
         self._asked_item_id: str | None = None
@@ -589,10 +596,8 @@ class GPTLiveSession(
         self._backend_running_responses.clear()
         self._backend_open_calls.clear()
         self._backend_response_pending = False
-        self._tool_reply_delegations.clear()
-        self._awaiting_tool_audio.clear()
+        self._tool_replies.clear()
         self._backend_reply_candidates.clear()
-        self._tool_audio_ready.clear()
         self._usage_total = types.Usage()
         self._session_id = None
 
@@ -899,8 +904,8 @@ class GPTLiveSession(
             self._backend_reply_candidates[d_id] = _ToolReplyCandidate(
                 results={
                     call
-                    for call, delegation in self._awaiting_tool_audio.items()
-                    if delegation == d_id
+                    for call, reply in self._tool_replies.items()
+                    if reply.submitted and reply.delegation_id == d_id
                 }
             )
 
@@ -957,7 +962,7 @@ class GPTLiveSession(
                 name=item.name,
                 arguments=item.arguments,
             )
-            self._tool_reply_delegations[item.call_id] = d_id
+            self._tool_replies[item.call_id] = _ToolReply(d_id)
             self._history.insert(fnc_call)
             self.emit("function_call", fnc_call)
 
@@ -994,7 +999,9 @@ class GPTLiveSession(
             if candidate is not None and (not candidate.has_tool_calls or candidate.has_text):
                 # A mixed response may answer the old results while starting new
                 # tools. Only a response with calls but no answer extends their wait.
-                self._tool_audio_ready.update(candidate.results & self._awaiting_tool_audio.keys())
+                for call in candidate.results:
+                    if (reply := self._tool_replies.get(call)) is not None:
+                        reply.ready = True
             self._maybe_continue_response()
 
         elif event.type in ("response.failed", "response.incomplete"):
@@ -1010,20 +1017,13 @@ class GPTLiveSession(
             # the service discards a failed response's calls: an output for one is refused, so
             # it goes to the voice model as context instead
             self._backend_running_responses.pop(d_id, None)
-            self._tool_reply_delegations = {
-                call: delegation
-                for call, delegation in self._tool_reply_delegations.items()
-                if delegation != d_id
-            }
-            self._awaiting_tool_audio = {
-                call: delegation
-                for call, delegation in self._awaiting_tool_audio.items()
-                # An earlier completed response can still owe audio under the same
-                # delegation. A later failure must not discard that ready answer.
-                if delegation != d_id or call in self._tool_audio_ready
+            self._tool_replies = {
+                call: reply
+                for call, reply in self._tool_replies.items()
+                # A later failure cannot discard an earlier completed answer.
+                if reply.delegation_id != d_id or reply.ready
             }
             self._backend_reply_candidates.pop(d_id, None)
-            self._tool_audio_ready.intersection_update(self._awaiting_tool_audio)
             self.emit("tool_reply_changed")
             self._maybe_continue_response()
 
@@ -1196,10 +1196,8 @@ class GPTLiveSession(
 
     async def aclose(self) -> None:
         await super().aclose()
-        self._awaiting_tool_audio.clear()
+        self._tool_replies.clear()
         self._backend_reply_candidates.clear()
-        self._tool_audio_ready.clear()
-        self._tool_reply_delegations.clear()
         self.emit("tool_reply_changed")
         if not self._session_started_fut.done():
             self._session_started_fut.cancel()
@@ -1210,7 +1208,7 @@ class GPTLiveSession(
     @property
     def pending_tool_reply(self) -> bool:
         """Results accepted by the backend but not yet answered audibly or failed."""
-        return bool(self._awaiting_tool_audio)
+        return any(reply.submitted for reply in self._tool_replies.values())
 
     def _on_audio_output(self) -> None:
         """Transfer only results whose backend continuation has completed to audible output.
@@ -1218,10 +1216,11 @@ class GPTLiveSession(
         Speech can continue independently of delegated work. Earlier audio cannot answer
         results that the backend has not processed, and a newer batch may still be running.
         """
-        if self._tool_audio_ready:
-            for call in self._tool_audio_ready:
-                self._awaiting_tool_audio.pop(call, None)
-            self._tool_audio_ready.clear()
+        if not self._tool_replies:
+            return
+        pending = self._tool_replies
+        self._tool_replies = {call: reply for call, reply in pending.items() if not reply.ready}
+        if len(self._tool_replies) != len(pending):
             self.emit("tool_reply_changed")
 
     # framework hooks
@@ -1280,9 +1279,7 @@ class GPTLiveSession(
             self.append_thinking("\n".join(lines))
 
         for output in backend_outputs:
-            self._awaiting_tool_audio[output.call_id] = self._tool_reply_delegations.pop(
-                output.call_id, None
-            )
+            self._tool_replies.setdefault(output.call_id, _ToolReply(None)).submitted = True
             self.send_event(
                 types.ResponseItemCreateEvent(
                     event_id=utils.shortuuid("tool_output_"),
