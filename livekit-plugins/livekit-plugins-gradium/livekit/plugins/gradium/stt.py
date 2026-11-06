@@ -135,7 +135,7 @@ class STT(stt.STT):
             vad_start_threshold=vad_start_threshold,
             temperature=temperature,
             language=LanguageCode(language),
-            keywords=keywords,
+            keywords=list(keywords) if keywords is not None else None,
             keyword_boost=keyword_boost,
         )
 

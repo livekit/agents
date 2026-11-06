@@ -267,6 +267,17 @@ async def test_speech_stream_sends_keywords_in_json_config(options, expected):
     assert json_config.get("keywords") == expected
 
 
+def test_keywords_are_copied_from_the_caller():
+    """Editing the caller's list after construction does not change the sent keywords."""
+    from livekit.plugins.gradium import STT
+
+    terms = ["Acme"]
+    stt = STT(api_key="test-key", keywords=terms)
+    terms.clear()
+
+    assert stt._opts.keywords == ["Acme"]
+
+
 class _FakeMessage:
     def __init__(self, payload: dict) -> None:
         import aiohttp
