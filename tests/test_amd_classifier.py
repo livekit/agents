@@ -9,15 +9,19 @@ from __future__ import annotations
 
 import asyncio
 import time
+from types import SimpleNamespace
 
 import pytest
 
+from livekit import rtc
 from livekit.agents.llm import FunctionToolCall
+from livekit.agents.voice.amd import detector as amd_detector
 from livekit.agents.voice.amd.classifier import (
     AMDCategory,
     AMDPredictionEvent,
     _AMDClassifier,
 )
+from livekit.agents.voice.amd.detector import AMD
 
 from .fake_llm import FakeLLM, FakeLLMResponse
 
@@ -77,6 +81,37 @@ def _human_response(transcript: str = "hello") -> FakeLLMResponse:
             )
         ],
     )
+
+
+class _RecordingClassifier:
+    def __init__(self) -> None:
+        self.timer_calls = 0
+        self.listening = False
+        self.settled: list[tuple[AMDCategory, str]] = []
+
+    def start_detection_timer(self) -> None:
+        self.timer_calls += 1
+
+    def start_listening(self) -> None:
+        self.listening = True
+
+    def settle(self, category: AMDCategory, reason: str) -> None:
+        self.settled.append((category, reason))
+
+
+def _make_sip_session(llm: FakeLLM) -> tuple[SimpleNamespace, SimpleNamespace]:
+    publisher = SimpleNamespace(
+        kind=rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
+        identity="callee",
+        track_publications={"track_sid": object()},
+    )
+    session = SimpleNamespace(
+        llm=llm,
+        _activity=None,
+        _amd=None,
+        _room_io=SimpleNamespace(room=SimpleNamespace(remote_participants={"callee": publisher})),
+    )
+    return session, publisher
 
 
 class TestAMDClassifier:
@@ -777,3 +812,213 @@ class TestAMDClassifier:
         assert clf._verdict_ready.is_set()
 
         await clf.close()
+
+
+class TestAMDWaitUntilAnswered:
+    """Tests for ``AMD(wait_until_answered=...)`` on SIP early media."""
+
+    async def test_sip_setup_waits_for_answer_by_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        answer_wait_started = asyncio.Event()
+        answered = asyncio.Event()
+
+        async def fake_wait_for_track_publication(**_: object) -> SimpleNamespace:
+            return SimpleNamespace(sid="track_sid")
+
+        async def fake_wait_for_participant_attribute(*_: object, **__: object) -> None:
+            answer_wait_started.set()
+            await answered.wait()
+
+        monkeypatch.setattr(
+            amd_detector, "wait_for_track_publication", fake_wait_for_track_publication
+        )
+        monkeypatch.setattr(
+            amd_detector,
+            "wait_for_participant_attribute",
+            fake_wait_for_participant_attribute,
+        )
+
+        classifier = _RecordingClassifier()
+        llm = FakeLLM()
+        session, _ = _make_sip_session(llm)
+        detector = AMD(
+            session,  # type: ignore[arg-type]
+            llm=llm,
+            participant_identity="callee",
+            suppress_compatibility_warning=True,
+        )
+        detector._stt = None
+        detector._classifier = classifier  # type: ignore[assignment]
+
+        await detector._setup(session)  # type: ignore[arg-type]
+        await answer_wait_started.wait()
+
+        assert detector._sip_answer_task is not None
+        assert classifier.timer_calls == 0
+        assert classifier.listening is False
+
+        answered.set()
+        await detector._sip_answer_task
+
+        assert classifier.timer_calls == 1
+        assert classifier.listening is True
+
+    async def test_wait_until_answered_false_classifies_sip_early_media(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def fake_wait_for_track_publication(**_: object) -> SimpleNamespace:
+            return SimpleNamespace(sid="track_sid")
+
+        async def fail_wait_for_participant_attribute(*_: object, **__: object) -> None:
+            raise AssertionError("SIP answer gate must not run when wait_until_answered=False")
+
+        monkeypatch.setattr(
+            amd_detector, "wait_for_track_publication", fake_wait_for_track_publication
+        )
+        monkeypatch.setattr(
+            amd_detector,
+            "wait_for_participant_attribute",
+            fail_wait_for_participant_attribute,
+        )
+
+        llm = FakeLLM(fake_responses=[_machine_vm_response("voicemail greeting")])
+        session, _ = _make_sip_session(llm)
+        detector = AMD(
+            session,  # type: ignore[arg-type]
+            llm=llm,
+            participant_identity="callee",
+            wait_until_answered=False,
+            suppress_compatibility_warning=True,
+        )
+        detector._stt = None
+        classifier = _make_classifier(
+            llm=llm, human_speech_threshold=0.05, machine_silence_threshold=0.3
+        )
+        detector._classifier = classifier
+        results: list[AMDPredictionEvent] = []
+        classifier.on("amd_prediction", results.append)
+
+        await detector._setup(session)  # type: ignore[arg-type]
+
+        assert detector._sip_answer_task is None
+        assert classifier.listening is True
+        assert classifier._detection_timeout_timer is not None
+        assert classifier._no_speech_timer is not None
+
+        classifier.on_user_speech_started()
+        await asyncio.sleep(0.1)
+        classifier.on_user_speech_ended(silence_duration=0.0)
+        detector._on_transcript("voicemail greeting")
+
+        await asyncio.sleep(0.4)
+        classifier.on_end_of_turn()
+
+        assert len(results) == 1
+        assert results[0].category == AMDCategory.MACHINE_VM
+
+        await classifier.close()
+
+    async def test_wait_until_answered_false_has_no_effect_on_non_sip_participant(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        classifier = _RecordingClassifier()
+
+        async def fake_wait_for_track_publication(**_: object) -> SimpleNamespace:
+            return SimpleNamespace(sid="track_sid")
+
+        async def fail_wait_for_participant_attribute(*_: object, **__: object) -> None:
+            raise AssertionError("non-SIP participants must never hit the SIP answer gate")
+
+        monkeypatch.setattr(
+            amd_detector, "wait_for_track_publication", fake_wait_for_track_publication
+        )
+        monkeypatch.setattr(
+            amd_detector,
+            "wait_for_participant_attribute",
+            fail_wait_for_participant_attribute,
+        )
+
+        llm = FakeLLM()
+        publisher = SimpleNamespace(
+            kind=object(),
+            identity="callee",
+            track_publications={"track_sid": object()},
+        )
+        session = SimpleNamespace(
+            llm=llm,
+            _activity=None,
+            _room_io=SimpleNamespace(
+                room=SimpleNamespace(remote_participants={"callee": publisher})
+            ),
+        )
+        detector = AMD(
+            session,  # type: ignore[arg-type]
+            llm=llm,
+            wait_until_answered=False,
+            suppress_compatibility_warning=True,
+        )
+        detector._stt = None
+        detector._classifier = classifier  # type: ignore[assignment]
+
+        await detector._setup(session)  # type: ignore[arg-type]
+
+        assert detector._sip_answer_task is None
+        assert classifier.timer_calls == 1
+        assert classifier.listening is True
+        assert classifier.settled == []
+
+    async def test_aclose_cancels_pending_sip_answer_when_never_answered(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        answer_wait_started = asyncio.Event()
+        answer_wait_cancelled = asyncio.Event()
+
+        async def fake_wait_for_track_publication(**_: object) -> SimpleNamespace:
+            return SimpleNamespace(sid="track_sid")
+
+        async def fake_wait_for_participant_attribute(*_: object, **__: object) -> None:
+            answer_wait_started.set()
+            try:
+                await asyncio.Future[None]()
+            except asyncio.CancelledError:
+                answer_wait_cancelled.set()
+                raise
+
+        monkeypatch.setattr(
+            amd_detector, "wait_for_track_publication", fake_wait_for_track_publication
+        )
+        monkeypatch.setattr(
+            amd_detector,
+            "wait_for_participant_attribute",
+            fake_wait_for_participant_attribute,
+        )
+
+        llm = FakeLLM()
+        session, _ = _make_sip_session(llm)
+        detector = AMD(
+            session,  # type: ignore[arg-type]
+            llm=llm,
+            participant_identity="callee",
+            suppress_compatibility_warning=True,
+        )
+        detector._stt = None
+        classifier = _make_classifier(llm=llm)
+        detector._classifier = classifier
+        session._amd = detector
+
+        await detector._setup(session)  # type: ignore[arg-type]
+        await answer_wait_started.wait()
+
+        answer_task = detector._sip_answer_task
+        assert answer_task is not None
+
+        await detector.aclose()
+
+        assert answer_wait_cancelled.is_set()
+        assert answer_task.cancelled()
+        assert detector._sip_answer_task is None
+        assert detector._setup_task is None
+        assert detector._classifier is None
+        assert classifier._closed is True
+        assert session._amd is None
