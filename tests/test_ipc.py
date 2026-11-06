@@ -19,6 +19,7 @@ import pytest
 from livekit.agents import JobContext, JobProcess, ipc, job, utils
 from livekit.agents.ipc.log_queue import LogQueueHandler, LogQueueListener
 from livekit.agents.utils.aio import duplex_unix
+from livekit.agents.voice.events import CloseReason
 from livekit.protocol import agent
 
 pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
@@ -211,7 +212,7 @@ async def _job_entrypoint_session_aclose_hangs(job_ctx: JobContext) -> None:
     job_ctx.add_shutdown_callback(_job_shutdown)
 
     class _HangingSession:
-        async def aclose(self) -> None:
+        async def _aclose_impl(self, *, reason: CloseReason) -> None:
             await asyncio.Event().wait()  # never resolves
 
     job_ctx._primary_agent_session = _HangingSession()  # type: ignore[assignment]
@@ -756,6 +757,49 @@ _job_loops: list[asyncio.AbstractEventLoop] = []
 async def _job_entrypoint_records_loop(job_ctx: JobContext) -> None:
     _job_loops.append(asyncio.get_running_loop())
     await _job_entrypoint(job_ctx)
+
+
+_close_reasons: list[CloseReason] = []
+
+
+async def _job_entrypoint_records_close_reason(job_ctx: JobContext) -> None:
+    start_args: _StartArgs = job_ctx.proc.user_arguments
+
+    class _Session:
+        async def aclose(self) -> None:
+            await self._aclose_impl(reason=CloseReason.USER_INITIATED)
+
+        async def _aclose_impl(self, *, reason: CloseReason) -> None:
+            _close_reasons.append(reason)
+
+    job_ctx._primary_agent_session = _Session()  # type: ignore[assignment]
+
+    async def _noop_session_end() -> None:
+        return None
+
+    job_ctx._on_session_end = _noop_session_end  # type: ignore[method-assign]
+
+    with start_args.entrypoint_counter.get_lock():
+        start_args.entrypoint_counter.value += 1
+
+    job_ctx.shutdown("close the session from the job shutdown")
+
+
+async def test_thread_job_shutdown_closes_session_as_job_shutdown():
+    """_shutdown_job must close the session with JOB_SHUTDOWN, not aclose()'s USER_INITIATED."""
+    _close_reasons.clear()
+    proc, start_args = _create_thread_proc(
+        close_timeout=10.0, job_entrypoint_fnc=_job_entrypoint_records_close_reason
+    )
+    await proc.start()
+    await proc.initialize()
+
+    await proc.launch_job(_generate_fake_job())
+    await _poll_until(lambda: start_args.entrypoint_counter.value >= 1)
+    await asyncio.wait_for(proc.aclose(), timeout=30.0)
+
+    assert proc.status == ipc.job_executor.JobStatus.SUCCESS
+    assert _close_reasons == [CloseReason.JOB_SHUTDOWN]
 
 
 async def test_thread_job_loop_is_closed_after_the_runner_exits():
