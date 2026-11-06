@@ -561,7 +561,10 @@ async def test_event_writer_stops_when_room_disconnects(
         with caplog.at_level(logging.WARNING, logger="livekit.agents"):
             host._send_event(agent_pb.AgentSessionEvent())
             host._send_event(agent_pb.AgentSessionEvent())
-            await host.aclose()
+            assert host._write_task is not None
+            await asyncio.wait_for(host._write_task, timeout=1.0)
+            host._send_event(agent_pb.AgentSessionEvent())
+        assert host._event_ch.empty()
         assert not [r for r in caplog.records if "failed to send session event" in r.message]
         assert room.local_participant.send_bytes.await_count == int(disconnect_during_send)
     finally:

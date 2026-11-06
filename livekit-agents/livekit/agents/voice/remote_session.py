@@ -496,6 +496,9 @@ class SessionHost:
                 await self._transport.send_message(msg)
             except _SessionTransportClosed:
                 # A deleted room has no recipient for the remaining notifications.
+                event_ch.close()
+                async for _ in event_ch:
+                    pass
                 return
             except Exception:
                 logger.warning("failed to send session event", exc_info=True)
