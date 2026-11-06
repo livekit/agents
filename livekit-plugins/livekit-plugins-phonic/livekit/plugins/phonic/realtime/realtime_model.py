@@ -1035,6 +1035,8 @@ class RealtimeSession(llm.RealtimeSession):
     def say(
         self,
         text: str | AsyncIterable[str],
+        *,
+        allow_interruptions: bool = True,
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
         if self._generate_reply_task and not self._generate_reply_task.done():
             self._generate_reply_task.cancel()

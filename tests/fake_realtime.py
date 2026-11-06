@@ -61,6 +61,7 @@ class FakeRealtimeSession(RealtimeSession):
         self.updated_instructions: str | None = None
         self.tool_choice: NotGivenOr[ToolChoice | None] = NOT_GIVEN
         self.say_calls: list[str | AsyncIterable[str]] = []
+        self.say_allow_interruptions: list[bool] = []
         self.user_activity_started = False
         self._reply_futs: list[asyncio.Future[GenerationCreatedEvent]] = []
         self.say_futs: list[asyncio.Future[GenerationCreatedEvent]] = []
@@ -135,8 +136,11 @@ class FakeRealtimeSession(RealtimeSession):
     def start_user_activity(self) -> None:
         self.user_activity_started = True
 
-    def say(self, text: str | AsyncIterable[str]) -> asyncio.Future[GenerationCreatedEvent]:
+    def say(
+        self, text: str | AsyncIterable[str], *, allow_interruptions: bool = True
+    ) -> asyncio.Future[GenerationCreatedEvent]:
         self.say_calls.append(text)
+        self.say_allow_interruptions.append(allow_interruptions)
         fut: asyncio.Future[GenerationCreatedEvent] = asyncio.get_event_loop().create_future()
         self.say_futs.append(fut)
         return fut

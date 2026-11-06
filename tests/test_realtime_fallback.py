@@ -158,13 +158,30 @@ def test_forwards_child_events_to_wrapper_subscribers() -> None:
     assert received == ["sentinel"]
 
 
-def test_proxies_say_to_active_child() -> None:
-    primary = FakeRealtimeModel()
+@pytest.mark.parametrize("allow_interruptions", [True, False])
+def test_proxies_say_to_active_child(allow_interruptions: bool) -> None:
+    primary = FakeRealtimeModel(capabilities=fake_capabilities(supports_uninterruptible_say=True))
     session = RealtimeModelFallbackAdapter([primary]).session()
 
-    session.say("hello there")
+    session.say("hello there", allow_interruptions=allow_interruptions)
 
     assert primary.active_session.say_calls == ["hello there"]
+    assert primary.active_session.say_allow_interruptions == [allow_interruptions]
+
+
+@pytest.mark.parametrize("backup_supports_uninterruptible_say", [False, True])
+def test_ands_uninterruptible_say_across_models(
+    backup_supports_uninterruptible_say: bool,
+) -> None:
+    primary = FakeRealtimeModel(capabilities=fake_capabilities(supports_uninterruptible_say=True))
+    backup = FakeRealtimeModel(
+        capabilities=fake_capabilities(
+            supports_uninterruptible_say=backup_supports_uninterruptible_say
+        )
+    )
+    adapter = RealtimeModelFallbackAdapter([primary, backup])
+
+    assert adapter.capabilities.supports_uninterruptible_say is backup_supports_uninterruptible_say
 
 
 def test_proxies_start_user_activity_to_active_child() -> None:

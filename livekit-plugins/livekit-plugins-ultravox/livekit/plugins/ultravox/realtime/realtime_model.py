@@ -571,6 +571,8 @@ class RealtimeSession(
     def say(
         self,
         text: str | AsyncIterable[str],
+        *,
+        allow_interruptions: bool = True,
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
         """Speak verbatim text via Ultravox ``ForcedAgentMessage``.
 
