@@ -2,18 +2,36 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use lk_agents_abi::BoxFuture;
 use lk_agents_abi::errors::HostError;
+use lk_agents_abi::llm::mcp::McpSession as _;
 
 use super::*;
 
 /// A host toolset whose server answers once `reachable`; a `blocking` listing waits for its
 /// cancellation.
-#[derive(Default)]
 struct Host {
     reachable: AtomicBool,
     blocking: AtomicBool,
     lists: AtomicUsize,
     cancelled: AtomicUsize,
     closes: AtomicUsize,
+    session: Arc<super::super::session::McpSession>,
+    server: Arc<super::super::tests::Server>,
+}
+
+impl Default for Host {
+    fn default() -> Self {
+        let server = Arc::new(super::super::tests::Server::default());
+        server.refuse.store(true, Ordering::SeqCst);
+        Self {
+            reachable: AtomicBool::new(false),
+            blocking: AtomicBool::new(false),
+            lists: AtomicUsize::new(0),
+            cancelled: AtomicUsize::new(0),
+            closes: AtomicUsize::new(0),
+            session: Arc::new(super::super::session::McpSession::new(10.0, None, None).unwrap()),
+            server,
+        }
+    }
 }
 
 impl McpToolsetHost for Host {
@@ -30,15 +48,15 @@ impl McpToolsetHost for Host {
                 self.cancelled.fetch_add(1, Ordering::SeqCst);
                 return Err(HostError::new("listing cancelled"));
             }
-            match self.reachable.load(Ordering::SeqCst) {
-                true => Ok(()),
-                false => Err(HostError::new("server unreachable")),
+            if self.reachable.load(Ordering::SeqCst) {
+                return Ok(());
             }
+            let server = self.server.clone();
+            self.session
+                .connect_fake(move || server.connect())
+                .await
+                .map_err(|error| HostError::new(error.to_string()))
         })
-    }
-
-    fn retry_in(&self) -> Result<f64, HostError> {
-        Ok(2.0)
     }
 
     fn close_idle<'a>(
@@ -54,7 +72,7 @@ impl McpToolsetHost for Host {
 struct Lifecycle(McpToolsetLifecycle, Arc<Host>);
 
 fn lifecycle(host: &Arc<Host>) -> Lifecycle {
-    Lifecycle(McpToolsetLifecycle::new("test".into(), 60.0), host.clone())
+    Lifecycle(McpToolsetLifecycle::new("test".into(), 60.0, host.session.clone()), host.clone())
 }
 
 async fn setup(lifecycle: &Lifecycle) {
@@ -72,10 +90,14 @@ async fn an_unreachable_server_is_listed_again_at_the_sessions_backoff() {
     let lifecycle = lifecycle(&host);
     setup(&lifecycle).await;
     assert_eq!(host.lists.load(Ordering::SeqCst), 1);
-    tokio::time::sleep(Duration::from_millis(2100)).await;
-    assert_eq!(host.lists.load(Ordering::SeqCst), 2, "one retry per backoff");
+    tokio::time::sleep(Duration::from_millis(900)).await;
+    assert_eq!(host.lists.load(Ordering::SeqCst), 1, "the native session is backing off");
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(host.lists.load(Ordering::SeqCst), 2, "the first native backoff expired");
+    tokio::time::sleep(Duration::from_millis(1800)).await;
+    assert_eq!(host.lists.load(Ordering::SeqCst), 2, "the next native backoff is two seconds");
     host.reachable.store(true, Ordering::SeqCst);
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
     assert_eq!(host.lists.load(Ordering::SeqCst), 3);
     tokio::time::sleep(Duration::from_secs(10)).await;
     assert_eq!(host.lists.load(Ordering::SeqCst), 3, "recovered: no further listing");

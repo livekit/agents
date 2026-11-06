@@ -345,8 +345,8 @@ class _core_McpToolsetLifecycle:
     last run released the toolset unless a run sets it up again first. `host` is the toolset,
     held only while a recovery or an idle close is pending.
     """
-    def __new__(cls, server: str, idle_close: float) -> Self:
-        """`server` names the server in logs."""
+    def __new__(cls, server: str, idle_close: float, session: McpSession) -> Self:
+        """`server` names the server in logs; `session` owns the reconnect backoff."""
     async def setup(self, host: MCPToolset) -> None:
         """Disarm a pending idle close, then list the tools unless they are listed or a recovery
         is under way. A failed listing is logged and recovered in the background; a cancelled

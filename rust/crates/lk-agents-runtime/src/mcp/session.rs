@@ -243,7 +243,7 @@ impl McpSessionPort for McpSession {
         self.connection.lock().as_ref().is_some_and(|c| c.alive())
     }
     fn retry_in(&self) -> f64 {
-        self.gate.lock().wait(self.epoch.elapsed()).as_secs_f64()
+        self.retry_delay().as_secs_f64()
     }
 
     async fn connect_http(
@@ -382,6 +382,10 @@ impl McpSessionPort for McpSession {
 }
 
 impl McpSession {
+    pub(super) fn retry_delay(&self) -> Duration {
+        self.gate.lock().wait(self.epoch.elapsed())
+    }
+
     async fn connect_to(&self, target: Target) -> Result<(), McpError> {
         let _connecting = self.connecting.lock().await;
         // New credentials replace the connection made with the old ones.

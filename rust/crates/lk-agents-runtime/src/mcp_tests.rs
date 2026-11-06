@@ -28,12 +28,12 @@ pub(super) struct Peer {
 
 /// The server: each connection attempt is a new peer.
 #[derive(Default)]
-struct Server {
+pub(super) struct Server {
     peers: parking_lot::Mutex<Vec<Arc<Peer>>>,
     /// Handshakes never answered while set.
     silent: AtomicBool,
     /// Connections refused while set.
-    refuse: AtomicBool,
+    pub(super) refuse: AtomicBool,
     attempts: AtomicUsize,
 }
 
@@ -41,7 +41,7 @@ impl Server {
     fn peer(&self) -> Arc<Peer> {
         self.peers.lock().last().unwrap().clone()
     }
-    fn connect(self: &Arc<Self>) -> FakeTransport {
+    pub(super) fn connect(self: &Arc<Self>) -> FakeTransport {
         self.attempts.fetch_add(1, Ordering::SeqCst);
         let (send, replies) = mpsc::channel(16);
         let peer = Arc::new(Peer {

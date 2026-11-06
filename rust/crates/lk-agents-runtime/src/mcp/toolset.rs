@@ -17,6 +17,7 @@ use crate::telemetry;
 
 pub struct McpToolsetLifecycle {
     server: String,
+    session: Arc<super::session::McpSession>,
     idle_close: Duration,
     /// One setup at a time.
     setting_up: tokio::sync::Mutex<()>,
@@ -65,20 +66,18 @@ async fn list(
 /// List again at the session's backoff until the server answers or `stop` fires.
 async fn recover(
     host: Arc<dyn McpToolsetHost>,
+    session: Arc<super::session::McpSession>,
     state: Arc<Mutex<State>>,
     stop: CancellationToken,
     context: CallContext,
     cx: telemetry::Cx,
 ) {
     loop {
-        let wait = host.retry_in().unwrap_or_else(|error| {
-            log::warn!(target: "livekit.agents", "MCP retry delay unavailable: {error}");
-            1.0
-        });
+        let wait = session.retry_delay();
         tokio::select! {
             biased;
             () = stop.cancelled() => return,
-            () = tokio::time::sleep(Duration::try_from_secs_f64(wait).unwrap_or_default()) => {}
+            () = tokio::time::sleep(wait) => {}
         }
         match list(&*host, &cx, &context, Some(&stop)).await {
             Ok(true) => {
@@ -94,9 +93,12 @@ async fn recover(
 }
 
 impl Port for McpToolsetLifecycle {
-    fn new(server: String, idle_close: f64) -> Self {
+    type Session = super::session::McpSession;
+
+    fn new(server: String, idle_close: f64, session: Arc<Self::Session>) -> Self {
         Self {
             server,
+            session,
             idle_close: Duration::try_from_secs_f64(idle_close).unwrap_or_default(),
             setting_up: tokio::sync::Mutex::new(()),
             state: Arc::default(),
@@ -123,8 +125,14 @@ impl Port for McpToolsetLifecycle {
                     self.server
                 );
                 let stop = CancellationToken::new();
-                let task =
-                    tokio::spawn(recover(host, self.state.clone(), stop.clone(), context, cx));
+                let task = tokio::spawn(recover(
+                    host,
+                    self.session.clone(),
+                    self.state.clone(),
+                    stop.clone(),
+                    context,
+                    cx,
+                ));
                 self.state.lock().recovery = Some(Recovery { stop, task });
             }
         }

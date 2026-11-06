@@ -1759,19 +1759,24 @@ pub struct CoreMcpToolsetLifecycle(pub(crate) ::std::sync::Arc<CoreMcpToolsetLif
 
 #[pymethods]
 impl CoreMcpToolsetLifecycle {
-    /// `server` names the server in logs.
+    /// `server` names the server in logs; `session` owns the reconnect backoff.
     #[new]
-    #[pyo3(signature = (server, idle_close))]
+    #[pyo3(signature = (server, idle_close, session))]
     fn new(
         py: Python<'_>,
         server: ::std::string::String,
         #[pyo3(from_py_with = _extract_mcp_toolset_lifecycle_new_idle_close)]
         idle_close: McpToolsetLifecycleNewIdleCloseInput,
+        session: Bound<'_, PyAny>,
     ) -> PyResult<CoreMcpToolsetLifecycle> {
         crate::py_calls::check_pid()?;
+        let session = session
+            .cast::<super::llm::McpSession>()
+            .map(|value| ::std::sync::Arc::clone(&value.get().0))
+            .map_err(::pyo3::PyErr::from)?;
         let out = py.detach(|| {
             <CoreMcpToolsetLifecycleImpl as ::lk_agents_abi::llm::mcp::McpToolsetLifecycle>::new(
-                server, idle_close,
+                server, idle_close, session,
             )
         });
         ::pyo3::PyResult::Ok(CoreMcpToolsetLifecycle(::std::sync::Arc::new(out)))
@@ -3783,40 +3788,6 @@ impl ::lk_agents_abi::llm::mcp::McpToolsetHost for McpToolsetHostProxy {
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
-        })
-    }
-
-    fn retry_in(&self) -> ::std::result::Result<f64, ::lk_agents_abi::errors::HostError> {
-        let host = ::std::sync::Arc::clone(&self.host);
-        let out = ::lk_agents_runtime::host::call_now(
-            &crate::py_calls::Entry,
-            ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((
-                    host.bind(py).getattr("_core_retry_in")?,
-                    ::pyo3::types::PyTuple::new(py, args)?,
-                    None,
-                ))
-            }),
-        );
-        ::pyo3::Python::attach(|py| {
-            let out = match out {
-                Ok(out) => out,
-                Err(e) => {
-                    return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
-                }
-            };
-            let o = out.value.bind(py);
-            let out = (crate::py_values::number_from_py::<f64>(
-                o.as_any(),
-                "McpToolsetHost._core_retry_in",
-            ))
-            .map_err(|e| {
-                <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(
-                    py, &e,
-                )
-            })?;
-            Ok(out)
         })
     }
 

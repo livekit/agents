@@ -213,9 +213,6 @@ pub trait McpToolsetHost: Send + Sync {
         #[host(context)] context: &'a crate::invoke::CallContext,
         #[host(cancel)] cancel: std::sync::Arc<dyn crate::invoke::Cancellation>,
     ) -> crate::BoxFuture<'a, Result<(), crate::errors::HostError>>;
-    /// Seconds until the server's session may try to connect again.
-    #[host(call, name = "_core_retry_in")]
-    fn retry_in(&self) -> Result<f64, crate::errors::HostError>;
     /// The connection idled: drop the tools and close the server, which a later `setup()`
     /// connects again.
     #[host(await, name = "_core_close_idle")]
@@ -233,9 +230,12 @@ pub trait McpToolsetHost: Send + Sync {
 /// held only while a recovery or an idle close is pending.
 #[crate::host(class(name = "_core_McpToolsetLifecycle"))]
 pub trait McpToolsetLifecycle: Send + Sync + Sized + 'static {
-    /// `server` names the server in logs.
+    #[host(class(name = "McpSession"))]
+    type Session: Send + Sync + 'static;
+
+    /// `server` names the server in logs; `session` owns the reconnect backoff.
     #[host(new)]
-    fn new(server: String, idle_close: f64) -> Self;
+    fn new(server: String, idle_close: f64, session: std::sync::Arc<Self::Session>) -> Self;
     /// Disarm a pending idle close, then list the tools unless they are listed or a recovery
     /// is under way. A failed listing is logged and recovered in the background; a cancelled
     /// setup cancels its listing.

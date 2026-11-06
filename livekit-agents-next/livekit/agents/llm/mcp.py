@@ -62,11 +62,6 @@ class MCPServer:
     def initialized(self) -> bool:
         return self._session.connected
 
-    @property
-    def _retry_in(self) -> float:
-        """Seconds until the session's backoff lets it try to connect again."""
-        return self._session.retry_in
-
     async def initialize(self) -> None:
         raise NotImplementedError
 
@@ -301,7 +296,9 @@ class MCPToolset(AsyncToolset):
         self._mcp_server = mcp_server
         self._tool_options = dict(tool_options or {})
         # the listing's recovery and the idle close are the core's
-        self._lifecycle = _core._core_McpToolsetLifecycle(repr(mcp_server), MCP_IDLE_CLOSE_SECONDS)
+        self._lifecycle = _core._core_McpToolsetLifecycle(
+            repr(mcp_server), MCP_IDLE_CLOSE_SECONDS, mcp_server._session
+        )
         # per-run credentials: one toolset per credential set, and each call's
         self._by_credentials: dict[str, MCPToolset] = {}
         self._by_call: weakref.WeakKeyDictionary[object, MCPToolset] = weakref.WeakKeyDictionary()
@@ -349,9 +346,6 @@ class MCPToolset(AsyncToolset):
         if not self._mcp_server.initialized:
             await self._mcp_server.initialize()
         self._tools = list(await self._mcp_server.list_tools(tool_options=self._tool_options))
-
-    def _core_retry_in(self) -> float:
-        return self._mcp_server._retry_in
 
     async def _core_close_idle(self) -> None:
         self._tools = []

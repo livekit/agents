@@ -91,7 +91,7 @@ pub trait Implementations: 'static {
     type ChoiceParser: ::lk_agents_abi::llm::inference::ChoiceParser;
     type CompletionWire: ::lk_agents_abi::llm::inference::CompletionWire;
     type McpSession: ::lk_agents_abi::llm::mcp::McpSession;
-    type McpToolsetLifecycle: ::lk_agents_abi::llm::mcp::McpToolsetLifecycle;
+    type McpToolsetLifecycle: ::lk_agents_abi::llm::mcp::McpToolsetLifecycle<Session = Self::McpSession>;
     type McpTools: ::lk_agents_abi::llm::mcp::McpTools;
     type LlmAlgorithms: ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms;
     type HostRealtimeModel: ::lk_agents_abi::llm::realtime::HostRealtimeModel;

@@ -21,6 +21,7 @@ async def lookup() -> str:
 
 class Server(MCPServer):
     def __init__(self) -> None:
+        super().__init__(init_timeout=10.0, request_timeout=None)
         self.connected = False
         self.closes = 0
         self.reachable = True
@@ -29,10 +30,6 @@ class Server(MCPServer):
     @property
     def initialized(self) -> bool:
         return self.connected
-
-    @property
-    def _retry_in(self) -> float:
-        return 0.0
 
     async def initialize(self) -> None:
         self.connected = True
