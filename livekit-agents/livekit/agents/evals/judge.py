@@ -116,7 +116,7 @@ def _has_handoffs(chat_ctx: ChatContext) -> bool:
 
 async def _evaluate_with_llm(llm: LLM, prompt: str, *, name: str) -> JudgmentResult:
     """Run one judgment under a span naming the judge, so its LLM request is attributed."""
-    with tracer.start_as_current_span("judge_evaluation") as span:
+    with tracer.start_as_current_span(trace_types.SPAN_JUDGE_EVALUATION) as span:
         span.set_attribute(trace_types.ATTR_GEN_AI_EVALUATION_NAME, name)
         result = await _judge_with_llm(llm, prompt)
         span.set_attribute(trace_types.ATTR_GEN_AI_EVALUATION_SCORE_LABEL, result.verdict)

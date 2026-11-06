@@ -30,6 +30,7 @@ from typing_extensions import TypeVar
 from livekit import rtc
 
 from ..log import logger
+from ..telemetry import trace_types
 from ..utils import images
 from . import _strict
 from .chat_context import ChatContext, ImageContent
@@ -630,9 +631,9 @@ def parse_function_arguments(json_arguments: str) -> dict[str, Any]:
         logger.warning(
             "repaired malformed function-call JSON arguments",
             extra={
-                "lk.pii.raw_arguments": json_arguments[:500],
-                "lk.pii.repaired": cleaned,
-                "lk.pii.error": str(strict_err),
+                trace_types.ATTR_PII_RAW_ARGUMENTS: json_arguments[:500],
+                trace_types.ATTR_PII_REPAIRED: cleaned,
+                trace_types.ATTR_PII_ERROR: str(strict_err),
             },
         )
         args_dict = cleaned
@@ -702,7 +703,7 @@ def prepare_function_arguments(
         except ValueError as e:
             logger.error(
                 f"error parsing arguments for `{fnc.info.name}`",
-                extra={"function": fnc.info.name, "lk.pii.arguments": json_arguments},
+                extra={"function": fnc.info.name, trace_types.ATTR_PII_ARGUMENTS: json_arguments},
             )
             raise ToolError(f"Error parsing arguments for `{fnc.info.name}`: {e}") from e
 
@@ -721,13 +722,13 @@ def prepare_function_arguments(
     except (pydantic.ValidationError, ValueError, TypeError) as e:
         logger.error(
             f"error parsing arguments for `{fnc.info.name}`",
-            extra={"function": fnc.info.name, "lk.pii.arguments": json_arguments},
+            extra={"function": fnc.info.name, trace_types.ATTR_PII_ARGUMENTS: json_arguments},
         )
         raise ToolError(f"Error parsing arguments for `{fnc.info.name}`: {e}") from e
     except Exception:
         logger.exception(
             f"error parsing arguments for `{fnc.info.name}`",
-            extra={"function": fnc.info.name, "lk.pii.arguments": json_arguments},
+            extra={"function": fnc.info.name, trace_types.ATTR_PII_ARGUMENTS: json_arguments},
         )
         raise
 
@@ -1002,7 +1003,7 @@ def make_function_call_output(
     if not _is_valid_function_output(output):
         logger.error(
             f"AI function `{fnc_call.name}` returned an invalid output",
-            extra={"call_id": fnc_call.call_id, "lk.pii.output": output},
+            extra={"call_id": fnc_call.call_id, trace_types.ATTR_PII_OUTPUT: output},
         )
         return FunctionCallResult(
             fnc_call=fnc_call,
@@ -1084,7 +1085,10 @@ async def execute_function_call(
         if not isinstance(e, ToolError):
             logger.exception(
                 f"exception executing AI function `{tool_call.name}`",
-                extra={"call_id": tool_call.call_id, "lk.pii.arguments": tool_call.arguments},
+                extra={
+                    "call_id": tool_call.call_id,
+                    trace_types.ATTR_PII_ARGUMENTS: tool_call.arguments,
+                },
             )
         out = make_function_call_output(fnc_call=fnc_call, output=None, exception=e)
 

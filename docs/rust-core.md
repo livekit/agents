@@ -32,7 +32,7 @@ classes; the Python voice pipeline does not call them.
 | `lk-agents-abi`         | The provider seam (`Stt`, `Tts`, `Llm`, `Vad`, `Realtime` traits) and the data vocabulary every other crate is written against, one module per subject named like the Python package. The host records (`#[derive(Host)]`). Behind its `python` feature: the registration table, the fork guard, the host bridge. Performs no I/O. |
 | `lk-agents-bindgen`     | The expansion of `#[host(..)]`: an item's pyo3 binding, emitted in the crate that owns the item. Shares its attribute parser with `lk-agents-codegen`.                                                                                                                                                                             |
 | `lk-agents-host-derive` | The proc macros: `#[derive(Host)]`, `#[host(..)]`, `Vocabulary`. Reached through `lk-agents-abi`.                                                                                                                                                                                                                                  |
-| `lk-agents-codegen`     | The generator binary: reads every declaration and writes the `.pyi` stubs, the pydantic modules, the TypeScript interfaces and the napi records. Also `check-layout`, the architecture check on the voice crate's module boundaries.                                                                                               |
+| `lk-agents-codegen`     | The generator binary: reads every declaration and writes the `.pyi` stubs, the pydantic modules, the TypeScript interfaces and the napi records, and copies the protocol's semantic conventions. Also `check-layout`, the architecture check on the voice crate's module boundaries.                                               |
 | `lk-agents-media`       | Container decode to PCM, ogg/opus encode, image encode, resampling. Pure Rust by default; `blingfire`, `images`, `ffmpeg` and `resample` add the C and C++ parts.                                                                                                                                                                  |
 | `lk-agents-rtc`         | RTC capabilities supplied by the host SDK: rooms, participants, tracks, streams and audio sources as host proxies, plus a fake room for tests.                                                                                                                                                                                     |
 | `lk-agents-inference`   | The `Native*` inference-gateway clients (STT, TTS, LLM, realtime, VAD, end of turn, AMD, interruption), the fallback adapters, the MCP client. The socket appears only in `transport` and `native`.                                                                                                                                |
@@ -146,6 +146,8 @@ pub struct AgentStateChanged { .. }
   pydantic modules under `livekit-agents/livekit/agents/_generated/`, the
   TypeScript interfaces, and the napi records under
   `lk-agents-node/src/generated/`. Generated files carry a first-line mark.
+  It also copies the `protocol` submodule's semantic conventions
+  (`protocol/otel/gen`) into `lk-agents-abi` and the Python package.
 
 ```bash
 cd rust

@@ -1055,7 +1055,7 @@ class ChatMessageAssert:
     def event(self) -> ChatMessageEvent:
         return self._event
 
-    @tracer.start_as_current_span("judge_evaluation")
+    @tracer.start_as_current_span(trace_types.SPAN_JUDGE_EVALUATION)
     async def judge(self, llm_v: llm.LLM, *, intent: str) -> ChatMessageAssert:
         """
         Evaluate whether the message fulfills the given intent.

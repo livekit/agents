@@ -2,6 +2,8 @@
 use serde_json::{Map, Value};
 use std::sync::LazyLock;
 
+use crate::telemetry::semconv;
+
 const MAX_DEPTH: usize = 64;
 static TOKENS: LazyLock<Vec<regex::Regex>> = LazyLock::new(|| {
     [
@@ -68,9 +70,10 @@ pub fn parse_logged(raw: &str) -> Result<Map<String, Value>, String> {
         };
         log::warn!(
             target: "livekit.agents",
-            "lk.pii.raw_arguments" = raw_arguments.as_str(),
-            "lk.pii.repaired" = repaired.as_str(),
-            "lk.pii.error" = error.as_str();
+            // Parenthesized: `log` sends a bare identifier key as its own name.
+            (semconv::LK_PII_RAW_ARGUMENTS) = raw_arguments.as_str(),
+            (semconv::LK_PII_REPAIRED) = repaired.as_str(),
+            (semconv::LK_PII_ERROR) = error.as_str();
             "repaired malformed function-call JSON arguments"
         );
     }
@@ -161,7 +164,9 @@ mod tests {
         assert_eq!(parse("{'x':'\\uD83D\\uDE00'}").unwrap().arguments["x"], json!("😀"));
     }
     // Catches: the repair warning losing the reference's `lk.pii.*` extras (the raw payload, the
-    // repaired value, the strict error), which is all a reader of that warning has to go on.
+    // repaired value, the strict error), which is all a reader of that warning has to go on; and a
+    // bare `LK_PII_ERROR = ..` key, which `log` sends as the text `LK_PII_ERROR`. The constants'
+    // strings are pinned in `semconv_pins`.
     #[test]
     fn a_repair_is_logged_with_the_raw_payload_the_repair_and_the_error() {
         struct Keys(std::sync::Mutex<Vec<(String, String)>>);
@@ -187,9 +192,9 @@ mod tests {
         parse_logged("{'x':1}").unwrap();
         let seen = keys.0.lock().unwrap().clone();
         let get = |k: &str| seen.iter().find(|(key, _)| key == k).map(|(_, v)| v.as_str());
-        assert_eq!(get("lk.pii.raw_arguments"), Some("{'x':1}"));
-        assert_eq!(get("lk.pii.repaired"), Some(r#"{"x":1}"#));
-        assert!(get("lk.pii.error").is_some_and(|e| !e.is_empty()), "{seen:?}");
+        assert_eq!(get(semconv::LK_PII_RAW_ARGUMENTS), Some("{'x':1}"), "{seen:?}");
+        assert_eq!(get(semconv::LK_PII_REPAIRED), Some(r#"{"x":1}"#), "{seen:?}");
+        assert!(get(semconv::LK_PII_ERROR).is_some_and(|e| !e.is_empty()), "{seen:?}");
     }
     #[test]
     fn invalid_and_deep_input_fails_boundedly() {

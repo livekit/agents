@@ -8,6 +8,7 @@ use lk_agents_abi::metrics::base::Metadata;
 use lk_agents_abi::MetricsMetadata;
 
 use crate::metrics::base::AgentMetrics;
+use crate::telemetry::semconv::metric;
 
 /// A counter takes `.add`, a histogram `.record`.
 #[crate::host(wire_strs)]
@@ -64,51 +65,73 @@ impl OtelRecord {
 
 // ---------------------------------------------------------------------------- instrument names
 
-// Not `pub`: [`INSTRUMENTS`] is the one public surface. `otel_metrics.py:36`.
-const TURN_E2E_LATENCY: &str = "lk.agents.turn.e2e_latency";
-const TURN_LLM_TTFT: &str = "lk.agents.turn.llm_ttft";
-const TURN_TTS_TTFB: &str = "lk.agents.turn.tts_ttfb";
-const TURN_TRANSCRIPTION_DELAY: &str = "lk.agents.turn.transcription_delay";
-const TURN_END_OF_TURN_DELAY: &str = "lk.agents.turn.end_of_turn_delay";
-const TURN_ON_USER_TURN_COMPLETED_DELAY: &str = "lk.agents.turn.on_user_turn_completed_delay";
+// Not `pub`: [`INSTRUMENTS`] is the one public surface. `otel_metrics.py:36`; the strings come
+// from the protocol registry (`telemetry::semconv::metric`).
+const TURN_E2E_LATENCY: &str = metric::LK_AGENTS_TURN_E2E_LATENCY;
+const TURN_E2E_LATENCY_UNIT: &str = metric::LK_AGENTS_TURN_E2E_LATENCY_UNIT;
+const TURN_LLM_TTFT: &str = metric::LK_AGENTS_TURN_LLM_TTFT;
+const TURN_LLM_TTFT_UNIT: &str = metric::LK_AGENTS_TURN_LLM_TTFT_UNIT;
+const TURN_TTS_TTFB: &str = metric::LK_AGENTS_TURN_TTS_TTFB;
+const TURN_TTS_TTFB_UNIT: &str = metric::LK_AGENTS_TURN_TTS_TTFB_UNIT;
+const TURN_TRANSCRIPTION_DELAY: &str = metric::LK_AGENTS_TURN_TRANSCRIPTION_DELAY;
+const TURN_TRANSCRIPTION_DELAY_UNIT: &str = metric::LK_AGENTS_TURN_TRANSCRIPTION_DELAY_UNIT;
+const TURN_END_OF_TURN_DELAY: &str = metric::LK_AGENTS_TURN_END_OF_TURN_DELAY;
+const TURN_END_OF_TURN_DELAY_UNIT: &str = metric::LK_AGENTS_TURN_END_OF_TURN_DELAY_UNIT;
+const TURN_ON_USER_TURN_COMPLETED_DELAY: &str = metric::LK_AGENTS_TURN_ON_USER_TURN_COMPLETED_DELAY;
+const TURN_ON_USER_TURN_COMPLETED_DELAY_UNIT: &str = metric::LK_AGENTS_TURN_ON_USER_TURN_COMPLETED_DELAY_UNIT;
 
 // `otel_metrics.py:68`.
-const LLM_INPUT_TOKENS: &str = "lk.agents.usage.llm_input_tokens";
-const LLM_INPUT_CACHED_TOKENS: &str = "lk.agents.usage.llm_input_cached_tokens";
-const LLM_OUTPUT_TOKENS: &str = "lk.agents.usage.llm_output_tokens";
-const LLM_INPUT_AUDIO_TOKENS: &str = "lk.agents.usage.llm_input_audio_tokens";
-const LLM_INPUT_TEXT_TOKENS: &str = "lk.agents.usage.llm_input_text_tokens";
-const LLM_OUTPUT_AUDIO_TOKENS: &str = "lk.agents.usage.llm_output_audio_tokens";
-const LLM_OUTPUT_TEXT_TOKENS: &str = "lk.agents.usage.llm_output_text_tokens";
-const LLM_SESSION_DURATION: &str = "lk.agents.usage.llm_session_duration";
-const TTS_CHARACTERS: &str = "lk.agents.usage.tts_characters";
-const TTS_AUDIO_DURATION: &str = "lk.agents.usage.tts_audio_duration";
-const STT_AUDIO_DURATION: &str = "lk.agents.usage.stt_audio_duration";
-const INTERRUPTION_NUM_REQUESTS: &str = "lk.agents.usage.interruption_num_requests";
+const LLM_INPUT_TOKENS: &str = metric::LK_AGENTS_USAGE_LLM_INPUT_TOKENS;
+const LLM_INPUT_TOKENS_UNIT: &str = metric::LK_AGENTS_USAGE_LLM_INPUT_TOKENS_UNIT;
+const LLM_INPUT_CACHED_TOKENS: &str = metric::LK_AGENTS_USAGE_LLM_INPUT_CACHED_TOKENS;
+const LLM_INPUT_CACHED_TOKENS_UNIT: &str = metric::LK_AGENTS_USAGE_LLM_INPUT_CACHED_TOKENS_UNIT;
+const LLM_OUTPUT_TOKENS: &str = metric::LK_AGENTS_USAGE_LLM_OUTPUT_TOKENS;
+const LLM_OUTPUT_TOKENS_UNIT: &str = metric::LK_AGENTS_USAGE_LLM_OUTPUT_TOKENS_UNIT;
+const LLM_INPUT_AUDIO_TOKENS: &str = metric::LK_AGENTS_USAGE_LLM_INPUT_AUDIO_TOKENS;
+const LLM_INPUT_AUDIO_TOKENS_UNIT: &str = metric::LK_AGENTS_USAGE_LLM_INPUT_AUDIO_TOKENS_UNIT;
+const LLM_INPUT_TEXT_TOKENS: &str = metric::LK_AGENTS_USAGE_LLM_INPUT_TEXT_TOKENS;
+const LLM_INPUT_TEXT_TOKENS_UNIT: &str = metric::LK_AGENTS_USAGE_LLM_INPUT_TEXT_TOKENS_UNIT;
+const LLM_OUTPUT_AUDIO_TOKENS: &str = metric::LK_AGENTS_USAGE_LLM_OUTPUT_AUDIO_TOKENS;
+const LLM_OUTPUT_AUDIO_TOKENS_UNIT: &str = metric::LK_AGENTS_USAGE_LLM_OUTPUT_AUDIO_TOKENS_UNIT;
+const LLM_OUTPUT_TEXT_TOKENS: &str = metric::LK_AGENTS_USAGE_LLM_OUTPUT_TEXT_TOKENS;
+const LLM_OUTPUT_TEXT_TOKENS_UNIT: &str = metric::LK_AGENTS_USAGE_LLM_OUTPUT_TEXT_TOKENS_UNIT;
+const LLM_SESSION_DURATION: &str = metric::LK_AGENTS_USAGE_LLM_SESSION_DURATION;
+const LLM_SESSION_DURATION_UNIT: &str = metric::LK_AGENTS_USAGE_LLM_SESSION_DURATION_UNIT;
+const TTS_CHARACTERS: &str = metric::LK_AGENTS_USAGE_TTS_CHARACTERS;
+const TTS_CHARACTERS_UNIT: &str = metric::LK_AGENTS_USAGE_TTS_CHARACTERS_UNIT;
+const TTS_AUDIO_DURATION: &str = metric::LK_AGENTS_USAGE_TTS_AUDIO_DURATION;
+const TTS_AUDIO_DURATION_UNIT: &str = metric::LK_AGENTS_USAGE_TTS_AUDIO_DURATION_UNIT;
+const STT_AUDIO_DURATION: &str = metric::LK_AGENTS_USAGE_STT_AUDIO_DURATION;
+const STT_AUDIO_DURATION_UNIT: &str = metric::LK_AGENTS_USAGE_STT_AUDIO_DURATION_UNIT;
+const INTERRUPTION_NUM_REQUESTS: &str = metric::LK_AGENTS_USAGE_INTERRUPTION_NUM_REQUESTS;
+const INTERRUPTION_NUM_REQUESTS_UNIT: &str = metric::LK_AGENTS_USAGE_INTERRUPTION_NUM_REQUESTS_UNIT;
 
 // `otel_metrics.py:90`.
-const CONNECTION_ACQUIRE_TIME: &str = "lk.agents.connection.acquire_time";
+const CONNECTION_ACQUIRE_TIME: &str = metric::LK_AGENTS_CONNECTION_ACQUIRE_TIME;
+const CONNECTION_ACQUIRE_TIME_UNIT: &str = metric::LK_AGENTS_CONNECTION_ACQUIRE_TIME_UNIT;
 
-pub const INSTRUMENTS: &[(&str, InstrumentKind)] = &[
-    (TURN_E2E_LATENCY, InstrumentKind::Histogram),
-    (TURN_LLM_TTFT, InstrumentKind::Histogram),
-    (TURN_TTS_TTFB, InstrumentKind::Histogram),
-    (TURN_TRANSCRIPTION_DELAY, InstrumentKind::Histogram),
-    (TURN_END_OF_TURN_DELAY, InstrumentKind::Histogram),
-    (TURN_ON_USER_TURN_COMPLETED_DELAY, InstrumentKind::Histogram),
-    (LLM_INPUT_TOKENS, InstrumentKind::Counter),
-    (LLM_INPUT_CACHED_TOKENS, InstrumentKind::Counter),
-    (LLM_OUTPUT_TOKENS, InstrumentKind::Counter),
-    (LLM_INPUT_AUDIO_TOKENS, InstrumentKind::Counter),
-    (LLM_INPUT_TEXT_TOKENS, InstrumentKind::Counter),
-    (LLM_OUTPUT_AUDIO_TOKENS, InstrumentKind::Counter),
-    (LLM_OUTPUT_TEXT_TOKENS, InstrumentKind::Counter),
-    (LLM_SESSION_DURATION, InstrumentKind::Counter),
-    (TTS_CHARACTERS, InstrumentKind::Counter),
-    (TTS_AUDIO_DURATION, InstrumentKind::Counter),
-    (STT_AUDIO_DURATION, InstrumentKind::Counter),
-    (INTERRUPTION_NUM_REQUESTS, InstrumentKind::Counter),
-    (CONNECTION_ACQUIRE_TIME, InstrumentKind::Histogram),
+/// Name, kind and the unit the host creates the instrument with (`""` = none), all from the
+/// registry; the host must create each instrument exactly so.
+pub const INSTRUMENTS: &[(&str, InstrumentKind, &str)] = &[
+    (TURN_E2E_LATENCY, InstrumentKind::Histogram, TURN_E2E_LATENCY_UNIT),
+    (TURN_LLM_TTFT, InstrumentKind::Histogram, TURN_LLM_TTFT_UNIT),
+    (TURN_TTS_TTFB, InstrumentKind::Histogram, TURN_TTS_TTFB_UNIT),
+    (TURN_TRANSCRIPTION_DELAY, InstrumentKind::Histogram, TURN_TRANSCRIPTION_DELAY_UNIT),
+    (TURN_END_OF_TURN_DELAY, InstrumentKind::Histogram, TURN_END_OF_TURN_DELAY_UNIT),
+    (TURN_ON_USER_TURN_COMPLETED_DELAY, InstrumentKind::Histogram, TURN_ON_USER_TURN_COMPLETED_DELAY_UNIT),
+    (LLM_INPUT_TOKENS, InstrumentKind::Counter, LLM_INPUT_TOKENS_UNIT),
+    (LLM_INPUT_CACHED_TOKENS, InstrumentKind::Counter, LLM_INPUT_CACHED_TOKENS_UNIT),
+    (LLM_OUTPUT_TOKENS, InstrumentKind::Counter, LLM_OUTPUT_TOKENS_UNIT),
+    (LLM_INPUT_AUDIO_TOKENS, InstrumentKind::Counter, LLM_INPUT_AUDIO_TOKENS_UNIT),
+    (LLM_INPUT_TEXT_TOKENS, InstrumentKind::Counter, LLM_INPUT_TEXT_TOKENS_UNIT),
+    (LLM_OUTPUT_AUDIO_TOKENS, InstrumentKind::Counter, LLM_OUTPUT_AUDIO_TOKENS_UNIT),
+    (LLM_OUTPUT_TEXT_TOKENS, InstrumentKind::Counter, LLM_OUTPUT_TEXT_TOKENS_UNIT),
+    (LLM_SESSION_DURATION, InstrumentKind::Counter, LLM_SESSION_DURATION_UNIT),
+    (TTS_CHARACTERS, InstrumentKind::Counter, TTS_CHARACTERS_UNIT),
+    (TTS_AUDIO_DURATION, InstrumentKind::Counter, TTS_AUDIO_DURATION_UNIT),
+    (STT_AUDIO_DURATION, InstrumentKind::Counter, STT_AUDIO_DURATION_UNIT),
+    (INTERRUPTION_NUM_REQUESTS, InstrumentKind::Counter, INTERRUPTION_NUM_REQUESTS_UNIT),
+    (CONNECTION_ACQUIRE_TIME, InstrumentKind::Histogram, CONNECTION_ACQUIRE_TIME_UNIT),
 ];
 
 // ---------------------------------------------------------------------------- attributes
@@ -349,7 +372,7 @@ mod tests {
     // Catches: an instrument named by a fold and missing from `INSTRUMENTS`.
     #[test]
     fn every_emitted_instrument_is_declared() {
-        let declared: Vec<&str> = INSTRUMENTS.iter().map(|(n, _)| *n).collect();
+        let declared: Vec<&str> = INSTRUMENTS.iter().map(|(n, _, _)| *n).collect();
 
         let mut realtime = tk::realtime();
         realtime.input_tokens = 1;
@@ -404,7 +427,7 @@ mod tests {
         for name in &emitted {
             assert!(declared.contains(name), "{name} is emitted but not in INSTRUMENTS");
         }
-        for (name, _) in INSTRUMENTS {
+        for (name, _, _) in INSTRUMENTS {
             assert!(emitted.contains(name), "{name} is declared but nothing emits it");
         }
     }

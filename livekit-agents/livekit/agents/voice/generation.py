@@ -190,7 +190,7 @@ def perform_llm_inference(
 
 
 @utils.log_exceptions(logger=logger)
-@tracer.start_as_current_span("llm_node")
+@tracer.start_as_current_span(trace_types.SPAN_LLM_NODE)
 async def _llm_inference_task(
     node: io.LLMNode,
     chat_ctx: ChatContext,
@@ -473,7 +473,7 @@ def perform_tts_inference(
 
 
 @utils.log_exceptions(logger=logger)
-@tracer.start_as_current_span("tts_node")
+@tracer.start_as_current_span(trace_types.SPAN_TTS_NODE)
 async def _tts_inference_task(
     node: io.TTSNode,
     input: AsyncIterable[str],
@@ -953,8 +953,8 @@ async def _execute_tools_task(
                     f"invalid arguments for AI function `{fnc_call.name}`",
                     extra={
                         "function": fnc_call.name,
-                        "lk.pii.arguments": fnc_call.arguments,
-                        "lk.pii.error": str(e),
+                        trace_types.ATTR_PII_ARGUMENTS: fnc_call.arguments,
+                        trace_types.ATTR_PII_ERROR: str(e),
                         "speech_id": speech_handle.id,
                     },
                 )
@@ -998,7 +998,7 @@ async def _execute_tools_task(
                     "executing mock tool" if mocked else "executing tool",
                     extra={
                         "function": fnc_call.name,
-                        "lk.pii.arguments": fnc_call.arguments,
+                        trace_types.ATTR_PII_ARGUMENTS: fnc_call.arguments,
                         "speech_id": speech_handle.id,
                     },
                 )
@@ -1012,7 +1012,7 @@ async def _execute_tools_task(
                     mock=mock,
                 )
 
-                @tracer.start_as_current_span("function_tool")
+                @tracer.start_as_current_span(trace_types.SPAN_FUNCTION_TOOL)
                 async def _traceable_fnc_tool(
                     function_callable: Callable,
                     fnc_call: llm.FunctionCall,
@@ -1254,7 +1254,7 @@ def make_tool_output(
         if len(agent_tasks) > 1:
             logger.error(
                 f"AI function `{fnc_call.name}` returned multiple AgentTask instances, ignoring the output",  # noqa: E501
-                extra={"call_id": fnc_call.call_id, "lk.pii.output": output},
+                extra={"call_id": fnc_call.call_id, trace_types.ATTR_PII_OUTPUT: output},
             )
             return ToolExecutionOutput(
                 fnc_call=fnc_call.model_copy(),

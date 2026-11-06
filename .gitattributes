@@ -1,2 +1,4 @@
 *.mp3 filter=lfs diff=lfs merge=lfs -text
 *.ogg filter=lfs diff=lfs merge=lfs -text
+rust/crates/lk-agents-abi/src/telemetry/semconv.rs linguist-generated
+livekit-agents/livekit/agents/_semconv.py linguist-generated

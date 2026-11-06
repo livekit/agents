@@ -275,7 +275,7 @@ async def test_room_connect_span(span_exporter: InMemorySpanExporter) -> None:
     assert span.parent.span_id == entrypoint.get_span_context().span_id
     attrs = span.attributes or {}
     assert attrs[trace_types.ATTR_ROOM_NAME] == "room-1"
-    assert attrs[trace_types.ATTR_ROOM_SID] == "RM_1"
+    assert attrs[trace_types.ATTR_ROOM_ID] == "RM_1"
     assert attrs[trace_types.ATTR_ROOM_AUTO_SUBSCRIBE] == "audio_only"
     assert attrs[trace_types.ATTR_ROOM_E2EE] is False
     assert attrs[trace_types.ATTR_PARTICIPANT_ID] == "PA_agent"

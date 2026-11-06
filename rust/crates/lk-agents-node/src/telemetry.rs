@@ -147,7 +147,7 @@ mod tests {
     use super::*;
     use lk_agents_abi::FrameId;
     use lk_agents_abi::telemetry::{
-        LogRecord as CoreLog, Severity, SpanBuilder, TelemetryBuffer, attr_bool, attr_num,
+        LogRecord as CoreLog, semconv, Severity, SpanBuilder, TelemetryBuffer, attr_bool, attr_num,
         attr_str, attr_strs,
     };
 
@@ -156,7 +156,7 @@ mod tests {
         // A silent mis-mapping here would send every number to the exporter as a string, which
         // renders as a working dashboard with unusable panels.
         let buf = TelemetryBuffer::default();
-        let mut s = SpanBuilder::start("tts_node", FrameId::from_raw(7), None);
+        let mut s = SpanBuilder::start(semconv::span::TTS_NODE, FrameId::from_raw(7), None);
         s.attr("a", attr_str("x"));
         s.attr("b", attr_num(1.5));
         s.attr("c", attr_bool(true));

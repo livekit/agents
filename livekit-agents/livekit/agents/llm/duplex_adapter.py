@@ -13,6 +13,7 @@ import numpy as np
 from livekit import rtc
 
 from ..log import logger
+from ..telemetry import trace_types
 from ..types import NOT_GIVEN, NotGivenOr, TimedString
 from ..utils import aio, is_given, shortuuid
 from .chat_context import ChatContext, ChatMessage, FunctionCall
@@ -409,7 +410,7 @@ class _DuplexRealtimeSession(RealtimeSession):
         ):
             logger.error(
                 "duplex transcript outlived the audio it describes",
-                extra={"lk.pii.transcript": "".join(f.text for f in self._fragments)},
+                extra={trace_types.ATTR_PII_TRANSCRIPT: "".join(f.text for f in self._fragments)},
             )
             burst = self._open_burst(kind="text")
             while self._fragments:

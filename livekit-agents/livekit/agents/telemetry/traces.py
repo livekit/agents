@@ -65,6 +65,7 @@ from opentelemetry.util.types import AttributeValue
 from livekit import api
 from livekit.protocol import metrics as proto_metrics
 
+from .. import _semconv
 from .._proto import encode_chat_item
 from ..log import TRACE_LEVEL, logger
 from ..types import (
@@ -83,7 +84,7 @@ if TYPE_CHECKING:
 
 
 _SESSION_OPTION_KEY_ALIASES = {
-    "keyterms": "lk.pii.keyterms",
+    "keyterms": trace_types.ATTR_PII_KEYTERMS,
 }
 
 # Option keys never written to the report: prompt text authored by the customer
@@ -358,7 +359,7 @@ def _job_stamp_attributes() -> dict[str, AttributeValue] | None:
     if (state := ctx._telemetry_state) is not None:
         return state.attributes
     # recording not (or not yet) initialized: still attribute the telemetry
-    return {"room_id": ctx.job.room.sid, "job_id": ctx.job.id}
+    return {trace_types.ATTR_ROOM_ID: ctx.job.room.sid, "job_id": ctx.job.id}
 
 
 class _MetadataSpanProcessor(SpanProcessor):
@@ -874,7 +875,10 @@ class _CloudTelemetry:
         everything before ``session.start()`` would be lost, and later spans would start
         their own traces. Creates the provider and the gated exporter but registers nothing:
         the job's spans are held until ``configure`` decides."""
-        base_metadata: dict[str, AttributeValue] = {"room_id": room_id, "job_id": job_id}
+        base_metadata: dict[str, AttributeValue] = {
+            trace_types.ATTR_ROOM_ID: room_id,
+            "job_id": job_id,
+        }
         if agent_name:
             base_metadata[trace_types.ATTR_AGENT_NAME] = agent_name
         with self._lock:
@@ -910,7 +914,10 @@ class _CloudTelemetry:
         """Set up (or reuse) the pipelines for a job. Returns the job's
         telemetry state, for the caller to keep on the JobContext — per-record
         stamping and upload gating resolve it from there."""
-        base_metadata: dict[str, AttributeValue] = {"room_id": room_id, "job_id": job_id}
+        base_metadata: dict[str, AttributeValue] = {
+            trace_types.ATTR_ROOM_ID: room_id,
+            "job_id": job_id,
+        }
         if agent_name:
             # identifies the agent for LiveKit Cloud agent insights (explicit dispatch
             # only; the default dispatch has no agent name). Included in both the
@@ -962,10 +969,12 @@ class _CloudTelemetry:
 
             # the meter provider outlives the job (the OTel metrics global is
             # set-once), so its resource carries only process-stable identity;
-            # per-job room_id/job_id ride on each measurement instead
+            # per-job lk.room_id/job_id ride on each measurement instead
             # (otel_metrics._job_attrs)
             process_metadata = {
-                k: v for k, v in base_metadata.items() if k not in ("room_id", "job_id")
+                k: v
+                for k, v in base_metadata.items()
+                if k not in (trace_types.ATTR_ROOM_ID, "job_id")
             }
             meter_resource = Resource.create({SERVICE_NAME: "livekit-agents", **process_metadata})
             self._ensure_meter_provider(meter_resource, url)
@@ -1277,7 +1286,7 @@ async def _upload_session_report(
         return provider.get_logger(
             name=name,
             attributes={
-                "room_id": report.room_id,
+                trace_types.ATTR_ROOM_ID: report.room_id,
                 "job_id": report.job_id,
                 "room": report.room,
                 **metadata,
@@ -1309,12 +1318,12 @@ async def _upload_session_report(
             body="session report",
             timestamp=int((report.started_at or report.timestamp or 0) * 1e9),
             attributes={
-                "session.options": _serialize_session_options(report.options),
-                "session.report_timestamp": report.timestamp,
-                "session.tags": sorted(tagger.tags) if tagger.tags else None,
-                "agent_name": agent_name,
-                "sdk_version": report.sdk_version,
-                "usage": [
+                _semconv.SESSION_OPTIONS: _serialize_session_options(report.options),
+                _semconv.SESSION_REPORT_TIMESTAMP: report.timestamp,
+                _semconv.SESSION_TAGS: sorted(tagger.tags) if tagger.tags else None,
+                _semconv.AGENT_NAME: agent_name,
+                _semconv.SDK_VERSION: report.sdk_version,
+                _semconv.USAGE: [
                     {k: v for k, v in u.model_dump().items() if v != 0 and v != 0.0}
                     for u in report.model_usage
                 ]
@@ -1337,7 +1346,7 @@ async def _upload_session_report(
                 chat_logger,
                 body="chat item",
                 timestamp=int(item.created_at * 1e9),
-                attributes={"chat.item": item_log},
+                attributes={_semconv.CHAT_ITEM: item_log},
                 severity=severity,
                 severity_text=severity_text,
             )
@@ -1356,7 +1365,7 @@ async def _upload_session_report(
                 eval_logger,
                 body="evaluation",
                 timestamp=int(report.timestamp * 1e9),
-                attributes={"evaluation": evaluation},
+                attributes={_semconv.EVALUATION: evaluation},
                 severity=severity,
                 severity_text=severity_text,
             )
@@ -1367,7 +1376,7 @@ async def _upload_session_report(
                 eval_logger,
                 body="tag",
                 timestamp=int(entry.timestamp * 1e9),
-                attributes={"tag": {"name": tag, "metadata": entry.metadata}},
+                attributes={_semconv.TAG: {"name": tag, "metadata": entry.metadata}},
             )
 
     if tagger.outcome:
@@ -1380,7 +1389,7 @@ async def _upload_session_report(
             eval_logger,
             body="outcome",
             timestamp=int(report.timestamp * 1e9),
-            attributes={"outcome": outcome_data},
+            attributes={_semconv.OUTCOME: outcome_data},
             severity=SeverityNumber.ERROR if is_fail else SeverityNumber.UNSPECIFIED,
             severity_text="error" if is_fail else "unspecified",
         )

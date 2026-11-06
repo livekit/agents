@@ -233,9 +233,9 @@ class _LLMEventChannel(aio.Chan[ChatChunk]):
 
 
 class LLMStream(ABC):
-    _llm_request_span_name: ClassVar[str] = "llm_request"
+    _llm_request_span_name: ClassVar[str] = trace_types.SPAN_LLM_REQUEST
     # None runs each attempt in the request span (an adapter whose wrapped streams have their own)
-    _llm_attempt_span_name: ClassVar[str | None] = "llm_request_run"
+    _llm_attempt_span_name: ClassVar[str | None] = trace_types.SPAN_LLM_REQUEST_RUN
     _genai_operation_name: ClassVar[str | None] = trace_types.GenAIOperationName.CHAT
 
     def __init__(

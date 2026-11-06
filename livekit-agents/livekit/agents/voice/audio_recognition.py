@@ -396,7 +396,7 @@ class AudioRecognition:
                             self._end_of_turn_task.cancel()
                     self._end_of_turn_task = None
                     # the pending decision is abandoned with the mode; the user turn stays open
-                    self._end_eou_wait_span("dropped")
+                    self._end_eou_wait_span(trace_types.EOU_OUTCOME_DROPPED)
                     self._user_turn_committed = False
                     if self._turn_detector_stream is not None:
                         self._turn_detector_stream.cancel_inference()
@@ -1084,7 +1084,7 @@ class AudioRecognition:
                             "final transcript not received after timeout",
                             extra={
                                 "transcript_timeout": transcript_timeout,
-                                "lk.pii.interim_transcript": self._audio_interim_transcript,
+                                trace_types.ATTR_INTERIM_TRANSCRIPT: self._audio_interim_transcript,
                             },
                         )
 
@@ -1249,7 +1249,7 @@ class AudioRecognition:
                 self._session.amd._on_transcript(transcript)
 
             extra: dict[str, Any] = {
-                "lk.pii.user_transcript": transcript,
+                trace_types.ATTR_USER_TRANSCRIPT: transcript,
                 "language": self._last_language,
             }
             if self._last_speaking_time:
@@ -1310,7 +1310,10 @@ class AudioRecognition:
 
             logger.debug(
                 "received user preflight transcript",
-                extra={"lk.pii.user_transcript": transcript, "language": self._last_language},
+                extra={
+                    trace_types.ATTR_USER_TRANSCRIPT: transcript,
+                    "language": self._last_language,
+                },
             )
 
             # still need to increment it as it's used for turn detection,
@@ -1391,7 +1394,9 @@ class AudioRecognition:
             # otherwise fall back to message arrival time.
             if self._speech_start_time is None:
                 self._speech_start_time = ev.speech_start_time or time.time()
-            self._end_eou_wait_span("user_resumed", end_time=ev.speech_start_time or now)
+            self._end_eou_wait_span(
+                trace_types.EOU_OUTCOME_USER_RESUMED, end_time=ev.speech_start_time or now
+            )
 
             with tracer.use_span(self._ensure_user_turn_span(start_time=self._speech_start_time)):
                 self._hooks.on_start_of_speech(None, speech_start_time=self._speech_start_time)
@@ -1412,7 +1417,9 @@ class AudioRecognition:
                 self._vad_speech_started = True
 
             self._cancel_transcription_timeout()
-            self._end_eou_wait_span("user_resumed", end_time=speech_start_time)
+            self._end_eou_wait_span(
+                trace_types.EOU_OUTCOME_USER_RESUMED, end_time=speech_start_time
+            )
 
             with tracer.use_span(self._ensure_user_turn_span(start_time=speech_start_time)):
                 self._hooks.on_start_of_speech(ev, speech_start_time=speech_start_time)
@@ -1579,7 +1586,7 @@ class AudioRecognition:
                     with (
                         tracer.use_span(eou_wait_span),
                         tracer.start_as_current_span(
-                            "eou_detection", end_on_exit=False
+                            trace_types.SPAN_EOU_DETECTION, end_on_exit=False
                         ) as eou_detection_span,
                         self._track_eou_detection_span(eou_detection_span),
                     ):
@@ -1799,7 +1806,7 @@ class AudioRecognition:
                         trace_types.ATTR_PROVIDER_REQUEST_IDS, self._stt_request_ids
                     )
                 self._stamp_stt_events(user_turn_span)
-                self._end_eou_wait_span("committed")
+                self._end_eou_wait_span(trace_types.EOU_OUTCOME_COMMITTED)
                 self._stamp_user_turn_resumes(user_turn_span)
                 if not end_of_turn.user_turn_span_adopted:
                     user_turn_span.end()
@@ -2007,7 +2014,9 @@ class AudioRecognition:
         start_time_ns = int(start_time * 1_000_000_000)
         # pinned to the session root: a turn may be created from any task (a late STT final)
         self._user_turn_span = tracer.start_span(
-            "user_turn", context=self._session._root_span_context, start_time=start_time_ns
+            trace_types.SPAN_USER_TURN,
+            context=self._session._root_span_context,
+            start_time=start_time_ns,
         )
 
         if self._user_turn_start is None:
@@ -2030,7 +2039,7 @@ class AudioRecognition:
 
     def _end_user_turn_span(self) -> None:
         # a wait still open here never reached a decision (teardown, clear_user_turn, ...)
-        self._end_eou_wait_span("dropped")
+        self._end_eou_wait_span(trace_types.EOU_OUTCOME_DROPPED)
         if self._stt_events and self._user_turn_span is None:
             self._ensure_user_turn_span(start_time=self._stt_events[0]["received_at"])
         if self._user_turn_span is not None:
@@ -2067,7 +2076,7 @@ class AudioRecognition:
             self._eou_wait_rearms += 1
             self._eou_wait_floor_ns = time.time_ns()
             span.add_event(
-                "rearmed",
+                trace_types.CHECKPOINT_REARMED,
                 {trace_types.ATTR_EOU_SOURCE: trigger},
                 timestamp=self._eou_wait_floor_ns,
             )
@@ -2086,7 +2095,7 @@ class AudioRecognition:
         started_at_ns = int(started_at * 1_000_000_000)
         with tracer.use_span(user_turn_span):
             span = tracer.start_span(
-                "eou_wait",
+                trace_types.SPAN_EOU_WAIT,
                 start_time=started_at_ns,
                 attributes={
                     trace_types.ATTR_EOU_SOURCE: trigger,
@@ -2132,7 +2141,7 @@ class AudioRecognition:
             # the detector is still running: end it first so the child stays inside the parent
             self._eou_wait_floor_ns = time.time_ns()
             detection.add_event(
-                "superseded",
+                trace_types.CHECKPOINT_SUPERSEDED,
                 {trace_types.ATTR_EOU_OUTCOME: outcome},
                 timestamp=self._eou_wait_floor_ns,
             )
@@ -2141,8 +2150,10 @@ class AudioRecognition:
         if floor_ns is not None:
             # VAD reports a resume after the fact: never end before what the span contains
             ended_at_ns = max(ended_at_ns, floor_ns)
-        if outcome == "user_resumed":
-            span.add_event("user_resumed", timestamp=max(requested_ns, started_at_ns or 0))
+        if outcome == trace_types.EOU_OUTCOME_USER_RESUMED:
+            span.add_event(
+                trace_types.CHECKPOINT_USER_RESUMED, timestamp=max(requested_ns, started_at_ns or 0)
+            )
         span.set_attributes(
             {
                 trace_types.ATTR_EOU_OUTCOME: outcome,
@@ -2157,5 +2168,5 @@ class AudioRecognition:
             }
         )
         span.end(end_time=ended_at_ns)
-        if outcome == "user_resumed":
+        if outcome == trace_types.EOU_OUTCOME_USER_RESUMED:
             self._user_turn_resumes += 1

@@ -31,6 +31,8 @@ jobs:
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.branch != '' && github.event.inputs.branch || github.ref }}
           lfs: true
+          # lk-agents-storage reads protocol/livekit/agent/thread_schema_v1.sql at build time
+          submodules: true
 
       - name: Install uv
         uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0

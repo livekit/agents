@@ -25,6 +25,7 @@ from ..llm import ToolChoice, utils as llm_utils
 from ..llm.chat_context import ChatContext
 from ..llm.tool_context import Tool
 from ..log import logger
+from ..telemetry import trace_types
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given
 from ._realtime_models import is_realtime_model
@@ -451,7 +452,7 @@ class LLMStream(llm.LLMStream):
                     extra={
                         "fnc_ctx": tool_schemas,
                         "tool_choice": tool_choice,
-                        "lk.pii.chat_ctx": chat_ctx,
+                        trace_types.ATTR_CHAT_CTX: chat_ctx,
                     },
                 )
             if not self._tools:

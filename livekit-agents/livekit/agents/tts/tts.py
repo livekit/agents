@@ -286,9 +286,9 @@ def _attempt_span(name: str | None, tts: TTS) -> Iterator[trace.Span]:
 class ChunkedStream(ABC):
     """Used by the non-streamed synthesize API, some providers support chunked http responses"""
 
-    _tts_request_span_name: ClassVar[str] = "tts_request"
+    _tts_request_span_name: ClassVar[str] = trace_types.SPAN_TTS_REQUEST
     # None runs each attempt in the request span (an adapter whose wrapped streams have their own)
-    _tts_attempt_span_name: ClassVar[str | None] = "tts_request_run"
+    _tts_attempt_span_name: ClassVar[str | None] = trace_types.SPAN_TTS_REQUEST_RUN
 
     def __init__(
         self,
@@ -550,9 +550,9 @@ class _ChunkedStreamFromStream(ChunkedStream):
 
 
 class SynthesizeStream(ABC):
-    _tts_request_span_name: ClassVar[str] = "tts_request"
+    _tts_request_span_name: ClassVar[str] = trace_types.SPAN_TTS_REQUEST
     # None runs each attempt in the request span (an adapter whose wrapped streams have their own)
-    _tts_attempt_span_name: ClassVar[str | None] = "tts_request_run"
+    _tts_attempt_span_name: ClassVar[str | None] = trace_types.SPAN_TTS_REQUEST_RUN
 
     class _FlushSentinel: ...
 

@@ -3,13 +3,16 @@
 
 use crate::llm::chat_context::{ChatItem, Role};
 
-/// `telemetry/trace_types.py:110`: OTel's GenAI names, not LiveKit's `lk.*` namespace.
+/// `telemetry/trace_types.py:110`: OTel's GenAI names, not LiveKit's `lk.*` namespace. Upstream
+/// deprecated them; the registry declares them as emitted ([`super::semconv::event`]).
 pub mod events {
-    pub const SYSTEM_MESSAGE: &str = "gen_ai.system.message";
-    pub const USER_MESSAGE: &str = "gen_ai.user.message";
-    pub const ASSISTANT_MESSAGE: &str = "gen_ai.assistant.message";
-    pub const TOOL_MESSAGE: &str = "gen_ai.tool.message";
-    pub const CHOICE: &str = "gen_ai.choice";
+    use super::super::semconv::event;
+
+    pub const SYSTEM_MESSAGE: &str = event::GEN_AI_SYSTEM_MESSAGE;
+    pub const USER_MESSAGE: &str = event::GEN_AI_USER_MESSAGE;
+    pub const ASSISTANT_MESSAGE: &str = event::GEN_AI_ASSISTANT_MESSAGE;
+    pub const TOOL_MESSAGE: &str = event::GEN_AI_TOOL_MESSAGE;
+    pub const CHOICE: &str = event::GEN_AI_CHOICE;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

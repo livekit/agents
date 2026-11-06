@@ -213,7 +213,7 @@ def _mark_recovery(stream: ChunkedStream | SynthesizeStream) -> None:
 
 
 class FallbackChunkedStream(ChunkedStream):
-    _tts_request_span_name: ClassVar[str] = "tts_fallback_adapter"
+    _tts_request_span_name: ClassVar[str] = trace_types.SPAN_TTS_FALLBACK_ADAPTER
     # each instance's request span nests directly under the adapter's
     _tts_attempt_span_name: ClassVar[str | None] = None
 
@@ -359,7 +359,7 @@ class FallbackChunkedStream(ChunkedStream):
 
 
 class FallbackSynthesizeStream(SynthesizeStream):
-    _tts_request_span_name: ClassVar[str] = "tts_fallback_adapter"
+    _tts_request_span_name: ClassVar[str] = trace_types.SPAN_TTS_FALLBACK_ADAPTER
     # each instance's request span nests directly under the adapter's
     _tts_attempt_span_name: ClassVar[str | None] = None
 

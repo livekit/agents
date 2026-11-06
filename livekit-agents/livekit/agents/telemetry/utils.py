@@ -96,7 +96,7 @@ def record_exception(
             trace_types.ATTR_EXCEPTION_TYPE: exception.__class__.__name__,
             trace_types.ATTR_EXCEPTION_MESSAGE: REDACTED_EXCEPTION_MESSAGE,
         }
-        span.add_event("exception", attrs)
+        span.add_event(trace_types.CHECKPOINT_EXCEPTION, attrs)
         span.set_attributes(attrs)
         return
 
@@ -167,5 +167,5 @@ def record_realtime_metrics(span: trace.Span, ev: RealtimeModelMetrics) -> None:
 
         # create a dedicated child span for orphaned metrics
         with tracer.use_span(span):
-            with tracer.start_span("realtime_metrics") as child:
+            with tracer.start_span(trace_types.SPAN_REALTIME_METRICS) as child:
                 child.set_attributes(attrs)

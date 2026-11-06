@@ -1,4 +1,5 @@
-//! `cargo run -p lk-agents-codegen -- --write` (in `rust/`): read every `#[derive(Host)]` declaration, write every host's view.
+//! `cargo run -p lk-agents-codegen -- --write` (in `rust/`): read every `#[derive(Host)]` declaration, write every host's view,
+//! and vendor the protocol's semantic conventions ([`SEMCONV`]).
 //! `--write` regenerates in place; `--check` exits 1 if any file would change (CI).
 //! The source lists are explicit, not a glob, so generated output never depends on file placement.
 
@@ -208,6 +209,15 @@ const PYTHON_GENERATED: &str = "livekit/agents/_generated";
 const NODE_ROOT: &str = "node/src/generated";
 const NODE_BINDING_ROOT: &str = "rust/crates/lk-agents-node/src/generated";
 
+/// The semantic conventions the `protocol` submodule generates (`otel/gen`, written by
+/// `otel/generate.sh` there), copied verbatim into the two places that cannot depend on a protocol
+/// package: `lk-agents-abi` (its pure tier forbids prost) and the Python host. The livekit/agents
+/// layout only: the `protocol` submodule and the `livekit-agents` destination are both its own.
+const SEMCONV: &[(&str, &str)] = &[
+    ("protocol/otel/gen/rust/semconv.rs", "rust/crates/lk-agents-abi/src/telemetry/semconv.rs"),
+    ("protocol/otel/gen/python/semconv.py", "livekit-agents/livekit/agents/_semconv.py"),
+];
+
 fn main() -> std::process::ExitCode {
     let check = std::env::args().any(|a| a == "--check");
     let write = std::env::args().any(|a| a == "--write");
@@ -282,6 +292,13 @@ fn run(check: bool) -> Result<usize, String> {
     }
     for out in napi::emit(&decls, &exposed)? {
         stale += put(&root.join(NODE_BINDING_ROOT).join(&out.path), &out.text, check)?;
+    }
+    if python_package == "livekit-agents" {
+        for (src, dst) in SEMCONV {
+            let text = std::fs::read_to_string(root.join(src))
+                .map_err(|e| format!("{src}: {e} (run `git submodule update --init protocol`)"))?;
+            stale += put(&root.join(dst), &text, check)?;
+        }
     }
     if !check {
         // Written every time so a fresh checkout imports, and the dir is never a namespace package.

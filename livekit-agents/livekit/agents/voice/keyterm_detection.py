@@ -356,7 +356,7 @@ class KeytermDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
         if (provider := trace_types.gen_ai_provider_name(self._llm.provider)) is not None:
             attributes[trace_types.ATTR_GEN_AI_PROVIDER_NAME] = provider
         with tracer.start_as_current_span(
-            "keyterm_detection", context=parent, attributes=attributes
+            trace_types.SPAN_KEYTERM_DETECTION, context=parent, attributes=attributes
         ) as span:
             # show static terms as applied too, or the LLM keeps re-proposing them
             current = (
