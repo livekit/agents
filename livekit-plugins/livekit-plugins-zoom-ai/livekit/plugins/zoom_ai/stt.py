@@ -265,6 +265,30 @@ class _RequestView:
         )
 
 
+def _join_speech(first: stt.SpeechData, second: stt.SpeechData) -> stt.SpeechData:
+    """One final for two consecutive segments of an utterance (turn_detection="none")."""
+    metadata: dict[str, Any] | None = None
+    if first.metadata or second.metadata:
+        a, b = first.metadata or {}, second.metadata or {}
+        metadata = {**a, **b}
+        if "transcript" in a or "transcript" in b:
+            metadata["transcript"] = " ".join(
+                t for t in (a.get("transcript"), b.get("transcript")) if t
+            )
+        if "speaker_segments" in a or "speaker_segments" in b:
+            metadata["speaker_segments"] = [
+                *(a.get("speaker_segments") or []),
+                *(b.get("speaker_segments") or []),
+            ]
+    return dataclasses.replace(
+        second,
+        text=" ".join(t for t in (first.text, second.text) if t),
+        start_time=first.start_time,
+        speaker_id=first.speaker_id if first.speaker_id == second.speaker_id else None,
+        metadata=metadata,
+    )
+
+
 class STT(stt.STT):
     """Zoom Scribe speech-to-text: streaming (Scribe Live) or per-utterance (Scribe Fast).
 
@@ -656,6 +680,8 @@ class STT(stt.STT):
 class SpeechStream(stt.SpeechStream):
     """One Scribe Live session; reconnects on option changes and server-side session ends."""
 
+    _carried: stt.SpeechData | None
+
     def __init__(self, *, stt: STT, opts: STTOptions, conn_options: APIConnectOptions) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=SAMPLE_RATE)
         self._zoom = stt
@@ -666,16 +692,23 @@ class SpeechStream(stt.SpeechStream):
         self._audio_duration = 0.0
         self._speech_started = False
         # turn_detection="none" (manual commit) state:
-        # - flushes not answered yet, in order: True waits for Scribe's final for a commit,
-        #   False (a flush with only digital silence) needs no commit and is answered with an
-        #   empty final once the finals before it have arrived;
-        self._flushes: collections.deque[bool] = collections.deque()
+        # - what is still owed a final, in order: "commit" (a flush that sent a commit),
+        #   "silent" (a flush after only digital silence: no commit, answered once the finals
+        #   before it arrive) and "drain" (the plugin's own commit before an options
+        #   reconnect: its final isn't an answer to any flush);
+        self._flushes: collections.deque[Literal["commit", "silent", "drain"]] = collections.deque()
+        # - transcript of drain commits, delivered with the final of the next flush so it
+        #   can't end a turn early (e.g. commit_user_turn() waiting on that flush);
+        self._carried = None
         # - non-silent audio sent to the current session since its last commit;
         self._uncommitted = False
         # - an options reconnect is waiting: input is held back instead of being sent;
         self._draining = False
-        # - input held back while draining, sent first on the next session, in order.
-        self._held: list[rtc.AudioFrame | SpeechStream._FlushSentinel] = []
+        # - input held back while draining, sent first on the next session, in order; a
+        #   frame leaves it only once sent, so a failed send keeps it for the retry.
+        self._held: collections.deque[rtc.AudioFrame | SpeechStream._FlushSentinel] = (
+            collections.deque()
+        )
         # Serializes sends with the drain commit, so no audio follows it on the old session.
         self._send_lock = asyncio.Lock()
         self._tracking_id: str | None = None  # the current session's x-zm-trackingid
@@ -790,33 +823,51 @@ class SpeechStream(stt.SpeechStream):
     @property
     def _commits_pending(self) -> int:
         """Commits sent whose final hasn't arrived yet."""
-        return sum(self._flushes)
+        return sum(1 for kind in self._flushes if kind != "silent")
 
     def _turn_open(self) -> bool:
         """A turn whose final transcript a reconnect would lose."""
         return self._commits_pending > 0 if self._manual_commit else self._speech_started
 
-    def _send_empty_final(self) -> None:
-        """Answer a flush that has no transcript (turn_detection="none")."""
+    def _send_final(self, data: stt.SpeechData, request_id: str = "") -> None:
         self._event_ch.send_nowait(
             stt.SpeechEvent(
                 type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                alternatives=[
-                    stt.SpeechData(
-                        language=_reported_language(
-                            None, self._view.language_detection, self._opts.language
-                        ),
-                        text="",
-                    )
-                ],
+                request_id=request_id,
+                alternatives=[data],
             )
         )
 
-    async def _commit(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+    def _answer_flush(self, data: stt.SpeechData | None = None, request_id: str = "") -> None:
+        """Answer a flush (turn_detection="none"), with any carried drain transcript first."""
+        if data is None:
+            data = self._carried or stt.SpeechData(
+                language=_reported_language(
+                    None, self._view.language_detection, self._opts.language
+                ),
+                text="",
+            )
+        elif self._carried is not None:
+            data = _join_speech(self._carried, data)
+        self._carried = None
+        self._send_final(data, request_id)
+
+    def _carry(self, data: stt.SpeechData) -> None:
+        """Keep a drain commit's transcript for the final of the next flush."""
+        if data.text:
+            self._carried = data if self._carried is None else _join_speech(self._carried, data)
+
+    async def _commit(
+        self, ws: aiohttp.ClientWebSocketResponse, kind: Literal["commit", "drain"] = "commit"
+    ) -> None:
         """Commit the audio sent since the last commit; Scribe answers with one final."""
-        self._flushes.append(True)
+        self._flushes.append(kind)
+        try:
+            await ws.send_str(json.dumps({"type": "input_audio_buffer.commit"}))
+        except BaseException:
+            self._flushes.pop()  # not sent: the caller keeps the flush for the next session
+            raise
         self._uncommitted = False
-        await ws.send_str(json.dumps({"type": "input_audio_buffer.commit"}))
 
     async def _start_drain(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         """Prepare a turn_detection="none" session for an options reconnect.
@@ -828,7 +879,7 @@ class SpeechStream(stt.SpeechStream):
         async with self._send_lock:
             self._draining = True
             if self._uncommitted:
-                await self._commit(ws)
+                await self._commit(ws, "drain")
 
     async def _wait_for_turn_end(self) -> None:
         """Return once no turn is open, or after ``RECONNECT_HOLD_S``."""
@@ -836,13 +887,18 @@ class SpeechStream(stt.SpeechStream):
         while self._turn_open() and time.monotonic() < deadline:
             await asyncio.sleep(0.05)
 
-    def _end_open_utterance(self) -> None:
+    def _end_open_utterance(self, *, closing: bool = False) -> None:
         """Close an utterance cut off by a reconnect so turn detection doesn't wait forever."""
-        # With turn_detection="none", answer each commit the old session left unanswered
-        # with an empty final, so a flush (e.g. commit_user_turn()) doesn't wait for one.
-        for _ in self._flushes:
-            self._send_empty_final()
+        # With turn_detection="none", answer each flush the old session left unanswered
+        # (with an empty final, or the carried transcript), so a flush (e.g.
+        # commit_user_turn()) doesn't wait for one. A cut-off drain commit owes no answer.
+        for kind in self._flushes:
+            if kind != "drain":
+                self._answer_flush()
         self._flushes.clear()
+        if closing and self._carried is not None:
+            self._send_final(self._carried)  # no flush is left to deliver it with
+            self._carried = None
         self._uncommitted = False  # audio not committed on the old session is gone with it
         self._draining = False
         if self._speech_started:
@@ -875,9 +931,9 @@ class SpeechStream(stt.SpeechStream):
                             # after a long pause): Scribe can return made-up text for
                             # that, so this flush gets an empty final instead, after the
                             # finals still due for earlier commits.
-                            self._flushes.append(False)
+                            self._flushes.append("silent")
                         else:
-                            self._send_empty_final()
+                            self._answer_flush()
                     return
                 if not frame.samples_per_channel:
                     return
@@ -899,24 +955,28 @@ class SpeechStream(stt.SpeechStream):
                     self.start_time = captured_at
                     anchored = True
 
+            async def send_held() -> None:
+                # Each held frame leaves the queue only once sent, so if this session
+                # fails, the retry resumes from the first unsent one.
+                while self._held:
+                    await send(self._held[0])
+                    self._held.popleft()
+
             try:
-                # Input held back while the previous session drained goes out first.
-                held, self._held = self._held, []
-                for frame in held:
-                    await send(frame)
+                async with self._send_lock:
+                    await send_held()  # held back while the previous session drained
                 async for frame in self._input_ch:
                     async with self._send_lock:
                         if self._draining:
                             self._held.append(frame)  # for the next session
-                        else:
-                            await send(frame)
+                            continue
+                        self._held.append(frame)  # kept until sent, for a retry
+                        await send_held()
                 # Input ended while a reconnect was waiting: there is no next session, so
                 # send what was held to this one.
                 async with self._send_lock:
                     self._draining = False
-                    held, self._held = self._held, []
-                    for frame in held:
-                        await send(frame)
+                    await send_held()
                 closing = True
                 await ws.send_str(json.dumps({"type": "session.close"}))
             except (aiohttp.ClientError, ConnectionError) as e:
@@ -1068,7 +1128,8 @@ class SpeechStream(stt.SpeechStream):
                     io_done.exception()  # retrieve it so asyncio doesn't log it at shutdown
                 await ws.close()
             if not reconnect:
-                self._end_open_utterance()  # Scribe closed without a final for the last turn
+                # Scribe closed without a final for the last turn
+                self._end_open_utterance(closing=True)
                 return
             # Scribe's audio_*_ms restart at 0 on the new session; keep stream-relative
             # timestamps moving forward, as the base class does when it retries.
@@ -1124,9 +1185,10 @@ class SpeechStream(stt.SpeechStream):
                     metadata = {**(metadata or {}), "speaker_segments": spans}
                 else:
                     speaker_id = ev.get("speaker") or None
+            answers: Literal["commit", "silent", "drain"] = "commit"
             if self._manual_commit:
-                if self._flushes:
-                    self._flushes.popleft()  # this final answers the oldest commit
+                # This final answers the oldest commit ("silent" entries never get one).
+                answers = self._flushes.popleft() if self._flushes else "commit"
             elif text and not self._speech_started:
                 # No speech_started for this transcript (e.g. it was lost in a reconnect):
                 # open the turn so turn_detection="stt" still commits it.
@@ -1139,38 +1201,37 @@ class SpeechStream(stt.SpeechStream):
                         else None,
                     )
                 )
-            # With turn_detection="none" each final answers a flush, so an empty one is
-            # sent too: it tells LiveKit the flush is done (e.g. commit_user_turn() waits).
-            if text or self._manual_commit:
+            data = stt.SpeechData(
+                language=_reported_language(
+                    ev.get("language"), self._view.language_detection, self._opts.language
+                ),
+                text=text,
+                start_time=start_ms / 1000 + self.start_time_offset + self._session_offset,
+                end_time=end_ms / 1000 + self.start_time_offset + self._session_offset,
+                speaker_id=speaker_id,
+                metadata=metadata,
+            )
+            if self._manual_commit:
+                # Each final answers a flush, so an empty one is sent too: it tells LiveKit
+                # the flush is done (e.g. commit_user_turn() waits). A drain commit's
+                # transcript waits for the next flush's final instead.
+                if answers == "drain":
+                    self._carry(data)
+                else:
+                    self._answer_flush(data, ev.get("item_id", ""))
+                # Then answer the silence-only flushes that were waiting behind this one.
+                while self._flushes and self._flushes[0] == "silent":
+                    self._flushes.popleft()
+                    self._answer_flush()
+            elif text:
                 self._event_ch.send_nowait(
                     stt.SpeechEvent(
                         type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                         request_id=ev.get("item_id", ""),
-                        alternatives=[
-                            stt.SpeechData(
-                                language=_reported_language(
-                                    ev.get("language"),
-                                    self._view.language_detection,
-                                    self._opts.language,
-                                ),
-                                text=text,
-                                start_time=start_ms / 1000
-                                + self.start_time_offset
-                                + self._session_offset,
-                                end_time=end_ms / 1000
-                                + self.start_time_offset
-                                + self._session_offset,
-                                speaker_id=speaker_id,
-                                metadata=metadata,
-                            )
-                        ],
+                        alternatives=[data],
                         speech_end_time=self._speech_end_time(end_ms),
                     )
                 )
-            # Then answer the silence-only flushes that were waiting behind this commit.
-            while self._flushes and not self._flushes[0]:
-                self._flushes.popleft()
-                self._send_empty_final()
             # Scribe's final closes the utterance: end of speech comes after the transcript,
             # so turn_detection="stt" commits the turn with the text already in hand.
             if self._speech_started:

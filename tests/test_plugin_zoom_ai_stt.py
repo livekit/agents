@@ -1334,8 +1334,110 @@ async def test_live_turn_detection_none_options_change_mid_utterance_loses_no_au
     # The held audio and flush went to the new session, in order, with the new language.
     assert fake.sessions[1].updates[0]["language"] == "fr-FR"
     assert len(fake.sessions[1].audio) == 9600
-    # Both parts of the utterance have a final (end_input's commit adds an empty one).
-    assert final_texts(events)[:2] == ["part 1.1", "part 2.1"]
+    # The utterance arrives as one final, with the part committed before the change first,
+    # answering LiveKit's flush (end_input()'s flush adds an empty one).
+    assert final_texts(events) == ["part 1.1 part 2.1", ""]
+
+
+async def test_live_turn_detection_none_drain_final_does_not_answer_a_later_flush(
+    scribe, http
+) -> None:
+    """commit_user_turn() during a drain gets the whole utterance, not the drained part."""
+    fake, live_url, fast_url = scribe
+    release = asyncio.Event()
+    fake.on_control = gated_commit_replies(fake, {(1, 1): release})
+    stt = make_stt(http, (live_url, fast_url), turn_detection="none")
+    stream = stt.stream()
+    events, collector = await collect_events(stream)
+
+    for f in speech(0.3):  # "book a"
+        stream.push_frame(f)
+    await wait_until(
+        lambda: bool(fake.sessions) and len(fake.sessions[0].audio) == 9600, "first part"
+    )
+    stt.update_options(language="fr-FR")
+    await wait_until(lambda: stream._draining, "drain started")
+    for f in speech(0.2):  # "flight"
+        stream.push_frame(f)
+    stream.flush()  # e.g. commit_user_turn(): waits for a final
+    release.set()  # the drain commit's final arrives while that flush waits
+    await wait_until(lambda: len(fake.sessions) == 2, "reconnect")
+    await wait_until(lambda: bool(final_texts(events)), "flush answered")
+    # One final with the whole utterance: the drain final alone would end the turn early.
+    assert final_texts(events) == ["part 1.1 part 2.1"]
+    await stream.aclose()
+    collector.cancel()
+
+
+async def test_live_turn_detection_none_drained_text_answers_a_silent_flush(scribe, http) -> None:
+    """With no speech after the drain, the next flush is answered with the drained text."""
+    fake, live_url, fast_url = scribe
+    fake.on_control = gated_commit_replies(fake, {})
+    stt = make_stt(http, (live_url, fast_url), turn_detection="none")
+    stream = stt.stream()
+    events, collector = await collect_events(stream)
+    for f in speech(0.3):
+        stream.push_frame(f)
+    await wait_until(
+        lambda: bool(fake.sessions) and len(fake.sessions[0].audio) == 9600, "speech sent"
+    )
+    stt.update_options(language="fr-FR")
+    await wait_until(lambda: len(fake.sessions) == 2, "reconnect")
+    stream.flush()  # nothing but the drained speech in this turn
+    await wait_until(lambda: bool(final_texts(events)), "flush answered")
+    assert final_texts(events) == ["part 1.1"]
+    assert fake.sessions[1].controls == []  # no commit for the silence-only flush
+    await stream.aclose()
+    collector.cancel()
+
+
+async def test_live_turn_detection_none_held_audio_survives_a_failed_replay(scribe, http) -> None:
+    """If the new session fails while sending held audio, the retry sends the rest."""
+    fake, live_url, fast_url = scribe
+    release = asyncio.Event()
+    fake.on_control = gated_commit_replies(fake, {(1, 1): release})
+    stt = make_stt(http, (live_url, fast_url), turn_detection="none")
+    stream = stt.stream(conn_options=FAST_RETRY)
+    connect = stream._connect_ws
+    connects = 0
+
+    async def connect_failing_second() -> aiohttp.ClientWebSocketResponse:
+        nonlocal connects
+        ws = await connect()
+        connects += 1
+        if connects == 2:  # the replacement session dies after 5 frames of the replay
+            sent = 0
+            send_bytes = ws.send_bytes
+
+            async def flaky(data: bytes, *args: Any, **kwargs: Any) -> None:
+                nonlocal sent
+                sent += 1
+                if sent > 5:
+                    raise ConnectionResetError("dropped")
+                await send_bytes(data, *args, **kwargs)
+
+            ws.send_bytes = flaky  # type: ignore[method-assign]
+        return ws
+
+    stream._connect_ws = connect_failing_second  # type: ignore[method-assign]
+    for f in speech(0.2):
+        stream.push_frame(f)
+    await wait_until(
+        lambda: bool(fake.sessions) and len(fake.sessions[0].audio) == 6400, "first part"
+    )
+    stt.update_options(language="fr-FR")
+    await wait_until(lambda: stream._draining, "drain started")
+    for f in speech(0.3):  # 15 frames held for the next session
+        stream.push_frame(f)
+    stream.flush()
+    release.set()
+    await wait_until(lambda: len(fake.sessions) == 3, "retry after the failed replay")
+    await wait_until(lambda: fake.sessions[2].controls[:1] == [COMMIT], "held flush")
+    await stream.aclose()
+
+    # 5 held frames reached the failed session; the other 10 and the flush reached the retry.
+    assert len(fake.sessions[1].audio) == 5 * 640
+    assert len(fake.sessions[2].audio) == 10 * 640
 
 
 async def test_live_turn_detection_none_options_change_waits_for_every_commit(scribe, http) -> None:
