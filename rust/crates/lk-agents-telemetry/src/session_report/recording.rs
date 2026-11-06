@@ -44,12 +44,13 @@ pub enum Uploaded {
 pub async fn upload(
     cloud: &CloudEndpoint,
     recording: &RecordingUpload,
+    profile: Option<&[u8]>,
     clock: &dyn Clock,
     limit: Duration,
 ) -> Result<Uploaded, UploadError> {
     let send = async {
         let _permit = ReportAdmission::process().upload().await;
-        attempts(cloud, recording, clock).await
+        attempts(cloud, recording, profile, clock).await
     };
     lk_agents_abi::timeout(clock, limit, send)
         .await
@@ -60,6 +61,7 @@ pub async fn upload(
 async fn attempts(
     cloud: &CloudEndpoint,
     recording: &RecordingUpload,
+    profile: Option<&[u8]>,
     clock: &dyn Clock,
 ) -> Result<Uploaded, UploadError> {
     let mut steps = Vec::new();
@@ -80,7 +82,7 @@ async fn attempts(
             attempts.wake(clock.now(), None, &mut steps);
             continue;
         };
-        let body = Multipart::new(recording).await;
+        let body = Multipart::new(recording, profile).await;
         let result = cloud
             .post("recordings/v0", |request| {
                 request
@@ -123,7 +125,8 @@ pub(super) struct Multipart {
 }
 
 impl Multipart {
-    pub(super) async fn new(recording: &RecordingUpload) -> Self {
+    /// `profile`: the job's gzipped pprof profile (`profile.pb.gz`), when there is one.
+    pub(super) async fn new(recording: &RecordingUpload, profile: Option<&[u8]>) -> Self {
         let boundary = format!("lk-recording-{:032x}", rand::random::<u128>());
         let mut head = Vec::new();
         let header = encode_header(&recording.header);
@@ -131,6 +134,10 @@ impl Multipart {
         if let Some(history) = &recording.chat_history {
             let (name, file) = ("chat_history", "chat_history.json");
             part(&mut head, &boundary, name, file, "application/json", history.as_bytes());
+        }
+        if let Some(profile) = profile {
+            let kind = "application/octet-stream";
+            part(&mut head, &boundary, "profile", "profile.pb.gz", kind, profile);
         }
         let audio = match &recording.audio_path {
             Some(path) => open(path).await.filter(|(_, len)| *len > 0),

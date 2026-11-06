@@ -24,6 +24,35 @@ use crate::otlp::{CloudEndpoint, Exporter};
 pub use events::EventRetention;
 pub use recording::Uploaded;
 
+/// Whether the recording upload carries the job's profile: on once Cloud ingest accepts the
+/// `profile` part (an unknown part fails the whole upload).
+const UPLOAD_PROFILES: bool = false;
+
+/// The job's profile, encoded on the blocking pool (an hour of samples takes tens of ms).
+async fn encode(profile: crate::profile::Profile) -> Option<Vec<u8>> {
+    let encoded = lk_agents_net::blocking_io::blocking_io().run((), move || profile.encode()).await;
+    encoded.ok()
+}
+
+/// Writes the job's profile beside its audio recording, as `profile.pb.gz`.
+async fn write_profile(audio: &str, profile: Vec<u8>) {
+    let Some(dir) = std::path::Path::new(audio).parent().filter(|dir| !dir.as_os_str().is_empty())
+    else {
+        return;
+    };
+    let file = dir.join("profile.pb.gz");
+    let io = lk_agents_net::blocking_io::blocking_io();
+    let written =
+        io.run((), move || std::fs::write(file, profile).map_err(|e| e.to_string())).await;
+    if let Some(error) = match written {
+        Ok(Ok(())) => None,
+        Ok(Err(error)) => Some(error),
+        Err(_) => Some("the write panicked".to_owned()),
+    } {
+        log::debug!(target: "livekit.agents", "the job's profile was not written: {error}");
+    }
+}
+
 /// A session report upload that did not complete.
 #[derive(Debug, Clone, thiserror::Error)]
 #[error("{0}")]
@@ -60,11 +89,30 @@ pub async fn export(
             return Ok(());
         }
     }
-    let (Some(cloud), Some(upload)) = (cloud, report::upload(report, options, simulated)) else {
+    let upload = cloud.and_then(|_| report::upload(report, options, simulated));
+    let send_profile = UPLOAD_PROFILES && upload.is_some();
+    let audio = report.audio_recording_path.clone();
+    let profile = match crate::profile::take(key) {
+        Some(profile) if audio.is_some() || send_profile => encode(profile).await,
+        _ => None,
+    };
+    if let (Some(profile), Some(audio)) = (&profile, &audio) {
+        write_profile(audio, profile.clone()).await;
+    }
+    let (Some(cloud), Some(upload)) = (cloud, upload) else {
         return Ok(());
     };
+    let profile = profile.filter(|profile| {
+        let fits = profile.len() <= crate::profile::UPLOAD_BYTES;
+        if send_profile && !fits {
+            log::debug!(target: "livekit.agents", "the job's profile is too large to upload");
+        }
+        send_profile && fits
+    });
     let limit = deadline.saturating_duration_since(clock.now());
-    if recording::upload(cloud, &upload, clock, limit).await? == Uploaded::Disabled {
+    if recording::upload(cloud, &upload, profile.as_deref(), clock, limit).await?
+        == Uploaded::Disabled
+    {
         log::warn!(target: "livekit.agents", "session recording is disabled by the project owner");
         if let Some(exporter) = exporter {
             exporter.disable_job(key);

@@ -91,9 +91,12 @@ class _core_LoopWatch:
         *,
         parent: SpanContext | None = None,
         job: str | None = None,
+        whole_process: bool = False,
     ) -> Self:
         """Watches the loop running on OS thread `os_thread` (`threading.get_native_id()`); its
-        stalls go under `parent` and count on `job`'s sessions.
+        stalls go under `parent` and count on `job`'s sessions. `whole_process`: the process runs
+        this job alone (the process executor), so its other running Python threads join the job's
+        profile; otherwise the profile holds the loop thread alone.
         """
     def beat(self) -> None:
         """The loop ran."""

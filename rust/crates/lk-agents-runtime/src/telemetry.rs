@@ -274,6 +274,8 @@ pub struct LoopStall {
     pub stack: Option<String>,
     /// The file being imported during the stall.
     pub import: Option<String>,
+    /// Still stuck: reported while it lasts, exempt from the rate limit.
+    pub ongoing: bool,
 }
 
 /// Records `stall`: the job's sessions count it, and its span goes under the first one's
@@ -298,6 +300,7 @@ pub fn loop_stalled(stall: LoopStall) {
         stall.duration.as_secs_f64(),
         stall.stack,
         stall.import,
+        stall.ongoing,
     );
 }
 

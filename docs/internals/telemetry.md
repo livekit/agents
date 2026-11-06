@@ -162,6 +162,27 @@ Rust; Python only proves its loop is alive.
   panic in it is caught. Stalls are always recorded with their duration; nothing on the loop
   waits for the detector.
 
+### Job profiles
+
+Every job records a wall-clock profile of its Python threads, which Cloud shows beside the
+session's audio recording.
+
+- **Sampling.** The stall detector's thread samples every 100 ms (10 Hz) with the same py-spy
+  sampler: the job's loop thread always (its waiting is what a slow turn is made of) and, when
+  the process runs one job, its other Python threads while they run. With several jobs in one
+  process (the thread executor), each job's profile holds its loop thread alone. A sample costs
+  0.1-0.5 ms on that thread; nothing runs on the loop and the GIL is never taken.
+- **Bounds.** 36,000 samples keep their own time (16 bytes each); later ones merge by stack and
+  thread. At most 20,000 distinct stacks; a sample of a new stack past them is counted, not kept.
+- **Format.** A gzipped pprof `profile.proto`: one sample per tick (not merged), value the tick's
+  wall time, with the labels `thread_name` and `end_timestamp_ns` (Unix ns); `time_nanos` is the
+  profile's start. A viewer places a sample on the audio timeline at `end_timestamp_ns` minus the
+  recording header's `start_time`; standard tools (`go tool pprof`, Pyroscope, speedscope) show
+  the aggregate.
+- **Output.** `profile.pb.gz` beside the job's audio recording, and the recording upload's
+  `profile` part ([reference](telemetry-reference.md)). A sampler that cannot run leaves the
+  profile empty; nothing is written or sent.
+
 ### Metrics
 
 Metrics are declared instruments (section [Metrics](#metrics-1)). A span end

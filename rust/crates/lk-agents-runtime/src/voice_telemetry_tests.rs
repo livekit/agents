@@ -169,14 +169,23 @@ fn event_loop_stalls_are_rate_limited() {
     let cx = tracer.root().continuing(Some(ENTRYPOINT));
     let blocked = crate::telemetry::Blocked::default();
     for _ in 0..32 {
-        crate::telemetry::event_loop_blocked(&cx, &blocked, 0.2, None, None);
+        crate::telemetry::event_loop_blocked(&cx, &blocked, 0.2, None, None, false);
     }
-    crate::telemetry::event_loop_blocked(&cx, &blocked, 0.6, Some("busy (app.py:7)".into()), None);
+    crate::telemetry::event_loop_blocked(
+        &cx,
+        &blocked,
+        0.6,
+        Some("busy (app.py:7)".into()),
+        None,
+        false,
+    );
+    // a loop still stuck is reported past the limit
+    crate::telemetry::event_loop_blocked(&cx, &blocked, 5.0, None, None, true);
     let spans = records.spans();
-    assert_eq!(spans.len(), 30, "30 a minute");
+    assert_eq!(spans.len(), 31, "30 a minute, and the still-stuck loop past them");
     assert!(spans.iter().all(|s| s.parent == Some(4)));
     let durations = records.measurements("lk.agents.event_loop.blocked_duration");
-    assert_eq!(durations.len(), 33);
+    assert_eq!(durations.len(), 34);
     // the 33rd is over the rate limit: its stack rides no span
     assert_eq!(labels(&durations[32]), [("severity".to_owned(), Value::String("error".into()))]);
 }
@@ -310,6 +319,7 @@ fn a_stall_reaches_the_sessions_of_its_job() {
         job: Some("AJ_stall".into()),
         stack: None,
         import: None,
+        ongoing: false,
     };
     let (ours, theirs) = (watch("ours", "AJ_stall"), watch("theirs", "AJ_other"));
     crate::telemetry::loop_stalled(stall());

@@ -383,6 +383,7 @@ The worker also serves Prometheus process metrics: `lk_agents_proc_initialize_du
 | `header` (`header.binpb`) | `MetricsRecordingHeader`: `room_id`, `job_id`, `start_time` (the audio recording's start), `duration` (ms), `simulated`, `redaction_enabled`, `session_summary` |
 | `chat_history` (`chat_history.json`) | `{"items": [...]}`, the `ChatContext` dictionary form with timestamps; uploaded whenever the transcript is recorded, and always for a redacted session |
 | `audio` (`recording.ogg`) | the session's OGG recording, when audio is recorded |
+| `profile` (`profile.pb.gz`, `application/octet-stream`) | the job's profile, a gzipped pprof `profile.proto` ([Job profiles](telemetry.md#job-profiles)); sent once Cloud ingest accepts the part, which it does not yet (an unknown part fails the upload) |
 
 `session_summary` is a JSON object: `job_id`, `room_id`, `room`,
 `audio_recording_path`, `audio_recording_started_at`, `options` (interruption,

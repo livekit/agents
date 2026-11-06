@@ -238,7 +238,9 @@ class _JobProc:
 
     async def _core_start_entrypoint(self) -> asyncio.Task[None]:
         # the job's stalls, under its entrypoint's span (current here)
-        self._loop_monitor.start(self._job_ctx.job.id)
+        self._loop_monitor.start(
+            self._job_ctx.job.id, whole_process=self._executor_type == JobExecutorType.PROCESS
+        )
         return self._in_job(self._args.job_entrypoint_fnc(self._job_ctx), "job_user_entrypoint")
 
     async def _core_wait(self, task: asyncio.Task[None]) -> None:

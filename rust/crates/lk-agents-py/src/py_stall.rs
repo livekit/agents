@@ -1,19 +1,20 @@
-//! Event-loop stalls (docs/internals/telemetry.md "Event-loop stalls"). Each watched asyncio
-//! loop's timer beats its [`LoopWatch`]; one detector thread per process notices a beat 100 ms
-//! old, reads the loop thread's Python stack with py-spy over the process's own memory (never
-//! the GIL) and records the stall once: when the loop beats again, when its watch closes, or at
-//! 5 s while it is still stuck. Beats and the detector's checks take no lock; the sampler is the
-//! detector thread's own.
+//! Event-loop stalls and job profiles (docs/internals/telemetry.md "Event-loop stalls", "Job
+//! profiles"). Each watched asyncio loop's timer beats its [`LoopWatch`]; one detector thread per
+//! process notices a beat 100 ms old, reads the loop thread's Python stack with py-spy over the
+//! process's own memory (never the GIL) and records the stall once: when the loop beats again,
+//! when its watch closes, or at 5 s while it is still stuck. Every 100 ms the same thread samples
+//! the watched jobs' Python threads into each job's profile. Beats and checks take no lock; a
+//! job's profile is locked once per sample; one process sample per tick serves both.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, LazyLock};
 use std::thread::{self, Thread};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
-use lk_agents_abi::telemetry::record::SpanContext;
-use lk_agents_runtime::telemetry::LoopStall;
+use lk_agents_abi::telemetry;
+use lk_agents_runtime::telemetry_export::profile::{self, Frame, Profile};
 use parking_lot::Mutex;
 
 /// How often the loop beats, and the detector checks.
@@ -23,8 +24,13 @@ const THRESHOLD: Duration = Duration::from_millis(100);
 /// Stack samples of one stall: at detection, then this often, at most `SAMPLES`.
 const SAMPLE_EVERY: Duration = Duration::from_millis(100);
 const SAMPLES: usize = 5;
+/// The job profiles' sampling period (10 Hz).
+const PROFILE_EVERY: Duration = Duration::from_millis(100);
 /// A stall still going after this long is recorded while it lasts (a deadlocked loop).
 const CAP: Duration = Duration::from_secs(5);
+/// How long after a still-stuck report a log line must still be on its way for the report to go
+/// to stderr too.
+const FORWARDING_GRACE: Duration = Duration::from_millis(200);
 /// The recorded stack: its deepest frames, at most this long.
 const FRAMES: usize = 20;
 const STACK_BYTES: usize = 4096;
@@ -39,27 +45,47 @@ fn nanos(d: Duration) -> u64 {
     u64::try_from(d.as_nanos()).unwrap_or(u64::MAX)
 }
 
+fn unix_nanos() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |since| u64::try_from(since.as_nanos()).unwrap_or(u64::MAX))
+}
+
 /// The declared `_core_LoopWatch`: one asyncio loop, beaten by its own timer.
 pub struct LoopWatch(Arc<Watched>);
 
 struct Watched {
     /// The loop's OS thread (`threading.get_native_id()`).
     os_thread: u64,
-    parent: Option<SpanContext>,
+    parent: Option<telemetry::record::SpanContext>,
     job: Option<String>,
+    /// The process runs this job alone: its other running threads join the job's profile.
+    whole_process: bool,
     last_beat: AtomicU64,
     closed: AtomicBool,
+    /// The job's profile, which the recording upload takes.
+    profile: Arc<Mutex<Profile>>,
 }
 
 impl lk_agents_abi::telemetry::host::LoopWatch for LoopWatch {
-    fn new(os_thread: u64, parent: Option<SpanContext>, job: Option<String>) -> Self {
+    fn new(
+        os_thread: u64,
+        parent: Option<telemetry::record::SpanContext>,
+        job: Option<String>,
+        whole_process: bool,
+    ) -> Self {
         let watched = Arc::new(Watched {
             os_thread,
-            parent: parent.and_then(SpanContext::valid),
+            parent: parent.and_then(telemetry::record::SpanContext::valid),
             job,
+            whole_process,
             last_beat: AtomicU64::new(now()),
             closed: AtomicBool::new(false),
+            profile: Arc::default(),
         });
+        if let Some(job) = &watched.job {
+            profile::register(telemetry::record::JobKey(job.clone()), watched.profile.clone());
+        }
         detector().watch(watched.clone());
         LoopWatch(watched)
     }
@@ -69,13 +95,23 @@ impl lk_agents_abi::telemetry::host::LoopWatch for LoopWatch {
     }
 
     fn close(&self) {
-        self.0.closed.store(true, Ordering::Relaxed);
+        self.0.close();
     }
 }
 
 impl Drop for LoopWatch {
     fn drop(&mut self) {
-        self.0.closed.store(true, Ordering::Relaxed);
+        self.0.close();
+    }
+}
+
+impl Watched {
+    fn close(&self) {
+        if !self.closed.swap(true, Ordering::Relaxed)
+            && let Some(job) = &self.job
+        {
+            profile::forget(&telemetry::record::JobKey(job.clone()), &self.profile);
+        }
     }
 }
 
@@ -105,29 +141,80 @@ fn detector() -> Arc<Detector> {
         return running.clone();
     }
     let (watches, received) = channel();
-    let thread = thread::Builder::new()
+    let thread = match thread::Builder::new()
         .name("lk-loop-stalls".into())
         .spawn(move || run(&received))
-        .map_or_else(|_| thread::current(), |handle| handle.thread().clone());
+    {
+        Ok(handle) => handle.thread().clone(),
+        Err(error) => {
+            // Watches still beat; nothing checks them in this process.
+            log::warn!(target: "livekit.agents", "event-loop stall detection unavailable: {error}");
+            thread::current()
+        }
+    };
     let started = Arc::new(Detector { pid, watches, thread });
     *slot = Some(started.clone());
     started
 }
 
+/// The detector's state between ticks.
+struct Detection {
+    sampler: Sampler,
+    watches: Vec<Entry>,
+    last_wake: u64,
+    next_profile: u64,
+    last_profile: Option<u64>,
+}
+
 fn run(received: &Receiver<Arc<Watched>>) {
-    let mut sampler = Sampler::new();
-    let mut watches: Vec<Entry> = Vec::new();
-    let mut last_wake = now();
+    let t = now();
+    let mut detection = Detection {
+        sampler: Sampler::new(),
+        watches: Vec::new(),
+        last_wake: t,
+        next_profile: t,
+        last_profile: None,
+    };
+    let mut panicked = false;
     loop {
-        thread::park_timeout(TICK);
-        watches.extend(received.try_iter().map(Entry::new));
+        // Nothing to watch: sleep until a watch arrives (`watch` unparks).
+        if detection.watches.is_empty() {
+            thread::park();
+        } else {
+            thread::park_timeout(TICK);
+        }
+        detection.watches.extend(received.try_iter().map(Entry::new));
+        // A panic in one tick (a sample, a record) must not end detection for the process.
+        if catch_unwind(AssertUnwindSafe(|| detection.tick())).is_err()
+            && !std::mem::replace(&mut panicked, true)
+        {
+            log::error!(target: "livekit.agents", "event-loop stall detection panicked; it goes on");
+        }
+    }
+}
+
+impl Detection {
+    fn tick(&mut self) {
         let t = now();
         // Late itself: the whole process was paused (SIGSTOP, throttling, a suspended machine),
         // not one loop. Every watch starts over from now.
-        let paused = t.saturating_sub(last_wake) >= nanos(THRESHOLD + TICK);
-        last_wake = t;
-        watches.retain_mut(|entry| {
-            let checked = entry.check(t, paused, &mut sampler);
+        let paused = t.saturating_sub(self.last_wake) >= nanos(THRESHOLD + TICK);
+        self.last_wake = t;
+        let profile = !self.watches.is_empty() && t >= self.next_profile;
+        let stalled = self.watches.iter().any(|entry| entry.wants_sample(t));
+        // One process sample per tick, shared by the profiles and every stalled loop.
+        let threads = if profile || stalled { self.sampler.sample_all() } else { None };
+        if profile {
+            let wall =
+                self.last_profile.map_or(nanos(PROFILE_EVERY), |last| t.saturating_sub(last));
+            self.last_profile = Some(t);
+            self.next_profile = t.saturating_add(nanos(PROFILE_EVERY));
+            if let Some(threads) = &threads {
+                add_samples(&self.watches, threads, unix_nanos(), i64::try_from(wall).unwrap_or(0));
+            }
+        }
+        self.watches.retain_mut(|entry| {
+            let checked = entry.check(t, paused, threads.as_deref());
             if let Some(stall) = checked.record {
                 lk_agents_runtime::telemetry::loop_stalled(stall);
             }
@@ -138,6 +225,35 @@ fn run(received: &Receiver<Arc<Watched>>) {
             checked.keep
         });
     }
+}
+
+/// One profile sample of every watched job: its loop thread always (wall clock: its waiting is
+/// what a slow turn is made of); when the process runs the job alone, its other Python threads
+/// too while they run (an idle pool thread would only add waiting). With several jobs in one
+/// process, other threads cannot be told apart by job.
+fn add_samples(watches: &[Entry], threads: &[ThreadStack], at: u64, wall: i64) {
+    for entry in watches {
+        let mut profile = entry.watched.profile.lock();
+        for thread in threads {
+            let loop_thread = thread.os_thread == Some(entry.watched.os_thread);
+            if loop_thread || (entry.watched.whole_process && thread.active) {
+                let frames = thread.frames.iter().map(|frame| Frame {
+                    function: &frame.function,
+                    file: &frame.file,
+                    line: frame.line,
+                });
+                profile.add(at, wall, &thread.name, frames);
+            }
+        }
+    }
+}
+
+/// The deepest frames of the thread `os_thread`, `function (file:line)`.
+fn frames_of(threads: &[ThreadStack], os_thread: u64) -> Option<Vec<String>> {
+    let thread = threads.iter().find(|thread| thread.os_thread == Some(os_thread))?;
+    let frame =
+        |frame: &SampledFrame| format!("{} ({}:{})", frame.function, frame.file, frame.line);
+    Some(thread.frames.iter().take(FRAMES).map(frame).collect())
 }
 
 struct Entry {
@@ -151,15 +267,11 @@ struct Entry {
 struct Checked {
     /// No once the watch is closed and done with.
     keep: bool,
-    record: Option<LoopStall>,
+    record: Option<lk_agents_runtime::telemetry::LoopStall>,
     /// The still-stuck report, for stderr: the core's log lines are not reaching Python's
     /// `logging` (one has been on its way since the report: waiting for the GIL, or in a handler).
     stderr: Option<String>,
 }
-
-/// How long after a still-stuck report a log line must still be on its way for the report to go
-/// to stderr too.
-const FORWARDING_GRACE: Duration = Duration::from_millis(200);
 
 struct Stall {
     since: u64,
@@ -175,15 +287,24 @@ impl Entry {
         Entry { watched, fresh_since: now(), stall: None }
     }
 
-    /// One check at `t`.
-    fn check(&mut self, t: u64, paused: bool, sampler: &mut Sampler) -> Checked {
+    /// A stall in progress whose next stack sample is due.
+    fn wants_sample(&self, t: u64) -> bool {
+        self.stall.as_ref().is_some_and(|s| s.samples.len() < SAMPLES && t >= s.next_sample)
+    }
+
+    /// One check at `t`, with this tick's process sample, if one was taken.
+    fn check(&mut self, t: u64, paused: bool, threads: Option<&[ThreadStack]>) -> Checked {
         let closed = self.watched.closed.load(Ordering::Relaxed);
         let last = self.watched.last_beat.load(Ordering::Relaxed).max(self.fresh_since);
         let mut checked = Checked { keep: !closed, record: None, stderr: None };
+        if paused {
+            // The process was paused: whatever the loop looked like is the pause, not a stall.
+            self.fresh_since = t;
+            self.stall = None;
+            return checked;
+        }
         let Some(stall) = self.stall.as_mut() else {
-            if paused {
-                self.fresh_since = t;
-            } else if !closed && t.saturating_sub(last) >= nanos(THRESHOLD) {
+            if !closed && t.saturating_sub(last) >= nanos(THRESHOLD) {
                 self.stall = Some(Stall {
                     since: last,
                     unforwarded: None,
@@ -197,18 +318,20 @@ impl Entry {
         let ended = last > stall.since;
         if ended || closed {
             let end = if ended { last.saturating_sub(nanos(TICK)) } else { t };
-            checked.record = stall.record(&self.watched, end);
+            checked.record = stall.record(&self.watched, end, false);
             self.stall = None;
             return checked;
         }
         if stall.samples.len() < SAMPLES && t >= stall.next_sample {
-            if let Some(frames) = sampler.sample(self.watched.os_thread) {
+            if let Some(frames) =
+                threads.and_then(|threads| frames_of(threads, self.watched.os_thread))
+            {
                 stall.samples.push(frames);
             }
             stall.next_sample = t.saturating_add(nanos(SAMPLE_EVERY));
         }
         if t.saturating_sub(stall.since) >= nanos(CAP) {
-            checked.record = stall.record(&self.watched, t);
+            checked.record = stall.record(&self.watched, t, true);
             if let Some(report) = &checked.record {
                 let message = lk_agents_runtime::telemetry::stall_message(
                     "livekit.agents: event loop still blocked after",
@@ -229,8 +352,13 @@ impl Entry {
 }
 
 impl Stall {
-    /// The stall ending at `end`, the first time only.
-    fn record(&mut self, watched: &Watched, end: u64) -> Option<LoopStall> {
+    /// The stall ending at `end` (`ongoing`: still stuck then), the first time only.
+    fn record(
+        &mut self,
+        watched: &Watched,
+        end: u64,
+        ongoing: bool,
+    ) -> Option<lk_agents_runtime::telemetry::LoopStall> {
         if std::mem::replace(&mut self.recorded, true) {
             return None;
         }
@@ -238,12 +366,13 @@ impl Stall {
             Some((frames, import)) => (Some(stack_text(frames)), import),
             None => (None, None),
         };
-        Some(LoopStall {
+        Some(lk_agents_runtime::telemetry::LoopStall {
             duration: Duration::from_nanos(end.saturating_sub(self.since)),
             parent: watched.parent,
             job: watched.job.clone(),
             stack,
             import,
+            ongoing,
         })
     }
 }
@@ -283,11 +412,27 @@ fn stack_text(frames: &[String]) -> String {
 
 pub(crate) use sampler::Sampler;
 
-/// py-spy over the process's own memory, built at the first stall. Any failure turns stacks
-/// off for the process with one warning; stalls are still recorded.
+/// One Python thread's stack at a sample.
+pub(crate) struct ThreadStack {
+    pub(crate) os_thread: Option<u64>,
+    pub(crate) name: String,
+    /// Running, not waiting (py-spy's judgement from the thread's OS state).
+    pub(crate) active: bool,
+    /// Innermost first.
+    pub(crate) frames: Vec<SampledFrame>,
+}
+
+pub(crate) struct SampledFrame {
+    pub(crate) function: String,
+    pub(crate) file: String,
+    pub(crate) line: i64,
+}
+
+/// py-spy over the process's own memory, built at the first sample. Any failure turns stacks
+/// off for the process with one warning; stalls are still recorded, profiles stay empty.
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 mod sampler {
-    use super::{AssertUnwindSafe, FRAMES, catch_unwind};
+    use super::{AssertUnwindSafe, SampledFrame, ThreadStack, catch_unwind};
 
     pub(crate) struct Sampler(State);
 
@@ -302,26 +447,21 @@ mod sampler {
             Sampler(State::Unstarted)
         }
 
-        #[cfg(test)]
-        pub(crate) fn off() -> Self {
-            Sampler(State::Off)
-        }
-
-        /// The deepest frames of the thread `os_thread`, `function (file:line)`.
-        pub(crate) fn sample(&mut self, os_thread: u64) -> Option<Vec<String>> {
+        /// Every Python thread's stack.
+        pub(crate) fn sample_all(&mut self) -> Option<Vec<ThreadStack>> {
             if let State::Unstarted = self.0 {
                 self.0 = start();
             }
             let State::Ready(spy) = &mut self.0 else { return None };
-            catch_unwind(AssertUnwindSafe(|| frames(spy, os_thread))).ok().flatten()
+            catch_unwind(AssertUnwindSafe(|| threads(spy))).ok().flatten()
         }
     }
 
     fn start() -> State {
         let mut config = py_spy::Config::default();
         config.blocking = py_spy::config::LockingStrategy::NonBlocking;
-        // the loop thread is wanted whatever py-spy thinks of it: blocked in a sleep or a read
-        // is exactly a stall
+        // a loop thread is wanted whatever py-spy thinks of it: blocked in a sleep or a read is
+        // exactly a stall, and a wall-clock profile counts waiting too
         config.include_idle = true;
         let pid = std::process::id() as py_spy::Pid;
         let why = match catch_unwind(AssertUnwindSafe(|| py_spy::PythonSpy::new(pid, &config))) {
@@ -333,20 +473,31 @@ mod sampler {
         State::Off
     }
 
-    fn frames(spy: &mut py_spy::PythonSpy, os_thread: u64) -> Option<Vec<String>> {
+    fn threads(spy: &mut py_spy::PythonSpy) -> Option<Vec<ThreadStack>> {
         let traces = spy.get_stack_traces().ok()?;
-        let trace = traces.into_iter().find(|trace| trace.os_thread_id == Some(os_thread))?;
-        let frame = |frame: &py_spy::Frame| {
-            let file = frame.short_filename.as_deref().unwrap_or(&frame.filename);
-            format!("{} ({file}:{})", frame.name, frame.line)
+        let thread = |trace: py_spy::StackTrace| ThreadStack {
+            os_thread: trace.os_thread_id,
+            active: trace.active,
+            name: trace.thread_name.unwrap_or_else(|| format!("thread {}", trace.thread_id)),
+            frames: trace
+                .frames
+                .into_iter()
+                .map(|frame| SampledFrame {
+                    file: frame.short_filename.unwrap_or(frame.filename),
+                    function: frame.name,
+                    line: i64::from(frame.line),
+                })
+                .collect(),
         };
-        Some(trace.frames.iter().take(FRAMES).map(frame).collect())
+        Some(traces.into_iter().map(thread).collect())
     }
 }
 
-/// Where py-spy does not run, stalls are recorded without a stack.
+/// Where py-spy does not run, stalls are recorded without a stack and profiles stay empty.
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 mod sampler {
+    use super::ThreadStack;
+
     pub(crate) struct Sampler;
 
     impl Sampler {
@@ -354,12 +505,7 @@ mod sampler {
             Sampler
         }
 
-        #[cfg(test)]
-        pub(crate) fn off() -> Self {
-            Sampler
-        }
-
-        pub(crate) fn sample(&mut self, _os_thread: u64) -> Option<Vec<String>> {
+        pub(crate) fn sample_all(&mut self) -> Option<Vec<ThreadStack>> {
             None
         }
     }
@@ -372,12 +518,18 @@ mod tests {
     const MS: u64 = 1_000_000;
 
     fn entry(job: &str) -> Entry {
+        entry_on(job, 1, true)
+    }
+
+    fn entry_on(job: &str, os_thread: u64, whole_process: bool) -> Entry {
         let watched = Arc::new(Watched {
-            os_thread: 1,
+            os_thread,
             parent: None,
             job: Some(job.into()),
+            whole_process,
             last_beat: AtomicU64::new(0),
             closed: AtomicBool::new(false),
+            profile: Arc::default(),
         });
         Entry { watched, fresh_since: 0, stall: None }
     }
@@ -386,52 +538,80 @@ mod tests {
         entry.watched.last_beat.store(at, Ordering::Relaxed);
     }
 
+    fn thread(os_thread: u64, name: &str, active: bool) -> ThreadStack {
+        let frame = SampledFrame { function: name.to_owned(), file: "app.py".into(), line: 1 };
+        ThreadStack { os_thread: Some(os_thread), name: name.into(), active, frames: vec![frame] }
+    }
+
     // Catches: a stall missed or recorded twice, or its duration off by more than a tick.
     #[test]
     fn a_stall_is_recorded_once_when_the_loop_beats_again() {
-        let (mut e, mut s) = (entry("AJ_1"), Sampler::off());
-        assert_eq!(e.check(80 * MS, false, &mut s).record.map(|x| x.duration), None);
-        let checked = e.check(120 * MS, false, &mut s);
+        let mut e = entry("AJ_1");
+        assert!(e.check(80 * MS, false, None).record.is_none());
+        let checked = e.check(120 * MS, false, None);
         assert!(checked.keep && checked.record.is_none(), "detected, not yet recorded");
         beat(&e, 420 * MS);
-        let stalled = e.check(440 * MS, false, &mut s).record.expect("recorded on the next beat");
+        let stalled = e.check(440 * MS, false, None).record.expect("recorded on the next beat");
         assert_eq!(stalled.duration, Duration::from_millis(400));
         assert_eq!(stalled.job.as_deref(), Some("AJ_1"));
-        assert!(stalled.stack.is_none(), "no sampler, no stack");
-        assert!(e.check(460 * MS, false, &mut s).record.is_none());
+        assert!(!stalled.ongoing && stalled.stack.is_none(), "no sample, no stack");
+        assert!(e.check(460 * MS, false, None).record.is_none());
     }
 
-    // Catches: a whole-process pause (the detector late too) reported as a loop stall.
+    // Catches: the stack not taken from the tick's shared sample, or from another thread.
+    #[test]
+    fn a_stall_s_stack_is_its_loop_thread_s_from_the_shared_sample() {
+        let mut e = entry("AJ_1");
+        e.check(120 * MS, false, None);
+        assert!(e.wants_sample(140 * MS));
+        let threads = [thread(9, "other", true), thread(1, "busy", true)];
+        e.check(140 * MS, false, Some(&threads));
+        assert!(!e.wants_sample(160 * MS), "the next sample is 100 ms later");
+        beat(&e, 300 * MS);
+        let stalled = e.check(320 * MS, false, None).record.unwrap();
+        assert_eq!(stalled.stack.as_deref(), Some("busy (app.py:1)"));
+    }
+
+    // Catches: a whole-process pause (the detector late too) reported as a loop stall, before
+    // or during a stall.
     #[test]
     fn a_process_pause_is_not_a_stall() {
-        let (mut e, mut s) = (entry("AJ_1"), Sampler::off());
-        assert!(e.check(5_000 * MS, true, &mut s).record.is_none());
+        let mut e = entry("AJ_1");
+        assert!(e.check(5_000 * MS, true, None).record.is_none());
         assert!(e.stall.is_none(), "watching starts over after the pause");
-        assert!(e.check(5_020 * MS, false, &mut s).record.is_none());
+        assert!(e.check(5_020 * MS, false, None).record.is_none());
+
+        let mut e = entry("AJ_1");
+        e.check(150 * MS, false, None);
+        assert!(e.stall.is_some());
+        assert!(e.check(9_000 * MS, true, None).record.is_none(), "the pause is not the stall's");
+        assert!(e.stall.is_none());
+        assert!(e.check(9_020 * MS, false, None).record.is_none());
     }
 
-    // Catches: a stuck loop never reported, reported again when it finally ends, or its report
-    // sent to stderr while log forwarding works.
+    // Catches: a stuck loop never reported, reported again when it finally ends, not marked as
+    // ongoing (and so rate-limited away), or its report sent to stderr while forwarding works.
     #[test]
     fn a_loop_stuck_past_the_cap_is_reported_while_stuck_and_once() {
-        let (mut e, mut s) = (entry("AJ_1"), Sampler::off());
-        assert!(e.check(120 * MS, false, &mut s).record.is_none());
-        let capped = e.check(5_020 * MS, false, &mut s).record.expect("reported at the cap");
+        let mut e = entry("AJ_1");
+        assert!(e.check(120 * MS, false, None).record.is_none());
+        let capped = e.check(5_020 * MS, false, None).record.expect("reported at the cap");
         assert_eq!(capped.duration, Duration::from_millis(5_020));
-        let later = e.check(5_240 * MS, false, &mut s);
+        assert!(capped.ongoing);
+        let later = e.check(5_240 * MS, false, None);
         assert!(later.stderr.is_none(), "this test's log forwarding is not waiting for the GIL");
         beat(&e, 9_000 * MS);
-        assert!(e.check(9_020 * MS, false, &mut s).record.is_none(), "once");
+        assert!(e.check(9_020 * MS, false, None).record.is_none(), "once");
         assert!(e.stall.is_none());
     }
 
     // Catches: a stall in progress lost when its watch closes, or a closed watch kept.
     #[test]
     fn closing_records_the_stall_in_progress_and_stops_watching() {
-        let (mut e, mut s) = (entry("AJ_1"), Sampler::off());
-        assert!(e.check(150 * MS, false, &mut s).record.is_none());
+        let mut e = entry("AJ_1");
+        assert!(e.check(150 * MS, false, None).record.is_none());
         e.watched.closed.store(true, Ordering::Relaxed);
-        let checked = e.check(300 * MS, false, &mut s);
+        let checked = e.check(300 * MS, false, None);
         assert!(!checked.keep);
         assert_eq!(checked.record.map(|x| x.duration), Some(Duration::from_millis(300)));
     }
@@ -453,5 +633,31 @@ mod tests {
         assert!(importing(&["busy (app.py:7)".to_owned()]).is_none());
         let long = vec!["f (x.py:1)".repeat(100); 20];
         assert!(stack_text(&long).len() <= STACK_BYTES);
+    }
+
+    // Catches: a job's profile missing its loop thread while it waits, filled with idle pool
+    // threads, or (a job sharing its process) taking the worker's or another job's threads.
+    #[test]
+    fn a_profile_has_its_loop_thread_and_running_threads_only() {
+        let threads =
+            [thread(1, "loop", false), thread(2, "worker", true), thread(3, "idle-pool", false)];
+        let alone = [entry_on("AJ_1", 1, true)];
+        add_samples(&alone, &threads, 1_000, 100);
+        assert_eq!(
+            alone[0].watched.profile.lock().samples(),
+            2,
+            "the waiting loop, the running worker"
+        );
+        let shared = [entry_on("AJ_1", 1, false), entry_on("AJ_2", 2, false)];
+        add_samples(&shared, &threads, 1_000, 100);
+        assert_eq!(shared[0].watched.profile.lock().samples(), 1, "its loop thread only");
+        assert_eq!(shared[1].watched.profile.lock().samples(), 1);
+        let one_of_a_pool = [entry_on("AJ_3", 1, false)];
+        add_samples(&one_of_a_pool, &threads, 1_000, 100);
+        assert_eq!(
+            one_of_a_pool[0].watched.profile.lock().samples(),
+            1,
+            "not the worker's threads"
+        );
     }
 }

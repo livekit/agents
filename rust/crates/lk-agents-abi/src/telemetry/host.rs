@@ -100,12 +100,15 @@ pub trait Telemetry {
 #[crate::host(class(name = "_core_LoopWatch"))]
 pub trait LoopWatch: Send + Sync + Sized + 'static {
     /// Watches the loop running on OS thread `os_thread` (`threading.get_native_id()`); its
-    /// stalls go under `parent` and count on `job`'s sessions.
+    /// stalls go under `parent` and count on `job`'s sessions. `whole_process`: the process runs
+    /// this job alone (the process executor), so its other running Python threads join the job's
+    /// profile; otherwise the profile holds the loop thread alone.
     #[host(new)]
     fn new(
         os_thread: u64,
         #[host(kw, default = None)] parent: Option<SpanContext>,
         #[host(kw, default = None)] job: Option<String>,
+        #[host(kw, default = false)] whole_process: bool,
     ) -> Self;
 
     /// The loop ran.

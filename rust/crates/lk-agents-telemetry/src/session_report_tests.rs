@@ -135,7 +135,8 @@ async fn the_upload_follows_the_ingest_contract() {
     std::fs::write(&path, &audio).unwrap();
     let (url, mut rx) = peer(vec![]).await;
     let upload = recording(Some(path.to_str().unwrap().to_owned()));
-    let sent = recording::upload(&cloud(&url), &upload, &*clock(), Duration::from_secs(10)).await;
+    let sent =
+        recording::upload(&cloud(&url), &upload, None, &*clock(), Duration::from_secs(10)).await;
     std::fs::remove_file(path).unwrap();
     assert_eq!(sent.unwrap(), Uploaded::Sent);
     let request = rx.recv().await.unwrap();
@@ -173,9 +174,10 @@ async fn the_upload_follows_the_ingest_contract() {
 async fn a_missing_audio_file_uploads_the_rest() {
     let (url, mut rx) = peer(vec![]).await;
     let upload = recording(Some("/nonexistent/recording.ogg".into()));
-    let body = Multipart::new(&upload).await;
+    let body = Multipart::new(&upload, None).await;
     assert!(!body.content_type().is_empty());
-    let sent = recording::upload(&cloud(&url), &upload, &*clock(), Duration::from_secs(10)).await;
+    let sent =
+        recording::upload(&cloud(&url), &upload, None, &*clock(), Duration::from_secs(10)).await;
     assert_eq!(sent.unwrap(), Uploaded::Sent);
     let names: Vec<String> = parts(&rx.recv().await.unwrap())
         .into_iter()
@@ -212,7 +214,7 @@ async fn retries_follow_retry_info_and_disabled_recording_stops() {
 }
 
 async fn send(url: &str) -> Result<Uploaded, UploadError> {
-    recording::upload(&cloud(url), &recording(None), &*clock(), Duration::from_secs(10)).await
+    recording::upload(&cloud(url), &recording(None), None, &*clock(), Duration::from_secs(10)).await
 }
 
 fn job_exporter(url: &str) -> Exporter {
@@ -283,4 +285,67 @@ async fn the_records_are_flushed_before_the_upload() {
     assert!(exporter.job_disabled(&key));
     assert!(rx.try_recv().is_err());
     assert_eq!(exporter.diagnostics().recording_disabled, 1);
+}
+
+// Catches: the job's profile missing from the upload, sent under another name or type, or put
+// after the streamed audio.
+#[tokio::test]
+async fn a_profile_rides_as_its_own_part_before_the_audio() {
+    let (url, mut rx) = peer(vec![]).await;
+    let upload = recording(None);
+    let profile = [0x1f_u8, 0x8b, 1, 2, 3];
+    let sent = recording::upload(
+        &cloud(&url),
+        &upload,
+        Some(&profile),
+        &*clock(),
+        Duration::from_secs(10),
+    )
+    .await;
+    assert_eq!(sent.unwrap(), Uploaded::Sent);
+    let parts = parts(&rx.recv().await.unwrap());
+    let names: Vec<&str> = parts
+        .iter()
+        .map(|(h, _)| h.split("name=\"").nth(1).unwrap().split('"').next().unwrap())
+        .collect();
+    assert_eq!(names, ["header", "chat_history", "profile"]);
+    assert!(parts[2].0.contains("filename=\"profile.pb.gz\""), "{}", parts[2].0);
+    assert!(parts[2].0.contains("application/octet-stream"), "{}", parts[2].0);
+    assert_eq!(parts[2].1, profile);
+}
+
+// Catches: the job's profile not written beside its audio recording, or the profile part sent
+// to a Cloud that has not accepted it yet (an unknown part fails the whole upload).
+#[tokio::test]
+async fn a_job_s_profile_is_written_beside_its_audio_and_not_uploaded_yet() {
+    let dir = std::env::temp_dir().join(format!("lk-profile-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let audio = dir.join("audio.ogg");
+    std::fs::write(&audio, b"OggS").unwrap();
+    let key = JobKey("AJ_profiled".into());
+    let profile = Arc::new(parking_lot::Mutex::new(crate::profile::Profile::default()));
+    let frame = crate::profile::Frame { function: "busy", file: "app.py", line: 7 };
+    profile.lock().add(1_000, crate::profile::PERIOD_NANOS, "MainThread", [frame].into_iter());
+    crate::profile::register(key.clone(), profile.clone());
+    let report = SessionReport {
+        job_id: "AJ_profiled".into(),
+        audio_recording_path: Some(audio.to_string_lossy().into_owned()),
+        audio_recording_started_at: Some(1.0),
+        ..report()
+    };
+    let options = RecordingOptions { audio: true, ..RecordingOptions::default() };
+    let (url, mut rx) = peer(vec![]).await;
+    let (endpoint, clock) = (cloud(&url), clock());
+    let outputs = ReportOutputs { exporter: None, cloud: Some(&endpoint), clock: &*clock };
+    export(outputs, &key, &report, &options, false, Duration::from_secs(10)).await.unwrap();
+    crate::profile::forget(&key, &profile);
+
+    let written = std::fs::read(dir.join("profile.pb.gz")).unwrap();
+    assert_eq!(&written[..2], [0x1f, 0x8b], "gzip");
+    let names: Vec<String> = parts(&rx.recv().await.unwrap())
+        .into_iter()
+        .map(|(h, _)| h.split("name=\"").nth(1).unwrap().split('"').next().unwrap().to_owned())
+        .collect();
+    assert!(!names.contains(&"profile".to_owned()), "{names:?}");
+    std::fs::remove_dir_all(&dir).unwrap();
 }

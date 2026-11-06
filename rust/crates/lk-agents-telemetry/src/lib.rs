@@ -12,6 +12,7 @@
 
 pub mod host;
 pub mod otlp;
+pub mod profile;
 pub mod session_report;
 pub mod stall;
 

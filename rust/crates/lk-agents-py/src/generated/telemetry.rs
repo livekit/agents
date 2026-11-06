@@ -307,15 +307,18 @@ pub struct CoreLoopWatch(pub(crate) ::std::sync::Arc<CoreLoopWatchImpl>);
 #[pymethods]
 impl CoreLoopWatch {
     /// Watches the loop running on OS thread `os_thread` (`threading.get_native_id()`); its
-    /// stalls go under `parent` and count on `job`'s sessions.
+    /// stalls go under `parent` and count on `job`'s sessions. `whole_process`: the process runs
+    /// this job alone (the process executor), so its other running Python threads join the job's
+    /// profile; otherwise the profile holds the loop thread alone.
     #[new]
-    #[pyo3(signature = (os_thread, *, parent = None, job = None))]
+    #[pyo3(signature = (os_thread, *, parent = None, job = None, whole_process = false))]
     fn new(
         py: Python<'_>,
         #[pyo3(from_py_with = _extract_loop_watch_new_os_thread)]
         os_thread: LoopWatchNewOsThreadInput,
         parent: Option<Bound<'_, PyAny>>,
         job: ::std::option::Option<::std::string::String>,
+        whole_process: bool,
     ) -> PyResult<CoreLoopWatch> {
         crate::py_calls::check_pid()?;
         let parent = parent
@@ -323,7 +326,10 @@ impl CoreLoopWatch {
             .transpose()?;
         let out = py.detach(|| {
             <CoreLoopWatchImpl as ::lk_agents_abi::telemetry::host::LoopWatch>::new(
-                os_thread, parent, job,
+                os_thread,
+                parent,
+                job,
+                whole_process,
             )
         });
         ::pyo3::PyResult::Ok(CoreLoopWatch(::std::sync::Arc::new(out)))

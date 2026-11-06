@@ -89,8 +89,12 @@ class _LoopMonitor:
         self._handle: asyncio.TimerHandle | None = None
         self._watch: _core._core_LoopWatch | None = None
 
-    def start(self, job: str | None) -> None:
-        self._watch = _core._core_LoopWatch(threading.get_native_id(), parent=_current(), job=job)
+    def start(self, job: str | None, *, whole_process: bool) -> None:
+        """``whole_process``: the process runs this job alone (the process executor), so the
+        job's profile also holds the process's other running threads."""
+        self._watch = _core._core_LoopWatch(
+            threading.get_native_id(), parent=_current(), job=job, whole_process=whole_process
+        )
         self._tick(asyncio.get_running_loop())
 
     def stop(self) -> None:

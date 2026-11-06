@@ -1,5 +1,6 @@
 //! Event-loop stalls (docs/internals/telemetry.md "Event-loop stalls"): each one's measurement,
-//! and its `event_loop_blocked` span (with the loop's stack) and warning line, within a rate limit.
+//! and its `event_loop_blocked` span (with the loop's stack) and warning line, within a rate limit
+//! that a loop still stuck is exempt from.
 
 use lk_agents_abi::telemetry::decl::Seconds;
 use lk_agents_abi::telemetry::errors::{ErrorType, Failure};
@@ -25,6 +26,7 @@ pub fn event_loop_blocked(
     duration: f64,
     stack: Option<String>,
     import: Option<String>,
+    ongoing: bool,
 ) {
     let severity =
         if duration >= BLOCKED_ERROR { BlockingSeverity::Error } else { BlockingSeverity::Warning };
@@ -35,7 +37,9 @@ pub fn event_loop_blocked(
         while sent.front().is_some_and(|at| now.saturating_sub(*at) >= 60_000_000_000) {
             sent.pop_front();
         }
-        if sent.len() >= BLOCKED_SPANS_PER_MINUTE {
+        // A loop still stuck is reported once per stall and never suppressed: it may be the
+        // one report of a deadlock.
+        if sent.len() >= BLOCKED_SPANS_PER_MINUTE && !ongoing {
             *suppressed += 1;
             return;
         }
