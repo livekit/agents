@@ -4,6 +4,7 @@ import io
 import logging
 import os
 import struct
+import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -348,9 +349,10 @@ def test_stream_buffer_close_while_reading():
     assert result == [b""]
 
 
-def _make_wav(sample_rate: int, num_channels: int, num_samples: int) -> bytes:
-    """Generate a valid PCM16 WAV file in memory."""
-    bits_per_sample = 16
+def _make_wav(
+    sample_rate: int, num_channels: int, num_samples: int, bits_per_sample: int = 16
+) -> bytes:
+    """Generate a valid integer PCM WAV file in memory."""
     byte_rate = sample_rate * num_channels * bits_per_sample // 8
     block_align = num_channels * bits_per_sample // 8
     data_size = num_samples * num_channels * (bits_per_sample // 8)
@@ -432,8 +434,147 @@ async def test_wav_inline_decoder_with_resampling():
     await decoder.aclose()
 
 
+@pytest.mark.parametrize("audio_format,bits_per_sample", [(1, 24), (3, 32)])
+@pytest.mark.parametrize("chunk_size", [13, 100000])
+@pytest.mark.parametrize("metadata_size", [0, 131072])
+async def test_parameterized_wav_preserves_pyav_formats(
+    audio_format: int, bits_per_sample: int, chunk_size: int, metadata_size: int
+):
+    sample_rate = 24000
+    sample = b"\x00\x00\x20" if audio_format == 1 else struct.pack("<f", 0.25)
+    pcm = sample * sample_rate
+    block_align = bits_per_sample // 8
+    fmt = struct.pack(
+        "<HHIIHH",
+        audio_format,
+        1,
+        sample_rate,
+        sample_rate * block_align,
+        block_align,
+        bits_per_sample,
+    )
+    wav = (
+        b"RIFF"
+        + struct.pack("<I", 36 + len(pcm))
+        + b"WAVEfmt "
+        + struct.pack("<I", len(fmt))
+        + fmt
+        + b"data"
+        + struct.pack("<I", len(pcm))
+        + pcm
+    )
+    if metadata_size:
+        metadata = b"JUNK" + struct.pack("<I", metadata_size) + bytes(metadata_size)
+        wav = (
+            wav[:4]
+            + struct.pack("<I", len(wav) - 8 + len(metadata))
+            + wav[8:12]
+            + metadata
+            + wav[12:]
+        )
+
+    async def decode(mime: str | None) -> bytes:
+        decoder = AudioStreamDecoder(sample_rate=sample_rate, format=mime)
+        try:
+            for start in range(0, len(wav), chunk_size):
+                decoder.push(wav[start : start + chunk_size])
+            decoder.end_input()
+            return b"".join([bytes(frame.data) async for frame in decoder])
+        finally:
+            await decoder.aclose()
+
+    expected = await decode(None)
+    assert expected
+    actual = await decode("audio/wav; codecs=1")
+    # PyAV's low-latency path can discard leading samples while probing.
+    assert len(expected) <= len(actual) <= len(pcm) * 16 // bits_per_sample
+    assert actual == struct.pack("<h", 8192) * (len(actual) // 2)
+
+
+async def test_pcm16_wav_audio_does_not_spill_to_disk(monkeypatch: pytest.MonkeyPatch):
+    temporary_files = []
+    temporary_file = tempfile.TemporaryFile
+
+    def track_temporary_file(*args, **kwargs):
+        temporary_files.append(True)
+        return temporary_file(*args, **kwargs)
+
+    monkeypatch.setattr(tempfile, "TemporaryFile", track_temporary_file)
+    wav = _make_wav(24000, 1, 48000)
+    decoder = AudioStreamDecoder(sample_rate=24000, format="audio/wav; codecs=1")
+    try:
+        decoder.push(wav)
+        decoder.end_input()
+        frames = [frame async for frame in decoder]
+        assert sum(frame.samples_per_channel for frame in frames) == 48000
+        assert not temporary_files
+    finally:
+        await decoder.aclose()
+
+
+@pytest.mark.parametrize("metadata_size", [65536, 131072])
+@pytest.mark.parametrize("temporary_storage_available", [True, False])
+async def test_wav_large_metadata_preserves_consecutive_segments(
+    metadata_size: int, temporary_storage_available: bool, monkeypatch: pytest.MonkeyPatch
+):
+    if not temporary_storage_available:
+
+        def fail_temporary_file(*args, **kwargs):
+            raise OSError("temporary storage unavailable")
+
+        monkeypatch.setattr(tempfile, "TemporaryFile", fail_temporary_file)
+    wav = _make_wav(24000, 1, 2400)
+    metadata = b"JUNK" + struct.pack("<I", metadata_size) + bytes(metadata_size)
+    wav = (
+        wav[:4] + struct.pack("<I", len(wav) - 8 + len(metadata)) + wav[8:12] + metadata + wav[12:]
+    )
+
+    async def decode(mime: str | None) -> bytes:
+        decoder = AudioStreamDecoder(sample_rate=24000, format=mime)
+        try:
+            for _ in range(2):
+                for start in range(0, len(wav), 1024):
+                    decoder.push(wav[start : start + 1024])
+            decoder.end_input()
+            return b"".join([bytes(frame.data) async for frame in decoder])
+        finally:
+            await decoder.aclose()
+
+    actual = await decode("audio/wav; codecs=1")
+    assert len(actual) == 2400 * 2 * 2
+    assert not any(actual)
+
+
+@pytest.mark.parametrize("storage_failure", ["rollover", "read"])
+async def test_unsupported_wav_without_replay_storage_closes_cleanly(
+    storage_failure: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
+    def fail_temporary_file(*args, **kwargs):
+        raise OSError("temporary storage unavailable")
+
+    if storage_failure == "rollover":
+        monkeypatch.setattr(tempfile, "TemporaryFile", fail_temporary_file)
+    else:
+        monkeypatch.setattr(tempfile.SpooledTemporaryFile, "read", fail_temporary_file)
+    wav = _make_wav(24000, 1, 2400, bits_per_sample=24)
+    metadata = b"JUNK" + struct.pack("<I", 131072) + bytes(131072)
+    wav = (
+        wav[:4] + struct.pack("<I", len(wav) - 8 + len(metadata)) + wav[8:12] + metadata + wav[12:]
+    )
+    decoder = AudioStreamDecoder(sample_rate=24000, format="audio/wav; codecs=1")
+    try:
+        for start in range(0, len(wav), 1024):
+            decoder.push(wav[start : start + 1024])
+        decoder.end_input()
+        assert [frame async for frame in decoder] == []
+        assert "error decoding WAV audio" in caplog.text
+    finally:
+        await decoder.aclose()
+
+
 @pytest.mark.asyncio
-async def test_wav_multi_chunk_each_with_headers():
+@pytest.mark.parametrize("mime_type", ["audio/wav", "audio/wav; codecs=1", " Audio/WAV "])
+async def test_wav_multi_chunk_each_with_headers(mime_type: str):
     """Each push() is a complete WAV file; decoder must re-parse headers each time."""
     sample_rate = 24000
     num_channels = 1
@@ -443,7 +584,7 @@ async def test_wav_multi_chunk_each_with_headers():
     wav_chunk = _make_wav(sample_rate, num_channels, samples_per_chunk)
 
     decoder = AudioStreamDecoder(
-        sample_rate=sample_rate, num_channels=num_channels, format="audio/wav"
+        sample_rate=sample_rate, num_channels=num_channels, format=mime_type
     )
 
     for _ in range(num_chunks):
