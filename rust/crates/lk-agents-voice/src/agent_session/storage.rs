@@ -36,7 +36,6 @@ impl VoiceDriver {
         if !self.session.chat_ctx.reload_transport(&read, history, self.activity.agent_name()) {
             return;
         }
-        self.publish_activity();
         self.publish_event(SessionEvent::HistoryReloaded {
             items: self.session.chat_ctx.items().cloned().collect(),
         });
@@ -86,7 +85,7 @@ impl VoiceDriver {
 
     pub(crate) fn storage_settled(&mut self, now: Ts, speech: SpeechId) {
         if let Some((outcome, interrupted)) = self.session.storage.pending.remove(&speech) {
-            self.activity.set_tools_in_flight(speech, false);
+            self.activity.tools_in_flight.remove(&speech);
             self.finish_reply(now, speech, outcome, interrupted);
         }
     }

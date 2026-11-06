@@ -13,7 +13,7 @@ use crate::agent_session::{
 };
 use crate::audio_recognition::{EndOfTurnInfo, TurnEdits};
 use crate::events::SessionEvent;
-use crate::generation::{EndOfSpeech, TurnOutcome as GenTurnOutcome, end_of_speech};
+use crate::generation::TurnOutcome as GenTurnOutcome;
 use crate::generation::{GenEvent, Providers, ReplyContext, ReplySource};
 use crate::tool_executor::{ToolCompletion, Toolset};
 use crate::trace::{GenerationStep, InterruptStep, PlayoutStep, SpeechStep, ToolStep};
@@ -22,6 +22,14 @@ use lk_agents_abi::voice::events::AgentState;
 use lk_agents_abi::{ChatContext, ChatMessage, Modality, Role, Ts};
 use lk_agents_core::tts::markup::ChatMessageExt;
 use std::sync::Arc;
+
+struct EndOfSpeech {
+    interrupted: bool,
+    has_tool_output: bool,
+    tools_running: bool,
+    speaking: bool,
+    interruption_enabled: bool,
+}
 
 /// A `say(stream)` the realtime model would speak itself (no TTS): the wire carries one text item.
 pub(crate) const SAY_SHAPE_REFUSED_ON_REALTIME: &str =
@@ -239,7 +247,7 @@ impl VoiceDriver {
             on_enter,
             call,
         } = request;
-        if self.activity.rt_session.is_some() {
+        if self.activity.realtime().is_some() {
             if chat_ctx.is_some() || toolset.is_some() || tool_names.is_some() {
                 return self.refuse_realtime_reply_overrides(call);
             }
@@ -317,7 +325,7 @@ impl VoiceDriver {
         // committed when the server did not segment and the reply is asked for. The STT's words
         // are neither sent nor kept ("ignore stt transcription for realtime model"); the server's
         // own transcript fills the user item.
-        if self.activity.rt_session.is_some() {
+        if self.activity.realtime().is_some() {
             self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned);
             // The commit of the server's buffer and the ask, as one request; its speech is
             // announced now, so the metrics name it.
@@ -329,9 +337,10 @@ impl VoiceDriver {
         // request the hook edited, answers a question this turn is not asking.
         let edited =
             edits.instructions.is_some() || edits.chat_ctx.is_some() || edits.user_text.is_some();
-        let stale = self.activity.preemptive_record_version != self.session.chat_ctx.version();
-        if let Some(preemptive_turn) = self.activity.preemptive_turn.take()
-            && (preemptive_turn != info.turn_id || edited || stale)
+        if let Some(preemptive) = self.activity.preemptive.take()
+            && (preemptive.turn != info.turn_id
+                || edited
+                || preemptive.record_version != self.session.chat_ctx.version())
             && self.activity.speech_scheduler.preemptive_generation().is_some()
         {
             self.cancel_preemptive_generation(now, PreemptiveDiscard::TurnAbandoned);
@@ -480,8 +489,6 @@ impl VoiceDriver {
             tools: turn_toolset.specs.clone(),
             on_enter: spec.on_enter,
             running_tool_calls: self.activity.tools.running_tool_calls(),
-            audio_output_enabled: self.session.outputs.plays_audio(),
-            text_output_enabled: self.session.outputs.shows_transcription(),
             expressive,
         };
 
@@ -527,10 +534,8 @@ impl VoiceDriver {
             ReplySource::Realtime => crate::generation::Request {
                 chat_ctx: record,
                 tools: plan.tools.clone(),
-                tts_enabled: false,
-                text_output_enabled: self.session.outputs.shows_transcription(),
                 instructions_hash: crate::generation::stable_hash(&instructions),
-                expressive: None,
+                expressive: false,
             },
         };
 
@@ -660,7 +665,7 @@ impl VoiceDriver {
                 if self.session.storage.enabled {
                     self.storage_settle(speech, *outcome, interrupted);
                 } else {
-                    self.activity.set_tools_in_flight(speech, false);
+                    self.activity.tools_in_flight.remove(&speech);
                     self.finish_reply(now, speech, *outcome, interrupted);
                 }
             }
@@ -681,7 +686,11 @@ impl VoiceDriver {
                 {
                     turn.played(position, true);
                 }
-                self.activity.set_tools_in_flight(speech, tools_running);
+                if tools_running {
+                    self.activity.tools_in_flight.insert(speech);
+                } else {
+                    self.activity.tools_in_flight.remove(&speech);
+                }
                 let text = item.as_ref().and_then(|m| m.raw_text_content());
                 self.step_spoken(
                     now,
@@ -852,7 +861,7 @@ impl VoiceDriver {
         speech: SpeechId,
         error: Box<lk_agents_abi::errors::ProviderError>,
     ) {
-        self.activity.set_tools_in_flight(speech, false);
+        self.activity.tools_in_flight.remove(&speech);
         // Released by the close's edge already: the edge was its end (`CloseAct::Released`).
         if self.activity.speech_was_released(speech) {
             return;
@@ -881,8 +890,10 @@ impl VoiceDriver {
         tools_running: bool,
         item: Option<Box<ChatMessage>>,
     ) {
-        if let Some(state) = self.activity.speech_scheduler.speech_mut(speech) {
-            let _ = state.mark_generation_done();
+        if let Some(state) = self.activity.speech_scheduler.speech_mut(speech)
+            && let Err(error) = state.mark_generation_done()
+        {
+            log::warn!(target: lk_agents_abi::LOG_TARGET, speech = speech.0, error:% = error; "speech step ended without an active generation");
         }
         self.record_trace(SpeechStep::StepSpoken { speech, step, interrupted });
         // The step's edge is spent: the next step's first frame is a new one.
@@ -917,13 +928,19 @@ impl VoiceDriver {
         // another speech's tool span goes back to `thinking` (listening would arm the away timer).
         let speech_interrupted =
             self.activity.speech_scheduler.speech(speech).is_some_and(|s| s.interrupted());
-        let eos = end_of_speech(
-            speech_interrupted,
+        let eos = EndOfSpeech {
+            interrupted: speech_interrupted,
             has_tool_output,
-            tools_running || self.tools_running_elsewhere(speech),
-            self.session.states.agent_state() == AgentState::Speaking,
-            self.session.config.effective.turn.interruption.detection_enabled(),
-        );
+            tools_running: tools_running || self.tools_running_elsewhere(speech),
+            speaking: self.session.states.agent_state() == AgentState::Speaking,
+            interruption_enabled: self
+                .session
+                .config
+                .effective
+                .turn
+                .interruption
+                .detection_enabled(),
+        };
         self.apply_end_of_speech(now, eos);
         self.commit_spoken(speech, item);
     }
@@ -939,14 +956,21 @@ impl VoiceDriver {
     }
 
     fn apply_end_of_speech(&mut self, now: Ts, eos: EndOfSpeech) {
-        if let Some(state) = eos.state {
-            self.set_agent_state(now, state);
-        }
-        if eos.end_of_agent_speech {
-            let eff = self.activity.audio_recognition.on_end_of_agent_speech(now, now);
-            self.apply_recognition_effects(eff);
-        }
-        if eos.restore_interruption_by_audio_activity {
+        let state = if !eos.interrupted && eos.has_tool_output {
+            AgentState::Thinking
+        } else if eos.speaking {
+            if !eos.interrupted && eos.tools_running {
+                AgentState::Thinking
+            } else {
+                AgentState::Listening
+            }
+        } else {
+            return;
+        };
+        self.set_agent_state(now, state);
+        let eff = self.activity.audio_recognition.on_end_of_agent_speech(now, now);
+        self.apply_recognition_effects(eff);
+        if eos.interruption_enabled {
             self.session.by_audio_activity = true;
         }
     }
@@ -974,13 +998,19 @@ impl VoiceDriver {
         // preemptive generation must not drop the agent out of `speaking` while another speech
         // plays.
         let was_current = self.activity.speech_scheduler.current_speech() == Some(speech);
-        let eos = end_of_speech(
+        let eos = EndOfSpeech {
             interrupted,
-            false,
-            false,
-            was_current && self.session.states.agent_state() == AgentState::Speaking,
-            self.session.config.effective.turn.interruption.detection_enabled(),
-        );
+            has_tool_output: false,
+            tools_running: false,
+            speaking: was_current && self.session.states.agent_state() == AgentState::Speaking,
+            interruption_enabled: self
+                .session
+                .config
+                .effective
+                .turn
+                .interruption
+                .detection_enabled(),
+        };
         self.apply_end_of_speech(now, eos);
 
         self.release_speech(now, speech);
@@ -1026,8 +1056,8 @@ impl VoiceDriver {
             // A host `interrupt()` queued after the input that ended it arrives too late.
             state.mark_done(None);
             let view = state.view();
-            let (outcome, failed) = (view.outcome(), view.error.is_some());
-            let error = view.error.clone();
+            let (outcome, failed) = (view.outcome(), view.error().is_some());
+            let error = view.error().cloned();
             self.agent_turn_done(speech, outcome, error);
             self.publish_event(SessionEvent::SpeechDone { speech, outcome });
             // The run that owned it lets it go, and its verdict moves to this speech.
@@ -1040,7 +1070,6 @@ impl VoiceDriver {
         // keeps its entry: a call and output can land after the speech is done.
         self.activity.speech_history.finish(speech);
         self.storage_speech_released(now, speech);
-        self.publish_activity();
         self.speech_finished(now, speech);
         self.voice_task_speech_released(now, speech);
         // A realtime session swapped meanwhile gets its frame once what it cut is released.

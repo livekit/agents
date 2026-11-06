@@ -73,7 +73,7 @@ impl super::AgentActivity {
             interrupted: handle.interrupted(),
         });
         let rt_turn_detection =
-            self.rt_session.as_ref().is_some_and(|session| session.capabilities.turn_detection);
+            self.realtime().is_some_and(|session| session.capabilities.turn_detection);
         let decision = decide_commit(&CommitInputs {
             // The reference keeps scheduling paused through the close's hard edge.
             scheduling_paused: self.speech_scheduler.is_paused()
@@ -85,7 +85,7 @@ impl super::AgentActivity {
             current_speech: guard,
             min_interruption_words: interruption.min_words() as usize,
             new_transcript: &info.new_transcript,
-            realtime_llm: self.rt_session.is_some(),
+            realtime_llm: self.realtime().is_some(),
             rt_turn_detection,
             interruption_detection: interruption.detection_enabled(),
             backchannel_over_agent: info.backchannel_over_agent,
@@ -304,7 +304,7 @@ impl VoiceDriver {
         match cmd {
             TurnCommand::Commit { skip_reply } => {
                 self.record_trace(TurnStep::CommitRequested { skip_reply });
-                if self.activity.rt_session.is_some() {
+                if self.activity.realtime().is_some() {
                     // Nothing is pushed: the commit means "commit whatever STT already has";
                     // pushing a blank re-sent the whole context with a blank user turn.
                     if !skip_reply {
@@ -342,7 +342,7 @@ impl VoiceDriver {
                 self.apply_recognition_effects(eff);
                 // The server holds its own input buffer; the reference calls
                 // `_rt_session.clear_audio()`.
-                if self.activity.rt_session.is_some() {
+                if self.activity.realtime().is_some() {
                     self.rt_send(lk_agents_abi::RealtimeCommand::ClearAudio(
                         lk_agents_abi::llm::realtime::ClearAudio {},
                     ));
@@ -369,7 +369,7 @@ impl VoiceDriver {
     pub(crate) fn apply_config(&mut self, now: Ts, layer: ConfigLayer, diff: ConfigDiff) {
         let ConfigDiff { endpointing, turn_detection_mode: mode, aec_warmup } = diff;
         // Refine the mode first: the journalled config carries the machine's mode.
-        let mode = match self.activity.rt_session.as_ref().map(|s| s.capabilities) {
+        let mode = match self.activity.realtime().map(|s| s.capabilities) {
             Some(caps) => self.reconcile_realtime_turn_detection(&caps),
             None => mode,
         };
@@ -606,7 +606,7 @@ impl VoiceDriver {
         }
         // Before the reply exists: supersede an unheard late reply, then interrupt the current
         // speech if it allows it. A realtime session interrupts in `generate_reply`.
-        if self.activity.rt_session.is_none() {
+        if self.activity.realtime().is_none() {
             if info.late {
                 self.supersede_unheard_reply(now);
             }
@@ -621,7 +621,7 @@ impl VoiceDriver {
         else {
             return;
         };
-        match self.interrupt_speech(now, current, InterruptCause::UserTurn, false) {
+        match self.interrupt_speech(now, current, InterruptCause::UserTurn) {
             Ok(InterruptOutcome::Now | InterruptOutcome::Already) => {}
             // A hold taken since the guard was read: the handle's to keep, said by name.
             Err(_) => self
@@ -652,11 +652,7 @@ impl VoiceDriver {
             (reply && unheard).then_some(id)
         });
         let Some(speech) = unheard else { return };
-        match self.interrupt_speech(now, speech, InterruptCause::Superseded, true) {
-            Ok(InterruptOutcome::Now | InterruptOutcome::Already) => {}
-            // Unreachable: `force` overrides the hold. Said rather than swallowed.
-            Err(_) => self.record_trace(CoreStep::PortFailure("a forced supersede was refused")),
-        }
+        self.force_interrupt_speech(now, speech, InterruptCause::Superseded);
     }
 
     pub(crate) fn commit_user_turn(
@@ -669,9 +665,9 @@ impl VoiceDriver {
     ) {
         // A realtime session commits its server buffer itself, and only when the server does not
         // segment audio (a client commit of a server-segmented buffer is refused).
-        if let Some(rt) = self.activity.rt_session.as_ref() {
+        if let Some(rt) = self.activity.realtime_activity() {
             let server_segments =
-                rt.capabilities.turn_detection && !self.activity.realtime_turn_detection_disabled;
+                rt.session.capabilities.turn_detection && !rt.turn_detection_disabled;
             if skip_reply {
                 if !server_segments {
                     self.rt_send(lk_agents_abi::RealtimeCommand::CommitAudio(
@@ -762,7 +758,7 @@ impl VoiceDriver {
         let speaking = s.current_speech_uninterrupted() || live_at_final;
         let refusal = if !policy.enabled() {
             Some(PreemptiveRefusal::Disabled)
-        } else if self.activity.rt_session.is_some() {
+        } else if self.activity.realtime().is_some() {
             Some(PreemptiveRefusal::Realtime)
         // The transition window: the leaving agent starts no preemptive generation
         // (`_new_turns_blocked`), which covers the `on_exit` phase before the scheduling task's

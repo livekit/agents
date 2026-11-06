@@ -5,7 +5,6 @@
 use crate::agent_activity::scheduling::SpeechId;
 use crate::tool_executor::Toolset;
 use lk_agents_abi::errors::ProviderError;
-use lk_agents_abi::voice::events::AgentState;
 use lk_agents_abi::{
     ChatContext, ChatItem, ChatMessage, CopyOptions, Extra, FunctionCall, FunctionCallOutput,
     MetricsReport, Role, ToolSpec,
@@ -223,44 +222,6 @@ impl TurnAccumulator {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct EndOfSpeech {
-    /// `_update_agent_state(..)`, thinking or listening; `None` leaves the state alone.
-    pub state: Option<AgentState>,
-    /// `_on_end_of_agent_speech(ignore_user_transcript_until=time.time())`.
-    pub end_of_agent_speech: bool,
-    /// `_restore_interruption_by_audio_activity()`.
-    pub restore_interruption_by_audio_activity: bool,
-}
-
-/// The state transition at the end of the speech. `tools_running`: "a running tool keeps the agent
-/// busy; 'listening' would arm the away timer".
-pub fn end_of_speech(
-    interrupted: bool,
-    has_tool_output: bool,
-    tools_running: bool,
-    agent_state_is_speaking: bool,
-    interruption_enabled: bool,
-) -> EndOfSpeech {
-    let state = if !interrupted && has_tool_output {
-        Some(AgentState::Thinking)
-    } else if agent_state_is_speaking {
-        Some(if !interrupted && tools_running {
-            AgentState::Thinking
-        } else {
-            AgentState::Listening
-        })
-    } else {
-        return EndOfSpeech::default();
-    };
-
-    EndOfSpeech {
-        state,
-        end_of_agent_speech: true,
-        restore_interruption_by_audio_activity: interruption_enabled,
-    }
-}
-
 /// A tool call still running from a previous turn, with the caller-minted id for its placeholder output.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunningToolCall {
@@ -269,108 +230,80 @@ pub struct RunningToolCall {
     pub output_id: String,
 }
 
-#[derive(Debug, Clone)]
-pub struct RequestInputs<'a> {
-    /// Read, never written.
-    pub record: &'a ChatContext,
-    /// Merged by id.
-    pub pending: &'a [ChatItem],
-    pub new_message: Option<&'a ChatMessage>,
-    pub instructions: &'a str,
-    /// `generate_reply(instructions=..)`: a system message for this request alone.
-    pub turn_instructions: Option<&'a str>,
-    pub tools: &'a [ToolSpec],
-    /// This reply runs inside the agent's `on_enter`: the `IGNORE_ON_ENTER` tools are withheld.
-    pub on_enter: bool,
-    pub running_tool_calls: &'a [RunningToolCall],
-    /// `session.output.audio_enabled`; exactly [`Request::tts_enabled`].
-    pub audio_output_enabled: bool,
-    pub text_output_enabled: bool,
-    /// `Clock::wall`: the stamp of every message this function mints.
-    pub now: SystemTime,
-    /// This turn's markup guide ([`ExpressiveLayers::guide`]); `None` is expressive off.
-    pub expressive: Option<&'a str>,
-}
-
 /// One request, ready to send. Its trace step `ChatRequested` is derived from it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Request {
     pub chat_ctx: ChatContext,
     /// After the on-enter exclusion.
     pub tools: Vec<ToolSpec>,
-    /// Whether this step synthesises audio. Drives the segmenter and the per-segment TTS.
-    pub tts_enabled: bool,
-    pub text_output_enabled: bool,
     pub instructions_hash: u64,
-    /// The markup guide it was planned with: the TTS is told, and a follow-up step plans with it.
-    pub expressive: Option<String>,
+    pub expressive: bool,
 }
 
 /// Assemble one request: pending and new items by `created_at`, the expressive guide and the
 /// running placeholders, then the core's plan (prompt first, per-turn instructions last).
-pub fn plan_request(inputs: RequestInputs<'_>) -> Request {
-    let RequestInputs {
-        record,
-        pending,
-        new_message,
-        instructions,
-        turn_instructions,
-        tools,
-        on_enter,
-        running_tool_calls,
-        audio_output_enabled,
-        text_output_enabled,
-        now,
-        expressive,
-    } = inputs;
-
-    let mut ctx = record.copy(&CopyOptions::default());
-
-    let known: std::collections::BTreeSet<String> =
-        ctx.items.iter().map(|it| it.id().to_owned()).collect();
-    ctx.insert_all(pending.iter().filter(|it| !known.contains(it.id())).cloned());
-    if let Some(msg) = new_message
-        && !known.contains(msg.id.as_str())
-    {
-        if msg.role == Role::User {
-            lk_agents_core::request::answer_pending_input(
-                &mut ctx.items,
-                &msg.raw_text_content().unwrap_or_default(),
-            );
-        }
-        ctx.insert(msg.clone());
+impl PlanSpec {
+    pub fn plan(&self, record: &ChatContext, instructions: &str, now: SystemTime) -> Request {
+        self.plan_pending(record, instructions, &[], now)
     }
-    // On, the guide replaces last turn's instead of stacking; off, it goes and past turns lose
-    // their markup.
-    match expressive {
-        Some(guide) => {
-            if !guide.trim().is_empty() {
-                upsert_expressive_instructions(&mut ctx, guide, now);
+
+    pub(crate) fn plan_pending(
+        &self,
+        record: &ChatContext,
+        instructions: &str,
+        pending: &[ChatItem],
+        now: SystemTime,
+    ) -> Request {
+        let record = self.record.as_ref().unwrap_or(record);
+        let instructions = self.instructions.as_deref().unwrap_or(instructions);
+
+        let mut ctx = record.copy(&CopyOptions::default());
+
+        let known: std::collections::BTreeSet<String> =
+            ctx.items.iter().map(|it| it.id().to_owned()).collect();
+        ctx.insert_all(pending.iter().filter(|it| !known.contains(it.id())).cloned());
+        if let Some(msg) = &self.new_message
+            && !known.contains(msg.id.as_str())
+        {
+            if msg.role == Role::User {
+                lk_agents_core::request::answer_pending_input(
+                    &mut ctx.items,
+                    &msg.raw_text_content().unwrap_or_default(),
+                );
+            }
+            ctx.insert(msg.clone());
+        }
+        // On, the guide replaces last turn's instead of stacking; off, it goes and past turns lose
+        // their markup.
+        match self.expressive.as_deref() {
+            Some(guide) => {
+                if !guide.trim().is_empty() {
+                    upsert_expressive_instructions(&mut ctx, guide, now);
+                }
+            }
+            None => {
+                lk_agents_core::tts::markup::remove_expressive_instructions(&mut ctx);
+                lk_agents_core::tts::markup::strip_assistant_markup(&mut ctx);
             }
         }
-        None => {
-            lk_agents_core::tts::markup::remove_expressive_instructions(&mut ctx);
-            lk_agents_core::tts::markup::strip_assistant_markup(&mut ctx);
+
+        inject_running_tool_calls(&mut ctx, &self.running_tool_calls);
+
+        let planned =
+            lk_agents_core::request::plan_request(lk_agents_core::request::RequestSnapshot {
+                history: &ctx.items,
+                instructions,
+                tools: &self.tools,
+                on_enter: self.on_enter,
+                turn_instructions: self.turn_instructions.as_deref(),
+                created_at: now,
+            });
+        Request {
+            chat_ctx: planned.chat_ctx,
+            tools: planned.tools,
+            instructions_hash: stable_hash(instructions),
+            expressive: self.expressive.is_some(),
         }
-    }
-
-    inject_running_tool_calls(&mut ctx, running_tool_calls);
-
-    let planned = lk_agents_core::request::plan_request(lk_agents_core::request::RequestSnapshot {
-        history: &ctx.items,
-        instructions,
-        tools,
-        on_enter,
-        turn_instructions,
-        created_at: now,
-    });
-    Request {
-        chat_ctx: planned.chat_ctx,
-        tools: planned.tools,
-        tts_enabled: audio_output_enabled,
-        text_output_enabled,
-        instructions_hash: stable_hash(instructions),
-        expressive: expressive.map(str::to_owned),
     }
 }
 
@@ -665,44 +598,8 @@ pub struct PlanSpec {
     pub tools: Vec<lk_agents_abi::ToolSpec>,
     pub on_enter: bool,
     pub running_tool_calls: Vec<crate::generation::RunningToolCall>,
-    pub audio_output_enabled: bool,
-    pub text_output_enabled: bool,
     /// This turn's markup guide; `None` is expressive off.
     pub expressive: Option<String>,
-}
-
-impl PlanSpec {
-    pub fn plan(
-        &self,
-        record: &lk_agents_abi::ChatContext,
-        instructions: &str,
-        now: std::time::SystemTime,
-    ) -> crate::generation::Request {
-        self.plan_pending(record, instructions, &[], now)
-    }
-
-    pub(crate) fn plan_pending(
-        &self,
-        record: &ChatContext,
-        instructions: &str,
-        pending: &[ChatItem],
-        now: SystemTime,
-    ) -> Request {
-        crate::generation::plan_request(crate::generation::RequestInputs {
-            record: self.record.as_ref().unwrap_or(record),
-            pending,
-            new_message: self.new_message.as_ref(),
-            instructions: self.instructions.as_deref().unwrap_or(instructions),
-            turn_instructions: self.turn_instructions.as_deref(),
-            tools: &self.tools,
-            on_enter: self.on_enter,
-            running_tool_calls: &self.running_tool_calls,
-            audio_output_enabled: self.audio_output_enabled,
-            text_output_enabled: self.text_output_enabled,
-            now,
-            expressive: self.expressive.as_deref(),
-        })
-    }
 }
 
 /// A reply's first request, planned against the core's accepted record and instructions once
@@ -956,25 +853,18 @@ mod expressive_tests {
         assert!(guide.ends_with("Be brief."), "{guide}");
     }
 
-    fn inputs<'a>(
-        record: &'a ChatContext,
-        expressive: Option<&'a str>,
-        now: SystemTime,
-    ) -> RequestInputs<'a> {
-        RequestInputs {
-            record,
-            pending: &[],
+    fn request(record: &ChatContext, expressive: Option<&str>, now: SystemTime) -> Request {
+        PlanSpec {
+            record: None,
             new_message: None,
-            instructions: "be nice",
+            instructions: None,
             turn_instructions: None,
-            tools: &[],
+            tools: vec![],
             on_enter: false,
-            running_tool_calls: &[],
-            audio_output_enabled: true,
-            text_output_enabled: true,
-            now,
-            expressive,
+            running_tool_calls: vec![],
+            expressive: expressive.map(str::to_owned),
         }
+        .plan(record, "be nice", now)
     }
 
     fn texts(ctx: &ChatContext) -> String {
@@ -992,7 +882,7 @@ mod expressive_tests {
         let said = "hi <expr type=\"emotion\" label=\"happy\"/>there";
         record.push(ChatMessage::text("a", Role::Assistant, said, t0));
 
-        let on = plan_request(inputs(&record, Some("new guide"), t1));
+        let on = request(&record, Some("new guide"), t1);
         let guides: Vec<_> = on
             .chat_ctx
             .items
@@ -1001,11 +891,11 @@ mod expressive_tests {
             .collect();
         assert_eq!(guides.len(), 1);
         assert_eq!(guides[0].created_at(), t0, "replaced in place, stamp kept");
-        assert_eq!(on.expressive.as_deref(), Some("new guide"));
+        assert!(on.expressive);
         assert!(texts(&on.chat_ctx).contains("new guide"));
         assert!(texts(&on.chat_ctx).contains("<expr"), "markup kept while on");
 
-        let off = plan_request(inputs(&record, None, t1));
+        let off = request(&record, None, t1);
         assert!(off.chat_ctx.items.iter().all(|it| it.id() != EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID));
         assert!(!texts(&off.chat_ctx).contains("<expr"), "markup stripped when off");
     }

@@ -122,7 +122,7 @@ fn an_override_wins_leaf_by_leaf_until_its_own_release() {
     };
     let mut config = DriverConfig::new(stack, SessionLegs::none());
     let delays = |config: &DriverConfig| {
-        let e = config.effective.turn.endpointing;
+        let e = config.effective().turn.endpointing;
         (e.min_delay, e.max_delay)
     };
     config.push_override(OverrideLayer { id: 1, options: endpointing(Some(900), None) });

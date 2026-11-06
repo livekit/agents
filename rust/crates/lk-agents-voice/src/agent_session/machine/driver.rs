@@ -110,8 +110,8 @@ pub struct VoiceDriver {
     pub(crate) step: crate::agent_session::time::StepClock,
     pub(crate) stopped: bool,
     pub(in crate::agent_session) opened: bool,
-    /// The activity changed this cycle: published once, as the cycle's effects are done.
-    pub(crate) activity_changed: std::cell::Cell<bool>,
+    /// The conversation view last published to spawned work.
+    pub(crate) published_chat_revision: Option<u64>,
     /// What the core decided outside an input transition (opening, the loop's end, published views),
     /// returned with the step's own effects.
     pub(super) outbox: Vec<crate::agent_session::effects::VoiceEffect>,
@@ -125,8 +125,6 @@ pub struct VoiceDriver {
     pub(crate) view: Arc<crate::agent_session::SessionView>,
     /// The session's span state: what the entities owning spans open and end them through.
     pub(crate) telemetry: crate::telemetry::Trace,
-    /// A runtime exports the records: only a unit test's core may be dropped before its close.
-    pub(crate) exported: bool,
 }
 
 impl VoiceDriver {
@@ -155,13 +153,6 @@ impl VoiceDriver {
             let ev = SessionEvent::Telemetry(Arc::new(records));
             self.outbox.push(crate::agent_session::effects::VoiceEffect::Emit(ev));
         }
-    }
-
-    /// A core no runtime runs (a unit test): dropping it before its close loses nothing.
-    #[cfg(test)]
-    pub(crate) fn unexported(mut self) -> Self {
-        self.exported = false;
-        self
     }
 
     /// Performed with its events on the host stream, so `start()` returns after them. Idempotent.
@@ -206,7 +197,7 @@ impl VoiceDriver {
 
     /// `ivr_detection=True`: the IVR system is the host's to start; the core starts no system.
     pub fn ivr_detection(&self) -> bool {
-        self.session.config.effective.turn.ivr_detection()
+        self.session.config.effective().turn.ivr_detection()
     }
 
     /// The session's STT, whose provider identity a recognition input is stamped with.
@@ -412,7 +403,7 @@ impl VoiceDriver {
 
     /// **Already done**, not dropped: an unattached handle would answer `done() == false` forever.
     pub(crate) fn settle_undelivered(&mut self, what: &str, call: Option<SpeechCall>) {
-        let allow_interruptions = self.session.config.effective.turn.interruption.enabled();
+        let allow_interruptions = self.session.config.effective().turn.interruption.enabled();
         let (id, mut state) = self.new_speech(call.as_ref().map(|c| c.speech), allow_interruptions);
         state.mark_done(Some(lk_agents_abi::errors::ProviderError::Local(
             lk_agents_abi::errors::ApiError::new(format!(
@@ -571,7 +562,7 @@ impl VoiceDriver {
                 .is_some_and(|(_, h)| !h.done() && !h.interrupted() && !h.allow_interruptions()),
             discard_audio_if_uninterruptible: session
                 .config
-                .effective
+                .effective()
                 .turn
                 .interruption
                 .discard_audio_if_uninterruptible(),
@@ -707,7 +698,7 @@ pub struct InitialSession {
 impl VoiceDriver {
     pub fn new(mut initial: InitialSession) -> Self {
         let (sink, audio_enabled) = initial.parts.outputs.pause_facts();
-        let paused_speech = PausedSpeech::new(&initial.config.effective, sink, audio_enabled);
+        let paused_speech = PausedSpeech::new(initial.config.effective(), sink, audio_enabled);
         let realtime_disabled = initial.rt_session.as_ref().map(|_| initial.rt_disabled);
         let activity = AgentActivity::from_initial(&mut initial, paused_speech);
         let mut telemetry = std::mem::take(&mut initial.parts.telemetry);
@@ -729,7 +720,7 @@ impl VoiceDriver {
             outbox.push(crate::agent_session::effects::VoiceEffect::Journal(Box::new(Step::Core(
                 CoreStep::ConfigApplied {
                     layer: crate::agent_activity::options::ConfigLayer::Session,
-                    effective: Box::new(initial.config.effective),
+                    effective: Box::new(*initial.config.effective()),
                 },
             ))));
             let since_zero = initial.now.at.saturating_duration_since(Ts::ZERO);
@@ -745,7 +736,7 @@ impl VoiceDriver {
             }
         }
         let mut driver = VoiceDriver {
-            activity_changed: Default::default(),
+            published_chat_revision: None,
             outbox,
             callbacks: Default::default(),
             pending_input: Vec::new(),
@@ -761,7 +752,6 @@ impl VoiceDriver {
             stopped: false,
             opened: false,
             telemetry: trace,
-            exported: true,
         };
         if let Some(stream) = driver.input.live_stt {
             driver.stt_stream_opened(stream);
@@ -770,7 +760,6 @@ impl VoiceDriver {
         driver.step.set(initial.now);
         let agent = driver.activity.agent_name().to_owned();
         driver.open_session_spans(telemetry, &agent);
-        driver.publish_activity();
         driver.flush_activity();
         driver.open_session(initial.forward_chat_context, initial.keyterms);
         driver

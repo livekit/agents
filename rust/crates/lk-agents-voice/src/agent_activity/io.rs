@@ -245,7 +245,7 @@ impl VoiceDriver {
         let (stt_given, vad_given) = (stt.is_given(), vad.is_given());
         let (stt_reopened, vad_reopened) =
             (matches!(stt, Maybe::Given(Some(_))), matches!(vad, Maybe::Given(Some(_))));
-        let _ = self.reopen_legs(stt, vad);
+        self.reopen_legs(stt, vad);
         self.record_trace(InputStep::ModelsUpdated {
             stt_given,
             vad_given,
@@ -306,7 +306,7 @@ impl VoiceDriver {
             self.input.first_input_at = None;
             self.activity.audio_recognition.input_started_at = None;
             if let Some(stt) = self.session.stt.as_ref().cloned() {
-                let _ = self.reopen_legs(Maybe::Given(Some(stt)), Maybe::NotGiven);
+                self.reopen_legs(Maybe::Given(Some(stt)), Maybe::NotGiven);
             }
         } else {
             self.host_end_of_speech(now);
@@ -424,7 +424,7 @@ impl VoiceDriver {
             return false;
         }
 
-        if self.activity.rt_session.is_none() {
+        if self.activity.realtime().is_none() {
             if !std::mem::replace(&mut self.input.video_sink_warned, true) {
                 self.record_trace(CoreStep::PortFailure(
                     "push_video: no realtime session, so a sampled frame reaches no model",

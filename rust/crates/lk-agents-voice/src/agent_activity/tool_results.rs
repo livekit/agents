@@ -131,10 +131,10 @@ impl VoiceDriver {
                 output.reply_required = *required;
             }
         }
-        if let Some(rt) = &self.activity.rt_session
-            && !self.activity.realtime_state.ended()
+        if let Some(rt) = self.activity.realtime_activity()
+            && !rt.state.ended()
         {
-            let auto = rt.capabilities.auto_tool_reply_generation;
+            let auto = rt.session.capabilities.auto_tool_reply_generation;
             for item in items.iter().filter(|item| matches!(item, ChatItem::FunctionCallOutput(_)))
             {
                 self.rt_send(lk_agents_abi::RealtimeCommand::PushItem(
@@ -161,7 +161,6 @@ impl VoiceDriver {
             self.commit_item(item, source, Visibility::Both);
         }
         self.activity.tool_step_committed(speech);
-        self.publish_activity();
         let completes_task = end.executions.iter().any(|execution| {
             matches!(execution.delivery, Some(Delivery::Complete(_) | Delivery::Fail(_)))
         });
@@ -282,7 +281,7 @@ mod tests {
             },
         );
         // The person interrupts while function_tools_executed is still running at the host.
-        let _ = driver.interrupt_speech(Ts::ZERO, speech, InterruptCause::Host, true).unwrap();
+        driver.force_interrupt_speech(Ts::ZERO, speech, InterruptCause::Host);
         assert!(driver.activity.speech_scheduler.speech(speech).unwrap().interrupted());
         driver.on_tools_executed_handled(hook, None);
         assert!(driver.activity.tools.claim.is_none(), "the old question cannot claim a new turn");

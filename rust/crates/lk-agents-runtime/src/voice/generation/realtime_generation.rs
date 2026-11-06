@@ -325,7 +325,7 @@ impl Generation<'_> {
                 provider: id.provider,
                 model: id.model,
             });
-            let expressive = self.ctx.plan.request.expressive.is_some();
+            let expressive = self.ctx.plan.request.expressive;
             let error = match tts.stream(&self.ctx.turn_cx(self.shared), expressive).await {
                 Ok(stream) => break stream.split(),
                 Err(error) => error,

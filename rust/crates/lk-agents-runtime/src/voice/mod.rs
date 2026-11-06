@@ -227,7 +227,7 @@ impl VoiceRuntime {
             });
             runtime.pump_realtime(session);
         }
-        let ivr_detection = runtime.shared.view.borrow().config.effective.turn.ivr_detection();
+        let ivr_detection = runtime.shared.view.borrow().config.effective().turn.ivr_detection();
         ivr::start(runtime.peer.clone(), ivr_detection, &runtime.tasks);
         if let Some(room_io) = room_io {
             let io_queue = runtime.reports.clone();

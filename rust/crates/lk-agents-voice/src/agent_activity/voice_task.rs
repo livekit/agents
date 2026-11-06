@@ -225,7 +225,7 @@ impl VoiceDriver {
             .filter(|s| self.activity.speech_agent(*s) == Some(agent))
             .collect();
         for s in own {
-            let _ = self.interrupt_speech(now, s, InterruptCause::VoiceTask, true);
+            self.force_interrupt_speech(now, s, InterruptCause::VoiceTask);
         }
     }
 

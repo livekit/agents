@@ -98,7 +98,7 @@ pub(super) async fn voice_leg(
         nodes: &ctx.resources.output_nodes,
         voice,
         aligned_transcript: ctx.plan.speech.use_tts_aligned_transcript == Some(true),
-        expressive: ctx.plan.request.expressive.is_some(),
+        expressive: ctx.plan.request.expressive,
         gate: &mut gate,
         acc: &mut acc,
         rx,

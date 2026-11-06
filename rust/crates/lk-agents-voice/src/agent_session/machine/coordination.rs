@@ -268,7 +268,7 @@ impl VoiceDriver {
         // "mm-hm" cannot prefix the next turn. The reference's `turn_detection not in
         // ("manual", "realtime_llm")` guard is unported: `TurnConfig::mode` is private.
         if matches!(ev, SessionEvent::BackchannelConfirmed)
-            && self.session.config.effective.turn.interruption.detection_enabled()
+            && self.session.config.effective().turn.interruption.detection_enabled()
             && self.activity.realtime().is_some()
         {
             self.rt_send(lk_agents_abi::RealtimeCommand::ClearAudio(

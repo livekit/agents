@@ -236,11 +236,10 @@ impl VoiceDriver {
     /// The caller answered and the run lets go.
     pub(crate) fn refuse_handoff(
         &mut self,
-        id: Option<HandoffId>,
+        _id: Option<HandoffId>,
         mut update: Box<AgentUpdate>,
         cause: HandoffRefused,
     ) {
-        let _ = id;
         self.answer(update.call.take(), Answer::Handoff(Err(cause)));
     }
 
@@ -414,7 +413,6 @@ impl VoiceDriver {
                 }
             }
         }
-        self.publish_activity();
 
         // The handoff's two records, minted here only: the `AgentHandoff` item
         // (`record_handoff_item`) and the history-only `AgentConfigUpdate` (`_start_session`),
@@ -445,7 +443,7 @@ impl VoiceDriver {
             vad: legs.vad,
             llm: self.session.llm.is_some(),
             tts: self.session.tts.is_some(),
-            realtime: self.activity.rt_session.is_some(),
+            realtime: self.activity.realtime().is_some(),
         };
         self.record_trace(HandoffStep::AgentUpdated {
             agent: self.activity.agent.clone(),

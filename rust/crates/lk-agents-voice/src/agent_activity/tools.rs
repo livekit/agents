@@ -384,7 +384,6 @@ impl VoiceDriver {
                 Visibility::Both,
             );
         }
-        self.publish_activity();
     }
 
     /// `_ToolExecutor.aclose()`: every body still running at the host, a detached one by now, is
@@ -408,7 +407,6 @@ impl VoiceDriver {
             };
             self.publish_event(tool_ended(id, call_id, None, ToolEndStatus::Cancelled));
         }
-        self.publish_activity();
     }
 
     // ------------------------------------------------------------------ background updates
@@ -527,7 +525,6 @@ impl VoiceDriver {
         for item in &items {
             self.commit_item(item.clone(), source.clone(), Visibility::Both);
         }
-        self.publish_activity();
         if let Some(delivery) = delivery {
             self.deliver_outcome(self.step.now, running.speech, delivery);
         }
@@ -635,7 +632,7 @@ impl VoiceDriver {
         chat_ctx: Option<lk_agents_abi::ChatContext>,
         voice_run: VoiceRunParticipation,
     ) -> Option<SpeechId> {
-        if self.activity.rt_session.is_some() {
+        if self.activity.realtime().is_some() {
             let tool_choice = Some(lk_agents_abi::ToolChoice::Forbidden);
             let role = match voice_run {
                 VoiceRunParticipation::Joins => RealtimeReplyRole::VoiceRun,
@@ -981,7 +978,7 @@ impl super::AgentActivity {
     /// The tool step is on the record; it no longer holds the activity in `thinking`.
     pub(super) fn tool_step_committed(&mut self, speech: SpeechId) {
         self.speech_history.commit_tools(speech);
-        self.set_tools_in_flight(speech, false);
+        self.tools_in_flight.remove(&speech);
     }
 
     /// The tool that claimed the person's turn, once (`_consume_next_turn`); not yet while the

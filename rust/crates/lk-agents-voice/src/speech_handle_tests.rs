@@ -28,17 +28,17 @@ fn holds_are_counted_and_the_first_holders_value_comes_back() {
 #[test]
 fn an_interrupted_speech_refuses_a_first_hold_and_keeps_its_value() {
     let mut speech = SpeechState::new(true);
-    assert_eq!(speech.interrupt(false), Ok(true));
+    assert_eq!(speech.interrupt(), Ok(true));
     assert_eq!(speech.hold_interruptions(), Err(SpeechError::AlreadyInterrupted));
     assert!(speech.allow_interruptions());
 
     let mut speech = SpeechState::new(false);
     speech.hold_interruptions().unwrap();
-    assert_eq!(speech.interrupt(true), Ok(true));
+    assert!(speech.force_interrupt());
     speech.release_interruptions();
     assert!(!speech.allow_interruptions());
     // Interrupted already: a second interrupt, and the watchdog once fired, are no-ops.
-    assert_eq!(speech.interrupt(false), Ok(false));
+    assert_eq!(speech.interrupt(), Ok(false));
     assert!(speech.take_interruption_timeout());
     assert!(!speech.take_interruption_timeout());
 }
@@ -78,7 +78,7 @@ fn every_change_is_published_after_the_creation() {
     speech.mark_scheduled();
     let updates = speech.take_updates();
     assert!(
-        matches!(updates[..], [SpeechUpdate::Created, SpeechUpdate::View(ref v)] if v.scheduled)
+        matches!(updates[..], [SpeechUpdate::Created, SpeechUpdate::View(ref v)] if v.scheduled())
     );
     assert!(speech.take_updates().is_empty(), "nothing changed since");
     speech.interrupt_refused();

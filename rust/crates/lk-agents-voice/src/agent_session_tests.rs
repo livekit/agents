@@ -1,6 +1,43 @@
 //! Session decisions over a decision core no executor runs.
 
 #[test]
+fn conversation_updates_publish_once_per_cycle_and_include_view_only_edits() {
+    use crate::agent_session::effects::VoiceEffect;
+    use lk_agents_abi::{ChatMessage, Role};
+
+    let mut driver = driver();
+    driver.take_outbox();
+    let message = |id| ChatMessage::text(id, Role::User, id, std::time::UNIX_EPOCH).into();
+    for id in ["first", "second"] {
+        driver.commit_item(
+            message(id),
+            crate::agent::Source::HostCtx,
+            crate::agent::Visibility::Both,
+        );
+    }
+    let contexts = |effects: Vec<VoiceEffect>| {
+        effects
+            .into_iter()
+            .filter_map(|effect| match effect {
+                VoiceEffect::ChatContext(ctx) => Some(ctx),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let updates = contexts(driver.settle_step());
+    assert_eq!(updates.len(), 1);
+    assert_eq!(updates[0].items.len(), 2);
+    assert!(contexts(driver.settle_step()).is_empty());
+
+    let version = driver.session.chat_ctx.version();
+    driver.session.chat_ctx.update_agent_chat_ctx(vec![message("replacement")], "agent");
+    let updates = contexts(driver.settle_step());
+    assert_eq!(updates.len(), 1);
+    assert_eq!(updates[0].items[0].id(), "replacement");
+    assert_eq!(driver.session.chat_ctx.version(), version);
+}
+
+#[test]
 fn terminal_provider_release_does_not_reacquire_resources_from_stale_selection_slots() {
     use crate::agent_session::effects::VoiceEffect;
     use lk_agents_abi::resources::{ResourceId, TextOutputRef};
@@ -49,7 +86,7 @@ fn realtime_transport_timeout_keeps_its_phase_and_request_identity_on_session_er
     use lk_agents_abi::errors::{ApiError, ApiErrorKind, TimeoutPhase};
     use lk_agents_abi::llm::realtime as rt;
 
-    let driver = &mut driver();
+    let driver = &mut realtime_driver();
     let mut timeout = ApiError::timed_out(TimeoutPhase::Connect);
     timeout.request_id = Some("handshake-7".into());
     driver.on_realtime(
@@ -81,13 +118,53 @@ fn realtime_transport_timeout_keeps_its_phase_and_request_identity_on_session_er
 }
 
 #[test]
+fn realtime_end_delivers_the_pending_speech_error_before_closing_its_player() {
+    use crate::agent_session::effects::VoiceEffect;
+    use crate::agent_activity::realtime::{RealtimeWake, Request};
+    use crate::agent_activity::scheduling::VoiceRunParticipation;
+    use lk_agents_abi::{Ts, llm::realtime as rt};
+
+    let mut driver = realtime_driver();
+    let speech = driver
+        .realtime_request(
+            Ts::ZERO,
+            Request::GenerateReply { instructions: None, tool_choice: None, read_back: false },
+            None,
+            None,
+            VoiceRunParticipation::Outside,
+        )
+        .unwrap();
+    driver.take_outbox();
+    driver.on_realtime(Ts::ZERO, RealtimeWake::Ended);
+    let effects = driver.settle_step();
+    let failed = effects
+        .iter()
+        .position(|effect| {
+            matches!(effect,
+                VoiceEffect::RealtimePlayer { speech: id, event }
+                if *id == speech && matches!(**event, rt::Event::GenerateReplyFailed(_))
+            )
+        })
+        .expect("the pending speech lost its terminal error");
+    let closed = effects
+        .iter()
+        .position(|effect| {
+            matches!(effect,
+                VoiceEffect::CloseRealtimePlayer(id) if *id == speech
+            )
+        })
+        .expect("the failed player was not closed");
+    assert!(failed < closed);
+}
+
+#[test]
 fn late_realtime_transcript_keeps_its_source_without_starting_another_speech() {
     use crate::agent_activity::realtime::RealtimeWake;
     use crate::agent_session::effects::VoiceEffect;
     use lk_agents_abi::llm::realtime as rt;
     use lk_agents_abi::{ChatMessage, Role, Ts};
 
-    let driver = &mut driver();
+    let driver = &mut realtime_driver();
     let source =
         ChatMessage::text("old-response", Role::Assistant, "Already heard", std::time::UNIX_EPOCH);
     let source_time = source.created_at;
@@ -103,7 +180,7 @@ fn late_realtime_transcript_keeps_its_source_without_starting_another_speech() {
             req_id: None,
         })),
     );
-    let players = driver.activity.realtime_players().clone();
+    let players: Vec<_> = driver.activity.realtime_players().copied().collect();
     driver.take_outbox();
     for event in [
         rt::Event::TranscriptAttribution(rt::TranscriptAttribution {
@@ -136,7 +213,11 @@ fn late_realtime_transcript_keeps_its_source_without_starting_another_speech() {
     ] {
         driver.on_realtime(Ts::ZERO, RealtimeWake::Event(event));
     }
-    assert_eq!(*driver.activity.realtime_players(), players, "a correction took the voice floor");
+    assert_eq!(
+        driver.activity.realtime_players().copied().collect::<Vec<_>>(),
+        players,
+        "a correction took the voice floor"
+    );
     assert!(
         !driver.take_outbox().iter().any(|effect| matches!(
             effect,
@@ -242,6 +323,26 @@ pub(crate) fn driver_with(
     hook_bound: Option<std::time::Duration>,
     now: Now,
 ) -> VoiceDriver {
+    VoiceDriver::new(initial_session(parts, hook_bound, now))
+}
+
+fn realtime_driver() -> VoiceDriver {
+    let parts = SessionParts { agent: "agent".into(), ..Default::default() };
+    let now = Now { at: lk_agents_abi::Ts::ZERO, wall: std::time::UNIX_EPOCH };
+    let mut initial = initial_session(parts, None, now);
+    initial.rt_session = Some(lk_agents_abi::resources::RealtimeRef {
+        id: lk_agents_abi::resources::ResourceId(1),
+        provider: lk_agents_abi::ProviderId::of_label("realtime"),
+        capabilities: initial.rt_caps,
+    });
+    VoiceDriver::new(initial)
+}
+
+fn initial_session(
+    parts: SessionParts,
+    hook_bound: Option<std::time::Duration>,
+    now: Now,
+) -> InitialSession {
     let legs = lk_agents_abi::voice::session_options::SessionLegs::none();
     let config = crate::agent_activity::DriverConfig::new(Default::default(), legs);
     let view = Arc::new(SessionView {
@@ -253,8 +354,8 @@ pub(crate) fn driver_with(
         usage: Default::default(),
         usage_revision: 0,
     });
-    VoiceDriver::new(InitialSession {
-        rt_resolved: config.effective.turn.owner(),
+    InitialSession {
+        rt_resolved: config.effective().turn.owner(),
         config,
         parts,
         instructions: Default::default(),
@@ -283,8 +384,7 @@ pub(crate) fn driver_with(
         journalled: false,
         forward_chat_context: true,
         keyterms: None,
-    })
-    .unexported()
+    }
 }
 
 // Catches: a second session in one job recording, or hosting the remote session.

@@ -296,7 +296,7 @@ impl VoiceDriver {
                     let request = request.0;
                     self.record_trace(GenerationStep::RequestCancelled { speech, request });
                     let cause = crate::trace::InterruptCause::RunCancelled;
-                    let _ = self.interrupt_speech(self.step.now, speech, cause, true);
+                    self.force_interrupt_speech(self.step.now, speech, cause);
                 }
                 AgentRunEffect::ToolPrepare { call, arguments, .. } => {
                     self.activity.reply_move(speech, call, ToolGo::Prepare { call, arguments })
@@ -591,13 +591,13 @@ impl VoiceDriver {
             previous_user_metrics: reply.previous_user_metrics.take(),
         };
         reply.next = Some(StepNext::Reply(Box::new(next)));
-        if reply.realtime && !self.activity.realtime_state.ended() {
+        if reply.realtime && self.activity.realtime_activity().is_some_and(|rt| !rt.state.ended()) {
             for item in unknown {
                 let push = lk_agents_abi::llm::realtime::PushItem {
                     item: Box::new(item),
                     reply_required: false,
                 };
-                if let Some(session) = self.activity.rt_session.as_ref().map(|session| session.id) {
+                if let Some(session) = self.activity.realtime().map(|session| session.id) {
                     self.record_effect(VoiceEffect::Realtime {
                         session,
                         command: lk_agents_abi::RealtimeCommand::PushItem(push),

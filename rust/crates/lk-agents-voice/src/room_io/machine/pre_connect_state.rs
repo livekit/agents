@@ -148,15 +148,13 @@ impl PreConnectState {
         let Some(slot) = self.slots.get_mut(&id) else {
             return Some(Err(HeadError::Closed));
         };
-        match slot {
-            SlotValue::Pending => None,
-            SlotValue::Taken => Some(Err(HeadError::Transferred)),
-            SlotValue::Ready(_) => {
-                let SlotValue::Ready(outcome) = std::mem::replace(slot, SlotValue::Taken) else {
-                    unreachable!()
-                };
-                Some(outcome)
+        match std::mem::replace(slot, SlotValue::Taken) {
+            SlotValue::Pending => {
+                *slot = SlotValue::Pending;
+                None
             }
+            SlotValue::Taken => Some(Err(HeadError::Transferred)),
+            SlotValue::Ready(outcome) => Some(outcome),
         }
     }
 

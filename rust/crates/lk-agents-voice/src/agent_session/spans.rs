@@ -269,8 +269,7 @@ impl Drop for VoiceDriver {
         if self.session.span.is_none() || std::thread::panicking() {
             return;
         }
-        debug_assert!(!self.exported, "the session's spans were dropped without its close");
-        // A unit test's core, or a release build's bug: the spans end, the records go nowhere.
+        // Without a runtime the records have no exporter; release native span ownership.
         self.close_spans();
     }
 }

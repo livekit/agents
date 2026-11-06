@@ -374,7 +374,7 @@ impl DriverBuilder {
                 realtime.disabled,
                 realtime.resolved,
             ),
-            None => (None, Default::default(), false, self.config.effective.turn.owner()),
+            None => (None, Default::default(), false, self.config.effective().turn.owner()),
         };
         let driver = VoiceDriver::new(InitialSession {
             config: self.config.clone(),
@@ -514,7 +514,7 @@ impl DriverBuilder {
             output: publications.output.subscribe(),
             recorder: publications.recorder.subscribe(),
             tts_transforms: lk_agents_voice::transcription::TransformSpec::of_set(
-                self.config.effective.speech.tts_text_transforms(),
+                self.config.effective().speech.tts_text_transforms(),
             ),
             conn: self.conn,
             queue: queue.clone(),
@@ -577,11 +577,11 @@ impl DriverBuilder {
         let side = lk_agents_voice::agent_activity::realtime::SessionSide {
             stt: self.stt.is_some(),
             vad: self.vad.is_some(),
-            detection: self.config.effective.turn.detection(),
+            detection: self.config.effective().turn.detection(),
             streaming_detector: self.config.legs.detector
                 == Some(lk_agents_voice::agent_activity::options::DetectorKind::Streaming),
-            interruption_given: self.config.effective.turn.interruption.mode.is_some(),
-            turn_detection_mode: self.config.effective.turn.owner(),
+            interruption_given: self.config.effective().turn.interruption.mode.is_some(),
+            turn_detection_mode: self.config.effective().turn.owner(),
         };
         let disabled =
             lk_agents_voice::agent_activity::realtime::turn_detection_disabled(&caps, side);
@@ -590,7 +590,7 @@ impl DriverBuilder {
         let owner = lk_agents_voice::agent_activity::realtime::realtime_turn_detection_mode(
             &caps, side, disabled,
         );
-        self.config.effective.turn.owner = Some(owner);
+        self.config.refine_turn_detection(owner);
         let (session, sink) =
             executor.open_realtime(&self.resources, Arc::clone(model), disabled, cx).await?;
         sinks.insert(AudioChannel::Realtime, sink);

@@ -236,9 +236,9 @@ impl SpeechHandle {
                 }
             }
         }
-        self.scheduled.set(view.scheduled);
-        self.interrupted.set(view.interrupted);
-        self.done.set(view.done);
+        self.scheduled.set(view.scheduled());
+        self.interrupted.set(view.interrupted());
+        self.done.set(view.done());
         self.authorized.set(view.generations.len());
         self.inner.lock().view = view;
     }
@@ -262,8 +262,8 @@ impl SpeechHandle {
             inner.say = None;
         }
         let pending = std::mem::take(&mut inner.pending);
-        if created && inner.view.done {
-            inner.requested &= inner.view.interrupted;
+        if created && inner.view.done() {
+            inner.requested &= inner.view.interrupted();
             // The setters asked meanwhile are the handle's own, as on any ended speech.
             for command in pending {
                 if let SpeechCommand::SetAllowInterruptions { allow, .. } = command {
@@ -635,7 +635,7 @@ impl lk_agents_abi::voice::speech_handle::SpeechHandle for SpeechHandle {
         inner.view.host_set_allow_interruptions(value, inner.requested).map_err(refused)?;
         // A detached handle, or a speech that ended: nothing is left to tell, the value is the
         // handle's own.
-        if *self.creation.borrow() == Creation::Detached || inner.view.done {
+        if *self.creation.borrow() == Creation::Detached || inner.view.done() {
             inner.view.allow_interruptions = value;
             return Ok(());
         }

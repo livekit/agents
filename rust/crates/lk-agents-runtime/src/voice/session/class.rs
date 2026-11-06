@@ -485,7 +485,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         self.host.options.as_ref()?;
         let view = Arc::clone(&self.view.borrow());
         Some(lk_agents_voice::agent_activity::options::resolved_session_options(
-            &view.config.effective,
+            view.config.effective(),
             &view.config.stack.session,
         ))
     }

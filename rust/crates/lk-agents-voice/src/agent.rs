@@ -154,6 +154,8 @@ pub struct SessionChatCtx {
     /// Bumped by every commit that adds or replaces; a preemptive generation planned against an
     /// older version is discarded.
     version: u64,
+    /// Includes view-only changes that do not invalidate a preemptive request.
+    view_revision: u64,
 }
 
 impl SessionChatCtx {
@@ -187,6 +189,7 @@ impl SessionChatCtx {
         if from == agent {
             return carried;
         }
+        self.view_revision += 1;
         for c in &mut self.items {
             if c.agent == from && c.visibility.model() && keep(&c.item) {
                 c.agent = agent.to_owned();
@@ -203,6 +206,7 @@ impl SessionChatCtx {
     /// A turn ran with expressive off: the markup in the agent's past assistant messages goes for
     /// good (`_strip_assistant_markup(self._chat_ctx)`), so it no longer few-shots the LLM.
     pub fn strip_assistant_markup(&mut self) {
+        self.view_revision += 1;
         for c in &mut self.items {
             if c.agent == self.agent
                 && c.visibility.model()
@@ -215,6 +219,10 @@ impl SessionChatCtx {
 
     pub fn version(&self) -> u64 {
         self.version
+    }
+
+    pub(crate) fn view_revision(&self) -> u64 {
+        self.view_revision
     }
 
     /// The only write, inserted by the item's own `created_at`; an existing id is replaced in
@@ -230,6 +238,7 @@ impl SessionChatCtx {
         let commit = self.insert(item, source, visibility, agent);
         if commit.1 != CommitOutcome::Filtered {
             self.version += 1;
+            self.view_revision += 1;
         }
         commit
     }
@@ -312,6 +321,7 @@ impl SessionChatCtx {
         let changed = !before.iter().eq(self.items.iter().map(|entry| &entry.item));
         if changed {
             self.version += 1;
+            self.view_revision += 1;
         }
         changed
     }
@@ -320,6 +330,7 @@ impl SessionChatCtx {
     /// Dropped items stay in history; known items are promoted in place; new ones are `HostCtx`,
     /// frame-only.
     pub fn update_agent_chat_ctx(&mut self, items: Vec<ChatItem>, agent: &str) {
+        self.view_revision += 1;
         self.agent = agent.to_owned();
         let incoming: BTreeSet<&str> = items.iter().map(ChatItem::id).collect();
         // A host-supplied item nobody else was told about leaves the record entirely.

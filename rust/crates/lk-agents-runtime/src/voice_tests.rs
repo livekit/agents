@@ -101,7 +101,7 @@ async fn accepted_views_are_published_before_receipts() {
     impl std::task::Wake for ReadsView {
         fn wake(self: Arc<Self>) {
             assert_eq!(
-                self.0.borrow().config.effective.timers.aec_warmup(),
+                self.0.borrow().config.effective().timers.aec_warmup(),
                 Some(Duration::from_secs(9)),
                 "receipt observed options from before acceptance"
             );

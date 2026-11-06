@@ -172,7 +172,6 @@ pub struct InterruptReport {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[must_use]
 pub enum InterruptOutcome {
     /// Interrupted now; a speech in the sink has its buffer cleared.
     Now,
@@ -279,7 +278,12 @@ impl VoiceDriver {
     /// tools (which finish and commit, with no follow-up). The refusal is the same one by name.
     pub(crate) fn host_interrupt_speech(&mut self, now: Ts, speech: SpeechId, force: bool) {
         self.record_trace(InterruptStep::HostInterrupt { speech: Some(speech), force });
-        let tell_socket = match self.interrupt_speech(now, speech, InterruptCause::Host, force) {
+        let result = if force {
+            Ok(self.force_interrupt_speech(now, speech, InterruptCause::Host))
+        } else {
+            self.interrupt_speech(now, speech, InterruptCause::Host)
+        };
+        let tell_socket = match result {
             // The socket too, once, for a pipeline speech on a realtime session.
             Ok(InterruptOutcome::Now) => !self.activity.is_realtime_speech(speech),
             // Already interrupted or done: a no-op, so another speech's live generation is
@@ -309,7 +313,9 @@ impl VoiceDriver {
             return;
         };
         if hold {
-            let _ = state.hold_interruptions();
+            if state.hold_interruptions().is_err() {
+                return;
+            }
         } else {
             state.release_interruptions();
         }
@@ -322,7 +328,9 @@ impl VoiceDriver {
         let Some(state) = self.activity.speech_scheduler.speech_mut(speech) else {
             return;
         };
-        let _ = state.set_allow_interruptions(allow);
+        if state.set_allow_interruptions(allow).is_err() {
+            return;
+        }
         let allow = state.allow_interruptions();
         self.record_trace(InterruptStep::InterruptionsToggled { speech, allow });
     }
@@ -336,17 +344,40 @@ impl VoiceDriver {
         now: Ts,
         speech: SpeechId,
         cause: InterruptCause,
-        force: bool,
     ) -> Result<InterruptOutcome, SpeechError> {
         let Some(state) = self.activity.speech_scheduler.speech_mut(speech) else {
             return Ok(InterruptOutcome::Already);
         };
-        let landed = state.interrupt(force)?;
-        // A close's cut: the task reports its end during the drain; the hard edge releases what
-        // is still open.
-        if !landed {
+        if !state.interrupt()? {
             return Ok(InterruptOutcome::Already);
         }
+        Ok(self.speech_interrupted(now, speech, cause, false))
+    }
+
+    pub(crate) fn force_interrupt_speech(
+        &mut self,
+        now: Ts,
+        speech: SpeechId,
+        cause: InterruptCause,
+    ) -> InterruptOutcome {
+        let Some(state) = self.activity.speech_scheduler.speech_mut(speech) else {
+            return InterruptOutcome::Already;
+        };
+        if !state.force_interrupt() {
+            return InterruptOutcome::Already;
+        }
+        self.speech_interrupted(now, speech, cause, true)
+    }
+
+    fn speech_interrupted(
+        &mut self,
+        now: Ts,
+        speech: SpeechId,
+        cause: InterruptCause,
+        force: bool,
+    ) -> InterruptOutcome {
+        // A close's cut: the task reports its end during the drain; the hard edge releases what
+        // is still open.
         // Only a speech whose audio is in the sink has anything to clear; clearing for a queued
         // speech would cut the current one. The clear precedes any `Resume`; the data plane
         // answers it with where playback stopped.
@@ -383,7 +414,7 @@ impl VoiceDriver {
         if realtime {
             self.realtime_interrupt(cause);
         }
-        Ok(InterruptOutcome::Now)
+        InterruptOutcome::Now
     }
 
     /// The one place the loop moves the playout sink, journalled as `PlayoutGate{speech, op,
@@ -407,7 +438,7 @@ impl VoiceDriver {
         if !state.interruptible() {
             return;
         }
-        if self.interrupt_speech(now, speech, InterruptCause::UserTurn, false).is_err() {
+        if self.interrupt_speech(now, speech, InterruptCause::UserTurn).is_err() {
             self.record_trace(InterruptStep::ByAudioActivityRefused(InterruptRefusal::NotAllowed));
         }
     }
@@ -539,17 +570,15 @@ impl VoiceDriver {
             }
             // The handle may have stopped allowing interruptions since guard 5 read it. A
             // interruption never overrides `allow_interruptions`; only the host may.
-            None => {
-                match self.interrupt_speech(now, speech, InterruptCause::ByAudioActivity, false) {
-                    Ok(outcome) => report.interrupted = Some(outcome != InterruptOutcome::Already),
-                    Err(_) => self.record_trace(InterruptStep::ByAudioActivityRefused(
-                        InterruptRefusal::NotAllowed,
-                    )),
-                }
-            }
+            None => match self.interrupt_speech(now, speech, InterruptCause::ByAudioActivity) {
+                Ok(outcome) => report.interrupted = Some(outcome != InterruptOutcome::Already),
+                Err(_) => self.record_trace(InterruptStep::ByAudioActivityRefused(
+                    InterruptRefusal::NotAllowed,
+                )),
+            },
         }
         // A pause keeps the realtime generation so playout can resume.
-        let socket_told = self.activity.rt_session.is_some() && report.interrupted == Some(true);
+        let socket_told = self.activity.realtime().is_some() && report.interrupted == Some(true);
         self.record_trace(InterruptStep::ByAudioActivity(Box::new(report)));
         socket_told
     }
@@ -608,7 +637,7 @@ impl VoiceDriver {
         }
         // Guard 3: `_rt_turn_detection_enabled`, read at the call.
         let stt_enabled = turn.stt_enabled();
-        let realtime_turn_detection = self.activity.rt_session.as_ref().is_some_and(|s| {
+        let realtime_turn_detection = self.activity.realtime().is_some_and(|s| {
             let caps = s.capabilities;
             caps.turn_detection
                 && !(caps.can_disable_turn_detection
@@ -782,7 +811,7 @@ impl VoiceDriver {
         // preemptive generation.
         let abandoned = crate::agent_activity::scheduling::PreemptiveDiscard::TurnAbandoned;
         self.cancel_preemptive_generation(now, abandoned);
-        let generating = self.activity.realtime_state.generating();
+        let generating = self.activity.realtime_generating();
         let mut reached = Vec::new();
         let mut socket_told = false;
         if let Some(id) = self.activity.speech_scheduler.current_speech() {
@@ -818,13 +847,23 @@ impl VoiceDriver {
             })
             .collect();
         for id in working {
-            if let Ok(InterruptOutcome::Now) = self.interrupt_speech(now, id, cause, force) {
+            let result = if force {
+                Ok(self.force_interrupt_speech(now, id, cause))
+            } else {
+                self.interrupt_speech(now, id, cause)
+            };
+            if let Ok(InterruptOutcome::Now) = result {
                 reached.push(id);
             }
         }
         // In pop order: the first refusal keeps that speech and all behind it (the reference breaks).
         for id in self.activity.speech_scheduler.speech_q().clone() {
-            match self.interrupt_speech(now, id, cause, force) {
+            let result = if force {
+                Ok(self.force_interrupt_speech(now, id, cause))
+            } else {
+                self.interrupt_speech(now, id, cause)
+            };
+            match result {
                 Ok(InterruptOutcome::Now) => reached.push(id),
                 Ok(InterruptOutcome::Already) => {}
                 Err(_) => {
@@ -844,7 +883,12 @@ impl VoiceDriver {
         force: bool,
         cause: InterruptCause,
     ) -> Result<bool, InterruptRefusal> {
-        match self.interrupt_speech(now, id, cause, force) {
+        let result = if force {
+            Ok(self.force_interrupt_speech(now, id, cause))
+        } else {
+            self.interrupt_speech(now, id, cause)
+        };
+        match result {
             Ok(outcome) => Ok(matches!(outcome, InterruptOutcome::Now)),
             Err(_) => {
                 let refusal = InterruptRefusal::NotAllowed;

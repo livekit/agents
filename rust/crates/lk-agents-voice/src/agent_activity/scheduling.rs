@@ -858,9 +858,9 @@ impl VoiceDriver {
             Rejected::Stopped => InterruptCause::Closing,
             Rejected::Draining => InterruptCause::ScheduleRejected,
         };
-        let _ = self.interrupt_speech(now, speech, cause, true);
+        self.force_interrupt_speech(now, speech, cause);
         // The server keeps generating a cancelled realtime turn until told.
-        if self.activity.rt_session.is_some() {
+        if self.activity.realtime().is_some() {
             self.realtime_interrupt(cause);
         }
         // Born past the close's edge: released here, since the loop may stop first.
@@ -966,7 +966,9 @@ impl VoiceDriver {
         }
         // A self-replying realtime model is still composing the reply its tools asked for: the
         // agent stays `thinking`.
-        if quiet && !self.activity.realtime_state.auto_reply_expected() {
+        if quiet
+            && !self.activity.realtime_activity().is_some_and(|rt| rt.state.auto_reply_expected())
+        {
             self.set_agent_state(now, AgentState::Listening);
         }
         self.settle_scheduling_pause();
@@ -1074,7 +1076,7 @@ impl VoiceDriver {
         if reason != PreemptiveDiscard::TurnAbandoned {
             self.activity.speech_scheduler.hand_over(speech);
         }
-        let _ = self.interrupt_speech(now, speech, InterruptCause::Superseded, true);
+        self.force_interrupt_speech(now, speech, InterruptCause::Superseded);
     }
 }
 

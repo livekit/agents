@@ -140,29 +140,33 @@ struct Open {
 }
 
 // Share the closed-generation identity horizon and keep retained late text below one bounded
-// duplex transcript backlog. Admission includes identifiers and spare String allocation.
+// duplex transcript backlog. Admission counts identifiers and text bytes.
 const ATTRIBUTED_TRANSCRIPT_BYTES: usize = 256 * 1024;
 
 struct AttributedTranscript {
     source_response_id: String,
     created_at: std::time::SystemTime,
-    message: Option<ChatMessage>,
+    message: Option<TranscriptMessage>,
+}
+
+struct TranscriptMessage {
+    id: String,
+    text: String,
 }
 
 impl AttributedTranscript {
     fn retained_bytes(&self) -> usize {
-        self.source_response_id.capacity()
-            + self.message.as_ref().map_or(0, |message| {
-                message.id.capacity()
-                    + message
-                        .content
-                        .iter()
-                        .map(|content| match content {
-                            lk_agents_abi::ChatContent::Text(text) => text.capacity(),
-                            _ => 0,
-                        })
-                        .sum::<usize>()
-            })
+        self.source_response_id.len()
+            + self.message.as_ref().map_or(0, |message| message.id.len() + message.text.len())
+    }
+
+    fn finish_message(&mut self) -> Option<ChatMessage> {
+        self.message.take().map(|message| {
+            let mut message =
+                ChatMessage::text(message.id, Role::Assistant, message.text, self.created_at);
+            message.metrics.provider_request_ids = Some(vec![self.source_response_id.clone()]);
+            message
+        })
     }
 }
 
@@ -171,10 +175,7 @@ fn transcript_overload() -> ApiError {
 }
 
 fn finish_transcript(mut transcript: AttributedTranscript) -> Option<ChatMessage> {
-    transcript.message.take().map(|mut message| {
-        message.metrics.provider_request_ids = Some(vec![transcript.source_response_id]);
-        message
-    })
+    transcript.finish_message()
 }
 
 pub(super) fn bare_reply(req_id: &str) -> RealtimeCommand {
@@ -230,7 +231,7 @@ impl RealtimeSessionState {
                     .with_retryable(false))
             };
         }
-        let bytes = attribution.response_id.capacity() + attribution.source_response_id.capacity();
+        let bytes = attribution.response_id.len() + attribution.source_response_id.len();
         if self.attributed.len() == CLOSED_REMEMBERED
             || bytes > ATTRIBUTED_TRANSCRIPT_BYTES.saturating_sub(self.attributed_bytes)
         {
@@ -256,15 +257,16 @@ impl RealtimeSessionState {
         &mut self,
         event: Event,
     ) -> Result<Option<ChatMessage>, ApiError> {
-        let id = response_id_of(&event).expect("attributed event has response identity");
+        let Some(id) = response_id_of(&event) else { return Ok(None) };
         if let Event::GenerationDone(done) = &event {
-            let (id, transcript) =
-                self.attributed.remove_entry(&done.response_id).expect("known attribution");
-            self.attributed_bytes -= id.capacity() + transcript.retained_bytes();
+            let Some((id, transcript)) = self.attributed.remove_entry(&done.response_id) else {
+                return Ok(None);
+            };
+            self.attributed_bytes -= id.len() + transcript.retained_bytes();
             self.close(done.response_id.clone());
             return Ok(finish_transcript(transcript));
         }
-        let transcript = self.attributed.get_mut(id).expect("known attribution");
+        let Some(transcript) = self.attributed.get_mut(id) else { return Ok(None) };
         let before = transcript.retained_bytes();
         let completed = match event {
             Event::MessageStarted(message) => {
@@ -273,17 +275,13 @@ impl RealtimeSessionState {
                         ApiError::new("realtime transcript messages overlap").with_retryable(false)
                     );
                 }
-                if message.message_id.capacity()
+                if message.message_id.len()
                     > ATTRIBUTED_TRANSCRIPT_BYTES.saturating_sub(self.attributed_bytes)
                 {
                     return Err(transcript_overload());
                 }
-                transcript.message = Some(ChatMessage::text(
-                    message.message_id,
-                    Role::Assistant,
-                    "",
-                    transcript.created_at,
-                ));
+                transcript.message =
+                    Some(TranscriptMessage { id: message.message_id, text: String::new() });
                 None
             }
             Event::TextDelta(delta) => {
@@ -295,15 +293,11 @@ impl RealtimeSessionState {
                     return Err(ApiError::new("realtime transcript delta changed its message")
                         .with_retryable(false));
                 }
-                let lk_agents_abi::ChatContent::Text(text) = &mut message.content[0] else {
-                    unreachable!("transcript has text only")
-                };
                 let available = ATTRIBUTED_TRANSCRIPT_BYTES.saturating_sub(self.attributed_bytes);
                 if delta.delta.len() > available {
                     return Err(transcript_overload());
                 }
-                text.reserve_exact(delta.delta.len());
-                text.push_str(&delta.delta);
+                message.text.push_str(&delta.delta);
                 None
             }
             Event::MessageDone(done) => {
@@ -312,11 +306,7 @@ impl RealtimeSessionState {
                     return Err(ApiError::new("realtime transcript ended another message")
                         .with_retryable(false));
                 }
-                transcript.message.take().map(|mut message| {
-                    message.metrics.provider_request_ids =
-                        Some(vec![transcript.source_response_id.clone()]);
-                    message
-                })
+                transcript.finish_message()
             }
             Event::AudioDelta(_) => {
                 return Err(ApiError::new("an attributed transcript contained new audio")
@@ -594,8 +584,7 @@ mod tests {
             .unwrap();
         state = RealtimeSessionState::default();
 
-        let mut id = String::with_capacity(ATTRIBUTED_TRANSCRIPT_BYTES / 2);
-        id.push('x');
+        let id = "x".repeat(ATTRIBUTED_TRANSCRIPT_BYTES / 2);
         state.attribute_transcript(attribution(id), std::time::UNIX_EPOCH).unwrap();
         assert!(
             state
@@ -607,17 +596,42 @@ mod tests {
         );
         state
             .transcript_event(Event::GenerationDone(rt::GenerationDone {
-                response_id: "x".into(),
+                response_id: "x".repeat(ATTRIBUTED_TRANSCRIPT_BYTES / 2),
                 status: rt::GenerationStatus::Completed,
                 usage: Default::default(),
             }))
             .unwrap();
-        // Completion releases the stored key's capacity, not the shorter acknowledgement's.
+        // Completion releases the stored key's bytes.
         state
             .attribute_transcript(
                 attribution("y".repeat(ATTRIBUTED_TRANSCRIPT_BYTES / 2)),
                 std::time::UNIX_EPOCH,
             )
             .unwrap();
+    }
+
+    #[test]
+    fn transcript_budget_ignores_spare_allocation_and_unknown_events_are_noops() {
+        let mut state = RealtimeSessionState::default();
+        let mut id = String::with_capacity(ATTRIBUTED_TRANSCRIPT_BYTES);
+        id.push('x');
+        state
+            .attribute_transcript(
+                rt::TranscriptAttribution { response_id: id, source_response_id: "source".into() },
+                std::time::UNIX_EPOCH,
+            )
+            .unwrap();
+        assert_eq!(state.attributed_bytes, 7);
+        assert!(
+            state
+                .transcript_event(Event::GenerationDone(rt::GenerationDone {
+                    response_id: "unknown".into(),
+                    status: rt::GenerationStatus::Completed,
+                    usage: Default::default(),
+                }))
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(state.attributed_bytes, 7);
     }
 }

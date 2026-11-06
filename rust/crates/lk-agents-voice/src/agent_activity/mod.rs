@@ -47,7 +47,6 @@ const KEPT_SPEECHES: usize = 128;
 #[derive(Default)]
 struct SpeechHistory {
     records: BTreeMap<SpeechId, SpeechRecord>,
-    facts: usize,
 }
 
 #[derive(Default)]
@@ -57,30 +56,19 @@ struct SpeechRecord {
     tools_committed: bool,
 }
 
-impl SpeechRecord {
-    fn facts(&self) -> usize {
-        usize::from(self.origin.is_some())
-            + usize::from(self.finished)
-            + usize::from(self.tools_committed)
-    }
-}
-
 impl SpeechHistory {
     fn remember(&mut self, speech: SpeechId, agent: String, kind: SpeechKind) {
         let record = self.records.entry(speech).or_default();
-        self.facts += usize::from(record.origin.is_none());
         record.origin = Some((agent, kind));
     }
 
     fn finish(&mut self, speech: SpeechId) {
         let record = self.records.entry(speech).or_default();
-        self.facts += usize::from(!record.finished);
         record.finished = true;
     }
 
     fn commit_tools(&mut self, speech: SpeechId) {
         let record = self.records.entry(speech).or_default();
-        self.facts += usize::from(!record.tools_committed);
         record.tools_committed = true;
     }
 
@@ -93,8 +81,7 @@ impl SpeechHistory {
     }
 
     fn prune(&mut self, live: impl Fn(SpeechId) -> bool) {
-        // Preserve the original retention trigger: each recorded fact counts, not each id.
-        if self.facts < 2 * KEPT_SPEECHES {
+        if self.records.len() <= KEPT_SPEECHES {
             return;
         }
         let Some(newest) =
@@ -102,14 +89,8 @@ impl SpeechHistory {
         else {
             return;
         };
-        let facts = &mut self.facts;
-        self.records.retain(|id, record| {
-            let keep = newest.0.saturating_sub(id.0) < KEPT_SPEECHES as u64 || live(*id);
-            if !keep {
-                *facts -= record.facts();
-            }
-            keep
-        });
+        self.records
+            .retain(|id, _| newest.0.saturating_sub(id.0) < KEPT_SPEECHES as u64 || live(*id));
     }
 }
 
@@ -144,7 +125,7 @@ pub(crate) struct AgentActivity {
     reply_plans:
         std::collections::VecDeque<(crate::agent_session::RequestId, crate::generation::ReplyPlan)>,
     /// Keeps the agent `thinking` across a filler `say` from inside a tool.
-    tools_in_flight: BTreeSet<SpeechId>,
+    pub(crate) tools_in_flight: BTreeSet<SpeechId>,
     /// The step's first frame transitions, once. Cleared when the step is spoken.
     spoke: BTreeSet<SpeechId>,
     /// `_current_speech` as last announced (`FloorChanged`); compared at the end of every cycle.
@@ -189,23 +170,29 @@ pub(crate) struct AgentActivity {
     /// generation that final asks for this cycle sees it so, as the reference's does (its final
     /// cuts a paused speech in a task, after `on_preemptive_generation` ran).
     live_speech_at_final: bool,
-    /// `generate_reply` matches on it.
-    preemptive_turn: Option<crate::audio_recognition::TurnId>,
-    /// The record version a preemptive generation was planned against.
-    preemptive_record_version: u64,
-    /// `_rt_session`. Exclusive with a pipeline.
-    rt_session: Option<lk_agents_abi::resources::RealtimeRef>,
-    realtime_state: crate::agent_activity::realtime::RealtimeSessionState,
-    /// Speech identities whose runtime player is still open.
-    realtime_players: BTreeSet<SpeechId>,
+    preemptive: Option<Preemptive>,
+    model: ActivityModel,
     /// Authorized speeches awaiting their first frame.
     launching: BTreeSet<SpeechId>,
-    /// The model's turn detection was switched off at the open.
-    realtime_turn_detection_disabled: bool,
-    /// Before the model's refinement, so a live change is one that moved this.
-    realtime_resolved_mode: crate::audio_recognition::TurnDetectionMode,
-    /// The `turn_detection` the options last said, so a live change is one that moved it.
-    realtime_requested_detection: crate::agent_activity::options::TurnDetection,
+}
+
+enum ActivityModel {
+    Pipeline,
+    Realtime(Box<RealtimeActivity>),
+}
+
+struct RealtimeActivity {
+    session: lk_agents_abi::resources::RealtimeRef,
+    state: realtime::RealtimeSessionState,
+    players: BTreeSet<SpeechId>,
+    turn_detection_disabled: bool,
+    resolved_mode: crate::audio_recognition::TurnDetectionMode,
+    requested_detection: crate::agent_activity::options::TurnDetection,
+}
+
+struct Preemptive {
+    turn: crate::audio_recognition::TurnId,
+    record_version: u64,
 }
 
 impl AgentActivity {
@@ -314,14 +301,6 @@ impl AgentActivity {
         self.speech_history.records.get(&speech)?.origin.as_ref().map(|(_, kind)| *kind)
     }
 
-    pub(crate) fn set_tools_in_flight(&mut self, speech: SpeechId, running: bool) {
-        if running {
-            self.tools_in_flight.insert(speech);
-        } else {
-            self.tools_in_flight.remove(&speech);
-        }
-    }
-
     /// `_current_speech` as last announced (`FloorChanged`): the new one when it moved.
     pub(crate) fn announce_current_speech(
         &mut self,
@@ -337,9 +316,10 @@ impl AgentActivity {
     /// A preemptive generation starts: it belongs to the turn after the last one, planned against
     /// `record_version`.
     pub(crate) fn key_preemptive_generation(&mut self, record_version: u64) {
-        self.preemptive_turn =
-            Some(crate::audio_recognition::TurnId(self.last_turn.map_or(1, |t| t.0 + 1)));
-        self.preemptive_record_version = record_version;
+        self.preemptive = Some(Preemptive {
+            turn: crate::audio_recognition::TurnId(self.last_turn.map_or(1, |t| t.0 + 1)),
+            record_version,
+        });
     }
 
     /// The turn detection the options said, and the mode they resolved to before the model's
@@ -349,10 +329,10 @@ impl AgentActivity {
         resolved: crate::audio_recognition::TurnDetectionMode,
         detection: crate::agent_activity::options::TurnDetection,
     ) -> bool {
-        let moved = resolved != self.realtime_resolved_mode
-            || detection != self.realtime_requested_detection;
-        self.realtime_resolved_mode = resolved;
-        self.realtime_requested_detection = detection;
+        let Some(rt) = self.realtime_activity_mut() else { return false };
+        let moved = resolved != rt.resolved_mode || detection != rt.requested_detection;
+        rt.resolved_mode = resolved;
+        rt.requested_detection = detection;
         moved
     }
 }
@@ -365,7 +345,7 @@ impl AgentActivity {
 pub struct DriverConfig {
     pub stack: ConfigStack,
     pub legs: SessionLegs,
-    pub effective: AgentSessionOptions,
+    effective: AgentSessionOptions,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -379,6 +359,14 @@ pub struct ConfigDiff {
 }
 
 impl DriverConfig {
+    pub fn effective(&self) -> &AgentSessionOptions {
+        &self.effective
+    }
+
+    pub fn refine_turn_detection(&mut self, owner: crate::audio_recognition::TurnDetectionMode) {
+        self.effective.turn.owner = Some(owner);
+    }
+
     pub fn new(stack: ConfigStack, legs: SessionLegs) -> Self {
         let effective = stack.resolve(&legs);
         DriverConfig { stack, legs, effective }
@@ -461,14 +449,13 @@ impl VoiceDriver {
                 // driver's clock.
                 self.commit_config(Some(next.render(Some(Modality::Audio))), vec![], vec![]);
                 // Ungated: the reference tells any realtime session and lets the plugin refuse.
-                if self.activity.rt_session.is_some() {
+                if self.activity.realtime().is_some() {
                     self.rt_send(lk_agents_abi::RealtimeCommand::UpdateInstructions(
                         lk_agents_abi::UpdateInstructions {
                             instructions: next.render(Some(Modality::Audio)),
                         },
                     ));
                 }
-                self.publish_activity();
             }
             ActivityCommand::UpdateExpressive(expressive) => {
                 self.session.expressive.session = expressive;
@@ -481,7 +468,7 @@ impl VoiceDriver {
                 }
                 // Ungated, like instructions: a `mutable_tools: false` server must still learn a
                 // handoff's new toolset.
-                if self.activity.rt_session.is_some() {
+                if self.activity.realtime().is_some() {
                     self.rt_send(lk_agents_abi::RealtimeCommand::UpdateTools(
                         lk_agents_abi::UpdateTools { tools: self.activity.toolset.specs.clone() },
                     ));
@@ -538,30 +525,24 @@ impl VoiceDriver {
                 let agent = self.activity.agent.clone();
                 self.session.chat_ctx.update_agent_chat_ctx(items, &agent);
                 // Ungated: the reference guards only on there being a session.
-                if self.activity.rt_session.is_some() {
+                if self.activity.realtime().is_some() {
                     let ctx = self.session.chat_ctx.for_realtime();
                     self.rt_send(lk_agents_abi::RealtimeCommand::UpdateChatCtx(
                         lk_agents_abi::UpdateChatCtx { chat_ctx: ctx },
                     ));
                 }
-                self.publish_activity();
                 self.record_trace(GenerationStep::ChatCtxUpdated { items: count });
             }
         }
     }
 
-    /// The activity changed: the snapshot the spawned work reads is rebuilt once, as the cycle's
-    /// effects are done ([`VoiceDriver::flush_activity`]), not per commit (a copy of the whole agent
-    /// context each time grew a long call's cost with its length squared).
-    pub(crate) fn publish_activity(&self) {
-        self.activity_changed.set(true);
-    }
-
     pub(crate) fn flush_activity(&mut self) {
-        if !self.activity_changed.replace(false) {
+        self.activity.prune_settled_speeches();
+        let revision = self.session.chat_ctx.view_revision();
+        if self.published_chat_revision == Some(revision) {
             return;
         }
-        self.activity.prune_settled_speeches();
+        self.published_chat_revision = Some(revision);
         self.record_effect(VoiceEffect::ChatContext(Arc::new(
             self.session.chat_ctx.agent_chat_ctx(),
         )));
@@ -607,7 +588,7 @@ impl VoiceDriver {
     /// Tell the realtime session which frame drives: instructions (audio rendering), conversation,
     /// tools, in the reference's order. No-op on a pipeline session.
     pub(crate) fn push_activity(&mut self, chat_ctx: Option<lk_agents_abi::ChatContext>) {
-        if self.activity.rt_session.is_none() {
+        if self.activity.realtime().is_none() {
             return;
         }
         self.rt_send(lk_agents_abi::RealtimeCommand::UpdateInstructions(
@@ -680,12 +661,11 @@ impl VoiceDriver {
         if !replaced {
             return;
         }
-        if self.activity.rt_session.is_some() {
+        if self.activity.realtime().is_some() {
             let chat_ctx = self.session.chat_ctx.for_realtime();
             let update = lk_agents_abi::UpdateChatCtx { chat_ctx };
             self.rt_send(lk_agents_abi::RealtimeCommand::UpdateChatCtx(update));
         }
-        self.publish_activity();
     }
 
     /// The speech is told, the host learns of a new item, the activity is republished.
@@ -719,7 +699,6 @@ impl VoiceDriver {
             }
             CommitOutcome::Added | CommitOutcome::Replaced | CommitOutcome::Filtered => {}
         }
-        self.publish_activity();
     }
 }
 
@@ -779,17 +758,19 @@ impl AgentActivity {
             running_activity: None,
             last_turn: None,
             live_speech_at_final: false,
-            preemptive_turn: None,
-            preemptive_record_version: 0,
-            rt_session: initial.rt_session.take(),
-            realtime_state: crate::agent_activity::realtime::RealtimeSessionState::new(
-                initial.rt_caps,
-            ),
-            realtime_players: Default::default(),
+            preemptive: None,
+            model: match initial.rt_session.take() {
+                Some(session) => ActivityModel::Realtime(Box::new(RealtimeActivity {
+                    session,
+                    state: realtime::RealtimeSessionState::new(initial.rt_caps),
+                    players: Default::default(),
+                    turn_detection_disabled: initial.rt_disabled,
+                    resolved_mode: initial.rt_resolved,
+                    requested_detection: initial.config.effective.turn.detection(),
+                })),
+                None => ActivityModel::Pipeline,
+            },
             launching: Default::default(),
-            realtime_turn_detection_disabled: initial.rt_disabled,
-            realtime_resolved_mode: initial.rt_resolved,
-            realtime_requested_detection: initial.config.effective.turn.detection(),
         }
     }
 }
@@ -799,7 +780,19 @@ impl AgentActivity {
         &self.agent
     }
     pub(crate) fn realtime(&self) -> Option<&lk_agents_abi::resources::RealtimeRef> {
-        self.rt_session.as_ref()
+        self.realtime_activity().map(|rt| &rt.session)
+    }
+    fn realtime_activity(&self) -> Option<&RealtimeActivity> {
+        match &self.model {
+            ActivityModel::Pipeline => None,
+            ActivityModel::Realtime(rt) => Some(rt),
+        }
+    }
+    fn realtime_activity_mut(&mut self) -> Option<&mut RealtimeActivity> {
+        match &mut self.model {
+            ActivityModel::Pipeline => None,
+            ActivityModel::Realtime(rt) => Some(rt),
+        }
     }
     pub(crate) fn speeches(&self) -> impl Iterator<Item = SpeechId> + '_ {
         self.speech_scheduler.speech_ids()
@@ -817,14 +810,15 @@ impl AgentActivity {
     pub(crate) fn retained_resources(
         &self,
     ) -> impl Iterator<Item = lk_agents_abi::resources::ResourceId> + '_ {
-        [
-            self.rt_session.as_ref().map(|r| r.id),
-            self.dynamic_instructions,
-            self.output_nodes.transcription,
-        ]
-        .into_iter()
-        .flatten()
-        .chain(self.handoff.updates().chain(self.voice_tasks.parents()).flat_map(|u| u.resources()))
+        [self.realtime().map(|r| r.id), self.dynamic_instructions, self.output_nodes.transcription]
+            .into_iter()
+            .flatten()
+            .chain(
+                self.handoff
+                    .updates()
+                    .chain(self.voice_tasks.parents())
+                    .flat_map(|u| u.resources()),
+            )
     }
     pub(crate) fn finish_step(&mut self) {
         self.live_speech_at_final = false;
@@ -849,8 +843,8 @@ impl AgentActivity {
         self.announce_current_speech(self.speech_scheduler.current_speech())
     }
     #[cfg(test)]
-    pub(crate) fn realtime_players(&self) -> &BTreeSet<SpeechId> {
-        &self.realtime_players
+    pub(crate) fn realtime_players(&self) -> impl Iterator<Item = &SpeechId> {
+        self.realtime_activity().into_iter().flat_map(|rt| rt.players.iter())
     }
 }
 
@@ -960,7 +954,7 @@ impl AgentActivity {
 
 impl AgentActivity {
     pub(crate) fn realtime_generating(&self) -> bool {
-        self.realtime_state.generating()
+        self.realtime_activity().is_some_and(|rt| rt.state.generating())
     }
     pub(crate) fn has_pending_commit(&self) -> bool {
         self.audio_recognition.commit_pending()
@@ -1070,7 +1064,7 @@ impl AgentActivity {
             (EndCall::AfterSpeech(id), SessionEvent::SpeechDone { speech, .. })
                 if *speech == id =>
             {
-                if self.rt_session.is_some() && self.realtime_state.auto_tool_reply() {
+                if self.realtime_activity().is_some_and(|rt| rt.state.auto_tool_reply()) {
                     self.end_call = Some(EndCall::AwaitingReply);
                     return Some(EndCallUpdate::ReplyDeadline(Some(
                         now.saturating_add(REPLY_WAIT),
@@ -1138,6 +1132,20 @@ mod speech_history_tests {
         }
         history.prune(|_| false);
         assert!(history.finished(SpeechId(1)));
+    }
+
+    #[test]
+    fn retention_counts_speeches_instead_of_their_facts() {
+        let mut history = SpeechHistory::default();
+        for id in 1..=100 {
+            let speech = SpeechId(id * 1000);
+            history.remember(speech, "agent".into(), SpeechKind::Say);
+            history.finish(speech);
+            history.commit_tools(speech);
+        }
+        history.prune(|_| false);
+        assert_eq!(history.records.len(), 100);
+        assert!(history.finished(SpeechId(1000)));
     }
 
     #[test]

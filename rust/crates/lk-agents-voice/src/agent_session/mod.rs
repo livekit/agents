@@ -153,7 +153,7 @@ impl VoiceSessionState {
         if let Some(items) = opening_items {
             chat_ctx.update_agent_chat_ctx(items, &agent);
         }
-        let cfg = &config.effective;
+        let cfg = config.effective();
         VoiceSessionState {
             usage: Default::default(),
             requests: Default::default(),
@@ -674,7 +674,7 @@ mod label_tests {
     fn state(aec: Option<Duration>) -> VoiceSessionState {
         let legs = crate::agent_activity::options::SessionLegs::none();
         let mut config = DriverConfig::new(Default::default(), legs);
-        config.effective.timers.aec_warmup = lk_agents_abi::Maybe::Given(aec);
+        config.edit(|options, _| options.timers.aec_warmup = lk_agents_abi::Maybe::Given(aec));
         VoiceSessionState::new(config, SessionParts::default(), Box::new(|| 1))
     }
 

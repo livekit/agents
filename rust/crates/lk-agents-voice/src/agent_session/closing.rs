@@ -163,18 +163,14 @@ impl VoiceDriver {
     fn force_cut_open(&mut self, now: Ts) {
         let open: Vec<SpeechId> = self.activity.speeches().collect();
         for speech in open {
-            match self.interrupt_speech(now, speech, InterruptCause::Closing, true) {
-                Ok(InterruptOutcome::Now) => {}
+            match self.force_interrupt_speech(now, speech, InterruptCause::Closing) {
+                InterruptOutcome::Now => {}
                 // Already stopped: the journal still carries the close's own step for it.
-                Ok(InterruptOutcome::Already) => self.record_trace(InterruptStep::Interrupted {
+                InterruptOutcome::Already => self.record_trace(InterruptStep::Interrupted {
                     speech,
                     cause: InterruptCause::Closing,
                     force: true,
                 }),
-                // Unreachable: `force` overrides the hold. Said rather than swallowed.
-                Err(_) => {
-                    self.record_trace(CoreStep::PortFailure("a forced close interrupt was refused"))
-                }
             }
         }
     }
@@ -219,7 +215,7 @@ impl VoiceDriver {
                 self.close_edge(now);
             }
             (ClosePhase::Edge, reason) if self.activity.speech_queue_empty() => {
-                let timers = &self.session.config.effective.timers;
+                let timers = &self.session.config.effective().timers;
                 let timeout = timers.session_close_transcript_timeout();
                 if reason != CloseReason::Error && self.transcript_pending(now) {
                     self.close_await_transcript(now, timeout);

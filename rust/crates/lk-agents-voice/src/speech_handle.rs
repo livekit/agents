@@ -106,34 +106,81 @@ pub enum SpeechUpdate {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SpeechView {
     pub allow_interruptions: bool,
-    pub interrupted: bool,
-    pub done: bool,
-    pub error: Option<ProviderError>,
-    pub scheduled: bool,
+    phase: SpeechPhase,
     /// `_num_steps`: 1 until the tool loop's first back edge.
     pub num_steps: u32,
     /// One per authorized step, addressed absolutely: `true` once its generation is done.
     pub generations: Vec<bool>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Scheduling {
+    Pending,
+    Scheduled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Completion {
+    Completed,
+    Interrupted,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum SpeechPhase {
+    Pending,
+    Scheduled,
+    Interrupted(Scheduling),
+    Done { scheduling: Scheduling, completion: Completion, error: Option<ProviderError> },
+}
+
 impl SpeechView {
     pub fn new(allow_interruptions: bool) -> Self {
         SpeechView {
             allow_interruptions,
-            interrupted: false,
-            done: false,
-            error: None,
-            scheduled: false,
+            phase: SpeechPhase::Pending,
             num_steps: 1,
             generations: Vec::new(),
         }
+    }
+
+    pub fn interrupted(&self) -> bool {
+        matches!(
+            self.phase,
+            SpeechPhase::Interrupted(_)
+                | SpeechPhase::Done { completion: Completion::Interrupted, .. }
+        )
+    }
+
+    pub fn done(&self) -> bool {
+        matches!(self.phase, SpeechPhase::Done { .. })
+    }
+
+    pub fn error(&self) -> Option<&ProviderError> {
+        match &self.phase {
+            SpeechPhase::Done { error, .. } => error.as_ref(),
+            _ => None,
+        }
+    }
+
+    fn scheduling(&self) -> Scheduling {
+        match &self.phase {
+            SpeechPhase::Pending => Scheduling::Pending,
+            SpeechPhase::Scheduled => Scheduling::Scheduled,
+            SpeechPhase::Interrupted(scheduling) | SpeechPhase::Done { scheduling, .. } => {
+                *scheduling
+            }
+        }
+    }
+
+    pub fn scheduled(&self) -> bool {
+        self.scheduling() == Scheduling::Scheduled
     }
 
     /// The host's `interrupt(force)` against this view, `requested` already or not: whether it
     /// records a new request for the core, in the reference's order (`speech_handle.py:185`).
     /// Interrupted or done already, it is a no-op; disallowed, it raises unless forced.
     pub fn host_interrupt(&self, requested: bool, force: bool) -> Result<bool, SpeechError> {
-        if requested || self.interrupted || self.done {
+        if requested || self.interrupted() || self.done() {
             return Ok(false);
         }
         if !force && !self.allow_interruptions {
@@ -148,7 +195,7 @@ impl SpeechView {
         allow: bool,
         requested: bool,
     ) -> Result<(), SpeechError> {
-        if !allow && (requested || self.interrupted) {
+        if !allow && (requested || self.interrupted()) {
             return Err(SpeechError::AlreadyInterrupted);
         }
         Ok(())
@@ -156,7 +203,7 @@ impl SpeechView {
 
     /// The host's `_hold_interruptions`: refused once the speech is interrupted.
     pub fn host_hold_interruptions(&self) -> Result<(), SpeechError> {
-        if self.interrupted {
+        if self.interrupted() {
             return Err(SpeechError::AlreadyInterrupted);
         }
         Ok(())
@@ -166,12 +213,12 @@ impl SpeechView {
     /// the speech. Forward-only, like the reference's `_interrupt_fut`: a request is only dropped
     /// when the core refuses it.
     pub fn host_interrupted(&self, requested: bool) -> bool {
-        self.interrupted || requested
+        self.interrupted() || requested
     }
 
     /// The user may cut it now: not interrupted already, and interruptions allowed.
     pub fn interruptible(&self) -> bool {
-        !self.interrupted && self.allow_interruptions
+        !self.interrupted() && self.allow_interruptions
     }
 
     /// Whether step `step` (counting as `num_steps` does) was authorized to play: each
@@ -199,15 +246,18 @@ impl SpeechView {
 
     /// `exception()`. [`SpeechError::NotDoneYet`] stands in for `asyncio.InvalidStateError`.
     pub fn exception(&self) -> Result<Option<ProviderError>, SpeechError> {
-        if self.done { Ok(self.error.clone()) } else { Err(SpeechError::NotDoneYet) }
+        match &self.phase {
+            SpeechPhase::Done { error, .. } => Ok(error.clone()),
+            _ => Err(SpeechError::NotDoneYet),
+        }
     }
 
     /// How a done speech ended, as `SpeechDone` reports it.
     pub fn outcome(&self) -> crate::events::SpeechOutcome {
         use crate::events::SpeechOutcome;
-        if self.error.is_some() && self.done {
+        if matches!(&self.phase, SpeechPhase::Done { error: Some(_), .. }) {
             SpeechOutcome::Failed
-        } else if self.interrupted {
+        } else if self.interrupted() {
             SpeechOutcome::Interrupted
         } else {
             SpeechOutcome::Completed
@@ -250,11 +300,11 @@ impl SpeechState {
     }
 
     pub fn interrupted(&self) -> bool {
-        self.view.interrupted
+        self.view.interrupted()
     }
 
     pub fn done(&self) -> bool {
-        self.view.done
+        self.view.done()
     }
 
     pub fn allow_interruptions(&self) -> bool {
@@ -266,7 +316,7 @@ impl SpeechState {
     }
 
     pub fn scheduled(&self) -> bool {
-        self.view.scheduled
+        self.view.scheduled()
     }
 
     pub fn step_authorized(&self, step: u32) -> bool {
@@ -316,23 +366,41 @@ impl SpeechState {
 
     /// `SpeechHandle._mark_scheduled`. Idempotent, like the `suppress(InvalidStateError)`.
     pub fn mark_scheduled(&mut self) {
-        if !self.view.scheduled {
-            self.change().scheduled = true;
+        if self.view.scheduled() {
+            return;
         }
+        let view = self.change();
+        view.phase = match &view.phase {
+            SpeechPhase::Pending | SpeechPhase::Scheduled => SpeechPhase::Scheduled,
+            SpeechPhase::Interrupted(_) => SpeechPhase::Interrupted(Scheduling::Scheduled),
+            SpeechPhase::Done { completion, error, .. } => SpeechPhase::Done {
+                scheduling: Scheduling::Scheduled,
+                completion: *completion,
+                error: error.clone(),
+            },
+        };
     }
 
     /// `interrupt(force=...)`: the guards, then `_cancel`. Returns whether it landed now; on
     /// `true` the driver arms the interruption watchdog.
-    pub fn interrupt(&mut self, force: bool) -> Result<bool, SpeechError> {
-        if self.view.interrupted || self.view.done {
+    pub fn interrupt(&mut self) -> Result<bool, SpeechError> {
+        if self.view.interrupted() || self.view.done() {
             return Ok(false);
         }
-        if !force && !self.view.allow_interruptions {
+        if !self.view.allow_interruptions {
             return Err(SpeechError::InterruptionsNotAllowed);
         }
-        self.change().interrupted = true;
+        Ok(self.force_interrupt())
+    }
+
+    pub fn force_interrupt(&mut self) -> bool {
+        if self.view.interrupted() || self.view.done() {
+            return false;
+        }
+        let scheduling = self.view.scheduling();
+        self.change().phase = SpeechPhase::Interrupted(scheduling);
         self.watchdog_armed = true;
-        Ok(true)
+        true
     }
 
     /// The loop refused the host's `interrupt()` (the speech disallowed it by then).
@@ -348,7 +416,7 @@ impl SpeechState {
     /// The `allow_interruptions` setter. Ignores the hold count, so a set during a hold is undone
     /// by the last release, as in the reference.
     pub fn set_allow_interruptions(&mut self, allow: bool) -> Result<(), SpeechError> {
-        if self.view.interrupted && !allow {
+        if self.view.interrupted() && !allow {
             return Err(SpeechError::AlreadyInterrupted);
         }
         self.change().allow_interruptions = allow;
@@ -359,7 +427,7 @@ impl SpeechState {
     /// release cannot lift another's. The first holder's value is restored.
     pub fn hold_interruptions(&mut self) -> Result<(), SpeechError> {
         if self.holds == 0 {
-            if self.view.interrupted {
+            if self.view.interrupted() {
                 return Err(SpeechError::AlreadyInterrupted);
             }
             self.restore = self.view.allow_interruptions;
@@ -375,7 +443,7 @@ impl SpeechState {
             return;
         }
         self.holds -= 1;
-        if self.holds == 0 && !(self.view.interrupted && !self.restore) {
+        if self.holds == 0 && !(self.view.interrupted() && !self.restore) {
             let restore = self.restore;
             self.change().allow_interruptions = restore;
         }
@@ -384,11 +452,16 @@ impl SpeechState {
     /// `_mark_done`: the first error stays. The newest generation is done with the speech.
     pub fn mark_done(&mut self, error: Option<ProviderError>) {
         let view = self.change();
-        if !view.done {
-            if error.is_some() {
-                view.error = error;
-            }
-            view.done = true;
+        if !view.done() {
+            view.phase = SpeechPhase::Done {
+                scheduling: view.scheduling(),
+                completion: if view.interrupted() {
+                    Completion::Interrupted
+                } else {
+                    Completion::Completed
+                },
+                error,
+            };
         }
         if let Some(last) = view.generations.last_mut() {
             *last = true;

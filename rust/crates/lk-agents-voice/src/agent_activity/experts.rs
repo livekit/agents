@@ -148,7 +148,6 @@ impl VoiceDriver {
         let reply_required = execution.output.reply_required;
         execution.output.id = pending;
         self.replace_items([ChatItem::FunctionCallOutput(execution.output)]);
-        self.publish_activity();
         if let Some(Delivery::Say(text)) = execution.delivery {
             self.say_text(now, text, VoiceRunParticipation::Outside);
         } else if reply_required {
@@ -157,7 +156,7 @@ impl VoiceDriver {
     }
 
     fn reply_with_full_history(&mut self, now: Ts) {
-        if self.activity.rt_session.is_some() {
+        if self.activity.realtime().is_some() {
             let role = crate::agent_activity::realtime::RealtimeReplyRole::Internal;
             self.realtime_reply(now, None, None, None, None, None, role);
             return;
