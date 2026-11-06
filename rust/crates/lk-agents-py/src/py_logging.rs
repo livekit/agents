@@ -184,8 +184,18 @@ fn flush_sender(sender: &SyncSender<Entry>, timeout: Duration) {
     let _ = flushed.recv_timeout(deadline.saturating_duration_since(Instant::now()));
 }
 
+/// The stall detector's sampler libraries (py-spy and its process reader): their own lines are
+/// internals; the detector logs what matters (`event-loop stall stacks unavailable`).
+const SAMPLER_TARGETS: [&str; 2] = ["py_spy", "remoteprocess"];
+
 impl Forwarder {
     fn enabled(&self, metadata: &Metadata) -> bool {
+        let target = metadata.target();
+        let sampler =
+            SAMPLER_TARGETS.iter().any(|crate_name| target.split("::").next() == Some(*crate_name));
+        if sampler && metadata.level() > Level::Error {
+            return false;
+        }
         let levels = self.levels.lock();
         levels
             .get(metadata.target())
@@ -436,5 +446,19 @@ mod logging_tests {
             super::IN_DRAIN.set(false);
             assert!(started.elapsed() < Duration::from_secs(1));
         });
+    }
+
+    // Catches: py-spy's internal lines ("looking up thread names") reaching the application's
+    // logs on every profiled job.
+    #[test]
+    fn the_samplers_own_lines_are_dropped_below_error() {
+        let metadata = |target: &'static str, level| {
+            log::Metadata::builder().target(target).level(level).build()
+        };
+        let forwarder = super::forwarder();
+        assert!(!forwarder.enabled(&metadata("py_spy::python_spy", log::Level::Info)));
+        assert!(!forwarder.enabled(&metadata("remoteprocess", log::Level::Warn)));
+        assert!(forwarder.enabled(&metadata("py_spy::python_spy", log::Level::Error)));
+        assert!(forwarder.enabled(&metadata("livekit.agents", log::Level::Info)));
     }
 }

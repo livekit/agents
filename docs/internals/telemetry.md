@@ -175,8 +175,10 @@ session's audio recording.
 - **Bounds.** 36,000 samples keep their own time (16 bytes each); later ones merge by stack and
   thread. At most 20,000 distinct stacks; a sample of a new stack past them is counted, not kept.
 - **Format.** A gzipped pprof `profile.proto`: one sample per tick (not merged), value the tick's
-  wall time, with the labels `thread_name` and `end_timestamp_ns` (Unix ns); `time_nanos` is the
-  profile's start. A viewer places a sample on the audio timeline at `end_timestamp_ns` minus the
+  wall time, with the labels `thread_name`, `thread_state` (`running` or `waiting`: waiting
+  when the OS says so or the innermost frame is one of Python's idle waits, the loop's selector, a
+  `threading` wait, a queue `get`, an idle pool worker) and `end_timestamp_ns` (Unix ns);
+  `time_nanos` is the profile's start. A viewer places a sample on the audio timeline at `end_timestamp_ns` minus the
   recording header's `start_time`; standard tools (`go tool pprof`, Pyroscope, speedscope) show
   the aggregate.
 - **Output.** `profile.pb.gz` beside the job's audio recording, and the recording upload's

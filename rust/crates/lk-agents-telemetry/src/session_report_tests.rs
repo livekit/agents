@@ -325,7 +325,13 @@ async fn a_job_s_profile_is_written_beside_its_audio_and_not_uploaded_yet() {
     let key = JobKey("AJ_profiled".into());
     let profile = Arc::new(parking_lot::Mutex::new(crate::profile::Profile::default()));
     let frame = crate::profile::Frame { function: "busy", file: "app.py", line: 7 };
-    profile.lock().add(1_000, crate::profile::PERIOD_NANOS, "MainThread", [frame].into_iter());
+    profile.lock().add(
+        1_000,
+        crate::profile::PERIOD_NANOS,
+        "MainThread",
+        true,
+        [frame].into_iter(),
+    );
     crate::profile::register(key.clone(), profile.clone());
     let report = SessionReport {
         job_id: "AJ_profiled".into(),

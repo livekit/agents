@@ -242,7 +242,7 @@ fn add_samples(watches: &[Entry], threads: &[ThreadStack], at: u64, wall: i64) {
                     file: &frame.file,
                     line: frame.line,
                 });
-                profile.add(at, wall, &thread.name, frames);
+                profile.add(at, wall, &thread.name, thread.active, frames);
             }
         }
     }
@@ -428,6 +428,20 @@ pub(crate) struct SampledFrame {
     pub(crate) line: i64,
 }
 
+/// A thread waiting in Python's own idle calls: the loop's selector, a `threading` wait, a queue
+/// `get`, a thread pool's idle worker. py-spy's own test misses them in-process (the OS reports the thread running, and its
+/// fallback matches bare names where Python 3.11+ gives `KqueueSelector.select`).
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+fn idle_frame(frame: &py_spy::Frame) -> bool {
+    let function = frame.name.rsplit('.').next().unwrap_or(&frame.name);
+    let file = frame.filename.as_str();
+    (file.ends_with("selectors.py") && matches!(function, "select" | "poll"))
+        || (file.ends_with("threading.py") && matches!(function, "wait" | "_wait_for_tstate_lock"))
+        || (file.ends_with("queue.py") && function == "get")
+        // a pool worker between work items: its queue `get` is C, so `_worker` is innermost
+        || (file.ends_with("futures/thread.py") && function == "_worker")
+}
+
 /// py-spy over the process's own memory, built at the first sample. Any failure turns stacks
 /// off for the process with one warning; stalls are still recorded, profiles stay empty.
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
@@ -477,7 +491,7 @@ mod sampler {
         let traces = spy.get_stack_traces().ok()?;
         let thread = |trace: py_spy::StackTrace| ThreadStack {
             os_thread: trace.os_thread_id,
-            active: trace.active,
+            active: trace.active && !trace.frames.first().is_some_and(super::idle_frame),
             name: trace.thread_name.unwrap_or_else(|| format!("thread {}", trace.thread_id)),
             frames: trace
                 .frames

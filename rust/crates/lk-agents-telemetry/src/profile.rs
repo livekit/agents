@@ -51,21 +51,22 @@ pub struct Profile {
     stacks: HashMap<Arc<[u64]>, u32>,
     stack_list: Vec<Arc<[u64]>>,
     threads: HashMap<String, i64>,
-    /// (stack, thread name, Unix ns, wall ns), in time order.
-    timed: Vec<(u32, i64, u64, i64)>,
-    merged: HashMap<(u32, i64), i64>,
+    /// (stack, thread name, Unix ns, wall ns, running), in time order.
+    timed: Vec<(u32, i64, u64, i64, bool)>,
+    merged: HashMap<(u32, i64, bool), i64>,
     /// Samples of a new stack past [`STACKS`].
     dropped: u64,
 }
 
 impl Profile {
-    /// Adds the stack `frames` (innermost first) of `thread`, sampled at `at_nanos` (Unix ns) and
-    /// standing for `wall_nanos` of wall time.
+    /// Adds the stack `frames` (innermost first) of `thread`, sampled at `at_nanos` (Unix ns),
+    /// standing for `wall_nanos` of wall time; `running`: the thread was running, not waiting.
     pub fn add<'a>(
         &mut self,
         at_nanos: u64,
         wall_nanos: i64,
         thread: &str,
+        running: bool,
         frames: impl Iterator<Item = Frame<'a>>,
     ) {
         let mut frames: Vec<Frame<'a>> = frames.take(DEPTH + 1).collect();
@@ -86,9 +87,9 @@ impl Profile {
         let thread = self.thread(thread);
         let wall = wall_nanos.clamp(0, LONGEST_SAMPLE_NANOS);
         if self.timed.len() < TIMED_SAMPLES {
-            self.timed.push((stack, thread, at_nanos, wall));
+            self.timed.push((stack, thread, at_nanos, wall, running));
         } else {
-            *self.merged.entry((stack, thread)).or_default() += wall;
+            *self.merged.entry((stack, thread, running)).or_default() += wall;
         }
     }
 
@@ -122,6 +123,9 @@ impl Profile {
         let (wall, nanoseconds) = (string("wall"), string("nanoseconds"));
         let (thread_name, end_timestamp) = (string("thread_name"), string("end_timestamp_ns"));
         let python = string("python");
+        let (thread_state, running, waiting) =
+            (string("thread_state"), string("running"), string("waiting"));
+        let state = |is_running: bool| if is_running { running } else { waiting };
         let stack =
             |id: u32| self.stack_list.get(id as usize).map_or_else(Vec::new, |s| s.to_vec());
         let label =
@@ -129,19 +133,23 @@ impl Profile {
         let mut samples: Vec<pprof::Sample> = self
             .timed
             .iter()
-            .map(|(id, thread, at, wall)| pprof::Sample {
+            .map(|(id, thread, at, wall, is_running)| pprof::Sample {
                 location_id: stack(*id),
                 value: vec![*wall],
                 label: vec![
                     label(thread_name, *thread, 0, 0),
+                    label(thread_state, state(*is_running), 0, 0),
                     label(end_timestamp, 0, *at as i64, nanoseconds),
                 ],
             })
             .collect();
-        samples.extend(self.merged.iter().map(|((id, thread), wall)| pprof::Sample {
+        samples.extend(self.merged.iter().map(|((id, thread, is_running), wall)| pprof::Sample {
             location_id: stack(*id),
             value: vec![*wall],
-            label: vec![label(thread_name, *thread, 0, 0)],
+            label: vec![
+                label(thread_name, *thread, 0, 0),
+                label(thread_state, state(*is_running), 0, 0),
+            ],
         }));
         let profile = pprof::Profile {
             sample_type: vec![pprof::ValueType { r#type: wall, unit: nanoseconds }],
@@ -391,9 +399,9 @@ mod tests {
     #[test]
     fn samples_keep_their_time_thread_wall_time_and_stack() {
         let mut p = Profile::default();
-        p.add(1_000, P, "MainThread", frames(&[("busy", 7), ("main", 20)]));
-        p.add(1_100, P + 3, "MainThread", frames(&[("busy", 7), ("main", 20)]));
-        p.add(1_200, P, "worker", frames(&[("lookup", 3)]));
+        p.add(1_000, P, "MainThread", true, frames(&[("busy", 7), ("main", 20)]));
+        p.add(1_100, P + 3, "MainThread", true, frames(&[("busy", 7), ("main", 20)]));
+        p.add(1_200, P, "worker", true, frames(&[("lookup", 3)]));
         let decoded = decode(&p.encode());
         let s = |i: i64| decoded.string_table[i as usize].as_str();
         assert_eq!(decoded.string_table[0], "");
@@ -408,6 +416,7 @@ mod tests {
             sample.label.iter().find(|l| s(l.key) == key).cloned().unwrap()
         };
         assert_eq!(s(label(first, "thread_name").str), "MainThread");
+        assert_eq!(s(label(first, "thread_state").str), "running");
         assert_eq!(label(&decoded.sample[2], "end_timestamp_ns").num, 1_200);
         assert_eq!(s(decoded.sample_type[0].r#type), "wall");
         assert_eq!(decoded.sample[1].value, [P + 3]);
@@ -419,12 +428,16 @@ mod tests {
     fn past_the_bound_samples_merge_without_time() {
         let mut p = Profile::default();
         for i in 0..TIMED_SAMPLES as u64 + 10 {
-            p.add(i, P, "MainThread", frames(&[("busy", 7)]));
+            p.add(i, P, "MainThread", true, frames(&[("busy", 7)]));
         }
         let decoded = decode(&p.encode());
         assert_eq!(decoded.sample.len(), TIMED_SAMPLES + 1);
         assert_eq!(decoded.sample[TIMED_SAMPLES].value, [P * 10]);
-        assert_eq!(decoded.sample[TIMED_SAMPLES].label.len(), 1, "the thread, no time");
+        assert_eq!(
+            decoded.sample[TIMED_SAMPLES].label.len(),
+            2,
+            "the thread and its state, no time"
+        );
     }
 
     // Catches: memory growing with distinct stacks past the bound (their frames interned all the
@@ -433,12 +446,18 @@ mod tests {
     fn stacks_depth_and_thread_names_are_bounded() {
         let mut p = Profile::default();
         for line in 0..STACKS as i64 {
-            p.add(1, P, "MainThread", [Frame { function: "f", file: "app.py", line }].into_iter());
+            p.add(
+                1,
+                P,
+                "MainThread",
+                true,
+                [Frame { function: "f", file: "app.py", line }].into_iter(),
+            );
         }
         let (strings, locations) = (p.strings.len(), p.location_list.len());
         for line in 0..1_000 {
             let frame = Frame { function: "new_function", file: "new.py", line };
-            p.add(2, P, "MainThread", [frame].into_iter());
+            p.add(2, P, "MainThread", true, [frame].into_iter());
         }
         assert_eq!(p.dropped(), 1_000);
         assert_eq!(
@@ -446,13 +465,19 @@ mod tests {
             (strings, locations),
             "nothing interned"
         );
-        p.add(3, P, "MainThread", [Frame { function: "f", file: "app.py", line: 0 }].into_iter());
+        p.add(
+            3,
+            P,
+            "MainThread",
+            true,
+            [Frame { function: "f", file: "app.py", line: 0 }].into_iter(),
+        );
         assert_eq!(p.dropped(), 1_000, "a known stack is still kept");
 
         let mut deep = Profile::default();
         let names: Vec<String> = (0..1_000).map(|i| format!("f{i}")).collect();
         let stack = names.iter().map(|name| Frame { function: name, file: "app.py", line: 1 });
-        deep.add(1, P, "MainThread", stack);
+        deep.add(1, P, "MainThread", true, stack);
         let decoded = decode(&deep.encode());
         assert_eq!(decoded.sample[0].location_id.len(), DEPTH + 1);
         let root = &decoded.location[(*decoded.sample[0].location_id.last().unwrap() - 1) as usize];
@@ -461,7 +486,7 @@ mod tests {
 
         let mut threads = Profile::default();
         for i in 0..THREADS + 50 {
-            threads.add(1, P, &format!("pool-{i}"), frames(&[("work", 1)]));
+            threads.add(1, P, &format!("pool-{i}"), true, frames(&[("work", 1)]));
         }
         assert_eq!(threads.threads.len(), THREADS);
         let decoded = decode(&threads.encode());
@@ -476,14 +501,14 @@ mod tests {
         let first = Arc::new(Mutex::new(Profile::default()));
         register(job.clone(), first.clone());
         assert!(take(&job).is_none(), "nothing sampled yet");
-        first.lock().add(5, P, "MainThread", frames(&[("busy", 7)]));
+        first.lock().add(5, P, "MainThread", true, frames(&[("busy", 7)]));
         assert!(take(&job).is_some());
         assert!(take(&job).is_none(), "taken");
 
         let second = Arc::new(Mutex::new(Profile::default()));
         register(job.clone(), second.clone());
         forget(&job, &first);
-        second.lock().add(6, P, "MainThread", frames(&[("busy", 7)]));
+        second.lock().add(6, P, "MainThread", true, frames(&[("busy", 7)]));
         assert!(take(&job).is_some(), "the earlier watch did not forget the later one's");
         forget(&job, &second);
         assert!(PROFILES.lock().get(&job).is_none());
