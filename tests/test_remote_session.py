@@ -552,11 +552,14 @@ async def test_event_writer_stops_when_room_disconnects(
     async def disconnect(*args: object, **kwargs: object) -> None:
         room.isconnected.return_value = False
         room.connection_state = rtc.ConnectionState.CONN_DISCONNECTED
+        room.on.call_args.args[1]()
         raise RuntimeError("room disconnected during send")
 
     room.local_participant.send_bytes = AsyncMock(side_effect=disconnect)
     host = SessionHost(RoomSessionTransport(room))
     await host.start()
+    if not disconnect_during_send:
+        room.on.call_args.args[1]()
     try:
         with caplog.at_level(logging.WARNING, logger="livekit.agents"):
             host._send_event(agent_pb.AgentSessionEvent())
@@ -572,10 +575,17 @@ async def test_event_writer_stops_when_room_disconnects(
 
 
 @pytest.mark.asyncio
-async def test_event_writer_resumes_after_room_reconnects(caplog: pytest.LogCaptureFixture) -> None:
-    """A reconnectable interruption must not permanently stop event forwarding."""
+@pytest.mark.parametrize("connected_before", [False, True])
+async def test_event_writer_resumes_after_room_connects(
+    caplog: pytest.LogCaptureFixture, connected_before: bool
+) -> None:
+    """Initial connection and reconnection must keep event forwarding available."""
     room = _fake_room(connected=False)
-    room.connection_state = rtc.ConnectionState.CONN_RECONNECTING
+    room.connection_state = (
+        rtc.ConnectionState.CONN_RECONNECTING
+        if connected_before
+        else rtc.ConnectionState.CONN_DISCONNECTED
+    )
     room.local_participant.send_bytes = AsyncMock()
     host = SessionHost(RoomSessionTransport(room))
     await host.start()

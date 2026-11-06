@@ -105,6 +105,7 @@ class RoomSessionTransport(SessionTransport):
         # their messages swapped.
         self._incoming_ch: utils.aio.Chan[rtc.ByteStreamReader] = utils.aio.Chan()
         self._read_task: asyncio.Task[None] | None = None
+        self._room_disconnected = False
 
     @property
     def remote_identity(self) -> str | None:
@@ -121,7 +122,11 @@ class RoomSessionTransport(SessionTransport):
             self._read_loop(), name="RoomSessionTransport._read_loop"
         )
         self._room.register_byte_stream_handler(TOPIC_SESSION_MESSAGES, self._on_byte_stream)
+        self._room.on("disconnected", self._on_disconnected)
         self._handler_registered = True
+
+    def _on_disconnected(self, *_args: Any) -> None:
+        self._room_disconnected = True
 
     def _on_byte_stream(self, reader: rtc.ByteStreamReader, participant_identity: str) -> None:
         if self._remote_identity and participant_identity != self._remote_identity:
@@ -169,22 +174,16 @@ class RoomSessionTransport(SessionTransport):
                     destination_identities=dest,
                 )
             except Exception as e:
-                if (
-                    self._recv_ch.closed
-                    or self._room.connection_state == rtc.ConnectionState.CONN_DISCONNECTED
-                ):
+                if self._recv_ch.closed or self._room_disconnected:
                     raise _SessionTransportClosed("room session transport is closed") from e
                 raise RuntimeError(f"failed to send binary stream message: {e}") from e
 
     def _check_connected(self) -> None:
         """Distinguish terminal room closure from a reconnectable interruption."""
-        if (
-            self._recv_ch.closed
-            or self._room.connection_state == rtc.ConnectionState.CONN_DISCONNECTED
-        ):
+        if self._recv_ch.closed or self._room_disconnected:
             raise _SessionTransportClosed("room session transport is closed")
         if not self._room.isconnected():
-            raise RuntimeError("room session transport is not connected")
+            raise RuntimeError("room session transport is closed")
 
     async def close(self) -> None:
         if self._recv_ch.closed:
@@ -195,6 +194,7 @@ class RoomSessionTransport(SessionTransport):
             await utils.aio.cancel_and_wait(self._read_task)
             self._read_task = None
         if self._handler_registered:
+            self._room.off("disconnected", self._on_disconnected)
             try:
                 self._room.unregister_byte_stream_handler(TOPIC_SESSION_MESSAGES)
             except (ValueError, AttributeError):
