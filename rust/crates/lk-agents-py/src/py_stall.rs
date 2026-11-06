@@ -146,7 +146,7 @@ fn detector() -> Arc<Detector> {
         Ok(handle) => handle.thread().clone(),
         Err(error) => {
             // Watches still beat; nothing checks them in this process.
-            log::warn!(target: "livekit.agents", "event-loop stall detection unavailable: {error}");
+            log::warn!(target: lk_agents_abi::LOG_TARGET, "event-loop stall detection unavailable: {error}");
             thread::current()
         }
     };
@@ -186,7 +186,7 @@ fn run(received: &Receiver<Arc<Watched>>) {
         if catch_unwind(AssertUnwindSafe(|| detection.tick())).is_err()
             && !std::mem::replace(&mut panicked, true)
         {
-            log::error!(target: "livekit.agents", "event-loop stall detection panicked; it goes on");
+            log::error!(target: lk_agents_abi::LOG_TARGET, "event-loop stall detection panicked; it goes on");
         }
     }
 }
@@ -461,7 +461,7 @@ mod sampler {
             Ok(Err(error)) => format!("{error:#}"),
             Err(_) => "the sampler panicked".to_owned(),
         };
-        log::warn!(target: "livekit.agents", "event-loop stall stacks unavailable: {why}");
+        log::warn!(target: lk_agents_abi::LOG_TARGET, "event-loop stall stacks unavailable: {why}");
         State::Off
     }
 

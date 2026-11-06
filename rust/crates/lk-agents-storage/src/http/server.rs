@@ -93,7 +93,7 @@ async fn serve(
             _ = stopped.changed() => break,
             _ = connections.next(), if !connections.is_empty() => {},
             accepted = listener.accept(), if connections.len() < CONNECTION_LIMIT => {
-                let accepted = accepted.inspect_err(|error| log::warn!("thread API accept failed: {error}"));
+                let accepted = accepted.inspect_err(|error| log::warn!(target: lk_agents_abi::LOG_TARGET, "thread API accept failed: {error}"));
                 let Ok((socket, _)) = accepted else { break };
                 let served = connection(socket, service.clone(), stopped.clone());
                 connections.push(TokioSpawner::current().spawn(served));

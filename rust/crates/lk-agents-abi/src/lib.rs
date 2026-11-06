@@ -20,6 +20,9 @@ pub use lk_agents_host_derive::host;
 /// So `lk_agents_abi::X` in an expansion resolves in ABI as in every other crate.
 extern crate self as lk_agents_abi;
 
+/// The `log` target of the framework's lines: Python's `livekit.agents` logger.
+pub const LOG_TARGET: &str = "livekit.agents";
+
 pub mod a2a;
 pub mod agent;
 pub mod cli;
@@ -28,7 +31,6 @@ pub mod evals;
 pub mod inference;
 pub mod invoke;
 pub mod llm;
-pub mod logging;
 pub mod media;
 pub mod metrics;
 pub mod recorder;

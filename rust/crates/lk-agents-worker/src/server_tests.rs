@@ -1,7 +1,6 @@
 use super::*;
 use http_body_util::BodyExt as _;
 use hyper::{Method, StatusCode};
-use lk_agents_abi::logging::LogWriter;
 
 fn settings() -> ServerSettings {
     ServerSettings { version: "2.0.0".into(), ..ServerSettings::default() }
@@ -376,8 +375,8 @@ async fn the_worker_endpoint_uses_generated_protobuf_json() {
 fn a_server_takes_a_job_only_with_a_voice_door() {
     let job = proto::Job { id: "AJ_1".into(), ..Default::default() };
     let req = JobRequest { job: crate::worker::job_info(&job), resuming: false };
-    assert_eq!(job_decision(&req, false, LogWriter::disabled()), JobDecision::Reject);
-    let JobDecision::Accept(args) = job_decision(&req, true, LogWriter::disabled()) else {
+    assert_eq!(job_decision(&req, false), JobDecision::Reject);
+    let JobDecision::Accept(args) = job_decision(&req, true) else {
         panic!("a voice door accepts")
     };
     assert_eq!((args.identity.as_str(), args.name.as_str()), ("agent-AJ_1", ""));

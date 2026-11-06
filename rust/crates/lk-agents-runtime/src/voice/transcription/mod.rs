@@ -81,7 +81,7 @@ impl Synchronizer {
             TranscriptSyncEffect::FlushTranscript => self.send(TranscriptOutput::Flush),
             TranscriptSyncEffect::ReportHeard(heard) => return Some(heard),
             TranscriptSyncEffect::Warn(warning) => {
-                log::warn!(target: "livekit.agents", "{}", warning.message());
+                log::warn!(target: lk_agents_abi::LOG_TARGET, "{}", warning.message());
             }
             TranscriptSyncEffect::Queue(output) => {
                 if let Some(tx) = self.tx.lock().as_ref() {

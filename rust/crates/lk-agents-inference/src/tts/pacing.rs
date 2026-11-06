@@ -124,7 +124,7 @@ pub(crate) fn trim_python_whitespace(text: &str) -> &str {
 }
 
 pub(crate) fn sent(text: &str, remaining: f64) {
-    log::debug!(target: "livekit.agents", "sent text to tts: {text:?}, remaining audio {remaining}");
+    log::debug!(target: lk_agents_abi::LOG_TARGET, "sent text to tts: {text:?}, remaining audio {remaining}");
 }
 
 /// A host sentence stream read by a task of its own, so a wait elsewhere never cancels a pending
@@ -174,7 +174,7 @@ impl HostSentences {
         self.reader.abort();
         let closed = self.stream.aclose(cx);
         if before(clock, Some(deadline), closed).await.is_err() {
-            log::warn!(target: "livekit.agents", "sentence stream close timed out");
+            log::warn!(target: lk_agents_abi::LOG_TARGET, "sentence stream close timed out");
         }
     }
 }
@@ -490,7 +490,7 @@ impl Port for PacedSentences {
             PacedInput::Unread(_) | PacedInput::Ended => {
                 let closed = self.stream.aclose(&cx);
                 if before(&*self.clock, Some(deadline), closed).await.is_err() {
-                    log::warn!(target: "livekit.agents", "sentence stream close timed out");
+                    log::warn!(target: lk_agents_abi::LOG_TARGET, "sentence stream close timed out");
                 }
             }
         }

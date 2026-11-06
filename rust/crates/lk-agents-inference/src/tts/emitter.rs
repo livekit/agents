@@ -194,7 +194,7 @@ impl Inner {
             AudioEmitterEffect::ScheduleFlushAfter(delay) => self.schedule_flush_after(delay),
             AudioEmitterEffect::CancelScheduledFlush => self.cancel_scheduled_flush(),
             AudioEmitterEffect::ReportDroppedBytes(bytes) => log::warn!(
-                target: "livekit.agents",
+                target: lk_agents_abi::LOG_TARGET,
                 "incomplete PCM sample at end of segment, discarding {bytes} trailing bytes"
             ),
         }
@@ -461,7 +461,7 @@ impl lk_agents_abi::media::emitter::AudioEmitter for AudioEmitter {
             m.initialize(&request_id, sample_rate, num_channels, frame_size_ms, stream)
         })?;
         if request_id.is_empty() {
-            log::warn!(target: "livekit.agents", "no request_id provided for TTS {}", me.label);
+            log::warn!(target: lk_agents_abi::LOG_TARGET, "no request_id provided for TTS {}", me.label);
         }
         if me.decode.set(decode).is_err() {
             return Err(EmitterError::AlreadyStarted);
@@ -602,7 +602,7 @@ async fn flush_timer(
             }
             fire
         }) {
-            log::debug!(target: "livekit.agents", "flush audio emitter due to slow audio generation");
+            log::debug!(target: lk_agents_abi::LOG_TARGET, "flush audio emitter due to slow audio generation");
             if let Err(error) = emitter.run(|m, now, eff| m.on_flush_deadline(now, eff)) {
                 emitter.fail(error);
             }

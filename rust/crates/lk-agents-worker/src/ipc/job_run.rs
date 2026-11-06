@@ -24,7 +24,7 @@ use tokio::sync::{oneshot, watch};
 use super::ipc_channel::Channel;
 
 use super::wire::{ToChild, bounded};
-use super::{Extra, ExtraValue, Level, ToParent, extra_fields, secs};
+use super::{ToParent, secs};
 use lk_agents_net::env::ProcessEnv;
 
 /// How long the entrypoint may take to return once the job shuts down, before it is cancelled.
@@ -146,22 +146,6 @@ impl Inner {
         }
     }
 
-    fn host(&self) -> Option<&Arc<dyn JobProcess>> {
-        self.host.get().map(|(host, _)| host)
-    }
-
-    /// `message` on the runner's logger, with the failure's traceback and `extra`.
-    fn log(&self, level: Level, message: &str, error: Option<HostError>, extra: Extra) {
-        let Some(host) = self.host() else {
-            log::log!(target: crate::LOG, log_level(level), "{message}");
-            return;
-        };
-        if let Err(failure) = host.log(level as i32, message.to_owned(), extra_fields(extra), error)
-        {
-            log::warn!(target: crate::LOG, "{message} (not logged by the host: {failure})");
-        }
-    }
-
     /// One shutdown step in its span, bounded by `timeout`.
     async fn step<D: telemetry::SpanDecl<End = ()>>(
         &self,
@@ -180,14 +164,13 @@ impl Inner {
             Ok(ran) => {
                 telemetry::end(span, ran.as_ref().map(|_| ()));
                 if let Err(error) = ran {
-                    self.log(Level::Error, error_msg, Some(error), Vec::new());
+                    log::error!(target: lk_agents_abi::LOG_TARGET, exc_text:% = error.exc_text(); "{error_msg}");
                 }
             }
             Err(()) => {
                 telemetry::end(span, lk_agents_abi::Elapsed);
-                let msg =
-                    format!("{} timed out after {}s", D::NAME, timeout.unwrap_or_default() as i64);
-                self.log(Level::Error, &msg, None, Vec::new());
+                let after = timeout.unwrap_or_default() as i64;
+                log::error!(target: lk_agents_abi::LOG_TARGET, "{} timed out after {after}s", D::NAME);
             }
         }
     }
@@ -280,12 +263,7 @@ impl Inner {
         if !entry_done
             && tokio::time::timeout(ENTRYPOINT_EXIT_TIMEOUT, &mut wait_entry).await.is_err()
         {
-            self.log(
-                Level::Warning,
-                "entrypoint did not exit in time, cancelling",
-                None,
-                Vec::new(),
-            );
+            log::warn!(target: lk_agents_abi::LOG_TARGET, "entrypoint did not exit in time, cancelling");
             let _ = host.cancel(shutdown.cx(), cx, entry).await;
             telemetry::event(root, telemetry::EntrypointCancelled);
         }
@@ -313,12 +291,7 @@ impl Inner {
                 None
             }
             Err(e) => {
-                self.log(
-                    Level::Error,
-                    "unhandled exception while running the job task",
-                    Some(e.clone()),
-                    Vec::new(),
-                );
+                log::error!(target: lk_agents_abi::LOG_TARGET, exc_text:% = e.exc_text(); "unhandled exception while running the job task");
                 // A crash before ctx.connect() resolves nothing else: the shutdown
                 // still runs, so the cleanup can flush the crash logs.
                 self.end("job crashed".into(), telemetry::ShutdownCause::EntrypointCrashed);
@@ -333,7 +306,7 @@ impl Inner {
                         && !self.fake
                 };
                 if unfinished {
-                    self.log(Level::Warning, "The job task completed without establishing a connection or performing a proper shutdown. Ensure that job_ctx.connect()/job_ctx.shutdown() is called and the job is correctly finalized.", None, Vec::new());
+                    log::warn!(target: lk_agents_abi::LOG_TARGET, "The job task completed without establishing a connection or performing a proper shutdown. Ensure that job_ctx.connect()/job_ctx.shutdown() is called and the job is correctly finalized.");
                 }
                 None
             }
@@ -348,7 +321,7 @@ impl Inner {
             !st.connected && st.cause != Some(telemetry::ShutdownCause::Application)
         };
         if unconnected {
-            self.log(Level::Warning, "The room connection was not established within 10 seconds after calling job_entry. This might mean that job_ctx.connect() was never invoked, or that no VoiceSession with an active RoomIO has been started.", None, Vec::new());
+            log::warn!(target: lk_agents_abi::LOG_TARGET, "The room connection was not established within 10 seconds after calling job_entry. This might mean that job_ctx.connect() was never invoked, or that no VoiceSession with an active RoomIO has been started.");
         }
     }
 
@@ -362,17 +335,12 @@ impl Inner {
         let aclose_timeout = self.session_aclose_timeout;
         match tokio::time::timeout(secs(aclose_timeout), host.close_session(under, cx)).await {
             Ok(Err(error)) => {
-                self.log(Level::Error, "error while closing the session", Some(error), Vec::new())
+                log::error!(target: lk_agents_abi::LOG_TARGET, exc_text:% = error.exc_text(); "error while closing the session")
             }
             Ok(Ok(())) => {}
-            Err(_) => self.log(
-                Level::Error,
-                &format!(
-                    "VoiceSession.aclose() timed out after {aclose_timeout:.1}s; proceeding with shutdown so registered callbacks still run."
-                ),
-                None,
-                Vec::new(),
-            ),
+            Err(_) => {
+                log::error!(target: lk_agents_abi::LOG_TARGET, "VoiceSession.aclose() timed out after {aclose_timeout:.1}s; proceeding with shutdown so registered callbacks still run.")
+            }
         }
     }
 
@@ -411,11 +379,8 @@ impl Inner {
         if let Some(parent) = self.parent.get() {
             let _ = parent.send(ToParent::ShuttingDown).await;
         }
-        let extra = vec![
-            ("reason", ExtraValue::Str(reason.to_owned())),
-            ("user_initiated", ExtraValue::Bool(cause == telemetry::ShutdownCause::Application)),
-        ];
-        self.log(Level::Debug, "shutting down job task", None, extra);
+        let user_initiated = cause == telemetry::ShutdownCause::Application;
+        log::debug!(target: lk_agents_abi::LOG_TARGET, reason = reason, user_initiated = user_initiated; "shutting down job task");
         if let Some(parent) = self.parent.get() {
             let _ = parent.send(ToParent::Exiting { reason: bounded(reason.to_owned()) }).await;
         }
@@ -442,12 +407,7 @@ impl Inner {
             .collect();
         for run in runs {
             if let Ok(Err(error)) = run.await {
-                self.log(
-                    Level::Error,
-                    "error while shutting down the job",
-                    Some(error),
-                    Vec::new(),
-                );
+                log::error!(target: lk_agents_abi::LOG_TARGET, exc_text:% = error.exc_text(); "error while shutting down the job");
             }
         }
     }
@@ -468,15 +428,6 @@ async fn shutdown_callback(
     let ran = host.shutdown_callback(span.cx(), &cx, callback, reason).await;
     telemetry::end(span, ran.as_ref());
     ran
-}
-
-fn log_level(level: Level) -> log::Level {
-    match level {
-        Level::Debug => log::Level::Debug,
-        Level::Info => log::Level::Info,
-        Level::Warning => log::Level::Warn,
-        Level::Error => log::Level::Error,
-    }
 }
 
 impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
@@ -620,7 +571,7 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
             }
         }
         if overlapping {
-            self.inner.log(Level::Warning, &format!("a participant has joined before a prior participant task matching the same identity has finished: '{identity}'"), None, Vec::new());
+            log::warn!(target: lk_agents_abi::LOG_TARGET, "a participant has joined before a prior participant task matching the same identity has finished: '{identity}'");
         }
         let spawner = TokioSpawner::new(self.inner.spawner.handle().clone());
         for (key, run, entry, name) in starts {
@@ -638,8 +589,7 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
                 if let Err(error) = ran
                     && !cancelled(&error)
                 {
-                    let msg = format!("error in participant entrypoint {name} for '{}'", key.0);
-                    inner.log(Level::Error, &msg, Some(error), Vec::new());
+                    log::error!(target: lk_agents_abi::LOG_TARGET, exc_text:% = error.exc_text(); "error in participant entrypoint {name} for '{}'", key.0);
                 }
             });
         }
@@ -648,12 +598,7 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
     /// A simulator leaving ends the job.
     fn participant_left(&self, attributes: BTreeMap<String, String>) {
         if attributes.contains_key(ATTRIBUTE_SIMULATOR) {
-            self.inner.log(
-                Level::Debug,
-                "simulator disconnected, shutting down the job",
-                None,
-                Vec::new(),
-            );
+            log::debug!(target: lk_agents_abi::LOG_TARGET, "simulator disconnected, shutting down the job");
             self.inner
                 .end("simulation completed".into(), telemetry::ShutdownCause::SimulationCompleted);
         }
@@ -668,17 +613,11 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
         cx: telemetry::Cx,
     ) -> Result<HostRef, WorkerError> {
         if self.inner.fake {
-            self.inner.log(
-                Level::Warning,
-                &format!("job_ctx.{name}() is not executed while in console mode"),
-                None,
-                Vec::new(),
-            );
+            log::warn!(target: lk_agents_abi::LOG_TARGET, "job_ctx.{name}() is not executed while in console mode");
             return Ok(console_result);
         }
         let (tx, rx) = oneshot::channel();
         let mut closed = self.inner.tasks_closed.subscribe();
-        let inner = self.inner.clone();
         let task = TokioSpawner::new(self.inner.spawner.handle().clone()).spawn(async move {
             let called = tokio::select! {
                 called = call.call(&cx, &context) => called.map_err(WorkerError::Host),
@@ -687,12 +626,7 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
             if let Err(WorkerError::Host(error)) = &called
                 && !cancelled(error)
             {
-                inner.log(
-                    Level::Error,
-                    &format!("error in {name}"),
-                    Some(error.clone()),
-                    Vec::new(),
-                );
+                log::error!(target: lk_agents_abi::LOG_TARGET, exc_text:% = error.exc_text(); "error in {name}");
             }
             let _ = tx.send(called);
         });

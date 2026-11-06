@@ -376,7 +376,7 @@ impl Turn {
     ) -> Result<Completion, StorageError> {
         for (task_id, message) in failed {
             lane.fail_orphan(&task_id, &message).await?;
-            log::warn!(target: "livekit.agents", lane = self.lane.as_str(), taskId = task_id.as_str(); "the task fails {reason}");
+            log::warn!(target: lk_agents_abi::LOG_TARGET, lane = self.lane.as_str(), taskId = task_id.as_str(); "the task fails {reason}");
         }
         Ok(Completion::Done)
     }
@@ -423,11 +423,11 @@ impl Turn {
             match run.resolve_later().await {
                 Some(Err(e)) if rejected_commit(&e) => {
                     if let Err(e) = lane.fail_orphan(&answer, &failed).await {
-                        log::warn!(target: "livekit.agents", taskId = answer.as_str(); "a rejected commit's task could not be failed: {e}");
+                        log::warn!(target: lk_agents_abi::LOG_TARGET, taskId = answer.as_str(); "a rejected commit's task could not be failed: {e}");
                     }
                 }
                 Some(Err(e)) => {
-                    log::warn!(target: "livekit.agents", taskId = answer.as_str(); "a commit stayed unresolved: {e}");
+                    log::warn!(target: lk_agents_abi::LOG_TARGET, taskId = answer.as_str(); "a commit stayed unresolved: {e}");
                 }
                 Some(Ok(_)) | None => {}
             }
@@ -499,7 +499,7 @@ impl Turn {
     ) -> Result<HandlerEvent, StorageError> {
         let out = HandlerOutput::try_from(output)?;
         if let Some(err) = &out.error {
-            log::error!(target: "livekit.agents", lane = self.lane.as_str(); "the a2a_session handler raised; the task fails: {err}");
+            log::error!(target: lk_agents_abi::LOG_TARGET, lane = self.lane.as_str(); "the a2a_session handler raised; the task fails: {err}");
         }
         Ok(HandlerEvent::Output(Box::new(out)))
     }
@@ -510,7 +510,7 @@ impl Turn {
         let Some(handler) = call.handler.take() else { return };
         let deadline = self.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
         if !handler.close(self.clock.as_ref(), deadline).await {
-            log::warn!(target: "livekit.agents", lane = self.lane.as_str(); "the handler did not settle within its deadline; its host task is still running");
+            log::warn!(target: lk_agents_abi::LOG_TARGET, lane = self.lane.as_str(); "the handler did not settle within its deadline; its host task is still running");
         }
     }
 }

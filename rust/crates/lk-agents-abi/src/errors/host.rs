@@ -55,6 +55,12 @@ impl HostError {
     pub fn with_traceback(self, traceback: Option<String>) -> Self {
         Self { traceback, ..self }
     }
+
+    /// The failure as Python's `logging` prints an exception (a record's `exc_text`): its
+    /// traceback, else `Kind: message`.
+    pub fn exc_text(&self) -> String {
+        self.traceback.as_deref().map_or_else(|| self.to_string(), |t| t.trim_end().to_owned())
+    }
 }
 
 impl std::fmt::Display for HostError {

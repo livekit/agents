@@ -172,7 +172,7 @@ pub(super) async fn serve(server: &EndpointServer, wire: Wire, origin: Origin) {
             }
         }
         (Err(error), Origin::Node(_)) => {
-            log::debug!(target: crate::LOG, "endpoint request rejected: {}", error.reason());
+            log::debug!(target: lk_agents_abi::LOG_TARGET, "endpoint request rejected: {}", error.reason());
             return end.reset(Code::HsrProtocol);
         }
         (Err(error), Origin::Listener { .. }) => return refuse(write, end, error.status()).await,

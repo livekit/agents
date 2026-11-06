@@ -6,7 +6,6 @@ use std::time::Duration;
 
 use lk_agents_abi::BoxFuture;
 use lk_agents_abi::worker::ipc_host::JobSupervisor as _;
-use serde_json::{Map, Value};
 
 use crate::ipc::Channel;
 use crate::ipc::pool::tests::job;
@@ -50,16 +49,6 @@ impl JobLauncher for Launcher {
     ) -> BoxFuture<'a, Result<(), HostError>> {
         self.completions.lock().push(completion);
         Box::pin(async { Ok(()) })
-    }
-
-    fn log(
-        &self,
-        _: i32,
-        _: String,
-        _: Map<String, Value>,
-        _: Option<HostError>,
-    ) -> Result<(), HostError> {
-        Ok(())
     }
 }
 

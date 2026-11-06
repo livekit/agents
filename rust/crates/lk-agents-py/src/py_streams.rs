@@ -233,7 +233,7 @@ impl<T: Send + 'static> StreamOutput<T> for HostStream<T> {
                     Ok(true) => {}
                     Ok(false) => return,
                     Err(error) => {
-                        log::warn!(target: "livekit.agents", "looking up host stream cleanup failed: {error}");
+                        log::warn!(target: lk_agents_abi::LOG_TARGET, "looking up host stream cleanup failed: {error}");
                         failed = true;
                         return;
                     }
@@ -243,7 +243,7 @@ impl<T: Send + 'static> StreamOutput<T> for HostStream<T> {
                     Err(e) => Err(e),
                 };
                 if let Err(e) = closed {
-                    log::warn!(target: "livekit.agents", "closing a host stream failed: {e}");
+                    log::warn!(target: lk_agents_abi::LOG_TARGET, "closing a host stream failed: {e}");
                     failed = true;
                 }
             };
@@ -604,7 +604,7 @@ pub fn close_native<'py, T: Send + 'static>(
     let source = source.clone();
     crate::py_calls::future_into_py(py, async move {
         if source.aclose().await == lk_agents_abi::Closed::TimedOut {
-            log::error!(target: "livekit.agents", "a native stream did not release its resources in time");
+            log::error!(target: lk_agents_abi::LOG_TARGET, "a native stream did not release its resources in time");
         }
         Ok(())
     })

@@ -308,7 +308,7 @@ impl VoiceRuntime {
         let Some(player) = self.realtime_players.get(&speech) else { return };
         let Err(error) = player.try_send(event) else { return };
         if matches!(error, tokio::sync::mpsc::error::TrySendError::Full(_)) {
-            log::error!(target: "livekit.agents", speech = speech.0,
+            log::error!(target: lk_agents_abi::LOG_TARGET, speech = speech.0,
                 capacity = crate::voice::generation::realtime_generation::PLAYER_CAPACITY;
                 "a realtime speech fell too far behind its reply; it ends on what it holds");
         }
@@ -336,7 +336,7 @@ impl VoiceRuntime {
     fn push_keyterms(&self, stt: Option<ResourceId>, terms: Vec<String>, warn_unsupported: bool) {
         if let Some(stt) = stt.and_then(|id| self.shared.resources.stt(id)) {
             if warn_unsupported {
-                log::warn!(target: "livekit.agents", stt = stt.label().as_str();
+                log::warn!(target: lk_agents_abi::LOG_TARGET, stt = stt.label().as_str();
                     "keyterms are not supported by this STT, ignoring keyterms update");
             }
             stt.update_keyterms(&terms);
@@ -620,7 +620,7 @@ impl VoiceRuntime {
             let hosted = callback.hosted.as_ref().expect("callback is pending");
             let rendered = hosted.host.render_template(&cx, &hosted.invocation, template).await;
             let text = rendered.unwrap_or_else(|e| {
-                log::error!(target: "livekit.agents", "a tool_handling template failed: {e}");
+                log::error!(target: lk_agents_abi::LOG_TARGET, "a tool_handling template failed: {e}");
                 None
             });
             callback.completed();
@@ -694,7 +694,7 @@ async fn reload_history(
             );
         }
         Err(error) => {
-            log::warn!(target: "livekit.agents", "the voice lane could not be acquired: {error}");
+            log::warn!(target: lk_agents_abi::LOG_TARGET, "the voice lane could not be acquired: {error}");
             if storage.lease_lost() {
                 let _ = queue.send(VoiceEvent::StorageLost(speech));
             }

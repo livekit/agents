@@ -20,7 +20,7 @@ use lk_agents_voice::avatar::machine::output::{
 };
 use lk_agents_voice::avatar::machine::queue::Queue;
 use lk_agents_voice::avatar::{
-    AUDIO_STREAM_TOPIC, LOG, RPC_CLEAR_BUFFER, RPC_PLAYBACK_FINISHED, playback_method, stream_name,
+    AUDIO_STREAM_TOPIC, RPC_CLEAR_BUFFER, RPC_PLAYBACK_FINISHED, playback_method, stream_name,
 };
 use parking_lot::Mutex;
 use std::collections::BTreeMap;
@@ -117,17 +117,17 @@ impl Inner {
             return Err(RtcError::Closed("avatar output"));
         }
         let identity = ParticipantIdentity(self.destination.clone());
-        log::debug!(target: LOG, identity = self.destination.as_str(); "waiting for the remote participant");
+        log::debug!(target: lk_agents_abi::LOG_TARGET, identity = self.destination.as_str(); "waiting for the remote participant");
         while self.room.participant(&identity)?.is_none() {
             next_room_event(&mut events, "room").await?;
         }
         if let Some(kind) = self.wait_remote_track {
-            log::debug!(target: LOG, identity = self.destination.as_str(), kind = kind; "waiting for the remote track");
+            log::debug!(target: lk_agents_abi::LOG_TARGET, identity = self.destination.as_str(), kind = kind; "waiting for the remote track");
             while !self.remote_track_published(&identity, kind)? {
                 next_room_event(&mut events, "room").await?;
             }
         }
-        log::debug!(target: LOG, identity = self.destination.as_str(); "remote participant ready");
+        log::debug!(target: lk_agents_abi::LOG_TARGET, identity = self.destination.as_str(); "remote participant ready");
         Ok(())
     }
 
@@ -271,7 +271,7 @@ impl Inner {
                     && let Err(error) = given_up.close(&telemetry::Cx::NONE).await
                 {
                     outcome.send_modify(|closed| *closed = closed.and(Closed::Failed));
-                    log::error!(target: LOG, error = error.to_string().as_str();
+                    log::error!(target: lk_agents_abi::LOG_TARGET, error = error.to_string().as_str();
                         "failed to close avatar audio stream");
                 }
             });
@@ -284,7 +284,7 @@ impl Inner {
         for &base in report_routes(self.wait_playback_start) {
             let Ok(method) = playback_method(base, &token) else { continue };
             if let Err(error) = self.room.local().unregister_rpc_method(method) {
-                log::error!(target: LOG, error = error.to_string().as_str(); "failed to retire avatar playback route");
+                log::error!(target: lk_agents_abi::LOG_TARGET, error = error.to_string().as_str(); "failed to retire avatar playback route");
             }
         }
     }
@@ -342,7 +342,7 @@ impl Inner {
                 && let Err(error) = writer.close(&telemetry::Cx::NONE).await
             {
                 outcome.send_modify(|closed| *closed = closed.and(Closed::Failed));
-                log::error!(target: LOG, error = error.to_string().as_str();
+                log::error!(target: lk_agents_abi::LOG_TARGET, error = error.to_string().as_str();
                         "failed to close avatar audio stream");
             }
         });
@@ -405,7 +405,7 @@ impl Drop for DataStreamAudioOutput {
 
 fn observe_close(closed: Closed) -> Closed {
     if closed != Closed::Clean {
-        log::error!("avatar output cleanup did not settle cleanly: {closed:?}");
+        log::error!(target: lk_agents_abi::LOG_TARGET, "avatar output cleanup did not settle cleanly: {closed:?}");
     }
     closed
 }
@@ -609,7 +609,7 @@ impl AudioOutput for DataStreamAudioOutput {
     }
 
     fn pause(&self) {
-        log::warn!(target: LOG,
+        log::warn!(target: lk_agents_abi::LOG_TARGET,
             "pause is not supported by DataStreamAudioOutput, disable `VoiceSession.resume_false_interruption` if you are using an avatar plugin.");
     }
 

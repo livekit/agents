@@ -22,40 +22,33 @@ pub const MEMORY_WARN_COOLDOWN: Duration = Duration::from_secs(120);
 /// Warn again before the cooldown when usage grew this much since the last warning.
 pub const MEMORY_WARN_RESET_DELTA_MB: f64 = 50.0;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Level {
-    Debug = 10,
-    Info = 20,
-    Warning = 30,
-    Error = 40,
+/// What a runner's diagnostics name: its process and the job it runs.
+#[derive(Clone, Debug, Default)]
+pub struct RunnerFields {
+    pub pid: Option<u32>,
+    pub job_id: Option<String>,
+    pub room: Option<String>,
+    pub room_id: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub enum ExtraValue {
-    Int(i64),
-    Float(f64),
-    Str(String),
-    Bool(bool),
+/// A line on the `livekit.agents` logger naming the runner (`pid`, `job_id`, `room`, `room_id`)
+/// after its own key-values.
+macro_rules! runner_log {
+    ($runner:expr, $level:expr $(, $key:ident $(:$capture:tt)? = $value:expr)* ; $($message:tt)+) => {{
+        let runner: $crate::ipc::RunnerFields = $runner;
+        log::log!(
+            target: lk_agents_abi::LOG_TARGET,
+            $level,
+            $($key $(:$capture)? = $value,)*
+            pid = runner.pid,
+            job_id = runner.job_id.as_deref(),
+            room = runner.room.as_deref(),
+            room_id = runner.room_id.as_deref();
+            $($message)+
+        )
+    }};
 }
-
-/// A log record's extra fields; the host adds the process's own after them.
-pub type Extra = Vec<(&'static str, ExtraValue)>;
-
-/// The fields as the host's log record takes them.
-pub fn extra_fields(extra: Extra) -> serde_json::Map<String, serde_json::Value> {
-    extra
-        .into_iter()
-        .map(|(key, value)| {
-            let value = match value {
-                ExtraValue::Int(v) => v.into(),
-                ExtraValue::Float(v) => v.into(),
-                ExtraValue::Str(v) => v.into(),
-                ExtraValue::Bool(v) => v.into(),
-            };
-            (key.to_owned(), value)
-        })
-        .collect()
-}
+pub(crate) use runner_log;
 
 #[derive(Clone, Debug)]
 pub struct SupervisorOptions {
@@ -210,9 +203,11 @@ impl WarnGate {
     }
 }
 
-/// Where the supervisor's diagnostics go: the executor's logger in the host language.
+/// What the supervisor's diagnostics name and whom it tells the runner is released.
 pub trait SupervisorCallbacks: Send + Sync + 'static {
-    fn log(&self, level: Level, msg: &str, extra: Extra);
+    fn runner(&self) -> RunnerFields {
+        RunnerFields::default()
+    }
     /// The runner ended and its supervision is over: the host's handle can go.
     fn release(&self) {}
 }
@@ -375,7 +370,7 @@ async fn refuse(
     mut commands: mpsc::Receiver<Command>,
     status: watch::Sender<Status>,
 ) {
-    host.log(Level::Error, &format!("launch failed before starting a runner: {cause}"), vec![]);
+    runner_log!(host.runner(), log::Level::Error; "launch failed before starting a runner: {cause}");
     status.send_modify(|status| status.launched = Some(Err(cause.clone())));
     commands.close();
     while let Some(command) = commands.recv().await {
@@ -540,7 +535,7 @@ impl Driver {
         if let Some(mut sample) = self.sampling.take()
             && tokio::time::timeout(secs(self.opts.close_timeout), &mut sample).await.is_err()
         {
-            self.log(Level::Error, "memory sample did not settle; retaining the runner's host");
+            runner_log!(self.host.runner(), log::Level::Error; "memory sample did not settle; retaining the runner's host");
             self.status.send_modify(|s| s.incomplete = true);
             let _ = sample.await;
         }
@@ -669,10 +664,6 @@ impl Driver {
         .min()
     }
 
-    fn log(&self, level: Level, msg: &str) {
-        self.host.log(level, msg, Vec::new());
-    }
-
     fn reply_init(&mut self, result: Result<Option<Duration>, InitError>) {
         if let Some(init) = self.init_reply.take() {
             let _ = init.send(result);
@@ -693,7 +684,7 @@ impl Driver {
             return;
         }
         self.initialized_requested = true;
-        self.log(Level::Info, &format!("initializing {}", self.opts.runner));
+        runner_log!(self.host.runner(), log::Level::Info; "initializing {}", self.opts.runner);
         self.send(ToChild::Hello(hello));
         if self.reader_closed {
             self.reply_init(Err(InitError::Closed));
@@ -780,9 +771,7 @@ impl Driver {
         (self.next_ping, self.pong_deadline, self.next_sample) = (None, None, None);
         self.close = Close::None;
         if exit.code != 0 && !exit.killed {
-            let message =
-                format!("{} exited with non-zero exit code {}", self.opts.runner, exit.code);
-            self.log(Level::Error, &message);
+            runner_log!(self.host.runner(), log::Level::Error; "{} exited with non-zero exit code {}", self.opts.runner, exit.code);
         }
     }
 
@@ -805,17 +794,12 @@ impl Driver {
         }
         if self.cleanup_at.is_some_and(|at| at <= now) {
             self.cleanup_at = None;
-            let message = format!("incomplete {} cleanup; retaining ownership", self.opts.runner);
-            self.log(Level::Error, &message);
+            runner_log!(self.host.runner(), log::Level::Error; "incomplete {} cleanup; retaining ownership", self.opts.runner);
             self.status.send_modify(|s| s.incomplete = true);
         }
         if self.startup_at.is_some_and(|at| at <= now) {
             self.startup_at = None;
-            let message = format!(
-                "{} launch did not enter initialization before its deadline",
-                self.opts.runner
-            );
-            self.log(Level::Error, &message);
+            runner_log!(self.host.runner(), log::Level::Error; "{} launch did not enter initialization before its deadline", self.opts.runner);
             self.end();
         }
         if let Some((_, at)) = self.init
@@ -846,7 +830,7 @@ impl Driver {
             && at <= now
         {
             self.pong_deadline = None;
-            self.log(Level::Error, &format!("{} is unresponsive, stopping it", self.opts.runner));
+            runner_log!(self.host.runner(), log::Level::Error; "{} is unresponsive, stopping it", self.opts.runner);
             self.end();
         }
         if let Some(at) = self.next_sample
@@ -865,16 +849,13 @@ impl Driver {
         match self.close {
             Close::Ack(at) if at <= now => {
                 let action = if self.stop() { "stopping it" } else { "waiting for it" };
-                let message =
-                    format!("{} did not ack shutdown in time, {action}", self.opts.runner);
-                self.log(Level::Error, &message);
+                runner_log!(self.host.runner(), log::Level::Error; "{} did not ack shutdown in time, {action}", self.opts.runner);
                 self.close = Close::ShuttingDown(now + secs(self.opts.close_timeout));
                 self.advance_close();
             }
             Close::ShuttingDown(at) | Close::Exit(at) if at <= now => {
                 let action = if self.stop() { "stopping it" } else { "waiting for it" };
-                let message = format!("{} did not exit in time, {action}", self.opts.runner);
-                self.log(Level::Error, &message);
+                runner_log!(self.host.runner(), log::Level::Error; "{} did not exit in time, {action}", self.opts.runner);
                 self.close = Close::Waiting;
             }
             _ => {}
@@ -898,8 +879,7 @@ impl Driver {
             }
             ToParent::ShuttingDown => self.on_shutting_down(now),
             ToParent::Exiting { reason } => {
-                let extra = vec![("reason", ExtraValue::Str(reason))];
-                self.host.log(Level::Info, &format!("{} exiting", self.opts.runner), extra);
+                runner_log!(self.host.runner(), log::Level::Info, reason = reason.as_str(); "{} exiting", self.opts.runner);
             }
             ToParent::JobAccepted { request_id, error } => self.on_job_accepted(request_id, error),
             ToParent::Ready { .. } => {
@@ -915,10 +895,7 @@ impl Driver {
             ToParent::Ready { error: None } => {
                 self.initialized = true;
                 let elapsed = now.saturating_sub(started);
-                let extra =
-                    vec![("elapsed_time", ExtraValue::Float(round(elapsed.as_secs_f64(), 2)))];
-                let message = format!("{} initialized", self.opts.runner);
-                self.host.log(Level::Info, &message, extra);
+                runner_log!(self.host.runner(), log::Level::Info, elapsed_time = round(elapsed.as_secs_f64(), 2); "{} initialized", self.opts.runner);
                 Ok(Some(elapsed))
             }
             _ => Err(InitError::Unexpected),
@@ -937,8 +914,7 @@ impl Driver {
         self.ping_unanswered = false;
         let delay = unix_now_ms().saturating_sub(sent_ms as i64);
         if delay as f64 > self.opts.high_ping_threshold * MILLIS_PER_SECOND {
-            let message = format!("{} is unresponsive", self.opts.runner);
-            self.host.log(Level::Warning, &message, vec![("delay", ExtraValue::Int(delay))]);
+            runner_log!(self.host.runner(), log::Level::Warn, delay = delay; "{} is unresponsive", self.opts.runner);
         }
         // a late pong does not revive a deadline that fired
         if self.pong_deadline.is_some() {
@@ -989,7 +965,7 @@ impl Driver {
         self.next_ping = None;
         self.pong_deadline = None;
         self.closing = true;
-        self.log(Level::Error, &format!("invalid IPC message: {failure}"));
+        runner_log!(self.host.runner(), log::Level::Error; "invalid IPC message: {failure}");
         if self.init.take().is_some() {
             let error = match *failure {
                 ProtocolError::Channel(ChannelError::Version(theirs)) => InitError::Version(theirs),
@@ -1051,12 +1027,11 @@ impl Driver {
         let forced = self.runner.stop();
         if !std::mem::replace(&mut self.stopped, true) {
             let runner = &self.opts.runner;
-            let message = if forced {
-                format!("stopping {runner}")
+            if forced {
+                runner_log!(self.host.runner(), log::Level::Info; "stopping {runner}");
             } else {
-                format!("waiting for {runner} to end")
-            };
-            self.log(Level::Info, &message);
+                runner_log!(self.host.runner(), log::Level::Info; "waiting for {runner} to end");
+            }
         }
         self.cleanup_at.get_or_insert(self.now() + secs(self.opts.close_timeout));
         forced
@@ -1083,38 +1058,45 @@ impl Driver {
         let Some(memory_mb) = sample else { return };
         let baseline = *self.baseline_mb.get_or_insert(memory_mb);
         let (warn_mb, limit_mb) = (self.opts.memory_warn_mb, self.opts.memory_limit_mb);
-        if limit_mb > 0.0 && memory_mb > limit_mb {
-            let extra = self.memory_extra(now, memory_mb, baseline);
-            let message = format!("{} exceeded memory limit, stopping it", self.opts.runner);
-            self.host.log(Level::Error, &message, extra);
-            self.end();
+        let over_limit = limit_mb > 0.0 && memory_mb > limit_mb;
+        let warning = if over_limit {
+            Some((
+                log::Level::Error,
+                format!("{} exceeded memory limit, stopping it", self.opts.runner),
+            ))
         } else if warn_mb > 0.0 && memory_mb > warn_mb && self.gate.should_warn(memory_mb, now) {
             // without a hard limit nothing is stopped: say so
             let advisory = match limit_mb <= 0.0 {
                 true => format!(" (advisory only, the {} will not be stopped)", self.opts.runner),
                 false => String::new(),
             };
-            let msg = format!(
+            let message = format!(
                 "{} memory usage is above the warning threshold{advisory}",
                 self.opts.runner
             );
-            let extra = self.memory_extra(now, memory_mb, baseline);
-            self.host.log(Level::Warning, &msg, extra);
+            Some((log::Level::Warn, message))
+        } else {
+            None
+        };
+        if let Some((level, message)) = warning {
+            runner_log!(
+                self.host.runner(),
+                level,
+                memory_usage_mb = round(memory_mb, 1),
+                memory_warn_mb = warn_mb,
+                memory_limit_mb = limit_mb,
+                uptime = round(now.as_secs_f64(), 1),
+                has_running_job = self.running_job,
+                baseline_memory_mb = round(baseline, 1),
+                growth_memory_mb = round(memory_mb - baseline, 1);
+                "{message}"
+            );
+        }
+        if over_limit {
+            self.end();
         }
         if !self.stopping() {
             self.next_sample = Some(now + MEMORY_MONITOR_INTERVAL);
         }
-    }
-
-    fn memory_extra(&self, now: Duration, memory_mb: f64, baseline_mb: f64) -> Extra {
-        vec![
-            ("memory_usage_mb", ExtraValue::Float(round(memory_mb, 1))),
-            ("memory_warn_mb", ExtraValue::Float(self.opts.memory_warn_mb)),
-            ("memory_limit_mb", ExtraValue::Float(self.opts.memory_limit_mb)),
-            ("uptime", ExtraValue::Float(round(now.as_secs_f64(), 1))),
-            ("has_running_job", ExtraValue::Bool(self.running_job)),
-            ("baseline_memory_mb", ExtraValue::Float(round(baseline_mb, 1))),
-            ("growth_memory_mb", ExtraValue::Float(round(memory_mb - baseline_mb, 1))),
-        ]
     }
 }

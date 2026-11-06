@@ -240,7 +240,7 @@ fn text_output(
     match factory.text_node(Arc::clone(&below)) {
         Ok(node) => Some(Arc::new(NodeTextOutput::new(node, below))),
         Err(e) => {
-            log::error!(target: "livekit.agents", error = e.to_string().as_str();
+            log::error!(target: lk_agents_abi::LOG_TARGET, error = e.to_string().as_str();
                     "failed to open the transcription_node");
             None
         }

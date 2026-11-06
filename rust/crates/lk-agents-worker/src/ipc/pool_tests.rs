@@ -8,7 +8,6 @@ use lk_agents_abi::invoke::CallContext;
 use lk_agents_abi::worker::ipc::JobCompletion;
 use lk_agents_abi::worker::ipc_host::{JobLauncher, LaunchReport, SupervisedJob};
 use lk_agents_abi::worker::types::{AcceptArguments, JobInfo, RunningJobInfo};
-use serde_json::{Map, Value};
 
 /// Processes are numbered in creation order; `fail_init` makes every initialize fail,
 /// `fail_launch` the first n launches.
@@ -66,15 +65,6 @@ impl JobLauncher for Numbered {
         _: &'a CallContext,
         _: JobCompletion,
     ) -> BoxFuture<'a, Result<(), HostError>> {
-        unreachable!()
-    }
-    fn log(
-        &self,
-        _: i32,
-        _: String,
-        _: Map<String, Value>,
-        _: Option<HostError>,
-    ) -> Result<(), HostError> {
         unreachable!()
     }
 }

@@ -533,7 +533,7 @@ impl RealtimeMachine {
                 code: done.error_code.clone(),
                 ..self.error(now, message, !fatal)
             };
-            log::error!(target: "livekit.agents", code = error.code.as_deref().unwrap_or(""); "{}", error.message);
+            log::error!(target: lk_agents_abi::LOG_TARGET, code = error.code.as_deref().unwrap_or(""); "{}", error.message);
             // Raised in the reference when fatal: the session stops, and reports it once.
             if fatal { step.fatal = Some(error) } else { step.events.push(Event::Error(error)) }
         }
@@ -574,7 +574,7 @@ impl RealtimeMachine {
         let error =
             RealtimeModelError { code: err.code.clone(), ..self.error(now, message, !fatal) };
         log::error!(
-            target: "livekit.agents",
+            target: lk_agents_abi::LOG_TARGET,
             code = err.code.as_deref().unwrap_or(""),
             error_type = err.type_.as_deref().unwrap_or("");
             "{}", error.message

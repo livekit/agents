@@ -26,8 +26,6 @@ pub type TransportFactory = Arc<dyn Fn(TurnDetectorModel) -> Arc<MountedTranspor
 /// `self._detector.emit("metrics_collected", ...)`.
 pub type MetricsCallback = Arc<dyn Fn(EotInferenceMetrics) + Send + Sync>;
 
-const LOG: &str = "livekit.agents";
-
 use lk_agents_net::clock::unix_now as now;
 
 fn pcm_frame(pcm: Vec<i16>, rate: u32, channels: u16) -> AudioFrame {
@@ -202,7 +200,7 @@ impl EotStream {
 
     fn warn(warnings: Vec<EotWarning>) {
         for warning in warnings {
-            log::warn!(target: LOG, "{}", sentence(&warning));
+            log::warn!(target: lk_agents_abi::LOG_TARGET, "{}", sentence(&warning));
         }
     }
 
@@ -229,7 +227,7 @@ impl EotStream {
                     cb(*m);
                 }
             }
-            SinkEvent::Warn(w) => log::warn!(target: LOG, "{}", sentence(&w)),
+            SinkEvent::Warn(w) => log::warn!(target: lk_agents_abi::LOG_TARGET, "{}", sentence(&w)),
             SinkEvent::End => {}
         }
     }
@@ -448,7 +446,7 @@ impl DetectorStream {
             }
             Some(f) if f != format => {
                 drop(inner);
-                log::error!(target: LOG, "a frame with a different audio format was already pushed");
+                log::error!(target: lk_agents_abi::LOG_TARGET, "a frame with a different audio format was already pushed");
                 return;
             }
             Some(_) => {}

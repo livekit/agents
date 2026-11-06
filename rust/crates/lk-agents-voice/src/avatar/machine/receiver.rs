@@ -10,7 +10,7 @@ use lk_agents_abi::voice::rtc::{ParticipantKind, StreamInfo};
 use lk_agents_media::AudioByteStream;
 
 use super::{
-    FinishedPayload, LOG, RPC_PLAYBACK_FINISHED, RPC_PLAYBACK_STARTED, Received, ReceiverEnd,
+    FinishedPayload, RPC_PLAYBACK_FINISHED, RPC_PLAYBACK_STARTED, Received, ReceiverEnd,
     playback_method, stream_segment,
 };
 
@@ -96,15 +96,15 @@ impl ReportAttempts {
             return ReportStep::Sent;
         }
         if code == RPC_UNSUPPORTED_METHOD && self.started {
-            log::error!(target: LOG, "remote participant didn't register lk.playback_started RPC");
+            log::error!(target: lk_agents_abi::LOG_TARGET, "remote participant didn't register lk.playback_started RPC");
             return ReportStep::Sent;
         }
         self.tried += 1;
         if !self.pending() {
-            log::error!(target: LOG, "failed to call {method} after {} retries", self.tried);
+            log::error!(target: lk_agents_abi::LOG_TARGET, "failed to call {method} after {} retries", self.tried);
             return ReportStep::Failed(ReceiverEnd::Failed(format!("RpcError {code}: {message}")));
         }
-        log::warn!(target: LOG, "failed to call {method}, retrying...");
+        log::warn!(target: lk_agents_abi::LOG_TARGET, "failed to call {method}, retrying...");
         ReportStep::RetryAfter(REPORT_RETRY_DELAY)
     }
 }

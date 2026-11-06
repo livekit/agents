@@ -101,7 +101,7 @@ impl lk_agents_abi::turn::inference::InferenceEot for AudioEot {
         let on_metrics = on_metrics.map(|observer| {
             Arc::new(move |metrics| {
                 if let Err(error) = observer.collected(metrics) {
-                    log::error!(target: "livekit.agents", "turn detector metrics observer failed: {error}");
+                    log::error!(target: lk_agents_abi::LOG_TARGET, "turn detector metrics observer failed: {error}");
                 }
             }) as MetricsCallback
         });

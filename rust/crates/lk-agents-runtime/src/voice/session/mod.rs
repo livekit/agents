@@ -885,7 +885,7 @@ impl VoiceSession {
         activation: u64,
     ) {
         if let Err(error) = scopes.discard(activation).await {
-            log::warn!("the refused agent toolsets could not close: {error}");
+            log::warn!(target: lk_agents_abi::LOG_TARGET, "the refused agent toolsets could not close: {error}");
         }
     }
 
@@ -1104,7 +1104,7 @@ impl<T: Send + 'static> Pusher<T> {
                 }
                 Ok(None) => break,
                 Err(e) => {
-                    log::error!("say(): the stream it speaks raised: {e}");
+                    log::error!(target: lk_agents_abi::LOG_TARGET, "say(): the stream it speaks raised: {e}");
                     break;
                 }
             }

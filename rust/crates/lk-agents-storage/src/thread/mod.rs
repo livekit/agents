@@ -544,12 +544,12 @@ impl Lane {
                         self.name(),
                         holder,
                     ));
-                    log::debug!(target: "livekit.agents", lane = self.name(), holder = holder; "waiting for the lane as its waiter");
+                    log::debug!(target: lk_agents_abi::LOG_TARGET, lane = self.name(), holder = holder; "waiting for the lane as its waiter");
                 }
                 self.set_waiter(holder).await?;
             }
             let Some(at) = poll.next(epoch.elapsed()) else {
-                log::debug!(target: "livekit.agents", lane = self.name(); "the lane was not released within {}s", opts.wait_timeout.as_secs_f64());
+                log::debug!(target: lk_agents_abi::LOG_TARGET, lane = self.name(); "the lane was not released within {}s", opts.wait_timeout.as_secs_f64());
                 return Err(StorageError::Rejected { running_task_id: None });
             };
             tokio::time::sleep_until(epoch + at).await;
@@ -729,7 +729,7 @@ impl Run {
         lease: LeaseAfterCommit,
         why: String,
     ) -> Result<Committed, StorageError> {
-        log::warn!(target: "livekit.agents", lane = self.lane.name(), runId = self.run_id.as_str(); "commit acknowledgment lost, resolving: {why}");
+        log::warn!(target: lk_agents_abi::LOG_TARGET, lane = self.lane.name(), runId = self.run_id.as_str(); "commit acknowledgment lost, resolving: {why}");
         let resolved = self.resolve(&commit, lease, RESOLVE_WAIT).await;
         if matches!(resolved, Err(StorageError::Uncertain(_))) {
             self.unresolved = Some((commit, lease));
@@ -831,7 +831,7 @@ impl Run {
             JournalEvent::RunEnded(RunEnded { outcome, reason: Some(reason.into()) }),
         );
         if let Err(e) = lease.release(Some((&self.run_id, &ended))).await {
-            log::warn!(target: "livekit.agents", lane = self.lane.name(), runId = self.run_id.as_str(); "run_ended could not be written after a failed run: {e}");
+            log::warn!(target: lk_agents_abi::LOG_TARGET, lane = self.lane.name(), runId = self.run_id.as_str(); "run_ended could not be written after a failed run: {e}");
         }
         Ok(())
     }

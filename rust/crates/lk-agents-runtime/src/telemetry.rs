@@ -189,7 +189,7 @@ impl lk_agents_abi::telemetry::host::Telemetry for Telemetry {
         let spawner = match crate::process::host_spawner() {
             Ok(spawner) => spawner,
             Err(error) => {
-                return log::warn!(target: "livekit.agents", "telemetry not started: {error}");
+                return log::warn!(target: lk_agents_abi::LOG_TARGET, "telemetry not started: {error}");
             }
         };
         let exporter = process.slot.install(|| {

@@ -147,7 +147,7 @@ impl Port for RemoteInteraction {
                 .await
                 .is_err()
         {
-            log::error!(target: "livekit.agents", "delegation cleanup incomplete");
+            log::error!(target: lk_agents_abi::LOG_TARGET, "delegation cleanup incomplete");
         }
     }
 

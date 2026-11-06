@@ -730,7 +730,7 @@ impl Aligned<'_> {
             }
             AlignedTranscriptEffect::Capture(text) => capture(self.leg, &text).await,
             AlignedTranscriptEffect::WarnUnaligned => log::warn!(
-                target: "livekit.agents",
+                target: lk_agents_abi::LOG_TARGET,
                 "no aligned transcript was returned from tts, forwarding the generated text \
                  without word timings"
             ),

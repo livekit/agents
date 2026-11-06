@@ -91,7 +91,7 @@ fn finish<M: Serialize, D: Serialize>(
                 "function call missing the corresponding function output, ignoring"
             }
         };
-        log::warn!(target: "livekit.agents", call_id = d.call_id.as_str(), function_name = d.tool_name.as_str(); "{message}");
+        log::warn!(target: lk_agents_abi::LOG_TARGET, call_id = d.call_id.as_str(), function_name = d.tool_name.as_str(); "{message}");
     }
     let data = serde_json::to_value(f.data)?;
     Ok((serialize_list(&f.messages)?, data))

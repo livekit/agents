@@ -43,11 +43,8 @@ pub use owner::{JobLaunch, JobSupervisor};
 pub use process::{ProcessExecutor, ProcessReceipt};
 pub use process_pool::ProcessPool;
 pub use supervisor::secs;
-pub use supervisor::{
-    Extra, ExtraValue, InitError, Level, ProtocolError, StartJobError, SupervisorOptions,
-    extra_fields,
-};
-pub use supervisor::{RunnerSupervisor, SupervisorCallbacks};
+pub use supervisor::{InitError, ProtocolError, StartJobError, SupervisorOptions};
+pub use supervisor::{RunnerFields, RunnerSupervisor, SupervisorCallbacks};
 pub use wire::{Hello, StartJob, ToChild, ToParent};
 
 /// The child's grace on top of the parent's `ping_timeout` before it calls itself orphaned.

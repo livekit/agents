@@ -79,7 +79,7 @@ pub(crate) fn parse_arguments(
         Ok(arguments) => arguments,
         Err(_) => {
             log::warn!(
-                target: "livekit.agents",
+                target: lk_agents_abi::LOG_TARGET,
                 call_id = call.call_id.as_str(),
                 tool_name = call.name.as_str();
                 "could not parse stored tool call arguments as a JSON object, using empty arguments"

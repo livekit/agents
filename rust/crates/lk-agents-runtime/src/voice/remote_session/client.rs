@@ -17,8 +17,6 @@ use tokio::sync::oneshot;
 use super::{ClientSink, SessionTransport, proto, request_name};
 use proto::agent_session_message::Message;
 
-const LOG: &str = "livekit.agents";
-
 /// Why a client request did not produce a response, as the exception the host raises.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum RequestError {
@@ -179,7 +177,7 @@ impl RemoteSession {
         let (tx, rx) = oneshot::channel();
         if sh.pending.lock().insert(id.clone(), tx).is_some() {
             // unreachable with a working id mint; the displaced caller sees `Cancelled`
-            log::error!(target: LOG, request_id = id.as_str();
+            log::error!(target: lk_agents_abi::LOG_TARGET, request_id = id.as_str();
                 "duplicate remote session request id; cancelling the displaced caller");
         }
         let _unregister = Unregister { shared: sh, id: id.clone() };
@@ -194,7 +192,7 @@ impl RemoteSession {
             Ok(Ok(resp)) => resp,
             Ok(Err(_)) => return Err(RequestError::Cancelled),
             Err(_) => {
-                log::warn!(target: LOG, request_id = id.as_str(), request_type = kind, timeout = timeout.as_secs_f64();
+                log::warn!(target: lk_agents_abi::LOG_TARGET, request_id = id.as_str(), request_type = kind, timeout = timeout.as_secs_f64();
                     "remote session request timed out");
                 return Err(RequestError::Timeout);
             }
@@ -264,7 +262,7 @@ async fn client_recv_loop(
             Ok(Some(msg)) => msg,
             Ok(None) => return,
             Err(e) => {
-                log::warn!(target: LOG, error = e.to_string().as_str(); "error processing session message");
+                log::warn!(target: lk_agents_abi::LOG_TARGET, error = e.to_string().as_str(); "error processing session message");
                 return;
             }
         };

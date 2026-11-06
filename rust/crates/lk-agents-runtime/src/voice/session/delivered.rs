@@ -147,7 +147,7 @@ fn host_items(events: &dyn SessionEvents, items: &[ChatItem]) -> Vec<HostRef> {
         // A host that keeps no objects (a simulation's) has no history to read.
         Ok(_) => Vec::new(),
         Err(error) => {
-            log::warn!(target: "livekit.agents", error = error.to_string().as_str(); "the host made no history items");
+            log::warn!(target: lk_agents_abi::LOG_TARGET, error = error.to_string().as_str(); "the host made no history items");
             Vec::new()
         }
     }

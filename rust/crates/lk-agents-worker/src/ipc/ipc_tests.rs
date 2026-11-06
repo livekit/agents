@@ -11,9 +11,73 @@ use tokio::time::Instant;
 
 use super::child::watch_parent;
 use super::ipc_channel::{MAGIC, VERSION, memory};
-use super::supervisor::{Extra, MEMORY_WARN_COOLDOWN, MEMORY_WARN_RESET_DELTA_MB, WarnGate};
+use super::supervisor::{MEMORY_WARN_COOLDOWN, MEMORY_WARN_RESET_DELTA_MB, WarnGate};
 use super::*;
 use lk_agents_net::clock::unix_now_ms;
+
+/// Every `log` line the code under test writes, with its key-values as text.
+pub(super) mod logs {
+    use parking_lot::Mutex;
+    use std::sync::LazyLock;
+
+    #[derive(Clone, Debug)]
+    pub(crate) struct Line {
+        pub(crate) level: log::Level,
+        pub(crate) message: String,
+        pub(crate) fields: Vec<(String, String)>,
+    }
+
+    impl Line {
+        pub(crate) fn field(&self, key: &str) -> Option<&str> {
+            self.fields.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
+        }
+    }
+
+    static LINES: Mutex<Vec<Line>> = Mutex::new(Vec::new());
+    /// Woken on every line.
+    pub(crate) static LOGGED: LazyLock<tokio::sync::Notify> =
+        LazyLock::new(tokio::sync::Notify::new);
+
+    struct Fields(Vec<(String, String)>);
+
+    impl<'kvs> log::kv::VisitSource<'kvs> for Fields {
+        fn visit_pair(
+            &mut self,
+            key: log::kv::Key<'kvs>,
+            value: log::kv::Value<'kvs>,
+        ) -> Result<(), log::kv::Error> {
+            self.0.push((key.to_string(), value.to_string()));
+            Ok(())
+        }
+    }
+
+    struct Capture;
+
+    impl log::Log for Capture {
+        fn enabled(&self, _: &log::Metadata<'_>) -> bool {
+            true
+        }
+        fn log(&self, record: &log::Record<'_>) {
+            let mut fields = Fields(Vec::new());
+            let _ = record.key_values().visit(&mut fields);
+            let message = record.args().to_string();
+            LINES.lock().push(Line { level: record.level(), message, fields: fields.0 });
+            LOGGED.notify_waiters();
+        }
+        fn flush(&self) {}
+    }
+
+    /// Makes the capture the test process's logger.
+    pub(crate) fn capture() {
+        if log::set_logger(&Capture).is_ok() {
+            log::set_max_level(log::LevelFilter::Trace);
+        }
+    }
+
+    pub(crate) fn lines() -> Vec<Line> {
+        LINES.lock().clone()
+    }
+}
 
 mod supervision {
     // Supervision contracts over the socket: each pins a past bug of the process lifecycle.
@@ -40,10 +104,10 @@ mod supervision {
     }
 
     fn errors(host: &FakeHost) -> Vec<String> {
-        let logs = host.logs.lock();
-        logs.iter()
-            .filter(|(level, ..)| *level == Level::Error)
-            .map(|(_, m, _)| m.clone())
+        host.lines()
+            .into_iter()
+            .filter(|line| line.level == log::Level::Error)
+            .map(|line| line.message)
             .collect()
     }
 
@@ -224,13 +288,12 @@ mod supervision {
         })
         .await
         .unwrap();
-        let (level, extra) = host.find(warning).unwrap();
-        assert_eq!(level, Level::Warning);
-        let field = |name: &str| extra.iter().find(|(key, _)| *key == name).unwrap().1.clone();
-        assert_eq!(field("memory_usage_mb"), ExtraValue::Float(600.0));
-        assert_eq!(field("baseline_memory_mb"), ExtraValue::Float(100.0));
-        assert_eq!(field("growth_memory_mb"), ExtraValue::Float(500.0));
-        assert_eq!(field("has_running_job"), ExtraValue::Bool(true));
+        let line = host.find(warning).unwrap();
+        assert_eq!(line.level, log::Level::Warn);
+        assert_eq!(line.field("memory_usage_mb"), Some("600"));
+        assert_eq!(line.field("baseline_memory_mb"), Some("100"));
+        assert_eq!(line.field("growth_memory_mb"), Some("500"));
+        assert_eq!(line.field("has_running_job"), Some("true"));
     }
 
     /// What the child reads within `within`, pings skipped; `None` when it reads nothing else.
@@ -335,8 +398,8 @@ fn hello() -> Hello {
 
 /// The supervisor's diagnostics and the runner it launched, as the test drives them.
 struct FakeHost {
-    logs: Mutex<Vec<(Level, String, Extra)>>,
-    logged: tokio::sync::Notify,
+    /// The job the supervisor's lines name, telling this test's lines from the others'.
+    id: String,
     /// `stop()` calls.
     kills: AtomicUsize,
     /// A process ends when stopped (its end of the channel drops); a thread does not.
@@ -350,9 +413,10 @@ struct FakeHost {
 
 impl Default for FakeHost {
     fn default() -> Self {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        logs::capture();
         Self {
-            logs: Mutex::default(),
-            logged: tokio::sync::Notify::new(),
+            id: format!("AJ_test_{}", NEXT.fetch_add(1, Ordering::Relaxed)),
             kills: AtomicUsize::new(0),
             forced: AtomicBool::new(true),
             samples: Mutex::default(),
@@ -364,9 +428,8 @@ impl Default for FakeHost {
 }
 
 impl SupervisorCallbacks for Arc<FakeHost> {
-    fn log(&self, level: Level, msg: &str, extra: Extra) {
-        self.logs.lock().push((level, msg.to_owned(), extra));
-        self.logged.notify_one();
+    fn runner(&self) -> RunnerFields {
+        RunnerFields { job_id: Some(self.id.clone()), ..RunnerFields::default() }
     }
 
     fn release(&self) {
@@ -419,13 +482,18 @@ impl RunnerExecutor for FakeExecutor {
 }
 
 impl FakeHost {
-    fn messages(&self) -> Vec<String> {
-        self.logs.lock().iter().map(|(_, m, _)| m.clone()).collect()
+    /// The supervisor's lines naming this host's job.
+    fn lines(&self) -> Vec<logs::Line> {
+        let lines = logs::lines().into_iter();
+        lines.filter(|line| line.field("job_id") == Some(self.id.as_str())).collect()
     }
 
-    fn find(&self, msg: &str) -> Option<(Level, Extra)> {
-        let logs = self.logs.lock();
-        logs.iter().find(|(_, m, _)| m == msg).map(|(l, _, e)| (*l, e.clone()))
+    fn messages(&self) -> Vec<String> {
+        self.lines().into_iter().map(|line| line.message).collect()
+    }
+
+    fn find(&self, msg: &str) -> Option<logs::Line> {
+        self.lines().into_iter().find(|line| line.message == msg)
     }
 
     /// The runner ends with `code`, killed when a forced stop came first.
@@ -545,8 +613,8 @@ async fn initialize_sends_hello_and_logs_the_elapsed_time() {
     let elapsed = init.await.unwrap().unwrap().unwrap();
     assert!(elapsed >= Duration::from_millis(1234));
     assert_eq!(host.messages(), ["initializing process", "process initialized"]);
-    let (_, extra) = host.find("process initialized").unwrap();
-    assert_eq!(extra, vec![("elapsed_time", ExtraValue::Float(1.23))]);
+    let line = host.find("process initialized").unwrap();
+    assert_eq!(line.field("elapsed_time"), Some("1.23"));
 }
 
 // Catches: a child that failed to initialize, speaks another version, or answers out of turn
@@ -624,10 +692,10 @@ async fn pings_on_the_interval_and_warns_on_a_late_pong() {
     while host.find("process is unresponsive").is_none() {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    let (level, extra) = host.find("process is unresponsive").unwrap();
-    assert_eq!(level, Level::Warning);
-    let ExtraValue::Int(delay) = extra[0].1 else { panic!() };
-    assert!(extra[0].0 == "delay" && delay >= 2_000);
+    let line = host.find("process is unresponsive").unwrap();
+    assert_eq!(line.level, log::Level::Warn);
+    let delay: i64 = line.field("delay").unwrap().parse().unwrap();
+    assert!(delay >= 2_000);
 
     write(&child, &ToParent::Pong { sent_ms: unix_now_ms() as u64 }).await.unwrap();
     tokio::time::sleep(Duration::from_millis(10)).await;
@@ -665,8 +733,8 @@ async fn missing_pongs_kill_the_process_after_ping_timeout() {
         killed_at >= Duration::from_secs(150) && killed_at < Duration::from_secs(151),
         "{killed_at:?}"
     );
-    let (level, _) = host.find("process is unresponsive, stopping it").unwrap();
-    assert_eq!(level, Level::Error);
+    let line = host.find("process is unresponsive, stopping it").unwrap();
+    assert_eq!(line.level, log::Level::Error);
     drop(drain);
 }
 
@@ -690,9 +758,10 @@ async fn shutdown_waits_for_the_ack_and_the_exit() {
     finish(&sup, &host, 0).await;
     close.await.unwrap();
     assert_eq!(host.kills.load(Ordering::SeqCst), 0);
-    let (level, extra) = host.find("process exiting").unwrap();
-    assert_eq!((level, extra), (Level::Info, vec![("reason", ExtraValue::Str("shutdown".into()))]));
-    assert!(host.logs.lock().iter().all(|(l, _, _)| *l != Level::Error), "{:?}", host.messages());
+    let line = host.find("process exiting").unwrap();
+    assert_eq!((line.level, line.field("reason")), (log::Level::Info, Some("shutdown")));
+    let errors = host.lines().into_iter().filter(|line| line.level == log::Level::Error);
+    assert_eq!(errors.count(), 0, "{:?}", host.messages());
     assert!(host.released.load(Ordering::SeqCst));
 }
 
@@ -791,18 +860,18 @@ async fn a_native_memory_sample_enforces_the_process_limit() {
     host.samples.lock().push_back(Some(600.0));
     sup.supervise().await;
     let message = "process exceeded memory limit, stopping it";
-    let (level, _) = tokio::time::timeout(Duration::from_secs(1), async {
+    let line = tokio::time::timeout(Duration::from_secs(1), async {
         loop {
-            let notified = host.logged.notified();
-            if let Some(log) = host.find(message) {
-                break log;
+            let notified = logs::LOGGED.notified();
+            if let Some(line) = host.find(message) {
+                break line;
             }
             notified.await;
         }
     })
     .await
     .expect("native sampler reports the memory limit");
-    assert_eq!(level, Level::Error);
+    assert_eq!(line.level, log::Level::Error);
     assert_eq!(host.kills.load(Ordering::SeqCst), 1);
 }
 

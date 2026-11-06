@@ -129,7 +129,7 @@ impl PublishedOutput {
         let publications = match self.participant.track_publications() {
             Ok(publications) => publications,
             Err(error) => {
-                log::error!(target: "livekit.agents", "background audio publication lookup failed: {error}");
+                log::error!(target: lk_agents_abi::LOG_TARGET, "background audio publication lookup failed: {error}");
                 return;
             }
         };
@@ -139,7 +139,7 @@ impl PublishedOutput {
         if let Err(error) =
             self.participant.unpublish_track(&telemetry::Cx::NONE, publication.sid()).await
         {
-            log::error!(target: "livekit.agents", "background audio publication cleanup failed: {error}");
+            log::error!(target: lk_agents_abi::LOG_TARGET, "background audio publication cleanup failed: {error}");
         }
     }
 }
@@ -562,7 +562,7 @@ impl Source {
             ),
             Ok(None) => Fetched::Ended,
             Err(err) => {
-                log::error!("background audio stream failed: {err}");
+                log::error!(target: lk_agents_abi::LOG_TARGET, "background audio stream failed: {err}");
                 Fetched::Ended
             }
         }
@@ -598,7 +598,7 @@ impl Source {
                 Input::Stream(stream) => stream.close(&telemetry::Cx::NONE).await,
                 Input::File(mut file) => {
                     if let Err(error) = file.close().await {
-                        log::warn!("background audio cleanup incomplete: {error}");
+                        log::warn!(target: lk_agents_abi::LOG_TARGET, "background audio cleanup incomplete: {error}");
                     }
                 }
                 Input::Closed => {}
@@ -636,7 +636,7 @@ impl FileInput {
             Ok(Some(Ok(pcm))) => Fetched::Pcm(pcm, rate, channels),
             Err(_) => Fetched::TimedOut,
             Ok(Some(Err(err))) => {
-                log::error!("background audio decode failed: {err}");
+                log::error!(target: lk_agents_abi::LOG_TARGET, "background audio decode failed: {err}");
                 Fetched::Ended
             }
             Ok(None) => Fetched::Ended,
@@ -770,7 +770,7 @@ impl lk_agents_abi::voice::background_audio::BackgroundAudioPlayer for Backgroun
             let sink = source.clone();
             let pump = spawn_owned((&this.tasks, this.spawner.as_ref()), async move {
                 if let Err(err) = engine.pump(sink, stop_rx).await {
-                    log::error!("background audio capture failed: {err}");
+                    log::error!(target: lk_agents_abi::LOG_TARGET, "background audio capture failed: {err}");
                 }
             });
             *output = Some(PublishedOutput {

@@ -3,9 +3,6 @@
 mod load;
 pub use load::{DefaultLoadCalc, LoadInputs, WorkerStatus};
 
-/// Logger shared by native worker diagnostics and host adapters.
-pub(crate) const LOG: &str = "livekit.agents";
-
 pub mod config;
 pub mod http;
 pub mod hw;

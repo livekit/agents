@@ -15,7 +15,7 @@ use lk_agents_voice::avatar::machine::receiver::{
     PlaybackReport, ReaderState, ReceiverState, ReportStep, frame_size,
 };
 use lk_agents_voice::avatar::{
-    AUDIO_STREAM_TOPIC, LOG, RPC_CLEAR_BUFFER, Received, ReceiverEnd, STREAM_IDLE_TIMEOUT,
+    AUDIO_STREAM_TOPIC, RPC_CLEAR_BUFFER, Received, ReceiverEnd, STREAM_IDLE_TIMEOUT,
 };
 use parking_lot::Mutex;
 use std::num::NonZeroU32;
@@ -151,7 +151,7 @@ impl RxInner {
             (state.cleared(), state.superseded())
         };
         if cleared {
-            log::debug!(target: LOG, stream_id = stream_id; "audio stream ended early after clear_buffer");
+            log::debug!(target: lk_agents_abi::LOG_TARGET, stream_id = stream_id; "audio stream ended early after clear_buffer");
             return;
         }
         let reason = if superseded {
@@ -159,7 +159,7 @@ impl RxInner {
         } else {
             format!("idle for {}s", STREAM_IDLE_TIMEOUT.as_secs())
         };
-        log::warn!(target: LOG, stream_id = stream_id; "audio stream ended before its trailer arrived ({reason})");
+        log::warn!(target: lk_agents_abi::LOG_TARGET, stream_id = stream_id; "audio stream ended before its trailer arrived ({reason})");
     }
 
     /// Closes the stream within the host teardown bound; a failed cleanup fails the read too.
@@ -264,7 +264,7 @@ impl RxInner {
         while let Some(report) = rx.recv().await {
             let mut attempts = report.attempts(self.rpc_max_retries);
             while attempts.pending() {
-                log::debug!(target: LOG, payload = report.payload.as_str(); "notifying {}", report.method);
+                log::debug!(target: lk_agents_abi::LOG_TARGET, payload = report.payload.as_str(); "notifying {}", report.method);
                 let (code, message) = self
                     .room
                     .local()
@@ -464,7 +464,7 @@ impl DataStreamAudioReceiver {
         if retired.streams_registered
             && let Err(error) = self.inner.room.unregister_byte_stream_handler(AUDIO_STREAM_TOPIC)
         {
-            log::warn!(target: LOG, "avatar receive handler could not unregister: {error}");
+            log::warn!(target: lk_agents_abi::LOG_TARGET, "avatar receive handler could not unregister: {error}");
         }
         if let Some((caller, id)) = retired.route {
             self.inner.room.rpc_router().remove(&caller, id);

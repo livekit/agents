@@ -49,7 +49,7 @@ async fn write_profile(audio: &str, profile: Vec<u8>) {
         Ok(Err(error)) => Some(error),
         Err(_) => Some("the write panicked".to_owned()),
     } {
-        log::debug!(target: "livekit.agents", "the job's profile was not written: {error}");
+        log::debug!(target: lk_agents_abi::LOG_TARGET, "the job's profile was not written: {error}");
     }
 }
 
@@ -83,7 +83,7 @@ pub async fn export(
             exporter.record(Record::Log(record));
         }
         if !exporter.flush(Some(key), deadline.saturating_duration_since(clock.now())).await {
-            log::warn!(target: "livekit.agents", "the session's telemetry was not all sent in time");
+            log::warn!(target: lk_agents_abi::LOG_TARGET, "the session's telemetry was not all sent in time");
         }
         if exporter.job_disabled(key) {
             return Ok(());
@@ -106,7 +106,7 @@ pub async fn export(
     let profile = profile.filter(|profile| {
         let fits = profile.len() <= crate::profile::UPLOAD_BYTES;
         if send_profile && !fits {
-            log::debug!(target: "livekit.agents", "the job's profile is too large to upload");
+            log::debug!(target: lk_agents_abi::LOG_TARGET, "the job's profile is too large to upload");
         }
         send_profile && fits
     });
@@ -114,7 +114,7 @@ pub async fn export(
     if recording::upload(cloud, &upload, profile.as_deref(), clock, limit).await?
         == Uploaded::Disabled
     {
-        log::warn!(target: "livekit.agents", "session recording is disabled by the project owner");
+        log::warn!(target: lk_agents_abi::LOG_TARGET, "session recording is disabled by the project owner");
         if let Some(exporter) = exporter {
             exporter.disable_job(key);
         }

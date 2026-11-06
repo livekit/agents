@@ -84,7 +84,7 @@ impl Inner {
                     inner.env.clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
                 let closed = source.close(deadline).await;
                 if !matches!(closed, lk_agents_abi::Closed::Clean) {
-                    log::error!("the run's source cleanup missed its deadline: {closed:?}");
+                    log::error!(target: lk_agents_abi::LOG_TARGET, "the run's source cleanup missed its deadline: {closed:?}");
                 }
             }
             let cleanup = match inner.resources.get() {
@@ -168,7 +168,7 @@ impl Inner {
                     }
                 }
                 Ok(Some(Message::Incomplete(pending))) => {
-                    log::error!("the run's cleanup missed its deadline: {pending:?}");
+                    log::error!(target: lk_agents_abi::LOG_TARGET, "the run's cleanup missed its deadline: {pending:?}");
                 }
                 other => {
                     drop(input);
@@ -279,7 +279,7 @@ impl stream::RunStream for RunStream {
         let closing = <Self as stream::RunStream>::aclose(self);
         Box::pin(async move {
             if let Err(error) = closing.await {
-                log::warn!("the failed stream could not close: {error}");
+                log::warn!(target: lk_agents_abi::LOG_TARGET, "the failed stream could not close: {error}");
             }
         })
     }

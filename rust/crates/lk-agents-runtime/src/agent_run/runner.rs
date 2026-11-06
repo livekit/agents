@@ -164,7 +164,7 @@ impl AgentRunner for Runner {
         match reported {
             Some(Ok(())) => Ok(()),
             Some(Err(ProgressRefused::Full)) => {
-                log::warn!(target: "livekit.agents", "invocation {invocation_id}: a progress update was dropped, {PROGRESS_QUEUE} are waiting");
+                log::warn!(target: lk_agents_abi::LOG_TARGET, "invocation {invocation_id}: a progress update was dropped, {PROGRESS_QUEUE} are waiting");
                 Ok(())
             }
             None | Some(Err(ProgressRefused::Ended)) => {

@@ -361,7 +361,6 @@ crates.
 lk-agents-runtime/src/
   lib.rs          module list; re-exports only the implementations lk-agents-py selects
   process.rs      process Tokio runtime, fork guard, the `ProcessEnv` it lends
-  logging.rs      bounded log writer; callers receive the ABI `LogWriter` through `ProcessEnv`
   tcp.rs          the console's TCP connector (a boundary adapter outside the executors)
   monotone.rs     a level-triggered cell whose value only moves forward (speech and playout marks)
   host/           HostInvoker: invocation lifecycle, scope admission, owned callback tasks
@@ -2341,9 +2340,9 @@ Host adapters do not implement IPC loops, supervision or pool policy.
 The host's port is the launcher (`ipc.JobLauncher`): `_core_launch(endpoint, launch)`
 starts the process (`multiprocessing`, the forkserver's preloads) or the job thread
 and reports it on `launch` (`_core.JobLaunch`: a process's receipt, a thread's
-return); `_core_completed` finishes the start method's bookkeeping;
-`_core_log` writes the supervisor's diagnostics, which already name the pid and
-the job. Everything else is the native `JobSupervisor` the pool creates and drives:
+return); `_core_completed` finishes the start method's bookkeeping. The
+supervisor's diagnostics are ordinary log lines naming the pid and the job
+(`pid`, `job_id`, `room`, `room_id`). Everything else is the native `JobSupervisor` the pool creates and drives:
 
 | State | Meaning |
 | --- | --- |
@@ -2461,25 +2460,23 @@ Each process writes its own logs to inherited stdout. Logs do not travel over
 the IPC control socket. Rust uses the structured `log` facade:
 
 ```rust
-log::warn!(target: "livekit.agents", lane = lane.as_str(); "the lease was lost");
+log::warn!(target: lk_agents_abi::LOG_TARGET, lane = lane.as_str(); "the lease was lost");
 ```
+
+Every line names the one `LOG_TARGET` (Python's `livekit.agents` logger) and carries its
+fields as key-values, never formatted into the message.
 
 `lk-agents-py` queues each record without taking the GIL (bounded; a full queue
 drops records and the drain reports how many) and one drain thread per process
 forwards them, in order and stamped when they were logged, to the Python logger
-of their target, with structured keys as `extra`. So code anywhere, sans-I/O
-cores included, logs freely, even under a lock. `_core.flush_logs()` waits for
-the queue (tests at their boundaries; the interpreter at exit). This is the one
+of their target, with structured keys as `extra` (integers, floats, booleans and strings keep
+their type; a `None` value is left out; an `exc_text` key becomes the record's formatted
+exception). So code anywhere, sans-I/O
+cores included, logs freely, even under a lock. `_core.flush_logs()` waits, without polling, until
+the drain forwarded every line queued before it (tests at their boundaries; the interpreter at
+exit). This is the one
 host entry outside HostInvoker: a record carries no invocation and settles nothing. Logs are observations, not protocol messages or
 inputs to decision policy.
-
-The runtime owns a bounded writer for worker lifecycle logs and process-specific
-host logging callbacks. The worker receives its ABI `LogWriter` through
-`ProcessEnv`; it owns no logging thread or process-global queue. Submission does
-not wait for the writer, and the next delivered record reports any drops. The
-writer follows the runtime's process ownership guard and is recreated after a
-fork. Host callbacks retain their job/process fields and exception details;
-ordinary Rust records still reach Python through the `log` facade above.
 
 ## Telemetry
 

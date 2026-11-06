@@ -61,7 +61,7 @@ pub fn event_loop_blocked(
     let frames = stack.as_deref().map(format_frames);
     let message =
         formatted_message("event loop blocked for", duration, frames.as_deref(), import.as_deref());
-    log::warn!(target: "livekit.agents", "{message}");
+    log::warn!(target: lk_agents_abi::LOG_TARGET, "{message}");
     let stack = frames.map(|frames| frames.join("\n"));
     let start = now.saturating_sub(u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX));
     let span = telemetry::start_at(

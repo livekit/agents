@@ -761,7 +761,7 @@ impl lk_agents_abi::recorder::SessionRecorder for SessionRecorder {
             Ok(_) => Ok(()),
             Err(RecordingFailure::IncompleteCleanup) => {
                 if !self.shared.cleanup_reported.swap(true, Ordering::AcqRel) {
-                    log::error!("recording cleanup incomplete; runtime retains the native worker");
+                    log::error!(target: lk_agents_abi::LOG_TARGET, "recording cleanup incomplete; runtime retains the native worker");
                 }
                 Ok(())
             }

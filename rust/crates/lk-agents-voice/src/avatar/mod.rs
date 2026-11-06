@@ -9,7 +9,6 @@ pub const RPC_CLEAR_BUFFER: &str = "lk.clear_buffer";
 pub const RPC_PLAYBACK_FINISHED: &str = "lk.playback_finished";
 pub const RPC_PLAYBACK_STARTED: &str = "lk.playback_started";
 pub const AUDIO_STREAM_TOPIC: &str = "lk.audio_stream";
-pub const LOG: &str = "livekit.agents";
 
 pub fn stream_name(segment: PlaybackSegment) -> String {
     format!("AUDIO_{}_{}", segment.attachment, segment.segment)

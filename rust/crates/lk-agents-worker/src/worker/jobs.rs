@@ -104,14 +104,7 @@ impl Worker {
             return;
         }
         self.draining = true;
-        self.host.logger().emit(
-            log::Level::Info,
-            format!(
-                "draining worker id={} timeout={timeout:?} agent_name={agent_name}",
-                self.worker_id,
-                agent_name = self.cfg.agent_name
-            ),
-        );
+        log::info!(target: lk_agents_abi::LOG_TARGET, worker_id = self.worker_id.as_str(), timeout:? = timeout, agent_name = self.cfg.agent_name.as_str(); "draining worker");
         // The draining status goes out immediately, before the wait.
         self.queue(update_worker_draining(self.active.len() as u32), outbox);
         if let Some(d) = timeout.filter(|d| !d.is_zero()) {
@@ -211,12 +204,7 @@ impl Worker {
             let cloud = s.edition == pb::server_info::Edition::Cloud as i32;
             (s.region, s.protocol, cloud)
         });
-        self.host.logger().emit(
-            log::Level::Info,
-            format!(
-                "registered worker id={} deployment={} url={} region={region} protocol={protocol} agent_name={agent_name}",
-                resp.worker_id, self.cfg.deployment, self.cfg.ws_url, agent_name = self.cfg.agent_name),
-        );
+        log::info!(target: lk_agents_abi::LOG_TARGET, worker_id = resp.worker_id.as_str(), deployment = self.cfg.deployment.as_str(), url = self.cfg.ws_url.as_str(), region = region.as_str(), protocol = protocol, agent_name = self.cfg.agent_name.as_str(); "registered worker");
         self.notify(WorkerNotification::Registered(RegisteredInfo {
             worker_id: resp.worker_id,
             region,
@@ -340,15 +328,7 @@ impl Worker {
         }
         p.state = PendingState::AwaitingUser;
         let request = JobRequest { job: super::job_info(&p.job), resuming: p.resuming };
-        self.host.logger().emit(
-            log::Level::Info,
-            format!(
-                "received job request job_id={} dispatch_id={} room={} resuming={} agent_name={agent_name}",
-                request.job.id,
-                request.job.dispatch_id,
-                request.room_name(),
-                request.resuming, agent_name = self.cfg.agent_name),
-        );
+        log::info!(target: lk_agents_abi::LOG_TARGET, job_id = request.job.id.as_str(), dispatch_id = request.job.dispatch_id.as_str(), room = request.room_name(), resuming = request.resuming, agent_name = self.cfg.agent_name.as_str(); "received job request");
         self.ask_user(slot, request);
     }
 
@@ -447,10 +427,7 @@ impl Worker {
                 self.dispositions.insert(job_id.clone(), JobStatus::JsFailed);
             }
             self.queue(update_job(&job_id, JobStatus::JsFailed), outbox);
-            self.host.logger().emit(
-                log::Level::Warn,
-                format!("received assignment for an unknown job job_id={job_id} agent_name={agent_name}", agent_name = self.cfg.agent_name),
-            );
+            log::warn!(target: lk_agents_abi::LOG_TARGET, job_id = job_id.as_str(), agent_name = self.cfg.agent_name.as_str(); "received assignment for an unknown job");
             return;
         };
         let slot = self.pending[idx].slot;
@@ -488,13 +465,7 @@ impl Worker {
         let Some(p) = self.pending.iter().find(|p| p.slot == slot) else { return };
         let job_id = p.job.id.clone();
         self.drop_pending(slot);
-        self.host.logger().emit(
-            log::Level::Warn,
-            format!(
-                "assignment for job {job_id} timed out agent_name={agent_name}",
-                agent_name = self.cfg.agent_name
-            ),
-        );
+        log::warn!(target: lk_agents_abi::LOG_TARGET, job_id = job_id.as_str(), agent_name = self.cfg.agent_name.as_str(); "job assignment timed out");
     }
 
     pub(super) fn on_launched(
@@ -529,14 +500,7 @@ impl Worker {
             Err(e) => {
                 self.dispositions.insert(p.job.id.clone(), JobStatus::JsFailed);
                 self.queue(update_job(&p.job.id, JobStatus::JsFailed), outbox);
-                self.host.logger().emit(
-                    log::Level::Error,
-                    format!(
-                        "failed to launch job job_id={} error={e} agent_name={agent_name}",
-                        p.job.id,
-                        agent_name = self.cfg.agent_name
-                    ),
-                );
+                log::error!(target: lk_agents_abi::LOG_TARGET, job_id = p.job.id.as_str(), agent_name = self.cfg.agent_name.as_str(); "failed to launch job: {e}");
             }
         }
     }
@@ -552,10 +516,7 @@ impl Worker {
             return;
         }
         if !self.active.iter().any(|j| j.job.id == job_id) {
-            self.host.logger().emit(
-                log::Level::Warn,
-                format!("job status for a job this worker does not have job_id={job_id} agent_name={agent_name}", agent_name = self.cfg.agent_name),
-            );
+            log::warn!(target: lk_agents_abi::LOG_TARGET, job_id = job_id.as_str(), agent_name = self.cfg.agent_name.as_str(); "job status for a job this worker does not have");
             return;
         }
         self.queue(update_job(&job_id, status), outbox);
@@ -570,10 +531,7 @@ impl Worker {
         let host = self.host.clone();
         self.operations.push(Box::pin(async move {
             if let Err(error) = host.terminate_job(id.clone()).await {
-                host.logger().emit(
-                    log::Level::Error,
-                    format!("failed to terminate job job_id={id} error={error}"),
-                );
+                log::error!(target: lk_agents_abi::LOG_TARGET, job_id = id.as_str(); "failed to terminate job: {error}");
             }
             Completion::Done
         }));
@@ -591,20 +549,12 @@ impl Worker {
         if self.previous_status != Some(status) {
             self.previous_status = Some(status);
             let full = status == WorkerStatus::Full;
-            self.host.logger().emit(
-                log::Level::Info,
-                format!(
-                    "{} load={} threshold={} agent_name={agent_name}",
-                    if full {
-                        "worker is at full capacity, marking as unavailable"
-                    } else {
-                        "worker is below capacity, marking as available"
-                    },
-                    inputs.effective_load(),
-                    inputs.load_threshold,
-                    agent_name = self.cfg.agent_name
-                ),
-            );
+            let message = if full {
+                "worker is at full capacity, marking as unavailable"
+            } else {
+                "worker is below capacity, marking as available"
+            };
+            log::info!(target: lk_agents_abi::LOG_TARGET, load = inputs.effective_load(), threshold = inputs.load_threshold, agent_name = self.cfg.agent_name.as_str(); "{message}");
         }
         self.queue(update_worker(status, self.worker_load, job_cnt), outbox);
     }

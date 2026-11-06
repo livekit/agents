@@ -390,7 +390,7 @@ impl LlmChunks {
                 Some(observed) = self.rx.recv() => self.step(observed.event, observed.at),
                 () = self.reporter.clock.wait_until(wake) => {
                     if wake >= deadline {
-                        log::error!(target: "livekit.agents", "LLM request cleanup missed its deadline");
+                        log::error!(target: lk_agents_abi::LOG_TARGET, "LLM request cleanup missed its deadline");
                         return Closed::TimedOut;
                     }
                     self.step(LlmRequestEvent::Wake, wake);
@@ -458,7 +458,7 @@ impl LlmChunks {
                 }
                 LlmRequestEffect::Deliver(chunk) => self.ready.push_back(chunk),
                 LlmRequestEffect::AttemptFailed { attempt, error } => {
-                    log::warn!(target: "livekit.agents", attempt, error = error.message.as_str(); "LLM request attempt failed, retrying");
+                    log::warn!(target: lk_agents_abi::LOG_TARGET, attempt, error = error.message.as_str(); "LLM request attempt failed, retrying");
                     if let Some(host) = &self.host {
                         host.failed(ProviderError::Local(error), true);
                     }
@@ -466,7 +466,7 @@ impl LlmChunks {
                 LlmRequestEffect::Finished(outcome) => self.outcome = Some(outcome),
                 LlmRequestEffect::CleanupIncomplete { request_id, attempt } => {
                     self.cleanup_incomplete = true;
-                    log::error!(target: "livekit.agents", request = request_id.0, attempt; "LLM request attempt did not release its transport in time");
+                    log::error!(target: lk_agents_abi::LOG_TARGET, request = request_id.0, attempt; "LLM request attempt did not release its transport in time");
                 }
             }
         }
@@ -481,7 +481,7 @@ impl LlmChunks {
         };
         let settle = move |outcome| async move {
             if outcome == TaskOutcome::Panicked {
-                log::error!(target: "livekit.agents", attempt; "LLM request attempt panicked");
+                log::error!(target: lk_agents_abi::LOG_TARGET, attempt; "LLM request attempt panicked");
             }
             closed.report(LlmRequestEvent::AttemptClosed { attempt }).await;
         };

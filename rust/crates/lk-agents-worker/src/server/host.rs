@@ -4,7 +4,6 @@
 //! reaches through the declared `ServerHost`), with endpoint streams dispatched to the host.
 
 use crate::ipc::telemetry;
-use lk_agents_abi::logging::LogWriter;
 use std::any::Any;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -134,18 +133,11 @@ pub struct ServerCallbacks {
     /// The server has a voice door.
     has_rtc: bool,
     pub(crate) mounted: Mounted,
-    pub(crate) logging: LogWriter,
 }
 
 impl ServerCallbacks {
-    pub(crate) fn new(proxy: Arc<dyn Host>, logging: LogWriter) -> Self {
-        ServerCallbacks {
-            proxy,
-            user_load: true,
-            has_rtc: false,
-            mounted: Mounted::default(),
-            logging,
-        }
+    pub(crate) fn new(proxy: Arc<dyn Host>) -> Self {
+        ServerCallbacks { proxy, user_load: true, has_rtc: false, mounted: Mounted::default() }
     }
 
     pub(crate) fn configured(&self, has_rtc: bool, user_load: bool) -> Self {
@@ -190,12 +182,8 @@ impl ServerCallbacks {
 
 #[async_trait]
 impl WorkerHost for ServerCallbacks {
-    fn logger(&self) -> LogWriter {
-        self.logging
-    }
-
     async fn on_job_request(&self, req: JobRequest) -> JobDecision {
-        server::job_decision(&req, self.has_rtc, self.logging)
+        server::job_decision(&req, self.has_rtc)
     }
 
     async fn launch_job(&self, info: RunningJobInfo) -> Result<JobId, HostError> {
@@ -307,7 +295,7 @@ impl ServerRuntime for AgentServerRuntime {
             .downcast::<Configuration>()
             .map_err(|_| WorkerError::Invalid("expected a native ServerConfig".into()))?;
         let spawner = TokioSpawner::new((env.runtime)().map_err(WorkerError::Failed)?);
-        let host = ServerCallbacks::new(host, env.logging);
+        let host = ServerCallbacks::new(host);
         let mounted = host.mounted.clone();
         Ok(Self {
             settings: config.settings.clone(),
@@ -396,10 +384,7 @@ impl ServerRuntime for AgentServerRuntime {
         if let Some(worker) = self.runtime.snapshot().worker
             && worker.send(WorkerCommand::JobStatus { job_id: job_id.clone(), status }).is_err()
         {
-            self.runtime.logger().emit(
-                log::Level::Error,
-                format!("worker job status admission failed job_id={job_id}"),
-            );
+            log::error!(target: lk_agents_abi::LOG_TARGET, job_id = job_id.as_str(); "worker job status admission failed");
         }
     }
 

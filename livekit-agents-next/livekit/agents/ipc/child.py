@@ -249,11 +249,6 @@ class _JobProc:
     async def _core_cancel(self, task: asyncio.Task[None]) -> None:
         await aio.cancel_and_wait(task)
 
-    def _core_log(
-        self, level: int, msg: str, extra: dict[str, Any], exc: BaseException | None = None
-    ) -> None:
-        logger.log(level, msg, extra=extra, exc_info=exc)
-
     async def _core_close_session(self) -> None:
         # every session of the job closes, so each one's spans end and reach the exporter
         if sessions := self._job_ctx._sessions:

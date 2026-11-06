@@ -202,7 +202,7 @@ impl ParticipantTranscriptionOutput {
     /// The output's own failure stays here: it is logged once, its text is dropped from then
     /// on, and [`Self::aclose`] reports it. Neither the speech nor the room fails with it.
     fn latched(&self, error: IoError) {
-        log::warn!(target: "livekit.agents", "room transcription output failed, dropping its text: {error}");
+        log::warn!(target: lk_agents_abi::LOG_TARGET, "room transcription output failed, dropping its text: {error}");
         self.changed.notify_waiters();
     }
 

@@ -176,7 +176,7 @@ impl SessionEvents for Events {
             && let Some(owner) = self.owner.upgrade()
             && let Err(error) = SessionOwner(owner).shutdown(close.reason.to_string(), false)
         {
-            log::warn!("the session owner could not begin cleanup: {error}");
+            log::warn!(target: lk_agents_abi::LOG_TARGET, "the session owner could not begin cleanup: {error}");
         }
         if let Some(host) = &self.host {
             host.event(wire, state);
@@ -353,14 +353,14 @@ impl Inner {
         if let Some(toolsets) = self.toolsets.get()
             && let Err(error) = toolsets.release(None).await
         {
-            log::warn!("the session toolsets could not close: {error}");
+            log::warn!(target: lk_agents_abi::LOG_TARGET, "the session toolsets could not close: {error}");
         }
         if let Some(startup) = self.startup.get() {
             startup.storage.aclose().await;
             startup.host.closed(&telemetry::Cx::NONE).await;
         }
         if let Err(error) = self.finish_recording().await {
-            log::warn!("the session recording could not finish: {error}");
+            log::warn!(target: lk_agents_abi::LOG_TARGET, "the session recording could not finish: {error}");
         }
     }
 }

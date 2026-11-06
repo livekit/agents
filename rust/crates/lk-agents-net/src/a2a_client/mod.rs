@@ -322,7 +322,7 @@ impl Inner {
         }
         drop(observations);
         if first {
-            log::error!(target: "livekit.agents", "A2A cleanup incomplete: {observation:?}");
+            log::error!(target: lk_agents_abi::LOG_TARGET, "A2A cleanup incomplete: {observation:?}");
         }
     }
 

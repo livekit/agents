@@ -167,7 +167,7 @@ impl AvatarLifecycle {
         match &job {
             Some(job) => job.on_avatar_shutdown(avatar.close()?)?,
             None => log::debug!(
-                target: "livekit.agents",
+                target: lk_agents_abi::LOG_TARGET,
                 "AvatarSession started outside a job context; call aclose() manually to release \
                  resources when the job shuts down"
             ),
@@ -241,11 +241,11 @@ impl Inner {
         match removed.await {
             Ok(Removal::Removed) => {}
             Ok(Removal::NotInRoom) => log::debug!(
-                target: "livekit.agents", identity = identity;
+                target: lk_agents_abi::LOG_TARGET, identity = identity;
                 "avatar participant not in room, skipping removal"
             ),
             Err(error) => log::warn!(
-                target: "livekit.agents", identity = identity, error = error.as_str();
+                target: lk_agents_abi::LOG_TARGET, identity = identity, error = error.as_str();
                 "failed to remove avatar participant"
             ),
         }

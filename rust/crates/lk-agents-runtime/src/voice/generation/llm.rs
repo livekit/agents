@@ -99,7 +99,7 @@ async fn chat_request(
         match dynamic.render(&ctx.turn_cx(shared), speech).await {
             Ok(text) => lk_agents_voice::generation::append_instructions(&mut chat_ctx, &text),
             Err(e) => {
-                log::error!(target: "livekit.agents", "the agent's instructions functions failed; the static instructions are sent: {e}")
+                log::error!(target: lk_agents_abi::LOG_TARGET, "the agent's instructions functions failed; the static instructions are sent: {e}")
             }
         }
     }

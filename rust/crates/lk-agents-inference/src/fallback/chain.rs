@@ -490,7 +490,7 @@ impl<B: Backend> FallbackChain<B> {
         )
         .await;
         if closed == lk_agents_abi::Closed::TimedOut {
-            log::error!("fallback cleanup incomplete; tasks retain ownership until settlement");
+            log::error!(target: lk_agents_abi::LOG_TARGET, "fallback cleanup incomplete; tasks retain ownership until settlement");
             self.retain(probes);
         }
     }
@@ -832,7 +832,7 @@ impl<B: Backend> RecoveryProbe<B> {
         )
         .await;
         if cleanup == lk_agents_abi::Closed::TimedOut {
-            log::error!(
+            log::error!(target: lk_agents_abi::LOG_TARGET,
                 "fallback probe cleanup incomplete; task retains ownership until settlement"
             );
             let _ = recovery.await;
@@ -941,7 +941,7 @@ impl<T, S> RunningAttempt<T, S> {
         )
         .await;
         if cleanup == lk_agents_abi::Closed::TimedOut {
-            log::error!(
+            log::error!(target: lk_agents_abi::LOG_TARGET,
                 "fallback attempt cleanup incomplete; task retains ownership until settlement"
             );
         }

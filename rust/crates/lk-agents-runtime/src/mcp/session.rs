@@ -307,7 +307,7 @@ impl McpSessionPort for McpSession {
             Ok(tools) => Ok(tools.into()),
             Err(error) => match self.state.lock().listing.last_known() {
                 Some(tools) if !matches!(error, McpError::NotInitialized) => {
-                    log::warn!("MCP tool listing failed, using the last listing: {error}");
+                    log::warn!(target: lk_agents_abi::LOG_TARGET, "MCP tool listing failed, using the last listing: {error}");
                     Ok(tools.into())
                 }
                 _ => Err(error),
@@ -373,13 +373,13 @@ impl McpSessionPort for McpSession {
         if let Some(connection) = previous
             && tokio::time::timeout(HOST_TEARDOWN_TIMEOUT, connection.settled()).await.is_err()
         {
-            log::error!("MCP incomplete cleanup; runtime retains ownership");
+            log::error!(target: lk_agents_abi::LOG_TARGET, "MCP incomplete cleanup; runtime retains ownership");
         }
         let initializing = self.state.lock().initializing.clone();
         if let Some(receipt) = initializing
             && tokio::time::timeout(HOST_TEARDOWN_TIMEOUT, receipt.closed()).await.is_err()
         {
-            log::error!("MCP incomplete initialization cleanup; runtime retains ownership");
+            log::error!(target: lk_agents_abi::LOG_TARGET, "MCP incomplete initialization cleanup; runtime retains ownership");
         }
     }
 }
@@ -489,7 +489,7 @@ impl McpSession {
                 state.listing.refresh();
             }
             Err(error) => {
-                log::warn!("MCP connection failed: {error}");
+                log::warn!(target: lk_agents_abi::LOG_TARGET, "MCP connection failed: {error}");
                 self.state.lock().gate.failed(now);
             }
         }
@@ -526,7 +526,7 @@ impl McpSession {
             Err(error) => {
                 // Observed owns the transport even if the SDK handshake is cancelled.
                 if tokio::time::timeout(HOST_TEARDOWN_TIMEOUT, receipt.closed()).await.is_err() {
-                    log::error!("MCP incomplete initialization cleanup; runtime retains ownership");
+                    log::error!(target: lk_agents_abi::LOG_TARGET, "MCP incomplete initialization cleanup; runtime retains ownership");
                 }
                 return Err(McpError::Initialization(Arc::new(error)));
             }

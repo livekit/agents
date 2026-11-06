@@ -55,13 +55,13 @@ impl AudioDrops {
         let speed = seconds / took.as_secs_f64().max(1e-6);
         if took > audio {
             log::warn!(
-                target: "livekit.agents",
+                target: lk_agents_abi::LOG_TARGET,
                 "audio consumer {consumer:?} took {:.3}s to drain {seconds:.2}s of pre-connect audio ({speed:.1}x real time): it falls behind the call",
                 took.as_secs_f64()
             );
         } else {
             log::info!(
-                target: "livekit.agents",
+                target: lk_agents_abi::LOG_TARGET,
                 "audio consumer {consumer:?} drained {seconds:.2}s of pre-connect audio in {:.3}s ({speed:.0}x real time)",
                 took.as_secs_f64()
             );
@@ -83,7 +83,7 @@ impl AudioDrops {
         let (consumer, policy) = (self.consumer, self.policy);
         if !self.warned.swap(true, Ordering::Relaxed) {
             log::warn!(
-                target: "livekit.agents",
+                target: lk_agents_abi::LOG_TARGET,
                 "audio consumer {consumer:?} fell behind, dropping audio ({policy:?}); suppressing repeats"
             );
         }

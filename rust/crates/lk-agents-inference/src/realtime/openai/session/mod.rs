@@ -214,7 +214,7 @@ pub fn warn_on_half_disabled_turn_taking(td: &lk_agents_abi::Maybe<Option<TurnDe
         if v.get("create_response") == Some(&serde_json::Value::Bool(false))
             && v.get("interrupt_response") != Some(&serde_json::Value::Bool(false))
         {
-            log::warn!(
+            log::warn!(target: lk_agents_abi::LOG_TARGET,
                 "create_response=False hands turn taking to the client, but the server still \
                  cancels its response on user speech, pass interrupt_response=False as well"
             );
@@ -376,7 +376,7 @@ impl Shared {
         if !self.record_incomplete_cleanup(generation) {
             return;
         }
-        log::error!(target: "livekit.agents", connection_generation = generation, model = label; "realtime cleanup did not settle within its deadline");
+        log::error!(target: lk_agents_abi::LOG_TARGET, connection_generation = generation, model = label; "realtime cleanup did not settle within its deadline");
     }
 }
 
@@ -738,7 +738,7 @@ impl Pump {
             let recycle = step.recycle;
             self.dispatch(step, &mut permit)?;
             if recycle {
-                log::debug!("recycling the {} connection", self.provider_label);
+                log::debug!(target: lk_agents_abi::LOG_TARGET, "recycling the {} connection", self.provider_label);
                 return Ok(Outcome::Recycle);
             }
         }

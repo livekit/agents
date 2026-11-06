@@ -50,14 +50,14 @@ impl EventRetention {
         self.retained += 1;
         if self.retained == SESSION_EVENTS_WARNING + 1 {
             log::warn!(
-                target: "livekit.agents",
+                target: lk_agents_abi::LOG_TARGET,
                 "the session report retains more than {SESSION_EVENTS_WARNING} events"
             );
         }
         let process = self.process.items.fetch_add(1, Ordering::Relaxed) + 1;
         if process > PROCESS_EVENTS_WARNING && !self.process.warned.swap(true, Ordering::Relaxed) {
             log::warn!(
-                target: "livekit.agents",
+                target: lk_agents_abi::LOG_TARGET,
                 "session reports retain {process} events across the process"
             );
         }

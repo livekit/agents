@@ -2,7 +2,6 @@
 //! reads the host calls.
 
 use livekit_protocol as proto;
-use lk_agents_abi::logging::LogWriter;
 
 use crate::{EnvOption, RuntimeConfig, WorkerConfig, WorkerPermissions};
 
@@ -388,23 +387,19 @@ impl ServerSettings {
 
 /// The Prometheus multiprocess directory a run uses: the configured one, else the inherited
 /// `PROMETHEUS_MULTIPROC_DIR`; created, and emptied of a previous run's files.
-pub fn prepare_prometheus_dir(configured: Option<&str>, logging: LogWriter) -> Option<String> {
+pub fn prepare_prometheus_dir(configured: Option<&str>) -> Option<String> {
     let dir = configured
         .map(str::to_owned)
         .or_else(|| std::env::var("PROMETHEUS_MULTIPROC_DIR").ok().filter(|d| !d.is_empty()))?;
     if let Err(e) = std::fs::create_dir_all(&dir) {
-        logging.emit(
-            log::Level::Warn,
-            format!("failed to create the prometheus directory path={dir} error={e}"),
-        );
+        log::warn!(target: lk_agents_abi::LOG_TARGET, path = dir.as_str(); "failed to create the prometheus directory: {e}");
         return Some(dir);
     }
-    logging
-        .emit(log::Level::Debug, format!("cleaning prometheus multiprocess directory path={dir}"));
+    log::debug!(target: lk_agents_abi::LOG_TARGET, path = dir.as_str(); "cleaning prometheus multiprocess directory");
     if let Ok(entries) = std::fs::read_dir(&dir) {
         for path in entries.flatten().map(|e| e.path()).filter(|p| p.is_file()) {
             if let Err(e) = std::fs::remove_file(&path) {
-                logging.emit(log::Level::Warn, format!("failed to remove {}: {e}", path.display()));
+                log::warn!(target: lk_agents_abi::LOG_TARGET, path:% = path.display(); "failed to remove a prometheus file: {e}");
             }
         }
     }

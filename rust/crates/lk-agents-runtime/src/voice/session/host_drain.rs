@@ -118,7 +118,7 @@ impl HostDrain {
             (Some(remote), Some(events), HostWire::Error(error)) => {
                 // The host's record of the error, else the error's own text.
                 let message = events.error_message(error).unwrap_or_else(|e| {
-                    log::warn!(target: "livekit.agents", error = e.to_string().as_str(); "error record unreadable");
+                    log::warn!(target: lk_agents_abi::LOG_TARGET, error = e.to_string().as_str(); "error record unreadable");
                     error.error.to_string()
                 });
                 remote.forward_error(message);
@@ -242,7 +242,7 @@ fn close_toolsets_later(
     let scopes = hooks.toolset_scopes().clone();
     let close = async move {
         if let Err(error) = scopes.release(Some(scope)).await {
-            log::warn!("the agent toolsets could not close: {error}");
+            log::warn!(target: lk_agents_abi::LOG_TARGET, "the agent toolsets could not close: {error}");
         }
     };
     tasks.spawn(spawner, "agent toolsets close", close);

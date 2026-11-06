@@ -126,7 +126,7 @@ impl WorkerStream for WsStream {
                     return Err(TransportError::Closed(reason));
                 }
                 Some(Ok(Message::Text(t))) => {
-                    log::warn!(target: crate::LOG, ws_data = truncate_ws_data(&t).as_str();
+                    log::warn!(target: lk_agents_abi::LOG_TARGET, ws_data = truncate_ws_data(&t).as_str();
                         "unexpected message type");
                 }
                 // Tungstenite handles ping/pong internally.

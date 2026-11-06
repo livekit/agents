@@ -323,12 +323,12 @@ impl Shared {
                 }
                 Ok(Outcome::Failed(reason)) => {
                     add(&self.counters.failed, records);
-                    log::warn!(target: "livekit.agents", "telemetry export failed: {reason}");
+                    log::warn!(target: lk_agents_abi::LOG_TARGET, "telemetry export failed: {reason}");
                 }
                 Err(_) => {
                     add(&self.counters.failed, records);
                     complete &= deadline.is_none_or(|at| self.clock.now() < at);
-                    log::warn!(target: "livekit.agents", "telemetry export timed out");
+                    log::warn!(target: lk_agents_abi::LOG_TARGET, "telemetry export timed out");
                 }
             }
         }

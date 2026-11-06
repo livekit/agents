@@ -143,7 +143,7 @@ impl Namespace {
                 Ok(match &self.config {
                     Config::Local { directory, lease, .. } => {
                         let storage = SqliteStorage::open(directory, *lease).await?;
-                        log::info!("local thread storage in {}", directory.display());
+                        log::info!(target: lk_agents_abi::LOG_TARGET, "local thread storage in {}", directory.display());
                         Backend::Local(Arc::new(storage))
                     }
                     Config::Cloud { opts, minter, env } => {
@@ -540,7 +540,7 @@ impl HostStorageClass for Namespace {
     async fn aclose(&self) {
         let deadline = self.clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
         if !self.a2a_tasks.wait_empty(&*self.clock, Some(deadline)).await {
-            log::error!(target: "livekit.agents", "storage is closing while accepted A2A work settles");
+            log::error!(target: lk_agents_abi::LOG_TARGET, "storage is closing while accepted A2A work settles");
         }
 
         if let Some(backend) = self.backend.get() {
@@ -651,7 +651,9 @@ impl host::handles::Thread for Thread {
         let thread = self.clone();
         match (env.spawner)() {
             Ok(spawner) => spawner.spawn_detached(async move { thread.close().await }),
-            Err(error) => log::warn!("the database connection could not close: {error}"),
+            Err(error) => {
+                log::warn!(target: lk_agents_abi::LOG_TARGET, "the database connection could not close: {error}")
+            }
         }
     }
 }

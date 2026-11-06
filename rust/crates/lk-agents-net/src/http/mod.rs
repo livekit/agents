@@ -144,7 +144,7 @@ impl GatewayHttp {
         }
         .await;
         if let Err(error) = result {
-            log::warn!(target: "livekit.agents", "HTTP prewarm failed: {error:?}");
+            log::warn!(target: lk_agents_abi::LOG_TARGET, "HTTP prewarm failed: {error:?}");
         }
     }
 
@@ -269,7 +269,7 @@ async fn rejected(response: reqwest::Response) -> AttemptFailure {
             extract_quota_usage(|name| response.headers().get(name).and_then(|v| v.to_str().ok()));
         let quota: Vec<String> = quota.iter().map(|(k, v)| format!("{k}={v}")).collect();
         log::warn!(
-            target: "livekit.agents",
+            target: lk_agents_abi::LOG_TARGET,
             request_id = request_id.as_deref().unwrap_or(""), quota = quota.join(" ").as_str();
             "request rate limited by inference gateway"
         );

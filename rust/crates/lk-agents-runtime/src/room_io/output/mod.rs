@@ -116,7 +116,7 @@ impl Shared {
         }
         if let Err(error) = source.clear_queue() {
             self.lock().cleanup_outcome = Some(Closed::Failed);
-            log::error!(target: "livekit.agents", "room audio queue cleanup failed: {error}");
+            log::error!(target: lk_agents_abi::LOG_TARGET, "room audio queue cleanup failed: {error}");
         }
     }
 
@@ -132,7 +132,7 @@ impl Shared {
             state.publication.fail(error.clone());
             state.playback.interrupted(source_played, now)
         };
-        log::error!(target: "livekit.agents", "room audio source failed: {error}");
+        log::error!(target: lk_agents_abi::LOG_TARGET, "room audio source failed: {error}");
         for report in reports {
             self.report(Some(report));
         }
@@ -629,7 +629,7 @@ fn cleanup_outcome(result: std::result::Result<(), RtcError>, resource: &str) ->
     match result {
         Ok(()) => Closed::Clean,
         Err(error) => {
-            log::error!(target: "livekit.agents", "room {resource} cleanup failed: {error}");
+            log::error!(target: lk_agents_abi::LOG_TARGET, "room {resource} cleanup failed: {error}");
             Closed::Failed
         }
     }

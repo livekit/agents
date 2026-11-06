@@ -110,7 +110,7 @@ impl RealtimeConnection {
                     .await
                     .is_ok();
                 if !closed {
-                    log::error!(target: "livekit.agents", "realtime session cleanup timed out");
+                    log::error!(target: lk_agents_abi::LOG_TARGET, "realtime session cleanup timed out");
                 }
                 closed
             }),
@@ -203,7 +203,7 @@ impl OpeningLeg {
                     PendingLeg::Vad(source) => source.close(deadline).await,
                 };
                 if outcome != lk_agents_abi::Closed::Clean {
-                    log::error!(target: "livekit.agents", "opening {} stream cleanup did not settle cleanly: {outcome:?}", channel.label());
+                    log::error!(target: lk_agents_abi::LOG_TARGET, "opening {} stream cleanup did not settle cleanly: {outcome:?}", channel.label());
                 }
                 resources.release(sink);
                 outcome

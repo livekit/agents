@@ -39,11 +39,9 @@ class _JobThread:
                 launch.thread_exited()
 
         self._thread = threading.Thread(target=run, name="job_thread_runner")
-        self.native_id: int | None = None
 
     def start(self) -> None:
         self._thread.start()
-        self.native_id = self._thread.native_id
 
 
 class JobLauncher:
@@ -133,13 +131,6 @@ class JobLauncher:
                 target=child.job_main, args=(self._args,), name="job_proc"
             ),
         )
-
-    def _core_log(
-        self, level: int, msg: str, extra: dict[str, Any], exc: BaseException | None = None
-    ) -> None:
-        if isinstance(self._proc, _JobThread):
-            extra = {**extra, "tid": self._proc.native_id}
-        logger.log(level, msg, extra=extra, exc_info=exc)
 
 
 class ProcPool(

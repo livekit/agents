@@ -441,7 +441,7 @@ impl AdapterSource {
         let delay = wait.as_secs_f64();
         *retries += 1;
         log::warn!(
-            target: "livekit.agents",
+            target: lk_agents_abi::LOG_TARGET,
             "{}: failed to synthesize speech: {error}, retrying in {delay}s (attempt {retries})",
             self.tts.label()
         );

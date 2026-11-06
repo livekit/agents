@@ -639,13 +639,23 @@ async def job() -> None:
         JobExecutorType.THREAD,
     )
 
+    class Logs(logging.Handler):
+        """What the core's supervisor logs on the worker's logger."""
+
+        def __init__(self) -> None:
+            super().__init__(logging.DEBUG)
+            self.records: list[logging.LogRecord] = []
+
+        def emit(self, record: logging.LogRecord) -> None:
+            self.records.append(record)
+
+    logs = Logs()
+    agents_logger = logging.getLogger("livekit.agents")
+    agents_logger.addHandler(logs)
+    agents_logger.setLevel(logging.DEBUG)
+
     class Parent:
-        """The worker's side, the core's supervisor's host, with what the supervisor logs."""
-
-        logs: list[tuple[str, dict[str, Any]]] = []
-
-        def _core_log(self, level: int, msg: str, extra: dict[str, Any], exc: Any = None) -> None:
-            self.logs.append((msg, extra))
+        """The worker's side, the core's supervisor's host."""
 
         def __init__(self) -> None:
             self.endpoint: asyncio.Future[int] = asyncio.get_running_loop().create_future()
@@ -712,7 +722,9 @@ async def job() -> None:
     parent.launch.thread_exited()
     assert await sup.join()
     assert sup.status == JobStatus.SUCCESS, sup.status
-    print(f"job {seen} told its parent {[m for m, _ in Parent.logs]}")
+    _core.flush_logs()
+    agents_logger.removeHandler(logs)
+    print(f"job {seen} told its parent {[r.getMessage() for r in logs.records]}")
     # the participant's entrypoint runs beside the entrypoint, in no set order with it
     assert sorted(seen) == [
         "delete_room DeleteRoomResponse",
@@ -721,7 +733,11 @@ async def job() -> None:
         "shutdown callback, no reason",
         "waited for mock_user",
     ], seen
-    assert ("job thread exiting", {"reason": "done"}) in Parent.logs, Parent.logs
+    assert any(
+        r.getMessage() == "job thread exiting"
+        and (r.reason, r.job_id, r.room, r.room_id) == ("done", "AJ_smoke", "console", "RM_smoke")  # type: ignore[attr-defined]
+        for r in logs.records
+    ), logs.records
     events, attributes = _core.job_timeline(1.0, 2.0, 0.0, 4.0, 5.0, 3_000_000_000_000_000_000)
     assert [e[0] for e in events][-1] == "job_started_on_server" and len(events) == 5, events
     assert dict(attributes) == {

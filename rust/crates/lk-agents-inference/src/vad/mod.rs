@@ -134,7 +134,7 @@ impl VadModelFactory for HostModels {
         match self.0.create() {
             Ok(model) => Box::new(HostModel(Some(model))),
             Err(error) => {
-                log::error!(target: "livekit.agents", "VAD model factory failed: {error}");
+                log::error!(target: lk_agents_abi::LOG_TARGET, "VAD model factory failed: {error}");
                 Box::new(HostModel(None))
             }
         }
@@ -152,7 +152,7 @@ impl VadModel for HostModel {
         match model.predict(window.to_vec()) {
             Ok(probability) => (probability as f32, started.elapsed().as_secs_f64()),
             Err(error) => {
-                log::error!(target: "livekit.agents", "VAD model failed: {error}");
+                log::error!(target: lk_agents_abi::LOG_TARGET, "VAD model failed: {error}");
                 (0.0, 0.0)
             }
         }
@@ -162,7 +162,7 @@ impl VadModel for HostModel {
         if let Some(model) = &self.0
             && let Err(error) = model.reset()
         {
-            log::error!(target: "livekit.agents", "VAD model reset failed: {error}");
+            log::error!(target: lk_agents_abi::LOG_TARGET, "VAD model reset failed: {error}");
         }
     }
 }
@@ -212,7 +212,7 @@ impl StreamOutput<VadEvent> for VadEventSource {
         Box::pin(async move {
             let Some(output) = self.0.next().await? else { return Ok(None) };
             if output.slow_inference {
-                log::warn!(target: "livekit.agents", delay = output.extra_inference_time; "inference is slower than realtime");
+                log::warn!(target: lk_agents_abi::LOG_TARGET, delay = output.extra_inference_time; "inference is slower than realtime");
             }
             let mut event = output.event;
             event.frames = output.frames;

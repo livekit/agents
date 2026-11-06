@@ -33,8 +33,6 @@ pub use lk_agents_voice::amd::machine::classifier::{
     POSTPONE_TERMINATION_TOOL, SAVE_PREDICTION_TOOL,
 };
 use lk_agents_voice::amd::machine::classifier::{classification_request, classification_verdicts};
-
-const LOG: &str = "livekit.agents";
 const TAP: &str = "amd";
 
 /// The host's end of the system: `Start`, `Verdict::Settle`, `Close`.
@@ -325,9 +323,13 @@ impl AmdSystem {
             Msg::Transcript(ev) => self.on_tap_transcript(now, ev),
             Msg::Callee(callee) => {
                 match &callee {
-                    Callee::Answered => log::debug!(target: LOG, "AMD starts listening"),
-                    Callee::Missing(error) => log::debug!(target: LOG, error = error.as_str();
-                        "AMD: call ended before detection could run, settling"),
+                    Callee::Answered => {
+                        log::debug!(target: lk_agents_abi::LOG_TARGET, "AMD starts listening")
+                    }
+                    Callee::Missing(error) => {
+                        log::debug!(target: lk_agents_abi::LOG_TARGET, error = error.as_str();
+                        "AMD: call ended before detection could run, settling")
+                    }
                 }
                 for input in callee.inputs() {
                     self.step(now, input);
@@ -582,7 +584,7 @@ async fn await_callee(
     time: crate::voice::session::Timebase,
 ) -> Callee {
     let Some(room) = room else {
-        log::warn!(target: LOG,
+        log::warn!(target: lk_agents_abi::LOG_TARGET,
             "session room_io unavailable, starting amd timers immediately as fallback");
         return Callee::Answered;
     };

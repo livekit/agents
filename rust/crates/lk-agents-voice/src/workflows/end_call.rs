@@ -55,7 +55,7 @@ impl VoiceDriver {
     /// The realtime model's reply never started.
     pub(crate) fn end_call_reply_timed_out(&mut self, now: Ts) {
         if self.activity.end_call_timed_out() {
-            log::warn!(target: "livekit.agents", "tool reply timed out, shutting down session");
+            log::warn!(target: lk_agents_abi::LOG_TARGET, "tool reply timed out, shutting down session");
             self.close_ended_call(now);
         }
     }

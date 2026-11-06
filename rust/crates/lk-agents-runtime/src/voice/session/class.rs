@@ -929,7 +929,7 @@ impl VoiceSession {
                     if let Some(hooks) = &hooks
                         && let Err(error) = hooks.toolset_scopes().release(None).await
                     {
-                        log::warn!("the session toolsets could not close: {error}");
+                        log::warn!(target: lk_agents_abi::LOG_TARGET, "the session toolsets could not close: {error}");
                     }
                 })
                 .await;

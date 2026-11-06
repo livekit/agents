@@ -176,7 +176,7 @@ impl Segmenter {
             Ok(open) => open,
             Err(message) => {
                 self.failed = true;
-                log::error!(target: "livekit.agents", "duplex audio stream failed: {message}");
+                log::error!(target: lk_agents_abi::LOG_TARGET, "duplex audio stream failed: {message}");
                 out.events.push(Event::Error(RealtimeModelError {
                     timestamp: now,
                     label: self.label.clone(),
@@ -216,7 +216,7 @@ impl Segmenter {
         } else if !self.fragments.is_empty()
             && self.audio_ms - self.waiting_since_ms >= UNCLAIMED_TRANSCRIPT_MS
         {
-            log::error!(target: "livekit.agents", "duplex transcript outlived the audio it describes");
+            log::error!(target: lk_agents_abi::LOG_TARGET, "duplex transcript outlived the audio it describes");
             self.flush_unclaimed(wall, &mut out.events);
         }
         out
@@ -417,7 +417,7 @@ impl Segmenter {
             })
             .collect();
         if !edited.is_empty() {
-            log::warn!(target: "livekit.agents", item_ids:? = edited;
+            log::warn!(target: lk_agents_abi::LOG_TARGET, item_ids:? = edited;
                 "duplex context is append-only; the model keeps what it has been told");
         }
         let new_items: Vec<ChatItem> =

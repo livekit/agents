@@ -461,7 +461,7 @@ impl ProviderAttempts {
                 }
                 RetryDecision::Retry(delay) => {
                     log::warn!(
-                        target: "livekit.agents",
+                        target: lk_agents_abi::LOG_TARGET,
                         "{} attempt failed: {error}, retrying in {delay}s",
                         self.kind.as_str()
                     );
@@ -540,7 +540,7 @@ const DEADLINE_GRACE: std::time::Duration = std::time::Duration::from_millis(50)
 
 fn stalled_cleanup() {
     log::error!(
-        target: "livekit.agents",
+        target: lk_agents_abi::LOG_TARGET,
         "provider cleanup incomplete; its host task retains ownership until settlement"
     );
 }

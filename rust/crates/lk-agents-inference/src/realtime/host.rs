@@ -181,7 +181,7 @@ impl HostRealtimeLeg {
                 Ok(None) => return,
                 // A malformed event is the plugin's bug; the session goes on.
                 Err(e) => {
-                    log::warn!(target: "livekit.agents", error = e.message.as_str(); "realtime event refused")
+                    log::warn!(target: lk_agents_abi::LOG_TARGET, error = e.message.as_str(); "realtime event refused")
                 }
             }
         }
@@ -281,7 +281,7 @@ impl HostRealtimeLeg {
             _ => Ok(()),
         };
         if let Err(e) = updated {
-            log::error!(target: "livekit.agents", error = e.message.as_str(); "failed to update the realtime session");
+            log::error!(target: lk_agents_abi::LOG_TARGET, error = e.message.as_str(); "failed to update the realtime session");
         }
     }
 }

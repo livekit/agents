@@ -67,7 +67,7 @@ impl SessionStorage {
                     voice_store: Some(Arc::new(store)),
                 }),
                 Err(error) => {
-                    log::warn!("the voice lane could not be loaded: {error}");
+                    log::warn!(target: lk_agents_abi::LOG_TARGET, "the voice lane could not be loaded: {error}");
                     None
                 }
             }
@@ -147,7 +147,7 @@ impl lk_agents_abi::voice::session_storage::SessionStorage for SessionStorage {
         if let Some(store) = &opened.voice_store
             && let Err(error) = store.aclose().await
         {
-            log::warn!("the voice store could not close: {error}");
+            log::warn!(target: lk_agents_abi::LOG_TARGET, "the voice store could not close: {error}");
         }
         opened.activation.close();
     }
@@ -162,7 +162,7 @@ impl StreamInput<VoiceStorageEvent> for StorageReporter {
         let input = match event {
             VoiceStorageEvent::Settled { speech, result, lease_lost } => {
                 if let Err(error) = result {
-                    log::warn!(target: "livekit.agents", "the voice turn could not commit: {error}");
+                    log::warn!(target: lk_agents_abi::LOG_TARGET, "the voice turn could not commit: {error}");
                 }
                 if lease_lost {
                     let _ = self.0.send(VoiceEvent::StorageLost(SpeechId(speech)));
@@ -171,7 +171,7 @@ impl StreamInput<VoiceStorageEvent> for StorageReporter {
             }
             VoiceStorageEvent::Abandoned { speech, result } => {
                 if let Err(error) = result {
-                    log::warn!(target: "livekit.agents", "the voice turn could not abandon: {error}");
+                    log::warn!(target: lk_agents_abi::LOG_TARGET, "the voice turn could not abandon: {error}");
                 }
                 VoiceEvent::StorageAbandoned(SpeechId(speech))
             }

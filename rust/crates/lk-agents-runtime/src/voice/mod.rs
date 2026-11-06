@@ -261,7 +261,7 @@ impl VoiceRuntime {
         self.serve().await;
         let late = self.close().await;
         if !late.is_empty() {
-            log::error!(target: "livekit.agents", tasks = late.join(", ").as_str();
+            log::error!(target: lk_agents_abi::LOG_TARGET, tasks = late.join(", ").as_str();
                 "voice session tasks missed the cleanup deadline and were cancelled");
         }
     }
@@ -579,7 +579,7 @@ impl VoiceRuntime {
                         && self.push_warned.insert(sink)
                     {
                         log::warn!(
-                            target: "livekit.agents",
+                            target: lk_agents_abi::LOG_TARGET,
                             "audio stream {sink:?} refused input: {error}; suppressing repeats"
                         );
                     }
@@ -647,7 +647,7 @@ async fn read_audio(
                 Ok(Some(frame)) => frame,
                 Ok(None) => break ChannelEndCause::SourceEnded,
                 Err(e) => {
-                    log::warn!(target: "livekit.agents", error = e.to_string().as_str(); "audio input failed");
+                    log::warn!(target: lk_agents_abi::LOG_TARGET, error = e.to_string().as_str(); "audio input failed");
                     break ChannelEndCause::Error;
                 }
             },

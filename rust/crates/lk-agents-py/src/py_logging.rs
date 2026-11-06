@@ -19,7 +19,7 @@ pub mod interfaces {
 
     #[lk_agents_abi::host(interface(
         host = "logging.LogRecord",
-        attrs(created(write), msecs(write))
+        attrs(created(write), msecs(write), exc_text(write))
     ))]
     pub struct LogRecord;
 
@@ -36,6 +36,7 @@ use log::LevelFilter;
 use log::Log;
 use log::Metadata;
 use log::Record;
+use parking_lot::Condvar;
 use parking_lot::Mutex;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -47,7 +48,7 @@ use std::sync::mpsc::Receiver;
 use std::sync::mpsc::SyncSender;
 use std::sync::mpsc::TrySendError;
 use std::sync::mpsc::sync_channel;
-use std::sync::{LazyLock, OnceLock};
+use std::sync::{Arc, LazyLock, OnceLock};
 use std::time::Duration;
 use std::time::Instant;
 use std::time::SystemTime;
@@ -64,19 +65,49 @@ struct Line {
     message: String,
     file: Option<String>,
     line: Option<u32>,
-    key_values: Vec<(String, String)>,
+    key_values: Vec<(String, Field)>,
     at: SystemTime,
 }
 
-enum Entry {
-    Line(Line),
-    Flush(SyncSender<()>),
+/// A key-value as Python's `extra` holds it.
+#[derive(Clone, Debug, PartialEq)]
+enum Field {
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+    Str(String),
 }
+
+/// The key-value [`emit`] sets as the record's `exc_text`: a failure's formatted traceback.
+const EXC_TEXT: &str = "exc_text";
 
 /// The queue's sender, for the process that started its drain (a fork starts its own).
 struct Queue {
     pid: u32,
-    sender: SyncSender<Entry>,
+    sender: SyncSender<Line>,
+    progress: Arc<Progress>,
+}
+
+/// The lines queued and the lines the drain has forwarded since: [`flush`] waits for the second
+/// to reach the first.
+#[derive(Default)]
+struct Progress {
+    queued: AtomicU64,
+    forwarded: Mutex<u64>,
+    advanced: Condvar,
+}
+
+impl Progress {
+    /// Waits, up to `timeout`, until `target` lines were forwarded.
+    fn wait(&self, target: u64, timeout: Duration) {
+        let mut forwarded = self.forwarded.lock();
+        self.advanced.wait_while_for(&mut forwarded, |forwarded| *forwarded < target, timeout);
+    }
+
+    fn forwarded(&self) {
+        *self.forwarded.lock() += 1;
+        self.advanced.notify_all();
+    }
 }
 
 struct Forwarder {
@@ -155,33 +186,15 @@ pub fn flush() {
         .lock()
         .as_ref()
         .filter(|queue| queue.pid == pid)
-        .map(|queue| queue.sender.clone());
-    let Some(sender) = queued else { return };
-    let wait = move || flush_sender(&sender, FLUSH_TIMEOUT);
+        .map(|queue| queue.progress.clone());
+    let Some(progress) = queued else { return };
+    let target = progress.queued.load(Ordering::SeqCst);
+    let wait = move || progress.wait(target, FLUSH_TIMEOUT);
     if crate::py_calls::holds_gil() {
         Python::attach(|py| py.detach(wait));
     } else {
         wait();
     }
-}
-
-fn flush_sender(sender: &SyncSender<Entry>, timeout: Duration) {
-    let deadline = Instant::now() + timeout;
-    let (done, flushed) = sync_channel(1);
-    let mut entry = Entry::Flush(done);
-    loop {
-        match sender.try_send(entry) {
-            Ok(()) => break,
-            Err(TrySendError::Disconnected(_)) => return,
-            Err(TrySendError::Full(pending)) => entry = pending,
-        }
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return;
-        }
-        std::thread::sleep(remaining.min(Duration::from_millis(1)));
-    }
-    let _ = flushed.recv_timeout(deadline.saturating_duration_since(Instant::now()));
 }
 
 /// The stall detector's sampler libraries (py-spy and its process reader): their own lines are
@@ -217,30 +230,39 @@ impl Forwarder {
             key_values,
             at: SystemTime::now(),
         };
-        let Some(sender) = self.sender() else { return };
-        if let Err(TrySendError::Full(_)) = sender.try_send(Entry::Line(line)) {
-            self.dropped.fetch_add(1, Ordering::Relaxed);
+        let Some((sender, progress)) = self.sender() else { return };
+        match sender.try_send(line) {
+            Ok(()) => {
+                progress.queued.fetch_add(1, Ordering::SeqCst);
+            }
+            Err(TrySendError::Full(_)) => {
+                self.dropped.fetch_add(1, Ordering::Relaxed);
+            }
+            Err(TrySendError::Disconnected(_)) => {}
         }
     }
 
     /// This process's sender, its drain started on first use.
-    fn sender(&self) -> Option<SyncSender<Entry>> {
+    fn sender(&self) -> Option<(SyncSender<Line>, Arc<Progress>)> {
         let pid = std::process::id();
         let mut queue = self.queue.lock();
         if let Some(queue) = queue.as_ref().filter(|queue| queue.pid == pid) {
-            return Some(queue.sender.clone());
+            return Some((queue.sender.clone(), queue.progress.clone()));
         }
-        let (sender, entries) = sync_channel(QUEUE);
+        let (sender, lines) = sync_channel(QUEUE);
+        let progress = Arc::new(Progress::default());
+        let drained = progress.clone();
         std::thread::Builder::new()
             .name("lk-log-drain".into())
-            .spawn(move || drain(entries))
+            .spawn(move || drain(lines, &drained))
             .ok()?;
-        *queue = Some(Queue { pid, sender: sender.clone() });
-        Some(sender)
+        *queue = Some(Queue { pid, sender: sender.clone(), progress: progress.clone() });
+        Some((sender, progress))
     }
 }
 
-struct KeyValues<'a>(&'a mut Vec<(String, String)>);
+/// A line's key-values, typed as Python's `extra` takes them; a null (`None`) one is left out.
+struct KeyValues<'a>(&'a mut Vec<(String, Field)>);
 
 impl<'kvs> log::kv::VisitSource<'kvs> for KeyValues<'_> {
     fn visit_pair(
@@ -248,7 +270,43 @@ impl<'kvs> log::kv::VisitSource<'kvs> for KeyValues<'_> {
         key: log::kv::Key<'kvs>,
         value: log::kv::Value<'kvs>,
     ) -> Result<(), log::kv::Error> {
-        self.0.push((key.as_str().to_owned(), value.to_string()));
+        let mut field = None;
+        value.visit(Typed(&mut field))?;
+        if let Some(field) = field {
+            self.0.push((key.as_str().to_owned(), field));
+        }
+        Ok(())
+    }
+}
+
+struct Typed<'a>(&'a mut Option<Field>);
+
+impl<'v> log::kv::VisitValue<'v> for Typed<'_> {
+    fn visit_any(&mut self, value: log::kv::Value<'_>) -> Result<(), log::kv::Error> {
+        *self.0 = Some(Field::Str(value.to_string()));
+        Ok(())
+    }
+    fn visit_null(&mut self) -> Result<(), log::kv::Error> {
+        Ok(())
+    }
+    fn visit_u64(&mut self, value: u64) -> Result<(), log::kv::Error> {
+        *self.0 = Some(i64::try_from(value).map_or(Field::Float(value as f64), Field::Int));
+        Ok(())
+    }
+    fn visit_i64(&mut self, value: i64) -> Result<(), log::kv::Error> {
+        *self.0 = Some(Field::Int(value));
+        Ok(())
+    }
+    fn visit_f64(&mut self, value: f64) -> Result<(), log::kv::Error> {
+        *self.0 = Some(Field::Float(value));
+        Ok(())
+    }
+    fn visit_bool(&mut self, value: bool) -> Result<(), log::kv::Error> {
+        *self.0 = Some(Field::Bool(value));
+        Ok(())
+    }
+    fn visit_str(&mut self, value: &str) -> Result<(), log::kv::Error> {
+        *self.0 = Some(Field::Str(value.to_owned()));
         Ok(())
     }
 }
@@ -271,19 +329,13 @@ pub fn forwarding_blocked(at_least: Duration) -> bool {
     since != 0 && since_epoch().saturating_sub(since) >= at_least.as_nanos() as u64
 }
 
-fn drain(entries: Receiver<Entry>) {
+fn drain(lines: Receiver<Line>, progress: &Progress) {
     IN_DRAIN.set(true);
-    for entry in entries {
-        match entry {
-            Entry::Line(line) => {
-                FORWARDING_SINCE.store(since_epoch(), Ordering::Relaxed);
-                Python::attach(|py| forward_line(py, &line));
-                FORWARDING_SINCE.store(0, Ordering::Relaxed);
-            }
-            Entry::Flush(done) => {
-                let _ = done.send(());
-            }
-        }
+    for line in lines {
+        FORWARDING_SINCE.store(since_epoch(), Ordering::Relaxed);
+        Python::attach(|py| forward_line(py, &line));
+        FORWARDING_SINCE.store(0, Ordering::Relaxed);
+        progress.forwarded();
     }
 }
 
@@ -331,8 +383,15 @@ fn emit(py: Python<'_>, line: &Line) -> PyResult<()> {
         return Ok(());
     }
     let extra = PyDict::new(py);
+    let mut exc_text = None;
     for (key, value) in &line.key_values {
-        extra.set_item(key, value)?;
+        match value {
+            Field::Str(text) if key == EXC_TEXT => exc_text = Some(text),
+            Field::Int(value) => extra.set_item(key, value)?,
+            Field::Float(value) => extra.set_item(key, value)?,
+            Field::Bool(value) => extra.set_item(key, value)?,
+            Field::Str(value) => extra.set_item(key, value)?,
+        }
     }
     let record = access::Logger::make_record(&logger)?.call1((
         &name,
@@ -348,6 +407,9 @@ fn emit(py: Python<'_>, line: &Line) -> PyResult<()> {
     let created = line.at.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs_f64();
     access::LogRecord::set_created(record.as_any(), created)?;
     access::LogRecord::set_msecs(record.as_any(), (created.fract() * 1000.0).floor())?;
+    if let Some(text) = exc_text {
+        access::LogRecord::set_exc_text(record.as_any(), text)?;
+    }
     access::Logger::handle(&logger)?.call1((record,))?;
     Ok(())
 }
@@ -425,13 +487,42 @@ mod logging_tests {
     }
 
     #[test]
-    fn flush_timeout_includes_waiting_for_space_in_the_queue() {
-        let (sender, _receiver) = mpsc::sync_channel(1);
-        let (done, _flushed) = mpsc::sync_channel(1);
-        assert!(sender.try_send(super::Entry::Flush(done)).is_ok());
+    fn a_flush_waits_for_the_lines_queued_before_it_up_to_its_timeout() {
+        let progress = std::sync::Arc::new(super::Progress::default());
         let started = std::time::Instant::now();
-        super::flush_sender(&sender, Duration::from_millis(30));
-        assert!(started.elapsed() < Duration::from_secs(1), "enqueue exceeded the flush deadline");
+        progress.wait(1, Duration::from_millis(30));
+        assert!(started.elapsed() < Duration::from_secs(1), "the wait exceeded its timeout");
+        let drain = progress.clone();
+        let forwarding = std::thread::spawn(move || drain.forwarded());
+        progress.wait(1, Duration::from_secs(10));
+        forwarding.join().unwrap();
+        assert_eq!(*progress.forwarded.lock(), 1);
+    }
+
+    // Catches: a key-value reaching Python's `extra` as its text rather than its value, or a
+    // `None` one present.
+    #[test]
+    fn key_values_keep_their_type_and_a_null_one_is_left_out() {
+        let pairs = [
+            ("pid", log::kv::Value::from(7_u32)),
+            ("uptime", log::kv::Value::from(1.5_f64)),
+            ("has_running_job", log::kv::Value::from(true)),
+            ("room", log::kv::Value::from("logging")),
+            ("room_id", log::kv::Value::null()),
+        ];
+        let record = log::Record::builder().key_values(&pairs).build();
+        let mut fields = Vec::new();
+        record.key_values().visit(&mut super::KeyValues(&mut fields)).unwrap();
+        use super::Field;
+        assert_eq!(
+            fields,
+            [
+                ("pid".to_owned(), Field::Int(7)),
+                ("uptime".to_owned(), Field::Float(1.5)),
+                ("has_running_job".to_owned(), Field::Bool(true)),
+                ("room".to_owned(), Field::Str("logging".into())),
+            ]
+        );
     }
 
     #[test]
@@ -459,6 +550,6 @@ mod logging_tests {
         assert!(!forwarder.enabled(&metadata("py_spy::python_spy", log::Level::Info)));
         assert!(!forwarder.enabled(&metadata("remoteprocess", log::Level::Warn)));
         assert!(forwarder.enabled(&metadata("py_spy::python_spy", log::Level::Error)));
-        assert!(forwarder.enabled(&metadata("livekit.agents", log::Level::Info)));
+        assert!(forwarder.enabled(&metadata(lk_agents_abi::LOG_TARGET, log::Level::Info)));
     }
 }

@@ -56,7 +56,7 @@ async fn list(
         () = stop.cancelled() => {
             cancel.cancel();
             if tokio::time::timeout(HOST_TEARDOWN_TIMEOUT, listing).await.is_err() {
-                log::error!(target: "livekit.agents", "MCP listing cleanup incomplete");
+                log::error!(target: lk_agents_abi::LOG_TARGET, "MCP listing cleanup incomplete");
             }
             Ok(false)
         }
@@ -120,7 +120,7 @@ impl Port for McpToolsetLifecycle {
             Ok(_) => self.state.lock().listed = true,
             Err(error) => {
                 log::warn!(
-                    target: "livekit.agents",
+                    target: lk_agents_abi::LOG_TARGET,
                     "MCP server unavailable, continuing without its tools: {error}, mcp_server={}",
                     self.server
                 );
@@ -165,7 +165,7 @@ impl Port for McpToolsetLifecycle {
                 state.listed = false;
             }
             if let Err(error) = host.close_idle(&cx, &context).await {
-                log::warn!(target: "livekit.agents", "MCP idle close failed: {error}");
+                log::warn!(target: lk_agents_abi::LOG_TARGET, "MCP idle close failed: {error}");
             }
         });
         if let Some((_, previous)) = guard.idle.replace((generation, task)) {

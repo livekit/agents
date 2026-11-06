@@ -11,8 +11,6 @@ pub use args::parse_cli;
 pub use logging::{LogRecord, format_log_record};
 pub use remote_cli::dev_channel;
 
-const LOG: &str = "livekit.agents";
-
 /// The launcher's functions as the host calls them.
 pub struct Commands;
 

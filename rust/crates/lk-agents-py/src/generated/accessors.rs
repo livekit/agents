@@ -272,6 +272,15 @@ impl LogRecord {
     {
         obj.setattr("msecs", value)
     }
+    pub fn exc_text<'py>(obj: &Bound<'py, impl pyo3::PyTypeInfo>) -> PyResult<Bound<'py, PyAny>> {
+        obj.as_any().getattr("exc_text")
+    }
+    pub fn set_exc_text<'py, V>(obj: &Bound<'py, PyAny>, value: V) -> PyResult<()>
+    where
+        V: IntoPyObject<'py>,
+    {
+        obj.setattr("exc_text", value)
+    }
 }
 
 /// Python interface: `atexit`.

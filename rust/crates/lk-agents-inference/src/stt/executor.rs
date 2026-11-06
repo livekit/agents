@@ -221,7 +221,7 @@ impl SttStreamExecutor {
         if let Some(source) = vad_source {
             let deadline = self.clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
             if source.close(deadline).await == lk_agents_abi::Closed::TimedOut {
-                log::error!("STT VAD cleanup incomplete");
+                log::error!(target: lk_agents_abi::LOG_TARGET, "STT VAD cleanup incomplete");
             }
         }
         outcome.map_err(|error| {
@@ -375,7 +375,7 @@ impl AudioUplink {
             && !self.vad_push_warned
         {
             self.vad_push_warned = true;
-            log::warn!(target: "livekit.agents", "STT VAD refused audio: {error}; suppressing repeats");
+            log::warn!(target: lk_agents_abi::LOG_TARGET, "STT VAD refused audio: {error}; suppressing repeats");
         }
         let samples = usize::try_from(frame.sample_rate / FRAMES_PER_SECOND).unwrap_or(0).max(1);
         let stride = usize::from(frame.num_channels) * PCM_SAMPLE_BYTES;

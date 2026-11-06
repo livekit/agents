@@ -3,7 +3,6 @@
 //! launcher the host makes.
 
 use crate::ipc::telemetry;
-use lk_agents_abi::logging::LogWriter;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -17,7 +16,8 @@ use lk_agents_abi::worker::types::RunningJobInfo;
 
 use super::owner::JobSupervisor;
 use super::pool::{Executors, LaunchError, PoolJoinOutcome, PoolOptions, ProcPool, ProcessEvent};
-use super::{Level, secs};
+use super::supervisor::runner_log;
+use super::{SupervisorCallbacks, secs};
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::task::TokioSpawner;
 
@@ -56,10 +56,6 @@ struct HostExecutors {
 
 #[async_trait::async_trait]
 impl Executors for HostExecutors {
-    fn logger(&self) -> LogWriter {
-        self.env.logging
-    }
-
     async fn create(&self) -> Result<Executor, HostError> {
         let launcher = self.host.create(&telemetry::Cx::NONE).await?;
         let process =
@@ -93,7 +89,7 @@ impl Executors for HostExecutors {
 
     fn failed(&self, proc: &Executor, message: &'static str, error: HostError) {
         if let Ok(process) = proc.supervisor() {
-            process.logger().log(Level::Error, message, vec![], Some(error));
+            runner_log!(process.logger().runner(), log::Level::Error, exc_text:% = error.exc_text(); "{message}");
         }
     }
 

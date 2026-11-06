@@ -188,7 +188,7 @@ impl Detection {
             Item::Media(frame) => match self.machine.push(frame) {
                 Ok(next) => ControlFlow::Continue(next),
                 Err(error) => {
-                    log::warn!(target: "livekit.agents", "dropping invalid VAD frame: {error}");
+                    log::warn!(target: lk_agents_abi::LOG_TARGET, "dropping invalid VAD frame: {error}");
                     ControlFlow::Continue(None)
                 }
             },

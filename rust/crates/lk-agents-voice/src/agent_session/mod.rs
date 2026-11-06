@@ -336,7 +336,7 @@ impl AecWarmup {
         self.remaining = Duration::ZERO;
         self.armed = false;
         if re_enabled {
-            log::debug!("aec warmup expired, re-enabling interruptions");
+            log::debug!(target: lk_agents_abi::LOG_TARGET, "aec warmup expired, re-enabling interruptions");
         }
         re_enabled
     }

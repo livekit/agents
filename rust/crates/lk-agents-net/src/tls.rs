@@ -16,7 +16,7 @@ pub fn client_config() -> Result<Arc<ClientConfig>, String> {
         .get_or_init(|| {
             let native = rustls_native_certs::load_native_certs();
             for error in native.errors {
-                log::warn!("failed to load TLS root certificate: {error}");
+                log::warn!(target: lk_agents_abi::LOG_TARGET, "failed to load TLS root certificate: {error}");
             }
             let mut roots = RootCertStore::empty();
             let (accepted, rejected) = roots.add_parsable_certificates(native.certs);
@@ -24,7 +24,7 @@ pub fn client_config() -> Result<Arc<ClientConfig>, String> {
                 return Err("no usable TLS root certificates; check SSL_CERT_FILE/SSL_CERT_DIR or the system trust store".into());
             }
             if rejected > 0 {
-                log::warn!("ignored {rejected} invalid TLS root certificates");
+                log::warn!(target: lk_agents_abi::LOG_TARGET, "ignored {rejected} invalid TLS root certificates");
             }
             let provider = rustls::crypto::ring::default_provider();
             let _already_installed = provider.clone().install_default();

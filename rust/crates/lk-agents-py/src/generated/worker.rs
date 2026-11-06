@@ -2503,58 +2503,6 @@ impl ::lk_agents_abi::worker::ipc_host::JobLauncher for JobLauncherProxy {
             })
         })
     }
-
-    fn log(
-        &self,
-        level: i32,
-        message: ::std::string::String,
-        extra: ::serde_json::Map<::std::string::String, ::serde_json::Value>,
-        error: ::std::option::Option<::lk_agents_abi::errors::HostError>,
-    ) -> ::std::result::Result<(), ::lk_agents_abi::errors::HostError> {
-        let host = ::std::sync::Arc::clone(&self.host);
-        let level_arg = level;
-        let message_arg = message;
-        let extra_arg = extra;
-        let error_arg = error;
-        let out = ::lk_agents_runtime::host::call_now(
-            &crate::py_calls::Entry,
-            ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 4] = [
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(level_arg, py)?,
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(message_arg, py)?,
-                    crate::py_values::extra_to_py(py, &extra_arg)?.into_any(),
-                    match error_arg {
-                        None => py.None().into_bound(py),
-                        Some(x) => crate::py_errors::ExceptionValue::to_exception(x, py)?,
-                    },
-                ];
-                Ok((
-                    host.bind(py).getattr("_core_log")?,
-                    ::pyo3::types::PyTuple::new(py, args)?,
-                    None,
-                ))
-            }),
-        );
-        ::pyo3::Python::attach(|py| {
-            let out = match out {
-                Ok(out) => out,
-                Err(e) => {
-                    return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
-                }
-            };
-            let o = out.value.bind(py);
-            let () = ({
-                let _ = o;
-                ::pyo3::PyResult::Ok(())
-            })
-            .map_err(|e| {
-                <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(
-                    py, &e,
-                )
-            })?;
-            Ok(())
-        })
-    }
 }
 
 // Declared in rust/crates/lk-agents-abi/src/worker/ipc_host.rs.
@@ -3109,58 +3057,6 @@ impl ::lk_agents_abi::worker::ipc_host::JobProcess for JobProcessProxy {
                 let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
                 Ok(())
             })
-        })
-    }
-
-    fn log(
-        &self,
-        level: i32,
-        message: ::std::string::String,
-        extra: ::serde_json::Map<::std::string::String, ::serde_json::Value>,
-        error: ::std::option::Option<::lk_agents_abi::errors::HostError>,
-    ) -> ::std::result::Result<(), ::lk_agents_abi::errors::HostError> {
-        let host = ::std::sync::Arc::clone(&self.host);
-        let level_arg = level;
-        let message_arg = message;
-        let extra_arg = extra;
-        let error_arg = error;
-        let out = ::lk_agents_runtime::host::call_now(
-            &crate::py_calls::Entry,
-            ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 4] = [
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(level_arg, py)?,
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(message_arg, py)?,
-                    crate::py_values::extra_to_py(py, &extra_arg)?.into_any(),
-                    match error_arg {
-                        None => py.None().into_bound(py),
-                        Some(x) => crate::py_errors::ExceptionValue::to_exception(x, py)?,
-                    },
-                ];
-                Ok((
-                    host.bind(py).getattr("_core_log")?,
-                    ::pyo3::types::PyTuple::new(py, args)?,
-                    None,
-                ))
-            }),
-        );
-        ::pyo3::Python::attach(|py| {
-            let out = match out {
-                Ok(out) => out,
-                Err(e) => {
-                    return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
-                }
-            };
-            let o = out.value.bind(py);
-            let () = ({
-                let _ = o;
-                ::pyo3::PyResult::Ok(())
-            })
-            .map_err(|e| {
-                <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(
-                    py, &e,
-                )
-            })?;
-            Ok(())
         })
     }
 }

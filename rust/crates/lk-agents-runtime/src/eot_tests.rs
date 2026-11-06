@@ -43,7 +43,7 @@ impl log::Log for HostLogger {
         true
     }
     fn log(&self, record: &log::Record<'_>) {
-        if record.target() == "livekit.agents" && record.level() == log::Level::Warn {
+        if record.target() == lk_agents_abi::LOG_TARGET && record.level() == log::Level::Warn {
             self.0.send(()).unwrap();
             with_host_lock(|| ());
         }

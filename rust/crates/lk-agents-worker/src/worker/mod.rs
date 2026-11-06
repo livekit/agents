@@ -14,7 +14,6 @@ use futures_util::{FutureExt, StreamExt, future::BoxFuture, stream::FuturesUnord
 use livekit_protocol::{
     self as proto, JobStatus, RegisterWorkerResponse, ServerMessage, WorkerMessage,
 };
-use lk_agents_abi::logging::LogWriter;
 use lk_agents_abi::{Clock, TimerSet, WallAnchor};
 use lk_agents_abi::{OwnedTask, SpawnerExt};
 use lk_agents_net::clock::RealClock;
@@ -834,16 +833,7 @@ impl Worker {
             });
         }
         let delay = retry_delay(*retries);
-        self.host.logger().emit(
-            log::Level::Warn,
-            format!(
-                "worker connection to {} failed ({:?}): {error}; retry {}/{} in {delay:?}",
-                self.runtime_cfg.server_url,
-                self.transport.kind(),
-                *retries + 1,
-                self.runtime_cfg.max_retry,
-            ),
-        );
+        log::warn!(target: lk_agents_abi::LOG_TARGET, url = self.runtime_cfg.server_url.as_str(), transport:? = self.transport.kind(), retry = *retries + 1, max_retry = self.runtime_cfg.max_retry, delay:? = delay; "worker connection failed: {error}");
         connection.retry_after(delay);
         *retries += 1;
         Ok(())
@@ -896,11 +886,6 @@ pub use lk_agents_abi::errors::{HostError, HostResult};
 
 #[async_trait]
 pub trait WorkerHost: Send + Sync {
-    /// Logging is supplied by the hosting process; hermetic drivers may leave it disabled.
-    fn logger(&self) -> LogWriter {
-        LogWriter::disabled()
-    }
-
     /// Whether this worker takes the job.
     async fn on_job_request(&self, req: JobRequest) -> JobDecision;
 

@@ -19,9 +19,6 @@ use super::{
 };
 use proto::agent_session_message::Message;
 
-/// The log target every line here lands on (the host maps it to its logger name).
-const LOG: &str = "livekit.agents";
-
 /// `SessionHost` (`remote_session.py:321`), running. Events queue from construction and one writer
 /// drains them in order; each request is a task named by its type.
 pub struct SessionServer {
@@ -245,7 +242,7 @@ impl RemoteSessionLink {
 
     fn send(&self, event: WireEvent, at: Option<f64>) {
         if let Err(e) = self.host.send_wire(event, at) {
-            log::error!(target: LOG, error = e.as_str();
+            log::error!(target: lk_agents_abi::LOG_TARGET, error = e.as_str();
                 "failed to forward a session event to the remote client");
         }
     }
@@ -265,7 +262,7 @@ impl RemoteSessionLink {
             self.tasks.spawn(self.spawner.as_ref(), "remote session close", async move {
                 let cancelled = host.aclose(SHUTDOWN_DRAIN).await;
                 if !cancelled.is_empty() {
-                    log::warn!(target: LOG, request_types = cancelled.join(", ").as_str();
+                    log::warn!(target: lk_agents_abi::LOG_TARGET, request_types = cancelled.join(", ").as_str();
                         "cancelled in-flight session requests while closing");
                 }
                 closed.send_replace(true);
@@ -282,7 +279,7 @@ async fn write_loop(
     // nobody awaits an event, so a failed one is logged rather than raised
     while let Some(msg) = rx.recv().await {
         if let Err(e) = transport.send_message(&msg).await {
-            log::warn!(target: LOG, error = e.to_string().as_str(); "failed to send session event");
+            log::warn!(target: lk_agents_abi::LOG_TARGET, error = e.to_string().as_str(); "failed to send session event");
         }
     }
 }
@@ -297,7 +294,7 @@ async fn recv_loop(
             Ok(Some(msg)) => msg,
             Ok(None) => return,
             Err(e) => {
-                log::warn!(target: LOG, error = e.to_string().as_str(); "error processing session message");
+                log::warn!(target: lk_agents_abi::LOG_TARGET, error = e.to_string().as_str(); "error processing session message");
                 return;
             }
         };
@@ -330,13 +327,13 @@ async fn handle_request(
     let outcome = match host.handle_request(&req).await {
         Ok(Some(resp)) => transport.send_message(&resp).await,
         Ok(None) => {
-            log::warn!(target: LOG, request_id = req.request_id.as_str(); "unknown session request");
+            log::warn!(target: lk_agents_abi::LOG_TARGET, request_id = req.request_id.as_str(); "unknown session request");
             Ok(())
         }
         Err(e) => Err(e),
     };
     if let Err(e) = outcome {
-        log::warn!(target: LOG, request_id = req.request_id.as_str(), error = e.to_string().as_str();
+        log::warn!(target: lk_agents_abi::LOG_TARGET, request_id = req.request_id.as_str(), error = e.to_string().as_str();
             "error handling session request");
         let _ = transport.send_message(&super::internal_error_response(&req.request_id)).await;
     }

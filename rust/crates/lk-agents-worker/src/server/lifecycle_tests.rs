@@ -1,5 +1,4 @@
 use super::*;
-use lk_agents_abi::logging::LogWriter;
 
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::worker::server_host::ServerHost;
@@ -113,7 +112,7 @@ impl ServerHost for Host {
 }
 
 fn hosted(host: &Host) -> ServerCallbacks {
-    ServerCallbacks::new(Arc::new(host.clone()), LogWriter::disabled())
+    ServerCallbacks::new(Arc::new(host.clone()))
 }
 
 fn options() -> ServerStart {

@@ -36,9 +36,7 @@ impl Worker {
                 self.worker_load = load;
                 self.load_health.last_valid = Some(self.load_requested);
             } else {
-                self.host
-                    .logger()
-                    .emit(log::Level::Warn, "invalid or timed out worker load sample".into());
+                log::warn!(target: lk_agents_abi::LOG_TARGET, "invalid or timed out worker load sample");
             }
             self.finish_load(outbox);
             return;
@@ -48,9 +46,7 @@ impl Worker {
             Ok(permit) => permit,
             Err(error) => {
                 self.load_pending = false;
-                self.host
-                    .logger()
-                    .emit(log::Level::Debug, format!("worker CPU sample deferred error={error}"));
+                log::debug!(target: lk_agents_abi::LOG_TARGET, "worker CPU sample deferred: {error}");
                 self.finish_load(outbox);
                 return;
             }
@@ -75,10 +71,9 @@ impl Worker {
                     self.load_health.last_valid = Some(self.load_requested);
                 }
             }
-            Err(error) => self
-                .host
-                .logger()
-                .emit(log::Level::Error, format!("worker CPU sampler failed error={error}")),
+            Err(error) => {
+                log::error!(target: lk_agents_abi::LOG_TARGET, "worker CPU sampler failed: {error}")
+            }
         }
         self.finish_load(outbox);
     }

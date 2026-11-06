@@ -114,7 +114,7 @@ impl ImageResolver for Images {
         )
         .map_err(|cause| format!("image {}: {cause}", image.id))?;
         if let Some(header) = prepared.overridden_mime {
-            log::warn!(target: "livekit.agents", declared_mime = image.mime_type.as_deref().unwrap_or_default(), header_mime = header.as_str(); "image MIME declaration overrides data URL header");
+            log::warn!(target: lk_agents_abi::LOG_TARGET, declared_mime = image.mime_type.as_deref().unwrap_or_default(), header_mime = header.as_str(); "image MIME declaration overrides data URL header");
         }
         Ok(SerializedImage {
             data_bytes: prepared.data,

@@ -1,6 +1,5 @@
 //! Connection to the external `lk` launcher for server discovery and job reloads.
 
-use crate::LOG;
 use lk_agents_abi::errors::HostError;
 use prost::Message as _;
 use std::sync::Arc;
@@ -83,7 +82,7 @@ pub async fn dev_channel(
     if let Err(err) =
         serve_dev_channel(cli_addr, agent_name, url, api_key, api_secret, server).await
     {
-        log::error!(target: LOG, "dev channel failed: {err}");
+        log::error!(target: lk_agents_abi::LOG_TARGET, "dev channel failed: {err}");
     }
 }
 
@@ -120,7 +119,7 @@ async fn serve_dev_channel(
     if let Some(Message::GetRunningJobsResponse(kept)) = first
         && !kept.jobs.is_empty()
     {
-        log::info!(target: LOG, "reloading {} job(s)", kept.jobs.len());
+        log::info!(target: lk_agents_abi::LOG_TARGET, "reloading {} job(s)", kept.jobs.len());
         let mut jobs = Vec::with_capacity(kept.jobs.len());
         for mut job in kept.jobs {
             job.token = lk_agents_net::token::extend_job_token(&job.token, &api_key, &api_secret)

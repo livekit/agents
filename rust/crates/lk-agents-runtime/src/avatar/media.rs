@@ -44,7 +44,7 @@ impl Media {
                 // settles, including when the caller receives the initialization failure.
                 spawner.spawn_detached(async move {
                     if let Err(error) = video.close(&telemetry::Cx::NONE).await {
-                        log::warn!("RTC source rollback: {error}");
+                        log::warn!(target: lk_agents_abi::LOG_TARGET, "RTC source rollback: {error}");
                     }
                 });
                 return Err(error);
@@ -134,7 +134,7 @@ impl AvatarMedia for Media {
         Box::pin(async move {
             if let Err(error) = self.publish_tracks().await {
                 if let Err(cleanup) = self.close().await {
-                    log::warn!("avatar publication rollback: {cleanup}");
+                    log::warn!(target: lk_agents_abi::LOG_TARGET, "avatar publication rollback: {cleanup}");
                 }
                 return Err(provider_error(error));
             }

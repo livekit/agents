@@ -14,8 +14,6 @@ use std::collections::{BTreeMap, VecDeque};
 use lk_agents_abi::errors::ProviderError;
 pub use lk_agents_abi::utils::video::{AudioReceiverFrame, AvatarFrame, MediaFrame};
 
-const LOG: &str = "livekit.agents";
-
 /// The playback position of a segment cut before any of it played.
 const NOT_PLAYED: f64 = 0.0;
 
@@ -849,7 +847,7 @@ impl RunnerCore {
 }
 
 fn log_error(what: &str, e: &ProviderError) {
-    log::error!(target: LOG, error = e.to_string().as_str(); "Error in {what}");
+    log::error!(target: lk_agents_abi::LOG_TARGET, error = e.to_string().as_str(); "Error in {what}");
 }
 
 #[cfg(test)]

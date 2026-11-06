@@ -81,7 +81,7 @@ pub fn notify<N: HostNotices>(
 ) {
     match admit(scope, requires) {
         Ok(context) => notices.notify(context.clone(), label, lossy, call),
-        Err(refusal) => log::warn!(target: "livekit.agents", "{label} failed: {refusal}"),
+        Err(refusal) => log::warn!(target: lk_agents_abi::LOG_TARGET, "{label} failed: {refusal}"),
     }
 }
 

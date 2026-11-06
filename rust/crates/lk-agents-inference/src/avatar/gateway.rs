@@ -31,8 +31,6 @@ use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::http::{GatewayHttp, Reporter, Sent, Stamped, read_body};
 use lk_agents_net::task::{TaskSet, TokioSpawner};
 
-const LOG: &str = "livekit.agents";
-
 /// Transport observations attempts may report ahead of the driver.
 const OBSERVATION_QUEUE: usize = 32;
 
@@ -394,15 +392,15 @@ impl Driver {
                     }
                 }
                 AvatarSessionEffect::AttemptFailed { attempt, error, .. } => {
-                    log::warn!(target: LOG, provider, attempt, error = error.message.as_str(); "avatar gateway request failed, retrying");
+                    log::warn!(target: lk_agents_abi::LOG_TARGET, provider, attempt, error = error.message.as_str(); "avatar gateway request failed, retrying");
                 }
                 AvatarSessionEffect::CreateFinished(outcome) => self.deliver(outcome),
                 AvatarSessionEffect::Retiring { session, reason } => {
-                    log::info!(target: LOG, provider, session_id = session.session_id.as_deref().unwrap_or_default(), reason = format!("{reason:?}").as_str();
+                    log::info!(target: lk_agents_abi::LOG_TARGET, provider, session_id = session.session_id.as_deref().unwrap_or_default(), reason = format!("{reason:?}").as_str();
                         "terminating an avatar session no caller holds");
                 }
                 AvatarSessionEffect::Unterminable(session) => {
-                    log::warn!(target: LOG, provider, session_id = session.session_id.as_deref().unwrap_or_default();
+                    log::warn!(target: lk_agents_abi::LOG_TARGET, provider, session_id = session.session_id.as_deref().unwrap_or_default();
                         "avatar session has no provider_session_id or terminate_token; it cannot be explicitly terminated and will bill until its provider idle timeout");
                 }
                 AvatarSessionEffect::SessionTerminated(session) => {
@@ -412,17 +410,17 @@ impl Driver {
                     }
                 }
                 AvatarSessionEffect::TerminateFailed { session, error } => {
-                    log::warn!(target: LOG, provider, provider_session_id = session.provider_session_id.as_deref().unwrap_or_default(), error = error.message.as_str();
+                    log::warn!(target: lk_agents_abi::LOG_TARGET, provider, provider_session_id = session.provider_session_id.as_deref().unwrap_or_default(), error = error.message.as_str();
                         "failed to terminate inference avatar session; it will keep billing until its provider idle timeout unless aclose() is called again");
                 }
                 AvatarSessionEffect::CleanupIncomplete { request, attempt } => {
                     self.cleanup_incomplete = true;
-                    log::error!(target: LOG, provider, request = request.0, attempt;
+                    log::error!(target: lk_agents_abi::LOG_TARGET, provider, request = request.0, attempt;
                         "avatar gateway request did not settle by its cleanup deadline; a provider session it created may bill until its idle timeout");
                 }
                 AvatarSessionEffect::RetirementIncomplete { request } => {
                     self.cleanup_incomplete = true;
-                    log::error!(target: LOG, provider, request = request.0;
+                    log::error!(target: lk_agents_abi::LOG_TARGET, provider, request = request.0;
                         "the gateway never answered an avatar create no caller took; a provider session it made may bill until its idle timeout");
                 }
             }
@@ -446,7 +444,7 @@ impl Driver {
                         provider_session_id: session.provider_session_id.clone(),
                     };
                     if !session.terminable() {
-                        log::warn!(target: LOG, provider = self.opts.provider.as_str(), session_id = session.session_id.as_deref().unwrap_or_default();
+                        log::warn!(target: lk_agents_abi::LOG_TARGET, provider = self.opts.provider.as_str(), session_id = session.session_id.as_deref().unwrap_or_default();
                             "avatar gateway create response had no provider_session_id or terminate_token; this session cannot be explicitly terminated and will bill until its provider idle timeout");
                     }
                     self.queued.push(AvatarSessionEvent::Adopted);
@@ -529,7 +527,7 @@ impl Driver {
         let closed = self.reporter.clone();
         let task = TokioSpawner::new(self.runtime.clone()).spawn_settled(work, move |outcome| async move {
             if outcome == TaskOutcome::Panicked {
-                log::error!(target: LOG, request = request.0, attempt; "avatar gateway request attempt panicked");
+                log::error!(target: lk_agents_abi::LOG_TARGET, request = request.0, attempt; "avatar gateway request attempt panicked");
             }
             closed.report(AvatarSessionEvent::AttemptClosed { request, attempt }).await;
         });

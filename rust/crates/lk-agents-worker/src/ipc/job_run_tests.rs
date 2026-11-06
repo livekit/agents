@@ -9,7 +9,6 @@ use lk_agents_abi::telemetry::record::{Record, RecordSink, SpanContext, SpanReco
 use lk_agents_abi::worker::ipc_host::JobRun as _;
 use lk_agents_abi::worker::job::StartJobFields;
 use lk_agents_net::telemetry::Tracer;
-use serde_json::{Map, Value};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 #[derive(Default)]
@@ -39,7 +38,6 @@ struct Host {
     events: Mutex<Vec<&'static str>>,
     /// Each step and the span current in it.
     calls: Mutex<Vec<(&'static str, Option<SpanContext>)>>,
-    logs: Mutex<Vec<String>>,
 }
 
 #[derive(Default)]
@@ -150,20 +148,11 @@ impl JobProcess for Host {
             Ok(())
         })
     }
-    fn log(
-        &self,
-        _: i32,
-        message: String,
-        _: Map<String, Value>,
-        _: Option<HostError>,
-    ) -> Result<(), HostError> {
-        self.logs.lock().push(message);
-        Ok(())
-    }
 }
 
 #[tokio::test(start_paused = true)]
 async fn report_preparation_and_upload_share_one_budget_and_shutdown_always_continues() {
+    crate::ipc::tests::logs::capture();
     for (segment, late) in
         [(UPLOAD_TIMEOUT_SECONDS * 2 / 3, true), (UPLOAD_TIMEOUT_SECONDS / 4, false)]
     {
@@ -174,7 +163,6 @@ async fn report_preparation_and_upload_share_one_budget_and_shutdown_always_cont
             cancelled: Arc::default(),
             events: Mutex::new(Vec::new()),
             calls: Mutex::new(Vec::new()),
-            logs: Mutex::new(Vec::new()),
         });
         let spans = Arc::new(Spans::default());
         let clock: Arc<dyn lk_agents_abi::Clock> = Arc::new(lk_agents_abi::VirtualClock::new());
@@ -245,7 +233,9 @@ async fn report_preparation_and_upload_share_one_budget_and_shutdown_always_cont
         assert_eq!(upload.status != Status::Unset, late, "a late upload records the timeout");
         if late {
             assert!(
-                host.logs.lock().iter().any(|line| line.contains("session_end_upload timed out"))
+                crate::ipc::tests::logs::lines()
+                    .iter()
+                    .any(|line| line.message.contains("session_end_upload timed out"))
             );
         }
         assert!(host.objects.values.lock().is_empty(), "shutdown retained a host object");

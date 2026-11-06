@@ -17,10 +17,11 @@ use lk_agents_net::task::TokioSpawner;
 use parking_lot::Mutex;
 use tokio::sync::{Notify, watch};
 
-use super::Level;
+use super::SupervisorCallbacks;
 use super::executor::{Connection, Exit, Runner, RunnerExecutor, host_error};
 use super::ipc_channel::{self, Channel};
 use super::owner::{JobLaunch, JobLogger, Report};
+use super::supervisor::runner_log;
 
 #[cfg(unix)]
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
@@ -599,10 +600,7 @@ mod tests {
     /// A forkserver child whose reaping receipt the test writes on `receipt`.
     fn forkserver_runner(child: &OwnedChild) -> (JobProcess, UnixStream) {
         let (sentinel, receipt) = UnixStream::pair().unwrap();
-        let logger = JobLogger::new(
-            lk_agents_abi::logging::LogWriter::disabled(),
-            Arc::new(crate::ipc::pool::tests::Numbered(0)),
-        );
+        let logger = JobLogger::default();
         let resource = ProcessResource::new(
             child.0.id(),
             sentinel.into_raw_fd().into(),
@@ -771,7 +769,7 @@ impl Tracked {
     /// The first failure only: the watcher keeps retrying.
     fn report(&mut self, logger: &JobLogger, message: String) {
         if !std::mem::replace(&mut self.failed, true) {
-            logger.log(Level::Error, &message, Vec::new(), None);
+            runner_log!(logger.runner(), log::Level::Error; "{message}");
         }
     }
 
@@ -820,12 +818,7 @@ async fn watch(
             };
             launching = None;
             if let Some(cause) = cause {
-                logger.log(
-                    Level::Error,
-                    &format!("process launch failed: {cause}"),
-                    Vec::new(),
-                    None,
-                );
+                runner_log!(logger.runner(), log::Level::Error; "process launch failed: {cause}");
                 process.lock().stopping = true;
             }
         }
@@ -894,8 +887,7 @@ impl Runner for JobProcess {
             Err(error) => error,
         };
         if !self.process.lock().exited {
-            let message = format!("failed to get memory info for process: {error}");
-            self.logger.log(Level::Warning, &message, Vec::new(), None);
+            runner_log!(self.logger.runner(), log::Level::Warn; "failed to get memory info for process: {error}");
         }
         None
     }

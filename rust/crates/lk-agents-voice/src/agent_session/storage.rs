@@ -112,7 +112,7 @@ impl VoiceDriver {
     /// say is still heard; no turn from here on takes the lane or commits.
     pub(crate) fn storage_lost(&mut self, speech: SpeechId) {
         if self.session.storage.enabled {
-            log::warn!(target: "livekit.agents", "the voice lane lease was lost: the call continues without storage");
+            log::warn!(target: lk_agents_abi::LOG_TARGET, "the voice lane lease was lost: the call continues without storage");
             self.record_trace(crate::trace::SpeechStep::LaneLost { speech });
         }
         self.session.storage.enabled = false;

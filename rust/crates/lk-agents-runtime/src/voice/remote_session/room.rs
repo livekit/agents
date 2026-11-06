@@ -13,9 +13,6 @@ use tokio::sync::Mutex as AsyncMutex;
 
 use super::{SessionTransport, TOPIC_SESSION_MESSAGES, proto};
 
-/// The Python logger every line here lands on.
-const LOG: &str = "livekit.agents";
-
 pub struct RoomTransport(Arc<Inner>);
 
 struct Inner {
@@ -132,7 +129,7 @@ impl SessionTransport for RoomTransport {
                 match proto::AgentSessionMessage::decode(data.as_slice()) {
                     Ok(msg) => return Ok(Some(msg)),
                     Err(e) => {
-                        log::warn!(target: LOG, error = e.to_string().as_str();
+                        log::warn!(target: lk_agents_abi::LOG_TARGET, error = e.to_string().as_str();
                         "failed to read binary stream message");
                     }
                 }
@@ -156,7 +153,7 @@ impl SessionTransport for RoomTransport {
                 && let Err(error) =
                     self.0.room.unregister_byte_stream_handler(TOPIC_SESSION_MESSAGES)
             {
-                log::error!(target: LOG, "room session handler cleanup failed: {error}");
+                log::error!(target: lk_agents_abi::LOG_TARGET, "room session handler cleanup failed: {error}");
             }
             if let Ok(mut incoming) = self.0.incoming.try_lock() {
                 let source = incoming.take();
@@ -165,7 +162,7 @@ impl SessionTransport for RoomTransport {
                     let deadline = self.0.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT);
                     let closed = source.close(deadline).await;
                     if closed != Closed::Clean {
-                        log::error!(target: LOG, "room session receiver cleanup failed: {closed:?}");
+                        log::error!(target: lk_agents_abi::LOG_TARGET, "room session receiver cleanup failed: {closed:?}");
                     }
                 }
             }

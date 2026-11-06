@@ -473,7 +473,7 @@ impl Notifier {
             let mut queue = self.0.queue.lock();
             if lossy && queue.entries.len() >= NOTIFY_QUEUE {
                 drop(queue);
-                log::warn!(target: "livekit.agents", "{label} dropped: {NOTIFY_QUEUE} notifications are waiting for the host loop");
+                log::warn!(target: lk_agents_abi::LOG_TARGET, "{label} dropped: {NOTIFY_QUEUE} notifications are waiting for the host loop");
                 return;
             }
             queue.entries.push_back((context.clone(), label, call));
@@ -487,7 +487,7 @@ impl Notifier {
                 std::mem::take(&mut queue.entries)
             };
             drop(dropped);
-            log::warn!(target: "livekit.agents", "{label} failed: {e}");
+            log::warn!(target: lk_agents_abi::LOG_TARGET, "{label} failed: {e}");
         }
     }
 
@@ -548,7 +548,7 @@ fn deliver(py: Python<'_>, notices: &Notices) {
                 Ok(())
             })();
             if let Err(e) = delivered {
-                log::warn!(target: "livekit.agents", "{label} failed: {e}");
+                log::warn!(target: lk_agents_abi::LOG_TARGET, "{label} failed: {e}");
             }
         }
     }

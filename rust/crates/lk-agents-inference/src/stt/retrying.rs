@@ -89,7 +89,7 @@ impl Failure<'_> {
             if let Some(hook) = hook {
                 hook(error.clone(), retries + 1, delay);
             }
-            log::warn!(target: "livekit.agents", stt = label, streamed = kind == RequestKind::SttStream;
+            log::warn!(target: lk_agents_abi::LOG_TARGET, stt = label, streamed = kind == RequestKind::SttStream;
                 "failed to recognize speech: {error}, retrying in {}s", delay.as_secs_f64());
             Ok(())
         } else {

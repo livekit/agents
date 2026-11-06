@@ -112,7 +112,7 @@ impl Inner {
         };
         for view in views {
             if let Err(error) = view.release() {
-                log::warn!("the run's context hydration could not release: {error}");
+                log::warn!(target: lk_agents_abi::LOG_TARGET, "the run's context hydration could not release: {error}");
             }
         }
     }
@@ -293,7 +293,7 @@ impl lk_agents_abi::agent::resources::RunResources for RunResources {
         if let Some(view) = retired
             && let Err(error) = view.release()
         {
-            log::warn!("the ended run's context hydration could not release: {error}");
+            log::warn!(target: lk_agents_abi::LOG_TARGET, "the ended run's context hydration could not release: {error}");
         }
     }
     fn aclose(&self) -> BoxFuture<'static, Outcome> {
@@ -305,7 +305,7 @@ impl lk_agents_abi::agent::resources::RunResources for RunResources {
         let closed = self.aclose();
         Box::pin(async move {
             if let Err(error) = closed.await {
-                log::warn!("the failed run's resources could not close: {error}");
+                log::warn!(target: lk_agents_abi::LOG_TARGET, "the failed run's resources could not close: {error}");
             }
         })
     }

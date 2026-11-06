@@ -65,7 +65,7 @@ pub fn parse_logged(raw: &str) -> Result<Map<String, Value>, String> {
             other => other.to_string(),
         };
         log::warn!(
-            target: "livekit.agents",
+            target: lk_agents_abi::LOG_TARGET,
             (crate::telemetry::log_keys::RAW_ARGUMENTS) = raw_arguments.as_str(),
             (crate::telemetry::log_keys::REPAIRED) = repaired.as_str(),
             (crate::telemetry::log_keys::ERROR) = error.as_str();

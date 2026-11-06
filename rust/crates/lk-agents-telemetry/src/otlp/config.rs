@@ -146,7 +146,7 @@ impl AppConfig {
             static WARNED: std::sync::Once = std::sync::Once::new();
             WARNED.call_once(|| {
                 log::warn!(
-                    target: "livekit.agents",
+                    target: lk_agents_abi::LOG_TARGET,
                     "unsupported OTLP protocol {other:?}; using http/protobuf"
                 );
             });

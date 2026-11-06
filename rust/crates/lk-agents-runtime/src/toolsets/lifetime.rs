@@ -139,11 +139,13 @@ async fn roll_back_children(hooks: &dyn ToolsetHooks) {
     match hooks.children() {
         Ok(Some(children)) => {
             if let Err(error) = children.close().await {
-                log::warn!("toolset setup rollback: {error}");
+                log::warn!(target: lk_agents_abi::LOG_TARGET, "toolset setup rollback: {error}");
             }
         }
         Ok(None) => {}
-        Err(error) => log::warn!("toolset child lookup during rollback: {error}"),
+        Err(error) => {
+            log::warn!(target: lk_agents_abi::LOG_TARGET, "toolset child lookup during rollback: {error}")
+        }
     }
 }
 

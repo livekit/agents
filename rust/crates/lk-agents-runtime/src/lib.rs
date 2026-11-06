@@ -46,7 +46,6 @@ pub use lk_agents_telemetry as telemetry_export;
 pub mod a2a;
 pub mod agent_run;
 pub mod host;
-pub mod logging;
 pub mod mcp;
 pub mod monotone;
 mod output_validation;

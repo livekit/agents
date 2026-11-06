@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use lk_agents_abi::voice::io::{AvatarPlaybackSegment, PlaybackFinished, PlaybackSegment};
 
-use super::{FinishedPayload, LOG, RPC_PLAYBACK_FINISHED, RPC_PLAYBACK_STARTED};
+use super::{FinishedPayload, RPC_PLAYBACK_FINISHED, RPC_PLAYBACK_STARTED};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputError {
@@ -91,13 +91,13 @@ pub fn after_clear(
         Ok((code, message)) => format!("{code}: {message}"),
         Err(error) => error,
     };
-    log::error!(target: LOG, error = failed.as_str(); "failed to perform clear buffer rpc");
+    log::error!(target: lk_agents_abi::LOG_TARGET, error = failed.as_str(); "failed to perform clear buffer rpc");
     AfterClear::AwaitFinish { give_up_after: Some(Duration::ZERO) }
 }
 
 /// The segment's finish when the avatar never acknowledged a clear: unheard, interrupted.
 pub fn unacknowledged_clear() -> PlaybackFinished {
-    log::warn!(target: LOG,
+    log::warn!(target: lk_agents_abi::LOG_TARGET,
         "playback clear was not acknowledged with segment identity; ending the captured segment unheard");
     PlaybackFinished {
         playback_position: Duration::ZERO,

@@ -237,7 +237,7 @@ impl VoiceDriver {
         let swept = self.telemetry.close_root();
         if swept > 0 {
             log::warn!(
-                target: "livekit.agents",
+                target: lk_agents_abi::LOG_TARGET,
                 swept = swept;
                 "spans of the session were still open after their owners ended them"
             );
@@ -250,7 +250,7 @@ impl VoiceDriver {
         if self.session.span.is_none() {
             return false;
         }
-        log::warn!(target: "livekit.agents", "the voice session ended without its close");
+        log::warn!(target: lk_agents_abi::LOG_TARGET, "the voice session ended without its close");
         self.close_spans();
         self.flush_spans();
         true

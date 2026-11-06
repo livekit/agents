@@ -327,7 +327,7 @@ impl VoiceDriver {
                 }
                 // As a text run reports it: the work is still owned and named, the reply goes on.
                 AgentRunEffect::IncompleteCleanup { pending } => log::error!(
-                    target: "livekit.agents",
+                    target: lk_agents_abi::LOG_TARGET,
                     "a reply's cleanup missed its deadline: {}",
                     pending.join(", ")
                 ),

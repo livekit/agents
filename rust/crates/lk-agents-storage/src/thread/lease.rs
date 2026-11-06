@@ -47,7 +47,7 @@ impl Drop for Waiter {
         // an owner change also clears the mark if the worker or database is unavailable.
         self.spawner.spawn_detached(async move {
             if let Err(error) = db.exec(WithdrawWaiter { lane: &lane, holder: &holder }).await {
-                log::debug!(target: "livekit.agents", lane = lane.as_str(); "waiter cleanup failed: {error}");
+                log::debug!(target: lk_agents_abi::LOG_TARGET, lane = lane.as_str(); "waiter cleanup failed: {error}");
             }
         });
     }
@@ -107,7 +107,7 @@ impl Ownership {
             *lost = Some(reason.clone());
             true
         }) {
-            log::warn!(target: "livekit.agents", lane = self.lane.as_str(); "{reason}");
+            log::warn!(target: lk_agents_abi::LOG_TARGET, lane = self.lane.as_str(); "{reason}");
         }
     }
 }
@@ -259,7 +259,7 @@ impl LeaseRenewal {
                 return ControlFlow::Break(());
             }
             Err(error) if error.retryable() => {
-                log::debug!(target: "livekit.agents", lane = self.fence.lane.as_str(); "lease extend failed, retrying: {error}");
+                log::debug!(target: lk_agents_abi::LOG_TARGET, lane = self.fence.lane.as_str(); "lease extend failed, retrying: {error}");
             }
             Err(error) => {
                 self.ownership.lose(format!("lease renewal failed: {error}"));

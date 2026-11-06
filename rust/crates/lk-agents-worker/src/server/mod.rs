@@ -14,7 +14,6 @@ use crate::{DrainError, Worker, WorkerClient, WorkerCommand, WorkerHost, WorkerN
 use futures_util::{FutureExt, StreamExt, future::BoxFuture, stream::FuturesUnordered};
 use host::ServerCallbacks;
 use lk_agents_abi::errors::HostError;
-use lk_agents_abi::logging::LogWriter;
 use lk_agents_abi::{OwnedTask, SpawnerExt, TaskError};
 use lk_agents_net::task::TokioSpawner;
 use std::future::Future;
@@ -121,16 +120,9 @@ pub fn simulated_job(
 
 /// The answer to a job request: a server with no voice door rejects it (another worker may take
 /// it), one with a voice door accepts it.
-pub fn job_decision(req: &JobRequest, has_rtc: bool, logging: LogWriter) -> JobDecision {
+pub fn job_decision(req: &JobRequest, has_rtc: bool) -> JobDecision {
     if !has_rtc {
-        logging.emit(
-            log::Level::Warn,
-            format!(
-                "a job reached a server with no rtc_session; rejecting it job_id={} room={}",
-                req.job.id,
-                req.room_name()
-            ),
-        );
+        log::warn!(target: lk_agents_abi::LOG_TARGET, job_id = req.job.id.as_str(), room = req.room_name(); "a job reached a server with no rtc_session; rejecting it");
         return JobDecision::Reject;
     }
     JobDecision::Accept(AcceptArguments {
@@ -215,10 +207,6 @@ pub struct ServerRuntime {
 }
 
 impl ServerRuntime {
-    pub(crate) fn logger(&self) -> LogWriter {
-        self.host.logging
-    }
-
     pub fn new(
         host: ServerCallbacks,
         blocking_io: Option<lk_agents_net::blocking_io::BlockingIo>,
@@ -405,17 +393,14 @@ impl ServerRuntime {
                     // The runtime keeps the stragglers; the callers get their outcome now.
                     reported = true;
                     let resources: Vec<_> = remaining.iter().copied().collect();
-                    self.host.logging.emit(
-                        log::Level::Error,
-                        format!("server cleanup deadline missed; runtime retains ownership resources={resources:?}"),
-                    );
+                    log::error!(target: lk_agents_abi::LOG_TARGET, resources:? = resources; "server cleanup deadline missed; runtime retains ownership");
                     self.snapshot.send_modify(|snapshot| snapshot.incomplete_cleanup = resources);
                     self.finish(&failure, &cleanup_failure);
                 }
                 Some((resource, result)) = closing.next() => {
                     remaining.remove(&resource);
                     if let Err(error) = result {
-                        self.host.logging.emit(log::Level::Error, format!("server resource cleanup failed resource={resource:?} error={error}"));
+                        log::error!(target: lk_agents_abi::LOG_TARGET, resource:? = resource; "server resource cleanup failed: {error}");
                         let error = format!("{resource:?}: {error}");
                         cleanup_failure.get_or_insert(error.clone());
                         failure.get_or_insert(error);
@@ -461,21 +446,16 @@ impl ServerRuntime {
         let status = Arc::new(ServerStatus::default());
         let probe = Arc::new(host.clone());
         let local = start.devmode || start.unregistered;
-        let logging = self.host.logging;
         resources.health = self.open_health(&settings, local, &status, &probe, stop).await?;
         resources.metrics = self.open_metrics(&settings, local, probe, stop).await?;
         // Decided before the job processes start, which inherit it: they delegate too.
         let cloud_routed = !start.unregistered
             && (settings.cloud() || lk_agents_net::strings::is_cloud_url(&settings.ws_url));
         if start.endpoints.is_empty() {
-            logging
-                .emit(log::Level::Info, "public listener off: no endpoints or HTTP routes".into());
+            log::info!(target: lk_agents_abi::LOG_TARGET, "public listener off: no endpoints or HTTP routes");
         } else if cloud_routed {
             *start.serving.lock() = Serving::Cloud;
-            logging.emit(
-                log::Level::Info,
-                "public listener off: LiveKit Cloud routes the agent's endpoints".into(),
-            );
+            log::info!(target: lk_agents_abi::LOG_TARGET, "public listener off: LiveKit Cloud routes the agent's endpoints");
         } else {
             resources.public = Some(self.open_public(&settings, start, local, stop).await?);
         }
@@ -484,10 +464,7 @@ impl ServerRuntime {
             .map(|url| url.trim_end_matches('/').to_owned())
             .unwrap_or_default();
         if settings.multiprocessing_fallback {
-            self.host.logging.emit(
-                log::Level::Warn,
-                "the forkserver is used on Linux only, job processes are spawned".into(),
-            );
+            log::warn!(target: lk_agents_abi::LOG_TARGET, "the forkserver is used on Linux only, job processes are spawned");
         }
         host.start(settings.clone(), start.devmode, start.has_rtc).await?;
         if start.unregistered {
@@ -499,7 +476,6 @@ impl ServerRuntime {
             self.snapshot.send_modify(|snapshot| snapshot.worker = Some(handle.clone()));
             let registration = Registration {
                 notifications: handle.subscribe(),
-                logging,
                 snapshots: self.snapshot.clone(),
                 status: status.clone(),
                 has_routes: !start.endpoints.is_empty(),
@@ -541,11 +517,9 @@ impl ServerRuntime {
         let permit = tokio::time::timeout(admission_deadline, admit)
             .await
             .map_err(|_| "server setup capacity wait timed out".to_owned())?;
-        let logging = self.host.logging;
         resources.setup = Some(blocking_io.spawn_admitted(permit, move || {
-            logging.initialize()?;
-            Ok((
-                prepare_prometheus_dir(configured.as_deref(), logging),
+            Ok::<_, String>((
+                prepare_prometheus_dir(configured.as_deref()),
                 discover_cpus.then(|| crate::CpuMonitor::new().cpu_count()),
             ))
         }));
@@ -569,17 +543,15 @@ impl ServerRuntime {
         probe: &Arc<ServerCallbacks>,
         stop: &watch::Sender<bool>,
     ) -> Result<Option<OwnedTask<Result<(), String>>>, String> {
-        let logging = self.host.logging;
         if settings.simulation {
-            logging
-                .emit(log::Level::Info, "health listener off: simulation runs share a host".into());
+            log::info!(target: lk_agents_abi::LOG_TARGET, "health listener off: simulation runs share a host");
             return Ok(None);
         }
         let (listener, url) = bind(&settings.listeners.health(local)).await?;
         self.snapshot.send_modify(|snapshot| {
             snapshot.http_port = listener.local_addr().map_or(0, |a| a.port())
         });
-        logging.emit(log::Level::Info, format!("health listener url={url} paths=/,/ready,/worker"));
+        log::info!(target: lk_agents_abi::LOG_TARGET, url:% = url, paths = "/,/ready,/worker"; "health listener");
         Ok(Some(TokioSpawner::current().spawn(serve_health(
             listener,
             Arc::new(settings.clone()),
@@ -597,13 +569,12 @@ impl ServerRuntime {
         probe: Arc<ServerCallbacks>,
         stop: &watch::Sender<bool>,
     ) -> Result<Option<OwnedTask<Result<(), String>>>, String> {
-        let logging = self.host.logging;
         let Some(address) = settings.listeners.prometheus(local) else {
-            logging.emit(log::Level::Info, "prometheus listener off: not configured".into());
+            log::info!(target: lk_agents_abi::LOG_TARGET, "prometheus listener off: not configured");
             return Ok(None);
         };
         let (listener, url) = bind(&address).await?;
-        logging.emit(log::Level::Info, format!("prometheus listener url={url}/metrics"));
+        log::info!(target: lk_agents_abi::LOG_TARGET, url:% = format_args!("{url}/metrics"); "prometheus listener");
         Ok(Some(TokioSpawner::current().spawn(serve_metrics(listener, probe, stop.subscribe()))))
     }
 
@@ -626,20 +597,10 @@ impl ServerRuntime {
         let (listener, url) = bind(&address).await?;
         let prefix = settings.endpoint_prefix();
         *start.serving.lock() = Serving::Local { base: format!("{url}{prefix}") };
-        let logging = self.host.logging;
         if unauthenticated {
-            logging.emit(
-                log::Level::Warn,
-                format!(
-                    "public listener url={url}{prefix} is UNAUTHENTICATED: anything on this \
-                     machine can call the agent's endpoints (console only, loopback)"
-                ),
-            );
+            log::warn!(target: lk_agents_abi::LOG_TARGET, url:% = format_args!("{url}{prefix}"); "public listener is UNAUTHENTICATED: anything on this machine can call the agent's endpoints (console only, loopback)");
         } else {
-            logging.emit(
-                log::Level::Info,
-                format!("public listener url={url}{prefix} auth=bearer token"),
-            );
+            log::info!(target: lk_agents_abi::LOG_TARGET, url:% = format_args!("{url}{prefix}"), auth = "bearer token"; "public listener");
         }
         let routes = Arc::new(PublicRoutes {
             prefix,
@@ -845,7 +806,6 @@ fn new_worker(
 /// Mirrors the worker's registrations into the snapshot and the health status.
 struct Registration {
     notifications: tokio::sync::broadcast::Receiver<WorkerNotification>,
-    logging: LogWriter,
     snapshots: watch::Sender<ServerSnapshot>,
     status: Arc<ServerStatus>,
     has_routes: bool,
@@ -866,14 +826,7 @@ impl Registration {
     fn registered(&self, info: crate::RegisteredInfo) {
         let cloud_routed = self.cloud_routed;
         if self.has_routes && info.cloud != cloud_routed {
-            self.logging.emit(
-                log::Level::Warn,
-                format!(
-                    "the server's edition (cloud={}) differs from its URL; \
-                     endpoints are routed as cloud={cloud_routed}",
-                    info.cloud
-                ),
-            );
+            log::warn!(target: lk_agents_abi::LOG_TARGET, cloud = info.cloud, routed_cloud = cloud_routed; "the server's edition differs from its URL; endpoints are routed by the URL");
         }
         self.snapshots.send_modify(|snapshot| snapshot.worker_id = info.worker_id);
         self.status.registered.store(true, Ordering::Release);

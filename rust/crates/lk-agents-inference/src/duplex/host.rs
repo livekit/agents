@@ -106,7 +106,7 @@ impl SessionGate {
 
     pub(super) fn deactivate(&self) {
         if let Err(error) = self.0.deactivate() {
-            log::error!(target: "livekit.agents", "duplex gate deactivate failed: {error}");
+            log::error!(target: lk_agents_abi::LOG_TARGET, "duplex gate deactivate failed: {error}");
         }
     }
 }
@@ -191,7 +191,7 @@ impl HostSession {
                 Ok(Some(abi::DuplexEvent::Session(event))) => DuplexEvent::Session(event),
                 // a malformed event is the view's bug; the session goes on
                 Err(e) => {
-                    log::warn!(target: "livekit.agents", error = e.to_string().as_str(); "duplex event refused");
+                    log::warn!(target: lk_agents_abi::LOG_TARGET, error = e.to_string().as_str(); "duplex event refused");
                     continue;
                 }
             };
@@ -248,7 +248,7 @@ impl HostSession {
             };
             let Err(e) = applied else { continue };
             if !configure {
-                log::error!(target: "livekit.agents", error = e.message.as_str(); "failed to update the duplex session");
+                log::error!(target: lk_agents_abi::LOG_TARGET, error = e.message.as_str(); "failed to update the duplex session");
                 continue;
             }
             let _ = tx.send(Some(DuplexEvent::Session(Event::HostError(HostRealtimeError {

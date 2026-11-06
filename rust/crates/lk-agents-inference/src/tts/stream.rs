@@ -60,7 +60,7 @@ impl lk_agents_abi::tts::streams::TtsStream for TtsStream {
     /// Cancels the synthesis; the input is not ended, so nothing pending is spoken.
     async fn aclose(&self) {
         if self.source.aclose().await == Closed::TimedOut {
-            log::error!(target: "livekit.agents", "a native stream did not release its resources in time");
+            log::error!(target: lk_agents_abi::LOG_TARGET, "a native stream did not release its resources in time");
         }
     }
 }

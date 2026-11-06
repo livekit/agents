@@ -109,7 +109,7 @@ impl PreConnectAudioHandler {
                 Err(error) => {
                     self.state.lock().core.close();
                     self.changed.notify_waiters();
-                    log::warn!(target: "livekit.agents", "pre-connect stream listener failed: {error}");
+                    log::warn!(target: lk_agents_abi::LOG_TARGET, "pre-connect stream listener failed: {error}");
                     break;
                 }
             };

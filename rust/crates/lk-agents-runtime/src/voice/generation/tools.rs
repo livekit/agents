@@ -182,7 +182,7 @@ impl HostedCall<'_> {
             }
             Ok(Err(refused)) => Err(PrepareFailure::Refused(refused.message)),
             Err(e) => {
-                log::error!(target: "livekit.agents", "preparing a tool call failed: {e}");
+                log::error!(target: lk_agents_abi::LOG_TARGET, "preparing a tool call failed: {e}");
                 Err(PrepareFailure::Internal)
             }
         }
@@ -342,7 +342,7 @@ impl ToolBody {
         let mut report = match host.run_tool(&self.cx, invocation, prepared).await {
             Ok((report, _)) => report,
             Err(error) => {
-                log::error!("the tool's host failed outside its error handling: {error}");
+                log::error!(target: lk_agents_abi::LOG_TARGET, "the tool's host failed outside its error handling: {error}");
                 ToolOutcome::Internal.into()
             }
         };
@@ -358,7 +358,7 @@ impl ToolBody {
                 .validate_tool_completion(&self.cx, invocation, prepared, report)
                 .await
                 .unwrap_or_else(|error| {
-                    log::error!("the task's completion validator failed: {error}");
+                    log::error!(target: lk_agents_abi::LOG_TARGET, "the task's completion validator failed: {error}");
                     ToolOutcome::Internal.into()
                 });
         }

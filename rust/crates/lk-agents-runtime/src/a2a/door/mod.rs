@@ -113,7 +113,7 @@ impl A2ADoor for Door {
         let clock = &*self.inner.clock;
         let deadline = clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
         if !self.tasks.wait_empty(clock, Some(deadline)).await {
-            log::error!(target: "livekit.agents", "A2A door cleanup missed its deadline; runtime retains accepted operations");
+            log::error!(target: lk_agents_abi::LOG_TARGET, "A2A door cleanup missed its deadline; runtime retains accepted operations");
         }
     }
 }

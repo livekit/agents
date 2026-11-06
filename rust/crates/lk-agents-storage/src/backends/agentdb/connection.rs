@@ -539,7 +539,7 @@ impl Conn {
         st.tx = None;
         drop(st);
         self.0.phase.send_replace(Phase::Connecting);
-        log::warn!(target: "livekit.agents", databaseId = self.0.opts.database_id.as_str(); "agentdb connection lost: {cause}");
+        log::warn!(target: lk_agents_abi::LOG_TARGET, databaseId = self.0.opts.database_id.as_str(); "agentdb connection lost: {cause}");
     }
 
     /// Exponential backoff until the budget runs out.
@@ -550,16 +550,16 @@ impl Conn {
         loop {
             match self.connect().await {
                 Ok(socket) => {
-                    log::info!(target: "livekit.agents", databaseId = self.0.opts.database_id.as_str(); "agentdb reconnected");
+                    log::info!(target: lk_agents_abi::LOG_TARGET, databaseId = self.0.opts.database_id.as_str(); "agentdb reconnected");
                     return Some(socket);
                 }
                 Err(e) if e.is_final() => {
-                    log::warn!(target: "livekit.agents", databaseId = self.0.opts.database_id.as_str(); "agentdb redial refused for good: {e}");
+                    log::warn!(target: lk_agents_abi::LOG_TARGET, databaseId = self.0.opts.database_id.as_str(); "agentdb redial refused for good: {e}");
                     self.0.state.lock().fatal = Some(e);
                     return None;
                 }
                 Err(e) => {
-                    log::warn!(target: "livekit.agents", databaseId = self.0.opts.database_id.as_str(); "agentdb redial failed: {e}")
+                    log::warn!(target: lk_agents_abi::LOG_TARGET, databaseId = self.0.opts.database_id.as_str(); "agentdb redial failed: {e}")
                 }
             }
             if tokio::time::Instant::now() >= deadline || self.is_closed() {

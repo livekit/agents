@@ -65,7 +65,7 @@ impl VideoForwarding {
                     Ok(Some(frame)) => frame,
                     Ok(None) => break ChannelEndCause::SourceEnded,
                     Err(e) => {
-                        log::warn!(target: "livekit.agents", error = e.to_string().as_str(); "video input failed");
+                        log::warn!(target: lk_agents_abi::LOG_TARGET, error = e.to_string().as_str(); "video input failed");
                         break ChannelEndCause::Error;
                     }
                 },

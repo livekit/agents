@@ -4,7 +4,6 @@
 //! awaits it.
 
 use crate::ipc::telemetry;
-use lk_agents_abi::logging::LogWriter;
 use lk_agents_net::task::{TaskSet, TokioSpawner};
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -22,8 +21,8 @@ use tokio::sync::watch;
 use super::executor::{RunnerExecutor, ThreadExecutor};
 use super::process::{ProcessExecutor, ProcessReceipt};
 use super::{
-    Extra, ExtraValue, HEALTH_CHECK_GRACE, Hello, InitError, Level, RunnerSupervisor,
-    SupervisorCallbacks, SupervisorOptions, extra_fields, secs,
+    HEALTH_CHECK_GRACE, Hello, InitError, RunnerFields, RunnerSupervisor, SupervisorCallbacks,
+    SupervisorOptions, secs,
 };
 use lk_agents_net::env::ProcessEnv;
 
@@ -102,8 +101,6 @@ impl ipc_host::JobSupervisor for JobSupervisor {
         mut options: JobRunnerOptions,
         context: CallContext,
     ) -> Result<Self, WorkerError> {
-        // Logging must be available before any launch.
-        env.logging.initialize().map_err(WorkerError::Failed)?;
         if options.thread {
             // A thread cannot be stopped: it is never late nor too large.
             options.ping_timeout = 0.0;
@@ -111,8 +108,7 @@ impl ipc_host::JobSupervisor for JobSupervisor {
             options.memory_limit_mb = 0.0;
         }
         let state = Arc::new(Mutex::new(RunnerState::default()));
-        let logger =
-            JobLogger { logging: env.logging, launcher: launcher.clone(), state: state.clone() };
+        let logger = JobLogger { state: state.clone() };
         Ok(Self {
             id: lk_agents_net::strings::shortuuid(if options.thread {
                 "THEXEC_"
@@ -367,58 +363,22 @@ impl ipc_host::JobLaunch for JobLaunch {
     }
 }
 
-/// The runner's diagnostics on the launcher's logger, naming its process and its job.
-#[derive(Clone)]
+/// What the runner's diagnostics name: its process and its job.
+#[derive(Clone, Default)]
 pub(crate) struct JobLogger {
-    logging: LogWriter,
-    launcher: Arc<dyn JobLauncher>,
     pub(crate) state: Arc<Mutex<RunnerState>>,
 }
 
-impl JobLogger {
-    #[cfg(test)]
-    pub(crate) fn new(logging: LogWriter, launcher: Arc<dyn JobLauncher>) -> Self {
-        Self { logging, launcher, state: Arc::default() }
-    }
-
-    /// One record, written by the bounded log writer.
-    pub(crate) fn log(
-        &self,
-        level: Level,
-        message: &str,
-        mut extra: Extra,
-        error: Option<HostError>,
-    ) {
-        {
-            let state = self.state.lock();
-            if let Some(pid) = state.pid {
-                extra.push(("pid", ExtraValue::Int(i64::from(pid))));
-            }
-            if let Some(info) = &state.running_job {
-                extra.push(("job_id", ExtraValue::Str(info.job.id.clone())));
-                if let Some(room) = &info.job.room {
-                    extra.push(("room", ExtraValue::Str(room.clone())));
-                }
-                if let Some(room_id) = &info.job.room_sid {
-                    extra.push(("room_id", ExtraValue::Str(room_id.clone())));
-                }
-            }
-        }
-        let (message, launcher) = (message.to_owned(), self.launcher.clone());
-        self.logging.submit_host(move |dropped| {
-            if dropped > 0 {
-                extra.push(("dropped_supervisor_logs", ExtraValue::Int(dropped as i64)));
-            }
-            if let Err(failure) = launcher.log(level as i32, message, extra_fields(extra), error) {
-                log::warn!(target: crate::LOG, "process diagnostic failed: {failure}");
-            }
-        });
-    }
-}
-
 impl SupervisorCallbacks for JobLogger {
-    fn log(&self, level: Level, msg: &str, extra: Extra) {
-        JobLogger::log(self, level, msg, extra, None);
+    fn runner(&self) -> RunnerFields {
+        let state = self.state.lock();
+        let job = state.running_job.as_ref().map(|info| &info.job);
+        RunnerFields {
+            pid: state.pid,
+            job_id: job.map(|job| job.id.clone()),
+            room: job.and_then(|job| job.room.clone()),
+            room_id: job.and_then(|job| job.room_sid.clone()),
+        }
     }
 }
 

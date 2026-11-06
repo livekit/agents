@@ -217,13 +217,13 @@ async fn open(path: &str) -> Option<(std::fs::File, u64)> {
         Ok(Ok(opened)) => Some(opened),
         Ok(Err(error)) => {
             log::warn!(
-                target: "livekit.agents",
+                target: lk_agents_abi::LOG_TARGET,
                 "failed to read the audio recording, uploading without it (path={path}): {error}"
             );
             None
         }
         Err(error) => {
-            log::warn!(target: "livekit.agents", "failed to read the audio recording: {error}");
+            log::warn!(target: lk_agents_abi::LOG_TARGET, "failed to read the audio recording: {error}");
             None
         }
     }

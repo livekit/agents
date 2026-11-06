@@ -41,7 +41,7 @@ impl Publisher {
                 Delivery::Send(frame) => sender.try_send(Ok(frame)).is_ok(),
                 Delivery::Detach(failure) => {
                     let _ = sender.try_send(Ok(failure));
-                    log::warn!(target: "livekit.agents", taskId = task_id; "detached a slow A2A observer");
+                    log::warn!(target: lk_agents_abi::LOG_TARGET, taskId = task_id; "detached a slow A2A observer");
                     false
                 }
             };

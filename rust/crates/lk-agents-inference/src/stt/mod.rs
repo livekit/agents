@@ -479,7 +479,7 @@ impl Stt for GatewayStt {
                 .swap(true, std::sync::atomic::Ordering::SeqCst)
             {
                 log::warn!(
-                    target: "livekit.agents",
+                    target: lk_agents_abi::LOG_TARGET,
                     stt = Stt::label(self).as_str();
                     "keyterms are not supported by this STT, ignoring keyterms update"
                 );

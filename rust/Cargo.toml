@@ -66,9 +66,10 @@ pbjson-types = "0.9"
 # CPU load and count for the worker's default load calculator, on every platform. `system` only:
 # no processes, disks, networks or components.
 sysinfo      = { version = "0.39", default-features = false, features = ["system"] }
-# The log facade, with structured key-values: a crate logs `log::info!(target: "livekit.agents", job_id = id; "..")`
-# and the binding queues it, then forwards it -- keys included, as `extra` -- into Python's
-# `logging` from its drain thread (`lk-agents-py` `logging.rs`).
+# The log facade, with structured key-values: a crate logs
+# `log::info!(target: lk_agents_abi::LOG_TARGET, job_id = id; "..")` and the binding queues it,
+# then forwards it -- keys included, as `extra` -- into Python's `logging` from its drain thread
+# (`lk-agents-py` `py_logging.rs`).
 log          = { version = "0.4", features = ["kv"] }
 # `image`/`base64`: `lk-agents-media` only. Encoding sits below the purity line by design,
 # so nothing in tiers 0/1 may pull these -- `cargo-deny` should ban them everywhere else.

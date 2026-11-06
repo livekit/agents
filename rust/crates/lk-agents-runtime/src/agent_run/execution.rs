@@ -172,7 +172,7 @@ impl Execution {
                 log_repaired_arguments(&call_id, &error, repaired)
             }
             AgentRunEffect::IncompleteCleanup { pending } => {
-                log::error!(target: "livekit.agents", "agent run cleanup missed its deadline: {}", pending.join(", "));
+                log::error!(target: lk_agents_abi::LOG_TARGET, "agent run cleanup missed its deadline: {}", pending.join(", "));
                 return Some(RunUpdate::IncompleteCleanup(pending));
             }
             AgentRunEffect::Finished { result, input_requirements } => {
@@ -263,7 +263,7 @@ impl Execution {
         let function_call = self.calls.get(&call).cloned();
         self.invoke(Work::Call(call), function_call, None, move |inv, events| async move {
             let text = host.render_template(&cx, &inv, template).await.unwrap_or_else(|e| {
-                log::error!(target: "livekit.agents", "a tool_handling template failed: {e}");
+                log::error!(target: lk_agents_abi::LOG_TARGET, "a tool_handling template failed: {e}");
                 None
             });
             let event = AgentRunEvent::ToolHandlingTemplateRendered { call, text };
@@ -453,7 +453,7 @@ fn prepare_report(
         Ok(Ok(prepared)) => return Report::Prepared { call, resource, prepared },
         Ok(Err(e)) => PrepareFailure::Refused(e.message),
         Err(e) => {
-            log::error!(target: "livekit.agents", "preparing a tool call failed: {e}");
+            log::error!(target: lk_agents_abi::LOG_TARGET, "preparing a tool call failed: {e}");
             PrepareFailure::Internal
         }
     };
@@ -466,7 +466,7 @@ fn log_repaired_arguments(call_id: &str, error: &str, repaired: Value) {
         other => other.to_string(),
     };
     log::warn!(
-        target: "livekit.agents",
+        target: lk_agents_abi::LOG_TARGET,
         call_id = call_id,
         (telemetry::log_keys::REPAIRED) = repaired.as_str(),
         (telemetry::log_keys::ERROR) = error;

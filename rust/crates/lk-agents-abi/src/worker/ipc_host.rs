@@ -8,7 +8,6 @@ use crate::worker::ipc::{JobCompletion, JobRunnerOptions, JobStatus};
 use crate::worker::job::StartJobFields;
 use crate::worker::types::RunningJobInfo;
 use crate::{HostRef, errors::HostError};
-use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 
 /// A worker operation's failure, raised as the host exception its kind names.
@@ -57,16 +56,6 @@ pub trait JobLauncher: Send + Sync {
         #[host(context)] context: &'a CallContext,
         completion: JobCompletion,
     ) -> crate::BoxFuture<'a, Result<(), HostError>>;
-    /// One supervision diagnostic on the host's logger, with the failure that caused it. `extra`
-    /// already names the process (`pid`) and its job (`job_id`, `room`, `room_id`).
-    #[host(call, name = "_core_log")]
-    fn log(
-        &self,
-        level: i32,
-        message: String,
-        extra: Map<String, Value>,
-        error: Option<HostError>,
-    ) -> Result<(), HostError>;
 }
 
 /// A native `JobLaunch`, as the supervisor hands it to its launcher.
@@ -259,14 +248,6 @@ pub trait JobProcess: Send + Sync {
         callback: HostRef,
         reason: Option<String>,
     ) -> crate::BoxFuture<'a, Result<(), HostError>>;
-    #[host(call, name = "_core_log")]
-    fn log(
-        &self,
-        level: i32,
-        message: String,
-        extra: Map<String, Value>,
-        error: Option<HostError>,
-    ) -> Result<(), HostError>;
 }
 
 /// An awaited application call of the job's (`connect`, `delete_room`, ...), run in its caller's

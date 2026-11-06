@@ -450,15 +450,12 @@ pub(crate) async fn accept<P: WorkerHost + ?Sized>(host: Arc<P>, mut stream: Tra
     let preamble = match tokio::time::timeout(PREAMBLE_TIMEOUT, stream.read_preamble()).await {
         Ok(Ok(preamble)) => preamble,
         Ok(Err(error)) => {
-            host.logger().emit(
-                log::Level::Warn,
-                format!("endpoint stream without a valid preamble error={error}"),
-            );
+            log::warn!(target: lk_agents_abi::LOG_TARGET, "endpoint stream without a valid preamble: {error}");
             stream.reset(HttpStreamResetCode::HsrProtocol);
             return;
         }
         Err(_) => {
-            host.logger().emit(log::Level::Warn, "endpoint stream sent no preamble in time".into());
+            log::warn!(target: lk_agents_abi::LOG_TARGET, "endpoint stream sent no preamble in time");
             stream.reset(HttpStreamResetCode::HsrProtocol);
             return;
         }
@@ -482,7 +479,7 @@ pub(crate) async fn dispatch(request: IncomingRequest, server: Option<&EndpointS
     let info = match metadata(preamble) {
         Ok(info) => info,
         Err(error) => {
-            log::warn!(target: crate::LOG, "invalid HTTP stream metadata: {error}");
+            log::warn!(target: lk_agents_abi::LOG_TARGET, "invalid HTTP stream metadata: {error}");
             stream.reset(HttpStreamResetCode::HsrProtocol);
             return;
         }

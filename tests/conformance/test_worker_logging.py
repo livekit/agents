@@ -1,4 +1,4 @@
-"""Supervisor diagnostics cross the job IPC boundary without blocking job execution."""
+"""Supervisor diagnostics reach Python's logging without blocking job execution."""
 
 from __future__ import annotations
 
@@ -30,21 +30,29 @@ def test_thread_job_exit_logs_preserve_fields_with_a_stalled_handler() -> None:
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+_FIELDS = ("reason", "job_id", "room", "room_id", "pid")
+
+
 async def _run_job() -> None:
     entered = threading.Event()
     release = threading.Event()
     records: list[tuple[int, str, dict[str, Any]]] = []
 
-    class Parent:
-        def _core_log(
-            self, level: int, message: str, extra: dict[str, Any], exc: Any = None
-        ) -> None:
+    class Stalling(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            message = record.getMessage()
             if message == "job thread initialized":
                 entered.set()
                 if not release.wait(timeout=10):
-                    raise TimeoutError("test did not release the diagnostic writer")
-            records.append((level, message, extra))
+                    raise TimeoutError("test did not release the log handler")
+            fields = {key: getattr(record, key) for key in _FIELDS if hasattr(record, key)}
+            records.append((record.levelno, message, fields))
 
+    agents_logger = logging.getLogger("livekit.agents")
+    agents_logger.addHandler(Stalling(logging.DEBUG))
+    agents_logger.setLevel(logging.DEBUG)
+
+    class Parent:
         def __init__(self) -> None:
             self.endpoint: asyncio.Future[int] = asyncio.get_running_loop().create_future()
             self.launch: _core.JobLaunch | None = None
@@ -89,7 +97,7 @@ async def _run_job() -> None:
     try:
         await initializing
         assert await asyncio.to_thread(entered.wait, 3), records
-        # The writer is blocked in the host handler. Job acceptance and shutdown must still
+        # The log drain is blocked in the handler. Job acceptance and shutdown must still
         # complete on the real IPC connection and Python loop.
         job = agent.Job(id="AJ_logging", room=models.Room(name="logging"))
         info = RunningJobInfo(

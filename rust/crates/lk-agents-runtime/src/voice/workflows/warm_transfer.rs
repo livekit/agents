@@ -25,8 +25,6 @@ use parking_lot::Mutex;
 use std::sync::Arc;
 use std::time::Duration;
 
-const LOG: &str = "livekit.agents";
-
 use lk_agents_voice::workflows::twilio::{self, TwilioError};
 use lk_agents_voice::workflows::warm_transfer::{
     Origination, Transfer, TransferFailure, TransferOutcome, TransferPlan, TransferTool,
@@ -226,7 +224,7 @@ impl TransferRun {
             biased;
             dialled = self.dial(&host, &api, &caller) => {
                 if let Err(err) = dialled {
-                    log::error!(target: LOG, "could not dial human agent: {err}");
+                    log::error!(target: lk_agents_abi::LOG_TARGET, "could not dial human agent: {err}");
                     self.abort_dial(&host).await;
                     self.settle(Err(TransferFailure::Dial));
                 }
@@ -401,7 +399,7 @@ impl TransferRun {
         let close = effects.close_human.is_some();
         self.perform(effects);
         if close && let Err(err) = host.disconnect_human(&telemetry::Cx::NONE).await {
-            log::debug!(target: LOG, "leaving the human agent's room failed: {err}");
+            log::debug!(target: lk_agents_abi::LOG_TARGET, "leaving the human agent's room failed: {err}");
         }
     }
 
@@ -417,7 +415,7 @@ impl TransferRun {
                 }
             };
             if let RoomEvent::Close { reason } = event {
-                log::debug!(target: LOG, "human agent's room closed: {reason:?}");
+                log::debug!(target: lk_agents_abi::LOG_TARGET, "human agent's room closed: {reason:?}");
                 let effects = self.lock().core.room_closed(reason_name(reason));
                 if let Some(effects) = effects {
                     self.perform(effects);
@@ -441,7 +439,7 @@ impl TransferRun {
         let caller_room = caller
             .name()
             .map_err(|error| TransferFailed::Host(HostError::new(error.to_string())))?;
-        log::debug!(target: LOG, "moving {HUMAN_AGENT_IDENTITY} to caller room {caller_room}");
+        log::debug!(target: lk_agents_abi::LOG_TARGET, "moving {HUMAN_AGENT_IDENTITY} to caller room {caller_room}");
         let moved = api
             .move_participant(
                 human_agent_room_name(&caller_room),
@@ -461,7 +459,7 @@ impl TransferRun {
                     Ok(Some(event)) => event,
                     Ok(None) => return,
                     Err(error) => {
-                        log::error!(target: LOG, "caller room event stream failed after transfer: {error}");
+                        log::error!(target: lk_agents_abi::LOG_TARGET, "caller room event stream failed after transfer: {error}");
                         return;
                     }
                 };
@@ -470,12 +468,12 @@ impl TransferRun {
                 };
                 if ends_merged_call(participant.kind()) {
                     log::info!(
-                        target: LOG,
+                        target: lk_agents_abi::LOG_TARGET,
                         "participant disconnected from caller room: {}, closing",
                         participant.identity()
                     );
                     if let Err(err) = api.delete_room(caller_room).await {
-                        log::warn!(target: LOG, "failed to delete the caller's room: {err}");
+                        log::warn!(target: lk_agents_abi::LOG_TARGET, "failed to delete the caller's room: {err}");
                     }
                     return;
                 }
@@ -535,7 +533,7 @@ async fn twilio_cancel(api: Arc<dyn TransferApi>, dial: TwilioDial, sid: String)
         other => other.map(drop),
     };
     if cancelled.is_err() {
-        log::warn!(target: LOG, "Failed to cancel Twilio call");
+        log::warn!(target: lk_agents_abi::LOG_TARGET, "Failed to cancel Twilio call");
     }
 }
 
@@ -625,7 +623,7 @@ async fn twilio_originate(
     if let Err(DialError::Twilio(error)) = &created
         && let Some(from) = twilio::retry_caller(dial, token.as_deref(), error)
     {
-        log::warn!(target: LOG, "Twilio rejected preserved caller ID; retrying with business caller ID");
+        log::warn!(target: lk_agents_abi::LOG_TARGET, "Twilio rejected preserved caller ID; retrying with business caller ID");
         guard.call = Some(Call::Creating(create(from, None)));
         created = guard.created().await;
     }
