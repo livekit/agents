@@ -27,6 +27,9 @@ HEADER_WORKER_TOKEN = "X-LiveKit-Worker-Token"
 HEADER_INFERENCE_PROVIDER = "X-LiveKit-Inference-Provider"
 HEADER_INFERENCE_PRIORITY = "X-LiveKit-Inference-Priority"
 HEADER_REQUEST_ID = "X-LiveKit-Request-Id"
+# The gateway sends "false" on terminal quota denials (out of credits, spent request
+# allowance, suspended project), which no retry can get past.
+HEADER_SHOULD_RETRY = "X-Should-Retry"
 
 # Quota telemetry headers the inference gateway stamps on LLM completions
 # responses (including 429 rejections). RPM/TPM are per-minute rate limits;
@@ -54,6 +57,11 @@ def extract_quota_usage(headers: Mapping[str, str]) -> dict[str, str]:
         for header, field in QUOTA_HEADER_FIELDS.items()
         if (value := headers.get(header))
     }
+
+
+def gateway_allows_retry(headers: Mapping[str, str] | None) -> bool:
+    """False when the gateway marked the response a terminal denial."""
+    return (headers or {}).get(HEADER_SHOULD_RETRY, "").strip().lower() != "false"
 
 
 def get_default_inference_url() -> str:
