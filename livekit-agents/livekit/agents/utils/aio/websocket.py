@@ -79,6 +79,10 @@ class WebSocketMonitor:
                     raise aiohttp.ServerTimeoutError(
                         f"No WebSocket messages received for {self._liveness_timeout} seconds"
                     )
+                if self._ping_sent:
+                    # a wait can return before its deadline (e.g. the coarse loop
+                    # clock on Windows); only probe once per silence window
+                    continue
                 self._ping_sent = True
                 ping = asyncio.create_task(self._ws.ping())
         except (aiohttp.ClientError, ConnectionError, asyncio.TimeoutError) as exc:

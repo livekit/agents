@@ -213,3 +213,42 @@ async def test_unresponsive_close_cannot_delay_failure() -> None:
             assert ws.closed
         finally:
             release.set()
+
+
+async def test_early_wake_does_not_resend_the_liveness_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One probe per silence window, even when a wait returns early.
+
+    The event loop can return a sub-tick wait immediately (observed on Windows,
+    where the monitor re-sent a PING dozens of times at a single timestamp). An
+    empty wake before the liveness deadline is not the end of the probe window.
+    """
+    pings = 0
+    wait_calls = 0
+    real_wait = asyncio.wait
+
+    async def ping() -> None:
+        nonlocal pings
+        pings += 1
+
+    async def early_wake(*args: Any, **kwargs: Any) -> tuple[set[Any], set[Any]]:
+        nonlocal wait_calls
+        wait_calls += 1
+        if wait_calls == 2:
+            # the wait right after the first probe: nothing completed and the
+            # liveness deadline has not been reached
+            return set(), set()
+        return await real_wait(*args, **kwargs)
+
+    ws = AsyncMock()
+    ws.receive.side_effect = asyncio.Event().wait
+    ws.ping.side_effect = ping
+
+    monkeypatch.setattr(asyncio, "wait", early_wake)
+    with pytest.raises(APIConnectionError) as exc_info:
+        await WebSocketMonitor(
+            cast(aiohttp.ClientWebSocketResponse, ws), liveness_timeout=0.2
+        ).receive()
+    assert isinstance(exc_info.value.__cause__, aiohttp.ServerTimeoutError)
+    assert pings == 1
