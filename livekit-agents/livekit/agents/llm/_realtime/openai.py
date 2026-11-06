@@ -1003,6 +1003,7 @@ class RealtimeSession(
             # chat context. the turn state goes first, since what it settles belongs in the
             # mirror that is replayed below
             self._reset_input_turn_state()
+            self._flush_generation_transcripts()
             chat_ctx = self.chat_ctx.copy(
                 exclude_instructions=True,
                 exclude_empty_message=True,
@@ -1851,6 +1852,34 @@ class RealtimeSession(
         self._close_current_generation("session closed")
         self._msg_ch.close()
         await self._main_atask
+
+    def _flush_generation_transcripts(self) -> None:
+        """Write what the model has already said into the mirror of the conversation.
+
+        A response that finishes writes each message's transcript into its mirror item
+        in `_handle_response_done`. A connection that drops mid-reply never delivers
+        that event, so the item is left with empty content, the replay below drops it
+        (`exclude_empty_message`), and the replayed conversation ends on the user's
+        request with nothing answering it -- the model then answers that request again
+        instead of the next one, and the caller hears the agent stop mid-sentence and
+        then reply to the question before last.
+
+        Flushing here keeps what was already said, truncated, the way an interruption
+        does. Each transcript is cleared once it has been written, so a reconnection
+        that fails and is retried cannot append it twice.
+        """
+        if not isinstance(self._current_generation, _ResponseGeneration):
+            return
+
+        for item_id, item_generation in self._current_generation.messages.items():
+            if not item_generation.audio_transcript:
+                continue
+
+            if (remote_item := self._remote_chat_ctx.get(item_id)) and isinstance(
+                remote_item.item, llm.ChatMessage
+            ):
+                remote_item.item.content.append(item_generation.audio_transcript)
+                item_generation.audio_transcript = ""
 
     def _close_current_generation(self, reason: str | None = None) -> None:
         """Close all channels and resolve _done_fut for the current generation.
