@@ -713,7 +713,7 @@ class JobContext:
                 trace_types.SPAN_ROOM_CONNECT,
                 attributes={
                     trace_types.ATTR_ROOM_NAME: self._info.job.room.name,
-                    trace_types.ATTR_ROOM_SID: self._info.job.room.sid,
+                    trace_types.ATTR_ROOM_ID: self._info.job.room.sid,
                     trace_types.ATTR_ROOM_AUTO_SUBSCRIBE: AutoSubscribe(auto_subscribe).value,
                     trace_types.ATTR_ROOM_E2EE: encryption is not None,
                 },

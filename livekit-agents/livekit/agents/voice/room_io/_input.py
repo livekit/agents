@@ -272,7 +272,7 @@ class _ParticipantInputStream(Generic[T], ABC):
             span.add_event(
                 trace_types.CHECKPOINT_TRACK_SUBSCRIBED,
                 {
-                    trace_types.ATTR_TRACK_SID: publication.sid,
+                    trace_types.ATTR_TRACK_ID: publication.sid,
                     trace_types.ATTR_TRACK_SOURCE: rtc.TrackSource.Name(publication.source),
                 },
             )

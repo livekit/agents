@@ -187,7 +187,7 @@ SAFE_KEYS = frozenset(
         "lk.rpc.error_code",
         "lk.rpc.handler_registered",
         # join keys, dispatch timeline, room/track ids, lifecycle enums (no content)
-        "lk.room_sid",
+        "lk.room_id",
         "lk.dispatch_id",
         "lk.job.worker_id",
         "lk.job.agent_id",
@@ -204,7 +204,7 @@ SAFE_KEYS = frozenset(
         "lk.room.e2ee",
         "lk.room.remote_participant_count",
         "lk.room_io.participant_filter",
-        "lk.track_sid",
+        "lk.track_id",
         "lk.track_source",
         "lk.first_frame_delay",
         "lk.pre_connect_audio.duration",

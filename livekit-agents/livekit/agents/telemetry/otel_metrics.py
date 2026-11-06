@@ -210,7 +210,7 @@ def _job_attrs() -> dict[str, Any]:
     if (state := ctx._telemetry_state) is not None:
         return dict(state.attributes)
     # recording was not initialized (disabled, or the crash path); keep identity
-    return {"room_id": ctx.job.room.sid, "job_id": ctx.job.id}
+    return {trace_types.ATTR_ROOM_ID: ctx.job.room.sid, "job_id": ctx.job.id}
 
 
 def _model_attrs(metadata: Metadata | None) -> dict[str, Any]:

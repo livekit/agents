@@ -670,11 +670,11 @@ pub const LK_ROOM_E2EE: &str = "lk.room.e2ee";
 /// Remote participants when the agent connected.
 pub const LK_ROOM_REMOTE_PARTICIPANT_COUNT: &str = "lk.room.remote_participant_count";
 
+/// Server-assigned room session SID (`RM_...`).
+pub const LK_ROOM_ID: &str = "lk.room_id";
+
 /// How room I/O picked its participant.
 pub const LK_ROOM_IO_PARTICIPANT_FILTER: &str = "lk.room_io.participant_filter";
-
-/// Server-assigned room session SID (`RM_...`).
-pub const LK_ROOM_SID: &str = "lk.room_sid";
 
 /// Identity of the RPC caller.
 pub const LK_RPC_CALLER_IDENTITY: &str = "lk.rpc.caller_identity";
@@ -921,7 +921,7 @@ pub mod lk_track_kind {
 }
 
 /// Server-assigned track SID (`TR_...`).
-pub const LK_TRACK_SID: &str = "lk.track_sid";
+pub const LK_TRACK_ID: &str = "lk.track_id";
 
 /// Source of the track, as the Agents RTC FFI `TrackSource` enum name.
 pub const LK_TRACK_SOURCE: &str = "lk.track_source";
@@ -1508,7 +1508,7 @@ pub mod checkpoint {
     pub const SUBSCRIBED: &str = "subscribed";
     /// A newer detection superseded this one.
     pub const SUPERSEDED: &str = "superseded";
-    /// The track was subscribed, with `lk.track_sid` and `lk.track_source`.
+    /// The track was subscribed, with `lk.track_id` (sent as `lk.track_sid`) and `lk.track_source`.
     pub const TRACK_SUBSCRIBED: &str = "track_subscribed";
     /// The user spoke again during the wait.
     pub const USER_RESUMED: &str = "user_resumed";

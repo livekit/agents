@@ -108,7 +108,7 @@ class _ParticipantAudioOutput(io.AudioOutput):
         ) as span:
             await self._publish_track()
             if self._publication is not None:
-                span.set_attribute(trace_types.ATTR_TRACK_SID, self._publication.sid)
+                span.set_attribute(trace_types.ATTR_TRACK_ID, self._publication.sid)
 
     async def aclose(self) -> None:
         if self._bstream_flush_timer:

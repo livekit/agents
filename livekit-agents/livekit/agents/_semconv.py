@@ -695,11 +695,11 @@ LK_ROOM_E2EE = "lk.room.e2ee"
 #: Remote participants when the agent connected.
 LK_ROOM_REMOTE_PARTICIPANT_COUNT = "lk.room.remote_participant_count"
 
+#: Server-assigned room session SID (`RM_...`).
+LK_ROOM_ID = "lk.room_id"
+
 #: How room I/O picked its participant.
 LK_ROOM_IO_PARTICIPANT_FILTER = "lk.room_io.participant_filter"
-
-#: Server-assigned room session SID (`RM_...`).
-LK_ROOM_SID = "lk.room_sid"
 
 #: Identity of the RPC caller.
 LK_RPC_CALLER_IDENTITY = "lk.rpc.caller_identity"
@@ -950,7 +950,7 @@ class LkTrackKind:
 
 
 #: Server-assigned track SID (`TR_...`).
-LK_TRACK_SID = "lk.track_sid"
+LK_TRACK_ID = "lk.track_id"
 
 #: Source of the track, as the Agents RTC FFI `TrackSource` enum name.
 LK_TRACK_SOURCE = "lk.track_source"
@@ -1608,7 +1608,7 @@ CHECKPOINT_STOP_RESPONSE = "stop_response"
 CHECKPOINT_SUBSCRIBED = "subscribed"
 #: A newer detection superseded this one.
 CHECKPOINT_SUPERSEDED = "superseded"
-#: The track was subscribed, with `lk.track_sid` and `lk.track_source`.
+#: The track was subscribed, with `lk.track_id` (sent as `lk.track_sid`) and `lk.track_source`.
 CHECKPOINT_TRACK_SUBSCRIBED = "track_subscribed"
 #: The user spoke again during the wait.
 CHECKPOINT_USER_RESUMED = "user_resumed"

@@ -32,7 +32,9 @@ PINS: list[tuple[str, str]] = [
     ("trace_types.ATTR_CLOUD_AGENT_ID", "lk.cloud_agent_id"),
     ("trace_types.ATTR_DEPLOYMENT_ID", "lk.deployment_id"),
     ("trace_types.ATTR_ROOM_NAME", "lk.pii.room_name"),
-    ("trace_types.ATTR_ROOM_SID", "lk.room_sid"),
+    # the two shared identity keys Agents renamed to the registry spelling (protocol 424a912b):
+    # pinned at the canonical name, so a drift back to `lk.room_sid` / `lk.track_sid` fails here
+    ("trace_types.ATTR_ROOM_ID", "lk.room_id"),
     ("trace_types.ATTR_DISPATCH_ID", "lk.dispatch_id"),
     ("trace_types.ATTR_WORKER_ID", "lk.job.worker_id"),
     ("trace_types.ATTR_JOB_AGENT_ID", "lk.job.agent_id"),
@@ -50,7 +52,7 @@ PINS: list[tuple[str, str]] = [
     ("trace_types.ATTR_ROOM_E2EE", "lk.room.e2ee"),
     ("trace_types.ATTR_ROOM_REMOTE_PARTICIPANT_COUNT", "lk.room.remote_participant_count"),
     ("trace_types.ATTR_ROOM_IO_PARTICIPANT_FILTER", "lk.room_io.participant_filter"),
-    ("trace_types.ATTR_TRACK_SID", "lk.track_sid"),
+    ("trace_types.ATTR_TRACK_ID", "lk.track_id"),
     ("trace_types.ATTR_TRACK_SOURCE", "lk.track_source"),
     ("trace_types.ATTR_FIRST_FRAME_DELAY", "lk.first_frame_delay"),
     ("trace_types.ATTR_PRE_CONNECT_AUDIO_DURATION", "lk.pre_connect_audio.duration"),

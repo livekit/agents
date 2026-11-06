@@ -359,7 +359,7 @@ def _job_stamp_attributes() -> dict[str, AttributeValue] | None:
     if (state := ctx._telemetry_state) is not None:
         return state.attributes
     # recording not (or not yet) initialized: still attribute the telemetry
-    return {"room_id": ctx.job.room.sid, "job_id": ctx.job.id}
+    return {trace_types.ATTR_ROOM_ID: ctx.job.room.sid, "job_id": ctx.job.id}
 
 
 class _MetadataSpanProcessor(SpanProcessor):
@@ -875,7 +875,10 @@ class _CloudTelemetry:
         everything before ``session.start()`` would be lost, and later spans would start
         their own traces. Creates the provider and the gated exporter but registers nothing:
         the job's spans are held until ``configure`` decides."""
-        base_metadata: dict[str, AttributeValue] = {"room_id": room_id, "job_id": job_id}
+        base_metadata: dict[str, AttributeValue] = {
+            trace_types.ATTR_ROOM_ID: room_id,
+            "job_id": job_id,
+        }
         if agent_name:
             base_metadata[trace_types.ATTR_AGENT_NAME] = agent_name
         with self._lock:
@@ -911,7 +914,10 @@ class _CloudTelemetry:
         """Set up (or reuse) the pipelines for a job. Returns the job's
         telemetry state, for the caller to keep on the JobContext — per-record
         stamping and upload gating resolve it from there."""
-        base_metadata: dict[str, AttributeValue] = {"room_id": room_id, "job_id": job_id}
+        base_metadata: dict[str, AttributeValue] = {
+            trace_types.ATTR_ROOM_ID: room_id,
+            "job_id": job_id,
+        }
         if agent_name:
             # identifies the agent for LiveKit Cloud agent insights (explicit dispatch
             # only; the default dispatch has no agent name). Included in both the
@@ -963,10 +969,12 @@ class _CloudTelemetry:
 
             # the meter provider outlives the job (the OTel metrics global is
             # set-once), so its resource carries only process-stable identity;
-            # per-job room_id/job_id ride on each measurement instead
+            # per-job lk.room_id/job_id ride on each measurement instead
             # (otel_metrics._job_attrs)
             process_metadata = {
-                k: v for k, v in base_metadata.items() if k not in ("room_id", "job_id")
+                k: v
+                for k, v in base_metadata.items()
+                if k not in (trace_types.ATTR_ROOM_ID, "job_id")
             }
             meter_resource = Resource.create({SERVICE_NAME: "livekit-agents", **process_metadata})
             self._ensure_meter_provider(meter_resource, url)
@@ -1278,7 +1286,7 @@ async def _upload_session_report(
         return provider.get_logger(
             name=name,
             attributes={
-                "room_id": report.room_id,
+                trace_types.ATTR_ROOM_ID: report.room_id,
                 "job_id": report.job_id,
                 "room": report.room,
                 **metadata,

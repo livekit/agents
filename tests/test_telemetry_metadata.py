@@ -11,7 +11,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from opentelemetry.util.types import AttributeValue
 
 from livekit.agents.job import _JobContextVar
-from livekit.agents.telemetry import set_tracer_provider, tracer
+from livekit.agents.telemetry import set_tracer_provider, trace_types, tracer
 from livekit.agents.telemetry.traces import _JobTelemetry, _MetadataSpanProcessor
 from livekit.agents.types import ATTRIBUTE_REDACTION_ENABLED, ATTRIBUTE_SIMULATION_ENABLED
 
@@ -29,7 +29,7 @@ def span_exporter() -> Iterator[tuple[TracerProvider, InMemorySpanExporter]]:
         metadata={
             "langfuse.session.id": "customer-session",
             "job_id": "provider-job",
-            "room_id": "provider-room",
+            trace_types.ATTR_ROOM_ID: "provider-room",
         },
     )
     try:
@@ -45,7 +45,7 @@ def _job_context(*, initialized: bool = True, traces_enabled: bool = True) -> It
         job=SimpleNamespace(id="job-a", room=SimpleNamespace(sid="room-a")),
         _telemetry_state=(
             _JobTelemetry(
-                attributes={"job_id": "job-a", "room_id": "room-a"},
+                attributes={"job_id": "job-a", trace_types.ATTR_ROOM_ID: "room-a"},
                 traces_enabled=traces_enabled,
                 logs_enabled=False,
             )
@@ -81,7 +81,7 @@ def test_exported_spans_keep_provider_metadata(
         assert span.attributes == {
             "langfuse.session.id": "customer-session",
             "job_id": "provider-job" if state == "outside" else "job-a",
-            "room_id": "provider-room" if state == "outside" else "room-a",
+            trace_types.ATTR_ROOM_ID: "provider-room" if state == "outside" else "room-a",
             **({"gen_ai.conversation.id": "room-a"} if state != "outside" else {}),
         }
 
@@ -94,7 +94,7 @@ def test_job_fallback_metadata_does_not_cross_jobs(
     processor = _MetadataSpanProcessor()
     fallback: dict[str, AttributeValue] = {
         "job_id": "job-b",
-        "room_id": "room-b",
+        trace_types.ATTR_ROOM_ID: "room-b",
         ATTRIBUTE_SIMULATION_ENABLED: True,
         ATTRIBUTE_REDACTION_ENABLED: True,
     }
@@ -107,7 +107,7 @@ def test_job_fallback_metadata_does_not_cross_jobs(
     assert exporter.get_finished_spans()[-1].attributes == {
         "langfuse.session.id": "customer-session",
         "job_id": "job-a",
-        "room_id": "room-a",
+        trace_types.ATTR_ROOM_ID: "room-a",
         "gen_ai.conversation.id": "room-a",
     }
 
@@ -124,5 +124,5 @@ def test_job_fallback_metadata_does_not_cross_jobs(
     assert exporter.get_finished_spans()[-1].attributes == {
         "langfuse.session.id": "customer-session",
         "job_id": "provider-job",
-        "room_id": "provider-room",
+        trace_types.ATTR_ROOM_ID: "provider-room",
     }

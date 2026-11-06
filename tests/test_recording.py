@@ -1362,7 +1362,7 @@ def test_metric_measurements_carry_job_identity() -> None:
     mock_ctx.job.room.sid = "room-42"
     # what init_recording() stashes: identity + session metadata
     mock_ctx._telemetry_state = _JobTelemetry(
-        attributes={"room_id": "room-42", "job_id": "job-42", "lk.simulation.enabled": True},
+        attributes={"lk.room_id": "room-42", "job_id": "job-42", "lk.simulation.enabled": True},
         traces_enabled=True,
         logs_enabled=True,
     )
@@ -1385,7 +1385,7 @@ def test_metric_measurements_carry_job_identity() -> None:
             _JobContextVar.reset(token)
 
     attrs = mock_counter.add.call_args.kwargs["attributes"]
-    assert attrs["room_id"] == "room-42"
+    assert attrs["lk.room_id"] == "room-42"
     assert attrs["job_id"] == "job-42"
     assert attrs["lk.simulation.enabled"] is True
 
@@ -1398,13 +1398,13 @@ def test_metric_measurements_carry_job_identity() -> None:
         finally:
             _JobContextVar.reset(token)
     attrs = mock_counter.add.call_args.kwargs["attributes"]
-    assert attrs == {"room_id": "room-42", "job_id": "job-42"}
+    assert attrs == {"lk.room_id": "room-42", "job_id": "job-42"}
 
     # outside a job context the attributes are simply absent, never wrong
     with patch.object(otel_metrics, "_llm_input_tokens") as mock_counter:
         otel_metrics.collect_usage(ev)
     attrs = mock_counter.add.call_args.kwargs["attributes"]
-    assert "room_id" not in attrs and "job_id" not in attrs
+    assert "lk.room_id" not in attrs and "job_id" not in attrs
 
 
 def test_provider_swap_keeps_the_old_pipeline_and_shuts_both_down_at_exit() -> None:
@@ -1662,3 +1662,77 @@ async def test_recorder_io_not_created_when_audio_false() -> None:
 
     assert session._recorder_io is None
     await _cleanup(session)
+
+
+# ---------------------------------------------------------------------------
+# Group 5: the registry's room key on every path the framework stamps it
+# ---------------------------------------------------------------------------
+
+
+def test_cloud_telemetry_stamps_the_room_sid_as_lk_room_id() -> None:
+    """The job's room SID (`RM_...`) travels as the registry's `lk.room_id` (protocol 424a912b)
+    on every path the framework stamps it: the trace resource, the per-span/per-log metadata
+    and the per-measurement metric attributes, for two jobs sharing one process. Neither the
+    bare `room_id` nor `lk.room_sid` is emitted any more, and the process-wide meter resource
+    carries no room at all, so a reused worker never attributes one job's metrics to another."""
+    from opentelemetry.sdk.trace import TracerProvider as SdkTracerProvider
+    from opentelemetry.trace import NoOpTracerProvider
+
+    from livekit.agents.job import _JobContextVar
+    from livekit.agents.telemetry import otel_metrics, trace_types, traces as traces_mod
+    from livekit.agents.telemetry.traces import set_tracer_provider
+
+    assert trace_types.ATTR_ROOM_ID == "lk.room_id"
+    legacy = {"room_id", "lk.room_sid", "lk.room.sid"}
+
+    with patch.dict("os.environ", {}, clear=True), _stub_cloud_tracer_deps() as stubs:
+        set_tracer_provider(NoOpTracerProvider())
+        _setup_cloud_tracer_for_job(job_id="AJ_1", room_id="RM_1")
+        _setup_cloud_tracer_for_job(job_id="AJ_2", room_id="RM_2")
+        cloud = traces_mod._cloud
+
+        # the per-record stamp (spans and logs), one per job
+        stamps = {job: cloud._export_jobs[job].attributes for job in ("AJ_1", "AJ_2")}
+        assert stamps == {
+            "AJ_1": {"lk.room_id": "RM_1", "job_id": "AJ_1"},
+            "AJ_2": {"lk.room_id": "RM_2", "job_id": "AJ_2"},
+        }
+
+        # the trace resource of the first job (the provider is built once per process)
+        created = traces_mod.tracer._tracer_provider
+        assert isinstance(created, SdkTracerProvider)
+        assert created.resource.attributes["lk.room_id"] == "RM_1"
+        assert not legacy & set(created.resource.attributes)
+
+        # the meter resource outlives the job: no room on it, under any spelling
+        meter_resource = stubs.meter_provider_cls.call_args.kwargs["resource"].attributes
+        assert "service.name" in meter_resource
+        assert not ({"lk.room_id", "job_id"} | legacy) & set(meter_resource)
+
+        # the metric points carry the stamp, or the same keys when recording never initialized
+        for job, room, state in (("AJ_1", "RM_1", True), ("AJ_2", "RM_2", False)):
+            ctx = SimpleNamespace(
+                job=SimpleNamespace(id=job, room=SimpleNamespace(sid=room)),
+                _telemetry_state=cloud._export_jobs[job] if state else None,
+            )
+            token = _JobContextVar.set(ctx)  # type: ignore[arg-type]
+            try:
+                assert otel_metrics._job_attrs() == {"lk.room_id": room, "job_id": job}
+                assert traces_mod._job_stamp_attributes() == {"lk.room_id": room, "job_id": job}
+            finally:
+                _JobContextVar.reset(token)
+
+
+async def test_upload_session_report_scopes_the_logger_by_lk_room_id() -> None:
+    """The session report's instrumentation scope names the room as `lk.room_id`, like the
+    records it travels with; the bare `room_id` spelling is gone from it."""
+    report = _make_mock_report({"audio": False, "traces": True, "logs": False, "transcript": False})
+    report.room_id = "RM_1"
+
+    with _patch_upload_deps() as mock_logger:
+        await _call_upload(report)
+
+    attrs = mock_logger.provider.get_logger.call_args_list[0].kwargs["attributes"]
+    assert attrs["lk.room_id"] == "RM_1"
+    assert "room_id" not in attrs
+    assert "lk.room_sid" not in attrs

@@ -37,7 +37,7 @@ ATTR_DEPLOYMENT_ID = _semconv.LK_DEPLOYMENT_ID
 ATTR_ROOM_NAME = _semconv.LK_PII_ROOM_NAME
 
 # join keys shared with the server, SIP, and client traces
-ATTR_ROOM_SID = _semconv.LK_ROOM_SID
+ATTR_ROOM_ID = _semconv.LK_ROOM_ID
 ATTR_DISPATCH_ID = _semconv.LK_DISPATCH_ID
 ATTR_WORKER_ID = _semconv.LK_JOB_WORKER_ID
 ATTR_JOB_AGENT_ID = _semconv.LK_JOB_AGENT_ID
@@ -75,7 +75,7 @@ ATTR_ROOM_E2EE = _semconv.LK_ROOM_E2EE
 ATTR_ROOM_REMOTE_PARTICIPANT_COUNT = _semconv.LK_ROOM_REMOTE_PARTICIPANT_COUNT
 ATTR_ROOM_IO_PARTICIPANT_FILTER = _semconv.LK_ROOM_IO_PARTICIPANT_FILTER
 """Whether RoomIO waited for a specific participant identity (true) or the first eligible one."""
-ATTR_TRACK_SID = _semconv.LK_TRACK_SID
+ATTR_TRACK_ID = _semconv.LK_TRACK_ID
 ATTR_TRACK_SOURCE = _semconv.LK_TRACK_SOURCE
 ATTR_FIRST_FRAME_DELAY = _semconv.LK_FIRST_FRAME_DELAY
 """Seconds from linking the participant to the first media frame received from them."""

@@ -540,7 +540,7 @@ def _start_job_span(job_ctx: JobContext) -> trace.Span:
             trace_types.ATTR_JOB_ID: job.id,
             trace_types.ATTR_AGENT_NAME: job.agent_name,
             trace_types.ATTR_ROOM_NAME: job.room.name,
-            trace_types.ATTR_ROOM_SID: job.room.sid,
+            trace_types.ATTR_ROOM_ID: job.room.sid,
             trace_types.ATTR_DISPATCH_ID: job.dispatch_id,
             trace_types.ATTR_WORKER_ID: info.worker_id,
             trace_types.ATTR_JOB_AGENT_ID: job.state.agent_id,

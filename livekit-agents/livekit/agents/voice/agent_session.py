@@ -1153,7 +1153,7 @@ class LiveSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                         trace_types.ATTR_JOB_ID: job_ctx.job.id,
                         trace_types.ATTR_AGENT_NAME: job_ctx.job.agent_name,
                         # join keys shared with server, SIP and client traces
-                        trace_types.ATTR_ROOM_SID: job_ctx.job.room.sid,
+                        trace_types.ATTR_ROOM_ID: job_ctx.job.room.sid,
                         trace_types.ATTR_DISPATCH_ID: job_ctx.job.dispatch_id,
                         trace_types.ATTR_WORKER_ID: job_ctx._info.worker_id,
                         trace_types.ATTR_JOB_AGENT_ID: job_ctx.job.state.agent_id,
