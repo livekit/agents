@@ -20,7 +20,8 @@ use parking_lot::Mutex;
 
 use lk_agents_abi::llm::inference::InvalidPayload;
 use lk_agents_net::env::ProcessEnv;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
 use crate::fallback::ChainPolicy;
 use crate::fallback::chain::{
@@ -324,7 +325,7 @@ impl Backend for SttBackend {
         req: &Self::Req,
         conn: &ApiConnectOptions,
         slot: RecoveryMode,
-        stop: tokio::sync::watch::Receiver<bool>,
+        stop: CancellationToken,
     ) -> Result<Recovery, ProviderError> {
         let stt = self.inner.with_conn_options(conn).unwrap_or_else(|| self.inner.clone());
         match (req, slot) {
@@ -351,7 +352,7 @@ impl SttBackend {
         language: Option<&LanguageCode>,
         tee: &InputTee,
         cx: &telemetry::Cx,
-        mut stop: tokio::sync::watch::Receiver<bool>,
+        stop: CancellationToken,
     ) -> Result<Recovery, ProviderError> {
         let (sink, mut source) = stt
             .stream(cx, language, None)
@@ -360,7 +361,7 @@ impl SttBackend {
             .split();
         let id = tee.add_probe(sink);
         let verdict = loop {
-            match probe_next(source.as_mut(), &mut stop).await {
+            match probe_next(source.as_mut(), &stop).await {
                 None | Some(Ok(None)) => break Ok(Recovery::NotYet),
                 Some(Ok(Some(ev)))
                     if ev.kind == SpeechEventType::FinalTranscript
@@ -674,13 +675,13 @@ impl ServeAttempt<SttBackend, SpeechEvent> for SttLeg {
         index: usize,
         session: SttSession,
         tx: &'a mut mpsc::Sender<Result<SpeechEvent, ProviderError>>,
-        mut stop: watch::Receiver<bool>,
+        stop: CancellationToken,
     ) -> BoxFuture<'a, Attempt<()>> {
         Box::pin(async move {
             let SttSession::Stream(mut source) = session else {
                 unreachable!("a Stream request opens Stream")
             };
-            let outcome = forward(&chain, index, source.as_mut(), &mut stop, tx, |_| true).await;
+            let outcome = forward(&chain, index, source.as_mut(), &stop, tx, |_| true).await;
             // The dead stream leaves the tee before the next entry installs its own.
             self.tee.clear_main();
             source.close(chain.clock().now().saturating_add(HOST_TEARDOWN_TIMEOUT)).await;

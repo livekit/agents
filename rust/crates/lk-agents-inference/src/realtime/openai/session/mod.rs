@@ -301,7 +301,7 @@ impl OpenAIRealtime {
         let shared = Arc::new(Shared {
             machine: Mutex::new(machine),
             caps: parking_lot::Mutex::new(caps),
-            closing: tokio::sync::Notify::new(),
+            closing: tokio_util::sync::CancellationToken::new(),
             cleanup: parking_lot::Mutex::new(None),
             retirement: parking_lot::Mutex::new(None),
             retirement_wake: Arc::new(tokio::sync::Notify::new()),
@@ -349,7 +349,7 @@ impl OpenAIRealtime {
 
 pub(super) struct Shared {
     /// `aclose` was called: a pump waiting to reconnect stops waiting.
-    pub(super) closing: tokio::sync::Notify,
+    pub(super) closing: tokio_util::sync::CancellationToken,
     cleanup: parking_lot::Mutex<Option<crate::effects::RealtimeConnectionEffect>>,
     machine: Mutex<RealtimeMachine>,
     retirement: parking_lot::Mutex<Option<tokio::sync::watch::Receiver<bool>>>,
@@ -440,7 +440,7 @@ impl OpenAIRealtimeSession {
             response_id: None,
         }));
         self.commands.send(Cmd::Close);
-        self.shared.closing.notify_one();
+        self.shared.closing.cancel();
         let pump = self.pump.lock().take();
         if let Some(mut pump) = pump {
             let settled = lk_agents_abi::timeout(
@@ -530,7 +530,7 @@ impl Pump {
             };
             tokio::select! {
                 biased;
-                () = self.shared.closing.notified() => {
+                () = self.shared.closing.cancelled() => {
                     let _ = connection.close(self.clock.now());
                     self.close().await;
                     return;
@@ -604,7 +604,7 @@ impl Pump {
             let deadline = connection.next_deadline();
             tokio::select! {
                 biased;
-                () = self.shared.closing.notified() => { self.close().await; return Ok(Outcome::Closed); }
+                () = self.shared.closing.cancelled() => { self.close().await; return Ok(Outcome::Closed); }
                 () = async { match deadline { Some(at) => self.clock.wait_until(at).await, None => std::future::pending().await } } => {
                     if let ControlFlow::Break(outcome) = self.tick_connection(connection) {
                         return Ok(outcome);
@@ -687,7 +687,7 @@ impl Pump {
             let mut step = tokio::select! {
                 biased;
                 result = &mut writer => return result.map(|()| Outcome::Closed),
-                () = self.shared.closing.notified() => { self.close().await; return Ok(Outcome::Closed); },
+                () = self.shared.closing.cancelled() => { self.close().await; return Ok(Outcome::Closed); },
                 reserved = outgoing.reserve(), if !writable => {
                     permit = Some(reserved.map_err(|_| ApiError::new("realtime writer closed").with_retryable(false))?);
                     continue;

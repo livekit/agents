@@ -86,7 +86,7 @@ pub struct MountedTransport {
     end: mpsc::UnboundedSender<SinkEvent>,
     /// Makes `run()` return on `detach()`; the cloud receive half would otherwise stay parked on
     /// an open socket.
-    stopped: tokio::sync::Notify,
+    stopped: tokio_util::sync::CancellationToken,
     ended: AtomicBool,
 }
 
@@ -104,7 +104,7 @@ impl MountedTransport {
             transport: build(sink),
             events: tokio::sync::Mutex::new(rx),
             end: tx,
-            stopped: tokio::sync::Notify::new(),
+            stopped: tokio_util::sync::CancellationToken::new(),
             ended: AtomicBool::new(false),
         })
     }
@@ -115,7 +115,7 @@ impl MountedTransport {
         if !self.ended.swap(true, Ordering::SeqCst) {
             let _ = self.end.send(SinkEvent::End);
         }
-        self.stopped.notify_waiters();
+        self.stopped.cancel();
     }
 
     /// Stop, without waiting for anything in flight.
@@ -127,13 +127,11 @@ impl MountedTransport {
     /// Run the transport for its whole lifetime. `Ok` is "the audio ended"; `Err` goes to the
     /// session's `transport_failed`.
     pub async fn run(&self) -> Result<(), ApiError> {
-        if self.ended.load(Ordering::SeqCst) {
-            return Ok(());
-        }
         let result = tokio::select! {
-            result = self.transport.run() => result,
+            biased;
             // `detach()` while parked: not an error.
-            () = self.stopped.notified() => Ok(()),
+            () = self.stopped.cancelled() => Ok(()),
+            result = self.transport.run() => result,
         };
         self.finish();
         result

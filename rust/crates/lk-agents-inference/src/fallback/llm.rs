@@ -12,7 +12,8 @@ use lk_agents_abi::llm::inference::InvalidPayload;
 use lk_agents_abi::{BoxFuture, Spawner};
 use lk_agents_abi::{ChatRequest, Closed, Llm, LlmStream, StreamOutput, ToolChoice, Ts};
 use lk_agents_abi::{Clock, HOST_TEARDOWN_TIMEOUT};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
 use crate::fallback::ChainPolicy;
 use crate::fallback::chain::{
@@ -145,7 +146,7 @@ impl Backend for LlmBackend {
         req: &Self::Req,
         conn: &lk_agents_abi::ApiConnectOptions,
         _slot: RecoveryMode,
-        stop: tokio::sync::watch::Receiver<bool>,
+        stop: CancellationToken,
     ) -> Result<Recovery, ProviderError> {
         // Drain and discard: reaching the end without an error is LLM's recovery signal.
         drain_probe(self.request(req, conn, true).await?, self.clock.as_ref(), stop).await
@@ -362,14 +363,13 @@ impl ServeAttempt<LlmBackend, LlmChunk> for LlmLeg {
         index: usize,
         mut stream: LlmStream,
         tx: &'a mut mpsc::Sender<Result<LlmChunk, ProviderError>>,
-        mut stop: watch::Receiver<bool>,
+        stop: CancellationToken,
     ) -> BoxFuture<'a, Attempt<()>> {
         Box::pin(async move {
             // Only `has_response()` chunks count as output (`llm:281-285`); usage-only chunks do
             // not block a retry.
             let outcome =
-                forward(&chain, index, stream.as_mut(), &mut stop, tx, LlmChunk::has_response)
-                    .await;
+                forward(&chain, index, stream.as_mut(), &stop, tx, LlmChunk::has_response).await;
             stream.close(chain.clock().now().saturating_add(HOST_TEARDOWN_TIMEOUT)).await;
             outcome
         })

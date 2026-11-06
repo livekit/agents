@@ -178,7 +178,7 @@ impl Backend for Fake {
         _req: &Self::Req,
         conn: &ApiConnectOptions,
         slot: RecoveryMode,
-        _stop: tokio::sync::watch::Receiver<bool>,
+        _stop: tokio_util::sync::CancellationToken,
     ) -> Result<Recovery, ProviderError> {
         self.probes.lock().push((slot, *conn));
         self.probes_entered.fetch_add(1, Ordering::SeqCst);
@@ -476,14 +476,15 @@ async fn closing_a_channel_source_stops_the_task_and_waits_for_it() {
     use std::sync::atomic::{AtomicBool, Ordering};
     let clock = Arc::new(lk_agents_abi::VirtualClock::new());
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<u8, ProviderError>>(4);
-    let (mut stop, done, chain) = crate::fallback::channel::ChainTask::pair(clock.clone());
+    let stop = tokio_util::sync::CancellationToken::new();
+    let (done, chain) = crate::fallback::channel::ChainTask::pair(clock.clone(), stop.clone());
     let member_closed = Arc::new(AtomicBool::new(false));
     let closed_flag = Arc::clone(&member_closed);
     let streams = Arc::new(TaskSet::default());
     let filling = streams.spawn(&TokioSpawner::current(), "filling", async move {
         let _tx = tx;
         // The task's loop: serve until the consumer stops it, then close the member.
-        let _ = stop.changed().await;
+        stop.cancelled().await;
         closed_flag.store(true, Ordering::SeqCst);
         let _ = done.send(());
     });
@@ -509,7 +510,8 @@ async fn a_task_that_ignores_the_stop_is_aborted_and_reported_timed_out() {
     use std::sync::Arc;
     let clock = Arc::new(lk_agents_abi::VirtualClock::new());
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<u8, ProviderError>>(4);
-    let (_stop, _done, chain) = crate::fallback::channel::ChainTask::pair(clock.clone());
+    let stop = tokio_util::sync::CancellationToken::new();
+    let (_done, chain) = crate::fallback::channel::ChainTask::pair(clock.clone(), stop);
     // Dropped with the task's work, so the receiver sees the abort.
     let (alive, aborted) = tokio::sync::oneshot::channel::<()>();
     let streams = Arc::new(TaskSet::default());
@@ -676,7 +678,7 @@ async fn a_queued_provider_attempt_does_not_open_after_its_operation_expires_or_
             Arc::new(Recorder::default()),
         )
         .unwrap();
-        let (stop, stopped) = tokio::sync::watch::channel(false);
+        let stop = chain.request_stop();
         let request = "request".to_owned();
         let mut state = ();
         let mut run = Box::pin(chain.run_cancellable(
@@ -687,7 +689,7 @@ async fn a_queued_provider_attempt_does_not_open_after_its_operation_expires_or_
                 slot: RecoveryMode::OneShot,
             },
             &mut state,
-            stopped,
+            stop.clone(),
             |_, _, _, _, _| Box::pin(async { Attempt::Served(()) }),
         ));
         // Accept and authorize the attempt, then hold its actual provider task in the executor.
@@ -698,7 +700,7 @@ async fn a_queued_provider_attempt_does_not_open_after_its_operation_expires_or_
         .await;
         scheduled.recv().await.expect("the inner attempt was scheduled");
         if cancel_before_execution {
-            stop.send(true).unwrap();
+            stop.cancel();
         } else {
             clock.advance(Duration::from_secs(2));
         }

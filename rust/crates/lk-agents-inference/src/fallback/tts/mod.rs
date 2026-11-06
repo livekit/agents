@@ -27,6 +27,7 @@ use lk_agents_net::env::ProcessEnv;
 use parking_lot::Mutex;
 use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
+use tokio_util::sync::CancellationToken;
 
 fn send(sink: &dyn StreamInput<String>, token: &Token) {
     let _ = match token {
@@ -299,7 +300,7 @@ impl Backend for TtsBackend {
         req: &Self::Req,
         conn: &ApiConnectOptions,
         _slot: RecoveryMode,
-        stop: tokio::sync::watch::Receiver<bool>,
+        stop: CancellationToken,
     ) -> Result<Recovery, ProviderError> {
         let tts = self.provider(conn);
         // A probe runs in the background, past the request it recovers for: in its job, under no
@@ -516,7 +517,7 @@ impl ServeAttempt<TtsBackend, SynthesizedAudio> for TtsLeg {
         index: usize,
         mut source: TtsSource,
         tx: &'a mut mpsc::Sender<Result<SynthesizedAudio, ProviderError>>,
-        mut stop: watch::Receiver<bool>,
+        stop: CancellationToken,
     ) -> BoxFuture<'a, Attempt<()>> {
         Box::pin(async move {
             let resampler = match self.resampler_for(index) {
@@ -527,7 +528,7 @@ impl ServeAttempt<TtsBackend, SynthesizedAudio> for TtsLeg {
                 }
             };
             let outcome =
-                self.forward_audio(&chain, index, &mut source, resampler, tx, &mut stop).await;
+                self.forward_audio(&chain, index, &mut source, resampler, tx, &stop).await;
             if let Some(log) = self.log.as_ref() {
                 log.clear_main();
             }
@@ -559,7 +560,7 @@ impl TtsLeg {
         source: &mut TtsSource,
         mut resampler: Option<AudioResampler>,
         tx: &mut mpsc::Sender<Result<SynthesizedAudio, ProviderError>>,
-        stop: &mut watch::Receiver<bool>,
+        stop: &CancellationToken,
     ) -> Attempt<()> {
         let mut produced = false;
         loop {

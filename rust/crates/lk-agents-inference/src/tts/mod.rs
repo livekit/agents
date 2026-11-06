@@ -34,6 +34,7 @@ use std::pin::pin;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot, watch};
+use tokio_util::sync::CancellationToken;
 use wire::FallbackModel;
 
 pub mod emitter;
@@ -330,7 +331,7 @@ impl GatewayTts {
         let (text_tx, text_rx) = mpsc::channel::<TextCmd>(TEXT_QUEUE_CAPACITY);
         let (audio_tx, audio_rx) =
             mpsc::channel::<Result<SynthesizedAudio, ApiError>>(AUDIO_QUEUE_CAPACITY);
-        let (stop, stopped) = watch::channel(false);
+        let stop = CancellationToken::new();
         let (done, settled) = oneshot::channel();
         let (failure, failed) = watch::channel(None);
         let clock = self.clock.clone();
@@ -347,7 +348,7 @@ impl GatewayTts {
             headers: headers.into_vec(),
             clock: clock.clone(),
             accepted_at,
-            stopped,
+            stopped: stop.clone(),
             done: Some(done),
             failure,
             create_frame: wire::session_create(&opts),
@@ -560,7 +561,7 @@ impl StreamInput<String> for SynthesisInput {
 pub struct SynthesisOutput {
     audio: mpsc::Receiver<Result<SynthesizedAudio, ApiError>>,
     done: bool,
-    stop: watch::Sender<bool>,
+    stop: CancellationToken,
     settled: Option<oneshot::Receiver<Result<(), ApiError>>>,
     failed: watch::Receiver<Option<ApiError>>,
     clock: Arc<dyn Clock>,
@@ -622,7 +623,7 @@ impl StreamOutput<SynthesizedAudio> for SynthesisOutput {
         deadline: lk_agents_abi::Ts,
     ) -> lk_agents_abi::BoxFuture<'static, lk_agents_abi::Closed> {
         Box::pin(async move {
-            let _ = self.stop.send(true);
+            self.stop.cancel();
             self.done = true;
             self.audio.close();
             let settled = self.settled.take();
@@ -640,7 +641,7 @@ impl lk_agents_abi::utils::stream::ProviderStream<SynthesizedAudio> for Synthesi
 
 impl Drop for SynthesisOutput {
     fn drop(&mut self) {
-        let _ = self.stop.send(true);
+        self.stop.cancel();
     }
 }
 
@@ -656,7 +657,7 @@ struct Pump {
     headers: Vec<(String, String)>,
     clock: Arc<dyn Clock>,
     accepted_at: Ts,
-    stopped: watch::Receiver<bool>,
+    stopped: CancellationToken,
     done: Option<oneshot::Sender<Result<(), ApiError>>>,
     failure: watch::Sender<Option<ApiError>>,
     create_frame: serde_json::Value,

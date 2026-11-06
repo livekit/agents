@@ -5,7 +5,7 @@
 use crate::effects::FallbackChainEffect;
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use parking_lot::Mutex;
@@ -22,7 +22,8 @@ use lk_agents_abi::errors::{ApiError, CANCELLED_STATUS, ProviderError};
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::{BoxFuture, Spawner, SpawnerExt};
 use lk_agents_net::task::{TaskId, TaskSet};
-use tokio::sync::{oneshot, watch};
+use tokio::sync::oneshot;
+use tokio_util::sync::{CancellationToken, DropGuard};
 
 use crate::fallback::{ChainPolicy, conn_options_for_attempt};
 
@@ -44,14 +45,14 @@ pub trait Backend: Send + Sync + 'static {
     ) -> Result<Self::Session, ProviderError>;
 
     /// `Ok(Recovery::NotYet)` is a clean decline (`stt/fallback_adapter.py:465-466`), not an error.
-    /// `stop` turns true when the adapter closes: a probe then closes what it opened and returns
+    /// `stop` is cancelled when the adapter closes: a probe then closes what it opened and returns
     /// (the reference cancels the probe task, whose `async with stream` closes the stream).
     async fn recover(
         &self,
         req: &Self::Req,
         conn: &ApiConnectOptions,
         slot: RecoveryMode,
-        stop: watch::Receiver<bool>,
+        stop: CancellationToken,
     ) -> Result<Recovery, ProviderError>;
 }
 
@@ -154,11 +155,9 @@ pub struct FallbackChain<B: Backend> {
     active: AtomicUsize,
     /// `_attempt_id`, numbering every attempt.
     attempts: AtomicU64,
-    /// `tts/fallback_adapter.py:102,155-159`. Set before the cancel sweep so an in-flight stream
-    /// cannot start a probe nothing will cancel.
-    closed: AtomicBool,
-    /// Every probe's `stop`; see [`Backend::recover`].
-    stop: watch::Sender<bool>,
+    /// `tts/fallback_adapter.py:102,155-159`: every request's and probe's stop. Cancelled before
+    /// the cancel sweep so an in-flight stream cannot start a probe nothing will cancel.
+    stop: CancellationToken,
     /// The request streams' tasks: a dropped stream only signals its task to stop, which then
     /// closes its member and settles under the chain.
     streams: Arc<TaskSet>,
@@ -198,8 +197,7 @@ impl<B: Backend> FallbackChain<B> {
             observer,
             active: AtomicUsize::new(0),
             attempts: AtomicU64::new(0),
-            closed: AtomicBool::new(false),
-            stop: watch::channel(false).0,
+            stop: CancellationToken::new(),
             streams: Arc::default(),
         })
     }
@@ -269,19 +267,24 @@ impl<B: Backend> FallbackChain<B> {
             req,
             ChainCall { conn_options: *caller_conn, accepted_at: self.clock.now(), slot },
             state,
-            self.stop.subscribe(),
+            self.request_stop(),
             move |index, backend, session, state, _stop| attempt(index, backend, session, state),
         )
         .await
     }
 
-    /// The consumer's cancellation belongs to this request, while chain close stops all requests.
+    /// A request's stop: the consumer cancels it, and the chain's close cancels every request.
+    pub(crate) fn request_stop(&self) -> CancellationToken {
+        self.stop.child_token()
+    }
+
+    /// `cancel` is the request's [`request_stop`](Self::request_stop).
     pub(crate) async fn run_cancellable<S, T, F>(
         &self,
         req: &B::Req,
         call: ChainCall,
         state: &mut S,
-        cancel: watch::Receiver<bool>,
+        cancel: CancellationToken,
         attempt: F,
     ) -> Result<ChainOutcome<T>, ProviderError>
     where
@@ -292,7 +295,7 @@ impl<B: Backend> FallbackChain<B> {
                 &'a B,
                 B::Session,
                 &'a mut S,
-                watch::Receiver<bool>,
+                CancellationToken,
             ) -> BoxFuture<'a, Attempt<T>>
             + Clone
             + Send
@@ -308,13 +311,13 @@ impl<B: Backend> FallbackChain<B> {
         &'c self,
         req: &'c B::Req,
         call: ChainCall,
-        cancel: watch::Receiver<bool>,
+        cancel: CancellationToken,
     ) -> Result<ChainRun<'c, B, T, S>, ProviderError> {
         let ChainCall { conn_options: caller_conn, accepted_at: started, slot } = call;
         let deadline = caller_conn
             .total_timeout
             .map(|seconds| started.saturating_add(Duration::from_secs_f64(seconds)));
-        if self.closed.load(Ordering::SeqCst) || *cancel.borrow() {
+        if cancel.is_cancelled() {
             return Err(ApiError::status("fallback closed", CANCELLED_STATUS, None, None).into());
         }
         if deadline.is_some_and(|at| self.clock.now() >= at) {
@@ -395,7 +398,7 @@ impl<B: Backend> FallbackChain<B> {
         conn: &ApiConnectOptions,
         deadline: Option<Ts>,
     ) {
-        if self.closed.load(Ordering::SeqCst) || deadline.is_some_and(|at| self.clock.now() >= at) {
+        if self.stop.is_cancelled() || deadline.is_some_and(|at| self.clock.now() >= at) {
             // `tts:218-220,499-502`. Nothing would cancel a probe started from here.
             return;
         }
@@ -407,7 +410,7 @@ impl<B: Backend> FallbackChain<B> {
             conn: *conn,
             observer: Arc::clone(&self.observer),
             status: Arc::clone(&self.status),
-            closed: self.stop.subscribe(),
+            closed: self.stop.clone(),
             clock: self.clock.clone(),
             deadline,
             slot,
@@ -446,8 +449,7 @@ impl<B: Backend> FallbackChain<B> {
 
     /// Marks the chain closed, tells every probe to stop, and hands back the ones in flight.
     fn begin_close(&self) -> Vec<Probe> {
-        self.closed.store(true, Ordering::SeqCst);
-        let _ = self.stop.send(true);
+        self.stop.cancel();
         let mut s = self.status.lock();
         s.backends
             .iter_mut()
@@ -530,7 +532,8 @@ struct ChainRun<'c, B: Backend, T, S> {
     recover_conn: ApiConnectOptions,
     slot: RecoveryMode,
     deadline: Option<Ts>,
-    cancel: watch::Receiver<bool>,
+    /// A child of the chain's stop.
+    cancel: CancellationToken,
     request: ChainRequest,
     effects: VecDeque<FallbackChainEffect>,
     active: Option<RunningAttempt<T, S>>,
@@ -546,7 +549,7 @@ impl<B: Backend, T: Send + 'static, S: Clone + Send + 'static> ChainRun<'_, B, T
                 &'a B,
                 B::Session,
                 &'a mut S,
-                watch::Receiver<bool>,
+                CancellationToken,
             ) -> BoxFuture<'a, Attempt<T>>
             + Clone
             + Send
@@ -580,9 +583,8 @@ impl<B: Backend, T: Send + 'static, S: Clone + Send + 'static> ChainRun<'_, B, T
             self.handle(ChainEvent::Wake);
             return;
         };
-        let mut closed = self.chain.stop.subscribe();
         let clock = self.chain.clock.as_ref();
-        let observation = active.observe(clock, self.deadline, &mut self.cancel, &mut closed).await;
+        let observation = active.observe(clock, self.deadline, &self.cancel).await;
         let event = match observation {
             AttemptObservation::Interrupted(event) => event,
             AttemptObservation::Completed(outcome, updated_state) => {
@@ -606,7 +608,7 @@ impl<B: Backend, T: Send + 'static, S: Clone + Send + 'static> ChainRun<'_, B, T
 
     fn served(&mut self, active: &RunningAttempt<T, S>, value: T) -> ChainEvent {
         self.served = Some((value, active.index, active.attempt_id));
-        if self.chain.closed.load(Ordering::SeqCst) || *self.cancel.borrow() {
+        if self.cancel.is_cancelled() {
             ChainEvent::Cancel
         } else {
             ChainEvent::Succeeded { attempt: active.id }
@@ -628,11 +630,7 @@ impl<B: Backend, T: Send + 'static, S: Clone + Send + 'static> ChainRun<'_, B, T
         if failed {
             chain.select(index, 0);
         }
-        if failed
-            && !produced_output
-            && !chain.closed.load(Ordering::SeqCst)
-            && !*self.cancel.borrow()
-        {
+        if failed && !produced_output && !self.cancel.is_cancelled() {
             chain.try_recovery(index, self.slot, self.req, &self.recover_conn, self.deadline);
         }
         ChainEvent::Failed { attempt: active.id, error, produced_output }
@@ -652,9 +650,8 @@ impl<B: Backend, T: Send + 'static, S: Clone + Send + 'static> ChainRun<'_, B, T
     }
 
     async fn sleep_until(&mut self, at: Ts) {
-        let mut closed = self.chain.stop.subscribe();
         let clock = self.chain.clock.clone();
-        let wake = wait_until(clock.as_ref(), at, &mut self.cancel, &mut closed).await;
+        let wake = wait_until(clock.as_ref(), at, &self.cancel).await;
         self.handle(if wake { ChainEvent::Wake } else { ChainEvent::Cancel });
     }
 
@@ -667,7 +664,7 @@ impl<B: Backend, T: Send + 'static, S: Clone + Send + 'static> ChainRun<'_, B, T
                 &'a B,
                 B::Session,
                 &'a mut S,
-                watch::Receiver<bool>,
+                CancellationToken,
             ) -> BoxFuture<'a, Attempt<T>>
             + Clone
             + Send
@@ -675,7 +672,7 @@ impl<B: Backend, T: Send + 'static, S: Clone + Send + 'static> ChainRun<'_, B, T
             + 'static,
     {
         let chain = self.chain;
-        if chain.closed.load(Ordering::SeqCst) || *self.cancel.borrow() {
+        if self.cancel.is_cancelled() {
             return self.handle(ChainEvent::Cancel);
         }
         // Recheck supplied time immediately before executing an authorized launch.
@@ -684,7 +681,7 @@ impl<B: Backend, T: Send + 'static, S: Clone + Send + 'static> ChainRun<'_, B, T
         }
         let attempt_id = chain.attempts.fetch_add(1, Ordering::Relaxed) + 1;
         chain.select(index, attempt_id);
-        let (stop, stop_rx) = watch::channel(false);
+        let stop = CancellationToken::new();
         let (result_tx, result) = oneshot::channel();
         let launch = AttemptLaunch {
             backend: Arc::clone(&chain.entries[index]),
@@ -692,8 +689,8 @@ impl<B: Backend, T: Send + 'static, S: Clone + Send + 'static> ChainRun<'_, B, T
             conn: conn_options_for_attempt(&self.caller_conn, &chain.policy),
             deadline: self.deadline,
             clock: chain.clock.clone(),
-            closed: chain.stop.subscribe(),
-            stop: stop_rx,
+            closed: chain.stop.clone(),
+            stop: stop.clone(),
             state: state.clone(),
             serve: serve.clone(),
             index,
@@ -702,7 +699,8 @@ impl<B: Backend, T: Send + 'static, S: Clone + Send + 'static> ChainRun<'_, B, T
             let _ = result_tx.send(launch.run().await);
         });
         chain.track_attempt(index, task);
-        self.active = Some(RunningAttempt { id, index, attempt_id, result, stop });
+        self.active =
+            Some(RunningAttempt { id, index, attempt_id, result, stop: stop.drop_guard() });
     }
 
     async fn cancel(&mut self, attempt: u64, state: &mut S) {
@@ -723,8 +721,8 @@ struct AttemptLaunch<B: Backend, S, F> {
     conn: ApiConnectOptions,
     deadline: Option<Ts>,
     clock: Arc<dyn Clock>,
-    closed: watch::Receiver<bool>,
-    stop: watch::Receiver<bool>,
+    closed: CancellationToken,
+    stop: CancellationToken,
     state: S,
     serve: F,
     index: usize,
@@ -738,7 +736,7 @@ impl<B: Backend, S, F> AttemptLaunch<B, S, F> {
             &'a B,
             B::Session,
             &'a mut S,
-            watch::Receiver<bool>,
+            CancellationToken,
         ) -> BoxFuture<'a, Attempt<T>>,
     {
         // Admission can outlive its authorization while the executor is busy.
@@ -763,7 +761,7 @@ impl<B: Backend, S, F> AttemptLaunch<B, S, F> {
 
     /// Why an attempt admitted late must not open: it was stopped, or its deadline passed.
     fn refusal(&self, now: Ts) -> Option<ProviderError> {
-        if *self.stop.borrow() || *self.closed.borrow() {
+        if self.stop.is_cancelled() || self.closed.is_cancelled() {
             return Some(
                 ApiError::status("fallback cancelled", CANCELLED_STATUS, None, None).into(),
             );
@@ -785,7 +783,7 @@ struct RecoveryProbe<B: Backend> {
     conn: ApiConnectOptions,
     observer: Arc<dyn ChainObserver>,
     status: Arc<Mutex<ChainState>>,
-    closed: watch::Receiver<bool>,
+    closed: CancellationToken,
     clock: Arc<dyn Clock>,
     deadline: Option<Ts>,
     slot: RecoveryMode,
@@ -795,13 +793,13 @@ struct RecoveryProbe<B: Backend> {
 
 impl<B: Backend> RecoveryProbe<B> {
     async fn run(mut self) {
-        if *self.closed.borrow() || self.deadline.is_some_and(|at| self.clock.now() >= at) {
+        if self.closed.is_cancelled() || self.deadline.is_some_and(|at| self.clock.now() >= at) {
             return;
         }
         self.conn.total_timeout =
             self.deadline.map(|at| at.saturating_duration_since(self.clock.now()).as_secs_f64());
         let Some(outcome) = self.until_interrupted().await else { return };
-        if *self.closed.borrow() || self.deadline.is_some_and(|at| self.clock.now() >= at) {
+        if self.closed.is_cancelled() || self.deadline.is_some_and(|at| self.clock.now() >= at) {
             return;
         }
         // `NotYet` and an error are both "still down"; the next request schedules another probe.
@@ -814,15 +812,15 @@ impl<B: Backend> RecoveryProbe<B> {
     /// probe is then told to stop and awaited, bounded, to close what it opened.
     async fn until_interrupted(&mut self) -> Option<Result<Recovery, ProviderError>> {
         use futures_util::future::{Either, select};
-        let (stop, stopped) = watch::channel(false);
-        let recovery = self.backend.recover(&self.req, &self.conn, self.slot, stopped);
+        let stop = CancellationToken::new();
+        let recovery = self.backend.recover(&self.req, &self.conn, self.slot, stop.clone());
         let limit = crate::wait_for_deadline(self.clock.as_ref(), self.deadline);
-        let interruption = select(Box::pin(limit), Box::pin(self.closed.changed()));
+        let interruption = select(Box::pin(limit), Box::pin(self.closed.cancelled()));
         let mut recovery = match select(Box::pin(recovery), Box::pin(interruption)).await {
             Either::Left((outcome, _)) => return Some(outcome),
             Either::Right((_, recovery)) => recovery,
         };
-        let _ = stop.send(true);
+        stop.cancel();
         let cleanup = lk_agents_abi::Closed::bounded(
             self.clock.as_ref(),
             self.clock.now().saturating_add(HOST_TEARDOWN_TIMEOUT),
@@ -863,17 +861,12 @@ impl<B: Backend> RecoveryProbe<B> {
     }
 }
 
-async fn wait_until(
-    clock: &dyn Clock,
-    at: Ts,
-    cancel: &mut watch::Receiver<bool>,
-    closed: &mut watch::Receiver<bool>,
-) -> bool {
+async fn wait_until(clock: &dyn Clock, at: Ts, cancel: &CancellationToken) -> bool {
     use futures_util::future::{Either, select};
-    if *cancel.borrow() || *closed.borrow() {
+    if cancel.is_cancelled() {
         return false;
     }
-    let stop = select(Box::pin(cancel.changed()), Box::pin(closed.changed()));
+    let stop = cancel.cancelled();
     matches!(select(Box::pin(clock.wait_until(at)), Box::pin(stop)).await, Either::Left(_))
 }
 
@@ -890,7 +883,8 @@ struct RunningAttempt<T, S> {
     /// The selection id it was chosen under.
     attempt_id: u64,
     result: oneshot::Receiver<(Attempt<T>, S)>,
-    stop: watch::Sender<bool>,
+    /// Dropping the attempt stops it too.
+    stop: DropGuard,
 }
 
 impl<T, S> RunningAttempt<T, S> {
@@ -898,16 +892,14 @@ impl<T, S> RunningAttempt<T, S> {
         &mut self,
         clock: &dyn Clock,
         deadline: Option<Ts>,
-        cancel: &mut watch::Receiver<bool>,
-        closed: &mut watch::Receiver<bool>,
+        cancel: &CancellationToken,
     ) -> AttemptObservation<T, S> {
         use futures_util::future::{Either, select};
-        if *cancel.borrow() || *closed.borrow() {
+        if cancel.is_cancelled() {
             return AttemptObservation::Interrupted(ChainEvent::Cancel);
         }
         let limit = crate::wait_for_deadline(clock, deadline);
-        let cancellation = select(Box::pin(cancel.changed()), Box::pin(closed.changed()));
-        let interruption = select(Box::pin(limit), Box::pin(cancellation));
+        let interruption = select(Box::pin(limit), Box::pin(cancel.cancelled()));
         match select(Box::pin(&mut self.result), Box::pin(interruption)).await {
             Either::Left((Ok((outcome, state)), _)) => {
                 AttemptObservation::Completed(outcome, Some(state))
@@ -930,7 +922,7 @@ impl<T, S> RunningAttempt<T, S> {
     }
 
     async fn cancel(&mut self, clock: &dyn Clock) -> Option<S> {
-        let _ = self.stop.send(true);
+        self.stop.token().cancel();
         let mut settled = None;
         let cleanup = lk_agents_abi::Closed::bounded(
             clock,

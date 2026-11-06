@@ -324,11 +324,12 @@ impl GatewayStt {
         let (audio, audio_rx) = AudioInput::new();
         let (event_tx, event_rx) = mpsc::channel::<Result<SpeechEvent, ApiError>>(STREAM_QUEUE);
         let (update_tx, update_rx) = mpsc::unbounded_channel::<serde_json::Value>();
-        let (stop, stop_rx) = tokio::sync::watch::channel(false);
+        let stop = tokio_util::sync::CancellationToken::new();
+        let stop_guard = Arc::new(stop.clone().drop_guard());
         let (failure, failure_rx) = tokio::sync::watch::channel(None);
         let (done, done_rx) = tokio::sync::oneshot::channel();
         let control = Arc::new(StreamControl {
-            stop: stop.clone(),
+            stop: Arc::clone(&stop_guard),
             failure,
             updates: update_tx.clone(),
             deferred: Arc::new(DeferredExtra::default()),
@@ -349,7 +350,7 @@ impl GatewayStt {
             update_tx,
             event_tx,
             failure: control.failure.clone(),
-            stop: stop_rx,
+            stop,
             accepted: self.shared.clock.now(),
         };
         self.shared.tasks.spawn(self.shared.spawner.as_ref(), "stt stream", async move {
@@ -362,7 +363,7 @@ impl GatewayStt {
             RecognitionOutput {
                 events: event_rx,
                 done: false,
-                stop,
+                stop: stop_guard,
                 joined: done_rx,
                 failure: failure_rx,
                 clock: self.shared.clock.clone(),

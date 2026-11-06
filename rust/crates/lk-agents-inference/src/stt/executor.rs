@@ -26,7 +26,7 @@ pub(super) struct SttStreamExecutor {
     pub(super) update_tx: mpsc::UnboundedSender<serde_json::Value>,
     pub(super) event_tx: mpsc::Sender<Result<SpeechEvent, ApiError>>,
     pub(super) failure: tokio::sync::watch::Sender<Option<ApiError>>,
-    pub(super) stop: tokio::sync::watch::Receiver<bool>,
+    pub(super) stop: tokio_util::sync::CancellationToken,
     pub(super) accepted: lk_agents_abi::Ts,
 }
 
@@ -50,7 +50,7 @@ impl SttStreamExecutor {
         let mut attempts = Attempts::start(policy, self.accepted, &mut steps);
         let mut last_start = self.clock.now();
         loop {
-            if *self.stop.borrow() {
+            if self.stop.is_cancelled() {
                 attempts.cancel(self.clock.now(), &mut Vec::new());
                 return;
             }
@@ -101,7 +101,7 @@ impl SttStreamExecutor {
             let at = attempts.wake_at(None).expect("authorized retry wake");
             use futures_util::future::{Either, select};
             if matches!(
-                select(Box::pin(self.clock.wait_until(at)), Box::pin(self.stop.changed())).await,
+                select(Box::pin(self.clock.wait_until(at)), Box::pin(self.stop.cancelled())).await,
                 Either::Right(_)
             ) {
                 attempts.cancel(self.clock.now(), &mut Vec::new());
@@ -211,7 +211,7 @@ impl SttStreamExecutor {
             }
         };
         let outcome = tokio::select! {
-            _ = self.stop.wait_for(|stop| *stop) => Ok(()),
+            () = self.stop.cancelled() => Ok(()),
             r = settle => r,
             r = send => r,
             r = recv => r,

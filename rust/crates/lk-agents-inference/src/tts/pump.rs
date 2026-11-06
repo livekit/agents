@@ -100,7 +100,7 @@ impl Pump {
             }
         };
         let opened = match select(
-            pin!(select(pin!(self.stopped.wait_for(|stop| *stop)), pin!(self.audio_tx.closed()))),
+            pin!(select(pin!(self.stopped.cancelled()), pin!(self.audio_tx.closed()))),
             pin!(select(pin!(total_timer), pin!(opening))),
         )
         .await
@@ -148,7 +148,7 @@ impl Pump {
         outcome: &Result<SynthesisEnd, ApiError>,
     ) {
         if matches!(outcome, Ok(SynthesisEnd::Completed))
-            && !*self.stopped.borrow()
+            && !self.stopped.is_cancelled()
             && !self.audio_tx.is_closed()
         {
             self.connections.lock().give_back(id, connection);
@@ -233,7 +233,7 @@ impl Pump {
         let clock = self.clock.as_ref();
         let total_deadline = core.total_deadline();
         let result =
-            Self::send(sender, text, &self.opts, clock, total_deadline, &mut self.stopped).await;
+            Self::send(sender, text, &self.opts, clock, total_deadline, &self.stopped).await;
         let event = match result {
             Ok(()) => TtsSynthesisEvent::InputSent {
                 input: sent,
@@ -261,7 +261,7 @@ impl Pump {
             }
         };
         let sent = match select(
-            pin!(self.stopped.wait_for(|stop| *stop)),
+            pin!(self.stopped.cancelled()),
             pin!(select(pin!(total_timer), pin!(self.audio_tx.send(Ok(audio))))),
         )
         .await
@@ -304,10 +304,7 @@ impl Pump {
         };
         match select(
             pin!(select(
-                pin!(select(
-                    pin!(self.stopped.wait_for(|stop| *stop)),
-                    pin!(self.audio_tx.closed())
-                )),
+                pin!(select(pin!(self.stopped.cancelled()), pin!(self.audio_tx.closed()))),
                 pin!(timer),
             )),
             pin!(select(pin!(command), pin!(receiver.recv()))),
@@ -329,7 +326,7 @@ impl Pump {
         opts: &TtsOptions,
         clock: &dyn Clock,
         deadline: Option<Ts>,
-        stopped: &mut watch::Receiver<bool>,
+        stopped: &CancellationToken,
     ) -> Result<(), ApiError> {
         let write_deadline = opts
             .conn_options
@@ -344,7 +341,7 @@ impl Pump {
             }
         };
         match select(
-            pin!(stopped.wait_for(|stop| *stop)),
+            pin!(stopped.cancelled()),
             pin!(select(pin!(timer), pin!(sender.send_text(text)))),
         )
         .await

@@ -29,7 +29,8 @@ impl lk_agents_abi::stt::inference::InferenceSttAudio for RecognitionInput {
 
 /// What reaches a live stream from its client: `session.update` frames and deferred keyterms.
 pub(super) struct StreamControl {
-    pub(super) stop: tokio::sync::watch::Sender<bool>,
+    /// Shared with the output: the stream stops once both halves are gone.
+    pub(super) stop: Arc<tokio_util::sync::DropGuard>,
     pub(super) failure: tokio::sync::watch::Sender<Option<ApiError>>,
     /// Unbounded: one update per option change or turn, sent ahead of queued audio.
     pub(super) updates: mpsc::UnboundedSender<serde_json::Value>,
@@ -66,14 +67,14 @@ impl StreamControl {
 
 impl StreamInput<AudioFrame> for RecognitionInput {
     fn push(&self, item: AudioFrame) -> Result<(), ProviderError> {
-        if !*self.control.stop.borrow() && self.audio.push(item) {
+        if !self.control.stop.token().is_cancelled() && self.audio.push(item) {
             return Ok(());
         }
         Err(self.closed_error())
     }
 
     fn head(&self, item: AudioFrame) -> Result<(), ProviderError> {
-        if !*self.control.stop.borrow() && self.audio.head(item) {
+        if !self.control.stop.token().is_cancelled() && self.audio.head(item) {
             return Ok(());
         }
         Err(self.closed_error())
@@ -81,7 +82,7 @@ impl StreamInput<AudioFrame> for RecognitionInput {
 
     fn flush(&self) -> Result<(), ProviderError> {
         match self.audio.flush() {
-            Some(flushed) if !*self.control.stop.borrow() => {
+            Some(flushed) if !self.control.stop.token().is_cancelled() => {
                 flushed.map_err(|stuck| ApiError::new(stuck.to_string()).into())
             }
             _ => Err(self.closed_error()),
@@ -108,7 +109,7 @@ impl RecognitionInput {
 pub struct RecognitionOutput {
     pub(super) events: mpsc::Receiver<Result<SpeechEvent, ApiError>>,
     pub(super) done: bool,
-    pub(super) stop: tokio::sync::watch::Sender<bool>,
+    pub(super) stop: Arc<tokio_util::sync::DropGuard>,
     pub(super) joined: tokio::sync::oneshot::Receiver<()>,
     pub(super) failure: tokio::sync::watch::Receiver<Option<ApiError>>,
     pub(super) clock: Arc<dyn Clock>,
@@ -143,7 +144,7 @@ impl StreamOutput<SpeechEvent> for RecognitionOutput {
     ) -> lk_agents_abi::BoxFuture<'static, lk_agents_abi::Closed> {
         Box::pin(async move {
             self.done = true;
-            self.stop.send_replace(true);
+            self.stop.token().cancel();
             self.events.close();
             let mut settled = false;
             let mut closed = lk_agents_abi::Closed::bounded(self.clock.as_ref(), deadline, async {

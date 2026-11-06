@@ -5,25 +5,27 @@ use std::sync::Arc;
 use crate::fallback::chain::StreamTask;
 use lk_agents_abi::errors::{ApiError, CANCELLED_STATUS, ProviderError};
 use lk_agents_abi::{Clock, Closed, HOST_TEARDOWN_TIMEOUT, StreamOutput, Ts};
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{mpsc, oneshot};
+use tokio_util::sync::CancellationToken;
 
 use crate::fallback::chain::{Attempt, Backend, ChainCall, FallbackChain, Recovery};
 use lk_agents_abi::BoxFuture;
 
 /// The task closes its member on stop rather than being aborted.
 pub(crate) struct ChainTask {
-    pub(crate) stop: watch::Sender<bool>,
+    pub(crate) stop: CancellationToken,
     pub(crate) done: Option<oneshot::Receiver<()>>,
     pub(crate) clock: Arc<dyn Clock>,
 }
 
 impl ChainTask {
+    /// `stop` is the request's stop, cancelled when the consumer drops or closes its source.
     pub(crate) fn pair(
         clock: Arc<dyn Clock>,
-    ) -> (watch::Receiver<bool>, oneshot::Sender<()>, ChainTask) {
-        let (stop_tx, stop_rx) = watch::channel(false);
+        stop: CancellationToken,
+    ) -> (oneshot::Sender<()>, ChainTask) {
         let (done_tx, done_rx) = oneshot::channel();
-        (stop_rx, done_tx, ChainTask { stop: stop_tx, done: Some(done_rx), clock })
+        (done_tx, ChainTask { stop, done: Some(done_rx), clock })
     }
 }
 
@@ -31,15 +33,11 @@ impl ChainTask {
 /// clean end, so the attempt loop breaks `Served` and closes its member on the way out.
 pub(crate) async fn next_or_stop<T, S: StreamOutput<T> + ?Sized>(
     source: &mut S,
-    stop: &mut watch::Receiver<bool>,
+    stop: &CancellationToken,
 ) -> Result<Option<T>, ProviderError> {
-    if *stop.borrow() {
-        return Err(ApiError::status("fallback cancelled", CANCELLED_STATUS, None, None).into());
-    }
     tokio::select! {
         biased;
-        changed = stop.changed() => {
-            let _ = changed;
+        () = stop.cancelled() => {
             Err(ApiError::status("fallback cancelled", CANCELLED_STATUS, None, None).into())
         }
         next = source.next() => next,
@@ -52,7 +50,7 @@ pub(crate) async fn forward<T, B: Backend, S: StreamOutput<T> + ?Sized>(
     chain: &FallbackChain<B>,
     index: usize,
     source: &mut S,
-    stop: &mut watch::Receiver<bool>,
+    stop: &CancellationToken,
     tx: &mut mpsc::Sender<Result<T, ProviderError>>,
     is_output: fn(&T) -> bool,
 ) -> Attempt<()> {
@@ -91,7 +89,7 @@ pub(crate) trait ServeAttempt<B: Backend, T>: Send + Sync + 'static {
         index: usize,
         session: B::Session,
         tx: &'a mut mpsc::Sender<Result<T, ProviderError>>,
-        stop: watch::Receiver<bool>,
+        stop: CancellationToken,
     ) -> BoxFuture<'a, Attempt<()>>;
 }
 
@@ -108,21 +106,16 @@ impl<B: Backend> FallbackChain<B> {
         keep: impl Send + 'static,
     ) -> ChannelSource<T> {
         let (mut tx, rx) = mpsc::channel(STREAM_BUFFER);
-        let (stop_rx, done_tx, chain_task) = ChainTask::pair(self.clock());
+        let stop = self.request_stop();
+        let (done_tx, chain_task) = ChainTask::pair(self.clock(), stop.clone());
         let chain = Arc::clone(self);
         let task = self.spawn_stream(async move {
             let _keep = keep;
             let serving = Arc::clone(&chain);
             let result = chain
-                .run_cancellable(
-                    &req,
-                    call,
-                    &mut tx,
-                    stop_rx,
-                    move |index, _, session, tx, stop| {
-                        Arc::clone(&attempt).serve(Arc::clone(&serving), index, session, tx, stop)
-                    },
-                )
+                .run_cancellable(&req, call, &mut tx, stop, move |index, _, session, tx, stop| {
+                    Arc::clone(&attempt).serve(Arc::clone(&serving), index, session, tx, stop)
+                })
                 .await;
             settled(&chain, result.as_ref().map(|_| ()));
             if let Err(error) = result {
@@ -138,33 +131,26 @@ impl<B: Backend> FallbackChain<B> {
 pub(crate) async fn send_or_stop<T>(
     tx: &mpsc::Sender<T>,
     item: T,
-    stop: &mut watch::Receiver<bool>,
+    stop: &CancellationToken,
 ) -> bool {
-    use futures_util::future::{Either, select};
-    if *stop.borrow() {
+    if stop.is_cancelled() {
         return false;
     }
-    match select(Box::pin(tx.send(item)), Box::pin(stop.changed())).await {
-        Either::Left((result, _)) => result.is_ok(),
-        Either::Right(_) => false,
-    }
-}
-
-/// Resolves once `stop` is true. A chain dropped without closing never stops its probes.
-pub(crate) async fn stopped(stop: &mut watch::Receiver<bool>) {
-    if stop.wait_for(|s| *s).await.is_err() {
-        std::future::pending::<()>().await;
+    tokio::select! {
+        biased;
+        result = tx.send(item) => result.is_ok(),
+        () = stop.cancelled() => false,
     }
 }
 
 /// `source.next()`, or `None` once the chain closes (the probe then closes its stream).
 pub(crate) async fn probe_next<T, S: StreamOutput<T> + ?Sized>(
     source: &mut S,
-    stop: &mut watch::Receiver<bool>,
+    stop: &CancellationToken,
 ) -> Option<Result<Option<T>, ProviderError>> {
     tokio::select! {
         biased;
-        () = stopped(stop) => None,
+        () = stop.cancelled() => None,
         next = source.next() => Some(next),
     }
 }
@@ -174,10 +160,10 @@ pub(crate) async fn probe_next<T, S: StreamOutput<T> + ?Sized>(
 pub(crate) async fn drain_probe<T, S: StreamOutput<T> + ?Sized>(
     mut source: Box<S>,
     clock: &dyn Clock,
-    mut stop: watch::Receiver<bool>,
+    stop: CancellationToken,
 ) -> Result<Recovery, ProviderError> {
     let verdict = loop {
-        match probe_next(source.as_mut(), &mut stop).await {
+        match probe_next(source.as_mut(), &stop).await {
             None => break Ok(Recovery::NotYet),
             Some(Ok(None)) => break Ok(Recovery::Recovered),
             Some(Ok(Some(_))) => {}
@@ -196,7 +182,7 @@ pub(crate) struct ChannelSource<T> {
 
 impl<T> Drop for ChannelSource<T> {
     fn drop(&mut self) {
-        let _ = self.chain.stop.send(true);
+        self.chain.stop.cancel();
     }
 }
 
@@ -221,7 +207,7 @@ impl<T: Send + 'static> StreamOutput<T> for ChannelSource<T> {
     /// pending `send` fails rather than blocks. An unanswered task is aborted and `TimedOut`.
     fn close(mut self: Box<Self>, deadline: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
         Box::pin(async move {
-            let _ = self.chain.stop.send(true);
+            self.chain.stop.cancel();
             self.rx.close();
             let done = self.chain.done.take();
             let closed = Closed::bounded(self.chain.clock.as_ref(), deadline, async move {
