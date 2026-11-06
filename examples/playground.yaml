@@ -251,11 +251,10 @@ examples:
         label: TTS
         default: inworld/inworld-tts-2
         options:
-          - { value: cartesia/sonic, label: Cartesia Sonic }
-          - { value: cartesia/sonic-2, label: Cartesia Sonic-2 }
+          - { value: cartesia/sonic-3.6, label: Cartesia Sonic-3.6 }
+          - { value: cartesia/sonic-3.5, label: Cartesia Sonic-3.5 }
           - { value: cartesia/sonic-3, label: Cartesia Sonic-3 }
           - { value: cartesia/sonic-3-latest, label: Cartesia Sonic-3 Latest }
-          - { value: cartesia/sonic-turbo, label: Cartesia Sonic Turbo }
           - { value: deepgram/aura, label: Deepgram Aura }
           - { value: deepgram/aura-2, label: Deepgram Aura-2 }
           - { value: inworld/inworld-tts-1, label: Inworld TTS 1 }
