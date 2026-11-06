@@ -2117,22 +2117,23 @@ async def test_delegate_starts_backend_work_the_service_reports_as_manual(
     try:
         await session._update_session()
         await asyncio.sleep(0.05)
-        session.delegate("Cancel the caller's 3pm appointment.")
-        await asyncio.sleep(0.05)
-        note, create = ws.sent[-2:]
-        assert note["type"] == "response.item.create"
-        assert note["item"]["role"] == "developer"
-        assert create["type"] == "response.create"
-        assert created == []  # the service's own event reports it
-
-        for client_event_id in (create["event_id"], None):
+        # OpenAI echoes the request's event id; Azure does not
+        for echo in (True, False):
+            session.delegate("Cancel the caller's 3pm appointment.")
+            await asyncio.sleep(0.05)
+            note, create = ws.sent[-2:]
+            assert note["type"] == "response.item.create"
+            assert note["item"]["role"] == "developer"
+            assert create["type"] == "response.create"
+            assert session._backend_busy
             session._handle_event(
                 {
                     "type": "session.delegation.created",
                     "delegation": {"id": f"d{len(created)}", "target": "responses"},
-                    "client_event_id": client_event_id,
+                    "client_event_id": create["event_id"] if echo else None,
                 }
             )
+            assert not session._backend_busy
         assert [(d.source, d.mode) for d in created] == [
             ("manual", "responses"),
             ("model", "responses"),
@@ -2220,7 +2221,7 @@ async def test_decisions_triggers_do_not_enable_manual_evaluation(
         await model.aclose()
 
 
-async def test_delegate_is_refused_only_while_a_function_call_is_open(
+async def test_delegate_is_refused_while_a_request_waits_or_a_function_call_is_open(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _connect_hook(monkeypatch)
@@ -2232,6 +2233,14 @@ async def test_delegate_is_refused_only_while_a_function_call_is_open(
         session._handle_event(_response_event("d1", {"type": "response.created"}))
         # running backend work is no obstacle: the service queues the delegation behind it
         session.delegate()
+        with pytest.raises(llm.RealtimeError):
+            session.delegate()
+        session._handle_event(
+            {
+                "type": "session.delegation.created",
+                "delegation": {"id": "d2", "target": "responses"},
+            }
+        )
         session._handle_event(_response_event("d1", _function_call_done("call_1")))
         with pytest.raises(llm.RealtimeError):
             session.delegate()

@@ -106,7 +106,7 @@ class DelegationDetector:
     def model(self) -> LLM | DecisionModel:
         return self._model
 
-    async def __call__(self, check: DelegationCheck) -> bool | str:
+    async def __call__(self, check: DelegationCheck) -> bool:
         tools: list[str] = []
         for tool in check.tools:
             if is_function_tool(tool):
@@ -154,7 +154,7 @@ class DelegationDetector:
             if not isinstance(result, ProbabilityResult):
                 logger.warning("delegation decision failed", extra={"errors": response.errors})
                 return False
-            delegate = result.value >= 0.5
+            return result.value >= 0.5
         else:
 
             @function_tool
@@ -190,15 +190,4 @@ class DelegationDetector:
             if not isinstance(args, dict):
                 logger.warning("delegation detector did not report a verdict")
                 return False
-            delegate = args.get("delegate") is True
-
-        if not delegate:
-            return False
-        # a reply said over the agent goes with a note, so the delegated work can confirm it first
-        last = next((m for m in reversed(messages) if m.role == "user"), None)
-        if last is not None and last.id in spoken_over:
-            return (
-                f'The caller said "{last.text_content}" while the agent was still speaking, so they '
-                "may not have heard all of it."
-            )
-        return True
+            return args.get("delegate") is True

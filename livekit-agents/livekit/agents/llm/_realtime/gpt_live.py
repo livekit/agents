@@ -121,7 +121,8 @@ class GPTLiveDelegation(llm.DelegationCreatedEvent):
 
     It carries no task text: the ask is whatever the conversation says, which the agent's chat
     context holds. Answer a client delegation with :meth:`GPTLiveSession.append_commentary`,
-    passing this id.
+    passing this id. On Azure a backend delegation started by ``delegate()`` reports
+    ``source="model"``, because Azure does not echo the request's event id.
     """
 
     mode: Literal["responses", "client"] = "client"
@@ -959,8 +960,8 @@ class GPTLiveSession(
         manual = (
             event.client_event_id is not None and event.client_event_id == self._delegate_event_id
         )
-        if manual:
-            self._delegate_event_id = None
+        # Azure omits client_event_id, so any delegation ends the wait for a delegate() request
+        self._delegate_event_id = None
         self._emit_delegation(
             delegation.id,
             source="manual" if manual else "model",
@@ -1137,7 +1138,7 @@ class GPTLiveSession(
         )
 
     def _handle_error(self, error: types.ErrorBody) -> None:
-        if error.client_event_id is not None and error.client_event_id == self._delegate_event_id:
+        if error.client_event_id in (None, self._delegate_event_id):
             self._delegate_event_id = None
         logger.error(
             "gpt-live returned an error",
@@ -1258,7 +1259,7 @@ class GPTLiveSession(
 
         Under ``delegation="responses"`` the backend runs it after any work already running, with
         ``instructions`` as a developer note; it is refused while a function call waits for its
-        output, so that raises ``RealtimeError``. Under client delegation the application answers
+        output or an earlier request has not started yet, so that raises ``RealtimeError``. Under client delegation the application answers
         its ``delegation_created`` like any other.
         """
         if self._opts.delegation == "decisions":
@@ -1274,6 +1275,8 @@ class GPTLiveSession(
             self._emit_delegation(delegation_id, source="manual", mode="client")
             return
 
+        if self._delegate_event_id is not None:
+            raise llm.RealtimeError("gpt-live is still waiting for the last delegate() request")
         # a call counts from its output_item.done, before its response completes
         if self._backend_open_calls or any(self._backend_running_responses.values()):
             raise llm.RealtimeError("gpt-live cannot delegate while a function call is open")
