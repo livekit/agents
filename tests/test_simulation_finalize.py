@@ -180,3 +180,27 @@ class TestRoomIODeleteRoomOnClose:
         job_ctx, _ = self._close(monkeypatch, simulation=None)
         job_ctx.delete_room.assert_called_once_with(room_name="room")
         job_ctx.add_shutdown_callback.assert_not_called()
+
+
+class TestDefines:
+    def _sim(self, dispatch_json: str) -> Any:
+        from google.protobuf import json_format
+
+        from livekit.agents.simulation import SimulationContext, SimulationDispatch
+
+        dispatch = json_format.Parse(
+            dispatch_json, SimulationDispatch(), ignore_unknown_fields=True
+        )
+        return SimulationContext(dispatch, MagicMock())
+
+    def test_exposes_the_dispatch_defines(self) -> None:
+        sim = self._sim('{"simulationRunId":"run","defines":{"prompt":"b","llm":"gpt-5"}}')
+        assert dict(sim.defines()) == {"prompt": "b", "llm": "gpt-5"}
+
+    def test_is_empty_without_defines(self) -> None:
+        assert dict(self._sim('{"simulationRunId":"run"}').defines()) == {}
+
+    def test_is_read_only(self) -> None:
+        defines = self._sim('{"simulationRunId":"run","defines":{"llm":"gpt-5"}}').defines()
+        with pytest.raises(TypeError):
+            defines["llm"] = "gemini"

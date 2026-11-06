@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import types
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeAlias, Union
 
@@ -135,6 +137,11 @@ class SimulationContext:
             return {}
         data: ScenarioUserdata = json.loads(self._scenario.userdata)
         return data
+
+    def defines(self) -> Mapping[str, str]:
+        """The values passed with ``lk agent simulate --set KEY=VALUE``, read-only.
+        Every scenario of the run sees the same values; empty when none were passed."""
+        return types.MappingProxyType(dict(self._dispatch.defines))
 
     def fail(self, reason: str = "") -> None:
         """Veto this run from your own checks (e.g. final DB state diverged).
