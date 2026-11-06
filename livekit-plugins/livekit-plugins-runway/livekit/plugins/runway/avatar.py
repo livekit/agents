@@ -162,7 +162,7 @@ class AvatarSession(BaseAvatarSession):
         if is_given(self._max_duration):
             body["maxDuration"] = self._max_duration
 
-        for attempt in range(self._conn_options.max_retry):
+        for attempt in range(self._conn_options.max_retry + 1):
             try:
                 async with self._ensure_http_session().post(
                     f"{self._api_url}/v1/realtime_sessions",
@@ -198,7 +198,7 @@ class AvatarSession(BaseAvatarSession):
                 else:
                     logger.exception("failed to call Runway avatar API")
 
-                if attempt < self._conn_options.max_retry - 1:
+                if attempt < self._conn_options.max_retry:
                     await asyncio.sleep(self._conn_options.retry_interval)
 
         raise APIConnectionError("Failed to start Runway Avatar Session after all retries")
