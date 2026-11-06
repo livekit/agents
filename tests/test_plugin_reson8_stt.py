@@ -174,6 +174,7 @@ class StartServer(Protocol):
         post_body: str = ...,
         ws_status: int | None = ...,
         ws_error_message: str | None = ...,
+        answer_pings: bool = ...,
     ) -> Recorded: ...
 
 
@@ -187,6 +188,7 @@ async def reson8_server() -> AsyncIterator[StartServer]:
         post_body: str = '{"text": "hello"}',
         ws_status: int | None = None,
         ws_error_message: str | None = None,
+        answer_pings: bool = True,
     ) -> Recorded:
         rec = Recorded(base_url="")
 
@@ -200,7 +202,8 @@ async def reson8_server() -> AsyncIterator[StartServer]:
             rec.handshake_headers = dict(request.headers)
             rec.query = dict(request.query)
 
-            ws = web.WebSocketResponse()
+            # answer_pings=False stands in for a half-open connection
+            ws = web.WebSocketResponse(autoping=answer_pings)
             await ws.prepare(request)
             rec._ws = ws
             rec.connections += 1
@@ -2025,6 +2028,63 @@ async def test_a_websocket_error_frame_surfaces_its_cause(
                 pass
 
     assert excinfo.value.__cause__ is None
+    await stream.aclose()
+
+
+async def test_a_silent_connection_fails_within_the_liveness_timeout(
+    reson8_server: StartServer,
+    client_session: aiohttp.ClientSession,
+) -> None:
+    """A half-open socket never delivers a close, so only an unanswered ping reveals it."""
+
+    server = await reson8_server(answer_pings=False)
+    stream = _stt(server.base_url, client_session).stream(
+        conn_options=APIConnectOptions(max_retry=0, liveness_timeout=1.0)
+    )
+
+    started = time.monotonic()
+    with pytest.raises(APIConnectionError, match="WebSocket connection lost"):
+        async with asyncio.timeout(5):
+            async for _ in stream:
+                pass
+
+    assert time.monotonic() - started < 3
+    await stream.aclose()
+
+
+async def test_a_quiet_connection_that_answers_pings_stays_open(
+    reson8_server: StartServer,
+    client_session: aiohttp.ClientSession,
+) -> None:
+    server = await reson8_server()
+    stream = _stt(server.base_url, client_session).stream(
+        conn_options=APIConnectOptions(max_retry=0, liveness_timeout=1.0)
+    )
+    log = EventLog(stream)
+
+    await server.wait_for_connections(1)
+    await asyncio.sleep(2.5)  # over two liveness windows with no message from Reson8
+
+    assert server.connections == 1
+    assert not log._task.done()
+    await log.aclose()
+    await stream.aclose()
+
+
+async def test_turn_events_reset_the_retry_budget(
+    reson8_server: StartServer,
+    client_session: aiohttp.ClientSession,
+) -> None:
+    server = await reson8_server()
+    stream = _stt(server.base_url, client_session).stream()
+    stream._num_retries = 1  # as if a previous connection had failed
+    log = EventLog(stream)
+
+    await server.send({"type": "turn_start"})
+    await log.wait_for(1)
+
+    assert stream._num_retries == 0
+    await log.aclose()
     await stream.aclose()
 
 
