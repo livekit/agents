@@ -4,10 +4,17 @@ from multiprocessing import current_process
 
 if current_process().name == "job_proc":
     import signal
+    from types import FrameType
 
-    # ignore signals in the jobs process (the parent process will handle them)
-    signal.signal(signal.SIGINT, signal.SIG_IGN)
-    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    def _ignore_signal(signum: int, frame: FrameType | None) -> None:
+        pass
+
+    # ignore signals in the jobs process (the parent process will handle them).
+    # A no-op handler instead of SIG_IGN: an ignored signal stays ignored across exec, so
+    # every subprocess the entrypoint starts would ignore SIGINT/SIGTERM as well and
+    # terminate() would not stop it; a handled signal is reset to the default on exec.
+    signal.signal(signal.SIGINT, _ignore_signal)
+    signal.signal(signal.SIGTERM, _ignore_signal)
 
     if hasattr(signal, "SIGUSR1"):
         from .proc_client import _dump_stack_traces

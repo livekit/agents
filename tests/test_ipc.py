@@ -5,7 +5,11 @@ import ctypes
 import io
 import logging
 import multiprocessing as mp
+import os
+import signal
 import socket
+import subprocess
+import sys
 import time
 import uuid
 from collections.abc import Callable
@@ -275,6 +279,40 @@ async def _poll_until(
 async def _wait_for_elements(q: asyncio.Queue, num_elements: int) -> None:
     for _ in range(num_elements):
         await q.get()
+
+
+def _job_proc_signals_main(q: mp.Queue) -> None:
+    # importing the module applies the job process's signal handling (name == "job_proc")
+    from livekit.agents.ipc import job_proc_lazy_main  # noqa: F401
+
+    tool = subprocess.Popen(["sleep", "30"])
+    tool.terminate()
+    try:
+        tool_code: int | None = tool.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        tool.kill()
+        tool.wait()
+        tool_code = None
+
+    os.kill(os.getpid(), signal.SIGTERM)
+    time.sleep(0.1)
+    q.put((tool_code, "job still running"))
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX signals")
+def test_job_proc_subprocess_does_not_inherit_ignored_signals():
+    """The job process shrugs off SIGINT/SIGTERM, but subprocesses started by the entrypoint
+    must keep the default actions, so terminate() still stops them."""
+    mp_ctx = mp.get_context("spawn")
+    q = mp_ctx.Queue()
+    proc = mp_ctx.Process(target=_job_proc_signals_main, args=(q,), name="job_proc")
+    proc.start()
+    try:
+        assert q.get(timeout=30) == (-signal.SIGTERM, "job still running")
+    finally:
+        proc.join(timeout=10)
+        if proc.is_alive():
+            proc.kill()
 
 
 async def test_proc_pool():
