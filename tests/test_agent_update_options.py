@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from livekit.agents import Agent, AgentSession
+from livekit.agents.llm.chat_context import Instructions
 
 from .fake_llm import FakeLLM
 from .fake_realtime import FakeRealtimeModel
@@ -237,5 +238,46 @@ async def test_update_options_vad_check_is_atomic() -> None:
         # rejected before any mutation — STT and VAD are untouched
         assert agent.stt is old_stt
         assert agent.vad is old_vad
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_update_instructions_accepts_instructions_object() -> None:
+    """update_instructions must accept the same type the constructor accepts."""
+    agent = Agent(
+        instructions=Instructions(audio="audio-initial", text="text-initial"),
+        llm=FakeLLM(),
+    )
+    session = AgentSession(turn_handling={"turn_detection": None})
+    await session.start(agent)
+    try:
+        await agent.update_instructions(Instructions(audio="audio-new", text="text-new"))
+
+        # the modality split survives the update
+        assert isinstance(agent.instructions, Instructions)
+        assert agent.instructions.render(modality="audio") == "audio-new"
+        assert agent.instructions.render(modality="text") == "text-new"
+
+        # the recorded config update collapses to the audio variant
+        updates = [it for it in agent.chat_ctx.items if it.type == "agent_config_update"]
+        assert updates
+        assert updates[-1].instructions == "audio-new"
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_update_instructions_still_accepts_str() -> None:
+    agent = Agent(instructions="initial", llm=FakeLLM())
+    session = AgentSession(turn_handling={"turn_detection": None})
+    await session.start(agent)
+    try:
+        await agent.update_instructions("updated")
+
+        assert agent.instructions == "updated"
+        updates = [it for it in agent.chat_ctx.items if it.type == "agent_config_update"]
+        assert updates
+        assert updates[-1].instructions == "updated"
     finally:
         await session.aclose()
