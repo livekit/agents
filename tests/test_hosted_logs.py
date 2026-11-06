@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
+import io
 import json
 import logging
 import multiprocessing as mp
@@ -602,15 +604,26 @@ async def test_job_process_writes_its_file_end_to_end(hosted_env: Path, redactio
     assert hello.get("lk.redaction.enabled", False) is redaction
 
 
+async def _thread_entrypoint(job_ctx: JobContext) -> None:
+    print("raw print", flush=True)
+    logging.getLogger("hosted-test").warning("hello")
+    await asyncio.get_running_loop().run_in_executor(
+        None, lambda: logging.getLogger("hosted-test").warning("from executor")
+    )
+    job_ctx.shutdown("done")
+
+
 async def test_thread_job_writes_its_file_end_to_end(
     hosted_env: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     hand_off()
     monkeypatch.setattr(logging.getLogger(), "handlers", [])
+    monkeypatch.setattr(sys, "stdout", sys.stdout)
+    monkeypatch.setattr(sys, "stderr", sys.stderr)
     _hosted_logs.install_thread_router()
     executor = ipc.job_thread_executor.ThreadJobExecutor(
         initialize_process_fnc=_noop_initialize,
-        job_entrypoint_fnc=_hosted_entrypoint,
+        job_entrypoint_fnc=_thread_entrypoint,
         session_end_fnc=None,
         simulation_end_fnc=None,
         inference_executor=None,
@@ -631,6 +644,53 @@ async def test_thread_job_writes_its_file_end_to_end(
 
     path = hosted_env / "jobs" / f"job-{info.job.id}.export.done.log"
     assert _jobs(hosted_env) == [path.name]
-    records, _ = _job_lines(path)
-    hello = next(r for r in records if r["message"] == "hello")
-    assert hello["job_id"] == info.job.id
+    records, raw = _job_lines(path)
+    assert "raw print" in raw
+    for message in ("hello", "from executor"):
+        record = next(r for r in records if r["message"] == message)
+        assert record["job_id"] == info.job.id
+
+
+def _decided_thread_output(hosted_env: Path) -> _hosted_logs._ThreadJobOutput:
+    hand_off()
+    out = _hosted_logs.thread_job_output("AJ_1", {}, redaction=False)
+    assert isinstance(out, _hosted_logs._ThreadJobOutput)
+    out.decide(logs=True, redaction=False)
+    return out
+
+
+def test_routed_stream_sends_job_writes_to_the_job_file(hosted_env: Path) -> None:
+    out = _decided_thread_output(hosted_env)
+    real = io.StringIO()
+    stream = _hosted_logs._RoutedStream(real)
+    stream.write("worker line\n")
+    token = _hosted_logs.current_job_output.set(out)
+    try:
+        stream.write("job line\n")
+    finally:
+        _hosted_logs.current_job_output.reset(token)
+    out.close()
+    assert real.getvalue() == "worker line\n"
+    assert (hosted_env / "jobs" / "job-AJ_1.export.done.log").read_text() == "job line\n"
+
+
+def test_raw_job_writes_never_tear_lines(hosted_env: Path) -> None:
+    out = _decided_thread_output(hosted_env)
+    out.write_raw("hel")
+    _route(out, logging.LogRecord("t", logging.INFO, __file__, 1, "record", None, None))
+    out.write_raw("lo\npartial")
+    out.close()
+    lines = (hosted_env / "jobs" / "job-AJ_1.export.done.log").read_text().splitlines()
+    assert json.loads(lines[0])["message"] == "record"
+    assert lines[1:] == ["hello", "partial"]
+
+
+async def test_executor_threads_keep_the_job_context() -> None:
+    marker: contextvars.ContextVar[str] = contextvars.ContextVar("marker", default="none")
+    loop = asyncio.get_running_loop()
+    _hosted_logs.route_executor_threads(loop)
+    marker.set("job")
+    try:
+        assert await loop.run_in_executor(None, marker.get) == "job"
+    finally:
+        await loop.shutdown_default_executor()

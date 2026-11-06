@@ -301,6 +301,8 @@ class _JobProc:
             hosted_output = _hosted_logs.thread_job_output(
                 job.id, hosted_fields, redaction=job.enable_redaction
             )
+            if hosted_output is not None:
+                _hosted_logs.route_executor_threads(asyncio.get_running_loop())
         else:
             hosted_output = _hosted_logs.redirect_job_output(
                 job.id, hosted_fields, redaction=job.enable_redaction

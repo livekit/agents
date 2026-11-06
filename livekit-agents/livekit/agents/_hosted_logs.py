@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
 import contextlib
 import contextvars
 import enum
@@ -12,7 +14,7 @@ import os
 import sys
 import threading
 from collections.abc import Callable
-from typing import Any, Protocol, TextIO
+from typing import Any, Protocol, TextIO, TypeVar, cast
 
 from .version import __version__
 
@@ -23,6 +25,8 @@ HOSTED_LOGS_JOBS_DIR_ENV = "LIVEKIT_HOSTED_LOGS_JOBS_DIR"
 _HANDED_OFF_ENV = "LIVEKIT_HOSTED_LOGS_HANDED_OFF"
 
 _REDACTED_JOB_FIELDS = frozenset({"room"})
+
+_T = TypeVar("_T")
 
 _handed_off = False
 
@@ -281,8 +285,22 @@ class _ThreadJobOutput:
         self._lock = threading.Lock()
         self._held: list[logging.LogRecord] | None = []
         self._router: _ThreadJobRouter | None = None
+        self._partial: dict[int, str] = {}
         self.redaction = redaction
         self.fields = fields
+
+    def write_raw(self, text: str) -> None:
+        """Write raw output, one complete line at a time per thread, so lines don't tear."""
+        thread = threading.get_ident()
+        with self._lock:
+            if self._closed:
+                return
+            lines, newline, rest = (self._partial.pop(thread, "") + text).rpartition("\n")
+            if newline:
+                self._stream.write(lines + newline)
+                self._stream.flush()
+            if rest:
+                self._partial[thread] = rest
 
     def emit(self, record: logging.LogRecord, router: _ThreadJobRouter) -> None:
         with self._lock:
@@ -317,6 +335,9 @@ class _ThreadJobOutput:
         with self._lock:
             if self._closed:
                 return
+            for rest in self._partial.values():
+                self._stream.write(rest + "\n")
+            self._partial.clear()
             renamed = self._rename(f"{os.path.basename(self._path)[: -len('.log')]}.done")
             self._closed = True
             self._held = None
@@ -388,6 +409,40 @@ class _ThreadJobRouter(logging.Handler):
         return self.format(_redact(record) if output.redaction else record)
 
 
+class _RoutedStream:
+    """Sends writes made in a thread job to its file, and every other write to ``real``."""
+
+    def __init__(self, real: TextIO) -> None:
+        self._real = real
+
+    def write(self, text: str) -> int:
+        output = current_job_output.get()
+        if isinstance(output, _ThreadJobOutput):
+            output.write_raw(text)
+            return len(text)
+        return self._real.write(text)
+
+    def flush(self) -> None:
+        self._real.flush()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._real, name)
+
+
+class _ContextExecutor(concurrent.futures.ThreadPoolExecutor):
+    """A thread pool that runs each task in the context of the code that submitted it."""
+
+    def submit(
+        self, fn: Callable[..., _T], /, *args: Any, **kwargs: Any
+    ) -> concurrent.futures.Future[_T]:
+        return super().submit(contextvars.copy_context().run, fn, *args, **kwargs)
+
+
+def route_executor_threads(loop: asyncio.AbstractEventLoop) -> None:
+    """Make ``run_in_executor(None, ...)`` threads of a thread job keep the job's context."""
+    loop.set_default_executor(_ContextExecutor())
+
+
 def _not_routed(record: logging.LogRecord) -> bool:
     """Filter for other handlers: skip records that the thread router writes."""
     return not isinstance(current_job_output.get(), _ThreadJobOutput)
@@ -407,6 +462,8 @@ def install_thread_router() -> None:
     router.setFormatter(JsonFormatter())
     _add_global_log_fields(router)
     root.addHandler(router)
+    sys.stdout = cast(TextIO, _RoutedStream(sys.stdout))
+    sys.stderr = cast(TextIO, _RoutedStream(sys.stderr))
 
 
 hand_off()
