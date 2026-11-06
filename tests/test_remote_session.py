@@ -542,12 +542,12 @@ class _FailingTransport(PairedTransport):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("disconnect_during_send", [False, True])
+@pytest.mark.parametrize("disconnect_at", ["before_start", "before_send", "during_send"])
 async def test_event_writer_stops_when_room_disconnects(
-    caplog: pytest.LogCaptureFixture, disconnect_during_send: bool
+    caplog: pytest.LogCaptureFixture, disconnect_at: str
 ) -> None:
     """A deleted room cannot receive queued events, including an in-flight send."""
-    room = _fake_room(connected=disconnect_during_send)
+    room = _fake_room()
 
     async def disconnect(*args: object, **kwargs: object) -> None:
         room.isconnected.return_value = False
@@ -557,8 +557,12 @@ async def test_event_writer_stops_when_room_disconnects(
 
     room.local_participant.send_bytes = AsyncMock(side_effect=disconnect)
     host = SessionHost(RoomSessionTransport(room))
+    if disconnect_at == "before_start":
+        room.isconnected.return_value = False
+        room.on.call_args.args[1]()
     await host.start()
-    if not disconnect_during_send:
+    if disconnect_at == "before_send":
+        room.isconnected.return_value = False
         room.on.call_args.args[1]()
     try:
         with caplog.at_level(logging.WARNING, logger="livekit.agents"):
@@ -569,7 +573,7 @@ async def test_event_writer_stops_when_room_disconnects(
             host._send_event(agent_pb.AgentSessionEvent())
         assert host._event_ch.empty()
         assert not [r for r in caplog.records if "failed to send session event" in r.message]
-        assert room.local_participant.send_bytes.await_count == int(disconnect_during_send)
+        assert room.local_participant.send_bytes.await_count == int(disconnect_at == "during_send")
     finally:
         await host.aclose()
 

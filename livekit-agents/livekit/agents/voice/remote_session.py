@@ -106,6 +106,7 @@ class RoomSessionTransport(SessionTransport):
         self._incoming_ch: utils.aio.Chan[rtc.ByteStreamReader] = utils.aio.Chan()
         self._read_task: asyncio.Task[None] | None = None
         self._room_disconnected = False
+        self._room.on("disconnected", self._on_disconnected)
 
     @property
     def remote_identity(self) -> str | None:
@@ -122,7 +123,6 @@ class RoomSessionTransport(SessionTransport):
             self._read_loop(), name="RoomSessionTransport._read_loop"
         )
         self._room.register_byte_stream_handler(TOPIC_SESSION_MESSAGES, self._on_byte_stream)
-        self._room.on("disconnected", self._on_disconnected)
         self._handler_registered = True
 
     def _on_disconnected(self, *_args: Any) -> None:
@@ -190,11 +190,11 @@ class RoomSessionTransport(SessionTransport):
             return
         self._recv_ch.close()
         self._incoming_ch.close()
+        self._room.off("disconnected", self._on_disconnected)
         if self._read_task is not None:
             await utils.aio.cancel_and_wait(self._read_task)
             self._read_task = None
         if self._handler_registered:
-            self._room.off("disconnected", self._on_disconnected)
             try:
                 self._room.unregister_byte_stream_handler(TOPIC_SESSION_MESSAGES)
             except (ValueError, AttributeError):
