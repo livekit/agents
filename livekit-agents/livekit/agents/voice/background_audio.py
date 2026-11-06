@@ -505,6 +505,11 @@ class PlayHandle:
 
 
 async def _loop_audio_frames(file_path: str) -> AsyncGenerator[rtc.AudioFrame, None]:
+    # a pass that decodes no frames would decode none on every later pass too
     while True:
+        decoded = False
         async for frame in audio_frames_from_file(file_path):
+            decoded = True
             yield frame
+        if not decoded:
+            return
