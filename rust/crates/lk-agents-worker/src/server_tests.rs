@@ -305,9 +305,12 @@ impl HealthProbe for MetricsProbe {
 async fn metrics_exchange(request: &[u8], content_type: &str) -> String {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let (listener, port) = bind_listener("127.0.0.1", 0).await.unwrap();
-    let (stop, stopped) = tokio::sync::watch::channel(false);
-    let serving =
-        tokio::spawn(serve_metrics(listener, Arc::new(MetricsProbe(content_type.into())), stopped));
+    let stop = tokio_util::sync::CancellationToken::new();
+    let serving = tokio::spawn(serve_metrics(
+        listener,
+        Arc::new(MetricsProbe(content_type.into())),
+        stop.clone(),
+    ));
     let mut client = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
     client.write_all(request).await.unwrap();
     let mut response = String::new();
@@ -315,7 +318,7 @@ async fn metrics_exchange(request: &[u8], content_type: &str) -> String {
         .await
         .unwrap()
         .unwrap();
-    stop.send_replace(true);
+    stop.cancel();
     serving.await.unwrap().unwrap();
     response
 }
@@ -410,8 +413,8 @@ async fn server_shutdown_resources_joins_stalled_health_and_metrics_connections(
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     for count in [1, 8, 32, 64] {
         let (listener, port) = bind_listener("127.0.0.1", 0).await.unwrap();
-        let (stop, stopped) = tokio::sync::watch::channel(false);
-        let serving = serve_metrics(listener, Arc::new(Probe), stopped);
+        let stop = tokio_util::sync::CancellationToken::new();
+        let serving = serve_metrics(listener, Arc::new(Probe), stop.clone());
         tokio::pin!(serving);
         let mut peers = Vec::new();
         for _ in 0..count {
@@ -421,7 +424,7 @@ async fn server_shutdown_resources_joins_stalled_health_and_metrics_connections(
             assert!(futures_util::poll!(&mut serving).is_pending());
         }
         tokio::task::yield_now().await;
-        stop.send_replace(true);
+        stop.cancel();
         tokio::time::timeout(std::time::Duration::from_secs(1), serving).await.unwrap().unwrap();
         for mut peer in peers {
             let result =

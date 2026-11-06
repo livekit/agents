@@ -22,7 +22,7 @@ use lk_agents_abi::{OwnedTask, SpawnerExt, TaskError};
 use lk_agents_net::task::TokioSpawner;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
-use tokio::sync::watch;
+use tokio_util::sync::CancellationToken;
 
 pub(super) type Response = hyper::Response<Full<Bytes>>;
 
@@ -69,21 +69,16 @@ impl HttpServer {
         Self { listener }
     }
 
-    pub(super) async fn serve<F, R>(
-        self,
-        mut stop: watch::Receiver<bool>,
-        route: F,
-    ) -> Result<(), String>
+    pub(super) async fn serve<F, R>(self, stop: CancellationToken, route: F) -> Result<(), String>
     where
         F: Fn(Request<()>) -> R + Send + Sync + 'static,
         R: Future<Output = Response> + Send + 'static,
     {
-        if *stop.borrow_and_update() {
+        if stop.is_cancelled() {
             return Ok(());
         }
         let mut connections = FuturesUnordered::<OwnedTask>::new();
-        let accepted =
-            self.accept_until_stopped(&mut stop, Arc::new(route), &mut connections).await;
+        let accepted = self.accept_until_stopped(&stop, Arc::new(route), &mut connections).await;
         cancel_connections(connections, accepted).await
     }
 
@@ -91,7 +86,7 @@ impl HttpServer {
     /// task.
     async fn accept_until_stopped<F, R>(
         &self,
-        stop: &mut watch::Receiver<bool>,
+        stop: &CancellationToken,
         route: Arc<F>,
         connections: &mut FuturesUnordered<OwnedTask>,
     ) -> Result<(), String>
@@ -103,9 +98,7 @@ impl HttpServer {
         loop {
             tokio::select! {
                 biased;
-                changed = stop.changed() => {
-                    if changed.is_err() || *stop.borrow_and_update() { return Ok(()); }
-                }
+                () = stop.cancelled() => return Ok(()),
                 joined = connections.next(), if !connections.is_empty() => {
                     if let Some(Err(error)) = joined {
                         return Err(format!("HTTP connection task: {error}"));
@@ -300,9 +293,10 @@ mod tests {
     #[tokio::test]
     async fn a_malformed_peer_does_not_stop_the_listener() {
         let (listener, port) = bind_listener("127.0.0.1", 0).await.unwrap();
-        let (stop, stopped) = watch::channel(false);
+        let stop = CancellationToken::new();
         let serving = tokio::spawn(
-            HttpServer::new(listener).serve(stopped, |_| async { text(StatusCode::OK, "hello") }),
+            HttpServer::new(listener)
+                .serve(stop.clone(), |_| async { text(StatusCode::OK, "hello") }),
         );
         for (request, status) in [
             ("GET / HTTP/1.1\r\nHost: a\r\nHost: b\r\n\r\n", "HTTP/1.1 400"),
@@ -317,7 +311,7 @@ mod tests {
                 .unwrap();
             assert!(response.starts_with(status), "{response}");
         }
-        stop.send_replace(true);
+        stop.cancel();
         serving.await.unwrap().unwrap();
     }
 
@@ -409,7 +403,8 @@ mod tests {
     #[tokio::test]
     async fn an_already_stopped_listener_returns_without_accepting() {
         let (listener, _) = bind_listener("127.0.0.1", 0).await.unwrap();
-        let (_stop, stopped) = watch::channel(true);
+        let stopped = CancellationToken::new();
+        stopped.cancel();
         tokio::time::timeout(
             Duration::from_secs(1),
             HttpServer::new(listener)

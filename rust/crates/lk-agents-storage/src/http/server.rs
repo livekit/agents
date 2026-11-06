@@ -15,7 +15,8 @@ use hyper_util::rt::TokioIo;
 use lk_agents_abi::SpawnerExt;
 use lk_agents_net::task::TokioSpawner;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{Mutex, watch};
+use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 
 use super::{ApiError, ThreadService};
 use crate::{Storage, StorageError};
@@ -26,7 +27,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct ThreadServer {
     port: u16,
-    stop: watch::Sender<bool>,
+    stop: CancellationToken,
     task: Mutex<Option<lk_agents_abi::OwnedTask<()>>>,
 }
 
@@ -53,8 +54,8 @@ impl ThreadServer {
         let port =
             listener.local_addr().map_err(|e| StorageError::Unavailable(e.to_string()))?.port();
         let service = Arc::new(ThreadService::new(storage, project_id, api_key, api_secret));
-        let (stop, stopped) = watch::channel(false);
-        let task = TokioSpawner::current().spawn(serve(listener, service, stopped));
+        let stop = CancellationToken::new();
+        let task = TokioSpawner::current().spawn(serve(listener, service, stop.clone()));
         Ok(Self { port, stop, task: Mutex::new(Some(task)) })
     }
 }
@@ -64,7 +65,7 @@ impl lk_agents_abi::storage::http::ThreadServer for ThreadServer {
         self.port
     }
     async fn aclose(&self) {
-        self.stop.send_replace(true);
+        self.stop.cancel();
         let mut task = self.task.lock().await;
         if let Some(task) = task.take() {
             let _ = task.await;
@@ -74,23 +75,16 @@ impl lk_agents_abi::storage::http::ThreadServer for ThreadServer {
 
 impl Drop for ThreadServer {
     fn drop(&mut self) {
-        self.stop.send_replace(true);
+        self.stop.cancel();
     }
 }
 
-async fn serve(
-    listener: TcpListener,
-    service: Arc<ThreadService>,
-    mut stopped: watch::Receiver<bool>,
-) {
+async fn serve(listener: TcpListener, service: Arc<ThreadService>, stopped: CancellationToken) {
     let mut connections = FuturesUnordered::new();
     loop {
-        if *stopped.borrow_and_update() {
-            break;
-        }
         tokio::select! {
             biased;
-            _ = stopped.changed() => break,
+            () = stopped.cancelled() => break,
             _ = connections.next(), if !connections.is_empty() => {},
             accepted = listener.accept(), if connections.len() < CONNECTION_LIMIT => {
                 let accepted = accepted.inspect_err(|error| log::warn!(target: lk_agents_abi::LOG_TARGET, "thread API accept failed: {error}"));
@@ -104,11 +98,7 @@ async fn serve(
     while connections.next().await.is_some() {}
 }
 
-async fn connection(
-    socket: TcpStream,
-    service: Arc<ThreadService>,
-    mut stopped: watch::Receiver<bool>,
-) {
+async fn connection(socket: TcpStream, service: Arc<ThreadService>, stopped: CancellationToken) {
     let handler = service_fn(move |request| {
         let service = service.clone();
         async move { Ok::<_, Infallible>(handle(service, request).await) }
@@ -117,12 +107,9 @@ async fn connection(
         .keep_alive(false)
         .max_buf_size(64 * 1024)
         .serve_connection(TokioIo::new(socket), handler);
-    if *stopped.borrow_and_update() {
-        return;
-    }
     tokio::select! {
         biased;
-        _ = stopped.changed() => {},
+        () = stopped.cancelled() => {},
         _ = tokio::time::timeout(REQUEST_TIMEOUT, connection) => {},
     }
 }

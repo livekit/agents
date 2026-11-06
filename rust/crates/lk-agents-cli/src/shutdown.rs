@@ -15,7 +15,7 @@ struct State {
 pub(crate) struct Watchdog {
     state: Mutex<State>,
     changed: Condvar,
-    requested: tokio::sync::watch::Sender<bool>,
+    requested: tokio_util::sync::CancellationToken,
     options: DrainOptions,
 }
 
@@ -26,12 +26,11 @@ pub struct Shutdown {
 impl CliShutdown for Shutdown {
     fn new(timeout: f64, drain_timeout: f64) -> Result<Self, CliError> {
         let options = DrainOptions::new(timeout, drain_timeout).map_err(CliError::Invalid)?;
-        let (requested, _) = tokio::sync::watch::channel(false);
         Ok(Self {
             watchdog: Arc::new(Watchdog {
                 state: Mutex::default(),
                 changed: Condvar::default(),
-                requested,
+                requested: tokio_util::sync::CancellationToken::new(),
                 options,
             }),
         })
@@ -42,8 +41,7 @@ impl CliShutdown for Shutdown {
     }
 
     async fn wait(&self) {
-        let mut requested = self.watchdog.requested.subscribe();
-        let _ = requested.wait_for(|requested| *requested).await;
+        self.watchdog.requested.cancelled().await;
     }
 
     fn begin(&self) -> bool {
@@ -101,7 +99,7 @@ impl Watchdog {
         if started.is_err() {
             terminate(b"livekit.agents: cannot start shutdown watchdog; terminating the CLI\n");
         }
-        self.requested.send_replace(true);
+        self.requested.cancel();
         true
     }
 }

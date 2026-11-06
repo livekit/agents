@@ -19,6 +19,7 @@ log.workspace = true
 parking_lot.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["alloc"] }
 tokio = { workspace = true, features = ["net", "io-util"] }
+tokio-util = "0.7"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

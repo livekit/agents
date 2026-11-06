@@ -311,7 +311,7 @@ struct Inner {
     state: Mutex<State>,
     changed: Notify,
     idle_ready: watch::Sender<Readiness>,
-    closed: watch::Sender<bool>,
+    closed: tokio_util::sync::CancellationToken,
     close_ready: watch::Sender<bool>,
 }
 
@@ -362,7 +362,7 @@ impl ProcPool {
             }),
             changed: Notify::new(),
             idle_ready: watch::channel(Readiness::Pending).0,
-            closed: watch::channel(false).0,
+            closed: tokio_util::sync::CancellationToken::new(),
             close_ready: watch::channel(false).0,
         }))
     }
@@ -395,7 +395,7 @@ impl ProcPool {
             let result = f(self, &mut st);
             self.allocate(&mut st);
             if st.closed {
-                self.0.closed.send_replace(true);
+                self.0.closed.cancel();
                 self.0.idle_ready.send_replace(Readiness::Closed);
             } else if st.ready.len() >= self.0.opts.num_idle_processes {
                 self.0.idle_ready.send_replace(Readiness::Ready);
@@ -585,7 +585,7 @@ impl ProcPool {
         if !initializing {
             return;
         }
-        let mut closed = self.0.closed.subscribe();
+        let closed = self.0.closed.clone();
         self.0.host.emit(ProcessEvent::Created, &process);
         let steps = async {
             self.0.host.start(&process).await?;
@@ -595,7 +595,7 @@ impl ProcPool {
         };
         let initialized = tokio::select! {
             biased;
-            _ = closed.wait_for(|closed| *closed) => false,
+            () = closed.cancelled() => false,
             result = steps => match result {
                 Ok(()) => true,
                 Err(error) => {

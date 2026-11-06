@@ -22,6 +22,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Duration;
 use tokio::sync::{Mutex, watch};
+use tokio_util::sync::CancellationToken;
 mod health;
 mod http;
 mod public;
@@ -323,7 +324,7 @@ impl ServerRuntime {
         mut control: watch::Receiver<Control>,
         cleanup_timeout: Duration,
     ) {
-        let (stop, _) = watch::channel(false);
+        let stop = CancellationToken::new();
         let mut resources = Resources::default();
         let (started, drain_requested) =
             Self::await_startup(self.start(&start, &stop, &mut resources), &mut control).await;
@@ -337,7 +338,7 @@ impl ServerRuntime {
             None => {}
         }
         let failure = running.close(&self);
-        stop.send_replace(true);
+        stop.cancel();
         self.close_resources(resources, failure, cleanup_timeout).await;
     }
 
@@ -422,7 +423,7 @@ impl ServerRuntime {
     async fn start(
         &self,
         start: &ServerStart,
-        stop: &watch::Sender<bool>,
+        stop: &CancellationToken,
         resources: &mut Resources,
     ) -> Result<Arc<ServerStatus>, String> {
         let mut settings = start.settings.clone();
@@ -541,7 +542,7 @@ impl ServerRuntime {
         local: bool,
         status: &Arc<ServerStatus>,
         probe: &Arc<ServerCallbacks>,
-        stop: &watch::Sender<bool>,
+        stop: &CancellationToken,
     ) -> Result<Option<OwnedTask<Result<(), String>>>, String> {
         if settings.simulation {
             log::info!(target: lk_agents_abi::LOG_TARGET, "health listener off: simulation runs share a host");
@@ -557,7 +558,7 @@ impl ServerRuntime {
             Arc::new(settings.clone()),
             status.clone(),
             probe.clone(),
-            stop.subscribe(),
+            stop.clone(),
         ))))
     }
 
@@ -567,7 +568,7 @@ impl ServerRuntime {
         settings: &ServerSettings,
         local: bool,
         probe: Arc<ServerCallbacks>,
-        stop: &watch::Sender<bool>,
+        stop: &CancellationToken,
     ) -> Result<Option<OwnedTask<Result<(), String>>>, String> {
         let Some(address) = settings.listeners.prometheus(local) else {
             log::info!(target: lk_agents_abi::LOG_TARGET, "prometheus listener off: not configured");
@@ -575,7 +576,7 @@ impl ServerRuntime {
         };
         let (listener, url) = bind(&address).await?;
         log::info!(target: lk_agents_abi::LOG_TARGET, url:% = format_args!("{url}/metrics"); "prometheus listener");
-        Ok(Some(TokioSpawner::current().spawn(serve_metrics(listener, probe, stop.subscribe()))))
+        Ok(Some(TokioSpawner::current().spawn(serve_metrics(listener, probe, stop.clone()))))
     }
 
     /// The worker's own endpoints: the console's, unauthenticated and on loopback only, or a
@@ -585,7 +586,7 @@ impl ServerRuntime {
         settings: &ServerSettings,
         start: &ServerStart,
         local: bool,
-        stop: &watch::Sender<bool>,
+        stop: &CancellationToken,
     ) -> Result<OwnedTask<Result<(), String>>, String> {
         let handler =
             self.host.mounted.get().cloned().ok_or("the endpoint server is not mounted")?;
@@ -608,7 +609,7 @@ impl ServerRuntime {
             unauthenticated,
             proxy_headers: settings.listeners.public.proxy_headers,
         });
-        Ok(TokioSpawner::current().spawn(serve_public(listener, routes, handler, stop.subscribe())))
+        Ok(TokioSpawner::current().spawn(serve_public(listener, routes, handler, stop.clone())))
     }
 
     fn drain_resources(

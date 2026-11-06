@@ -19,7 +19,8 @@ use lk_agents_abi::{ATTRIBUTE_SIMULATOR, HostRef};
 use lk_agents_abi::{OwnedTask, SpawnerExt};
 use lk_agents_net::task::{TaskSet, TokioSpawner};
 use parking_lot::Mutex;
-use tokio::sync::{oneshot, watch};
+use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
 
 use super::ipc_channel::Channel;
 
@@ -94,11 +95,11 @@ struct Inner {
     /// The job's LiveKit Cloud observability endpoint, when it has one.
     observability_url: Option<String>,
     state: Mutex<State>,
-    ended: watch::Sender<bool>,
+    ended: CancellationToken,
     /// Held while the room connects, so a second `connect()` waits for the first.
     connecting: tokio::sync::Mutex<()>,
     /// Set once the job ends: the application calls still running are cancelled.
-    tasks_closed: watch::Sender<bool>,
+    tasks_closed: CancellationToken,
     /// The participant entrypoints, which run to their own end.
     participants: Arc<TaskSet>,
     tracer: telemetry::Tracer,
@@ -142,7 +143,7 @@ impl Inner {
         }
         if st.shutdown.is_none() {
             st.shutdown = Some(reason);
-            self.ended.send_replace(true);
+            self.ended.cancel();
         }
     }
 
@@ -235,7 +236,6 @@ impl Inner {
         tokio::pin!(wait_entry);
         let warn_at = tokio::time::sleep(CONNECT_WARNING_DELAY);
         tokio::pin!(warn_at);
-        let mut ended = self.ended.subscribe();
         let (mut entry_done, mut warned) = (false, self.fake);
         let mut crash = None;
         loop {
@@ -248,7 +248,7 @@ impl Inner {
                     warned = true;
                     self.warn_if_unconnected();
                 }
-                _ = ended.wait_for(|e| *e) => break,
+                () = self.ended.cancelled() => break,
             }
         }
         let (reason, cause) = {
@@ -463,9 +463,9 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
                 session_aclose_timeout,
                 observability_url,
                 state: Mutex::new(State { redaction, ..State::default() }),
-                ended: watch::channel(false).0,
+                ended: CancellationToken::new(),
                 connecting: tokio::sync::Mutex::new(()),
-                tasks_closed: watch::channel(false).0,
+                tasks_closed: CancellationToken::new(),
                 participants: Arc::default(),
                 tracer: env.tracer.clone(),
                 clock: env.clock.clone(),
@@ -617,11 +617,11 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
             return Ok(console_result);
         }
         let (tx, rx) = oneshot::channel();
-        let mut closed = self.inner.tasks_closed.subscribe();
+        let closed = self.inner.tasks_closed.clone();
         let task = TokioSpawner::new(self.inner.spawner.handle().clone()).spawn(async move {
             let called = tokio::select! {
                 called = call.call(&cx, &context) => called.map_err(WorkerError::Host),
-                _ = closed.wait_for(|closed| *closed) => Err(WorkerError::Cancelled),
+                () = closed.cancelled() => Err(WorkerError::Cancelled),
             };
             if let Err(WorkerError::Host(error)) = &called
                 && !cancelled(error)
@@ -639,7 +639,7 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
     }
 
     async fn close_tasks(&self) {
-        self.inner.tasks_closed.send_replace(true);
+        self.inner.tasks_closed.cancel();
         let tasks = std::mem::take(&mut self.inner.state.lock().tasks);
         for task in tasks {
             let _ = task.await;

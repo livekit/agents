@@ -36,6 +36,7 @@ thiserror.workspace = true
 log.workspace = true
 async-trait.workspace = true
 tokio = { version = "1", features = ["rt", "sync", "time", "macros", "net"] }
+tokio-util = "0.7"
 futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 bytes = "1"
 url = "2"

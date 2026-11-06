@@ -11,7 +11,7 @@ use lk_agents_abi::worker::ipc_host::{ChildInitialize, JobProcess, WorkerError};
 use lk_agents_abi::{OwnedTask, SpawnerExt};
 use lk_agents_net::task::TokioSpawner;
 use parking_lot::Mutex;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::mpsc;
 use tokio::time::Instant;
 
 use super::ipc_channel::{Channel, ChannelError};
@@ -29,7 +29,7 @@ pub struct ChildChannel {
     watching: Mutex<Option<OwnedTask<Result<(), ChannelError>>>>,
     spawner: TokioSpawner,
     /// `stop()`: `serve` returns.
-    stop: watch::Sender<bool>,
+    stop: tokio_util::sync::CancellationToken,
     /// The job the parent started, once it did.
     run: OnceLock<Arc<JobRun>>,
     asyncio_debug: bool,
@@ -221,7 +221,7 @@ impl lk_agents_abi::worker::ipc_host::IpcClient for ChildChannel {
             inbox: tokio::sync::Mutex::new(inbox),
             watching: Mutex::new(Some(watching)),
             spawner,
-            stop: watch::channel(false).0,
+            stop: tokio_util::sync::CancellationToken::new(),
             run: OnceLock::new(),
             asyncio_debug: hello.asyncio_debug,
         })
@@ -233,7 +233,6 @@ impl lk_agents_abi::worker::ipc_host::IpcClient for ChildChannel {
     }
 
     async fn serve(&self, host: Arc<dyn JobProcess>) -> Result<(), WorkerError> {
-        let mut stop = self.stop.subscribe();
         let served = async {
             loop {
                 let Some(msg) = self.inbox.lock().await.recv().await else {
@@ -246,12 +245,12 @@ impl lk_agents_abi::worker::ipc_host::IpcClient for ChildChannel {
         };
         tokio::select! {
             served = served => served,
-            _ = stop.wait_for(|stopped| *stopped) => Ok(()),
+            () = self.stop.cancelled() => Ok(()),
         }
     }
 
     fn stop(&self) {
-        self.stop.send_replace(true);
+        self.stop.cancel();
     }
 
     /// Stops watching the parent, then closes the channel: what is queued is flushed and the

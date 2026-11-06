@@ -182,7 +182,7 @@ pub async fn serve_health(
     settings: Arc<ServerSettings>,
     status: Arc<ServerStatus>,
     probe: Arc<dyn HealthProbe>,
-    stop: tokio::sync::watch::Receiver<bool>,
+    stop: tokio_util::sync::CancellationToken,
 ) -> Result<(), String> {
     HttpServer::new(listener)
         .serve(stop, move |request| {
@@ -199,7 +199,7 @@ pub async fn serve_health(
 pub async fn serve_metrics(
     listener: tokio::net::TcpListener,
     probe: Arc<dyn HealthProbe>,
-    stop: tokio::sync::watch::Receiver<bool>,
+    stop: tokio_util::sync::CancellationToken,
 ) -> Result<(), String> {
     HttpServer::new(listener)
         .serve(stop, move |request| {

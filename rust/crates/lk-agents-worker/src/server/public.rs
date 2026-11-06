@@ -10,7 +10,7 @@ use lk_agents_abi::worker::http::{EndpointKind, EndpointRequest, HttpScheme, Req
 use lk_agents_abi::{OwnedTask, SpawnerExt};
 use lk_agents_net::task::TokioSpawner;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::watch;
+use tokio_util::sync::CancellationToken;
 
 use crate::http::{EndpointServer, HttpStream, Origin, decode_path};
 
@@ -33,9 +33,9 @@ pub async fn serve_public(
     listener: TcpListener,
     routes: Arc<PublicRoutes>,
     server: Arc<EndpointServer>,
-    mut stop: watch::Receiver<bool>,
+    stop: CancellationToken,
 ) -> Result<(), String> {
-    if *stop.borrow_and_update() {
+    if stop.is_cancelled() {
         return Ok(());
     }
     let spawner = TokioSpawner::current();
@@ -44,9 +44,7 @@ pub async fn serve_public(
     loop {
         tokio::select! {
             biased;
-            changed = stop.changed() => {
-                if changed.is_err() || *stop.borrow_and_update() { break; }
-            }
+            () = stop.cancelled() => break,
             _ = connections.next(), if !connections.is_empty() => {}
             accepted = listener.accept(), if connections.len() < MAX_CONNECTIONS => match accepted {
                 Ok((socket, peer)) => connections.push(spawner.spawn(serve_connection(
