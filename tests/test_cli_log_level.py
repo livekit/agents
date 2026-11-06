@@ -5,6 +5,7 @@ from unittest.mock import patch
 import pytest
 from typer.testing import CliRunner
 
+import livekit.agents.__main__ as thin_cli
 from livekit.agents.cli._legacy import _build_cli
 from livekit.agents.worker import AgentServer, ServerEnvOption, ServerOptions
 
@@ -149,6 +150,37 @@ class TestDevCommandLogLevel:
         result = runner.invoke(app, ["dev", "--no-reload"])
         assert result.exit_code == 0
         assert mock_run_worker.call_args.kwargs["args"].log_level == "CRITICAL"
+
+
+class TestThinConsoleLogLevel:
+    @patch("livekit.agents.cli.cli._run_tcp_console")
+    @patch("livekit.agents.__main__._discover_server")
+    def test_cli_arg_is_forwarded(self, mock_discover_server, mock_run_console):
+        server = _make_server()
+        mock_discover_server.return_value = server
+
+        result = thin_cli.main(
+            ["console", "--connect-addr", "127.0.0.1:9876", "--log-level", "ERROR"]
+        )
+
+        assert result == 0
+        mock_run_console.assert_called_once_with(
+            server=server,
+            connect_addr="127.0.0.1:9876",
+            record=False,
+            log_level="ERROR",
+        )
+
+    @patch("livekit.agents.cli.cli._run_tcp_console")
+    @patch("livekit.agents.__main__._discover_server")
+    def test_default_log_level_is_debug(self, mock_discover_server, mock_run_console):
+        server = _make_server()
+        mock_discover_server.return_value = server
+
+        result = thin_cli.main(["console", "--connect-addr", "127.0.0.1:9876"])
+
+        assert result == 0
+        assert mock_run_console.call_args.kwargs["log_level"] == "DEBUG"
 
 
 class TestLogLevelValidation:
