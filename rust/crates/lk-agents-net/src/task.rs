@@ -16,17 +16,21 @@ use lk_agents_abi::{
     TaskOutcome, Ts,
 };
 use tokio::runtime::Handle;
-use tokio::sync::{Notify, oneshot, watch};
+use tokio::sync::{Notify, oneshot};
+use tokio_util::sync::CancellationToken;
 
-struct Control(watch::Sender<bool>);
+struct Control {
+    cancel: CancellationToken,
+    finished: CancellationToken,
+}
 
 impl TaskControl for Control {
     fn cancel(&self) {
-        self.0.send_replace(true);
+        self.cancel.cancel();
     }
 
     fn is_finished(&self) -> bool {
-        self.0.is_closed()
+        self.finished.is_cancelled()
     }
 }
 
@@ -35,11 +39,17 @@ impl TaskControl for Control {
 /// outcome is reported last; a panic is reported, then resumed into the executor.
 pub fn launch(task: Launch) -> (BoxFuture<'static, ()>, OwnedTask<Box<dyn Any + Send>>) {
     let Launch { work, settled, site: _ } = task;
-    let (cancel, cancelled) = watch::channel(false);
+    let control = Control { cancel: CancellationToken::new(), finished: CancellationToken::new() };
     let (report, done) = oneshot::channel();
-    let run = run_launched(work, settled, cancelled, report);
+    let run = run_launched(
+        work,
+        settled,
+        control.cancel.clone(),
+        control.finished.clone().drop_guard(),
+        report,
+    );
     let output = Box::pin(async move { done.await.unwrap_or(Err(TaskError::Cancelled)) });
-    (Box::pin(run), OwnedTask::new(Arc::new(Control(cancel)), output))
+    (Box::pin(run), OwnedTask::new(Arc::new(control), output))
 }
 
 type Launched = Box<dyn Any + Send>;
@@ -47,7 +57,8 @@ type Launched = Box<dyn Any + Send>;
 async fn run_launched(
     work: BoxFuture<'static, Launched>,
     settled: Option<Settle>,
-    mut cancelled: watch::Receiver<bool>,
+    cancelled: CancellationToken,
+    finished: tokio_util::sync::DropGuard,
     report: oneshot::Sender<Result<Launched, TaskError>>,
 ) {
     let mut panic = None;
@@ -55,11 +66,7 @@ async fn run_launched(
         // The work is dropped at the end of this block, before `settled` runs.
         let mut work = work;
         // A dropped control without a request is detached work: it runs on.
-        let mut requested = std::pin::pin!(async {
-            if cancelled.wait_for(|requested| *requested).await.is_err() {
-                std::future::pending::<()>().await;
-            }
-        });
+        let mut requested = std::pin::pin!(cancelled.cancelled());
         std::future::poll_fn(|cx| {
             if requested.as_mut().poll(cx).is_ready() {
                 return Poll::Ready(Err(TaskError::Cancelled));
@@ -81,7 +88,7 @@ async fn run_launched(
         settled(outcome).await;
     }
     let _ = report.send(result);
-    drop(cancelled);
+    drop(finished);
     if let Some(payload) = panic {
         std::panic::resume_unwind(payload);
     }
@@ -301,30 +308,19 @@ impl TaskSet {
 }
 
 /// Explicit cancellation of an owned host operation, acknowledged by its normal result.
-pub struct Cancellation(tokio::sync::watch::Sender<bool>);
-impl Default for Cancellation {
-    fn default() -> Self {
-        Self(tokio::sync::watch::channel(false).0)
-    }
-}
+#[derive(Default)]
+pub struct Cancellation(CancellationToken);
 impl Cancellation {
     pub fn cancel(&self) {
-        self.0.send_replace(true);
+        self.0.cancel();
     }
 }
 impl lk_agents_abi::invoke::Cancellation for Cancellation {
     fn is_cancelled(&self) -> bool {
-        *self.0.borrow()
+        self.0.is_cancelled()
     }
     fn cancelled(&self) -> lk_agents_abi::BoxFuture<'_, ()> {
-        let mut changes = self.0.subscribe();
-        Box::pin(async move {
-            while !*changes.borrow_and_update() {
-                if changes.changed().await.is_err() {
-                    return;
-                }
-            }
-        })
+        Box::pin(self.0.cancelled())
     }
 }
 

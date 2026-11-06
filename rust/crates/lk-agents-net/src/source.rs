@@ -9,7 +9,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
-use tokio::sync::watch;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, PartialEq)]
 pub enum Pulled<T> {
@@ -37,7 +37,7 @@ enum State<T> {
 struct Inner<T> {
     state: Mutex<Option<State<T>>>,
     reading: AtomicBool,
-    closing: watch::Sender<bool>,
+    closing: CancellationToken,
     clock: Arc<dyn Clock>,
 }
 
@@ -66,14 +66,14 @@ impl<T: Send + 'static> SharedStream<T> {
             inner: Arc::new(Inner {
                 state: Mutex::new(Some(State::Ready(source))),
                 reading: AtomicBool::new(false),
-                closing: watch::channel(false).0,
+                closing: CancellationToken::new(),
                 clock,
             }),
         }
     }
 
     pub fn is_closed(&self) -> bool {
-        *self.inner.closing.borrow()
+        self.inner.closing.is_cancelled()
     }
 
     pub async fn pull(&self) -> Result<Pulled<T>, PullError> {
@@ -100,7 +100,7 @@ impl<T: Send + 'static> SharedStream<T> {
     /// The first close owns the deadline. Every caller waits for the same cleanup outcome;
     /// abandoning a waiter leaves the pending work available to the next waiter.
     pub async fn close(&self, deadline: Ts) -> Closed {
-        self.inner.closing.send_replace(true);
+        self.inner.closing.cancel();
         let cleanup = self.inner.begin_close(deadline);
         cleanup.await
     }
@@ -111,7 +111,7 @@ impl<T: Send + 'static> Inner<T> {
     fn begin_read(&self) -> Option<Pending<T>> {
         let mut state = self.state.lock();
         let pending = match state.take().expect("a stream always owns its state") {
-            State::Ready(source) => read_next(source, self.closing.subscribe()),
+            State::Ready(source) => read_next(source, self.closing.clone()),
             State::Reading(pending) => pending,
             State::Closing(cleanup) => {
                 *state = Some(State::Closing(cleanup));
@@ -126,7 +126,7 @@ impl<T: Send + 'static> Inner<T> {
     fn finish_read(&self, completed: &Mutex<Read<T>>) -> Result<Pulled<T>, PullError> {
         let (item, previous) = {
             let mut state = self.state.lock();
-            if *self.closing.borrow() {
+            if self.closing.is_cancelled() {
                 return Ok(Pulled::Cancelled);
             }
             let mut completed = completed.lock();
@@ -139,11 +139,11 @@ impl<T: Send + 'static> Inner<T> {
         match item {
             Some(Ok(Some(item))) => Ok(Pulled::Item(item)),
             Some(Ok(None)) => {
-                self.closing.send_replace(true);
+                self.closing.cancel();
                 Ok(Pulled::End)
             }
             Some(Err(error)) => {
-                self.closing.send_replace(true);
+                self.closing.cancel();
                 Err(error.into())
             }
             None => Ok(Pulled::Cancelled),
@@ -165,12 +165,12 @@ impl<T: Send + 'static> Inner<T> {
 /// One shared read of the source's next item; a close wins over an item ready at once.
 fn read_next<T: Send + 'static>(
     mut source: Box<dyn StreamOutput<T>>,
-    mut closing: watch::Receiver<bool>,
+    closing: CancellationToken,
 ) -> Pending<T> {
     async move {
         let item = tokio::select! {
             biased;
-            _ = closing.wait_for(|closed| *closed) => None,
+            () = closing.cancelled() => None,
             item = source.next() => Some(item),
         };
         Arc::new(Mutex::new(Read { source: Some(source), item }))
@@ -341,14 +341,14 @@ mod tests {
     struct Gated {
         reads: Arc<AtomicUsize>,
         entered: Arc<tokio::sync::Notify>,
-        released: watch::Receiver<bool>,
+        released: CancellationToken,
     }
     impl StreamOutput<u32> for Gated {
         fn next(&mut self) -> BoxFuture<'_, Result<Option<u32>, ProviderError>> {
             Box::pin(async move {
                 self.reads.fetch_add(1, Ordering::SeqCst);
                 self.entered.notify_one();
-                let _ = self.released.wait_for(|released| *released).await;
+                self.released.cancelled().await;
                 Ok(Some(42))
             })
         }
@@ -361,9 +361,13 @@ mod tests {
     async fn abandoning_a_read_resumes_the_same_pending_pull() {
         let reads = Arc::new(AtomicUsize::new(0));
         let entered = Arc::new(tokio::sync::Notify::new());
-        let (release, released) = watch::channel(false);
+        let released = CancellationToken::new();
         let source = SharedStream::new(
-            Box::new(Gated { reads: reads.clone(), entered: entered.clone(), released }),
+            Box::new(Gated {
+                reads: reads.clone(),
+                entered: entered.clone(),
+                released: released.clone(),
+            }),
             Arc::new(crate::clock::RealClock::new()),
         );
         let first = tokio::spawn({
@@ -373,7 +377,7 @@ mod tests {
         entered.notified().await;
         first.abort();
         let _ = first.await;
-        release.send_replace(true);
+        released.cancel();
         assert_eq!(source.pull().await.unwrap(), Pulled::Item(42));
         assert_eq!(reads.load(Ordering::SeqCst), 1, "a cancelled waiter must not repeat next()");
         assert_eq!(source.aclose().await, Closed::Clean);
