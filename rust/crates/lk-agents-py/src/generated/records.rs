@@ -24462,13 +24462,28 @@ pub mod worker_ipc {
                 v.extract::<bool>()
             })?,
             received_at: crate::py_values::attr_with(obj, "StartJobFields", "received_at", |v| {
-                crate::py_values::number_from_py::<f64>(v, "StartJobFields.received_at")
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (crate::py_values::number_from_py::<f64>(v, "StartJobFields.received_at"))
+                        .map(Some)
+                }
             })?,
             accepted_at: crate::py_values::attr_with(obj, "StartJobFields", "accepted_at", |v| {
-                crate::py_values::number_from_py::<f64>(v, "StartJobFields.accepted_at")
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (crate::py_values::number_from_py::<f64>(v, "StartJobFields.accepted_at"))
+                        .map(Some)
+                }
             })?,
             assigned_at: crate::py_values::attr_with(obj, "StartJobFields", "assigned_at", |v| {
-                crate::py_values::number_from_py::<f64>(v, "StartJobFields.assigned_at")
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (crate::py_values::number_from_py::<f64>(v, "StartJobFields.assigned_at"))
+                        .map(Some)
+                }
             })?,
             launched_at: crate::py_values::attr_with(obj, "StartJobFields", "launched_at", |v| {
                 crate::py_values::number_from_py::<f64>(v, "StartJobFields.launched_at")
@@ -24513,15 +24528,24 @@ pub mod worker_ipc {
         kwargs.set_item("fake_job", ::pyo3::IntoPyObjectExt::into_bound_py_any(fake_job, py)?)?;
         kwargs.set_item(
             "received_at",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(received_at, py)?,
+            match received_at {
+                None => py.None().into_bound(py),
+                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+            },
         )?;
         kwargs.set_item(
             "accepted_at",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(accepted_at, py)?,
+            match accepted_at {
+                None => py.None().into_bound(py),
+                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+            },
         )?;
         kwargs.set_item(
             "assigned_at",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(assigned_at, py)?,
+            match assigned_at {
+                None => py.None().into_bound(py),
+                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+            },
         )?;
         kwargs.set_item(
             "launched_at",
@@ -25070,13 +25094,28 @@ pub mod worker_server {
                 v.extract::<bool>()
             })?,
             received_at: crate::py_values::attr_with(obj, "RunningJobInfo", "received_at", |v| {
-                crate::py_values::number_from_py::<f64>(v, "RunningJobInfo.received_at")
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (crate::py_values::number_from_py::<f64>(v, "RunningJobInfo.received_at"))
+                        .map(Some)
+                }
             })?,
             accepted_at: crate::py_values::attr_with(obj, "RunningJobInfo", "accepted_at", |v| {
-                crate::py_values::number_from_py::<f64>(v, "RunningJobInfo.accepted_at")
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (crate::py_values::number_from_py::<f64>(v, "RunningJobInfo.accepted_at"))
+                        .map(Some)
+                }
             })?,
             assigned_at: crate::py_values::attr_with(obj, "RunningJobInfo", "assigned_at", |v| {
-                crate::py_values::number_from_py::<f64>(v, "RunningJobInfo.assigned_at")
+                if v.is_none() {
+                    Ok(None)
+                } else {
+                    (crate::py_values::number_from_py::<f64>(v, "RunningJobInfo.assigned_at"))
+                        .map(Some)
+                }
             })?,
         })
     }
@@ -25109,15 +25148,24 @@ pub mod worker_server {
         kwargs.set_item("fake_job", ::pyo3::IntoPyObjectExt::into_bound_py_any(fake_job, py)?)?;
         kwargs.set_item(
             "received_at",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(received_at, py)?,
+            match received_at {
+                None => py.None().into_bound(py),
+                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+            },
         )?;
         kwargs.set_item(
             "accepted_at",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(accepted_at, py)?,
+            match accepted_at {
+                None => py.None().into_bound(py),
+                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+            },
         )?;
         kwargs.set_item(
             "assigned_at",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(assigned_at, py)?,
+            match assigned_at {
+                None => py.None().into_bound(py),
+                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+            },
         )?;
         crate::py_calls::call(
             RUNNING_JOB_INFO

@@ -4,9 +4,12 @@ use crate::LOG;
 use lk_agents_abi::errors::HostError;
 use prost::Message as _;
 use std::sync::Arc;
+use tokio::io::{AsyncRead, AsyncReadExt};
 
 pub use lk_agents_abi::cli::DevServer;
 use lk_agents_abi::worker::types::{AcceptArguments, RunningJobInfo};
+
+const DEV_FRAME_LIMIT: usize = 8 * 1024 * 1024;
 
 fn to_proto(info: RunningJobInfo) -> livekit_protocol::agent::RunningAgentJobInfo {
     livekit_protocol::agent::RunningAgentJobInfo {
@@ -39,10 +42,29 @@ fn from_proto(
         token: pb.token,
         worker_id: pb.worker_id,
         fake_job: pb.mock_job,
-        received_at: 0.0,
-        accepted_at: 0.0,
-        assigned_at: 0.0,
+        received_at: None,
+        accepted_at: None,
+        assigned_at: None,
     })
+}
+
+async fn recv(
+    stream: &mut (impl AsyncRead + Unpin),
+) -> std::io::Result<Option<livekit_protocol::agent::agent_dev_message::Message>> {
+    let mut len = [0u8; 4];
+    stream.read_exact(&mut len).await?;
+    let len = u32::from_be_bytes(len) as usize;
+    if len > DEV_FRAME_LIMIT {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("dev frame exceeds {DEV_FRAME_LIMIT} bytes"),
+        ));
+    }
+    let mut bytes = vec![0u8; len];
+    stream.read_exact(&mut bytes).await?;
+    let decoded = livekit_protocol::agent::AgentDevMessage::decode(bytes.as_slice())
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    Ok(decoded.message)
 }
 
 /// The dev channel to `lk agent dev` at `cli_addr` (`host:port`), length-prefixed
@@ -59,7 +81,7 @@ pub async fn dev_channel(
     server: Arc<dyn DevServer>,
 ) {
     if let Err(err) =
-        serve_dev_channel(cli_addr, agent_name, url, (api_key, api_secret), server).await
+        serve_dev_channel(cli_addr, agent_name, url, api_key, api_secret, server).await
     {
         log::error!(target: LOG, "dev channel failed: {err}");
     }
@@ -69,14 +91,15 @@ async fn serve_dev_channel(
     cli_addr: String,
     agent_name: String,
     url: String,
-    (api_key, api_secret): (String, String),
+    api_key: String,
+    api_secret: String,
     server: Arc<dyn DevServer>,
 ) -> Result<(), HostError> {
     use livekit_protocol::agent::{
         AgentDevMessage, GetRunningAgentJobsRequest, GetRunningAgentJobsResponse, ServerInfo,
         agent_dev_message::Message,
     };
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::io::AsyncWriteExt;
 
     let io = |e: std::io::Error| HostError::new(format!("dev channel: {e}"));
     let mut stream = tokio::net::TcpStream::connect(&cli_addr).await.map_err(io)?;
@@ -86,15 +109,6 @@ async fn serve_dev_channel(
         stream.write_all(&bytes).await?;
         stream.flush().await
     }
-    async fn recv(stream: &mut tokio::net::TcpStream) -> std::io::Result<Option<Message>> {
-        let mut len = [0u8; 4];
-        stream.read_exact(&mut len).await?;
-        let mut bytes = vec![0u8; u32::from_be_bytes(len) as usize];
-        stream.read_exact(&mut bytes).await?;
-        let decoded = AgentDevMessage::decode(bytes.as_slice())
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        Ok(decoded.message)
-    }
 
     send(&mut stream, Message::ServerInfo(ServerInfo { agent_name, url: url.clone() }))
         .await
@@ -102,7 +116,7 @@ async fn serve_dev_channel(
     send(&mut stream, Message::GetRunningJobsRequest(GetRunningAgentJobsRequest {}))
         .await
         .map_err(io)?;
-    let Ok(first) = recv(&mut stream).await else { return Ok(()) };
+    let first = recv(&mut stream).await.map_err(io)?;
     if let Some(Message::GetRunningJobsResponse(kept)) = first
         && !kept.jobs.is_empty()
     {
@@ -117,14 +131,16 @@ async fn serve_dev_channel(
         server.reload_jobs(&lk_agents_abi::telemetry::Cx::NONE, jobs).await?;
     }
     // Asked before the CLI restarts this process: what runs now, to resume after the reload.
-    while let Ok(message) = recv(&mut stream).await {
+    loop {
+        let message = recv(&mut stream).await.map_err(io)?;
         if let Some(Message::GetRunningJobsRequest(_)) = message {
             let jobs = server.running_jobs()?.into_iter().map(to_proto).collect();
             let reply = Message::GetRunningJobsResponse(GetRunningAgentJobsResponse { jobs });
-            if send(&mut stream, reply).await.is_err() {
-                break;
-            }
+            send(&mut stream, reply).await.map_err(io)?;
         }
     }
-    Ok(())
 }
+
+#[cfg(test)]
+#[path = "remote_cli_tests.rs"]
+mod tests;

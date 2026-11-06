@@ -111,9 +111,9 @@ pub fn simulated_job(
         token,
         worker_id: worker_id.to_owned(),
         fake_job,
-        received_at: 0.0,
-        accepted_at: 0.0,
-        assigned_at: 0.0,
+        received_at: None,
+        accepted_at: None,
+        assigned_at: None,
     })
 }
 

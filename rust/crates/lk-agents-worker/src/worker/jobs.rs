@@ -472,9 +472,9 @@ impl Worker {
             token: a.token,
             worker_id: self.worker_id.clone(),
             fake_job: false,
-            received_at: unix(p.received),
-            accepted_at: unix(p.accepted),
-            assigned_at: unix(self.clock.now()),
+            received_at: Some(unix(p.received)),
+            accepted_at: Some(unix(p.accepted)),
+            assigned_at: Some(unix(self.clock.now())),
         };
         self.pending[idx].state = PendingState::Launching(Box::new(info.clone()));
         let (host, generation) = (self.host.clone(), self.generation);

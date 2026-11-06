@@ -105,9 +105,9 @@ class StartJobFields:
     token: str
     worker_id: str
     fake_job: bool
-    received_at: float
-    accepted_at: float
-    assigned_at: float
+    received_at: float | None
+    accepted_at: float | None
+    assigned_at: float | None
     launched_at: float
     traceparent: str | None = None
 

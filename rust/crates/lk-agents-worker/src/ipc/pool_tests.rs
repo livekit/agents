@@ -109,9 +109,9 @@ pub(in crate::ipc) fn job(id: &str) -> RunningJobInfo {
         token: String::new(),
         worker_id: String::new(),
         fake_job: false,
-        received_at: 0.0,
-        accepted_at: 0.0,
-        assigned_at: 0.0,
+        received_at: None,
+        accepted_at: None,
+        assigned_at: None,
     }
 }
 

@@ -46,13 +46,13 @@ class RunningJobInfo:
     token: str
     worker_id: str
     fake_job: bool
-    received_at: float
-    """The dispatch timeline in unix seconds, 0.0 for a job no dispatch offered (simulated):
+    received_at: float | None
+    """The dispatch timeline in unix seconds, absent for a job no dispatch offered:
     the `AvailabilityRequest` arrived,
     """
-    accepted_at: float
+    accepted_at: float | None
     """the request was accepted,"""
-    assigned_at: float
+    assigned_at: float | None
     """and the `JobAssignment` arrived."""
 
 

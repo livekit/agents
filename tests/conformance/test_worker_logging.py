@@ -111,9 +111,9 @@ async def _run_job() -> None:
             token="",
             worker_id="worker",
             fake_job=True,
-            received_at=0,
-            accepted_at=0,
-            assigned_at=0,
+            received_at=None,
+            accepted_at=None,
+            assigned_at=None,
         )
         await asyncio.wait_for(supervisor.launch_job(info), timeout=3)
         await asyncio.wait_for(asyncio.shield(serving), timeout=3)

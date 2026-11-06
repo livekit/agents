@@ -32,11 +32,11 @@ class RunningJobInfo:
     token: str
     worker_id: str
     fake_job: bool
-    received_at: float = 0.0
+    received_at: float | None = None
     """The worker received the availability request."""
-    accepted_at: float = 0.0
+    accepted_at: float | None = None
     """The request handler accepted the job."""
-    assigned_at: float = 0.0
+    assigned_at: float | None = None
     """The server's assignment (room token) arrived."""
     launched_at: float = 0.0
     """A process was acquired from the pool and handed the job."""

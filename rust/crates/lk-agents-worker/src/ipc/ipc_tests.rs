@@ -252,6 +252,11 @@ mod supervision {
         assert!(validate(&invalid).is_err());
         invalid.launched_at = 0.0;
         assert!(validate(&invalid).is_ok());
+        invalid.received_at = Some(f64::INFINITY);
+        assert!(refused(&invalid, "received_at"));
+        invalid.received_at = None;
+        invalid.accepted_at = None;
+        assert!(validate(&invalid).is_ok());
 
         let (sup, _host, child) = setup(short(60.0));
         ready(&sup, &child).await;
@@ -314,9 +319,9 @@ fn job() -> StartJob {
         token: "tok".into(),
         worker_id: "AW_1".into(),
         fake_job: true,
-        received_at: 1761500000.25,
-        accepted_at: 1761500000.5,
-        assigned_at: 0.0,
+        received_at: Some(1761500000.25),
+        accepted_at: Some(1761500000.5),
+        assigned_at: None,
         launched_at: 1761500001.0,
         traceparent: None,
     }

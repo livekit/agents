@@ -74,9 +74,9 @@ def running_job(job: agent.Job, *, fake_job: bool = True) -> RunningJobInfo:
         token="",
         worker_id="",
         fake_job=fake_job,
-        received_at=0.0,
-        accepted_at=0.0,
-        assigned_at=0.0,
+        received_at=None,
+        accepted_at=None,
+        assigned_at=None,
     )
 
 

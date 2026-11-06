@@ -13,9 +13,9 @@ pub struct StartJobFields {
     pub token: String,
     pub worker_id: String,
     pub fake_job: bool,
-    pub received_at: f64,
-    pub accepted_at: f64,
-    pub assigned_at: f64,
+    pub received_at: Option<f64>,
+    pub accepted_at: Option<f64>,
+    pub assigned_at: Option<f64>,
     pub launched_at: f64,
     #[host(default = None)]
     pub traceparent: Option<String>,
@@ -85,14 +85,14 @@ pub struct RunningJobInfo {
     pub worker_id: String,
     pub fake_job: bool,
     /// The worker received the availability request.
-    #[host(default = 0.0)]
-    pub received_at: f64,
+    #[host(default = None)]
+    pub received_at: Option<f64>,
     /// The request handler accepted the job.
-    #[host(default = 0.0)]
-    pub accepted_at: f64,
+    #[host(default = None)]
+    pub accepted_at: Option<f64>,
     /// The server's assignment (room token) arrived.
-    #[host(default = 0.0)]
-    pub assigned_at: f64,
+    #[host(default = None)]
+    pub assigned_at: Option<f64>,
     /// A process was acquired from the pool and handed the job.
     #[host(default = 0.0)]
     pub launched_at: f64,

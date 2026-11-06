@@ -146,9 +146,9 @@ pub fn validate_start_job(job: &StartJob) -> Result<(), StartJobError> {
         ("received_at", job.received_at),
         ("accepted_at", job.accepted_at),
         ("assigned_at", job.assigned_at),
-        ("launched_at", job.launched_at),
+        ("launched_at", Some(job.launched_at)),
     ] {
-        if !value.is_finite() || value < 0.0 {
+        if value.is_some_and(|value| !value.is_finite() || value < 0.0) {
             return Err(StartJobError::InvalidFields(format!(
                 "{field} must be finite and nonnegative"
             )));

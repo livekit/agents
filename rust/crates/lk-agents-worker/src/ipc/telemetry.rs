@@ -76,9 +76,9 @@ fn nanos(at: f64) -> u64 {
     (at * 1e9) as u64
 }
 
-/// Seconds between two known instants (zero is unknown).
-fn gap(start: f64, end: f64) -> Option<Seconds> {
-    (start != 0.0 && end != 0.0).then(|| Seconds((end - start).max(0.0)))
+/// Seconds between two known instants.
+fn gap(start: Option<f64>, end: Option<f64>) -> Option<Seconds> {
+    Some(Seconds((end? - start?).max(0.0)))
 }
 
 /// The call's thread as its dispatch names it: the `thread_id` of the job's JSON metadata.
@@ -130,25 +130,22 @@ pub(crate) fn start_job(
         agent_id: job.state.as_ref().and_then(|s| known(&s.agent_id)),
         accept_latency: gap(f.received_at, f.accepted_at),
         assignment_latency: gap(f.accepted_at, f.assigned_at),
-        launch_latency: gap(f.assigned_at, f.launched_at),
-        entrypoint_latency: gap(f.launched_at, started),
-        dispatch_latency: gap(f.received_at, started),
+        launch_latency: gap(f.assigned_at, Some(f.launched_at)),
+        entrypoint_latency: gap(Some(f.launched_at), Some(started)),
+        dispatch_latency: gap(f.received_at, Some(started)),
     };
-    let start = if f.received_at != 0.0 { nanos(f.received_at) } else { nanos(started) };
+    let start = nanos(f.received_at.unwrap_or(started));
     let span = lk_agents_net::telemetry::start_at(&cx, decl, start);
-    let stage = |at: f64| (at != 0.0).then(|| nanos(at));
-    if let Some(at) = stage(f.received_at) {
+    if let Some(at) = f.received_at.map(nanos) {
         lk_agents_net::telemetry::event_at(&span, JobReceived, at);
     }
-    if let Some(at) = stage(f.accepted_at) {
+    if let Some(at) = f.accepted_at.map(nanos) {
         lk_agents_net::telemetry::event_at(&span, JobAccepted, at);
     }
-    if let Some(at) = stage(f.assigned_at) {
+    if let Some(at) = f.assigned_at.map(nanos) {
         lk_agents_net::telemetry::event_at(&span, JobAssigned, at);
     }
-    if let Some(at) = stage(f.launched_at) {
-        lk_agents_net::telemetry::event_at(&span, ProcessAssigned, at);
-    }
+    lk_agents_net::telemetry::event_at(&span, ProcessAssigned, nanos(f.launched_at));
     lk_agents_net::telemetry::event_at(&span, EntrypointStarted, nanos(started));
     // `JobState.started_at`: unix nanoseconds.
     let started_on_server = job.state.as_ref().and_then(|s| u64::try_from(s.started_at).ok());
@@ -165,8 +162,9 @@ mod tests {
     // Catches: an unknown stage counted as an instant.
     #[test]
     fn unknown_stages_have_no_latency() {
-        assert_eq!(gap(0.0, 2.0), None);
-        assert_eq!(gap(3.0, 2.0), Some(Seconds(0.0)));
+        assert_eq!(gap(None, Some(2.0)), None);
+        assert_eq!(gap(Some(0.0), Some(2.0)), Some(Seconds(2.0)));
+        assert_eq!(gap(Some(3.0), Some(2.0)), Some(Seconds(0.0)));
     }
 
     // Catches: a simulated job's run identity lost (`lk.simulation.job_id` read from a field the

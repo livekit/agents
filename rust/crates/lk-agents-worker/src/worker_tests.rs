@@ -978,7 +978,8 @@ mod contracts {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         let info = rig.launched.lock()[0].clone();
-        let after = |at: f64| ((at - info.received_at) * 1000.0).round() / 1000.0;
+        let after =
+            |at: Option<f64>| ((at.unwrap() - info.received_at.unwrap()) * 1000.0).round() / 1000.0;
         assert_eq!((after(info.accepted_at), after(info.assigned_at)), (2.0, 5.0));
         close(rig, task).await;
     }
