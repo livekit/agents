@@ -205,6 +205,8 @@ class STT(stt.STT):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStream:
         config = dataclasses.replace(self._opts)
+        if is_given(language):
+            config.language = LanguageCode(language)
         stream = SpeechStream(
             stt=self,
             opts=config,

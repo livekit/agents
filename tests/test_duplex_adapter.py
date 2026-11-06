@@ -959,6 +959,18 @@ async def test_a_lone_function_call_is_not_the_reply_the_speech_after_it_is() ->
     await session.aclose()
 
 
+async def test_a_lone_call_is_the_reply_when_the_ask_forces_it() -> None:
+    """Under a tool_choice naming the function, the call answers the ask; the speech needs its result."""
+    fake, session = _askable()
+    session.update_options(tool_choice={"type": "function", "function": {"name": "lookup"}})
+    fut = session.generate_reply()
+    fake.emit("function_call", llm.FunctionCall(call_id="c1", name="lookup", arguments="{}"))
+    generation = await asyncio.wait_for(fut, 1)
+    assert generation.user_initiated
+    assert [c.name async for c in generation.function_stream] == ["lookup"]
+    await session.aclose()
+
+
 async def test_late_words_are_not_the_reply_the_speech_after_them_is() -> None:
     """Words for sound the model already produced cannot answer a request made after it."""
     fake, session = _askable()
