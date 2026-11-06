@@ -381,7 +381,7 @@ lk-agents-runtime/src/
     keyterm_detection.rs keyterm extraction's provider stream, reported to voice's detection pass
     console.rs          the console TCP port adapter
     remote_session/     host runtime loops and drain, room byte-stream transport
-    workflows/          DTMF publish/collect; warm transfer dialing, room watching, provider HTTP via the host
+    workflows/          DTMF publish/collect; warm transfer dialing, room watching, its LiveKit and Twilio requests (TransferApi over lk-agents-net)
   room_io/        RoomIo owner, participant input readers, audio and transcription output, pre-connect receiver
   avatar/         data-stream audio output, receiver and runner, each implementing its ABI class directly
   rtc/            room event fan-out and stream ingress admission, room waits, playout ledger lock

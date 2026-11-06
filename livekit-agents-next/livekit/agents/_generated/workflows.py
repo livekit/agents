@@ -23,22 +23,6 @@ if TYPE_CHECKING:
     from ..types import NotGivenOr
 
 
-class SipParticipantRequest(TypedDict):
-    """`CreateSIPParticipantRequest`'s fields as the host fills the protobuf. `sip_number` is `None`
-    when empty and `dtmf` `""` when absent, as in the reference.
-    """
-
-    sip_trunk_id: str | None
-    sip_call_to: str
-    room_name: str
-    participant_identity: str
-    wait_until_answered: bool
-    sip_number: str | None
-    headers: dict[str, str]
-    dtmf: str
-    ringing_timeout: float | None
-
-
 class IoEnableState(TypedDict, total=False):
     """The caller session's io legs the warm transfer turns off while the caller is on hold, read
     and restored. Absent or `None` reads as `true`.

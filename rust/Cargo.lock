@@ -1710,6 +1710,7 @@ dependencies = [
  "bytes",
  "futures-util",
  "livekit-api",
+ "livekit-protocol",
  "livekit-token",
  "lk-agents-abi",
  "lk-agents-core",

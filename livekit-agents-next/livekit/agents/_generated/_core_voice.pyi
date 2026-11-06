@@ -1141,7 +1141,7 @@ class WarmTransfer:
         *,
         sip_call_to: str | None = None,
         sip_trunk_id: NotGivenOr[str | None] = ...,
-        has_sip_connection: bool = False,
+        sip_connection: bytes | bytearray | memoryview | list[int] | None = None,
         sip_number: NotGivenOr[str] = ...,
         sip_headers: Mapping[str, str] | None = None,
         dtmf: str | None = None,
@@ -1151,7 +1151,10 @@ class WarmTransfer:
         env_sip_trunk: str | None = None,
         env_sip_number: str = "",
         twilio: TwilioDial | None = None,
-    ) -> Self: ...
+    ) -> Self:
+        """`sip_connection` is the serialized `SIPOutboundConfig` dialled through when no trunk id
+        names one.
+        """
     @property
     def instructions(self) -> str: ...
     def tools(self) -> list[dict[str, object]]: ...

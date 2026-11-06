@@ -5161,6 +5161,32 @@ pub fn receive_dtmf<'py>(
 type WarmTransferImpl =
     <crate::generated::implementations::Selected as super::Implementations>::WarmTransfer;
 
+fn _extract_warm_transfer_new_sip_connection(
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<WarmTransferNewSipConnectionInput> {
+    if obj.is_none() {
+        Ok(None)
+    } else {
+        (if obj.is_instance_of::<::pyo3::types::PyBytes>()
+            || obj.is_instance_of::<::pyo3::types::PyByteArray>()
+            || obj.is_instance_of::<::pyo3::types::PyMemoryView>()
+        {
+            crate::py_values::owned_bytes(obj.as_any(), "sip_connection")
+        } else {
+            obj.try_iter().and_then(|items| {
+                items
+                    .map(|item| {
+                        let item = item?;
+                        crate::py_values::number_from_py::<u8>(item.as_any(), "sip_connection")
+                    })
+                    .collect::<PyResult<Vec<_>>>()
+            })
+        })
+        .map(Some)
+    }
+}
+type WarmTransferNewSipConnectionInput = ::std::option::Option<::std::vec::Vec<u8>>;
+
 fn _extract_warm_transfer_new_ringing_timeout(
     obj: &Bound<'_, PyAny>,
 ) -> PyResult<WarmTransferNewRingingTimeoutInput> {
@@ -5178,13 +5204,16 @@ pub struct WarmTransfer(pub(crate) ::std::sync::Arc<WarmTransferImpl>);
 
 #[pymethods]
 impl WarmTransfer {
+    /// `sip_connection` is the serialized `SIPOutboundConfig` dialled through when no trunk id
+    /// names one.
     #[new]
-    #[pyo3(signature = (*, sip_call_to = None, sip_trunk_id = crate::py_values::Omittable::NOT_GIVEN, has_sip_connection = false, sip_number = crate::py_values::Omittable::NOT_GIVEN, sip_headers = None, dtmf = None, ringing_timeout = None, instructions = crate::py_values::Omittable::NOT_GIVEN, conversation = None, env_sip_trunk = None, env_sip_number = "".to_owned(), twilio = None))]
+    #[pyo3(signature = (*, sip_call_to = None, sip_trunk_id = crate::py_values::Omittable::NOT_GIVEN, sip_connection = None, sip_number = crate::py_values::Omittable::NOT_GIVEN, sip_headers = None, dtmf = None, ringing_timeout = None, instructions = crate::py_values::Omittable::NOT_GIVEN, conversation = None, env_sip_trunk = None, env_sip_number = "".to_owned(), twilio = None))]
     fn new(
         py: Python<'_>,
         sip_call_to: ::std::option::Option<::std::string::String>,
         sip_trunk_id: crate::py_values::Omittable<'_>,
-        has_sip_connection: bool,
+        #[pyo3(from_py_with = _extract_warm_transfer_new_sip_connection)]
+        sip_connection: WarmTransferNewSipConnectionInput,
         sip_number: crate::py_values::Omittable<'_>,
         sip_headers: ::std::option::Option<
             ::std::collections::BTreeMap<::std::string::String, ::std::string::String>,
@@ -5216,7 +5245,7 @@ impl WarmTransfer {
         let twilio = twilio
             .map(|v| crate::generated::records::workflows::twilio_dial_from_py(v.as_any()))
             .transpose()?;
-        let out = py.detach(|| <WarmTransferImpl as ::lk_agents_abi::voice::workflows::warm_transfer::WarmTransfer>::new(&env, sip_call_to, sip_trunk_id, has_sip_connection, sip_number, sip_headers, dtmf, ringing_timeout, instructions, conversation, env_sip_trunk, env_sip_number, twilio)).map_err(|e: ::lk_agents_abi::voice::workflows::warm_transfer::WarmTransferRefused| <::lk_agents_abi::voice::workflows::warm_transfer::WarmTransferRefused as crate::py_errors::HostException>::to_py_err(&e))?;
+        let out = py.detach(|| <WarmTransferImpl as ::lk_agents_abi::voice::workflows::warm_transfer::WarmTransfer>::new(&env, sip_call_to, sip_trunk_id, sip_connection, sip_number, sip_headers, dtmf, ringing_timeout, instructions, conversation, env_sip_trunk, env_sip_number, twilio)).map_err(|e: ::lk_agents_abi::voice::workflows::warm_transfer::WarmTransferRefused| <::lk_agents_abi::voice::workflows::warm_transfer::WarmTransferRefused as crate::py_errors::HostException>::to_py_err(&e))?;
         ::pyo3::PyResult::Ok(WarmTransfer(::std::sync::Arc::new(out)))
     }
 
@@ -11963,225 +11992,53 @@ impl ::lk_agents_abi::voice::workflows::warm_transfer::TransferHost for Transfer
         })
     }
 
-    fn create_sip_participant(
+    fn server_env(
         &self,
-        cx: &::lk_agents_abi::telemetry::Cx,
-        request: ::lk_agents_abi::voice::workflows::SipParticipantRequest,
-    ) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
-    {
-        let host = ::std::sync::Arc::clone(&self.host);
-        let request_arg = request;
-        let started = ::lk_agents_runtime::host::call(
-            &crate::py_calls::Entry,
-            "TransferHost._core_create_sip_participant",
-            &self.context,
-            &[],
-            cx,
-            ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
-                    [crate::generated::records::workflows::sip_participant_request_to_py(
-                        py,
-                        request_arg,
-                    )?];
-                Ok((
-                    host.bind(py).getattr("_core_create_sip_participant")?,
-                    ::pyo3::types::PyTuple::new(py, args)?,
-                    None,
-                ))
-            }),
-        );
-        ::std::boxed::Box::pin(async move {
-            let out = started.await;
-            ::pyo3::Python::attach(|py| {
-                let out = match out {
-                    Ok(out) => out,
-                    Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
-                    }
-                };
-                let o = out.value.bind(py);
-                let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
-                Ok(())
-            })
-        })
-    }
-
-    fn connect_twilio_call(
-        &self,
-        cx: &::lk_agents_abi::telemetry::Cx,
-        room_name: ::std::string::String,
-        identity: ::std::string::String,
-    ) -> ::lk_agents_abi::BoxFuture<
-        '_,
-        ::std::result::Result<::std::string::String, ::lk_agents_abi::errors::HostError>,
+    ) -> ::std::result::Result<
+        ::std::collections::BTreeMap<::std::string::String, ::std::string::String>,
+        ::lk_agents_abi::errors::HostError,
     > {
         let host = ::std::sync::Arc::clone(&self.host);
-        let room_name_arg = room_name;
-        let identity_arg = identity;
-        let started = ::lk_agents_runtime::host::call(
+        let out = ::lk_agents_runtime::host::call_now(
             &crate::py_calls::Entry,
-            "TransferHost._core_connect_twilio_call",
-            &self.context,
-            &[],
-            cx,
             ::std::boxed::Box::new(move |py| {
                 let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(room_name_arg, py)?,
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(identity_arg, py)?,
+                    host.bind(py).getattr("_job")?,
+                    ::pyo3::types::PyString::new(py, "_server_env").into_any(),
                 ];
                 Ok((
-                    host.bind(py).getattr("_core_connect_twilio_call")?,
+                    py.import("builtins")?.getattr("getattr")?,
                     ::pyo3::types::PyTuple::new(py, args)?,
                     None,
                 ))
             }),
         );
-        ::std::boxed::Box::pin(async move {
-            let out = started.await;
-            ::pyo3::Python::attach(|py| {
-                let out = match out {
-                    Ok(out) => out,
-                    Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
-                    }
-                };
-                let o = out.value.bind(py);
-                let out = (o.extract::<::std::string::String>()).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
-                Ok(out)
-            })
-        })
-    }
-
-    fn http_post(
-        &self,
-        cx: &::lk_agents_abi::telemetry::Cx,
-        url: ::std::string::String,
-        headers: ::std::collections::BTreeMap<::std::string::String, ::std::string::String>,
-        form: ::std::vec::Vec<(::std::string::String, ::std::string::String)>,
-    ) -> ::lk_agents_abi::BoxFuture<
-        '_,
-        ::std::result::Result<(u16, ::std::string::String), ::lk_agents_abi::errors::HostError>,
-    > {
-        let host = ::std::sync::Arc::clone(&self.host);
-        let url_arg = url;
-        let headers_arg = headers;
-        let form_arg = form;
-        let started = ::lk_agents_runtime::host::call(
-            &crate::py_calls::Entry,
-            "TransferHost._core_http_post",
-            &self.context,
-            &[],
-            cx,
-            ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 3] = [
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(url_arg, py)?,
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(headers_arg, py)?,
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(form_arg, py)?,
-                ];
-                Ok((
-                    host.bind(py).getattr("_core_http_post")?,
-                    ::pyo3::types::PyTuple::new(py, args)?,
-                    None,
-                ))
-            }),
-        );
-        ::std::boxed::Box::pin(async move {
-            let out = started.await;
-            ::pyo3::Python::attach(|py| {
-                let out = match out {
-                    Ok(out) => out,
-                    Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
-                    }
-                };
-                let o = out.value.bind(py);
-                let out = ((|| -> ::pyo3::PyResult<_> { let tuple = o.cast::<::pyo3::types::PyTuple>()?; if tuple.len() != 2 { return Err(::pyo3::exceptions::PyTypeError::new_err(format!("{}: expected a tuple of 2 items", "TransferHost._core_http_post"))); } let item_0 = tuple.get_item(0)?; let item_1 = tuple.get_item(1)?; Ok(((crate::py_values::number_from_py::<u16>(item_0.as_any(), "TransferHost._core_http_post"))?, (item_1.extract::<::std::string::String>())?,)) })()).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
-                Ok(out)
-            })
-        })
-    }
-
-    fn move_participant(
-        &self,
-        cx: &::lk_agents_abi::telemetry::Cx,
-        room: ::std::string::String,
-        identity: ::std::string::String,
-        destination: ::std::string::String,
-    ) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
-    {
-        let host = ::std::sync::Arc::clone(&self.host);
-        let room_arg = room;
-        let identity_arg = identity;
-        let destination_arg = destination;
-        let started = ::lk_agents_runtime::host::call(
-            &crate::py_calls::Entry,
-            "TransferHost._core_move_participant",
-            &self.context,
-            &[],
-            cx,
-            ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 3] = [
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(room_arg, py)?,
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(identity_arg, py)?,
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(destination_arg, py)?,
-                ];
-                Ok((
-                    host.bind(py).getattr("_core_move_participant")?,
-                    ::pyo3::types::PyTuple::new(py, args)?,
-                    None,
-                ))
-            }),
-        );
-        ::std::boxed::Box::pin(async move {
-            let out = started.await;
-            ::pyo3::Python::attach(|py| {
-                let out = match out {
-                    Ok(out) => out,
-                    Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
-                    }
-                };
-                let o = out.value.bind(py);
-                let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
-                Ok(())
-            })
-        })
-    }
-
-    fn delete_caller_room(
-        &self,
-        cx: &::lk_agents_abi::telemetry::Cx,
-    ) -> ::lk_agents_abi::BoxFuture<'_, ::std::result::Result<(), ::lk_agents_abi::errors::HostError>>
-    {
-        let host = ::std::sync::Arc::clone(&self.host);
-        let started = ::lk_agents_runtime::host::call(
-            &crate::py_calls::Entry,
-            "TransferHost._core_delete_caller_room",
-            &self.context,
-            &[],
-            cx,
-            ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 0] = [];
-                Ok((
-                    host.bind(py).getattr("_core_delete_caller_room")?,
-                    ::pyo3::types::PyTuple::new(py, args)?,
-                    None,
-                ))
-            }),
-        );
-        ::std::boxed::Box::pin(async move {
-            let out = started.await;
-            ::pyo3::Python::attach(|py| {
-                let out = match out {
-                    Ok(out) => out,
-                    Err(e) => {
-                        return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
-                    }
-                };
-                let o = out.value.bind(py);
-                let () = ({ let _ = o; ::pyo3::PyResult::Ok(()) }).map_err(|e| <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e))?;
-                Ok(())
-            })
+        ::pyo3::Python::attach(|py| {
+            let out = match out {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(<::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(py, &e));
+                }
+            };
+            let o = out.value.bind(py);
+            let out = (o.cast::<::pyo3::types::PyDict>().map_err(::pyo3::PyErr::from).and_then(
+                |dict| {
+                    dict.iter()
+                        .map(|(key, item)| {
+                            Ok((
+                                key.extract::<::std::string::String>()?,
+                                item.extract::<::std::string::String>()?,
+                            ))
+                        })
+                        .collect::<PyResult<::std::collections::BTreeMap<_, _>>>()
+                },
+            ))
+            .map_err(|e| {
+                <::lk_agents_abi::errors::HostError as crate::py_errors::FromHostErr>::from_host(
+                    py, &e,
+                )
+            })?;
+            Ok(out)
         })
     }
 }

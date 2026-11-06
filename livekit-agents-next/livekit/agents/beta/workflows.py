@@ -13,7 +13,7 @@ from pydantic import AfterValidator
 import livekit.rtc as rtc
 from livekit import api
 
-from .. import _core, llm, stt, tts, utils
+from .. import _core, llm, stt, tts
 from .._generated.public_beta_workflows import *  # noqa: F403
 from .._generated.vad import VAD
 from .._generated.voice_session import DtmfTaskOptions, UpdateAgentArgs
@@ -26,7 +26,6 @@ from .._generated.workflows import (
     GetDtmfResult,
     GetEmailResult,
     IoEnableState,
-    SipParticipantRequest,
     WarmTransferResult,
     WorkflowInstructions as WorkflowInstructions,
 )
@@ -265,12 +264,11 @@ class WarmTransfer:
             chat_ctx: The caller conversation the briefing summarises.
             tools: More tools for the briefing agent.
         """
-        self._sip_connection = sip_connection
         self._hold_audio = hold_audio
         self._transfer = _core.WarmTransfer(
             sip_call_to=sip_call_to,
             sip_trunk_id=sip_trunk_id,
-            has_sip_connection=sip_connection is not None,
+            sip_connection=sip_connection.SerializeToString() if sip_connection else None,
             sip_number=sip_number,
             sip_headers=sip_headers,
             dtmf=dtmf,
@@ -341,7 +339,6 @@ class TwilioConnectorWarmTransfer(WarmTransfer):
             token. Other failures propagate without a retry to avoid duplicate calls.
             Other arguments have the same meaning as in ``WarmTransfer``.
         """
-        self._sip_connection = None
         self._hold_audio = hold_audio
         self._transfer = _core.WarmTransfer(
             ringing_timeout=ringing_timeout,
@@ -396,8 +393,8 @@ def _transfer_tool(transfer: _core.WarmTransfer, spec: dict[str, Any]) -> llm.Ra
 
 
 class _TransferHost:
-    """What the core's transfer asks of the SDK: the rooms, the human agent's session, the hold
-    music and the API requests. Each ``_core_<method>`` is one call or two."""
+    """What the core's transfer asks of the SDK: the rooms, the human agent's session and the
+    hold music. Each ``_core_<method>`` is one call or two."""
 
     def __init__(self, transfer: WarmTransfer, session: VoiceSession, job_ctx: JobContext) -> None:
         self._transfer = transfer
@@ -460,46 +457,3 @@ class _TransferHost:
 
     async def _core_disconnect_human(self) -> None:
         await self._room.disconnect()
-
-    async def _core_create_sip_participant(self, request: SipParticipantRequest) -> None:
-        sip = api.CreateSIPParticipantRequest(
-            sip_trunk_id=request["sip_trunk_id"],
-            sip_call_to=request["sip_call_to"],
-            room_name=request["room_name"],
-            participant_identity=request["participant_identity"],
-            wait_until_answered=request["wait_until_answered"],
-            sip_number=request["sip_number"],
-            headers=request["headers"],
-            dtmf=request["dtmf"],
-        )
-        if (ringing_timeout := request["ringing_timeout"]) is not None:
-            sip.ringing_timeout.FromNanoseconds(int(ringing_timeout * 1e9))
-        if self._transfer._sip_connection is not None:
-            sip.trunk.CopyFrom(self._transfer._sip_connection)
-        await self._job.api.sip.create_sip_participant(sip)
-
-    async def _core_connect_twilio_call(self, room_name: str, identity: str) -> str:
-        response = await self._job.api.connector.connect_twilio_call(
-            api.ConnectTwilioCallRequest(
-                twilio_call_direction=api.ConnectTwilioCallRequest.TwilioCallDirection.TWILIO_CALL_DIRECTION_OUTBOUND,
-                room_name=room_name,
-                participant_identity=identity,
-            )
-        )
-        return response.connect_url
-
-    async def _core_http_post(
-        self, url: str, headers: dict[str, str], form: list[tuple[str, str]]
-    ) -> tuple[int, str]:
-        async with utils.http_context.http_session().post(
-            url, headers=headers, data=form, allow_redirects=False
-        ) as response:
-            return response.status, await response.text()
-
-    async def _core_move_participant(self, room: str, identity: str, destination: str) -> None:
-        await self._job.api.room.move_participant(
-            api.MoveParticipantRequest(room=room, identity=identity, destination_room=destination)
-        )
-
-    async def _core_delete_caller_room(self) -> None:
-        await self._job.delete_room(room_name=self._job.room.name)

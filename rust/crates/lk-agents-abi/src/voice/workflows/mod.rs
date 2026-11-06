@@ -2,23 +2,6 @@
 //! reference's `beta/workflows/` modules publish. The workflows are `lk-agents-voice`'s.
 
 use crate::utils::dates::Date;
-use std::collections::BTreeMap;
-
-/// `CreateSIPParticipantRequest`'s fields as the host fills the protobuf. `sip_number` is `None`
-/// when empty and `dtmf` `""` when absent, as in the reference.
-#[crate::host(record(module = "workflows", typed_dict, emit))]
-#[derive(Debug, Clone, PartialEq)]
-pub struct SipParticipantRequest {
-    pub sip_trunk_id: Option<String>,
-    pub sip_call_to: String,
-    pub room_name: String,
-    pub participant_identity: String,
-    pub wait_until_answered: bool,
-    pub sip_number: Option<String>,
-    pub headers: BTreeMap<String, String>,
-    pub dtmf: String,
-    pub ringing_timeout: Option<f64>,
-}
 
 /// The caller session's io legs the warm transfer turns off while the caller is on hold, read
 /// and restored. Absent or `None` reads as `true`.

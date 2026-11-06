@@ -25328,69 +25328,6 @@ pub mod workflows {
 
     // Declared in rust/crates/lk-agents-abi/src/voice/workflows/mod.rs.
 
-    pub fn sip_participant_request_to_py<'py>(
-        py: Python<'py>,
-        value: ::lk_agents_abi::voice::workflows::SipParticipantRequest,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let ::lk_agents_abi::voice::workflows::SipParticipantRequest {
-            sip_trunk_id,
-            sip_call_to,
-            room_name,
-            participant_identity,
-            wait_until_answered,
-            sip_number,
-            headers,
-            dtmf,
-            ringing_timeout,
-        } = value;
-        let dict = ::pyo3::types::PyDict::new(py);
-        dict.set_item(
-            "sip_trunk_id",
-            match sip_trunk_id {
-                None => py.None().into_bound(py),
-                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
-            },
-        )?;
-        dict.set_item("sip_call_to", ::pyo3::IntoPyObjectExt::into_bound_py_any(sip_call_to, py)?)?;
-        dict.set_item("room_name", ::pyo3::IntoPyObjectExt::into_bound_py_any(room_name, py)?)?;
-        dict.set_item(
-            "participant_identity",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(participant_identity, py)?,
-        )?;
-        dict.set_item(
-            "wait_until_answered",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(wait_until_answered, py)?,
-        )?;
-        dict.set_item(
-            "sip_number",
-            match sip_number {
-                None => py.None().into_bound(py),
-                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
-            },
-        )?;
-        dict.set_item("headers", {
-            let d = ::pyo3::types::PyDict::new(py);
-            for (k, x) in headers {
-                d.set_item(
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(k, py)?,
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
-                )?;
-            }
-            d.into_any()
-        })?;
-        dict.set_item("dtmf", ::pyo3::IntoPyObjectExt::into_bound_py_any(dtmf, py)?)?;
-        dict.set_item(
-            "ringing_timeout",
-            match ringing_timeout {
-                None => py.None().into_bound(py),
-                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
-            },
-        )?;
-        Ok(dict.into_any())
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/voice/workflows/mod.rs.
-
     pub fn io_enable_state_from_py(
         obj: &Bound<'_, PyAny>,
     ) -> PyResult<::lk_agents_abi::voice::workflows::IoEnableState> {

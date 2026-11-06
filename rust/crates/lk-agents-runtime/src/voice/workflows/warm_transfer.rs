@@ -1,19 +1,20 @@
 //! The warm transfer (`beta.workflows.WarmTransfer`): while the caller waits on hold, a second
 //! session in a room of its own dials a human agent, briefs them on the call, and either moves
 //! them into the caller's room or reports why not. The core runs the sequence and decides; the
-//! host (`TransferHost`) connects rooms, starts the second session, plays the hold music and
-//! makes the LiveKit and Twilio requests.
+//! host (`TransferHost`) connects rooms, starts the second session and plays the hold music; the
+//! LiveKit and Twilio requests go through [`TransferApi`].
 
 use crate::telemetry;
 use lk_agents_abi::Maybe;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::voice::rtc::{DisconnectReason, RoomEvent, RtcRoom, TRACK_KIND_AUDIO};
 use lk_agents_abi::voice::workflows::InstructionsArg;
+use lk_agents_abi::voice::workflows::TwilioDial;
 pub use lk_agents_abi::voice::workflows::warm_transfer::{
     HUMAN_AGENT_IDENTITY, TWILIO_RINGING_TIMEOUT, TransferFailed, WarmTransferRefused,
 };
-use lk_agents_abi::voice::workflows::{SipParticipantRequest, TwilioDial};
 use lk_agents_abi::{Clock, HostRef, Spawner, SpawnerExt};
+use lk_agents_net::room_service::{RoomService, SipCall, Telephony};
 use lk_agents_net::task::{TaskId, TaskSet};
 use lk_agents_voice::workflows::effects::{TransferEffects, TransferToolEffect};
 use serde_json::Value;
@@ -37,10 +38,94 @@ pub use lk_agents_voice::workflows::warm_transfer::TransferConfig;
 
 pub use lk_agents_abi::voice::workflows::warm_transfer::TransferHost;
 
+/// The LiveKit and Twilio requests a transfer makes: [`ProjectApi`] over the server's project,
+/// a fake in tests. Errors are the request's failure as text.
+pub trait TransferApi: Send + Sync {
+    /// Dial `call`, returning once it is answered when it waits for an answer.
+    fn create_sip_participant(&self, call: SipCall) -> BoxFuture<'_, Result<(), String>>;
+    /// The Twilio media stream URL that joins `room` as `identity`.
+    fn connect_twilio_call(
+        &self,
+        room: String,
+        identity: String,
+    ) -> BoxFuture<'_, Result<String, String>>;
+    /// A Twilio REST request: the first response's status and body, redirects not followed.
+    fn post_form(&self, request: twilio::Request) -> BoxFuture<'_, Result<(u16, String), String>>;
+    fn move_participant(
+        &self,
+        room: String,
+        identity: String,
+        destination: String,
+    ) -> BoxFuture<'_, Result<(), String>>;
+    /// Deletes `room`; a room already gone is not an error.
+    fn delete_room(&self, room: String) -> BoxFuture<'_, Result<(), String>>;
+}
+
+type BoxFuture<'a, T> = lk_agents_abi::BoxFuture<'a, T>;
+
+/// [`TransferApi`] over a project's services, with the server's URL and key pair.
+pub struct ProjectApi {
+    rooms: RoomService,
+    telephony: Telephony,
+}
+
+impl ProjectApi {
+    /// The project of the server's `LIVEKIT_URL`, `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET`.
+    pub fn of_server(env: &BTreeMap<String, String>) -> Self {
+        let get = |name: &str| env.get(name).map_or("", String::as_str);
+        let (url, key, secret) =
+            (get("LIVEKIT_URL"), get("LIVEKIT_API_KEY"), get("LIVEKIT_API_SECRET"));
+        ProjectApi {
+            rooms: RoomService::new(url, key, secret),
+            telephony: Telephony::new(url, key, secret),
+        }
+    }
+}
+
+impl TransferApi for ProjectApi {
+    fn create_sip_participant(&self, call: SipCall) -> BoxFuture<'_, Result<(), String>> {
+        Box::pin(async move {
+            self.telephony.create_sip_participant(call).await.map_err(|e| e.to_string())
+        })
+    }
+    fn connect_twilio_call(
+        &self,
+        room: String,
+        identity: String,
+    ) -> BoxFuture<'_, Result<String, String>> {
+        Box::pin(async move {
+            self.telephony.connect_twilio_call(&room, &identity).await.map_err(|e| e.to_string())
+        })
+    }
+    fn post_form(&self, request: twilio::Request) -> BoxFuture<'_, Result<(u16, String), String>> {
+        Box::pin(async move {
+            lk_agents_net::room_service::post_form(&request.url, &request.headers, &request.form)
+                .await
+        })
+    }
+    fn move_participant(
+        &self,
+        room: String,
+        identity: String,
+        destination: String,
+    ) -> BoxFuture<'_, Result<(), String>> {
+        Box::pin(async move {
+            self.rooms
+                .move_participant(&room, &identity, &destination)
+                .await
+                .map_err(|e| e.to_string())
+        })
+    }
+    fn delete_room(&self, room: String) -> BoxFuture<'_, Result<(), String>> {
+        Box::pin(async move { self.rooms.delete_room(&room).await.map_err(|e| e.to_string()) })
+    }
+}
+
 /// The run's shared state: who settles it, and what the tools reach.
 #[derive(Default)]
 struct Running {
     host: Option<Arc<dyn TransferHost>>,
+    api: Option<Arc<dyn TransferApi>>,
     caller: Option<Arc<dyn RtcRoom>>,
     core: Transfer,
     hold: Option<HostRef>,
@@ -51,6 +136,8 @@ struct Running {
 /// and its run.
 pub struct TransferRun {
     plan: TransferPlan,
+    /// The trunk to dial through when the plan names no trunk id.
+    sip_connection: Option<livekit_protocol::SipOutboundConfig>,
     clock: Arc<dyn Clock>,
     spawner: Arc<dyn Spawner>,
 
@@ -61,9 +148,15 @@ pub struct TransferRun {
 }
 
 impl TransferRun {
-    pub fn new(plan: TransferPlan, clock: Arc<dyn Clock>, spawner: Arc<dyn Spawner>) -> Self {
+    pub fn new(
+        plan: TransferPlan,
+        sip_connection: Option<livekit_protocol::SipOutboundConfig>,
+        clock: Arc<dyn Clock>,
+        spawner: Arc<dyn Spawner>,
+    ) -> Self {
         TransferRun {
             plan,
+            sip_connection,
             clock,
             spawner,
             running: Mutex::new(Running::default()),
@@ -91,6 +184,7 @@ impl TransferRun {
     pub async fn run(
         self: &Arc<Self>,
         host: Arc<dyn TransferHost>,
+        api: Arc<dyn TransferApi>,
         caller: Arc<dyn RtcRoom>,
     ) -> Result<String, TransferFailed> {
         {
@@ -100,6 +194,7 @@ impl TransferRun {
             }
             *running = Running {
                 host: Some(host.clone()),
+                api: Some(api.clone()),
                 caller: Some(caller.clone()),
                 ..Running::default()
             };
@@ -115,7 +210,7 @@ impl TransferRun {
         settled.as_mut().enable();
         tokio::select! {
             biased;
-            dialled = self.dial(&host, &caller) => {
+            dialled = self.dial(&host, &api, &caller) => {
                 if let Err(err) = dialled {
                     log::error!(target: LOG, "could not dial human agent: {err}");
                     self.abort_dial(&host).await;
@@ -169,6 +264,7 @@ impl Drop for Restore {
                 self.0.tasks.cancel(watcher);
             }
             running.caller = None;
+            running.api = None;
             running.core.cancel()
         };
         self.0.perform(effects);
@@ -212,6 +308,7 @@ impl TransferRun {
     async fn dial(
         self: &Arc<Self>,
         host: &Arc<dyn TransferHost>,
+        api: &Arc<dyn TransferApi>,
         caller: &Arc<dyn RtcRoom>,
     ) -> Result<(), DialError> {
         let room_name = human_agent_room_name(&caller.name()?);
@@ -238,7 +335,7 @@ impl TransferRun {
         host.start_human(&telemetry::Cx::NONE).await?;
         match &self.plan.origination {
             Origination::Sip { sip_call_to, sip_trunk_id, sip_number, sip_headers, dtmf } => {
-                let request = SipParticipantRequest {
+                let call = SipCall {
                     sip_trunk_id: sip_trunk_id.clone(),
                     sip_call_to: sip_call_to.clone(),
                     room_name,
@@ -247,13 +344,14 @@ impl TransferRun {
                     sip_number: Some(sip_number.clone()).filter(|s| !s.is_empty()),
                     headers: sip_headers.clone(),
                     dtmf: dtmf.clone().unwrap_or_default(),
-                    ringing_timeout: self.plan.ringing_timeout.map(|d| d.as_secs_f64()),
+                    ringing_timeout: self.plan.ringing_timeout,
+                    trunk: self.sip_connection.clone(),
                 };
-                host.create_sip_participant(&telemetry::Cx::NONE, request).await?;
+                api.create_sip_participant(call).await.map_err(DialError::Api)?;
             }
             Origination::Twilio(dial) => {
                 twilio_originate(
-                    host,
+                    api,
                     dial,
                     &room_name,
                     &room,
@@ -310,28 +408,27 @@ impl TransferRun {
     /// `connect_to_caller`: the human agent moved into the caller's room, the transfer settled,
     /// and the caller's room deleted once the caller or the human agent leaves it.
     async fn connect(self: &Arc<Self>) -> Result<(), TransferFailed> {
-        let (host, caller) = {
+        let (api, caller) = {
             let running = self.lock();
-            let (Some(host), Some(caller)) = (running.host.clone(), running.caller.clone()) else {
+            let (Some(api), Some(caller)) = (running.api.clone(), running.caller.clone()) else {
                 return Err(TransferFailed::NotRunning);
             };
-            (host, caller)
+            (api, caller)
         };
         let caller_room = caller
             .name()
             .map_err(|error| TransferFailed::Host(HostError::new(error.to_string())))?;
         log::debug!(target: LOG, "moving {HUMAN_AGENT_IDENTITY} to caller room {caller_room}");
-        let moved = host
+        let moved = api
             .move_participant(
-                &telemetry::Cx::NONE,
                 human_agent_room_name(&caller_room),
                 HUMAN_AGENT_IDENTITY.to_owned(),
-                caller_room,
+                caller_room.clone(),
             )
             .await;
         if let Err(error) = moved {
             self.lock().core.merge_failed();
-            return Err(error.into());
+            return Err(HostError::new(error).into());
         }
         self.settle(Ok(HUMAN_AGENT_IDENTITY.to_owned()));
         let mut events = caller.events();
@@ -354,7 +451,7 @@ impl TransferRun {
                         "participant disconnected from caller room: {}, closing",
                         participant.identity()
                     );
-                    if let Err(err) = host.delete_caller_room(&telemetry::Cx::NONE).await {
+                    if let Err(err) = api.delete_room(caller_room).await {
                         log::warn!(target: LOG, "failed to delete the caller's room: {err}");
                     }
                     return;
@@ -381,35 +478,36 @@ enum DialError {
     NoAnswer,
     #[error(transparent)]
     Rtc(#[from] lk_agents_abi::voice::rtc::RtcError),
+    #[error("{0}")]
+    Api(String),
 }
 
-/// One Twilio request through the host; the reply's JSON object.
+/// One Twilio request; the reply's JSON object.
 async fn twilio_send(
-    host: &Arc<dyn TransferHost>,
+    api: &Arc<dyn TransferApi>,
     request: twilio::Request,
 ) -> Result<serde_json::Map<String, Value>, DialError> {
-    let (status, body) =
-        host.http_post(&telemetry::Cx::NONE, request.url, request.headers, request.form).await?;
+    let (status, body) = api.post_form(request).await.map_err(DialError::Api)?;
     Ok(twilio::reply(status, &body)?)
 }
 
 /// Create the outbound call, streaming into the connector: its SID.
 async fn twilio_create_call(
-    host: Arc<dyn TransferHost>,
+    api: Arc<dyn TransferApi>,
     dial: TwilioDial,
     from: String,
     twiml: String,
     call_token: Option<String>,
 ) -> Result<String, DialError> {
-    let call = twilio_send(&host, twilio::create_call(&dial, from, &twiml, call_token)).await?;
+    let call = twilio_send(&api, twilio::create_call(&dial, from, &twiml, call_token)).await?;
     Ok(twilio::call_sid(&call)?)
 }
 
 /// A call the transfer gave up on, cancelled, or completed when it was answered meanwhile.
-async fn twilio_cancel(host: Arc<dyn TransferHost>, dial: TwilioDial, sid: String) {
-    let cancelled = match twilio_send(&host, twilio::set_status(&dial, &sid, "canceled")).await {
+async fn twilio_cancel(api: Arc<dyn TransferApi>, dial: TwilioDial, sid: String) {
+    let cancelled = match twilio_send(&api, twilio::set_status(&dial, &sid, "canceled")).await {
         Err(DialError::Twilio(error)) if twilio::complete_instead(&error) => {
-            twilio_send(&host, twilio::set_status(&dial, &sid, "completed")).await.map(drop)
+            twilio_send(&api, twilio::set_status(&dial, &sid, "completed")).await.map(drop)
         }
         other => other.map(drop),
     };
@@ -428,7 +526,7 @@ enum Call {
 /// dropped): Twilio can create the call after the transfer gave up.
 struct CancelOnDrop {
     spawner: Arc<dyn Spawner>,
-    host: Arc<dyn TransferHost>,
+    api: Arc<dyn TransferApi>,
     dial: TwilioDial,
     call: Option<Call>,
 }
@@ -449,18 +547,18 @@ impl CancelOnDrop {
 
 impl Drop for CancelOnDrop {
     fn drop(&mut self) {
-        let (host, dial) = (self.host.clone(), self.dial.clone());
+        let (api, dial) = (self.api.clone(), self.dial.clone());
         match self.call.take() {
             // Detached: the dial's owner is being dropped, and the call must still be cancelled.
             Some(Call::Creating(task)) => {
                 self.spawner.spawn_detached(async move {
                     if let Ok(Ok(sid)) = task.await {
-                        twilio_cancel(host, dial, sid).await;
+                        twilio_cancel(api, dial, sid).await;
                     }
                 });
             }
             Some(Call::Created(sid)) => {
-                self.spawner.spawn_detached(twilio_cancel(host, dial, sid));
+                self.spawner.spawn_detached(twilio_cancel(api, dial, sid));
             }
             None => {}
         }
@@ -471,7 +569,7 @@ impl Drop for CancelOnDrop {
 /// [`twilio::first_caller`] (again with [`twilio::retry_caller`] when Twilio rejects it), then
 /// the human agent's audio track awaited in their room, within `ringing_timeout`.
 async fn twilio_originate(
-    host: &Arc<dyn TransferHost>,
+    api: &Arc<dyn TransferApi>,
     dial: &TwilioDial,
     room_name: &str,
     room: &Arc<dyn RtcRoom>,
@@ -479,27 +577,24 @@ async fn twilio_originate(
     clock: &dyn Clock,
     spawner: Arc<dyn Spawner>,
 ) -> Result<(), DialError> {
-    let connect_url = host
-        .connect_twilio_call(
-            &telemetry::Cx::NONE,
-            room_name.to_owned(),
-            HUMAN_AGENT_IDENTITY.to_owned(),
-        )
-        .await?;
+    let connect_url = api
+        .connect_twilio_call(room_name.to_owned(), HUMAN_AGENT_IDENTITY.to_owned())
+        .await
+        .map_err(DialError::Api)?;
     let twiml = twilio::twiml(&connect_url);
     let (from, token) = twilio::first_caller(dial);
     let create = |from: String, token: Option<String>| {
         let (reply, created) = tokio::sync::oneshot::channel();
-        let (host, dial, twiml) = (host.clone(), dial.clone(), twiml.clone());
+        let (api, dial, twiml) = (api.clone(), dial.clone(), twiml.clone());
         // Detached: a creation the caller stops waiting for is cancelled by `CancelOnDrop`.
         spawner.spawn_detached(async move {
-            let _ = reply.send(twilio_create_call(host, dial, from, twiml, token).await);
+            let _ = reply.send(twilio_create_call(api, dial, from, twiml, token).await);
         });
         created
     };
     let mut guard = CancelOnDrop {
         spawner: spawner.clone(),
-        host: host.clone(),
+        api: api.clone(),
         dial: dial.clone(),
         call: Some(Call::Creating(create(from, token.clone()))),
     };
@@ -539,7 +634,7 @@ impl lk_agents_abi::voice::workflows::warm_transfer::WarmTransfer for WarmTransf
         env: &ProcessEnv,
         sip_call_to: Option<String>,
         sip_trunk_id: Maybe<Option<String>>,
-        has_sip_connection: bool,
+        sip_connection: Option<Vec<u8>>,
         sip_number: Maybe<String>,
         sip_headers: Option<BTreeMap<String, String>>,
         dtmf: Option<String>,
@@ -553,7 +648,7 @@ impl lk_agents_abi::voice::workflows::warm_transfer::WarmTransfer for WarmTransf
         let plan = TransferPlan::resolve(TransferConfig {
             sip_call_to,
             sip_trunk_id,
-            has_sip_connection,
+            has_sip_connection: sip_connection.is_some(),
             sip_number,
             sip_headers,
             dtmf,
@@ -564,8 +659,15 @@ impl lk_agents_abi::voice::workflows::warm_transfer::WarmTransfer for WarmTransf
             env_sip_number,
             twilio,
         })?;
+        let sip_connection = sip_connection
+            .map(|bytes| {
+                <livekit_protocol::SipOutboundConfig as prost::Message>::decode(bytes.as_slice())
+            })
+            .transpose()
+            .map_err(|error| WarmTransferRefused::InvalidSipConnection(error.to_string()))?;
         let spawner = (env.spawner)().map_err(HostError::new)?;
-        Ok(Self(Arc::new(TransferRun::new(plan, env.clock.clone(), spawner))))
+        let run = TransferRun::new(plan, sip_connection, env.clock.clone(), spawner);
+        Ok(Self(Arc::new(run)))
     }
 
     fn instructions(&self) -> String {
@@ -580,14 +682,11 @@ impl lk_agents_abi::voice::workflows::warm_transfer::WarmTransfer for WarmTransf
         host: Arc<dyn lk_agents_abi::voice::workflows::warm_transfer::TransferHost>,
         caller: Arc<dyn lk_agents_abi::voice::room_owner::SessionRoom>,
     ) -> Result<String, TransferFailed> {
-        self.0
-            .run(
-                host,
-                caller.rtc().ok_or_else(|| {
-                    HostError::new("warm transfer requires a connected caller RTC room")
-                })?,
-            )
-            .await
+        let api = Arc::new(ProjectApi::of_server(&host.server_env()?));
+        let caller = caller
+            .rtc()
+            .ok_or_else(|| HostError::new("warm transfer requires a connected caller RTC room"))?;
+        self.0.run(host, api, caller).await
     }
 
     async fn call_tool(
@@ -677,6 +776,7 @@ mod tests {
         .unwrap();
         Arc::new(TransferRun::new(
             plan,
+            None,
             Arc::new(lk_agents_abi::VirtualClock::new()),
             Arc::new(lk_agents_net::task::TokioSpawner::current()),
         ))
@@ -685,8 +785,6 @@ mod tests {
     #[derive(Default)]
     struct Holding {
         hold_starts: std::sync::atomic::AtomicUsize,
-        create_release: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
-        call_statuses: Mutex<Vec<String>>,
     }
 
     impl TransferHost for Holding {
@@ -734,36 +832,44 @@ mod tests {
         ) -> lk_agents_abi::BoxFuture<'_, Result<(), HostError>> {
             Box::pin(async move { unreachable!() })
         }
-        fn create_sip_participant(
-            &self,
-            _cx: &telemetry::Cx,
-            _: SipParticipantRequest,
-        ) -> lk_agents_abi::BoxFuture<'_, Result<(), HostError>> {
+        fn server_env(&self) -> Result<BTreeMap<String, String>, HostError> {
+            unreachable!()
+        }
+    }
+
+    /// The project's services: the connector's URL, Twilio's answers as `twilio` gives them.
+    #[derive(Default)]
+    struct FakeApi {
+        create_release: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+        call_statuses: Mutex<Vec<String>>,
+        create_reply: Mutex<Option<(u16, String)>>,
+    }
+
+    impl TransferApi for FakeApi {
+        fn create_sip_participant(&self, _: SipCall) -> BoxFuture<'_, Result<(), String>> {
             Box::pin(async move { unreachable!() })
         }
         fn connect_twilio_call(
             &self,
-            _cx: &telemetry::Cx,
             _: String,
             _: String,
-        ) -> lk_agents_abi::BoxFuture<'_, Result<String, HostError>> {
+        ) -> BoxFuture<'_, Result<String, String>> {
             Box::pin(async { Ok("wss://connector.test".to_owned()) })
         }
-        fn http_post(
+        fn post_form(
             &self,
-            _cx: &telemetry::Cx,
-            url: String,
-            _: BTreeMap<String, String>,
-            form: Vec<(String, String)>,
-        ) -> lk_agents_abi::BoxFuture<'_, Result<(u16, String), HostError>> {
+            request: twilio::Request,
+        ) -> BoxFuture<'_, Result<(u16, String), String>> {
             Box::pin(async move {
-                if url.ends_with("/Calls.json") {
+                if request.url.ends_with("/Calls.json") {
                     let release = self.create_release.lock().take();
                     if let Some(release) = release {
                         let _ = release.await;
                     }
-                    Ok((200, r#"{"sid":"late-call"}"#.to_owned()))
+                    let reply = self.create_reply.lock().take();
+                    Ok(reply.unwrap_or((200, r#"{"sid":"late-call"}"#.to_owned())))
                 } else {
+                    let form = request.form;
                     let status = form.iter().find(|(key, _)| key == "Status").unwrap().1.clone();
                     self.call_statuses.lock().push(status);
                     Ok((200, "{}".to_owned()))
@@ -772,17 +878,13 @@ mod tests {
         }
         fn move_participant(
             &self,
-            _cx: &telemetry::Cx,
             _: String,
             _: String,
             _: String,
-        ) -> lk_agents_abi::BoxFuture<'_, Result<(), HostError>> {
+        ) -> BoxFuture<'_, Result<(), String>> {
             Box::pin(async move { unreachable!() })
         }
-        fn delete_caller_room(
-            &self,
-            _cx: &telemetry::Cx,
-        ) -> lk_agents_abi::BoxFuture<'_, Result<(), HostError>> {
+        fn delete_room(&self, _: String) -> BoxFuture<'_, Result<(), String>> {
             Box::pin(async move { unreachable!() })
         }
     }
@@ -792,12 +894,13 @@ mod tests {
         use std::{future::Future, task::Poll};
         let transfer = transfer();
         let host = Arc::new(Holding::default());
+        let api: Arc<dyn TransferApi> = Arc::new(FakeApi::default());
         let caller: Arc<dyn RtcRoom> = Arc::new(Untouched);
-        let first = transfer.run(host.clone(), caller.clone());
+        let first = transfer.run(host.clone(), api.clone(), caller.clone());
         let mut first = std::pin::pin!(first);
         let polled = std::future::poll_fn(|cx| Poll::Ready(first.as_mut().poll(cx))).await;
         assert!(polled.is_pending());
-        let second = transfer.run(host.clone(), caller);
+        let second = transfer.run(host.clone(), api, caller);
         let mut second = std::pin::pin!(second);
         let polled = std::future::poll_fn(|cx| Poll::Ready(second.as_mut().poll(cx))).await;
         let Poll::Ready(Err(error)) = polled else { panic!("a second run must be refused") };
@@ -837,9 +940,9 @@ mod tests {
             started: 0.into(),
         });
         let (release, pending) = tokio::sync::oneshot::channel();
-        let host =
-            Arc::new(Holding { create_release: Mutex::new(Some(pending)), ..Default::default() });
-        let port: Arc<dyn TransferHost> = host.clone();
+        let api =
+            Arc::new(FakeApi { create_release: Mutex::new(Some(pending)), ..Default::default() });
+        let port: Arc<dyn TransferApi> = api.clone();
         let dial = TwilioDial {
             phone_number: "+15550100".to_owned(),
             from_number: "+15550200".to_owned(),
@@ -867,11 +970,33 @@ mod tests {
         assert_eq!(spawner.started.load(std::sync::atomic::Ordering::SeqCst), 2);
         release.send(()).unwrap();
         for _ in 0..64 {
-            if !host.call_statuses.lock().is_empty() {
+            if !api.call_statuses.lock().is_empty() {
                 break;
             }
             tokio::task::yield_now().await;
         }
-        assert_eq!(*host.call_statuses.lock(), ["canceled"]);
+        assert_eq!(*api.call_statuses.lock(), ["canceled"]);
+    }
+
+    // Catches: a Twilio redirect or error reply taken as a created call, or its error text lost:
+    // the first response is Twilio's answer, and a non-2xx one names its status and code.
+    #[tokio::test]
+    async fn a_twilio_reply_outside_2xx_fails_the_request_with_its_status_and_code() {
+        let api = FakeApi::default();
+        *api.create_reply.lock() = Some((302, r#"{"code":20003}"#.to_owned()));
+        let api: Arc<dyn TransferApi> = Arc::new(api);
+        let dial = TwilioDial {
+            phone_number: "+15550100".to_owned(),
+            from_number: "+15550200".to_owned(),
+            account_sid: "account".to_owned(),
+            auth_token: "secret".to_owned(),
+            call_token: None,
+            original_caller_number: None,
+        };
+        let error =
+            twilio_create_call(api, dial, "+15550200".to_owned(), "<Response/>".into(), None)
+                .await
+                .unwrap_err();
+        assert_eq!(error.to_string(), "Twilio request failed (HTTP 302, code 20003)");
     }
 }

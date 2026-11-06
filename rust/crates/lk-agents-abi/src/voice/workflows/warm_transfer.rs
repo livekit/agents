@@ -1,6 +1,6 @@
 //! The host bridge and public contract of a warm transfer.
 
-use super::{InstructionsArg, IoEnableState, SipParticipantRequest, TwilioDial};
+use super::{InstructionsArg, IoEnableState, TwilioDial};
 use crate::errors::HostError;
 use crate::{HostRef, Maybe};
 use std::collections::BTreeMap;
@@ -34,6 +34,8 @@ pub enum WarmTransferRefused {
     NoTwilioCredentials,
     #[error("twilio_call_token requires original_caller_number")]
     CallTokenWithoutCaller,
+    #[error("invalid sip_connection: {0}")]
+    InvalidSipConnection(String),
     #[error(transparent)]
     #[host(delegate)]
     Host(#[from] HostError),
@@ -62,7 +64,8 @@ pub enum TransferFailed {
     Host(#[from] HostError),
 }
 
-/// SDK calls used by the transfer executor, each entered through HostInvoker.
+/// What the transfer executor asks of the SDK (rooms, sessions, hold music), each entered through
+/// HostInvoker. Its LiveKit and Twilio requests are the runtime's own.
 #[crate::host(proxy(host = "livekit.agents.beta.workflows._TransferHost"))]
 pub trait TransferHost: Send + Sync {
     #[host(await, name = "_core_start_hold")]
@@ -96,40 +99,10 @@ pub trait TransferHost: Send + Sync {
         &self,
         cx: &crate::telemetry::Cx,
     ) -> crate::BoxFuture<'_, Result<(), HostError>>;
-    #[host(await, name = "_core_create_sip_participant")]
-    fn create_sip_participant(
-        &self,
-        cx: &crate::telemetry::Cx,
-        request: SipParticipantRequest,
-    ) -> crate::BoxFuture<'_, Result<(), HostError>>;
-    #[host(await, name = "_core_connect_twilio_call")]
-    fn connect_twilio_call(
-        &self,
-        cx: &crate::telemetry::Cx,
-        room_name: String,
-        identity: String,
-    ) -> crate::BoxFuture<'_, Result<String, HostError>>;
-    #[host(await, name = "_core_http_post")]
-    fn http_post(
-        &self,
-        cx: &crate::telemetry::Cx,
-        url: String,
-        headers: BTreeMap<String, String>,
-        form: Vec<(String, String)>,
-    ) -> crate::BoxFuture<'_, Result<(u16, String), HostError>>;
-    #[host(await, name = "_core_move_participant")]
-    fn move_participant(
-        &self,
-        cx: &crate::telemetry::Cx,
-        room: String,
-        identity: String,
-        destination: String,
-    ) -> crate::BoxFuture<'_, Result<(), HostError>>;
-    #[host(await, name = "_core_delete_caller_room")]
-    fn delete_caller_room(
-        &self,
-        cx: &crate::telemetry::Cx,
-    ) -> crate::BoxFuture<'_, Result<(), HostError>>;
+    /// The server's settings by variable name: the transfer's LiveKit requests authenticate with
+    /// its `LIVEKIT_URL`, `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET`.
+    #[host(call, getter = "_job._server_env")]
+    fn server_env(&self) -> Result<BTreeMap<String, String>, HostError>;
 }
 
 /// A transfer plan and the runtime ownership of its current dial.
@@ -139,13 +112,15 @@ pub trait WarmTransfer: Sized + Send + Sync + 'static {
     #[host(env)]
     type Env;
 
+    /// `sip_connection` is the serialized `SIPOutboundConfig` dialled through when no trunk id
+    /// names one.
     #[host(new)]
     #[allow(clippy::too_many_arguments, reason = "Preserve the public Python signature")]
     fn new(
         env: &Self::Env,
         #[host(kw, default = None)] sip_call_to: Option<String>,
         sip_trunk_id: Maybe<Option<String>>,
-        #[host(default = false)] has_sip_connection: bool,
+        #[host(default = None)] sip_connection: Option<Vec<u8>>,
         sip_number: Maybe<String>,
         #[host(default = None)] sip_headers: Option<BTreeMap<String, String>>,
         #[host(default = None)] dtmf: Option<String>,
