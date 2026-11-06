@@ -414,10 +414,10 @@ def _to_murf_websocket_pkt(opts: _TTSOptions) -> dict[str, Any]:
     if opts.style:
         voice_config["style"] = opts.style
 
-    if opts.speed:
+    if opts.speed is not None:
         voice_config["rate"] = opts.speed
 
-    if opts.pitch:
+    if opts.pitch is not None:
         voice_config["pitch"] = opts.pitch
 
     if opts.locale:
