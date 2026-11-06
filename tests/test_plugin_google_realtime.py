@@ -1278,3 +1278,71 @@ async def test_reply_instructions_turns_follow_the_model(
         assert len(sent) == 1
         assert sent[0].turn_complete
         assert [(t.role, t.parts[0].text) for t in sent[0].turns or [] if t.parts] == expected
+
+
+@llm.function_tool
+async def save_contact(fields: dict[str, str]) -> None:
+    """Save the contact fields gathered in the conversation."""
+
+
+use_action = llm.function_tool(
+    lambda raw_arguments: None,
+    raw_schema={
+        "name": "use_action",
+        "description": "Run a workflow action with its own arguments.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string"},
+                "arguments": {"type": "object", "additionalProperties": True},
+            },
+            "required": ["action"],
+        },
+    },
+)
+
+
+async def _connect_declarations(
+    monkeypatch: pytest.MonkeyPatch, **options: object
+) -> dict[str, types.FunctionDeclaration]:
+    async with _make_configured_session(monkeypatch, **options) as session:
+        session._tools = llm.ToolContext([save_contact, use_action])
+        config = session._build_connect_config()
+    assert config.tools is not None
+    tool = config.tools[0]
+    assert isinstance(tool, types.Tool) and tool.function_declarations is not None
+    declarations = tool.function_declarations
+    return {d.name: d for d in declarations if d.name}
+
+
+async def test_tools_use_the_simplified_schema_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    declarations = await _connect_declarations(monkeypatch, model="gemini-3.8-live")
+
+    for declaration in declarations.values():
+        assert declaration.parameters_json_schema is None
+        assert declaration.parameters is not None
+    contact = declarations["save_contact"].parameters
+    assert contact is not None and contact.properties is not None
+    assert contact.properties["fields"].type == types.Type.OBJECT
+    assert contact.properties["fields"].properties is None
+
+
+@pytest.mark.parametrize("model", ["gemini-3.8-live", "gemini-3.1-flash-live-preview"])
+async def test_tools_keep_free_form_objects_with_parameters_json_schema(
+    monkeypatch: pytest.MonkeyPatch, model: str
+) -> None:
+    declarations = await _connect_declarations(
+        monkeypatch, model=model, use_parameters_json_schema=True
+    )
+
+    for declaration in declarations.values():
+        assert declaration.parameters is None
+    contact = declarations["save_contact"].parameters_json_schema
+    assert contact is not None
+    assert contact["properties"]["fields"]["additionalProperties"] == {"type": "string"}
+    action = declarations["use_action"].parameters_json_schema
+    assert action is not None
+    assert action["properties"]["arguments"]["additionalProperties"] is True
+    assert action["required"] == ["action"]
