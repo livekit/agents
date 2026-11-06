@@ -51,8 +51,7 @@ class SpeechCreatedWire:
     """
 
     user_initiated: bool
-    source: str
-    """`SpeechKind::as_source_str`: `"say"` or `"generate_reply"`."""
+    source: Literal["say", "generate_reply"]
     speech_handle: SpeechHandle
 
 
@@ -148,8 +147,7 @@ class DiagnosticWire:
     `lk.pii.*` entries go through the host's redaction filter.
     """
 
-    level: str
-    """`"debug"`, `"info"` or `"warning"` -- the name `logging` takes."""
+    level: Literal["info", "warning", "error"]
     message: str
     fields: dict[str, str]
 
@@ -303,7 +301,7 @@ class ParticipantLinked:
 @dataclass(kw_only=True, slots=True)
 class ParticipantUnlinked:
     identity: str
-    reason: str
+    reason: Literal["unknown", "client_initiated", "duplicate_identity", "server_shutdown", "participant_removed", "room_deleted", "state_mismatch", "join_failure", "migration", "signal_close", "room_closed", "user_unavailable", "user_rejected", "sip_trunk_failure", "connection_timeout", "media_failure", "agent_error"]
 
 
 @dataclass(kw_only=True, slots=True)

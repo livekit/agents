@@ -76,7 +76,12 @@ fn wire_enum_parameters_cross_as_their_string() {
     assert!(adapter.contains("crate::py_values::str_to_py(py, &"), "{adapter}");
     let stubs = crate::class_stub::emit(&declarations).unwrap();
     let text = stubs.iter().map(|stub| stub.out.text.as_str()).collect::<String>();
-    assert!(text.contains("def echo(role: str) -> str"), "{text}");
+    assert!(
+        text.contains(
+            r#"def echo(role: Literal["user", "assistant"]) -> Literal["user", "assistant"]"#
+        ),
+        "{text}"
+    );
 }
 
 #[test]
@@ -506,7 +511,7 @@ fn pure_wire_string_enum_map_keys_emit_in_the_rust_map_order_and_reject_host_inp
     );
     let stubs = crate::class_stub::emit(&declarations).unwrap();
     let text = stubs.iter().map(|out| out.out.text.as_str()).collect::<String>();
-    assert!(text.contains("def values() -> dict[str, list[str]]"), "{text}");
+    assert!(text.contains(r#"def values() -> dict[Literal["zed", "alpha"], list[str]]"#), "{text}");
     let adapters = crate::adapter::emit(&declarations).unwrap();
     let code = &adapters.iter().find(|out| out.path == "llm.rs").unwrap().text;
     assert!(

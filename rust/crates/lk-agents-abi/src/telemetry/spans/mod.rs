@@ -68,6 +68,7 @@ pub const SPANS: &[Declared] = &[
 pub mod text {
     use super::common::GenAiOperation;
     use super::endpoint::HttpRequest;
+    use crate::evals::JudgeVerdict;
     use crate::telemetry::decl::{Attrs, Current, External, GenAiContent, SpanValue, span};
     use crate::telemetry::semconv::otel;
 
@@ -125,13 +126,6 @@ pub mod text {
         pub verdict: Option<JudgeVerdict>,
         #[attr(otel::GEN_AI_EVALUATION_EXPLANATION)]
         pub explanation: Option<GenAiContent<String>>,
-    }
-
-    #[derive(SpanValue, Debug, Clone, Copy, PartialEq, Eq)]
-    pub enum JudgeVerdict {
-        Pass,
-        Fail,
-        Maybe,
     }
 }
 

@@ -869,6 +869,7 @@ impl Resolver<'_> {
                 extract,
                 emit,
                 literal: unit_enum(it),
+                wires: Vec::new(),
             }));
         }
         if voc::find(&entries, "error").is_some() {
@@ -886,6 +887,7 @@ impl Resolver<'_> {
                 extract: true,
                 emit: true,
                 literal: false,
+                wires: record::wire_strings(at, it)?,
             }));
         }
         if let Some(own) = voc::find(&entries, "codec") {
@@ -928,6 +930,7 @@ impl Resolver<'_> {
                 extract: has("extract"),
                 emit: has("emit"),
                 literal: false,
+                wires: Vec::new(),
             }));
         }
         if let Some((class, family)) = self.arc_object(module, item, at)? {
@@ -942,6 +945,7 @@ impl Resolver<'_> {
                 extract: false,
                 emit: true,
                 literal: false,
+                wires: record::wire_strings(at, it)?,
             }));
         }
         Err(format!(

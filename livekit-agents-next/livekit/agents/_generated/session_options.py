@@ -21,7 +21,13 @@ if TYPE_CHECKING:
     from livekit.agents.voice.io import TurnDetectionMode
 
     from .connect import SessionConnectOptions
-    from .turn import EndpointingOptions, InterruptionOptions, TurnHandlingOptions
+    from .turn import (
+        EndpointingMode,
+        EndpointingOptions,
+        InterruptionMode,
+        InterruptionOptions,
+        TurnHandlingOptions,
+    )
 
 DetectorKind: TypeAlias = Literal["streaming"]
 """Picks the endpointing base and the turn machine's countdown arm."""
@@ -85,7 +91,7 @@ class SessionLegs(TypedDict):
 class ResolvedEndpointing(TypedDict):
     """The resolved `endpointing` group, seconds as `f64`."""
 
-    mode: str
+    mode: EndpointingMode
     min_delay: float
     max_delay: float
     alpha: float
@@ -95,7 +101,7 @@ class ResolvedInterruption(TypedDict):
     """The resolved `interruption` group. `mode` is absent when the session picks."""
 
     enabled: bool
-    mode: NotRequired[str]
+    mode: NotRequired[InterruptionMode]
     discard_audio_if_uninterruptible: bool
     min_duration: float
     min_words: int
@@ -123,7 +129,7 @@ class ResolvedUserTurnLimit(TypedDict):
 class EndpointingOverrides(TypedDict, total=False):
     """The session layer's sparse endpointing (`AgentSessionOptions.endpointing_overrides`)."""
 
-    mode: str
+    mode: EndpointingMode
     min_delay: float
     max_delay: float
     alpha: float
@@ -161,8 +167,7 @@ class InterruptionGateVerdict(TypedDict):
     build: bool
     reason: str | None
     """`"cannot_gatekeep"`, `"interruptions_disabled"`, `"asked_vad"`, `"production_default"`."""
-    level: str | None
-    """`"warning"` or `"info"`."""
+    level: Literal["info", "warning", "error"] | None
     message: str | None
 
 

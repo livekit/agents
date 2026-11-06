@@ -131,8 +131,7 @@ impl CoreJudgeRunner {
 type EvaluationsImpl =
     <crate::generated::implementations::Selected as super::Implementations>::Evaluations;
 
-/// The aggregates of `result`'s verdicts; a verdict other than pass, fail or maybe is
-/// refused.
+/// The aggregates of `result`'s verdicts.
 #[pyfunction]
 #[pyo3(signature = (result))]
 pub fn _core_evaluation_score<'py>(
@@ -141,13 +140,7 @@ pub fn _core_evaluation_score<'py>(
 ) -> PyResult<Bound<'py, PyAny>> {
     crate::py_calls::check_pid()?;
     let result = crate::generated::records::evals::evaluation_result_from_py(result.as_any())?;
-    let out = py
-        .detach(|| <EvaluationsImpl as ::lk_agents_abi::evals::Evaluations>::score(result))
-        .map_err(|e: ::lk_agents_abi::evals::InvalidJudgment| {
-            <::lk_agents_abi::evals::InvalidJudgment as crate::py_errors::HostException>::to_py_err(
-                &e,
-            )
-        })?;
+    let out = py.detach(|| <EvaluationsImpl as ::lk_agents_abi::evals::Evaluations>::score(result));
     crate::generated::records::evals::evaluation_score_to_py(py, out)
 }
 

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterable, Mapping, Sequence
 from datetime import date
-from typing import Any, Self
+from typing import Any, Literal, Self
 
 from livekit.agents import VAD
 from livekit.agents._generated.expressive import ExpressiveOptions
@@ -225,7 +225,7 @@ class BackgroundAudioPlayer:
         *,
         ambient: Sequence[Sound],
         choose: bool,
-        source: str | None = None,
+        source: Literal["unknown", "camera", "microphone", "screenshare", "screenshare_audio"] | None = None,
     ) -> str: ...
     def play(
         self,
@@ -391,12 +391,18 @@ def _core_room_participant_attributes_changed(
 def _core_room_participant_disconnected(
     bus: RoomEventBus,
     participant: RemoteParticipant,
-    reason: str,
+    reason: Literal["unknown", "client_initiated", "duplicate_identity", "server_shutdown", "participant_removed", "room_deleted", "state_mismatch", "join_failure", "migration", "signal_close", "room_closed", "user_unavailable", "user_rejected", "sip_trunk_failure", "connection_timeout", "media_failure", "agent_error"],
 ) -> None: ...
 
-def _core_room_connection_state_changed(bus: RoomEventBus, state: str) -> None: ...
+def _core_room_connection_state_changed(
+    bus: RoomEventBus,
+    state: Literal["disconnected", "connected", "reconnecting"],
+) -> None: ...
 
-def _core_room_disconnected(bus: RoomEventBus, reason: str) -> None: ...
+def _core_room_disconnected(
+    bus: RoomEventBus,
+    reason: Literal["unknown", "client_initiated", "duplicate_identity", "server_shutdown", "participant_removed", "room_deleted", "state_mismatch", "join_failure", "migration", "signal_close", "room_closed", "user_unavailable", "user_rejected", "sip_trunk_failure", "connection_timeout", "media_failure", "agent_error"],
+) -> None: ...
 
 def _core_room_sip_dtmf_received(
     bus: RoomEventBus,
@@ -494,7 +500,7 @@ class SessionOptions:
         before `start()`.
         """
     @property
-    def turn_detection(self) -> str | None:
+    def turn_detection(self) -> Literal["vad", "stt", "manual", "realtime_llm", "unset"] | None:
         """The turn detection mode the session's own settings name (the constructor's and every
         `update_options` before `start()`); `None` when automatic or a detector object.
         """

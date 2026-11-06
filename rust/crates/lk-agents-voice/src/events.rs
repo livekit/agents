@@ -1,4 +1,4 @@
-use lk_agents_abi::voice::events::{AgentState, UserState};
+use lk_agents_abi::voice::events::{AgentState, DiagnosticLevel, UserState};
 // The host records that are these events' payloads as they are.
 pub use lk_agents_abi::voice::events::{
     AgentBackchannelOpportunityEvent, EndOfSpeechEvent, OverlapInterruptionEvent,
@@ -140,24 +140,6 @@ pub struct TranscriptionTimeoutEvent {
     pub turn_start: Ts,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DiagnosticLevel {
-    Info,
-    Warning,
-    Error,
-}
-
-impl DiagnosticLevel {
-    /// The name the host's `logging` module takes.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            DiagnosticLevel::Info => "info",
-            DiagnosticLevel::Warning => "warning",
-            DiagnosticLevel::Error => "error",
-        }
-    }
-}
-
 /// A sentence the core decided and only the host can say: a core crate has no logger. `message` is
 /// the reference's own sentence (users grep for it); `fields` is its `extra={...}`, `lk.pii.*` included.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -170,7 +152,7 @@ pub struct DiagnosticEvent {
 impl DiagnosticEvent {
     pub fn wire(&self) -> lk_agents_abi::voice::events::DiagnosticWire {
         lk_agents_abi::voice::events::DiagnosticWire {
-            level: self.level.as_str().to_owned(),
+            level: self.level,
             message: self.message.to_owned(),
             fields: self.fields.iter().map(|(k, v)| ((*k).to_owned(), v.clone())).collect(),
         }

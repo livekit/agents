@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Self
+from typing import Literal, Self
 
 from livekit.agents._bindings import AttemptHost
 
@@ -41,7 +41,12 @@ class ProviderAttempts:
     data arrived (heartbeats are not progress), `audio_received()` for synthesized audio and
     `complete_response()` when nothing is owed any more.
     """
-    def __new__(cls, kind: str, conn_options: APIConnectOptions, host: AttemptHost) -> Self: ...
+    def __new__(
+        cls,
+        kind: Literal["llm", "stt_batch", "stt_stream", "tts_batch", "tts_stream", "interruption", "avatar"],
+        conn_options: APIConnectOptions,
+        host: AttemptHost,
+    ) -> Self: ...
     @property
     def core(self) -> bool:
         """Whether the session owns retries; set before the request starts."""

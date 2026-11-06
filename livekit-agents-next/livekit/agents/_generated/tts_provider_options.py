@@ -9,12 +9,9 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import Literal
 
 from typing_extensions import TypedDict
-
-if TYPE_CHECKING:
-    from typing import Literal
 
 
 class CartesiaOptions(TypedDict, total=False):
@@ -47,9 +44,9 @@ class RimeOptions(TypedDict, total=False):
 class InworldOptions(TypedDict, total=False):
     speaking_rate: float
     temperature: float
-    delivery_mode: Literal['DELIVERY_MODE_UNSPECIFIED', 'STABLE', 'BALANCED', 'CREATIVE']
-    timestamp_type: Literal['TIMESTAMP_TYPE_UNSPECIFIED', 'WORD', 'CHARACTER']
-    apply_text_normalization: Literal['APPLY_TEXT_NORMALIZATION_UNSPECIFIED', 'ON', 'OFF']
+    delivery_mode: Literal["DELIVERY_MODE_UNSPECIFIED", "STABLE", "BALANCED", "CREATIVE"]
+    timestamp_type: Literal["TIMESTAMP_TYPE_UNSPECIFIED", "WORD", "CHARACTER"]
+    apply_text_normalization: Literal["APPLY_TEXT_NORMALIZATION_UNSPECIFIED", "ON", "OFF"]
 
 
 class XaiOptions(TypedDict, total=False):
@@ -67,7 +64,7 @@ class FishAudioOptions(TypedDict, total=False):
     temperature: float
     top_p: float
     normalize: bool
-    latency: Literal['normal', 'balanced', 'low']
+    latency: Literal["normal", "balanced", "low"]
     chunk_length: int
     max_new_tokens: int
     min_chunk_length: int

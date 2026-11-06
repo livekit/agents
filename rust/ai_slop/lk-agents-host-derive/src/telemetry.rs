@@ -97,6 +97,25 @@ pub fn span_value(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
         ));
     };
     let ident = &input.ident;
+    let value = quote! {
+        impl #d::SpanValue for #ident {
+            fn value(&self) -> ::core::option::Option<#d::Value> {
+                ::core::option::Option::Some(#d::Value::String(self.as_str().into()))
+            }
+        }
+    };
+    // `#[span_value(wire_strs)]`: its strings and `as_str` are its `#[host(wire_strs)]`'s.
+    if let Some(a) = input.attrs.iter().find(|a| a.path().is_ident("span_value")) {
+        let named: syn::Ident = a.parse_args()?;
+        if named != "wire_strs" {
+            return Err(syn::Error::new_spanned(named, "`#[span_value(wire_strs)]`"));
+        }
+        let named_wire = |v: &&syn::Variant| v.attrs.iter().any(|a| a.path().is_ident("wire"));
+        if let Some(v) = data.variants.iter().find(|v| t::variant_open(v) || named_wire(v)) {
+            return Err(syn::Error::new_spanned(v, "a wire vocabulary's strings are its own"));
+        }
+        return Ok(value);
+    }
     let mut open = false;
     let arms = data
         .variants
@@ -135,11 +154,7 @@ pub fn span_value(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
                 match self { #( #arms ),* }
             }
         }
-        impl #d::SpanValue for #ident {
-            fn value(&self) -> ::core::option::Option<#d::Value> {
-                ::core::option::Option::Some(#d::Value::String(self.as_str().into()))
-            }
-        }
+        #value
     })
 }
 
@@ -369,6 +384,8 @@ mod tests {
         assert!(out.contains("Origin :: ServerSpeech => \"server_speech\""), "{out}");
         let out = derive(super::span_value, quote! { enum S { #[wire = "CONN_UP"] Up } });
         assert!(out.contains("S :: Up => \"CONN_UP\""), "{out}");
+        let out = derive(super::span_value, quote! { #[span_value(wire_strs)] enum V { Pass } });
+        assert!(!out.contains("fn as_str") && out.contains("self . as_str ()"), "{out}");
         let out = derive(super::span_value, quote! { enum E { A(u8) } });
         assert!(out.contains("carries no data"), "{out}");
         let out = derive(super::span_value, quote! { enum E { #[open] Other(String), A } });

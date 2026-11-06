@@ -81,7 +81,7 @@ pub fn update_from_host(
     update: lk_agents_abi::a2a::client::TaskUpdate,
 ) -> Result<crate::a2a::client::TaskUpdate, DelegationError> {
     use lk_agents_abi::storage::TaskState;
-    let state = TaskState::parse(&update.state).ok_or(DelegationError::InvalidState)?;
+    let state = update.state;
     let follow_task = match update.metadata.get("livekit/mergedInto") {
         None => None,
         Some(Value::String(id))

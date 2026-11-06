@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use lk_agents_abi::Clock;
+use lk_agents_abi::evals::JudgeVerdict;
 use lk_agents_abi::telemetry::report::{
     EvaluationRecord, Outcome, ReportOutcome, ReportTag, SessionReport, TAG_FAIL, TAG_SUCCESS,
 };
@@ -110,7 +111,7 @@ impl lk_agents_abi::telemetry::report::Tagger for Tagger {
     fn _core_record_judgment(
         &mut self,
         name: String,
-        verdict: String,
+        verdict: JudgeVerdict,
         reasoning: String,
         instructions: String,
     ) {
@@ -180,7 +181,12 @@ mod tests {
     fn a_stamped_report_carries_the_tags_evaluations_and_outcome_now() {
         let mut tagger = Tagger::with_clock(Arc::new(VirtualClock::new()));
         tagger.add("k:v".into(), Some(json!({"a": 1})));
-        tagger._core_record_judgment("tone".into(), "pass".into(), "ok".into(), "be nice".into());
+        tagger._core_record_judgment(
+            "tone".into(),
+            JudgeVerdict::Pass,
+            "ok".into(),
+            "be nice".into(),
+        );
         let report = SessionReport { job_id: "AJ_1".into(), ..SessionReport::default() };
         let stamped = tagger._core_stamp(report.clone());
         assert_eq!(stamped.job_id, "AJ_1");

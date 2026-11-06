@@ -70,22 +70,25 @@ fn _extract_image_functions_serialize_image_frame_inference_height(
 type ImageFunctionsSerializeImageFrameInferenceHeightInput = ::std::option::Option<u32>;
 
 #[pyfunction]
-#[pyo3(signature = (frame, *, format = "JPEG".to_owned(), quality = None, resize_width = None, resize_height = None, resize_strategy = None))]
+#[pyo3(signature = (frame, *, format, quality = None, resize_width = None, resize_height = None, resize_strategy = None))]
 pub fn encode_image<'py>(
     py: Python<'py>,
     frame: Bound<'_, PyAny>,
-    format: ::std::string::String,
+    format: Bound<'_, PyAny>,
     #[pyo3(from_py_with = _extract_image_functions_encode_image_quality)]
     quality: ImageFunctionsEncodeImageQualityInput,
     #[pyo3(from_py_with = _extract_image_functions_encode_image_resize_width)]
     resize_width: ImageFunctionsEncodeImageResizeWidthInput,
     #[pyo3(from_py_with = _extract_image_functions_encode_image_resize_height)]
     resize_height: ImageFunctionsEncodeImageResizeHeightInput,
-    resize_strategy: ::std::option::Option<::std::string::String>,
+    resize_strategy: Option<Bound<'_, PyAny>>,
 ) -> PyResult<Bound<'py, PyAny>> {
     crate::py_calls::check_pid()?;
     let env = crate::process::env();
     let frame = crate::generated::utils::RtcVideoFrameProxy::from_host(frame.as_any())?;
+    let format = crate::py_values::str_from_py(format.as_any())?;
+    let resize_strategy =
+        resize_strategy.map(|v| crate::py_values::str_from_py(v.as_any())).transpose()?;
     crate::py_calls::future_into_py(py, async move {
         let out = <ImageFunctionsImpl as ::lk_agents_abi::media::images::ImageFunctions>::encode_image(&env, frame, format, quality, resize_width, resize_height, resize_strategy).await.map_err(|e: ::lk_agents_abi::media::images::ImageError| <::lk_agents_abi::media::images::ImageError as crate::py_errors::HostException>::to_py_err(&e))?;
         Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any(out, py))

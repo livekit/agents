@@ -100,7 +100,7 @@ impl TryFrom<Vec<String>> for TextTransformSet {
 }
 
 /// ``"fixed"`` for fixed delay, ``"dynamic"`` for dynamic delay.
-#[crate::host(record(module = "turn", extract))]
+#[crate::host(record(module = "turn", extract, emit))]
 #[crate::host(wire_strs(err = UnknownLiteral, msg = UnknownLiteral {
     what: "endpointing mode",
     value: s.to_owned(),
@@ -530,10 +530,27 @@ impl SessionLegs {
 #[crate::host(record(module = "session_options", typed_dict, emit))]
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct ResolvedEndpointing {
-    pub mode: String,
+    #[serde(serialize_with = "wire")]
+    pub mode: EndpointingMode,
     pub min_delay: f64,
     pub max_delay: f64,
     pub alpha: f64,
+}
+
+/// A wire vocabulary serialized as its wire string.
+fn wire<T: fmt::Display, S: serde::Serializer>(value: &T, s: S) -> Result<S::Ok, S::Error> {
+    s.collect_str(value)
+}
+
+/// A present wire vocabulary serialized as its wire string (an absent one is skipped).
+fn wire_some<T: fmt::Display, S: serde::Serializer>(
+    value: &Option<T>,
+    s: S,
+) -> Result<S::Ok, S::Error> {
+    match value {
+        Some(value) => s.collect_str(value),
+        None => s.serialize_none(),
+    }
 }
 
 /// The resolved `interruption` group. `mode` is absent when the session picks.
@@ -542,8 +559,8 @@ pub struct ResolvedEndpointing {
 pub struct ResolvedInterruption {
     pub enabled: bool,
     #[host(default = None)]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", serialize_with = "wire_some")]
+    pub mode: Option<InterruptionMode>,
     pub discard_audio_if_uninterruptible: bool,
     pub min_duration: f64,
     pub min_words: u32,
@@ -575,8 +592,8 @@ pub struct ResolvedUserTurnLimit {
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
 pub struct EndpointingOverrides {
     #[host(default = None)]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", serialize_with = "wire_some")]
+    pub mode: Option<EndpointingMode>,
     #[host(default = None)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub min_delay: Option<f64>,
@@ -620,8 +637,7 @@ pub struct InterruptionGateVerdict {
     pub build: bool,
     /// `"cannot_gatekeep"`, `"interruptions_disabled"`, `"asked_vad"`, `"production_default"`.
     pub reason: Option<String>,
-    /// `"warning"` or `"info"`.
-    pub level: Option<String>,
+    pub level: Option<crate::voice::events::DiagnosticLevel>,
     pub message: Option<String>,
 }
 

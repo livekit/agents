@@ -19,9 +19,9 @@ if TYPE_CHECKING:
 
 @dataclass
 class JudgmentResult:
-    """One judge's decision; `verdict` is `"pass"`, `"fail"` or `"maybe"`."""
+    """One judge's decision."""
 
-    verdict: Literal['pass', 'fail', 'maybe']
+    verdict: Literal["pass", "fail", "maybe"]
     reasoning: str
     instructions: str = ""
     """The criteria the judge evaluated against."""

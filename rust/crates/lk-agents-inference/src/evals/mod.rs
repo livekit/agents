@@ -17,7 +17,7 @@ use futures_util::future::join_all;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::evals::{
     EvaluationHost, EvaluationResult, EvaluationScore, Evaluations, IntentFailure, IntentJudgment,
-    InvalidJudgment, JudgeOutcome, JudgeRunner, JudgeSpec, Judgment,
+    InvalidJudgment, JudgeOutcome, JudgeRunner, JudgeSpec, JudgeVerdict, Judgment,
 };
 use lk_agents_abi::usage::TokenUsage;
 use lk_agents_abi::utils::host_ref::HostRef;
@@ -103,9 +103,9 @@ impl JudgeRunner for Judges {
                     span,
                     telemetry::JudgeEvaluationEnd {
                         verdict: Some(if judgment.success {
-                            telemetry::JudgeVerdict::Pass
+                            JudgeVerdict::Pass
                         } else {
-                            telemetry::JudgeVerdict::Fail
+                            JudgeVerdict::Fail
                         }),
                         explanation: cx
                             .capture_content()
@@ -181,9 +181,7 @@ impl Judges {
         let judged = match judge {
             Judge::BuiltIn(judge) => self.built_in(span.cx(), judge, chat_ctx, reference).await,
             Judge::Host { evaluator, .. } => {
-                let judged =
-                    self.host.evaluate(span.cx(), evaluator, context).await.map_err(|e| e.message);
-                judged.and_then(prompts::checked)
+                self.host.evaluate(span.cx(), evaluator, context).await.map_err(|e| e.message)
             }
         };
         match judged {
@@ -192,12 +190,7 @@ impl Judges {
                 telemetry::end(
                     span,
                     telemetry::JudgeEvaluationEnd {
-                        verdict: match judgment.verdict.as_str() {
-                            "pass" => Some(telemetry::JudgeVerdict::Pass),
-                            "fail" => Some(telemetry::JudgeVerdict::Fail),
-                            "maybe" => Some(telemetry::JudgeVerdict::Maybe),
-                            _ => None,
-                        },
+                        verdict: Some(judgment.verdict),
                         explanation: capture
                             .then(|| telemetry::GenAiContent(judgment.reasoning.clone())),
                     },
@@ -321,21 +314,22 @@ async fn first_call(
 pub struct Rules;
 
 impl Evaluations for Rules {
-    fn score(result: EvaluationResult) -> Result<EvaluationScore, InvalidJudgment> {
-        let verdicts: Vec<String> = result.judgments.into_values().map(|j| j.verdict).collect();
+    fn score(result: EvaluationResult) -> EvaluationScore {
+        let verdicts: Vec<JudgeVerdict> =
+            result.judgments.into_values().map(|j| j.verdict).collect();
         prompts::score(&verdicts)
     }
 
     fn judgment_passed(judgment: Judgment) -> bool {
-        judgment.verdict == "pass"
+        judgment.verdict == JudgeVerdict::Pass
     }
 
     fn judgment_failed(judgment: Judgment) -> bool {
-        judgment.verdict == "fail"
+        judgment.verdict == JudgeVerdict::Fail
     }
 
     fn judgment_uncertain(judgment: Judgment) -> bool {
-        judgment.verdict == "maybe"
+        judgment.verdict == JudgeVerdict::Maybe
     }
 
     fn tool_schemas() -> serde_json::Value {

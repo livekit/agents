@@ -9,12 +9,12 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from typing_extensions import TypedDict
 
 if TYPE_CHECKING:
-    from typing import Any, Literal
+    from typing import Any
 
 
 class CartesiaOptions(TypedDict, total=False):
@@ -77,9 +77,9 @@ class AssemblyaiOptions(TypedDict, total=False):
     speaker_labels: bool
     agent_context: str
     previous_context_n_turns: int
-    voice_focus: Literal['near-field', 'far-field']
+    voice_focus: Literal["near-field", "far-field"]
     voice_focus_threshold: float
-    mode: Literal['min_latency', 'balanced', 'max_accuracy']
+    mode: Literal["min_latency", "balanced", "max_accuracy"]
 
 
 class SpeechmaticsOptions(TypedDict, total=False):
@@ -111,7 +111,7 @@ class InworldOptions(TypedDict, total=False):
     enable_voice_profile: bool
     voice_profile_top_n: int
     include_word_timestamps: bool
-    audio_encoding: Literal['LINEAR16', 'AUTO_DETECT']
+    audio_encoding: Literal["LINEAR16", "AUTO_DETECT"]
     inactivity_timeout_seconds: int
     end_of_turn_confidence_threshold: float
     min_end_of_turn_silence_when_confident: int

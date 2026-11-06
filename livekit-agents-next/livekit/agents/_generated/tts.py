@@ -61,7 +61,7 @@ class TTSCapabilities:
 class MarkupInfo:
     """What the expressive markup pipeline can do with a given voice."""
 
-    nonverbals: dict[str, list[str]] = field(default_factory=dict)
+    nonverbals: dict[Literal["laughing", "breathing", "sighing", "crying", "vocalizing", "mouth_sounds", "reflex_sounds"], list[str]] = field(default_factory=dict)
     """``NonverbalOptions`` field -> the labels it governs; an absent field is a no-op"""
 
 

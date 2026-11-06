@@ -20,7 +20,7 @@ TurnDetectorModel: TypeAlias = Literal["turn-detector-v1", "turn-detector-v1-min
 
 @dataclass
 class TurnDetectionEvent:
-    type: Literal['eot_prediction']
+    type: Literal["eot_prediction"]
     end_of_turn_probability: float
     last_speaking_time: float
     detection_delay: float | None = None

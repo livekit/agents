@@ -33,9 +33,7 @@ pub use lk_agents_abi::telemetry::spans::inference::RequestSpan;
 pub(crate) use lk_agents_abi::telemetry::spans::inference::{
     Attempt, LlmFallbackAdapter, LlmFallbackChoice, LlmRequestRun, TtsRequestRun,
 };
-pub(crate) use lk_agents_abi::telemetry::spans::text::{
-    JudgeEvaluation, JudgeEvaluationEnd, JudgeVerdict,
-};
+pub(crate) use lk_agents_abi::telemetry::spans::text::{JudgeEvaluation, JudgeEvaluationEnd};
 pub(crate) use lk_agents_net::telemetry::{
     Cx, ErrorType, Failed, Failure, ScopedSpan, end, measure, start,
 };

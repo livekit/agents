@@ -1,7 +1,7 @@
 //! Every string a judge model sees, and the reading of its answers: a wording change moves
 //! verdict rates. Pure: data in, data out.
 
-use lk_agents_abi::evals::{EvaluationScore, InvalidJudgment, Judgment};
+use lk_agents_abi::evals::{EvaluationScore, JudgeVerdict, Judgment};
 use lk_agents_abi::{ChatItem, ToolFlags, ToolSpec};
 use serde_json::{Value, json};
 
@@ -111,7 +111,7 @@ impl BuiltIn {
     /// The judgment it reaches without a model, if any.
     pub fn without_model(&self, chat_ctx: &[ChatItem]) -> Option<Judgment> {
         (self.frame == Frame::Handoff && !has_handoffs(chat_ctx)).then(|| Judgment {
-            verdict: "pass".into(),
+            verdict: JudgeVerdict::Pass,
             reasoning: NO_HANDOFFS.into(),
             instructions: String::new(),
         })
@@ -150,7 +150,7 @@ pub fn submit_verdict_tool() -> ToolSpec {
             "properties": {
                 "verdict": {
                     "description": "Your judgment - 'pass' if criteria met, 'fail' if not, 'maybe' if uncertain.",
-                    "enum": ["pass", "fail", "maybe"],
+                    "enum": JudgeVerdict::ALL.map(JudgeVerdict::as_str),
                     "title": "Verdict",
                     "type": "string",
                 },
@@ -222,10 +222,10 @@ pub fn request_extra(model: &str) -> lk_agents_abi::Extra {
 }
 
 /// `submit_verdict`'s arguments, strictly: a malformed payload is no verdict.
-pub fn parse_verdict(arguments: &str) -> Result<(String, String), String> {
+pub fn parse_verdict(arguments: &str) -> Result<(JudgeVerdict, String), String> {
     let value: Value = serde_json::from_str(arguments).map_err(|e| format!("not JSON: {e}"))?;
     let verdict = match value.get("verdict") {
-        Some(Value::String(v)) if matches!(v.as_str(), "pass" | "fail" | "maybe") => v.clone(),
+        Some(Value::String(v)) => v.parse()?,
         other => {
             return Err(format!("verdict must be 'pass', 'fail' or 'maybe', got {}", shown(other)));
         }
@@ -235,14 +235,6 @@ pub fn parse_verdict(arguments: &str) -> Result<(String, String), String> {
         other => return Err(format!("reasoning must be a string, got {}", shown(other))),
     };
     Ok((verdict, reasoning))
-}
-
-/// An application judgment, refused unless its verdict is pass, fail or maybe.
-pub fn checked(judgment: Judgment) -> Result<Judgment, String> {
-    match judgment.verdict.as_str() {
-        "pass" | "fail" | "maybe" => Ok(judgment),
-        other => Err(format!("verdict must be 'pass', 'fail' or 'maybe', got {other:?}")),
-    }
 }
 
 /// `check_intent`'s arguments: repaired JSON, then a lax boolean.
@@ -271,26 +263,25 @@ fn shown(value: Option<&Value>) -> String {
 }
 
 /// Pass scores 1, maybe 0.5, fail 0. Empty: score 0 while the vacuous aggregates hold.
-pub fn score(verdicts: &[String]) -> Result<EvaluationScore, InvalidJudgment> {
+pub fn score(verdicts: &[JudgeVerdict]) -> EvaluationScore {
     let mut points = 0.0;
     let (mut passed, mut failed) = (0usize, 0usize);
     for verdict in verdicts {
-        match verdict.as_str() {
-            "pass" => {
+        match verdict {
+            JudgeVerdict::Pass => {
                 points += 1.0;
                 passed += 1;
             }
-            "maybe" => points += 0.5,
-            "fail" => failed += 1,
-            other => return Err(InvalidJudgment(format!("unknown verdict {other:?}"))),
+            JudgeVerdict::Maybe => points += 0.5,
+            JudgeVerdict::Fail => failed += 1,
         }
     }
     let n = verdicts.len();
-    Ok(EvaluationScore {
+    EvaluationScore {
         score: if n == 0 { 0.0 } else { points / n as f64 },
         all_passed: passed == n,
         any_passed: passed > 0,
         majority_passed: n == 0 || passed * 2 > n,
         none_failed: failed == 0,
-    })
+    }
 }

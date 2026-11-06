@@ -1,7 +1,8 @@
 //! Typed launcher arguments. Clap owns syntax, help, aliases and diagnostics.
 
+use clap::builder::{PossibleValue, PossibleValuesParser, TypedValueParser};
 use clap::{Parser, Subcommand, ValueEnum};
-use lk_agents_abi::cli::{CliArgs, CliParseResult};
+use lk_agents_abi::cli::{CliArgs, CliParseResult, LogLevel};
 
 #[derive(Parser)]
 #[command(about = "Run a LiveKit agent server")]
@@ -20,7 +21,7 @@ enum Command {
 
 #[derive(clap::Args)]
 struct StartArgs {
-    #[arg(long, value_enum, ignore_case = true, default_value_t = LogLevel::Info)]
+    #[arg(long, ignore_case = true, default_value_t = LogLevel::Info, value_parser = log_level())]
     log_level: LogLevel,
     #[arg(long)]
     dev: bool,
@@ -67,31 +68,17 @@ fn seconds(value: &str) -> Result<f64, String> {
     Ok(seconds)
 }
 
-#[derive(Clone, Copy, ValueEnum)]
-enum LogLevel {
-    Trace,
-    Debug,
-    Info,
-    #[value(alias = "warning")]
-    Warn,
-    Error,
-    #[value(alias = "critical")]
-    Fatal,
-    Off,
-}
-
-impl LogLevel {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Trace => "trace",
-            Self::Debug => "debug",
-            Self::Info => "info",
-            Self::Warn => "warn",
-            Self::Error => "error",
-            Self::Fatal => "fatal",
-            Self::Off => "off",
-        }
-    }
+/// Every level by its wire string; `warning` and `critical` are aliases of `warn` and `fatal`.
+fn log_level() -> impl TypedValueParser<Value = LogLevel> {
+    let values = LogLevel::ALL.map(|level| match level {
+        LogLevel::Warn => PossibleValue::new(level.as_str()).alias("warning"),
+        LogLevel::Fatal => PossibleValue::new(level.as_str()).alias("critical"),
+        _ => PossibleValue::new(level.as_str()),
+    });
+    PossibleValuesParser::new(values.clone()).map(move |name| {
+        let value = values.iter().find(|v| v.matches(&name, true)).expect("a possible value");
+        value.get_name().parse().expect("a possible value names a level")
+    })
 }
 
 pub fn parse_cli(argv: Vec<String>) -> CliParseResult {
@@ -102,7 +89,7 @@ pub fn parse_cli(argv: Vec<String>) -> CliParseResult {
     };
     let args = match command {
         Command::Start(args) => CliArgs::Start {
-            log_level: args.log_level.as_str().into(),
+            log_level: args.log_level,
             dev: args.dev,
             cli_addr: args.cli_addr,
             simulation: args.simulation,
@@ -159,6 +146,21 @@ mod tests {
             parse(&["console", "--connect-addr=localhost:9", "--record"]),
             CliParseResult::Parsed { args: CliArgs::Console { record: true, .. } }
         ));
+    }
+
+    // Catches: an alias or another case read as no level, or as the wrong one.
+    #[test]
+    fn log_levels_accept_their_aliases_in_any_case() {
+        for (flag, level) in
+            [("WARNING", LogLevel::Warn), ("critical", LogLevel::Fatal), ("Debug", LogLevel::Debug)]
+        {
+            let CliParseResult::Parsed { args: CliArgs::Start { log_level, .. } } =
+                parse(&["start", "--log-level", flag])
+            else {
+                panic!("expected start")
+            };
+            assert_eq!(log_level, level, "{flag}");
+        }
     }
 
     #[test]

@@ -20,6 +20,7 @@ pub fn ty(entry: &voc::Entry, rust: &str) -> Result<Ty, String> {
         extract: true,
         emit: true,
         literal: false,
+        wires: Vec::new(),
     }))
 }
 

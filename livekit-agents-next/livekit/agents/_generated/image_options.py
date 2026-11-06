@@ -20,7 +20,7 @@ class ResizeOptions:
 
     width: int
     height: int
-    strategy: Literal['center_aspect_fit', 'center_aspect_cover', 'scale_aspect_fit', 'scale_aspect_cover', 'skew']
+    strategy: Literal["center_aspect_fit", "center_aspect_cover", "scale_aspect_fit", "scale_aspect_cover", "skew"]
     """``center_aspect_fit`` letterboxes into the size, ``center_aspect_cover`` fills it
         cropping, ``scale_aspect_fit``/``scale_aspect_cover`` keep the aspect ratio inside/around it,
         ``skew`` resizes to it exactly.
@@ -31,7 +31,7 @@ class ResizeOptions:
 class EncodeOptions:
     """How a frame is encoded."""
 
-    format: Literal['JPEG', 'PNG'] = "JPEG"
+    format: Literal["JPEG", "PNG"] = "JPEG"
     resize_options: ResizeOptions | None = None
     quality: int | None = 75
     """JPEG quality, 0-100."""

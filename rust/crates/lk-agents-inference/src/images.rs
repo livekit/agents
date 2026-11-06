@@ -42,19 +42,14 @@ impl lk_agents_abi::media::images::ImageFunctions for ImageFunctions {
     async fn encode_image(
         _env: &ProcessEnv,
         frame: Arc<dyn RtcVideoFrame>,
-        format: String,
+        format: ImageFormat,
         quality: Option<u8>,
         resize_width: Option<u32>,
         resize_height: Option<u32>,
-        resize_strategy: Option<String>,
+        resize_strategy: Option<ResizeStrategy>,
     ) -> Result<Vec<u8>, ImageError> {
-        let options = ImageEncodeOptions {
-            format: format.parse().map_err(ImageError)?,
-            quality,
-            resize_width,
-            resize_height,
-            resize_strategy: resize_strategy.map(|s| s.parse()).transpose().map_err(ImageError)?,
-        };
+        let options =
+            ImageEncodeOptions { format, quality, resize_width, resize_height, resize_strategy };
         let prepared = prepare(ImageInput::HostFrame(frame), options).await?;
         prepared.data.ok_or_else(|| ImageError("image encoder returned no bytes".into()))
     }

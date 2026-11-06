@@ -127,7 +127,7 @@ pub struct Artifact {
 #[derive(Debug, Clone, PartialEq)]
 #[crate::host(record(module = "a2a_client", emit, extract))]
 pub struct TaskUpdate {
-    pub state: String,
+    pub state: crate::storage::TaskState,
     pub text: String,
     pub task_id: String,
     pub context_id: String,

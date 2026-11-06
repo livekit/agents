@@ -16,8 +16,6 @@ from .agent_run import RunUpdate
 from .text_session import TextSessionUpdate
 
 if TYPE_CHECKING:
-    from typing import Literal
-
     from pydantic import JsonValue
 
 

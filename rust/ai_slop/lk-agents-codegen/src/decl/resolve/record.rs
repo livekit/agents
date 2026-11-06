@@ -217,12 +217,7 @@ impl Resolver<'_> {
                 if en.variants.iter().all(|v| matches!(v.fields, syn::Fields::Unit)) {
                     let mut values = Vec::new();
                     for v in &en.variants {
-                        let vat = format!("{at}::{}", v.ident);
-                        let entries = voc::read(&v.attrs).map_err(|e| format!("{vat}: {e}"))?;
-                        voc::only(&vat, &entries, &["rename"])?;
-                        let value = voc::text(&vat, &entries, "rename")?
-                            .unwrap_or_else(|| snake(&v.ident.to_string()));
-                        values.push((v.ident.to_string(), value, doc(&v.attrs)));
+                        values.push((v.ident.to_string(), variant_wire(at, v)?, doc(&v.attrs)));
                     }
                     RecordBody::Literals(values)
                 } else if enumeration {
@@ -864,6 +859,24 @@ fn by_hand(at: &str, entries: &[Entry], key: &str) -> Result<bool, String> {
 }
 
 /// A unit-only enum: it crosses as its string.
+/// A unit variant's wire string: its `#[host(rename)]`, else its snake-cased name.
+fn variant_wire(at: &str, v: &syn::Variant) -> Result<String, String> {
+    let at = format!("{at}::{}", v.ident);
+    let entries = voc::read(&v.attrs).map_err(|e| format!("{at}: {e}"))?;
+    voc::only(&at, &entries, &["rename"])?;
+    Ok(voc::text(&at, &entries, "rename")?.unwrap_or_else(|| snake(&v.ident.to_string())))
+}
+
+/// A unit enum's wire strings in declaration order; empty for any other item.
+pub(super) fn wire_strings(at: &str, item: &syn::Item) -> Result<Vec<String>, String> {
+    match item {
+        syn::Item::Enum(e) if unit_enum(item) => {
+            e.variants.iter().map(|v| variant_wire(at, v)).collect()
+        }
+        _ => Ok(Vec::new()),
+    }
+}
+
 pub(super) fn unit_enum(item: &syn::Item) -> bool {
     matches!(item, syn::Item::Enum(e)
         if e.variants.iter().all(|v| matches!(v.fields, syn::Fields::Unit)))
@@ -926,6 +939,8 @@ pub(super) fn check_default(at: &str, ty: &Ty, default: Option<&Literal>) -> Res
         {
             true
         }
+        // A wire vocabulary's string: one of its wire strings.
+        (Ty::Record(r), Literal::Str(s)) if !r.wires.is_empty() => r.wires.contains(s),
         // A hand-written conversion's host value (`False` for `AlignedTranscript::None`).
         (Ty::Record(Record { host: HostForm::Converted(..), .. }), _) => true,
         (Ty::Record(Record { host: HostForm::Via { via, .. }, .. }), d) => {

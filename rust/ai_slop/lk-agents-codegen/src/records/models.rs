@@ -172,6 +172,10 @@ pub fn python(decls: &Declarations) -> Result<Vec<Out>, String> {
             }
         }
         body.push_str(&public_paths(&records, &mut runtime));
+        // A wire vocabulary's `Literal` is evaluated wherever its record's annotations are.
+        if typing.remove("typing", "Literal") {
+            runtime.add("typing", "Literal");
+        }
         for imports in [&mut runtime, &mut typing] {
             imports.remove_module(&format!(".{module}"));
             imports.remove_module(&format!("{PACKAGE}.{module}"));
@@ -966,7 +970,9 @@ fn annotation(ty: &Ty, module: &str, own: &[String], any: bool, typing: &mut Imp
                 typing.add(&format!(".{m}"), name);
                 name.clone()
             }
-            HostForm::WireStrs | HostForm::Str | HostForm::Wire => "str".into(),
+            HostForm::WireStrs | HostForm::Str | HostForm::Wire => {
+                typing.annotation(&r.wire_annotation(), &r.rust)
+            }
             HostForm::Annotation(text)
             | HostForm::Converted(text, ..)
             | HostForm::Via { host: text, .. } => typing.annotation(text, &r.rust),

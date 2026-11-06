@@ -184,14 +184,21 @@ pub struct AgentFalseInterruption {
     pub created_at: f64,
 }
 
+/// How a speech handle was created: only `say()` is `say`; every reply is `generate_reply`.
+#[crate::host(wire_strs)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpeechSource {
+    Say,
+    GenerateReply,
+}
+
 /// `speech_created`'s payload: the host wraps the `_core.SpeechHandle` in its `SpeechHandle` for
 /// the public `SpeechCreatedEvent` (`voice/events.py`).
 #[crate::host(record(module = "session_wire", name = "SpeechCreatedWire", emit))]
 #[derive(Clone)]
 pub struct SpeechCreated {
     pub user_initiated: bool,
-    /// `SpeechKind::as_source_str`: `"say"` or `"generate_reply"`.
-    pub source: String,
+    pub source: SpeechSource,
     pub speech_handle: std::sync::Arc<dyn crate::voice::speech_handle::Speech>,
 }
 
@@ -454,13 +461,21 @@ impl ToolsExecutedEvent {
     }
 }
 
+/// A diagnostic's level: the name the host's `logging` module takes.
+#[crate::host(wire_strs)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiagnosticLevel {
+    Info,
+    Warning,
+    Error,
+}
+
 /// A sentence the core decided and the host logs. `fields` is the reference's `extra={...}`, so
 /// `lk.pii.*` entries go through the host's redaction filter.
 #[crate::host(record(module = "session_wire", emit))]
 #[derive(Debug, Clone)]
 pub struct DiagnosticWire {
-    /// `"debug"`, `"info"` or `"warning"` -- the name `logging` takes.
-    pub level: String,
+    pub level: DiagnosticLevel,
     pub message: String,
     pub fields: BTreeMap<String, String>,
 }
@@ -755,8 +770,7 @@ pub struct SpeechCreatedEvent {
     /// True if the speech was created using public methods like `say` or `generate_reply`
     pub user_initiated: bool,
     /// Source indicating how the speech handle was created
-    #[host(annotation = "typing.Literal['say', 'generate_reply']")]
-    pub source: String,
+    pub source: SpeechSource,
     /// The speech handle that was created
     #[host(
         hide_repr,

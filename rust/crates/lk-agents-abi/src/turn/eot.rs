@@ -92,10 +92,16 @@ pub struct PredictionEvent {
 
 // Public data contracts. Python behavior remains in its adapters.
 
+/// `TurnDetectionEvent.type`.
+#[crate::host(wire_strs)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TurnDetectionEventType {
+    EotPrediction,
+}
+
 #[crate::host(record(module = "turn_events", path = "livekit.agents.voice.io", dataclass))]
 pub struct TurnDetectionEvent {
-    #[host(annotation = "typing.Literal['eot_prediction']")]
-    pub r#type: String,
+    pub r#type: TurnDetectionEventType,
     pub end_of_turn_probability: f64,
     pub last_speaking_time: f64,
     /// Latest input audio creation time -> prediction receive time.

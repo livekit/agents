@@ -5,11 +5,23 @@
 use std::sync::Arc;
 
 use crate::errors::HostError;
+use crate::telemetry::decl::SpanValue;
 use crate::usage::TokenUsage;
 use crate::utils::host_ref::HostRef;
 use crate::{ChatItem, Llm};
 
-/// One judge's decision; `verdict` is `"pass"`, `"fail"` or `"maybe"`.
+/// What a judge decided.
+#[crate::host(wire_enum(msg = format!("verdict must be 'pass', 'fail' or 'maybe', got {s:?}")))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, SpanValue)]
+#[span_value(wire_strs)]
+#[serde(rename_all = "snake_case")]
+pub enum JudgeVerdict {
+    Pass,
+    Fail,
+    Maybe,
+}
+
+/// One judge's decision.
 #[crate::host(record(
     module = "evals",
     name = "JudgmentResult",
@@ -38,8 +50,7 @@ use crate::{ChatItem, Llm};
     doc = "Whether the judge was uncertain about the verdict."
 ))]
 pub struct Judgment {
-    #[host(annotation = "typing.Literal['pass', 'fail', 'maybe']")]
-    pub verdict: String,
+    pub verdict: JudgeVerdict,
     pub reasoning: String,
     /// The criteria the judge evaluated against.
     #[host(default = "")]
@@ -168,10 +179,9 @@ pub enum IntentFailure {
 /// The pure eval rules the host's types read.
 #[crate::host(functions)]
 pub trait Evaluations {
-    /// The aggregates of `result`'s verdicts; a verdict other than pass, fail or maybe is
-    /// refused.
+    /// The aggregates of `result`'s verdicts.
     #[host(function, name = "_core_evaluation_score")]
-    fn score(result: EvaluationResult) -> Result<EvaluationScore, InvalidJudgment>;
+    fn score(result: EvaluationResult) -> EvaluationScore;
 
     /// `JudgmentResult.passed`: the verdict is pass.
     #[host(function, name = "_core_judgment_passed")]

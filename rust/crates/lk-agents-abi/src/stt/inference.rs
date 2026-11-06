@@ -231,6 +231,25 @@ pub struct DeepgramFluxOptions {
     pub detect_language: crate::Maybe<bool>,
 }
 
+/// `AssemblyaiOptions.voice_focus`.
+#[crate::host(wire_strs)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AssemblyaiVoiceFocus {
+    #[host(rename = "near-field")]
+    NearField,
+    #[host(rename = "far-field")]
+    FarField,
+}
+
+/// `AssemblyaiOptions.mode`.
+#[crate::host(wire_strs)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AssemblyaiMode {
+    MinLatency,
+    Balanced,
+    MaxAccuracy,
+}
+
 #[crate::host(record(
     module = "stt_provider_options",
     path = "livekit.agents.inference.stt",
@@ -259,12 +278,10 @@ pub struct AssemblyaiOptions {
     pub agent_context: crate::Maybe<String>,
     #[host(annotation = "int")]
     pub previous_context_n_turns: crate::Maybe<i64>,
-    #[host(annotation = "typing.Literal['near-field', 'far-field']")]
-    pub voice_focus: crate::Maybe<String>,
+    pub voice_focus: crate::Maybe<AssemblyaiVoiceFocus>,
     #[host(annotation = "float")]
     pub voice_focus_threshold: crate::Maybe<f64>,
-    #[host(annotation = "typing.Literal['min_latency', 'balanced', 'max_accuracy']")]
-    pub mode: crate::Maybe<String>,
+    pub mode: crate::Maybe<AssemblyaiMode>,
 }
 
 #[crate::host(record(
@@ -322,6 +339,16 @@ pub struct XaiOptions {
     pub interim_results: crate::Maybe<bool>,
 }
 
+/// `InworldOptions.audio_encoding`.
+#[crate::host(wire_strs)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InworldAudioEncoding {
+    #[host(rename = "LINEAR16")]
+    Linear16,
+    #[host(rename = "AUTO_DETECT")]
+    AutoDetect,
+}
+
 #[crate::host(record(
     module = "stt_provider_options",
     path = "livekit.agents.inference.stt",
@@ -334,8 +361,7 @@ pub struct InworldOptions {
     pub voice_profile_top_n: crate::Maybe<i64>,
     #[host(annotation = "bool")]
     pub include_word_timestamps: crate::Maybe<bool>,
-    #[host(annotation = "typing.Literal['LINEAR16', 'AUTO_DETECT']")]
-    pub audio_encoding: crate::Maybe<String>,
+    pub audio_encoding: crate::Maybe<InworldAudioEncoding>,
     #[host(annotation = "int")]
     pub inactivity_timeout_seconds: crate::Maybe<i64>,
     #[host(annotation = "float")]

@@ -43,7 +43,7 @@ class SpeechCreatedEvent:
 
     user_initiated: bool
     """True if the speech was created using public methods like `say` or `generate_reply`"""
-    source: Literal['say', 'generate_reply']
+    source: Literal["say", "generate_reply"]
     """Source indicating how the speech handle was created"""
     speech_handle: Annotated[SpeechHandle, Field(exclude=True)] = field(repr=False)
     """The speech handle that was created"""

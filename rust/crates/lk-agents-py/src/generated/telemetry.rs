@@ -526,11 +526,12 @@ impl Tagger {
     fn _core_record_judgment(
         &mut self,
         name: ::std::string::String,
-        verdict: ::std::string::String,
+        verdict: Bound<'_, PyAny>,
         reasoning: ::std::string::String,
         instructions: ::std::string::String,
     ) -> PyResult<()> {
         crate::py_calls::check_pid()?;
+        let verdict = crate::py_values::str_from_py(verdict.as_any())?;
         <TaggerImpl as ::lk_agents_abi::telemetry::report::Tagger>::_core_record_judgment(
             &mut self.0,
             name,

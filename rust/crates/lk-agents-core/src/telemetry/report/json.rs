@@ -182,7 +182,7 @@ mod tests {
         use lk_agents_abi::voice::session_options as o;
         let resolved = o::ResolvedSessionOptions {
             endpointing: o::ResolvedEndpointing {
-                mode: "fixed".into(),
+                mode: o::EndpointingMode::Fixed,
                 min_delay: 0.5,
                 max_delay: 3.0,
                 alpha: 0.9,

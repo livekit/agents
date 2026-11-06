@@ -69,7 +69,7 @@ class EvaluationRecord:
 
     name: str
     tag: str
-    verdict: str
+    verdict: Literal["pass", "fail", "maybe"]
     reasoning: str
     instructions: str
 

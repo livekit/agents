@@ -80,7 +80,7 @@ fn every_item_kind_reaches_the_transcript_in_order() {
 #[test]
 fn a_malformed_verdict_payload_is_no_verdict() {
     let good = prompts::parse_verdict(r#"{"verdict": "maybe", "reasoning": "unclear"}"#);
-    assert_eq!(good, Ok(("maybe".into(), "unclear".into())));
+    assert_eq!(good, Ok((JudgeVerdict::Maybe, "unclear".into())));
     for bad in [
         r#"{"verdict": "pass", "reasoning": "#,
         r#"{"verdict": "PASS", "reasoning": "ok"}"#,
@@ -96,14 +96,13 @@ fn a_malformed_verdict_payload_is_no_verdict() {
 // an empty evaluation scoring as a success.
 #[test]
 fn the_aggregates_disagree_correctly_on_a_mixed_set() {
-    let verdicts = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
-    let mixed = prompts::score(&verdicts(&["pass", "pass", "fail", "maybe"])).unwrap();
+    use JudgeVerdict::{Fail, Maybe, Pass};
+    let mixed = prompts::score(&[Pass, Pass, Fail, Maybe]);
     assert_eq!(mixed.score, 0.625);
     assert!(!mixed.all_passed && mixed.any_passed && !mixed.majority_passed && !mixed.none_failed);
-    let empty = prompts::score(&[]).unwrap();
+    let empty = prompts::score(&[]);
     assert_eq!(empty.score, 0.0);
     assert!(empty.all_passed && !empty.any_passed && empty.majority_passed && empty.none_failed);
-    assert!(prompts::score(&verdicts(&["PASS"])).is_err());
 }
 
 struct Registry;
@@ -208,8 +207,11 @@ fn host_judge(name: &str) -> JudgeSpec {
 // handoff to judge.
 #[tokio::test]
 async fn judges_run_concurrently_and_answer_in_judge_order() {
-    let booked =
-        Judgment { verdict: "maybe".into(), reasoning: "pending".into(), instructions: "".into() };
+    let booked = Judgment {
+        verdict: JudgeVerdict::Maybe,
+        reasoning: "pending".into(),
+        instructions: "".into(),
+    };
     let (runner, llm) =
         judges(Some(r#"{"verdict":"pass","reasoning":"grounded"}"#), 2, Host(Ok(booked.clone())));
     let chat_ctx = vec![msg("m1", Role::User, "hi"), handoff("h0", None, "greeter")];
@@ -243,26 +245,22 @@ async fn judges_run_concurrently_and_answer_in_judge_order() {
     assert!(prompts.iter().all(|p| p.contains("Reference:\nassistant: hello")), "{prompts:?}");
 }
 
-// Catches: a judge whose model answered in prose, or whose evaluator raised or returned an
-// unknown verdict, reported as a judgment.
+// Catches: a judge whose model answered in prose, or whose evaluator raised, reported as a
+// judgment.
 #[tokio::test]
 async fn a_judge_without_a_usable_verdict_fails_by_name() {
-    let shouted =
-        Judgment { verdict: "PASS".into(), reasoning: "".into(), instructions: "".into() };
-    for (host, model) in [(Host(Err("unreachable")), None), (Host(Ok(shouted)), None)] {
-        let (runner, _) = judges(model, 1, host);
-        let outcomes = runner
-            .evaluate(
-                vec![built_in("safety"), host_judge("booking")],
-                vec![],
-                None,
-                Default::default(),
-                lk_agents_abi::telemetry::Cx::NONE,
-            )
-            .await
-            .unwrap();
-        assert!(outcomes.iter().all(|o| matches!(o, JudgeOutcome::Failed { .. })), "{outcomes:?}");
-    }
+    let (runner, _) = judges(None, 1, Host(Err("unreachable")));
+    let outcomes = runner
+        .evaluate(
+            vec![built_in("safety"), host_judge("booking")],
+            vec![],
+            None,
+            Default::default(),
+            lk_agents_abi::telemetry::Cx::NONE,
+        )
+        .await
+        .unwrap();
+    assert!(outcomes.iter().all(|o| matches!(o, JudgeOutcome::Failed { .. })), "{outcomes:?}");
 }
 
 #[derive(Default)]
@@ -348,7 +346,7 @@ async fn a_host_judge_runs_in_its_span_and_its_explanation_follows_capture() {
         tracer.set_capture_content(capture);
         let env = ProcessEnv { tracer, ..ProcessEnv::current_runtime() };
         let judgment = Judgment {
-            verdict: "pass".into(),
+            verdict: JudgeVerdict::Pass,
             reasoning: "private".into(),
             instructions: String::new(),
         };

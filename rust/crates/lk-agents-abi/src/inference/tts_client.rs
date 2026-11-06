@@ -133,6 +133,44 @@ pub struct RimeOptions {
     pub no_text_normalization: crate::Maybe<bool>,
 }
 
+/// `InworldOptions.delivery_mode`.
+#[crate::host(wire_strs)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InworldDeliveryMode {
+    #[host(rename = "DELIVERY_MODE_UNSPECIFIED")]
+    Unspecified,
+    #[host(rename = "STABLE")]
+    Stable,
+    #[host(rename = "BALANCED")]
+    Balanced,
+    #[host(rename = "CREATIVE")]
+    Creative,
+}
+
+/// `InworldOptions.timestamp_type`.
+#[crate::host(wire_strs)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InworldTimestampType {
+    #[host(rename = "TIMESTAMP_TYPE_UNSPECIFIED")]
+    Unspecified,
+    #[host(rename = "WORD")]
+    Word,
+    #[host(rename = "CHARACTER")]
+    Character,
+}
+
+/// `InworldOptions.apply_text_normalization`.
+#[crate::host(wire_strs)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InworldTextNormalization {
+    #[host(rename = "APPLY_TEXT_NORMALIZATION_UNSPECIFIED")]
+    Unspecified,
+    #[host(rename = "ON")]
+    On,
+    #[host(rename = "OFF")]
+    Off,
+}
+
 #[crate::host(record(
     module = "tts_provider_options",
     path = "livekit.agents.inference.tts",
@@ -143,14 +181,9 @@ pub struct InworldOptions {
     pub speaking_rate: crate::Maybe<f64>,
     #[host(annotation = "float")]
     pub temperature: crate::Maybe<f64>,
-    #[host(
-        annotation = "typing.Literal['DELIVERY_MODE_UNSPECIFIED', 'STABLE', 'BALANCED', 'CREATIVE']"
-    )]
-    pub delivery_mode: crate::Maybe<String>,
-    #[host(annotation = "typing.Literal['TIMESTAMP_TYPE_UNSPECIFIED', 'WORD', 'CHARACTER']")]
-    pub timestamp_type: crate::Maybe<String>,
-    #[host(annotation = "typing.Literal['APPLY_TEXT_NORMALIZATION_UNSPECIFIED', 'ON', 'OFF']")]
-    pub apply_text_normalization: crate::Maybe<String>,
+    pub delivery_mode: crate::Maybe<InworldDeliveryMode>,
+    pub timestamp_type: crate::Maybe<InworldTimestampType>,
+    pub apply_text_normalization: crate::Maybe<InworldTextNormalization>,
 }
 
 #[crate::host(record(
@@ -165,6 +198,15 @@ pub struct XaiOptions {
     pub speed: crate::Maybe<f64>,
     #[host(annotation = "typing.Literal[0, 1, 2]")]
     pub optimize_streaming_latency: crate::Maybe<serde_json::Value>,
+}
+
+/// `FishAudioOptions.latency`.
+#[crate::host(wire_strs)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FishAudioLatency {
+    Normal,
+    Balanced,
+    Low,
 }
 
 /// See https://docs.fish.audio/api-reference/endpoint/websocket/tts-live
@@ -186,8 +228,7 @@ pub struct FishAudioOptions {
     pub top_p: crate::Maybe<f64>,
     #[host(annotation = "bool")]
     pub normalize: crate::Maybe<bool>,
-    #[host(annotation = "typing.Literal['normal', 'balanced', 'low']")]
-    pub latency: crate::Maybe<String>,
+    pub latency: crate::Maybe<FishAudioLatency>,
     #[host(annotation = "int")]
     pub chunk_length: crate::Maybe<i64>,
     #[host(annotation = "int")]

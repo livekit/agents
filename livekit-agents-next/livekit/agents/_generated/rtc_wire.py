@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from inspect import get_annotations
-from typing import TYPE_CHECKING, TypeAlias
+from typing import TYPE_CHECKING, Literal, TypeAlias
 
 if TYPE_CHECKING:
     from livekit.rtc import VideoFrame
@@ -26,7 +26,7 @@ class TrackPublishOptions:
 
     name: str
     """`track_name` on the wire; absent keeps the default (`roomio_audio`)."""
-    source: str
+    source: Literal["unknown", "camera", "microphone", "screenshare", "screenshare_audio"]
     """Crosses as its name; the host adapter maps it back to `rtc.TrackSource`."""
     sample_rate: int
     num_channels: int
@@ -169,7 +169,7 @@ class AudioOutputCapabilities:
 @dataclass(kw_only=True, slots=True)
 class VideoTrackOptions:
     name: str
-    source: str
+    source: Literal["unknown", "camera", "microphone", "screenshare", "screenshare_audio"]
     width: int
     height: int
 

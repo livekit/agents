@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Self
+from typing import Literal, Self
 
 from livekit.agents._core import SpanKind, StatusCode
 
@@ -164,7 +164,7 @@ class Tagger:
     def _core_record_judgment(
         self,
         name: str,
-        verdict: str,
+        verdict: Literal["pass", "fail", "maybe"],
         reasoning: str,
         instructions: str,
     ) -> None:

@@ -9,7 +9,7 @@ use crate::speech_handle::{SpeechState, SpeechUpdate};
 use crate::telemetry;
 use crate::trace::{CloseAct, CloseStep, InterruptCause, InterruptStep, SpeechStep, TurnStep};
 use lk_agents_abi::Ts;
-use lk_agents_abi::voice::events::AgentState;
+use lk_agents_abi::voice::events::{AgentState, SpeechSource};
 use std::collections::{BTreeMap, VecDeque};
 use std::time::Duration;
 
@@ -658,13 +658,13 @@ pub enum SpeechKind {
 
 impl SpeechKind {
     /// `SpeechCreatedEvent.source`: only `say()` is `say`; everything else is `generate_reply`.
-    pub const fn as_source_str(self) -> &'static str {
+    pub const fn source(self) -> SpeechSource {
         match self {
-            SpeechKind::Say => "say",
+            SpeechKind::Say => SpeechSource::Say,
             SpeechKind::TurnReply
             | SpeechKind::GenerateReply
             | SpeechKind::Preemptive
-            | SpeechKind::Realtime => "generate_reply",
+            | SpeechKind::Realtime => SpeechSource::GenerateReply,
         }
     }
 

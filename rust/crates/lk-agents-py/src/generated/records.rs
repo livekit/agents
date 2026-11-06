@@ -1104,7 +1104,7 @@ pub mod a2a_client {
         }
         Ok(::lk_agents_abi::a2a::client::TaskUpdate {
             state: crate::py_values::attr_with(obj, "TaskUpdate", "state", |v| {
-                v.extract::<::std::string::String>()
+                crate::generated::records::storage_class::task_state_from_py(v)
             })?,
             text: crate::py_values::attr_with(obj, "TaskUpdate", "text", |v| {
                 v.extract::<::std::string::String>()
@@ -1155,7 +1155,10 @@ pub mod a2a_client {
             artifacts,
         } = value;
         let kwargs = ::pyo3::types::PyDict::new(py);
-        kwargs.set_item("state", ::pyo3::IntoPyObjectExt::into_bound_py_any(state, py)?)?;
+        kwargs.set_item(
+            "state",
+            crate::generated::records::storage_class::task_state_to_py(py, state)?,
+        )?;
         kwargs.set_item("text", ::pyo3::IntoPyObjectExt::into_bound_py_any(text, py)?)?;
         kwargs.set_item("task_id", ::pyo3::IntoPyObjectExt::into_bound_py_any(task_id, py)?)?;
         kwargs
@@ -5229,7 +5232,7 @@ pub mod cli {
         )?)? {
             return Ok(::lk_agents_abi::cli::CliArgs::Start {
                 log_level: crate::py_values::attr_with(obj, "CliArgsStart", "log_level", |v| {
-                    v.extract::<::std::string::String>()
+                    crate::py_values::str_from_py(v)
                 })?,
                 dev: crate::py_values::attr_with(obj, "CliArgsStart", "dev", |v| {
                     v.extract::<bool>()
@@ -5336,10 +5339,7 @@ pub mod cli {
                 drain_timeout,
             } => {
                 let kwargs = ::pyo3::types::PyDict::new(py);
-                kwargs.set_item(
-                    "log_level",
-                    ::pyo3::IntoPyObjectExt::into_bound_py_any(log_level, py)?,
-                )?;
+                kwargs.set_item("log_level", crate::py_values::str_to_py(py, &log_level))?;
                 kwargs.set_item("dev", ::pyo3::IntoPyObjectExt::into_bound_py_any(dev, py)?)?;
                 kwargs.set_item(
                     "cli_addr",
@@ -6145,7 +6145,7 @@ pub mod evals {
         }
         Ok(::lk_agents_abi::evals::Judgment {
             verdict: crate::py_values::attr_with(obj, "JudgmentResult", "verdict", |v| {
-                v.extract::<::std::string::String>()
+                crate::py_values::str_from_py(v)
             })?,
             reasoning: crate::py_values::attr_with(obj, "JudgmentResult", "reasoning", |v| {
                 v.extract::<::std::string::String>()
@@ -6165,7 +6165,7 @@ pub mod evals {
     ) -> PyResult<Bound<'py, PyAny>> {
         let ::lk_agents_abi::evals::Judgment { verdict, reasoning, instructions } = value;
         let kwargs = ::pyo3::types::PyDict::new(py);
-        kwargs.set_item("verdict", ::pyo3::IntoPyObjectExt::into_bound_py_any(verdict, py)?)?;
+        kwargs.set_item("verdict", crate::py_values::str_to_py(py, &verdict))?;
         kwargs.set_item("reasoning", ::pyo3::IntoPyObjectExt::into_bound_py_any(reasoning, py)?)?;
         kwargs.set_item(
             "instructions",
@@ -12815,7 +12815,7 @@ pub mod session_options {
             alpha,
         } = value;
         let dict = ::pyo3::types::PyDict::new(py);
-        dict.set_item("mode", ::pyo3::IntoPyObjectExt::into_bound_py_any(mode, py)?)?;
+        dict.set_item("mode", crate::generated::records::turn::endpointing_mode_to_py(py, mode)?)?;
         dict.set_item("min_delay", ::pyo3::IntoPyObjectExt::into_bound_py_any(min_delay, py)?)?;
         dict.set_item("max_delay", ::pyo3::IntoPyObjectExt::into_bound_py_any(max_delay, py)?)?;
         dict.set_item("alpha", ::pyo3::IntoPyObjectExt::into_bound_py_any(alpha, py)?)?;
@@ -12841,7 +12841,10 @@ pub mod session_options {
         let dict = ::pyo3::types::PyDict::new(py);
         dict.set_item("enabled", ::pyo3::IntoPyObjectExt::into_bound_py_any(enabled, py)?)?;
         if let Some(x) = mode {
-            dict.set_item("mode", ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)?;
+            dict.set_item(
+                "mode",
+                crate::generated::records::turn::interruption_mode_to_py(py, x)?,
+            )?;
         }
         dict.set_item(
             "discard_audio_if_uninterruptible",
@@ -12951,7 +12954,7 @@ pub mod session_options {
         } = value;
         let dict = ::pyo3::types::PyDict::new(py);
         if let Some(x) = mode {
-            dict.set_item("mode", ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)?;
+            dict.set_item("mode", crate::generated::records::turn::endpointing_mode_to_py(py, x)?)?;
         }
         if let Some(x) = min_delay {
             dict.set_item("min_delay", ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?)?;
@@ -13116,7 +13119,7 @@ pub mod session_options {
             "level",
             match level {
                 None => py.None().into_bound(py),
-                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?,
+                Some(x) => ::pyo3::IntoPyObjectExt::into_bound_py_any(x.as_str(), py)?,
             },
         )?;
         dict.set_item(
@@ -13282,7 +13285,8 @@ pub mod session_wire {
             "user_initiated",
             ::pyo3::IntoPyObjectExt::into_bound_py_any(user_initiated, py)?,
         )?;
-        kwargs.set_item("source", ::pyo3::IntoPyObjectExt::into_bound_py_any(source, py)?)?;
+        kwargs
+            .set_item("source", ::pyo3::IntoPyObjectExt::into_bound_py_any(source.as_str(), py)?)?;
         kwargs.set_item("speech_handle", <dyn ::lk_agents_abi::voice::speech_handle::Speech as crate::generated::NativeToHost>::to_host(py, speech_handle)?)?;
         crate::py_calls::call(
             SPEECH_CREATED_WIRE
@@ -13581,7 +13585,8 @@ pub mod session_wire {
     ) -> PyResult<Bound<'py, PyAny>> {
         let ::lk_agents_abi::voice::events::DiagnosticWire { level, message, fields } = value;
         let kwargs = ::pyo3::types::PyDict::new(py);
-        kwargs.set_item("level", ::pyo3::IntoPyObjectExt::into_bound_py_any(level, py)?)?;
+        kwargs
+            .set_item("level", ::pyo3::IntoPyObjectExt::into_bound_py_any(level.as_str(), py)?)?;
         kwargs.set_item("message", ::pyo3::IntoPyObjectExt::into_bound_py_any(message, py)?)?;
         kwargs.set_item("fields", {
             let d = ::pyo3::types::PyDict::new(py);
@@ -17468,7 +17473,7 @@ pub mod telemetry {
                 v.extract::<::std::string::String>()
             })?,
             verdict: crate::py_values::attr_with(obj, "EvaluationRecord", "verdict", |v| {
-                v.extract::<::std::string::String>()
+                crate::py_values::str_from_py(v)
             })?,
             reasoning: crate::py_values::attr_with(obj, "EvaluationRecord", "reasoning", |v| {
                 v.extract::<::std::string::String>()
@@ -17491,7 +17496,7 @@ pub mod telemetry {
         let kwargs = ::pyo3::types::PyDict::new(py);
         kwargs.set_item("name", ::pyo3::IntoPyObjectExt::into_bound_py_any(name, py)?)?;
         kwargs.set_item("tag", ::pyo3::IntoPyObjectExt::into_bound_py_any(tag, py)?)?;
-        kwargs.set_item("verdict", ::pyo3::IntoPyObjectExt::into_bound_py_any(verdict, py)?)?;
+        kwargs.set_item("verdict", crate::py_values::str_to_py(py, &verdict))?;
         kwargs.set_item("reasoning", ::pyo3::IntoPyObjectExt::into_bound_py_any(reasoning, py)?)?;
         kwargs.set_item(
             "instructions",
@@ -20614,6 +20619,17 @@ pub mod turn {
                 "EndpointingMode: {other:?} is not one of 'fixed', 'dynamic'"
             ))),
         }
+    }
+
+    pub fn endpointing_mode_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::voice::session_options::EndpointingMode,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let value = match value {
+            ::lk_agents_abi::voice::session_options::EndpointingMode::Fixed => "fixed",
+            ::lk_agents_abi::voice::session_options::EndpointingMode::Dynamic => "dynamic",
+        };
+        ::pyo3::PyResult::Ok(::pyo3::types::PyString::new(py, value).into_any())
     }
 
     // Declared in rust/crates/lk-agents-abi/src/voice/session_options.rs.

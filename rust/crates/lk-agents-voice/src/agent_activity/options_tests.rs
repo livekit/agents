@@ -1,4 +1,5 @@
 use super::*;
+use lk_agents_abi::voice::events::DiagnosticLevel;
 use lk_agents_abi::voice::session_options::InterruptionGateFunctions;
 
 // Catches: a mode the legs cannot honour kept instead of falling as `Auto` does.
@@ -47,7 +48,7 @@ fn the_interruption_gate_names_its_reason() {
     );
     let production = gate(true, None, false, false);
     assert_eq!(production.reason.as_deref(), Some("production_default"));
-    assert_eq!(production.level.as_deref(), Some("info"));
+    assert_eq!(production.level, Some(DiagnosticLevel::Info));
     assert_eq!(production.message.as_deref(), Some(ADAPTIVE_OFF_IN_PRODUCTION));
 
     // No aligned streaming STT: adaptive asked for is warned about, unasked is silent.
@@ -68,7 +69,7 @@ fn the_interruption_gate_names_its_reason() {
     };
     let warned = cannot(Some(InterruptionMode::Adaptive));
     assert_eq!(warned.reason.as_deref(), Some("cannot_gatekeep"));
-    assert_eq!(warned.level.as_deref(), Some("warning"));
+    assert_eq!(warned.level, Some(DiagnosticLevel::Warning));
     assert_eq!(cannot(None).level, None);
     // A realtime model detecting turns itself leaves nothing to gatekeep with.
     let realtime =

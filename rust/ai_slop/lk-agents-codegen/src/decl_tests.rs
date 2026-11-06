@@ -1120,7 +1120,15 @@ fn declared_classes_consume_string_enums_with_native_error_expressions() {
     let llm = &out.iter().find(|o| o.path == "llm.rs").unwrap().text;
     assert!(llm.contains("let kind = crate::py_values::str_from_py(kind.as_any())?;"), "{llm}");
     let stubs = crate::class_stub::emit(&decls).expect("stubs");
-    assert!(stubs[0].out.text.contains("kind: str"), "{}", stubs[0].out.text);
+    assert!(
+        stubs[0].out.text.contains(r#"kind: Literal["batch", "stream"]"#),
+        "{}",
+        stubs[0].out.text
+    );
+    // A default names one of its wire strings.
+    let source =
+        source.replace("fn new(kind: Kind)", "fn new(#[host(default = \"bulk\")] kind: Kind)");
+    assert!(read(&source).unwrap_err().contains("is not a value of"));
 }
 
 // Catches: a declared proxy refused as a host call's argument (a typed noise-cancellation choice

@@ -431,14 +431,14 @@ pub fn resolved_session_options(
     let overrides = session.turn.endpointing;
     ResolvedSessionOptions {
         endpointing: ResolvedEndpointing {
-            mode: mode.resolved().as_str().to_owned(),
+            mode: mode.resolved(),
             min_delay: secs(min_delay.resolved()),
             max_delay: secs(max_delay.resolved()),
             alpha: alpha.resolved(),
         },
         interruption: ResolvedInterruption {
             enabled: enabled.resolved(),
-            mode: interruption_mode.map(|m| m.as_str().to_owned()),
+            mode: interruption_mode,
             discard_audio_if_uninterruptible: discard_audio_if_uninterruptible.resolved(),
             min_duration: secs(min_duration.resolved()),
             min_words: min_words.resolved(),
@@ -460,7 +460,7 @@ pub fn resolved_session_options(
         turn_detection_mode: (detection != TurnDetection::Auto)
             .then(|| detection.as_str().to_owned()),
         endpointing_overrides: EndpointingOverrides {
-            mode: overrides.mode.map(|m| m.as_str().to_owned()),
+            mode: overrides.mode,
             min_delay: overrides.min_delay.map(secs),
             max_delay: overrides.max_delay.map(secs),
             alpha: overrides.alpha,
@@ -544,7 +544,7 @@ impl InterruptionGate {
             InterruptionGate::VadOnly { reason, diagnostic } => InterruptionGateVerdict {
                 build: false,
                 reason: Some((*reason).to_owned()),
-                level: diagnostic.as_ref().map(|d| d.level.as_str().to_owned()),
+                level: diagnostic.as_ref().map(|d| d.level),
                 message: diagnostic.as_ref().map(|d| d.message.to_owned()),
             },
         }

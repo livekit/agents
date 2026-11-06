@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any, Self
+from typing import Any, Literal, Self
 
 from livekit.agents.tts import TTS
 
@@ -110,7 +110,11 @@ def eot_select(
 ) -> tuple[TurnDetectorModel, bool, list[str]]:
     """The turn detector a host constructs: `(model, cloud, warnings)`."""
 
-def stt_resolve_vad_for_model(model: str | None = None, *, has_vad: bool = False) -> str:
+def stt_resolve_vad_for_model(
+    model: str | None = None,
+    *,
+    has_vad: bool = False,
+) -> Literal["keep", "drop_and_warn", "create_default", "none"]:
     """`_resolve_vad_for_model`: what the host does with the caller's VAD for this model."""
 
 def stt_normalize_fallback_str(model: str) -> FallbackModel:

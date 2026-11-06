@@ -291,7 +291,7 @@ async fn local_tasks(
     let mut page_token = None;
     loop {
         // the host's state names the row state of the same spelling
-        let status = status.and_then(|s| crate::TaskState::parse(s.as_str()));
+        let status = status.and_then(|s| crate::TaskState::from_wire(s.as_str()));
         let query = TaskQuery { status, page_size: 100, page_token, ..TaskQuery::default() };
         let page = thread.list_tasks(&query).await?;
         for row in page.tasks {

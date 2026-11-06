@@ -190,7 +190,7 @@ impl SessionEvent {
             SessionEvent::SpeechCreated { speech, kind, user_initiated } => {
                 HostWire::SpeechCreated(w::SpeechCreated {
                     user_initiated: *user_initiated,
-                    source: kind.as_source_str().to_owned(),
+                    source: kind.source(),
                     speech_handle: speeches(*speech),
                 })
             }

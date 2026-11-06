@@ -6,6 +6,7 @@ use serde_json::{Map, Value};
 
 /// A task's state: the storage core's `TaskState` as the host reads it.
 #[crate::host(record(module = "storage_class", extract, emit))]
+#[crate::host(wire_strs)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "kebab-case"))]
@@ -27,33 +28,8 @@ pub enum TaskState {
 }
 
 impl TaskState {
-    pub fn parse(value: &str) -> Option<Self> {
-        Some(match value {
-            "submitted" => Self::Submitted,
-            "working" => Self::Working,
-            "input-required" => Self::InputRequired,
-            "completed" => Self::Completed,
-            "failed" => Self::Failed,
-            "canceled" => Self::Canceled,
-            "rejected" => Self::Rejected,
-            _ => return None,
-        })
-    }
-
     pub fn is_terminal(self) -> bool {
         matches!(self, Self::Completed | Self::Failed | Self::Canceled | Self::Rejected)
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            TaskState::Submitted => "submitted",
-            TaskState::Working => "working",
-            TaskState::InputRequired => "input-required",
-            TaskState::Completed => "completed",
-            TaskState::Failed => "failed",
-            TaskState::Canceled => "canceled",
-            TaskState::Rejected => "rejected",
-        }
     }
 }
 

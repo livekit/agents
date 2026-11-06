@@ -60,7 +60,7 @@ impl RecordingOptions {
 pub struct EvaluationRecord {
     pub name: String,
     pub tag: String,
-    pub verdict: String,
+    pub verdict: crate::evals::JudgeVerdict,
     pub reasoning: String,
     pub instructions: String,
 }
@@ -417,7 +417,7 @@ pub trait Tagger: Send + Sized + 'static {
     fn _core_record_judgment(
         &mut self,
         name: String,
-        verdict: String,
+        verdict: crate::evals::JudgeVerdict,
         reasoning: String,
         instructions: String,
     );

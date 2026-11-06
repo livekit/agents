@@ -180,6 +180,13 @@ impl Imports {
         self.entries.retain(|(owner, _)| owner != module);
     }
 
+    /// Whether `module`'s `name` was imported, no longer importing it.
+    pub(crate) fn remove(&mut self, module: &str, name: &str) -> bool {
+        let before = self.entries.len();
+        self.entries.retain(|(m, n)| !(m == module && n == name));
+        self.entries.len() != before
+    }
+
     /// `name` may be a nested model (`Owner.Name`): its owner is imported.
     pub(crate) fn add(&mut self, module: &str, name: &str) {
         let name = name.split('.').next().unwrap_or(name);
@@ -533,7 +540,9 @@ pub(crate) fn annotation(this: &str, ty: &Ty, dir: Dir, imports: &mut Imports) -
             }
             // Two modules' models of one name are told apart by an alias.
             HostForm::Record { module, name } => imports.external(&format!(".{module}"), name),
-            HostForm::WireStrs | HostForm::Str | HostForm::Wire => "str".into(),
+            HostForm::WireStrs | HostForm::Str | HostForm::Wire => {
+                imports.annotation(&r.wire_annotation(), &r.rust)
+            }
             HostForm::Annotation(text)
             | HostForm::Converted(text, ..)
             | HostForm::Via { host: text, .. } => imports.annotation(text, &r.rust),

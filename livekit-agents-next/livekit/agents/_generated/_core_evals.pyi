@@ -39,9 +39,7 @@ class _core_JudgeRunner:
         """Whether `message` fulfills `intent`. A provider failure raises the provider's error."""
 
 def _core_evaluation_score(result: EvaluationResult) -> EvaluationScore:
-    """The aggregates of `result`'s verdicts; a verdict other than pass, fail or maybe is
-    refused.
-    """
+    """The aggregates of `result`'s verdicts."""
 
 def _core_judgment_passed(judgment: JudgmentResult) -> bool:
     """`JudgmentResult.passed`: the verdict is pass."""

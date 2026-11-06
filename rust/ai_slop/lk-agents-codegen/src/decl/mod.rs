@@ -975,9 +975,23 @@ pub struct Record {
     /// A unit-only record enum: it crosses as its string (or `Enum` member), not as a
     /// dict of fields.
     pub literal: bool,
+    /// A wire vocabulary's strings (`wire_strs`, `wire_enum`, a `string` unit enum): its host
+    /// annotation is their `Literal`. Empty for any other record.
+    pub wires: Vec<String>,
     /// Declared directions: the host may pass it in (`extract`) / receive it (`emit`).
     pub extract: bool,
     pub emit: bool,
+}
+
+impl Record {
+    /// The host annotation of a wire vocabulary: `typing.Literal[..]` of its strings, else `str`.
+    pub fn wire_annotation(&self) -> String {
+        if self.wires.is_empty() {
+            return "str".into();
+        }
+        let wires = self.wires.iter().map(|w| format!("{w:?}")).collect::<Vec<_>>();
+        format!("typing.Literal[{}]", wires.join(", "))
+    }
 }
 
 impl Ty {

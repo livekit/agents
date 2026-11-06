@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Self
+from typing import Literal, Self
 
 from livekit.agents.tts import SynthesizedAudio
 from livekit.agents.utils.aio import Chan
@@ -18,11 +18,11 @@ from .usage import TokenUsage
 async def encode_image(
     frame: VideoFrame,
     *,
-    format: str = "JPEG",
+    format: Literal["JPEG", "PNG"],
     quality: int | None = None,
     resize_width: int | None = None,
     resize_height: int | None = None,
-    resize_strategy: str | None = None,
+    resize_strategy: Literal["center_aspect_fit", "center_aspect_cover", "scale_aspect_fit", "scale_aspect_cover", "skew"] | None = None,
 ) -> bytes: ...
 
 async def serialize_image_frame(

@@ -86,7 +86,7 @@ json_cell!(TaskData, TaskInternal, ChatItem, a2a::Message);
 
 impl FromCell for TaskState {
     fn from_cell(cell: &SqlValue) -> Result<Self, String> {
-        cell.as_str().and_then(TaskState::parse).ok_or_else(|| "a task state".into())
+        cell.as_str().and_then(TaskState::from_wire).ok_or_else(|| "a task state".into())
     }
 }
 

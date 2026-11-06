@@ -10,29 +10,23 @@ pub enum ImageInput {
     Url { url: String, mime_type: Option<String> },
 }
 
-/// PIL's format names, upper case.
+/// PIL's format names, upper case. A typo must not default to JPEG.
+#[crate::host(wire_enum(msg = format!("unknown image format {s:?}: expected 'JPEG' or 'PNG'")))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ImageFormat {
     #[default]
+    #[host(rename = "JPEG")]
     Jpeg,
+    #[host(rename = "PNG")]
     Png,
-}
-
-/// A typo must not default to JPEG.
-impl std::str::FromStr for ImageFormat {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, String> {
-        match s {
-            "JPEG" => Ok(ImageFormat::Jpeg),
-            "PNG" => Ok(ImageFormat::Png),
-            _ => Err(format!("unknown image format {s:?}: expected 'JPEG' or 'PNG'")),
-        }
-    }
 }
 
 /// `ResizeOptions.strategy` (`image.py:47`). The `Scale*` strategies do not letterbox, so the
 /// result is usually smaller (fit) or larger (cover) than the box in one dimension.
+#[crate::host(wire_enum(msg = format!(
+    "unknown resize strategy {s:?}: expected one of 'center_aspect_fit', 'center_aspect_cover', \
+     'scale_aspect_fit', 'scale_aspect_cover', 'skew'"
+)))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResizeStrategy {
     CenterAspectFit,
@@ -40,26 +34,6 @@ pub enum ResizeStrategy {
     ScaleAspectFit,
     ScaleAspectCover,
     Skew,
-}
-
-impl std::str::FromStr for ResizeStrategy {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, String> {
-        Ok(match s {
-            "center_aspect_fit" => ResizeStrategy::CenterAspectFit,
-            "center_aspect_cover" => ResizeStrategy::CenterAspectCover,
-            "scale_aspect_fit" => ResizeStrategy::ScaleAspectFit,
-            "scale_aspect_cover" => ResizeStrategy::ScaleAspectCover,
-            "skew" => ResizeStrategy::Skew,
-            _ => {
-                return Err(format!(
-                    "unknown resize strategy {s:?}: expected one of 'center_aspect_fit', \
-                     'center_aspect_cover', 'scale_aspect_fit', 'scale_aspect_cover', 'skew'"
-                ));
-            }
-        })
-    }
 }
 
 #[derive(Clone)]
@@ -105,11 +79,11 @@ pub trait ImageFunctions {
     async fn encode_image(
         env: &Self::Env,
         frame: Arc<dyn RtcVideoFrame>,
-        #[host(kw, default = "JPEG")] format: String,
+        #[host(kw)] format: ImageFormat,
         #[host(default = None)] quality: Option<u8>,
         #[host(default = None)] resize_width: Option<u32>,
         #[host(default = None)] resize_height: Option<u32>,
-        #[host(default = None)] resize_strategy: Option<String>,
+        #[host(default = None)] resize_strategy: Option<ResizeStrategy>,
     ) -> Result<Vec<u8>, ImageError>;
 
     /// A frame as JPEG bytes, resized to its inference size when it has one.
@@ -146,17 +120,14 @@ pub struct ResizeOptions {
     /// ``center_aspect_fit`` letterboxes into the size, ``center_aspect_cover`` fills it
     ///     cropping, ``scale_aspect_fit``/``scale_aspect_cover`` keep the aspect ratio inside/around it,
     ///     ``skew`` resizes to it exactly.
-    #[host(
-        annotation = "typing.Literal['center_aspect_fit', 'center_aspect_cover', 'scale_aspect_fit', 'scale_aspect_cover', 'skew']"
-    )]
-    pub strategy: String,
+    pub strategy: ResizeStrategy,
 }
 
 /// How a frame is encoded.
 #[crate::host(record(module = "image_options", path = "livekit.agents.utils.media", dataclass))]
 pub struct EncodeOptions {
-    #[host(default = "JPEG", annotation = "typing.Literal['JPEG', 'PNG']")]
-    pub format: String,
+    #[host(default = "JPEG")]
+    pub format: ImageFormat,
     #[host(default = None)]
     pub resize_options: Option<ResizeOptions>,
     /// JPEG quality, 0-100.

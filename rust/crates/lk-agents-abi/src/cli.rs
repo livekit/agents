@@ -1,11 +1,24 @@
 //! The process launcher's typed command line, and the agent server the dev channel reports on.
 
+/// The launcher's `--log-level`; `warning` and `critical` are aliases of `warn` and `fatal`.
+#[crate::host(wire_enum(msg = format!("unknown log level {s:?}")))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogLevel {
+    Trace,
+    Debug,
+    Info,
+    Warn,
+    Error,
+    Fatal,
+    Off,
+}
+
 /// The command accepted by the process launcher.
 #[derive(Debug, Clone, PartialEq)]
 #[crate::host(record(module = "cli", emit, extract))]
 pub enum CliArgs {
     Start {
-        log_level: String,
+        log_level: LogLevel,
         dev: bool,
         cli_addr: Option<String>,
         simulation: bool,

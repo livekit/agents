@@ -10,7 +10,7 @@ import inspect
 import logging
 import time
 from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterable
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from livekit import rtc
 
@@ -399,7 +399,7 @@ def _on_speech_created(self: VoiceSession[Any], wire: SpeechCreatedWire) -> None
         "speech_created",
         SpeechCreatedEvent(
             user_initiated=wire.user_initiated,
-            source=cast(Literal["say", "generate_reply"], wire.source),
+            source=wire.source,
             speech_handle=handle,
         ),
     )

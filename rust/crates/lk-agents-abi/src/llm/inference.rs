@@ -137,6 +137,35 @@ pub trait CompletionWire {
 
 // Public data contracts. Python behavior remains in its adapters.
 
+/// `ChatCompletionOptions.prompt_cache_retention`.
+#[crate::host(wire_strs)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromptCacheRetention {
+    InMemory,
+    #[host(rename = "24h")]
+    Day,
+}
+
+/// `ChatCompletionOptions.service_tier`.
+#[crate::host(wire_strs)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServiceTier {
+    Auto,
+    Default,
+    Flex,
+    Scale,
+    Priority,
+}
+
+/// `ChatCompletionOptions.verbosity`.
+#[crate::host(wire_strs)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Verbosity {
+    Low,
+    Medium,
+    High,
+}
+
 #[crate::host(record(
     module = "llm_provider_options",
     path = "livekit.agents.inference.llm",
@@ -155,8 +184,7 @@ pub struct ChatCompletionOptions {
     pub max_tokens: crate::Maybe<Option<i64>>,
     #[host(annotation = "openai.types.shared_params.Metadata | None")]
     pub metadata: crate::Maybe<Option<serde_json::Value>>,
-    #[host(annotation = "list[typing.Literal['text', 'audio']] | None")]
-    pub modalities: crate::Maybe<Option<Vec<String>>>,
+    pub modalities: crate::Maybe<Option<Vec<crate::Modality>>>,
     #[host(annotation = "int | None")]
     pub n: crate::Maybe<Option<i64>>,
     #[host(annotation = "bool")]
@@ -167,16 +195,14 @@ pub struct ChatCompletionOptions {
     pub presence_penalty: crate::Maybe<Option<f64>>,
     #[host(annotation = "str")]
     pub prompt_cache_key: crate::Maybe<String>,
-    #[host(annotation = "typing.Literal['in_memory', '24h'] | None")]
-    pub prompt_cache_retention: crate::Maybe<Option<String>>,
+    pub prompt_cache_retention: crate::Maybe<Option<PromptCacheRetention>>,
     #[host(annotation = "openai.types.shared.reasoning_effort.ReasoningEffort | None")]
     pub reasoning_effort: crate::Maybe<Option<serde_json::Value>>,
     #[host(annotation = "str")]
     pub safety_identifier: crate::Maybe<String>,
     #[host(annotation = "int | None")]
     pub seed: crate::Maybe<Option<i64>>,
-    #[host(annotation = "typing.Literal['auto', 'default', 'flex', 'scale', 'priority'] | None")]
-    pub service_tier: crate::Maybe<Option<String>>,
+    pub service_tier: crate::Maybe<Option<ServiceTier>>,
     #[host(annotation = "str | None | list[str] | None")]
     pub stop: crate::Maybe<Option<serde_json::Value>>,
     #[host(annotation = "bool | None")]
@@ -189,8 +215,7 @@ pub struct ChatCompletionOptions {
     pub top_p: crate::Maybe<Option<f64>>,
     #[host(annotation = "str")]
     pub user: crate::Maybe<String>,
-    #[host(annotation = "typing.Literal['low', 'medium', 'high'] | None")]
-    pub verbosity: crate::Maybe<Option<String>>,
+    pub verbosity: crate::Maybe<Option<Verbosity>>,
     #[host(annotation = "openai.types.chat.completion_create_params.WebSearchOptions")]
     pub web_search_options: crate::Maybe<serde_json::Value>,
     #[host(annotation = "livekit.agents.llm.ToolChoice")]

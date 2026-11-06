@@ -10,7 +10,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TypeAlias
+from typing import TYPE_CHECKING, TypeAlias
+
+if TYPE_CHECKING:
+    from .storage_class import TaskState
 
 
 @dataclass(kw_only=True, slots=True)
@@ -87,7 +90,7 @@ class Artifact:
 
 @dataclass(kw_only=True, slots=True)
 class TaskUpdate:
-    state: str
+    state: TaskState
     text: str
     task_id: str
     context_id: str

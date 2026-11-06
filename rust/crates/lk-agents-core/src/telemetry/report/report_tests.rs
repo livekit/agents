@@ -107,7 +107,7 @@ fn report() -> SessionReport {
         evaluations: vec![EvaluationRecord {
             name: "task".into(),
             tag: "lk.judge.task:fail".into(),
-            verdict: "fail".into(),
+            verdict: lk_agents_abi::evals::JudgeVerdict::Fail,
             reasoning: "why".into(),
             instructions: "how".into(),
         }],

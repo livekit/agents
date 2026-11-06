@@ -141,16 +141,7 @@ pub use lk_agents_core::a2a::client::message_from_wire;
 
 pub fn update_from_wire(update: lk_agents_core::a2a::client::TaskUpdate) -> TaskUpdate {
     TaskUpdate {
-        state: match update.state {
-            lk_agents_abi::storage::TaskState::Submitted => "submitted",
-            lk_agents_abi::storage::TaskState::Working => "working",
-            lk_agents_abi::storage::TaskState::InputRequired => "input-required",
-            lk_agents_abi::storage::TaskState::Completed => "completed",
-            lk_agents_abi::storage::TaskState::Failed => "failed",
-            lk_agents_abi::storage::TaskState::Canceled => "canceled",
-            lk_agents_abi::storage::TaskState::Rejected => "rejected",
-        }
-        .into(),
+        state: update.state,
         text: update.text,
         task_id: update.task_id,
         context_id: update.context_id,

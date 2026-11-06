@@ -11,6 +11,7 @@ mod json;
 mod upload;
 
 use lk_agents_abi::ChatItem;
+use lk_agents_abi::evals::JudgeVerdict;
 use lk_agents_abi::llm::chat_context::protocol::encode_chat_item;
 use lk_agents_abi::telemetry::decl::{JsonObject, KvList, RecordDecl, Value};
 use lk_agents_abi::telemetry::record::{JobKey, Key, LogRecord};
@@ -83,7 +84,7 @@ pub fn records(report: &SessionReport, options: &RecordingOptions) -> Vec<LogRec
     }
 
     for e in &report.evaluations {
-        let fail = e.verdict == "fail";
+        let fail = e.verdict == JudgeVerdict::Fail;
         push(&EvaluationLog { evaluation: KvList(e.clone()) }, nanos(report.timestamp), fail);
     }
 

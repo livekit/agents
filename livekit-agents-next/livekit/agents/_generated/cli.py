@@ -10,12 +10,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TypeAlias
+from typing import Literal, TypeAlias
 
 
 @dataclass(kw_only=True, slots=True)
 class CliArgsStart:
-    log_level: str
+    log_level: Literal["trace", "debug", "info", "warn", "error", "fatal", "off"]
     dev: bool
     cli_addr: str | None
     simulation: bool
