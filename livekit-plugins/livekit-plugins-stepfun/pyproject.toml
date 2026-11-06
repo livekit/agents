@@ -1,0 +1,53 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "livekit-plugins-stepfun"
+dynamic = ["version"]
+description = "StepFun (阶跃星辰) speech and chat plugin for LiveKit Agents"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+authors = [{ name = "StepFun" }]
+keywords = ["webrtc", "realtime", "audio", "video", "livekit", "stepfun", "asr", "tts"]
+classifiers = [
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Topic :: Multimedia :: Sound/Audio",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+
+dependencies = [
+    "livekit-agents[codecs]>=1.8.6",
+    "aiohttp>=3.10",
+]
+
+[project.optional-dependencies]
+# The OpenAI-compatible chat client is optional for speech-only installs.
+llm = [
+    "livekit-plugins-openai>=1.8.6",
+]
+[project.urls]
+Documentation = "https://platform.stepfun.ai/docs"
+Homepage = "https://www.stepfun.com/"
+Source = "https://github.com/livekit/agents"
+
+[tool.hatch.version]
+path = "livekit/plugins/stepfun/version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["livekit"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/livekit", "/README.md"]
+
+[tool.uv]
+exclude-newer = "7 days"
+exclude-newer-package = { livekit-agents = "0 days" }
