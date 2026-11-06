@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import signal
 import threading
 import time
@@ -223,3 +224,108 @@ def test_sigterm_with_blocked_event_loop_escalates() -> None:
     assert elapsed < block_for / 2, (
         f"shutdown took {elapsed:.1f}s — the blocked loop was never preempted"
     )
+
+
+# ---------------------------------------------------------------------------
+# worker startup failure: the CLI must exit non-zero, and the original error
+# must remain the reported one (orchestrators watch the exit code)
+# ---------------------------------------------------------------------------
+
+
+class _StartupFailureServer(_StubServer):
+    """A worker whose run() fails at startup (bad config, unreachable
+    LiveKit server, bad credentials, ...)."""
+
+    async def run(self, *, devmode: bool, unregistered: bool) -> None:
+        raise ValueError("ws_url is required, or set LIVEKIT_URL environment variable")
+
+
+class _EarlyFailureServer(_StubServer):
+    """run() fails before the server's internals exist (e.g. no rtc_session
+    registered). drain()/aclose() then raise AttributeError on the
+    uninitialized attributes, like the real AgentServer does."""
+
+    async def run(self, *, devmode: bool, unregistered: bool) -> None:
+        raise RuntimeError("No RTC session entrypoint has been registered.")
+
+    async def drain(self) -> None:
+        raise AttributeError("'AgentServer' object has no attribute '_proc_pool'")
+
+    async def aclose(self) -> None:
+        raise AttributeError("'AgentServer' object has no attribute '_close_future'")
+
+
+class _DrainFailureServer(_StubServer):
+    """run() fails, then drain() raises a non-timeout error. aclose() must
+    still be called explicitly: it is the only teardown path for the
+    inference executor, HTTP session/server, Prometheus server, API client
+    and message channel."""
+
+    async def run(self, *, devmode: bool, unregistered: bool) -> None:
+        raise RuntimeError("worker failed at startup")
+
+    async def drain(self) -> None:
+        self.calls.append("drain")
+        raise RuntimeError("drain failed")
+
+    async def aclose(self) -> None:
+        self.calls.append("aclose")
+
+
+@pytest.mark.parametrize("dev", [False, True], ids=["start", "dev"])
+def test_worker_startup_failure_exits_nonzero(dev: bool) -> None:
+    """A worker that fails to start must exit non-zero: supervisors (systemd,
+    docker, k8s probes, CI) treat exit 0 as a clean stop and never alert or
+    restart. The graceful-shutdown path still runs before the exit."""
+    server = _StartupFailureServer()
+    args = proto.CliArgs(log_level="DEBUG", dev=dev)
+
+    with _run_worker_test_env():
+        with pytest.raises(SystemExit) as exc_info:
+            _run_worker(server, args)  # type: ignore[arg-type]
+
+    assert exc_info.value.code != 0
+    # drain/aclose still ran before the non-zero exit
+    expected_calls = ["drain", "aclose"] if not dev else ["aclose"]
+    assert server.calls == expected_calls
+
+
+def test_worker_startup_failure_before_init_is_not_masked(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """When run() fails before the server finished initializing, drain()/
+    aclose() raise AttributeError on the uninitialized internals. That
+    secondary error must not escape and replace the original failure: the
+    original error stays the one logged and the exit is non-zero."""
+    server = _EarlyFailureServer()
+    args = proto.CliArgs(log_level="DEBUG", dev=False)
+
+    with _run_worker_test_env(), caplog.at_level(logging.ERROR):
+        with pytest.raises(SystemExit) as exc_info:
+            _run_worker(server, args)  # type: ignore[arg-type]
+
+    assert exc_info.value.code != 0
+    failure_logs = [r for r in caplog.records if r.getMessage() == "worker failed"]
+    assert failure_logs, "the original startup error must be logged"
+    assert isinstance(failure_logs[0].exc_info[1], RuntimeError)
+
+
+def test_worker_failure_still_closes_server_when_drain_raises(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A secondary drain() error after run() failed must not skip aclose():
+    aclose() must still be called explicitly, even though the worker is
+    already exiting non-zero."""
+    server = _DrainFailureServer()
+    args = proto.CliArgs(log_level="DEBUG", dev=False)
+
+    with _run_worker_test_env(), caplog.at_level(logging.WARNING):
+        with pytest.raises(SystemExit) as exc_info:
+            _run_worker(server, args)  # type: ignore[arg-type]
+
+    assert exc_info.value.code != 0
+    assert server.calls == ["drain", "aclose"]
+    warnings = [
+        r for r in caplog.records if r.getMessage() == "error during shutdown after worker failure"
+    ]
+    assert warnings, "the secondary drain error must stay a warning, not mask the failure"
