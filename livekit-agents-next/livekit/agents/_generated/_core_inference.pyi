@@ -206,7 +206,8 @@ class InferenceTts:
         sample_rate: int = 24000,
         extra_kwargs: dict[str, object] | None = None,
         fallback: list[HostFallbackModel] | None = None,
-    ) -> Self: ...
+    ) -> Self:
+        """`inference.TTS`'s mixin builds it on first use, after a fork, from the TTS's attributes."""
     @property
     def sample_rate(self) -> int: ...
     @property

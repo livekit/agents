@@ -184,6 +184,8 @@ pub(super) fn facade(entries: &[Entry], at: &str) -> Result<Option<Facade>, Stri
                     "annotation",
                     "resolve",
                     "legs",
+                    "leg",
+                    "cached",
                     "availability",
                 ],
             )?;
@@ -216,6 +218,8 @@ pub(super) fn facade(entries: &[Entry], at: &str) -> Result<Option<Facade>, Stri
                 resolve: per_parameter("resolve")?,
                 legs: voc::find(&entry.nested, "legs")
                     .map_or(Vec::new(), |legs| legs.nested.iter().map(|l| l.key.clone()).collect()),
+                leg: voc::text(at, &entry.nested, "leg")?,
+                cached: voc::find(&entry.nested, "cached").is_some(),
                 availability: voc::find(&entry.nested, "availability")
                     .map(|a| {
                         voc::only(at, &a.nested, &["observer", "event", "record"])?;

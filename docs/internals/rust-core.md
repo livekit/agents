@@ -747,8 +747,10 @@ agent references and settles the view when the native handoff answers.
 signatures, including keyword defaults, Future-returning calls and readable
 views. Required native arguments cannot be omitted by a facade. A facade on a class's
 constructor is the host mixin that builds it from the host object's attributes, once per running
-loop, hands it to the core as the provider unless a subclass replaces a declared method, and
-emits a fallback chain's availability event: the fallback adapters' mixins are generated. Python keeps
+loop or once per object on first use, hands it to the core as the provider unless a subclass
+replaces a declared method, and emits a fallback chain's availability event; the class's other
+facades are the mixin's methods. The fallback adapters' and the inference clients' mixins are
+generated. Python keeps
 handwritten methods where SDK object conversion or callback binding is needed;
 configuration types and VoiceTask authoring are separate from the session class.
 

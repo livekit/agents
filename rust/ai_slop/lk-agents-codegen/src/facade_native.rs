@@ -1,11 +1,13 @@
 //! A facade on a class's `#[host(new)]`: the host mixin that builds that native class from its
 //! host class's own attributes, one per running event loop (a native engine calls the host
-//! objects it holds on the loop it was built on). Each native parameter `p` is read from `self._p`,
-//! declared for the type checker and set by the host class's `__init__`, and passed through
-//! `resolve(p = "module.fn")` when given.
+//! objects it holds on the loop it was built on), or with `cached` once per host object, on first
+//! use. Each native parameter `p` is read from `self._p`, declared for the type checker and set by
+//! the host class's `__init__`, and passed through `resolve(p = "module.fn")` when given. The
+//! class's other facades with the same module and class are the mixin's methods.
 //!
-//! `legs(a, b)`: the mixin's `_core_leg` hands the core this native engine in place of the host
-//! object, unless the host class's subclass replaces one of those provider methods.
+//! `legs(a, b)`: the mixin's `_core_leg` hands the core this native engine (`leg = "m"`: the
+//! value of the host's method `m()`) in place of the host object, unless the host class's
+//! subclass replaces one of those provider methods.
 //! `availability(observer = "p", event = "..", record = "module.Name")`: the host object is the
 //! chain observer the constructor takes as `p`; an entry of `members` going unavailable or
 //! recovering is emitted as `event`, a `record(entry, available)`.
@@ -13,6 +15,17 @@
 use crate::class_stub::{Dir, Imports};
 use crate::decl::{Class, Declarations, Facade, Method, MethodKind, Ty};
 use crate::python::Out;
+
+/// Whether `facade` is a method of a constructor facade's host mixin.
+pub fn hosts(declarations: &Declarations, facade: &Facade) -> bool {
+    declarations.classes.iter().flat_map(|class| &class.methods).any(|method| {
+        method.kind == MethodKind::New
+            && method
+                .facade
+                .as_ref()
+                .is_some_and(|f| f.module == facade.module && f.class == facade.class)
+    })
+}
 
 pub fn emit(declarations: &Declarations) -> Result<Vec<Out>, String> {
     let mut modules = std::collections::BTreeMap::<&str, Vec<_>>::new();
@@ -32,7 +45,7 @@ pub fn emit(declarations: &Declarations) -> Result<Vec<Out>, String> {
         for (class, method, facade) in hosts {
             body.push_str(&host(declarations, class, method, facade, &mut runtime, &mut typing)?);
         }
-        let mut text = "# GENERATED FILE -- DO NOT EDIT.\n# From #[host(new, facade)] declarations in lk-agents-abi.\n\nfrom __future__ import annotations\n\nfrom typing import TYPE_CHECKING, Any\n\nfrom .. import _bindings, _core\n".to_owned();
+        let mut text = "# GENERATED FILE -- DO NOT EDIT.\n# From #[host(new, facade)] declarations in lk-agents-abi.\n\nfrom __future__ import annotations\n\nimport functools\nfrom typing import TYPE_CHECKING, Any\n\nfrom .. import _bindings, _core\n".to_owned();
         text.push_str(&runtime.render(&[]));
         // `Any` is imported at runtime: the declarations below name it too.
         typing.remove_module("typing");
@@ -119,19 +132,48 @@ fn host(
             call("self.emit", &[event, record], 8)
         ));
     }
-    let lines: String = arguments.iter().map(|a| format!("                {a},\n")).collect();
-    let mut text = format!(
-        "\n\nclass {mixin}:\n    if TYPE_CHECKING:\n{declared}\n    @property\n    def {target}(self) -> _core.{native}:\n        return _bindings.on_loop(\n            self,\n            lambda: _core.{native}(\n{lines}            ),\n        )\n"
-    );
+    let build = match facade.cached {
+        true => {
+            let lines: String = arguments.iter().map(|a| format!("            {a},\n")).collect();
+            format!(
+                "    @functools.cached_property\n    def {target}(self) -> _core.{native}:\n        return _core.{native}(\n{lines}        )\n"
+            )
+        }
+        false => {
+            let lines: String =
+                arguments.iter().map(|a| format!("                {a},\n")).collect();
+            format!(
+                "    @property\n    def {target}(self) -> _core.{native}:\n        return _bindings.on_loop(\n            self,\n            lambda: _core.{native}(\n{lines}            ),\n        )\n"
+            )
+        }
+    };
+    let leg = match &facade.leg {
+        Some(leg) => {
+            declared.push_str(&format!("\n        def {leg}(self) -> _core.{native}: ...\n"));
+            format!("self.{leg}()")
+        }
+        None => format!("self.{target}"),
+    };
+    let mut text = format!("\n\nclass {mixin}:\n    if TYPE_CHECKING:\n{declared}\n{build}");
     if !facade.legs.is_empty() {
         let mut arguments = vec!["self".to_owned(), mixin.clone()];
         arguments.extend(facade.legs.iter().map(|l| format!("{l:?}")));
         text.push_str(&format!(
-            "\n    def _core_leg(self) -> Any:\n        \"\"\"This engine, unless a subclass replaces what it would bypass.\"\"\"\n{}        return self if replaced else self.{target}\n",
+            "\n    def _core_leg(self) -> Any:\n        \"\"\"This engine, unless a subclass replaces what it would bypass.\"\"\"\n{}        return self if replaced else {leg}\n",
             call("replaced = _bindings.overrides", &arguments, 8)
         ));
     }
     text.push_str(&members);
+    for other in &class.methods {
+        if let Some(delegated) = other.facade.as_ref().filter(|f| {
+            other.kind != MethodKind::New && f.module == facade.module && f.class == *mixin
+        }) {
+            if delegated.target != *target {
+                return Err(format!("{}: facade targets {target}", other.rust_name));
+            }
+            text.push_str(&crate::facade::delegate(class, other, delegated, runtime)?);
+        }
+    }
     Ok(text)
 }
 
@@ -235,5 +277,33 @@ mod tests {
         ));
         assert!(text.contains("from . import events\n"));
         assert!(text.contains("        def _core_gone(self) -> None: ...\n"));
+    }
+
+    #[test]
+    fn a_cached_engine_is_built_once_and_its_methods_join_the_mixin() {
+        let declarations = crate::decl::tests::read(
+            r#"
+            #[crate::host(class(name = "Client"))]
+            pub trait Client: Sized {
+                #[host(env)]
+                type Env;
+                #[host(new, facade(module = "hosts", class = "ClientHost", target = "_native", cached, legs(chat), leg = "_core_native"))]
+                fn new(env: &Self::Env, model: String) -> Self;
+                #[host(getter, facade(module = "hosts", class = "ClientHost", target = "_native"))]
+                fn model(&self) -> String;
+            }
+            "#,
+        )
+        .unwrap();
+        let text = super::emit(&declarations).unwrap().remove(0).text;
+        assert!(text.contains(
+            "    @functools.cached_property\n    def _native(self) -> _core.Client:\n        return _core.Client(\n            self._model,\n        )\n"
+        ));
+        assert!(text.contains("        def _core_native(self) -> _core.Client: ...\n"));
+        assert!(text.contains("return self if replaced else self._core_native()\n"));
+        assert!(text.contains(
+            "    @property\n    def model(self) -> str:\n        return self._native.model\n"
+        ));
+        assert!(crate::facade::emit(&declarations).unwrap().is_empty());
     }
 }

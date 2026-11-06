@@ -23,8 +23,18 @@ pub trait InferenceLlm: Send + Sync + Sized + 'static {
     /// LiveKit Inference gateway; without, `api_key` is an OpenAI-compatible provider's own key,
     /// sent as the bearer with no LiveKit header. `label` is the host class it reports as.
     /// `strict_tool_schema`, `gzip_body` and `msgpack_body` suit a provider that refuses strict
-    /// tool schemas or accepts compressed or msgpack bodies.
+    /// tool schemas or accepts compressed or msgpack bodies. `inference.LLM`'s mixin builds it on
+    /// first use, after a fork, from the LLM's attributes.
     #[host(new)]
+    #[host(facade(
+        module = "provider_hosts",
+        class = "InferenceLlmHost",
+        target = "_native",
+        cached,
+        legs(chat),
+        leg = "_core_native",
+        annotation(extra_kwargs = "dict[str, object]")
+    ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         env: &Self::Env,
@@ -52,14 +62,26 @@ pub trait InferenceLlm: Send + Sync + Sized + 'static {
     ) -> Self;
 
     #[host(getter)]
+    #[host(facade(module = "provider_hosts", class = "InferenceLlmHost", target = "_native"))]
     fn model(&self) -> String;
 
     /// The persistent request options, a copy.
     #[host(getter)]
     fn extra_kwargs(&self) -> Extra;
 
-    /// Read by the next `chat()`. `extra_kwargs` replaces the persistent options.
+    /// Read by the next ``chat()``. ``extra_kwargs`` replaces the persistent kwargs.
     #[host(call)]
+    #[host(facade(
+        module = "provider_hosts",
+        class = "InferenceLlmHost",
+        target = "_native",
+        not_given,
+        annotation(
+            model = ".inference_llm.LLMModels | str",
+            extra_kwargs = ".llm_provider_options.ChatCompletionOptions | dict[str, Any]"
+        ),
+        resolve(extra_kwargs = "builtins.dict")
+    ))]
     fn update_options(
         &self,
         #[host(kw, default = None)] model: Option<String>,

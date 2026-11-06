@@ -14,7 +14,6 @@
 
 from __future__ import annotations
 
-import dataclasses
 import os
 import platform
 from typing import Any
@@ -276,9 +275,8 @@ class LLM(OpenAILLM):
             super().update_options(model=new_model)
             return
         # Endpoint changed: the next chat builds the client for the new URL
-        assert self._endpoint is not None
-        self._endpoint = dataclasses.replace(self._endpoint, base_url=_resolve_base_url(new_model))
-        self._model_name = new_model
+        self._base_url = _resolve_base_url(new_model)
+        self._model = new_model
         self._sarvam_api_version = new_version
         self.__dict__.pop("_native", None)
 

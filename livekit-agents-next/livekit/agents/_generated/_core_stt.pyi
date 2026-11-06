@@ -85,7 +85,8 @@ class InferenceStt:
         vad: VAD[Any] | None = None,
     ) -> Self:
         """A client of `model` on the gateway at `base_url`. Starts nothing. `vad`'s end of speech
-        finalizes the transcript (Speechmatics only).
+        finalizes the transcript (Speechmatics only). `inference.STT`'s mixin builds it on first
+        use, after a fork, from the STT's attributes.
         """
     def set_vad(self, vad: VAD[Any] | None = None) -> None:
         """The model's VAD as the host resolved it on `update_options(model=)`; `None` drops it.

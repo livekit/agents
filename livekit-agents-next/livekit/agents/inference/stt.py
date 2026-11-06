@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import dataclasses
-import functools
 from typing import Any
 
 from .. import _bindings, _core, stt
@@ -13,6 +12,7 @@ from .._generated.inference_stt import (
     STTModels,
 )
 from .._generated.language import LanguageCode
+from .._generated.provider_hosts import InferenceSttHost
 from .._generated.public_inference_stt import *  # noqa: F403
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
@@ -51,7 +51,7 @@ __all__ = [
 DEFAULT_SAMPLE_RATE = 16000
 
 
-class STT(stt.STT):
+class STT(InferenceSttHost, stt.STT):
     """LiveKit Inference STT over the core's gateway client (``_core.InferenceStt``)."""
 
     def __init__(
@@ -93,13 +93,14 @@ class STT(stt.STT):
         self._language = LanguageCode(language) if is_given(language) else None
         self._encoding = encoding if is_given(encoding) else "pcm_s16le"
         self._sample_rate = sample_rate if is_given(sample_rate) else DEFAULT_SAMPLE_RATE
-        self._extra = dict(extra_kwargs) if is_given(extra_kwargs) else {}
+        self._extra_kwargs = dict(extra_kwargs) if is_given(extra_kwargs) else {}
         self._fallback = [
             _core.stt_normalize_fallback_str(f) if isinstance(f, str) else f.copy()
             for f in fallbacks
         ]
-        self._conn = conn_options if is_given(conn_options) else DEFAULT_API_CONNECT_OPTIONS
-        self._creds = Credentials.resolve(base_url, api_key, api_secret)
+        self._conn_options = conn_options if is_given(conn_options) else DEFAULT_API_CONNECT_OPTIONS
+        credentials = Credentials.resolve(base_url, api_key, api_secret)
+        self._base_url, self._api_key, self._api_secret = dataclasses.astuple(credentials)
         self._vad = self._resolve_vad(vad if is_given(vad) else None)
         super().__init__(capabilities=self._fold_capabilities())
 
@@ -120,7 +121,7 @@ class STT(stt.STT):
         return _core.stt_capabilities(
             self._model,
             fallback=[f["model"] for f in self._fallback],
-            extra_kwargs=self._extra,
+            extra_kwargs=self._extra_kwargs,
         )
 
     def _resolve_vad(self, vad: vad_mod.VAD | None) -> vad_mod.VAD | None:
@@ -136,32 +137,10 @@ class STT(stt.STT):
                 return VAD()
         return vad
 
-    @functools.cached_property
-    def _native(self) -> _core.InferenceStt:
-        # built on first use, after a fork: the client tracks its open streams and takes the
-        # option and keyterm changes to them
-        return _core.InferenceStt(
-            model=self._model,
-            language=str(self._language) if self._language else None,
-            encoding=self._encoding,
-            sample_rate=self._sample_rate,
-            base_url=self._creds.base_url,
-            api_key=self._creds.api_key,
-            api_secret=self._creds.api_secret,
-            extra_kwargs=self._extra,
-            fallback=self._fallback or None,
-            conn_options=self._conn,
-            vad=self._vad,
-        )
-
     def _core_conn_options(self) -> APIConnectOptions | None:
         """The policy this provider was given, which a session or run that supplies none
         keeps (models.md)."""
-        return self._conn
-
-    def _core_leg(self) -> Any:
-        """The core's own client, unless a subclass replaces what it would bypass."""
-        return self if type(self).stream is not STT.stream else self._core_native()
+        return self._conn_options
 
     def _core_native(self) -> _core.InferenceStt:
         """The client as a session of the current job holds it: its connections carry that job."""
@@ -178,7 +157,7 @@ class STT(stt.STT):
         language: NotGivenOr[STTLanguages | str] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
     ) -> SpeechStream:
-        resolved = conn_options if is_given(conn_options) else self._conn
+        resolved = conn_options if is_given(conn_options) else self._conn_options
         return SpeechStream(
             stt=self,
             language=str(LanguageCode(language)) if is_given(language) else None,
@@ -203,7 +182,7 @@ class STT(stt.STT):
         if is_given(language):
             self._language = LanguageCode(language)
         if is_given(extra):
-            self._extra.update(extra)
+            self._extra_kwargs.update(extra)
         self._capabilities = self._fold_capabilities()
         self._native.update_options(
             model=model if is_given(model) else None,

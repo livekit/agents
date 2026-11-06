@@ -540,6 +540,7 @@ pub struct InferenceTts(pub(crate) ::std::sync::Arc<InferenceTtsImpl>);
 
 #[pymethods]
 impl InferenceTts {
+    /// `inference.TTS`'s mixin builds it on first use, after a fork, from the TTS's attributes.
     #[new]
     #[pyo3(signature = (model, *, base_url, api_key, api_secret, conn_options, voice = None, language = None, encoding = "pcm_s16le".to_owned(), sample_rate = 24000, extra_kwargs = None, fallback = None))]
     fn new(

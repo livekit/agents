@@ -289,7 +289,7 @@ def test_missing_api_key_raises() -> None:
 
 def test_conversations_resolves_to_v1_endpoint() -> None:
     llm = SarvamLLM(model="sarvam-105b-conversations", api_key="sk_test")
-    assert llm._endpoint.base_url.rstrip("/") == SARVAM_LLM_BASE_URL_V1.rstrip("/")
+    assert llm._base_url.rstrip("/") == SARVAM_LLM_BASE_URL_V1.rstrip("/")
     import asyncio
 
     asyncio.get_event_loop().run_until_complete(llm.aclose())
@@ -299,7 +299,7 @@ def test_v2_models_resolve_to_v2_endpoint() -> None:
     """Non-conversations models resolve to /v2."""
     for model in ["sarvam-105b", "gemma4", "glm5.2"]:
         llm = SarvamLLM(model=model, api_key="sk_test")
-        assert llm._endpoint.base_url.rstrip("/") == SARVAM_LLM_BASE_URL_V2.rstrip("/")
+        assert llm._base_url.rstrip("/") == SARVAM_LLM_BASE_URL_V2.rstrip("/")
         import asyncio
 
         asyncio.get_event_loop().run_until_complete(llm.aclose())
@@ -377,7 +377,7 @@ def test_explicit_base_url_overrides_conversations_v1() -> None:
         api_key="sk_test",
         base_url=custom,
     )
-    assert llm._endpoint.base_url.rstrip("/") == custom.rstrip("/")
+    assert llm._base_url.rstrip("/") == custom.rstrip("/")
     import asyncio
 
     asyncio.get_event_loop().run_until_complete(llm.aclose())

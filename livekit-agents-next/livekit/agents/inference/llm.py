@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import dataclasses
-import functools
 from typing import TYPE_CHECKING, Any, cast, get_args
 
 from .. import _core, llm
 from .._bindings import APIConnectionError, APIStatusError, APITimeoutError
 from .._generated.inference_llm import LLMModels, RealtimeModels, ReasoningEffort
 from .._generated.llm_provider_options import ChatCompletionOptions
+from .._generated.provider_hosts import InferenceLlmHost
 from .._generated.public_inference_llm import *  # noqa: F403
 from ..llm import ToolChoice, utils as llm_utils
 from ..llm.chat_context import ChatContext
@@ -104,7 +104,7 @@ class ProviderEndpoint:
     """Msgpack request bodies, for a provider that accepts them."""
 
 
-class LLM(llm.LLM):
+class LLM(InferenceLlmHost, llm.LLM):
     """LiveKit Inference LLM over the core's gateway client (``_core.InferenceLlm``)."""
 
     def __init__(
@@ -121,68 +121,32 @@ class LLM(llm.LLM):
     ) -> None:
         """``_endpoint``: a provider plugin's own endpoint in place of the gateway."""
         super().__init__()
-        self._model_name = model
-        self._provider_name = provider
-        self._endpoint = _endpoint
-        self._creds = None if _endpoint else Credentials.resolve(base_url, api_key, api_secret)
+        self._model = model
+        self._provider = provider
         self._inference_class = inference_class
         self._extra_kwargs: dict[str, object] = dict(extra_kwargs or {})
-
-    @functools.cached_property
-    def _native(self) -> _core.InferenceLlm:
-        # built on first use, after a fork: nothing of the core starts at construction
-        if (endpoint := self._endpoint) is not None:
-            return _core.InferenceLlm(
-                self._model_name,
-                base_url=endpoint.base_url,
-                api_key=endpoint.api_key,
-                api_secret=None,
-                label=self.label,
-                strict_tool_schema=endpoint.strict_tool_schema,
-                gzip_body=endpoint.gzip_body,
-                msgpack_body=endpoint.msgpack_body,
-                extra_kwargs=self._extra_kwargs,
+        # the client is built from these on first use, after a fork (`InferenceLlmHost`)
+        if _endpoint is None:
+            credentials = Credentials.resolve(base_url, api_key, api_secret)
+            self._base_url, self._api_key, self._api_secret = dataclasses.astuple(credentials)
+            self._strict_tool_schema, self._gzip_body, self._msgpack_body = True, False, False
+        else:
+            self._base_url, self._api_key, self._api_secret = (
+                _endpoint.base_url,
+                _endpoint.api_key,
+                None,
             )
-        assert self._creds is not None
-        return _core.InferenceLlm(
-            self._model_name,
-            provider=self._provider_name,
-            base_url=self._creds.base_url,
-            api_key=self._creds.api_key,
-            api_secret=self._creds.api_secret,
-            label=self.label,
-            inference_class=self._inference_class,
-            extra_kwargs=self._extra_kwargs,
-        )
+            self._strict_tool_schema = _endpoint.strict_tool_schema
+            self._gzip_body, self._msgpack_body = _endpoint.gzip_body, _endpoint.msgpack_body
 
     @classmethod
     def from_model_string(cls, model: str) -> LLM:
         return cls(model)
 
-    def _core_leg(self) -> Any:
-        """The core's own client, unless a subclass replaces what it would bypass."""
-        return self if type(self).chat is not LLM.chat else self._core_native()
-
     def _core_native(self) -> _core.InferenceLlm:
         """The client as a session of the current job holds it: its requests carry that job."""
         headers = get_inference_headers(inference_class=self._inference_class)
         return self._native.identified(list(headers.items()), self)
-
-    def update_options(
-        self,
-        *,
-        model: NotGivenOr[LLMModels | str] = NOT_GIVEN,
-        extra_kwargs: NotGivenOr[ChatCompletionOptions | dict[str, Any]] = NOT_GIVEN,
-    ) -> None:
-        """Read by the next ``chat()``. ``extra_kwargs`` replaces the persistent kwargs."""
-        self._native.update_options(
-            model=model if is_given(model) else None,
-            extra_kwargs=dict(extra_kwargs) if is_given(extra_kwargs) else None,
-        )
-
-    @property
-    def model(self) -> str:
-        return self._native.model
 
     @property
     def provider(self) -> str:

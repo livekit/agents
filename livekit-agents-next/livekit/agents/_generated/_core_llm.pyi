@@ -242,7 +242,8 @@ class InferenceLlm:
         LiveKit Inference gateway; without, `api_key` is an OpenAI-compatible provider's own key,
         sent as the bearer with no LiveKit header. `label` is the host class it reports as.
         `strict_tool_schema`, `gzip_body` and `msgpack_body` suit a provider that refuses strict
-        tool schemas or accepts compressed or msgpack bodies.
+        tool schemas or accepts compressed or msgpack bodies. `inference.LLM`'s mixin builds it on
+        first use, after a fork, from the LLM's attributes.
         """
     def identified(
         self,
@@ -264,7 +265,7 @@ class InferenceLlm:
         model: str | None = None,
         extra_kwargs: dict[str, object] | None = None,
     ) -> None:
-        """Read by the next `chat()`. `extra_kwargs` replaces the persistent options."""
+        """Read by the next ``chat()``. ``extra_kwargs`` replaces the persistent kwargs."""
     def chat(
         self,
         items: Sequence[ChatItem],

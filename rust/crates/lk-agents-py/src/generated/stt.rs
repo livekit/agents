@@ -281,7 +281,8 @@ pub struct InferenceStt(pub(crate) ::std::sync::Arc<InferenceSttImpl>);
 #[pymethods]
 impl InferenceStt {
     /// A client of `model` on the gateway at `base_url`. Starts nothing. `vad`'s end of speech
-    /// finalizes the transcript (Speechmatics only).
+    /// finalizes the transcript (Speechmatics only). `inference.STT`'s mixin builds it on first
+    /// use, after a fork, from the STT's attributes.
     #[new]
     #[pyo3(signature = (*, model, language, encoding, sample_rate, base_url, api_key, api_secret, extra_kwargs, fallback = None, conn_options, vad = None))]
     fn new(

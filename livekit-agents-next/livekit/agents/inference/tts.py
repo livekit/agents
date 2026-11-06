@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import functools
+import dataclasses
 from typing import Any
 
 from .. import _core, tts
 from .._generated.inference_tts import FallbackModel as FallbackModel, TTSEncoding, TTSModels
 from .._generated.language import LanguageCode
+from .._generated.provider_hosts import InferenceTtsHost
 from .._generated.public_inference_tts import *  # noqa: F403
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given, shortuuid
@@ -38,7 +39,7 @@ __all__ = [
 DEFAULT_SAMPLE_RATE = 24000
 
 
-class TTS(tts.TTS):
+class TTS(InferenceTtsHost, tts.TTS):
     """LiveKit Inference TTS over the core's gateway client (``_core.InferenceTts``)."""
 
     def __init__(
@@ -79,17 +80,18 @@ class TTS(tts.TTS):
         self._voice = voice if is_given(voice) else None
         self._language = LanguageCode(language) if is_given(language) else None
         self._encoding = encoding if is_given(encoding) else "pcm_s16le"
-        self._extra = dict(extra_kwargs) if is_given(extra_kwargs) else {}
+        self._extra_kwargs = dict(extra_kwargs) if is_given(extra_kwargs) else {}
         self._fallback = [
             _core.tts_normalize_fallback_str(f) if isinstance(f, str) else f.copy()
             for f in fallbacks
         ]
-        self._conn = conn_options if is_given(conn_options) else DEFAULT_API_CONNECT_OPTIONS
-        self._creds = Credentials.resolve(base_url, api_key, api_secret)
+        self._conn_options = conn_options if is_given(conn_options) else DEFAULT_API_CONNECT_OPTIONS
+        credentials = Credentials.resolve(base_url, api_key, api_secret)
+        self._base_url, self._api_key, self._api_secret = dataclasses.astuple(credentials)
         super().__init__(
             capabilities=tts.TTSCapabilities(
                 streaming=True,
-                aligned_transcript=_core.tts_has_aligned_transcript(model, self._extra),
+                aligned_transcript=_core.tts_has_aligned_transcript(model, self._extra_kwargs),
             ),
             sample_rate=sample_rate if is_given(sample_rate) else DEFAULT_SAMPLE_RATE,
             num_channels=1,
@@ -113,35 +115,10 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "livekit"
 
-    @functools.cached_property
-    def _native(self) -> _core.InferenceTts:
-        # built on first use, after a fork; the client splits, converts and aligns each synthesis
-        return _core.InferenceTts(
-            self._model,
-            voice=self._voice,
-            language=str(self._language) if self._language else None,
-            encoding=self._encoding,
-            sample_rate=self.sample_rate,
-            base_url=self._creds.base_url,
-            api_key=self._creds.api_key,
-            api_secret=self._creds.api_secret,
-            extra_kwargs=self._extra,
-            fallback=self._fallback or None,
-            conn_options=self._conn,
-        )
-
     def _core_conn_options(self) -> APIConnectOptions | None:
         """The policy this provider was given, which a session or run that supplies none
         keeps (models.md)."""
-        return self._conn
-
-    def _core_leg(self) -> Any:
-        """The core's own client, unless a subclass replaces what it would bypass."""
-        return (
-            self
-            if (type(self).synthesize is not TTS.synthesize or type(self).stream is not TTS.stream)
-            else self._core_native()
-        )
+        return self._conn_options
 
     def _core_native(self) -> _core.InferenceTts:
         """The client as a session of the current job holds it: its connections carry that job."""
@@ -163,9 +140,9 @@ class TTS(tts.TTS):
         if is_given(language):
             self._language = LanguageCode(language)
         if is_given(extra_kwargs):
-            self._extra.update(extra_kwargs)
+            self._extra_kwargs.update(extra_kwargs)
         self._capabilities.aligned_transcript = _core.tts_has_aligned_transcript(
-            self._model, self._extra
+            self._model, self._extra_kwargs
         )
         self._native.update_options(
             model=model if is_given(model) else None,
@@ -177,13 +154,13 @@ class TTS(tts.TTS):
     def synthesize(
         self, text: str, *, conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN
     ) -> tts.ChunkedStream:
-        resolved = conn_options if is_given(conn_options) else self._conn
+        resolved = conn_options if is_given(conn_options) else self._conn_options
         return self._synthesize_with_stream(text, conn_options=resolved)
 
     def stream(
         self, *, conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN
     ) -> SynthesizeStream:
-        resolved = conn_options if is_given(conn_options) else self._conn
+        resolved = conn_options if is_given(conn_options) else self._conn_options
         return SynthesizeStream(tts=self, conn_options=resolved)
 
 

@@ -13,7 +13,22 @@ pub trait InferenceTts: Send + Sync + Sized + 'static {
 
     #[host(class(name = "TtsStream"))]
     type Stream;
+    /// `inference.TTS`'s mixin builds it on first use, after a fork, from the TTS's attributes.
     #[host(new)]
+    #[host(facade(
+        module = "provider_hosts",
+        class = "InferenceTtsHost",
+        target = "_native",
+        cached,
+        legs(synthesize, stream),
+        leg = "_core_native",
+        annotation(
+            language = ".language.LanguageCode | None",
+            sample_rate = "int",
+            extra_kwargs = "dict[str, Any]",
+            fallback = "list[.inference_tts.FallbackModel]"
+        )
+    ))]
     #[allow(clippy::too_many_arguments, reason = "Preserve the public Python signature")]
     fn new(
         env: &Self::Env,

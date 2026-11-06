@@ -26,8 +26,22 @@ pub trait InferenceStt: Stt + Sized + 'static {
     type Events: StreamOutput<SpeechEvent> + 'static;
 
     /// A client of `model` on the gateway at `base_url`. Starts nothing. `vad`'s end of speech
-    /// finalizes the transcript (Speechmatics only).
+    /// finalizes the transcript (Speechmatics only). `inference.STT`'s mixin builds it on first
+    /// use, after a fork, from the STT's attributes.
     #[host(new)]
+    #[host(facade(
+        module = "provider_hosts",
+        class = "InferenceSttHost",
+        target = "_native",
+        cached,
+        legs(stream),
+        leg = "_core_native",
+        annotation(
+            language = ".language.LanguageCode | None",
+            extra_kwargs = "dict[str, Any]",
+            fallback = "list[.inference_stt.FallbackModel]"
+        )
+    ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         env: &Self::Env,

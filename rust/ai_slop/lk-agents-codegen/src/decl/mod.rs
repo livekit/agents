@@ -712,6 +712,10 @@ pub struct Facade {
     pub resolve: Vec<(String, String)>,
     /// On a constructor: the provider methods whose override keeps the host object as the leg.
     pub legs: Vec<String>,
+    /// On a constructor: the host method whose value is the leg, in place of the target.
+    pub leg: Option<String>,
+    /// On a constructor: built once per host object, not once per running loop.
+    pub cached: bool,
     /// On a constructor: the host class observes its chain and emits its availability event.
     pub availability: Option<Availability>,
 }

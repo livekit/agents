@@ -7,9 +7,11 @@ pub fn emit(declarations: &Declarations) -> Result<Vec<Out>, String> {
     let mut groups = std::collections::BTreeMap::<(String, String), Vec<_>>::new();
     for class in &declarations.classes {
         for method in &class.methods {
-            // A constructor's facade is the host mixin `facade_native` writes.
-            if let Some(facade) = method.facade.as_ref().filter(|_| method.kind != MethodKind::New)
-            {
+            // A constructor's facade, and every method facade of its class, is the host mixin
+            // `facade_native` writes.
+            if let Some(facade) = method.facade.as_ref().filter(|f| {
+                method.kind != MethodKind::New && !crate::facade_native::hosts(declarations, f)
+            }) {
                 groups
                     .entry((facade.module.clone(), facade.class.clone()))
                     .or_default()
@@ -68,7 +70,10 @@ fn imported(
 ) -> Result<String, String> {
     let (module, name) =
         dotted.rsplit_once('.').ok_or_else(|| format!("{at}: `{dotted}` names module.item"))?;
-    imports.add(module, name);
+    // A builtin (`builtins.dict`) is in scope already.
+    if module != "builtins" {
+        imports.add(module, name);
+    }
     Ok(name.to_owned())
 }
 
@@ -145,7 +150,7 @@ fn argument(
 }
 
 /// The Python delegate of one facade method.
-fn delegate(
+pub(crate) fn delegate(
     class: &Class,
     method: &Method,
     facade: &Facade,
