@@ -25,6 +25,7 @@ use parking_lot::Mutex;
 use std::sync::Arc;
 use std::time::Duration;
 
+use super::twilio as twilio_http;
 use lk_agents_voice::workflows::twilio::{self, TwilioError};
 use lk_agents_voice::workflows::warm_transfer::{
     Origination, Transfer, TransferFailure, TransferOutcome, TransferPlan, TransferTool,
@@ -48,7 +49,10 @@ pub trait TransferApi: Send + Sync {
         identity: String,
     ) -> BoxFuture<'_, Result<String, String>>;
     /// A Twilio REST request: the first response's status and body, redirects not followed.
-    fn post_form(&self, request: twilio::Request) -> BoxFuture<'_, Result<(u16, String), String>>;
+    fn post_form(
+        &self,
+        request: twilio_http::Request,
+    ) -> BoxFuture<'_, Result<(u16, String), String>>;
     fn move_participant(
         &self,
         room: String,
@@ -95,7 +99,10 @@ impl TransferApi for ProjectApi {
             self.telephony.connect_twilio_call(&room, &identity).await.map_err(|e| e.to_string())
         })
     }
-    fn post_form(&self, request: twilio::Request) -> BoxFuture<'_, Result<(u16, String), String>> {
+    fn post_form(
+        &self,
+        request: twilio_http::Request,
+    ) -> BoxFuture<'_, Result<(u16, String), String>> {
         Box::pin(async move {
             lk_agents_net::room_service::post_form(&request.url, &request.headers, &request.form)
                 .await
@@ -506,10 +513,10 @@ enum DialError {
 /// One Twilio request; the reply's JSON object.
 async fn twilio_send(
     api: &Arc<dyn TransferApi>,
-    request: twilio::Request,
+    request: twilio_http::Request,
 ) -> Result<serde_json::Map<String, Value>, DialError> {
     let (status, body) = api.post_form(request).await.map_err(DialError::Api)?;
-    Ok(twilio::reply(status, &body)?)
+    Ok(twilio_http::reply(status, &body)?)
 }
 
 /// Create the outbound call, streaming into the connector: its SID.
@@ -520,15 +527,16 @@ async fn twilio_create_call(
     twiml: String,
     call_token: Option<String>,
 ) -> Result<String, DialError> {
-    let call = twilio_send(&api, twilio::create_call(&dial, from, &twiml, call_token)).await?;
-    Ok(twilio::call_sid(&call)?)
+    let call = twilio_send(&api, twilio_http::create_call(&dial, from, &twiml, call_token)).await?;
+    Ok(twilio_http::call_sid(&call)?)
 }
 
 /// A call the transfer gave up on, cancelled, or completed when it was answered meanwhile.
 async fn twilio_cancel(api: Arc<dyn TransferApi>, dial: TwilioDial, sid: String) {
-    let cancelled = match twilio_send(&api, twilio::set_status(&dial, &sid, "canceled")).await {
+    let cancelled = match twilio_send(&api, twilio_http::set_status(&dial, &sid, "canceled")).await
+    {
         Err(DialError::Twilio(error)) if twilio::complete_instead(&error) => {
-            twilio_send(&api, twilio::set_status(&dial, &sid, "completed")).await.map(drop)
+            twilio_send(&api, twilio_http::set_status(&dial, &sid, "completed")).await.map(drop)
         }
         other => other.map(drop),
     };
@@ -879,7 +887,7 @@ mod tests {
         }
         fn post_form(
             &self,
-            request: twilio::Request,
+            request: twilio_http::Request,
         ) -> BoxFuture<'_, Result<(u16, String), String>> {
             Box::pin(async move {
                 if request.url.ends_with("/Calls.json") {

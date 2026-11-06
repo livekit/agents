@@ -22,11 +22,12 @@ use prost::Message as _;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{Mutex as AsyncMutex, mpsc};
 
+use super::remote_session::{FrameDecoder, frame};
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_voice::remote_session::console::{
     CONSOLE_SAMPLE_RATE, ConsolePlayback, microphone_frame,
 };
-use lk_agents_voice::remote_session::{ConsoleSink, FrameDecoder, SessionTransport, frame, proto};
+use lk_agents_voice::remote_session::{ConsoleSink, SessionTransport, proto};
 use proto::agent_session_message::{Message, console_io};
 
 /// The CLI's socket: transport, console sink and both audio legs. Connected by `start()`; what is

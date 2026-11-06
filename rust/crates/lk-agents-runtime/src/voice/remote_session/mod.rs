@@ -3,7 +3,9 @@
 #[cfg(test)]
 mod client;
 pub mod driver;
+pub mod framing;
 pub mod room;
+pub(super) use framing::{FrameDecoder, MAX_MESSAGE_SIZE, frame};
 
 use crate::telemetry;
 use crate::voice::session::Timebase;
@@ -12,6 +14,12 @@ use lk_agents_abi::worker::remote_session::WireEvent;
 use std::sync::Arc;
 
 pub use lk_agents_voice::remote_session::*;
+
+/// Where a client's arriving events go.
+#[cfg(test)]
+pub trait ClientSink: Send + Sync {
+    fn event(&self, name: &str, event: &proto::AgentSessionEvent);
+}
 
 /// Opens the production remote host on the session's selected transport.
 pub fn hosting(

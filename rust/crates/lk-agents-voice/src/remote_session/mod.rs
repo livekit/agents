@@ -16,12 +16,6 @@ use lk_agents_abi::worker::remote_session::{
 };
 use prost::Message as _;
 
-/// `_TCP_HEADER_SIZE` (`remote_session.py:184`): big-endian `>I`.
-pub const HEADER_SIZE: usize = 4;
-
-/// `_TCP_MAX_MESSAGE_SIZE`: 1 MiB. A receive bound only, as in the reference.
-pub const MAX_MESSAGE_SIZE: usize = 1 << 20;
-
 /// `TOPIC_SESSION_MESSAGES` (`remote_session.py:57`): the byte-stream topic both halves register on.
 pub const TOPIC_SESSION_MESSAGES: &str = "lk.agent.session";
 
@@ -544,62 +538,6 @@ pub struct NonFiniteStamp;
 
 pub use lk_agents_abi::voice::console::{ConsoleSink, SessionTransport};
 
-/// Where a client's arriving events go: `RemoteSession.emit(name, event)`.
-pub trait ClientSink: Send + Sync {
-    fn event(&self, name: &str, event: &proto::AgentSessionEvent);
-}
-
-/// `struct.pack(">I", len(data)) + data`, as one buffer so no sender can splice between header and body.
-pub fn frame(payload: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(HEADER_SIZE + payload.len());
-    out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-    out.extend_from_slice(payload);
-    out
-}
-
-/// Why the reader gave up (all `StopAsyncIteration` in the reference).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum FrameError {
-    /// `logger.error("TCP message too large: %d bytes", length)`.
-    #[error("frame of {0} bytes exceeds the {MAX_MESSAGE_SIZE} byte limit")]
-    Oversize(u32),
-}
-
-/// Reassembles length-prefixed frames from a byte stream.
-#[derive(Debug, Default)]
-pub struct FrameDecoder {
-    buf: Vec<u8>,
-}
-
-impl FrameDecoder {
-    pub fn new() -> Self {
-        FrameDecoder { buf: Vec::new() }
-    }
-
-    /// Append any chunk, including one spanning several frames.
-    pub fn push(&mut self, chunk: &[u8]) {
-        self.buf.extend_from_slice(chunk);
-    }
-
-    /// The next complete frame, or `Ok(None)`. The length is checked on the header alone.
-    pub fn next_frame(&mut self) -> Result<Option<Vec<u8>>, FrameError> {
-        if self.buf.len() < HEADER_SIZE {
-            return Ok(None);
-        }
-        let len = u32::from_be_bytes([self.buf[0], self.buf[1], self.buf[2], self.buf[3]]);
-        if len as usize > MAX_MESSAGE_SIZE {
-            return Err(FrameError::Oversize(len));
-        }
-        let total = HEADER_SIZE + len as usize;
-        if self.buf.len() < total {
-            return Ok(None);
-        }
-        let body = self.buf[HEADER_SIZE..total].to_vec();
-        self.buf.drain(..total);
-        Ok(Some(body))
-    }
-}
-
 pub mod proto {
     pub use livekit_protocol::agent::*;
     pub use pbjson_types::{Duration, Struct, Timestamp};
@@ -704,29 +642,6 @@ fn json_to_value(v: &serde_json::Value) -> pbjson_types::Value {
         }),
     };
     pbjson_types::Value { kind: Some(kind) }
-}
-
-#[cfg(test)]
-mod frame_tests {
-    use super::*;
-
-    // Catches: a little-endian length header (the reader would stall on a real peer).
-    #[test]
-    fn the_frame_header_is_four_big_endian_bytes() {
-        assert_eq!(frame(b"ab"), [0, 0, 0, 2, b'a', b'b']);
-    }
-
-    // Catches: a stateless decoder dropping frames that span reads.
-    #[test]
-    fn frames_reassemble_across_read_boundaries() {
-        let mut d = FrameDecoder::new();
-        let wire = frame(b"hello");
-        let (a, b) = wire.split_at(3);
-        d.push(a);
-        assert_eq!(d.next_frame().unwrap(), None, "a partial header yields nothing");
-        d.push(b);
-        assert_eq!(d.next_frame().unwrap(), Some(b"hello".to_vec()));
-    }
 }
 
 #[cfg(test)]

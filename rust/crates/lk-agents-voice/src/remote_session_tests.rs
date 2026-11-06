@@ -149,8 +149,4 @@ fn tool_starts_and_debug_messages_reach_the_console() {
         encode_wire(empty),
         Ok(Some(Event::DebugMessage(proto::DebugMessage { payload: None })))
     ));
-
-    let mut decoder = FrameDecoder::new();
-    decoder.push(&((MAX_MESSAGE_SIZE as u32) + 1).to_be_bytes());
-    assert!(matches!(decoder.next_frame(), Err(FrameError::Oversize(_))));
 }
