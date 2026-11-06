@@ -171,6 +171,48 @@ def test_sent_tokenizer_terminator_runs(
     assert tokenizer.tokenize(text=text) == expected
 
 
+DOT_INSIDE_WORD_CASES = [
+    (
+        "Visit https://docs.livekit.io/agents. It has examples.",
+        ["Visit https://docs.livekit.io/agents.", "It has examples."],
+    ),
+    ("Book on irctc.co.in today. It is fast.", ["Book on irctc.co.in today.", "It is fast."]),
+    (
+        "Open config.yaml and save it. Then restart.",
+        ["Open config.yaml and save it.", "Then restart."],
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "tokenizer",
+    [basic.SentenceTokenizer(min_sentence_len=1), blingfire.SentenceTokenizer(min_sentence_len=1)],
+)
+@pytest.mark.parametrize("text, expected", DOT_INSIDE_WORD_CASES)
+def test_sent_tokenizer_keeps_dot_inside_word(
+    tokenizer: tokenize.SentenceTokenizer, text: str, expected: list[str]
+):
+    assert tokenizer.tokenize(text=text) == expected
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("We are done.Next item is ready.", ["We are done.", "Next item is ready."]),
+        (
+            "I read e.g. the first chapter of the book today.",
+            ["I read e.g. the first chapter of the book today."],
+        ),
+        (
+            "He has a Ph.D. in physics from a good school.",
+            ["He has a Ph.D. in physics from a good school."],
+        ),
+    ],
+)
+def test_basic_sent_tokenizer_dot_before_letter_keeps_other_rules(text: str, expected: list[str]):
+    assert basic.SentenceTokenizer(min_sentence_len=1).tokenize(text=text) == expected
+
+
 def test_basic_sent_tokenizer_keeps_terminator_runs_unspaced():
     # with the default min_sentence_len the pieces were merged back with spaces
     text = "That is amazing!!! I cannot believe it happened today."
