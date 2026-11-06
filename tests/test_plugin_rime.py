@@ -5859,6 +5859,25 @@ class TestRealtime:
             assert session.chat_ctx.items[-1].output == "working"
             assert session.chat_ctx.items[0].extra == {}
 
+    async def test_message_reply_is_kept_only_while_the_message_is_recorded(self):
+        async with peer_model(playback="discard", context_mode="strict") as (peer, model, _):
+            session = model.session()
+            await session.update_instructions("Help")
+            replies = session._history._message_replies
+            for text in ("", "Hello"):
+                pending = session.generate_reply()
+                response = await peer.start(await peer.next())
+                await pending
+                await peer.message(response, text=text)
+                await peer.end(response)
+                generation = session._generations[response]
+                await wait_until(lambda: generation.ended)  # noqa: B023
+            # The empty message was never recorded, so it keeps no reply.
+            assert replies == {f"message-{response}": response}
+            await session.update_chat_ctx(llm.ChatContext.empty())
+            assert not session.chat_ctx.items
+            assert replies == {}
+
     @pytest.mark.parametrize("context_mode", ["shared", "strict"])
     async def test_reply_spoken_before_its_tool_call_accepts_later_results(self, context_mode):
         finish = asyncio.Event()

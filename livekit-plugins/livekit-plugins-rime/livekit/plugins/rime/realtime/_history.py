@@ -245,7 +245,14 @@ class PrismHistory:
         self._revision += 1
         return call.model_copy(deep=True)
 
-    def record_assistant(self, message_id: str, transcript: str, *, played: bool = False) -> None:
+    def record_assistant(
+        self,
+        message_id: str,
+        transcript: str,
+        *,
+        played: bool = False,
+        response_id: str | None = None,
+    ) -> None:
         """Record completed or interrupted output, including an unheard message."""
         self._revision += 1
         self._variants.setdefault(message_id, set()).add(transcript)
@@ -255,6 +262,8 @@ class PrismHistory:
         self._chat._upsert_item(
             llm.ChatMessage(id=message_id, role="assistant", content=[transcript])
         )
+        if response_id is not None:
+            self._message_replies[message_id] = response_id
 
     @staticmethod
     def validate(
@@ -321,7 +330,6 @@ class PrismHistory:
             )
         elif isinstance(payload, r.MessageStarted):
             self._ids[payload.output.item_id] = payload.output.item_id
-            self._message_replies[payload.output.item_id] = payload.output.response.response_id
             self._active.setdefault(payload.output.response.response_id, set()).add(
                 payload.output.item_id
             )
