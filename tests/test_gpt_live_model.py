@@ -2235,6 +2235,16 @@ async def test_delegate_is_refused_while_a_request_waits_or_a_function_call_is_o
         session.delegate()
         with pytest.raises(llm.RealtimeError):
             session.delegate()
+        # a delegation answering another request leaves this one waiting
+        session._handle_event(
+            {
+                "type": "session.delegation.created",
+                "delegation": {"id": "d0", "target": "responses"},
+                "client_event_id": "other",
+            }
+        )
+        with pytest.raises(llm.RealtimeError):
+            session.delegate()
         session._handle_event(
             {
                 "type": "session.delegation.created",
@@ -2253,6 +2263,16 @@ async def test_delegate_is_refused_while_a_request_waits_or_a_function_call_is_o
 def test_delegation_recovery_is_off_only_when_false(value: object, expected: object) -> None:
     model = GPTLiveModel(api_key="sk-test", delegation_recovery=value)  # type: ignore[arg-type]
     assert model._opts.delegation_recovery == expected
+
+
+def test_delegation_recovery_is_refused_under_decisions() -> None:
+    with pytest.raises(ValueError, match="delegation_recovery"):
+        GPTLiveModel(
+            api_key="sk-test",
+            delegation="decisions",
+            decisions_options={"model": "gpt-6-luna"},
+            delegation_recovery={},
+        )
 
 
 def test_decisions_delegation_requires_configuration() -> None:

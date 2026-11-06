@@ -250,7 +250,7 @@ class GPTLiveModel(llm.DuplexModel):
             )
         if is_given(responses_options) and delegation != "responses":
             raise ValueError("responses_options requires delegation='responses'")
-        if delegation_recovery and delegation == "decisions":
+        if delegation_recovery is not False and delegation == "decisions":
             raise ValueError("delegation_recovery requires delegation='responses' or 'client'")
         is_azure = azure_deployment is not None or entra_token is not None
         if not is_azure:
@@ -960,8 +960,9 @@ class GPTLiveSession(
         manual = (
             event.client_event_id is not None and event.client_event_id == self._delegate_event_id
         )
-        # Azure omits client_event_id, so any delegation ends the wait for a delegate() request
-        self._delegate_event_id = None
+        # Azure omits client_event_id, so a delegation without one also ends the wait
+        if manual or event.client_event_id is None:
+            self._delegate_event_id = None
         self._emit_delegation(
             delegation.id,
             source="manual" if manual else "model",
@@ -1259,8 +1260,8 @@ class GPTLiveSession(
 
         Under ``delegation="responses"`` the backend runs it after any work already running, with
         ``instructions`` as a developer note; it is refused while a function call waits for its
-        output or an earlier request has not started yet, so that raises ``RealtimeError``. Under client delegation the application answers
-        its ``delegation_created`` like any other.
+        output or an earlier request has not started yet, so that raises ``RealtimeError``. Under
+        client delegation the application answers its ``delegation_created`` like any other.
         """
         if self._opts.delegation == "decisions":
             raise llm.RealtimeError("gpt-live decisions delegation has nothing to delegate to")

@@ -26,6 +26,11 @@ DEFAULT_DETECTOR_MODEL = "google/gemma-4-31b-it"
 # how late a caller turn may start and still count as said over the agent's message: a turn
 # starts when its first words are transcribed, which trails the speech itself (not the grace period)
 _SPOKEN_OVER_SLACK = 1.0
+# the backend's history keeps no overlap, so a turn said over the agent is delegated with this note
+_SPOKEN_OVER_NOTE = (
+    'The caller said "{text}" while the agent was still speaking, so they may not have heard all '
+    "of it."
+)
 
 DEFAULT_PROMPT = (
     "A caller talks to a voice agent that cannot act on its own: only its backend can, through "
@@ -106,7 +111,7 @@ class DelegationDetector:
     def model(self) -> LLM | DecisionModel:
         return self._model
 
-    async def __call__(self, check: DelegationCheck) -> bool:
+    async def __call__(self, check: DelegationCheck) -> bool | str:
         tools: list[str] = []
         for tool in check.tools:
             if is_function_tool(tool):
@@ -154,7 +159,7 @@ class DelegationDetector:
             if not isinstance(result, ProbabilityResult):
                 logger.warning("delegation decision failed", extra={"errors": response.errors})
                 return False
-            return result.value >= 0.5
+            delegate = result.value >= 0.5
         else:
 
             @function_tool
@@ -190,4 +195,9 @@ class DelegationDetector:
             if not isinstance(args, dict):
                 logger.warning("delegation detector did not report a verdict")
                 return False
-            return args.get("delegate") is True
+            delegate = args.get("delegate") is True
+
+        last = next((m for m in reversed(messages) if m.role == "user"), None)
+        if delegate and last is not None and last.id in spoken_over:
+            return _SPOKEN_OVER_NOTE.format(text=last.text_content)
+        return delegate

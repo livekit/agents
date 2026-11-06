@@ -69,7 +69,7 @@ async def test_a_decision_model_delegates_at_even_odds_or_more() -> None:
     assert await DelegationDetector(_Decided(0.4))(_check()) is False
 
 
-async def test_a_turn_said_over_the_agent_is_marked() -> None:
+async def test_a_turn_said_over_the_agent_is_marked_and_the_backend_told() -> None:
     check = _check()
     # the caller started while the agent's reply was still playing
     check.chat_ctx.items[0].metrics = {"started_speaking_at": 102.0}
@@ -83,7 +83,8 @@ async def test_a_turn_said_over_the_agent_is_marked() -> None:
             FakeLLMResponse(input=marked, content="", ttft=0, duration=0, tool_calls=[call])
         ]
     )
-    assert await DelegationDetector(model)(check) is True
+    note = await DelegationDetector(model)(check)
+    assert isinstance(note, str) and "Cancel my 3pm." in note
 
 
 # the loop in AgentActivity: a turn the realtime model left undelegated is judged once the agent
