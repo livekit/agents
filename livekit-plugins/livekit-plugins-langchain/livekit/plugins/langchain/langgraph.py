@@ -117,7 +117,7 @@ class LangGraphStream(llm.LLMStream, Generic[ContextT]):
         self._stream_mode = stream_mode
 
     async def _run(self) -> None:
-        state = self._chat_ctx_to_state()
+        state = await self._chat_ctx_to_state()
         is_multi_mode = isinstance(self._stream_mode, list)
 
         # Some LangGraph versions don't accept the `subgraphs` or `context` kwargs yet.
@@ -173,21 +173,53 @@ class LangGraphStream(llm.LLMStream, Generic[ContextT]):
                 if chat_chunk:
                     self._event_ch.send_nowait(chat_chunk)
 
-    def _chat_ctx_to_state(self) -> dict[str, Any]:
+    async def _chat_ctx_to_state(self) -> dict[str, Any]:
         """Convert chat context to langgraph input"""
 
+        # A checkpointed graph already stores its own replies, and the chat context's copies
+        # have different ids, so add_messages would keep both. Each stored reply absorbs at
+        # most one copy, in order; an interrupted copy is a prefix of the stored reply. Other
+        # assistant turns (e.g. session.say()) are sent.
+        graph_replies = await self._graph_replies()
+        next_reply = 0
         messages: list[AIMessage | HumanMessage | SystemMessage] = []
         for msg in self._chat_ctx.messages():
             content = msg.raw_text_content
             if content:
                 if msg.role == "assistant":
-                    messages.append(AIMessage(content=content, id=msg.id))
+                    match = next(
+                        (
+                            i
+                            for i in range(next_reply, len(graph_replies))
+                            if graph_replies[i].startswith(content)
+                        ),
+                        None,
+                    )
+                    if match is None:
+                        messages.append(AIMessage(content=content, id=msg.id))
+                    else:
+                        next_reply = match + 1
                 elif msg.role == "user":
                     messages.append(HumanMessage(content=content, id=msg.id))
                 elif msg.role in ["system", "developer"]:
                     messages.append(SystemMessage(content=content, id=msg.id))
 
         return {"messages": messages}
+
+    async def _graph_replies(self) -> list[str]:
+        """Replies the graph produced itself, in order, as stored in its checkpoint."""
+        if not getattr(self._graph, "checkpointer", None):
+            return []
+        snapshot = await self._graph.aget_state(self._config or {})
+        sent_ids = {msg.id for msg in self._chat_ctx.messages()}
+        return [
+            m.content
+            for m in snapshot.values.get("messages", [])
+            if isinstance(m, AIMessage)
+            and isinstance(m.content, str)
+            and m.content
+            and m.id not in sent_ids
+        ]
 
 
 def _extract_message_chunk(item: Any) -> BaseMessageChunk | str | None:
