@@ -9,6 +9,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 import aiohttp
+import numpy as np
 import pytest
 
 from livekit.agents import inference
@@ -430,6 +431,77 @@ async def test_wav_inline_decoder_with_resampling():
     expected = num_samples * out_rate // src_rate
     assert abs(total_samples - expected) <= out_rate // 50  # within 20ms tolerance
     await decoder.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "source_channels,output_channels", [(2, 1), (1, 2), (2, 2), (1, 1), (2, None)]
+)
+@pytest.mark.parametrize("output_rate", [None, 16000, 48000])
+@pytest.mark.parametrize("chunk_size", [37, 65536])
+async def test_wav_inline_decoder_output_channels(
+    source_channels, output_channels, output_rate, chunk_size
+):
+    """The public WAV decoder must honour output channels, including when resampling."""
+    source_rate = 16000
+    num_samples = source_rate // 5 + 317  # include a partial final AudioByteStream frame
+    expected_channels = output_channels or source_channels
+    expected_rate = output_rate or source_rate
+    # Put the signal in the right channel only, so a stereo-to-mono conversion
+    # that merely takes the left channel would silently lose the audio.
+    source = np.full((num_samples, source_channels), 2000, dtype=np.int16)
+    if source_channels == 2:
+        source[:, 0] = 0
+    wav_bytes = _make_wav(source_rate, source_channels, num_samples)[:44] + source.tobytes()
+    decoder = AudioStreamDecoder(
+        sample_rate=output_rate, num_channels=output_channels, format="audio/wav"
+    )
+    try:
+        for offset in range(0, len(wav_bytes), chunk_size):
+            decoder.push(wav_bytes[offset : offset + chunk_size])
+        decoder.end_input()
+        frames = [frame async for frame in decoder]
+
+        assert frames
+        assert all(frame.num_channels == expected_channels for frame in frames)
+        assert all(frame.sample_rate == expected_rate for frame in frames)
+        expected_samples = num_samples * expected_rate // source_rate
+        assert abs(sum(frame.samples_per_channel for frame in frames) - expected_samples) <= 1
+        pcm = np.frombuffer(b"".join(bytes(frame.data) for frame in frames), dtype=np.int16)
+        pcm = pcm.reshape(-1, expected_channels)
+        # Exclude the resampler's startup/end transient when checking the signal.
+        steady = pcm[expected_rate // 100 : -expected_rate // 100]
+        if expected_channels == 1:
+            assert np.all(steady[:, 0] > 0)
+        elif source_channels == 1:
+            assert np.all(np.abs(steady[:, 0].astype(np.int32) - steady[:, 1]) <= 1)
+            assert np.all(steady > 0)
+        else:
+            assert np.all(np.abs(steady[:, 0]) <= 1)
+            assert np.all(steady[:, 1] > 0)
+    finally:
+        await decoder.aclose()
+
+
+@pytest.mark.asyncio
+async def test_wav_output_channels_reset_between_segments():
+    """A fresh WAV header can change the source format without changing the output format."""
+    decoder = AudioStreamDecoder(sample_rate=48000, num_channels=1, format="audio/wav")
+    expected_samples = 0
+    try:
+        for source_rate, source_channels in [(16000, 2), (24000, 1), (24000, 2)]:
+            num_samples = source_rate // 5 + source_rate // 100
+            pcm = np.full((num_samples, source_channels), 2000, dtype=np.int16)
+            wav_bytes = _make_wav(source_rate, source_channels, num_samples)[:44] + pcm.tobytes()
+            decoder.push(wav_bytes)
+            expected_samples += num_samples * 48000 // source_rate
+        decoder.end_input()
+        frames = [frame async for frame in decoder]
+        assert frames
+        assert all(frame.num_channels == 1 and frame.sample_rate == 48000 for frame in frames)
+        assert abs(sum(frame.samples_per_channel for frame in frames) - expected_samples) <= 3
+    finally:
+        await decoder.aclose()
 
 
 @pytest.mark.asyncio
