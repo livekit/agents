@@ -1440,6 +1440,55 @@ async def test_live_turn_detection_none_held_audio_survives_a_failed_replay(scri
     assert len(fake.sessions[2].audio) == 10 * 640
 
 
+def test_joined_segments_keep_the_recognized_text_of_each() -> None:
+    """A polished segment joined with an unpolished one keeps both in the raw transcript."""
+    polished = zoom_stt.stt.SpeechData(
+        language="en-US", text="Hello!", metadata={"transcript": "hello"}
+    )
+    unpolished = zoom_stt.stt.SpeechData(language="en-US", text="world")
+    joined = zoom_stt._join_speech(polished, unpolished)
+    assert joined.text == "Hello! world"
+    assert joined.metadata == {"transcript": "hello world"}
+    plain = zoom_stt._join_speech(unpolished, unpolished)
+    assert plain.text == "world world" and plain.metadata is None
+
+
+async def test_live_resent_frames_are_counted_once_in_usage(scribe, http) -> None:
+    """A frame resent after a failed send counts once toward recognition usage."""
+    fake, live_url, fast_url = scribe
+    stt = make_stt(http, (live_url, fast_url), turn_detection="none")
+    stream = stt.stream(conn_options=FAST_RETRY)
+    connect = stream._connect_ws
+    connects = 0
+
+    async def connect_failing_first() -> aiohttp.ClientWebSocketResponse:
+        nonlocal connects
+        ws = await connect()
+        connects += 1
+        if connects == 1:  # the first session drops on its 6th frame
+            sent = 0
+            send_bytes = ws.send_bytes
+
+            async def flaky(data: bytes, *args: Any, **kwargs: Any) -> None:
+                nonlocal sent
+                sent += 1
+                if sent > 5:
+                    raise ConnectionResetError("dropped")
+                await send_bytes(data, *args, **kwargs)
+
+            ws.send_bytes = flaky  # type: ignore[method-assign]
+        return ws
+
+    stream._connect_ws = connect_failing_first  # type: ignore[method-assign]
+    events = await run_stream(stream, speech(0.4))  # 20 frames, 0.4 s
+
+    assert len(fake.sessions) == 2
+    # Nothing lost: 5 frames reached the first session, the other 15 the retry.
+    assert len(fake.sessions[0].audio) + len(fake.sessions[1].audio) == 20 * 640
+    usage = [e.recognition_usage.audio_duration for e in events if e.recognition_usage]
+    assert sum(usage) == pytest.approx(0.4, abs=0.001)  # the failed frame isn't counted twice
+
+
 async def test_live_turn_detection_none_options_change_waits_for_every_commit(scribe, http) -> None:
     fake, live_url, fast_url = scribe
     gates = {(1, 1): asyncio.Event(), (1, 2): asyncio.Event()}

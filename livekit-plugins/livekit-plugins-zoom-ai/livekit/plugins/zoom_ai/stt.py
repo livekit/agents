@@ -272,8 +272,10 @@ def _join_speech(first: stt.SpeechData, second: stt.SpeechData) -> stt.SpeechDat
         a, b = first.metadata or {}, second.metadata or {}
         metadata = {**a, **b}
         if "transcript" in a or "transcript" in b:
+            # The recognized text of each segment: its metadata["transcript"] when it was
+            # polished, else its text (polishing failed or was off for that segment).
             metadata["transcript"] = " ".join(
-                t for t in (a.get("transcript"), b.get("transcript")) if t
+                t for t in (a.get("transcript", first.text), b.get("transcript", second.text)) if t
             )
         if "speaker_segments" in a or "speaker_segments" in b:
             metadata["speaker_segments"] = [
@@ -830,6 +832,7 @@ class SpeechStream(stt.SpeechStream):
         return self._commits_pending > 0 if self._manual_commit else self._speech_started
 
     def _send_final(self, data: stt.SpeechData, request_id: str = "") -> None:
+        """Emit a final transcript event with the supplied speech data."""
         self._event_ch.send_nowait(
             stt.SpeechEvent(
                 type=stt.SpeechEventType.FINAL_TRANSCRIPT,
@@ -940,8 +943,9 @@ class SpeechStream(stt.SpeechStream):
                 # Each frame is sent as it arrives (10-20 ms in an agent). The docs suggest
                 # about 100 ms per message, but smaller messages end turns slightly sooner.
                 data = frame.data.tobytes()
-                self._audio_duration += frame.duration
                 await ws.send_bytes(data)
+                # Counted once sent: a frame whose send fails is sent again on the retry.
+                self._audio_duration += frame.duration
                 if self._manual_commit and not self._uncommitted and data.strip(b"\0"):
                     self._uncommitted = True
                 last_audio_at = last_input_at = time.monotonic()
