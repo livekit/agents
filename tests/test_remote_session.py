@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from livekit import rtc
 from livekit.agents.llm import ChatContext, ChatMessage
 from livekit.agents.metrics import AgentSessionUsage
 from livekit.agents.voice import remote_session as remote_session_module
@@ -445,6 +446,9 @@ async def test_aclose_flushes_the_response_of_an_inflight_request():
 def _fake_room(*, connected: bool = True, stream_error: Exception | None = None) -> MagicMock:
     room = MagicMock()
     room.isconnected = MagicMock(return_value=connected)
+    room.connection_state = (
+        rtc.ConnectionState.CONN_CONNECTED if connected else rtc.ConnectionState.CONN_DISCONNECTED
+    )
 
     async def _send_bytes(data, **kwargs):
         if stream_error is not None:
@@ -535,6 +539,54 @@ async def test_room_transport_sends_each_message_in_one_call():
 class _FailingTransport(PairedTransport):
     async def send_message(self, msg: agent_pb.AgentSessionMessage) -> None:
         raise RuntimeError("transport is down")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("disconnect_during_send", [False, True])
+async def test_event_writer_stops_when_room_disconnects(
+    caplog: pytest.LogCaptureFixture, disconnect_during_send: bool
+) -> None:
+    """A deleted room cannot receive queued events, including an in-flight send."""
+    room = _fake_room(connected=disconnect_during_send)
+
+    async def disconnect(*args: object, **kwargs: object) -> None:
+        room.isconnected.return_value = False
+        room.connection_state = rtc.ConnectionState.CONN_DISCONNECTED
+        raise RuntimeError("room disconnected during send")
+
+    room.local_participant.send_bytes = AsyncMock(side_effect=disconnect)
+    host = SessionHost(RoomSessionTransport(room))
+    await host.start()
+    try:
+        with caplog.at_level(logging.WARNING, logger="livekit.agents"):
+            host._send_event(agent_pb.AgentSessionEvent())
+            host._send_event(agent_pb.AgentSessionEvent())
+            await host.aclose()
+        assert not [r for r in caplog.records if "failed to send session event" in r.message]
+        assert room.local_participant.send_bytes.await_count == int(disconnect_during_send)
+    finally:
+        await host.aclose()
+
+
+@pytest.mark.asyncio
+async def test_event_writer_resumes_after_room_reconnects(caplog: pytest.LogCaptureFixture) -> None:
+    """A reconnectable interruption must not permanently stop event forwarding."""
+    room = _fake_room(connected=False)
+    room.connection_state = rtc.ConnectionState.CONN_RECONNECTING
+    room.local_participant.send_bytes = AsyncMock()
+    host = SessionHost(RoomSessionTransport(room))
+    await host.start()
+    try:
+        host._send_event(agent_pb.AgentSessionEvent())
+        await asyncio.sleep(0)
+        assert [r for r in caplog.records if "failed to send session event" in r.message]
+        room.isconnected.return_value = True
+        room.connection_state = rtc.ConnectionState.CONN_CONNECTED
+        host._send_event(agent_pb.AgentSessionEvent())
+        await host.aclose()
+        room.local_participant.send_bytes.assert_awaited_once()
+    finally:
+        await host.aclose()
 
 
 @pytest.mark.asyncio
