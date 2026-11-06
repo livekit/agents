@@ -277,6 +277,9 @@ class _STTPipeline:
 
 
 class AudioRecognition:
+    _vad_segments_ended_in_turn: int = 0
+    _finals_in_turn: int = 0
+
     def __init__(
         self,
         session: AgentSession,
@@ -321,6 +324,8 @@ class AudioRecognition:
         self._last_final_transcript_time: float | None = None
         self._last_speaking_time: float | None = None
         self._speech_start_time: float | None = None
+        self._vad_segments_ended_in_turn: int = 0
+        self._finals_in_turn: int = 0
 
         # used for manual commit_user_turn
         self._final_transcript_received = asyncio.Event()
@@ -1064,6 +1069,8 @@ class AudioRecognition:
         self._speech_start_time = None
         self._last_speaking_time = None
         self._vad_speech_started = False
+        self._vad_segments_ended_in_turn = 0
+        self._finals_in_turn = 0
         self._user_turn_committed = False
         self._stt_turn_ended = False
         self._last_emitted_prediction = None
@@ -1101,10 +1108,29 @@ class AudioRecognition:
 
         async def _commit_user_turn() -> None:
             can_flush = self._stt_pipeline is not None and self._stt_pipeline.manual_flush
+            final_is_stale = (
+                self._last_final_transcript_time is not None
+                and time.time() - self._last_final_transcript_time > 0.5
+            )
+            final_covers_speech = (
+                self._vad is not None
+                and self._last_final_transcript_time is not None
+                and self._last_speaking_time is not None
+                and self._last_final_transcript_time >= self._last_speaking_time
+                and not self._speaking
+                and self._finals_in_turn >= self._vad_segments_ended_in_turn
+            )
+            has_complete_manual_final = (
+                self._turn_detection_mode == "manual"
+                and audio_detached
+                and bool(self._audio_transcript.strip())
+                and not self._audio_interim_transcript
+                and final_covers_speech
+            )
             if (
                 can_flush
                 or self._last_final_transcript_time is None
-                or (time.time() - self._last_final_transcript_time > 0.5)
+                or (final_is_stale and not has_complete_manual_final)
             ):
                 self._final_transcript_received.clear()
 
@@ -1301,6 +1327,7 @@ class AudioRecognition:
             logger.debug("received user transcript", extra=extra)
 
             self._last_final_transcript_time = time.time()
+            self._finals_in_turn += 1
             self._audio_transcript += f" {transcript}"
             self._audio_transcript = self._audio_transcript.lstrip()
             self._final_transcript_confidence.append(confidence)
@@ -1523,6 +1550,8 @@ class AudioRecognition:
             self._last_speaking_time = speech_end_time
 
             # A committed turn clears _vad_speech_started before its late VAD EOS arrives.
+            if vad_speech_started:
+                self._vad_segments_ended_in_turn += 1
             if self._stt_pipeline is not None and vad_speech_started:
                 self._arm_transcription_timeout(
                     ev.speech_duration,
@@ -1905,12 +1934,14 @@ class AudioRecognition:
                 self._audio_transcript = ""
                 self._final_transcript_confidence = []
                 self._last_final_transcript_time = None
+                self._finals_in_turn = 0
                 # concurrent user speech might have changed it
                 # only reset if there is no new speech
                 if self._last_speaking_time == last_speaking_time:
                     self._speech_start_time = None
                     self._vad_speech_started = False
                     self._last_speaking_time = None
+                    self._vad_segments_ended_in_turn = 0
 
                 if self._turn_detector_stream is not None:
                     self._turn_detector_stream.flush(reason="turn committed")
