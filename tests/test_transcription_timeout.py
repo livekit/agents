@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 import pytest
 
 from livekit.agents import Agent, UserTranscriptionTimeoutEvent
+from livekit.agents.voice.audio_recognition import AudioRecognition
 
 from .fake_session import FakeActions, create_session, run_session
 
@@ -146,3 +148,66 @@ async def test_refires_on_next_attempt() -> None:
     assert events[1].speech_duration == pytest.approx(2.0, abs=0.5)
     # Both bursts belong to the same uncommitted turn.
     assert events[1].vad_speech_started_at == pytest.approx(events[0].vad_speech_started_at)
+
+
+NO_TRANSCRIPT_MESSAGE = "no transcript for user speech"
+
+
+def _no_transcript_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return [r for r in caplog.records if r.getMessage() == NO_TRANSCRIPT_MESSAGE]
+
+
+async def test_no_transcript_warning_fires_without_option(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "")
+
+    session = create_session(actions)
+    caplog.set_level(logging.WARNING, logger="livekit.agents")
+
+    await asyncio.wait_for(run_session(session, _agent(), drain_delay=10), timeout=SESSION_TIMEOUT)
+
+    records = _no_transcript_records(caplog)
+    assert len(records) == 1
+    assert records[0].levelno == logging.WARNING
+    assert records[0].speech_duration == pytest.approx(2.0, abs=0.5)
+    assert hasattr(records[0], "stt")
+
+
+@pytest.mark.parametrize(
+    ("start", "end", "transcript", "final"),
+    [
+        (0.5, 2.5, "Hello, how are you?", True),  # transcribed
+        (0.5, 2.5, "Hello, how are you?", False),  # interim only still counts as a transcript
+        (0.5, 1.0, "", True),  # short blip below the minimum speech duration
+    ],
+)
+async def test_no_transcript_warning_skipped(
+    caplog: pytest.LogCaptureFixture, start: float, end: float, transcript: str, final: bool
+) -> None:
+    actions = FakeActions()
+    actions.add_user_speech(start, end, transcript, final=final)
+    if transcript and final:
+        actions.add_llm("I'm doing well, thank you!")
+        actions.add_tts(2.0)
+
+    session = create_session(actions)
+    caplog.set_level(logging.WARNING, logger="livekit.agents")
+
+    await asyncio.wait_for(run_session(session, _agent(), drain_delay=10), timeout=SESSION_TIMEOUT)
+
+    assert _no_transcript_records(caplog) == []
+
+
+def test_no_transcript_warning_skipped_when_audio_withheld() -> None:
+    # uninterruptible agent speech and AEC warmup send silence to STT, so no transcript is
+    # expected; the fake audio input pushes too few frames to drive this end to end
+    recognition = AudioRecognition.__new__(AudioRecognition)
+    recognition._no_transcript_warning_handle = None
+    recognition._stt_audio_withheld = True
+    recognition._segment_transcribed = False
+
+    recognition._arm_no_transcript_warning(2.0)
+
+    assert recognition._no_transcript_warning_handle is None
