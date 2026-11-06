@@ -2,6 +2,11 @@ from ..types import NOT_GIVEN, NotGivenOr
 from ..utils.misc import is_given
 
 
+def _check_alpha(alpha: float) -> None:
+    if not 0 < alpha <= 1:
+        raise ValueError("alpha must be in (0, 1].")
+
+
 class ExpFilter:
     def __init__(
         self,
@@ -10,8 +15,7 @@ class ExpFilter:
         min_val: NotGivenOr[float] = NOT_GIVEN,
         initial: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
-        if not 0 < alpha <= 1:
-            raise ValueError("alpha must be in (0, 1].")
+        _check_alpha(alpha)
 
         self._alpha = alpha
         self._filtered = initial
@@ -26,7 +30,7 @@ class ExpFilter:
         max_val: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         if is_given(alpha):
-            assert 0 < alpha <= 1, "alpha must be in (0, 1]."
+            _check_alpha(alpha)
             self._alpha = alpha
         if is_given(initial):
             self._filtered = initial
@@ -61,4 +65,5 @@ class ExpFilter:
         return self._filtered if is_given(self._filtered) else None
 
     def update_base(self, alpha: float) -> None:
+        _check_alpha(alpha)
         self._alpha = alpha
