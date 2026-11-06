@@ -1608,7 +1608,7 @@ CHECKPOINT_STOP_RESPONSE = "stop_response"
 CHECKPOINT_SUBSCRIBED = "subscribed"
 #: A newer detection superseded this one.
 CHECKPOINT_SUPERSEDED = "superseded"
-#: The track was subscribed, with `lk.track_id` (sent as `lk.track_sid`) and `lk.track_source`.
+#: The track was subscribed, with `lk.track_id` and `lk.track_source`.
 CHECKPOINT_TRACK_SUBSCRIBED = "track_subscribed"
 #: The user spoke again during the wait.
 CHECKPOINT_USER_RESUMED = "user_resumed"

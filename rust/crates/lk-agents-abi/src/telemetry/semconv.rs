@@ -1508,7 +1508,7 @@ pub mod checkpoint {
     pub const SUBSCRIBED: &str = "subscribed";
     /// A newer detection superseded this one.
     pub const SUPERSEDED: &str = "superseded";
-    /// The track was subscribed, with `lk.track_id` (sent as `lk.track_sid`) and `lk.track_source`.
+    /// The track was subscribed, with `lk.track_id` and `lk.track_source`.
     pub const TRACK_SUBSCRIBED: &str = "track_subscribed";
     /// The user spoke again during the wait.
     pub const USER_RESUMED: &str = "user_resumed";
