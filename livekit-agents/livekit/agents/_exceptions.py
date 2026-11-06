@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 
 class UnexpectedModelBehavior(RuntimeError):
     """Raised when the model behaves in a way the run cannot recover from,
@@ -191,4 +193,40 @@ def create_api_error_from_http(
         status_code=status,
         request_id=request_id,
         body=body,
+    )
+
+
+_MAX_ERROR_BODY_CHARS = 500
+
+
+def create_api_error_from_response(
+    message: str,
+    *,
+    status: int,
+    headers: Mapping[str, str] | None,
+    request_id_header: str = "x-request-id",
+    body: str | None = None,
+    secret: str | None = None,
+) -> APIStatusError:
+    """Create an APIStatusError from a failed HTTP response or WebSocket handshake.
+
+    The message is used as is, so callers keep the message they raised before. Pass the
+    fields of the response, never the aiohttp exception itself: its `request_info` and
+    repr hold the request headers, which carry the API key.
+
+    Args:
+        message: The error message, usually the aiohttp error message (the reason phrase).
+        status: The HTTP status code.
+        headers: The response headers. Only `request_id_header` is read.
+        request_id_header: The response header that holds the provider's request id.
+        body: The response text. It is truncated, because it goes into log lines.
+        secret: A credential to mask in the body, in case the provider echoes it back.
+    """
+    request_id = headers.get(request_id_header) if headers else None
+    if body:
+        if secret:
+            body = body.replace(secret, "***")
+        body = body[:_MAX_ERROR_BODY_CHARS]
+    return APIStatusError(
+        message=message, status_code=status, request_id=request_id, body=body or None
     )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import weakref
@@ -14,6 +15,7 @@ from livekit.agents import (
     APIError,
     APIStatusError,
     APITimeoutError,
+    create_api_error_from_response,
     tokenize,
     tts,
     utils,
@@ -259,6 +261,7 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        error_body: str | None = None
         try:
             http_params: dict = {
                 "encoding": self._opts.encoding,
@@ -280,6 +283,10 @@ class ChunkedStream(tts.ChunkedStream):
                 json={"text": self._input_text},
                 timeout=aiohttp.ClientTimeout(total=30, sock_connect=self._conn_options.timeout),
             ) as resp:
+                if not resp.ok:
+                    # best effort: a failed read must not change the error raised below
+                    with contextlib.suppress(Exception):
+                        error_body = await resp.text(errors="replace")
                 resp.raise_for_status()
 
                 output_emitter.initialize(
@@ -297,8 +304,13 @@ class ChunkedStream(tts.ChunkedStream):
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=None, body=None
+            raise create_api_error_from_response(
+                e.message,
+                status=e.status,
+                headers=e.headers,
+                request_id_header="dg-request-id",
+                body=error_body,
+                secret=self._opts.api_key,
             ) from None
         except Exception as e:
             raise APIConnectionError() from e
@@ -355,9 +367,17 @@ class SynthesizeStream(tts.SynthesizeStream):
         except APIError:
             raise
         except aiohttp.ClientResponseError as e:
-            raise APIStatusError(
-                message=e.message, status_code=e.status, request_id=request_id, body=None
-            ) from None
+            # a failed handshake; RequestInfo carries the API key, so only response fields are kept.
+            error = create_api_error_from_response(
+                e.message,
+                status=e.status,
+                headers=e.headers,
+                request_id_header="dg-request-id",
+            )
+            # without a provider request id, keep the local one this error carried before
+            if error.request_id is None:
+                error.request_id = request_id
+            raise error from None
         except Exception as e:
             raise APIConnectionError() from e
         finally:
