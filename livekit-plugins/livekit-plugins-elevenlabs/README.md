@@ -34,3 +34,25 @@ chunks do not pace reconnect backlogs or guarantee that provider queue errors
 are avoided. Flushes send any remaining partial chunk before the commit.
 
 This option applies only to realtime STT and is set at construction time.
+
+## Eleven Realtime (speech-to-speech)
+
+Use an Eleven Realtime model as the `llm` of an `AgentSession`. Instructions and
+function tools come from the LiveKit `Agent`:
+
+```python
+from livekit.agents import AgentSession
+from livekit.plugins import elevenlabs
+
+session = AgentSession(
+    llm=elevenlabs.realtime.RealtimeModel(
+        model="eleven_realtime_v1_mini",
+        voice="brian",
+        language="en",
+    ),
+)
+```
+
+The model, voice, language and turn detection lock once the conversation starts;
+instructions and tools can still change. The server ends a session after
+`max_duration_seconds` (600 by default, up to 7200).

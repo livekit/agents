@@ -14,6 +14,24 @@ TTSModels = Literal[
     "eleven_v4_turbo",
 ]
 
+RealtimeModels = Literal[
+    "eleven_realtime_v1_mini",
+    "eleven_realtime_v1_max",
+]
+
+RealtimeVoices = Literal[
+    "brian",
+    "lily",
+    "jessica",
+    "george",
+    "matilda",
+    "sarah",
+    "will",
+    "liam",
+    "michael",
+    "chris",
+]
+
 # Synthesized via text-to-dialogue instead of text-to-speech (see tts.py).
 DIALOGUE_TTS_MODEL_PREFIXES = ("eleven_v3", "eleven_v4")
 
