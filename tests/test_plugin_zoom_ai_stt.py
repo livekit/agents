@@ -70,6 +70,8 @@ class FakeScribe:
         self.on_audio: LiveScript | None = None
         # Called right after session.updated; lets a test end the session early.
         self.on_start: LiveScript | None = None
+        # Called after each control message (e.g. input_audio_buffer.commit).
+        self.on_control: LiveScript | None = None
         # Error events sent in place of session.updated (Scribe rejecting the settings).
         self.reject_update: list[dict[str, Any]] | None = None
         self.transcript = "Hi there, what is the capital of France?"
@@ -114,6 +116,8 @@ class FakeScribe:
                 await ws.close()
             else:
                 session.controls.append(event)
+                if self.on_control:
+                    await self.on_control(ws, session)
         return ws
 
     async def transcribe(self, request: web.Request) -> web.Response:
@@ -1024,6 +1028,573 @@ async def test_live_input_gap_mid_turn_sends_silence_to_end_it(
     )
     await asyncio.sleep(0.3)
     assert len(fake.sessions[0].audio) == 6400 + window  # sent once per gap
+    await stream.aclose()
+
+
+# ---------------------------------------------------------------------------
+# turn_detection="none": LiveKit's VAD ends the turn, each flush commits
+# ---------------------------------------------------------------------------
+
+COMMIT = {"type": "input_audio_buffer.commit"}
+SAMPLE_RATE_BYTES = 16000 * 2  # 1 s of 16 kHz PCM16
+
+
+def commit_replies(transcripts: list[str]) -> LiveScript:
+    """Scribe with its VAD off: each commit is acked, then its final (and the next turn opens)."""
+
+    async def reply(ws: web.WebSocketResponse, session: LiveSession) -> None:
+        if session.controls[-1] != COMMIT:
+            return
+        n = sum(1 for c in session.controls if c == COMMIT)
+        end_ms = len(session.audio) * 1000 // SAMPLE_RATE_BYTES
+        await ws.send_json({"type": "input_audio_buffer.committed", "item_id": f"item_{n}"})
+        await ws.send_json(
+            {
+                "type": "transcription.completed",
+                "item_id": f"item_{n}",
+                "transcript": transcripts[n - 1] if n <= len(transcripts) else "",
+                "audio_start_ms": 0,
+                "audio_end_ms": end_ms,
+            }
+        )
+        await ws.send_json({"type": "input_audio_buffer.speech_started", "audio_start_ms": end_ms})
+
+    return reply
+
+
+def test_turn_detection_none_capabilities() -> None:
+    assert not zoom_ai.STT(api_key=API_KEY).capabilities.manual_flush
+    assert zoom_ai.STT(api_key=API_KEY, turn_detection="none").capabilities.manual_flush
+    fast = zoom_ai.STT(api_key=API_KEY, mode="fast", turn_detection="none")
+    assert not fast.capabilities.manual_flush  # Fast is one request per utterance
+    with pytest.raises(ValueError, match="turn_detection"):
+        zoom_ai.STT(api_key=API_KEY, turn_detection="vad")  # type: ignore[arg-type]
+
+
+async def test_live_turn_detection_none_turns_scribes_vad_off(scribe, http) -> None:
+    fake, live_url, fast_url = scribe
+    stt = make_stt(
+        http,
+        (live_url, fast_url),
+        turn_detection="none",
+        silence_duration_ms=600,
+        extra_kwargs={"turn_detection": {"type": "server_vad", "silence_duration_ms": 500}},
+    )
+    await run_stream(stt.stream(), frames(0.2))
+
+    # Scribe's VAD stays off whatever silence_duration_ms and extra_kwargs say.
+    assert fake.sessions[0].updates[0]["turn_detection"] == {"type": "none"}
+
+
+async def test_live_turn_detection_none_commits_on_each_flush(scribe, http) -> None:
+    fake, live_url, fast_url = scribe
+    fake.on_control = commit_replies(["First turn.", "Second turn."])
+    stt = make_stt(http, (live_url, fast_url), turn_detection="none")
+    stream = stt.stream()
+    events: list[SpeechEvent] = []
+
+    async def collect() -> None:
+        async for ev in stream:
+            events.append(ev)
+
+    collector = asyncio.create_task(collect())
+    for f in speech(0.5):
+        stream.push_frame(f)
+    stream.flush()  # LiveKit's VAD ended the user's speech
+    await wait_until(
+        lambda: any(e.type == SpeechEventType.FINAL_TRANSCRIPT for e in events), "first final"
+    )
+    for f in speech(0.5):
+        stream.push_frame(f)
+    stream.end_input()  # flushes too: the rest of the audio is committed before closing
+    await asyncio.wait_for(collector, 5)
+
+    assert fake.sessions[0].controls == [COMMIT, COMMIT, {"type": "session.close"}]
+    finals = [e for e in events if e.type == SpeechEventType.FINAL_TRANSCRIPT]
+    assert [e.alternatives[0].text for e in finals] == ["First turn.", "Second turn."]
+    # LiveKit's VAD owns the turn: no start or end of speech from the STT, even though
+    # Scribe opens its next turn (speech_started) after each commit.
+    assert {e.type for e in events} == {
+        SpeechEventType.FINAL_TRANSCRIPT,
+        SpeechEventType.RECOGNITION_USAGE,
+    }
+    # The flush, after LiveKit's VAD silence, ends the segment, so Scribe's audio_end_ms
+    # isn't the end of speech: no speech_end_time is reported (LiveKit's VAD has it).
+    assert all(f.speech_end_time is None for f in finals)
+
+
+async def test_live_server_turn_detection_ignores_flushes(scribe, http) -> None:
+    fake, live_url, fast_url = scribe
+    stt = make_stt(http, (live_url, fast_url))
+    stream = stt.stream()
+    for f in frames(0.2):
+        stream.push_frame(f)
+    stream.flush()
+    await run_stream(stream, frames(0.2))
+
+    assert fake.sessions[0].controls == [{"type": "session.close"}]  # Scribe's VAD ends turns
+
+
+async def test_live_turn_detection_none_reports_an_empty_final(scribe, http) -> None:
+    """A commit Scribe finds no words in still answers the flush, so LiveKit stops waiting."""
+    fake, live_url, fast_url = scribe
+    fake.on_control = commit_replies([""])
+    stt = make_stt(http, (live_url, fast_url), turn_detection="none")
+    events = await run_stream(stt.stream(), speech(0.3))
+
+    finals = [e for e in events if e.type == SpeechEventType.FINAL_TRANSCRIPT]
+    assert [e.alternatives[0].text for e in finals] == [""]
+    assert fake.sessions[0].controls[0] == COMMIT
+
+
+async def test_live_turn_detection_none_silence_only_flush_is_not_committed(scribe, http) -> None:
+    """A flush after only digital silence gets an empty final without a commit.
+
+    Scribe can return made-up text for a commit of long, pure digital silence (e.g.
+    end_input() after the user was quiet); real audio, even very quiet, is committed.
+    """
+    fake, live_url, fast_url = scribe
+    fake.on_control = commit_replies(["Hello."])
+    stt = make_stt(http, (live_url, fast_url), turn_detection="none")
+    stream = stt.stream()
+    for f in speech(0.2):
+        stream.push_frame(f)
+    stream.flush()  # real audio: committed
+    for f in frames(0.5):
+        stream.push_frame(f)
+    events = await run_stream(stream, [])  # end_input() flushes after only zeros
+
+    assert fake.sessions[0].controls == [COMMIT, {"type": "session.close"}]
+    assert final_texts(events) == ["Hello.", ""]
+
+
+async def test_live_turn_detection_none_sends_no_gap_silence(
+    scribe, http, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only Scribe's VAD needs silence to end a turn; with it off, the commit does."""
+    fake, live_url, fast_url = scribe
+    monkeypatch.setattr(zoom_stt, "INPUT_GAP_S", 0.1)
+
+    async def start_speech(ws: web.WebSocketResponse, session: LiveSession) -> None:
+        if not getattr(session, "_started", False):
+            session._started = True  # type: ignore[attr-defined]
+            await ws.send_json({"type": "input_audio_buffer.speech_started", "audio_start_ms": 0})
+
+    fake.on_audio = start_speech
+    stt = make_stt(http, (live_url, fast_url), turn_detection="none")
+    stream = stt.stream()
+    for f in frames(0.2):  # 6400 bytes, then the input stops
+        stream.push_frame(f)
+    await wait_until(lambda: bool(fake.sessions) and len(fake.sessions[0].audio) >= 6400, "audio")
+    await asyncio.sleep(0.4)
+    assert len(fake.sessions[0].audio) == 6400
+    await stream.aclose()
+
+
+async def test_live_turn_detection_none_update_options_waits_for_the_commit(scribe, http) -> None:
+    fake, live_url, fast_url = scribe
+    answer = asyncio.Event()
+    pending: list[asyncio.Task[None]] = []
+
+    async def late_final(ws: web.WebSocketResponse, session: LiveSession) -> None:
+        if session.controls[-1] != COMMIT or len(fake.sessions) > 1:
+            return
+
+        async def send() -> None:
+            await answer.wait()
+            await ws.send_json(
+                {
+                    "type": "transcription.completed",
+                    "item_id": "i1",
+                    "transcript": "Before the change.",
+                    "audio_start_ms": 0,
+                    "audio_end_ms": 300,
+                }
+            )
+
+        pending.append(asyncio.create_task(send()))
+
+    fake.on_control = late_final
+    stt = make_stt(http, (live_url, fast_url), turn_detection="none")
+    stream = stt.stream()
+    events: list[SpeechEvent] = []
+
+    async def collect() -> None:
+        async for ev in stream:
+            events.append(ev)
+
+    collector = asyncio.create_task(collect())
+    for f in speech(0.3):
+        stream.push_frame(f)
+    stream.flush()
+    await wait_until(lambda: stream._commits_pending == 1, "commit sent")
+    stt.update_options(language="fr-FR")  # while the commit's final is outstanding
+    await asyncio.sleep(0.3)
+    assert len(fake.sessions) == 1  # held until the final arrives
+    answer.set()
+    for f in frames(0.2):
+        stream.push_frame(f)
+    await wait_until(
+        lambda: len(fake.sessions) == 2 and bool(fake.sessions[1].updates), "reconnect"
+    )
+    stream.end_input()
+    await asyncio.wait_for(collector, 5)
+
+    finals = [e.alternatives[0].text for e in events if e.type == SpeechEventType.FINAL_TRANSCRIPT]
+    assert finals[0] == "Before the change."
+    assert fake.sessions[1].updates[0]["turn_detection"] == {"type": "none"}
+
+
+def speech(seconds: float) -> list[rtc.AudioFrame]:
+    """Non-silent 16 kHz frames (any non-zero samples; the fake server doesn't decode)."""
+    per_frame = 16000 * 20 // 1000
+    return [
+        rtc.AudioFrame(b"\x01\x01" * per_frame, 16000, 1, per_frame)
+        for _ in range(int(seconds * 50))
+    ]
+
+
+def gated_commit_replies(fake: FakeScribe, gates: dict[tuple[int, int], asyncio.Event]):
+    """Answer commit n of session k with "part k.n", once gates[(k, n)] (if any) is set."""
+    tasks: list[asyncio.Task[None]] = []
+
+    async def reply(ws: web.WebSocketResponse, session: LiveSession) -> None:
+        if session.controls[-1] != COMMIT:
+            return
+        k = fake.sessions.index(session) + 1
+        n = sum(1 for c in session.controls if c == COMMIT)
+
+        async def send() -> None:
+            gate = gates.get((k, n))
+            if gate is not None:
+                await gate.wait()
+            if not ws.closed:
+                await ws.send_json(
+                    {
+                        "type": "transcription.completed",
+                        "item_id": f"item_{k}_{n}",
+                        "transcript": f"part {k}.{n}",
+                        "audio_start_ms": 0,
+                        "audio_end_ms": len(session.audio) * 1000 // SAMPLE_RATE_BYTES,
+                    }
+                )
+
+        tasks.append(asyncio.create_task(send()))
+
+    return reply
+
+
+async def collect_events(stream: zoom_stt.SpeechStream) -> tuple[list[SpeechEvent], asyncio.Task]:
+    events: list[SpeechEvent] = []
+
+    async def collect() -> None:
+        async for ev in stream:
+            events.append(ev)
+
+    return events, asyncio.create_task(collect())
+
+
+def final_texts(events: list[SpeechEvent]) -> list[str]:
+    return [e.alternatives[0].text for e in events if e.type == SpeechEventType.FINAL_TRANSCRIPT]
+
+
+async def test_live_turn_detection_none_options_change_mid_utterance_loses_no_audio(
+    scribe, http
+) -> None:
+    """Audio sent before the change is committed; audio after it goes to the new session."""
+    fake, live_url, fast_url = scribe
+    release = asyncio.Event()
+    fake.on_control = gated_commit_replies(fake, {(1, 1): release})
+    stt = make_stt(http, (live_url, fast_url), turn_detection="none")
+    stream = stt.stream()
+    events, collector = await collect_events(stream)
+
+    for f in speech(0.3):  # the user is mid-utterance: no flush yet
+        stream.push_frame(f)
+    await wait_until(
+        lambda: bool(fake.sessions) and len(fake.sessions[0].audio) == 9600, "first part sent"
+    )
+    stt.update_options(language="fr-FR")
+    await wait_until(lambda: stream._draining, "drain started")
+    for f in speech(0.3):  # the user keeps talking while the old session drains
+        stream.push_frame(f)
+    stream.flush()  # then LiveKit's VAD ends the speech
+    await asyncio.sleep(0.2)
+    # The first part was committed; nothing more went to the old session.
+    assert fake.sessions[0].controls == [COMMIT]
+    assert len(fake.sessions[0].audio) == 9600
+    assert len(fake.sessions) == 1  # held until the drain commit's final arrives
+
+    release.set()
+    await wait_until(lambda: len(fake.sessions) == 2, "reconnect")
+    await wait_until(lambda: fake.sessions[1].controls[:1] == [COMMIT], "held flush")
+    stream.end_input()
+    await asyncio.wait_for(collector, 5)
+
+    # The held audio and flush went to the new session, in order, with the new language.
+    assert fake.sessions[1].updates[0]["language"] == "fr-FR"
+    assert len(fake.sessions[1].audio) == 9600
+    # The utterance arrives as one final, with the part committed before the change first,
+    # answering LiveKit's flush (end_input()'s flush adds an empty one).
+    assert final_texts(events) == ["part 1.1 part 2.1", ""]
+
+
+async def test_live_turn_detection_none_drain_final_does_not_answer_a_later_flush(
+    scribe, http
+) -> None:
+    """commit_user_turn() during a drain gets the whole utterance, not the drained part."""
+    fake, live_url, fast_url = scribe
+    release = asyncio.Event()
+    fake.on_control = gated_commit_replies(fake, {(1, 1): release})
+    stt = make_stt(http, (live_url, fast_url), turn_detection="none")
+    stream = stt.stream()
+    events, collector = await collect_events(stream)
+
+    for f in speech(0.3):  # "book a"
+        stream.push_frame(f)
+    await wait_until(
+        lambda: bool(fake.sessions) and len(fake.sessions[0].audio) == 9600, "first part"
+    )
+    stt.update_options(language="fr-FR")
+    await wait_until(lambda: stream._draining, "drain started")
+    for f in speech(0.2):  # "flight"
+        stream.push_frame(f)
+    stream.flush()  # e.g. commit_user_turn(): waits for a final
+    release.set()  # the drain commit's final arrives while that flush waits
+    await wait_until(lambda: len(fake.sessions) == 2, "reconnect")
+    await wait_until(lambda: bool(final_texts(events)), "flush answered")
+    # One final with the whole utterance: the drain final alone would end the turn early.
+    assert final_texts(events) == ["part 1.1 part 2.1"]
+    await stream.aclose()
+    collector.cancel()
+
+
+async def test_live_turn_detection_none_drained_text_answers_a_silent_flush(scribe, http) -> None:
+    """With no speech after the drain, the next flush is answered with the drained text."""
+    fake, live_url, fast_url = scribe
+    fake.on_control = gated_commit_replies(fake, {})
+    stt = make_stt(http, (live_url, fast_url), turn_detection="none")
+    stream = stt.stream()
+    events, collector = await collect_events(stream)
+    for f in speech(0.3):
+        stream.push_frame(f)
+    await wait_until(
+        lambda: bool(fake.sessions) and len(fake.sessions[0].audio) == 9600, "speech sent"
+    )
+    stt.update_options(language="fr-FR")
+    await wait_until(lambda: len(fake.sessions) == 2, "reconnect")
+    stream.flush()  # nothing but the drained speech in this turn
+    await wait_until(lambda: bool(final_texts(events)), "flush answered")
+    assert final_texts(events) == ["part 1.1"]
+    assert fake.sessions[1].controls == []  # no commit for the silence-only flush
+    await stream.aclose()
+    collector.cancel()
+
+
+async def test_live_turn_detection_none_held_audio_survives_a_failed_replay(scribe, http) -> None:
+    """If the new session fails while sending held audio, the retry sends the rest."""
+    fake, live_url, fast_url = scribe
+    release = asyncio.Event()
+    fake.on_control = gated_commit_replies(fake, {(1, 1): release})
+    stt = make_stt(http, (live_url, fast_url), turn_detection="none")
+    stream = stt.stream(conn_options=FAST_RETRY)
+    connect = stream._connect_ws
+    connects = 0
+
+    async def connect_failing_second() -> aiohttp.ClientWebSocketResponse:
+        nonlocal connects
+        ws = await connect()
+        connects += 1
+        if connects == 2:  # the replacement session dies after 5 frames of the replay
+            sent = 0
+            send_bytes = ws.send_bytes
+
+            async def flaky(data: bytes, *args: Any, **kwargs: Any) -> None:
+                nonlocal sent
+                sent += 1
+                if sent > 5:
+                    raise ConnectionResetError("dropped")
+                await send_bytes(data, *args, **kwargs)
+
+            ws.send_bytes = flaky  # type: ignore[method-assign]
+        return ws
+
+    stream._connect_ws = connect_failing_second  # type: ignore[method-assign]
+    for f in speech(0.2):
+        stream.push_frame(f)
+    await wait_until(
+        lambda: bool(fake.sessions) and len(fake.sessions[0].audio) == 6400, "first part"
+    )
+    stt.update_options(language="fr-FR")
+    await wait_until(lambda: stream._draining, "drain started")
+    for f in speech(0.3):  # 15 frames held for the next session
+        stream.push_frame(f)
+    stream.flush()
+    release.set()
+    await wait_until(lambda: len(fake.sessions) == 3, "retry after the failed replay")
+    await wait_until(lambda: fake.sessions[2].controls[:1] == [COMMIT], "held flush")
+    await stream.aclose()
+
+    # 5 held frames reached the failed session; the other 10 and the flush reached the retry.
+    assert len(fake.sessions[1].audio) == 5 * 640
+    assert len(fake.sessions[2].audio) == 10 * 640
+
+
+def test_joined_segments_keep_the_recognized_text_of_each() -> None:
+    """A polished segment joined with an unpolished one keeps both in the raw transcript."""
+    polished = zoom_stt.stt.SpeechData(
+        language="en-US", text="Hello!", metadata={"transcript": "hello"}
+    )
+    unpolished = zoom_stt.stt.SpeechData(language="en-US", text="world")
+    joined = zoom_stt._join_speech(polished, unpolished)
+    assert joined.text == "Hello! world"
+    assert joined.metadata == {"transcript": "hello world"}
+    plain = zoom_stt._join_speech(unpolished, unpolished)
+    assert plain.text == "world world" and plain.metadata is None
+
+
+async def test_live_resent_frames_are_counted_once_in_usage(scribe, http) -> None:
+    """A frame resent after a failed send counts once toward recognition usage."""
+    fake, live_url, fast_url = scribe
+    stt = make_stt(http, (live_url, fast_url), turn_detection="none")
+    stream = stt.stream(conn_options=FAST_RETRY)
+    connect = stream._connect_ws
+    connects = 0
+
+    async def connect_failing_first() -> aiohttp.ClientWebSocketResponse:
+        nonlocal connects
+        ws = await connect()
+        connects += 1
+        if connects == 1:  # the first session drops on its 6th frame
+            sent = 0
+            send_bytes = ws.send_bytes
+
+            async def flaky(data: bytes, *args: Any, **kwargs: Any) -> None:
+                nonlocal sent
+                sent += 1
+                if sent > 5:
+                    raise ConnectionResetError("dropped")
+                await send_bytes(data, *args, **kwargs)
+
+            ws.send_bytes = flaky  # type: ignore[method-assign]
+        return ws
+
+    stream._connect_ws = connect_failing_first  # type: ignore[method-assign]
+    events = await run_stream(stream, speech(0.4))  # 20 frames, 0.4 s
+
+    assert len(fake.sessions) == 2
+    # Nothing lost: 5 frames reached the first session, the other 15 the retry.
+    assert len(fake.sessions[0].audio) + len(fake.sessions[1].audio) == 20 * 640
+    usage = [e.recognition_usage.audio_duration for e in events if e.recognition_usage]
+    assert sum(usage) == pytest.approx(0.4, abs=0.001)  # the failed frame isn't counted twice
+
+
+async def test_live_turn_detection_none_options_change_waits_for_every_commit(scribe, http) -> None:
+    fake, live_url, fast_url = scribe
+    gates = {(1, 1): asyncio.Event(), (1, 2): asyncio.Event()}
+    fake.on_control = gated_commit_replies(fake, gates)
+    stt = make_stt(http, (live_url, fast_url), turn_detection="none")
+    stream = stt.stream()
+    events, collector = await collect_events(stream)
+
+    for _ in range(2):  # two utterances, flushed before either final arrives
+        for f in speech(0.2):
+            stream.push_frame(f)
+        stream.flush()
+    await wait_until(lambda: stream._commits_pending == 2, "two commits")
+    stt.update_options(language="fr-FR")
+    gates[(1, 1)].set()
+    await wait_until(lambda: stream._commits_pending == 1, "first final")
+    await asyncio.sleep(0.2)
+    assert len(fake.sessions) == 1  # the second commit's final is still outstanding
+    gates[(1, 2)].set()
+    await wait_until(lambda: len(fake.sessions) == 2, "reconnect")
+    stream.end_input()
+    await asyncio.wait_for(collector, 5)
+
+    assert fake.sessions[0].controls == [COMMIT, COMMIT]  # nothing uncommitted to drain
+    assert final_texts(events)[:2] == ["part 1.1", "part 1.2"]
+
+
+async def test_live_turn_detection_none_digital_silence_is_not_committed_on_drain(
+    scribe, http
+) -> None:
+    fake, live_url, fast_url = scribe
+    stt = make_stt(http, (live_url, fast_url), turn_detection="none")
+    stream = stt.stream()
+    for f in frames(0.3):  # zeros only, e.g. a muted input
+        stream.push_frame(f)
+    await wait_until(
+        lambda: bool(fake.sessions) and len(fake.sessions[0].audio) == 9600, "silence sent"
+    )
+    stt.update_options(language="fr-FR")
+    await wait_until(lambda: len(fake.sessions) == 2, "reconnect")
+    await run_stream(stream, [])
+
+    # A commit covering only digital silence can make Scribe return made-up text.
+    assert fake.sessions[0].controls == []
+
+
+async def test_live_turn_detection_none_dropped_session_answers_its_commit(scribe, http) -> None:
+    """A commit cut off by a reconnect gets an empty final, so a flush isn't left waiting."""
+    fake, live_url, fast_url = scribe
+
+    async def end_on_commit(ws: web.WebSocketResponse, session: LiveSession) -> None:
+        if session.controls[-1] == COMMIT and len(fake.sessions) == 1:
+            await ws.send_json({"type": "session.closed", "reason": "time_limit"})
+            await ws.close()
+
+    fake.on_control = end_on_commit
+    stt = make_stt(http, (live_url, fast_url), turn_detection="none")
+    stream = stt.stream(conn_options=FAST_RETRY)
+    events, collector = await collect_events(stream)
+    for f in speech(0.2):
+        stream.push_frame(f)
+    stream.flush()
+    await wait_until(lambda: len(fake.sessions) == 2, "retry")
+    await wait_until(lambda: final_texts(events) == [""], "empty final")
+    await stream.aclose()
+    collector.cancel()
+
+
+async def test_live_turn_detection_none_hold_timeout_answers_the_commit(
+    scribe, http, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake, live_url, fast_url = scribe
+    monkeypatch.setattr(zoom_stt, "RECONNECT_HOLD_S", 0.2)
+    never = asyncio.Event()
+    fake.on_control = gated_commit_replies(fake, {(1, 1): never})  # no final for it
+    stt = make_stt(http, (live_url, fast_url), turn_detection="none")
+    stream = stt.stream()
+    events, collector = await collect_events(stream)
+    for f in speech(0.2):
+        stream.push_frame(f)
+    stream.flush()
+    await wait_until(lambda: stream._commits_pending == 1, "commit sent")
+    stt.update_options(language="fr-FR")
+    await wait_until(lambda: len(fake.sessions) == 2, "reconnect after the hold")
+    await wait_until(lambda: final_texts(events) == [""], "empty final")
+    await stream.aclose()
+    collector.cancel()
+    never.set()  # let the fake's reply task finish (its session is already closed)
+    await asyncio.sleep(0.05)
+
+
+async def test_live_turn_detection_none_silence_duration_change_keeps_the_session(
+    scribe, http, caplog: pytest.LogCaptureFixture
+) -> None:
+    fake, live_url, fast_url = scribe
+    stt = make_stt(http, (live_url, fast_url), turn_detection="none")
+    stream = stt.stream()
+    for f in speech(0.2):
+        stream.push_frame(f)
+    await wait_until(lambda: bool(fake.sessions) and bool(fake.sessions[0].audio), "audio")
+    with caplog.at_level(logging.WARNING):
+        stt.update_options(silence_duration_ms=600)
+    await asyncio.sleep(0.2)
+    assert len(fake.sessions) == 1  # not sent in this mode, so nothing to reconnect for
+    assert fake.sessions[0].controls == []  # and the utterance isn't committed early
+    assert 'not used with turn_detection="none"' in caplog.text
     await stream.aclose()
 
 
