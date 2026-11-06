@@ -181,3 +181,123 @@ async def test_audio_forwarding_reconciles_playout_pause_before_first_frame() ->
 
     assert order == ["reconcile", "frame", "flush"]
     audio_output.resume.assert_not_called()
+
+
+# --- hold_reply_while_user_speaking -----------------------------------------
+
+
+@pytest.fixture
+async def early_reply_activity() -> AsyncIterator[tuple[AgentActivity, FakeAudioOutput]]:
+    """A session that starts a reply on time even while the caller is making noise."""
+    session = AgentSession(
+        turn_handling={
+            "interruption": {
+                "resume_false_interruption": True,
+                "false_interruption_timeout": 2.0,
+                "hold_reply_while_user_speaking": False,
+            }
+        }
+    )
+    audio_output = FakeAudioOutput(can_pause=True)
+    session.output.audio = audio_output
+    agent_activity = AgentActivity(Agent(instructions="test"), session)
+    session._update_agent_state("thinking")
+
+    yield agent_activity, audio_output
+
+    await session.aclose()
+
+
+async def test_a_pause_taken_while_thinking_is_released_when_the_reply_is_ready(
+    early_reply_activity: tuple[AgentActivity, FakeAudioOutput],
+) -> None:
+    """Regression for https://github.com/livekit/agents/issues/7837.
+
+    Caller noise arriving while the agent is still generating pauses the playout.
+    Holding it then costs end-of-speech plus `false_interruption_timeout`, which on
+    a phone line turns a breath into seconds of dead air before the agent answers.
+    """
+    agent_activity, audio_output = early_reply_activity
+    speech_handle = SpeechHandle.create()
+    agent_activity._update_paused_speech(speech_handle, timeout=2.0)
+    audio_output.pause()
+    assert audio_output._paused_at is not None
+
+    agent_activity._reconcile_playout_pause(speech_handle)
+
+    assert audio_output._paused_at is None, "the reply is ready; it should not wait for EOS"
+    assert agent_activity._paused_speech is None
+    assert agent_activity._false_interruption_timer is None
+
+
+async def test_a_pause_taken_while_speaking_still_holds(
+    early_reply_activity: tuple[AgentActivity, FakeAudioOutput],
+) -> None:
+    """The option is scoped to pauses recorded while the agent was *thinking*.
+
+    An interruption that arrives while the agent is already speaking is a real
+    interruption, and keeps today's behaviour whatever this option says.
+    """
+    agent_activity, audio_output = early_reply_activity
+    speech_handle = SpeechHandle.create()
+    agent_activity._session._update_agent_state("speaking")
+    agent_activity._update_paused_speech(speech_handle, timeout=2.0)
+    audio_output.pause()
+    paused_at = audio_output._paused_at
+
+    agent_activity._reconcile_playout_pause(speech_handle)
+
+    assert audio_output._paused_at == paused_at
+    assert agent_activity._paused_speech is not None
+    assert agent_activity._paused_speech.handle is speech_handle
+
+
+async def test_caller_noise_does_not_hold_the_reply_at_authorization(
+    early_reply_activity: tuple[AgentActivity, FakeAudioOutput],
+) -> None:
+    """The playout release is downstream of authorization, which gathers *all* of
+    its futures -- so a pending `_user_silence_event` would hold the reply before
+    forwarding ever runs, and the option would do nothing in the case it exists for.
+    """
+    agent_activity, _ = early_reply_activity
+    speech_handle = SpeechHandle.create()
+    agent_activity._user_silence_event.clear()  # the caller is making a noise
+
+    assert agent_activity._waits_for_user_silence(speech_handle) is False
+
+
+async def test_the_default_still_waits_for_the_caller_to_stop(
+    activity: tuple[AgentActivity, FakeAudioOutput],
+) -> None:
+    agent_activity, _ = activity
+    speech_handle = SpeechHandle.create()
+
+    assert agent_activity._waits_for_user_silence(speech_handle) is True
+
+
+async def test_uninterruptible_speech_never_waits(
+    activity: tuple[AgentActivity, FakeAudioOutput],
+) -> None:
+    """Speech that cannot be interrupted never waited for silence, option or not."""
+    agent_activity, _ = activity
+    speech_handle = SpeechHandle.create(allow_interruptions=False)
+
+    assert agent_activity._waits_for_user_silence(speech_handle) is False
+
+
+async def test_no_pause_is_created_when_noise_preceded_the_reply_becoming_current(
+    early_reply_activity: tuple[AgentActivity, FakeAudioOutput],
+) -> None:
+    """Start-of-speech can arrive before this handle is current, so no pause was ever
+    recorded -- the release path has nothing to release, and the block that *creates*
+    a pause would hold the reply anyway. With the hold opted out, neither should.
+    """
+    agent_activity, audio_output = early_reply_activity
+    speech_handle = SpeechHandle.create()
+    agent_activity._user_silence_event.clear()  # the caller is making a noise
+    assert agent_activity._paused_speech is None  # nothing was recorded
+
+    agent_activity._reconcile_playout_pause(speech_handle)
+
+    assert audio_output._paused_at is None, "a fresh pause was created despite the opt-out"
+    assert agent_activity._paused_speech is None

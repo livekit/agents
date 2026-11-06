@@ -45,6 +45,9 @@ class _FakeActivity(SimpleNamespace):
             _rt_chat_ctx_lock=asyncio.Lock(),
             _authorization_allowed=authorization_allowed,
             _user_silence_event=user_silence,
+            # mirrors the real method with hold_reply_while_user_speaking at its default:
+            # an interruptible speech waits for the caller to stop before it is authorized
+            _waits_for_user_silence=lambda speech_handle: speech_handle.allow_interruptions,
             # the fake model reports supports_overlapping_speech=False, so the caller gates
             _rt_overlapping_speech_enabled=False,
             tools=[],

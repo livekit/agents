@@ -178,6 +178,17 @@ class InterruptionOptions(TypedDict, total=False):
     false_interruption_timeout: float | None
     """Seconds of silence after an interruption before it is
     classified as false. ``None`` disables. Defaults to ``2.0``."""
+    hold_reply_while_user_speaking: bool
+    """Keep a reply's audio paused while the caller is still making sound, when the
+    pause was recorded with the agent *thinking* rather than speaking.
+
+    ``True`` (the default) waits for end of speech, plus
+    ``false_interruption_timeout`` when the sound was long enough to count as an
+    interruption. ``False`` starts the reply as soon as its audio is ready, which
+    is what 1.6.x did: on a phone line, breaths and short "mm" sounds near the
+    start of a reply otherwise add dead air before the agent answers.
+
+    Interruptions that arrive while the agent is already speaking are unaffected."""
     backchannel_boundary: float | tuple[float, float] | None
     """Seconds near the start/end of each agent turn during which overlapping
     speech classified as a backchannel by the adaptive detector is suppressed
@@ -194,6 +205,7 @@ _INTERRUPTION_DEFAULTS: InterruptionOptions = {
     "min_words": 0,
     "resume_false_interruption": True,
     "false_interruption_timeout": 2.0,
+    "hold_reply_while_user_speaking": True,
     "backchannel_boundary": (1.0, 1.0),
 }
 
