@@ -50,6 +50,22 @@ def test_basic_sent_still_splits_after_a_number() -> None:
         assert text[start:end].strip() == sent
 
 
+def test_basic_sent_keeps_the_period_after_a_company_suffix() -> None:
+    # Regression: the rule splitting "Acme Inc. He ..." into two sentences
+    # replaced the period with <stop>, so it was dropped from the first sentence
+    # and every later span was shifted by one character.
+    for text in (
+        "I have been working for Acme Inc. He is my boss and he is nice.",
+        "We bought the parts from Smith and Co. They arrived on time today.",
+    ):
+        sentences = split_sentences(text, min_sentence_len=20)
+        assert len(sentences) == 2, sentences
+        assert sentences[0][0].endswith((" Inc.", " Co.")), sentences
+        for sent, start, end in sentences:
+            assert text[start:end].strip() == sent, (sent, text[start:end])
+        assert sentences[-1][2] == len(text), sentences
+
+
 def test_basic_sent_xml_wrapper_keeps_last_char() -> None:
     # The xml-aware wrapper remaps the sentence spans back onto the original
     # text; with the old end index the final period was split into its own
