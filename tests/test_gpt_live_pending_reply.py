@@ -122,10 +122,10 @@ class ProviderPeer:
         )
         await self.receive(wire.InputAudioAppendEvent.model_fields["type"].default)
 
-    async def backend(self, event_type, *, item=None, delegation_id="delegation"):
+    async def backend(self, event_type, *, item=None, delegation_id="delegation", **fields):
         event = wire.ResponseEventEnvelope(
             delegation_id=delegation_id,
-            event=wire.ResponsesEvent(type=event_type, item=item),
+            event=wire.ResponsesEvent(type=event_type, item=item, **fields),
         )
         await self.send(event)
         async with asyncio.timeout(DEADLINE_SECONDS):
@@ -190,6 +190,10 @@ class ProviderPeer:
         "streaming_completion",
         "later_response_failed",
         "later_response_incomplete",
+        "mixed_text_before_call",
+        "mixed_text_after_call",
+        "mixed_message_after_call",
+        "mixed_empty_text",
     ],
 )
 @pytest.mark.parametrize("with_run", [False, True])
@@ -305,6 +309,47 @@ async def test_gpt_live_pending_reply(case, with_run, expire_wait=False):
                     await peer.speech(session, speeches, "Still checking.")
                     assert live.pending_tool_reply
                     assert session.agent_state == "thinking"
+                if case.startswith("mixed_"):
+                    if case == "mixed_text_before_call":
+                        await peer.backend("response.output_text.delta", delta="First result.")
+                    await peer.backend(
+                        RESPONSE_ITEM_DONE,
+                        item=wire.OutputItem(
+                            id="later",
+                            type="function_call",
+                            status="completed",
+                            call_id="later",
+                            name="lookup",
+                            arguments="{}",
+                        ),
+                    )
+                    if case == "mixed_text_after_call":
+                        await peer.backend("response.output_text.delta", delta="First result.")
+                    elif case == "mixed_message_after_call":
+                        # Construct from the wire dict so this also runs on older schemas
+                        # that silently discarded message content.
+                        item = wire.OutputItem.model_validate(
+                            {
+                                "id": "answer",
+                                "type": "message",
+                                "status": "completed",
+                                "content": [{"type": "output_text", "text": "First result."}],
+                            }
+                        )
+                        await peer.backend(RESPONSE_ITEM_DONE, item=item)
+                    elif case == "mixed_empty_text":
+                        await peer.backend("response.output_text.delta", delta="  ")
+                    await peer.receive(wire.ResponseItemCreateEvent.model_fields["type"].default)
+                    await peer.backend(RESPONSE_COMPLETED)
+                    await peer.receive(wire.ResponseCreateEvent.model_fields["type"].default)
+                    await peer.speech(
+                        session,
+                        speeches,
+                        "Checking next." if case == "mixed_empty_text" else "First result.",
+                    )
+                    expected = {"call-0", "later"} if case == "mixed_empty_text" else {"later"}
+                    assert set(live._awaiting_tool_audio) == expected
+                    await peer.backend(RESPONSE_CREATED)
                 if case == "streaming_completion":
                     speaker = session.output.audio
                     speaker.captured.clear()

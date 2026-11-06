@@ -113,6 +113,15 @@ class GPTLiveDelegation:
 
 
 @dataclass
+class _ToolReplyCandidate:
+    """Results visible to one backend response and the kinds of output it produced."""
+
+    results: set[str]
+    has_tool_calls: bool = False
+    has_text: bool = False
+
+
+@dataclass
 class _Speech:
     """One speaker's fragments so far: the message they grow into and, for the user, their turn."""
 
@@ -426,9 +435,9 @@ class GPTLiveSession(
         self._backend_response_pending = False
         self._tool_reply_delegations: dict[str, str | None] = {}
         self._awaiting_tool_audio: dict[str, str | None] = {}
-        # Snapshot results visible when a backend response starts. Only a completed
-        # continuation without more tool calls makes those results ready for speech.
-        self._backend_reply_candidates: dict[str | None, set[str]] = {}
+        # Snapshot results visible when a backend response starts. A continuation
+        # can both answer those results and ask for more work.
+        self._backend_reply_candidates: dict[str | None, _ToolReplyCandidate] = {}
         self._tool_audio_ready: set[str] = set()
 
         # the newest history item the last ask was about, so an ask never repeats one
@@ -887,14 +896,36 @@ class GPTLiveSession(
 
         if event.type == "response.created":
             self._backend_running_responses[d_id] = set()
-            self._backend_reply_candidates[d_id] = {
-                call for call, delegation in self._awaiting_tool_audio.items() if delegation == d_id
-            }
+            self._backend_reply_candidates[d_id] = _ToolReplyCandidate(
+                results={
+                    call
+                    for call, delegation in self._awaiting_tool_audio.items()
+                    if delegation == d_id
+                }
+            )
+
+        elif event.type == "response.output_text.delta":
+            if (
+                event.delta
+                and event.delta.strip()
+                and (candidate := self._backend_reply_candidates.get(d_id)) is not None
+            ):
+                candidate.has_text = True
 
         elif event.type == "response.output_item.done":
             # only the completed item carries the name, call id and arguments together
             item = event.item
-            if item is None or item.type != "function_call":
+            if item is None:
+                return
+            if item.type == "message" and item.status == "completed":
+                if any(
+                    part.type == "output_text" and part.text and part.text.strip()
+                    for part in item.content
+                ):
+                    if (candidate := self._backend_reply_candidates.get(d_id)) is not None:
+                        candidate.has_text = True
+                return
+            if item.type != "function_call":
                 return
             if item.status != "completed":
                 logger.debug(
@@ -917,8 +948,8 @@ class GPTLiveSession(
             if item.call_id in calls:
                 return
             calls.add(item.call_id)
-            # A tool-only response extends the chain; it has not produced the answer.
-            self._backend_reply_candidates.pop(d_id, None)
+            if (candidate := self._backend_reply_candidates.get(d_id)) is not None:
+                candidate.has_tool_calls = True
 
             fnc_call = llm.FunctionCall(
                 id=item.id or utils.shortuuid("fc_"),
@@ -959,9 +990,11 @@ class GPTLiveSession(
                 )
             if (calls := self._backend_running_responses.pop(d_id, None)) is not None:
                 self._backend_open_calls |= calls
-            self._tool_audio_ready.update(
-                self._backend_reply_candidates.pop(d_id, set()) & self._awaiting_tool_audio.keys()
-            )
+            candidate = self._backend_reply_candidates.pop(d_id, None)
+            if candidate is not None and (not candidate.has_tool_calls or candidate.has_text):
+                # A mixed response may answer the old results while starting new
+                # tools. Only a response with calls but no answer extends their wait.
+                self._tool_audio_ready.update(candidate.results & self._awaiting_tool_audio.keys())
             self._maybe_continue_response()
 
         elif event.type in ("response.failed", "response.incomplete"):
