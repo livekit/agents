@@ -147,6 +147,20 @@ class PlaybackProgressedEvent:
 class AudioOutputCapabilities:
     pause: bool
 
+    # Whether ``flush()`` marks the end of the segment for a receiver *outside* this
+    # SDK, rather than only arming local completion bookkeeping.
+    #
+    # Sinks that push the audio to a remote consumer answer ``True``: the avatar
+    # data-stream sink closes the stream it is writing to, and DebugQueueIO pushes
+    # an AudioSegmentEnd to whatever reads the queue. For those, an extra ``flush()``
+    # is an end-of-speech the remote side will act on, so a wrapper must not issue one
+    # on the user's behalf.
+    #
+    # Sinks that own playback answer ``False``: flushing them is local bookkeeping
+    # (the room sink uses it to arm the task that reports the segment), so a wrapper
+    # may flush before clearing when it needs that bookkeeping settled.
+    flush_ends_segment: bool = False
+
 
 class AudioOutput(
     ABC, rtc.EventEmitter[Literal["playback_finished", "playback_started", "playback_progressed"]]
@@ -218,6 +232,10 @@ class AudioOutput(
     @property
     def label(self) -> str:
         return self.__label
+
+    @property
+    def capabilities(self) -> AudioOutputCapabilities:
+        return self._capabilities
 
     @property
     def next_in_chain(self) -> AudioOutput | None:
@@ -363,7 +381,11 @@ class _AudioSinkProxy(AudioOutput):
     def __init__(self, next_in_chain: AudioOutput) -> None:
         super().__init__(
             label="AudioSinkProxy",
-            capabilities=AudioOutputCapabilities(pause=True),
+            # the proxy stands in for the leaf, so it reports the leaf's contract
+            capabilities=AudioOutputCapabilities(
+                pause=True,
+                flush_ends_segment=next_in_chain.capabilities.flush_ends_segment,
+            ),
             next_in_chain=None,
         )
         # whether the wrapper above us has attached the proxy; set_next_in_chain
@@ -510,6 +532,177 @@ class _AudioSinkProxy(AudioOutput):
 
     def clear_buffer(self) -> None:
         self.next_in_chain.clear_buffer()
+
+
+class BufferedAudioOutput(AudioOutput):
+    """Hold the start of each segment back so the sink never starts with an empty queue.
+
+    A provider that streams at roughly real-time pace hands over audio in chunks, and a gap
+    between two chunks is audible because the sink plays whatever it is given straight
+    away. This holds the first ``buffer_duration`` seconds of every segment before passing
+    anything on, so the sink always starts with a full reserve to absorb those gaps.
+
+    The cost is the same amount of latency on the first word of every reply, so this is
+    opt-in. Use it for realtime models whose providers drift, not for pipeline TTS that
+    already pushes audio faster than real-time.
+
+    Example::
+
+        session.output.audio = BufferedAudioOutput(
+            next_in_chain=session.output.audio,
+            buffer_duration=0.3,
+        )
+    """
+
+    def __init__(
+        self,
+        *,
+        next_in_chain: AudioOutput,
+        buffer_duration: float = 0.3,
+        sample_rate: int | None = None,
+    ) -> None:
+        super().__init__(
+            label="BufferedAudioOutput",
+            capabilities=AudioOutputCapabilities(
+                pause=next_in_chain.can_pause,
+                flush_ends_segment=next_in_chain.capabilities.flush_ends_segment,
+            ),
+            next_in_chain=next_in_chain,
+            sample_rate=sample_rate,
+        )
+        self._buffer_duration = max(buffer_duration, 0.0)
+        self._held: list[rtc.AudioFrame] = []
+        self._held_duration = 0.0
+        # a segment starts with the buffer empty; the reserve then drains as the sink plays
+        self._priming = self._buffer_duration > 0
+        self._reserve = 0.0
+        self._drain_started_at: float | None = None
+        self._paused_at: float | None = None
+        self._flush_task: asyncio.Task[None] | None = None
+
+    @property
+    def next_in_chain(self) -> AudioOutput:
+        # a buffer is only meaningful in front of a sink, so it is required at construction
+        assert self._next_in_chain is not None
+        return self._next_in_chain
+
+    @property
+    def buffered_duration(self) -> float:
+        """Seconds of audio currently held back by the buffer."""
+        return self._held_duration
+
+    @property
+    def sample_rate(self) -> int | None:
+        return self.next_in_chain.sample_rate
+
+    @property
+    def can_pause(self) -> bool:
+        return self.next_in_chain.can_pause
+
+    def _reserve_remaining(self) -> float:
+        """Seconds of audio forwarded downstream that the sink has not played yet."""
+        if self._drain_started_at is None or self._paused_at is not None:
+            return self._reserve
+
+        return self._reserve - (time.monotonic() - self._drain_started_at)
+
+    def _start_segment(self) -> None:
+        self._priming = self._buffer_duration > 0
+        self._reserve = 0.0
+        self._drain_started_at = None
+
+    async def capture_frame(self, frame: rtc.AudioFrame) -> None:
+        if self._priming:
+            self._held.append(frame)
+            self._held_duration += frame.duration
+            if self._held_duration >= self._buffer_duration:
+                await self._release()
+            return
+
+        if self._buffer_duration > 0 and self._reserve_remaining() <= 0:
+            # the sink drained mid-segment, so take another bite before handing anything on
+            self._priming = True
+            self._held.append(frame)
+            self._held_duration += frame.duration
+            return
+
+        await self._forward(frame)
+
+    async def _forward(self, frame: rtc.AudioFrame) -> None:
+        await super().capture_frame(frame)
+        if self._drain_started_at is None:
+            self._drain_started_at = time.monotonic()
+        self._reserve += frame.duration
+        await self.next_in_chain.capture_frame(frame)
+
+    async def _release(self) -> None:
+        held, self._held = self._held, []
+        self._held_duration = 0.0
+        self._priming = False
+        self._reserve = 0.0
+        self._drain_started_at = None
+        for frame in held:
+            await self._forward(frame)
+
+    def flush(self) -> None:
+        # snapshot held frames so the async task works on its own copy; new
+        # captures go to a fresh _held list. don't call super().flush() yet —
+        # the segment isn't complete until the held frames are released.
+        held_snapshot, self._held = self._held, []
+        self._held_duration = 0.0
+        self._flush_task = asyncio.create_task(self._release_and_flush(held_snapshot))
+
+    async def _release_and_flush(self, held: list[rtc.AudioFrame]) -> None:
+        # release held frames as part of the current segment
+        for frame in held:
+            await self._forward(frame)
+        # complete the segment, then flush downstream, then start the next segment
+        super().flush()
+        self.next_in_chain.flush()
+        self._start_segment()
+
+    async def wait_for_playout(self) -> PlaybackFinishedEvent:
+        task, self._flush_task = self._flush_task, None
+        if task is not None:
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        return await super().wait_for_playout()
+
+    def clear_buffer(self) -> None:
+        # an interruption drops the held tail, so cancel any pending release task
+        task, self._flush_task = self._flush_task, None
+        if task is not None and not task.done():
+            task.cancel()
+        self._held.clear()
+        self._held_duration = 0.0
+        super().flush()
+        self._start_segment()
+        # Cancelling the release task above means the sink's own flush never happened.
+        # Sinks that own playback settle a segment through flush (the room sink arms
+        # the playout wait there), so flush before clearing or the segment is never
+        # reported and wait_for_playout() hangs. The flush only arms that reporting;
+        # the clear that follows settles it as interrupted.
+        #
+        # Sinks that push audio to an external receiver answer flush_ends_segment, and
+        # for those an extra flush is an end-of-speech the remote side acts on — the
+        # avatar would report the stop as a normal completion before this clear lands.
+        # Those sinks settle from clear_buffer() alone, so they are cleared directly.
+        if not self.next_in_chain.capabilities.flush_ends_segment:
+            self.next_in_chain.flush()
+        self.next_in_chain.clear_buffer()
+
+    def pause(self) -> None:
+        self._paused_at = time.monotonic()
+        super().pause()
+
+    def resume(self) -> None:
+        paused_at, self._paused_at = self._paused_at, None
+        if paused_at is not None and self._drain_started_at is not None:
+            # the sink did not play while paused, so keep the reserve it had
+            self._drain_started_at += time.monotonic() - paused_at
+        super().resume()
 
 
 class TextOutput(ABC):

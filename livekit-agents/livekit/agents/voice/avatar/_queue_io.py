@@ -33,7 +33,7 @@ class QueueAudioOutput(
             label="DebugQueueIO",
             next_in_chain=None,
             sample_rate=sample_rate,
-            capabilities=AudioOutputCapabilities(pause=False),
+            capabilities=AudioOutputCapabilities(pause=False, flush_ends_segment=True),
         )
         self._wait_playback_start = wait_playback_start
         self._data_ch = utils.aio.Chan[rtc.AudioFrame | AudioSegmentEnd]()

@@ -53,7 +53,7 @@ class DataStreamAudioOutput(AudioOutput):
             label="DataStreamIO",
             next_in_chain=None,
             sample_rate=sample_rate,
-            capabilities=AudioOutputCapabilities(pause=False),
+            capabilities=AudioOutputCapabilities(pause=False, flush_ends_segment=True),
         )
         self._room = room
         self._destination_identity = destination_identity

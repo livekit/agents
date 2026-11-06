@@ -44,7 +44,7 @@ class FakeAudioOutput(AudioOutput):
             label="FakeIO",
             next_in_chain=next_in_chain,
             sample_rate=sample_rate,
-            capabilities=AudioOutputCapabilities(pause=can_pause),
+            capabilities=AudioOutputCapabilities(pause=can_pause, flush_ends_segment=False),
         )
         self._pushed_duration = 0.0
         self._flushed = False
