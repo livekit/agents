@@ -142,6 +142,9 @@ class RunResult(Generic[Run_T]):
 
         self.__last_speech_handle: SpeechHandle | None = None
         self.__last_final_output: Any = None
+        # a run can watch several speech handles (e.g. session.say() from a
+        # tool); remember a failure so a later clean handle cannot hide it
+        self.__last_speech_handle_with_error: SpeechHandle | None = None
 
         # an awaiter suspended before this run started resumes into it
         if session is not None:
@@ -261,11 +264,17 @@ class RunResult(Generic[Run_T]):
 
         if isinstance(handle, SpeechHandle):
             handle._remove_item_added_callback(self._item_added)
+            # an unwatched handle no longer belongs to the run; its failure
+            # must not decide how the run completes
+            if self.__last_speech_handle_with_error is handle:
+                self.__last_speech_handle_with_error = None
         return True
 
     def _mark_done_if_needed(self, handle: SpeechHandle | asyncio.Future[Any] | None) -> None:
         if isinstance(handle, SpeechHandle):
             self.__last_speech_handle = handle
+            if handle._error is not None:
+                self.__last_speech_handle_with_error = handle
 
         suspensions = self._session._run_suspensions if self._session is not None else []
         if all(
@@ -278,18 +287,32 @@ class RunResult(Generic[Run_T]):
         """Preserve task values across speech without retaining handled errors."""
         self.__last_final_output = None if isinstance(output, BaseException) else output
 
+    def _failed_watched_handle(self) -> SpeechHandle | None:
+        """Return a still-watched speech handle that completed with a failure."""
+        if self.__last_speech_handle_with_error is not None:
+            return self.__last_speech_handle_with_error
+
+        # its done callback may still be queued on the loop when the run completes
+        for handle in self._handles:
+            if isinstance(handle, SpeechHandle) and handle.done() and handle._error is not None:
+                return handle
+        return None
+
     def _mark_done(self) -> None:
         with contextlib.suppress(asyncio.InvalidStateError):
-            if self.__last_speech_handle is None:
+            # an earlier watched speech that failed must still fail the run:
+            # falling back to the last completed handle would hide the failure.
+            speech_handle = self._failed_watched_handle() or self.__last_speech_handle
+            if speech_handle is None:
                 self._done_fut.set_result(None)
                 return
 
             # propagate speech handle errors (e.g. LLM or realtime failures)
-            if self.__last_speech_handle._error is not None:
-                self._done_fut.set_exception(self.__last_speech_handle._error)
+            if speech_handle._error is not None:
+                self._done_fut.set_exception(speech_handle._error)
                 return
 
-            final_output = self.__last_speech_handle._maybe_run_final_output
+            final_output = speech_handle._maybe_run_final_output
             if not isinstance(final_output, BaseException):
                 final_output = self.__last_final_output
             if not isinstance(final_output, BaseException):
