@@ -13,9 +13,12 @@ deterministically. Covers:
 from __future__ import annotations
 
 import pytest
+from google.protobuf.timestamp_pb2 import Timestamp
 
 from livekit import rtc
 from livekit.agents._exceptions import APIConnectionError
+from livekit.agents.metrics import EOTInferenceMetrics
+from livekit.protocol.agent_pb.agent_inference import ServerMessage
 
 from .fake_turn_detector_ws import (
     drain_send_queue,
@@ -100,5 +103,76 @@ class TestCloudStreamSendOrdering:
                 if m.WhichOneof("message") == "inference_start"
             ]
             assert start_ids == [first_id, second_id]
+        finally:
+            await stream.aclose()
+
+
+def _eot_prediction_message(
+    request_id: str, *, sent_ms: int | None, probability: float = 0.9
+) -> ServerMessage:
+    """A server ``eot_prediction`` frame. When ``sent_ms`` is None the
+    ``latest_client_created_at`` timestamp is left unset, exactly as the server
+    may send it (an unset proto Timestamp reads back as epoch 0)."""
+    msg = ServerMessage()
+    msg.request_id = request_id
+    prediction = msg.eot_prediction
+    prediction.probability = probability
+    if sent_ms is not None:
+        prediction.inference_stats.latest_client_created_at.FromMilliseconds(sent_ms)
+    return msg
+
+
+def _emitted_eot_metrics(stream: object) -> list[EOTInferenceMetrics]:
+    return [
+        call.args[1]
+        for call in stream._detector.emit.call_args_list  # type: ignore[attr-defined]
+        if call.args and call.args[0] == "metrics_collected"
+    ]
+
+
+class TestCloudStreamDetectionDelay:
+    """``detection_delay`` derivation from the server's client timestamp."""
+
+    async def test_unset_client_timestamp_yields_null_detection_delay(self) -> None:
+        """Regression: when the server omits ``latest_client_created_at`` the
+        timestamp reads back as epoch 0, so ``now - 0`` used to report a
+        detection_delay of decades. Both the resolved prediction and the emitted
+        metric must report ``None`` (unknown) instead of a garbage duration."""
+        stream, _fake_ws, transport = make_stream(connect_script=[None])
+        try:
+            fut = stream.predict()
+            transport._process_message(_eot_prediction_message(stream._request_id, sent_ms=None))
+
+            event = fut.result()
+            assert event.detection_delay is None
+
+            metrics = _emitted_eot_metrics(stream)
+            assert metrics
+            assert metrics[-1].detection_delay is None
+        finally:
+            await stream.aclose()
+
+    async def test_known_client_timestamp_reports_real_detection_delay(self) -> None:
+        """Control: with a real ``latest_client_created_at`` the delay is still a
+        small positive number, so the guard does not change the correct case."""
+        now = Timestamp()
+        now.GetCurrentTime()
+        stream, _fake_ws, transport = make_stream(connect_script=[None])
+        try:
+            fut = stream.predict()
+            transport._process_message(
+                _eot_prediction_message(stream._request_id, sent_ms=now.ToMilliseconds() - 50)
+            )
+
+            event = fut.result()
+            assert event.detection_delay is not None
+            assert 0.0 <= event.detection_delay < 60.0
+
+            metrics = _emitted_eot_metrics(stream)
+            assert metrics
+            # The event and metric should expose the same computed delay.
+            assert metrics[-1].detection_delay == event.detection_delay
+            assert metrics[-1].detection_delay is not None
+            assert 0.0 <= metrics[-1].detection_delay < 60.0
         finally:
             await stream.aclose()
