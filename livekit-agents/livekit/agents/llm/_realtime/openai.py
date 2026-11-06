@@ -2319,17 +2319,10 @@ class RealtimeSession(
 
         self._current_generation._close()
 
+        # _done_fut only tells the reconnect branch of _run_ws that the generation ended.
+        # _handle_response_done_but_not_complete reports a failed response.
         with contextlib.suppress(asyncio.InvalidStateError):
-            if event.response.status in ("failed", "incomplete"):
-                details = event.response.status_details
-                msg = f"response {event.response.status}"
-                if details and details.error:
-                    msg = f"{msg}: [{details.error.type}] {details.error.code}"
-                elif details and details.reason:
-                    msg = f"{msg}: {details.reason}"
-                self._current_generation._done_fut.set_exception(llm.RealtimeError(msg))
-            else:
-                self._current_generation._done_fut.set_result(None)
+            self._current_generation._done_fut.set_result(None)
 
         self._current_generation = None
 
@@ -2485,7 +2478,7 @@ class RealtimeSession(
             raise error
         self._emit_error(error, recoverable=True)
 
-        # response errors are handled by _handle_response_done via _done_fut.
+        # a failed response is reported by _handle_response_done_but_not_complete.
         # error events here are for non-response errors (e.g. invalid request).
 
     def _emit_error(self, error: Exception, recoverable: bool) -> None:
