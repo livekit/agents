@@ -226,6 +226,58 @@ async def test_speech_stream_sends_language_in_json_config():
     assert setup_msg["json_config"] == {"language": "pt", "temp": 0.3}
 
 
+@pytest.mark.parametrize(
+    ("options", "expected"),
+    [
+        ({}, None),
+        ({"keywords": []}, None),
+        ({"keywords": ["pare-chocs", "AccèsD"]}, {"words": ["pare-chocs", "AccèsD"]}),
+        (
+            {"keywords": ["pare-chocs"], "keyword_boost": 5.0},
+            {"words": ["pare-chocs"], "boost": 5.0},
+        ),
+    ],
+)
+async def test_speech_stream_sends_keywords_in_json_config(options, expected):
+    """Keywords and their boost are sent in setup json_config only when set."""
+    from livekit.plugins.gradium import STT
+
+    sent_messages: list[str] = []
+
+    class FakeWebSocket:
+        async def send_str(self, message: str) -> None:
+            sent_messages.append(message)
+
+    class FakeSession:
+        async def ws_connect(self, url, headers, **kwargs):
+            return FakeWebSocket()
+
+    stt = STT(api_key="test-key", http_session=FakeSession(), **options)
+
+    def _fake_create_task(coro, *args, **kwargs):
+        coro.close()
+        return MagicMock()
+
+    with patch("livekit.agents.stt.stt.asyncio.create_task", side_effect=_fake_create_task):
+        stream = stt.stream()
+
+    await stream._connect_ws()
+
+    json_config = json.loads(sent_messages[0])["json_config"]
+    assert json_config.get("keywords") == expected
+
+
+def test_keywords_are_copied_from_the_caller():
+    """Editing the caller's list after construction does not change the sent keywords."""
+    from livekit.plugins.gradium import STT
+
+    terms = ["Acme"]
+    stt = STT(api_key="test-key", keywords=terms)
+    terms.clear()
+
+    assert stt._opts.keywords == ["Acme"]
+
+
 class _FakeMessage:
     def __init__(self, payload: dict) -> None:
         import aiohttp

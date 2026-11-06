@@ -68,6 +68,10 @@ class STTOptions:
     # When set, a VAD inactivity probability below this threshold signals the start of
     # speech before any text is transcribed, which allows a faster barge-in.
     vad_start_threshold: float | None = None
+    # Words or phrases to favor in the transcript, such as product names or jargon.
+    keywords: list[str] | None = None
+    # How strongly to favor the keywords, the server defaults to 2.0.
+    keyword_boost: float | None = None
 
 
 class STT(stt.STT):
@@ -87,6 +91,8 @@ class STT(stt.STT):
         vad_start_threshold: float | None = None,
         temperature: float | None = None,
         language: str = "en",
+        keywords: list[str] | None = None,
+        keyword_boost: float | None = None,
     ):
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -129,6 +135,8 @@ class STT(stt.STT):
             vad_start_threshold=vad_start_threshold,
             temperature=temperature,
             language=LanguageCode(language),
+            keywords=list(keywords) if keywords is not None else None,
+            keyword_boost=keyword_boost,
         )
 
         if is_given(encoding):
@@ -528,6 +536,11 @@ class SpeechStream(stt.SpeechStream):
         json_config: dict[str, Any] = {"language": self._opts.language.language}
         if self._opts.temperature is not None:
             json_config["temp"] = self._opts.temperature
+        if self._opts.keywords:
+            keywords: dict[str, Any] = {"words": self._opts.keywords}
+            if self._opts.keyword_boost is not None:
+                keywords["boost"] = self._opts.keyword_boost
+            json_config["keywords"] = keywords
         setup_msg["json_config"] = json_config
 
         await ws.send_str(json.dumps(setup_msg))
