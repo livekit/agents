@@ -7,7 +7,6 @@ import pytest
 
 from livekit.agents import beta
 from livekit.agents.llm.chat_context import Instructions
-from livekit.agents.types import NOT_GIVEN, NotGivenOr
 
 pytestmark = pytest.mark.unit
 
@@ -48,18 +47,27 @@ async def test_email_with_verify_spelling_is_spelled_from_the_start() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("modality", "require_confirmation"),
-    [("text", NOT_GIVEN), ("audio", False), ("text", False)],
-)
-async def test_email_with_verify_spelling_requires_confirmation(
-    modality: str, require_confirmation: NotGivenOr[bool]
-) -> None:
-    task = beta.workflows.GetEmailTask(
-        verify_spelling=True, require_confirmation=require_confirmation
-    )
+async def test_email_with_verify_spelling_completes_immediately_over_text() -> None:
+    task = beta.workflows.GetEmailTask(verify_spelling=True)
     ctx = SimpleNamespace(
-        speech_handle=SimpleNamespace(input_details=SimpleNamespace(modality=modality))
+        speech_handle=SimpleNamespace(input_details=SimpleNamespace(modality="text"))
+    )
+
+    result = await task._update_email_impl("alice@example.com", ctx)
+
+    assert result is None
+    assert task.done()
+    instructions = task.instructions
+    assert isinstance(instructions, Instructions)
+    assert "spell it out character by character" not in (instructions.text or "")
+    assert "confirm_email_address" not in (instructions.text or "")
+
+
+@pytest.mark.asyncio
+async def test_email_verify_spelling_takes_precedence_over_require_confirmation_on_audio() -> None:
+    task = beta.workflows.GetEmailTask(verify_spelling=True, require_confirmation=False)
+    ctx = SimpleNamespace(
+        speech_handle=SimpleNamespace(input_details=SimpleNamespace(modality="audio"))
     )
 
     result = await task._update_email_impl("alice@example.com", ctx)
@@ -67,10 +75,6 @@ async def test_email_with_verify_spelling_requires_confirmation(
     assert result is not None
     assert " ".join("alice@example.com") in result
     assert not task.done()
-    assert any(t.id == "confirm_email_address" for t in task.tools)
-    instructions = task.instructions
-    assert isinstance(instructions, Instructions)
-    assert "confirm_email_address" in (instructions.text or "")
 
 
 @pytest.mark.asyncio
