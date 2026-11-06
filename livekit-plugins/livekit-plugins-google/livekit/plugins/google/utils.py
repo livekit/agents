@@ -67,6 +67,7 @@ def create_function_response(
     output: llm.FunctionCallOutput,
     *,
     vertexai: bool = False,
+    supports_scheduling: bool | None = None,
     tool_response_scheduling: NotGivenOr[types.FunctionResponseScheduling] = NOT_GIVEN,
     send_id: bool = True,
 ) -> types.FunctionResponse:
@@ -78,8 +79,8 @@ def create_function_response(
         name=output.name,
         response={"error": output.output} if output.is_error else {"output": output.output},
     )
-    # vertexai does not support scheduling; the gemini api defaults it to WHEN_IDLE
-    if not vertexai and is_given(tool_response_scheduling):
+    allow_scheduling = (not vertexai) if supports_scheduling is None else supports_scheduling
+    if allow_scheduling and is_given(tool_response_scheduling):
         res.scheduling = tool_response_scheduling
     return res
 
@@ -88,6 +89,7 @@ def get_tool_results_for_realtime(
     chat_ctx: llm.ChatContext,
     *,
     vertexai: bool = False,
+    supports_scheduling: bool | None = None,
     tool_response_scheduling: NotGivenOr[types.FunctionResponseScheduling] = NOT_GIVEN,
     supports_silent_scheduling: bool = False,
     synthetic_call_ids: Set[str] = frozenset(),
@@ -101,6 +103,7 @@ def get_tool_results_for_realtime(
         create_function_response(
             msg,
             vertexai=vertexai,
+            supports_scheduling=supports_scheduling,
             tool_response_scheduling=(
                 types.FunctionResponseScheduling.SILENT
                 if supports_silent_scheduling and not msg.reply_required
