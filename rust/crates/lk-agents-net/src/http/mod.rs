@@ -132,8 +132,19 @@ impl GatewayHttp {
         for (name, value) in headers {
             builder = builder.header(name, value);
         }
-        if let Ok(response) = builder.send().await {
-            let _ = response.bytes().await;
+        let result = async {
+            let response = builder
+                .send()
+                .await
+                .map_err(|error| AttemptFailure::Connection(error_chain(&error)))?;
+            if !response.status().is_success() {
+                return Err(rejected(response).await);
+            }
+            read_body(response, ERROR_BODY_LIMIT).await.map(|_| ())
+        }
+        .await;
+        if let Err(error) = result {
+            log::warn!(target: "livekit.agents", "HTTP prewarm failed: {error:?}");
         }
     }
 
@@ -196,21 +207,56 @@ impl GatewayHttp {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("the answer exceeds {limit} bytes")]
+pub(crate) struct BodyLimitExceeded {
+    limit: usize,
+}
+
+/// A bounded response body, shared by streamed exchanges and direct HTTP reads.
+pub(crate) struct BodyReader {
+    bytes: Vec<u8>,
+    limit: usize,
+}
+
+impl BodyReader {
+    pub(crate) fn new(limit: usize) -> Self {
+        Self { bytes: Vec::new(), limit }
+    }
+
+    pub(crate) fn append(&mut self, bytes: &[u8]) -> Result<(), BodyLimitExceeded> {
+        if bytes.len() > self.limit - self.bytes.len() {
+            return Err(BodyLimitExceeded { limit: self.limit });
+        }
+        self.bytes.extend_from_slice(bytes);
+        Ok(())
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.bytes.clear();
+    }
+
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    pub(crate) fn finish(self) -> Vec<u8> {
+        self.bytes
+    }
+}
+
 /// A JSON answer's body, read to its end; one larger than `limit` bytes is malformed.
 pub async fn read_body(
     response: reqwest::Response,
     limit: usize,
 ) -> Result<Vec<u8>, AttemptFailure> {
-    let mut body = Vec::new();
+    let mut body = BodyReader::new(limit);
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|err| AttemptFailure::Connection(error_chain(&err)))?;
-        if body.len() + chunk.len() > limit {
-            return Err(AttemptFailure::Malformed(format!("the answer exceeds {limit} bytes")));
-        }
-        body.extend_from_slice(&chunk);
+        body.append(&chunk).map_err(|error| AttemptFailure::Malformed(error.to_string()))?;
     }
-    Ok(body)
+    Ok(body.finish())
 }
 
 async fn rejected(response: reqwest::Response) -> AttemptFailure {
@@ -228,16 +274,10 @@ async fn rejected(response: reqwest::Response) -> AttemptFailure {
             "request rate limited by inference gateway"
         );
     }
-    let mut body = Vec::new();
-    let mut stream = response.bytes_stream();
-    while let Some(Ok(chunk)) = stream.next().await {
-        body.extend_from_slice(&chunk[..chunk.len().min(ERROR_BODY_LIMIT - body.len())]);
-        if body.len() >= ERROR_BODY_LIMIT {
-            break;
-        }
-    }
-    let body = String::from_utf8_lossy(&body);
-    let message = error_message(&body).unwrap_or_default();
+    let message = match read_body(response, ERROR_BODY_LIMIT).await {
+        Ok(body) => error_message(&String::from_utf8_lossy(&body)).unwrap_or_default(),
+        Err(error) => format!("cannot read HTTP error response: {error:?}"),
+    };
     AttemptFailure::Rejected { status, message, request_id }
 }
 
@@ -317,6 +357,59 @@ impl futures_util::Stream for ReportingBody {
                 self.progress.reach(WRITTEN);
                 Poll::Ready(None)
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[test]
+    fn body_limit_counts_all_chunks_and_restarts_without_old_bytes() {
+        let mut body = BodyReader::new(4);
+        body.append(b"ab").unwrap();
+        body.append(b"cd").unwrap();
+        assert!(body.append(b"e").is_err());
+        assert_eq!(body.as_bytes(), b"abcd");
+        body.clear();
+        body.append(b"efgh").unwrap();
+        assert_eq!(body.finish(), b"efgh");
+    }
+
+    #[tokio::test]
+    async fn rejected_responses_keep_the_status_and_explain_incomplete_or_oversized_bodies() {
+        for oversized in [false, true] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let peer = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0; 1024];
+                socket.read(&mut request).await.unwrap();
+                socket.write_all(b"HTTP/1.1 503 Unavailable\r\nContent-Length: 65537\r\nX-Request-Id: test-id\r\nConnection: close\r\n\r\n").await.unwrap();
+                if oversized {
+                    socket.write_all(&vec![b'x'; ERROR_BODY_LIMIT + 1]).await.unwrap();
+                } else {
+                    socket.write_all(b"partial").await.unwrap();
+                }
+            });
+            let response = GatewayHttp::new()
+                .unwrap()
+                .client()
+                .get(format!("http://{addr}"))
+                .send()
+                .await
+                .unwrap();
+            let AttemptFailure::Rejected { status, message, request_id } = rejected(response).await
+            else {
+                panic!("must preserve the rejected status");
+            };
+            assert_eq!(status, 503);
+            assert_eq!(request_id.as_deref(), Some("test-id"));
+            assert!(message.contains("cannot read HTTP error response"));
+            assert!(message.contains(if oversized { "exceeds" } else { "Connection" }));
+            peer.await.unwrap();
         }
     }
 }

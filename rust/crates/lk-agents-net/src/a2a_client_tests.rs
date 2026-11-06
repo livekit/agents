@@ -720,7 +720,7 @@ async fn client_close_owns_a_stalled_cancel_request_until_its_original_ack_is_dr
 }
 
 #[tokio::test]
-async fn a_cleanup_deadline_reports_incomplete_but_retains_the_original_cancel_future() {
+async fn client_close_waits_for_the_original_cancel_settlement_past_the_old_cleanup_deadline() {
     let peer = Peer::start(Scenario::DelayedCancel).await;
     let clock = Arc::new(RealClock::new());
     let client = Arc::new(client(&peer, &clock));
@@ -748,16 +748,11 @@ async fn a_cleanup_deadline_reports_incomplete_but_retains_the_original_cancel_f
     });
     close_started.notified().await;
     tokio::time::advance(lk_agents_abi::HOST_TEARDOWN_TIMEOUT + Duration::from_secs(1)).await;
-    closing.await.unwrap();
-    let observations = client.cleanup_observations();
-    assert!(
-        observations.iter().any(
-            |o| matches!(o, CleanupObservation::Incomplete { requests } if !requests.is_empty())
-        )
-    );
-    assert!(!cancelling.is_finished(), "expiry must keep ownership of the original request");
+    assert!(!closing.is_finished(), "close waits for the actual settlement");
+    assert!(!cancelling.is_finished(), "the original request is still owned");
     tokio::time::resume();
     peer.ack_gate.release.notify_one();
+    tokio::time::timeout(LIMIT, closing).await.unwrap().unwrap();
     let result = tokio::time::timeout(LIMIT, cancelling).await.unwrap().unwrap();
     match result {
         Ok(update) => assert_eq!(update.state, TaskState::Canceled),

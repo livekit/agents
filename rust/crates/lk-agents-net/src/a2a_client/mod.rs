@@ -9,23 +9,24 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::ops::ControlFlow;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Weak};
 
 use crate::transport::HttpRequest;
 use a2a::{AgentCard, JsonRpcId, Message};
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::storage::thread::REASON_CALLER_CANCELED;
-use lk_agents_abi::{ApiConnectOptions, Clock, Closed, HOST_TEARDOWN_TIMEOUT, StreamOutput, Ts};
+use lk_agents_abi::{ApiConnectOptions, Clock, Closed, StreamOutput, Ts};
 use lk_agents_core::a2a::client::{
     Client, ClientError, HttpMethod, ReplyState, Request, TaskUpdate,
 };
 use lk_agents_core::a2a::rpc::TaskRef;
-use tokio::sync::{Mutex as AsyncMutex, Notify, mpsc, oneshot, watch};
+use tokio::sync::{Mutex as AsyncMutex, Notify, mpsc, watch};
+use tokio_util::sync::CancellationToken;
 
 use crate::env::ProcessEnv;
-use crate::http::GatewayHttp;
 use crate::http::exchange::{Exchange, HttpEvent};
+use crate::http::{BodyReader, GatewayHttp};
 use crate::source::{PullError, Pulled, SharedStream};
 use crate::sse::{SseDecoder, SseEvent};
 use crate::task::TokioSpawner;
@@ -47,18 +48,22 @@ pub enum CleanupObservation {
         task: TaskRef,
         error: String,
     },
-    CancellationIncomplete {
-        task: TaskRef,
-    },
-    Incomplete {
-        requests: Vec<u64>,
-    },
+}
+
+#[derive(Clone, Default)]
+struct CallState {
+    admitted: bool,
+    acknowledgement: Option<Result<TaskRef, ClientError>>,
+    identity: Option<TaskRef>,
+    terminal: bool,
+    consumed: bool,
+    settled: bool,
 }
 
 struct Operation {
     _task: OwnedTask,
-    cancel: watch::Sender<bool>,
-    settled: watch::Receiver<bool>,
+    stop: CancellationToken,
+    state: watch::Receiver<CallState>,
 }
 
 struct Inner {
@@ -196,59 +201,55 @@ impl AgentClient {
     async fn start(&self, id: u64, request: Request) -> Result<Reply, ClientError> {
         self.inner.ensure_open()?;
         let (updates, rx) = mpsc::channel(UPDATE_QUEUE);
-        let (ack, acknowledged) = oneshot::channel();
-        let (admit, admitted) = oneshot::channel();
-        let (done, settled) = watch::channel(false);
-        let (cancel, cancelled) = watch::channel(false);
-        let (delivered, consumed) = watch::channel(false);
-        let (known, identity) = watch::channel(request.task.clone());
-        let remote = identity.clone();
-        let terminal = Arc::new(AtomicBool::new(false));
+        let (state, mut acknowledged) =
+            watch::channel(CallState { identity: request.task.clone(), ..CallState::default() });
+        let stop = CancellationToken::new();
+        let operation = OperationGuard { stop: stop.clone(), state: acknowledged.clone() };
         let call = RemoteCall {
-            delivery: Delivery {
-                inner: self.inner.clone(),
-                ack: Some(ack),
-                updates,
-                identity: known,
-                terminal: terminal.clone(),
-            },
+            delivery: Delivery { inner: self.inner.clone(), updates, state: state.clone() },
             task: RemoteTask {
                 inner: self.inner.clone(),
                 id,
                 task_response: request.task_response,
-                identity,
-                terminal: terminal.clone(),
+                state: acknowledged.clone(),
             },
-            cancelled,
-            consumed,
+            stop: stop.clone(),
         };
         let inner = self.inner.clone();
+        let done = state.clone();
+        let remote = acknowledged.clone();
         let task = TokioSpawner::new(self.inner.runtime.clone()).spawn_settled(
-            call.run(request, admitted),
+            call.run(request),
             move |outcome| async move {
-                inner.cancel_unfinished_call(id, outcome, &terminal, &remote).await;
+                inner.cancel_unfinished_call(id, outcome, &remote).await;
                 inner.forget_call(id);
                 // The client is released before the call is announced settled.
                 drop(inner);
-                done.send_replace(true);
+                done.send_modify(|state| state.settled = true);
             },
         );
         {
             let mut operations = self.inner.operations.lock();
             self.inner.ensure_open()?;
-            operations.insert(id, Operation { _task: task, cancel, settled: settled.clone() });
+            operations.insert(id, Operation { _task: task, stop, state: acknowledged.clone() });
         }
         let source = SharedStream::new(
             Box::new(ReplyUpdates {
                 rx,
-                delivered,
-                operation: OperationGuard { inner: Arc::downgrade(&self.inner), id, settled },
+                state: state.clone(),
+                operation,
                 clock: self.inner.clock.clone(),
             }),
             self.inner.clock.clone(),
         );
-        let _ = admit.send(());
-        let task = acknowledged.await.map_err(|_| ClientError::Incomplete)??;
+        state.send_modify(|state| state.admitted = true);
+        let task = acknowledged
+            .wait_for(|state| state.acknowledgement.is_some() || state.settled)
+            .await
+            .map_err(|_| ClientError::Incomplete)?
+            .acknowledgement
+            .clone()
+            .ok_or(ClientError::Incomplete)??;
         Ok(Reply {
             task_id: task.id,
             thread_id: task.context_id,
@@ -282,18 +283,8 @@ impl AgentClient {
         self.inner.closed.store(true, Ordering::Release);
         self.inner.closing.notify_waiters();
         let waiting = self.inner.cancel_all();
-        let wait = async {
-            for mut settled in waiting {
-                while !*settled.borrow_and_update() {
-                    if settled.changed().await.is_err() {
-                        break;
-                    }
-                }
-            }
-        };
-        if tokio::time::timeout(HOST_TEARDOWN_TIMEOUT, wait).await.is_err() {
-            let requests = self.inner.operations.lock().keys().copied().collect();
-            self.inner.observe(CleanupObservation::Incomplete { requests });
+        for mut state in waiting {
+            let _ = state.wait_for(|state| state.settled).await;
         }
         let operations = self.inner.operations.lock();
         if operations.is_empty() {
@@ -335,13 +326,13 @@ impl Inner {
         }
     }
 
-    fn cancel_all(&self) -> Vec<watch::Receiver<bool>> {
+    fn cancel_all(&self) -> Vec<watch::Receiver<CallState>> {
         self.operations
             .lock()
             .values_mut()
             .map(|op| {
-                op.cancel.send_replace(true);
-                op.settled.clone()
+                op.stop.cancel();
+                op.state.clone()
             })
             .collect()
     }
@@ -365,13 +356,15 @@ impl Inner {
 
     async fn read_response(&self, request: &Request) -> Result<Vec<u8>, ClientError> {
         let mut exchange = self.exchange(request);
-        let mut body = Vec::new();
+        let mut body = BodyReader::new(RESPONSE_LIMIT);
         loop {
             match exchange.next().await.map_err(ClientError::Transport)? {
                 HttpEvent::Started => body.clear(),
                 HttpEvent::Headers(_) => {}
-                HttpEvent::Bytes(bytes) => append_body(&mut body, &bytes)?,
-                HttpEvent::End => return Ok(body),
+                HttpEvent::Bytes(bytes) => body
+                    .append(&bytes)
+                    .map_err(|error| ClientError::InvalidResponse(error.to_string()))?,
+                HttpEvent::End => return Ok(body.finish()),
             }
         }
     }
@@ -388,16 +381,7 @@ impl Inner {
     }
 
     async fn cancel_owned(&self, task: &TaskRef) {
-        let cancellation = self.cancel_remote(task, Some(REASON_CALLER_CANCELED));
-        tokio::pin!(cancellation);
-        let result = match tokio::time::timeout(HOST_TEARDOWN_TIMEOUT, &mut cancellation).await {
-            Ok(result) => result,
-            Err(_) => {
-                self.observe(CleanupObservation::CancellationIncomplete { task: task.clone() });
-                cancellation.await
-            }
-        };
-        if let Err(error) = result {
+        if let Err(error) = self.cancel_remote(task, Some(REASON_CALLER_CANCELED)).await {
             self.observe(CleanupObservation::CancelUncertain {
                 task: task.clone(),
                 error: error.to_string(),
@@ -410,13 +394,13 @@ impl Inner {
         &self,
         id: u64,
         outcome: TaskOutcome,
-        terminal: &AtomicBool,
-        remote: &watch::Receiver<Option<TaskRef>>,
+        remote: &watch::Receiver<CallState>,
     ) {
-        if outcome == TaskOutcome::Completed || terminal.load(Ordering::Acquire) {
+        let state = remote.borrow().clone();
+        if outcome == TaskOutcome::Completed || state.terminal || !state.admitted {
             return;
         }
-        let task = remote.borrow().clone();
+        let task = state.identity;
         match task {
             Some(task) => self.cancel_owned(&task).await,
             None => self.observe(CleanupObservation::UnacknowledgedRequest { request: id }),
@@ -438,62 +422,66 @@ impl Inner {
 struct RemoteCall {
     delivery: Delivery,
     task: RemoteTask,
-    cancelled: watch::Receiver<bool>,
-    consumed: watch::Receiver<bool>,
+    stop: CancellationToken,
 }
 
 impl RemoteCall {
-    async fn run(mut self, request: Request, admitted: oneshot::Receiver<()>) {
-        if admitted.await.is_err() {
-            return;
-        }
-        match self.exchange_unless_cancelled(request).await {
-            Ok(()) => self.cancel_unread_question().await,
-            Err(error) => self.report_failure(error).await,
-        }
-    }
-
-    async fn exchange_unless_cancelled(&mut self, request: Request) -> Result<(), ClientError> {
-        let Self { delivery, task, cancelled, .. } = self;
-        let exchange = exchange(request, delivery);
-        tokio::pin!(exchange);
+    async fn run(mut self, request: Request) {
         tokio::select! {
             biased;
-            _ = cancelled.changed() => task.cancel_on_caller_exit(exchange.as_mut()).await,
-            result = &mut exchange => result,
+            () = self.stop.cancelled() => return,
+            admitted = self.task.state.wait_for(|state| state.admitted) => {
+                if admitted.is_err() {
+                    return;
+                }
+            }
+        }
+        let result = {
+            let exchange = exchange(request, &mut self.delivery);
+            tokio::pin!(exchange);
+            tokio::select! {
+                biased;
+                () = self.stop.cancelled() => {
+                    self.task.cancel_abandoned(exchange.as_mut()).await;
+                    None
+                },
+                result = &mut exchange => Some(result),
+            }
+        };
+        match result {
+            Some(Ok(())) => self.cancel_unread_question().await,
+            Some(Err(error)) => self.report_failure(error).await,
+            None => self.delivery.fail_acknowledgement(ClientError::Closed),
         }
     }
 
     /// Until the recipient consumes a buffered question, abandoning its reply still owes
     /// cancellation of the nonterminal remote task.
     async fn cancel_unread_question(&mut self) {
-        if self.task.terminal.load(Ordering::Acquire) || *self.consumed.borrow() {
+        if self.task.state.borrow().terminal || self.task.state.borrow().consumed {
             return;
         }
         tokio::select! {
-            _ = self.consumed.changed() => {},
-            _ = self.cancelled.changed() => {},
+            biased;
+            _ = self.task.state.wait_for(|state| state.consumed) => {},
+            () = self.stop.cancelled() => {},
         }
-        if *self.consumed.borrow() {
+        if self.task.state.borrow().consumed {
             return;
         }
-        let task = self.task.identity.borrow().clone();
+        let task = self.task.state.borrow().identity.clone();
         if let Some(task) = task {
             self.task.inner.cancel_owned(&task).await;
         }
     }
 
     async fn report_failure(&mut self, error: ClientError) {
-        if let Some(ack) = self.delivery.ack.take() {
-            let _ = ack.send(Err(error.clone()));
-        }
-        if *self.cancelled.borrow() {
-            return;
-        }
+        self.delivery.fail_acknowledgement(error.clone());
         self.task.cancel_after_failure(&error).await;
         tokio::select! {
+            biased;
+            () = self.stop.cancelled() => {},
             _ = self.delivery.updates.send(Err(error)) => {},
-            _ = self.cancelled.changed() => {},
         }
     }
 }
@@ -503,33 +491,17 @@ struct RemoteTask {
     inner: Arc<Inner>,
     id: u64,
     task_response: bool,
-    identity: watch::Receiver<Option<TaskRef>>,
-    terminal: Arc<AtomicBool>,
+    state: watch::Receiver<CallState>,
 }
 
 impl RemoteTask {
-    /// Cleanup runs within the teardown bound; past it, the overrun is recorded and cleanup
-    /// is still awaited.
-    async fn cancel_on_caller_exit(
-        &self,
-        exchange: Pin<&mut impl Future<Output = Result<(), ClientError>>>,
-    ) -> Result<(), ClientError> {
-        let cleanup = self.cancel_abandoned(exchange);
-        tokio::pin!(cleanup);
-        if tokio::time::timeout(HOST_TEARDOWN_TIMEOUT, &mut cleanup).await.is_err() {
-            self.inner.observe(CleanupObservation::Incomplete { requests: vec![self.id] });
-            cleanup.await;
-        }
-        Err(ClientError::Closed)
-    }
-
     async fn cancel_abandoned(
         &self,
         exchange: Pin<&mut impl Future<Output = Result<(), ClientError>>>,
     ) {
         if self.task_response {
             if let Err(error) = exchange.await
-                && let Some(task) = self.identity.borrow().clone()
+                && let Some(task) = self.state.borrow().identity.clone()
             {
                 self.inner.observe(CleanupObservation::CancelUncertain {
                     task,
@@ -539,15 +511,8 @@ impl RemoteTask {
             return;
         }
         match self.await_identity(exchange).await {
-            Some(task) if !self.terminal.load(Ordering::Acquire) => {
-                if let Err(error) =
-                    self.inner.cancel_remote(&task, Some(REASON_CALLER_CANCELED)).await
-                {
-                    self.inner.observe(CleanupObservation::CancelUncertain {
-                        task,
-                        error: error.to_string(),
-                    });
-                }
+            Some(task) if !self.state.borrow().terminal => {
+                self.inner.cancel_owned(&task).await;
             }
             Some(_) => {}
             None => {
@@ -562,24 +527,25 @@ impl RemoteTask {
         &self,
         mut exchange: Pin<&mut impl Future<Output = Result<(), ClientError>>>,
     ) -> Option<TaskRef> {
-        let mut identity = self.identity.clone();
+        let mut state = self.state.clone();
         loop {
-            if let Some(task) = identity.borrow_and_update().clone() {
+            if let Some(task) = state.borrow_and_update().identity.clone() {
                 return Some(task);
             }
             tokio::select! {
-                _ = identity.changed() => {},
-                _ = &mut exchange => return identity.borrow().clone(),
+                biased;
+                _ = state.changed() => {},
+                _ = &mut exchange => return state.borrow().identity.clone(),
             }
         }
     }
 
     /// A failed exchange cancels its nonterminal remote task, or records why it cannot.
     async fn cancel_after_failure(&self, error: &ClientError) {
-        if self.terminal.load(Ordering::Acquire) {
+        if self.state.borrow().terminal {
             return;
         }
-        let task = self.identity.borrow().clone();
+        let task = self.state.borrow().identity.clone();
         let Some(task) = task else {
             if !matches!(error, ClientError::Rpc { .. }) {
                 self.inner.observe(CleanupObservation::UnacknowledgedRequest { request: self.id });
@@ -598,22 +564,33 @@ impl RemoteTask {
 /// Hands a call's decoded updates to its caller; the first one acknowledges the call.
 struct Delivery {
     inner: Arc<Inner>,
-    ack: Option<oneshot::Sender<Result<TaskRef, ClientError>>>,
     updates: mpsc::Sender<Result<TaskUpdate, ClientError>>,
-    identity: watch::Sender<Option<TaskRef>>,
-    terminal: Arc<AtomicBool>,
+    state: watch::Sender<CallState>,
 }
 
 impl Delivery {
+    fn fail_acknowledgement(&self, error: ClientError) {
+        self.state.send_if_modified(|state| {
+            if state.acknowledgement.is_some() {
+                return false;
+            }
+            state.acknowledgement = Some(Err(error));
+            true
+        });
+    }
+
     async fn deliver(&mut self, update: TaskUpdate) -> Result<(), ClientError> {
         let task = TaskRef { id: update.task_id.clone(), context_id: update.context_id.clone() };
-        if !task.id.is_empty() {
-            self.identity.send_replace(Some(task.clone()));
-        }
-        self.terminal.store(update.state.is_terminal(), Ordering::Release);
-        if let Some(ack) = self.ack.take() {
+        let first = self.state.borrow().acknowledgement.is_none();
+        self.state.send_modify(|state| {
+            if !task.id.is_empty() {
+                state.identity = Some(task.clone());
+            }
+            state.terminal = update.state.is_terminal();
+        });
+        if first {
             self.inner.core.lock().acknowledge(&update)?;
-            let _ = ack.send(Ok(task));
+            self.state.send_modify(|state| state.acknowledgement = Some(Ok(task)));
         }
         self.updates.send(Ok(update)).await.map_err(|_| ClientError::Closed)
     }
@@ -637,18 +614,13 @@ impl Reply {
 }
 
 struct OperationGuard {
-    inner: Weak<Inner>,
-    id: u64,
-    settled: watch::Receiver<bool>,
+    stop: CancellationToken,
+    state: watch::Receiver<CallState>,
 }
 
 impl OperationGuard {
     fn cancel(&self) {
-        if let Some(inner) = self.inner.upgrade()
-            && let Some(operation) = inner.operations.lock().get_mut(&self.id)
-        {
-            operation.cancel.send_replace(true);
-        }
+        self.stop.cancel();
     }
 }
 
@@ -662,7 +634,7 @@ struct ReplyUpdates {
     rx: mpsc::Receiver<Result<TaskUpdate, ClientError>>,
     operation: OperationGuard,
     clock: Arc<dyn Clock>,
-    delivered: watch::Sender<bool>,
+    state: watch::Sender<CallState>,
 }
 
 impl StreamOutput<TaskUpdate> for ReplyUpdates {
@@ -675,7 +647,7 @@ impl StreamOutput<TaskUpdate> for ReplyUpdates {
                 }
             })?;
             if update.as_ref().is_some_and(TaskUpdate::is_settled) {
-                self.delivered.send_replace(true);
+                self.state.send_modify(|state| state.consumed = true);
             }
             Ok(update)
         })
@@ -688,11 +660,7 @@ impl StreamOutput<TaskUpdate> for ReplyUpdates {
             self.operation.cancel();
             let clock = self.clock.clone();
             Closed::bounded(&*clock, deadline, async move {
-                while !*self.operation.settled.borrow_and_update() {
-                    if self.operation.settled.changed().await.is_err() {
-                        break;
-                    }
-                }
+                let _ = self.operation.state.wait_for(|state| state.settled).await;
             })
             .await
         })
@@ -711,7 +679,10 @@ async fn exchange(request: Request, delivery: &mut Delivery) -> Result<(), Clien
                     return reader.state.finish();
                 }
             }
-            HttpEvent::Bytes(bytes) => append_body(&mut reader.body, &bytes)?,
+            HttpEvent::Bytes(bytes) => reader
+                .body
+                .append(&bytes)
+                .map_err(|error| ClientError::InvalidResponse(error.to_string()))?,
             HttpEvent::End => return reader.finish(&mut exchange, delivery).await,
         }
     }
@@ -746,7 +717,7 @@ struct ReplyReader<'a> {
     framing: ReplyFraming,
     decoder: SseDecoder,
     events: Vec<SseEvent>,
-    body: Vec<u8>,
+    body: BodyReader,
 }
 
 impl<'a> ReplyReader<'a> {
@@ -762,7 +733,7 @@ impl<'a> ReplyReader<'a> {
             framing: ReplyFraming::Json,
             decoder: SseDecoder::new(),
             events: Vec::new(),
-            body: Vec::new(),
+            body: BodyReader::new(RESPONSE_LIMIT),
         })
     }
 
@@ -811,9 +782,9 @@ impl<'a> ReplyReader<'a> {
             return self.state.finish();
         }
         let update = if self.request.task_response {
-            Some(self.state.decode_task(&self.body, &self.id)?)
+            Some(self.state.decode_task(self.body.as_bytes(), &self.id)?)
         } else {
-            self.state.decode(&self.body, &self.id)?
+            self.state.decode(self.body.as_bytes(), &self.id)?
         };
         if let Some(update) = update {
             exchange
@@ -823,16 +794,6 @@ impl<'a> ReplyReader<'a> {
         }
         self.state.finish()
     }
-}
-
-fn append_body(body: &mut Vec<u8>, bytes: &[u8]) -> Result<(), ClientError> {
-    if body.len() + bytes.len() > RESPONSE_LIMIT {
-        return Err(ClientError::InvalidResponse(format!(
-            "the answer exceeds {RESPONSE_LIMIT} bytes"
-        )));
-    }
-    body.extend_from_slice(bytes);
-    Ok(())
 }
 
 fn checked_url(url: &str) -> Result<url::Url, ClientError> {

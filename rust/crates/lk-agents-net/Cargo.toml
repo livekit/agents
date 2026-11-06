@@ -28,6 +28,7 @@ async-trait.workspace = true
 thiserror.workspace = true
 serde_json = { workspace = true, features = ["preserve_order", "raw_value"] }
 tokio = { workspace = true, features = ["io-util", "sync", "time"] }
+tokio-util = { version = "0.7", features = ["rt"] }
 futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 # TLS crypto provider: `ring` only (reqwest/tungstenite use `rustls-no-provider`-style builds).
 rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
