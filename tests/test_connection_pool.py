@@ -252,6 +252,86 @@ async def test_aclose_closes_retired_connections_never_returned():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("blocked_operation", ["connect", "drain"])
+async def test_aclose_waits_for_an_in_flight_acquisition(blocked_operation):
+    started = asyncio.Event()
+    release = asyncio.Event()
+    closing_started = asyncio.Event()
+    created: list[DummyConnection] = []
+    closed: list[DummyConnection] = []
+
+    async def connect_cb(timeout: float):
+        if blocked_operation == "connect":
+            started.set()
+            await release.wait()
+        conn = DummyConnection(len(created) + 1)
+        created.append(conn)
+        return conn
+
+    async def close_cb(conn: DummyConnection) -> None:
+        if blocked_operation == "drain":
+            started.set()
+            await release.wait()
+        closed.append(conn)
+
+    pool = ConnectionPool(connect_cb=connect_cb, close_cb=close_cb)
+    if blocked_operation == "drain":
+        pool.put(await pool.get(timeout=10.0))
+        pool.invalidate()
+
+    async def close_pool() -> None:
+        closing_started.set()
+        await pool.aclose()
+
+    acquiring = asyncio.create_task(pool.get(timeout=10.0))
+    await started.wait()
+    closing = asyncio.create_task(close_pool())
+    await closing_started.wait()
+    try:
+        assert not closing.done(), "aclose() returned while acquisition was still in progress."
+        release.set()
+        conn = await asyncio.wait_for(acquiring, timeout=5.0)
+        await asyncio.wait_for(closing, timeout=5.0)
+
+        assert len(created) == (1 if blocked_operation == "connect" else 2)
+        assert closed == created, (
+            "Every connection must be closed exactly once before aclose() returns."
+        )
+        assert conn in closed
+
+        # Closing the pool still permits a subsequent acquisition, as before.
+        reopened = await pool.get(timeout=10.0)
+        assert reopened not in closed
+        await pool.aclose()
+        assert closed == created
+    finally:
+        release.set()
+        await asyncio.gather(acquiring, closing, return_exceptions=True)
+        await pool.aclose()
+
+
+@pytest.mark.asyncio
+async def test_aclose_cancels_an_in_flight_prewarm():
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def connect_cb(timeout: float):
+        started.set()
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    pool = ConnectionPool(connect_cb=connect_cb)
+    pool.prewarm()
+    await started.wait()
+    await asyncio.wait_for(pool.aclose(), timeout=5.0)
+
+    assert cancelled.is_set()
+
+
+@pytest.mark.asyncio
 async def test_invalidate_mid_stream_lets_the_stream_finish_then_reconnects():
     """The update_options case: options change while one stream is speaking."""
     pool, closed = _closing_pool()
