@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import TypedDict
+
 import pytest
 from openai.types.chat.chat_completion_chunk import (
     Choice,
@@ -7,6 +9,7 @@ from openai.types.chat.chat_completion_chunk import (
     ChoiceDeltaToolCall,
     ChoiceDeltaToolCallFunction,
 )
+from typing_extensions import NotRequired, Required
 
 from livekit.agents.inference.llm import LLMStream
 from livekit.agents.llm.utils import ThinkingTokenFilter, strip_thinking_tokens
@@ -207,3 +210,31 @@ def test_strips_reasoning_from_text_alongside_tool_call() -> None:
     assert chunk is not None
     assert chunk.delta is not None
     assert chunk.delta.content == "Let me check that.\n\n"
+
+
+class UserProfile(TypedDict):
+    name: Required[str]
+    age: NotRequired[int]
+
+
+class OptionalProfile(TypedDict, total=False):
+    bio: str
+
+
+def test_to_response_format_param_typed_dict() -> None:
+    from livekit.agents.llm.utils import to_openai_response_format, to_response_format_param
+
+    name, model_cls = to_response_format_param(UserProfile)
+    assert name == "UserProfile"
+    schema = model_cls.model_json_schema()
+    assert "name" in schema.get("required", [])
+    assert "age" not in schema.get("required", [])
+
+    name_opt, opt_cls = to_response_format_param(OptionalProfile)
+    assert name_opt == "OptionalProfile"
+    opt_schema = opt_cls.model_json_schema()
+    assert "bio" not in opt_schema.get("required", [])
+
+    openai_format = to_openai_response_format(UserProfile)
+    assert openai_format["type"] == "json_schema"
+    assert openai_format["json_schema"]["name"] == "UserProfile"
