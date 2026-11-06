@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from typing import Any
 
 import pytest
 
 from livekit.agents import Agent, AgentSession, AgentTask, RunContext, function_tool
-from livekit.agents.llm import FunctionToolCall, ToolError
+from livekit.agents.llm import ChatContext, FunctionToolCall, ToolError
+from livekit.agents.voice.generation import _RUNNING_PLACEHOLDER_KEY
 
 from .fake_llm import FakeLLM, FakeLLMResponse
 
@@ -73,6 +75,187 @@ async def test_nested_agent_task_no_deadlock():
         # Now complete InnerTask by triggering the finish tool
         second_result = await asyncio.wait_for(sess.run(user_input="done"), timeout=5.0)
         assert second_result is not None
+
+
+def _record_llm_inputs(llm: FakeLLM) -> list[ChatContext]:
+    seen: list[ChatContext] = []
+    chat = llm.chat
+
+    def _recording_chat(**kwargs: Any) -> Any:
+        seen.append(kwargs["chat_ctx"].copy())
+        return chat(**kwargs)
+
+    llm.chat = _recording_chat  # type: ignore[method-assign]
+    return seen
+
+
+def _shown_as_running(seen: list[ChatContext], instructions: str) -> list[str] | None:
+    """Names of the in-progress pairs in the turn generated for ``instructions``."""
+    for ctx in seen:
+        last = ctx.items[-1]
+        if last.type == "message" and last.text_content == instructions:
+            return [
+                item.name
+                for item in ctx.items
+                if item.type == "function_call" and item.extra.get(_RUNNING_PLACEHOLDER_KEY)
+            ]
+    return None
+
+
+@pytest.mark.asyncio
+async def test_awaited_task_is_not_shown_its_parent_tool_as_running() -> None:
+    """A task awaited inside a tool can't call that tool, so its LLM must not get an
+    in-progress pair for it: the model calls the tool anyway and gets "unknown function"
+    back, an extra LLM round before the task's first question (livekit/livekit#5139)."""
+    llm = _build_fake_llm()
+    seen = _record_llm_inputs(llm)
+
+    async with AgentSession(llm=llm) as sess:
+        await sess.start(RootAgent())
+        await asyncio.wait_for(sess.run(user_input="go"), timeout=5.0)
+
+    # OuterTask's on_enter reply runs while start_outer awaits it, InnerTask's while
+    # start_inner and start_outer await it
+    assert _shown_as_running(seen, "outer_greeting") == []
+    assert _shown_as_running(seen, "inner_greeting") == []
+
+
+class RootWithBackgroundJob(Agent):
+    def __init__(self) -> None:
+        super().__init__(instructions="root agent")
+
+    @function_tool
+    async def start_outer(self, ctx: RunContext) -> str:
+        """Transitions into OuterTask."""
+        await OuterTask()
+        return "outer completed"
+
+    @function_tool
+    async def background_job(self, ctx: RunContext) -> str:
+        """Runs a long job."""
+        await asyncio.sleep(1.0)
+        return "job done"
+
+
+@pytest.mark.asyncio
+async def test_awaited_task_still_sees_other_running_tools() -> None:
+    """Only the calls awaiting the task are hidden from it. Another running call keeps its
+    in-progress pair even if the task doesn't list that tool: a custom llm_node can add
+    tools on every turn, so the listed tools can't tell what the model may re-issue."""
+    llm = FakeLLM(
+        fake_responses=[
+            FakeLLMResponse(
+                input="go",
+                content="",
+                ttft=0,
+                duration=0,
+                tool_calls=[
+                    FunctionToolCall(name="background_job", arguments="{}", call_id="call_job"),
+                    FunctionToolCall(name="start_outer", arguments="{}", call_id="call_outer"),
+                ],
+            ),
+            FakeLLMResponse(input="outer_greeting", content="hi", ttft=0, duration=0),
+        ]
+    )
+    seen = _record_llm_inputs(llm)
+
+    async with AgentSession(llm=llm) as sess:
+        await sess.start(RootWithBackgroundJob())
+        await asyncio.wait_for(sess.run(user_input="go"), timeout=5.0)
+
+    assert _shown_as_running(seen, "outer_greeting") == ["background_job"]
+
+
+class PaymentTask(AgentTask):
+    def __init__(self) -> None:
+        super().__init__(instructions="payment task")
+
+    async def on_enter(self) -> None:
+        await self.session.generate_reply(instructions="payment_greeting")
+
+
+@function_tool
+async def start_payment(ctx: RunContext) -> str:
+    """Starts a payment."""
+    await PaymentTask()
+    return "payment done"
+
+
+@pytest.mark.asyncio
+async def test_awaited_session_tool_stays_shown_as_running() -> None:
+    """A session-wide tool is in every agent's tools, including the task it awaits, so the
+    task can call it again: its in-progress pair has to stay."""
+    llm = FakeLLM(
+        fake_responses=[
+            FakeLLMResponse(
+                input="go",
+                content="",
+                ttft=0,
+                duration=0,
+                tool_calls=[
+                    FunctionToolCall(name="start_payment", arguments="{}", call_id="call_pay")
+                ],
+            ),
+            FakeLLMResponse(input="payment_greeting", content="hi", ttft=0, duration=0),
+        ]
+    )
+    seen = _record_llm_inputs(llm)
+
+    async with AgentSession(llm=llm, tools=[start_payment]) as sess:
+        await sess.start(Agent(instructions="root agent"))
+        await asyncio.wait_for(sess.run(user_input="go"), timeout=5.0)
+
+    assert _shown_as_running(seen, "payment_greeting") == ["start_payment"]
+
+
+class FinishTask(AgentTask):
+    def __init__(self) -> None:
+        super().__init__(instructions="finish task")
+
+    async def on_enter(self) -> None:
+        await self.session.generate_reply(instructions="finish_greeting")
+
+    @function_tool
+    async def finish(self, ctx: RunContext) -> str:
+        """Completes the task."""
+        self.complete(None)
+        return "done"
+
+
+class RootWithFinish(Agent):
+    def __init__(self) -> None:
+        super().__init__(instructions="root agent")
+
+    @function_tool
+    async def finish(self, ctx: RunContext) -> str:
+        """Hands over to FinishTask."""
+        await FinishTask()
+        return "finished"
+
+
+@pytest.mark.asyncio
+async def test_awaiting_tool_named_like_a_task_tool_is_hidden() -> None:
+    """The task's own `finish` is another tool than the parent's `finish` awaiting it: a
+    placeholder for the parent's call would tell the task its `finish` is already running."""
+    llm = FakeLLM(
+        fake_responses=[
+            FakeLLMResponse(
+                input="go",
+                content="",
+                ttft=0,
+                duration=0,
+                tool_calls=[FunctionToolCall(name="finish", arguments="{}", call_id="call_fin")],
+            ),
+            FakeLLMResponse(input="finish_greeting", content="hi", ttft=0, duration=0),
+        ]
+    )
+    seen = _record_llm_inputs(llm)
+
+    async with AgentSession(llm=llm) as sess:
+        await sess.start(RootWithFinish())
+        await asyncio.wait_for(sess.run(user_input="go"), timeout=5.0)
+
+    assert _shown_as_running(seen, "finish_greeting") == []
 
 
 class SimpleTask(AgentTask):
