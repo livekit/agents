@@ -126,6 +126,20 @@ class TestShift:
         _assert_eq(buf, [3, 4, 5, 6])
 
 
+@pytest.mark.parametrize("input_rate", [8000, 24000, 48000])
+def test_reset_discards_pending_resampler_audio(input_rate: int) -> None:
+    """Resetting between speech segments must also discard delayed input samples."""
+    buf = AudioArrayBuffer(buffer_size=16000, sample_rate=16000)
+    assert buf.push_frame(_frame([10000], sr=input_rate)) == 0
+
+    buf.reset()
+    assert len(buf) == 0
+    assert buf.push_frame(_frame([0] * 120, sr=input_rate)) > 0
+
+    # The native resampler may dither silence by one PCM unit.
+    assert np.max(np.abs(buf.read())) <= 2
+
+
 class TestRead:
     def test_returns_copy(self) -> None:
         buf = AudioArrayBuffer(buffer_size=10)
