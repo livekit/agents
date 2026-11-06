@@ -7,13 +7,14 @@ use lk_agents_abi::Maybe;
 use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::llm::realtime::{
     OpenAIRealtimeConfig, OpenAIRealtimeModel, RealtimeConfigurationError, RealtimeOptions,
+    RealtimeProvider,
 };
 use lk_agents_net::task::TokioSpawner;
 use serde_json::{Value, json};
 
 use super::session::{Auth, Connect, OpenAIRealtime};
 use super::wire::Azure;
-use crate::realtime::dialect::{Dialect, INFERENCE, OPENAI, TurnDetection};
+use crate::realtime::dialect::{Dialect, OPENAI, TurnDetection};
 use crate::realtime::machine::{OptionsPatch, SessionOptions};
 use lk_agents_net::env::ProcessEnv;
 
@@ -108,19 +109,24 @@ impl OpenAIRealtimeModel for OpenAIRealtime {
             .map_err(|e| RealtimeConfigurationError::Invalid(e.to_string()))?;
         // the gateway's caller resolved its own credentials and URL
         let (api_key, base_url) = match &named {
-            Some(dialect) if dialect.provider_label == INFERENCE.provider_label => {
+            Some(dialect) if dialect.provider == RealtimeProvider::Inference => {
                 (config.api_key.clone(), config.base_url.clone().unwrap_or_default())
             }
             _ => endpoint(&config, |name| std::env::var(name).ok())
                 .map_err(|error| RealtimeConfigurationError::Invalid(error.to_owned()))?,
         };
         let dialect = named.unwrap_or_else(|| Dialect::for_base_url(&base_url));
-        let is_inference = dialect.provider_label == INFERENCE.provider_label;
+        let is_inference = dialect.provider == RealtimeProvider::Inference;
         let mut opts = SessionOptions::from_dialect(&dialect, false);
         if let Some(model) = config.model {
             opts.model = model;
         }
-        if is_inference && opts.model.starts_with("xai/") {
+        let model_provider = opts
+            .model
+            .split_once('/')
+            .and_then(|(provider, _)| RealtimeProvider::from_wire(provider))
+            .unwrap_or(dialect.provider);
+        if is_inference && model_provider == RealtimeProvider::Xai {
             opts.transcription = Some(json!({"model": "grok-transcribe"}));
             opts.voice = json!("eve");
             opts.turn_detection = Some(TurnDetection::ServerVad {
@@ -301,8 +307,12 @@ mod tests {
             turn_detection: Maybe::Given(None),
             ..RealtimeOptions::default()
         };
-        let update =
-            super::super::encode::options_update("e", patch(options), &crate::realtime::OPENAI);
+        let update = serde_json::to_value(super::super::encode::options_update(
+            "e",
+            patch(options),
+            &crate::realtime::OPENAI,
+        ))
+        .unwrap();
         let session = &update["session"];
         assert_eq!(session["tracing"], Value::Null);
         assert!(session.get("truncation").is_none() && session.get("reasoning").is_none());

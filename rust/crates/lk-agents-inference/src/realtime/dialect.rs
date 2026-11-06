@@ -5,7 +5,8 @@
 
 use std::time::Duration;
 
-use serde_json::{Map, Value, json};
+use lk_agents_abi::llm::realtime::RealtimeProvider;
+use serde_json::{Value, json};
 
 use lk_agents_abi::llm::realtime::RealtimeCapabilities;
 
@@ -25,7 +26,8 @@ pub fn is_fatal_error(code: Option<&str>, type_: Option<&str>) -> bool {
 }
 
 /// Server-side turn detection, in the two shapes the API accepts; `Raw` passes any other shape.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum TurnDetection {
     ServerVad {
         threshold: f64,
@@ -39,6 +41,7 @@ pub enum TurnDetection {
         create_response: bool,
         interrupt_response: bool,
     },
+    #[serde(untagged)]
     Raw(Value),
 }
 
@@ -102,11 +105,9 @@ pub enum Protocol {
     Beta,
 }
 
-/// One `(nested path, top-level name)` promotion in a `session.update` payload.
-pub type Promotion = (&'static [&'static str], &'static str);
-
 #[derive(Debug, Clone)]
 pub struct Dialect {
+    pub provider: RealtimeProvider,
     /// `self._provider_label`. Appears in every error message the session emits.
     pub provider_label: &'static str,
     /// `base_url` before the runtime turns it into a socket URL.
@@ -125,10 +126,6 @@ pub struct Dialect {
     pub caps: CapabilityOverrides,
 
     // --- payload shape ---
-    /// Fields lifted out of the nested `audio` block to the top level of `session`.
-    pub promote: &'static [Promotion],
-    /// Drop `session.audio` entirely when the promotions emptied both of its halves.
-    pub prune_empty_audio: bool,
     /// Applied on the socket by [`crate::realtime::openai::wire::WireShape`].
     pub protocol: Protocol,
 
@@ -200,7 +197,7 @@ impl Dialect {
             .into_iter()
             .filter(|tool| {
                 tool.provider_tool.as_ref().is_none_or(|declaration| {
-                    self.provider_label == XAI.provider_label
+                    self.provider == RealtimeProvider::Xai
                         && declaration.provider.as_deref() == Some("xai")
                 })
             })
@@ -235,6 +232,7 @@ impl Dialect {
 
 /// `livekit-plugins-openai/realtime`, the protocol everything else here is a delta on.
 pub const OPENAI: Dialect = Dialect {
+    provider: RealtimeProvider::Openai,
     provider_label: "OpenAI Realtime API",
     default_base_url: "https://api.openai.com/v1",
     api_key_env: "OPENAI_API_KEY",
@@ -255,8 +253,6 @@ pub const OPENAI: Dialect = Dialect {
         can_disable_turn_detection: None,
         supports_say: None,
     },
-    promote: &[],
-    prune_empty_audio: false,
     protocol: Protocol::Ga,
     supports_turn_detection_disabled: true,
     ignore_unknown_function_calls: false,
@@ -271,6 +267,7 @@ pub const OPENAI: Dialect = Dialect {
 /// LiveKit Inference: the OpenAI protocol through the gateway, which refuses a session it cannot
 /// route with one of three codes no retry fixes.
 pub const INFERENCE: Dialect = Dialect {
+    provider: RealtimeProvider::Inference,
     provider_label: "LiveKit Inference Realtime",
     extra_fatal_codes: &[
         "unsupported_transcription_model",
@@ -282,6 +279,7 @@ pub const INFERENCE: Dialect = Dialect {
 
 /// `livekit-plugins-xai/realtime`, as a value.
 pub const XAI: Dialect = Dialect {
+    provider: RealtimeProvider::Xai,
     provider_label: "xAI Realtime API",
     // Already `wss://` with a path; `process_base_url` only appends `?model=`.
     default_base_url: "wss://api.x.ai/v1/realtime",
@@ -309,11 +307,6 @@ pub const XAI: Dialect = Dialect {
         // "force_message drives scripted TTS without a follow-up response.create"
         supports_say: Some(true),
     },
-    promote: &[
-        (&["audio", "output", "voice"], "voice"),
-        (&["audio", "input", "turn_detection"], "turn_detection"),
-    ],
-    prune_empty_audio: true,
     protocol: Protocol::Ga,
     supports_turn_detection_disabled: false,
     ignore_unknown_function_calls: true,
@@ -328,6 +321,7 @@ pub const XAI: Dialect = Dialect {
 /// `livekit-plugins-azure/realtime`: Azure Voice Live, the beta protocol behind an Azure
 /// endpoint. The plugin supplies the endpoint and the voice object.
 pub const VOICE_LIVE: Dialect = Dialect {
+    provider: RealtimeProvider::VoiceLive,
     provider_label: "Azure Voice Live",
     default_base_url: "",
     api_key_env: "AZURE_VOICE_LIVE_API_KEY",
@@ -367,12 +361,7 @@ impl std::error::Error for UnknownDialect {}
 /// The name [`std::str::FromStr`] reads.
 impl std::fmt::Display for Dialect {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self.provider_label {
-            l if l == XAI.provider_label => "xai",
-            l if l == INFERENCE.provider_label => "inference",
-            l if l == VOICE_LIVE.provider_label => "voice_live",
-            _ => "openai",
-        })
+        std::fmt::Display::fmt(&self.provider, f)
     }
 }
 
@@ -380,12 +369,12 @@ impl std::str::FromStr for Dialect {
     type Err = UnknownDialect;
 
     fn from_str(name: &str) -> Result<Self, UnknownDialect> {
-        match name {
-            "openai" => Ok(OPENAI),
-            "xai" => Ok(XAI),
-            "inference" => Ok(INFERENCE),
-            "voice_live" => Ok(VOICE_LIVE),
-            other => Err(UnknownDialect(other.to_owned())),
+        match RealtimeProvider::from_wire(name) {
+            Some(RealtimeProvider::Openai) => Ok(OPENAI),
+            Some(RealtimeProvider::Xai) => Ok(XAI),
+            Some(RealtimeProvider::Inference) => Ok(INFERENCE),
+            Some(RealtimeProvider::VoiceLive) => Ok(VOICE_LIVE),
+            None => Err(UnknownDialect(name.to_owned())),
         }
     }
 }
@@ -402,22 +391,6 @@ impl Dialect {
         let host = base_url.split_once("://").map_or(base_url, |(_, r)| r);
         let host = host.split(['/', '?']).next().unwrap_or(host);
         if host == "api.x.ai" { XAI } else { OPENAI }
-    }
-
-    /// The map already holds only what was given (pydantic's `model_fields_set`).
-    pub fn rewrite_session(&self, session: &mut Map<String, Value>) {
-        for (path, dest) in self.promote {
-            if let Some(v) = remove_path(session, path) {
-                session.insert((*dest).to_owned(), v);
-            }
-        }
-
-        if self.prune_empty_audio
-            && let Some(Value::Object(audio)) = session.get("audio")
-            && audio.values().all(|half| matches!(half, Value::Object(m) if m.is_empty()))
-        {
-            session.remove("audio");
-        }
     }
 
     /// The capability record for a session. `turn_detection_given` is `is_given(turn_detection)`
@@ -451,84 +424,23 @@ impl Dialect {
     }
 }
 
-/// Remove `path` from a nested map, leaving the (possibly empty) parents for `prune_empty_audio`.
-fn remove_path(root: &mut Map<String, Value>, path: &[&str]) -> Option<Value> {
-    let (last, parents) = path.split_last()?;
-    let mut cur = root;
-    for step in parents {
-        cur = match cur.get_mut(*step) {
-            Some(Value::Object(m)) => m,
-            _ => return None,
-        };
-    }
-    cur.remove(*last)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn full_session() -> Map<String, Value> {
-        let audio_format = json!({"rate": SAMPLE_RATE, "type": "audio/pcm"});
-        let Value::Object(m) = json!({
-            "type": "realtime",
-            "model": "grok-voice-latest",
-            "output_modalities": ["audio"],
-            "audio": {
-                "input": {
-                    "format": audio_format,
-                    "noise_reduction": null,
-                    "transcription": {"model": "grok-transcribe"},
-                    "turn_detection": {"type": "server_vad"},
-                },
-                "output": {"format": audio_format, "speed": 1.0, "voice": "Ara"},
-            },
-            "max_output_tokens": "inf",
-        }) else {
-            unreachable!()
-        };
-        m
-    }
-
-    // Catches: the xAI promotion implemented as a copy rather than a move.
     #[test]
-    fn xai_moves_voice_and_turn_detection_to_the_top_level() {
-        let mut s = full_session();
-        XAI.rewrite_session(&mut s);
-
-        assert_eq!(s["voice"], json!("Ara"));
-        assert_eq!(s["turn_detection"], json!({"type": "server_vad"}));
-        let audio = &s["audio"];
-        assert!(audio["output"].get("voice").is_none(), "voice must be gone from audio.output");
-        assert!(audio["input"].get("turn_detection").is_none());
-        // and what the promotion did NOT touch is still nested
-        assert_eq!(audio["output"]["speed"], json!(1.0));
-        assert_eq!(audio["input"]["transcription"], json!({"model": "grok-transcribe"}));
-    }
-
-    // Catches: shipping an empty `audio` block for a voice-only update.
-    #[test]
-    fn a_voice_only_update_ships_no_audio_block_at_all() {
-        let Value::Object(mut s) =
-            json!({"type": "realtime", "audio": {"input": {}, "output": {"voice": "Eve"}}})
-        else {
-            unreachable!()
-        };
-        XAI.rewrite_session(&mut s);
-        assert_eq!(
-            Value::Object(s),
-            json!({"type": "realtime", "voice": "Eve"}),
-            "the whole audio block goes once the promotion empties it"
-        );
-    }
-
-    // Catches: promoting `voice` for OpenAI, which rejects a top-level `voice`.
-    #[test]
-    fn openai_promotes_nothing() {
-        let mut s = full_session();
-        let before = s.clone();
-        OPENAI.rewrite_session(&mut s);
-        assert_eq!(s, before);
+    fn dialect_names_use_the_provider_vocabulary() {
+        for (name, provider) in [
+            ("openai", RealtimeProvider::Openai),
+            ("xai", RealtimeProvider::Xai),
+            ("inference", RealtimeProvider::Inference),
+            ("voice_live", RealtimeProvider::VoiceLive),
+        ] {
+            let dialect: Dialect = name.parse().unwrap();
+            assert_eq!(dialect.provider, provider);
+            assert_eq!(dialect.to_string(), name);
+        }
+        assert!(RealtimeProvider::from_wire("xai-other").is_none());
     }
 
     // Catches: computing xAI's `can_disable_turn_detection` instead of forcing `false`.

@@ -5,6 +5,17 @@ use crate::errors::{ApiError, HostError};
 use crate::{ApiConnectOptions, AudioFrame, Maybe, ToolChoice, ToolSpec, Ts};
 use crate::{ChatItem, FunctionCall};
 
+/// The realtime provider selected at configuration time, including gateway model prefixes.
+#[crate::host(wire_strs)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RealtimeProvider {
+    #[default]
+    Openai,
+    Xai,
+    Inference,
+    VoiceLive,
+}
+
 #[crate::host(record(
     module = "realtime",
     path = "livekit.agents.llm.realtime",
@@ -320,6 +331,7 @@ pub enum Modalities {
 }
 
 /// `response.done`'s `status`.
+#[crate::host(wire_strs)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum GenerationStatus {
     #[default]

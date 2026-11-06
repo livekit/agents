@@ -454,7 +454,7 @@ async fn update_options_sends_only_what_changed_to_the_live_session() {
     assert!(sent[1]["event_id"].as_str().unwrap().starts_with("options_update_"));
     assert_eq!(
         sent[1]["session"],
-        json!({"type": "realtime", "audio": {"input": {}, "output": {"voice": "cedar"}}}),
+        json!({"type": "realtime", "audio": {"output": {"voice": "cedar"}}}),
         "speed did not change, transcription and noise reduction are the model's own"
     );
     assert_eq!(realtime.model(), "gpt-realtime");
@@ -509,7 +509,7 @@ fn realtime_malformed_message_preserves_operation_identity_and_decode_cause() {
     .expect_err("malformed known fields must fail before core dispatch");
     assert_eq!(error.operation, "response.created");
     assert_eq!(error.event_id.as_deref(), Some("evt_bad"));
-    assert_eq!(error.cause, "id must be a string");
+    assert!(error.cause.contains("expected a string"));
     let error = lk_agents_inference::realtime::openai::wire::decode_text(
         r#"{"type":"response.output_audio.delta","item_id":"m1","delta":"not base64"}"#,
         &Default::default(),
@@ -529,7 +529,36 @@ fn realtime_malformed_message_preserves_operation_identity_and_decode_cause() {
         &Default::default(), std::time::SystemTime::UNIX_EPOCH,
     ).expect_err("malformed known numeric fields cannot become zero usage on clean completion");
     assert_eq!(error.event_id.as_deref(), Some("evt_usage"));
-    assert!(error.cause.contains("usage.input_tokens"));
+    assert!(error.cause.contains("expected u64"));
+}
+
+#[tokio::test]
+async fn unknown_server_items_do_not_end_the_session() {
+    let ws = Arc::new(FakeWs::new(vec![]).keep_open());
+    let session = model(ws.clone(), OPENAI).session(false).await;
+    frames(&ws, 1).await;
+    for event in
+        ["conversation.item.added", "response.output_item.added", "response.output_item.done"]
+    {
+        ws.feed(text(json!({"type": event, "item": {"type": "mcp_list_tools"}})));
+    }
+    let req_id = session.generate_reply(None);
+    frames(&ws, 2).await;
+    ws.feed(text(json!({"type": "response.created", "response": {
+        "id": "after_mcp", "metadata": {"client_event_id": req_id}
+    }})));
+    loop {
+        match next_event(&session).await {
+            Event::GenerationCreated(created) => {
+                assert_eq!(created.response_id, "after_mcp");
+                assert_eq!(created.req_id, Some(req_id));
+                break;
+            }
+            Event::Error(error) => panic!("unknown item ended session: {error:?}"),
+            _ => {}
+        }
+    }
+    session.aclose().await;
 }
 
 #[tokio::test]

@@ -1,7 +1,7 @@
 //! One independently polled socket writer. Framing and media conversion use admitted workers;
 //! a stalled peer cannot suspend the owner's timer or command dispatch.
 
-use super::wire::WireShape;
+use super::wire::{EncodeError, WireShape};
 use crate::realtime::dialect::{NUM_CHANNELS, SAMPLE_RATE};
 use crate::realtime::machine::{Outgoing, ReplyKind};
 use lk_agents_abi::errors::{ApiError, TimeoutPhase};
@@ -55,12 +55,12 @@ impl Encoder {
         effects: Vec<Outgoing>,
         images: &dyn ImageResolver,
         shape: &WireShape,
-    ) -> Result<Vec<PreparedFrame>, String> {
+    ) -> Result<Vec<PreparedFrame>, EncodeError> {
         let mut frames = Vec::new();
         for effect in effects {
             match effect {
                 Outgoing::AudioAppend { frame } => self.append_audio(&frame, &mut frames)?,
-                Outgoing::AudioClear => frames.push(self.clear_audio()),
+                Outgoing::AudioClear => frames.push(self.clear_audio()?),
                 other => frames.push(encode_control(other, images, shape)?),
             }
         }
@@ -72,21 +72,27 @@ impl Encoder {
         &mut self,
         frame: &lk_agents_abi::AudioFrame,
         frames: &mut Vec<PreparedFrame>,
-    ) -> Result<(), String> {
-        for frame in self.resampler.push_frame(frame).map_err(|error| error.to_string())? {
-            frames.extend(self.bstream.push(&frame.data).iter().map(|chunk| {
-                PreparedFrame::audio(
-                    super::wire::input_audio_buffer_append(&chunk.data).to_string(),
-                )
-            }));
+    ) -> Result<(), EncodeError> {
+        for frame in
+            self.resampler.push_frame(frame).map_err(|error| EncodeError(error.to_string()))?
+        {
+            for chunk in self.bstream.push(&frame.data) {
+                let text =
+                    serde_json::to_string(&super::wire::input_audio_buffer_append(&chunk.data))
+                        .map_err(|error| EncodeError(error.to_string()))?;
+                frames.push(PreparedFrame::audio(text));
+            }
         }
         Ok(())
     }
 
     /// Drops the audio held back for framing and resampling, then clears the server's buffer.
-    fn clear_audio(&mut self) -> PreparedFrame {
+    fn clear_audio(&mut self) -> Result<PreparedFrame, EncodeError> {
         *self = Encoder::new();
-        PreparedFrame::audio(super::wire::input_audio_buffer_clear().to_string())
+        Ok(PreparedFrame::audio(
+            serde_json::to_string(&super::wire::ClientEvent::AudioClear)
+                .map_err(|error| EncodeError(error.to_string()))?,
+        ))
     }
 }
 
@@ -95,7 +101,7 @@ fn encode_control(
     effect: Outgoing,
     images: &dyn ImageResolver,
     shape: &WireShape,
-) -> Result<PreparedFrame, String> {
+) -> Result<PreparedFrame, EncodeError> {
     let response = match &effect {
         Outgoing::ResponseCreate { req_id, .. } => Some((req_id.clone(), ReplyKind::Generated)),
         Outgoing::ForceMessage { req_id, .. } => Some((req_id.clone(), ReplyKind::Say)),
@@ -103,7 +109,10 @@ fn encode_control(
     };
     let mut frame = super::encode::encode(effect, images)?;
     shape.outbound(&mut frame);
-    Ok(PreparedFrame { text: frame.to_string(), response })
+    Ok(PreparedFrame {
+        text: serde_json::to_string(&frame).map_err(|error| EncodeError(error.to_string()))?,
+        response,
+    })
 }
 
 /// One connection's socket writer: encodes each batch on the media pool and writes its frames
@@ -151,7 +160,8 @@ impl Writer {
         let (encoder, frames) = prepared.await.map_err(|error| {
             ApiError::new(format!("realtime frame worker failed: {error}")).with_retryable(false)
         })?;
-        let frames = frames.map_err(|error| ApiError::new(error).with_retryable(false))?;
+        let frames =
+            frames.map_err(|error| ApiError::new(error.to_string()).with_retryable(false))?;
         Ok((encoder, frames))
     }
 
