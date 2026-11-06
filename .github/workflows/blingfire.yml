@@ -1,0 +1,90 @@
+name: Build BlingFire wheels
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - livekit-blingfire/**
+      - .github/workflows/blingfire.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: blingfire-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            arch: x86_64
+          - os: ubuntu-24.04-arm
+            arch: aarch64
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+      - name: Prepare the pinned manylinux builder
+        run: docker build --tag livekit-blingfire-wheels livekit-blingfire
+      - name: Build and qualify with CPython 3.15.2
+        run: |
+          mkdir wheelhouse
+          container="blingfire-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          cleanup() {
+            status=$?
+            trap - EXIT INT TERM
+            if ! docker rm --force "$container"; then
+              if [ "$status" -eq 0 ]; then status=1; fi
+            fi
+            exit "$status"
+          }
+          trap cleanup EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          docker create --name "$container" --init --cpus 1 --memory 1536m \
+            --memory-swap 1536m --pids-limit 128 \
+            --mount "type=bind,source=$PWD/wheelhouse,target=/out" livekit-blingfire-wheels
+          docker start --attach "$container"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: blingfire-${{ matrix.arch }}-${{ runner.os }}
+          path: wheelhouse/repaired/*.whl
+          if-no-files-found: error
+
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.15.2"
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: "0.13.6"
+      - name: Build from the source distribution
+        run: |
+          uv build --sdist --no-sources --python 3.15.2 --out-dir source-dist livekit-blingfire
+          uv build --wheel --no-sources --python 3.15.2 --out-dir wheelhouse source-dist/livekit_blingfire-1.1.0.tar.gz
+        env:
+          SOURCE_DATE_EPOCH: "1733688115"
+          CMAKE_BUILD_PARALLEL_LEVEL: "1"
+      - name: Qualify the installed wheel
+        run: |
+          uv venv --python 3.15.2 .wheel-venv
+          uv pip install --python .wheel-venv/bin/python --require-hashes -r livekit-blingfire/tests/requirements.txt
+          uv pip install --python .wheel-venv/bin/python wheelhouse/*.whl
+          .wheel-venv/bin/python -I livekit-blingfire/tests/qualify.py outcomes.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: blingfire-arm64-macOS
+          path: wheelhouse/*.whl
+          if-no-files-found: error
