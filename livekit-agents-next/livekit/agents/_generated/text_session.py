@@ -16,7 +16,14 @@ if TYPE_CHECKING:
     from livekit.agents.llm import LLM
     from livekit.agents.voice.agent_run import AgentCallbacks
 
-    from .agent_run import AgentDefinition, RunError, RunInputRequirement, RunResult, StreamEvent
+    from .agent_run import (
+        AgentDefinition,
+        AgentError,
+        RunError,
+        RunInputRequirement,
+        RunResult,
+        StreamEvent,
+    )
     from .chat_items import ChatItem, ChatMessage
     from .connect import APIConnectOptions
 
@@ -121,6 +128,11 @@ class LocalAgentTool:
 
 
 @dataclass(kw_only=True, slots=True)
+class RoutingErrorAgent:
+    error: AgentError
+
+
+@dataclass(kw_only=True, slots=True)
 class RoutingErrorMaxDepth:
     max_depth: int
 
@@ -156,7 +168,8 @@ class RoutingErrorMissingAcceptedOutput:
 
 
 RoutingError: TypeAlias = (
-    RoutingErrorMaxDepth
+    RoutingErrorAgent
+    | RoutingErrorMaxDepth
     | RoutingErrorUnknownAgent
     | RoutingErrorUnknownScope
     | RoutingErrorUnknownTool

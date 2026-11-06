@@ -102,6 +102,8 @@ pub struct LocalAgentTool {
 #[crate::host(record(module = "text_session", emit))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RoutingError {
+    #[host(field = "error")]
+    Agent(crate::agent::AgentError),
     MaxDepth {
         max_depth: usize,
     },
@@ -121,6 +123,7 @@ pub enum RoutingError {
 impl std::fmt::Display for RoutingError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Agent(error) => error.fmt(f),
             Self::MaxDepth { max_depth } => {
                 write!(f, "agent-tool call exceeds max_depth={max_depth}")
             }
@@ -138,7 +141,14 @@ impl std::fmt::Display for RoutingError {
     }
 }
 
-impl std::error::Error for RoutingError {}
+impl std::error::Error for RoutingError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Agent(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 use crate::agent::run::{RunError, RunResult};
 

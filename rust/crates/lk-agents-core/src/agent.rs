@@ -2,6 +2,7 @@
 //! validity, its tools, the instructions of a request and the structured output's tool.
 
 use lk_agents_abi::ToolSpec;
+pub use lk_agents_abi::agent::AgentError;
 use lk_agents_abi::agent::{AgentDefinition, FunctionToolInfo, OutputSpec};
 use serde_json::{Value, json};
 
@@ -13,38 +14,6 @@ pub const FINAL_RESULT_DESCRIPTION: &str = "The final result of the run, once yo
 
 /// The key a non-object output schema is wrapped under, and unwrapped from.
 pub const WRAPPED_RESULT_KEY: &str = "result";
-
-/// A definition no invocation can run.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AgentError {
-    /// A raw-schema tool has no signature to bind validated arguments to.
-    ApprovalOnRawSchema {
-        tool: String,
-    },
-    DuplicateTool {
-        tool: String,
-    },
-    /// The name the structured output is offered under.
-    ReservedToolName {
-        tool: String,
-    },
-}
-
-impl std::fmt::Display for AgentError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            AgentError::ApprovalOnRawSchema { tool } => {
-                write!(f, "tool `{tool}` has a raw schema and cannot require approval")
-            }
-            AgentError::DuplicateTool { tool } => write!(f, "tool `{tool}` is registered twice"),
-            AgentError::ReservedToolName { tool } => {
-                write!(f, "tool `{tool}` uses the name reserved for the structured output")
-            }
-        }
-    }
-}
-
-impl std::error::Error for AgentError {}
 
 /// The checks every invocation relies on.
 pub fn validate(agent: &AgentDefinition) -> Result<(), AgentError> {

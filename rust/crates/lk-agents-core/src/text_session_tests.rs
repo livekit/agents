@@ -189,7 +189,7 @@ impl Driver {
     }
 
     fn invocation(&self) -> String {
-        self.session.invocation.as_ref().unwrap().id.clone()
+        self.session.phase.invocation().unwrap().id.clone()
     }
 
     fn run(&mut self, event: agent_run::AgentRunEvent) -> Vec<TextSessionEffect> {
@@ -612,6 +612,70 @@ fn unknown_agents_scopes_and_implicit_child_outputs_refuse_routing() {
 }
 
 #[test]
+fn invalid_agent_definitions_retain_their_typed_error() {
+    let mut cfg = config(false, ChatHistory::Fresh, false);
+    let desk = cfg.agents.get_mut("desk").unwrap();
+    desk.definition.tools.push(desk.definition.tools[0].clone());
+    let expected = crate::agent::AgentError::DuplicateTool { tool: "book".into() };
+    assert!(matches!(
+        TextSession::new(cfg.clone(), input(None)),
+        Err(RoutingError::Agent(error)) if error == expected
+    ));
+
+    let mut session =
+        TextSession::new(config(false, ChatHistory::Fresh, false), input(None)).unwrap();
+    // Exercise the invocation boundary independently of construction's validation.
+    session.config = cfg;
+    let effects =
+        session.handle(TextSessionEvent::Start(message("human", Role::User, "Hello")), Ts::ZERO);
+    assert!(matches!(
+        &effects[..],
+        [TextSessionEffect::Finished {
+            result: Err(TextSessionError::Routing(RoutingError::Agent(error))), ..
+        }] if *error == expected
+    ));
+}
+
+#[test]
+fn unserializable_child_arguments_release_the_resource_without_starting_a_child() {
+    for identity in
+        [ArgumentIdentity::Fingerprint("opaque".into()), ArgumentIdentity::Json(json!([]))]
+    {
+        let mut driver = Driver::new(config(false, ChatHistory::Fresh, false), None, "Book");
+        driver.reply("", &[("book", json!({"nights":2}))]);
+        let call = driver
+            .effects
+            .iter()
+            .find_map(|effect| match effect {
+                TextSessionEffect::Run {
+                    effect: agent_run::AgentRunEffect::ToolPrepare { call, .. },
+                    ..
+                } => Some(*call),
+                _ => None,
+            })
+            .unwrap();
+        let effects = driver.run(agent_run::AgentRunEvent::ToolPrepared {
+            call,
+            prepared: ResourceId(777),
+            identity,
+        });
+        assert!(effects.iter().any(|effect| matches!(
+            effect,
+            TextSessionEffect::Run {
+                effect: agent_run::AgentRunEffect::ToolArgumentsRelease {
+                    prepared: ResourceId(777)
+                },
+                ..
+            }
+        )));
+        assert_eq!(driver.session.state.frames.len(), 1);
+        assert!(driver.request().1.items.iter().any(|item| matches!(item,
+            ChatItem::FunctionCallOutput(output) if output.is_error && output.output.contains("serializable")
+        )));
+    }
+}
+
+#[test]
 fn direct_child_execution_reconciles_with_its_original_parent_call() {
     let mut first = Driver::new(config(false, ChatHistory::Fresh, false), None, "Book");
     first.reply("", &[("book", json!({"nights":2}))]);
@@ -979,7 +1043,7 @@ fn a_failed_child_keeps_its_invocation_identity_on_the_terminal_effect() {
         } if *invocation_id == child
     )));
     assert!(
-        driver.session.invocation.is_none(),
+        matches!(driver.session.phase, Phase::Done),
         "the terminal retains an identity, not a live run"
     );
 }

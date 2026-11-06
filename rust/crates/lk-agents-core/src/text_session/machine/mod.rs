@@ -91,9 +91,14 @@ pub enum TextSessionEvent {
 
 struct PreparedChild {
     function_call: FunctionCall,
-    arguments: Option<Value>,
-    identity: Option<String>,
-    executing: bool,
+    arguments: Value,
+    identity: String,
+}
+
+enum Child {
+    Preparing(FunctionCall),
+    Prepared(PreparedChild),
+    Executing(PreparedChild),
 }
 
 enum InvocationRelease {
@@ -105,9 +110,31 @@ struct Invocation {
     id: String,
     frame_id: FrameId,
     run: AgentRun,
-    children: BTreeMap<CallId, PreparedChild>,
+    children: BTreeMap<CallId, Child>,
     outputs: BTreeMap<ValidationId, Value>,
-    release: Option<InvocationRelease>,
+}
+
+enum Phase {
+    NotStarted,
+    Running(Invocation),
+    Releasing(Invocation, InvocationRelease),
+    Done,
+}
+
+impl Phase {
+    fn invocation(&self) -> Option<&Invocation> {
+        match self {
+            Self::Running(invocation) | Self::Releasing(invocation, _) => Some(invocation),
+            Self::NotStarted | Self::Done => None,
+        }
+    }
+
+    fn invocation_mut(&mut self) -> Option<&mut Invocation> {
+        match self {
+            Self::Running(invocation) | Self::Releasing(invocation, _) => Some(invocation),
+            Self::NotStarted | Self::Done => None,
+        }
+    }
 }
 
 pub struct TextSession {
@@ -120,11 +147,9 @@ pub struct TextSession {
     cleanup_timeout: Duration,
     delegated: bool,
     checkpoints: bool,
-    invocation: Option<Invocation>,
+    phase: Phase,
     /// The turn's ended invocations: the live one is added to it when read.
     usage: Ledger,
-    started: bool,
-    done: bool,
     sequence: u64,
 }
 
@@ -205,10 +230,8 @@ impl TextSession {
             cleanup_timeout: input.cleanup_timeout,
             delegated: input.delegated,
             checkpoints: false,
-            invocation: None,
+            phase: Phase::NotStarted,
             usage: Ledger::default(),
-            started: false,
-            done: false,
             sequence: 0,
         })
     }
@@ -225,7 +248,7 @@ impl TextSession {
     }
 
     pub fn wake_at(&self) -> Option<Ts> {
-        self.invocation.as_ref().and_then(|i| i.run.wake_at())
+        self.phase.invocation().and_then(|i| i.run.wake_at())
     }
 
     pub fn handle(&mut self, event: TextSessionEvent, now: Ts) -> Vec<TextSessionEffect> {
@@ -244,12 +267,11 @@ impl TextSession {
             });
             return effects;
         }
-        if self.done {
+        if matches!(self.phase, Phase::Done) {
             return effects;
         }
         match event {
-            TextSessionEvent::Start(message) if !self.started => {
-                self.started = true;
+            TextSessionEvent::Start(message) if matches!(self.phase, Phase::NotStarted) => {
                 let frame = self.state.frames.get_mut(&self.state.active_frame_id).unwrap();
                 record_delivered(frame, message.clone());
                 // An answered read-back is now ordinary history. AgentRun alone decides whether
@@ -265,8 +287,9 @@ impl TextSession {
             {
                 if matches!(verdict, OutputVerdict::Accepted { .. })
                     && let Some(output) = output
+                    && let Some(invocation) = self.phase.invocation_mut()
                 {
-                    self.invocation.as_mut().unwrap().outputs.insert(validation, output);
+                    invocation.outputs.insert(validation, output);
                 }
                 self.run_event(
                     agent_run::AgentRunEvent::OutputValidated { validation, verdict },
@@ -280,34 +303,33 @@ impl TextSession {
                 let frame = self.state.frames.get_mut(&self.state.active_frame_id).unwrap();
                 record_delivered(frame, message);
             }
-            TextSessionEvent::InvocationReleased { invocation_id, delivered }
-                if self.is_current(&invocation_id) =>
+            TextSessionEvent::InvocationReleased { invocation_id, delivered } if matches!(&self.phase, Phase::Releasing(invocation, _) if invocation.id == invocation_id) =>
             {
                 self.receipts(&delivered);
-                match self.invocation.as_mut().unwrap().release.take() {
-                    Some(InvocationRelease::Settled(result, output, approvals)) => {
-                        self.end_invocation();
+                let phase = std::mem::replace(&mut self.phase, Phase::Done);
+                let Phase::Releasing(invocation, release) = phase else { return effects };
+                self.usage.absorb(invocation.run.ledger());
+                match release {
+                    InvocationRelease::Settled(result, output, approvals) => {
                         self.settled(*result, output, approvals, now, &mut effects);
                     }
-                    Some(InvocationRelease::Parked) => {
-                        self.end_invocation();
+                    InvocationRelease::Parked => {
                         self.next_child(now, &mut effects);
                     }
-                    None => {}
                 }
             }
             TextSessionEvent::Reconcile { frame_id, result, output }
-                if !self.started && frame_id == self.state.active_frame_id =>
+                if matches!(self.phase, Phase::NotStarted)
+                    && frame_id == self.state.active_frame_id =>
             {
-                self.started = true;
                 self.usage.add(&result.usage);
                 self.settled(result, output, Vec::new(), now, &mut effects);
             }
             TextSessionEvent::Cancel => {
-                if self.invocation.as_ref().is_some_and(|i| i.release.is_some()) {
+                if matches!(self.phase, Phase::Releasing(..)) {
                     self.end_invocation();
                     self.finish(Err(TextSessionError::Run(RunError::Cancelled)), &mut effects);
-                } else if self.invocation.is_some() {
+                } else if matches!(self.phase, Phase::Running(_)) {
                     self.run_event(agent_run::AgentRunEvent::Cancel, now, &mut effects);
                 } else {
                     self.finish(Err(TextSessionError::Run(RunError::Cancelled)), &mut effects);
@@ -322,7 +344,7 @@ impl TextSession {
     }
 
     fn is_current(&self, invocation_id: &str) -> bool {
-        self.invocation.as_ref().is_some_and(|i| i.id == invocation_id)
+        self.phase.invocation().is_some_and(|i| i.id == invocation_id)
     }
 
     fn invoke(
@@ -371,12 +393,7 @@ impl TextSession {
                 }
             }
             Err(error) => {
-                self.finish(
-                    Err(TextSessionError::Routing(RoutingError::InvalidState(format!(
-                        "{error:?}"
-                    )))),
-                    effects,
-                );
+                self.finish(Err(TextSessionError::Routing(RoutingError::Agent(error))), effects);
                 return;
             }
         };
@@ -394,13 +411,12 @@ impl TextSession {
         } else {
             run.handle(agent_run::AgentRunEvent::Start, now)
         };
-        self.invocation = Some(Invocation {
+        self.phase = Phase::Running(Invocation {
             id: invocation_id,
             frame_id: frame.id.clone(),
             run,
             children: BTreeMap::new(),
             outputs: BTreeMap::new(),
-            release: None,
         });
         self.run_effects(run_effects, now, effects);
     }
@@ -411,19 +427,25 @@ impl TextSession {
         now: Ts,
         effects: &mut Vec<TextSessionEffect>,
     ) {
-        let Some(invocation) = self.invocation.as_mut() else {
+        let Some(invocation) = self.phase.invocation_mut() else {
             return;
         };
         if let agent_run::AgentRunEvent::ToolPrepared { call, prepared, identity } = &event
             && let Some(child) = invocation.children.get_mut(call)
-            && child.identity.is_none()
-            && let Err(failure) = accept_child_arguments(child, identity)
+            && let Child::Preparing(function_call) = child
         {
-            effects.push(TextSessionEffect::Run {
-                invocation_id: invocation.id.clone(),
-                effect: agent_run::AgentRunEffect::ToolArgumentsRelease { prepared: *prepared },
-            });
-            event = agent_run::AgentRunEvent::ToolPrepareFailed { call: *call, failure };
+            match accept_child_arguments(function_call, identity) {
+                Ok(prepared) => *child = Child::Prepared(prepared),
+                Err(failure) => {
+                    let effect =
+                        agent_run::AgentRunEffect::ToolArgumentsRelease { prepared: *prepared };
+                    effects.push(TextSessionEffect::Run {
+                        invocation_id: invocation.id.clone(),
+                        effect,
+                    });
+                    event = agent_run::AgentRunEvent::ToolPrepareFailed { call: *call, failure };
+                }
+            }
         }
         let run_effects = invocation.run.handle(event, now);
         self.run_effects(run_effects, now, effects);
@@ -436,7 +458,7 @@ impl TextSession {
         effects: &mut Vec<TextSessionEffect>,
     ) {
         for effect in run_effects {
-            let Some(invocation) = self.invocation.as_ref() else {
+            let Some(invocation) = self.phase.invocation() else {
                 break;
             };
             let frame_id = invocation.frame_id.clone();
@@ -455,7 +477,7 @@ impl TextSession {
                     self.execute_child(call, function_call, invocation_id, prepared, effects)
                 }
                 agent_run::AgentRunEffect::ToolCancel { call }
-                    if invocation.children.get(&call).is_some_and(|c| c.executing) =>
+                    if matches!(invocation.children.get(&call), Some(Child::Executing(_))) =>
                 {
                     self.cancel_child(call, now, effects)
                 }
@@ -493,20 +515,14 @@ impl TextSession {
 
     /// A call of an agent tool becomes a child the session runs itself.
     fn prepare_child(&mut self, call: CallId, function_call: &FunctionCall) {
-        let Some(invocation) = self.invocation.as_mut() else {
+        let Some(invocation) = self.phase.invocation_mut() else {
             return;
         };
         let agent_name = &self.state.frames[&invocation.frame_id].agent_name;
         if !self.config.agents[agent_name].agent_tools.contains_key(&function_call.name) {
             return;
         }
-        let child = PreparedChild {
-            function_call: function_call.clone(),
-            arguments: None,
-            identity: None,
-            executing: false,
-        };
-        invocation.children.insert(call, child);
+        invocation.children.insert(call, Child::Preparing(function_call.clone()));
     }
 
     fn execute_child(
@@ -517,13 +533,19 @@ impl TextSession {
         prepared: ResourceId,
         effects: &mut Vec<TextSessionEffect>,
     ) {
-        let child = self
-            .invocation
-            .as_mut()
-            .and_then(|invocation| invocation.children.get_mut(&call))
-            .expect("an executing child was prepared in the current invocation");
-        child.function_call = function_call;
-        child.executing = true;
+        let Some(invocation) = self.phase.invocation_mut() else { return };
+        let Some(child) = invocation.children.remove(&call) else { return };
+        let child = match child {
+            Child::Prepared(mut child) | Child::Executing(mut child) => {
+                child.function_call = function_call;
+                Child::Executing(child)
+            }
+            child @ Child::Preparing(_) => {
+                invocation.children.insert(call, child);
+                return;
+            }
+        };
+        invocation.children.insert(call, child);
         effects.push(TextSessionEffect::Run {
             invocation_id,
             effect: agent_run::AgentRunEffect::ToolArgumentsRelease { prepared },
@@ -531,13 +553,9 @@ impl TextSession {
     }
 
     fn cancel_child(&mut self, call: CallId, now: Ts, effects: &mut Vec<TextSessionEffect>) {
-        let invocation =
-            self.invocation.as_mut().expect("a canceled child runs in the current invocation");
-        invocation
-            .children
-            .get_mut(&call)
-            .expect("a canceled child was prepared in the current invocation")
-            .executing = false;
+        let Some(invocation) = self.phase.invocation_mut() else { return };
+        let Some(Child::Executing(child)) = invocation.children.remove(&call) else { return };
+        invocation.children.insert(call, Child::Prepared(child));
         let settled = invocation.run.handle(
             agent_run::AgentRunEvent::ToolSettled {
                 call,
@@ -563,16 +581,19 @@ impl TextSession {
                 return self.finish(Err(TextSessionError::Run(error)), effects);
             }
         };
-        let invocation = self.invocation.as_ref().expect("a run finishes in its invocation");
-        let output = validated_output(invocation, &result.outcome);
-        let approvals = self.approvals(invocation, &result);
+        let phase = std::mem::replace(&mut self.phase, Phase::Done);
+        let (Phase::Running(invocation) | Phase::Releasing(invocation, _)) = phase else { return };
+        let output = validated_output(&invocation, &result.outcome);
+        let approvals = self.approvals(&invocation, &result);
         effects.push(TextSessionEffect::InvocationSettled {
             frame_id,
             invocation_id,
             result: result.clone(),
         });
-        self.invocation.as_mut().expect("a run finishes in its invocation").release =
-            Some(InvocationRelease::Settled(Box::new(result), output, approvals));
+        self.phase = Phase::Releasing(
+            invocation,
+            InvocationRelease::Settled(Box::new(result), output, approvals),
+        );
     }
 
     fn pending(
@@ -593,8 +614,8 @@ impl TextSession {
             execution_id: self.state.execution_id.clone(),
             tool_name: child.function_call.name.clone(),
             agent_name: tool.agent_name.clone(),
-            validated_arguments: child.arguments.clone().unwrap(),
-            identity: child.identity.clone().unwrap(),
+            validated_arguments: child.arguments.clone(),
+            identity: child.identity.clone(),
             status,
         }
     }
@@ -603,7 +624,10 @@ impl TextSession {
         invocation
             .children
             .values()
-            .filter(|child| child.arguments.is_some())
+            .filter_map(|child| match child {
+                Child::Prepared(child) | Child::Executing(child) => Some(child),
+                Child::Preparing(_) => None,
+            })
             .filter_map(|child| {
                 result.all_messages.iter().find_map(|item| match item {
                     ChatItem::FunctionCall(call)
@@ -625,20 +649,22 @@ impl TextSession {
     }
 
     fn park(&mut self, now: Ts, effects: &mut Vec<TextSessionEffect>) {
-        let Some(invocation) = &self.invocation else {
+        let Phase::Running(invocation) = &mut self.phase else {
             return;
         };
-        if invocation.release.is_some() {
-            return;
-        }
-        let calls: Vec<_> =
-            invocation.children.iter().filter(|(_, c)| c.executing).map(|(id, _)| *id).collect();
+        let calls: Vec<_> = invocation
+            .children
+            .iter()
+            .filter(|(_, c)| matches!(c, Child::Executing(_)))
+            .map(|(id, _)| *id)
+            .collect();
         let history = match invocation.run.delegation_checkpoint(&calls, now) {
             agent_run::DelegationCheckpoint::Waiting => return,
             agent_run::DelegationCheckpoint::ConflictingOutcome => {
-                for id in &calls {
-                    self.invocation.as_mut().unwrap().children.get_mut(id).unwrap().executing =
-                        false;
+                for call in &calls {
+                    if let Some(Child::Executing(child)) = invocation.children.remove(call) {
+                        invocation.children.insert(*call, Child::Prepared(child));
+                    }
                 }
                 for call in calls {
                     self.run_event(
@@ -657,15 +683,18 @@ impl TextSession {
             }
             agent_run::DelegationCheckpoint::Ready { history } => history,
         };
-        let mut pending: Vec<_> = calls
-            .iter()
-            .map(|id| {
-                self.pending(
+        let Phase::Running(invocation) = &self.phase else { return };
+        let mut pending: Vec<_> = invocation
+            .children
+            .values()
+            .filter_map(|child| {
+                let Child::Executing(child) = child else { return None };
+                Some(self.pending(
                     &invocation.frame_id,
                     &invocation.id,
-                    &invocation.children[id],
+                    child,
                     ChildCallStatus::Ready,
-                )
+                ))
             })
             .collect();
         // Validation/launch arrival order must not change the model's sibling order.
@@ -685,17 +714,18 @@ impl TextSession {
             frame_id: invocation.frame_id.clone(),
             invocation_id: invocation.id.clone(),
         });
-        self.invocation.as_mut().unwrap().release = Some(InvocationRelease::Parked);
+        if let Phase::Running(invocation) = std::mem::replace(&mut self.phase, Phase::Done) {
+            self.phase = Phase::Releasing(invocation, InvocationRelease::Parked);
+        }
     }
 
     /// The released invocation's dialogue as the person received it: a message cut short reads
     /// as interrupted, with the text that reached them.
     fn receipts(&mut self, delivered: &BTreeMap<String, String>) {
-        let Some(invocation) = &self.invocation else { return };
-        let items = match &invocation.release {
-            Some(InvocationRelease::Settled(result, ..)) => &result.new_messages,
-            Some(InvocationRelease::Parked) => &self.state.frames[&invocation.frame_id].history,
-            None => return,
+        let Phase::Releasing(invocation, release) = &self.phase else { return };
+        let items = match release {
+            InvocationRelease::Settled(result, ..) => &result.new_messages,
+            InvocationRelease::Parked => &self.state.frames[&invocation.frame_id].history,
         };
         let received: Vec<ChatMessage> = (items.iter())
             .filter_map(|item| {
@@ -715,7 +745,7 @@ impl TextSession {
 
     /// The latest snapshot of the turn's usage: every local invocation it ran, once.
     pub fn usage(&self) -> Usage {
-        match &self.invocation {
+        match self.phase.invocation() {
             Some(invocation) => {
                 let mut usage = self.usage.clone();
                 usage.absorb(invocation.run.ledger());
@@ -727,11 +757,12 @@ impl TextSession {
 
     /// Changes whenever [`usage`](Self::usage) may have: ended invocations, then the live one.
     pub fn usage_revision(&self) -> (u64, u64) {
-        (self.usage.revision(), self.invocation.as_ref().map_or(0, |i| i.run.ledger().revision()))
+        (self.usage.revision(), self.phase.invocation().map_or(0, |i| i.run.ledger().revision()))
     }
 
     fn end_invocation(&mut self) {
-        if let Some(invocation) = self.invocation.take() {
+        let phase = std::mem::replace(&mut self.phase, Phase::Done);
+        if let Phase::Running(invocation) | Phase::Releasing(invocation, _) = phase {
             self.usage.absorb(invocation.run.ledger());
         }
     }
@@ -741,10 +772,9 @@ impl TextSession {
         mut result: Result<TextSessionTurn, TextSessionError>,
         effects: &mut Vec<TextSessionEffect>,
     ) {
-        self.done = true;
         let invocation_id = match &result {
             Err(TextSessionError::Run(_)) => {
-                self.invocation.as_ref().map(|invocation| invocation.id.clone())
+                self.phase.invocation().map(|invocation| invocation.id.clone())
             }
             _ => None,
         };
@@ -763,15 +793,15 @@ impl TextSession {
 
 /// Records a child's validated arguments when they are a JSON object, else refuses them.
 fn accept_child_arguments(
-    child: &mut PreparedChild,
+    function_call: &FunctionCall,
     identity: &ArgumentIdentity,
-) -> Result<(), crate::tool_calls::PrepareFailure> {
+) -> Result<PreparedChild, crate::tool_calls::PrepareFailure> {
     match identity {
-        ArgumentIdentity::Json(value) if value.is_object() => {
-            child.identity = Some(approval::canonical(identity));
-            child.arguments = Some(value.clone());
-            Ok(())
-        }
+        ArgumentIdentity::Json(value) if value.is_object() => Ok(PreparedChild {
+            function_call: function_call.clone(),
+            arguments: value.clone(),
+            identity: approval::canonical(identity),
+        }),
         _ => Err(crate::tool_calls::PrepareFailure::Refused(
             "local agent arguments must have a serializable validated JSON object".into(),
         )),

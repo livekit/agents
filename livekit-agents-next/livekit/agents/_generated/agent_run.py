@@ -29,6 +29,31 @@ if TYPE_CHECKING:
 
 
 @dataclass(kw_only=True, slots=True)
+class AgentErrorApprovalOnRawSchema:
+    """A raw-schema tool has no signature to bind validated arguments to."""
+
+    tool: str
+
+
+@dataclass(kw_only=True, slots=True)
+class AgentErrorDuplicateTool:
+    tool: str
+
+
+@dataclass(kw_only=True, slots=True)
+class AgentErrorReservedToolName:
+    """The name the structured output is offered under."""
+
+    tool: str
+
+
+AgentError: TypeAlias = (
+    AgentErrorApprovalOnRawSchema | AgentErrorDuplicateTool | AgentErrorReservedToolName
+)
+"""A definition no invocation can run."""
+
+
+@dataclass(kw_only=True, slots=True)
 class Invocation:
     """What one host callback runs within, captured when the owning operation was created (a
     `run()` call entry), never from whichever task dispatches it later.

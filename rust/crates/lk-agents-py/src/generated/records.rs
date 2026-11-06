@@ -1610,6 +1610,67 @@ pub mod agent_run {
     use pyo3::prelude::*;
 
     // Declared in rust/crates/lk-agents-abi/src/agent/mod.rs.
+    static AGENT_ERROR_APPROVAL_ON_RAW_SCHEMA: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static AGENT_ERROR_DUPLICATE_TOOL: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+    static AGENT_ERROR_RESERVED_TOOL_NAME: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn agent_error_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::agent::AgentError,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        match value {
+            ::lk_agents_abi::agent::AgentError::ApprovalOnRawSchema { tool } => {
+                let kwargs = ::pyo3::types::PyDict::new(py);
+                kwargs.set_item("tool", ::pyo3::IntoPyObjectExt::into_bound_py_any(tool, py)?)?;
+                crate::py_calls::call(
+                    AGENT_ERROR_APPROVAL_ON_RAW_SCHEMA
+                        .import(
+                            py,
+                            "livekit.agents._generated.agent_run",
+                            "AgentErrorApprovalOnRawSchema",
+                        )?
+                        .as_any(),
+                    (),
+                    Some(&kwargs),
+                )
+            }
+            ::lk_agents_abi::agent::AgentError::DuplicateTool { tool } => {
+                let kwargs = ::pyo3::types::PyDict::new(py);
+                kwargs.set_item("tool", ::pyo3::IntoPyObjectExt::into_bound_py_any(tool, py)?)?;
+                crate::py_calls::call(
+                    AGENT_ERROR_DUPLICATE_TOOL
+                        .import(
+                            py,
+                            "livekit.agents._generated.agent_run",
+                            "AgentErrorDuplicateTool",
+                        )?
+                        .as_any(),
+                    (),
+                    Some(&kwargs),
+                )
+            }
+            ::lk_agents_abi::agent::AgentError::ReservedToolName { tool } => {
+                let kwargs = ::pyo3::types::PyDict::new(py);
+                kwargs.set_item("tool", ::pyo3::IntoPyObjectExt::into_bound_py_any(tool, py)?)?;
+                crate::py_calls::call(
+                    AGENT_ERROR_RESERVED_TOOL_NAME
+                        .import(
+                            py,
+                            "livekit.agents._generated.agent_run",
+                            "AgentErrorReservedToolName",
+                        )?
+                        .as_any(),
+                    (),
+                    Some(&kwargs),
+                )
+            }
+        }
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/agent/mod.rs.
     static INVOCATION: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -18681,6 +18742,8 @@ pub mod text_session {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/text_session.rs.
+    static ROUTING_ERROR_AGENT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
     static ROUTING_ERROR_MAX_DEPTH: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
     static ROUTING_ERROR_UNKNOWN_AGENT: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
@@ -18702,6 +18765,20 @@ pub mod text_session {
         value: ::lk_agents_abi::text_session::RoutingError,
     ) -> PyResult<Bound<'py, PyAny>> {
         match value {
+            ::lk_agents_abi::text_session::RoutingError::Agent(error) => {
+                let kwargs = ::pyo3::types::PyDict::new(py);
+                kwargs.set_item(
+                    "error",
+                    crate::generated::records::agent_run::agent_error_to_py(py, error)?,
+                )?;
+                crate::py_calls::call(
+                    ROUTING_ERROR_AGENT
+                        .import(py, "livekit.agents._generated.text_session", "RoutingErrorAgent")?
+                        .as_any(),
+                    (),
+                    Some(&kwargs),
+                )
+            }
             ::lk_agents_abi::text_session::RoutingError::MaxDepth { max_depth } => {
                 let kwargs = ::pyo3::types::PyDict::new(py);
                 kwargs.set_item(

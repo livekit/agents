@@ -22,6 +22,39 @@ use crate::utils::host_ref::HostRef;
 use crate::{FunctionCall, ToolSpec};
 use std::sync::Arc;
 
+/// A definition no invocation can run.
+#[crate::host(record(module = "agent_run", emit))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AgentError {
+    /// A raw-schema tool has no signature to bind validated arguments to.
+    ApprovalOnRawSchema {
+        tool: String,
+    },
+    DuplicateTool {
+        tool: String,
+    },
+    /// The name the structured output is offered under.
+    ReservedToolName {
+        tool: String,
+    },
+}
+
+impl std::fmt::Display for AgentError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ApprovalOnRawSchema { tool } => {
+                write!(f, "tool `{tool}` has a raw schema and cannot require approval")
+            }
+            Self::DuplicateTool { tool } => write!(f, "tool `{tool}` is registered twice"),
+            Self::ReservedToolName { tool } => {
+                write!(f, "tool `{tool}` uses the name reserved for the structured output")
+            }
+        }
+    }
+}
+
+impl std::error::Error for AgentError {}
+
 /// What one host callback runs within, captured when the owning operation was created (a
 /// `run()` call entry), never from whichever task dispatches it later.
 #[crate::host(record(module = "agent_run", emit))]

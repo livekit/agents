@@ -61,8 +61,7 @@ impl TextSessionConfig {
             if name.is_empty() || *name != agent.definition.name {
                 return Err(RoutingError::InvalidState("unstable agent name".into()));
             }
-            crate::agent::validate(&agent.definition)
-                .map_err(|e| RoutingError::InvalidState(format!("{e:?}")))?;
+            crate::agent::validate(&agent.definition).map_err(RoutingError::Agent)?;
             for (tool_name, tool) in &agent.agent_tools {
                 if !agent.definition.tools.iter().any(|t| t.spec.name == *tool_name) {
                     return Err(RoutingError::UnknownTool(tool_name.clone()));
