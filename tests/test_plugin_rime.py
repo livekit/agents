@@ -5859,6 +5859,103 @@ class TestRealtime:
             assert session.chat_ctx.items[-1].output == "working"
             assert session.chat_ctx.items[0].extra == {}
 
+    async def test_message_reply_is_kept_only_while_the_message_is_recorded(self):
+        async with peer_model(playback="discard", context_mode="strict") as (peer, model, _):
+            session = model.session()
+            await session.update_instructions("Help")
+            replies = session._history._message_replies
+            for text in ("", "Hello"):
+                pending = session.generate_reply()
+                response = await peer.start(await peer.next())
+                await pending
+                await peer.message(response, text=text)
+                await peer.end(response)
+                generation = session._generations[response]
+                await wait_until(lambda: generation.ended)  # noqa: B023
+            # The empty message was never recorded, so it keeps no reply.
+            assert replies == {f"message-{response}": response}
+            await session.update_chat_ctx(llm.ChatContext.empty())
+            assert not session.chat_ctx.items
+            assert replies == {}
+
+    @pytest.mark.parametrize("context_mode", ["shared", "strict"])
+    async def test_reply_spoken_before_its_tool_call_accepts_later_results(self, context_mode):
+        finish = asyncio.Event()
+
+        @function_tool
+        async def lookup(ctx: RunContext) -> str:
+            """Look up an order."""
+            await ctx.update("Searching")
+            await finish.wait()
+            return "The order shipped"
+
+        async with peer_model(context_mode=context_mode) as (peer, model, _):
+            async with AgentSession(llm=model) as owner:
+                owner.output.audio = FakeAudioOutput()
+                await owner.start(Agent(instructions="test", tools=[lookup]))
+                speech = owner.generate_reply()
+                response = await peer.start(await peer.next())
+                # Prism sends a reply's speech before its tool calls, so playback starts
+                # before the tool runs.
+                await peer.message(response, text="Let me check", seconds=0.2)
+                await wait_until(lambda: owner.agent_state == "speaking")
+                await peer.emit(
+                    "response.function_call_arguments.done",
+                    response_id=response,
+                    item_id="lookup-item",
+                    call_id="lookup-call",
+                    name="lookup",
+                    arguments="{}",
+                )
+                await peer.end(response)
+                replies = []
+
+                async def respond():
+                    while True:
+                        request = await peer.next()
+                        replies.append(request)
+                        response = await peer.start(request)
+                        await peer.message(response)
+                        await peer.end(response)
+
+                responder = asyncio.create_task(respond())
+                try:
+                    await asyncio.wait_for(speech.wait_for_playout(), 3)
+                    await asyncio.wait_for(owner.wait_for_idle(), 3)
+                    # Core dates the message from playback start and the call from when the
+                    # tool started, so its context has the message first. The plugin gains
+                    # the message when the reply ends, after the call.
+                    kinds = [
+                        i.type
+                        for i in owner.current_agent.chat_ctx.items
+                        if i.id in ("message-" + response, "lookup-item")
+                    ]
+                    assert kinds == ["message", "function_call"]
+                    finish.set()
+                    await wait_until(
+                        lambda: any(
+                            isinstance(i, llm.FunctionCallOutput)
+                            and i.call_id == "lookup-call_final"
+                            for i in model._session.chat_ctx.items
+                        )
+                    )
+                    await wait_until(
+                        lambda: any(
+                            "lookup-call_final" in req["response"].get("prism_instruction", "")
+                            for req in replies
+                        )
+                    )
+                    await asyncio.wait_for(owner.wait_for_idle(), 3)
+                    # Later updates that include the same items are still accepted.
+                    await owner.current_agent.update_chat_ctx(owner.current_agent.chat_ctx.copy())
+                    assert all(
+                        op["type"] != "conversation.item.delete" for op in peer.history_operations
+                    )
+                    assert peer.connections == 1
+                finally:
+                    responder.cancel()
+                    await asyncio.gather(responder, return_exceptions=True)
+
     @pytest.mark.parametrize("context_mode", ["shared", "strict"])
     @pytest.mark.parametrize("silent", [False, True])
     @pytest.mark.parametrize("fails", [False, True])

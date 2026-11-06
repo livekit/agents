@@ -1326,11 +1326,14 @@ class RealtimeSession(llm.RealtimeSession[Literal["rime_server_event_received"]]
                 transcript = message.retained_text
             if transcript or message.retained_text is not None:
                 assert self._history is not None
-                self._history.record_assistant(item_id, message.transcript)
+                response_id = generation.ref.response_id
+                self._history.record_assistant(item_id, message.transcript, response_id=response_id)
                 if message.played_transcript is not None:
                     self._history.record_assistant(item_id, message.played_transcript, played=True)
                 if message.retained_text is not None:
-                    self._history.record_assistant(item_id, message.retained_text)
+                    self._history.record_assistant(
+                        item_id, message.retained_text, response_id=response_id
+                    )
             message.retained_text = None
             message.text.close()
             message.audio.close()
