@@ -150,7 +150,12 @@ def _build_tool_spec(tool: llm.FunctionTool | llm.RawFunctionTool) -> dict:
                 {
                     "name": info.name,
                     "description": info.raw_schema.get("description", ""),
-                    "inputSchema": {"json": info.raw_schema.get("parameters", {})},
+                    # `parameters: {}` declares a tool with no arguments, but Bedrock
+                    # rejects an empty schema
+                    "inputSchema": {
+                        "json": info.raw_schema.get("parameters")
+                        or {"type": "object", "properties": {}}
+                    },
                 }
             )
         }

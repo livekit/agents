@@ -164,7 +164,10 @@ def to_fnc_ctx(tool_ctx: llm.ToolContext, *, strict: bool = True) -> list[dict[s
                 {
                     "name": info.name,
                     "description": info.raw_schema.get("description", ""),
-                    "input_schema": info.raw_schema.get("parameters", {}),
+                    # `parameters: {}` declares a tool with no arguments, but the API
+                    # requires the schema to name its type
+                    "input_schema": info.raw_schema.get("parameters")
+                    or {"type": "object", "properties": {}},
                 }
             )
 
