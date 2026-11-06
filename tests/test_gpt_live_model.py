@@ -2106,38 +2106,51 @@ async def test_decisions_delegation_and_manual_evaluation(
         await model.aclose()
 
 
-async def test_delegate_starts_backend_work_the_service_reports_as_manual(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("azure", [False, True])
+async def test_delegate_starts_backend_work_the_service_reports(
+    monkeypatch: pytest.MonkeyPatch, azure: bool
 ) -> None:
     ws = _connect_hook(monkeypatch)
-    model = GPTLiveModel(api_key="sk-test")
+    model = (
+        GPTLiveModel.with_azure(
+            azure_deployment="gpt-live-1",
+            azure_endpoint="https://x.openai.azure.com",
+            api_key="k",
+            responses_options={"model": "gpt-6.1-terra"},
+        )
+        if azure
+        else GPTLiveModel(api_key="sk-test")
+    )
     session = model.session()
     created: list[GPTLiveDelegation] = []
     session.on("delegation_created", created.append)
+
+    def delegation_created(client_event_id: str | None) -> None:
+        session._handle_event(
+            {
+                "type": "session.delegation.created",
+                "delegation": {"id": f"d{len(created)}", "target": "responses"},
+                "client_event_id": client_event_id,
+            }
+        )
+
     try:
         await session._update_session()
         await asyncio.sleep(0.05)
-        # OpenAI echoes the request's event id; Azure does not
-        for echo in (True, False):
-            session.delegate("Cancel the caller's 3pm appointment.")
-            await asyncio.sleep(0.05)
-            note, create = ws.sent[-2:]
-            assert note["type"] == "response.item.create"
-            assert note["item"]["role"] == "developer"
-            assert create["type"] == "response.create"
-            assert session._backend_busy
-            session._handle_event(
-                {
-                    "type": "session.delegation.created",
-                    "delegation": {"id": f"d{len(created)}", "target": "responses"},
-                    "client_event_id": create["event_id"] if echo else None,
-                }
-            )
+        session.delegate("Cancel the caller's 3pm appointment.")
+        await asyncio.sleep(0.05)
+        note, create = ws.sent[-2:]
+        assert note["type"] == "response.item.create"
+        assert note["item"]["role"] == "developer"
+        assert create["type"] == "response.create"
+        assert session._backend_busy
+        # an id-less delegation is the model's own, except on Azure, which never echoes the id
+        delegation_created(None)
+        assert session._backend_busy is not azure
+        if not azure:
+            delegation_created(create["event_id"])
             assert not session._backend_busy
-        assert [(d.source, d.mode) for d in created] == [
-            ("manual", "responses"),
-            ("model", "responses"),
-        ]
+        assert [d.source for d in created] == (["model"] if azure else ["model", "manual"])
     finally:
         await session.aclose()
         await model.aclose()

@@ -960,8 +960,8 @@ class GPTLiveSession(
         manual = (
             event.client_event_id is not None and event.client_event_id == self._delegate_event_id
         )
-        # Azure omits client_event_id, so a delegation without one also ends the wait
-        if manual or event.client_event_id is None:
+        # Azure never echoes client_event_id, so there any delegation without one ends the wait
+        if manual or (self._opts.is_azure and event.client_event_id is None):
             self._delegate_event_id = None
         self._emit_delegation(
             delegation.id,
@@ -1139,7 +1139,9 @@ class GPTLiveSession(
         )
 
     def _handle_error(self, error: types.ErrorBody) -> None:
-        if error.client_event_id in (None, self._delegate_event_id):
+        if error.client_event_id == self._delegate_event_id or (
+            self._opts.is_azure and error.client_event_id is None
+        ):
             self._delegate_event_id = None
         logger.error(
             "gpt-live returned an error",

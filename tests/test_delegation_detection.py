@@ -84,7 +84,8 @@ async def test_a_turn_said_over_the_agent_is_marked_and_the_backend_told() -> No
         ]
     )
     note = await DelegationDetector(model)(check)
-    assert isinstance(note, str) and "Cancel my 3pm." in note
+    # the caller's words never reach the backend as a developer message
+    assert isinstance(note, str) and "Cancel my 3pm." not in note
 
 
 # the loop in AgentActivity: a turn the realtime model left undelegated is judged once the agent

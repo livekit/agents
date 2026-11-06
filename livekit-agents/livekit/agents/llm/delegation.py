@@ -26,10 +26,11 @@ DEFAULT_DETECTOR_MODEL = "google/gemma-4-31b-it"
 # how late a caller turn may start and still count as said over the agent's message: a turn
 # starts when its first words are transcribed, which trails the speech itself (not the grace period)
 _SPOKEN_OVER_SLACK = 1.0
-# the backend's history keeps no overlap, so a turn said over the agent is delegated with this note
+# the backend's history keeps no overlap, so a turn said over the agent is delegated with this
+# note; it quotes nothing the caller said, which would reach the backend as a developer message
 _SPOKEN_OVER_NOTE = (
-    'The caller said "{text}" while the agent was still speaking, so they may not have heard all '
-    "of it."
+    "The caller's last turn was said while the agent was still speaking, so they may not have "
+    "heard all of it."
 )
 
 DEFAULT_PROMPT = (
@@ -199,5 +200,5 @@ class DelegationDetector:
 
         last = next((m for m in reversed(messages) if m.role == "user"), None)
         if delegate and last is not None and last.id in spoken_over:
-            return _SPOKEN_OVER_NOTE.format(text=last.text_content)
+            return _SPOKEN_OVER_NOTE
         return delegate
