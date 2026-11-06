@@ -201,6 +201,7 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
 
         # audio during a swap is dropped; replaying it would lag the model behind realtime
         self._swapping = False
+        self._swap_tool_reply_pending = False
 
         self._active_index = 0
         self._active_bound = False
@@ -356,6 +357,7 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
                     self._set_available(index, False)
                     return e
 
+            self._swap_tool_reply_pending = self._active.pending_tool_reply is True
             self._swapping = True
             try:
                 # close the old child; best-effort since the provider may already be dead
@@ -372,6 +374,7 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
                     error = await _bring_up(nxt)
             finally:
                 self._swapping = False
+                self._swap_tool_reply_pending = False
 
             if error is not None:
                 # every model failed to start; escalate so AgentSession can close instead of
@@ -409,7 +412,9 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
     @property
     def pending_tool_reply(self) -> bool | None:
         """Follow the active provider's continuation lifecycle across fallback."""
-        return self._active.pending_tool_reply
+        # The old child clears its state during close, before replacement work is
+        # installed. Retain ownership of that wait until the swap can publish it.
+        return self._swap_tool_reply_pending or self._active.pending_tool_reply
 
     @property
     def chat_ctx(self) -> ChatContext:

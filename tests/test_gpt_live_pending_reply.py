@@ -70,6 +70,9 @@ class ProviderPeer:
         self.commands = asyncio.Queue()
         self.processed = asyncio.Queue()
         self.runner = None
+        self.close_received = asyncio.Event()
+        self.allow_close = asyncio.Event()
+        self.allow_close.set()
 
     async def handler(self, request):
         self.ws = web.WebSocketResponse()
@@ -84,6 +87,8 @@ class ProviderPeer:
                     wire.SessionStartedEvent(session=wire.SessionResource(id="session"))
                 )
             elif event["type"] == wire.SessionCloseEvent.model_fields["type"].default:
+                self.close_received.set()
+                await self.allow_close.wait()
                 await self.send(wire.SessionClosedEvent(reason="close_requested"))
         return self.ws
 
@@ -598,3 +603,23 @@ async def test_provider_wait_outlives_run_placeholder(case):
             await c.peer.late_transcript(c.speeches)
         c.assert_pending()
         await c.finish()
+
+
+async def test_fallback_keeps_busy_while_closing_the_old_provider(with_run):
+    """A hook completing mid-swap must not observe a false idle interval."""
+    async with _conversation(with_run, fallback="regenerate") as c:
+        await c.ready_reply()
+        c.peer.allow_close.clear()
+        swap = asyncio.create_task(c.realtime.restart(switch_model=True))
+        await asyncio.wait_for(c.peer.close_received.wait(), TIMEOUT)
+        try:
+            await c.release_hook()
+            assert c.realtime.pending_tool_reply is True
+            assert c.session.agent_state == "thinking"
+            assert c.session._user_away_timer is None
+        finally:
+            c.peer.allow_close.set()
+            await asyncio.wait_for(swap, TIMEOUT)
+            await c.peer.receive(wire.CommentaryAppendEvent.model_fields["type"].default)
+            await c.peer.speech(c.session, c.speeches, ANSWER, speech_handle=c.speeches[-1])
+            await c.assert_idle()
