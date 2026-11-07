@@ -75,7 +75,6 @@ use lk_agents_voice::{
     },
     events::SessionEvent,
     filler_scheduler::FillerId,
-    tool_executor::ToolOutcome,
     trace::{
         CoreStep, DetectorStep, GenerationStep, HandoffStep, PlayoutStep, SpeechStep, Step,
         ToolStep, TurnStep,
