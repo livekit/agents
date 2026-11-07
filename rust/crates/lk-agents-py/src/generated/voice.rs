@@ -3902,6 +3902,8 @@ impl CoreSessionOwner {
     /// console's) claims the job's primary session and sets the job's recording from its plan;
     /// the start time is set; the job's session opens its audio recording and the job's shutdown
     /// is made to close it; the recording is ready; the toolsets set up and the voice loop starts.
+    /// A failure closes the owner and ends the session's spans with it; a thread whose lane does
+    /// not load fails it with its storage error.
     #[pyo3(signature = (storage, host, *, job = None))]
     fn start<'py>(
         &self,
@@ -3922,11 +3924,7 @@ impl CoreSessionOwner {
         let cx = crate::py_calls::entry_cx();
         let call = py.detach(|| <CoreSessionOwnerImpl as ::lk_agents_abi::voice::session_owner::SessionOwner>::start(&self.0, storage, host, job, cx)).map_err(|e: ::lk_agents_abi::errors::HostError| <::lk_agents_abi::errors::HostError as crate::py_errors::HostException>::to_py_err(&e))?;
         crate::py_calls::future_into_py(py, async move {
-            let () = call.await.map_err(|e: ::lk_agents_abi::errors::HostError| {
-                <::lk_agents_abi::errors::HostError as crate::py_errors::HostException>::to_py_err(
-                    &e,
-                )
-            })?;
+            let () = call.await.map_err(|e: ::lk_agents_abi::voice::session::StartFailed| <::lk_agents_abi::voice::session::StartFailed as crate::py_errors::HostException>::to_py_err(&e))?;
             Python::attach(|py| ::pyo3::IntoPyObjectExt::into_py_any((), py))
         })
     }
@@ -4432,13 +4430,13 @@ pub struct CoreSessionStorage(pub(crate) ::std::sync::Arc<CoreSessionStorageImpl
 #[pymethods]
 impl CoreSessionStorage {
     #[new]
-    #[pyo3(signature = (namespace, thread_id, lane, fallback_lane, initial_history))]
+    #[pyo3(signature = (namespace, thread_id, lane, agent, initial_history))]
     fn new(
         py: Python<'_>,
         namespace: Option<Bound<'_, PyAny>>,
         thread_id: ::std::option::Option<::std::string::String>,
         lane: ::std::string::String,
-        fallback_lane: ::std::string::String,
+        agent: ::std::string::String,
         initial_history: Option<Bound<'_, PyAny>>,
     ) -> PyResult<CoreSessionStorage> {
         crate::py_calls::check_pid()?;
@@ -4462,12 +4460,13 @@ impl CoreSessionStorage {
                 })
             })
             .transpose()?;
-        let out = py.detach(|| <CoreSessionStorageImpl as ::lk_agents_abi::voice::session_storage::SessionStorage>::new(&env, namespace, thread_id, lane, fallback_lane, initial_history));
+        let out = py.detach(|| <CoreSessionStorageImpl as ::lk_agents_abi::voice::session_storage::SessionStorage>::new(&env, namespace, thread_id, lane, agent, initial_history));
         ::pyo3::PyResult::Ok(CoreSessionStorage(::std::sync::Arc::new(out)))
     }
 
-    /// Load the supplied thread's lane. Without one, or when it does not load, the call runs on
-    /// a new thread of the local SQLite storage (`SQLiteStorage()`'s default directory).
+    /// Load the supplied thread's lane; its failure is the call's (no other thread replaces it).
+    /// Without a thread, the call runs on a new thread of the local SQLite storage
+    /// (`SQLiteStorage()`'s default directory).
     fn open<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
         let this = ::std::sync::Arc::clone(&self.0);
@@ -12155,6 +12154,7 @@ impl crate::py_errors::HostException for ::lk_agents_abi::voice::session::StartF
     fn to_py_err(&self) -> ::pyo3::PyErr {
         #[allow(unreachable_patterns)]
         match self {
+            Self::Storage(inner) => crate::py_errors::HostException::to_py_err(inner),
             Self::Host(inner) => crate::py_errors::HostException::to_py_err(inner),
             _ => ::pyo3::exceptions::PyRuntimeError::new_err(::std::string::ToString::to_string(
                 self,

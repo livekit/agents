@@ -1,4 +1,4 @@
-//! Storage startup: the call's lane, on the supplied thread or a new local one.
+//! Storage startup: the call's lane, on the supplied thread or, without one, a new local one.
 
 use crate::voice::VoiceRuntime;
 use crate::voice::session::Tx;
@@ -21,6 +21,7 @@ pub struct SessionStorage {
     namespace: Option<Arc<Namespace>>,
     thread_id: Option<String>,
     lane: String,
+    agent: String,
     initial_history: Option<Vec<ChatItem>>,
     opened: OnceCell<Opened>,
 }
@@ -35,6 +36,16 @@ pub(super) struct Opened {
 }
 
 impl SessionStorage {
+    /// The thread the call was given.
+    pub(super) fn supplied_thread(&self) -> Option<&str> {
+        self.thread_id.as_deref()
+    }
+
+    /// The call's agent, which the spans of a start that failed before its session ran name.
+    pub(super) fn agent(&self) -> &str {
+        &self.agent
+    }
+
     /// The existing host ABI exposes infallible getters after `open`. Native startup uses the
     /// returned ready payload directly instead of relying on this protocol-only entry point.
     fn opened(&self) -> &Opened {
@@ -46,17 +57,12 @@ impl SessionStorage {
         self.opened.get_or_try_init(|| self.load()).await
     }
 
-    /// The supplied thread's lane; without one, or when it does not load, a new thread of the
+    /// The supplied thread's lane, whose failure is the call's; without one, a new thread of the
     /// local SQLite storage.
     async fn load(&self) -> Result<Opened, StorageError> {
         if let (Some(namespace), Some(thread_id)) = (&self.namespace, &self.thread_id) {
             let initial_history = self.initial_history.clone();
-            match self.lane(Arc::clone(namespace), thread_id.clone(), initial_history).await {
-                Ok(opened) => return Ok(opened),
-                Err(error) => {
-                    log::warn!(target: lk_agents_abi::LOG_TARGET, threadId = thread_id.as_str(); "the voice lane could not be loaded, the call continues on a new local thread: {error}")
-                }
-            }
+            return self.lane(Arc::clone(namespace), thread_id.clone(), initial_history).await;
         }
         let local = Arc::new(Namespace::new(&self.env, None, None, None, None, None, None)?);
         let thread = local.create_thread(None, None, 0).await?;
@@ -111,7 +117,7 @@ impl lk_agents_abi::voice::session_storage::SessionStorage for SessionStorage {
         namespace: Option<Arc<Namespace>>,
         thread_id: Option<String>,
         lane: String,
-        _fallback_lane: String,
+        agent: String,
         initial_history: Option<Vec<ChatItem>>,
     ) -> Self {
         Self {
@@ -119,6 +125,7 @@ impl lk_agents_abi::voice::session_storage::SessionStorage for SessionStorage {
             namespace,
             thread_id,
             lane,
+            agent,
             initial_history,
             opened: OnceCell::new(),
         }

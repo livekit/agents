@@ -145,7 +145,8 @@ class VoiceSession(SessionCommands, rtc.EventEmitter[EventTypes], Generic[Contex
             tools: Tools shared by every agent of the session. A name an agent's own tool
                 also has is refused with ``ValueError`` when that agent runs.
             context, thread: Read by tools through ``RunContext``. Without ``thread``, the call
-                runs on a new thread of the local ``SQLiteStorage()``.
+                runs on a new thread of the local ``SQLiteStorage()``; a ``thread`` whose lane
+                does not load fails ``start()`` with its ``StorageError``.
             video_sampler: How often camera frames reach the model; ``None`` sends every frame.
             turn_detection, endpointing_opts: The session's turn completion and endpointing
                 policy, as ``update_options`` changes them.
@@ -340,7 +341,12 @@ class VoiceSession(SessionCommands, rtc.EventEmitter[EventTypes], Generic[Contex
         chat_ctx: llm.ChatContext | None = None,
     ) -> None:
         """Start the session on ``room`` (the job's room by default, an offline room without
-        one) with ``agent`` driving."""
+        one) with ``agent`` driving.
+
+        Raises:
+            StorageError: The call's thread did not load (``ThreadNotFound``,
+                ``StorageUnavailable``, ...); the session is closed.
+        """
         from opentelemetry import context as otel_context
 
         from .._generated.session_owner import SessionJobInfo

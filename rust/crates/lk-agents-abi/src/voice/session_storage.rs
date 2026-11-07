@@ -20,12 +20,13 @@ pub trait SessionStorage: Send + Sync + Sized + 'static {
         namespace: Option<Arc<Self::Namespace>>,
         thread_id: Option<String>,
         lane: String,
-        fallback_lane: String,
+        agent: String,
         initial_history: Option<Vec<ChatItem>>,
     ) -> Self;
 
-    /// Load the supplied thread's lane. Without one, or when it does not load, the call runs on
-    /// a new thread of the local SQLite storage (`SQLiteStorage()`'s default directory).
+    /// Load the supplied thread's lane; its failure is the call's (no other thread replaces it).
+    /// Without a thread, the call runs on a new thread of the local SQLite storage
+    /// (`SQLiteStorage()`'s default directory).
     #[host(await)]
     async fn open(&self) -> Result<(), StorageError>;
     /// The storage the call's thread lives in.

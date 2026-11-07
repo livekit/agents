@@ -309,6 +309,15 @@ def caplog(request: pytest.FixtureRequest) -> Iterator[pytest.LogCaptureFixture]
 
 
 @pytest.fixture(scope="session", autouse=True)
+def _local_threads(tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
+    """``SQLiteStorage()``'s threads, a call's without ``thread=`` among them, stay out of the
+    real ``~/.livekit``."""
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("LIVEKIT_AGENT_THREADS_DIR", str(tmp_path_factory.mktemp("agent-threads")))
+        yield
+
+
+@pytest.fixture(scope="session", autouse=True)
 def _logging_baseline():
     """Pristine logging state, snapshotted once before any test runs."""
     loggers = [logging.getLogger()]  # root

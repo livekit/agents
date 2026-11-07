@@ -37,9 +37,11 @@ a thread in Cloud storage.
 
 A server with no storage still speaks standard A2A: every message still
 gets an A2A task id, and a text run has no `ctx.thread`. A call is never
-without a thread: a `VoiceSession` given none, or whose thread does not
-load, runs on a new thread of the local `SQLiteStorage()`, in its default
-directory, and logs why when a supplied thread did not load.
+without a thread: a `VoiceSession` given none runs on a new thread of the
+local `SQLiteStorage()`, in its default directory. A supplied thread whose
+lane does not load fails the start with its `StorageError` (`NotFound`,
+`Unavailable`, ...); no other thread replaces it (see
+[voice-session.md](../voice-session.md#the-calls-thread)).
 
 ## Rust interface
 
@@ -439,9 +441,11 @@ storage contract.
 
 ### Local SQLite storage
 
-`SQLiteStorage()` defaults to `~/.livekit/agent-threads`, alongside the LiveKit
-CLI's `~/.livekit/cli-config.yaml`. `SQLiteStorage(directory=...)` overrides
-that location. Relative paths resolve against the working directory once at
+`SQLiteStorage()` defaults to `~/.livekit/agent-threads/<project_id>`, alongside
+the LiveKit CLI's `~/.livekit/cli-config.yaml`. The `LIVEKIT_AGENT_THREADS_DIR`
+environment variable replaces `~/.livekit/agent-threads` (the test suite points
+it at a temporary directory); `SQLiteStorage(directory=...)` overrides the whole
+location. Relative paths resolve against the working directory once at
 initialization, before workers start. The resolved absolute path is logged at
 startup and passed unchanged to job processes. Reusing the directory restores
 saved threads across restarts; choosing another directory creates a separate
@@ -451,7 +455,7 @@ The default directory is shared by local workers for this OS user. A local
 storage failure is reported; it never causes a fallback to Cloud.
 
 ```text
-~/.livekit/agent-threads/
+~/.livekit/agent-threads/default/
 ├─ lifecycle.lock
 ├─ registry.sqlite
 └─ threads/

@@ -37,7 +37,7 @@ again when left empty.
 | `tts_text_transforms` | the `TextTransforms` applied before synthesis: `"filter_markdown"`, `"filter_emoji"` |
 | `tools` | tools and toolsets every agent of the call is offered, besides its own; a name an agent's tool already has is refused (`ValueError`) when that agent runs, see [tools](tools.md#tools-on-an-agent) |
 | `context` | the application object; marked fields require explicit loading and saving |
-| `thread` | the call's durable thread, `ctx.thread`; omitted, the call runs on a new thread of the local `SQLiteStorage()` |
+| `thread` | the call's durable thread, `ctx.thread`; omitted, the call runs on a new thread of the local `SQLiteStorage()`; one whose lane does not load fails `start()` ([the call's thread](#the-calls-thread)) |
 
 `session.start(agent, chat_ctx=)` and `session.update_agent(agent, chat_ctx=)`
 are the two places to supply a different history. An explicit agent switch
@@ -402,8 +402,29 @@ the web console sends it, else a new thread. It is `ctx.thread` on the
 without `thread=` runs on a new thread of the local `SQLiteStorage()`, in its
 default directory, and `session.thread` is that thread once started. If a
 supplied dispatch thread id is unknown or deleted, the door logs the refusal and
-`ctx.thread` is `None`; a supplied thread whose lane does not load is logged and
-the call runs on a new local thread too.
+`ctx.thread` is `None`.
+
+A call given a thread whose lane does not load does not start: no other thread
+replaces it. `await session.start(...)` raises the storage's error,
+`ThreadNotFound` for an unknown, deleted or expired thread and
+`StorageUnavailable` for a storage that cannot be reached (retryable), both
+`livekit.agents.storage.StorageError`s; the session is closed, its
+`agent_session` and `session_start` spans end with that error, and the job
+logs `the session could not start` once, with `job_id` and `thread_id`. The
+entrypoint decides what the caller hears:
+
+```python
+from livekit.agents.storage import StorageError, StorageUnavailable
+
+try:
+    await session.start(agent)
+except StorageUnavailable:
+    ...  # retry the start, or end the call
+except StorageError:
+    ...  # the thread is gone: start a new session on a new thread, or end the call
+```
+
+Uncaught, the error ends the job as any entrypoint exception does.
 For phone-number routing and conversation continuity, see
 [channel routing](channels.md#channel-routing).
 

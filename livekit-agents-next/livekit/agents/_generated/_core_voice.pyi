@@ -865,6 +865,8 @@ class _core_SessionOwner:
         console's) claims the job's primary session and sets the job's recording from its plan;
         the start time is set; the job's session opens its audio recording and the job's shutdown
         is made to close it; the recording is ready; the toolsets set up and the voice loop starts.
+        A failure closes the owner and ends the session's spans with it; a thread whose lane does
+        not load fails it with its storage error.
         """
     @property
     def session(self) -> VoiceSession | None: ...
@@ -994,12 +996,13 @@ class _core_SessionStorage:
         namespace: Storage | None,
         thread_id: str | None,
         lane: str,
-        fallback_lane: str,
+        agent: str,
         initial_history: Sequence[ChatItem] | None,
     ) -> Self: ...
     async def open(self) -> None:
-        """Load the supplied thread's lane. Without one, or when it does not load, the call runs on
-        a new thread of the local SQLite storage (`SQLiteStorage()`'s default directory).
+        """Load the supplied thread's lane; its failure is the call's (no other thread replaces it).
+        Without a thread, the call runs on a new thread of the local SQLite storage
+        (`SQLiteStorage()`'s default directory).
         """
     @property
     def namespace(self) -> Storage:

@@ -151,7 +151,7 @@ async fn cancelled_start_waiter_and_concurrent_close_settle_partial_acquisition_
             .await
     );
     host.release.notify_one();
-    assert_eq!(other.await.unwrap_err().message, "toolset initialization failed");
+    assert_eq!(other.await.unwrap_err().to_string(), "toolset initialization failed");
     closing.await;
     assert_eq!(host.prepared.load(Ordering::SeqCst), 1);
     assert_eq!(host.closed.load(Ordering::SeqCst), 1);
@@ -214,27 +214,74 @@ impl lk_agents_abi::errors::RefRegistry for Registry {
     fn release(&self, _id: u64) {}
 }
 
-/// A call on a new thread of a local storage in its own directory.
-async fn storage() -> Arc<SessionStorage> {
+/// A new thread of a local storage in its own directory.
+async fn local_thread(env: &ProcessEnv) -> (Arc<lk_agents_storage::storage::Namespace>, String) {
     use lk_agents_abi::storage::Storage as _;
-    let env = ProcessEnv::current_runtime();
     let directory = std::env::temp_dir().join(lk_agents_net::strings::shortuuid("owner-threads-"));
     let local = lk_agents_abi::storage::LocalStorageOptions {
         directory: Some(directory.display().to_string()),
         project_id: "default".into(),
     };
     let namespace =
-        lk_agents_storage::storage::Namespace::new(&env, Some(local), None, None, None, None, None)
+        lk_agents_storage::storage::Namespace::new(env, Some(local), None, None, None, None, None)
             .unwrap();
     let thread = namespace.create_thread(None, None, 0).await.unwrap();
-    Arc::new(SessionStorage::new(
-        &env,
-        Some(Arc::new(namespace)),
-        Some(thread.thread_id),
-        "frontdesk".into(),
-        "frontdesk".into(),
-        None,
-    ))
+    (Arc::new(namespace), thread.thread_id)
+}
+
+/// A call on a new thread of a local storage in its own directory.
+async fn storage() -> Arc<SessionStorage> {
+    let env = ProcessEnv::current_runtime();
+    let (namespace, thread_id) = local_thread(&env).await;
+    let lane = || "frontdesk".to_owned();
+    Arc::new(SessionStorage::new(&env, Some(namespace), Some(thread_id), lane(), lane(), None))
+}
+
+#[derive(Default)]
+struct Records(Mutex<Vec<lk_agents_abi::telemetry::record::Record>>);
+
+impl lk_agents_abi::telemetry::record::RecordSink for Records {
+    fn record(&self, record: lk_agents_abi::telemetry::record::Record) {
+        self.0.lock().push(record);
+    }
+}
+
+// Catches: a call given a thread whose lane does not load continuing on a new local thread (a
+// silent fork) instead of failing its start with the storage's own error, which the session's
+// reserved spans end with.
+#[tokio::test]
+async fn a_thread_whose_lane_does_not_load_fails_the_start() {
+    use lk_agents_abi::storage::{Storage as _, StorageError};
+    use lk_agents_abi::telemetry::record::{Record, Status};
+    let records = Arc::new(Records::default());
+    let base = ProcessEnv::current_runtime();
+    let tracer = lk_agents_telemetry::Tracer::new(records.clone(), base.clock.clone(), 5);
+    let env = ProcessEnv { tracer, ..base };
+    let (namespace, thread_id) = local_thread(&env).await;
+    namespace.delete_thread(thread_id.clone()).await.unwrap();
+    let lane = || "frontdesk".to_owned();
+    let storage = SessionStorage::new(&env, Some(namespace), Some(thread_id), lane(), lane(), None);
+    let owner =
+        SessionOwner::new(&env, SessionOptions::new(crate::voice::session::tests::option_kwargs()));
+    let host = Arc::new(FailingHost::default());
+    let opening = owner
+        .start(Arc::new(storage), host.clone(), None, lk_agents_abi::telemetry::Cx::NONE)
+        .unwrap();
+    let error = opening.await.unwrap_err();
+    assert!(matches!(error, StartFailed::Storage(StorageError::NotFound(_))), "{error:?}");
+    assert_eq!(host.prepared.load(Ordering::SeqCst), 0);
+    assert_eq!(host.closed.load(Ordering::SeqCst), 1);
+    let spans: Vec<_> = (records.0.lock().iter())
+        .filter_map(|record| match record {
+            Record::Span(span) => Some((span.name.to_string(), span.status.clone())),
+            _ => None,
+        })
+        .collect();
+    let failed = Status::Error(error.to_string());
+    assert_eq!(
+        spans,
+        [("session_start".to_owned(), failed.clone()), ("agent_session".to_owned(), failed)]
+    );
 }
 
 /// A job recording what its sessions claim, record and register, in order.
