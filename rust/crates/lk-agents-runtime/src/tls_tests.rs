@@ -78,7 +78,8 @@ async fn trust_probe() {
 async fn probe() {
     if matches!(std::env::var("TLS_TEST_MODE").unwrap().as_str(), "empty" | "malformed" | "missing")
     {
-        assert!(tls::config().await.unwrap_err().contains("no usable TLS root certificates"));
+        let error = tls::config().await.unwrap_err().to_string();
+        assert!(error.contains("no usable TLS root certificates"));
         assert!(tls::http_client_builder().is_err(), "must not fall back to bundled roots");
         return;
     }

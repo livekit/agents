@@ -20,12 +20,39 @@ pub mod interfaces {
 
     #[lk_agents_abi::host(interface(host = "livekit.agents._bindings.APITimeoutError"))]
     pub struct ApiTimeoutError;
+
+    #[lk_agents_abi::host(interface(
+        host = "livekit.agents._generated.storage_errors.ThreadNotFound"
+    ))]
+    pub struct ThreadNotFound;
+
+    #[lk_agents_abi::host(interface(
+        host = "livekit.agents._generated.storage_errors.StorageUnavailable"
+    ))]
+    pub struct StorageUnavailable;
+
+    #[lk_agents_abi::host(interface(host = "livekit.agents._generated.storage_errors.LeaseLost"))]
+    pub struct LeaseLost;
+
+    #[lk_agents_abi::host(interface(
+        host = "livekit.agents._generated.storage_errors.VersionConflict"
+    ))]
+    pub struct VersionConflict;
+
+    #[lk_agents_abi::host(interface(
+        host = "livekit.agents._generated.storage_errors.NotSerializable"
+    ))]
+    pub struct NotSerializable;
+
+    #[lk_agents_abi::host(interface(host = "livekit.agents._generated.storage_errors.TooLarge"))]
+    pub struct TooLarge;
 }
 
 use crate::generated::accessors as access;
 use crate::py_objects::exception_table;
 use lk_agents_abi::errors::ApiErrorKind;
 use lk_agents_abi::errors::CapturedError;
+use lk_agents_abi::errors::HostErrorKind;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::errors::TaxonomyMatches;
 use lk_agents_abi::errors::host_retryable;
@@ -112,12 +139,32 @@ pub fn capture_host(py: Python<'_>, err: &PyErr) -> lk_agents_abi::errors::HostE
 }
 
 fn capture_host_value(value: &Bound<'_, PyAny>) -> lk_agents_abi::errors::HostError {
-    let kind =
+    let class =
         value.get_type().name().map(|n| n.to_string()).unwrap_or_else(|_| "BaseException".into());
     // An exception's __str__ can itself raise. Preserve the original even in that case.
     let message = value.str().map(|s| s.to_string()).unwrap_or_default();
-    lk_agents_abi::errors::HostError::captured(kind, message, insert(value.clone().unbind()))
+    let host_ref = insert(value.clone().unbind());
+    lk_agents_abi::errors::HostError::captured(host_kind(value), class, message, host_ref)
         .with_traceback(crate::py_calls::traceback(value))
+}
+
+/// The one place a host exception's class becomes the kind Rust branches on.
+fn host_kind(value: &Bound<'_, PyAny>) -> HostErrorKind {
+    if value.is_instance_of::<pyo3::exceptions::asyncio::CancelledError>() {
+        return HostErrorKind::Cancelled;
+    }
+    type Import = for<'py> fn(Python<'py>) -> PyResult<Bound<'py, PyAny>>;
+    let storage: [(Import, HostErrorKind); 6] = [
+        (access::ThreadNotFound::import, HostErrorKind::NotFound),
+        (access::StorageUnavailable::import, HostErrorKind::Unavailable),
+        (access::LeaseLost::import, HostErrorKind::LeaseLost),
+        (access::VersionConflict::import, HostErrorKind::VersionConflict),
+        (access::NotSerializable::import, HostErrorKind::NotSerializable),
+        (access::TooLarge::import, HostErrorKind::TooLarge),
+    ];
+    let is =
+        |import: Import| import(value.py()).and_then(|c| value.is_instance(&c)).unwrap_or(false);
+    storage.into_iter().find(|(import, _)| is(*import)).map_or(HostErrorKind::Other, |(_, k)| k)
 }
 
 pub fn raise_host(py: Python<'_>, error: lk_agents_abi::errors::HostError) -> PyErr {

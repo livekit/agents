@@ -65,6 +65,11 @@ pub enum StorageError {
     #[error("the turn was cancelled: {0}")]
     #[host(kind = "asyncio.CancelledError")]
     Cancelled(String),
+    /// The handler's own save, refused (a stale save, a field that is not JSON, a state too
+    /// large) and raised through its turn: the host's error, whose kind is the refusal.
+    #[error("invalid: {0}")]
+    #[host(kind = "ValueError")]
+    Refused(crate::errors::HostError),
     /// A request the database or this client refuses as made: a bad argument, a statement the
     /// database rejected, a schema this client does not write.
     #[error("invalid: {0}")]

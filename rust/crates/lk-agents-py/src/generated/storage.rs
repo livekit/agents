@@ -1747,6 +1747,9 @@ impl crate::py_errors::HostException for ::lk_agents_abi::storage::StorageError 
                 "CancelledError",
                 ::std::string::ToString::to_string(self),
             ),
+            Self::Refused(..) => {
+                ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
+            }
             Self::Invalid(..) => {
                 ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
             }

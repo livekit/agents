@@ -24,7 +24,7 @@ use lk_agents_core::a2a::rpc::TaskRef;
 use tokio::sync::{Mutex as AsyncMutex, mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
-use crate::env::ProcessEnv;
+use crate::env::{ProcessEnv, ProcessError};
 use crate::http::exchange::{Exchange, HttpEvent};
 use crate::http::{BodyReader, GatewayHttp};
 use crate::source::{PullError, Pulled, SharedStream};
@@ -95,9 +95,7 @@ impl AgentClient {
         options.validate().map_err(|error| ClientError::InvalidInput(error.to_string()))?;
         let endpoint_url = checked_url(&endpoint)?;
         let core = Client::new(endpoint, token)?;
-        // A process that cannot lend a runtime will not gain one on retry.
-        let unavailable =
-            |error| ClientError::Transport(ApiError::new(error).with_retryable(false));
+        let unavailable = |error: ProcessError| ClientError::Transport(error.into());
         Ok(Self {
             inner: Arc::new(Inner {
                 core: Mutex::new(core),

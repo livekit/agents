@@ -1,7 +1,7 @@
 //! A host exception travels through Rust behind a [`CapturedError`] and is re-raised as the same
 //! object; `retryable` and `status_code` are copied out so `FallbackChain` decides with no GIL.
 
-use super::{CapturedError, HostError};
+use super::{CapturedError, HostError, HostErrorKind};
 use crate::errors::api::{ApiError, ApiErrorKind};
 
 /// A provider failure, from either side of the seam.
@@ -62,10 +62,10 @@ impl ProviderError {
         }
     }
 
-    /// The host cancelled the call itself (`asyncio.CancelledError`): its provider stopped, nothing
-    /// failed.
+    /// The call was cancelled, not failed: the host cancelled it, or we closed the request.
     pub fn cancelled(&self) -> bool {
-        matches!(self, ProviderError::Host { error, .. } if error.kind == "CancelledError")
+        self.api_kind() == Some(ApiErrorKind::Cancelled)
+            || matches!(self, ProviderError::Host { error, .. } if error.kind == HostErrorKind::Cancelled)
     }
 
     /// `Some` only for a host exception.

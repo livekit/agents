@@ -189,7 +189,7 @@ fn events_and_failures_are_recorded_on_the_span() {
         AgentStateChanged { old: ConversationState::Listening, new: ConversationState::Thinking },
     );
     let error = HostError::new("boom");
-    let error = HostError { kind: "ValueError".into(), ..error };
+    let error = HostError { class: "ValueError".into(), ..error };
     t.step(ts(6));
     t.end(root, Failed { end: session_end(), error: &error });
     let records = t.drain();

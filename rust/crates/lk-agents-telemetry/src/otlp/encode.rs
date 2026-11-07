@@ -284,12 +284,12 @@ impl Body {
     }
 }
 
-pub(crate) fn body(message: &impl prost::Message, gzip: bool) -> Result<Body, String> {
+pub(crate) fn body(message: &impl prost::Message, gzip: bool) -> std::io::Result<Body> {
     let bytes = message.encode_to_vec();
     let bytes = if gzip {
         let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
-        encoder.write_all(&bytes).map_err(|e| e.to_string())?;
-        encoder.finish().map_err(|e| e.to_string())?
+        encoder.write_all(&bytes)?;
+        encoder.finish()?
     } else {
         bytes
     };

@@ -1,6 +1,7 @@
 //! The resolved worker configuration and the worker's protocol constants.
 use super::WorkerPermissions;
 
+use lk_agents_abi::worker::ipc_host::WorkerError;
 use std::time::Duration;
 
 /// Must be unique across processes, not unpredictable: the clock and the pid suffice.
@@ -101,17 +102,21 @@ pub struct DrainOptions {
 }
 
 impl DrainOptions {
-    pub fn new(total: f64, drain: f64) -> Result<Self, String> {
+    pub fn new(total: f64, drain: f64) -> Result<Self, WorkerError> {
         let duration = |name: &str, seconds: f64| {
             Duration::try_from_secs_f64(seconds)
                 .ok()
                 .filter(|value| value.as_secs_f64() <= 3_155_760_000.0)
-                .ok_or_else(|| format!("{name} must be finite and nonnegative"))
+                .ok_or_else(|| {
+                    WorkerError::Invalid(format!("{name} must be finite and nonnegative"))
+                })
         };
         let total = duration("shutdown_timeout", total)?;
         let drain = duration("drain_timeout", drain)?;
         if total.is_zero() || drain >= total {
-            return Err("shutdown_timeout must be positive and greater than drain_timeout".into());
+            return Err(WorkerError::Invalid(
+                "shutdown_timeout must be positive and greater than drain_timeout".into(),
+            ));
         }
         Ok(Self { total, drain })
     }

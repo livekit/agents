@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use lk_agents_abi::HostRef;
-use lk_agents_abi::errors::{ApiError, ApiErrorKind, CANCELLED_STATUS, HostError, ProviderError};
+use lk_agents_abi::errors::{ApiError, ApiErrorKind, HostError, ProviderError};
 use lk_agents_abi::invoke::CallContext;
 use lk_agents_net::task::Cancellation;
 use parking_lot::Mutex;
@@ -112,7 +112,7 @@ impl AttemptMachine {
             self.attempts.reset_retries();
         }
         if matches!(self.kind, RequestKind::Llm | RequestKind::TtsBatch | RequestKind::TtsStream)
-            && error.status_code == Some(CANCELLED_STATUS)
+            && error.kind == ApiErrorKind::Cancelled
         {
             self.cancel(now_ns);
             return Ok(RetryDecision::Stop);
@@ -563,9 +563,10 @@ mod tests {
         seconds * 1_000_000_000
     }
 
-    // Replay eligibility belongs to the provider boundary, including delivered audio and 499.
+    // Replay eligibility belongs to the provider boundary, including delivered audio and a
+    // cancellation.
     #[test]
-    fn delivered_output_blocks_replay_except_for_recognition_and_499_stops_synthesis() {
+    fn delivered_output_blocks_replay_except_for_recognition_and_cancellation_stops_synthesis() {
         for kind in [
             RequestKind::Llm,
             RequestKind::SttBatch,
@@ -590,8 +591,8 @@ mod tests {
         for kind in [RequestKind::Llm, RequestKind::TtsBatch, RequestKind::TtsStream] {
             let mut operation = AttemptMachine::new(kind, ApiConnectOptions::default(), 0).unwrap();
             operation.ready(0).unwrap();
-            let cancelled = ApiError { status_code: Some(499), ..ApiError::connection(None) };
-            assert_eq!(operation.failure(cancelled.into(), false, 0).unwrap(), RetryDecision::Stop);
+            let cancelled = ApiError::cancelled("closed").into();
+            assert_eq!(operation.failure(cancelled, false, 0).unwrap(), RetryDecision::Stop);
         }
     }
 

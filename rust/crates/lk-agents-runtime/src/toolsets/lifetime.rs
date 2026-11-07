@@ -252,7 +252,7 @@ impl Inner {
         let spawner = match (self.env.spawner)() {
             Ok(spawner) => spawner,
             Err(error) => {
-                self.completed(epoch, operation, Err(HostError::new(error)), hooks);
+                self.completed(epoch, operation, Err(HostError::new(error.to_string())), hooks);
                 return;
             }
         };

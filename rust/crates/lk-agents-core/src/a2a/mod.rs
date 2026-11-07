@@ -23,7 +23,7 @@ pub mod rpc;
 pub mod task;
 pub mod wire;
 
-use lk_agents_abi::errors::ProviderError;
+use lk_agents_abi::errors::{HostErrorKind, ProviderError};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -180,23 +180,21 @@ pub fn caller_history_of(message: &a2a::Message) -> Result<Option<Value>, Storag
         .transpose()
 }
 
-/// The storage errors a handler's own save raises, which [`host_error`] carries as `Invalid`
-/// named by their kind: a stale save, a field that is not JSON, a state too large.
-pub(crate) const SAVE_REFUSALS: [&str; 3] = ["VersionConflict", "NotSerializable", "TooLarge"];
-
 /// A failure the host's stream raised: a cancellation ends the run `canceled`, a storage error
 /// the handler met fails it as that error.
 pub fn host_error(e: ProviderError) -> StorageError {
-    let ProviderError::Host { error, .. } = &e else {
+    let ProviderError::Host { error, .. } = e else {
         return StorageError::Unavailable(e.to_string());
     };
-    let message = error.message.clone();
-    match error.host_kind() {
-        "CancelledError" => StorageError::Cancelled(message),
-        "ThreadNotFound" => StorageError::NotFound(message),
-        "StorageUnavailable" => StorageError::Unavailable(message),
-        "LeaseLost" => StorageError::LeaseLost(message),
-        kind => StorageError::Invalid(format!("{kind}: {message}")),
+    match error.kind {
+        HostErrorKind::Cancelled => StorageError::Cancelled(error.message),
+        HostErrorKind::NotFound => StorageError::NotFound(error.message),
+        HostErrorKind::Unavailable => StorageError::Unavailable(error.message),
+        HostErrorKind::LeaseLost => StorageError::LeaseLost(error.message),
+        HostErrorKind::VersionConflict
+        | HostErrorKind::NotSerializable
+        | HostErrorKind::TooLarge => StorageError::Refused(error),
+        HostErrorKind::Other => StorageError::Invalid(error.to_string()),
     }
 }
 
@@ -465,9 +463,10 @@ mod tests {
     // met losing its kind.
     #[test]
     fn host_failures_map_to_storage_errors() {
-        let host = |kind: &str| ProviderError::Host {
+        let host = |kind| ProviderError::Host {
             error: lk_agents_abi::errors::HostError {
-                kind: kind.into(),
+                kind,
+                class: "VersionConflict".into(),
                 message: "m".into(),
                 host_ref: None,
                 traceback: None,
@@ -476,14 +475,17 @@ mod tests {
             retryable: false,
             status_code: None,
         };
-        assert!(
-            matches!(host_error(host("CancelledError")), StorageError::Cancelled(m) if m == "m")
-        );
-        assert!(matches!(host_error(host("StorageUnavailable")), StorageError::Unavailable(_)));
-        assert!(matches!(host_error(host("ThreadNotFound")), StorageError::NotFound(_)));
         assert!(matches!(
-            host_error(host("VersionConflict")),
-            StorageError::Invalid(m) if m.starts_with("VersionConflict")
+            host_error(host(HostErrorKind::Cancelled)),
+            StorageError::Cancelled(m) if m == "m"
         ));
+        assert!(matches!(
+            host_error(host(HostErrorKind::Unavailable)),
+            StorageError::Unavailable(_)
+        ));
+        assert!(matches!(host_error(host(HostErrorKind::NotFound)), StorageError::NotFound(_)));
+        let refused = host_error(host(HostErrorKind::VersionConflict));
+        assert!(matches!(&refused, StorageError::Refused(_)));
+        assert_eq!(python_reason(&refused), "VersionConflict: m");
     }
 }

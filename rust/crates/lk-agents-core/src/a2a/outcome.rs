@@ -597,14 +597,8 @@ pub fn python_reason(e: &StorageError) -> String {
         StorageError::NotSerializable(..) => format!("NotSerializable: {e}"),
         StorageError::TooLarge { .. } => format!("TooLarge: {e}"),
         StorageError::Unavailable(m) => format!("StorageUnavailable: {m}"),
-        // a refused save the handler raised keeps its own kind
-        StorageError::Invalid(m)
-            if super::SAVE_REFUSALS
-                .iter()
-                .any(|k| m.strip_prefix(k).is_some_and(|r| r.starts_with(": "))) =>
-        {
-            m.clone()
-        }
+        // a refused save the handler raised keeps its own class
+        StorageError::Refused(error) => error.to_string(),
         StorageError::Invalid(m) => format!("ValueError: {m}"),
         StorageError::Cancelled(m) => {
             if m.is_empty() {

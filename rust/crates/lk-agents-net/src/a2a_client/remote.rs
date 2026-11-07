@@ -408,10 +408,8 @@ fn host_error(error: HostError) -> AgentClientError {
     })
 }
 
-fn unavailable(error: String) -> AgentClientError {
-    AgentClientError::Provider(ProviderError::Local(
-        lk_agents_abi::errors::ApiError::new(error).with_retryable(false),
-    ))
+fn unavailable(error: crate::env::ProcessError) -> AgentClientError {
+    AgentClientError::Provider(ProviderError::Local(error.into()))
 }
 
 fn protocol(error: impl std::fmt::Display) -> AgentClientError {

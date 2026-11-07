@@ -38,7 +38,7 @@ fn node_id(prefix: &str) -> String {
 pub struct AgentNodes {
     host: Arc<dyn SessionNodes>,
     clock: Arc<dyn Clock>,
-    spawner: fn() -> Result<Arc<dyn Spawner>, String>,
+    spawner: fn() -> Result<Arc<dyn Spawner>, lk_agents_net::env::ProcessError>,
 }
 
 impl lk_agents_abi::voice::nodes::AgentNodes for AgentNodes {
@@ -137,7 +137,7 @@ impl NodeFactory for AgentNodes {
 
 impl AgentNodes {
     fn opener(&self) -> Result<Opener, HostError> {
-        let spawner = (self.spawner)().map_err(HostError::new)?;
+        let spawner = (self.spawner)().map_err(|error| HostError::new(error.to_string()))?;
         Ok(Opener { host: Arc::clone(&self.host), clock: Arc::clone(&self.clock), spawner })
     }
 }

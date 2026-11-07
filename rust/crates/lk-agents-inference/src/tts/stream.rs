@@ -28,10 +28,8 @@ impl TtsStream {
         }
         self.sink.as_ref().ok_or_else(|| ProviderError::Host {
             error: HostError {
-                kind: "RuntimeError".into(),
-                message: "this is a synthesize() stream; its text was given at the call".into(),
-                host_ref: None,
-                traceback: None,
+                class: "RuntimeError".into(),
+                ..HostError::new("this is a synthesize() stream; its text was given at the call")
             },
             api_kind: None,
             retryable: false,

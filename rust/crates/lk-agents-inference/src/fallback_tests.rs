@@ -540,7 +540,7 @@ async fn cancellation_is_not_a_backend_health_penalty() {
         .run(&"req".to_string(), &caller(), RecoveryMode::OneShot, &mut (), |_, _, _, _| {
             Box::pin(async {
                 Attempt::Failed {
-                    error: ProviderError::Local(ApiError::status("cancelled", 499, None, None)),
+                    error: ProviderError::Local(ApiError::cancelled("cancelled")),
                     produced_output: false,
                 }
             })

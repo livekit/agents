@@ -146,7 +146,7 @@ pub async fn serve_health(
     status: Arc<ServerStatus>,
     probe: Arc<dyn HealthProbe>,
     stop: tokio_util::sync::CancellationToken,
-) -> Result<(), String> {
+) -> Result<(), ServerError> {
     HttpServer::new(listener)
         .serve(stop, move |request| {
             let (settings, status, probe) = (settings.clone(), status.clone(), probe.clone());
@@ -163,7 +163,7 @@ pub async fn serve_metrics(
     listener: tokio::net::TcpListener,
     probe: Arc<dyn HealthProbe>,
     stop: tokio_util::sync::CancellationToken,
-) -> Result<(), String> {
+) -> Result<(), ServerError> {
     HttpServer::new(listener)
         .serve(stop, move |request| {
             let probe = probe.clone();

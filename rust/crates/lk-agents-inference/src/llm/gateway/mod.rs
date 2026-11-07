@@ -162,9 +162,8 @@ impl lk_agents_abi::llm::inference::InferenceLlm for GatewayLlm {
         msgpack_body: bool,
         extra_kwargs: Option<Extra>,
     ) -> Result<Self, ApiError> {
-        let unavailable = |e: String| ApiError::new(e).with_retryable(false);
-        let runtime = (env.runtime)().map_err(unavailable)?;
-        let http = (env.http)().map_err(unavailable)?;
+        let runtime = (env.runtime)().map_err(ApiError::from)?;
+        let http = (env.http)().map_err(ApiError::from)?;
         let opts = LlmOptions {
             model,
             base_url,

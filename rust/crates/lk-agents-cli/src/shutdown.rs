@@ -25,7 +25,8 @@ pub struct Shutdown {
 
 impl CliShutdown for Shutdown {
     fn new(timeout: f64, drain_timeout: f64) -> Result<Self, CliError> {
-        let options = DrainOptions::new(timeout, drain_timeout).map_err(CliError::Invalid)?;
+        let options = DrainOptions::new(timeout, drain_timeout)
+            .map_err(|error| CliError::Invalid(error.to_string()))?;
         Ok(Self {
             watchdog: Arc::new(Watchdog {
                 state: Mutex::default(),
@@ -135,7 +136,7 @@ pub(crate) fn terminate(_message: &[u8]) -> ! {
 }
 
 // Process-wide signal registration has exactly one active launcher owner.
-static INSTALLED: OnceLock<Result<(), String>> = OnceLock::new();
+static INSTALLED: OnceLock<Result<(), ctrlc::Error>> = OnceLock::new();
 static OWNER: Mutex<Weak<Watchdog>> = Mutex::new(Weak::new());
 
 pub(crate) fn listen(watchdog: &Arc<Watchdog>) -> Result<(), CliError> {
@@ -150,12 +151,9 @@ pub(crate) fn listen(watchdog: &Arc<Watchdog>) -> Result<(), CliError> {
             Err(CliError::Invalid("another launcher already owns process signals".into()))
         };
     }
-    INSTALLED
-        .get_or_init(|| ctrlc::set_handler(on_signal).map_err(|error| error.to_string()))
-        .as_ref()
-        .map_err(|error| {
-            CliError::Invalid(format!("cannot install process signal handler: {error}"))
-        })?;
+    INSTALLED.get_or_init(|| ctrlc::set_handler(on_signal)).as_ref().map_err(|error| {
+        CliError::Invalid(format!("cannot install process signal handler: {error}"))
+    })?;
     *owner = Arc::downgrade(watchdog);
     Ok(())
 }

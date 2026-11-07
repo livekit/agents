@@ -49,7 +49,7 @@ impl RunStream {
         resources: Arc<RunResources>,
         build: impl FnOnce() -> Result<Box<dyn Input>, InvalidRun>,
     ) -> Result<(), InvalidRun> {
-        let spawner = (self.0.env.spawner)().map_err(InvalidRun)?;
+        let spawner = (self.0.env.spawner)().map_err(|e| InvalidRun(e.to_string()))?;
         self.0.policy.lock().attach().map_err(|e| InvalidRun(e.to_string()))?;
         let _ = self.0.spawner.set(spawner);
         let _ = self.0.resources.set(resources);

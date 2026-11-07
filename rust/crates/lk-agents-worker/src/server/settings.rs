@@ -4,6 +4,7 @@
 use livekit_protocol as proto;
 
 use crate::{EnvOption, RuntimeConfig, WorkerConfig, WorkerPermissions};
+use lk_agents_abi::worker::ipc_host::WorkerError;
 
 /// `load_threshold`'s default, to which a hosted (Cloud) worker is held.
 pub const DEFAULT_LOAD_THRESHOLD: EnvOption<f32> = EnvOption::Split {
@@ -159,7 +160,7 @@ impl ServerSettings {
     pub fn apply(
         &mut self,
         options: lk_agents_abi::worker::types::ServerOptions,
-    ) -> Result<(), String> {
+    ) -> Result<(), WorkerError> {
         use lk_agents_abi::Maybe::Given;
         let mut next = self.clone();
         if let Given(value) = options.ws_url {
@@ -175,8 +176,8 @@ impl ServerSettings {
             next.agent_name = value;
         }
         if let Given(value) = options.listeners {
-            next.listeners =
-                serde_json::from_value(value).map_err(|error| format!("listeners: {error}"))?;
+            next.listeners = serde_json::from_value(value)
+                .map_err(|error| WorkerError::Invalid(format!("listeners: {error}")))?;
         }
         if let Given(value) = options.max_retry {
             next.max_retry = value;
@@ -237,8 +238,9 @@ impl ServerSettings {
         Ok(())
     }
 
-    fn validate(&self) -> Result<(), String> {
+    fn validate(&self) -> Result<(), WorkerError> {
         crate::config::DrainOptions::new(self.shutdown_timeout, self.drain_timeout)?;
+        let invalid = |message: &str| Err(WorkerError::Invalid(message.into()));
         for (name, value) in [
             ("drain_timeout", self.drain_timeout),
             ("shutdown_timeout", self.shutdown_timeout),
@@ -249,17 +251,19 @@ impl ServerSettings {
             ("initialize_process_timeout", self.initialize_process_timeout),
         ] {
             if !value.is_finite() || value < 0.0 || value > 3_155_760_000.0 {
-                return Err(format!("{name} must be finite and non-negative"));
+                return Err(WorkerError::Invalid(format!(
+                    "{name} must be finite and non-negative"
+                )));
             }
         }
         if self.load_threshold.get(false).is_nan() || self.load_threshold.get(false) < 0.0 {
-            return Err("load_threshold must be non-negative".into());
+            return invalid("load_threshold must be non-negative");
         }
         if !matches!(self.job_executor_type.as_str(), "process" | "thread") {
-            return Err("job_executor_type must be process or thread".into());
+            return invalid("job_executor_type must be process or thread");
         }
         if !matches!(self.multiprocessing_context.as_str(), "spawn" | "forkserver") {
-            return Err("multiprocessing_context must be spawn or forkserver".into());
+            return invalid("multiprocessing_context must be spawn or forkserver");
         }
         Ok(())
     }
@@ -300,27 +304,28 @@ impl ServerSettings {
     }
 
     /// What `run()` refuses before starting anything, in its order.
-    pub fn check_routes(&self, has_routes: bool) -> Result<(), String> {
+    pub fn check_routes(&self, has_routes: bool) -> Result<(), WorkerError> {
         if has_routes && self.agent_name.is_empty() {
-            return Err(
+            return Err(WorkerError::Invalid(
                 "server.http routes are served at /agents/{agent_name}/..., so they require \
                  an agent_name (AgentServer(agent_name=) or LIVEKIT_AGENT_NAME)"
                     .into(),
-            );
+            ));
         }
         Ok(())
     }
 
-    pub fn check_registration(&self) -> Result<(), String> {
+    pub fn check_registration(&self) -> Result<(), WorkerError> {
+        let missing = |message: &str| Err(WorkerError::Invalid(message.into()));
         if self.ws_url.is_empty() {
-            return Err("ws_url is required, or set LIVEKIT_URL environment variable".into());
+            return missing("ws_url is required, or set LIVEKIT_URL environment variable");
         }
         if self.api_key.is_empty() {
-            return Err("api_key is required, or set LIVEKIT_API_KEY environment variable".into());
+            return missing("api_key is required, or set LIVEKIT_API_KEY environment variable");
         }
         if self.api_secret.is_empty() {
-            return Err(
-                "api_secret is required, or set LIVEKIT_API_SECRET environment variable".into()
+            return missing(
+                "api_secret is required, or set LIVEKIT_API_SECRET environment variable",
             );
         }
         Ok(())
@@ -454,7 +459,7 @@ impl ServerSettings {
 
     /// Where this worker's own delegations to `endpoint` go: Cloud, in the worker's deployment
     /// (so development calls never reach production), or the worker's public listener.
-    pub fn delegation_url(&self, serving: &Serving, endpoint: &str) -> Result<String, String> {
+    pub fn delegation_url(&self, serving: &Serving, endpoint: &str) -> Result<String, WorkerError> {
         if let Serving::Local { base } = serving {
             return Ok(format!("{base}/{endpoint}"));
         }
@@ -462,12 +467,15 @@ impl ServerSettings {
             return Ok(format!("{}/{endpoint}", self.endpoints_url));
         }
         if !self.cloud_routed(serving) {
-            return Err(format!(
+            return Err(WorkerError::Failed(format!(
                 "endpoint {endpoint:?} is not reachable yet: the server has not started serving"
-            ));
+            )));
         }
-        self.endpoint_url(serving, endpoint)
-            .ok_or_else(|| "delegating to an endpoint needs LIVEKIT_URL and an agent_name".into())
+        self.endpoint_url(serving, endpoint).ok_or_else(|| {
+            WorkerError::Failed(
+                "delegating to an endpoint needs LIVEKIT_URL and an agent_name".into(),
+            )
+        })
     }
 }
 

@@ -722,7 +722,9 @@ impl lk_agents_abi::recorder::SessionRecorder for SessionRecorder {
     ) -> Result<Self, RecordingFailure> {
         #[cfg(feature = "media-ffmpeg")]
         {
-            let runtime = env.caller_runtime().map_err(RecordingFailure::Worker)?;
+            let runtime = env
+                .caller_runtime()
+                .map_err(|error| RecordingFailure::Worker(error.to_string()))?;
             Self::start(
                 &lk_agents_media::pool::media_pool(),
                 runtime,

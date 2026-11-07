@@ -11,7 +11,7 @@ use livekit_protocol::agent::{ChatMessage, ChatRole, FunctionCall, FunctionCallO
 use lk_agents_abi::Clock;
 use lk_agents_abi::a2a::turn::HandlerPort;
 use lk_agents_abi::a2a::turn::TurnContext;
-use lk_agents_abi::errors::{HostError, ProviderError};
+use lk_agents_abi::errors::{HostError, HostErrorKind, ProviderError};
 use lk_agents_abi::llm::chat_context::protocol::{decode_chat_item, encode_chat_item};
 use lk_agents_core::a2a::{
     DebounceSpec, HandlerOutput, PendingCall, Policy, PolicySpec, TurnHost, TurnOptions, TurnResult,
@@ -247,7 +247,7 @@ impl TurnHost for Fake {
             tokio::select! {
                 biased;
                 () = cancel.cancelled() => Err(ProviderError::Host {
-                    error: HostError { kind: "CancelledError".into(), ..HostError::new("") },
+                    error: HostError { kind: HostErrorKind::Cancelled, ..HostError::new("") },
                     api_kind: None,
                     retryable: false,
                     status_code: None,
@@ -325,10 +325,9 @@ impl Fake {
             }),
             Behavior::Unavailable => Err(ProviderError::Host {
                 error: HostError {
-                    kind: "StorageUnavailable".into(),
-                    message: "the model is down".into(),
-                    host_ref: None,
-                    traceback: None,
+                    kind: HostErrorKind::Unavailable,
+                    class: "StorageUnavailable".into(),
+                    ..HostError::new("the model is down")
                 },
                 api_kind: None,
                 retryable: true,

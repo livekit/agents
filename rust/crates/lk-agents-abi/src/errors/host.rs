@@ -15,13 +15,30 @@ impl CapturedError {
     }
 }
 
+/// What a caller branches on in a host failure. The adapter classifies the exception once, by
+/// class: cancellation, and the storage failures a handler raises, one per `StorageError` variant.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum HostErrorKind {
+    #[default]
+    Other,
+    Cancelled,
+    NotFound,
+    Unavailable,
+    LeaseLost,
+    VersionConflict,
+    NotSerializable,
+    TooLarge,
+}
+
 /// An error crossing a host boundary. Recovery policy belongs to the operation receiving it.
 /// Clones share ownership of the original exception; the last drop releases its adapter entry.
 /// Raised back to the host as the exception it was.
 #[crate::host(error(original))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostError {
-    pub kind: String,
+    pub kind: HostErrorKind,
+    /// The exception's class name: diagnostics only, never a decision.
+    pub class: String,
     pub message: String,
     pub host_ref: Option<CapturedError>,
     /// The host's formatted traceback, for the span that records the failure.
@@ -29,23 +46,31 @@ pub struct HostError {
 }
 
 impl HostError {
-    /// The captured exception's own class name, what a wrapping error's `host_kind` delegates to.
+    /// The captured exception's class name, what a wrapping error's `host_kind` delegates to.
     pub fn host_kind(&self) -> &str {
-        &self.kind
+        &self.class
     }
 
     /// A diagnostic without an original language exception (for example, an invalid host result).
     pub fn new(message: impl Into<String>) -> Self {
-        Self { kind: String::new(), message: message.into(), host_ref: None, traceback: None }
+        Self {
+            kind: HostErrorKind::Other,
+            class: String::new(),
+            message: message.into(),
+            host_ref: None,
+            traceback: None,
+        }
     }
 
     pub fn captured(
-        kind: impl Into<String>,
+        kind: HostErrorKind,
+        class: impl Into<String>,
         message: impl Into<String>,
         host_ref: CapturedError,
     ) -> Self {
         Self {
-            kind: kind.into(),
+            kind,
+            class: class.into(),
             message: message.into(),
             host_ref: Some(host_ref),
             traceback: None,
@@ -65,10 +90,10 @@ impl HostError {
 
 impl std::fmt::Display for HostError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.kind.is_empty() {
+        if self.class.is_empty() {
             write!(f, "{}", self.message)
         } else {
-            write!(f, "{}: {}", self.kind, self.message)
+            write!(f, "{}: {}", self.class, self.message)
         }
     }
 }
@@ -96,6 +121,7 @@ mod tests {
     fn shared_host_errors_preserve_diagnostics_and_release_on_last_drop() {
         let table = Table::holding([8]);
         let error = HostError::captured(
+            HostErrorKind::Other,
             "PluginError",
             "failed",
             CapturedError::new(8, &table.as_registry()),

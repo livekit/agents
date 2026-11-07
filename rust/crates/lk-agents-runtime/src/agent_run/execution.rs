@@ -6,7 +6,7 @@ use crate::telemetry;
 use lk_agents_abi::a2a::turn::Verdict;
 use lk_agents_abi::agent::run::{RunInputRequirement, RunOutcome, RunResult};
 use lk_agents_abi::agent::{FunctionToolInfo, OutputCandidate, ToolArgumentError, ToolTemplate};
-use lk_agents_abi::errors::HostError;
+use lk_agents_abi::errors::{ApiError, HostError};
 use lk_agents_abi::{ChatContext, ToolSpec};
 use serde_json::{Map, Value};
 
@@ -221,7 +221,7 @@ impl Execution {
         let host = self.setup.host.clone();
         let cx = self.cx.clone();
         self.invoke(Work::Render(render), None, None, move |inv, events| async move {
-            let result = host.render_instructions(&cx, &inv).await.map_err(|e| e.to_string());
+            let result = host.render_instructions(&cx, &inv).await;
             let event = AgentRunEvent::InstructionsRendered { render, result };
             let _ = events.send(Report::Core(event)).await;
         });
@@ -367,9 +367,8 @@ impl Execution {
         match report {
             Report::Core(event) => (event, None),
             Report::LlmFailed { request, error } => {
-                let message = error.to_string();
-                self.failure = Some(error);
-                (AgentRunEvent::LlmFailed { request, error: message }, None)
+                self.failure = Some(error.clone());
+                (AgentRunEvent::LlmFailed { request, error }, None)
             }
             Report::Prepared { call, resource, prepared } => {
                 self.prepared.insert(resource, prepared.prepared);
@@ -428,18 +427,18 @@ async fn checkpoint_host(
     cx: &telemetry::Cx,
     inv: &Invocation,
     list_tools: bool,
-) -> (Result<Verdict, String>, Option<Vec<FunctionToolInfo>>) {
+) -> (Result<Verdict, HostError>, Option<Vec<FunctionToolInfo>>) {
     let verdict = match host.checkpoint(cx, inv).await {
         Ok(true) => Verdict::Yield,
         Ok(false) => Verdict::Continue,
-        Err(error) => return (Err(error.to_string()), None),
+        Err(error) => return (Err(error), None),
     };
     if !list_tools || verdict == Verdict::Yield {
         return (Ok(verdict), None);
     }
     match host.list_tools(cx, inv).await {
         Ok(tools) => (Ok(verdict), Some(tools)),
-        Err(error) => (Err(error.to_string()), None),
+        Err(error) => (Err(error), None),
     }
 }
 
@@ -503,7 +502,7 @@ impl ToolRun {
                     events.send(Report::Core(AgentRunEvent::ToolCallUpdated { call, extra })).await;
                 AgentRunEvent::ToolSettled { call, outcome: report.outcome }
             }
-            Err(e) => AgentRunEvent::ToolLaunchFailed { call, error: e.to_string() },
+            Err(error) => AgentRunEvent::ToolLaunchFailed { call, error },
         };
         let _ = events.send(Report::Core(event)).await;
     }
@@ -532,9 +531,8 @@ async fn stream_request(
     };
     let mut stream = match opened {
         None => {
-            let _ = events
-                .send(Report::Core(AgentRunEvent::LlmFailed { request, error: "cancelled".into() }))
-                .await;
+            let error = ApiError::cancelled("the request was cancelled").into();
+            let _ = events.send(Report::Core(AgentRunEvent::LlmFailed { request, error })).await;
             return;
         }
         Some(Err(error)) => {
@@ -560,10 +558,8 @@ async fn stream_request(
                 if closed != lk_agents_abi::Closed::Clean {
                     log::warn!(target: lk_agents_abi::LOG_TARGET, request = request.0, outcome:? = closed; "cancelled model request cleanup incomplete");
                 }
-                break Report::Core(AgentRunEvent::LlmFailed {
-                    request,
-                    error: "cancelled".into(),
-                });
+                let error = ApiError::cancelled("the request was cancelled").into();
+                break Report::Core(AgentRunEvent::LlmFailed { request, error });
             }
             Some(Ok(Some(chunk))) => {
                 trace.observe(&chunk);

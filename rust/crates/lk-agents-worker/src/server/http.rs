@@ -24,6 +24,8 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 
+use super::ServerError;
+
 pub(super) type Response = hyper::Response<Full<Bytes>>;
 
 const MAX_CONNECTIONS: usize = 64;
@@ -69,7 +71,11 @@ impl HttpServer {
         Self { listener }
     }
 
-    pub(super) async fn serve<F, R>(self, stop: CancellationToken, route: F) -> Result<(), String>
+    pub(super) async fn serve<F, R>(
+        self,
+        stop: CancellationToken,
+        route: F,
+    ) -> Result<(), ServerError>
     where
         F: Fn(Request<()>) -> R + Send + Sync + 'static,
         R: Future<Output = Response> + Send + 'static,
@@ -89,7 +95,7 @@ impl HttpServer {
         stop: &CancellationToken,
         route: Arc<F>,
         connections: &mut FuturesUnordered<OwnedTask>,
-    ) -> Result<(), String>
+    ) -> Result<(), ServerError>
     where
         F: Fn(Request<()>) -> R + Send + Sync + 'static,
         R: Future<Output = Response> + Send + 'static,
@@ -101,11 +107,11 @@ impl HttpServer {
                 () = stop.cancelled() => return Ok(()),
                 joined = connections.next(), if !connections.is_empty() => {
                     if let Some(Err(error)) = joined {
-                        return Err(format!("HTTP connection task: {error}"));
+                        return Err(format!("HTTP connection task: {error}").into());
                     }
                 }
                 accepted = self.listener.accept(), if connections.len() < MAX_CONNECTIONS => {
-                    let (socket, _) = accepted.map_err(|error| error.to_string())?;
+                    let (socket, _) = accepted?;
                     connections.push(spawner.spawn(serve_connection(socket, route.clone())));
                 }
             }
@@ -116,14 +122,14 @@ impl HttpServer {
 /// Cancels and joins every connection; a join failure other than the cancel replaces `result`.
 async fn cancel_connections(
     mut connections: FuturesUnordered<OwnedTask>,
-    mut result: Result<(), String>,
-) -> Result<(), String> {
+    mut result: Result<(), ServerError>,
+) -> Result<(), ServerError> {
     connections.iter().for_each(OwnedTask::cancel);
     while let Some(joined) = connections.next().await {
         if let Err(error) = joined
             && !matches!(error, TaskError::Cancelled)
         {
-            result = Err(format!("HTTP connection task: {error}"));
+            result = Err(format!("HTTP connection task: {error}").into());
         }
     }
     result

@@ -12,6 +12,7 @@ use lk_agents_net::task::TokioSpawner;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::sync::CancellationToken;
 
+use super::ServerError;
 use crate::http::{EndpointServer, HttpStream, Origin, decode_path};
 
 /// Matches the endpoint server's pending handler limit.
@@ -34,7 +35,7 @@ pub async fn serve_public(
     routes: Arc<PublicRoutes>,
     server: Arc<EndpointServer>,
     stop: CancellationToken,
-) -> Result<(), String> {
+) -> Result<(), ServerError> {
     if stop.is_cancelled() {
         return Ok(());
     }
@@ -53,7 +54,7 @@ pub async fn serve_public(
                     routes.clone(),
                     server.clone(),
                 ))),
-                Err(error) => { result = Err(error.to_string()); break; }
+                Err(error) => { result = Err(error.into()); break; }
             },
         }
     }

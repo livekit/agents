@@ -90,7 +90,8 @@ impl From<&ProtocolError> for lk_agents_abi::worker::ipc::IpcFailure {
         let message = error.to_string();
         match error {
             ProtocolError::Channel(ChannelError::Closed | ChannelError::Truncated) => {
-                Self::Io { kind: "UnexpectedEof".into(), os_error: None, message }
+                let kind = format!("{:?}", std::io::ErrorKind::UnexpectedEof);
+                Self::Io { kind, os_error: None, message }
             }
             ProtocolError::Channel(ChannelError::Io { kind, os_error, .. }) => {
                 Self::Io { kind: format!("{kind:?}"), os_error: *os_error, message }

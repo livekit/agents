@@ -41,10 +41,8 @@ impl StreamOutput<SpeechEvent> for Attempt {
                 Attempt::Fail => Err(ApiError::new("hiccup").into()),
                 Attempt::Cancelled => Err(ProviderError::Host {
                     error: lk_agents_abi::errors::HostError {
-                        kind: "CancelledError".into(),
-                        message: String::new(),
-                        host_ref: None,
-                        traceback: None,
+                        kind: lk_agents_abi::errors::HostErrorKind::Cancelled,
+                        ..lk_agents_abi::errors::HostError::new("")
                     },
                     api_kind: None,
                     retryable: false,

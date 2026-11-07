@@ -113,7 +113,7 @@ impl Inner {
             Err(error) => {
                 let retired = self.entries.lock().take();
                 drop(retired);
-                self.started.send_replace(Some(Err(HostError::new(error))));
+                self.started.send_replace(Some(Err(HostError::new(error.to_string()))));
                 self.closed.send_replace(Some(Ok(())));
             }
         }

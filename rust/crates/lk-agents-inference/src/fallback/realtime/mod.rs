@@ -139,7 +139,8 @@ impl lk_agents_abi::llm::fallback::RealtimeFallbackModel for RealtimeFallbackMod
                     RealtimeFallbackMember::Native(model) => ChainModel::Native(model),
                     RealtimeFallbackMember::Host(model) => ChainModel::Host(
                         model,
-                        (env.spawner)().map_err(lk_agents_abi::errors::HostError::new)?,
+                        (env.spawner)()
+                            .map_err(|e| lk_agents_abi::errors::HostError::new(e.to_string()))?,
                     ),
                 })
             })

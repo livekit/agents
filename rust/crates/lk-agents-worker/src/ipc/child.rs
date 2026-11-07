@@ -180,7 +180,8 @@ impl lk_agents_abi::worker::ipc_host::IpcClient for ChildChannel {
         initialize: Arc<dyn ChildInitialize>,
         process: bool,
     ) -> Result<Self, WorkerError> {
-        let spawner = TokioSpawner::new((env.runtime)().map_err(WorkerError::Failed)?);
+        let runtime = (env.runtime)().map_err(|error| WorkerError::Failed(error.to_string()))?;
+        let spawner = TokioSpawner::new(runtime);
         let runtime = spawner.handle().clone();
         let _runtime = runtime.enter();
         let channel = Arc::new(

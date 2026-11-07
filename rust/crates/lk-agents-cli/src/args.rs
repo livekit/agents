@@ -60,10 +60,10 @@ enum LegacyLogFormat {
     Colored,
 }
 
-fn seconds(value: &str) -> Result<f64, String> {
-    let seconds: f64 = value.parse().map_err(|_| "expected seconds".to_owned())?;
+fn seconds(value: &str) -> Result<f64, &'static str> {
+    let seconds: f64 = value.parse().map_err(|_| "expected seconds")?;
     if !seconds.is_finite() || seconds < 0.0 {
-        return Err("seconds must be finite and nonnegative".into());
+        return Err("seconds must be finite and nonnegative");
     }
     Ok(seconds)
 }

@@ -48,7 +48,7 @@ impl AgentRun {
     pub(super) fn checkpoint_done(
         &mut self,
         checkpoint: CheckpointId,
-        result: Result<Verdict, String>,
+        result: Result<Verdict, lk_agents_abi::errors::HostError>,
         tools: Option<Vec<lk_agents_abi::agent::FunctionToolInfo>>,
         now: Ts,
         effects: &mut Vec<AgentRunEffect>,
@@ -68,7 +68,7 @@ impl AgentRun {
             }
             (Ok(Verdict::Continue), Next::Finish(result)) => self.finish_now(Ok(*result), effects),
             (Ok(Verdict::Yield), _) => self.complete_interrupted(effects),
-            (Err(error), _) => self.finish_now(Err(RunError::Host(error)), effects),
+            (Err(error), _) => self.finish_now(Err(RunError::Host(error.to_string())), effects),
         }
     }
 

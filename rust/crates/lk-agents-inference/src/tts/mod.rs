@@ -712,7 +712,7 @@ impl InferenceTts for GatewayTts {
         Ok(GatewayTts::new(
             opts,
             Arc::new(lk_agents_net::websocket::TungsteniteTransport),
-            (env.spawner)().map_err(InvalidPayload)?,
+            (env.spawner)().map_err(|e| InvalidPayload(e.to_string()))?,
             env.clock.clone(),
         ))
     }

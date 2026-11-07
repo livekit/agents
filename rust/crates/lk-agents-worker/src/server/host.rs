@@ -53,7 +53,7 @@ impl ServerConfig for Configuration {
         let env = |name: &str| std::env::var(name).ok();
         let mut settings =
             ServerSettings { http_proxy: ServerSettings::env_proxy(env), ..Default::default() };
-        settings.apply(options).map_err(WorkerError::Invalid)?;
+        settings.apply(options)?;
         Ok(Self {
             settings: Arc::new(Mutex::new(settings.with_env(env))),
             serving: Arc::default(),
@@ -67,7 +67,7 @@ impl ServerConfig for Configuration {
                 "cannot update options after starting the server".into(),
             ));
         }
-        self.get().apply(options).map_err(WorkerError::Invalid)
+        self.get().apply(options)
     }
 
     fn ws_url(&self) -> String {
@@ -117,7 +117,7 @@ impl ServerConfig for Configuration {
 
     fn delegation_url(&self, endpoint: String) -> Result<String, WorkerError> {
         let serving = self.serving.lock().clone();
-        self.get().delegation_url(&serving, &endpoint).map_err(WorkerError::Failed)
+        self.get().delegation_url(&serving, &endpoint)
     }
 }
 
@@ -149,7 +149,7 @@ impl ServerCallbacks {
         start: ServerSettings,
         devmode: bool,
         has_rtc: bool,
-    ) -> Result<(), String> {
+    ) -> Result<(), HostError> {
         let options = ProcessStartOptions {
             devmode,
             job_processes: has_rtc,
@@ -169,7 +169,7 @@ impl ServerCallbacks {
                 http_proxy: start.http_proxy.filter(|proxy| !proxy.is_empty()),
             },
         };
-        self.proxy.start(&telemetry::Cx::NONE, options).await.map_err(|error| error.to_string())
+        self.proxy.start(&telemetry::Cx::NONE, options).await
     }
 
     /// Admit no new exchange, close WebSockets and wait for the exchanges in flight.
@@ -294,7 +294,8 @@ impl ServerRuntime for AgentServerRuntime {
         let config = config
             .downcast::<Configuration>()
             .map_err(|_| WorkerError::Invalid("expected a native ServerConfig".into()))?;
-        let spawner = TokioSpawner::new((env.runtime)().map_err(WorkerError::Failed)?);
+        let runtime = (env.runtime)().map_err(|error| WorkerError::Failed(error.to_string()))?;
+        let spawner = TokioSpawner::new(runtime);
         let host = ServerCallbacks::new(host);
         let mounted = host.mounted.clone();
         Ok(Self {
@@ -356,7 +357,8 @@ impl ServerRuntime for AgentServerRuntime {
         };
         self.running.store(true, Ordering::Release);
         let runtime = self.runtime.clone();
-        self.spawner.run(async move { runtime.run(start).await }).await.map_err(WorkerError::Failed)
+        let ran = self.spawner.run(async move { runtime.run(start).await }).await;
+        ran.map_err(|error| WorkerError::Failed(error.to_string()))
     }
 
     async fn drain(&self, timeout: Option<f64>) -> Result<(), WorkerError> {
@@ -372,7 +374,8 @@ impl ServerRuntime for AgentServerRuntime {
 
     async fn aclose(&self) -> Result<(), WorkerError> {
         let runtime = self.runtime.clone();
-        self.spawner.run(async move { runtime.close().await }).await.map_err(WorkerError::Failed)
+        let closed = self.spawner.run(async move { runtime.close().await }).await;
+        closed.map_err(|error| WorkerError::Failed(error.to_string()))
     }
 
     fn job_status(&self, job_id: String, status: String) {
@@ -403,22 +406,18 @@ impl ServerRuntime for AgentServerRuntime {
         if snapshot.phase != ServerPhase::Running {
             return Err(WorkerError::Failed("the server is not accepting jobs".into()));
         }
-        let room_info = room_info
-            .map(|bytes| server::decode_room(&bytes))
-            .transpose()
-            .map_err(WorkerError::Invalid)?;
+        let room_info = room_info.map(|bytes| server::decode_room(&bytes)).transpose()?;
         let info = server::simulated_job(
             &self.settings(),
             &snapshot.worker_id,
             &room,
             server::SimulatedJobOptions { fake_job, agent_identity, room_info, token },
-        )
-        .map_err(WorkerError::Invalid)?;
+        )?;
         let runtime = self.runtime.clone();
         self.spawner
             .run(async move { runtime.simulate_job(info).await })
             .await
-            .map_err(WorkerError::Failed)
+            .map_err(|error| WorkerError::Failed(error.to_string()))
     }
 }
 

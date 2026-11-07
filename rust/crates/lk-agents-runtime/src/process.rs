@@ -6,17 +6,7 @@ use parking_lot::Mutex;
 use std::sync::Arc;
 
 use lk_agents_abi::Clock;
-
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum ProcessError {
-    #[error("the native runtime failed to start: {0}")]
-    Start(String),
-    #[error(
-        "livekit.agents._core was inherited across a fork. The Rust core cannot be used in a \
-         forked child without re-initialising it: call _core.init(role) in the child."
-    )]
-    Inherited,
-}
+use lk_agents_net::env::ProcessError;
 
 struct Started {
     runtime: tokio::runtime::Runtime,
@@ -69,7 +59,9 @@ fn with_started<T>(read: impl FnOnce(&Started) -> T) -> Result<T, ProcessError> 
         .enable_all()
         .build()
         .map_err(|e| ProcessError::Start(e.to_string()))?;
-    let http = Arc::new(lk_agents_net::http::GatewayHttp::new().map_err(ProcessError::Start)?);
+    let http = lk_agents_net::http::GatewayHttp::new()
+        .map_err(|error| ProcessError::Start(error.to_string()))?;
+    let http = Arc::new(http);
     let started = slot.insert(Started { runtime, http });
     Ok(read(started))
 }
@@ -105,20 +97,18 @@ pub fn host_clock() -> Arc<dyn Clock> {
 }
 
 /// The host's executor: the process runtime's.
-pub fn host_spawner() -> Result<Arc<dyn lk_agents_abi::Spawner>, String> {
-    Ok(Arc::new(lk_agents_net::task::TokioSpawner::new(
-        handle().map_err(|error| error.to_string())?,
-    )))
+pub fn host_spawner() -> Result<Arc<dyn lk_agents_abi::Spawner>, ProcessError> {
+    Ok(Arc::new(lk_agents_net::task::TokioSpawner::new(handle()?)))
 }
 
 /// What this process lends the declared classes. Reading it starts nothing: the
 /// runtime-bound handles start the process runtime on first use.
 pub fn env() -> lk_agents_net::env::ProcessEnv {
     lk_agents_net::env::ProcessEnv {
-        runtime: || handle().map_err(|error| error.to_string()),
+        runtime: handle,
         spawner: host_spawner,
         clock: host_clock(),
-        http: || with_started(|started| started.http.clone()).map_err(|error| error.to_string()),
+        http: || with_started(|started| started.http.clone()),
         tracer: crate::telemetry::tracer(),
     }
 }

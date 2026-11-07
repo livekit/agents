@@ -170,8 +170,9 @@ impl InferenceAvatar for GatewayAvatar {
         api_secret: String,
         conn_options: ApiConnectOptions,
     ) -> Result<Self, AvatarError> {
-        let unavailable = |e: String| AvatarError::from(ApiError::new(e).with_retryable(false));
-        conn_options.validate().map_err(|e| unavailable(e.to_string()))?;
+        conn_options
+            .validate()
+            .map_err(|e| AvatarError::from(ApiError::new(e.to_string()).with_retryable(false)))?;
         // Signing then cannot fail when an attempt launches.
         lk_agents_net::token::inference_bearer(&api_key, &api_secret)?;
         let opts = AvatarOptions::new(
@@ -181,8 +182,8 @@ impl InferenceAvatar for GatewayAvatar {
             extra_kwargs.unwrap_or_default(),
             base_url,
         )?;
-        let runtime = (env.runtime)().map_err(unavailable)?;
-        let http = (env.http)().map_err(unavailable)?;
+        let runtime = (env.runtime)().map_err(ApiError::from)?;
+        let http = (env.http)().map_err(ApiError::from)?;
         let policy = RequestPolicy::from_options(&conn_options);
         Ok(GatewayAvatar::new(
             opts,

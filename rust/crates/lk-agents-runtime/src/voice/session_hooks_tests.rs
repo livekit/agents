@@ -77,12 +77,7 @@ impl lk_agents_abi::llm::toolsets::ScopesPort for FakeScopes {
 impl ScriptedHooks {
     fn result<T>(&self, value: T) -> Result<T, HostError> {
         if self.raise {
-            Err(HostError {
-                kind: "ValueError".into(),
-                message: "the hook raised".into(),
-                host_ref: None,
-                traceback: None,
-            })
+            Err(HostError { class: "ValueError".into(), ..HostError::new("the hook raised") })
         } else {
             Ok(value)
         }

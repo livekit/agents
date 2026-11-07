@@ -92,7 +92,7 @@ pub enum DrainError {
     #[error("drain outcome channel closed")]
     OutcomeUnavailable,
     #[error("server cleanup failed during drain: {0}")]
-    Cleanup(String),
+    Cleanup(crate::server::ServerError),
     #[error(transparent)]
     Host(#[from] HostError),
 }

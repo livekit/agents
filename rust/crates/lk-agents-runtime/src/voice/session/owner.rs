@@ -438,7 +438,7 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
         job: Option<lk_agents_abi::voice::session_owner::SessionJobInfo>,
         cx: telemetry::Cx,
     ) -> Result<BoxFuture<'static, Result<(), HostError>>, HostError> {
-        let spawner = (self.0.env.spawner)().map_err(HostError::new)?;
+        let spawner = (self.0.env.spawner)().map_err(|e| HostError::new(e.to_string()))?;
         let action = self.0.lifecycle.lock().start();
         match action {
             StartOwner::Closed => return Err(HostError::new("this VoiceSession is closed")),
@@ -634,7 +634,7 @@ impl lk_agents_abi::voice::session_owner::SessionOwner for SessionOwner {
         drain: bool,
     ) -> Result<BoxFuture<'static, ()>, UnknownCloseReason> {
         let reason = CloseReason::from_wire(&reason).ok_or(UnknownCloseReason(reason))?;
-        let spawner = (self.0.env.spawner)().map_err(UnknownCloseReason)?;
+        let spawner = (self.0.env.spawner)().map_err(|e| UnknownCloseReason(e.to_string()))?;
         let action = self.0.lifecycle.lock().close();
         if let CloseOwner::Close { wait_start } = action {
             let inner = self.0.clone();

@@ -93,7 +93,7 @@ fn end_records_the_exception_and_its_attributes() {
     let (tracer, sink) = tracer();
     let cx = tracer.root().with_job(Some(JobKey("J".into()))).with_conversation(Some("RM_1"));
     let mut error = HostError::new("boom").with_traceback(Some("Traceback ...".into()));
-    error.kind = "ValueError".into();
+    error.class = "ValueError".into();
     let failed: Result<AgentRunEnd, HostError> = Err(error);
     end(start(&cx, run()), failed.as_ref());
     let ok: Result<AgentRunEnd, ApiError> = Ok(AgentRunEnd { status: RunStatus::Completed });

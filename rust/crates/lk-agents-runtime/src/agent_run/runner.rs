@@ -30,7 +30,7 @@ pub struct Runner {
     /// Each running invocation's progress port and usage, by invocation id; ended ones are pruned
     /// when the next one starts.
     running: Mutex<Vec<(String, Progress, watch::Receiver<Usage>)>>,
-    runtime: fn() -> Result<tokio::runtime::Handle, String>,
+    runtime: fn() -> Result<tokio::runtime::Handle, lk_agents_net::env::ProcessError>,
     tracer: telemetry::Tracer,
 }
 
@@ -62,7 +62,7 @@ impl AgentRunner for Runner {
         let ChatItem::Message(mut message) = request.message else {
             return Err(InvalidRun("a run's message is a chat message".into()));
         };
-        let runtime = (self.runtime)().map_err(InvalidRun)?;
+        let runtime = (self.runtime)().map_err(|error| InvalidRun(error.to_string()))?;
         let execution_id = lk_agents_core::agent_run::execution::bind(
             &mut message,
             &request.history,

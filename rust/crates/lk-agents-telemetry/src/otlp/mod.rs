@@ -361,7 +361,7 @@ impl Shared {
                 let (signal, body) = cloud_request(&process, &identity, &recording, payload);
                 let body = match body {
                     Ok(body) => body,
-                    Err(error) => return Outcome::Failed(error),
+                    Err(error) => return Outcome::Failed(error.to_string()),
                 };
                 let path = format!("{}/otlp/v0", signal.path());
                 match cloud.post(&path, |request| body.attach(request)).await {
@@ -381,7 +381,7 @@ fn cloud_request(
     identity: &JobIdentity,
     recording: &CloudRecording,
     payload: Cloud,
-) -> (Signal, Result<encode::Body, String>) {
+) -> (Signal, std::io::Result<encode::Body>) {
     let resource = encode::cloud_resource(process, identity);
     let stamp = encode::cloud_stamp(process, identity, recording);
     let policy = ContentPolicy::cloud(recording.redaction);
@@ -422,11 +422,11 @@ async fn export_app(process: &ProcessIdentity, config: &AppConfig, payload: App)
     let Some(url) = url else { return Outcome::Sent };
     let body = match body {
         Ok(body) => body,
-        Err(error) => return Outcome::Failed(error),
+        Err(error) => return Outcome::Failed(error.to_string()),
     };
     let client = match cloud::client().await {
         Ok(client) => client,
-        Err(error) => return Outcome::Failed(error),
+        Err(error) => return Outcome::Failed(error.to_string()),
     };
     let mut request = body.attach(client.post(url));
     for (key, value) in &config.headers {

@@ -28,6 +28,7 @@ use lk_agents_abi::agent::run::{
 };
 use lk_agents_abi::agent::{AgentDefinition, OutputSpec};
 use lk_agents_abi::agent::{ArgumentIdentity, OutputCandidate, ReadBackAnswer};
+use lk_agents_abi::errors::{HostError, ProviderError};
 use lk_agents_abi::llm::tool_executor::{ASK_IN_OWN_WORDS, ToolOutcome};
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::usage::Usage;
@@ -103,12 +104,12 @@ pub enum AgentRunEvent {
     Start,
     HostCheckpointDone {
         checkpoint: CheckpointId,
-        result: Result<lk_agents_abi::a2a::turn::Verdict, String>,
+        result: Result<lk_agents_abi::a2a::turn::Verdict, HostError>,
         tools: Option<Vec<lk_agents_abi::agent::FunctionToolInfo>>,
     },
     InstructionsRendered {
         render: RenderId,
-        result: Result<String, String>,
+        result: Result<String, HostError>,
     },
     LlmChunk {
         request: RequestId,
@@ -123,9 +124,10 @@ pub enum AgentRunEvent {
         request: RequestId,
         call: FunctionCall,
     },
+    /// The request failed after the provider's own recovery, or was cancelled.
     LlmFailed {
         request: RequestId,
-        error: String,
+        error: ProviderError,
     },
     /// The host bound and validated the arguments; `prepared` holds them for the body.
     ToolPrepared {
@@ -162,7 +164,7 @@ pub enum AgentRunEvent {
     },
     ToolLaunchFailed {
         call: CallId,
-        error: String,
+        error: HostError,
     },
     OutputValidated {
         validation: ValidationId,
@@ -400,7 +402,7 @@ impl AgentRun {
                         self.dynamic = Some(dynamic.clone());
                         self.request(Purpose::Turn, Some(dynamic), now, &mut fx)
                     }
-                    Err(e) => self.abort(RunError::Host(e), now, &mut fx),
+                    Err(e) => self.abort(RunError::Host(e.to_string()), now, &mut fx),
                 },
                 _ => {}
             },
@@ -423,7 +425,12 @@ impl AgentRun {
                     };
                     end_text(&step, true, &mut fx);
                     self.phase = Phase::Acting(acting);
-                    self.abort(RunError::Model(error), now, &mut fx);
+                    let error = if error.cancelled() {
+                        RunError::Cancelled
+                    } else {
+                        RunError::Model(error.to_string())
+                    };
+                    self.abort(error, now, &mut fx);
                 }
             }
             AgentRunEvent::ToolPrepared { call, prepared, identity } => {

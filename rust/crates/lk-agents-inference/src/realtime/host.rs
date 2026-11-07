@@ -28,7 +28,7 @@ impl lk_agents_abi::llm::realtime::HostRealtimeModel for HostRealtimeModel {
     type Env = ProcessEnv;
 
     fn new(env: &ProcessEnv, model: Arc<dyn HostRealtime>) -> Result<Self, HostError> {
-        let spawner = (env.spawner)().map_err(HostError::new)?;
+        let spawner = (env.spawner)().map_err(|e| HostError::new(e.to_string()))?;
         Ok(Self::new(model, WallAnchor::of(&*env.clock), spawner))
     }
 }

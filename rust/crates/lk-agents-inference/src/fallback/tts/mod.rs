@@ -672,7 +672,7 @@ impl port::FallbackTts for FallbackTts {
             ..ChainPolicy::tts_defaults()
         };
         let observer = on_availability.unwrap_or_else(|| Arc::new(crate::fallback::IgnoreEvents));
-        let spawner = (env.spawner)().map_err(InvalidPayload)?;
+        let spawner = (env.spawner)().map_err(|e| InvalidPayload(e.to_string()))?;
         FallbackTts::new(ttss, sample_rate, policy, env.clock.clone(), spawner, observer)
             .map_err(|error| InvalidPayload(error.to_string()))
     }

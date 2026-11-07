@@ -561,7 +561,7 @@ async fn malformed_messages_fail_without_discovery_or_remote_side_effects() {
 #[test]
 fn an_unusable_process_runtime_is_a_final_error_not_a_retryable_connection_failure() {
     let env = ProcessEnv {
-        runtime: || Err("the process runtime belongs to the parent of this fork".into()),
+        runtime: || Err(lk_agents_net::env::ProcessError::Inherited),
         ..ProcessEnv::current_runtime()
     };
     let options = ApiConnectOptions::default();

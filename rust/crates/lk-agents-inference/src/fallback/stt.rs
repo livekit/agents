@@ -506,7 +506,7 @@ impl lk_agents_abi::stt::fallback::FallbackStt for FallbackStt {
             stts,
             policy,
             env.clock.clone(),
-            (env.spawner)().map_err(InvalidPayload)?,
+            (env.spawner)().map_err(|e| InvalidPayload(e.to_string()))?,
             observer,
         )
         .map_err(|error| InvalidPayload(error.to_string()))

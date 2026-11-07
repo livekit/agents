@@ -102,8 +102,8 @@ impl GatewayHttp {
         self.client.clone()
     }
 
-    pub fn new() -> Result<Self, String> {
-        let client = crate::tls::http_client_builder()?
+    pub fn new() -> Result<Self, crate::tls::TlsError> {
+        let builder = crate::tls::http_client_builder()?
             .retry(reqwest::retry::never())
             .pool_max_idle_per_host(50)
             .pool_idle_timeout(std::time::Duration::from_secs(120))
@@ -120,10 +120,8 @@ impl GatewayHttp {
                 } else {
                     attempt.follow()
                 }
-            }))
-            .build()
-            .map_err(|e| error_chain(&e))?;
-        Ok(GatewayHttp { client })
+            }));
+        Ok(GatewayHttp { client: crate::tls::build(builder)? })
     }
 
     /// A GET whose response is read to its end, so its connection stays pooled (`prewarm()`).

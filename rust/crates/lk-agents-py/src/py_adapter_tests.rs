@@ -313,14 +313,14 @@ mod proxies {
             for key in ["bad_arity", "bad_metadata"] {
                 let prepared = proxy.prepare_tool(&lk_agents_abi::telemetry::Cx::NONE, &inv, args(key)).await.unwrap().unwrap();
                 let error = proxy.run_tool(&lk_agents_abi::telemetry::Cx::NONE, &inv, &prepared.prepared).await.unwrap_err();
-                assert_eq!(error.kind, "TypeError");
+                assert_eq!(error.class, "TypeError");
                 let expected = if key == "bad_arity" { "tuple of 2 items" } else { "expected a dict" };
                 assert!(error.message.contains(expected), "{error}");
             }
             let refused = proxy.prepare_tool(&lk_agents_abi::telemetry::Cx::NONE, &inv, args("bad")).await.unwrap().unwrap_err();
             assert_eq!(refused.message, "city is required");
             let failed = proxy.prepare_tool(&lk_agents_abi::telemetry::Cx::NONE, &inv, args("crash")).await.unwrap_err();
-            assert_eq!(failed.kind, "KeyError");
+            assert_eq!(failed.class, "KeyError");
             let verdict =
                 proxy.validate_output(&lk_agents_abi::telemetry::Cx::NONE, &agent, OutputCandidate::Value(serde_json::json!(3))).await;
             assert!(matches!(verdict, Ok(ValidatedOutput::Retry(r)) if r == "not a number"));
@@ -391,7 +391,7 @@ mod proxies {
                 serde_json::Map::new(),
             ))
             .unwrap_err();
-        assert_eq!(error.kind, "RuntimeError");
+        assert_eq!(error.class, "RuntimeError");
         assert!(
             error
                 .message

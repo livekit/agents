@@ -37,7 +37,7 @@ pub async fn connect_with_limit(
     let uri = request.uri();
     let connector = if uri.scheme_str() == Some("wss") {
         Some(tokio_tungstenite::Connector::Rustls(
-            crate::tls::config().await.map_err(TransportError::Connect)?,
+            crate::tls::config().await.map_err(|e| TransportError::Connect(e.to_string()))?,
         ))
     } else {
         None

@@ -393,7 +393,7 @@ impl lk_agents_abi::stt::inference::InferenceStt for GatewayStt {
         conn_options: ApiConnectOptions,
         vad: Option<Arc<dyn crate::abi::Vad>>,
     ) -> Result<Self, ApiError> {
-        let spawner = (env.spawner)().map_err(|e| ApiError::new(e).with_retryable(false))?;
+        let spawner = (env.spawner)().map_err(ApiError::from)?;
         // Not `parse_model_into`: the host already parsed `provider/model:language`; a second
         // parse would strip a legitimate `:` from the model name.
         let opts = SttOptions {

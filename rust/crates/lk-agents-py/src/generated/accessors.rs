@@ -207,6 +207,84 @@ impl ApiTimeoutError {
     }
 }
 
+/// Python interface: `livekit.agents._generated.storage_errors.ThreadNotFound`.
+pub use crate::py_errors::interfaces::ThreadNotFound;
+impl ThreadNotFound {
+    pub fn import(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+        static CLASS: pyo3::sync::PyOnceLock<Py<pyo3::types::PyType>> =
+            pyo3::sync::PyOnceLock::new();
+        Ok(CLASS
+            .import(py, "livekit.agents._generated.storage_errors", "ThreadNotFound")?
+            .as_any()
+            .clone())
+    }
+}
+
+/// Python interface: `livekit.agents._generated.storage_errors.StorageUnavailable`.
+pub use crate::py_errors::interfaces::StorageUnavailable;
+impl StorageUnavailable {
+    pub fn import(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+        static CLASS: pyo3::sync::PyOnceLock<Py<pyo3::types::PyType>> =
+            pyo3::sync::PyOnceLock::new();
+        Ok(CLASS
+            .import(py, "livekit.agents._generated.storage_errors", "StorageUnavailable")?
+            .as_any()
+            .clone())
+    }
+}
+
+/// Python interface: `livekit.agents._generated.storage_errors.LeaseLost`.
+pub use crate::py_errors::interfaces::LeaseLost;
+impl LeaseLost {
+    pub fn import(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+        static CLASS: pyo3::sync::PyOnceLock<Py<pyo3::types::PyType>> =
+            pyo3::sync::PyOnceLock::new();
+        Ok(CLASS
+            .import(py, "livekit.agents._generated.storage_errors", "LeaseLost")?
+            .as_any()
+            .clone())
+    }
+}
+
+/// Python interface: `livekit.agents._generated.storage_errors.VersionConflict`.
+pub use crate::py_errors::interfaces::VersionConflict;
+impl VersionConflict {
+    pub fn import(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+        static CLASS: pyo3::sync::PyOnceLock<Py<pyo3::types::PyType>> =
+            pyo3::sync::PyOnceLock::new();
+        Ok(CLASS
+            .import(py, "livekit.agents._generated.storage_errors", "VersionConflict")?
+            .as_any()
+            .clone())
+    }
+}
+
+/// Python interface: `livekit.agents._generated.storage_errors.NotSerializable`.
+pub use crate::py_errors::interfaces::NotSerializable;
+impl NotSerializable {
+    pub fn import(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+        static CLASS: pyo3::sync::PyOnceLock<Py<pyo3::types::PyType>> =
+            pyo3::sync::PyOnceLock::new();
+        Ok(CLASS
+            .import(py, "livekit.agents._generated.storage_errors", "NotSerializable")?
+            .as_any()
+            .clone())
+    }
+}
+
+/// Python interface: `livekit.agents._generated.storage_errors.TooLarge`.
+pub use crate::py_errors::interfaces::TooLarge;
+impl TooLarge {
+    pub fn import(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+        static CLASS: pyo3::sync::PyOnceLock<Py<pyo3::types::PyType>> =
+            pyo3::sync::PyOnceLock::new();
+        Ok(CLASS
+            .import(py, "livekit.agents._generated.storage_errors", "TooLarge")?
+            .as_any()
+            .clone())
+    }
+}
+
 /// Python interface: `logging`.
 pub use crate::py_logging::interfaces::LoggingModule;
 impl LoggingModule {

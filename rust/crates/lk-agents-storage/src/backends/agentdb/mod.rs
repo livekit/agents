@@ -111,7 +111,9 @@ impl AgentDbStorage {
         minter: TokenMinter,
         env: &ProcessEnv,
     ) -> Result<Self, StorageError> {
-        let unavailable = |what: &str, e: String| StorageError::Unavailable(format!("{what}: {e}"));
+        let unavailable = |what: &str, e: lk_agents_net::env::ProcessError| {
+            StorageError::Unavailable(format!("{what}: {e}"))
+        };
         let runtime = (env.runtime)().map_err(|e| unavailable("storage runtime", e))?;
         let url = &opts.url;
         let data_plane = match (url.strip_prefix("https://"), url.strip_prefix("http://")) {

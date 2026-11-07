@@ -6,7 +6,7 @@
 
 use crate::telemetry;
 use lk_agents_abi::Maybe;
-use lk_agents_abi::errors::HostError;
+use lk_agents_abi::errors::{ApiError, HostError};
 use lk_agents_abi::voice::rtc::{DisconnectReason, RoomEvent, RtcRoom, TRACK_KIND_AUDIO};
 use lk_agents_abi::voice::workflows::InstructionsArg;
 pub use lk_agents_abi::voice::workflows::warm_transfer::{
@@ -14,7 +14,7 @@ pub use lk_agents_abi::voice::workflows::warm_transfer::{
 };
 use lk_agents_abi::voice::workflows::{TwilioCallEnd, TwilioDial};
 use lk_agents_abi::{Clock, HostRef, Spawner, SpawnerExt};
-use lk_agents_net::room_service::{RoomService, SipCall, Telephony};
+use lk_agents_net::room_service::{RoomService, SipCall, Telephony, api_error};
 use lk_agents_net::task::{TaskId, TaskSet};
 use lk_agents_voice::workflows::effects::{TransferEffects, TransferToolEffect};
 use serde_json::Value;
@@ -38,29 +38,29 @@ pub use lk_agents_voice::workflows::warm_transfer::TransferConfig;
 pub use lk_agents_abi::voice::workflows::warm_transfer::TransferHost;
 
 /// The LiveKit and Twilio requests a transfer makes: [`ProjectApi`] over the server's project,
-/// a fake in tests. Errors are the request's failure as text.
+/// a fake in tests.
 pub trait TransferApi: Send + Sync {
     /// Dial `call`, returning once it is answered when it waits for an answer.
-    fn create_sip_participant(&self, call: SipCall) -> BoxFuture<'_, Result<(), String>>;
+    fn create_sip_participant(&self, call: SipCall) -> BoxFuture<'_, Result<(), ApiError>>;
     /// The Twilio media stream URL that joins `room` as `identity`.
     fn connect_twilio_call(
         &self,
         room: String,
         identity: String,
-    ) -> BoxFuture<'_, Result<String, String>>;
+    ) -> BoxFuture<'_, Result<String, ApiError>>;
     /// A Twilio REST request: the first response's status and body, redirects not followed.
     fn post_form(
         &self,
         request: twilio_http::Request,
-    ) -> BoxFuture<'_, Result<(u16, String), String>>;
+    ) -> BoxFuture<'_, Result<(u16, String), ApiError>>;
     fn move_participant(
         &self,
         room: String,
         identity: String,
         destination: String,
-    ) -> BoxFuture<'_, Result<(), String>>;
+    ) -> BoxFuture<'_, Result<(), ApiError>>;
     /// Deletes `room`; a room already gone is not an error.
-    fn delete_room(&self, room: String) -> BoxFuture<'_, Result<(), String>>;
+    fn delete_room(&self, room: String) -> BoxFuture<'_, Result<(), ApiError>>;
 }
 
 type BoxFuture<'a, T> = lk_agents_abi::BoxFuture<'a, T>;
@@ -85,24 +85,24 @@ impl ProjectApi {
 }
 
 impl TransferApi for ProjectApi {
-    fn create_sip_participant(&self, call: SipCall) -> BoxFuture<'_, Result<(), String>> {
-        Box::pin(async move {
-            self.telephony.create_sip_participant(call).await.map_err(|e| e.to_string())
-        })
+    fn create_sip_participant(&self, call: SipCall) -> BoxFuture<'_, Result<(), ApiError>> {
+        Box::pin(
+            async move { self.telephony.create_sip_participant(call).await.map_err(api_error) },
+        )
     }
     fn connect_twilio_call(
         &self,
         room: String,
         identity: String,
-    ) -> BoxFuture<'_, Result<String, String>> {
+    ) -> BoxFuture<'_, Result<String, ApiError>> {
         Box::pin(async move {
-            self.telephony.connect_twilio_call(&room, &identity).await.map_err(|e| e.to_string())
+            self.telephony.connect_twilio_call(&room, &identity).await.map_err(api_error)
         })
     }
     fn post_form(
         &self,
         request: twilio_http::Request,
-    ) -> BoxFuture<'_, Result<(u16, String), String>> {
+    ) -> BoxFuture<'_, Result<(u16, String), ApiError>> {
         Box::pin(async move {
             lk_agents_net::room_service::post_form(&request.url, &request.headers, &request.form)
                 .await
@@ -113,16 +113,13 @@ impl TransferApi for ProjectApi {
         room: String,
         identity: String,
         destination: String,
-    ) -> BoxFuture<'_, Result<(), String>> {
+    ) -> BoxFuture<'_, Result<(), ApiError>> {
         Box::pin(async move {
-            self.rooms
-                .move_participant(&room, &identity, &destination)
-                .await
-                .map_err(|e| e.to_string())
+            self.rooms.move_participant(&room, &identity, &destination).await.map_err(api_error)
         })
     }
-    fn delete_room(&self, room: String) -> BoxFuture<'_, Result<(), String>> {
-        Box::pin(async move { self.rooms.delete_room(&room).await.map_err(|e| e.to_string()) })
+    fn delete_room(&self, room: String) -> BoxFuture<'_, Result<(), ApiError>> {
+        Box::pin(async move { self.rooms.delete_room(&room).await.map_err(api_error) })
     }
 }
 
@@ -456,7 +453,7 @@ impl TransferRun {
             .await;
         if let Err(error) = moved {
             self.lock().core.merge_failed();
-            return Err(HostError::new(error).into());
+            return Err(HostError::new(error.to_string()).into());
         }
         self.settle(Ok(HUMAN_AGENT_IDENTITY.to_owned()));
         let mut events = caller.events();
@@ -506,8 +503,8 @@ enum DialError {
     NoAnswer,
     #[error(transparent)]
     Rtc(#[from] lk_agents_abi::voice::rtc::RtcError),
-    #[error("{0}")]
-    Api(String),
+    #[error(transparent)]
+    Api(ApiError),
 }
 
 /// One Twilio request; the reply's JSON object.
@@ -694,7 +691,7 @@ impl lk_agents_abi::voice::workflows::warm_transfer::WarmTransfer for WarmTransf
             })
             .transpose()
             .map_err(|error| WarmTransferRefused::InvalidSipConnection(error.to_string()))?;
-        let spawner = (env.spawner)().map_err(HostError::new)?;
+        let spawner = (env.spawner)().map_err(|e| HostError::new(e.to_string()))?;
         let run = TransferRun::new(plan, sip_connection, env.clock.clone(), spawner);
         Ok(Self(Arc::new(run)))
     }
@@ -875,20 +872,20 @@ mod tests {
     }
 
     impl TransferApi for FakeApi {
-        fn create_sip_participant(&self, _: SipCall) -> BoxFuture<'_, Result<(), String>> {
+        fn create_sip_participant(&self, _: SipCall) -> BoxFuture<'_, Result<(), ApiError>> {
             Box::pin(async move { unreachable!() })
         }
         fn connect_twilio_call(
             &self,
             _: String,
             _: String,
-        ) -> BoxFuture<'_, Result<String, String>> {
+        ) -> BoxFuture<'_, Result<String, ApiError>> {
             Box::pin(async { Ok("wss://connector.test".to_owned()) })
         }
         fn post_form(
             &self,
             request: twilio_http::Request,
-        ) -> BoxFuture<'_, Result<(u16, String), String>> {
+        ) -> BoxFuture<'_, Result<(u16, String), ApiError>> {
             Box::pin(async move {
                 if request.url.ends_with("/Calls.json") {
                     let release = self.create_release.lock().take();
@@ -910,10 +907,10 @@ mod tests {
             _: String,
             _: String,
             _: String,
-        ) -> BoxFuture<'_, Result<(), String>> {
+        ) -> BoxFuture<'_, Result<(), ApiError>> {
             Box::pin(async move { unreachable!() })
         }
-        fn delete_room(&self, _: String) -> BoxFuture<'_, Result<(), String>> {
+        fn delete_room(&self, _: String) -> BoxFuture<'_, Result<(), ApiError>> {
             Box::pin(async move { unreachable!() })
         }
     }

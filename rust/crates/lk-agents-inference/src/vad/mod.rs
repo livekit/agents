@@ -52,7 +52,7 @@ impl LocalVad {
 
     /// Input drops are measured under `cx`'s job.
     fn open(&self, cx: &telemetry::Cx) -> Result<(VadInput, VadOutputSource), ProviderError> {
-        let unavailable = |error: String| {
+        let unavailable = |error: lk_agents_net::env::ProcessError| {
             ProviderError::Local(ApiError::new(format!("VAD execution unavailable: {error}")))
         };
         let runtime = self.env.caller_runtime().map_err(unavailable)?;

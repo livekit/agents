@@ -720,7 +720,8 @@ impl lk_agents_abi::voice::background_audio::BackgroundAudioPlayer for Backgroun
         blocksize: usize,
         stream_timeout_ms: u64,
     ) -> Result<Self, ProviderError> {
-        let spawner = (env.spawner)().map_err(lk_agents_abi::errors::ApiError::new)?;
+        let spawner =
+            (env.spawner)().map_err(|e| lk_agents_abi::errors::ApiError::new(e.to_string()))?;
         Ok(Self(Arc::new(BackgroundAudioPlayer::new(
             sample_rate,
             num_channels,

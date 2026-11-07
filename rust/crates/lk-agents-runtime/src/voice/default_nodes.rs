@@ -103,7 +103,8 @@ impl lk_agents_abi::voice::nodes::DefaultNodes for DefaultNodes {
             // Detached: dropping the output closes `tx`, which ends the request.
             Ok(spawner) => spawner.spawn_detached(complete(llm, req, cx, env.clock.clone(), tx)),
             Err(error) => {
-                let _ = tx.try_send(Err(lk_agents_abi::errors::ApiError::new(error).into()));
+                let error = lk_agents_abi::errors::ApiError::new(error.to_string());
+                let _ = tx.try_send(Err(error.into()));
             }
         }
         Ok(NodeOutput(tokio::sync::Mutex::new(rx)))
@@ -377,7 +378,8 @@ where
     let spawner = match (env.spawner)() {
         Ok(spawner) => spawner,
         Err(error) => {
-            let _ = tx.try_send(Err(lk_agents_abi::errors::ApiError::new(error).into()));
+            let error = lk_agents_abi::errors::ApiError::new(error.to_string());
+            let _ = tx.try_send(Err(error.into()));
             return NodeOutput(tokio::sync::Mutex::new(rx));
         }
     };

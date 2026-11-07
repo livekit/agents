@@ -1032,7 +1032,7 @@ fn a_failed_child_keeps_its_invocation_identity_on_the_terminal_effect() {
     let (request, _) = driver.request();
     let effects = driver.run(agent_run::AgentRunEvent::LlmFailed {
         request,
-        error: "child provider failed".into(),
+        error: lk_agents_abi::errors::ApiError::new("child provider failed").into(),
     });
     assert!(effects.iter().any(|effect| matches!(
         effect,

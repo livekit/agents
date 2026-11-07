@@ -420,7 +420,7 @@ impl lk_agents_abi::media::emitter::AudioEmitter for AudioEmitter {
         dst_ch: Arc<dyn EmitterOutput>,
     ) -> Result<Self, EmitterError> {
         let env = EmitterEnv {
-            spawner: (env.spawner)().map_err(EmitterError::Unavailable)?,
+            spawner: (env.spawner)().map_err(|e| EmitterError::Unavailable(e.to_string()))?,
             clock: env.clock.clone(),
         };
         Ok(Self::with_env(label, dst_ch, env))

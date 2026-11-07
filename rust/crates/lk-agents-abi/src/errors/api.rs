@@ -36,7 +36,7 @@ pub const DEFAULT_TIMEOUT_MESSAGE: &str = "Request timed out.";
 pub const TRANSIENT_CLIENT_STATUSES: [i64; 2] = [408, 429];
 
 /// The status of a request we closed ([`ApiErrorKind::Cancelled`]).
-pub const CANCELLED_STATUS: i64 = 499;
+const CANCELLED_STATUS: i64 = 499;
 
 /// The rule `APIStatusError.__init__` applies: is this status retryable? A non-transient 4xx is
 /// forced non-retryable even when the caller passed `retryable=True` (#5831).
@@ -196,6 +196,12 @@ impl ApiError {
             phase: Some(phase),
             ..Self::timeout(Some(format!("Request timed out ({} timeout).", phase.as_str())))
         }
+    }
+
+    /// A request we closed: never retried, never a mark against the provider. The host sees
+    /// `APIStatusError` with status 499.
+    pub fn cancelled(message: impl Into<String>) -> Self {
+        Self::status(message, CANCELLED_STATUS, None, Some(false))
     }
 
     pub fn with_retryable(mut self, retryable: bool) -> Self {

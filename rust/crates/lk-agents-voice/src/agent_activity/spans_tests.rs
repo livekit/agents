@@ -454,10 +454,9 @@ fn a_handoff_is_one_update_agent_and_a_raised_hook_records_its_exception() {
     s.at(100);
     let exit = s.d.hook_span(HookKind::OnExit, Some("back")).expect("its span");
     let error = lk_agents_abi::errors::HostError {
-        kind: "ValueError".into(),
-        message: "no table".into(),
-        host_ref: None,
+        class: "ValueError".into(),
         traceback: Some("Traceback (most recent call last): ...".into()),
+        ..lk_agents_abi::errors::HostError::new("no table")
     };
     s.at(200);
     s.d.hook_span_ended(exit, Some(&HookFailure::Raised(&error)));

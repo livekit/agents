@@ -9,7 +9,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use super::telemetry;
-use lk_agents_abi::errors::HostError;
+use lk_agents_abi::errors::{HostError, HostErrorKind};
 use lk_agents_abi::invoke::CallContext;
 use lk_agents_abi::worker::ipc_host::{
     JobCall, JobExecution, JobProcess, ParticipantEntrypoint, WorkerError,
@@ -131,7 +131,7 @@ impl JobRun {
 }
 
 fn cancelled(error: &HostError) -> bool {
-    error.kind == "CancelledError"
+    error.kind == HostErrorKind::Cancelled
 }
 
 impl Inner {
@@ -456,7 +456,9 @@ impl lk_agents_abi::worker::ipc_host::JobRun for JobRun {
             inner: Arc::new(Inner {
                 host: OnceLock::new(),
                 parent: OnceLock::new(),
-                spawner: TokioSpawner::new((env.runtime)().map_err(WorkerError::Failed)?),
+                spawner: TokioSpawner::new(
+                    (env.runtime)().map_err(|error| WorkerError::Failed(error.to_string()))?,
+                ),
                 fake: fake_job,
                 session_end_timeout,
                 session_end,

@@ -117,7 +117,7 @@ impl avatar::AvatarLifecycle for AvatarLifecycle {
         avatar: Arc<dyn AvatarHost>,
         job: Option<Arc<dyn SessionJob>>,
     ) -> Result<Self, HostError> {
-        let spawner = (env.spawner)().map_err(HostError::new)?;
+        let spawner = (env.spawner)().map_err(|e| HostError::new(e.to_string()))?;
         let clock = env.clock.clone();
         Self::open(owner, room, identity, provider, avatar, job, clock, spawner)
     }

@@ -264,7 +264,7 @@ impl avatar::AvatarRunner for AvatarRunner {
         lazy_publish: bool,
     ) -> Result<Self, RtcError> {
         let room = room.rtc().ok_or(RtcError::NotConnected)?;
-        let spawner = (env.spawner)().map_err(RtcError::host)?;
+        let spawner = (env.spawner)().map_err(|e| RtcError::host(e.to_string()))?;
         let plan = lk_agents_voice::av_sync::MediaPlan::new(options, queue_size_ms)
             .map_err(RtcError::host)?;
         let clock = env.clock.clone();

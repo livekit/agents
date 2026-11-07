@@ -2,6 +2,7 @@
 
 use lk_agents_abi::BoxFuture;
 use lk_agents_abi::SpawnerExt;
+use lk_agents_net::env::ProcessError;
 use lk_agents_net::task::TokioSpawner;
 use std::io;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -19,11 +20,11 @@ pub trait Connector: Send + Sync {
 /// Connects on the reactor `runtime` returns, called at connection so constructing a client
 /// starts nothing.
 pub struct Tcp {
-    runtime: fn() -> Result<tokio::runtime::Handle, String>,
+    runtime: fn() -> Result<tokio::runtime::Handle, ProcessError>,
 }
 
 impl Tcp {
-    pub fn new(runtime: fn() -> Result<tokio::runtime::Handle, String>) -> Self {
+    pub fn new(runtime: fn() -> Result<tokio::runtime::Handle, ProcessError>) -> Self {
         Self { runtime }
     }
 }

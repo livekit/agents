@@ -493,7 +493,7 @@ impl avatar::DataStreamAudioReceiver for DataStreamAudioReceiver {
         on_clear_buffer: Option<Arc<dyn ClearBufferListener>>,
     ) -> Result<Self, ProviderError> {
         let frame_size = frame_size(frame_size_ms).map_err(failure)?;
-        let spawner = (env.spawner)().map_err(ApiError::new)?;
+        let spawner = (env.spawner)().map_err(|e| ApiError::new(e.to_string()))?;
         let on_clear = on_clear_buffer.map(|listener| {
             Arc::new(move || listener.clear_buffer()) as Arc<dyn Fn() + Send + Sync>
         });

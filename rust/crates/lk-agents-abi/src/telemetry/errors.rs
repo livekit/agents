@@ -46,7 +46,7 @@ pub trait SpanError {
 /// An application exception: the host's type, message and traceback.
 impl SpanError for HostError {
     fn error_type(&self) -> ErrorType {
-        let class = if self.kind.is_empty() { "HostError" } else { &self.kind };
+        let class = if self.class.is_empty() { "HostError" } else { &self.class };
         ErrorType::Exception(class.to_owned())
     }
     fn message(&self) -> String {

@@ -860,7 +860,9 @@ fn scheduled(
     SCHEDULER.with(|slot| *slot.borrow_mut() = Some(spawner));
     lk_agents_runtime::net::env::ProcessEnv {
         spawner: || {
-            SCHEDULER.with(|slot| slot.borrow().clone()).ok_or_else(|| "no case scheduler".into())
+            SCHEDULER.with(|slot| slot.borrow().clone()).ok_or_else(|| {
+                lk_agents_runtime::net::env::ProcessError::NoRuntime("no case scheduler".into())
+            })
         },
         tracer,
         ..lk_agents_runtime::net::env::ProcessEnv::current_runtime()

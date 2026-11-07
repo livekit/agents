@@ -162,7 +162,7 @@ impl Inner {
                     });
                 }
                 Err(error) => {
-                    self.closed.send_replace(Some(Err(HostError::new(error).into())));
+                    self.closed.send_replace(Some(Err(HostError::new(error.to_string()).into())));
                 }
             }
         }
@@ -242,7 +242,7 @@ impl lk_agents_abi::agent::resources::RunResources for RunResources {
     }
 
     fn open(&self) -> Result<BoxFuture<'static, Outcome>, ResourceError> {
-        let spawner = (self.0.env.spawner)().map_err(HostError::new)?;
+        let spawner = (self.0.env.spawner)().map_err(|e| HostError::new(e.to_string()))?;
         let action = self.0.lifecycle.lock().start();
         match action {
             StartOwner::Closed => return Err(ResourceError::Closed),

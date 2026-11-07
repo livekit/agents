@@ -64,15 +64,15 @@ fn the_worker_registers_and_connects_with_the_resolved_settings() {
 #[test]
 fn registration_needs_the_url_the_credentials_and_a_name_for_routes() {
     let mut s = settings();
-    assert!(s.check_registration().unwrap_err().starts_with("ws_url"));
+    assert!(s.check_registration().unwrap_err().to_string().starts_with("ws_url"));
     s.ws_url = "wss://x".into();
-    assert!(s.check_registration().unwrap_err().starts_with("api_key"));
+    assert!(s.check_registration().unwrap_err().to_string().starts_with("api_key"));
     s.api_key = "k".into();
-    assert!(s.check_registration().unwrap_err().starts_with("api_secret"));
+    assert!(s.check_registration().unwrap_err().to_string().starts_with("api_secret"));
     s.api_secret = "s".into();
     assert!(s.check_registration().is_ok());
     assert!(s.check_routes(false).is_ok());
-    assert!(s.check_routes(true).unwrap_err().contains("agent_name"));
+    assert!(s.check_routes(true).unwrap_err().to_string().contains("agent_name"));
 }
 
 // Catches: a mistyped listener key silently ignored, or development binding every interface.
@@ -83,8 +83,9 @@ fn listeners_refuse_unknown_keys_and_default_per_mode() {
     let listeners = |value: serde_json::Value| {
         settings().apply(ServerOptions { listeners: Given(value), ..Default::default() })
     };
-    assert!(listeners(serde_json::json!({"admin": {}})).unwrap_err().contains("admin"));
-    assert!(listeners(serde_json::json!({"health": {"prt": 1}})).unwrap_err().contains("prt"));
+    let refused = |value| listeners(value).unwrap_err().to_string();
+    assert!(refused(serde_json::json!({"admin": {}})).contains("admin"));
+    assert!(refused(serde_json::json!({"health": {"prt": 1}})).contains("prt"));
     let mut s = settings();
     s.apply(ServerOptions {
         listeners: Given(serde_json::json!({"public": {"port": 9000}, "prometheus": {}})),
@@ -197,7 +198,7 @@ fn invalid_server_update_cannot_partially_change_launch_configuration() {
             ..Default::default()
         })
         .unwrap_err();
-    assert!(error.contains("initialize_process_timeout"));
+    assert!(error.to_string().contains("initialize_process_timeout"));
     assert_eq!(server.ws_url, original_url, "a refused update changes no option");
     server
         .apply(ServerOptions {
@@ -225,7 +226,7 @@ fn unsupported_start_method_is_refused_before_launch() {
             ..Default::default()
         })
         .unwrap_err();
-    assert!(error.contains("multiprocessing_context"));
+    assert!(error.to_string().contains("multiprocessing_context"));
     assert_eq!(server.multiprocessing_context, method);
 }
 
@@ -413,7 +414,7 @@ fn a_simulated_job_names_its_agent_and_room() {
         SimulatedJobOptions { agent_identity: Some("a".into()), ..Default::default() },
     )
     .unwrap_err();
-    assert_eq!(real, "a dispatched job requires room information");
+    assert_eq!(real.to_string(), "a dispatched job requires room information");
     let mut creds = settings();
     creds.api_key = "APIkey".into();
     creds.api_secret = "thiskeyistotallyunsafe".into();

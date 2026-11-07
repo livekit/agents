@@ -205,7 +205,7 @@ async fn failed_registration_is_reported_by_run_and_close_joins_cleanup() {
         .await
         .unwrap()
         .unwrap_err();
-    assert!(failure.contains("connection failed after 0 retries"), "{failure}");
+    assert!(failure.to_string().contains("connection failed after 0 retries"), "{failure}");
     assert_eq!(runtime.close().await, Ok(()));
     assert_eq!(runtime.close().await, Ok(()));
     assert_eq!(runtime.snapshot().phase, ServerPhase::Closed);

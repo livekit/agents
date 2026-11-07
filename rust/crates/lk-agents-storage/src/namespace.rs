@@ -737,9 +737,10 @@ mod tests {
     #[tokio::test]
     async fn cloud_storage_starts_nothing_until_first_use_and_shares_its_backend() {
         static RUNTIME_READS: AtomicUsize = AtomicUsize::new(0);
-        fn runtime() -> Result<tokio::runtime::Handle, String> {
+        fn runtime() -> Result<tokio::runtime::Handle, lk_agents_net::env::ProcessError> {
             RUNTIME_READS.fetch_add(1, Ordering::Relaxed);
-            tokio::runtime::Handle::try_current().map_err(|e| e.to_string())
+            tokio::runtime::Handle::try_current()
+                .map_err(|e| lk_agents_net::env::ProcessError::NoRuntime(e.to_string()))
         }
         let mut env = ProcessEnv::current_runtime();
         env.runtime = runtime;

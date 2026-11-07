@@ -24,7 +24,7 @@ pub(crate) fn project(
 mod tests {
     use super::*;
     use lk_agents_abi::agent::SerializedOutput;
-    use lk_agents_abi::errors::{CapturedError, RefRegistry};
+    use lk_agents_abi::errors::{CapturedError, HostErrorKind, RefRegistry};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -68,8 +68,12 @@ mod tests {
     fn failed_validation_releases_the_host_error_instead_of_retaining_an_output() {
         let registry = Arc::new(Registry::default());
         let port: Arc<dyn RefRegistry> = registry.clone();
-        let error =
-            HostError::captured("ValidatorError", "host failed", CapturedError::new(9, &port));
+        let error = HostError::captured(
+            HostErrorKind::Other,
+            "ValidatorError",
+            "host failed",
+            CapturedError::new(9, &port),
+        );
         let (verdict, retained, serialized) = project(Err(error));
         assert_eq!(verdict, OutputVerdict::Failed("ValidatorError: host failed".into()));
         assert_eq!(retained, None);

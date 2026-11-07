@@ -171,14 +171,21 @@ fn storage_failure_in_the_turn_fails_the_receipt_before_releasing_the_lane() {
 /// `storage-unavailable`: the turn's save could not be written (docs/protocol/a2a.md#errors).
 #[test]
 fn a_refused_save_in_the_handler_fails_the_receipt() {
-    for kind in ["VersionConflict", "NotSerializable", "TooLarge"] {
+    use lk_agents_abi::errors::{HostError, HostErrorKind};
+    for (kind, class) in [
+        (HostErrorKind::VersionConflict, "VersionConflict"),
+        (HostErrorKind::NotSerializable, "NotSerializable"),
+        (HostErrorKind::TooLarge, "TooLarge"),
+    ] {
         let mut m = machine(Policy::Queue);
         m.phase = Phase::Run { path: Path::Main, step: RunStep::Recover };
         m.pending = Some(4);
         step(&mut m, Completion::Done);
-        let raised = StorageError::Invalid(format!("{kind}: save_context refused"));
+        let error =
+            HostError { kind, class: class.into(), ..HostError::new("save_context refused") };
+        let raised = StorageError::Refused(error);
         let pickup = operation(at(&mut m, Duration::ZERO, Err(raised)));
-        assert!(matches!(&pickup, Operation::Pickup(t) if t == "receipt"), "{kind}: {pickup:?}");
+        assert!(matches!(&pickup, Operation::Pickup(t) if t == "receipt"), "{class}: {pickup:?}");
         assert!(matches!(
             step(&mut m, Completion::Picked(Some(TaskState::Working))),
             Operation::FailOrphans { reason: REASON_STORAGE_UNAVAILABLE, failed }
@@ -187,7 +194,7 @@ fn a_refused_save_in_the_handler_fails_the_receipt() {
         let abandon = step(&mut m, Completion::Done);
         assert!(
             matches!(&abandon, Operation::Abandon { outcome: RunOutcome::Failed, reason }
-                if *reason == format!("{kind}: save_context refused")),
+                if *reason == format!("{class}: save_context refused")),
             "{abandon:?}"
         );
     }

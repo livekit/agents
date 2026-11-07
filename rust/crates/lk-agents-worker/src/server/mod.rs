@@ -3,7 +3,44 @@
 //! host, and the lifecycle (start, load, drain, close) the binding runs. The host keeps the job
 //! processes and the user's callbacks.
 
-type SetupOutcome = Result<(Option<String>, Option<f32>), String>;
+type SetupOutcome = (Option<String>, Option<f32>);
+
+/// A server lifecycle failure, raised to the host as its message (`RuntimeError`): nothing
+/// branches on it.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{0}")]
+pub struct ServerError(String);
+
+impl From<&str> for ServerError {
+    fn from(message: &str) -> Self {
+        Self(message.to_owned())
+    }
+}
+impl From<String> for ServerError {
+    fn from(message: String) -> Self {
+        Self(message)
+    }
+}
+impl From<HostError> for ServerError {
+    fn from(error: HostError) -> Self {
+        Self(error.to_string())
+    }
+}
+impl From<WorkerError> for ServerError {
+    fn from(error: WorkerError) -> Self {
+        Self(error.to_string())
+    }
+}
+impl From<TaskError> for ServerError {
+    fn from(error: TaskError) -> Self {
+        Self(error.to_string())
+    }
+}
+impl From<std::io::Error> for ServerError {
+    fn from(error: std::io::Error) -> Self {
+        Self(error.to_string())
+    }
+}
 
 /// The most idle job processes a production server keeps when the count comes from its CPUs.
 const MAX_DISCOVERED_IDLE_PROCESSES: u32 = 4;
@@ -14,6 +51,7 @@ use crate::{DrainError, Worker, WorkerClient, WorkerCommand, WorkerHost, WorkerN
 use futures_util::{FutureExt, StreamExt, future::BoxFuture, stream::FuturesUnordered};
 use host::ServerCallbacks;
 use lk_agents_abi::errors::HostError;
+use lk_agents_abi::worker::ipc_host::WorkerError;
 use lk_agents_abi::{OwnedTask, SpawnerExt, TaskError};
 use lk_agents_net::task::TokioSpawner;
 use std::future::Future;
@@ -60,19 +98,20 @@ pub fn simulated_job(
     worker_id: &str,
     room: &str,
     options: SimulatedJobOptions,
-) -> Result<RunningJobInfo, String> {
+) -> Result<RunningJobInfo, WorkerError> {
+    let invalid = |error: lk_agents_net::token::TokenError| WorkerError::Invalid(error.to_string());
     let SimulatedJobOptions { fake_job, agent_identity, room_info, token } = options;
     let token = token.filter(|t| !t.is_empty());
     let agent_identity = match (&token, agent_identity) {
-        (Some(token), _) => {
-            Some(lk_agents_net::token::token_identity(token).map_err(|e| e.to_string())?)
-        }
+        (Some(token), _) => Some(lk_agents_net::token::token_identity(token).map_err(invalid)?),
         (None, identity) => identity,
     };
     let identity = match agent_identity {
         Some(identity) => identity,
         None if fake_job => lk_agents_net::strings::shortuuid("fake-agent-"),
-        None => return Err("a dispatched job requires an agent identity".into()),
+        None => {
+            return Err(WorkerError::Invalid("a dispatched job requires an agent identity".into()));
+        }
     };
     let room_info = match room_info {
         Some(info) => info,
@@ -81,7 +120,9 @@ pub fn simulated_job(
             name: room.to_owned(),
             ..Default::default()
         },
-        None => return Err("a dispatched job requires room information".into()),
+        None => {
+            return Err(WorkerError::Invalid("a dispatched job requires room information".into()));
+        }
     };
     let job = proto::Job {
         id: lk_agents_net::strings::shortuuid(if fake_job { "mock-job-" } else { "job-" }),
@@ -101,7 +142,7 @@ pub fn simulated_job(
             room,
             lk_agents_net::token::RoomJoinOptions { agent: true, ..Default::default() },
         )
-        .map_err(|e| e.to_string())?,
+        .map_err(invalid)?,
     };
     Ok(RunningJobInfo {
         accept_arguments: AcceptArguments {
@@ -137,8 +178,8 @@ pub fn job_decision(req: &JobRequest, has_rtc: bool) -> JobDecision {
 }
 
 /// A room as `simulate_job` takes it, from its protobuf bytes.
-pub fn decode_room(bytes: &[u8]) -> Result<proto::Room, String> {
-    proto::Room::decode(bytes).map_err(|e| format!("room_info: {e}"))
+pub fn decode_room(bytes: &[u8]) -> Result<proto::Room, WorkerError> {
+    proto::Room::decode(bytes).map_err(|e| WorkerError::Invalid(format!("room_info: {e}")))
 }
 
 // --------------------------------------------------------------------- the listeners
@@ -194,7 +235,7 @@ struct Control {
     drain: Option<Option<Duration>>,
 }
 
-type Outcome<E = String> = watch::Sender<Option<Result<(), E>>>;
+type Outcome<E = ServerError> = watch::Sender<Option<Result<(), E>>>;
 
 #[derive(Clone)]
 pub struct ServerRuntime {
@@ -242,7 +283,7 @@ impl ServerRuntime {
         self.snapshot.borrow().clone()
     }
 
-    pub async fn run(&self, start: ServerStart) -> Result<(), String> {
+    pub async fn run(&self, start: ServerStart) -> Result<(), ServerError> {
         let receiver = self.receiver.lock().await.take().ok_or("worker is already running")?;
         let timeout = Duration::try_from_secs_f64(start.settings.shutdown_process_timeout)
             .map_err(|_| "shutdown timeout must be finite and nonnegative")?;
@@ -261,11 +302,11 @@ impl ServerRuntime {
         wait_outcome(&self.outcome).await
     }
 
-    pub async fn simulate_job(&self, info: crate::RunningJobInfo) -> Result<(), String> {
+    pub async fn simulate_job(&self, info: crate::RunningJobInfo) -> Result<(), ServerError> {
         if self.snapshot().phase != ServerPhase::Running {
             return Err("the server is not accepting jobs".into());
         }
-        self.host.launch_job(info).await.map(|_| ()).map_err(|error| error.to_string())
+        self.host.launch_job(info).await.map(|_| ()).map_err(ServerError::from)
     }
 
     pub async fn drain(&self, timeout: Option<Duration>) -> Result<(), DrainError> {
@@ -286,7 +327,7 @@ impl ServerRuntime {
         wait_drain_outcome(&self.drain_outcome).await
     }
 
-    pub async fn close(&self) -> Result<(), String> {
+    pub async fn close(&self) -> Result<(), ServerError> {
         if self.snapshot().phase == ServerPhase::Idle {
             return Ok(());
         }
@@ -349,9 +390,9 @@ impl ServerRuntime {
     /// Startup's result, or `None` when a close (or the end of control) comes first; and
     /// whether a drain was requested meanwhile.
     async fn await_startup(
-        startup: impl Future<Output = Result<Arc<ServerStatus>, String>>,
+        startup: impl Future<Output = Result<Arc<ServerStatus>, ServerError>>,
         control: &mut watch::Receiver<Control>,
-    ) -> (Option<Result<Arc<ServerStatus>, String>>, bool) {
+    ) -> (Option<Result<Arc<ServerStatus>, ServerError>>, bool) {
         tokio::pin!(startup);
         let mut drain_requested = false;
         loop {
@@ -373,7 +414,7 @@ impl ServerRuntime {
     async fn close_resources(
         &self,
         resources: Resources,
-        mut failure: Option<String>,
+        mut failure: Option<ServerError>,
         cleanup_timeout: Duration,
     ) {
         let mut closing = resources.close(self.host.clone());
@@ -387,7 +428,7 @@ impl ServerRuntime {
             ServerResource::Metrics,
         ]
         .into();
-        let mut cleanup_failure: Option<String> = None;
+        let mut cleanup_failure: Option<ServerError> = None;
         let mut reported = false;
         let deadline = tokio::time::sleep(cleanup_timeout);
         tokio::pin!(deadline);
@@ -406,7 +447,7 @@ impl ServerRuntime {
                     remaining.remove(&resource);
                     if let Err(error) = result {
                         log::error!(target: lk_agents_abi::LOG_TARGET, resource:? = resource; "server resource cleanup failed: {error}");
-                        let error = format!("{resource:?}: {error}");
+                        let error = ServerError(format!("{resource:?}: {error}"));
                         cleanup_failure.get_or_insert(error.clone());
                         failure.get_or_insert(error);
                     }
@@ -419,7 +460,7 @@ impl ServerRuntime {
         }
     }
 
-    fn finish(&self, failure: &Option<String>, cleanup_failure: &Option<String>) {
+    fn finish(&self, failure: &Option<ServerError>, cleanup_failure: &Option<ServerError>) {
         Self::settle(&self.cleanup_outcome, cleanup_failure.clone().map_or(Ok(()), Err));
         Self::settle(&self.outcome, failure.clone().map_or(Ok(()), Err));
     }
@@ -429,7 +470,7 @@ impl ServerRuntime {
         start: &ServerStart,
         stop: &CancellationToken,
         resources: &mut Resources,
-    ) -> Result<Arc<ServerStatus>, String> {
+    ) -> Result<Arc<ServerStatus>, ServerError> {
         let mut settings = start.settings.clone();
         if !start.has_rtc && !start.has_text_doors {
             return Err("No RTC session entrypoint has been registered".into());
@@ -505,7 +546,7 @@ impl ServerRuntime {
         settings: &mut ServerSettings,
         blocking_io: &lk_agents_net::blocking_io::BlockingIo,
         resources: &mut Resources,
-    ) -> Result<(), String> {
+    ) -> Result<(), ServerError> {
         let configured = settings.prometheus_multiproc_dir.clone();
         let discover_cpus = settings.num_idle_processes.is_none();
         let admission_deadline =
@@ -523,14 +564,14 @@ impl ServerRuntime {
             .await
             .map_err(|_| "server setup capacity wait timed out".to_owned())?;
         resources.setup = Some(blocking_io.spawn_admitted(permit, move || {
-            Ok::<_, String>((
+            (
                 prepare_prometheus_dir(configured.as_deref()),
                 discover_cpus.then(|| crate::CpuMonitor::new().cpu_count()),
-            ))
+            )
         }));
         let setup = resources.setup.as_mut().expect("setup owned before awaiting").await;
         resources.setup.take();
-        let (directory, cpus) = setup.map_err(|error| error.to_string())??;
+        let (directory, cpus) = setup.map_err(|error| ServerError(error.to_string()))?;
         settings.prometheus_multiproc_dir = directory;
         if let Some(cpus) = cpus {
             let prod = (cpus.ceil() as u32).min(MAX_DISCOVERED_IDLE_PROCESSES);
@@ -547,7 +588,7 @@ impl ServerRuntime {
         status: &Arc<ServerStatus>,
         probe: &Arc<ServerCallbacks>,
         stop: &CancellationToken,
-    ) -> Result<Option<OwnedTask<Result<(), String>>>, String> {
+    ) -> Result<Option<OwnedTask<Result<(), ServerError>>>, ServerError> {
         if settings.simulation {
             log::info!(target: lk_agents_abi::LOG_TARGET, "health listener off: simulation runs share a host");
             return Ok(None);
@@ -573,7 +614,7 @@ impl ServerRuntime {
         local: bool,
         probe: Arc<ServerCallbacks>,
         stop: &CancellationToken,
-    ) -> Result<Option<OwnedTask<Result<(), String>>>, String> {
+    ) -> Result<Option<OwnedTask<Result<(), ServerError>>>, ServerError> {
         let Some(address) = settings.listeners.prometheus(local) else {
             log::info!(target: lk_agents_abi::LOG_TARGET, "prometheus listener off: not configured");
             return Ok(None);
@@ -591,7 +632,7 @@ impl ServerRuntime {
         start: &ServerStart,
         local: bool,
         stop: &CancellationToken,
-    ) -> Result<OwnedTask<Result<(), String>>, String> {
+    ) -> Result<OwnedTask<Result<(), ServerError>>, ServerError> {
         let handler =
             self.host.mounted.get().cloned().ok_or("the endpoint server is not mounted")?;
         let unauthenticated = start.unregistered;
@@ -651,7 +692,7 @@ type StartedNotification<'a> = (BoxFuture<'a, Result<(), HostError>>, Arc<Server
 /// notification, with its health status.
 #[derive(Default)]
 struct RunningServer<'a> {
-    failure: Option<String>,
+    failure: Option<ServerError>,
     drain_requested: bool,
     drained: bool,
     drain: Option<BoxFuture<'static, Result<(), DrainError>>>,
@@ -742,7 +783,7 @@ impl<'a> RunningServer<'a> {
     fn on_started_notified(&mut self, result: Result<(), HostError>) -> ControlFlow<()> {
         let (_, status) = self.started_notification.take().expect("notification pending");
         if let Err(error) = result {
-            self.failure = Some(error.to_string());
+            self.failure = Some(error.into());
             return ControlFlow::Break(());
         }
         status.heartbeat();
@@ -764,21 +805,21 @@ impl<'a> RunningServer<'a> {
     fn on_connection_lost(
         &mut self,
         resources: &mut Resources,
-        result: Result<Result<(), String>, TaskError>,
+        result: Result<Result<(), ServerError>, TaskError>,
     ) -> ControlFlow<()> {
         // The connection is gone: nothing of it is left to stop.
         resources.connection = None;
         resources.worker = None;
-        self.failure = Some(match result.unwrap_or_else(|error| Err(error.to_string())) {
+        self.failure = Some(match result.unwrap_or_else(|error| Err(error.into())) {
             Ok(()) => "worker connection stopped".into(),
-            Err(error) => format!("{:?}: {error}", ServerResource::Worker),
+            Err(error) => ServerError(format!("{:?}: {error}", ServerResource::Worker)),
         });
         ControlFlow::Break(())
     }
 
     /// Enters Closing: an unfinished drain fails as closed, and the drain and the `started`
     /// notification are dropped. Returns the failure that ended the run.
-    fn close(self, server: &ServerRuntime) -> Option<String> {
+    fn close(self, server: &ServerRuntime) -> Option<ServerError> {
         server.set_phase(ServerPhase::Closing);
         if self.drain_requested && !self.drained {
             ServerRuntime::settle(&server.drain_outcome, Err(DrainError::Closed));
@@ -843,14 +884,14 @@ impl Registration {
 async fn run_worker_connection(
     mut worker: Worker,
     mut registration: Registration,
-) -> Result<(), String> {
+) -> Result<(), ServerError> {
     let run = worker.run();
     tokio::pin!(run);
     let result = tokio::select! {
         result = &mut run => result,
         () = registration.forward() => run.await,
     }
-    .map_err(|error| error.to_string());
+    .map_err(|error| ServerError(error.to_string()));
     if result.is_err() {
         registration.status.failed.store(true, Ordering::Release);
     }
@@ -865,7 +906,7 @@ struct LoadReporter {
 }
 
 impl LoadReporter {
-    async fn run(self) -> Result<(), String> {
+    async fn run(self) -> Result<(), ServerError> {
         let mut interval = tokio::time::interval(crate::UPDATE_LOAD_INTERVAL);
         loop {
             interval.tick().await;
@@ -873,33 +914,26 @@ impl LoadReporter {
         }
     }
 
-    async fn report_once(&self) -> Result<(), String> {
+    async fn report_once(&self) -> Result<(), ServerError> {
         let (host, status) = (&self.host, &self.status);
         if let Some(worker) = &self.worker {
             let snapshot = worker.snapshot();
             status.set_load(snapshot.worker_load);
             status.connected.store(snapshot.registered, Ordering::Release);
             if let Some(target) = snapshot.target_idle_processes {
-                host.proxy
-                    .idle_processes(&telemetry::Cx::NONE, target)
-                    .await
-                    .map_err(|error| error.to_string())?;
+                host.proxy.idle_processes(&telemetry::Cx::NONE, target).await?;
             }
         }
         // The host answering is its heartbeat: `/` reads it without waiting on the host.
-        host.proxy
-            .worker_load(&telemetry::Cx::NONE, f64::from(status.load()))
-            .await
-            .map_err(|error| error.to_string())?;
+        host.proxy.worker_load(&telemetry::Cx::NONE, f64::from(status.load())).await?;
         status.heartbeat();
         Ok(())
     }
 }
 
 /// A listener bound at `address`, and the URL it is reached at from this host.
-async fn bind(address: &Bind) -> Result<(tokio::net::TcpListener, String), String> {
-    let (listener, port) =
-        bind_listener(&address.host, address.port).await.map_err(|error| error.to_string())?;
+async fn bind(address: &Bind) -> Result<(tokio::net::TcpListener, String), ServerError> {
+    let (listener, port) = bind_listener(&address.host, address.port).await?;
     let host = match address.host.as_str() {
         "" | "0.0.0.0" => "127.0.0.1".to_owned(),
         "::" | "[::]" => "[::1]".to_owned(),
@@ -909,12 +943,12 @@ async fn bind(address: &Bind) -> Result<(tokio::net::TcpListener, String), Strin
     Ok((listener, format!("http://{host}:{port}")))
 }
 
-async fn wait_outcome(outcome: &Outcome) -> Result<(), String> {
+async fn wait_outcome(outcome: &Outcome) -> Result<(), ServerError> {
     outcome
         .subscribe()
         .wait_for(Option::is_some)
         .await
-        .map_err(|error| error.to_string())?
+        .map_err(|error| ServerError(error.to_string()))?
         .clone()
         .unwrap_or(Ok(()))
 }
@@ -948,8 +982,8 @@ async fn pending_notification(
 }
 
 async fn pending_worker(
-    worker: &mut Option<OwnedTask<Result<(), String>>>,
-) -> Result<Result<(), String>, TaskError> {
+    worker: &mut Option<OwnedTask<Result<(), ServerError>>>,
+) -> Result<Result<(), ServerError>, TaskError> {
     match worker {
         Some(worker) => worker.await,
         None => std::future::pending().await,
@@ -960,24 +994,24 @@ async fn pending_worker(
 struct Resources {
     setup: Option<lk_agents_net::blocking_io::Job<SetupOutcome>>,
     worker: Option<WorkerClient>,
-    connection: Option<OwnedTask<Result<(), String>>>,
-    load: Option<OwnedTask<Result<(), String>>>,
-    public: Option<OwnedTask<Result<(), String>>>,
-    health: Option<OwnedTask<Result<(), String>>>,
-    metrics: Option<OwnedTask<Result<(), String>>>,
+    connection: Option<OwnedTask<Result<(), ServerError>>>,
+    load: Option<OwnedTask<Result<(), ServerError>>>,
+    public: Option<OwnedTask<Result<(), ServerError>>>,
+    health: Option<OwnedTask<Result<(), ServerError>>>,
+    metrics: Option<OwnedTask<Result<(), ServerError>>>,
 }
 
 impl Resources {
     fn close(
         self,
         host: ServerCallbacks,
-    ) -> FuturesUnordered<BoxFuture<'static, (ServerResource, Result<(), String>)>> {
+    ) -> FuturesUnordered<BoxFuture<'static, (ServerResource, Result<(), ServerError>)>> {
         let closing = FuturesUnordered::new();
         closing.push(
             async move {
                 (
                     ServerResource::Host,
-                    host.proxy.close(&telemetry::Cx::NONE).await.map_err(|error| error.to_string()),
+                    host.proxy.close(&telemetry::Cx::NONE).await.map_err(ServerError::from),
                 )
             }
             .boxed(),
@@ -985,10 +1019,7 @@ impl Resources {
         closing.push(
             async move {
                 let result = match self.setup {
-                    Some(setup) => setup
-                        .await
-                        .map_err(|error| error.to_string())
-                        .and_then(|result| result.map(|_| ())),
+                    Some(setup) => setup.await.map(drop).map_err(|e| ServerError(e.to_string())),
                     None => Ok(()),
                 };
                 (ServerResource::Setup, result)
@@ -999,10 +1030,12 @@ impl Resources {
             .worker
             .map(|worker| {
                 worker.send(WorkerCommand::Close).map_err(|_| {
-                    worker
-                        .snapshot()
-                        .finished
-                        .unwrap_or_else(|| "worker close admission failed".into())
+                    ServerError(
+                        worker
+                            .snapshot()
+                            .finished
+                            .unwrap_or_else(|| "worker close admission failed".into()),
+                    )
                 })
             })
             .unwrap_or(Ok(()));
@@ -1026,7 +1059,7 @@ impl Resources {
                         Some(task) => match task.await {
                             Ok(result) => result,
                             Err(TaskError::Cancelled) if resource == ServerResource::Load => Ok(()),
-                            Err(error) => Err(error.to_string()),
+                            Err(error) => Err(error.into()),
                         },
                         None => Ok(()),
                     };

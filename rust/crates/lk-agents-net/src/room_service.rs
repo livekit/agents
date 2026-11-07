@@ -9,6 +9,7 @@ use livekit_api::services::room::RoomClient;
 use livekit_api::services::sip::{CreateSIPParticipantOptions, SIPClient};
 use livekit_api::services::{ServerError, ServerErrorCode, ServiceError};
 use livekit_protocol as proto;
+use lk_agents_abi::errors::ApiError;
 
 /// A project's RoomService: its `LIVEKIT_URL` (`wss://` or `https://`) and key pair.
 pub struct RoomService(RoomClient);
@@ -130,16 +131,27 @@ impl Telephony {
     }
 }
 
+/// A project request's failure: an unsent request is a connection failure.
+pub fn api_error(error: ServiceError) -> ApiError {
+    match error {
+        ServiceError::Twirp(ServerError::Request(error)) => {
+            ApiError::connection(Some(crate::http::error_chain(&error)))
+        }
+        error => ApiError::new(error.to_string()),
+    }
+}
+
 /// A form POST that does not follow redirects: the status and body of the first response.
 pub async fn post_form(
     url: &str,
     headers: &BTreeMap<String, String>,
     form: &[(String, String)],
-) -> Result<(u16, String), String> {
-    let client = crate::tls::http_client_builder()?
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|error| crate::http::error_chain(&error))?;
+) -> Result<(u16, String), ApiError> {
+    let unbuilt =
+        |error: crate::tls::TlsError| ApiError::new(error.to_string()).with_retryable(false);
+    let builder = crate::tls::http_client_builder().map_err(unbuilt)?;
+    let client =
+        crate::tls::build(builder.redirect(reqwest::redirect::Policy::none())).map_err(unbuilt)?;
     let body = url::form_urlencoded::Serializer::new(String::new()).extend_pairs(form).finish();
     let mut request = client
         .post(url)
@@ -148,9 +160,11 @@ pub async fn post_form(
     for (name, value) in headers {
         request = request.header(name, value);
     }
-    let response = request.send().await.map_err(|error| crate::http::error_chain(&error))?;
+    let failed =
+        |error: reqwest::Error| ApiError::connection(Some(crate::http::error_chain(&error)));
+    let response = request.send().await.map_err(failed)?;
     let status = response.status().as_u16();
-    let text = response.text().await.map_err(|error| crate::http::error_chain(&error))?;
+    let text = response.text().await.map_err(failed)?;
     Ok((status, text))
 }
 

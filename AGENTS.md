@@ -335,6 +335,12 @@ STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
   crates.
 - Audio into a consumer goes through a `media_queue` (`CatchUp` or `Now`); a bounded channel
   with fatal overflow is not allowed for audio, and local pressure is never a non-retryable error.
+- Errors: an error's type distinguishes only what some caller branches on; everything else is
+  its message. The shared kinds are `ApiError` (provider, network, transport), `StorageError`,
+  `HostError` (a typed `HostErrorKind` the adapter classifies once, never an exception name),
+  cancellation (`ApiErrorKind::Cancelled`, `StorageError::Cancelled`, `HostErrorKind::Cancelled`)
+  and invalid input or configuration. No `Result<_, String>` and no decision on an error's
+  message; a new variant needs a caller that matches on it.
 - Every git-tracked handwritten `.rs` file stays within 1,250 lines; files with the generated
   marker are skipped. Split by responsibility when moving code.
 - Production functions nest at most 4 braces below their body (`nesting-baseline.json` holds

@@ -22,7 +22,7 @@ pub struct Runner {
     config: TextSessionConfig,
     agents: BTreeMap<String, TextSessionAgent>,
     control: Mutex<Option<Control>>,
-    runtime: fn() -> Result<tokio::runtime::Handle, String>,
+    runtime: fn() -> Result<tokio::runtime::Handle, lk_agents_net::env::ProcessError>,
     clock: Arc<dyn Clock>,
     tracer: telemetry::Tracer,
 }
@@ -57,7 +57,7 @@ impl TextSessionRunner for Runner {
     }
 
     fn run(&self, request: TextSessionRequest) -> Result<Updates, InvalidRun> {
-        let runtime = (self.runtime)().map_err(InvalidRun)?;
+        let runtime = (self.runtime)().map_err(|error| InvalidRun(error.to_string()))?;
         let mut current = self.control.lock();
         if current.as_ref().is_some_and(|c| !c.release.is_closed()) {
             return Err(InvalidRun("this runner already has an active request".into()));

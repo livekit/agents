@@ -40,7 +40,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
     ) -> Result<Self, lk_agents_abi::voice::rtc::RtcError> {
         let spawner = (env.spawner)().map_err(|e| {
             lk_agents_abi::voice::rtc::RtcError::Stream(
-                lk_agents_abi::errors::ApiError::new(e).into(),
+                lk_agents_abi::errors::ApiError::new(e.to_string()).into(),
             )
         })?;
         let agents = HostAgents::default();

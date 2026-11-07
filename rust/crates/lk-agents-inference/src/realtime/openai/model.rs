@@ -185,8 +185,7 @@ impl OpenAIRealtimeModel for OpenAIRealtime {
             auth,
             conn: config.conn_options,
         };
-        let runtime =
-            (env.runtime)().map_err(|error| ApiError::new(error).with_retryable(false))?;
+        let runtime = (env.runtime)().map_err(ApiError::from)?;
         let mut native = OpenAIRealtime::new(
             dialect,
             "",

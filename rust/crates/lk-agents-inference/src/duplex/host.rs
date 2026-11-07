@@ -113,7 +113,7 @@ impl SessionGate {
 
 /// `{type(e).__name__}: {e}`, as the output stream's failure is reported.
 fn describe(e: &HostError) -> String {
-    format!("{}: {}", e.kind, e.message)
+    format!("{}: {}", e.class, e.message)
 }
 
 pub(super) fn provider_error(e: HostError) -> ProviderError {
@@ -352,7 +352,7 @@ impl abi::DuplexRealtimeModel for DuplexAdapterModel {
             audio_timeout: Duration::from_secs_f64(audio_timeout.max(0.0)),
             clock: env.clock.clone(),
             anchor: WallAnchor::of(&*env.clock),
-            spawner: (env.spawner)().map_err(HostError::new)?,
+            spawner: (env.spawner)().map_err(|e| HostError::new(e.to_string()))?,
         })
     }
 

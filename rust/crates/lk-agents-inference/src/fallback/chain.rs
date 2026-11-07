@@ -18,7 +18,7 @@ use lk_agents_abi::HOST_TEARDOWN_TIMEOUT;
 use lk_agents_abi::OwnedTask;
 use lk_agents_abi::Ts;
 use lk_agents_abi::errors::ApiErrorKind;
-use lk_agents_abi::errors::{ApiError, CANCELLED_STATUS, ProviderError};
+use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::{BoxFuture, Spawner, SpawnerExt};
 use lk_agents_net::task::{TaskId, TaskSet};
@@ -318,7 +318,7 @@ impl<B: Backend> FallbackChain<B> {
             .total_timeout
             .map(|seconds| started.saturating_add(Duration::from_secs_f64(seconds)));
         if cancel.is_cancelled() {
-            return Err(ApiError::status("fallback closed", CANCELLED_STATUS, None, None).into());
+            return Err(ApiError::cancelled("fallback closed").into());
         }
         if deadline.is_some_and(|at| self.clock.now() >= at) {
             return Err(ApiError::timed_out(lk_agents_abi::errors::TimeoutPhase::Total).into());
@@ -762,9 +762,7 @@ impl<B: Backend, S, F> AttemptLaunch<B, S, F> {
     /// Why an attempt admitted late must not open: it was stopped, or its deadline passed.
     fn refusal(&self, now: Ts) -> Option<ProviderError> {
         if self.stop.is_cancelled() || self.closed.is_cancelled() {
-            return Some(
-                ApiError::status("fallback cancelled", CANCELLED_STATUS, None, None).into(),
-            );
+            return Some(ApiError::cancelled("fallback cancelled").into());
         }
         self.deadline.is_some_and(|at| now >= at).then(|| {
             ApiError::timed_out(lk_agents_abi::errors::TimeoutPhase::Total)
