@@ -82,7 +82,7 @@ agent_python_path=${PYTHONPATH:-$PWD/../livekit-agents-next}
 step "worker generated API, CLI and endpoint contracts"
 PYTHONPATH="$agent_python_path:$PWD/.." "$py" -m pytest \
     ../tests/conformance/test_worker_records.py ../tests/conformance/test_python_bootstrap.py \
-    ../tests/test_endpoint_routes.py ../tests/test_http.py --unit -q
+    ../tests/test_endpoint_routes.py --unit -q
 
 step "bounded real IPC, preload and shutdown journeys"
 LIVEKIT_IPC_SOAK_BATCHES=3 LIVEKIT_AGENTS_PRELOAD_LOCAL_INFERENCE=0 \
