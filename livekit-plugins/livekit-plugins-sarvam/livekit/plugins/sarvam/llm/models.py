@@ -17,6 +17,6 @@ from typing import Literal
 SarvamLLMModels = Literal[
     "gemma4",
     "sarvam-105b",
-    "glm5.2",
+    "glm5.3",
     "sarvam-105b-conversations",
 ]

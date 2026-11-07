@@ -90,7 +90,17 @@ def test_constructor_rejects_old_30b_model() -> None:
         )
 
 
-@pytest.mark.parametrize("model", ["gemma4", "sarvam-105b", "sarvam-105b-conversations", "glm5.2"])
+def test_constructor_rejects_deprecated_glm52_model() -> None:
+    # the API answers glm5.2 with a 404, "glm5.2 has been deprecated."
+    with pytest.raises(ValueError, match="Unsupported Sarvam model"):
+        SarvamLLM(
+            model="glm5.2",
+            api_key="sk_test",
+            client=_fake_async_client(),
+        )
+
+
+@pytest.mark.parametrize("model", ["gemma4", "sarvam-105b", "sarvam-105b-conversations", "glm5.3"])
 def test_constructor_accepts_each_supported_model(model: str) -> None:
     llm = SarvamLLM(model=model, api_key="sk_test", client=_fake_async_client())
     assert llm.model == model
@@ -218,9 +228,9 @@ def test_reasoning_effort_set_for_gemma4() -> None:
     assert llm._opts.reasoning_effort == "low"
 
 
-def test_reasoning_effort_set_for_glm52() -> None:
+def test_reasoning_effort_set_for_glm53() -> None:
     llm = SarvamLLM(
-        model="glm5.2",
+        model="glm5.3",
         api_key="sk_test",
         client=_fake_async_client(),
         reasoning_effort="medium",
@@ -248,9 +258,9 @@ def test_image_rejected_on_non_vision_model() -> None:
         llm.chat(chat_ctx=_chat_ctx_with_image())
 
 
-def test_image_rejected_on_glm52() -> None:
+def test_image_rejected_on_glm53() -> None:
     llm = SarvamLLM(
-        model="glm5.2",
+        model="glm5.3",
         api_key="sk_test",
         client=_fake_async_client(),
     )
@@ -550,7 +560,7 @@ def test_conversations_resolves_to_v1_endpoint() -> None:
 
 def test_v2_models_resolve_to_v2_endpoint() -> None:
     """Non-conversations models resolve to /v2."""
-    for model in ["sarvam-105b", "gemma4", "glm5.2"]:
+    for model in ["sarvam-105b", "gemma4", "glm5.3"]:
         llm = SarvamLLM(model=model, api_key="sk_test")
         assert str(llm._client._base_url).rstrip("/") == SARVAM_LLM_BASE_URL_V2.rstrip("/")
         import asyncio
@@ -592,6 +602,56 @@ def test_conversations_strips_wiki_grounding() -> None:
     )
     if is_given(llm._opts.extra_body):
         assert "wiki_grounding" not in llm._opts.extra_body
+
+
+def test_glm53_strips_wiki_grounding() -> None:
+    # the API rejects wiki_grounding on glm5.3 with a 400
+    llm = SarvamLLM(
+        model="glm5.3",
+        api_key="sk_test",
+        client=_fake_async_client(),
+        wiki_grounding=True,
+    )
+    assert not is_given(llm._opts.extra_body)
+
+
+def test_glm53_strips_wiki_grounding_from_extra_body() -> None:
+    llm = SarvamLLM(
+        model="glm5.3",
+        api_key="sk_test",
+        client=_fake_async_client(),
+        extra_body={"wiki_grounding": True, "seed": 7},
+    )
+    assert llm._opts.extra_body == {"seed": 7}
+
+
+def test_model_switch_drops_and_restores_wiki_grounding() -> None:
+    llm = SarvamLLM(
+        model="sarvam-105b",
+        api_key="sk_test",
+        client=_fake_async_client(),
+        wiki_grounding=True,
+        seed=7,
+    )
+
+    llm.update_options(model="glm5.3")
+    assert llm._opts.extra_body == {"seed": 7}
+
+    llm.update_options(model="sarvam-105b")
+    assert llm._opts.extra_body == {"seed": 7, "wiki_grounding": True}
+
+
+def test_model_switch_leaves_extra_body_unset_without_fields() -> None:
+    llm = SarvamLLM(
+        model="sarvam-105b",
+        api_key="sk_test",
+        client=_fake_async_client(),
+        wiki_grounding=True,
+    )
+
+    llm.update_options(model="glm5.3")
+
+    assert not is_given(llm._opts.extra_body)
 
 
 def test_conversations_rejects_image_input() -> None:
