@@ -1,6 +1,7 @@
 import asyncio
 import enum
 import json
+from collections.abc import AsyncIterator
 from typing import Annotated, Any, Literal
 from unittest.mock import MagicMock
 
@@ -329,6 +330,144 @@ class TestToolContext:
         ctx = ToolContext([mock_tool_1, mock_tool_2])
         ctx._exclude([])
         assert set(ctx.function_tools) == {"mock_tool_1", "mock_tool_2"}
+
+    @pytest.mark.parametrize("excluded", [mock_tool_1, raw_tool_1, DummyProviderTool("p")])
+    def test_exclusions_survive_flattened_sync(self, excluded):
+        inner = Toolset(id="inner", tools=[excluded, mock_tool_2])
+        outer = Toolset(id="outer", tools=[inner])
+        ctx = ToolContext([outer])
+        ctx._exclude([excluded])
+
+        ctx._sync_flattened([*ctx.flatten(), mock_tool_3])
+        assert ctx.flatten() == [mock_tool_2, mock_tool_3]
+        ctx._sync_flattened([mock_tool_3])
+        assert ctx.flatten() == [mock_tool_3]
+        assert ctx.toolsets == [inner, outer]
+        assert inner.tools == [excluded, mock_tool_2]
+
+    def test_repeated_exclusions_accumulate(self):
+        toolset = MockToolset1()
+        ctx = ToolContext([toolset, mock_tool_3])
+
+        ctx._exclude([mock_tool_1])
+        ctx._exclude([mock_tool_2])
+
+        assert ctx.flatten() == [mock_tool_3]
+        assert ctx.toolsets == [toolset]
+        assert toolset.tools == [mock_tool_1, mock_tool_2]
+
+    @pytest.mark.parametrize("excluded", [mock_tool_1, raw_tool_1, DummyProviderTool("p")])
+    def test_copy_preserves_exclusions(self, excluded):
+        toolset = Toolset(id="tools", tools=[excluded, mock_tool_2])
+        ctx = ToolContext([toolset])
+        ctx._exclude([excluded])
+
+        copied = ctx.copy()
+
+        assert copied == ctx
+        assert copied.flatten() == [mock_tool_2]
+        assert copied.toolsets == [toolset]
+        copied._sync_flattened([*copied.flatten(), mock_tool_3])
+        assert copied.flatten() == [mock_tool_2, mock_tool_3]
+        copied._sync_flattened([*copied.flatten(), excluded])
+        assert excluded in copied.flatten()
+        assert sum(tool is excluded for tool in copied.flatten()) == 1
+        assert excluded not in ctx.flatten()
+        assert toolset.tools == [excluded, mock_tool_2]
+
+    def test_flattened_sync_explicitly_readds_excluded_member(self):
+        toolset = MockToolset1()
+        ctx = ToolContext([toolset])
+        ctx._exclude([mock_tool_1, mock_tool_2])
+
+        ctx._sync_flattened([mock_tool_1])
+
+        assert ctx.flatten() == [mock_tool_1]
+        assert ctx.get_function_tool("mock_tool_1") is mock_tool_1
+        assert ctx.get_function_tool("mock_tool_2") is None
+        assert ctx.toolsets == [toolset]
+
+    def test_flattened_sync_readds_excluded_top_level_provider(self):
+        provider = DummyProviderTool("provider")
+        ctx = ToolContext([provider, mock_tool_1])
+        ctx._exclude([provider])
+
+        ctx._sync_flattened([*ctx.flatten(), provider])
+
+        assert ctx.provider_tools == [provider]
+        assert ctx.get_function_tool("mock_tool_1") is mock_tool_1
+
+    def test_flattened_sync_replaces_excluded_member_with_same_name(self):
+        toolset = MockToolset1()
+        ctx = ToolContext([toolset])
+        ctx._exclude([mock_tool_1])
+
+        @function_tool(name="mock_tool_1")
+        async def replacement() -> str:
+            """Replacement tool."""
+            return "replacement"
+
+        ctx._sync_flattened([*ctx.flatten(), replacement])
+
+        assert ctx.get_function_tool("mock_tool_1") is replacement
+        assert ctx.get_function_tool("mock_tool_2") is mock_tool_2
+        assert ctx.toolsets == [toolset]
+        assert ctx.copy() == ctx
+
+    def test_update_tools_resets_exclusions(self):
+        toolset = MockToolset1()
+        ctx = ToolContext([toolset])
+        ctx._exclude([mock_tool_1])
+
+        ctx.update_tools([toolset])
+
+        assert ctx.flatten() == [mock_tool_1, mock_tool_2]
+        assert ctx.toolsets == [toolset]
+
+
+@pytest.mark.parametrize("lazy", [False, True], ids=["eager", "streaming"])
+async def test_llm_node_edits_preserve_excluded_toolset_members(lazy: bool) -> None:
+    from livekit.agents.llm import ChatChunk, ChatContext, ChoiceDelta, FunctionToolCall
+    from livekit.agents.voice import generation
+    from livekit.agents.voice.io import ModelSettings
+
+    toolset = MockToolset1()
+    ctx = ToolContext([toolset])
+    ctx._exclude([mock_tool_1])
+
+    def node(
+        chat_ctx: ChatContext, tools: list[Tool], model_settings: ModelSettings
+    ) -> str | AsyncIterator[ChatChunk]:
+        assert tools == [mock_tool_2]
+        if not lazy:
+            tools.append(mock_tool_3)
+            return "hello"
+
+        async def stream() -> AsyncIterator[ChatChunk]:
+            tools.append(mock_tool_3)
+            yield ChatChunk(
+                id="reply",
+                delta=ChoiceDelta(
+                    tool_calls=[
+                        FunctionToolCall(name="mock_tool_3", call_id="call", arguments="{}")
+                    ]
+                ),
+            )
+
+        return stream()
+
+    task, data = generation.perform_llm_inference(
+        node=node, chat_ctx=ChatContext.empty(), tool_ctx=ctx, model_settings=ModelSettings()
+    )
+    assert await task is True
+    assert ctx.get_function_tool("mock_tool_1") is None
+    assert ctx.get_function_tool("mock_tool_3") is mock_tool_3
+    assert ctx.toolsets == [toolset]
+    assert toolset.tools == [mock_tool_1, mock_tool_2]
+    if lazy:
+        assert [call.name for call in data.generated_functions] == ["mock_tool_3"]
+    else:
+        assert data.generated_text == "hello"
 
 
 def test_end_call_tool_ignore_on_enter_flag():
