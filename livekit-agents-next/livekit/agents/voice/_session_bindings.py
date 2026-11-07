@@ -564,9 +564,12 @@ class RemoteSessionAccess:
         return agent.name, agent._config.instructions, tools, self.session.history.items
 
     async def _core_run_input(self, text: str) -> list[llm.ChatItem]:
+        from .run_result import _events
+
         await self.session.interrupt(force=True)
         result = await self.session._run(user_input=text)
-        return result.new_messages()
+        # the reply to `text`: the run's events, without the input itself (1.x `RunResult.events`)
+        return [event.item for event in _events(result.new_messages())]
 
     async def _core_session_state(self) -> tuple[str, str, str, dict[str, str], float | None]:
         options = self.session.options

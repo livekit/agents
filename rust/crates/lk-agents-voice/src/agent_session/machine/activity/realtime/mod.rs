@@ -999,7 +999,12 @@ impl VoiceDriver {
             let item = ChatMessage::text(self.session.ids.mint("item"), Role::User, &text, wall);
             let push = rt::PushItem { item: Box::new(item.clone().into()), reply_required: true };
             self.rt_send(RealtimeCommand::PushItem(push));
-            self.commit_item(item.into(), Source::UserTyped, Visibility::Both);
+            let item = lk_agents_abi::ChatItem::from(item);
+            if role == RealtimeReplyRole::VoiceRun {
+                // The run's input: its `new_messages()` start with it.
+                self.session.runs.record(&item);
+            }
+            self.commit_item(item, Source::UserTyped, Visibility::Both);
         }
         let request = Request::GenerateReply { instructions, tool_choice, read_back };
         self.realtime_request(now, request, call, allow_interruptions, voice_run)

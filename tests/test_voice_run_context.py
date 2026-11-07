@@ -63,6 +63,32 @@ async def test_a_call_without_storage_runs_on_a_local_thread() -> None:
     await local.aclose()
 
 
+# Catches: a voice run's `new_messages()` leaving out the input it was run on, which a text run's
+# starts with; and the remote session's `run_input` reply echoing that input back.
+async def test_a_voice_run_starts_with_its_input_and_run_input_answers_without_it() -> None:
+    from livekit.agents.voice._session_bindings import RemoteSessionAccess
+
+    agent = Agent(instructions="Check.", name="desk")
+    checked: list[str] = []
+
+    @agent.tool
+    async def check(ctx: RunContext) -> str:
+        """Check the caller's request."""
+        checked.append(ctx.execution_id)
+        return f"checked {len(checked) - 1}"
+
+    async with VoiceSession(
+        llm=_calls("hello", "again"), vad=None, turn_detection="manual"
+    ) as session:
+        await session.start(agent)
+        result = await session._run(user_input="hello")
+        first = result.new_messages()[0]
+        assert first.type == "message" and first.role == "user"
+        assert first.text_content == "hello"
+        reply = await RemoteSessionAccess(session)._core_run_input("again")
+    assert [item.type for item in reply] == ["function_call", "function_call_output", "message"]
+
+
 async def test_a_call_keeps_one_execution_id_across_its_turns() -> None:
     agent = Agent(instructions="Check.", name="desk")
     seen: list[tuple[str, str]] = []
