@@ -16,6 +16,7 @@ use tokio::time::Instant;
 
 use crate::ipc::telemetry;
 use lk_agents_abi::errors::HostError;
+use lk_agents_abi::worker::ipc_host::ProcessEvent;
 use lk_agents_abi::worker::types::RunningJobInfo;
 
 use super::process_pool::Executor;
@@ -65,33 +66,6 @@ impl std::fmt::Display for PoolAdmissionError {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PoolCleanupObservation {
     pub processes: Vec<ProcessId>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ProcessEvent {
-    Created,
-    Started,
-    Ready,
-    Closed,
-    JobLaunched,
-    CleanupIncomplete,
-    JoinFailed,
-    ExitFailed,
-}
-
-impl ProcessEvent {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Created => "process_created",
-            Self::Started => "process_started",
-            Self::Ready => "process_ready",
-            Self::Closed => "process_closed",
-            Self::JobLaunched => "process_job_launched",
-            Self::CleanupIncomplete => "process_cleanup_incomplete",
-            Self::JoinFailed => "process_join_failed",
-            Self::ExitFailed => "process_exit_failed",
-        }
-    }
 }
 
 /// The pool's steps on its executors: the host's in production, a fake in tests.

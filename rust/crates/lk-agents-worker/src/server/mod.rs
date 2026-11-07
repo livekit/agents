@@ -26,7 +26,7 @@ use tokio_util::sync::CancellationToken;
 mod health;
 mod http;
 mod public;
-pub use health::{HealthProbe, HealthState, ServerStatus, serve_health, serve_metrics};
+pub use health::{HealthProbe, ServerStatus, serve_health, serve_metrics};
 #[cfg(test)]
 use health::{health_route, metrics_route};
 pub use http::bind_listener;

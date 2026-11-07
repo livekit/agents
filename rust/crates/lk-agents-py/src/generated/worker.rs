@@ -3383,7 +3383,7 @@ impl ::lk_agents_abi::worker::ipc_host::PoolCallbacks for PoolCallbacksProxy {
 
     fn emit(
         &self,
-        event: ::std::string::String,
+        event: ::lk_agents_abi::worker::ipc_host::ProcessEvent,
         process: ::std::sync::Arc<dyn ::lk_agents_abi::worker::ipc_host::SupervisedJob>,
     ) {
         let host = ::std::sync::Arc::clone(&self.host);
@@ -3396,7 +3396,7 @@ impl ::lk_agents_abi::worker::ipc_host::PoolCallbacks for PoolCallbacksProxy {
             &[],
             false,
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [::pyo3::IntoPyObjectExt::into_bound_py_any(event_arg, py)?, <dyn ::lk_agents_abi::worker::ipc_host::SupervisedJob as super::NativeToHost>::to_host(py, process_arg)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 2] = [crate::py_values::str_to_py(py, &event_arg), <dyn ::lk_agents_abi::worker::ipc_host::SupervisedJob as super::NativeToHost>::to_host(py, process_arg)?];
                 Ok((host.bind(py).getattr("emit")?, ::pyo3::types::PyTuple::new(py, args)?, None))
             }),
         );

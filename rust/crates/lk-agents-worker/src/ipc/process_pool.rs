@@ -9,12 +9,12 @@ use lk_agents_abi::errors::HostError;
 use lk_agents_abi::invoke::CallContext;
 use lk_agents_abi::worker::ipc::{JobRunnerOptions, JobStatus};
 use lk_agents_abi::worker::ipc_host::{
-    JobSupervisor as _, PoolCallbacks, SupervisedJob, WorkerError,
+    JobSupervisor as _, PoolCallbacks, ProcessEvent, SupervisedJob, WorkerError,
 };
 use lk_agents_abi::worker::types::RunningJobInfo;
 
 use super::owner::JobSupervisor;
-use super::pool::{Executors, LaunchError, PoolJoinOutcome, PoolOptions, ProcPool, ProcessEvent};
+use super::pool::{Executors, LaunchError, PoolJoinOutcome, PoolOptions, ProcPool};
 use super::supervisor::runner_log;
 use super::{SupervisorCallbacks, secs};
 use lk_agents_net::env::ProcessEnv;
@@ -104,7 +104,7 @@ impl Executors for HostExecutors {
     }
 
     fn emit(&self, event: ProcessEvent, proc: &Executor) {
-        self.host.emit(event.as_str().into(), proc.0.clone());
+        self.host.emit(event, proc.0.clone());
     }
 }
 

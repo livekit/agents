@@ -1,6 +1,7 @@
 use super::*;
 use http_body_util::BodyExt as _;
 use hyper::{Method, StatusCode};
+use lk_agents_abi::worker::server_host::HealthState;
 
 fn settings() -> ServerSettings {
     ServerSettings { version: "2.0.0".into(), ..ServerSettings::default() }

@@ -3,6 +3,7 @@ use super::http::{HttpServer, Response, method_not_allowed, response, text};
 use super::*;
 use hyper::header::HeaderValue;
 use hyper::{Method, StatusCode};
+use lk_agents_abi::worker::server_host::HealthState;
 /// What the health and metrics listeners read from the host, beside the server's own state.
 #[async_trait::async_trait]
 pub trait HealthProbe: Send + Sync {
@@ -14,44 +15,6 @@ pub trait HealthProbe: Send + Sync {
 
 /// How long the host may go without answering before the worker reads as stuck.
 pub const STUCK_AFTER: Duration = Duration::from_secs(5);
-
-/// What `/` and `/ready` report.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HealthState {
-    /// Not registered yet, or the job process pool has not filled for the first time.
-    Starting,
-    Ready,
-    /// The connection dropped; the worker is registering again.
-    Reconnecting,
-    Draining,
-    /// Reconnection gave up, or the pool cannot start.
-    Failed,
-    /// The host has not answered for `STUCK_AFTER`.
-    Stuck,
-}
-
-impl HealthState {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            HealthState::Starting => "starting",
-            HealthState::Ready => "OK",
-            HealthState::Reconnecting => "reconnecting",
-            HealthState::Draining => "draining",
-            HealthState::Failed => "failed",
-            HealthState::Stuck => "stuck",
-        }
-    }
-
-    /// `/`: only what a restart fixes fails it, never a drain or a dropped connection.
-    pub fn live(self) -> bool {
-        matches!(self, HealthState::Ready | HealthState::Reconnecting | HealthState::Draining)
-    }
-
-    /// `/ready`: whether to receive traffic.
-    pub fn ready(self) -> bool {
-        self == HealthState::Ready
-    }
-}
 
 /// The server state the listener and `/worker` read, written by the lifecycle as it happens.
 pub struct ServerStatus {

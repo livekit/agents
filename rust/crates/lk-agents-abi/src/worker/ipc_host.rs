@@ -301,6 +301,28 @@ pub trait IpcClient: Send + Sync + Sized + 'static {
     async fn aclose(&self);
 }
 
+/// A process's step in the pool, the event `ProcPool.emit` names.
+#[crate::host(wire_enum)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProcessEvent {
+    #[host(rename = "process_created")]
+    Created,
+    #[host(rename = "process_started")]
+    Started,
+    #[host(rename = "process_ready")]
+    Ready,
+    #[host(rename = "process_closed")]
+    Closed,
+    #[host(rename = "process_job_launched")]
+    JobLaunched,
+    #[host(rename = "process_cleanup_incomplete")]
+    CleanupIncomplete,
+    #[host(rename = "process_join_failed")]
+    JoinFailed,
+    #[host(rename = "process_exit_failed")]
+    ExitFailed,
+}
+
 #[crate::host(proxy(host = "livekit.agents.ipc.ProcPool"))]
 pub trait PoolCallbacks: Send + Sync {
     /// The launcher of a new process, made on the host's loop.
@@ -309,10 +331,9 @@ pub trait PoolCallbacks: Send + Sync {
         &self,
         cx: &crate::telemetry::Cx,
     ) -> crate::BoxFuture<'_, Result<Arc<dyn JobLauncher>, HostError>>;
-    /// The pool's one notification of a process's step: `process_created`, `process_started`,
-    /// `process_ready`, `process_job_launched`, `process_closed`, or a cleanup failure.
+    /// The pool's one notification of a process's step.
     #[host(notify, name = "emit")]
-    fn emit(&self, event: String, process: Arc<dyn SupervisedJob>);
+    fn emit(&self, event: ProcessEvent, process: Arc<dyn SupervisedJob>);
 }
 
 /// The warm job processes: the pool keeps `num_idle_processes` ready, hands each job the next one

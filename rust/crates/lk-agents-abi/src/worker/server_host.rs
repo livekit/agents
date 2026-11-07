@@ -191,3 +191,32 @@ pub trait ServerRuntime: Send + Sync + Sized + 'static {
         #[host(default = None)] token: Option<String>,
     ) -> Result<(), WorkerError>;
 }
+
+/// What the worker's `/` and `/ready` report, the body of a failed check.
+#[crate::host(wire_strs)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HealthState {
+    /// Not registered yet, or the job process pool has not filled for the first time.
+    Starting,
+    #[host(rename = "OK")]
+    Ready,
+    /// The connection dropped; the worker is registering again.
+    Reconnecting,
+    Draining,
+    /// Reconnection gave up, or the pool cannot start.
+    Failed,
+    /// The host has not answered for the stuck deadline.
+    Stuck,
+}
+
+impl HealthState {
+    /// `/`: only what a restart fixes fails it, never a drain or a dropped connection.
+    pub fn live(self) -> bool {
+        matches!(self, HealthState::Ready | HealthState::Reconnecting | HealthState::Draining)
+    }
+
+    /// `/ready`: whether to receive traffic.
+    pub fn ready(self) -> bool {
+        self == HealthState::Ready
+    }
+}
