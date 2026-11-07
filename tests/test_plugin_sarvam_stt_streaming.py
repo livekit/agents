@@ -65,6 +65,8 @@ def _make_stream(
     stream._flush_observed = False
     stream._stream_started_at = stt_streaming.time.time()
     stream._audio_position = 0.0
+    stream._last_audio_sent_at = stt_streaming.time.monotonic()
+    stream._input_ended = False
     stream._audio_duration_collector = stt_streaming.PeriodicCollector(
         callback=stt_streaming.RealtimeSpeechStream._on_audio_duration_report.__get__(
             stream, stt_streaming.RealtimeSpeechStream
@@ -1957,3 +1959,49 @@ async def test_process_audio_forwards_small_frames_regardless_of_stream_type(
     assert stt_streaming.AUDIO_CHUNK_MS <= 100
     assert len(sent) == 1000 // stt_streaming.AUDIO_CHUNK_MS
     assert {len(payload) for payload in sent} == {expected_bytes}
+
+
+async def test_keepalive_sends_silence_when_input_goes_idle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(stt_streaming, "KEEPALIVE_INTERVAL_S", 0.05)
+    stream = _make_stream()
+    sent: list[bytes] = []
+
+    async def _send_bytes(payload: bytes) -> None:
+        sent.append(payload)
+
+    ws = SimpleNamespace(closed=False, send_bytes=_send_bytes)
+    stream._last_audio_sent_at = stt_streaming.time.monotonic()
+
+    task = asyncio.create_task(stream._keepalive(ws))
+    await asyncio.sleep(0.02)
+    assert sent == []  # not idle long enough yet
+
+    await asyncio.sleep(0.15)
+    assert sent, "expected silence after the idle interval"
+    chunk_samples = int(16000 * stt_streaming.AUDIO_CHUNK_MS / 1000)
+    assert sent[0] == bytes(chunk_samples * 2)
+    assert stream._audio_position == pytest.approx(len(sent) * chunk_samples / 16000)
+
+    stream._input_ended = True
+    await asyncio.wait_for(task, timeout=1.0)
+
+
+async def test_keepalive_stays_quiet_while_audio_flows(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(stt_streaming, "KEEPALIVE_INTERVAL_S", 0.05)
+    stream = _make_stream()
+    sent: list[bytes] = []
+
+    async def _send_bytes(payload: bytes) -> None:
+        sent.append(payload)
+
+    ws = SimpleNamespace(closed=False, send_bytes=_send_bytes)
+    task = asyncio.create_task(stream._keepalive(ws))
+    for _ in range(10):
+        stream._last_audio_sent_at = stt_streaming.time.monotonic()
+        await asyncio.sleep(0.02)
+
+    assert sent == []
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
