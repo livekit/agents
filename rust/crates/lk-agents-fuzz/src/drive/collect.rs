@@ -339,30 +339,44 @@ impl Run {
     /// before it reported, has none. For those the journal's `ChatRequested` stands in: the driver
     /// journals it and opens the request in one poll, with no await between, so the requests a
     /// context's plans opened are those plans in order, and each takes the earliest request of its
-    /// context nobody has taken.
+    /// context nobody has taken. A retry the request stream arms reopens the request after its
+    /// backoff with no `ChatRequested` of its own, so its `RetryArmed` plans the speech's request
+    /// again and waits for it, until the speech's request finishes.
     fn attribute_chats(&mut self, from_journal: usize, from_host: usize) {
-        let plans: Vec<(u64, Vec<String>)> = self.record.journal()[from_journal..]
-            .iter()
-            .filter_map(|(_, step)| match step {
+        for position in from_journal..self.record.journal().len() {
+            let speech = match &self.record.journal()[position].1 {
                 Step::Generation(GenerationStep::ChatRequested { speech, ctx_ids, .. }) => {
-                    Some((speech.0, ctx_ids.clone()))
+                    let (speech, ctx_ids) = (speech.0, ctx_ids.clone());
+                    // A retry armed earlier reopened its request first.
+                    self.take_retried_chats();
+                    self.take_chat(speech, &ctx_ids);
+                    continue;
                 }
-                _ => None,
-            })
-            .collect();
-        for (speech, ctx_ids) in plans {
-            let chat = self
-                .record
-                .resources(Kind::Chat)
-                .filter(|o| {
-                    matches!(o.detail(), Detail::Chat { ctx_ids: seen, speech: None, .. } if *seen == ctx_ids)
-                })
-                .map(|o| o.nth())
-                .next();
-            if let Some(chat) = chat {
-                self.record.attribute_chat(chat, speech);
-            }
+                Step::Generation(GenerationStep::RetryArmed {
+                    speech,
+                    leg: ProviderKind::Llm,
+                    ..
+                }) => speech,
+                Step::Generation(GenerationStep::LlmRequestFinished { speech, .. }) => {
+                    let speech = speech.0;
+                    self.retried_chats.retain(|(retried, _)| *retried != speech);
+                    continue;
+                }
+                _ => continue,
+            };
+            let planned =
+                self.record.journal()[..position].iter().rev().find_map(|(_, step)| match step {
+                    Step::Generation(GenerationStep::ChatRequested {
+                        speech: planned,
+                        ctx_ids,
+                        ..
+                    }) if planned == speech => Some((speech.0, ctx_ids.clone())),
+                    _ => None,
+                });
+            self.retried_chats.extend(planned);
+            self.take_retried_chats();
         }
+        self.take_retried_chats();
         // A request's own metrics name its speech exactly, so they have the last word.
         for position in from_host..self.record.host().len() {
             let Host::Session(SessionEvent::MetricsCollected {
@@ -375,6 +389,32 @@ impl Run {
             let Some(chat) = self.registry.request_of(&metrics.request_id) else { continue };
             let speech = speech.0;
             self.record.attribute_chat(chat, speech);
+        }
+    }
+
+    /// The earliest request of this context nobody has taken is the speech's, if one opened.
+    fn take_chat(&mut self, speech: u64, ctx_ids: &[String]) -> bool {
+        let chat = self
+            .record
+            .resources(Kind::Chat)
+            .filter(|o| {
+                matches!(o.detail(), Detail::Chat { ctx_ids: seen, speech: None, .. } if seen == ctx_ids)
+            })
+            .map(|o| o.nth())
+            .next();
+        if let Some(chat) = chat {
+            self.record.attribute_chat(chat, speech);
+        }
+        chat.is_some()
+    }
+
+    /// Each armed retry whose reopened request has been seen takes it, oldest first.
+    fn take_retried_chats(&mut self) {
+        let retried = std::mem::take(&mut self.retried_chats);
+        for (speech, ctx_ids) in retried {
+            if !self.take_chat(speech, &ctx_ids) {
+                self.retried_chats.push((speech, ctx_ids));
+            }
         }
     }
 }

@@ -363,6 +363,7 @@ impl Run {
             livelock,
             busiest_instant: 0,
             deadlock: None,
+            retried_chats: Vec::new(),
             pending: BTreeMap::new(),
             task_awaits: BTreeMap::new(),
             dtmf_await: None,
