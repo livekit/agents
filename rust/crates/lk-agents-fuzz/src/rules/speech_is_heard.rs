@@ -24,7 +24,9 @@ use crate::{
     authored::Authored,
     check::{Check, Contract, Rule, Subject},
     input::{Input, RoomIn, RtEvent},
-    record::{Handle, Kind, Observed, Recording, SpeechView},
+    record::{
+        Handle, Kind, Observed, Recording, SpeechView, StorageOperation, StorageStep,
+    },
 };
 
 /// How long a speech with nothing to wait on may stay silent.
@@ -47,6 +49,7 @@ impl Rule for SpeechIsHeard {
             waited_behind_the_persons_utterance,
             waited_on_a_stalled_voice,
             waited_on_a_voice_fed_after_its_open,
+            waited_on_its_storage_receipt,
         ],
         counterexamples: &[
             silent_behind_a_paused_speech,
@@ -303,6 +306,19 @@ fn waits_on(r: &Recording, speech: u64, deadline: u64) -> Option<&'static str> {
     };
     if OWED.iter().any(|k| open(*k)) {
         return Some("owed by the case");
+    }
+    // Its turn reported, the speech is done once the store's receipt comes (seed 12956).
+    let storage = r.host_view().storage();
+    let committing = storage.iter().filter(|(at, _)| before(at)).any(|(_, step)| {
+        matches!(step, StorageStep::Requested { speech: id, operation }
+            if *id == speech
+                && matches!(operation, StorageOperation::Settle | StorageOperation::Abandon)
+                && !storage.iter().any(|(at, answered)| before(at) && matches!(answered,
+                    StorageStep::Answered { speech: s, operation: op, .. }
+                        if s == id && op == operation)))
+    });
+    if committing {
+        return Some("its storage receipt");
     }
     // The text this speech asked its voice to speak before the bound: a stream that produced
     // some of it is the speech's own. A realtime message voiced from its first words on feeds
@@ -593,6 +609,20 @@ fn waited_on_a_voice_fed_after_its_open() -> Recording {
         .produced(0, 0, "Hello there.")
         .first_audio_due(0, BOUND_MS * 3)
         .closed(Kind::Tts, 0)
+        .later(BOUND_MS * 2)
+        .done()
+}
+
+/// A reply with nothing to say, its turn still being committed at the bound.
+fn waited_on_its_storage_receipt() -> Recording {
+    use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechKind;
+    let settle = StorageOperation::Settle;
+    Authored::new()
+        .output(true)
+        .speech_created(4, SpeechKind::GenerateReply)
+        .speech(4, Handle::live())
+        .later(BOUND_MS - 1)
+        .storage(StorageStep::Requested { speech: 4, operation: settle })
         .later(BOUND_MS * 2)
         .done()
 }
