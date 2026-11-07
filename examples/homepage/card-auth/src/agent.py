@@ -81,7 +81,6 @@ async def card_verification(ctx: JobContext) -> None:
         {
             "channel": "phone" if on_phone else "browser",
             "direction": "outbound" if outbound else "inbound",
-            "caller": _masked(caller.attributes.get("sip.phoneNumber", "")),
             "models": {"stt": STT_MODEL, "llm": LLM_MODEL, "tts": TTS_MODEL},
         },
     )
@@ -147,11 +146,6 @@ async def card_verification(ctx: JobContext) -> None:
             ctx.shutdown(reason="the call was not answered")
             return
     session.say(outbound_greeting() if outbound else GREETING)
-
-
-def _masked(number: str) -> str | None:
-    digits = "".join(c for c in number if c.isdigit())
-    return f"•••-{digits[-4:]}" if len(digits) >= 4 else None
 
 
 def check_in_when_user_away(session: AgentSession) -> None:
