@@ -29,7 +29,7 @@ class AMDCategory(StrEnum):
 class AMDPredictionEvent:
     speech_duration: float
     category: AMDCategory
-    reason: str
+    reason: Literal["detection_timeout", "no_speech_timeout", "short_greeting", "llm", "participant_missing"]
     transcript: str
     delay: float
     type: Literal["amd_prediction"] = "amd_prediction"

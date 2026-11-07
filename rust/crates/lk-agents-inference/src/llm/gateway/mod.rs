@@ -566,27 +566,37 @@ async fn read_events(
             reporter.report(LlmRequestEvent::Progress { attempt }).await;
         }
         for event in events.drain(..) {
-            if event.data == "[DONE]" {
-                reporter.report(LlmRequestEvent::Ended { attempt }).await;
+            let event = match decode_event(&event.data, attempt, request_id.as_deref()) {
+                Ok(event) => event,
+                Err(failure) => return Some(failure),
+            };
+            let ended = matches!(event, LlmRequestEvent::Ended { .. });
+            reporter.report(event).await;
+            if ended {
                 return None;
             }
-            match serde_json::from_str::<CompletionEvent>(&event.data) {
-                Ok(CompletionEvent::Error { error }) => {
-                    return Some(AttemptFailure::Rejected {
-                        status: i64::from(error.code),
-                        message: error.message,
-                        request_id,
-                        retryable: None,
-                    });
-                }
-                Ok(CompletionEvent::Chunk(chunk)) => {
-                    reporter.report(LlmRequestEvent::Chunk { attempt, chunk }).await
-                }
-                Err(err) => {
-                    return Some(AttemptFailure::Malformed(format!("undecodable chunk: {err}")));
-                }
-            }
         }
+    }
+}
+
+/// One event of the stream: a chunk, the end at `[DONE]`, or the attempt's failure.
+fn decode_event(
+    data: &str,
+    attempt: u32,
+    request_id: Option<&str>,
+) -> Result<LlmRequestEvent, AttemptFailure> {
+    if data == "[DONE]" {
+        return Ok(LlmRequestEvent::Ended { attempt });
+    }
+    match serde_json::from_str::<CompletionEvent>(data) {
+        Ok(CompletionEvent::Chunk(chunk)) => Ok(LlmRequestEvent::Chunk { attempt, chunk }),
+        Ok(CompletionEvent::Error { error }) => Err(AttemptFailure::Rejected {
+            status: i64::from(error.code),
+            message: error.message,
+            request_id: request_id.map(str::to_owned),
+            retryable: None,
+        }),
+        Err(err) => Err(AttemptFailure::Malformed(format!("undecodable chunk: {err}"))),
     }
 }
 
