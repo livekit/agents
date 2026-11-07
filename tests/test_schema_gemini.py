@@ -290,13 +290,13 @@ async def test_raw_tool_keeps_explicit_property_ordering_on_live_api(key: str):
 # Test for a FunctionTool with no parameters. Both APIs should omit the schema
 async def test_function_tool_without_parameters():
     [text_schema] = llm.ToolContext([ping]).parse_function_tools("google")
-    assert text_schema["parameters_json_schema"] is None
+    assert "parameters_json_schema" not in text_schema
     assert "parameters" not in text_schema
 
     [live_schema] = llm.ToolContext([ping]).parse_function_tools(
         "google", use_parameters_json_schema=False
     )
-    assert live_schema["parameters"] is None
+    assert "parameters" not in live_schema
     assert "parameters_json_schema" not in live_schema
 
 
