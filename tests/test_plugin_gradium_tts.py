@@ -177,6 +177,34 @@ async def test_synthesize_emits_audio_and_sends_eos():
     assert ws.sent[1]["text"] == "hello world"
 
 
+@pytest.mark.parametrize("streaming", [False, True])
+async def test_text_frames_become_timed_transcripts(streaming):
+    from livekit.agents.types import USERDATA_TIMED_TRANSCRIPT
+
+    text_frames = [
+        {"type": "text", "text": "Hello there!", "start_s": 0.0, "stop_s": 0.8},
+        {"type": "text", "text": "world", "start_s": 0.8, "stop_s": 1.0},
+    ]
+    tts, _, _ = _make_tts([READY, text_frames[0], AUDIO, text_frames[1], AUDIO, EOS])
+
+    timed = []
+    if streaming:
+        async with tts.stream(conn_options=CONN_OPTS) as stream:
+            stream.push_text("Hello there! world")
+            stream.end_input()
+            async for ev in stream:
+                timed += ev.frame.userdata.get(USERDATA_TIMED_TRANSCRIPT, [])
+    else:
+        async for ev in tts.synthesize("Hello there! world", conn_options=CONN_OPTS):
+            timed += ev.frame.userdata.get(USERDATA_TIMED_TRANSCRIPT, [])
+
+    assert tts.capabilities.aligned_transcript
+    assert [(str(t), t.start_time, t.end_time) for t in timed] == [
+        ("Hello there! ", 0.0, 0.8),
+        ("world ", 0.8, 1.0),
+    ]
+
+
 async def test_synthesize_raises_on_error_frame():
     tts, _, _ = _make_tts([READY, ERROR, "close"], close_code=1011)
 
