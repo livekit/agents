@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -169,23 +170,21 @@ async def vehicle_service(ctx: JobContext) -> None:
 def check_in_when_user_away(session: AgentSession) -> None:
     """Asks once whether the caller's still there when the line goes quiet, and says goodbye
     if it stays quiet. Fixed lines, so silence never agrees to anything."""
-    quiet_spells = 0
+    check_in: asyncio.Task[None] | None = None
 
+    async def ask_then_hang_up() -> None:
+        await session.say(STILL_THERE)
+        await asyncio.sleep(session.options.user_away_timeout)
+        await session.say(SILENT_GOODBYE, allow_interruptions=False)
+        session.shutdown()
+
+    @session.on("user_state_changed")
     def on_user_state(ev: UserStateChangedEvent) -> None:
-        nonlocal quiet_spells
-        if ev.new_state == "speaking":
-            quiet_spells = 0
-        elif ev.new_state == "away":
-            quiet_spells += 1
-            if quiet_spells == 1:
-                session.say(STILL_THERE)
-                session.reset_away_timer()
-            elif quiet_spells == 2:
-                session.say(
-                    SILENT_GOODBYE, allow_interruptions=False
-                ).add_done_callback(lambda _: session.shutdown())
-
-    session.on("user_state_changed", on_user_state)
+        nonlocal check_in
+        if check_in:
+            check_in.cancel()
+        if ev.new_state == "away":
+            check_in = asyncio.create_task(ask_then_hang_up())
 
 
 if __name__ == "__main__":
