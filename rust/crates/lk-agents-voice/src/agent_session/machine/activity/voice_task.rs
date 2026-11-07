@@ -247,24 +247,19 @@ impl VoiceDriver {
         }
     }
 
-    /// A tool of `speech` completed a task with its validated value, or failed it with a reason:
-    /// the task whose agent made the speech ends with it, the tasks it started first. An end no
-    /// task owns is a plain output.
+    /// A tool of `speech` completed a task with its validated value, or failed it: the task whose
+    /// agent made the speech ends with it, the tasks it started first. An end no task owns is a
+    /// plain output.
     pub(crate) fn end_voice_task(
         &mut self,
         now: Ts,
         speech: SpeechId,
-        end: Result<HostRef, String>,
+        end: Result<HostRef, VoiceTaskEnded>,
     ) {
         let Some(agent) = self.activity.speech_agent(speech) else { return };
         let tasks = &self.activity.voice_tasks.stack;
         if let Some(i) = tasks.iter().rposition(|t| t.agent == agent) {
-            self.end_voice_tasks(
-                now,
-                i,
-                Some(speech),
-                end.map(VoiceTaskValue::Value).map_err(VoiceTaskEnded::Failed),
-            );
+            self.end_voice_tasks(now, i, Some(speech), end.map(VoiceTaskValue::Value));
         }
     }
 

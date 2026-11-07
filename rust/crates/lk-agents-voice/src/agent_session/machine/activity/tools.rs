@@ -22,6 +22,7 @@ use crate::tool_executor::{
 use crate::trace::{FillerEnd, GenerationStep, ToolStep as TraceToolStep};
 use lk_agents_abi::agent::{ArgumentIdentity, ReadBackAnswer, ToolTemplate};
 use lk_agents_abi::resources::ResourceId;
+use lk_agents_abi::voice::session::VoiceTaskEnded;
 use lk_agents_abi::{ChatItem, FunctionCall, Ts};
 use lk_agents_core::agent_run::AgentRunEvent;
 use lk_agents_core::tool_calls::{Admission, admit};
@@ -555,7 +556,9 @@ impl VoiceDriver {
                 self.say_text(now, text, voice_run);
             }
             Delivery::Complete(value) => self.end_voice_task(now, speech, Ok(value)),
-            Delivery::Fail(reason) => self.end_voice_task(now, speech, Err(reason)),
+            Delivery::Fail(reason) => {
+                self.end_voice_task(now, speech, Err(VoiceTaskEnded::Failed(reason)))
+            }
             Delivery::Ask(ask) => {
                 let output = crate::events::RunOutcome::InputRequired(ask.clone());
                 self.session.runs.outputs.insert(speech, output.clone());

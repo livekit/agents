@@ -447,12 +447,12 @@ pub fn safe_render(template: &str, data: &serde_json::Value) -> Rendered {
                 out.push('}');
             }
             '{' => match read_field(&mut chars) {
-                Ok(field) => match lookup(data, &field) {
+                Field::Closed(field) => match lookup(data, &field) {
                     Some(v) => out.push_str(&v),
                     None => missing.push(field),
                 },
                 // An unterminated hole is left verbatim and reported missing.
-                Err(field) => {
+                Field::Unterminated(field) => {
                     out.push('{');
                     out.push_str(&field);
                     missing.push(field);
@@ -465,16 +465,21 @@ pub fn safe_render(template: &str, data: &serde_json::Value) -> Rendered {
     Rendered { text: out, missing }
 }
 
-/// A hole's name up to its `}`: `Err` with what was read when the template ends first.
-fn read_field(chars: &mut impl Iterator<Item = (usize, char)>) -> Result<String, String> {
+/// A hole's name up to its `}`, or what was read when the template ends first.
+enum Field {
+    Closed(String),
+    Unterminated(String),
+}
+
+fn read_field(chars: &mut impl Iterator<Item = (usize, char)>) -> Field {
     let mut field = String::new();
     for (_, c) in chars {
         if c == '}' {
-            return Ok(field);
+            return Field::Closed(field);
         }
         field.push(c);
     }
-    Err(field)
+    Field::Unterminated(field)
 }
 
 /// Resolve `a.b.c` against `data`. `None` is "no value"; a JSON `null` resolves to `""`.
