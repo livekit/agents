@@ -6,6 +6,7 @@ Adapted from zek's reproduction in PR #8379; no provider or SDK internals are pa
 import asyncio
 import base64
 import json
+import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
@@ -18,6 +19,7 @@ from livekit.agents import Agent, AgentSession, function_tool, llm
 from livekit.agents.llm._realtime import gpt_live_types as wire
 from livekit.agents.llm._realtime.gpt_live import SAMPLE_RATE, GPTLiveModel, GPTLiveSession
 from livekit.agents.voice import io
+from livekit.agents.voice.events import ToolCallEnded
 from livekit.agents.voice.run_result import RunResult
 from livekit.agents.voice.speech_handle import SpeechHandle
 
@@ -49,6 +51,8 @@ class MemorySpeaker(io.AudioOutput):
 
     async def capture_frame(self, frame):
         await super().capture_frame(frame)
+        if not self.duration:
+            self.on_playback_started(created_at=time.time())
         self.duration += frame.duration
         self.captured.set()
 
@@ -390,6 +394,61 @@ async def _conversation(with_run, *, no_reply=False, fallback=None):
 @pytest.fixture(params=[False, True], ids=["no_run", "active_run"])
 def with_run(request):
     return request.param
+
+
+@pytest.mark.parametrize("complete_before_playout", [False, True], ids=["running", "completed"])
+async def test_inline_tool_preamble_stays_busy_through_result_submission(
+    with_run, complete_before_playout
+):
+    """A call in the audible burst owns work until its result reaches the provider."""
+    async with _conversation(with_run) as c:
+        ended, executed = asyncio.Event(), asyncio.Event()
+        states = []
+        c.session.on("agent_state_changed", lambda event: states.append(event.new_state))
+        c.session.on(
+            "tool_execution_updated",
+            lambda event: ended.set() if isinstance(event.update, ToolCallEnded) else None,
+        )
+        c.session.on("function_tools_executed", lambda _: executed.set())
+        await c.peer.user_turn(c.realtime)
+        await c.peer.send(
+            wire.TranscriptDeltaEvent(
+                type=OUTPUT_TRANSCRIPT_DELTA, delta="I'll check that now.", start_ms=0, end_ms=100
+            )
+        )
+        await c.peer.audio()
+        await _wait_for_agent_state(c.session, "speaking")
+        await c.peer.backend(RESPONSE_CREATED)
+        await c.peer.tool_call("call-0")
+        await asyncio.wait_for(c.started.get(), TIMEOUT)
+        await c.release_hook()
+        states.clear()
+
+        # Hold actual result submission after execution has finished. Neither an
+        # unfinished hook nor provider pending state can hide this local interval.
+        async with c.activity._rt_chat_ctx_lock:
+            if complete_before_playout:
+                c.release.set()
+                await asyncio.wait_for(ended.wait(), TIMEOUT)
+            await c.peer.backend(RESPONSE_COMPLETED)
+            await c.peer.audio(speech=False)
+            await _wait_for_agent_state(c.session, "thinking")
+            assert "listening" not in states
+            assert c.session._user_away_timer is None
+            c.release.set()
+            await asyncio.wait_for(executed.wait(), TIMEOUT)
+            assert not c.live.pending_tool_reply
+            assert c.session.agent_state == "thinking"
+            assert c.session._user_away_timer is None
+
+        await c.peer.receive(wire.ResponseItemCreateEvent.model_fields["type"].default)
+        await c.peer.receive(wire.ResponseCreateEvent.model_fields["type"].default)
+        await asyncio.gather(*c.speeches)
+        c.assert_pending()
+        assert "listening" not in states
+        await c.peer.continuation()
+        await c.finish()
+        assert states.count("listening") == 1
 
 
 @pytest.mark.parametrize(

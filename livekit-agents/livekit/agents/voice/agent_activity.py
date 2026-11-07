@@ -4469,6 +4469,7 @@ class AgentActivity(RecognitionHooks):
                     inference_span=inference_span,
                 )
             finally:
+                self._background_speeches.discard(speech_handle)
                 inference_span.end()
 
     async def _realtime_generation_task_impl(
@@ -4787,6 +4788,11 @@ class AgentActivity(RecognitionHooks):
         # _process_messages handles its own playout waits and interrupt cleanup
         await process_msg_task
 
+        # Inline calls outlive their preamble, even if execution already finished.
+        # Keep local ownership until result submission hands the reply to the provider.
+        if function_calls and not speech_handle.interrupted:
+            self._background_speeches.add(speech_handle)
+
         self._session._update_agent_state(
             "thinking" if self._has_pending_agent_work else "listening"
         )
@@ -4946,11 +4952,7 @@ class AgentActivity(RecognitionHooks):
             lambda _: self._session._update_agent_state("thinking")
         )
 
-        self._background_speeches.add(speech_handle)
-        try:
-            await exe_task
-        finally:
-            self._background_speeches.discard(speech_handle)
+        await exe_task
 
         # important: no agent output should be used after this point
 
@@ -5107,6 +5109,7 @@ class AgentActivity(RecognitionHooks):
                     speech_handle, SpeechHandle.SPEECH_PRIORITY_NORMAL, force=True
                 )
 
+        self._background_speeches.discard(speech_handle)
         # no reply follows, so nothing else clears the "thinking" the tool asserted
         if not tool_reply_expected and self._no_pending_speech:
             self._session._update_agent_state(
