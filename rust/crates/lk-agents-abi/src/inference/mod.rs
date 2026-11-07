@@ -4,8 +4,8 @@
 pub mod avatar_session;
 pub mod fallback;
 pub mod models;
-pub mod tts_wire;
 pub mod stt_wire;
+pub mod tts_wire;
 
 use serde_json::Value;
 
