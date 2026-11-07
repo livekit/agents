@@ -503,3 +503,11 @@ async def test_lowered_markup_travels_even_without_a_style(
 
     # no style to carry, so no speech_metadata -- but the lowered words still travel
     assert _request_body(mock_stream)["contents"] == [{"parts": [{"text": spoken}]}]
+
+
+def test_default_model_is_not_the_retiring_preview():
+    # gemini-3.1-flash-tts-preview shuts down on 2026-11-17: a TTS built without
+    # a model must not depend on it
+    tts_ = TTS(api_key="k")
+    assert tts_.model == "gemini-3.8-flash-tts"
+    assert tts_._opts.instructions is None

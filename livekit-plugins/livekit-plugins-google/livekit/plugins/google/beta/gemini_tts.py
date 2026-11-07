@@ -84,7 +84,7 @@ GEMINI_VOICES = Literal[
     "Sulafat",
 ]
 
-DEFAULT_MODEL = "gemini-3.1-flash-tts-preview"
+DEFAULT_MODEL = "gemini-3.8-flash-tts"
 DEFAULT_VOICE = "Kore"
 DEFAULT_SAMPLE_RATE = 24000  # not configurable
 NUM_CHANNELS = 1
@@ -126,7 +126,7 @@ class TTS(tts.TTS):
         - For Google Gemini API: Set the `api_key` argument or the `GOOGLE_API_KEY` environment variable.
 
         Args:
-            model (str, optional): The Gemini TTS model to use. Defaults to "gemini-3.1-flash-tts-preview".
+            model (str, optional): The Gemini TTS model to use. Defaults to "gemini-3.8-flash-tts".
             voice_name (str, optional): The voice to use for synthesis. Defaults to "Kore".
             api_key (str, optional): The API key for Google Gemini. If not provided, it attempts to read from the `GOOGLE_API_KEY` environment variable.
             vertexai (bool, optional): Whether to use VertexAI. Defaults to False.
