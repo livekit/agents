@@ -397,8 +397,9 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
 
     @property
     def capabilities(self) -> RealtimeCapabilities:
-        # the active model's caps, so per-turn consumers see the model actually in use
-        return self._active.realtime_model.capabilities
+        # the active session's caps, so per-turn consumers see the model actually in use;
+        # recurses through nested adapters instead of stopping at their merged caps
+        return self._active.capabilities
 
     @property
     def chat_ctx(self) -> ChatContext:
