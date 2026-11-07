@@ -197,10 +197,41 @@ impl InferenceEot {
     fn stream(
         &self,
         py: Python<'_>,
-        headers: ::std::vec::Vec<(::std::string::String, ::std::string::String)>,
+        headers: Bound<'_, PyAny>,
         conn_options: Bound<'_, PyAny>,
     ) -> PyResult<super::turn::EotStream> {
         crate::py_calls::check_pid()?;
+        let headers = crate::generated::records::from_representation::<
+            ::lk_agents_abi::Headers,
+            ::std::vec::Vec<(::std::string::String, ::std::string::String)>,
+        >(if headers.as_any().is_instance_of::<::pyo3::types::PyList>()
+            || headers.as_any().is_instance_of::<::pyo3::types::PyTuple>()
+        {
+            headers
+                .as_any()
+                .try_iter()?
+                .map(|item| {
+                    let item = &item?;
+                    (|| -> ::pyo3::PyResult<_> {
+                        let tuple = item.cast::<::pyo3::types::PyTuple>()?;
+                        if tuple.len() != 2 {
+                            return Err(::pyo3::exceptions::PyTypeError::new_err(format!(
+                                "{}: expected a tuple of 2 items",
+                                "headers"
+                            )));
+                        }
+                        let item_0 = tuple.get_item(0)?;
+                        let item_1 = tuple.get_item(1)?;
+                        Ok((
+                            (item_0.extract::<::std::string::String>())?,
+                            (item_1.extract::<::std::string::String>())?,
+                        ))
+                    })()
+                })
+                .collect::<PyResult<Vec<_>>>()
+        } else {
+            Err(::pyo3::exceptions::PyTypeError::new_err("headers: expected a list or tuple"))
+        }?)?;
         let conn_options =
             crate::generated::records::connect::api_connect_options_from_py(conn_options.as_any())?;
         let out = py.detach(|| <InferenceEotImpl as ::lk_agents_abi::turn::inference::InferenceEot>::stream(&self.0, headers, conn_options)).map_err(|e: ::lk_agents_abi::errors::ProviderError| <::lk_agents_abi::errors::ProviderError as crate::py_errors::HostException>::to_py_err(&e))?;

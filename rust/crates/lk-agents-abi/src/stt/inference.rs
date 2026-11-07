@@ -74,7 +74,7 @@ pub trait InferenceStt: Stt + Sized + 'static {
     #[host(call)]
     fn identified(
         &self,
-        headers: Vec<(String, String)>,
+        headers: crate::Headers,
         #[host(default = None)] reporter: Option<Arc<dyn Stt>>,
     ) -> Self;
 

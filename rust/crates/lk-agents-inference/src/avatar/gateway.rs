@@ -217,17 +217,17 @@ impl InferenceAvatar for GatewayAvatar {
         room_sid: String,
         livekit_url: Option<String>,
         agent_identity: String,
-        headers: Vec<(String, String)>,
+        headers: Headers,
     ) -> Result<u32, AvatarError> {
         let livekit_url =
             livekit_url.filter(|url| !url.is_empty()).ok_or(AvatarError::MissingUrl)?;
         let room = AvatarRoom { livekit_url, room_name, room_sid, agent_identity };
-        GatewayAvatar::create(self, room, headers.into_iter().collect()).await
+        GatewayAvatar::create(self, room, headers).await
     }
 
-    async fn aclose(&self, headers: Vec<(String, String)>) {
+    async fn aclose(&self, headers: Headers) {
         // Decision 14: a missed cleanup deadline was logged and reported; close returns.
-        let _ = self.close(headers.into_iter().collect()).await;
+        let _ = self.close(headers).await;
     }
 }
 

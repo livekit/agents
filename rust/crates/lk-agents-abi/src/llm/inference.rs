@@ -57,7 +57,7 @@ pub trait InferenceLlm: Send + Sync + Sized + 'static {
     #[host(call)]
     fn identified(
         &self,
-        headers: Vec<(String, String)>,
+        headers: crate::Headers,
         #[host(default = None)] reporter: Option<Arc<dyn Llm>>,
     ) -> Self;
 
@@ -101,7 +101,7 @@ pub trait InferenceLlm: Send + Sync + Sized + 'static {
         #[host(default = None)] tool_choice: Option<ToolChoice>,
         #[host(default = None)] response_format: Option<serde_json::Value>,
         #[host(default = None)] extra_kwargs: Option<Extra>,
-        #[host(default = None)] headers: Option<Vec<(String, String)>>,
+        #[host(default = None)] headers: Option<crate::Headers>,
     ) -> Result<Self::Chunks, ApiError>;
 }
 

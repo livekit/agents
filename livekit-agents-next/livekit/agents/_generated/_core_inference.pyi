@@ -50,7 +50,7 @@ def inference_identity_headers(
     room_sid: str | None = None,
     job_id: str | None = None,
     agent_sid: str | None = None,
-    job_headers: Sequence[tuple[str, str]] | None = None,
+    job_headers: list[tuple[str, str]] | None = None,
 ) -> list[tuple[str, str]]:
     """An inference request's identification headers, in order: `user_agent`, the priority of a
     nonempty `inference_class`, and in a job (`job_headers` given) its nonempty room, job and
@@ -58,7 +58,7 @@ def inference_identity_headers(
     these) and a fresh session id.
     """
 
-def inference_quota_usage(headers: Sequence[tuple[str, str]]) -> list[tuple[str, str]]:
+def inference_quota_usage(headers: list[tuple[str, str]]) -> list[tuple[str, str]]:
     """The gateway's quota dimensions among a response's header pairs (names case-insensitive);
     an empty value is not reported.
     """
@@ -181,14 +181,14 @@ class InferenceAvatar:
         room_sid: str,
         livekit_url: str | None = None,
         agent_identity: str,
-        headers: Sequence[tuple[str, str]],
+        headers: list[tuple[str, str]],
     ) -> int:
         """Creates the provider session for the agent `agent_identity` in `room_name` and returns the
         audio sample rate the avatar takes. A second call while one runs, or once a session was
         created, is refused. Cancelling the call stops creating; a session created anyway is
         terminated. `livekit_url` defaults to `LIVEKIT_URL`; `headers` are `get_inference_headers()`.
         """
-    async def aclose(self, headers: Sequence[tuple[str, str]]) -> None:
+    async def aclose(self, headers: list[tuple[str, str]]) -> None:
         """Stops creating and terminates every held session so it stops billing now. Returns once
         that cleanup settled or its deadline passed (then logged); a failed terminate keeps the
         session held, so a second call retries.
@@ -216,10 +216,10 @@ class InferenceTts:
     def sample_rate(self) -> int: ...
     @property
     def aligned_transcript(self) -> bool: ...
-    def prewarm(self, *, headers: Sequence[tuple[str, str]] | None = None) -> None: ...
+    def prewarm(self, *, headers: list[tuple[str, str]] | None = None) -> None: ...
     def identified(
         self,
-        headers: Sequence[tuple[str, str]],
+        headers: list[tuple[str, str]],
         reporter: TTS[Any] | None = None,
     ) -> InferenceTts: ...
     def update_options(
@@ -233,7 +233,7 @@ class InferenceTts:
     async def stream(
         self,
         *,
-        headers: Sequence[tuple[str, str]] | None = None,
+        headers: list[tuple[str, str]] | None = None,
         conn_options: APIConnectOptions | None = None,
         expressive: bool = False,
     ) -> TtsStream: ...

@@ -6,55 +6,7 @@ use lk_agents_abi::errors::{ApiError, ProviderError, TimeoutPhase};
 use lk_agents_abi::{ApiConnectOptions, Ts};
 use std::sync::Arc;
 
-/// Ordered headers with host dictionary replacement semantics.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Headers(Vec<(String, String)>);
-
-impl Headers {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn set(&mut self, name: impl Into<String>, value: impl Into<String>) {
-        let name = name.into();
-        let value = value.into();
-        match self.0.iter_mut().find(|(key, _)| *key == name) {
-            Some(slot) => slot.1 = value,
-            None => self.0.push((name, value)),
-        }
-    }
-
-    pub fn get(&self, name: &str) -> Option<&str> {
-        self.0.iter().find(|(key, _)| key.eq_ignore_ascii_case(name)).map(|(_, v)| v.as_str())
-    }
-
-    pub fn remove(&mut self, name: &str) {
-        self.0.retain(|(key, _)| !key.eq_ignore_ascii_case(name));
-    }
-
-    pub fn iter(&self) -> std::slice::Iter<'_, (String, String)> {
-        self.0.iter()
-    }
-}
-
-impl FromIterator<(String, String)> for Headers {
-    fn from_iter<I: IntoIterator<Item = (String, String)>>(pairs: I) -> Self {
-        let mut headers = Self::new();
-        for (name, value) in pairs {
-            headers.set(name, value);
-        }
-        headers
-    }
-}
-
-impl IntoIterator for Headers {
-    type Item = (String, String);
-    type IntoIter = std::vec::IntoIter<Self::Item>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.0.into_iter()
-    }
-}
+pub use lk_agents_abi::Headers;
 
 /// Retry policy depends on the call site; see [`connect_error`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

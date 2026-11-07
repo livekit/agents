@@ -40,8 +40,8 @@ impl InferenceModels for Models {
             .map_err(|mismatch| InvalidOption(mismatch.to_string()))
     }
 
-    fn inference_quota_usage(headers: Vec<(String, String)>) -> Vec<(String, String)> {
-        crate::headers::quota_usage(headers.into_iter().collect())
+    fn inference_quota_usage(headers: crate::headers::Headers) -> Vec<(String, String)> {
+        crate::headers::quota_usage(headers)
             .into_iter()
             .map(|(field, value)| (field.to_owned(), value))
             .collect()

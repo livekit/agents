@@ -730,11 +730,11 @@ impl InferenceTts for GatewayTts {
     fn aligned_transcript(&self) -> bool {
         self.aligned_transcript()
     }
-    fn prewarm(&self, headers: Option<Vec<(String, String)>>) {
-        self.prewarm_identified(headers.map(|h| h.into_iter().collect()));
+    fn prewarm(&self, headers: Option<Headers>) {
+        self.prewarm_identified(headers);
     }
-    fn identified(&self, headers: Vec<(String, String)>, reporter: Option<Arc<dyn Tts>>) -> Self {
-        self.identified(headers.into_iter().collect(), reporter)
+    fn identified(&self, headers: Headers, reporter: Option<Arc<dyn Tts>>) -> Self {
+        self.identified(headers, reporter)
     }
     fn update_options(
         &self,
@@ -755,13 +755,12 @@ impl InferenceTts for GatewayTts {
     /// synthesis's job context; each sentence pushed goes out as it arrives.
     async fn stream(
         &self,
-        headers: Option<Vec<(String, String)>>,
+        headers: Option<Headers>,
         conn_options: Option<ApiConnectOptions>,
         expressive: bool,
     ) -> Result<Self::Stream, ProviderError> {
-        let (sink, source) = self
-            .configured(conn_options)
-            .stream_identified(headers.map(|pairs| pairs.into_iter().collect()), expressive)?;
+        let (sink, source) =
+            self.configured(conn_options).stream_identified(headers, expressive)?;
         Ok(TtsStream::new(Some(Box::new(sink)), Box::new(source), self.clock.clone()))
     }
 }

@@ -102,7 +102,7 @@ pub trait InferenceEot: Send + Sync + Sized + 'static {
     #[host(call)]
     fn stream(
         &self,
-        headers: Vec<(String, String)>,
+        headers: crate::Headers,
         conn_options: ApiConnectOptions,
     ) -> Result<Self::Stream, ProviderError>;
 }

@@ -104,18 +104,16 @@ impl lk_agents_abi::inference::InferenceCredentials for Credentials {
         room_sid: Option<String>,
         job_id: Option<String>,
         agent_sid: Option<String>,
-        job_headers: Option<Vec<(String, String)>>,
-    ) -> Vec<(String, String)> {
+        job_headers: Option<crate::headers::Headers>,
+    ) -> crate::headers::Headers {
         let job = job_headers.map(|headers| crate::headers::JobIdentity {
             room_sid,
             job_id,
             agent_sid,
             worker_token: env("LIVEKIT_WORKER_TOKEN"),
-            headers: headers.into_iter().collect(),
+            headers,
         });
         crate::headers::identity_headers(&user_agent, inference_class.as_deref(), job)
-            .into_iter()
-            .collect()
     }
 }
 

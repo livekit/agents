@@ -15,8 +15,6 @@ type InferenceCredentialsImpl =
     <crate::generated::implementations::Selected as super::Implementations>::InferenceCredentials;
 type InferenceCredentialsInferenceCredentialsOutput =
     (::std::string::String, ::std::string::String, ::std::string::String);
-type InferenceCredentialsInferenceIdentityHeadersOutput =
-    ::std::vec::Vec<(::std::string::String, ::std::string::String)>;
 
 /// `explicit`, else `LIVEKIT_INFERENCE_API_KEY`, else `server`; `""` when nothing resolves. A
 /// set but empty `LIVEKIT_INFERENCE_API_KEY` shadows `server`.
@@ -82,20 +80,76 @@ pub fn inference_credentials(
 /// these) and a fresh session id.
 #[pyfunction]
 #[pyo3(signature = (user_agent, inference_class = None, room_sid = None, job_id = None, agent_sid = None, job_headers = None))]
-pub fn inference_identity_headers(
-    py: Python<'_>,
+pub fn inference_identity_headers<'py>(
+    py: Python<'py>,
     user_agent: ::std::string::String,
     inference_class: ::std::option::Option<::std::string::String>,
     room_sid: ::std::option::Option<::std::string::String>,
     job_id: ::std::option::Option<::std::string::String>,
     agent_sid: ::std::option::Option<::std::string::String>,
-    job_headers: ::std::option::Option<
-        ::std::vec::Vec<(::std::string::String, ::std::string::String)>,
-    >,
-) -> PyResult<InferenceCredentialsInferenceIdentityHeadersOutput> {
+    job_headers: Option<Bound<'_, PyAny>>,
+) -> PyResult<Bound<'py, PyAny>> {
     crate::py_calls::check_pid()?;
+    let job_headers = job_headers
+        .map(|v| {
+            crate::generated::records::from_representation::<
+                ::lk_agents_abi::Headers,
+                ::std::vec::Vec<(::std::string::String, ::std::string::String)>,
+            >(if v.as_any().is_instance_of::<::pyo3::types::PyList>()
+                || v.as_any().is_instance_of::<::pyo3::types::PyTuple>()
+            {
+                v.as_any()
+                    .try_iter()?
+                    .map(|item| {
+                        let item = &item?;
+                        (|| -> ::pyo3::PyResult<_> {
+                            let tuple = item.cast::<::pyo3::types::PyTuple>()?;
+                            if tuple.len() != 2 {
+                                return Err(::pyo3::exceptions::PyTypeError::new_err(format!(
+                                    "{}: expected a tuple of 2 items",
+                                    "job_headers"
+                                )));
+                            }
+                            let item_0 = tuple.get_item(0)?;
+                            let item_1 = tuple.get_item(1)?;
+                            Ok((
+                                (item_0.extract::<::std::string::String>())?,
+                                (item_1.extract::<::std::string::String>())?,
+                            ))
+                        })()
+                    })
+                    .collect::<PyResult<Vec<_>>>()
+            } else {
+                Err(::pyo3::exceptions::PyTypeError::new_err(
+                    "job_headers: expected a list or tuple",
+                ))
+            }?)
+        })
+        .transpose()?;
     let out = py.detach(|| <InferenceCredentialsImpl as ::lk_agents_abi::inference::InferenceCredentials>::inference_identity_headers(user_agent, inference_class, room_sid, job_id, agent_sid, job_headers));
-    ::pyo3::PyResult::Ok(out)
+    ::pyo3::PyResult::Ok({
+        let scalar: ::std::vec::Vec<(::std::string::String, ::std::string::String)> = out.into();
+        ::pyo3::types::PyList::new(
+            py,
+            scalar
+                .into_iter()
+                .map(|x| {
+                    ::pyo3::PyResult::Ok({
+                        let (x0, x1) = x;
+                        ::pyo3::types::PyTuple::new(
+                            py,
+                            [
+                                ::pyo3::IntoPyObjectExt::into_bound_py_any(x0, py)?,
+                                ::pyo3::IntoPyObjectExt::into_bound_py_any(x1, py)?,
+                            ],
+                        )?
+                        .into_any()
+                    })
+                })
+                .collect::<PyResult<Vec<_>>>()?,
+        )?
+        .into_any()
+    })
 }
 
 // Declared in rust/crates/lk-agents-abi/src/inference/mod.rs.
@@ -116,8 +170,39 @@ type InferenceModelsLlmUnsupportedParamsOutput = ::std::vec::Vec<::std::string::
 #[pyo3(signature = (headers))]
 pub fn inference_quota_usage(
     py: Python<'_>,
-    headers: ::std::vec::Vec<(::std::string::String, ::std::string::String)>,
+    headers: Bound<'_, PyAny>,
 ) -> PyResult<InferenceModelsInferenceQuotaUsageOutput> {
+    let headers = crate::generated::records::from_representation::<
+        ::lk_agents_abi::Headers,
+        ::std::vec::Vec<(::std::string::String, ::std::string::String)>,
+    >(if headers.as_any().is_instance_of::<::pyo3::types::PyList>()
+        || headers.as_any().is_instance_of::<::pyo3::types::PyTuple>()
+    {
+        headers
+            .as_any()
+            .try_iter()?
+            .map(|item| {
+                let item = &item?;
+                (|| -> ::pyo3::PyResult<_> {
+                    let tuple = item.cast::<::pyo3::types::PyTuple>()?;
+                    if tuple.len() != 2 {
+                        return Err(::pyo3::exceptions::PyTypeError::new_err(format!(
+                            "{}: expected a tuple of 2 items",
+                            "headers"
+                        )));
+                    }
+                    let item_0 = tuple.get_item(0)?;
+                    let item_1 = tuple.get_item(1)?;
+                    Ok((
+                        (item_0.extract::<::std::string::String>())?,
+                        (item_1.extract::<::std::string::String>())?,
+                    ))
+                })()
+            })
+            .collect::<PyResult<Vec<_>>>()
+    } else {
+        Err(::pyo3::exceptions::PyTypeError::new_err("headers: expected a list or tuple"))
+    }?)?;
     let out = py.detach(|| {
         <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::inference_quota_usage(
             headers,
@@ -493,9 +578,40 @@ impl InferenceAvatar {
         room_sid: ::std::string::String,
         livekit_url: ::std::option::Option<::std::string::String>,
         agent_identity: ::std::string::String,
-        headers: ::std::vec::Vec<(::std::string::String, ::std::string::String)>,
+        headers: Bound<'_, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
+        let headers = crate::generated::records::from_representation::<
+            ::lk_agents_abi::Headers,
+            ::std::vec::Vec<(::std::string::String, ::std::string::String)>,
+        >(if headers.as_any().is_instance_of::<::pyo3::types::PyList>()
+            || headers.as_any().is_instance_of::<::pyo3::types::PyTuple>()
+        {
+            headers
+                .as_any()
+                .try_iter()?
+                .map(|item| {
+                    let item = &item?;
+                    (|| -> ::pyo3::PyResult<_> {
+                        let tuple = item.cast::<::pyo3::types::PyTuple>()?;
+                        if tuple.len() != 2 {
+                            return Err(::pyo3::exceptions::PyTypeError::new_err(format!(
+                                "{}: expected a tuple of 2 items",
+                                "headers"
+                            )));
+                        }
+                        let item_0 = tuple.get_item(0)?;
+                        let item_1 = tuple.get_item(1)?;
+                        Ok((
+                            (item_0.extract::<::std::string::String>())?,
+                            (item_1.extract::<::std::string::String>())?,
+                        ))
+                    })()
+                })
+                .collect::<PyResult<Vec<_>>>()
+        } else {
+            Err(::pyo3::exceptions::PyTypeError::new_err("headers: expected a list or tuple"))
+        }?)?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
             let out = <InferenceAvatarImpl as ::lk_agents_abi::inference::avatar_session::InferenceAvatar>::create(&this, room_name, room_sid, livekit_url, agent_identity, headers)
@@ -511,9 +627,40 @@ impl InferenceAvatar {
     fn aclose<'py>(
         &self,
         py: Python<'py>,
-        headers: ::std::vec::Vec<(::std::string::String, ::std::string::String)>,
+        headers: Bound<'_, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
+        let headers = crate::generated::records::from_representation::<
+            ::lk_agents_abi::Headers,
+            ::std::vec::Vec<(::std::string::String, ::std::string::String)>,
+        >(if headers.as_any().is_instance_of::<::pyo3::types::PyList>()
+            || headers.as_any().is_instance_of::<::pyo3::types::PyTuple>()
+        {
+            headers
+                .as_any()
+                .try_iter()?
+                .map(|item| {
+                    let item = &item?;
+                    (|| -> ::pyo3::PyResult<_> {
+                        let tuple = item.cast::<::pyo3::types::PyTuple>()?;
+                        if tuple.len() != 2 {
+                            return Err(::pyo3::exceptions::PyTypeError::new_err(format!(
+                                "{}: expected a tuple of 2 items",
+                                "headers"
+                            )));
+                        }
+                        let item_0 = tuple.get_item(0)?;
+                        let item_1 = tuple.get_item(1)?;
+                        Ok((
+                            (item_0.extract::<::std::string::String>())?,
+                            (item_1.extract::<::std::string::String>())?,
+                        ))
+                    })()
+                })
+                .collect::<PyResult<Vec<_>>>()
+        } else {
+            Err(::pyo3::exceptions::PyTypeError::new_err("headers: expected a list or tuple"))
+        }?)?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
             let () = <InferenceAvatarImpl as ::lk_agents_abi::inference::avatar_session::InferenceAvatar>::aclose(&this, headers)
@@ -612,14 +759,44 @@ impl InferenceTts {
     }
 
     #[pyo3(signature = (*, headers = None))]
-    fn prewarm(
-        &self,
-        py: Python<'_>,
-        headers: ::std::option::Option<
-            ::std::vec::Vec<(::std::string::String, ::std::string::String)>,
-        >,
-    ) -> PyResult<()> {
+    fn prewarm(&self, py: Python<'_>, headers: Option<Bound<'_, PyAny>>) -> PyResult<()> {
         crate::py_calls::check_pid()?;
+        let headers = headers
+            .map(|v| {
+                crate::generated::records::from_representation::<
+                    ::lk_agents_abi::Headers,
+                    ::std::vec::Vec<(::std::string::String, ::std::string::String)>,
+                >(if v.as_any().is_instance_of::<::pyo3::types::PyList>()
+                    || v.as_any().is_instance_of::<::pyo3::types::PyTuple>()
+                {
+                    v.as_any()
+                        .try_iter()?
+                        .map(|item| {
+                            let item = &item?;
+                            (|| -> ::pyo3::PyResult<_> {
+                                let tuple = item.cast::<::pyo3::types::PyTuple>()?;
+                                if tuple.len() != 2 {
+                                    return Err(::pyo3::exceptions::PyTypeError::new_err(format!(
+                                        "{}: expected a tuple of 2 items",
+                                        "headers"
+                                    )));
+                                }
+                                let item_0 = tuple.get_item(0)?;
+                                let item_1 = tuple.get_item(1)?;
+                                Ok((
+                                    (item_0.extract::<::std::string::String>())?,
+                                    (item_1.extract::<::std::string::String>())?,
+                                ))
+                            })()
+                        })
+                        .collect::<PyResult<Vec<_>>>()
+                } else {
+                    Err(::pyo3::exceptions::PyTypeError::new_err(
+                        "headers: expected a list or tuple",
+                    ))
+                }?)
+            })
+            .transpose()?;
         py.detach(|| {
             <InferenceTtsImpl as ::lk_agents_abi::inference::tts_client::InferenceTts>::prewarm(
                 &self.0, headers,
@@ -632,10 +809,41 @@ impl InferenceTts {
     fn identified(
         &self,
         py: Python<'_>,
-        headers: ::std::vec::Vec<(::std::string::String, ::std::string::String)>,
+        headers: Bound<'_, PyAny>,
         reporter: Option<Bound<'_, PyAny>>,
     ) -> PyResult<InferenceTts> {
         crate::py_calls::check_pid()?;
+        let headers = crate::generated::records::from_representation::<
+            ::lk_agents_abi::Headers,
+            ::std::vec::Vec<(::std::string::String, ::std::string::String)>,
+        >(if headers.as_any().is_instance_of::<::pyo3::types::PyList>()
+            || headers.as_any().is_instance_of::<::pyo3::types::PyTuple>()
+        {
+            headers
+                .as_any()
+                .try_iter()?
+                .map(|item| {
+                    let item = &item?;
+                    (|| -> ::pyo3::PyResult<_> {
+                        let tuple = item.cast::<::pyo3::types::PyTuple>()?;
+                        if tuple.len() != 2 {
+                            return Err(::pyo3::exceptions::PyTypeError::new_err(format!(
+                                "{}: expected a tuple of 2 items",
+                                "headers"
+                            )));
+                        }
+                        let item_0 = tuple.get_item(0)?;
+                        let item_1 = tuple.get_item(1)?;
+                        Ok((
+                            (item_0.extract::<::std::string::String>())?,
+                            (item_1.extract::<::std::string::String>())?,
+                        ))
+                    })()
+                })
+                .collect::<PyResult<Vec<_>>>()
+        } else {
+            Err(::pyo3::exceptions::PyTypeError::new_err("headers: expected a list or tuple"))
+        }?)?;
         let reporter =
             reporter.map(|v| crate::generated::tts::TtsProxy::from_host(v.as_any())).transpose()?;
         let out = py.detach(|| {
@@ -672,13 +880,47 @@ impl InferenceTts {
     fn stream<'py>(
         &self,
         py: Python<'py>,
-        headers: ::std::option::Option<
-            ::std::vec::Vec<(::std::string::String, ::std::string::String)>,
-        >,
+        headers: Option<Bound<'_, PyAny>>,
         conn_options: Option<Bound<'_, PyAny>>,
         expressive: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
+        let headers = headers
+            .map(|v| {
+                crate::generated::records::from_representation::<
+                    ::lk_agents_abi::Headers,
+                    ::std::vec::Vec<(::std::string::String, ::std::string::String)>,
+                >(if v.as_any().is_instance_of::<::pyo3::types::PyList>()
+                    || v.as_any().is_instance_of::<::pyo3::types::PyTuple>()
+                {
+                    v.as_any()
+                        .try_iter()?
+                        .map(|item| {
+                            let item = &item?;
+                            (|| -> ::pyo3::PyResult<_> {
+                                let tuple = item.cast::<::pyo3::types::PyTuple>()?;
+                                if tuple.len() != 2 {
+                                    return Err(::pyo3::exceptions::PyTypeError::new_err(format!(
+                                        "{}: expected a tuple of 2 items",
+                                        "headers"
+                                    )));
+                                }
+                                let item_0 = tuple.get_item(0)?;
+                                let item_1 = tuple.get_item(1)?;
+                                Ok((
+                                    (item_0.extract::<::std::string::String>())?,
+                                    (item_1.extract::<::std::string::String>())?,
+                                ))
+                            })()
+                        })
+                        .collect::<PyResult<Vec<_>>>()
+                } else {
+                    Err(::pyo3::exceptions::PyTypeError::new_err(
+                        "headers: expected a list or tuple",
+                    ))
+                }?)
+            })
+            .transpose()?;
         let conn_options = conn_options
             .map(|v| crate::generated::records::connect::api_connect_options_from_py(v.as_any()))
             .transpose()?;

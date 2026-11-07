@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from typing import Self
 
 from livekit.local_inference import EOT
@@ -53,11 +53,7 @@ class InferenceEot:
     def supports(self, language: str | None = None) -> bool: ...
     def update_overrides(self, overrides: ThresholdOverride | None = None) -> None: ...
     def update_backchannel_overrides(self, overrides: ThresholdOverride | None = None) -> None: ...
-    def stream(
-        self,
-        headers: Sequence[tuple[str, str]],
-        conn_options: APIConnectOptions,
-    ) -> EotStream:
+    def stream(self, headers: list[tuple[str, str]], conn_options: APIConnectOptions) -> EotStream:
         """One stream of the user's audio. `headers` (`get_inference_headers()`) identify the job on
         each gateway connection.
         """

@@ -856,7 +856,7 @@ pub trait OpenAIRealtimeModel: Send + Sync + Sized + 'static {
     #[host(call)]
     fn update_options(&self, options: RealtimeOptions);
     #[host(call)]
-    fn bind_identification(&self, headers: Vec<(String, String)>);
+    fn bind_identification(&self, headers: crate::Headers);
 }
 
 // Public data contracts. Python behavior remains in its adapters.

@@ -16,6 +16,15 @@ from livekit.agents.voice.avatar import DataStreamAudioOutput
 pytestmark = pytest.mark.unit
 
 
+def test_inference_headers_keep_the_public_list_of_pairs_interface() -> None:
+    headers = _core.inference_identity_headers(
+        "agent",
+        job_headers=[("User-Agent", "override"), ("X-Request", "first"), ("X-Request", "last")],
+    )
+    assert isinstance(headers, list)
+    assert headers == [("User-Agent", "override"), ("X-Request", "last")]
+
+
 def test_provider_updates_bind_only_the_changed_legs_and_their_nodes() -> None:
     from types import SimpleNamespace
 

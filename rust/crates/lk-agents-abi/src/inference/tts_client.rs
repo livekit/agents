@@ -51,11 +51,11 @@ pub trait InferenceTts: Send + Sync + Sized + 'static {
     #[host(getter)]
     fn aligned_transcript(&self) -> bool;
     #[host(call)]
-    fn prewarm(&self, #[host(kw, default = None)] headers: Option<Vec<(String, String)>>);
+    fn prewarm(&self, #[host(kw, default = None)] headers: Option<crate::Headers>);
     #[host(call)]
     fn identified(
         &self,
-        headers: Vec<(String, String)>,
+        headers: crate::Headers,
         #[host(default = None)] reporter: Option<std::sync::Arc<dyn Tts>>,
     ) -> Self;
     #[host(call)]
@@ -70,7 +70,7 @@ pub trait InferenceTts: Send + Sync + Sized + 'static {
     #[host(await)]
     async fn stream(
         &self,
-        #[host(kw, default = None)] headers: Option<Vec<(String, String)>>,
+        #[host(kw, default = None)] headers: Option<crate::Headers>,
         #[host(default = None)] conn_options: Option<ApiConnectOptions>,
         #[host(default = false)] expressive: bool,
     ) -> Result<Self::Stream, ProviderError>;

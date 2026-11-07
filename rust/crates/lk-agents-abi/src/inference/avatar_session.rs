@@ -84,14 +84,14 @@ pub trait InferenceAvatar: Send + Sync + Sized + 'static {
         room_sid: String,
         #[host(default = None)] livekit_url: Option<String>,
         agent_identity: String,
-        headers: Vec<(String, String)>,
+        headers: crate::Headers,
     ) -> Result<u32, AvatarError>;
 
     /// Stops creating and terminates every held session so it stops billing now. Returns once
     /// that cleanup settled or its deadline passed (then logged); a failed terminate keeps the
     /// session held, so a second call retries.
     #[host(await)]
-    async fn aclose(&self, headers: Vec<(String, String)>);
+    async fn aclose(&self, headers: crate::Headers);
 }
 
 // Public data contracts. Python behavior remains in its adapters.

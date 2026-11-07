@@ -440,8 +440,8 @@ impl lk_agents_abi::stt::inference::InferenceStt for GatewayStt {
         GatewayStt::set_vad(self, vad);
     }
 
-    fn identified(&self, headers: Vec<(String, String)>, reporter: Option<Arc<dyn Stt>>) -> Self {
-        GatewayStt::identified(self, headers.into_iter().collect(), reporter)
+    fn identified(&self, headers: Headers, reporter: Option<Arc<dyn Stt>>) -> Self {
+        GatewayStt::identified(self, headers, reporter)
     }
 
     fn update_options(

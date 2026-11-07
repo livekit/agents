@@ -217,8 +217,8 @@ impl OpenAIRealtimeModel for OpenAIRealtime {
     fn update_options(&self, options: RealtimeOptions) {
         self.update_options(patch(options));
     }
-    fn bind_identification(&self, headers: Vec<(String, String)>) {
-        self.bind_identification(headers.into_iter().collect());
+    fn bind_identification(&self, headers: crate::headers::Headers) {
+        self.bind_identification(headers);
     }
 }
 

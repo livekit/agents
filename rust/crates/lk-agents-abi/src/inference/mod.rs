@@ -58,8 +58,8 @@ pub trait InferenceCredentials {
         #[host(default = None)] room_sid: Option<String>,
         #[host(default = None)] job_id: Option<String>,
         #[host(default = None)] agent_sid: Option<String>,
-        #[host(default = None)] job_headers: Option<Vec<(String, String)>>,
-    ) -> Vec<(String, String)>;
+        #[host(default = None)] job_headers: Option<crate::Headers>,
+    ) -> crate::Headers;
 }
 /// The gateway's model tables, request headers and local model registry the host reads: pure
 /// lookups, safe in a forked child.
@@ -68,7 +68,7 @@ pub trait InferenceModels {
     /// The gateway's quota dimensions among a response's header pairs (names case-insensitive);
     /// an empty value is not reported.
     #[host(function)]
-    fn inference_quota_usage(headers: Vec<(String, String)>) -> Vec<(String, String)>;
+    fn inference_quota_usage(headers: crate::Headers) -> Vec<(String, String)>;
 
     /// Loads the native models' weights; `false` when no provider is linked.
     #[host(function)]

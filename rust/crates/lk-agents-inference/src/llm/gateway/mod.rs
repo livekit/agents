@@ -181,8 +181,8 @@ impl lk_agents_abi::llm::inference::InferenceLlm for GatewayLlm {
         Ok(GatewayLlm::new(opts, http, runtime, env.clock.clone()))
     }
 
-    fn identified(&self, headers: Vec<(String, String)>, reporter: Option<Arc<dyn Llm>>) -> Self {
-        self.view(headers.into_iter().collect(), reporter)
+    fn identified(&self, headers: Headers, reporter: Option<Arc<dyn Llm>>) -> Self {
+        self.view(headers, reporter)
     }
 
     fn model(&self) -> String {
@@ -213,7 +213,7 @@ impl lk_agents_abi::llm::inference::InferenceLlm for GatewayLlm {
         tool_choice: Option<ToolChoice>,
         response_format: Option<serde_json::Value>,
         extra_kwargs: Option<Extra>,
-        headers: Option<Vec<(String, String)>>,
+        headers: Option<Headers>,
     ) -> Result<LlmChunks, ApiError> {
         conn_options.validate().map_err(|e| ApiError::new(e.to_string()).with_retryable(false))?;
         let args = ChatArgs {
@@ -223,7 +223,7 @@ impl lk_agents_abi::llm::inference::InferenceLlm for GatewayLlm {
             response_format: response_format.filter(|f| !f.is_null()),
             inference_class: None,
         };
-        let identification: Option<Headers> = headers.map(|pairs| pairs.into_iter().collect());
+        let identification = headers;
         let policy = RequestPolicy::from_options(&conn_options);
         GatewayLlm::chat(
             self,

@@ -247,7 +247,7 @@ class InferenceLlm:
         """
     def identified(
         self,
-        headers: Sequence[tuple[str, str]],
+        headers: list[tuple[str, str]],
         reporter: LLM[Any] | None = None,
     ) -> InferenceLlm:
         """This client as a session of the job `headers` (`get_inference_headers()`) identifies
@@ -276,7 +276,7 @@ class InferenceLlm:
         tool_choice: ToolChoice | None = None,
         response_format: object | None = None,
         extra_kwargs: dict[str, object] | None = None,
-        headers: Sequence[tuple[str, str]] | None = None,
+        headers: list[tuple[str, str]] | None = None,
     ) -> InferenceLlmChunks:
         """Opens a completion of `items`; no I/O until the first pull. `headers` identify the
         caller's job, read in its context.
@@ -437,7 +437,7 @@ class OpenAIRealtimeModel:
     def label(self) -> str: ...
     def capabilities(self) -> RealtimeCapabilities: ...
     def update_options(self, options: RealtimeOptions) -> None: ...
-    def bind_identification(self, headers: Sequence[tuple[str, str]]) -> None: ...
+    def bind_identification(self, headers: list[tuple[str, str]]) -> None: ...
 
 def chat_ctx_to_dict(
     items: Sequence[ChatItem],

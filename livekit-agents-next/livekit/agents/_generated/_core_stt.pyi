@@ -94,7 +94,7 @@ class InferenceStt:
         """
     def identified(
         self,
-        headers: Sequence[tuple[str, str]],
+        headers: list[tuple[str, str]],
         reporter: STT[Any] | None = None,
     ) -> InferenceStt:
         """This client as a session of the job `headers` (`get_inference_headers()`) identifies holds
