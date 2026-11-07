@@ -296,7 +296,8 @@ fn history_only_continuation_answers_the_presented_call_without_answering_other_
     );
     let mut saved = history.items;
     assert!(
-        crate::request::answer_pending_input(&mut saved, "unrelated new message").is_empty(),
+        crate::agent_run::planning::answer_pending_input(&mut saved, "unrelated new message")
+            .is_empty(),
         "an unpresented retained question is not implicitly selected on the next turn"
     );
 }
@@ -377,7 +378,8 @@ fn an_unselected_read_back_cannot_grant_even_if_a_transport_rewrites_its_output(
     for item in &mut history {
         match item {
             ChatItem::FunctionCall(call) => {
-                call.extra.insert(crate::request::INPUT_REQUESTED_KEY.into(), json!(false));
+                call.extra
+                    .insert(crate::agent_run::planning::INPUT_REQUESTED_KEY.into(), json!(false));
             }
             ChatItem::FunctionCallOutput(output) => output.output = "unrelated answer".into(),
             _ => {}

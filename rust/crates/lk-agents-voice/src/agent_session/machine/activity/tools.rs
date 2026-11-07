@@ -590,7 +590,8 @@ impl VoiceDriver {
     /// waiting; retaining them is not permission to answer them with this person's message.
     pub(crate) fn answer_pending_input(&mut self, text: &str) {
         let mut history: Vec<ChatItem> = self.session.chat_ctx.items().cloned().collect();
-        let approval_answers = lk_agents_core::request::answer_pending_input(&mut history, text);
+        let approval_answers =
+            lk_agents_core::agent_run::planning::answer_pending_input(&mut history, text);
         history.retain(|item| matches!(item, ChatItem::FunctionCallOutput(output) if approval_answers.contains(&output.call_id)));
         self.replies_answered(&approval_answers);
         self.activity.tools.approval_answers = approval_answers;

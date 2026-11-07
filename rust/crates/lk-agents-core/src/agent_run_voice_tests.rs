@@ -267,11 +267,12 @@ fn retry_budget_failure_has_no_selected_terminal_delivery_and_cannot_be_reopened
         AgentRunEffect::HandleToolResults { terminal_call: None, .. }
     )));
     assert!(items.iter().all(|item| !matches!(item,
-        ChatItem::FunctionCall(call) if call.extra.get(crate::request::INPUT_REQUESTED_KEY).and_then(Value::as_bool) == Some(true)
+        ChatItem::FunctionCall(call) if call.extra.get(crate::agent_run::planning::INPUT_REQUESTED_KEY).and_then(Value::as_bool) == Some(true)
     )), "a failed batch selects no question");
     let mut failed_history = items.clone();
     assert!(
-        crate::request::answer_pending_input(&mut failed_history, "unrelated").is_empty(),
+        crate::agent_run::planning::answer_pending_input(&mut failed_history, "unrelated")
+            .is_empty(),
         "a failed batch answers no question"
     );
     let edits = items

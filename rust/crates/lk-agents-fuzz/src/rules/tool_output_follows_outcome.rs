@@ -133,7 +133,7 @@ impl Rule for ToolOutputFollowsOutcome {
         for (i, (at, item, speech)) in announced.iter().enumerate() {
             match item {
                 ChatItem::FunctionCall(call) => {
-                    let flag = call.extra.get(lk_agents_core::request::INPUT_REQUESTED_KEY);
+                    let flag = call.extra.get(lk_agents_core::agent_run::planning::INPUT_REQUESTED_KEY);
                     if flag.is_some_and(|flag| {
                         flag.as_bool() == Some(true) || flag.as_str() == Some("true")
                     }) {
@@ -232,7 +232,7 @@ fn selected_question(call_id: &str) -> Step {
         extra: Default::default(),
         group_id: None,
     };
-    call.extra.insert(lk_agents_core::request::INPUT_REQUESTED_KEY.into(), true.into());
+    call.extra.insert(lk_agents_core::agent_run::planning::INPUT_REQUESTED_KEY.into(), true.into());
     Step::Emitted(SessionEvent::ConversationItemAdded {
         item: Box::new(call.into()),
         agent: "agent".into(),

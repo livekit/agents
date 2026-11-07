@@ -85,7 +85,7 @@ impl AgentRun {
             if terminal.is_none() {
                 if exceeded.is_none() && matches!(this, Some(Terminal::Ask(_))) {
                     item.extra.insert(
-                        crate::request::INPUT_REQUESTED_KEY.into(),
+                        crate::agent_run::planning::INPUT_REQUESTED_KEY.into(),
                         serde_json::Value::Bool(true),
                     );
                 }

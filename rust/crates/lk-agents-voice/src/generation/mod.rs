@@ -9,6 +9,7 @@ use lk_agents_abi::{
     ChatContext, ChatItem, ChatMessage, CopyOptions, Extra, FunctionCall, FunctionCallOutput,
     MetricsReport, Role, ToolSpec,
 };
+use lk_agents_core::agent_run::planning;
 use lk_agents_core::llm::history::ChatContextExt;
 use lk_agents_core::tts::markup::MarkupExt;
 use std::hash::{Hash, Hasher};
@@ -29,7 +30,7 @@ pub const RUNNING_TOOL_PLACEHOLDER: &str = "The tool call is still in progress."
 pub const RUNNING_PLACEHOLDER_KEY: &str = "__lk_running_placeholder__";
 
 /// The id of the rendered prompt in every request. Must not change (persisted contexts carry it).
-pub const INSTRUCTIONS_MESSAGE_ID: &str = lk_agents_core::request::INSTRUCTIONS_MESSAGE_ID;
+pub const INSTRUCTIONS_MESSAGE_ID: &str = planning::INSTRUCTIONS_MESSAGE_ID;
 
 /// Python truthiness for an `f64`: zero is "absent".
 fn truthy(v: f64) -> bool {
@@ -266,7 +267,7 @@ impl PlanSpec {
             && !known.contains(msg.id.as_str())
         {
             if msg.role == Role::User {
-                lk_agents_core::request::answer_pending_input(
+                planning::answer_pending_input(
                     &mut ctx.items,
                     &msg.raw_text_content().unwrap_or_default(),
                 );
@@ -289,15 +290,14 @@ impl PlanSpec {
 
         inject_running_tool_calls(&mut ctx, &self.running_tool_calls);
 
-        let planned =
-            lk_agents_core::request::plan_request(lk_agents_core::request::RequestSnapshot {
-                history: &ctx.items,
-                instructions,
-                tools: &self.tools,
-                on_enter: self.on_enter,
-                turn_instructions: self.turn_instructions.as_deref(),
-                created_at: now,
-            });
+        let planned = planning::plan_request(planning::RequestSnapshot {
+            history: &ctx.items,
+            instructions,
+            tools: &self.tools,
+            on_enter: self.on_enter,
+            turn_instructions: self.turn_instructions.as_deref(),
+            created_at: now,
+        });
         Request {
             chat_ctx: planned.chat_ctx,
             tools: planned.tools,

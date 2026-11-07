@@ -16,9 +16,9 @@
 
 use super::effects::AgentRunEffect;
 use super::execution;
+use super::planning::{self, RequestSnapshot, plan_request};
 use crate::agent::{self, AgentError, first_string_parameter};
 use crate::llm::history::ChatContextExt;
-use crate::request::{RequestSnapshot, plan_request};
 use crate::tool_calls::{self, FinalCandidate, PrepareFailure, Recorded, Settled, ToolCalls};
 use crate::tool_outcome;
 use crate::usage::{Ledger, ModelKind};
@@ -554,12 +554,11 @@ impl AgentRun {
             }
         };
         let answer = message.raw_text_content().unwrap_or_default();
-        self.approval_answers = crate::request::answer_pending_input(&mut self.history, &answer);
+        self.approval_answers = planning::answer_pending_input(&mut self.history, &answer);
         // A transport (the A2A door) may already have written the selected call's answer.
         // Retained sibling read-backs remain waiting and cannot grant their repeats.
         if let Some((at, _)) = execution::pending_turn(&self.history) {
-            self.approval_answers
-                .extend(crate::request::answered_approval_calls(&self.history[at..]));
+            self.approval_answers.extend(planning::answered_approval_calls(&self.history[at..]));
         }
         self.first_new = self.history.len();
         self.history.push(ChatItem::Message(message));
