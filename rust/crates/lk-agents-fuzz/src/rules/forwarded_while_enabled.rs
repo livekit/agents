@@ -144,6 +144,13 @@ impl Rule for ForwardedWhileEnabled {
             }
             for tag in heard.tags {
                 let Tag::Mic { mic, chunk } = *tag else { continue };
+                // A tag no push made by then is a sample the leg's own processing made (a
+                // resampler ringing past the last chunk of a microphone's tag range), not audio
+                // that got past a closed input.
+                let pushed = pushed_at.get(&(mic, chunk));
+                if pushed.is_none_or(|pushes| pushes.iter().all(|pushed| *pushed >= heard.at)) {
+                    continue;
+                }
                 let late =
                     pushed_enabled.get(&(mic, chunk)).is_some_and(|pushed| *pushed < heard.at);
                 let raced = pushed_at.get(&(mic, chunk)).is_some_and(|pushes| {
