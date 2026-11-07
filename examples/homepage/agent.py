@@ -63,7 +63,9 @@ class Assistant(Agent):
         )
 
 
-server = AgentServer()
+server = AgentServer(
+    job_memory_limit_mb=600,
+)
 
 
 @server.rtc_session(agent_name=CONFIG.name)
@@ -87,6 +89,11 @@ async def homepage_agent(ctx: JobContext):
     disconnect_scripted_callers(session)
     publish_frontend_attributes(tts_voice=CONFIG.tts_voice_label)
 
+    # Protection against framework bugs AGT-3919 and AGT-3920:
+    # - pre_connect_audio=False disables the pre-connect audio handler, removing AGT-3919 risk
+    # - job_memory_limit_mb=600 caps memory usage, containing both bugs
+    # - session_host remains enabled (default True) because the homepage dev panel reads
+    #   the lk.agent.session stream (see behaviors/frontend_attributes.py)
     await session.start(
         agent=Assistant(),
         room=ctx.room,
@@ -95,6 +102,7 @@ async def homepage_agent(ctx: JobContext):
                 noise_cancellation=ai_coustics.audio_enhancement(
                     model=ai_coustics.EnhancerModel.QUAIL_VF_S
                 ),
+                pre_connect_audio=False,
             ),
         ),
     )
