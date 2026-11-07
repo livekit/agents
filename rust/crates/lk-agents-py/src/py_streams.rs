@@ -41,7 +41,7 @@ use crate::py_errors::captured;
 use lk_agents_abi::Closed;
 use lk_agents_abi::StreamInput;
 use lk_agents_abi::StreamOutput;
-use lk_agents_abi::errors::ProviderError;
+use lk_agents_abi::errors::{ProviderError, PullError};
 use lk_agents_abi::utils::clock::Clock;
 use lk_agents_abi::utils::clock::Ts;
 use lk_agents_abi::utils::host_ref::HostRef;
@@ -589,7 +589,10 @@ pub fn recv_native<'py, T: Send + 'static>(
 ) -> PyResult<Bound<'py, PyAny>> {
     let source = source.clone();
     crate::py_calls::future_into_py(py, async move {
-        match source.pull().await {
+        let Some(pull) = source.try_pull() else {
+            return Err(crate::py_errors::HostException::to_py_err(&PullError::Overlap));
+        };
+        match pull.await {
             Ok(Pulled::Item(item)) => Python::attach(|py| to_py(py, item)).map(Some),
             Ok(Pulled::End | Pulled::Cancelled) => Ok(None),
             Err(error) => Err(crate::py_errors::HostException::to_py_err(&error)),

@@ -188,7 +188,7 @@ fn progress_and_partial_artifacts_cannot_become_a_success_at_eof_or_remote_failu
         reply.accept(task("task", "context", "TASK_STATE_SUBMITTED")).unwrap();
         reply.accept(status("TASK_STATE_WORKING", Some("Working"))).unwrap();
         reply.accept(chunk("partial", json!([{"text": "partial result"}]), false)).unwrap();
-        assert_eq!(reply.finish(), Err(ClientError::Incomplete));
+        assert_eq!(reply.finish(), Err(ClientError::incomplete()));
         let update = reply.accept(status(outcome, Some("stopped"))).unwrap().unwrap();
         assert_ne!(update.state, TaskState::Completed);
         assert_eq!(update.text, "stopped");

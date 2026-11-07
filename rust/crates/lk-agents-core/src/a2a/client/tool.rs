@@ -27,16 +27,16 @@ pub fn tool_definition(card: &AgentCard) -> Result<ToolCard, ClientError> {
             serde_json::to_value(params).and_then(serde_json::from_value::<ToolDeclaration>)
         })
         .transpose()
-        .map_err(|error| ClientError::InvalidResponse(error.to_string()))?
+        .map_err(ClientError::invalid_response)?
         .unwrap_or_default();
     let name = declaration.tool_name.unwrap_or_else(|| card.name.clone());
     if name.is_empty() {
-        return Err(ClientError::InvalidResponse("the remote tool has no name".into()));
+        return Err(ClientError::invalid_response("the remote tool has no name"));
     }
     let structured_input = declaration.input_schema.is_some();
     let input_schema = declaration.input_schema.unwrap_or_else(request_schema);
     let input_schema = input_schema.as_object().cloned().ok_or_else(|| {
-        ClientError::InvalidResponse("the remote input schema must be an object".into())
+        ClientError::invalid_response("the remote input schema must be an object")
     })?;
     Ok(ToolCard {
         name,

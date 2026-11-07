@@ -18,7 +18,7 @@ use lk_agents_core::a2a::rpc::TaskRef;
 use lk_agents_net::a2a_client::{AgentClient, CleanupObservation, Reply};
 use lk_agents_net::clock::RealClock;
 use lk_agents_net::env::ProcessEnv;
-use lk_agents_net::source::{PullError, Pulled};
+use lk_agents_net::source::Pulled;
 use serde_json::json;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
@@ -352,7 +352,7 @@ async fn updates(reply: &Reply) -> Vec<TaskUpdate> {
     tokio::time::timeout(LIMIT, async {
         let mut updates = Vec::new();
         loop {
-            match reply.pull().await.unwrap() {
+            match reply.try_pull().unwrap().await.unwrap() {
                 Pulled::Item(update) => updates.push(update),
                 Pulled::End => return updates,
                 Pulled::Cancelled => panic!("a live reply was canceled"),
@@ -471,11 +471,11 @@ async fn closing_or_dropping_an_acknowledged_reply_cancels_the_exact_task_withou
         let client = client(&peer, &clock);
         let reply =
             client.send(message("cancel-me", "Work"), None, None, None, &Cx::NONE).await.unwrap();
-        let first = reply.pull().await.unwrap();
+        let first = reply.try_pull().unwrap().await.unwrap();
         assert!(matches!(first, Pulled::Item(TaskUpdate { state: TaskState::Submitted, .. })));
         if explicit_close {
             assert_eq!(reply.aclose(clock.now().saturating_add(LIMIT)).await, Closed::Clean);
-            assert!(matches!(reply.pull().await.unwrap(), Pulled::End));
+            assert!(matches!(reply.try_pull().unwrap().await.unwrap(), Pulled::End));
         }
         drop(reply);
         client.aclose().await;
@@ -507,21 +507,20 @@ async fn a_truncated_remote_stream_reports_failure_after_progress_and_never_a_fi
     let reply =
         client.send(message("truncated", "Work"), None, None, None, &Cx::NONE).await.unwrap();
     let mut progress = false;
-    let failure = tokio::time::timeout(LIMIT, async {
+    tokio::time::timeout(LIMIT, async {
         loop {
-            match reply.pull().await {
+            match reply.try_pull().unwrap().await {
                 Ok(Pulled::Item(update)) => {
                     assert_ne!(update.state, TaskState::Completed);
                     progress |= update.state == TaskState::Working;
                 }
-                Err(error) => return error,
+                Err(_) => return,
                 ended => panic!("an incomplete task became a clean end: {ended:?}"),
             }
         }
     })
     .await
     .unwrap();
-    assert!(matches!(failure, PullError::Failed(_)));
     assert!(progress);
     client.aclose().await;
     assert!(client.cleanup_observations().is_empty());
@@ -646,11 +645,11 @@ async fn an_unconsumed_input_question_is_canceled_even_after_the_remote_stream_e
         .await
         .unwrap();
     assert!(matches!(
-        reply.pull().await.unwrap(),
+        reply.try_pull().unwrap().await.unwrap(),
         Pulled::Item(TaskUpdate { state: TaskState::Submitted, .. })
     ));
     assert!(matches!(
-        reply.pull().await.unwrap(),
+        reply.try_pull().unwrap().await.unwrap(),
         Pulled::Item(TaskUpdate { state: TaskState::Working, .. })
     ));
     tokio::time::timeout(LIMIT, peer.ack_gate.finished.notified()).await.unwrap();
@@ -702,7 +701,7 @@ async fn client_close_owns_a_stalled_cancel_request_until_its_original_ack_is_dr
     let outcome = tokio::time::timeout(LIMIT, cancelling).await.unwrap().unwrap();
     match outcome {
         Ok(update) => assert_eq!(update.state, TaskState::Canceled),
-        Err(error) => assert!(matches!(error, ClientError::Closed | ClientError::Incomplete)),
+        Err(error) => assert!(matches!(error, ClientError::Protocol(_))),
     }
     assert!(client.cleanup_observations().is_empty());
     let requests = peer.finish().await;
@@ -756,7 +755,7 @@ async fn client_close_waits_for_the_original_cancel_settlement_past_the_old_clea
     let result = tokio::time::timeout(LIMIT, cancelling).await.unwrap().unwrap();
     match result {
         Ok(update) => assert_eq!(update.state, TaskState::Canceled),
-        Err(error) => assert!(matches!(error, ClientError::Closed | ClientError::Incomplete)),
+        Err(error) => assert!(matches!(error, ClientError::Protocol(_))),
     }
     client.aclose().await;
     assert!(!client.cleanup_observations().iter().any(|o| matches!(
@@ -833,9 +832,9 @@ async fn stalled_acknowledged_stream_retains_read_timeout_through_the_reply_sour
     .unwrap();
     let reply = client.send(message("work", "Work"), None, None, None, &Cx::NONE).await.unwrap();
     loop {
-        match reply.pull().await {
+        match reply.try_pull().unwrap().await {
             Ok(Pulled::Item(update)) => assert!(!update.state.is_terminal()),
-            Err(PullError::Failed(ProviderError::Local(error))) => {
+            Err(ProviderError::Local(error)) => {
                 assert_eq!(error.kind, ApiErrorKind::Timeout);
                 assert_eq!(error.phase, Some(TimeoutPhase::Read));
                 break;

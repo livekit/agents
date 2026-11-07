@@ -18,8 +18,6 @@ pub enum Pulled<T> {
     Cancelled,
 }
 
-pub use lk_agents_abi::errors::PullError;
-
 type Pending<T> = Shared<BoxFuture<'static, Arc<Mutex<Read<T>>>>>;
 type Cleanup = Shared<BoxFuture<'static, Closed>>;
 
@@ -76,21 +74,29 @@ impl<T: Send + 'static> SharedStream<T> {
         self.inner.closing.is_cancelled()
     }
 
-    pub async fn pull(&self) -> Result<Pulled<T>, PullError> {
-        if self.is_closed() {
-            return Ok(Pulled::End);
-        }
-        self.inner
-            .reading
-            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
-            .map_err(|_| PullError::Overlap)?;
-        let _reading = Reading(&self.inner.reading);
-        let Some(pending) = self.inner.begin_read() else {
-            return Ok(Pulled::End);
+    /// Admits one read at a time: `None` while another pull of this stream is in flight, which
+    /// the language adapter raises as its overlap error.
+    pub fn try_pull(&self) -> Option<impl Future<Output = Result<Pulled<T>, ProviderError>> + '_> {
+        let closed = self.is_closed();
+        let reading = if closed {
+            None
+        } else {
+            let reading = &self.inner.reading;
+            reading.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed).ok()?;
+            Some(Reading(reading))
         };
-        // No state lock is held while polling the source, which may enter a language runtime.
-        let completed = pending.await;
-        self.inner.finish_read(&completed)
+        Some(async move {
+            let _reading = reading;
+            if closed {
+                return Ok(Pulled::End);
+            }
+            let Some(pending) = self.inner.begin_read() else {
+                return Ok(Pulled::End);
+            };
+            // No state lock is held while polling the source, which may enter a language runtime.
+            let completed = pending.await;
+            self.inner.finish_read(&completed)
+        })
     }
 
     pub async fn aclose(&self) -> Closed {
@@ -123,7 +129,7 @@ impl<T: Send + 'static> Inner<T> {
     }
 
     /// Hands the source back for the next read, unless a close won while it was read.
-    fn finish_read(&self, completed: &Mutex<Read<T>>) -> Result<Pulled<T>, PullError> {
+    fn finish_read(&self, completed: &Mutex<Read<T>>) -> Result<Pulled<T>, ProviderError> {
         let (item, previous) = {
             let mut state = self.state.lock();
             if self.closing.is_cancelled() {
@@ -144,7 +150,7 @@ impl<T: Send + 'static> Inner<T> {
             }
             Some(Err(error)) => {
                 self.closing.cancel();
-                Err(error.into())
+                Err(error)
             }
             None => Ok(Pulled::Cancelled),
         }
@@ -245,14 +251,14 @@ mod tests {
         let (source, _) = source(vec![]);
         let blocked = tokio::spawn({
             let source = source.clone();
-            async move { source.pull().await }
+            async move { source.try_pull().unwrap().await }
         });
         tokio::task::yield_now().await;
-        assert!(matches!(source.pull().await, Err(PullError::Overlap)));
+        assert!(source.try_pull().is_none());
         blocked.abort();
         let _ = blocked.await;
         let (source, _) = self::source(vec![1]);
-        assert!(matches!(source.pull().await, Ok(Pulled::Item(1))));
+        assert!(matches!(source.try_pull().unwrap().await, Ok(Pulled::Item(1))));
     }
 
     // Catches: a close that waits behind the blocked pull it must end, the blocked pull reported
@@ -262,13 +268,13 @@ mod tests {
         let (source, closes) = source(vec![]);
         let blocked = tokio::spawn({
             let source = source.clone();
-            async move { source.pull().await }
+            async move { source.try_pull().unwrap().await }
         });
         tokio::task::yield_now().await;
         assert_eq!(source.aclose().await, Closed::Clean);
         assert!(matches!(blocked.await.unwrap(), Ok(Pulled::Cancelled)));
         assert_eq!(source.aclose().await, Closed::Clean);
-        assert!(matches!(source.pull().await, Ok(Pulled::End)));
+        assert!(matches!(source.try_pull().unwrap().await, Ok(Pulled::End)));
         assert_eq!(closes.load(Ordering::SeqCst), 1);
     }
     struct Closing {
@@ -372,13 +378,13 @@ mod tests {
         );
         let first = tokio::spawn({
             let source = source.clone();
-            async move { source.pull().await }
+            async move { source.try_pull().unwrap().await }
         });
         entered.notified().await;
         first.abort();
         let _ = first.await;
         released.cancel();
-        assert_eq!(source.pull().await.unwrap(), Pulled::Item(42));
+        assert_eq!(source.try_pull().unwrap().await.unwrap(), Pulled::Item(42));
         assert_eq!(reads.load(Ordering::SeqCst), 1, "a cancelled waiter must not repeat next()");
         assert_eq!(source.aclose().await, Closed::Clean);
     }

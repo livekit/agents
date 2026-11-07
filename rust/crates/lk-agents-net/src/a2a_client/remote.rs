@@ -107,8 +107,7 @@ impl Port for RemoteInteraction {
     ) -> Result<RemoteEvent, AgentClientError> {
         let endpoint = self.inner.0.lock().policy.snapshot().id.endpoint;
         let client =
-            AgentClient::new(env, endpoint, token.clone(), conn_options.unwrap_or_default())
-                .map_err(super::host::client_error)?;
+            AgentClient::new(env, endpoint, token.clone(), conn_options.unwrap_or_default())?;
         let request = Request {
             arguments,
             structured,
@@ -437,8 +436,7 @@ impl lk_agents_abi::a2a::remote::RemoteConfiguration for RemoteInteraction {
         name: String,
         description: String,
     ) -> Result<lk_agents_abi::a2a::client::AgentCard, AgentClientError> {
-        lk_agents_core::a2a::client::delegation_tool(name, description)
-            .map_err(super::host::client_error)
+        Ok(lk_agents_core::a2a::client::delegation_tool(name, description)?)
     }
 
     fn _core_remote_token(

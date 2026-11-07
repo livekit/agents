@@ -45,7 +45,8 @@ impl lk_agents_abi::tts::streams::TtsStream for TtsStream {
         Ok(())
     }
     async fn recv(&self) -> Result<Option<SynthesizedAudio>, PullError> {
-        self.source.pull().await.map(|pulled| match pulled {
+        let pull = self.source.try_pull().ok_or(PullError::Overlap)?;
+        Ok(match pull.await? {
             Pulled::Item(audio) => Some(audio),
             Pulled::End | Pulled::Cancelled => None,
         })

@@ -27,7 +27,7 @@ use tokio_util::sync::CancellationToken;
 use crate::env::{ProcessEnv, ProcessError};
 use crate::http::exchange::{Exchange, HttpEvent};
 use crate::http::{BodyReader, GatewayHttp};
-use crate::source::{PullError, Pulled, SharedStream};
+use crate::source::{Pulled, SharedStream};
 use crate::sse::{SseDecoder, SseEvent};
 use crate::task::TokioSpawner;
 use lk_agents_abi::{OwnedTask, SpawnerExt, TaskOutcome};
@@ -124,19 +124,19 @@ impl AgentClient {
         let discovery = self.inner.read_response(&request);
         let body = tokio::select! {
             biased;
-            () = self.inner.closing.cancelled() => return Err(ClientError::Closed),
+            () = self.inner.closing.cancelled() => return Err(ClientError::closed()),
             body = discovery => body?,
         };
         self.inner.ensure_open()?;
         // Validate routing before any bearer is sent to a peer-provided interface URL.
-        let card: AgentCard = serde_json::from_slice(&body)
-            .map_err(|e| ClientError::InvalidResponse(e.to_string()))?;
+        let card: AgentCard =
+            serde_json::from_slice(&body).map_err(ClientError::invalid_response)?;
         for interface in &card.supported_interfaces {
             if interface.protocol_binding == a2a::TRANSPORT_PROTOCOL_JSONRPC {
                 let rpc = checked_url(&interface.url)?;
                 if rpc.origin() != self.inner.endpoint.origin() {
-                    return Err(ClientError::InvalidResponse(
-                        "the card's JSONRPC interface must have the endpoint's origin".into(),
+                    return Err(ClientError::invalid_response(
+                        "the card's JSONRPC interface must have the endpoint's origin",
                     ));
                 }
             }
@@ -193,6 +193,21 @@ impl AgentClient {
     }
 
     async fn start(&self, id: u64, request: Request) -> Result<Reply, ClientError> {
+        let (task, updates) = self.open(id, request).await?;
+        Ok(Reply {
+            task_id: task.id,
+            thread_id: task.context_id,
+            source: SharedStream::new(Box::new(updates), self.inner.clock.clone()),
+            clock: self.inner.clock.clone(),
+        })
+    }
+
+    /// Runs the request as an owned call; its task once the peer acknowledged it.
+    async fn open(
+        &self,
+        id: u64,
+        request: Request,
+    ) -> Result<(TaskRef, ReplyUpdates), ClientError> {
         self.inner.ensure_open()?;
         let (updates, rx) = mpsc::channel(UPDATE_QUEUE);
         let (state, mut acknowledged) =
@@ -227,29 +242,17 @@ impl AgentClient {
             self.inner.ensure_open()?;
             operations.insert(id, Operation { _task: task, stop, state: acknowledged.clone() });
         }
-        let source = SharedStream::new(
-            Box::new(ReplyUpdates {
-                rx,
-                state: state.clone(),
-                operation,
-                clock: self.inner.clock.clone(),
-            }),
-            self.inner.clock.clone(),
-        );
+        let updates =
+            ReplyUpdates { rx, state: state.clone(), operation, clock: self.inner.clock.clone() };
         state.send_modify(|state| state.admitted = true);
         let task = acknowledged
             .wait_for(|state| state.acknowledgement.is_some() || state.settled)
             .await
-            .map_err(|_| ClientError::Incomplete)?
+            .map_err(|_| ClientError::incomplete())?
             .acknowledgement
             .clone()
-            .ok_or(ClientError::Incomplete)??;
-        Ok(Reply {
-            task_id: task.id,
-            thread_id: task.context_id,
-            source,
-            clock: self.inner.clock.clone(),
-        })
+            .ok_or_else(ClientError::incomplete)??;
+        Ok((task, updates))
     }
 
     /// Always sends contextId and the full-URI reason, independent of card capability hints.
@@ -261,15 +264,8 @@ impl AgentClient {
         self.connect().await?;
         let id = self.inner.next_id();
         let request = self.inner.core.lock().cancel(&task, reason, JsonRpcId::Number(id as i64))?;
-        let reply = self.start(id, request).await?;
-        match reply.pull().await {
-            Ok(Pulled::Item(update)) => Ok(update),
-            Ok(_) => Err(ClientError::Incomplete),
-            Err(PullError::Failed(ProviderError::Local(error))) => {
-                Err(ClientError::Transport(error))
-            }
-            Err(error) => Err(transport_error(error.to_string())),
-        }
+        let (_, mut updates) = self.open(id, request).await?;
+        updates.recv().await?.ok_or_else(ClientError::incomplete)
     }
 
     /// Stops admission and settles owned exchanges. Missed cleanup remains observable and owned.
@@ -299,7 +295,7 @@ impl Drop for AgentClient {
 
 impl Inner {
     fn ensure_open(&self) -> Result<(), ClientError> {
-        if self.closing.is_cancelled() { Err(ClientError::Closed) } else { Ok(()) }
+        if self.closing.is_cancelled() { Err(ClientError::closed()) } else { Ok(()) }
     }
 
     fn next_id(&self) -> u64 {
@@ -353,9 +349,9 @@ impl Inner {
             match exchange.next().await.map_err(ClientError::Transport)? {
                 HttpEvent::Started => body.clear(),
                 HttpEvent::Headers(_) => {}
-                HttpEvent::Bytes(bytes) => body
-                    .append(&bytes)
-                    .map_err(|error| ClientError::InvalidResponse(error.to_string()))?,
+                HttpEvent::Bytes(bytes) => {
+                    body.append(&bytes).map_err(ClientError::invalid_response)?
+                }
                 HttpEvent::End => return Ok(body.finish()),
             }
         }
@@ -443,7 +439,7 @@ impl RemoteCall {
         match result {
             Some(Ok(())) => self.cancel_unread_question().await,
             Some(Err(error)) => self.report_failure(error).await,
-            None => self.delivery.fail_acknowledgement(ClientError::Closed),
+            None => self.delivery.fail_acknowledgement(ClientError::closed()),
         }
     }
 
@@ -584,7 +580,7 @@ impl Delivery {
             self.inner.core.lock().acknowledge(&update)?;
             self.state.send_modify(|state| state.acknowledgement = Some(Ok(task)));
         }
-        self.updates.send(Ok(update)).await.map_err(|_| ClientError::Closed)
+        self.updates.send(Ok(update)).await.map_err(|_| ClientError::closed())
     }
 }
 
@@ -597,8 +593,11 @@ pub struct Reply {
 }
 
 impl Reply {
-    pub async fn pull(&self) -> Result<Pulled<TaskUpdate>, PullError> {
-        self.source.pull().await
+    /// `None` while another pull of this reply is in flight.
+    pub fn try_pull(
+        &self,
+    ) -> Option<impl Future<Output = Result<Pulled<TaskUpdate>, ProviderError>> + '_> {
+        self.source.try_pull()
     }
     pub async fn aclose(&self, deadline: Ts) -> Closed {
         self.source.close(deadline).await
@@ -629,19 +628,23 @@ struct ReplyUpdates {
     state: watch::Sender<CallState>,
 }
 
+impl ReplyUpdates {
+    async fn recv(&mut self) -> Result<Option<TaskUpdate>, ClientError> {
+        let update = self.rx.recv().await.transpose()?;
+        if update.as_ref().is_some_and(TaskUpdate::is_settled) {
+            self.state.send_modify(|state| state.consumed = true);
+        }
+        Ok(update)
+    }
+}
+
 impl StreamOutput<TaskUpdate> for ReplyUpdates {
     fn next(&mut self) -> lk_agents_abi::BoxFuture<'_, Result<Option<TaskUpdate>, ProviderError>> {
         Box::pin(async move {
-            let update = self.rx.recv().await.transpose().map_err(|e| match e {
+            self.recv().await.map_err(|error| match error {
                 ClientError::Transport(error) => ProviderError::Local(error),
-                error => {
-                    ProviderError::from(ApiError::new(error.to_string()).with_retryable(false))
-                }
-            })?;
-            if update.as_ref().is_some_and(TaskUpdate::is_settled) {
-                self.state.send_modify(|state| state.consumed = true);
-            }
-            Ok(update)
+                error => ApiError::new(error.to_string()).with_retryable(false).into(),
+            })
         })
     }
     fn cancel_safe(&self) -> bool {
@@ -671,10 +674,9 @@ async fn exchange(request: Request, delivery: &mut Delivery) -> Result<(), Clien
                     return reader.state.finish();
                 }
             }
-            HttpEvent::Bytes(bytes) => reader
-                .body
-                .append(&bytes)
-                .map_err(|error| ClientError::InvalidResponse(error.to_string()))?,
+            HttpEvent::Bytes(bytes) => {
+                reader.body.append(&bytes).map_err(ClientError::invalid_response)?
+            }
             HttpEvent::End => return reader.finish(&mut exchange, delivery).await,
         }
     }
@@ -743,9 +745,7 @@ impl<'a> ReplyReader<'a> {
         exchange: &mut Exchange,
         delivery: &mut Delivery,
     ) -> Result<ControlFlow<()>, ClientError> {
-        self.decoder
-            .feed(bytes, &mut self.events)
-            .map_err(|error| ClientError::InvalidResponse(error.to_string()))?;
+        self.decoder.feed(bytes, &mut self.events).map_err(ClientError::invalid_response)?;
         for event in self.events.drain(..) {
             if let Some(update) = self.state.decode(event.data.as_bytes(), &self.id)? {
                 exchange.delivered();
@@ -768,9 +768,7 @@ impl<'a> ReplyReader<'a> {
         delivery: &mut Delivery,
     ) -> Result<(), ClientError> {
         if self.framing == ReplyFraming::EventStream {
-            self.decoder
-                .finish()
-                .map_err(|error| ClientError::InvalidResponse(error.to_string()))?;
+            self.decoder.finish().map_err(ClientError::invalid_response)?;
             return self.state.finish();
         }
         let update = if self.request.task_response {
@@ -801,8 +799,4 @@ fn checked_url(url: &str) -> Result<url::Url, ClientError> {
         ));
     }
     Ok(url)
-}
-
-fn transport_error(error: String) -> ClientError {
-    ClientError::Transport(ApiError::connection(Some(error)))
 }

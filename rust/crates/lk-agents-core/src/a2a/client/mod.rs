@@ -19,22 +19,48 @@ use serde_json::{Map, Value};
 
 use crate::a2a::rpc::{TaskRef, task_state};
 
+/// Connection, timeout and status failures are the transport's `ApiError` kinds.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum ClientError {
-    #[error(transparent)]
-    Transport(#[from] lk_agents_abi::errors::ApiError),
-    #[error("the A2A client is closed")]
-    Closed,
-    #[error("connect the A2A client before sending a request")]
-    NotConnected,
     #[error("invalid A2A input: {0}")]
     InvalidInput(String),
-    #[error("invalid A2A response: {0}")]
-    InvalidResponse(String),
     #[error("A2A error {code}: {message}")]
     Rpc { code: i32, message: String, data: Option<Value> },
-    #[error("the A2A stream ended before an outcome")]
-    Incomplete,
+    /// The client or the peer broke the protocol: closed, not connected, an invalid or
+    /// incomplete reply.
+    #[error("{0}")]
+    Protocol(String),
+    #[error(transparent)]
+    Transport(#[from] lk_agents_abi::errors::ApiError),
+}
+
+impl ClientError {
+    pub fn closed() -> Self {
+        Self::Protocol("the A2A client is closed".into())
+    }
+
+    pub fn incomplete() -> Self {
+        Self::Protocol("the A2A stream ended before an outcome".into())
+    }
+
+    pub fn invalid_response(error: impl std::fmt::Display) -> Self {
+        Self::Protocol(format!("invalid A2A response: {error}"))
+    }
+
+    fn not_connected() -> Self {
+        Self::Protocol("connect the A2A client before sending a request".into())
+    }
+}
+
+/// The host's view of a client failure.
+impl From<ClientError> for lk_agents_abi::a2a::client::AgentClientError {
+    fn from(error: ClientError) -> Self {
+        match error {
+            ClientError::InvalidInput(message) => Self::InvalidInput(message),
+            ClientError::Transport(error) => Self::Provider(error.into()),
+            error => Self::Protocol(error.to_string()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -135,7 +161,8 @@ impl Client {
     pub fn accept_card(&mut self, body: &[u8]) -> Result<&AgentCard, ClientError> {
         self.ensure_open()?;
         if self.card.is_none() {
-            let card: AgentCard = serde_json::from_slice(body).map_err(malformed)?;
+            let card: AgentCard =
+                serde_json::from_slice(body).map_err(ClientError::invalid_response)?;
             let interface = card
                 .supported_interfaces
                 .iter()
@@ -144,11 +171,9 @@ impl Client {
                         && i.protocol_version == "1.0"
                 })
                 .ok_or_else(|| {
-                    ClientError::InvalidResponse(
-                        "the card offers no A2A 1.0 JSONRPC interface".into(),
-                    )
+                    ClientError::invalid_response("the card offers no A2A 1.0 JSONRPC interface")
                 })?;
-            check_url(&interface.url).map_err(|e| ClientError::InvalidResponse(e.to_string()))?;
+            check_url(&interface.url).map_err(ClientError::invalid_response)?;
             self.rpc_url = Some(interface.url.clone());
             self.card = Some(card);
         }
@@ -260,12 +285,12 @@ impl Client {
     }
 
     fn ensure_open(&self) -> Result<(), ClientError> {
-        if self.closed { Err(ClientError::Closed) } else { Ok(()) }
+        if self.closed { Err(ClientError::closed()) } else { Ok(()) }
     }
 
     fn ensure_connected(&self) -> Result<(), ClientError> {
         self.ensure_open()?;
-        if self.card.is_none() { Err(ClientError::NotConnected) } else { Ok(()) }
+        if self.card.is_none() { Err(ClientError::not_connected()) } else { Ok(()) }
     }
 
     fn message_route<'a>(
@@ -333,7 +358,7 @@ impl Client {
         headers.push(("Content-Type".into(), "application/json".into()));
         Ok(Request {
             method: HttpMethod::Post,
-            url: self.rpc_url.clone().ok_or(ClientError::NotConnected)?,
+            url: self.rpc_url.clone().ok_or_else(ClientError::not_connected)?,
             headers,
             body,
             id: Some(id),
@@ -372,10 +397,6 @@ fn check_task(task: &TaskRef) -> Result<(), ClientError> {
         return Err(ClientError::InvalidInput("task methods require task and context ids".into()));
     }
     Ok(())
-}
-
-fn malformed(error: impl std::fmt::Display) -> ClientError {
-    ClientError::InvalidResponse(error.to_string())
 }
 
 /// A task's progress or observed outcome. `follow_task` names the task that owns a merged
@@ -436,19 +457,21 @@ impl ReplyState {
         id: &JsonRpcId,
     ) -> Result<Option<TaskUpdate>, ClientError> {
         let result = response_result(body, id)?;
-        self.accept(serde_json::from_value(result).map_err(malformed)?)
+        self.accept(serde_json::from_value(result).map_err(ClientError::invalid_response)?)
     }
 
     /// `CancelTask` and `GetTask` return a task directly, rather than a streaming wrapper.
     pub fn decode_task(&mut self, body: &[u8], id: &JsonRpcId) -> Result<TaskUpdate, ClientError> {
         let result = response_result(body, id)?;
-        self.accept(StreamResponse::Task(serde_json::from_value(result).map_err(malformed)?))?
-            .ok_or_else(|| malformed("a task response did not produce an update"))
+        self.accept(StreamResponse::Task(
+            serde_json::from_value(result).map_err(ClientError::invalid_response)?,
+        ))?
+        .ok_or_else(|| ClientError::invalid_response("a task response did not produce an update"))
     }
 
     pub fn accept(&mut self, event: StreamResponse) -> Result<Option<TaskUpdate>, ClientError> {
         if self.settled {
-            return Err(malformed("the task already supplied its outcome"));
+            return Err(ClientError::invalid_response("the task already supplied its outcome"));
         }
         match event {
             StreamResponse::Task(task) => {
@@ -491,14 +514,16 @@ impl ReplyState {
     /// A message instead of a task: the remote answered at once and the reply is settled.
     fn direct_reply(&mut self, message: Message) -> Result<Option<TaskUpdate>, ClientError> {
         if self.task.is_some() {
-            return Err(malformed("a task stream cannot turn into an unrelated message"));
+            return Err(ClientError::invalid_response(
+                "a task stream cannot turn into an unrelated message",
+            ));
         }
         if self
             .expected_context
             .as_ref()
             .is_some_and(|context| Some(context) != message.context_id.as_ref())
         {
-            return Err(malformed("the message belongs to another context"));
+            return Err(ClientError::invalid_response("the message belongs to another context"));
         }
         self.settled = true;
         let text = parts_text(&message.parts);
@@ -525,19 +550,19 @@ impl ReplyState {
 
     /// Transport EOF is an observation, never evidence that remote work completed.
     pub fn finish(&self) -> Result<(), ClientError> {
-        if self.settled { Ok(()) } else { Err(ClientError::Incomplete) }
+        if self.settled { Ok(()) } else { Err(ClientError::incomplete()) }
     }
 
     fn identify(&mut self, id: &str, context_id: &str) -> Result<(), ClientError> {
         if id.is_empty() || context_id.is_empty() {
-            return Err(malformed("a task update needs task and context ids"));
+            return Err(ClientError::invalid_response("a task update needs task and context ids"));
         }
         if self.expected_context.as_deref().is_some_and(|expected| expected != context_id) {
-            return Err(malformed("the update belongs to another context"));
+            return Err(ClientError::invalid_response("the update belongs to another context"));
         }
         match &self.task {
             Some(task) if task.id != id || task.context_id != context_id => {
-                Err(malformed("the update belongs to another task or context"))
+                Err(ClientError::invalid_response("the update belongs to another task or context"))
             }
             Some(_) => Ok(()),
             None => {
@@ -552,8 +577,9 @@ impl ReplyState {
         status: a2a::TaskStatus,
         mut metadata: Map<String, Value>,
     ) -> Result<Option<TaskUpdate>, ClientError> {
-        let state = task_state(&status.state)
-            .ok_or_else(|| malformed("the peer reported an unsupported task state"))?;
+        let state = task_state(&status.state).ok_or_else(|| {
+            ClientError::invalid_response("the peer reported an unsupported task state")
+        })?;
         if let Some(message) = &status.message
             && let Some(message_metadata) = &message.metadata
         {
@@ -572,7 +598,7 @@ impl ReplyState {
                 Some(TaskRef { id: id.clone(), context_id: task.context_id.clone() })
             }
             Some(_) => {
-                return Err(malformed(
+                return Err(ClientError::invalid_response(
                     "mergedInto must name a different task on a completed outcome",
                 ));
             }
@@ -612,16 +638,21 @@ fn append_artifact(into: &mut Artifact, update: Artifact) {
 }
 
 fn response_result(body: &[u8], id: &JsonRpcId) -> Result<Value, ClientError> {
-    let response: JsonRpcResponse = serde_json::from_slice(body).map_err(malformed)?;
+    let response: JsonRpcResponse =
+        serde_json::from_slice(body).map_err(ClientError::invalid_response)?;
     if response.jsonrpc != "2.0" || &response.id != id {
-        return Err(malformed("the JSON-RPC response does not match its request"));
+        return Err(ClientError::invalid_response(
+            "the JSON-RPC response does not match its request",
+        ));
     }
     match (response.result, response.error) {
         (None, Some(error)) => {
             Err(ClientError::Rpc { code: error.code, message: error.message, data: error.data })
         }
         (Some(result), None) => Ok(result),
-        _ => Err(malformed("a JSON-RPC response needs exactly one result or error")),
+        _ => Err(ClientError::invalid_response(
+            "a JSON-RPC response needs exactly one result or error",
+        )),
     }
 }
 
