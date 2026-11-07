@@ -72,6 +72,8 @@ class FakeScribe:
         self.on_start: LiveScript | None = None
         # Error events sent in place of session.updated (Scribe rejecting the settings).
         self.reject_update: list[dict[str, Any]] | None = None
+        # False stands in for a half-open connection: pings go unanswered.
+        self.answer_pings = True
         self.transcript = "Hi there, what is the capital of France?"
         self.fast_status = 200
         self.fast_body: dict[str, Any] = {
@@ -85,7 +87,7 @@ class FakeScribe:
         }
 
     async def live(self, request: web.Request) -> web.WebSocketResponse:
-        ws = web.WebSocketResponse(protocols=("live-asr",))
+        ws = web.WebSocketResponse(protocols=("live-asr",), autoping=self.answer_pings)
         await ws.prepare(request)
         session = LiveSession(headers=dict(request.headers), protocol=ws.ws_protocol)
         self.sessions.append(session)
@@ -766,6 +768,55 @@ async def test_live_reconnects_after_a_dropped_connection(scribe, http) -> None:
     await run_stream(stream, frames(0.1))
 
     assert len(fake.sessions) == 2
+
+
+async def test_live_fails_within_the_liveness_timeout_when_scribe_goes_silent(scribe, http) -> None:
+    # a half-open socket never delivers a close, so only an unanswered ping reveals it
+    fake, live_url, fast_url = scribe
+    fake.answer_pings = False
+    stt = make_stt(http, (live_url, fast_url))
+    stream = stt.stream(
+        conn_options=APIConnectOptions(max_retry=0, timeout=5, liveness_timeout=1.0)
+    )
+
+    async def drain() -> None:
+        async for _ in stream:
+            pass
+
+    started = time.monotonic()
+    with pytest.raises(APIConnectionError, match="WebSocket connection lost"):
+        await asyncio.wait_for(drain(), 5)
+    assert time.monotonic() - started < 3
+    await stream.aclose()
+
+
+async def test_live_stays_connected_through_silence_while_scribe_answers_pings(
+    scribe, http
+) -> None:
+    fake, live_url, fast_url = scribe
+    stt = make_stt(http, (live_url, fast_url))
+    stream = stt.stream(
+        conn_options=APIConnectOptions(max_retry=0, timeout=5, liveness_timeout=1.0)
+    )
+    await wait_until(lambda: bool(fake.sessions) and bool(fake.sessions[0].updates), "connect")
+    await asyncio.sleep(2.5)  # over two liveness windows with no message from Scribe
+
+    assert len(fake.sessions) == 1
+    await run_stream(stream, frames(0.1))
+
+
+async def test_live_speech_events_reset_the_retry_budget(scribe, http) -> None:
+    fake, live_url, fast_url = scribe
+
+    async def speech_started(ws: web.WebSocketResponse, session: LiveSession) -> None:
+        await ws.send_json({"type": "input_audio_buffer.speech_started", "audio_start_ms": 0})
+
+    fake.on_start = speech_started
+    stt = make_stt(http, (live_url, fast_url))
+    stream = stt.stream(conn_options=FAST_RETRY)
+    stream._num_retries = 1  # as if a previous connection had failed
+    await wait_until(lambda: stream._num_retries == 0, "the retry budget to reset")
+    await run_stream(stream, frames(0.1))
 
 
 async def test_live_stream_language_override(scribe, http) -> None:

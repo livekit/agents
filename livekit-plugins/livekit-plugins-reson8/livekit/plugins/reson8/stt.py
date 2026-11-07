@@ -62,7 +62,6 @@ from ._utils import (
 )
 from .log import logger
 
-KEEPALIVE_INTERVAL = 30.0
 # Reson8 answers a flush in well under 100ms when it has anything to say,
 # so this is a ceiling for the case where it has nothing and stays silent
 _FINAL_TURN_GRACE = 0.25
@@ -734,7 +733,7 @@ class SpeechStream(stt.RecognizeStream):
         connect = self._ensure_session().ws_connect(
             url,
             headers={**auth_headers(self._api_key), **integration_headers()},
-            heartbeat=KEEPALIVE_INTERVAL,
+            autoping=False,  # WebSocketMonitor in recv_task notices a dead connection
         )
 
         try:
@@ -791,8 +790,11 @@ class SpeechStream(stt.RecognizeStream):
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+            monitor = utils.aio.WebSocketMonitor(
+                ws, liveness_timeout=self._conn_options.liveness_timeout
+            )
             while True:
-                msg = await ws.receive()
+                msg = await monitor.receive()
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
@@ -835,6 +837,8 @@ class SpeechStream(stt.RecognizeStream):
                     continue
 
                 self._process_message(parsed)
+                if parsed.get("type") in ("turn_start", "turn_end_candidate", "turn_end"):
+                    self._mark_provider_progress()
 
         while True:
             ws: aiohttp.ClientWebSocketResponse | None = None
