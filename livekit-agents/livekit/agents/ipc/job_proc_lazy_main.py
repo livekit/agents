@@ -49,6 +49,7 @@ from .proto import (
     ShuttingDown,
     StartJobRequest,
 )
+from .stdio_capture import ChildStdio, redirect_stdio
 
 if TYPE_CHECKING:
     from ..voice.remote_session import SessionHost
@@ -72,10 +73,14 @@ class ProcStartArgs:
     log_cch: socket.socket
     logger_levels: dict[str, int]
     simulation_end_fnc: Callable[[Any], Any] | None = None
+    stdio: ChildStdio | None = None
 
 
 def proc_main(args: ProcStartArgs) -> None:
     import logging
+
+    if args.stdio is not None:
+        redirect_stdio(args.stdio)
 
     from .log_queue import LogQueueHandler
     from .proc_client import _ProcClient
