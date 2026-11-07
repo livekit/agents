@@ -121,9 +121,20 @@ impl<'a> InputsView<'a> {
     /// applied after it, which is where the effects of that turn have all landed. `None` until
     /// the driver has had a turn at all.
     pub fn driver_turn_after(&self, at: Observed) -> Option<Turn> {
+        self.turn_after(at, yields)
+    }
+
+    /// The driver's first turn after `at` that ran the session until it rested: an `Advance`. An
+    /// await ends as soon as what it awaits is ready, which can be before a task woken in the
+    /// same turn (the audio pump) has run.
+    pub fn rested_turn_after(&self, at: Observed) -> Option<Turn> {
+        self.turn_after(at, |input| matches!(input, Input::Advance { .. }))
+    }
+
+    fn turn_after(&self, at: Observed, turn: impl Fn(&Input) -> bool) -> Option<Turn> {
         let applied = &self.0.applied;
         let after = applied.partition_point(|a| a.at <= at);
-        let began = after + applied[after..].iter().position(|a| yields(&a.input))?;
+        let began = after + applied[after..].iter().position(|a| turn(&a.input))?;
         Some(Turn { began: applied[began].at, ended: applied.get(began + 1).map(|a| a.at) })
     }
 

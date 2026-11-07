@@ -220,9 +220,10 @@ fn expect_reached(
     (mic, chunk): (u32, u16),
     pushed: Observed,
 ) {
-    // Frames move through the pump on the driver's next turn. Until it has had one, nothing has
-    // moved the frame and nothing can be said about where it went.
-    let Some(turn) = inputs.driver_turn_after(pushed) else { return };
+    // Frames move through the pump on the driver's next turn that runs the session to rest (an
+    // await answered first ends its turn before the pump ran, seed 11116). Until it has had one,
+    // nothing has moved the frame and nothing can be said about where it went.
+    let Some(turn) = inputs.rested_turn_after(pushed) else { return };
     let end = turn.ended.unwrap_or(Observed::END);
     let way = std::cell::OnceCell::new();
     let on_its_way = || *way.get_or_init(|| on_its_way(inference, (mic, chunk), pushed).max(end));
