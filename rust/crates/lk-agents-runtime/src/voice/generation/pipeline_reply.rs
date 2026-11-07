@@ -228,18 +228,22 @@ async fn pipeline_reply_task_impl(
             // A step that took the floor gives it back before its tools are waited for, as
             // `_mark_generation_done` precedes `await exe_task`: a tool waiting for idle would
             // otherwise wait on its own speech.
-            // Its words played even though the model failed: where the cut stopped them.
-            if let Ok(Some(spoken)) = &spoken {
-                let has_tools = !tools.is_empty();
-                let tools_running = has_tools && !handle.interrupted();
+            // Its words played even though the model failed: where the cut stopped them. A voice
+            // that failed too still gives back the floor its step took while its tools run.
+            let has_tools = !tools.is_empty();
+            let played = match &spoken {
+                Ok(Some(spoken)) => Some(spoken.acc.played_at()),
+                _ => None,
+            };
+            if played.is_some() || has_tools && handle.step_authorized(ctx.plan.step) {
                 let interrupted = handle.interrupted();
                 step_spoken(
                     shared,
                     handle,
                     ctx.plan.step,
-                    (interrupted, spoken.acc.played_at()),
+                    (interrupted, played.flatten()),
                     has_tools,
-                    tools_running,
+                    has_tools && !interrupted,
                     None,
                 );
             }

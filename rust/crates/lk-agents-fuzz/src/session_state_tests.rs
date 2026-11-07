@@ -314,6 +314,23 @@ mod failed_step_releases_floor {
     }
 }
 
+mod failed_voice_releases_floor {
+    //! A step whose model and voice both failed gives the floor back before waiting for its tools.
+    use lk_agents_fuzz::search;
+
+    // Catches: a step whose model request failed while its voice failed too kept its speech
+    // current while its tool waited for idle (`ctx.foreground()`), until the close: only a voice
+    // that spoke released the floor (`speech_settles`, survey seed 27049).
+    #[test]
+    fn a_tool_waiting_for_idle_outlives_its_failed_voice() {
+        let seed = 27049;
+        let setup = search::sample_setup(&mut fastrand::Rng::with_seed(seed));
+        let outcome = search::explore(setup, seed, 3000);
+        let failed: Vec<_> = outcome.failures.iter().map(|f| f.contract.to_string()).collect();
+        assert!(!failed.iter().any(|c| c == "speech_settles"), "{failed:?}");
+    }
+}
+
 mod final_ends_pause {
     //! A final transcript ends the pause it took: the paused speech is interrupted.
     use lk_agents_fuzz::drive::{Case, RoomLegs, Setup, run};
