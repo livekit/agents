@@ -8,10 +8,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use livekit_protocol::agent::agent_task::{GetTasksRequest, Task};
 use livekit_protocol::agent::agent_thread::{
-    CreateRequest, GetItemsRequest, Item, ListRequest, ListResponse, Thread as ThreadRecord,
-    UpdateRequest,
+    CreateRequest, ListRequest, ListResponse, Thread as ThreadRecord, UpdateRequest,
 };
 use lk_agents_abi::storage as host;
 use lk_agents_abi::storage::handles::Thread as Reads;
@@ -24,8 +22,9 @@ use lk_agents_net::task::TaskSet;
 use serde_json::Value;
 use tokio::sync::OnceCell;
 
-use crate::backends::agentdb::{AgentDbOptions, AgentDbStorage, TokenMinter, service_error};
+use crate::backends::agentdb::{AgentDbOptions, AgentDbStorage, TokenMinter};
 use crate::backends::sqlite::SqliteStorage;
+use crate::backends::with_thread;
 use crate::context::store::ContextStore;
 use crate::thread::LeaseTiming;
 use crate::thread::db::{ItemPage, TaskPage, TaskQuery};
@@ -133,8 +132,6 @@ pub struct Namespace {
     clock: Arc<dyn lk_agents_abi::Clock>,
 }
 
-/// The holder of a read-only handle: it never takes a lease.
-const READER: &str = "reader";
 /// A local items page when the caller names no limit.
 const LOCAL_PAGE: i64 = 100;
 
@@ -156,12 +153,11 @@ impl Namespace {
                         // The API client loads the system trust store. Keep that blocking
                         // work off the request executor as well as the module import path.
                         let storage = lk_agents_net::blocking_io::blocking_io()
-                            .run((), move || {
+                            .try_run((), move || {
                                 let _guard = runtime.enter();
                                 AgentDbStorage::new(opts, minter, &env)
                             })
-                            .await
-                            .map_err(|e| StorageError::Unavailable(e.to_string()))??;
+                            .await?;
                         Backend::Cloud(Arc::new(storage))
                     }
                 })
@@ -250,15 +246,6 @@ pub fn thread_item_page(page: ItemPage) -> Result<ThreadItemPage, StorageError> 
     Ok(ThreadItemPage { items, after: page.next.unwrap_or_default() })
 }
 
-fn cloud_item(i: Item) -> Result<ThreadItem, StorageError> {
-    Ok(ThreadItem {
-        agent: i.agent,
-        seq: i.seq,
-        message_id: i.message_id,
-        item: chat_item(i.item.unwrap_or_default())?,
-    })
-}
-
 fn chat_item(
     item: lk_agents_abi::livekit_protocol::agent::chat_context::ChatItem,
 ) -> Result<lk_agents_abi::ChatItem, StorageError> {
@@ -266,25 +253,8 @@ fn chat_item(
         .map_err(StorageError::Invalid)
 }
 
-/// Preserve the framework's A2A state and the presence of an application label.
-fn cloud_task(t: Task) -> Result<ThreadTask, StorageError> {
-    let status = serde_json::from_value::<crate::http::generated::TaskStatus>(Value::String(
-        t.status.clone(),
-    ))
-    .ok()
-    .and_then(crate::http::task_filter)
-    .ok_or_else(|| StorageError::Unavailable(format!("unknown task state {}", t.status)))?;
-    Ok(ThreadTask {
-        task_id: t.task_id,
-        thread_id: t.thread_id,
-        name: t.name,
-        status,
-        updated_at: seconds_of(t.updated_at),
-    })
-}
-
-/// Every task of a local thread, of `status` when given.
-async fn local_tasks(
+/// Every task of a thread, of `status` when given.
+pub(crate) async fn thread_tasks(
     thread: &Thread,
     thread_id: &str,
     status: Option<TaskState>,
@@ -455,27 +425,15 @@ impl HostStorageClass for Namespace {
         after: Option<String>,
         limit: Option<u32>,
     ) -> Result<ThreadItemPage, StorageError> {
-        match self.backend().await? {
-            Backend::Cloud(cloud) => {
-                let request = GetItemsRequest {
-                    thread_id,
-                    agent: agent.unwrap_or_default(),
-                    page_token: after.unwrap_or_default(),
-                    limit: page_limit(limit)?,
-                    ..Default::default()
-                };
-                let page = cloud.threads().items(request).await.map_err(service_error)?;
-                let items = page.items.into_iter().map(cloud_item).collect::<Result<_, _>>()?;
-                Ok(ThreadItemPage { items, after: page.next_page_token })
-            }
-            Backend::Local(local) => {
-                let thread = local.open(&thread_id, READER).await?;
-                let limit = limit.map_or(LOCAL_PAGE, i64::from);
-                let page = thread.list_items(agent.as_deref(), after.as_deref(), limit).await;
-                thread.close().await;
-                thread_item_page(page?)
-            }
-        }
+        self.storage()
+            .await?
+            .get_thread_items(
+                &thread_id,
+                agent.as_deref(),
+                after.as_deref(),
+                limit.map_or(LOCAL_PAGE, i64::from),
+            )
+            .await
     }
 
     async fn get_thread_tasks(
@@ -483,36 +441,7 @@ impl HostStorageClass for Namespace {
         thread_id: String,
         status: Option<TaskState>,
     ) -> Result<Vec<ThreadTask>, StorageError> {
-        match self.backend().await? {
-            Backend::Cloud(cloud) => {
-                let status =
-                    status.map(|status| crate::http::task_status(status).as_str().to_owned());
-                let mut tasks = Vec::new();
-                let mut page_token = String::new();
-                loop {
-                    let request = GetTasksRequest {
-                        thread_id: thread_id.clone(),
-                        status: status.clone(),
-                        page_token,
-                        ..Default::default()
-                    };
-                    let page = cloud.threads().tasks(request).await.map_err(service_error)?;
-                    tasks.extend(
-                        page.tasks.into_iter().map(cloud_task).collect::<Result<Vec<_>, _>>()?,
-                    );
-                    if page.next_page_token.is_empty() {
-                        return Ok(tasks);
-                    }
-                    page_token = page.next_page_token;
-                }
-            }
-            Backend::Local(local) => {
-                let thread = local.open(&thread_id, READER).await?;
-                let tasks = local_tasks(&thread, &thread_id, status).await;
-                thread.close().await;
-                tasks
-            }
-        }
+        self.storage().await?.get_thread_tasks(&thread_id, status).await
     }
 
     async fn open(&self, thread_id: String, holder: String) -> Result<Thread, StorageError> {
@@ -674,10 +603,10 @@ impl RunHandle {
     fn new(run: Run) -> Self {
         Self {
             version: run.version(),
-            closed: run.closed,
-            history: run.history.clone(),
-            state: run.state.clone(),
-            context_scopes: run.context_scopes.clone(),
+            closed: run.closed(),
+            history: run.history().to_vec(),
+            state: run.state().cloned(),
+            context_scopes: run.context_scopes().to_vec(),
             run: Arc::new(tokio::sync::Mutex::new(run)),
         }
     }
@@ -707,10 +636,10 @@ impl host::handles::Run for RunHandle {
     ) -> Result<i64, StorageError> {
         let history = history.into_iter().map(ItemRow::from).collect();
         let mut run = self.run.lock().await;
-        run.history = history;
-        run.scope_writes = scope_writes.unwrap_or_default();
-        if state.is_some() {
-            run.state = state;
+        *run.history_mut() = history;
+        run.stage_scopes(scope_writes.unwrap_or_default());
+        if let Some(state) = state {
+            run.set_state(state);
         }
         Ok(run.commit(CommitOptions::default()).await?.version)
     }
@@ -734,10 +663,8 @@ impl ThreadHandle {
         &self,
         read: impl AsyncFnOnce(&Thread) -> Result<T, StorageError>,
     ) -> Result<T, StorageError> {
-        let thread = self.namespace.storage().await?.open(&self.thread_id, &self.holder).await?;
-        let out = read(&thread).await;
-        thread.close().await;
-        out
+        let storage = self.namespace.storage().await?;
+        with_thread(&*storage, &self.thread_id, &self.holder, read).await
     }
 }
 

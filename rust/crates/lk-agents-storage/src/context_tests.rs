@@ -119,7 +119,7 @@ async fn application_transactions_commit_on_exit_or_with_the_turn(backend: Backe
     assert_eq!(notes(&direct).await.len(), 1, "staged until the turn commits");
     let thread = fixture.thread("w1").await;
     let mut run = thread.lane("desk").open(RunOptions::new("r1", "AST_1")).await.unwrap();
-    run.app_writes = turn.statements();
+    run.stage_statements(turn.statements());
     run.commit(CommitOptions::default()).await.unwrap();
     assert_eq!(notes(&direct).await, [[json!("first")], [json!("turn")]]);
     fixture.cleanup(&[&thread]).await;
@@ -143,10 +143,10 @@ async fn a_turns_application_writes_never_apply_after_a_takeover(backend: Backen
     let mut fresh = s2.lane("desk").open(RunOptions::new("r2", "AST_2")).await.unwrap();
     fresh.commit(CommitOptions::default()).await.unwrap();
 
-    stale.app_writes = vec![lk_agents_abi::storage::context::AppStatement {
+    stale.stage_statements(vec![lk_agents_abi::storage::context::AppStatement {
         sql: "INSERT INTO notes (body) VALUES ('late')".into(),
         params: Vec::new(),
-    }];
+    }]);
     let err = stale.commit(CommitOptions::default()).await.expect_err("fenced out");
     assert!(matches!(err, StorageError::VersionConflict { .. }), "{err}");
     assert!(notes(&direct).await.is_empty(), "the loser's application SQL wrote nothing");

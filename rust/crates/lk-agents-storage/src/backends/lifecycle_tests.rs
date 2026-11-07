@@ -107,7 +107,7 @@ async fn a_commit_does_not_extend_expiry(backend: Backend) {
     tokio::time::sleep(Duration::from_millis(1100)).await;
     let thread = s.open(&t.thread_id, "w1").await.unwrap();
     let mut run = thread.lane("front-desk").open(RunOptions::new("r1", "AST_1")).await.unwrap();
-    run.state = Some(serde_json::json!({"n": 1}));
+    run.set_state(serde_json::json!({"n": 1}));
     run.commit(CommitOptions::default()).await.unwrap();
     thread.close().await;
     assert_eq!(s.get_thread(&t.thread_id).await.unwrap().expires_at, t.expires_at);

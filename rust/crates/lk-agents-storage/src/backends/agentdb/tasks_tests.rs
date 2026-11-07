@@ -85,7 +85,7 @@ async fn cloud_task_views_preserve_waiting_state_and_label_presence_and_refuse_u
     assert_eq!(tasks[1].name.as_deref(), Some(""));
     assert!(matches!(
         storage.get_thread_tasks("AT_1".into(), None).await,
-        Err(StorageError::Unavailable(_))
+        Err(StorageError::Invalid(_))
     ));
     storage.aclose().await;
     peer.close().await;

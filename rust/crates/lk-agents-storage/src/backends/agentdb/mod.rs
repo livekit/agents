@@ -14,36 +14,40 @@ use crate::StorageError;
 use crate::sql::{BatchResult, Row, Statement};
 use async_trait::async_trait;
 use livekit_api::services::threads::ThreadClient;
-use livekit_api::services::{LiveKitApi, ServerError, ServiceError, public_api_url};
+use livekit_api::services::{
+    LiveKitApi, ServerError, ServerErrorCode, ServiceError, public_api_url,
+};
 use livekit_protocol::agent::agent_thread::{
     CreateRequest, ListRequest, ListResponse, Thread as ThreadRecord, UpdateRequest,
 };
+use lk_agents_abi::storage::wsdb::WsdbCode;
 use lk_agents_net::env::ProcessEnv;
 
 use crate::thread::{LeaseTiming, SchemaCell, Thread};
 use crate::{Storage, ThreadDbConnection};
 pub use connection::{Conn, Options as ConnOptions, TokenMinter, WsdbError};
 
-/// The data plane's errors: a drop mid-request, a severed database, a request still refused after
-/// its resends (`retry`) and a closed connection are `Unavailable`, retryable (a batch's lost
-/// answer is `Uncertain`, see [`Pooled`]); `not_found` at `Hello` is `ThreadNotFound`; a refused
-/// token is `Unauthorized`; the rest keep agent-db's code.
+/// Read failures may be retried when the database is unavailable or backpressured. Batch
+/// failures with an unknown outcome are classified separately by [`Pooled`].
 impl From<WsdbError> for StorageError {
     fn from(e: WsdbError) -> Self {
         match e {
             WsdbError::Closed | WsdbError::Disconnected | WsdbError::Timeout | WsdbError::Io(_) => {
                 StorageError::Unavailable(e.to_string())
             }
-            WsdbError::Server { code, message } => match code.as_str() {
-                "unavailable" | "resource_exhausted" | "retry" => {
+            WsdbError::Server { code, message } => match code {
+                WsdbCode::Unavailable | WsdbCode::ResourceExhausted => {
                     StorageError::Unavailable(message)
                 }
-                "outcome_unknown" => StorageError::Uncertain(message),
-                "not_found" => StorageError::NotFound(message),
-                "unauthenticated" | "permission_denied" => StorageError::Unauthorized(message),
-                _ => StorageError::Invalid(format!("{code}: {message}")),
+                WsdbCode::NotFound => StorageError::NotFound(message),
+                WsdbCode::Unauthenticated => StorageError::Unauthorized(message),
+                WsdbCode::Protocol
+                | WsdbCode::Internal
+                | WsdbCode::Txn
+                | WsdbCode::Exec
+                | WsdbCode::Query => StorageError::Invalid(format!("{}: {message}", code.as_str())),
             },
-            WsdbError::Protocol(m) => StorageError::Unavailable(m),
+            WsdbError::Protocol(m) => StorageError::Invalid(m),
             WsdbError::TooLarge(_) => {
                 StorageError::TooLarge { what: "request".into(), limit: connection::MAX_FRAME }
             }
@@ -58,14 +62,17 @@ pub fn service_error(e: ServiceError) -> StorageError {
     match e {
         ServiceError::Twirp(ServerError::Request(e)) => StorageError::Unavailable(e.to_string()),
         ServiceError::Twirp(ServerError::Twirp(c)) => match c.code.as_str() {
-            "not_found" => StorageError::NotFound(c.msg),
-            "unauthenticated" | "permission_denied" => StorageError::Unauthorized(c.msg),
-            "unavailable" | "deadline_exceeded" | "resource_exhausted" => {
-                StorageError::Unavailable(c.msg)
+            ServerErrorCode::NOT_FOUND => StorageError::NotFound(c.msg),
+            ServerErrorCode::UNAUTHENTICATED | ServerErrorCode::PERMISSION_DENIED => {
+                StorageError::Unauthorized(c.msg)
             }
+            ServerErrorCode::CANCELED => StorageError::Cancelled(c.msg),
+            ServerErrorCode::UNAVAILABLE
+            | ServerErrorCode::DEADLINE_EXCEEDED
+            | ServerErrorCode::RESOURCE_EXHAUSTED => StorageError::Unavailable(c.msg),
             _ => StorageError::Invalid(format!("{}: {}", c.code, c.msg)),
         },
-        ServiceError::Twirp(e) => StorageError::Unavailable(e.to_string()),
+        ServiceError::Twirp(e) => StorageError::Invalid(e.to_string()),
         other => StorageError::Invalid(other.to_string()),
     }
 }
@@ -188,6 +195,80 @@ impl Storage for AgentDbStorage {
         Thread::new(Arc::new(pooled), thread_id, self.opts.lease, schema, holder).await
     }
 
+    async fn get_thread_items(
+        &self,
+        id: &str,
+        lane: Option<&str>,
+        after: Option<&str>,
+        limit: i64,
+    ) -> Result<lk_agents_abi::storage::ThreadItemPage, StorageError> {
+        use lk_agents_abi::storage::{ThreadItem, ThreadItemPage};
+        let request = livekit_protocol::agent::agent_thread::GetItemsRequest {
+            thread_id: id.into(),
+            agent: lane.unwrap_or_default().into(),
+            page_token: after.unwrap_or_default().into(),
+            limit: limit.clamp(1, 500) as i32,
+            ..Default::default()
+        };
+        let page = self.threads().items(request).await.map_err(service_error)?;
+        let items = page
+            .items
+            .into_iter()
+            .map(|item| {
+                Ok(ThreadItem {
+                    agent: item.agent,
+                    seq: item.seq,
+                    message_id: item.message_id,
+                    item: lk_agents_abi::llm::chat_context::protocol::decode_chat_item(
+                        item.item.unwrap_or_default(),
+                    )
+                    .map_err(StorageError::Invalid)?,
+                })
+            })
+            .collect::<Result<_, StorageError>>()?;
+        Ok(ThreadItemPage { items, after: page.next_page_token })
+    }
+
+    async fn get_thread_tasks(
+        &self,
+        id: &str,
+        status: Option<crate::TaskState>,
+    ) -> Result<Vec<lk_agents_abi::storage::ThreadTask>, StorageError> {
+        use lk_agents_abi::storage::ThreadTask;
+        let mut tasks = Vec::new();
+        let mut page_token = String::new();
+        loop {
+            let request = livekit_protocol::agent::agent_task::GetTasksRequest {
+                thread_id: id.into(),
+                status: status.map(|s| crate::http::task_status(s).as_str().to_owned()),
+                page_token,
+                ..Default::default()
+            };
+            let page = self.threads().tasks(request).await.map_err(service_error)?;
+            for task in page.tasks {
+                let state = serde_json::from_value::<crate::http::generated::TaskStatus>(
+                    serde_json::Value::String(task.status.clone()),
+                )
+                .ok()
+                .and_then(crate::http::task_filter)
+                .ok_or_else(|| {
+                    StorageError::Invalid(format!("unknown task state {}", task.status))
+                })?;
+                tasks.push(ThreadTask {
+                    task_id: task.task_id,
+                    thread_id: task.thread_id,
+                    name: task.name,
+                    status: state,
+                    updated_at: task.updated_at.map_or(0, |t| t.seconds),
+                });
+            }
+            if page.next_page_token.is_empty() {
+                return Ok(tasks);
+            }
+            page_token = page.next_page_token;
+        }
+    }
+
     async fn close(&self) {
         self.pool.clear().await;
     }
@@ -213,7 +294,10 @@ impl ThreadDbConnection for Pooled {
     async fn batch(&self, statements: Vec<Statement>) -> Result<BatchResult, StorageError> {
         self.live()?;
         self.conn.batch(&statements).await.map_err(|e| match e {
-            WsdbError::Disconnected | WsdbError::Timeout | WsdbError::Protocol(_) => {
+            WsdbError::Disconnected
+            | WsdbError::Timeout
+            | WsdbError::Protocol(_)
+            | WsdbError::Server { code: WsdbCode::Unavailable, .. } => {
                 StorageError::Uncertain(e.to_string())
             }
             e => e.into(),
@@ -304,6 +388,47 @@ impl DbPool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn unavailable_after_sending_a_commit_is_uncertain_and_is_not_resent() {
+        use connection::tests::{dial, hello_ok, reply, serve};
+        use connection::wire as pb;
+        fn dying(message: &pb::ClientMessage) -> Vec<pb::ServerMessage> {
+            match &message.message {
+                Some(pb::client_message::Message::Hello(_)) => vec![hello_ok()],
+                Some(pb::client_message::Message::Batch(_)) => {
+                    vec![reply(pb::server_message::Message::Error(pb::Error {
+                        code: "unavailable".into(),
+                        message: "database is shutting down".into(),
+                    }))]
+                }
+                _ => Vec::new(),
+            }
+        }
+        let (url, seen) = serve(dying, false).await;
+        let conn = dial(&url, "DB_1").await.unwrap();
+        let pooled = Pooled {
+            conn,
+            schema: SchemaCell::default(),
+            pool: Arc::default(),
+            closed: AtomicBool::new(false),
+        };
+        let result =
+            pooled.batch(vec![Statement::raw("UPDATE lanes SET version = version + 1")]).await;
+        assert!(
+            matches!(result, Err(StorageError::Uncertain(ref message)) if message.contains("database is shutting down")),
+            "{result:?}"
+        );
+        let batches = seen
+            .lock()
+            .iter()
+            .filter(|message| {
+                matches!(message.message, Some(pb::client_message::Message::Batch(_)))
+            })
+            .count();
+        assert_eq!(batches, 1, "a commit with an unknown outcome must not be resent");
+        pooled.conn.aclose().await;
+    }
 
     #[tokio::test]
     async fn the_data_plane_sits_under_the_project_public_api() {

@@ -89,10 +89,10 @@ async fn initialize(reword_initial: bool, install_race: bool, version: Option<i6
         diagnostics.reword.store(true, Ordering::Relaxed);
         let lane = thread.lane("desk");
         let mut run = lane.open(RunOptions::new("schema-run", "AST_schema")).await?;
-        run.state = Some(json!({"saved": true}));
+        run.set_state(json!({"saved": true}));
         run.commit(CommitOptions::default()).await?;
         let mut restored = lane.open(RunOptions::new("schema-read", "AST_read")).await?;
-        if restored.state != Some(json!({"saved": true})) {
+        if restored.state() != Some(&json!({"saved": true})) {
             return Err(StorageError::Unavailable(
                 "the initialized schema lost the committed state".into(),
             ));

@@ -85,8 +85,10 @@ struct EventColumns {
 json_cell!(TaskData, TaskInternal, ChatItem, a2a::Message);
 
 impl FromCell for TaskState {
-    fn from_cell(cell: &SqlValue) -> Result<Self, String> {
-        cell.as_str().and_then(TaskState::from_wire).ok_or_else(|| "a task state".into())
+    fn from_cell(cell: &SqlValue) -> Result<Self, crate::StorageError> {
+        cell.as_str()
+            .and_then(TaskState::from_wire)
+            .ok_or_else(|| crate::StorageError::Invalid("a task state".into()))
     }
 }
 
@@ -828,7 +830,7 @@ mod tests {
             SqlValue::Int(0),
         ];
         assert!(
-            matches!(LaneRow::from_row(&lane), Err(StorageError::Unavailable(m)) if m.starts_with("lease_until"))
+            matches!(LaneRow::from_row(&lane), Err(StorageError::Invalid(m)) if m.starts_with("lease_until"))
         );
         lane[4] = SqlValue::Int(0);
         assert_eq!(LaneRow::from_row(&lane).unwrap().lease_until, 0);

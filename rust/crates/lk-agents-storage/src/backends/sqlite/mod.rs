@@ -11,10 +11,11 @@ use async_trait::async_trait;
 use livekit_protocol::agent::agent_thread::{
     CreateRequest, ListRequest, ListResponse, Thread as ThreadRecord, UpdateRequest,
 };
-use lk_agents_net::clock::{unix_now, unix_now_ms};
+use lk_agents_net::clock::unix_now_ms;
 
 use crate::StorageError;
-use crate::sql::{Bind, Row, SqlValue, Statement, statement};
+use crate::cursor::Cursor;
+use crate::sql::{Bind, Cells, Row, SqlValue, Statement, statement};
 use crate::thread::db;
 use crate::thread::{LeaseTiming, SchemaCell, Thread};
 use crate::{Storage, ThreadDbConnection, shortuuid};
@@ -49,15 +50,27 @@ const REGISTRY_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS threads (
   expires_at INTEGER NOT NULL
 )";
 
+// Version 0 used milliseconds for creation/activity, seconds for TTL/expiry. The version
+// update and conversion are one transaction, including when several processes open at once.
+const REGISTRY_MIGRATION: &str = "CREATE TABLE IF NOT EXISTS registry_schema (
+  version INTEGER NOT NULL
+)";
+
 statement! {
-    /// Older local registries recorded activity in seconds. Normalize once so updates within a
-    /// second have the same ordering as the Cloud threads service.
-    NormalizeRegistryToMillis {} => r#"
-UPDATE threads SET
-  created_at = CASE WHEN created_at < 100000000000 THEN created_at * 1000 ELSE created_at END,
-  last_active = CASE WHEN last_active < 100000000000 THEN last_active * 1000 ELSE last_active END
-WHERE created_at < 100000000000 OR last_active < 100000000000
+    MigrateRegistryToMillis {} => r#"
+UPDATE threads SET idle_ttl = idle_ttl * 1000, expires_at = expires_at * 1000
+WHERE NOT EXISTS (SELECT 1 FROM registry_schema)
 "#
+}
+
+statement! {
+    SetRegistryVersion {} => r#"
+INSERT INTO registry_schema (version) SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM registry_schema)
+"#
+}
+
+statement! {
+    SelectRegistryVersion {} => "SELECT version FROM registry_schema"
 }
 
 statement! {
@@ -115,8 +128,8 @@ UPDATE threads SET
     (SELECT json_group_object(key, NULLIF(value, '')) FROM json_each(:attributes))),
   last_active = :now, idle_ttl = COALESCE(:idle_ttl, idle_ttl),
   expires_at = CASE WHEN COALESCE(:idle_ttl, idle_ttl) = 0 THEN 0
-                    ELSE :now / 1000 + COALESCE(:idle_ttl, idle_ttl) END
-WHERE thread_id = :thread_id AND (expires_at = 0 OR expires_at > :now / 1000)
+                    ELSE :now + COALESCE(:idle_ttl, idle_ttl) END
+WHERE thread_id = :thread_id AND (expires_at = 0 OR expires_at > :now)
 RETURNING thread_id, scope, attributes, created_at, last_active, idle_ttl, expires_at
 "#
 }
@@ -125,7 +138,7 @@ statement! {
     /// Whether the thread's registry row is live.
     RegistryThreadIsLive<'a> { thread_id: &'a str } => r#"
 SELECT EXISTS (SELECT 1 FROM threads WHERE thread_id = :thread_id
-  AND (expires_at = 0 OR expires_at > unixepoch()))
+  AND (expires_at = 0 OR expires_at > CAST(unixepoch('subsec') * 1000 AS INTEGER)))
 "#
 }
 
@@ -155,14 +168,23 @@ impl SqliteStorage {
         let threads = directory.join("threads");
         let created = threads.clone();
         lk_agents_net::blocking_io::blocking_io()
-            .run((), move || std::fs::create_dir_all(created))
+            .try_run((), move || std::fs::create_dir_all(created))
             .await
-            .map_err(|e| StorageError::Invalid(format!("{}: {e}", threads.display())))?
             .map_err(|e| StorageError::Invalid(format!("{}: {e}", threads.display())))?;
         let registry = FileConnection::open(directory.join("registry.sqlite"), true).await?;
         registry
-            .batch(vec![Statement::ddl(REGISTRY_SCHEMA), NormalizeRegistryToMillis {}.bind()])
+            .batch(vec![
+                Statement::ddl(REGISTRY_SCHEMA),
+                Statement::ddl(REGISTRY_MIGRATION),
+                MigrateRegistryToMillis {}.bind(),
+                SetRegistryVersion {}.bind(),
+            ])
             .await?;
+        let versions = registry.query(SelectRegistryVersion {}.bind()).await?;
+        if versions.as_slice() != [vec![SqlValue::Int(1)]] {
+            registry.close().await;
+            return Err(StorageError::Invalid("unsupported registry schema version".into()));
+        }
         Ok(Self { directory, registry, lease })
     }
 
@@ -177,7 +199,7 @@ impl SqliteStorage {
         let rows = self.registry.query(SelectRegistryThread { thread_id }.bind()).await?;
         let row = rows.first().ok_or_else(|| StorageError::NotFound(thread_id.into()))?;
         let (record, expires_at) = thread_record(row)?;
-        if expires_at != 0 && expires_at <= unix_now() as i64 {
+        if expires_at != 0 && expires_at <= unix_now_ms() {
             self.delete_thread(thread_id).await?;
             return Err(StorageError::NotFound(thread_id.into()));
         }
@@ -186,42 +208,48 @@ impl SqliteStorage {
 }
 
 fn timestamp(value: i64) -> Option<pbjson_types::Timestamp> {
-    (value != 0).then_some(if value >= 100000000000 {
-        pbjson_types::Timestamp {
-            seconds: value / 1000,
-            nanos: ((value % 1000) * 1_000_000) as i32,
-        }
-    } else {
-        pbjson_types::Timestamp { seconds: value, nanos: 0 }
+    (value != 0).then_some(pbjson_types::Timestamp {
+        seconds: value / 1000,
+        nanos: ((value % 1000) * 1_000_000) as i32,
     })
 }
 
 /// A registry row as the threads service's record, and its expiry (`0` never).
 fn thread_record(row: &Row) -> Result<(ThreadRecord, i64), StorageError> {
-    let int = |i: usize| row.get(i).and_then(SqlValue::as_i64).unwrap_or(0);
-    let text = |i: usize| row.get(i).and_then(SqlValue::as_str).unwrap_or("").to_owned();
-    let attributes: HashMap<String, String> = serde_json::from_str(&text(2))
-        .map_err(|e| StorageError::Unavailable(format!("thread attributes: {e}")))?;
-    let expires_at = int(6);
+    let cells = Cells::new(
+        row,
+        &[
+            "thread_id",
+            "scope",
+            "attributes",
+            "created_at",
+            "last_active",
+            "idle_ttl",
+            "expires_at",
+        ],
+    )?;
+    let attributes: HashMap<String, String> = serde_json::from_value(cells.get(2)?)
+        .map_err(|e| StorageError::Invalid(format!("thread attributes: {e}")))?;
+    let expires_at = cells.get(6)?;
     let record = ThreadRecord {
-        thread_id: text(0),
-        scope: text(1),
+        thread_id: cells.get(0)?,
+        scope: cells.get(1)?,
         attributes,
-        created_at: timestamp(int(3)),
-        last_active: timestamp(int(4)),
+        created_at: timestamp(cells.get(3)?),
+        last_active: timestamp(cells.get(4)?),
         expires_at: timestamp(expires_at),
-        idle_ttl: Some(pbjson_types::Duration { seconds: int(5), nanos: 0 }),
-        database_id: text(0),
+        idle_ttl: Some(pbjson_types::Duration { seconds: cells.get::<i64>(5)? / 1000, nanos: 0 }),
+        database_id: cells.get(0)?,
     };
     Ok((record, expires_at))
 }
 
-fn ttl_secs(d: Option<&pbjson_types::Duration>) -> i64 {
-    d.map_or(0, |d| d.seconds + i64::from(d.nanos > 0))
+fn ttl_millis(d: Option<&pbjson_types::Duration>) -> i64 {
+    d.map_or(0, |d| (d.seconds + i64::from(d.nanos > 0)).saturating_mul(1000))
 }
 
 fn expiry(last_active_ms: i64, idle_ttl: i64) -> i64 {
-    if idle_ttl == 0 { 0 } else { last_active_ms / 1000 + idle_ttl }
+    if idle_ttl == 0 { 0 } else { last_active_ms.saturating_add(idle_ttl) }
 }
 
 #[async_trait]
@@ -232,7 +260,7 @@ impl Storage for SqliteStorage {
         let thread_id = shortuuid("AT_");
         let connection = FileConnection::open(self.file(&thread_id)?, true).await?;
         let now = unix_now_ms();
-        let idle_ttl = ttl_secs(request.idle_ttl.as_ref());
+        let idle_ttl = ttl_millis(request.idle_ttl.as_ref());
         let attributes: HashMap<&String, &String> =
             request.attributes.iter().filter(|(_, v)| !v.is_empty()).collect();
         let insert = InsertRegistryThread {
@@ -265,20 +293,12 @@ impl Storage for SqliteStorage {
             0 => DEFAULT_THREAD_PAGE,
             n => n.clamp(1, MAX_THREAD_PAGE),
         };
-        let (before_at, before_id) = match request.page_token.as_str() {
-            "" => (i64::MAX, String::new()),
-            token => {
-                let (scope, at, id): (String, i64, String) = serde_json::from_str(token)
-                    .map_err(|_| StorageError::Invalid("invalid thread cursor".into()))?;
-                if scope != request.scope {
-                    return Err(StorageError::Invalid("cursor belongs to another scope".into()));
-                }
-                (at, id)
-            }
-        };
+        let listing = ("threads", &request.scope);
+        let (before_at, before_id) =
+            Cursor::position(Some(&request.page_token), listing, (i64::MAX, String::new()))?;
         let select = SelectRegistryPage {
             scope: &request.scope,
-            now: unix_now() as i64,
+            now: unix_now_ms(),
             before_at,
             before_id: &before_id,
             limit: i64::from(limit + 1),
@@ -295,8 +315,7 @@ impl Storage for SqliteStorage {
                     .last_active
                     .as_ref()
                     .map_or(0, |c| c.seconds * 1000 + i64::from(c.nanos) / 1_000_000);
-                serde_json::to_string(&(&request.scope, at, &t.thread_id))
-                    .map_err(|error| StorageError::Invalid(error.to_string()))?
+                Cursor::encode(listing, (at, &t.thread_id))
             }
             _ => String::new(),
         };
@@ -309,7 +328,7 @@ impl Storage for SqliteStorage {
             thread_id: &request.thread_id,
             attributes: SqlValue::json(&request.attributes),
             now: unix_now_ms(),
-            idle_ttl: request.idle_ttl.as_ref().map(|d| ttl_secs(Some(d))),
+            idle_ttl: request.idle_ttl.as_ref().map(|d| ttl_millis(Some(d))),
         }
         .bind();
         let result = self.registry.batch(vec![update]).await?;
@@ -352,6 +371,41 @@ impl Storage for SqliteStorage {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn registry_migration_is_versioned_and_preserves_millisecond_timestamps() {
+        let directory = std::env::temp_dir().join(shortuuid("registry_migration_"));
+        std::fs::create_dir_all(&directory).unwrap();
+        {
+            let conn = rusqlite::Connection::open(directory.join("registry.sqlite")).unwrap();
+            conn.execute(REGISTRY_SCHEMA, []).unwrap();
+            conn.execute(
+                "INSERT INTO threads VALUES ('AT_legacy', 'scope', '{}', 42123, 44123, 2, 46)",
+                [],
+            )
+            .unwrap();
+        }
+        for _ in 0..2 {
+            let storage = SqliteStorage::open(&directory, LeaseTiming::default()).await.unwrap();
+            let rows = storage
+                .registry
+                .query(SelectRegistryThread { thread_id: "AT_legacy" }.bind())
+                .await
+                .unwrap();
+            let (record, expires) = thread_record(&rows[0]).unwrap();
+            assert_eq!(
+                record.created_at,
+                Some(pbjson_types::Timestamp { seconds: 42, nanos: 123_000_000 })
+            );
+            assert_eq!(
+                record.last_active,
+                Some(pbjson_types::Timestamp { seconds: 44, nanos: 123_000_000 })
+            );
+            assert_eq!(expires, 46000);
+            assert_eq!(record.idle_ttl.unwrap().seconds, 2);
+            storage.close().await;
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
     /// Each registry read returns the columns `thread_record` reads, in its order.
     #[test]
     fn registry_reads_return_thread_record_columns() {

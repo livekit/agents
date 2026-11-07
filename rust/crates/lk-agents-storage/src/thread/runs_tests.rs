@@ -46,9 +46,9 @@ async fn the_second_lane_waits_while_the_first_holds_and_gets_it_after_the_commi
     let s2 = fx.thread("w2").await;
     assert_ne!(s1.holder(), s2.holder());
     assert_eq!(run1.version(), 0);
-    assert!(!run1.closed && run1.lease().is_some());
-    assert!(run1.history.is_empty());
-    assert_eq!(run1.state, None);
+    assert!(!run1.closed() && run1.lease().is_some());
+    assert!(run1.history().is_empty());
+    assert_eq!(run1.state(), None);
     let journal = s1.journal(0, 100).await.unwrap();
     assert_eq!(journal.iter().map(|e| e.r#type.as_str()).collect::<Vec<_>>(), vec!["run_started"]);
     assert!(run1.lease().is_some_and(|h| !h.is_lost()));
@@ -94,14 +94,16 @@ async fn the_second_lane_waits_while_the_first_holds_and_gets_it_after_the_commi
     assert!(waiter(&s1).await.is_some_and(|holder| holder.starts_with(s2.holder())));
 
     // The first run writes everything a run writes, and releases.
-    run1.history.push(message("i1", ChatRole::User, "hi"));
-    run1.history.last_mut().unwrap().message_id = Some("m1".into());
-    run1.history.push(message("i2", ChatRole::Assistant, "hello"));
-    run1.history.push(message("sys", ChatRole::System, "be nice"));
-    run1.state = Some(json!({"patient": "Ann"}));
-    run1.events.append(JournalEvent::Error { error: "boom".into() });
-    run1.usage.requests = 1;
-    run1.usage.tokens.input_tokens = 10;
+    run1.history_mut().push(message("i1", ChatRole::User, "hi"));
+    run1.history_mut().last_mut().unwrap().message_id = Some("m1".into());
+    run1.history_mut().push(message("i2", ChatRole::Assistant, "hello"));
+    run1.history_mut().push(message("sys", ChatRole::System, "be nice"));
+    run1.set_state(json!({"patient": "Ann"}));
+    run1.events().append(JournalEvent::Error { error: "boom".into() });
+    let mut usage = lk_agents_abi::usage::Usage::default();
+    usage.requests = 1;
+    usage.tokens.input_tokens = 10;
+    run1.set_usage(usage);
     let request = run1.writes(CommitOptions::default()).unwrap();
     assert_eq!(request.items.len(), 2, "instructions are not stored");
     assert_eq!(request.items[0].message_id.as_deref(), Some("m1"));
@@ -121,10 +123,10 @@ async fn the_second_lane_waits_while_the_first_holds_and_gets_it_after_the_commi
     assert!(acquired_at >= released_at);
     assert!(acquired_at - released_at < Duration::from_millis(1500), "a poll interval at most");
     assert_eq!(run2.version(), 1);
-    assert_eq!(run2.history.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(), vec!["i1", "i2"]);
+    assert_eq!(run2.history().iter().map(|i| i.id.as_str()).collect::<Vec<_>>(), vec!["i1", "i2"]);
     let first = ItemRow { message_id: Some("m1".into()), ..message("i1", ChatRole::User, "hi") };
-    assert_eq!(run2.history[0], first);
-    assert_eq!(run2.state, Some(json!({"patient": "Ann"})));
+    assert_eq!(run2.history()[0], first);
+    assert_eq!(run2.state(), Some(&json!({"patient": "Ann"})));
     assert_eq!(waiter(&s2).await, None, "the waiter that won cleared its own mark");
     assert!(s2.journal(0, 100).await.unwrap().iter().any(|e| e.r#type == "usage"));
 
@@ -132,8 +134,8 @@ async fn the_second_lane_waits_while_the_first_holds_and_gets_it_after_the_commi
     assert!(run2.writes(CommitOptions::default()).unwrap().items.is_empty());
     let unchanged = run2.writes(CommitOptions::default()).unwrap().state;
     assert_eq!(unchanged, None, "unchanged state is not rewritten");
-    run2.history.retain(|i| i.id != "i2");
-    run2.state = Some(json!({"patient": "Ann", "seen": true}));
+    run2.history_mut().retain(|i| i.id != "i2");
+    run2.set_state(json!({"patient": "Ann", "seen": true}));
     let request = run2.writes(CommitOptions::default()).unwrap();
     assert_eq!(request.delete_items, vec!["i2".to_owned()]);
     assert_eq!(run2.commit(CommitOptions::default()).await.unwrap().version, 2);
@@ -162,10 +164,10 @@ async fn a_run_that_aborts_writes_run_ended_and_nothing_else(backend: Backend) {
     let s = fx.thread("w1").await;
     let lane = s.lane(LANE);
     let mut run = lane.open(RunOptions::new("r1", "AST_1")).await.unwrap();
-    run.history.push(message("i1", ChatRole::User, "hi"));
-    run.state = Some(json!({"x": 1}));
-    run.events.append(JournalEvent::Error { error: "boom".into() });
-    run.tasks
+    run.history_mut().push(message("i1", ChatRole::User, "hi"));
+    run.set_state(json!({"x": 1}));
+    run.events().append(JournalEvent::Error { error: "boom".into() });
+    run.tasks()
         .write(
             "AST_t",
             TaskState::Submitted,
@@ -196,7 +198,7 @@ async fn a_run_that_aborts_writes_run_ended_and_nothing_else(backend: Backend) {
         })
         .await
         .unwrap();
-    assert!(next.history.is_empty() && next.state.is_none());
+    assert!(next.history().is_empty() && next.state().is_none());
     assert_eq!(next.version(), 0);
     drop(next);
     fx.cleanup(&[&s]).await;
@@ -207,14 +209,14 @@ async fn a_committed_run_id_yields_a_closed_run(backend: Backend) {
     let s = fx.thread("w1").await;
     let lane = s.lane(LANE);
     let mut run = lane.open(RunOptions::new("r1", "AST_1")).await.unwrap();
-    run.history.push(message("i1", ChatRole::User, "hi"));
+    run.history_mut().push(message("i1", ChatRole::User, "hi"));
     run.commit(CommitOptions::default()).await.unwrap();
 
     let mut again = lane.open(RunOptions::new("r1", "AST_1")).await.unwrap();
-    assert!(again.closed);
+    assert!(again.closed());
     assert_eq!(again.version(), 1);
-    assert_eq!(again.history.len(), 1, "loaded, so a retry can answer from it");
-    again.history.push(message("i2", ChatRole::Assistant, "hello"));
+    assert_eq!(again.history().len(), 1, "loaded, so a retry can answer from it");
+    again.history_mut().push(message("i2", ChatRole::Assistant, "hello"));
     let committed = again.commit(CommitOptions::default()).await.unwrap();
     assert_eq!(committed.version, 1, "no bump");
     assert_eq!(lane.info().await.unwrap().unwrap().version, 1);
@@ -230,7 +232,7 @@ async fn a_committed_run_id_yields_a_closed_run(backend: Backend) {
         })
         .await
         .unwrap();
-    assert!(!free.closed);
+    assert!(!free.closed());
     drop(free);
     fx.cleanup(&[&s]).await;
 }
@@ -252,10 +254,10 @@ async fn a_stale_commit_is_a_version_conflict(backend: Backend) {
         })
         .await
         .unwrap();
-    fresh.history.push(message("i1", ChatRole::User, "hi"));
+    fresh.history_mut().push(message("i1", ChatRole::User, "hi"));
     assert_eq!(fresh.commit(CommitOptions::default()).await.unwrap().version, 1);
 
-    stale.history.push(message("i9", ChatRole::Assistant, "late"));
+    stale.history_mut().push(message("i9", ChatRole::Assistant, "late"));
     let err = stale.commit(CommitOptions::default()).await.expect_err("fenced out");
     assert!(matches!(err, StorageError::VersionConflict { expected: 0, .. }), "{err}");
     assert_eq!(s1.lane(LANE).history().await.unwrap().len(), 1, "the loser wrote nothing");
@@ -282,9 +284,9 @@ async fn concurrent_runs_take_no_lease_and_append(backend: Backend) {
     let mut a = open(&s1, "r1", "AST_1").await;
     let mut b = open(&s2, "r2", "AST_2").await;
     assert!(a.lease().is_none());
-    a.history.push(message("a1", ChatRole::User, "one"));
-    a.state = Some(json!({"ignored": true}));
-    b.history.push(message("b1", ChatRole::User, "two"));
+    a.history_mut().push(message("a1", ChatRole::User, "one"));
+    a.set_state(json!({"ignored": true}));
+    b.history_mut().push(message("b1", ChatRole::User, "two"));
     let drained = CommitOptions { drained_id: Some(3), ..CommitOptions::default() };
     let request = a.writes(drained.clone()).unwrap();
     assert_eq!(request.state, None);
@@ -337,7 +339,7 @@ async fn a_cancel_never_overwrites_a_terminal_task(backend: Backend) {
     let s = fx.thread("w1").await;
     let lane = s.lane(LANE);
     let mut run = lane.open(RunOptions::new("r1", "AST_1")).await.unwrap();
-    run.tasks.write("AST_1", TaskState::Completed, TaskPatch::default()).await.unwrap();
+    run.tasks().write("AST_1", TaskState::Completed, TaskPatch::default()).await.unwrap();
     run.commit(CommitOptions::default()).await.unwrap();
 
     let after = lane.cancel_task("AST_1", metadata("late")).await.unwrap().expect("the row");
@@ -359,8 +361,8 @@ async fn a_commit_never_overwrites_a_canceled_task(backend: Backend) {
     let canceled = s2.lane(LANE).cancel_task("AST_1", metadata("client")).await.unwrap();
     assert_eq!(canceled.unwrap().status, TaskState::Canceled);
 
-    run.history.push(message("i1", ChatRole::User, "hi"));
-    run.tasks.write("AST_1", TaskState::Completed, TaskPatch::default()).await.unwrap();
+    run.history_mut().push(message("i1", ChatRole::User, "hi"));
+    run.tasks().write("AST_1", TaskState::Completed, TaskPatch::default()).await.unwrap();
     let committed = run
         .commit(CommitOptions { answer_task: Some("AST_1".into()), ..CommitOptions::default() })
         .await
@@ -382,7 +384,7 @@ async fn a_pickup_leaves_a_row_answered_working(backend: Backend) {
     lane.submit(&submitted("AST_1")).await.unwrap();
     let mut run = lane.open(RunOptions::new("r1", "AST_1")).await.unwrap();
     let answered = TaskPatch { answered: true, ..TaskPatch::default() };
-    run.tasks.write("AST_1", TaskState::Working, answered).await.unwrap();
+    run.tasks().write("AST_1", TaskState::Working, answered).await.unwrap();
     run.commit(CommitOptions::default()).await.unwrap();
 
     assert_eq!(lane.pickup("AST_1").await.unwrap(), None, "no dead holder's row");
@@ -413,11 +415,11 @@ async fn a_concurrent_write_keeps_a_row_canceled_mid_turn(backend: Backend) {
         ..RunOptions::new("r1", "AST_1")
     };
     let mut run = lane.open(opts).await.unwrap();
-    assert!(run.picked_up);
+    assert!(run.picked_up());
     s2.lane(LANE).cancel_task("AST_1", metadata("client")).await.unwrap();
 
-    run.history.push(message("i1", ChatRole::User, "hi"));
-    run.tasks.write("AST_1", TaskState::Completed, TaskPatch::default()).await.unwrap();
+    run.history_mut().push(message("i1", ChatRole::User, "hi"));
+    run.tasks().write("AST_1", TaskState::Completed, TaskPatch::default()).await.unwrap();
     let committed = run
         .commit(CommitOptions { answer_task: Some("AST_1".into()), ..CommitOptions::default() })
         .await
@@ -476,7 +478,7 @@ async fn waiters_take_the_lane_in_the_order_their_rows_were_submitted(backend: B
         ..RunOptions::new("r1", "AST_first")
     };
     let mut run = lane.open(first).await.unwrap();
-    assert!(run.picked_up);
+    assert!(run.picked_up());
     run.commit(CommitOptions::default()).await.unwrap();
     // the first row is working now: the second is the oldest waiter and takes the lane
     lane.open(second()).await.unwrap().commit(CommitOptions::default()).await.unwrap();
@@ -500,8 +502,8 @@ async fn an_expired_owner_cannot_restart_or_commit_after_takeover(backend: Backe
     let owner = second.lane(LANE).open(RunOptions::new("r2", "AST_2")).await.unwrap();
     assert_eq!(stale.version(), owner.version(), "takeover alone does not change the version");
     assert_ne!(old_lease.fence().token, owner.lease().unwrap().fence().token);
-    stale.state = Some(json!({"stale": true}));
-    stale.history.push(message("stale", ChatRole::Assistant, "old owner's answer"));
+    stale.set_state(json!({"stale": true}));
+    stale.history_mut().push(message("stale", ChatRole::Assistant, "old owner's answer"));
     let error = stale.commit(CommitOptions::default()).await.unwrap_err();
     assert!(matches!(error, StorageError::VersionConflict { .. }), "{error}");
     assert!(second.lane(LANE).history().await.unwrap().is_empty());
@@ -521,12 +523,12 @@ async fn an_item_id_of_another_lane_fails_the_commit_without_mutation(backend: B
     let fx = backend.fixture(None).await;
     let s = fx.thread("w1").await;
     let mut a = s.lane("lane-a").open(RunOptions::new("ra", "AST_a")).await.unwrap();
-    a.history.push(message("shared", ChatRole::User, "a's"));
+    a.history_mut().push(message("shared", ChatRole::User, "a's"));
     a.commit(CommitOptions::default()).await.unwrap();
 
     let mut b = s.lane("lane-b").open(RunOptions::new("rb", "AST_b")).await.unwrap();
-    b.history.push(message("b1", ChatRole::User, "b's own"));
-    b.history.push(message("shared", ChatRole::User, "b's"));
+    b.history_mut().push(message("b1", ChatRole::User, "b's own"));
+    b.history_mut().push(message("shared", ChatRole::User, "b's"));
     assert!(b.commit(CommitOptions::default()).await.is_err());
     let a_items = s.lane("lane-a").history().await.unwrap();
     assert_eq!(a_items, vec![message("shared", ChatRole::User, "a's")]);
@@ -541,7 +543,7 @@ async fn a_concurrent_run_refuses_to_edit_or_delete_loaded_history(backend: Back
     let s = fx.thread("w1").await;
     let lane = s.lane(LANE);
     let mut first = lane.open(RunOptions::new("r0", "AST_0")).await.unwrap();
-    first.history.push(message("i1", ChatRole::User, "hi"));
+    first.history_mut().push(message("i1", ChatRole::User, "hi"));
     first.commit(CommitOptions::default()).await.unwrap();
     let concurrent = |run_id: &str| RunOptions {
         access: LaneAccess::Concurrent,
@@ -549,14 +551,14 @@ async fn a_concurrent_run_refuses_to_edit_or_delete_loaded_history(backend: Back
     };
 
     let mut deleting = lane.open(concurrent("r1")).await.unwrap();
-    deleting.history.clear();
-    deleting.history.push(message("i2", ChatRole::User, "new"));
+    deleting.history_mut().clear();
+    deleting.history_mut().push(message("i2", ChatRole::User, "new"));
     assert!(matches!(
         deleting.commit(CommitOptions::default()).await,
         Err(StorageError::Invalid(_))
     ));
     let mut editing = lane.open(concurrent("r2")).await.unwrap();
-    editing.history[0] = message("i1", ChatRole::User, "rewritten");
+    editing.history_mut()[0] = message("i1", ChatRole::User, "rewritten");
     assert!(matches!(
         editing.commit(CommitOptions::default()).await,
         Err(StorageError::Invalid(_))
@@ -572,12 +574,12 @@ async fn a_run_loads_its_whole_history_in_its_acquire(backend: Backend) {
     let lane = s.lane(LANE);
     let mut run = lane.open(RunOptions::new("r1", "AST_1")).await.unwrap();
     for i in 0..600 {
-        run.history.push(message(&format!("i{i}"), ChatRole::User, "hi"));
+        run.history_mut().push(message(&format!("i{i}"), ChatRole::User, "hi"));
     }
     run.commit(CommitOptions::default()).await.unwrap();
     let again = lane.open(RunOptions::new("r2", "AST_2")).await.unwrap();
-    assert_eq!(again.history.len(), 600);
-    assert_eq!(again.history.last().map(|i| i.id.as_str()), Some("i599"));
+    assert_eq!(again.history().len(), 600);
+    assert_eq!(again.history().last().map(|i| i.id.as_str()), Some("i599"));
     drop(again);
     fx.cleanup(&[&s]).await;
 }
@@ -589,7 +591,7 @@ async fn items_page_by_position_with_a_filter_bound_cursor(backend: Backend) {
     let s = fx.thread("w1").await;
     for (lane, n) in [("lane-a", 0), ("lane-b", 1), ("lane-a", 2)] {
         let mut run = s.lane(lane).open(RunOptions::new(format!("r{n}"), "")).await.unwrap();
-        run.history.push(message(&format!("i{n}"), ChatRole::User, "hi"));
+        run.history_mut().push(message(&format!("i{n}"), ChatRole::User, "hi"));
         run.commit(CommitOptions::default()).await.unwrap();
     }
     let ids = |p: &lk_agents_storage::thread::db::ItemPage| -> Vec<String> {
@@ -719,8 +721,8 @@ async fn commit_through(
     let (s, faults) = fx.faulty_thread("w1").await;
     let lane = s.lane(LANE);
     let mut run = lane.open(RunOptions::new("r1", "AST_1")).await.unwrap();
-    run.history.push(message("i1", ChatRole::User, "hi"));
-    run.tasks.write("AST_1", TaskState::Completed, TaskPatch::default()).await.unwrap();
+    run.history_mut().push(message("i1", ChatRole::User, "hi"));
+    run.tasks().write("AST_1", TaskState::Completed, TaskPatch::default()).await.unwrap();
     faults.fail_next_commit(fault);
     let committed = run.commit(CommitOptions::default()).await.map(|c| c.version);
     (fx, s, committed)
@@ -761,7 +763,7 @@ async fn a_lost_ack_after_the_lane_moved_on_is_a_rejection_with_nothing_written(
     let mut fresh = s2.lane(LANE).open(RunOptions::new("r2", "AST_2")).await.unwrap();
     fresh.commit(CommitOptions::default()).await.unwrap();
 
-    stale.history.push(message("i9", ChatRole::Assistant, "late"));
+    stale.history_mut().push(message("i9", ChatRole::Assistant, "late"));
     faults.fail_next_commit(lk_agents_storage::testing::CommitFault::LoseAckBefore);
     let err = stale.commit(CommitOptions::default()).await.expect_err("rejected");
     assert!(matches!(err, StorageError::VersionConflict { .. }), "{err}");

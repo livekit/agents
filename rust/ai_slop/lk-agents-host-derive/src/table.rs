@@ -76,7 +76,7 @@ pub fn table(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
             const COLUMNS: &'static [&'static str] = &[#(#column_names),*];
             const SELECT: &'static str = #select;
 
-            fn from_row(row: &crate::sql::Row) -> Result<Self, crate::StorageError> {
+            fn from_row(row: &[crate::sql::SqlValue]) -> Result<Self, crate::StorageError> {
                 let cells = crate::sql::Cells::new(row, Self::COLUMNS)?;
                 Ok(#target { #(#reads),* })
             }

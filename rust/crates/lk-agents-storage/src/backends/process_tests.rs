@@ -86,7 +86,7 @@ async fn worker() -> TestResult<()> {
             Outcome::Deleted
         }
         "old" => {
-            run.state = Some(json!({"owner": "stale"}));
+            run.set_state(json!({"owner": "stale"}));
             std::fs::write(control.join("ready"), b"")?;
             while !control.join("resume").exists() {
                 tokio::time::sleep(Duration::from_millis(10)).await;
@@ -97,13 +97,13 @@ async fn worker() -> TestResult<()> {
             }
         }
         "replacement" => {
-            run.state = Some(json!({"owner": "replacement"}));
+            run.set_state(json!({"owner": "replacement"}));
             run.commit(CommitOptions::default()).await?;
             Outcome::Committed
         }
         "reader" => {
-            if run.state != Some(json!({"owner": "replacement"})) {
-                return Err(format!("restart loaded {:?}", run.state).into());
+            if run.state() != Some(&json!({"owner": "replacement"})) {
+                return Err(format!("restart loaded {:?}", run.state()).into());
             }
             run.abandon(RunOutcome::Completed, "restart verified").await?;
             Outcome::Restored

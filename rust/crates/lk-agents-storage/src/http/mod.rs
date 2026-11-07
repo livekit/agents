@@ -7,14 +7,17 @@ use lk_agents_abi::a2a::auth::{
     AuthOperation, AuthPermissions as _, AuthPrincipal, Credentials as _,
 };
 use lk_agents_net::a2a_auth::Credentials;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::sql::{Bind, Row, SqlValue, Table};
+use crate::backends::with_thread;
+use crate::cursor::Cursor;
+use crate::sql::{Bind, Cells};
 use crate::thread::schema::{SelectItemsAfter, SelectItemsBefore, SelectThreadTasksInserted};
-use crate::{Storage, StorageError, TaskState, Thread};
+use crate::{Storage, TaskState, Thread};
 use generated::*;
 use livekit_protocol::agent::agent_thread;
+pub use lk_agents_abi::errors::ApiError;
 
 pub mod generated;
 mod server;
@@ -97,37 +100,33 @@ impl ThreadService {
     }
 }
 
-#[derive(Debug, Serialize)]
-pub struct ApiError {
-    #[serde(skip)]
-    pub status: u16,
-    pub code: &'static str,
-    pub message: String,
+trait HttpError {
+    fn invalid(message: impl std::fmt::Display) -> Self;
+    fn unauthorized(message: impl Into<String>) -> Self;
+    fn forbidden(message: impl Into<String>) -> Self;
+    fn not_found(message: impl Into<String>) -> Self;
+    fn internal(error: impl std::fmt::Display) -> Self;
 }
 
-impl ApiError {
-    pub fn invalid(message: impl std::fmt::Display) -> Self {
-        Self { status: 400, code: "invalid_argument", message: message.to_string() }
+impl HttpError for ApiError {
+    fn invalid(message: impl std::fmt::Display) -> Self {
+        Self::status(message.to_string(), 400, None, Some(false))
     }
 
-    pub fn unauthorized(message: impl Into<String>) -> Self {
-        Self { status: 401, code: "unauthenticated", message: message.into() }
+    fn unauthorized(message: impl Into<String>) -> Self {
+        Self::status(message, 401, None, Some(false))
     }
 
-    pub fn forbidden(message: impl Into<String>) -> Self {
-        Self { status: 403, code: "permission_denied", message: message.into() }
+    fn forbidden(message: impl Into<String>) -> Self {
+        Self::status(message, 403, None, Some(false))
     }
 
-    pub fn not_found(message: impl Into<String>) -> Self {
-        Self { status: 404, code: "not_found", message: message.into() }
+    fn not_found(message: impl Into<String>) -> Self {
+        Self::status(message, 404, None, Some(false))
     }
 
-    pub fn internal(_error: impl std::fmt::Display) -> Self {
-        Self { status: 500, code: "internal", message: "storage request failed".into() }
-    }
-
-    pub fn body(&self) -> Value {
-        json!({"error": self})
+    fn internal(_error: impl std::fmt::Display) -> Self {
+        Self::status("storage request failed", 500, None, Some(false))
     }
 }
 
@@ -156,23 +155,6 @@ fn decode_query(query: &str) -> Result<BTreeMap<String, String>, ApiError> {
         }
     }
     Ok(parameters)
-}
-
-impl From<StorageError> for ApiError {
-    fn from(error: StorageError) -> Self {
-        match error {
-            StorageError::NotFound(message) => Self::not_found(message),
-            StorageError::Unauthorized(message) => Self::forbidden(message),
-            StorageError::Invalid(message) | StorageError::NotSerializable(_, message) => {
-                Self::invalid(message)
-            }
-            StorageError::TooLarge { .. } => Self::invalid(error),
-            StorageError::VersionConflict { .. } | StorageError::Rejected { .. } => {
-                Self { status: 409, code: "aborted", message: error.to_string() }
-            }
-            _ => Self { status: 503, code: "unavailable", message: "storage unavailable".into() },
-        }
-    }
 }
 
 fn check_query(query: &BTreeMap<String, String>, allowed: &[&str]) -> Result<(), ApiError> {
@@ -351,10 +333,9 @@ impl generated::ThreadService for ThreadService {
         request: GetThreadItemsRequest,
     ) -> Result<GetThreadItemsResponse, ApiError> {
         self.thread(context, &request.project_id, &request.thread_id, AuthOperation::Read).await?;
-        let thread = self.storage.open(&request.thread_id, "thread-api").await?;
-        let result = items(&thread, request).await;
-        thread.close().await;
-        result
+        let id = request.thread_id.clone();
+        with_thread(&*self.storage, &id, "thread-api", async |thread| items(thread, request).await)
+            .await
     }
 
     async fn get_thread_tasks(
@@ -363,29 +344,9 @@ impl generated::ThreadService for ThreadService {
         request: GetThreadTasksRequest,
     ) -> Result<GetThreadTasksResponse, ApiError> {
         self.thread(context, &request.project_id, &request.thread_id, AuthOperation::Read).await?;
-        let thread = self.storage.open(&request.thread_id, "thread-api").await?;
-        let result = tasks(&thread, request).await;
-        thread.close().await;
-        result
-    }
-}
-
-fn position(cursor: &str, listing: &str, initial: i64) -> Result<i64, ApiError> {
-    if cursor.is_empty() {
-        return Ok(initial);
-    }
-    let (bound, pos): (String, i64) = serde_json::from_str(cursor).map_err(ApiError::invalid)?;
-    if bound != listing {
-        return Err(ApiError::invalid("cursor belongs to another listing"));
-    }
-    Ok(pos)
-}
-
-fn next_cursor(listing: &str, pos: i64, more: bool) -> String {
-    if more {
-        serde_json::to_string(&(listing, pos)).expect("cursor consists of JSON primitives")
-    } else {
-        String::new()
+        let id = request.thread_id.clone();
+        with_thread(&*self.storage, &id, "thread-api", async |thread| tasks(thread, request).await)
+            .await
     }
 }
 
@@ -394,9 +355,9 @@ async fn items(
     request: GetThreadItemsRequest,
 ) -> Result<GetThreadItemsResponse, ApiError> {
     let desc = request.sort_order == SortOrder::SortOrderDesc;
-    let listing = serde_json::to_string(&(&request.thread_id, &request.agent, desc))
-        .map_err(ApiError::internal)?;
-    let after = position(&request.page_cursor, &listing, if desc { i64::MAX } else { 0 })?;
+    let listing = ("http-items", &request.thread_id, &request.agent, desc);
+    let after =
+        Cursor::position(Some(&request.page_cursor), listing, if desc { i64::MAX } else { 0 })?;
     let limit = page_size(request.page_page_size)?;
     thread.ensure_schema().await?;
     let lane = Some(request.agent.as_str()).filter(|lane| !lane.is_empty());
@@ -410,24 +371,17 @@ async fn items(
     let mut items = Vec::new();
     let mut last = after;
     for row in rows.iter().take(limit as usize) {
-        last = integer(row, 0)?;
-        let item = crate::ItemRow::from_row(&row[3..].to_vec())?;
+        let (cells, item) = Cells::followed_by::<crate::ItemRow>(row, &["rowid", "lane", "seq"])?;
+        last = cells.get(0)?;
         items.push(agent_thread::Item {
-            agent: row
-                .get(1)
-                .and_then(SqlValue::as_str)
-                .ok_or_else(|| ApiError::internal("item lane"))?
-                .to_owned(),
-            seq: integer(row, 2)?,
+            agent: cells.get(1)?,
+            seq: cells.get(2)?,
             message_id: item.message_id.unwrap_or_default(),
             item: Some(item.payload),
         });
     }
-    Ok(GetThreadItemsResponse { items, page_info: page_info(next_cursor(&listing, last, more)) })
-}
-
-fn integer(row: &Row, index: usize) -> Result<i64, ApiError> {
-    row.get(index).and_then(SqlValue::as_i64).ok_or_else(|| ApiError::internal("invalid row"))
+    let next = if more { Cursor::encode(listing, last) } else { String::new() };
+    Ok(GetThreadItemsResponse { items, page_info: page_info(next) })
 }
 
 pub(crate) fn task_status(status: TaskState) -> TaskStatus {
@@ -460,9 +414,8 @@ async fn tasks(
     request: GetThreadTasksRequest,
 ) -> Result<GetThreadTasksResponse, ApiError> {
     let status = task_filter(request.status).map(TaskState::as_str);
-    let listing =
-        serde_json::to_string(&(&request.thread_id, &status)).map_err(ApiError::internal)?;
-    let after = position(&request.page_cursor, &listing, 0)?;
+    let listing = ("http-tasks", &request.thread_id, status);
+    let after = Cursor::position(Some(&request.page_cursor), listing, 0_i64)?;
     let limit = page_size(request.page_page_size)?;
     thread.ensure_schema().await?;
     let page = SelectThreadTasksInserted {
@@ -477,8 +430,8 @@ async fn tasks(
     let mut items = Vec::new();
     let mut last = after;
     for row in rows.iter().take(limit as usize) {
-        last = integer(row, 0)?;
-        let task = crate::thread::schema::TaskRow::from_row(&row[1..].to_vec())?;
+        let (cells, task) = Cells::followed_by::<crate::thread::schema::TaskRow>(row, &["rowid"])?;
+        last = cells.get(0)?;
         items.push(TaskRecord {
             task_id: task.task_id,
             thread_id: request.thread_id.clone(),
@@ -490,5 +443,6 @@ async fn tasks(
             }),
         });
     }
-    Ok(GetThreadTasksResponse { items, page_info: page_info(next_cursor(&listing, last, more)) })
+    let next = if more { Cursor::encode(listing, last) } else { String::new() };
+    Ok(GetThreadTasksResponse { items, page_info: page_info(next) })
 }

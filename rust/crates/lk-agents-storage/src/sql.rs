@@ -181,7 +181,7 @@ impl BatchResult {
     /// zero-row success.
     pub fn at(&self, i: usize) -> Result<&StatementResult, StorageError> {
         self.results.get(i).ok_or_else(|| {
-            StorageError::Unavailable(format!(
+            StorageError::Invalid(format!(
                 "a batch answered {} results, statement {i} has none",
                 self.results.len()
             ))
@@ -191,14 +191,17 @@ impl BatchResult {
 
 /// Typed reads of one row's cells, positional, each failure naming the column.
 pub struct Cells<'a> {
-    row: &'a Row,
+    row: &'a [SqlValue],
     columns: &'static [&'static str],
 }
 
 impl<'a> Cells<'a> {
-    pub fn new(row: &'a Row, columns: &'static [&'static str]) -> Result<Self, StorageError> {
+    pub fn new(
+        row: &'a [SqlValue],
+        columns: &'static [&'static str],
+    ) -> Result<Self, StorageError> {
         if row.len() != columns.len() {
-            return Err(StorageError::Unavailable(format!(
+            return Err(StorageError::Invalid(format!(
                 "expected {} columns, got {}",
                 columns.len(),
                 row.len()
@@ -210,8 +213,20 @@ impl<'a> Cells<'a> {
     /// Cell `i`, typed; a mismatch names the column.
     pub fn get<T: FromCell>(&self, i: usize) -> Result<T, StorageError> {
         T::from_cell(&self.row[i]).map_err(|expected| {
-            StorageError::Unavailable(format!("{}: expected {expected}", self.columns[i]))
+            StorageError::Invalid(format!("{}: expected {expected}", self.columns[i]))
         })
+    }
+
+    /// A record following a named prefix in a joined or paged row.
+    pub fn followed_by<T: Table>(
+        row: &'a [SqlValue],
+        prefix: &'static [&'static str],
+    ) -> Result<(Self, T), StorageError> {
+        if row.len() != prefix.len() + T::COLUMNS.len() {
+            return Err(StorageError::Invalid("invalid paged row width".into()));
+        }
+        let (head, tail) = row.split_at(prefix.len());
+        Ok((Self::new(head, prefix)?, T::from_row(tail)?))
     }
 }
 
@@ -223,30 +238,30 @@ pub trait Table: Sized {
     /// The column list a read selects: `json(col)` for a JSONB column.
     const SELECT: &'static str;
     /// The record of a row read with [`Self::SELECT`].
-    fn from_row(row: &Row) -> Result<Self, StorageError>;
+    fn from_row(row: &[SqlValue]) -> Result<Self, StorageError>;
 }
 
 pub trait FromCell: Sized {
-    fn from_cell(cell: &SqlValue) -> Result<Self, String>;
+    fn from_cell(cell: &SqlValue) -> Result<Self, StorageError>;
 }
 
 impl FromCell for i64 {
-    fn from_cell(cell: &SqlValue) -> Result<Self, String> {
-        cell.as_i64().ok_or_else(|| "an integer".into())
+    fn from_cell(cell: &SqlValue) -> Result<Self, StorageError> {
+        cell.as_i64().ok_or_else(|| StorageError::Invalid("an integer".into()))
     }
 }
 
 impl FromCell for String {
-    fn from_cell(cell: &SqlValue) -> Result<Self, String> {
-        cell.as_str().map(str::to_owned).ok_or_else(|| "text".into())
+    fn from_cell(cell: &SqlValue) -> Result<Self, StorageError> {
+        cell.as_str().map(str::to_owned).ok_or_else(|| StorageError::Invalid("text".into()))
     }
 }
 
 /// A JSONB column, read as `json(col)` text.
 impl FromCell for Value {
-    fn from_cell(cell: &SqlValue) -> Result<Self, String> {
-        let text = cell.as_str().ok_or("JSON text")?;
-        serde_json::from_str(text).map_err(|e| format!("JSON: {e}"))
+    fn from_cell(cell: &SqlValue) -> Result<Self, StorageError> {
+        let text = cell.as_str().ok_or_else(|| StorageError::Invalid("JSON text".into()))?;
+        serde_json::from_str(text).map_err(|e| StorageError::Invalid(format!("JSON: {e}")))
     }
 }
 
@@ -254,15 +269,15 @@ impl FromCell for Value {
 macro_rules! json_cell {
     ($($t:ty),*) => {$(
         impl $crate::sql::FromCell for $t {
-            fn from_cell(cell: &$crate::sql::SqlValue) -> Result<Self, String> {
-                serde_json::from_value(<serde_json::Value as $crate::sql::FromCell>::from_cell(cell)?).map_err(|e| format!("JSON: {e}"))
+            fn from_cell(cell: &$crate::sql::SqlValue) -> Result<Self, $crate::StorageError> {
+                serde_json::from_value(<serde_json::Value as $crate::sql::FromCell>::from_cell(cell)?).map_err(|e| $crate::StorageError::Invalid(format!("JSON: {e}")))
             }
         }
     )*};
 }
 
 impl<T: FromCell> FromCell for Option<T> {
-    fn from_cell(cell: &SqlValue) -> Result<Self, String> {
+    fn from_cell(cell: &SqlValue) -> Result<Self, StorageError> {
         if cell.is_null() { Ok(None) } else { T::from_cell(cell).map(Some) }
     }
 }

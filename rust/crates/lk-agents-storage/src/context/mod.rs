@@ -36,13 +36,13 @@ impl ContextActivation {
         let mut base_revisions = BTreeMap::new();
         for scope in scopes {
             if scope.scope_id.is_empty() || scope.revision < 0 {
-                return Err(StorageError::Unavailable(
+                return Err(StorageError::Invalid(
                     "invalid context scope identity or revision".into(),
                 ));
             }
             base_revisions.insert(scope.scope_id.clone(), scope.revision);
             if by_id.insert(scope.scope_id.clone(), scope).is_some() {
-                return Err(StorageError::Unavailable("duplicate context scope".into()));
+                return Err(StorageError::Invalid("duplicate context scope".into()));
             }
         }
         Ok(Self {
@@ -289,7 +289,7 @@ pub fn scopes_from_rows(rows: &[Row]) -> Result<Vec<ContextScope>, StorageError>
 }
 
 fn decode(error: serde_json::Error) -> StorageError {
-    StorageError::Unavailable(format!("context scope: {error}"))
+    StorageError::Invalid(format!("context scope: {error}"))
 }
 
 /// A revision mismatch fails a NOT NULL constraint, rolling back the enclosing batch. A

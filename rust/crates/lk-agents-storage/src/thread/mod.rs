@@ -19,7 +19,7 @@ use std::time::Duration;
 use parking_lot::Mutex;
 
 use crate::StorageError;
-use crate::sql::{Bind, Row, Statement, Table};
+use crate::sql::{Bind, SqlValue, Statement, Table};
 use crate::thread::db::{ItemPage, TaskPage, TaskQuery};
 use crate::thread::schema::*;
 use lk_agents_abi::storage::context::ContextScope;
@@ -174,12 +174,12 @@ impl Thread {
     async fn read<S: Bind, T>(
         &self,
         statement: S,
-        decode: fn(&Row) -> Result<T, StorageError>,
+        decode: fn(&[SqlValue]) -> Result<T, StorageError>,
     ) -> Result<Vec<T>, StorageError> {
         if !self.refresh_schema().await? {
             return Ok(Vec::new());
         }
-        self.conn.query(statement.bind()).await?.iter().map(decode).collect()
+        self.conn.query(statement.bind()).await?.iter().map(|row| decode(row)).collect()
     }
 
     /// One write statement; how many rows it changed.

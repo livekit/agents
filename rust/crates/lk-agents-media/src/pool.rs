@@ -233,16 +233,7 @@ impl<C: Class> Drop for Permit<C> {
     }
 }
 
-/// The job panicked; its capacity was released when it unwound.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("worker job panicked")]
-pub struct JobPanicked;
-
-impl From<JobPanicked> for std::io::Error {
-    fn from(error: JobPanicked) -> Self {
-        std::io::Error::other(error)
-    }
-}
+pub use lk_agents_abi::errors::JobPanicked;
 
 struct Slot<T> {
     result: Option<Result<T, JobPanicked>>,

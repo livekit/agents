@@ -268,37 +268,84 @@ pub struct Run {
     /// The lease the run holds; `None` under the `concurrent` policy, which takes none.
     pub(super) lease: Option<Lease>,
     pub(super) access: LaneAccess,
-    pub holder: String,
-    pub run_id: String,
-    pub task_id: String,
-    pub channel: Option<String>,
+    pub(super) holder: String,
+    pub(super) run_id: String,
+    pub(super) task_id: String,
+    pub(super) channel: Option<String>,
     /// A `run_id` that already committed: the run writes nothing and answers nothing twice.
-    pub closed: bool,
+    pub(super) closed: bool,
     /// The whole history, loaded; append as the model and the tools speak, delete by removing.
-    pub history: Vec<ItemRow>,
+    pub(super) history: Vec<ItemRow>,
     /// What was loaded, by id, in order.
     pub(super) loaded: Vec<(String, ChatItem)>,
     /// The state snapshot as loaded, `None` for a fresh lane; the caller can replace it
     /// explicitly, and the commit writes it when it differs from what was loaded.
-    pub state: Option<Value>,
-    pub context_scopes: Vec<ContextScope>,
-    pub scope_writes: Vec<ContextScopeWrite>,
+    pub(super) state: Option<Value>,
+    pub(super) context_scopes: Vec<ContextScope>,
+    pub(super) scope_writes: Vec<ContextScopeWrite>,
     /// Application statements managed transactions staged, applied first in the commit.
-    pub app_writes: Vec<AppStatement>,
+    pub(super) app_writes: Vec<AppStatement>,
     pub(super) loaded_state: Option<Value>,
-    pub events: EventLog,
-    pub tasks: Tasks,
+    pub(super) events: EventLog,
+    pub(super) tasks: Tasks,
     /// Whether the acquire's `pickup` took the row to `working`.
-    pub picked_up: bool,
-    pub usage: Usage,
-    pub outcome: RunOutcome,
-    pub reason: Option<String>,
+    pub(super) picked_up: bool,
+    pub(super) usage: Usage,
+    pub(super) outcome: RunOutcome,
+    pub(super) reason: Option<String>,
     pub(super) finished: bool,
     /// The commit [`Run::commit`] could not resolve in its wait, and whether it kept the lease.
     pub(super) unresolved: Option<(Commit, LeaseAfterCommit)>,
 }
 
 impl Run {
+    pub fn holder(&self) -> &str {
+        &self.holder
+    }
+    pub fn id(&self) -> &str {
+        &self.run_id
+    }
+    pub fn closed(&self) -> bool {
+        self.closed
+    }
+    pub fn picked_up(&self) -> bool {
+        self.picked_up
+    }
+    pub fn history(&self) -> &[ItemRow] {
+        &self.history
+    }
+    pub fn history_mut(&mut self) -> &mut Vec<ItemRow> {
+        &mut self.history
+    }
+    pub fn state(&self) -> Option<&Value> {
+        self.state.as_ref()
+    }
+    pub fn set_state(&mut self, state: Value) {
+        self.state = Some(state);
+    }
+    pub fn context_scopes(&self) -> &[ContextScope] {
+        &self.context_scopes
+    }
+    pub fn stage_scopes(&mut self, writes: Vec<ContextScopeWrite>) {
+        self.scope_writes = writes;
+    }
+    pub fn stage_statements(&mut self, writes: Vec<AppStatement>) {
+        self.app_writes = writes;
+    }
+    pub fn events(&mut self) -> &mut EventLog {
+        &mut self.events
+    }
+    pub fn tasks(&mut self) -> &mut Tasks {
+        &mut self.tasks
+    }
+    pub fn set_usage(&mut self, usage: Usage) {
+        self.usage = usage;
+    }
+    pub fn end_as(&mut self, outcome: RunOutcome, reason: Option<String>) {
+        self.outcome = outcome;
+        self.reason = reason;
+    }
+
     pub fn lease(&self) -> Option<&Lease> {
         self.lease.as_ref()
     }

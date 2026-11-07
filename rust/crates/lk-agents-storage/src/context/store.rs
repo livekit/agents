@@ -13,6 +13,7 @@ use serde_json::Value;
 
 use super::ContextActivation as Activation;
 use super::transaction::Transaction;
+use crate::backends::with_thread;
 use crate::sql::{Row, Statement};
 use crate::thread::run::RunOutcome;
 use crate::{CommitOptions, RunOptions, Storage, StorageError, Thread, shortuuid};
@@ -44,14 +45,11 @@ impl Database {
         &self,
         f: impl AsyncFnOnce(&Thread) -> Result<T, StorageError>,
     ) -> Result<T, StorageError> {
-        let thread = self.storage.open(&self.thread_id, "application").await?;
-        let result = async {
+        with_thread(&*self.storage, &self.thread_id, "application", async |thread| {
             thread.ensure_schema().await?;
-            f(&thread).await
-        }
-        .await;
-        thread.close().await;
-        result
+            f(thread).await
+        })
+        .await
     }
 
     /// One read over committed records.
@@ -65,20 +63,16 @@ impl Database {
     }
 
     async fn snapshot(&self) -> Result<(Vec<ContextScope>, Option<Value>), StorageError> {
-        let thread = self.storage.open(&self.thread_id, "context").await?;
-        let result = async {
+        with_thread(&*self.storage, &self.thread_id, "context", async |thread| {
             let scopes = thread.context_scopes(&self.lane).await?;
             let routing = thread.lane(&self.lane).info().await?.and_then(|lane| lane.state);
             Ok((scopes, routing))
-        }
-        .await;
-        thread.close().await;
-        result
+        })
+        .await
     }
 
     async fn commit(&self, writes: Vec<ContextScopeWrite>) -> Result<(), StorageError> {
-        let thread = self.storage.open(&self.thread_id, "context").await?;
-        let result = async {
+        with_thread(&*self.storage, &self.thread_id, "context", async |thread| {
             let mut options = RunOptions::new(shortuuid("context_"), "");
             options.channel = Some("context".into());
             let mut run = thread.lane(&self.lane).open(options).await?;
@@ -86,7 +80,7 @@ impl Database {
             // Check before any writes so a stale direct save has a typed refusal.
             for write in &writes {
                 let revision = run
-                    .context_scopes
+                    .context_scopes()
                     .iter()
                     .find(|scope| scope.scope_id == write.scope.scope_id)
                     .map_or(0, |scope| scope.revision);
@@ -98,13 +92,11 @@ impl Database {
                     });
                 }
             }
-            run.scope_writes = writes;
+            run.stage_scopes(writes);
             run.commit(CommitOptions::default()).await?;
             Ok(())
-        }
-        .await;
-        thread.close().await;
-        result
+        })
+        .await
     }
 }
 

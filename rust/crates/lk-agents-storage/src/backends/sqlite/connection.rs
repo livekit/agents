@@ -172,8 +172,8 @@ pub(super) fn connect(path: &Path, create: bool) -> Result<rusqlite::Connection,
 // Execution: the backend-neutral statements on a synchronous connection, which the local backend
 // runs on its files and the storage simulation on an in-memory database.
 
-/// The database's own failure (a lock held past the busy timeout, I/O, a full disk, corruption,
-/// memory) applied nothing and is retryable: `Unavailable`. What the caller asked wrongly (a
+/// Transient database failures (a busy lock, I/O, a full disk or memory) are retryable.
+/// Corruption, permissions and what the caller asked wrongly (a
 /// refused constraint, which is how a fence aborts a batch, a type mismatch, SQL it rejects)
 /// stays `Invalid`.
 pub fn sqlite_error(e: rusqlite::Error) -> StorageError {
@@ -186,16 +186,9 @@ pub fn sqlite_error(e: rusqlite::Error) -> StorageError {
                     | Code::DatabaseLocked
                     | Code::SystemIoFailure
                     | Code::DiskFull
-                    | Code::DatabaseCorrupt
-                    | Code::NotADatabase
                     | Code::CannotOpen
-                    | Code::ReadOnly
-                    | Code::PermissionDenied
                     | Code::FileLockingProtocolFailed
-                    | Code::NoLargeFileSupport
                     | Code::OutOfMemory
-                    | Code::InternalMalfunction
-                    | Code::SchemaChanged
             ) =>
         {
             StorageError::Unavailable(format!("sqlite: {e}"))
@@ -226,7 +219,7 @@ fn cell(v: ValueRef<'_>) -> Result<SqlValue, StorageError> {
         ValueRef::Real(d) => SqlValue::Double(d),
         ValueRef::Text(t) => SqlValue::Text(
             std::str::from_utf8(t)
-                .map_err(|e| StorageError::Unavailable(format!("a text cell: {e}")))?
+                .map_err(|e| StorageError::Invalid(format!("a text cell: {e}")))?
                 .to_owned(),
         ),
         ValueRef::Blob(b) => SqlValue::Blob(b.to_vec()),
@@ -314,6 +307,24 @@ pub fn batch(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn corrupt_or_forbidden_databases_are_not_retryable() {
+        for code in [
+            rusqlite::ffi::SQLITE_CORRUPT,
+            rusqlite::ffi::SQLITE_NOTADB,
+            rusqlite::ffi::SQLITE_PERM,
+            rusqlite::ffi::SQLITE_READONLY,
+        ] {
+            let error =
+                sqlite_error(rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(code), None));
+            assert!(!error.retryable(), "{error}");
+        }
+        let busy = sqlite_error(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY),
+            None,
+        ));
+        assert!(busy.retryable());
+    }
     #[test]
     fn transaction_control_cannot_partially_commit_a_batch() {
         let mut conn = rusqlite::Connection::open_in_memory().unwrap();

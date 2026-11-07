@@ -8,6 +8,7 @@ pub mod journal;
 mod rows;
 pub mod thread;
 pub mod voice;
+pub mod wsdb;
 
 use std::collections::BTreeMap;
 
@@ -81,6 +82,30 @@ impl StorageError {
     /// `true` for the errors a caller may retry: [`StorageError::Unavailable`] only.
     pub fn retryable(&self) -> bool {
         matches!(self, StorageError::Unavailable(_))
+    }
+}
+
+impl From<crate::errors::JobPanicked> for StorageError {
+    fn from(error: crate::errors::JobPanicked) -> Self {
+        Self::Invalid(error.to_string())
+    }
+}
+
+impl From<StorageError> for crate::errors::ApiError {
+    fn from(error: StorageError) -> Self {
+        let status = match &error {
+            StorageError::NotFound(_) => 404,
+            StorageError::Unauthorized(_) => 403,
+            StorageError::Invalid(_)
+            | StorageError::NotSerializable(..)
+            | StorageError::TooLarge { .. }
+            | StorageError::Refused(_) => 400,
+            StorageError::VersionConflict { .. } | StorageError::Rejected { .. } => 409,
+            StorageError::Cancelled(_) => 499,
+            _ => 503,
+        };
+        let message = if status == 503 { "storage unavailable".into() } else { error.to_string() };
+        Self::status(message, status, None, Some(error.retryable()))
     }
 }
 

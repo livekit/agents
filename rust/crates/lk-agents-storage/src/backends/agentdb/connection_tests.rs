@@ -96,7 +96,10 @@ pub(crate) fn script(m: &pb::ClientMessage) -> Vec<pb::ServerMessage> {
             vec![reply(S::Error(pb::Error { code: "exec".into(), message: "constraint".into() }))]
         }
         Some(C::Exec(s)) if s.sql == "busy" => {
-            vec![reply(S::Error(pb::Error { code: "retry".into(), message: "busy".into() }))]
+            vec![reply(S::Error(pb::Error {
+                code: "resource_exhausted".into(),
+                message: "busy".into(),
+            }))]
         }
         Some(C::Exec(_)) => vec![reply(S::ExecResult(pb::ExecResult {
             rows_affected: 1,
@@ -169,7 +172,7 @@ async fn hello_carries_the_token_and_a_refused_database_is_a_server_error() {
     let conn = dial(&url, "DB_1").await.unwrap();
     assert_eq!(conn.tip(), 7);
     let err = dial(&url, "DB_nope").await.err().unwrap();
-    assert!(matches!(&err, WsdbError::Server { code, .. } if code == "not_found"), "{err}");
+    assert!(matches!(&err, WsdbError::Server { code: WsdbCode::NotFound, .. }), "{err}");
     conn.close();
 }
 
@@ -180,17 +183,17 @@ async fn exec_query_and_credits() {
     let r = conn.exec(&st("INSERT", vec!["v".into()])).await.unwrap();
     assert_eq!((r.rows_affected, r.last_insert_id, r.tip), (1, 9, 8));
     let err = conn.exec(&st("boom", vec![])).await.err().unwrap();
-    assert!(matches!(err, WsdbError::Server { code, .. } if code == "exec"));
-    // `retry` applied nothing: sent three times, then the error
+    assert!(matches!(err, WsdbError::Server { code: WsdbCode::Exec, .. }));
+    // Backpressure is returned once; the caller owns retry policy.
     let err = conn.exec(&st("busy", vec![])).await.err().unwrap();
-    assert!(matches!(err, WsdbError::Server { code, .. } if code == "retry"));
+    assert!(matches!(err, WsdbError::Server { code: WsdbCode::ResourceExhausted, .. }));
     let busy = |log: &Served| {
         log.lock()
             .iter()
             .filter(|m| matches!(&m.message, Some(pb::client_message::Message::Exec(s)) if s.sql == "busy"))
             .count()
     };
-    assert_eq!(busy(&log), 3);
+    assert_eq!(busy(&log), 1);
 
     let rows = conn.query_all(&st("SELECT", vec![])).await.unwrap();
     assert_eq!(
@@ -308,7 +311,7 @@ async fn a_redial_the_server_refuses_for_good_fails_later_calls_with_its_error()
     let conn = dial(&url, "DB_1").await.unwrap();
     assert!(matches!(conn.exec(&st("drop", vec![])).await, Err(WsdbError::Disconnected)));
     let err = conn.exec(&st("INSERT", vec![])).await.err().unwrap();
-    assert!(matches!(&err, WsdbError::Server { code, .. } if code == "not_found"), "{err}");
+    assert!(matches!(&err, WsdbError::Server { code: WsdbCode::NotFound, .. }), "{err}");
     assert_eq!(hellos(&log), 2, "no redial after a final refusal");
 }
 

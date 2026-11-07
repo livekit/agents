@@ -114,12 +114,12 @@ async fn items_and_tasks_page_through_the_existing_client() {
     for index in 0..3 {
         let mut run =
             thread.lane("desk").open(RunOptions::new(format!("run-{index}"), "")).await.unwrap();
-        run.history.push(ItemRow::new(chat_item::Item::Message(ChatMessage {
+        run.history_mut().push(ItemRow::new(chat_item::Item::Message(ChatMessage {
             id: format!("item-{index}"),
             role: ChatRole::User as i32,
             ..Default::default()
         })));
-        run.tasks
+        run.tasks()
             .write(
                 &format!("task-{index}"),
                 if index == 0 { TaskState::InputRequired } else { TaskState::Completed },
@@ -205,7 +205,10 @@ async fn authorization_validation_and_project_isolation_apply_before_mutation() 
         ThreadService::new(store.storage.clone(), "project-a".into(), KEY.into(), SECRET.into());
     let auth = format!("Bearer {}", token("customer"));
     let path = "/v0/projects/project-a/threads";
-    assert_eq!(service.request("POST", path, "", None, b"{}").await.unwrap_err().status, 401);
+    assert_eq!(
+        service.request("POST", path, "", None, b"{}").await.unwrap_err().status_code,
+        Some(401)
+    );
     assert_eq!(
         service
             .request(
@@ -217,16 +220,16 @@ async fn authorization_validation_and_project_isolation_apply_before_mutation() 
             )
             .await
             .unwrap_err()
-            .status,
-        403
+            .status_code,
+        Some(403)
     );
     assert_eq!(
         service
             .request("POST", path, "", Some(&auth), br#"{"scope":"other"}"#)
             .await
             .unwrap_err()
-            .status,
-        403
+            .status_code,
+        Some(403)
     );
     for body in [
         br#"{"scope":"customer","unknown":true}"#.as_slice(),
@@ -235,8 +238,8 @@ async fn authorization_validation_and_project_isolation_apply_before_mutation() 
         b"not JSON",
     ] {
         assert_eq!(
-            service.request("POST", path, "", Some(&auth), body).await.unwrap_err().status,
-            400
+            service.request("POST", path, "", Some(&auth), body).await.unwrap_err().status_code,
+            Some(400)
         );
     }
     let created =
@@ -247,8 +250,8 @@ async fn authorization_validation_and_project_isolation_apply_before_mutation() 
             .request("GET", path, "scope=customer&page.pageSize=bad", Some(&auth), b"")
             .await
             .unwrap_err()
-            .status,
-        400
+            .status_code,
+        Some(400)
     );
     let readonly = Credentials::new(KEY.into(), SECRET.into())
         .thread_grant_token(
@@ -263,8 +266,8 @@ async fn authorization_validation_and_project_isolation_apply_before_mutation() 
             .request("DELETE", &format!("{path}/{id}"), "", Some(&readonly), b"")
             .await
             .unwrap_err()
-            .status,
-        403
+            .status_code,
+        Some(403)
     );
     let endpoint =
         Credentials::new(KEY.into(), SECRET.into()).project_token("".into(), 3600).unwrap();
@@ -273,16 +276,16 @@ async fn authorization_validation_and_project_isolation_apply_before_mutation() 
             .request("GET", &format!("{path}/{id}"), "", Some(&format!("Bearer {endpoint}")), b"")
             .await
             .unwrap_err()
-            .status,
-        403
+            .status_code,
+        Some(403)
     );
     assert_eq!(
         service
             .request("PATCH", &format!("{path}/{id}"), "", Some(&auth), br#"{"idleTtl":"0s"}"#)
             .await
             .unwrap_err()
-            .status,
-        400
+            .status_code,
+        Some(400)
     );
     assert_eq!(
         service.request("GET", path, "scope=customer", Some(&auth), b"").await.unwrap()["items"]
@@ -322,7 +325,7 @@ async fn task_filters_preserve_every_state_and_optional_name() {
             1 => Some(String::new()),
             _ => Some(format!("label-{index}")),
         };
-        run.tasks
+        run.tasks()
             .write(&format!("task-{index}"), *state, TaskPatch { name, ..Default::default() })
             .await
             .unwrap();
@@ -357,8 +360,8 @@ async fn task_filters_preserve_every_state_and_optional_name() {
         .append_pair("page.cursor", cursor)
         .finish();
     assert_eq!(
-        service.request("GET", &path, &query, Some(&auth), b"").await.unwrap_err().status,
-        400
+        service.request("GET", &path, &query, Some(&auth), b"").await.unwrap_err().status_code,
+        Some(400)
     );
 
     for query in [
@@ -371,8 +374,8 @@ async fn task_filters_preserve_every_state_and_optional_name() {
         "page.pageSize=2147483648",
     ] {
         assert_eq!(
-            service.request("GET", &path, query, Some(&auth), b"").await.unwrap_err().status,
-            400,
+            service.request("GET", &path, query, Some(&auth), b"").await.unwrap_err().status_code,
+            Some(400),
             "query {query}"
         );
     }
@@ -403,8 +406,8 @@ async fn url_decoding_rejects_invalid_input_and_preserves_encoded_values() {
         (path, "scope=customer&unknown=true"),
     ] {
         assert_eq!(
-            service.request("GET", path, query, Some(&auth), b"").await.unwrap_err().status,
-            400
+            service.request("GET", path, query, Some(&auth), b"").await.unwrap_err().status_code,
+            Some(400)
         );
     }
     store.close().await;

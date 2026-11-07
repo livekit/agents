@@ -64,9 +64,9 @@ impl Call {
             (Access::Kept, Some(lease)) => self.lane.resume(options, lease).await?,
             _ => self.lane.open(options).await?,
         };
-        let history_end = run.history.iter().map(ItemRow::created_at).fold(0.0, f64::max);
+        let history_end = run.history().iter().map(ItemRow::created_at).fold(0.0, f64::max);
         let opened =
-            Completion::Opened { closed: run.closed, picked_up: run.picked_up, history_end };
+            Completion::Opened { closed: run.closed(), picked_up: run.picked_up(), history_end };
         self.run = Some(run);
         Ok(opened)
     }
@@ -75,13 +75,13 @@ impl Call {
     async fn stage(&mut self, staged: Stage) -> Result<Completion, StorageError> {
         let run = self.run()?;
         for edit in staged.edits {
-            edit.apply(&mut run.history);
+            edit.apply(run.history_mut());
         }
         for t in staged.transitions {
-            run.tasks.write(&t.task_id, t.status, t.patch).await?;
+            run.tasks().write(&t.task_id, t.status, t.patch).await?;
         }
         for event in staged.events {
-            run.events.append(event);
+            run.events().append(event);
         }
         if let Some(end) = staged.end {
             end_run(run, end);
@@ -90,7 +90,7 @@ impl Call {
     }
 
     async fn checkpoint(&mut self, task_ids: &[String]) -> Result<Completion, StorageError> {
-        let holder = self.run()?.holder.clone();
+        let holder = self.run()?.holder().to_owned();
         let mut rows = Vec::with_capacity(task_ids.len());
         for task_id in task_ids {
             rows.push(self.lane.checkpoint(task_id).await?);
@@ -103,7 +103,7 @@ impl Call {
         let lease = options.lease;
         let run = self.run()?;
         let committed = run.commit(options).await?;
-        let run_id = run.run_id.clone();
+        let run_id = run.id().to_owned();
         if lease == LeaseAfterCommit::Keep {
             self.lease = run.lease().cloned();
         }
@@ -125,14 +125,13 @@ impl Call {
 
 /// What a settled turn leaves for the commit; a `None` state keeps the loaded one.
 fn end_run(run: &mut Run, end: RunEnd) {
-    if end.state.is_some() {
-        run.state = end.state;
+    if let Some(state) = end.state {
+        run.set_state(state);
     }
-    run.scope_writes = end.scope_writes;
-    run.app_writes = end.app_writes;
-    run.usage = end.usage;
-    run.outcome = end.outcome;
-    run.reason = end.reason;
+    run.stage_scopes(end.scope_writes);
+    run.stage_statements(end.app_writes);
+    run.set_usage(end.usage);
+    run.end_as(end.outcome, end.reason);
 }
 
 /// One text door's turns: its lane, its options, its host.
@@ -273,12 +272,12 @@ impl Turn {
             }
             Operation::ReadInbox => Completion::Inbox(call.lane.inbox(true).await?),
             Operation::Pickup(task_id) => Completion::Picked(call.lane.pickup(&task_id).await?),
-            Operation::ReadWorking => Completion::Tasks(call.run()?.tasks.working().await?),
+            Operation::ReadWorking => Completion::Tasks(call.run()?.tasks().working().await?),
             Operation::FailOrphans { reason, failed } => {
                 self.fail_orphans(&call.lane, reason, failed).await?
             }
             Operation::ReadPending(named) => {
-                Completion::Task(call.run()?.tasks.pending_ask(named.as_deref()).await?)
+                Completion::Task(call.run()?.tasks().pending_ask(named.as_deref()).await?)
             }
             Operation::Stage(staged) => call.stage(*staged).await?,
             Operation::Handle(handle) => self.open_handler(call, *handle).await?,
@@ -397,12 +396,12 @@ impl Turn {
             lane: handle.lane,
             message: handle.message.payload,
             batch: handle.batch,
-            history: run.history.clone(),
-            state: run.state.clone(),
-            context_scopes: run.context_scopes.clone(),
+            history: run.history().to_vec(),
+            state: run.state().cloned(),
+            context_scopes: run.context_scopes().to_vec(),
             read_only: handle.read_only,
             task_id: handle.task_id,
-            tasks: run.tasks.recent(handle.recent_tasks).await?,
+            tasks: run.tasks().recent(handle.recent_tasks).await?,
             caller_history,
             answer_tool: handle.answer_tool,
         };

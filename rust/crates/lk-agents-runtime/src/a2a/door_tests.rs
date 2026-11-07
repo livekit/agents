@@ -276,7 +276,7 @@ async fn a_continuation_keeps_one_wire_identity(backend: Backend) {
         .await
         .unwrap();
     for id in ["AST_older", "AST_newer"] {
-        questions.tasks.wait(id, "Which name?", Default::default()).await.unwrap();
+        questions.tasks().wait(id, "Which name?", Default::default()).await.unwrap();
     }
     questions.commit(Default::default()).await.unwrap();
     let older = door.dispatch(body("SendMessage", json!({"message": {"messageId": "older-answer", "contextId": task.context_id, "taskId": "AST_older", "role": "ROLE_USER", "parts": [{"text": "Grace"}]}})), principal(true), None, None, None, None, None).await;

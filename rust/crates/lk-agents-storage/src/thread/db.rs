@@ -5,7 +5,8 @@ use lk_agents_abi::storage::context::{AppStatement, ContextScope, ContextScopeWr
 use lk_agents_abi::storage::journal::JournalEvent;
 use serde_json::{Map, Value};
 
-use crate::sql::{BatchResult, Bind, FromCell, Row, SqlValue, Statement, Table, first_cell};
+use crate::cursor::Cursor;
+use crate::sql::{BatchResult, Bind, Cells, FromCell, Row, SqlValue, Statement, Table, first_cell};
 use crate::thread::run::TaskState;
 use crate::thread::schema::*;
 use crate::{StorageError, TaskPickup, TaskWrite, ThreadDbConnection};
@@ -138,7 +139,7 @@ pub(crate) async fn schema_version(
         [row] if row.as_slice() == [SqlValue::Int(0)] => return Ok(None),
         [row] if row.as_slice() == [SqlValue::Int(1)] => {}
         _ => {
-            return Err(StorageError::Unavailable(
+            return Err(StorageError::Invalid(
                 "schema catalog probe did not return one boolean".into(),
             ));
         }
@@ -234,7 +235,7 @@ pub(crate) async fn acquire(
         .at(lane_row)?
         .rows()
         .first()
-        .ok_or_else(|| StorageError::Unavailable("acquire: no lane row".into()))?;
+        .ok_or_else(|| StorageError::Invalid("acquire: no lane row".into()))?;
     let picked_up = match pickup {
         Some(i) => out.at(i)?.rows_affected() > 0,
         None => false,
@@ -259,9 +260,9 @@ pub(crate) async fn acquire(
 fn rows<T>(
     out: &BatchResult,
     i: usize,
-    decode: fn(&Row) -> Result<T, StorageError>,
+    decode: fn(&[SqlValue]) -> Result<T, StorageError>,
 ) -> Result<Vec<T>, StorageError> {
-    out.at(i)?.rows().iter().map(decode).collect()
+    out.at(i)?.rows().iter().map(|row| decode(row)).collect()
 }
 
 /// What the inbox receive answers.
@@ -308,7 +309,7 @@ pub(crate) async fn receive(
     let out = conn.batch(b.0).await?;
 
     let crate::sql::StatementResult::Exec { rows_affected, .. } = out.at(inbox)? else {
-        return Err(StorageError::Unavailable("receive: the inbox insert answered rows".into()));
+        return Err(StorageError::Invalid("receive: the inbox insert answered rows".into()));
     };
     if *rows_affected == 0 {
         let task_id =
@@ -329,10 +330,7 @@ pub(crate) async fn checkpoint(
     let status = b.add(SelectTaskStatus { lane, task_id });
     let out = conn.batch(b.0).await?;
     let waiter = first_cell(out.at(waiter)?.rows()).and_then(SqlValue::as_str).map(str::to_owned);
-    let status = first_cell(out.at(status)?.rows())
-        .map(TaskState::from_cell)
-        .transpose()
-        .map_err(StorageError::Unavailable)?;
+    let status = first_cell(out.at(status)?.rows()).map(TaskState::from_cell).transpose()?;
     Ok((waiter, status))
 }
 
@@ -350,10 +348,7 @@ pub(crate) async fn pickup(
     if out.at(moved)?.rows_affected() == 0 {
         return Ok(None);
     }
-    first_cell(out.at(before)?.rows())
-        .map(TaskState::from_cell)
-        .transpose()
-        .map_err(StorageError::Unavailable)
+    first_cell(out.at(before)?.rows()).map(TaskState::from_cell).transpose()
 }
 
 /// `tasks/cancel`, one batch: the conditional transition, then the row as it is after:
@@ -368,7 +363,7 @@ pub(crate) async fn cancel(
     b.add(CancelTask { lane, task_id, metadata: SqlValue::json(metadata) });
     let row = b.add(SelectTask { lane, task_id });
     let out = conn.batch(b.0).await?;
-    out.at(row)?.rows().first().map(TaskRow::from_row).transpose()
+    out.at(row)?.rows().first().map(|row| TaskRow::from_row(row)).transpose()
 }
 
 /// A lease and how long it lasts, for a fenced commit.
@@ -569,11 +564,11 @@ impl CommitReads {
             Some(_) => out.at(self.lane_row)?.first_int(),
             None => {
                 let row = out.at(self.lane_row)?.rows().first();
-                row.map(LaneRow::from_row).transpose()?.map(|l| l.version)
+                row.map(|row| LaneRow::from_row(row)).transpose()?.map(|l| l.version)
             }
         };
         let task = match self.task {
-            Some(i) => out.at(i)?.rows().first().map(TaskRow::from_row).transpose()?,
+            Some(i) => out.at(i)?.rows().first().map(|row| TaskRow::from_row(row)).transpose()?,
             None => None,
         };
         match (fence, version) {
@@ -582,7 +577,7 @@ impl CommitReads {
                 lane: lane.to_owned(),
                 expected: fence.version,
             }),
-            (None, None) => Err(StorageError::Unavailable("commit: no lane row".into())),
+            (None, None) => Err(StorageError::Invalid("commit: no lane row".into())),
         }
     }
 }
@@ -614,10 +609,12 @@ pub(crate) async fn resolve_commit(
     let out = conn.batch(b.0).await?;
     let committed = !out.at(committed)?.rows().is_empty();
     let task = match task {
-        Some(i) if committed => out.at(i)?.rows().first().map(TaskRow::from_row).transpose()?,
+        Some(i) if committed => {
+            out.at(i)?.rows().first().map(|row| TaskRow::from_row(row)).transpose()?
+        }
         _ => None,
     };
-    Ok(resolution(fence, committed, out.at(lane_fence)?.rows().first(), task))
+    resolution(fence, committed, out.at(lane_fence)?.rows().first(), task)
 }
 
 /// The resolution of a run whose `run_ended` is there (`committed`) or not, given the lane's
@@ -627,23 +624,28 @@ fn resolution(
     committed: bool,
     lane: Option<&Row>,
     task: Option<TaskRow>,
-) -> Resolution {
-    let version = lane.and_then(|r| r.first()).and_then(SqlValue::as_i64).unwrap_or(0);
-    let token = lane.and_then(|r| r.get(1)).and_then(SqlValue::as_str);
+) -> Result<Resolution, StorageError> {
+    let (version, token) = match lane {
+        Some(row) => {
+            let cells = Cells::new(row, &["version", "lease_token"])?;
+            (cells.get::<i64>(0)?, cells.get::<Option<String>>(1)?)
+        }
+        None => (0, None),
+    };
     if committed {
         // the version this run's commit made, not the lane's now: others may have committed
         // since
         let version = fence.map_or(version, |f| f.version + 1);
-        return Resolution::Committed(Box::new(Committed { version, task }));
+        return Ok(Resolution::Committed(Box::new(Committed { version, task })));
     }
-    match fence {
+    Ok(match fence {
         // an append-only batch that did not land can be sent again
         None => Resolution::NotApplied,
-        Some(f) if f.version == version && token == Some(f.token.as_str()) => {
+        Some(f) if f.version == version && token.as_deref() == Some(f.token.as_str()) => {
             Resolution::NotApplied
         }
         Some(_) => Resolution::Rejected,
-    }
+    })
 }
 
 /// One page of the thread's tasks in `q.order`. A page token is opaque, bound to the filters
@@ -657,30 +659,15 @@ pub(crate) async fn list_tasks(
         TaskOrder::Inserted => "i",
     };
     let status = q.status.map_or("*", TaskState::as_str);
-    // the filters and order a page token is bound to, as its prefix
-    let filters =
-        format!("{order}:{status}:{}:{}:", q.updated_after, q.lane.as_deref().unwrap_or("*"));
-    let invalid =
-        || StorageError::Invalid(format!("page token {:?} for this listing", q.page_token));
-    let position = q
-        .page_token
-        .as_deref()
-        .filter(|t| !t.is_empty())
-        .map(|token| token.strip_prefix(&filters).ok_or_else(invalid))
-        .transpose()?;
+    let filters = ("tasks", order, status, q.updated_after, q.lane.as_deref());
     let (lane, status, updated_after) =
         (q.lane.as_deref(), q.status.map(TaskState::as_str), q.updated_after);
     let page_size = q.page_size.clamp(1, MAX_TASK_PAGE);
     let mut b = Batch::default();
     let page = match q.order {
         TaskOrder::Updated => {
-            let (before_at, before_id) = match position {
-                None => (i64::MAX, String::new()),
-                Some(at) => at
-                    .split_once(':')
-                    .and_then(|(at, id)| Some((at.parse().ok()?, id.to_owned())))
-                    .ok_or_else(invalid)?,
-            };
+            let (before_at, before_id) =
+                Cursor::position(q.page_token.as_deref(), filters, (i64::MAX, String::new()))?;
             b.add(SelectThreadTasksPage {
                 lane,
                 status,
@@ -691,7 +678,7 @@ pub(crate) async fn list_tasks(
             })
         }
         TaskOrder::Inserted => {
-            let after = position.map_or(Ok(0), |pos| pos.parse().map_err(|_| invalid()))?;
+            let after = Cursor::position(q.page_token.as_deref(), filters, 0_i64)?;
             b.add(SelectThreadTasksInserted {
                 lane,
                 status,
@@ -709,10 +696,9 @@ pub(crate) async fn list_tasks(
         match q.order {
             TaskOrder::Updated => tasks.push(TaskRow::from_row(row)?),
             TaskOrder::Inserted => {
-                let pos = row.first().and_then(SqlValue::as_i64);
-                let pos = pos.ok_or_else(|| StorageError::Unavailable("a task page row".into()))?;
-                positions.push(pos);
-                tasks.push(TaskRow::from_row(&row[1..].to_vec())?);
+                let (cells, task) = Cells::followed_by::<TaskRow>(row, &["rowid"])?;
+                positions.push(cells.get::<i64>(0)?);
+                tasks.push(task);
             }
         }
     }
@@ -720,10 +706,10 @@ pub(crate) async fn list_tasks(
     tasks.truncate(page_size as usize);
     let next_page_token = match (tasks.last(), q.order) {
         (Some(last), TaskOrder::Updated) if more => {
-            format!("{filters}{}:{}", last.updated_at, last.task_id)
+            Cursor::encode(filters, (last.updated_at, &last.task_id))
         }
         (Some(_), TaskOrder::Inserted) if more => {
-            format!("{filters}{}", positions[tasks.len() - 1])
+            Cursor::encode(filters, positions[tasks.len() - 1])
         }
         _ => String::new(),
     };
@@ -758,30 +744,19 @@ pub(crate) async fn list_items(
     cursor: Option<&str>,
     limit: i64,
 ) -> Result<ItemPage, StorageError> {
-    let scope = lane.unwrap_or("*");
-    let after = match cursor {
-        None => 0,
-        Some(c) => c
-            .rsplit_once(':')
-            .filter(|(s, _)| *s == scope)
-            .and_then(|(_, pos)| pos.parse().ok())
-            .ok_or_else(|| StorageError::Invalid(format!("item cursor {c:?} for this listing")))?,
-    };
+    let scope = ("items", lane);
+    let after = Cursor::position(cursor, scope, 0_i64)?;
     let limit = limit.clamp(1, MAX_ITEM_PAGE);
     let rows = conn.query(SelectItemsAfter { lane, after, limit: limit + 1 }.bind()).await?;
     let mut items = Vec::new();
     let mut last = 0;
     for row in &rows {
-        let pos = row.first().and_then(SqlValue::as_i64);
-        let row_lane = row.get(1).and_then(SqlValue::as_str);
-        let (Some(pos), Some(row_lane)) = (pos, row_lane) else {
-            return Err(StorageError::Unavailable("an item page row".into()));
-        };
+        let (cells, item) = Cells::followed_by::<ItemRow>(row, &["rowid", "lane", "seq"])?;
+        let pos: i64 = cells.get(0)?;
         if items.len() as i64 == limit {
-            return Ok(ItemPage { items, next: Some(format!("{scope}:{last}")) });
+            return Ok(ItemPage { items, next: Some(Cursor::encode(scope, last)) });
         }
-        let item = ItemRow::from_row(&row[3..].to_vec())?;
-        items.push(PagedItem { seq: pos, lane: row_lane.to_owned(), item });
+        items.push(PagedItem { seq: cells.get(2)?, lane: cells.get(1)?, item });
         last = pos;
     }
     Ok(ItemPage { items, next: None })
@@ -818,7 +793,7 @@ mod tests {
     }
 
     fn resolve(fence: Option<&Fence>, committed: bool, lane: Row) -> Resolution {
-        resolution(fence, committed, Some(&lane), None)
+        resolution(fence, committed, Some(&lane), None).unwrap()
     }
 
     // Decision 39: a lost acknowledgment is decided by the run's own record, never guessed.
@@ -853,12 +828,12 @@ mod tests {
     /// An answer missing a statement's result is malformed, never an empty success: a lost
     /// commit is not resolved as not applied, nor a commit as made.
     #[tokio::test]
-    async fn a_batch_answer_missing_a_statement_is_unavailable() {
+    async fn a_batch_answer_missing_a_statement_is_invalid() {
         let f = fence();
         let resolved = resolve_commit(&Short, "front-desk", "r1", Some(&f), None).await;
-        assert!(matches!(resolved, Err(StorageError::Unavailable(_))), "{resolved:?}");
+        assert!(matches!(resolved, Err(StorageError::Invalid(_))), "{resolved:?}");
         let fenced = Some(Fenced { fence: &f, keep: None });
         let committed = commit(&Short, "front-desk", &Commit::default(), fenced).await;
-        assert!(matches!(committed, Err(StorageError::Unavailable(_))), "{committed:?}");
+        assert!(matches!(committed, Err(StorageError::Invalid(_))), "{committed:?}");
     }
 }

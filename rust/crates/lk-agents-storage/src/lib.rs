@@ -9,6 +9,7 @@
 
 pub mod backends;
 pub mod context;
+mod cursor;
 pub mod http;
 pub mod sql;
 pub mod storage;

@@ -6,10 +6,8 @@
 //!   by `Credit`; `Batch` applies its statements atomically, one result per statement, then `Done`.
 //! * A dropped socket is redialed within a budget; a request issued meanwhile waits, and requests
 //!   in flight fail [`WsdbError::Disconnected`] (outcome unknown).
-//! * A request answered `retry` applied nothing and is sent again, twice at most.
 
 use std::collections::HashMap;
-use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
@@ -27,6 +25,7 @@ use wire as pb;
 
 use crate::StorageError;
 use crate::sql::{BatchResult, Row, SqlValue, Statement, StatementResult};
+use lk_agents_abi::storage::wsdb::WsdbCode;
 
 /// A bound value as the wire carries it.
 fn to_wire(v: &SqlValue) -> wire::Value {
@@ -159,8 +158,8 @@ pub enum WsdbError {
     #[error("agentdb client: connection lost, request outcome unknown")]
     Disconnected,
     /// A server-reported error with its stable code (`not_found`, `unauthenticated`, `unavailable`, ..).
-    #[error("agentdb {code}: {message}")]
-    Server { code: String, message: String },
+    #[error("agentdb {}: {message}", code.as_str())]
+    Server { code: WsdbCode, message: String },
     #[error("agentdb client: protocol: {0}")]
     Protocol(String),
     #[error("agentdb client: {0}")]
@@ -173,10 +172,31 @@ pub enum WsdbError {
 }
 
 impl WsdbError {
-    /// A `Hello` refusal no redial can change: the database is gone or the key is refused.
+    /// A `Hello` refusal that redialing cannot repair.
     fn is_final(&self) -> bool {
-        matches!(self, WsdbError::Server { code, .. }
-            if matches!(code.as_str(), "not_found" | "unauthenticated" | "permission_denied"))
+        match self {
+            Self::Server { code, .. } => match code {
+                WsdbCode::Unavailable | WsdbCode::ResourceExhausted => false,
+                WsdbCode::Protocol
+                | WsdbCode::Unauthenticated
+                | WsdbCode::NotFound
+                | WsdbCode::Internal
+                | WsdbCode::Txn
+                | WsdbCode::Exec
+                | WsdbCode::Query => true,
+            },
+            Self::Protocol(_) => true,
+            _ => false,
+        }
+    }
+
+    fn server(error: pb::Error) -> Self {
+        match WsdbCode::from_wire(&error.code) {
+            Some(code) => Self::Server { code, message: error.message },
+            None => {
+                Self::Protocol(format!("unknown server code {}: {}", error.code, error.message))
+            }
+        }
     }
 }
 
@@ -399,10 +419,10 @@ impl Conn {
             .map_err(|e| match e {
                 // the upgrade's own refusal is final, as the same refusal at `Hello` is
                 TransportError::Status { status: 401 | 403, message, .. } => {
-                    WsdbError::Server { code: "unauthenticated".into(), message }
+                    WsdbError::Server { code: WsdbCode::Unauthenticated, message }
                 }
                 TransportError::Status { status: 404, message, .. } => {
-                    WsdbError::Server { code: "not_found".into(), message }
+                    WsdbError::Server { code: WsdbCode::NotFound, message }
                 }
                 e => WsdbError::Io(format!("dial {}: {e}", self.0.opts.url)),
             })?;
@@ -441,7 +461,7 @@ impl Conn {
         let ok = match resp.message {
             Some(pb::server_message::Message::HelloOk(ok)) => ok,
             Some(pb::server_message::Message::Error(e)) => {
-                return Err(WsdbError::Server { code: e.code, message: e.message });
+                return Err(WsdbError::server(e));
             }
             other => {
                 return Err(WsdbError::Protocol(format!("unexpected hello response {other:?}")));
@@ -671,7 +691,7 @@ impl Conn {
             Some(pb::ServerMessage {
                 message: Some(pb::server_message::Message::Error(e)),
                 ..
-            }) => Err(WsdbError::Server { code: e.code, message: e.message }),
+            }) => Err(WsdbError::server(e)),
             Some(resp) => Ok(resp),
         }
     }
@@ -684,10 +704,6 @@ impl Conn {
     /// One write statement; returns once durable.
     pub async fn exec(&self, s: &Statement) -> Result<ExecResult, WsdbError> {
         let stmt = statement(s);
-        resend(|| self.exec_once(stmt.clone())).await
-    }
-
-    async fn exec_once(&self, stmt: pb::Statement) -> Result<ExecResult, WsdbError> {
         let mut req = self.register().await?;
         self.write(req.id, pb::client_message::Message::Exec(stmt))?;
         let r = match req.next().await?.message {
@@ -708,10 +724,6 @@ impl Conn {
     /// A query's rows, all of them: one credit back per batch consumed.
     pub async fn query_all(&self, s: &Statement) -> Result<Vec<Row>, WsdbError> {
         let stmt = statement(s);
-        resend(|| self.query_once(stmt.clone())).await
-    }
-
-    async fn query_once(&self, stmt: pb::Statement) -> Result<Vec<Row>, WsdbError> {
         let mut req = self.register().await?;
         let id = req.id;
         self.write(id, pb::client_message::Message::Query(stmt))?;
@@ -744,10 +756,6 @@ impl Conn {
     /// Statements applied atomically, in order, each answered in order.
     pub async fn batch(&self, statements: &[Statement]) -> Result<BatchResult, WsdbError> {
         let statements: Vec<pb::Statement> = statements.iter().map(statement).collect();
-        resend(|| self.batch_once(statements.clone())).await
-    }
-
-    async fn batch_once(&self, statements: Vec<pb::Statement>) -> Result<BatchResult, WsdbError> {
         let n = statements.len();
         let mut req = self.register().await?;
         let id = req.id;
@@ -845,25 +853,6 @@ impl TokenMinter {
         lk_agents_net::token::database_admin_token(&self.api_key, &self.api_secret)
             .map_err(|e| StorageError::Invalid(format!("token: {e}")))
     }
-}
-
-/// The pauses before each resend of a request the server answered `retry`.
-const RETRY_PAUSES: [Duration; 2] = [Duration::from_millis(50), Duration::from_millis(200)];
-
-/// Sends again a request answered `retry`: the server applied nothing, so the same request is safe.
-async fn resend<T, F>(send: impl Fn() -> F) -> Result<T, WsdbError>
-where
-    F: Future<Output = Result<T, WsdbError>>,
-{
-    for pause in RETRY_PAUSES {
-        match send().await {
-            Err(WsdbError::Server { code, .. }) if code == "retry" => {
-                tokio::time::sleep(pause).await
-            }
-            out => return out,
-        }
-    }
-    send().await
 }
 
 enum ResultSet {

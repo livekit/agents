@@ -17,6 +17,7 @@ use lk_agents_abi::storage::voice::{
 };
 use lk_agents_abi::{ChatContent, ChatItem, Role};
 
+use crate::backends::with_thread;
 use crate::context::store::ContextStore;
 use crate::{CommitOptions, Lease, Run, RunOptions, Storage, Thread, shortuuid};
 
@@ -60,20 +61,17 @@ impl VoiceStore {
         lane: String,
         explicit_history: Option<Vec<ChatItem>>,
     ) -> Result<Self, StorageError> {
-        let thread = backend.open(&thread_id, "voice-load").await?;
-        let snapshot = async {
+        let (history, version) = with_thread(&*backend, &thread_id, "voice-load", async |thread| {
             let lane = thread.lane(&lane);
             let history =
                 if explicit_history.is_none() { lane.history().await? } else { Vec::new() };
             let version = lane.info().await?.map_or(0, |lane| lane.version);
             Ok::<_, StorageError>((history, version))
-        }
-        .await;
-        thread.close().await;
-        let (history, version) = snapshot?;
+        })
+        .await?;
         let items = history
             .iter()
-            .map(|row| decode_chat_item(row.payload.clone()).map_err(StorageError::Unavailable))
+            .map(|row| decode_chat_item(row.payload.clone()).map_err(StorageError::Invalid))
             .collect::<Result<Vec<_>, _>>()?;
         let known = explicit_history
             .as_ref()
@@ -139,29 +137,28 @@ impl VoiceStore {
             }
         };
         let prepared = (|| {
-            let merged =
-                if state.explicit && run.version() == state.version {
-                    local
-                } else {
-                    let mut stored = run
-                        .history
-                        .iter()
-                        .map(|row| {
-                            decode_chat_item(row.payload.clone()).map_err(StorageError::Unavailable)
-                        })
-                        .collect::<Result<Vec<_>, _>>()?;
-                    let ids: BTreeSet<_> = stored.iter().map(|item| item.id().to_owned()).collect();
-                    let (mut instructions, pending): (Vec<_>, Vec<_>) =
-                        local.into_iter().partition(|item| !conversational(item));
-                    stored.extend(pending.into_iter().filter(|item| {
+            let merged = if state.explicit && run.version() == state.version {
+                local
+            } else {
+                let mut stored = run
+                    .history()
+                    .iter()
+                    .map(|row| decode_chat_item(row.payload.clone()).map_err(StorageError::Invalid))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let ids: BTreeSet<_> = stored.iter().map(|item| item.id().to_owned()).collect();
+                let (mut instructions, pending): (Vec<_>, Vec<_>) =
+                    local.into_iter().partition(|item| !conversational(item));
+                stored.extend(
+                    pending.into_iter().filter(|item| {
                         !state.known.contains(item.id()) && !ids.contains(item.id())
-                    }));
-                    instructions.extend(stored);
-                    instructions
-                };
+                    }),
+                );
+                instructions.extend(stored);
+                instructions
+            };
             self.activation.begin_managed(
-                run.context_scopes.clone(),
-                run.state.clone(),
+                run.context_scopes().to_vec(),
+                run.state().cloned(),
                 &fields,
             )?;
             Ok::<_, StorageError>(merged)
@@ -194,8 +191,12 @@ impl VoiceStore {
         }
         let fields = self.activation.lock_managed().await;
         let mut active = state.active.take().expect("the active voice turn");
-        let message_ids: BTreeMap<_, _> =
-            active.run.history.iter().map(|row| (row.id.clone(), row.message_id.clone())).collect();
+        let message_ids: BTreeMap<_, _> = active
+            .run
+            .history()
+            .iter()
+            .map(|row| (row.id.clone(), row.message_id.clone()))
+            .collect();
         let history = history
             .into_iter()
             .filter(conversational)
@@ -217,9 +218,9 @@ impl VoiceStore {
             .collect::<Result<Vec<_>, StorageError>>();
         let result = match history {
             Ok(history) => {
-                active.run.history = history;
-                active.run.scope_writes = self.activation.writes();
-                active.run.app_writes = self.activation.statements();
+                *active.run.history_mut() = history;
+                active.run.stage_scopes(self.activation.writes());
+                active.run.stage_statements(self.activation.statements());
                 active.run.commit(CommitOptions::default()).await.map(|committed| committed.version)
             }
             Err(error) => {
@@ -247,7 +248,7 @@ impl VoiceStore {
         self.activation.end_managed(result.is_ok(), fields);
         if let Ok(version) = result {
             state.version = version;
-            state.known = active.run.history.iter().map(|row| row.id.clone()).collect();
+            state.known = active.run.history().iter().map(|row| row.id.clone()).collect();
             Ok(())
         } else {
             result.map(|_| ())
@@ -373,7 +374,7 @@ impl HostVoiceStore for VoiceStore {
                 Some(fields) => fields,
                 None => self.activation.lock_managed().await,
             };
-            result = if resolving && !active.run.closed {
+            result = if resolving && !active.run.closed() {
                 match active.run.resolve_later().await {
                     Some(result) => result.map(|_| ()),
                     None => Err(StorageError::Invalid("the voice commit has no resolver".into())),

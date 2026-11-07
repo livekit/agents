@@ -30,7 +30,10 @@ fn lock_file(directory: &Path) -> Result<File, StorageError> {
 }
 
 fn io_error(error: std::io::Error) -> StorageError {
-    StorageError::Unavailable(format!("storage lifecycle: {error}"))
+    match error.kind() {
+        std::io::ErrorKind::PermissionDenied => StorageError::Unauthorized(error.to_string()),
+        _ => StorageError::Unavailable(format!("storage lifecycle: {error}")),
+    }
 }
 
 /// Each thread worker checks current metadata while holding a shared lifecycle lock.

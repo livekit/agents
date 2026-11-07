@@ -18,7 +18,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-use super::{ApiError, ThreadService};
+use super::{ApiError, HttpError, ThreadService};
 use crate::{Storage, StorageError};
 
 const BODY_LIMIT: usize = 64 * 1024;
@@ -151,11 +151,7 @@ async fn handle(service: Arc<ThreadService>, request: Request<Incoming>) -> Resp
                 )
                 .await
         }
-        Err(_) => Err(ApiError {
-            status: 413,
-            code: "resource_exhausted",
-            message: "request body exceeds limit".into(),
-        }),
+        Err(_) => Err(ApiError::status("request body exceeds limit", 413, None, Some(false))),
     };
     response(result, origin.as_deref())
 }
@@ -167,8 +163,9 @@ fn response(
     let (status, body) = match result {
         Ok(body) => (StatusCode::OK, body),
         Err(error) => (
-            StatusCode::from_u16(error.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-            error.body(),
+            StatusCode::from_u16(error.status_code.unwrap_or(500) as u16)
+                .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+            error_body(&error),
         ),
     };
     let mut response = Response::builder()
@@ -183,4 +180,19 @@ fn response(
             .header("access-control-allow-headers", "Authorization, Content-Type, Api-Version");
     }
     response.body(Full::new(Bytes::from(body.to_string()))).expect("fixed response headers")
+}
+
+fn error_body(error: &ApiError) -> serde_json::Value {
+    let code = match error.status_code.unwrap_or(500) {
+        400 => "invalid_argument",
+        401 => "unauthenticated",
+        403 => "permission_denied",
+        404 => "not_found",
+        409 => "aborted",
+        413 => "resource_exhausted",
+        499 => "canceled",
+        503 => "unavailable",
+        _ => "internal",
+    };
+    serde_json::json!({"error": {"code": code, "message": error.message}})
 }

@@ -18,6 +18,17 @@ pub use host_capture::{
 pub use provider::{ProviderError, PullError};
 pub use side_table::RefRegistry;
 
+/// A blocking job unwound before it could return its result.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("worker job panicked")]
+pub struct JobPanicked;
+
+impl From<JobPanicked> for std::io::Error {
+    fn from(error: JobPanicked) -> Self {
+        std::io::Error::other(error)
+    }
+}
+
 // Constructors are part of the boundary contract, including plugin-authored exceptions. Only
 // cause traversal and status display/normalization require host behavior.
 #[crate::host(exceptions(module = "api_errors", path = "livekit.agents._bindings", classes(

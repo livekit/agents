@@ -450,7 +450,7 @@ async fn two_workers_share_one_session(backend: Backend) {
     assert_eq!(b.lane(LANE).info().await.unwrap().unwrap().version, 2);
     // The state was written at the first commit and loaded by the second worker.
     let run = b.lane(LANE).open(RunOptions::new("peek", "AST_peek")).await.unwrap();
-    assert_eq!(run.state, Some(json!({"verified": 2})));
+    assert_eq!(run.state(), Some(&json!({"verified": 2})));
     drop(run);
     fx.cleanup(&[&a, &b]).await;
 }
