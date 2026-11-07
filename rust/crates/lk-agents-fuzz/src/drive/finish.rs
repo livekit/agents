@@ -225,6 +225,8 @@ impl Run {
         let voice = now + self.registry.voice_due_in().map_or(0, |d| d.as_millis() as u64);
         // The avatar plays what it holds in real time before it reports it played.
         let avatar = now + self.avatar_due_in().map_or(0, |d| d.as_millis() as u64);
+        // The store answers a commit or an acquire after its own latency.
+        let storage = self.storage_due().map_or(now, |at| at.as_nanos() / 1_000_000);
         let furthest = self
             .deadlines()
             .map(|(_, at)| at)
@@ -232,13 +234,15 @@ impl Run {
             .unwrap_or(now)
             .max(playing)
             .max(voice)
-            .max(avatar);
+            .max(avatar)
+            .max(storage);
         Input::Advance { ms: Millis((furthest.saturating_sub(now) + 1).min(RELEASE_CAP_MS)) }
     }
 
     /// Whether the driver armed a deadline the clock has not reached: a speech queued behind
     /// `min_consecutive_speech_delay`, or a retry waiting out its backoff, waits on the driver's
-    /// own clock, not on the case, so a round that leaves one ahead is not quiet. The recorder's
+    /// own clock, not on the case, so a round that leaves one ahead is not quiet, as is a storage
+    /// answer still in its latency (seed 13626). The recorder's
     /// flush re-arms for as long as the session lives and owes nobody anything.
     fn deadline_ahead(&self) -> bool {
         let now = self.record.now().at_ms;
@@ -246,6 +250,12 @@ impl Run {
             || !self.room_audio_queued().is_zero()
             || self.registry.voice_due_in().is_some()
             || self.avatar_due_in().is_some()
+            || self.storage_due().is_some()
+    }
+
+    /// The storage answer the fake still owes on its own clock, past now.
+    fn storage_due(&self) -> Option<Ts> {
+        self.registry.storage_due_after(self.time.now())
     }
 
     /// The avatar's playout still to come, or the agent's sink waiting out its give-up timer.
