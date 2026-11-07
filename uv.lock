@@ -73,6 +73,7 @@ members = [
     "livekit-plugins-minimal",
     "livekit-plugins-minimax-ai",
     "livekit-plugins-mistralai",
+    "livekit-plugins-moss",
     "livekit-plugins-murf",
     "livekit-plugins-nabrah",
     "livekit-plugins-neuphonic",
@@ -1720,6 +1721,17 @@ wheels = [
 ]
 
 [[package]]
+name = "inferedge-moss-core"
+version = "0.36.0"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b5/18/1495a5e9978232badae7367f0c97cbe671d8cbc92afb48251749f46680ab/inferedge_moss_core-0.36.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:fb425e374bc70734bf76a2889933dac4898dee2ad536fe5f319af3dcda0af245", size = 4650281, upload-time = "2026-11-03T00:58:22.932Z" },
+    { url = "https://files.pythonhosted.org/packages/57/3c/e0bd771801d8158740db813dc93006e95c3f62d80145ea034e3050af400d/inferedge_moss_core-0.36.0-cp310-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:cd3825d3181525f901de9e4fb008cff1438ec5ded1a8584ee659da97794de3f2", size = 5497628, upload-time = "2026-11-03T00:58:24.97Z" },
+    { url = "https://files.pythonhosted.org/packages/84/3e/beb99a689439d417f4c427d90cac3d9dc0734367ca4509c09798a2eaaef8/inferedge_moss_core-0.36.0-cp310-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:de2c43033f1cb9e577cbccb07f7f7e8085b85252a05e34a86c04da5bfc79fac1", size = 5707173, upload-time = "2026-11-03T00:58:26.844Z" },
+    { url = "https://files.pythonhosted.org/packages/4c/fa/4d45c15ae2a53eb80e4e225c6e96601f37e5cef62846a0016641e5cc8138/inferedge_moss_core-0.36.0-cp310-abi3-win_amd64.whl", hash = "sha256:17c64994ccfa60ac66c4cc8eb5bd8607e60559e37772071fdbd04680e84a51df", size = 6149929, upload-time = "2026-11-03T00:58:28.766Z" },
+]
+
+[[package]]
 name = "iniconfig"
 version = "2.3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2285,6 +2297,9 @@ minimax = [
 mistralai = [
     { name = "livekit-plugins-mistralai" },
 ]
+moss = [
+    { name = "livekit-plugins-moss" },
+]
 murf = [
     { name = "livekit-plugins-murf" },
 ]
@@ -2458,6 +2473,7 @@ requires-dist = [
     { name = "livekit-plugins-microsoft-ai", marker = "extra == 'microsoft-ai'", editable = "livekit-plugins/livekit-plugins-microsoft-ai" },
     { name = "livekit-plugins-minimax-ai", marker = "extra == 'minimax'", editable = "livekit-plugins/livekit-plugins-minimax" },
     { name = "livekit-plugins-mistralai", marker = "extra == 'mistralai'", editable = "livekit-plugins/livekit-plugins-mistralai" },
+    { name = "livekit-plugins-moss", marker = "extra == 'moss'", editable = "livekit-plugins/livekit-plugins-moss" },
     { name = "livekit-plugins-murf", marker = "extra == 'murf'", editable = "livekit-plugins/livekit-plugins-murf" },
     { name = "livekit-plugins-nabrah", marker = "extra == 'nabrah'", editable = "livekit-plugins/livekit-plugins-nabrah" },
     { name = "livekit-plugins-neuphonic", marker = "extra == 'neuphonic'", editable = "livekit-plugins/livekit-plugins-neuphonic" },
@@ -2519,7 +2535,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "bland", "boson-avatar", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hume", "images", "inworld", "kalpa", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "meta", "microsoft-ai", "minimax", "mistralai", "murf", "nabrah", "neuphonic", "nltk", "nvidia", "openai", "palabra", "perplexity", "phonic", "protoface", "resemble", "reson8", "respeecher", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "slng", "smallestai", "soniox", "spatius", "speechify", "speechmatics", "spitch", "synthesia", "tavus", "thunderphone", "trugen", "turn-detector", "typesafe", "ultravox", "upliftai", "vakyam", "xai", "zoom-ai"]
+provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "bland", "boson-avatar", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hume", "images", "inworld", "kalpa", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "meta", "microsoft-ai", "minimax", "mistralai", "moss", "murf", "nabrah", "neuphonic", "nltk", "nvidia", "openai", "palabra", "perplexity", "phonic", "protoface", "resemble", "reson8", "respeecher", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "slng", "smallestai", "soniox", "spatius", "speechify", "speechmatics", "spitch", "synthesia", "tavus", "thunderphone", "trugen", "turn-detector", "typesafe", "ultravox", "upliftai", "vakyam", "xai", "zoom-ai"]
 
 [[package]]
 name = "livekit-api"
@@ -3464,6 +3480,20 @@ requires-dist = [
 ]
 
 [[package]]
+name = "livekit-plugins-moss"
+source = { editable = "livekit-plugins/livekit-plugins-moss" }
+dependencies = [
+    { name = "livekit-agents" },
+    { name = "moss" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "livekit-agents", editable = "livekit-agents" },
+    { name = "moss", specifier = ">=1.15.0" },
+]
+
+[[package]]
 name = "livekit-plugins-murf"
 source = { editable = "livekit-plugins/livekit-plugins-murf" }
 dependencies = [
@@ -4293,6 +4323,22 @@ wheels = [
 [package.optional-dependencies]
 realtime = [
     { name = "websockets" },
+]
+
+[[package]]
+name = "moss"
+version = "1.22.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "h11" },
+    { name = "httpx" },
+    { name = "inferedge-moss-core" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/71/5b/2785c8f32eca7bad777cbe12aa6c357ae40ae4a4dcb7a515945a14a26044/moss-1.22.0.tar.gz", hash = "sha256:6c9b12d44db8757b71bd98bb16460b77be0e8877a6654e72b551730693944a4d", size = 61291, upload-time = "2026-11-03T01:01:24.088Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b6/66/b7ce928e9e9726402ee31710ae615e9817af123437c4f5434ff52485fa40/moss-1.22.0-py3-none-any.whl", hash = "sha256:fb70ed4ca2fd5529d1cbbb81626a8c066f0f437bfa318e519973f95cdf7928da", size = 54103, upload-time = "2026-11-03T01:01:22.96Z" },
 ]
 
 [[package]]
