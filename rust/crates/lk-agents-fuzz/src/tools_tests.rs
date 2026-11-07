@@ -547,6 +547,23 @@ mod tool_update_before_detach_heard {
     }
 }
 
+mod cut_question {
+    //! A question its speech was cut before putting is not the one the person's words answer.
+    use lk_agents_fuzz::search;
+
+    // Catches: a step whose speech was cut before its tools settled kept its question selected,
+    // so the person's next words answered a question never put instead of the one asked (survey
+    // seed 16796 BasicPos, tool_output_follows_outcome).
+    #[test]
+    fn the_next_words_answer_the_question_asked() {
+        let seed = 16796;
+        let setup = search::sample_setup(&mut fastrand::Rng::with_seed(seed));
+        let outcome = search::explore(setup, seed, 3000);
+        let failed: Vec<_> = outcome.failures.iter().map(|f| f.contract.to_string()).collect();
+        assert!(!failed.iter().any(|c| c == "tool_output_follows_outcome"), "{failed:?}");
+    }
+}
+
 mod tool_update_as_first_report {
     //! A body's first report from the host: progress detaches it, an end answers its call.
     use lk_agents_fuzz::check::check_all;

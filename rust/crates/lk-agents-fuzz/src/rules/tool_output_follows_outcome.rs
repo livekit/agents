@@ -49,6 +49,7 @@ impl Rule for ToolOutputFollowsOutcome {
     fn on_complete(r: &Recording, check: &mut Check) {
         let inputs = r.inputs_view();
         let host = r.host_view();
+        let internal = r.internal_view();
         let closing = inputs.closing_asked_at();
         // Each output as first announced, and every announcement in order.
         let announced: Vec<_> = r
@@ -183,9 +184,12 @@ impl Rule for ToolOutputFollowsOutcome {
                         selected.remove(&call.call_id);
                     }
                 }
-                // A step cut before its tools were awaited asks nothing.
+                // A step cut before its tools were awaited asks nothing; one cut after it put
+                // its question leaves the question asked.
                 ChatItem::FunctionCallOutput(o) if o.output.starts_with(WAITING_PREFIX) => {
-                    let cut = speech.is_some_and(|s| host.speech(s.0).is_interrupted());
+                    let cut = speech.is_some_and(|s| {
+                        internal.speech(s.0).interrupted_at().is_some_and(|cut| cut <= *at)
+                    });
                     if !cut {
                         match waiting.iter_mut().find(|(call, _)| *call == o.call_id) {
                             Some((_, id)) => *id = o.id.clone(),

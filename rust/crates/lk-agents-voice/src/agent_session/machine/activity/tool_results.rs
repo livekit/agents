@@ -125,10 +125,17 @@ impl VoiceDriver {
             })
             .collect();
         for item in &mut items {
-            if let ChatItem::FunctionCallOutput(output) = item
-                && let Some(required) = reply_required.get(&output.call_id)
-            {
-                output.reply_required = *required;
+            match item {
+                ChatItem::FunctionCallOutput(output) => {
+                    if let Some(required) = reply_required.get(&output.call_id) {
+                        output.reply_required = *required;
+                    }
+                }
+                // A cut speech never put its question: the person's next words do not answer it.
+                ChatItem::FunctionCall(call) if interrupted => {
+                    call.extra.remove(lk_agents_core::agent_run::planning::INPUT_REQUESTED_KEY);
+                }
+                _ => {}
             }
         }
         if let Some(rt) = self.activity.realtime_activity()
