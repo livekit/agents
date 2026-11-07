@@ -20,10 +20,10 @@ import asyncio
 import json
 import logging
 from collections.abc import Callable
-from typing import Any
 
 from livekit import rtc
 from livekit.agents import AgentSession, ConversationItemAddedEvent, llm
+from pydantic import BaseModel
 
 logger = logging.getLogger("suggested-replies")
 
@@ -34,13 +34,11 @@ RECENT_TURNS = 8
 
 INSTRUCTIONS = """\
 You help the CALLER on a phone call with {persona}. Given the call so far, suggest 1-3 short \
-things the caller could say next, so someone unsure what to say has a line ready.
-
-Return ONLY JSON, no markdown fences, in exactly this shape:
-{{"suggestions": [{{"label": "<=3 words for a button", "value": "the exact words the caller says"}}]}}
+things the caller could say next, so someone unsure what to say has a line ready. Each has a \
+label of three words or fewer, for a button, and the exact words the caller says.
 
 How to choose:
-- "value" is a natural first-person line, one or two short sentences, answering exactly what {persona} just asked and nothing more.
+- The words are a natural first-person line, one or two short sentences, answering exactly what {persona} just asked and nothing more.
 - The caller reads the line out loud, so write it the way people speak: no symbols or \
 abbreviations, "forty-two dollars and eighteen cents" rather than "$42.18".
 - The caller's details come only from the script below. Never invent any other name, date, number, or amount.
@@ -48,10 +46,19 @@ abbreviations, "forty-two dollars and eighteen cents" rather than "$42.18".
 - If {persona} offered choices, pick from them, in {persona}'s words.
 - Put the most useful reply first.
 - While {persona} is still doing something they said they'd do ("one sec", "pulling that up", \
-"let me check"), the caller just waits: return an empty list. Otherwise always return at least one.
+"let me check"), the caller just waits: suggest nothing. Otherwise always suggest at least one.
 
 {script}
 """
+
+
+class Suggestion(BaseModel):
+    label: str
+    value: str
+
+
+class Suggestions(BaseModel):
+    suggestions: list[Suggestion]
 
 
 class SuggestedReplies:
@@ -106,17 +113,13 @@ class SuggestedReplies:
             content=INSTRUCTIONS.format(persona=self._persona, script=script),
         )
         ctx.add_message(role="user", content=self._prompt(line))
-        raw = ""
-        stream = self._llm.chat(chat_ctx=ctx)
-        try:
-            async for chunk in stream:
-                if chunk.delta and chunk.delta.content:
-                    raw += chunk.delta.content
-        finally:
-            await stream.aclose()
+        reply = await self._llm.chat(
+            chat_ctx=ctx, response_format=Suggestions
+        ).collect()
         if self._session.user_state == "speaking":
             return
-        await self._publish(parse_suggestions(raw))
+        suggestions = Suggestions.model_validate_json(reply.text).suggestions
+        await self._publish([s.model_dump() for s in suggestions[:MAX_SUGGESTIONS]])
 
     def _prompt(self, line: str) -> str:
         turns = [
@@ -134,40 +137,6 @@ class SuggestedReplies:
         )
 
     async def _publish(self, items: list[dict[str, str]]) -> None:
-        logger.debug("suggested replies", extra={"count": len(items)})
         await self._room.local_participant.set_attributes(
             {SUGGESTIONS_ATTRIBUTE: json.dumps(items)}
         )
-
-
-def parse_suggestions(raw: str) -> list[dict[str, str]]:
-    data = _loads(raw)
-    items = data.get("suggestions") if isinstance(data, dict) else data
-    if not isinstance(items, list):
-        return []
-    clean: list[dict[str, str]] = []
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        label, value = item.get("label"), item.get("value")
-        if (
-            isinstance(label, str)
-            and isinstance(value, str)
-            and label.strip()
-            and value.strip()
-        ):
-            clean.append({"label": label.strip(), "value": value.strip()})
-    return clean[:MAX_SUGGESTIONS]
-
-
-def _loads(raw: str) -> Any:
-    try:
-        return json.loads(raw)
-    except ValueError:
-        start, end = raw.find("{"), raw.rfind("}")
-        if start != -1 and end > start:
-            try:
-                return json.loads(raw[start : end + 1])
-            except ValueError:
-                pass
-        return {}
