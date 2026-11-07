@@ -88,13 +88,14 @@ impl Rule for ToolOutputFollowsOutcome {
             created.is_some_and(|c| stretches.iter().any(|(from, to)| *from < c && c <= *to))
         };
         // A tool's first report may be the host's: progress detaches the body, which answers
-        // with its final; an end answers the call, and the body's own answer comes too late.
+        // with its final; an end answers the call, or a detached body's final, and the body's
+        // own answer comes too late.
         let mut detached = BTreeSet::new();
         let mut ended = BTreeSet::new();
         for applied in inputs.accepted() {
             let (tool, answer, outcome) = match &applied.input {
                 Input::ToolUpdate { tool, progress, end } => {
-                    if detached.contains(&tool.nth) || ended.contains(&tool.nth) {
+                    if ended.contains(&tool.nth) {
                         continue;
                     }
                     if progress.is_some() {

@@ -611,6 +611,42 @@ mod tool_update_as_first_report {
         assert!(!failed.iter().any(|c| misread.contains(&c.as_str())), "{failed:?}");
     }
 
+    // Catches: the rule held a detached body's own answer to its final, though the host's
+    // update ending the body had answered it first and the product refused the later answer
+    // (survey seed 6581 TaskBridge, tool_output_follows_outcome).
+    #[test]
+    fn a_detached_bodys_end_update_is_its_final() {
+        for schedule in 0..8 {
+            let setup = Setup { tools: vec!["lookup".into()], ..Setup::default() };
+            let inputs = [
+                Input::GenerateReply { user_input: None, instructions: None, allow: None },
+                Input::Advance { ms: Millis(100) },
+                Input::LlmToolCall {
+                    chat: Ref::new(0),
+                    name: "lookup".into(),
+                    args: ToolArgs("{}".into()),
+                },
+                Input::LlmEnd { chat: Ref::new(0) },
+                Input::Advance { ms: Millis(100) },
+                update(Some("Checking."), ToolAnswer::AfterIdle),
+                Input::Advance { ms: Millis(100) },
+                update(None, ToolAnswer::AskVerbatim),
+                answer(ToolAnswer::Ask, "Tuesday at 9 works."),
+                Input::Advance { ms: Millis(3_000) },
+            ];
+            let run = simulate(async {
+                let policy = lk_agents_fuzz::drive::Policy::TaskBridge;
+                let mut run = Run::start(&setup, schedule, policy).await;
+                for input in &inputs {
+                    run.apply(input).await;
+                }
+                run
+            });
+            let failed = failed(&run);
+            assert!(!failed.iter().any(|c| c == "tool_output_follows_outcome"), "{failed:?}");
+        }
+    }
+
     // Catches: a host update ending the body and the body's own answer, both in before the
     // runtime's body task next ran: the task took the answer and dropped the update the host had
     // sent first (survey seed 4271 TaskBridge, tool_output_follows_outcome).
