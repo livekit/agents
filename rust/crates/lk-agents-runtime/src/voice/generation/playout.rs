@@ -69,7 +69,7 @@ async fn with_playout_controls<S: Segment, T: Send>(
 pub(crate) fn first_frame(shared: &Arc<SessionShared>, acc: &mut TurnAccumulator, at: f64) {
     acc.on_forwarded(
         lk_agents_voice::generation::machine::forward::TurnAccumulatorOutputEvent::Audio { at },
-        shared.time.wall_secs(),
+        || shared.time.wall_secs(),
     );
 }
 

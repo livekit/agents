@@ -140,12 +140,12 @@ impl TurnAccumulator {
     /// `_on_first_frame`: stamps the turn's first audible instant, `at` (the capture instant for
     /// audio, nothing for text) or `now` (`fut.result() or time.time()`). `false` if not the turn's
     /// first frame (it fires per segment and from both outputs).
-    pub fn on_first_frame(&mut self, at: Option<f64>, now: f64) -> bool {
+    pub fn on_first_frame(&mut self, at: Option<f64>, now: impl FnOnce() -> f64) -> bool {
         if self.started_speaking_at.is_some() {
             return false;
         }
         // Truthiness, not presence.
-        self.started_speaking_at = Some(at.filter(|at| truthy(*at)).unwrap_or(now));
+        self.started_speaking_at = Some(at.filter(|at| truthy(*at)).unwrap_or_else(now));
         true
     }
 
