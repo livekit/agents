@@ -2,7 +2,7 @@
 //!
 //! Physical attachment callbacks are the boundary facts. A host object can have overlapping
 //! attachments, so one detach cannot retire a different attachment of that same object.
-use lk_agents_voice::agent_activity::scheduling::SpeechKind;
+use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechKind;
 
 use crate::{
     authored::Authored,

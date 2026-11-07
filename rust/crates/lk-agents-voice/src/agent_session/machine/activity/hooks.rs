@@ -3,8 +3,8 @@
 //! long each is waited on.
 
 use crate::agent::TurnEdit;
-use crate::agent_activity::recognition::PendingTurn;
 use crate::agent_session::effects::Timer;
+use crate::agent_session::machine::activity::recognition::PendingTurn;
 use crate::agent_session::machine::coordination::VoiceCallback;
 use crate::agent_session::{HookCall, HookId, HookKind, HookOutcome, VoiceDriver, VoiceHostEvent};
 use crate::telemetry;

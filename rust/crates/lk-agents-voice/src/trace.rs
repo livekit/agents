@@ -1,7 +1,7 @@
-use crate::agent_activity::false_interruption::InterruptRefusal;
-use crate::agent_activity::scheduling::{PreemptiveVerdict, SpeechId};
 use crate::agent_session::effects::Timer;
 pub use crate::agent_session::effects::{GateCause, GateOp};
+use crate::agent_session::machine::activity::false_interruption::InterruptRefusal;
+use crate::agent_session::machine::activity::scheduling::{PreemptiveVerdict, SpeechId};
 use crate::audio_recognition::UserTurnCommitVerdict;
 use crate::events::SessionEvent;
 use lk_agents_abi::Ts;
@@ -71,8 +71,8 @@ pub enum CoreStep {
     /// The whole configuration in effect after a layer of the option stack was applied. What a
     /// re-resolution changed is the diff against the previous `ConfigApplied`. Boxed: largest, rarest.
     ConfigApplied {
-        layer: crate::agent_activity::options::ConfigLayer,
-        effective: Box<crate::agent_activity::options::AgentSessionOptions>,
+        layer: crate::agent_session::options::ConfigLayer,
+        effective: Box<crate::agent_session::options::AgentSessionOptions>,
     },
     WallEpoch {
         at: std::time::SystemTime,
@@ -132,9 +132,9 @@ pub enum TurnStep {
         speech: SpeechId,
         verdict: PreemptiveVerdict,
     },
-    PreemptiveRefused(crate::agent_activity::scheduling::PreemptiveRefusal),
+    PreemptiveRefused(crate::agent_session::machine::activity::scheduling::PreemptiveRefusal),
     /// A user turn past its limit gets no `on_user_turn_exceeded`.
-    TurnLimitSkipped(crate::agent_activity::hooks::TurnLimitSkip),
+    TurnLimitSkipped(crate::agent_session::machine::activity::hooks::TurnLimitSkip),
 }
 
 #[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]
@@ -156,7 +156,7 @@ pub enum SpeechStep {
     /// The queue refused a speech (draining or stopped): force-interrupted, nothing plays.
     ScheduleRejected {
         speech: SpeechId,
-        reason: crate::agent_activity::scheduling::Rejected,
+        reason: crate::agent_session::machine::activity::scheduling::Rejected,
     },
     /// A `say()` the driver refused before asking any model or voice for it, as the reference
     /// raises at `AgentActivity.say`.
@@ -225,7 +225,9 @@ pub enum SpeechStep {
 
 #[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]
 pub enum InterruptStep {
-    ByAudioActivity(Box<crate::agent_activity::false_interruption::InterruptReport>),
+    ByAudioActivity(
+        Box<crate::agent_session::machine::activity::false_interruption::InterruptReport>,
+    ),
     /// A interruption check refused before any effect ran.
     ByAudioActivityRefused(InterruptRefusal),
     /// Only produced by [`folded`](crate::trace::folded): the barge step above repeated `count` times.
@@ -439,7 +441,7 @@ pub enum PlayoutStep {
     },
     OutputRefused {
         speech: SpeechId,
-        reason: crate::agent_session::output::OutputBindingError,
+        reason: crate::agent_session::machine::output::OutputBindingError,
     },
     OutputReplaced {
         audio: bool,
@@ -605,19 +607,19 @@ pub enum HandoffStep {
     },
     /// `VoiceTask.run()` from `speech`'s tool: `agent` takes the floor, `parent` waits.
     TaskEntered {
-        task: crate::agent_activity::voice_task::VoiceTaskId,
+        task: crate::agent_session::machine::activity::voice_task::VoiceTaskId,
         parent: String,
         agent: String,
         speech: SpeechId,
     },
     /// The task ended `how`; `restored` is the parent installed again, without its hooks.
     TaskEnded {
-        task: crate::agent_activity::voice_task::VoiceTaskId,
-        how: crate::agent_activity::voice_task::TaskEnd,
+        task: crate::agent_session::machine::activity::voice_task::VoiceTaskId,
+        how: crate::agent_session::machine::activity::voice_task::TaskEnd,
         restored: String,
     },
     /// `VoiceTask.run()` refused before the task started.
-    TaskRefused { why: crate::agent_activity::voice_task::VoiceTaskEnded },
+    TaskRefused { why: crate::agent_session::machine::activity::voice_task::VoiceTaskEnded },
     /// One call into user code issued, by kind. `OnExit` precedes the handoff's pause, `OnEnter`
     /// follows `AgentUpdated`. `HookFinished` closes it.
     HookIssued {
@@ -790,7 +792,7 @@ pub enum RoomLinkStep {
     /// `delete_room_on_close`: the host was asked to delete the room, after `Close`.
     DeleteRoomRequested,
     /// The linked participant pressed a key: `None` when it is no DTMF key.
-    KeyPressed { key: Option<crate::workflows::dtmf::DtmfEvent> },
+    KeyPressed { key: Option<crate::workflows::machine::dtmf::DtmfEvent> },
 }
 
 /// One [`RoomEvent`](lk_agents_abi::voice::rtc::RoomEvent) variant, payload dropped: what the journal keeps of it.

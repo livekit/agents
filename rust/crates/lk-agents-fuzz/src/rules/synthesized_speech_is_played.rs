@@ -5,7 +5,7 @@
 //! loses the playback report, an output swapped at the wrong instant -- every one of those shows
 //! up here as the same absence, which is what lets this catch failures nobody wrote a rule for.
 use lk_agents_voice::{
-    agent_activity::scheduling::SpeechId,
+    agent_session::machine::activity::scheduling::SpeechId,
     events::{ErrorSource, SessionEvent},
     trace::{GenerationStep, PlayoutStep, Step},
 };

@@ -24,10 +24,10 @@ use lk_agents_abi::voice::session_owner::{
 use lk_agents_abi::voice::session_storage::SessionStorage as _;
 use lk_agents_abi::{BoxFuture, HostRef, Maybe};
 use lk_agents_net::{env::ProcessEnv, task::TaskSet};
-use lk_agents_voice::agent_activity::options::{RECORDING_ALL_OFF, validate_session_update};
 use lk_agents_voice::agent_session::lifecycle::{
     CloseOwner, OwnerLifecycle, SessionStartPlans, StartOwner,
 };
+use lk_agents_voice::agent_session::options::{RECORDING_ALL_OFF, validate_session_update};
 use parking_lot::Mutex;
 use std::sync::{Arc, OnceLock, Weak};
 use tokio::sync::{OnceCell, watch};

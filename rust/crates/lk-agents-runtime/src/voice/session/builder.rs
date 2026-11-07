@@ -16,7 +16,7 @@ use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::voice::io::{AudioInput, AudioOutput, TextOutput};
 use lk_agents_abi::voice::rtc::RoomEvent;
 use lk_agents_abi::{AudioFrame, EotDetector, Llm, Spawner, StreamInput, Stt, Tts, Vad};
-use lk_agents_voice::agent_activity::{DriverConfig, PIPELINE_SAMPLE_RATE};
+use lk_agents_voice::agent_session::machine::activity::{DriverConfig, PIPELINE_SAMPLE_RATE};
 use lk_agents_voice::agent_session::{
     DriverError, InitialSession, Now, SessionParts, VoiceDriver, VoiceHostEvent,
 };
@@ -41,7 +41,7 @@ pub struct SessionCores {
     pub eot: Option<Arc<dyn EotDetector>>,
     /// The interruption detector, whose verdicts the executor pumps into the queue.
     pub interruption:
-        Option<Arc<dyn lk_agents_voice::agent_activity::false_interruption::InterruptionPort>>,
+        Option<Arc<dyn lk_agents_voice::agent_session::machine::activity::false_interruption::InterruptionPort>>,
     /// The opened realtime session whose events are read after the executor adopts the cores.
     pub realtime_events: Option<Arc<dyn lk_agents_abi::RealtimeSession>>,
     /// The room's events and the room IO's, forwarded into the queue until `Closing`.
@@ -177,9 +177,9 @@ pub struct DriverBuilder {
     /// `None` is VAD-only interruption: every burst past `min_interruption_duration`, a "mm-hm"
     /// included, stops the agent.
     pub interruption:
-        Option<Arc<dyn lk_agents_voice::agent_activity::false_interruption::InterruptionPort>>,
+        Option<Arc<dyn lk_agents_voice::agent_session::machine::activity::false_interruption::InterruptionPort>>,
     /// `None` forwards **every** frame the host pushes.
-    pub video_sampler: Option<lk_agents_voice::agent_activity::video_sampler::VideoSampler>,
+    pub video_sampler: Option<lk_agents_voice::agent_session::video_sampler::VideoSampler>,
     /// Instead of an LLM+TTS pair: `llm`/`tts` are ignored while it is set.
     pub realtime: Option<Arc<dyn lk_agents_abi::Realtime>>,
     pub toolset: lk_agents_voice::tool_executor::Toolset,
@@ -546,7 +546,7 @@ impl DriverBuilder {
             sinks.insert(AudioChannel::Vad, sink);
         }
         {
-            use lk_agents_voice::agent_activity::options::DetectorKind;
+            use lk_agents_voice::agent_session::options::DetectorKind;
             let eot = self.eot.is_some();
             self.config.edit(|_, legs| legs.detector = eot.then_some(DetectorKind::Streaming));
         }
@@ -574,20 +574,22 @@ impl DriverBuilder {
         // Who ends the turn, decided once from the model's capabilities and the session's
         // inputs (`_resolve_rt_turn_detection_enabled`).
         let caps = model.capabilities();
-        let side = lk_agents_voice::agent_activity::realtime::SessionSide {
+        let side = lk_agents_voice::agent_session::machine::activity::realtime::SessionSide {
             stt: self.stt.is_some(),
             vad: self.vad.is_some(),
             detection: self.config.effective().turn.detection(),
             streaming_detector: self.config.legs.detector
-                == Some(lk_agents_voice::agent_activity::options::DetectorKind::Streaming),
+                == Some(lk_agents_voice::agent_session::options::DetectorKind::Streaming),
             interruption_given: self.config.effective().turn.interruption.mode.is_some(),
             turn_detection_mode: self.config.effective().turn.owner(),
         };
         let disabled =
-            lk_agents_voice::agent_activity::realtime::turn_detection_disabled(&caps, side);
+            lk_agents_voice::agent_session::machine::activity::realtime::turn_detection_disabled(
+                &caps, side,
+            );
         // The refined mode goes into the config; the pre-refinement answer is kept so a later
         // re-resolution is compared against it.
-        let owner = lk_agents_voice::agent_activity::realtime::realtime_turn_detection_mode(
+        let owner = lk_agents_voice::agent_session::machine::activity::realtime::realtime_turn_detection_mode(
             &caps, side, disabled,
         );
         self.config.refine_turn_detection(owner);

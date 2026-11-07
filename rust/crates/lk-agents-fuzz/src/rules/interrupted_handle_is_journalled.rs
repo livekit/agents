@@ -49,7 +49,7 @@ impl Rule for InterruptedHandleIsJournalled {
 
 /// The handle says interrupted and the journal agrees.
 fn interrupted_and_journalled() -> Recording {
-    use lk_agents_voice::{agent_activity::scheduling::SpeechId, trace::InterruptCause};
+    use lk_agents_voice::{agent_session::machine::activity::scheduling::SpeechId, trace::InterruptCause};
     Authored::new()
         .speech(3, Handle::finished().interrupted())
         .journal(Interrupt(Interrupted {
@@ -67,7 +67,7 @@ fn interrupted_without_journal() -> Recording {
 
 /// The core interrupted the speech; its done handle says it was not.
 fn journalled_done_not_interrupted() -> Recording {
-    use lk_agents_voice::{agent_activity::scheduling::SpeechId, trace::InterruptCause};
+    use lk_agents_voice::{agent_session::machine::activity::scheduling::SpeechId, trace::InterruptCause};
     Authored::new()
         .speech(3, Handle::finished())
         .journal(Interrupt(Interrupted {

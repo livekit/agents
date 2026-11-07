@@ -17,7 +17,7 @@ use lk_agents_abi::{
 };
 use lk_agents_voice::{
     agent::Source,
-    agent_activity::scheduling::SpeechKind,
+    agent_session::machine::activity::scheduling::SpeechKind,
     events::SessionEvent,
     trace::{CoreStep, HandoffStep, SpeechStep, Step},
 };
@@ -235,7 +235,7 @@ fn epoch() -> SystemTime {
 }
 
 fn reply(interrupted: bool, llm: Option<MetricsMetadata>) -> Step {
-    use lk_agents_voice::agent_activity::scheduling::SpeechId;
+    use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
     let mut m = ChatMessage::text("item_msg_1", Role::Assistant, "Sure.", epoch());
     m.interrupted = interrupted;
     m.metrics.llm_node_ttft = Some(0.3);
@@ -257,7 +257,7 @@ fn named() -> Option<MetricsMetadata> {
 }
 
 fn recorded(interrupted: bool) -> Authored {
-    use lk_agents_voice::agent_activity::scheduling::SpeechId;
+    use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
     Authored::new()
         .journal(Step::Core(CoreStep::WallEpoch { at: epoch() }))
         .journal(Step::Speech(SpeechStep::StepSpoken { speech: SpeechId(3), step: 1, interrupted }))

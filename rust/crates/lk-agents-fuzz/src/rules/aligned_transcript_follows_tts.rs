@@ -12,7 +12,7 @@
 //! stamped word at the stamp, the rest of it (punctuation the tokeniser splits off) no earlier.
 //! Words are matched to stamps by position in the text, whitespace ignored.
 use lk_agents_voice::{
-    agent_activity::scheduling::SpeechId,
+    agent_session::machine::activity::scheduling::SpeechId,
     trace::{GenerationStep, PlayoutStep, Step},
 };
 

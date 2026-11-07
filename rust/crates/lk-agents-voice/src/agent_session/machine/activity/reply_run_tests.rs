@@ -223,8 +223,8 @@ fn failed_reply_keeps_correlated_input_requirements_in_the_voice_run_failure() {
     );
     let speech = driver.start_speech(
         lk_agents_abi::Ts::ZERO,
-        crate::agent_activity::speech::SpeechSpec::new(
-            crate::agent_activity::scheduling::SpeechKind::Say,
+        crate::agent_session::machine::activity::speech::SpeechSpec::new(
+            crate::agent_session::machine::activity::scheduling::SpeechKind::Say,
             crate::generation::ReplySource::Text("owned".into()),
             true,
         ),

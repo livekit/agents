@@ -7,7 +7,7 @@ use lk_agents_abi::{ChatItem, Ts};
 
 use super::VoiceDriver;
 use super::effects::{Timer, VoiceEffect};
-use crate::agent_activity::scheduling::SpeechId;
+use crate::agent_session::machine::activity::scheduling::SpeechId;
 use crate::events::SessionEvent;
 use crate::generation::TurnOutcome;
 

@@ -1,4 +1,4 @@
-use crate::agent_activity::scheduling::SpeechId;
+use crate::agent_session::machine::activity::scheduling::SpeechId;
 use crate::agent_session::{FillerSource, HookId};
 use crate::events::{SessionEvent, ToolEndStatus, ToolLifecycle};
 use crate::filler_scheduler::{FillerAction, FillerId, FillerScheduler};
@@ -30,7 +30,8 @@ pub(crate) struct Tools {
     /// `InputRequired(tool=)`: the person's next turn is a call of this tool.
     pub(crate) claim: Option<Claim>,
     /// Each live model reply's `AgentRun`, which decides its steps.
-    pub(crate) replies: BTreeMap<SpeechId, crate::agent_activity::reply_run::ReplyRun>,
+    pub(crate) replies:
+        BTreeMap<SpeechId, crate::agent_session::machine::activity::reply_run::ReplyRun>,
     /// The waiting calls the person's latest message answered: the only read-backs a reply
     /// started since can consume.
     pub(crate) approval_answers: std::collections::BTreeSet<String>,

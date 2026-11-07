@@ -2,9 +2,9 @@
 //! [`machine::VoiceDriver`] owns ordered transitions; [`effects`] declares runtime work.
 //! Shared session data lives here, with command, host-event and step-clock contracts beside it.
 
-use crate::agent_activity::DriverConfig;
-use crate::agent_activity::scheduling::SpeechId;
 use crate::agent_session::effects::VoiceEffect;
+use crate::agent_session::machine::activity::DriverConfig;
+use crate::agent_session::machine::activity::scheduling::SpeechId;
 use lk_agents_abi::resources::{AudioOutputRef, ResourceId, TextOutputRef};
 use lk_agents_abi::voice::events::AgentState;
 use lk_agents_abi::voice::io::AudioOutputCapabilities;
@@ -19,12 +19,13 @@ pub mod effects;
 pub mod host_events;
 pub mod lifecycle;
 pub mod machine;
-pub mod output;
+pub mod options;
 mod report;
 pub mod room;
 mod spans;
 pub(crate) mod storage;
 pub mod time;
+pub mod video_sampler;
 
 // The paths the activity files, the fuzz harness and the napi binding name the session's items by.
 pub(crate) use agent_user_state::AgentUserState;
@@ -35,7 +36,7 @@ pub use machine::driver::*;
 pub use time::*;
 
 /// State retained across agent changes. The `VoiceDriver` orchestrates it together with the
-/// [`AgentActivity`](crate::agent_activity::AgentActivity).
+/// [`AgentActivity`](crate::agent_session::machine::activity::AgentActivity).
 pub(crate) struct VoiceSessionState {
     /// `session.usage`: provider metrics records and tool bodies started (usage.md "Voice
     /// sessions"), published with the view.
@@ -71,7 +72,7 @@ pub(crate) struct VoiceSessionState {
     pub(crate) vad: Option<lk_agents_abi::resources::VadRef>,
     /// `session.output` as the core decides with it.
     pub(crate) outputs: Outputs,
-    pub(crate) output_bindings: output::OutputBindings,
+    pub(crate) output_bindings: machine::output::OutputBindings,
     /// `AgentSession._tools`, and the hosts that run them.
     pub(crate) tools: crate::tool_executor::Toolset,
     pub(crate) tool_hosts: Vec<lk_agents_abi::HostRef>,
@@ -672,7 +673,7 @@ mod label_tests {
     use super::*;
 
     fn state(aec: Option<Duration>) -> VoiceSessionState {
-        let legs = crate::agent_activity::options::SessionLegs::none();
+        let legs = crate::agent_session::options::SessionLegs::none();
         let mut config = DriverConfig::new(Default::default(), legs);
         config.edit(|options, _| options.timers.aec_warmup = lk_agents_abi::Maybe::Given(aec));
         VoiceSessionState::new(config, SessionParts::default(), Box::new(|| 1))

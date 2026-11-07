@@ -1,4 +1,4 @@
-use crate::agent_activity::scheduling::SpeechId;
+use crate::agent_session::machine::activity::scheduling::SpeechId;
 use crate::audio_recognition::TurnId;
 use crate::generation::INSTRUCTIONS_MESSAGE_ID;
 use lk_agents_abi::{ChatContext, ChatItem, Vocabulary};

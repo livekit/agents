@@ -8,7 +8,7 @@ use lk_agents_abi::voice::session_options::{
     Expressive, InterruptionMode, ResolvedSessionOptions, SessionConnOptions, SessionKwargs,
     SessionLegs, TurnDetection, UpdateKwargs,
 };
-use lk_agents_voice::agent_activity::options::{
+use lk_agents_voice::agent_session::options::{
     ConfigStack, OverrideLayer, resolved_session_options, session_layer, update_layer,
 };
 use lk_agents_voice::provider_layers::{

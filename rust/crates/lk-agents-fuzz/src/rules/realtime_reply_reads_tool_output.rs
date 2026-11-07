@@ -69,7 +69,7 @@ fn early() -> Breach {
 
 fn ended() -> Step {
     Step::Tool(ToolStep::CallEnded {
-        speech: lk_agents_voice::agent_activity::scheduling::SpeechId(1),
+        speech: lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId(1),
         call_id: "call_1".into(),
         end: lk_agents_voice::tool_executor::ToolEnd::Done,
     })
@@ -77,7 +77,7 @@ fn ended() -> Step {
 
 fn committed() -> Step {
     Step::Tool(ToolStep::Finished {
-        speech: lk_agents_voice::agent_activity::scheduling::SpeechId(1),
+        speech: lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId(1),
         committed: 2,
     })
 }

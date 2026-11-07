@@ -1,7 +1,7 @@
 //! The host event stream: what the driver hands its host, in order, and each item's wire record.
 
-use crate::agent_activity::scheduling::SpeechId;
 use crate::agent_session::commands::HookId;
+use crate::agent_session::machine::activity::scheduling::SpeechId;
 use crate::events::{ErrorEvent, SessionEvent};
 use crate::filler_scheduler::FillerId;
 use crate::telemetry;

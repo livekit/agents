@@ -109,7 +109,7 @@ macro_rules! option_group {
             /// Lay `over` on top: a said leaf wins, an unsaid one keeps its answer.
             pub fn merge(&mut self, over: &Self) {
                 $(
-                    if $crate::agent_activity::options::Leaf::is_said(&over.$leaf) {
+                    if $crate::agent_session::options::Leaf::is_said(&over.$leaf) {
                         self.$leaf = over.$leaf;
                     }
                 )*
@@ -118,7 +118,7 @@ macro_rules! option_group {
             }
             $(
                 pub fn $leaf(&self) -> $value {
-                    $crate::agent_activity::options::Leaf::resolved(self.$leaf)
+                    $crate::agent_session::options::Leaf::resolved(self.$leaf)
                 }
             )*
         }
@@ -615,7 +615,7 @@ impl lk_agents_abi::voice::session_options::InterruptionGateFunctions for Interr
         streaming_detector: bool,
         interruption_given: bool,
     ) -> bool {
-        let side = crate::agent_activity::realtime::SessionSide {
+        let side = crate::agent_session::machine::activity::realtime::SessionSide {
             stt: false,
             vad,
             detection: turn_detection.and_then(|s| s.parse().ok()).unwrap_or(TurnDetection::Auto),
@@ -628,7 +628,9 @@ impl lk_agents_abi::voice::session_options::InterruptionGateFunctions for Interr
             can_disable_turn_detection,
             ..Default::default()
         };
-        crate::agent_activity::realtime::server_turn_detection_enabled(&caps, side)
+        crate::agent_session::machine::activity::realtime::server_turn_detection_enabled(
+            &caps, side,
+        )
     }
 
     fn resolve_interruption_detector(

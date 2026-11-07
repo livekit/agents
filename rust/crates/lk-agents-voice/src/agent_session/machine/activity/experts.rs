@@ -4,9 +4,11 @@
 //! which resolves the originating call in place. The person's reply goes back to the body.
 
 use crate::agent::{Source, Visibility};
-use crate::agent_activity::scheduling::{PreemptiveDiscard, SpeechKind, VoiceRunParticipation};
-use crate::agent_activity::speech::SpeechSpec;
 use crate::agent_session::effects::VoiceEffect;
+use crate::agent_session::machine::activity::scheduling::{
+    PreemptiveDiscard, SpeechKind, VoiceRunParticipation,
+};
+use crate::agent_session::machine::activity::speech::SpeechSpec;
 use crate::agent_session::{ToolUpdate, VoiceDriver};
 use crate::audio_recognition::EndOfTurnInfo;
 use crate::events::{SessionEvent, ToolEndStatus, ToolLifecycle};
@@ -157,7 +159,8 @@ impl VoiceDriver {
 
     fn reply_with_full_history(&mut self, now: Ts) {
         if self.activity.realtime().is_some() {
-            let role = crate::agent_activity::realtime::RealtimeReplyRole::Internal;
+            let role =
+                crate::agent_session::machine::activity::realtime::RealtimeReplyRole::Internal;
             self.realtime_reply(now, None, None, None, None, None, role);
             return;
         }

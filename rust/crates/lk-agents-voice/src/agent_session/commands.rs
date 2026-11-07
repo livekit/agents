@@ -1,8 +1,8 @@
 //! The session's command vocabulary: everything a host or a system may ask of the driver, each
 //! answered (when it is) through the channel it carries.
 
-use crate::agent_activity::false_interruption::InterruptRefusal;
-use crate::agent_activity::scheduling::SpeechId;
+use crate::agent_session::machine::activity::false_interruption::InterruptRefusal;
+use crate::agent_session::machine::activity::scheduling::SpeechId;
 use crate::filler_scheduler::FillerId;
 use crate::generation::Instructions;
 use crate::tool_executor::Toolset;
@@ -35,7 +35,7 @@ pub enum Command {
     Dtmf(DtmfCommand),
     /// Answered by `RunStarted` or `RunRefused`, settled by `RunSettled`.
     Run(Box<crate::run_result::RunSpec>),
-    VoiceTask(crate::agent_activity::voice_task::VoiceTaskCommand),
+    VoiceTask(crate::agent_session::machine::activity::voice_task::VoiceTaskCommand),
     /// From `VoiceCommandOrigin::Amd`: the detector attached or released its verdict; its `amd`
     /// span is the session trace's.
     AmdSpan(AmdSpan),
@@ -127,9 +127,17 @@ pub enum Answer {
     /// The speech of a [`SpeechCall`] is created.
     Speech,
     ReplyPlan(Option<Box<crate::generation::PlannedReply>>),
-    OutputBinding(Result<Option<super::output::SegmentBinding>, super::output::OutputBindingError>),
+    OutputBinding(
+        Result<
+            Option<super::machine::output::SegmentBinding>,
+            super::machine::output::OutputBindingError,
+        >,
+    ),
     OutputActivation(
-        Result<Option<super::output::SegmentBinding>, super::output::OutputBindingError>,
+        Result<
+            Option<super::machine::output::SegmentBinding>,
+            super::machine::output::OutputBindingError,
+        >,
     ),
     /// A tool call's next move.
     ToolGo(crate::tool_executor::ToolGo),
@@ -142,12 +150,12 @@ pub enum Answer {
     Hold(Result<HoldId, IdleRefused>),
     Drain(Result<(), DrainRefused>),
     Handoff(Result<(), HandoffRefused>),
-    Dtmf(crate::workflows::dtmf::DtmfOutcome),
+    Dtmf(crate::workflows::machine::dtmf::DtmfOutcome),
     /// The value of the task's validated `Completed`.
     VoiceTask(
         Result<
             lk_agents_abi::voice::session::VoiceTaskValue,
-            crate::agent_activity::voice_task::VoiceTaskEnded,
+            crate::agent_session::machine::activity::voice_task::VoiceTaskEnded,
         >,
     ),
 }
@@ -167,8 +175,8 @@ macro_rules! answer_picks {
 
 answer_picks! {
     reply_plan: ReplyPlan(Option<Box<crate::generation::PlannedReply>>),
-    output_binding: OutputBinding(Result<Option<super::output::SegmentBinding>, super::output::OutputBindingError>),
-    output_activated: OutputActivation(Result<Option<super::output::SegmentBinding>, super::output::OutputBindingError>),
+    output_binding: OutputBinding(Result<Option<super::machine::output::SegmentBinding>, super::machine::output::OutputBindingError>),
+    output_activated: OutputActivation(Result<Option<super::machine::output::SegmentBinding>, super::machine::output::OutputBindingError>),
     tool_go: ToolGo(crate::tool_executor::ToolGo),
     tool_step: ToolStep(crate::tool_executor::StepNext),
     interrupt: Interrupt(Result<(), InterruptRefusal>),
@@ -177,8 +185,8 @@ answer_picks! {
     hold: Hold(Result<HoldId, IdleRefused>),
     drain: Drain(Result<(), DrainRefused>),
     handoff: Handoff(Result<(), HandoffRefused>),
-    dtmf: Dtmf(crate::workflows::dtmf::DtmfOutcome),
-    voice_task: VoiceTask(Result<lk_agents_abi::voice::session::VoiceTaskValue, crate::agent_activity::voice_task::VoiceTaskEnded>),
+    dtmf: Dtmf(crate::workflows::machine::dtmf::DtmfOutcome),
+    voice_task: VoiceTask(Result<lk_agents_abi::voice::session::VoiceTaskValue, crate::agent_session::machine::activity::voice_task::VoiceTaskEnded>),
 }
 
 #[derive(Debug)]
@@ -206,7 +214,7 @@ impl Command {
             Command::Ivr(c) => leaf!(c; IvrCommand: Start, SeedTranscript, Close, AddTools),
             Command::Dtmf(c) => leaf!(c; DtmfCommand: Start, Cancel),
             Command::VoiceTask(c) => {
-                use crate::agent_activity::voice_task::VoiceTaskCommand;
+                use crate::agent_session::machine::activity::voice_task::VoiceTaskCommand;
                 leaf!(c; VoiceTaskCommand: Run, Cancel)
             }
             Command::Video(_) => "Command::Video",
@@ -266,8 +274,8 @@ impl From<ActivityCommand> for Command {
     }
 }
 
-impl From<crate::agent_activity::voice_task::VoiceTaskCommand> for Command {
-    fn from(c: crate::agent_activity::voice_task::VoiceTaskCommand) -> Command {
+impl From<crate::agent_session::machine::activity::voice_task::VoiceTaskCommand> for Command {
+    fn from(c: crate::agent_session::machine::activity::voice_task::VoiceTaskCommand) -> Command {
         Command::VoiceTask(c)
     }
 }
@@ -291,9 +299,9 @@ pub enum TurnCommand {
     Clear,
     /// Unnamed leaves keep their answer; a changed endpointing replaces the model (a running
     /// countdown keeps its deadline); `turn_detection=None` arrives as `Some(Auto)`.
-    Configure(Box<crate::agent_activity::options::AgentSessionOptions>),
+    Configure(Box<crate::agent_session::options::AgentSessionOptions>),
     /// `override_options(..)`: a layer over the base until its `ReleaseOverride`.
-    Override(Box<crate::agent_activity::options::OverrideLayer>),
+    Override(Box<crate::agent_session::options::OverrideLayer>),
     /// The `override_options` block ended, however it ended.
     ReleaseOverride(u64),
     /// `AMD._on_end_of_turn`, from `VoiceCommandOrigin::Amd`: while the detector holds a machine verdict under
@@ -307,7 +315,7 @@ pub enum TurnCommand {
 pub enum DtmfCommand {
     /// Answered once with the first outcome, or `Stopped`; the confirm arm is spoken by the
     /// driver.
-    Start { collector: crate::workflows::dtmf::DtmfCollector, call: Option<RequestId> },
+    Start { collector: crate::workflows::machine::dtmf::DtmfCollector, call: Option<RequestId> },
     /// The awaiter of `call` went away: its collection stops; a newer one is left running.
     Cancel { call: RequestId },
 }
@@ -534,7 +542,7 @@ pub enum ActivityCommand {
     UpdateInstructions(Instructions),
     UpdateTools(crate::tool_executor::Toolset),
     /// `update_options(expressive=)`: the session's setting, read by the next reply.
-    UpdateExpressive(crate::agent_activity::options::Expressive),
+    UpdateExpressive(crate::agent_session::options::Expressive),
     /// The old pump is aborted first, so two sources never feed the legs at once.
     SetAudioInput(Option<AudioInputHandle>),
     SetVideoInput(Option<lk_agents_abi::resources::VideoInputRef>),
@@ -601,9 +609,9 @@ pub struct AgentUpdate {
     pub stt: Maybe<Option<lk_agents_abi::resources::SttRef>>,
     pub vad: Maybe<Option<lk_agents_abi::resources::VadRef>>,
     /// **Replaced whole** and re-resolved over the resulting legs.
-    pub options: crate::agent_activity::options::AgentSessionOptions,
+    pub options: crate::agent_session::options::AgentSessionOptions,
     /// The agent's `expressive`, replacing the previous agent's; `None` defers to the session's.
-    pub expressive: Option<crate::agent_activity::options::Expressive>,
+    pub expressive: Option<crate::agent_session::options::Expressive>,
     /// The agent's `transcription_node`, replacing the previous
     /// agent's.
     pub output_nodes: crate::agent_session::OutputNodes,
@@ -635,9 +643,9 @@ impl Command {
     pub fn resources(&self) -> Vec<ResourceId> {
         match self {
             Command::Activity(ActivityCommand::Update(update)) => update.resources().collect(),
-            Command::VoiceTask(crate::agent_activity::voice_task::VoiceTaskCommand::Run(run)) => {
-                run.update.resources().collect()
-            }
+            Command::VoiceTask(
+                crate::agent_session::machine::activity::voice_task::VoiceTaskCommand::Run(run),
+            ) => run.update.resources().collect(),
             Command::Activity(ActivityCommand::SetAudioInput(Some(input))) => vec![input.0],
             Command::Recorder(RecorderCommand::Attach(recorder)) => vec![recorder.0],
             Command::Activity(ActivityCommand::SetAudioOutput(Some(out))) => vec![out.id],
@@ -669,9 +677,11 @@ impl Command {
                 | ActivityCommand::SetTranscriptionOutput(None)
                 | ActivityCommand::Drain { .. },
             )
-            | Command::VoiceTask(crate::agent_activity::voice_task::VoiceTaskCommand::Cancel {
-                ..
-            })
+            | Command::VoiceTask(
+                crate::agent_session::machine::activity::voice_task::VoiceTaskCommand::Cancel {
+                    ..
+                },
+            )
             | Command::Recorder(RecorderCommand::Detach)
             | Command::Speech(_)
             | Command::Turn(_)

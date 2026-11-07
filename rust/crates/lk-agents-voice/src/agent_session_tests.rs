@@ -71,8 +71,8 @@ fn terminal_provider_release_does_not_reacquire_resources_from_stale_selection_s
 }
 
 use super::*;
-use crate::agent_activity::scheduling::SpeechId;
 use crate::agent_session::lifecycle::SessionStartPlans;
+use crate::agent_session::machine::activity::scheduling::SpeechId;
 use crate::events::SessionEvent;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_core::tts::markup::ChatMessageExt;
@@ -80,8 +80,8 @@ use std::sync::Arc;
 
 #[test]
 fn realtime_transport_timeout_keeps_its_phase_and_request_identity_on_session_error() {
-    use crate::agent_activity::realtime::RealtimeWake;
     use crate::agent_session::effects::VoiceEffect;
+    use crate::agent_session::machine::activity::realtime::RealtimeWake;
     use lk_agents_abi::Ts;
     use lk_agents_abi::errors::{ApiError, ApiErrorKind, TimeoutPhase};
     use lk_agents_abi::llm::realtime as rt;
@@ -120,8 +120,8 @@ fn realtime_transport_timeout_keeps_its_phase_and_request_identity_on_session_er
 #[test]
 fn realtime_end_delivers_the_pending_speech_error_before_closing_its_player() {
     use crate::agent_session::effects::VoiceEffect;
-    use crate::agent_activity::realtime::{RealtimeWake, Request};
-    use crate::agent_activity::scheduling::VoiceRunParticipation;
+    use crate::agent_session::machine::activity::realtime::{RealtimeWake, Request};
+    use crate::agent_session::machine::activity::scheduling::VoiceRunParticipation;
     use lk_agents_abi::{Ts, llm::realtime as rt};
 
     let mut driver = realtime_driver();
@@ -159,8 +159,8 @@ fn realtime_end_delivers_the_pending_speech_error_before_closing_its_player() {
 
 #[test]
 fn late_realtime_transcript_keeps_its_source_without_starting_another_speech() {
-    use crate::agent_activity::realtime::RealtimeWake;
     use crate::agent_session::effects::VoiceEffect;
+    use crate::agent_session::machine::activity::realtime::RealtimeWake;
     use lk_agents_abi::llm::realtime as rt;
     use lk_agents_abi::{ChatMessage, Role, Ts};
 
@@ -269,9 +269,9 @@ fn a_speech_ended_without_its_turn_releases_the_lane_within_30_s() {
 #[test]
 fn a_say_released_before_its_step_reports_keeps_its_source() {
     use crate::agent::Source;
-    use crate::agent_activity::scheduling::SpeechKind;
-    use crate::agent_activity::speech::SpeechSpec;
     use crate::agent_session::effects::VoiceEffect;
+    use crate::agent_session::machine::activity::scheduling::SpeechKind;
+    use crate::agent_session::machine::activity::speech::SpeechSpec;
     use crate::generation::{GenEvent, ReplySource};
     use lk_agents_abi::{ChatMessage, Role, Ts};
 
@@ -344,7 +344,8 @@ fn initial_session(
     now: Now,
 ) -> InitialSession {
     let legs = lk_agents_abi::voice::session_options::SessionLegs::none();
-    let config = crate::agent_activity::DriverConfig::new(Default::default(), legs);
+    let config =
+        crate::agent_session::machine::activity::DriverConfig::new(Default::default(), legs);
     let view = Arc::new(SessionView {
         launch_holds: Default::default(),
         config: config.clone(),
@@ -546,8 +547,8 @@ fn speech_created_by_a_callback_is_scheduled_without_another_input() {
 
 #[test]
 fn a_handoff_drains_accepted_callback_speech_and_holds_new_host_speech() {
-    use crate::agent_activity::handoff::HandoffEvent;
     use crate::agent_session::effects::VoiceEffect;
+    use crate::agent_session::machine::activity::handoff::HandoffEvent;
     use crate::agent_session::machine::coordination::VoiceCallback;
     use crate::trace::{SpeechStep, Step};
     use lk_agents_abi::Maybe;

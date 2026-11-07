@@ -45,9 +45,9 @@ async fn traced(name: &str) -> (VoiceRuntime, Arc<Records>) {
     let records = Arc::new(Records::default());
     let clock = Arc::new(lk_agents_abi::VirtualClock::new());
     let time = Timebase::from_virtual(clock.clone());
-    let config = lk_agents_voice::agent_activity::DriverConfig::new(
+    let config = lk_agents_voice::agent_session::machine::activity::DriverConfig::new(
         Default::default(),
-        lk_agents_voice::agent_activity::options::SessionLegs::none(),
+        lk_agents_voice::agent_session::options::SessionLegs::none(),
     );
     let spawner = Arc::new(lk_agents_net::task::TokioSpawner::current());
     let mut builder = DriverBuilder::new("agent".into(), time, spawner, config);

@@ -1,6 +1,6 @@
 //! Session lifecycle decisions over an observed phase; execution retains the phase's resources.
 
-use crate::agent_activity::options::{RECORDING_ALL_OFF, RECORDING_ALL_ON, records_anything};
+use crate::agent_session::options::{RECORDING_ALL_OFF, RECORDING_ALL_ON, records_anything};
 use lk_agents_abi::voice::session::{OpenRefused, SessionRefused};
 use lk_agents_abi::voice::session_effects::StartPlan;
 

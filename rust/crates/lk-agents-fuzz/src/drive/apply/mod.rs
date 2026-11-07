@@ -14,8 +14,8 @@ use lk_agents_abi::voice::session::{VoiceSession as _, VoiceTaskEnded};
 use lk_agents_abi::voice::session_options::{TurnHandlingKwargs, UpdateKwargs};
 use lk_agents_voice::agent_session::{Command, CommitSuperseded, DrainRefused, IvrCommand};
 
-use lk_agents_voice::agent_activity::scheduling::SpeechKind;
-use lk_agents_voice::workflows::dtmf::{DtmfOutcome, GetDtmfResult};
+use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechKind;
+use lk_agents_voice::workflows::machine::dtmf::{DtmfOutcome, GetDtmfResult};
 
 use super::start::{
     Llm, Tts, avatar_metrics, frame, history, patch, session_stt, tool_specs, turn_detection,

@@ -1,4 +1,4 @@
-use crate::agent_activity::options::EndpointingMode;
+use crate::agent_session::options::EndpointingMode;
 use lk_agents_abi::{Maybe, Ts};
 use lk_agents_media::ExpFilter;
 use std::time::Duration;

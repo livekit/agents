@@ -14,7 +14,7 @@ use lk_agents_abi::{
     AudioFrame, BoxFuture, Realtime, RealtimeSession, Spawner, SpawnerExt, StreamInput, Stt, Vad,
 };
 use lk_agents_net::task::TaskSet;
-use lk_agents_voice::agent_activity::false_interruption::InterruptionPort;
+use lk_agents_voice::agent_session::machine::activity::false_interruption::InterruptionPort;
 use lk_agents_voice::agent_session::{DriverError, VoiceEvent};
 use lk_agents_voice::audio::AudioChannel;
 use std::sync::Arc;
@@ -124,7 +124,7 @@ impl RealtimeConnection {
             if let Some(close) = owner.take_close()
                 && close.await
             {
-                let _ = tx.send(lk_agents_voice::agent_activity::realtime::RealtimeWake::Closed);
+                let _ = tx.send(lk_agents_voice::agent_session::machine::activity::realtime::RealtimeWake::Closed);
             }
         });
     }
@@ -354,7 +354,7 @@ impl VoiceRuntime {
         let tx = self.reports.clone();
         let closing = self.shared.closing.clone();
         self.spawn("realtime events", async move {
-            use lk_agents_voice::agent_activity::realtime::RealtimeWake;
+            use lk_agents_voice::agent_session::machine::activity::realtime::RealtimeWake;
             loop {
                 let event = tokio::select! {
                     biased;

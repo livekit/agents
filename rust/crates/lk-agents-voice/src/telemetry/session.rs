@@ -2,7 +2,7 @@
 //! `update_agent`), a lifecycle callback's span with the activity it runs in, the AMD detection,
 //! the event-loop stalls `agent_session` ends with, and the turn span of each chat item.
 
-use crate::agent_activity::scheduling::SpeechId;
+use crate::agent_session::machine::activity::scheduling::SpeechId;
 use crate::audio_recognition::TurnId;
 use lk_agents_abi::telemetry::decl::{Seconds, SpanContext, SpanDecl};
 use lk_agents_abi::telemetry::errors::SpanError;

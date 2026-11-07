@@ -91,7 +91,7 @@ fn failed_request(speech: u64) -> Authored {
 /// The driver armed a retry for the speech after the failure.
 fn failure_then_retry() -> Recording {
     use lk_agents_abi::Ts;
-    use lk_agents_voice::agent_activity::scheduling::SpeechId;
+    use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
     failed_request(4)
         .journal(Step::Generation(GenerationStep::RetryArmed {
             speech: SpeechId(4),

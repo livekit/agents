@@ -131,7 +131,7 @@ fn budgets() -> ConnSetup {
 
 fn armed(attempt: u32) -> Step {
     use lk_agents_abi::Ts;
-    use lk_agents_voice::agent_activity::scheduling::SpeechId;
+    use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
     Step::Generation(GenerationStep::RetryArmed {
         speech: SpeechId(4),
         leg: ProviderKind::Llm,
@@ -142,7 +142,7 @@ fn armed(attempt: u32) -> Step {
 
 fn error(recoverable: bool) -> Step {
     use lk_agents_abi::errors::{ApiError, ProviderError};
-    use lk_agents_voice::{agent_activity::scheduling::SpeechId, events::ErrorEvent};
+    use lk_agents_voice::{agent_session::machine::activity::scheduling::SpeechId, events::ErrorEvent};
     Step::Emitted(SessionEvent::Error(Box::new(ErrorEvent::provider(
         ErrorSource::Llm,
         recoverable,

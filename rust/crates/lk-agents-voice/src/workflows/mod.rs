@@ -11,11 +11,10 @@ use lk_agents_voice::generation::{Rendered, safe_render};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 
-pub mod dtmf;
 pub mod effects;
 pub mod end_call;
+pub mod machine;
 pub mod twilio;
-pub mod warm_transfer;
 
 /// The capture tools' checks and DTMF symbols, as the host calls them.
 pub struct WorkflowRules;
@@ -150,13 +149,13 @@ impl WorkflowChecks for WorkflowRules {
     }
 
     fn dtmf_code(symbol: String) -> Result<u8, UnknownDtmfSymbol> {
-        dtmf::dtmf_code(&symbol).map_err(|_| UnknownDtmfSymbol(symbol))
+        machine::dtmf::dtmf_code(&symbol).map_err(|_| UnknownDtmfSymbol(symbol))
     }
 
     fn format_dtmf(symbols: Vec<String>) -> Result<String, UnknownDtmfSymbol> {
         // the space-joined digits that fill the DTMF read-back's `{digits}` hole
-        let keys = dtmf::parse_all(&symbols, str::to_owned).map_err(UnknownDtmfSymbol)?;
-        Ok(dtmf::format_dtmf(&keys))
+        let keys = machine::dtmf::parse_all(&symbols, str::to_owned).map_err(UnknownDtmfSymbol)?;
+        Ok(machine::dtmf::format_dtmf(&keys))
     }
 }
 

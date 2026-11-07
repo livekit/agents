@@ -207,7 +207,7 @@ fn say_two_words(handle: Handle) -> Authored {
 }
 
 fn forwarded(text: &str) -> lk_agents_voice::trace::Step {
-    use lk_agents_voice::agent_activity::scheduling::SpeechId;
+    use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
     Playout(TranscriptForwarded { speech: SpeechId(1), text: text.into(), start_time: None })
 }
 
@@ -218,7 +218,7 @@ fn all_text_forwarded() -> Recording {
 
 /// The case turned the transcription leg off, so a completed speech forwards nothing.
 fn completed_with_no_transcript_path() -> Recording {
-    use lk_agents_voice::agent_activity::scheduling::SpeechKind;
+    use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechKind;
     Authored::new()
         .sent(Input::SetIoEnabled { leg: IoKind::Transcription, enabled: false })
         .sent_opening(say("one two"), &[(Kind::Answer, Detail::None)])
@@ -231,7 +231,7 @@ fn completed_with_no_transcript_path() -> Recording {
 /// The sink was attached when the speech began and detached before it spoke, so nothing was
 /// forwarded and nothing was lost.
 fn detached_mid_speech_forwards_nothing() -> Recording {
-    use lk_agents_voice::agent_activity::scheduling::SpeechKind;
+    use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechKind;
     Authored::new()
         .sent_opening(say("one two"), &[(Kind::Answer, Detail::None)])
         .result(0, Answer::Speech(1))

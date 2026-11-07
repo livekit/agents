@@ -95,7 +95,7 @@ impl ToolStep {
 /// in the loop.
 struct HostedCall<'a> {
     shared: &'a Arc<SessionShared>,
-    speech: lk_agents_voice::agent_activity::scheduling::SpeechId,
+    speech: lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId,
     host: Option<HostedTool>,
     bodies: crate::voice::SpeechTasks,
     /// The tool's description, for its `function_tool`.

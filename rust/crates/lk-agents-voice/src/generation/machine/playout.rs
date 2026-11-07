@@ -1,7 +1,7 @@
 //! Playback accounting and acceptance of a speech forwarding's sink reports.
 
-use crate::agent_activity::scheduling::SpeechId;
 use crate::agent_session::Now;
+use crate::agent_session::machine::activity::scheduling::SpeechId;
 use crate::generation::effects::{
     AudioPlaybackAccountingEffect, AudioPlaybackCutEffect, AudioPlaybackFinishEffect,
     AudioPlaybackFlowEffect,

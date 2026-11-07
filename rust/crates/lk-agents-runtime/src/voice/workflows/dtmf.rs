@@ -1,7 +1,7 @@
 //! VoiceRuntime publication and collection of room keypad tones.
 
 use crate::telemetry;
-use lk_agents_voice::workflows::dtmf::{
+use lk_agents_voice::workflows::machine::dtmf::{
     DtmfReception, DtmfSendError, ReceiveDtmfError, dtmf_code, dtmf_send_answer,
 };
 use std::sync::Arc;

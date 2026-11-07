@@ -156,7 +156,7 @@ impl Rule for ToolOutputFollowsOutcome {
 }
 
 fn output(call_id: &str, text: &str, is_error: bool, reply_required: bool) -> Step {
-    use lk_agents_voice::agent_activity::scheduling::SpeechId;
+    use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
     let mut out = lk_agents_abi::FunctionCallOutput::new(
         format!("{call_id}_out"),
         call_id,

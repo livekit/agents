@@ -213,7 +213,7 @@ fn output(call_id: &str, text: &str) -> Step {
 }
 
 fn emitted(item: ChatItem, step: u32) -> Step {
-    use lk_agents_voice::agent_activity::scheduling::SpeechId;
+    use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
     Step::Emitted(SessionEvent::ConversationItemAdded {
         item: Box::new(item),
         agent: "agent".into(),

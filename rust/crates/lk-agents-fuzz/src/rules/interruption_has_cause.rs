@@ -151,7 +151,7 @@ fn user_input_before(inputs: &InputsView, at: Observed) -> bool {
 
 /// The host interrupted, and the journal blames the host.
 fn host_interrupt_then_journal() -> Recording {
-    use lk_agents_voice::agent_activity::scheduling::SpeechId;
+    use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
     Authored::new()
         .sent(Input::Interrupt { force: false, wait: false })
         .journal(Step::Interrupt(Interrupted {
@@ -164,7 +164,7 @@ fn host_interrupt_then_journal() -> Recording {
 
 /// The case swapped the audio output, which cuts whatever was playing into the old one.
 fn sink_swap_then_journal() -> Recording {
-    use lk_agents_voice::agent_activity::scheduling::SpeechId;
+    use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
     Authored::new()
         .sent(Input::SetAudioOutput { attach: false })
         .journal(Step::Interrupt(Interrupted {
@@ -178,7 +178,7 @@ fn sink_swap_then_journal() -> Recording {
 /// The journal blames the host, but the host never interrupted anything.
 /// The cut names an output swap no input made.
 fn replaced_cause_without_swap() -> Recording {
-    use lk_agents_voice::agent_activity::scheduling::SpeechId;
+    use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
     Authored::new()
         .sent(Input::Interrupt { force: false, wait: false })
         .journal(Step::Interrupt(Interrupted {
@@ -192,7 +192,7 @@ fn replaced_cause_without_swap() -> Recording {
 /// A swap is no host interrupt: journalled as `Host`, it would read as the effect of an earlier
 /// interrupt call (which `refused_interrupt_is_no_interruption` then flags).
 fn swap_is_not_a_host_interrupt() -> Recording {
-    use lk_agents_voice::agent_activity::scheduling::SpeechId;
+    use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
     Authored::new()
         .sent(Input::SetAudioOutput { attach: false })
         .journal(Step::Interrupt(Interrupted {
@@ -204,7 +204,7 @@ fn swap_is_not_a_host_interrupt() -> Recording {
 }
 
 fn host_cause_without_host_call() -> Recording {
-    use lk_agents_voice::agent_activity::scheduling::SpeechId;
+    use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
     Authored::new()
         .journal(Step::Interrupt(Interrupted {
             speech: SpeechId(3),
@@ -215,7 +215,7 @@ fn host_cause_without_host_call() -> Recording {
 }
 
 fn cut_for_closing() -> Step {
-    use lk_agents_voice::agent_activity::scheduling::SpeechId;
+    use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
     Step::Interrupt(Interrupted {
         speech: SpeechId(3),
         cause: InterruptCause::Closing,
@@ -238,7 +238,7 @@ fn closing_cause_without_close() -> Recording {
 }
 
 fn run_cancellation_then_interruption() -> Recording {
-    use lk_agents_voice::agent_activity::scheduling::SpeechId;
+    use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
     use lk_agents_voice::trace::GenerationStep;
     Authored::new()
         .journal(Step::Generation(GenerationStep::RequestCancelled {
@@ -254,7 +254,7 @@ fn run_cancellation_then_interruption() -> Recording {
 }
 
 fn run_cause_without_cancellation() -> Recording {
-    use lk_agents_voice::agent_activity::scheduling::SpeechId;
+    use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
     use lk_agents_voice::trace::GenerationStep;
     Authored::new()
         // A different speech's cancellation cannot justify this interruption.

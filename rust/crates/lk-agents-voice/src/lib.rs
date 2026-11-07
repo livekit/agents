@@ -6,8 +6,8 @@
 //! Voice conversation decisions over supplied events and time; runtime executes their effects.
 //!
 //! Start with [`agent_session::machine::VoiceDriver`], the ordered session coordinator.
-//! [`agent_activity`] holds the active agent's floor, hooks and reply coordination;
-//! its replies compose the shared [`lk_agents_core::agent_run::AgentRun`].
+//! Its [`activity`](agent_session::machine::activity) holds the active agent's floor, hooks and
+//! reply coordination; its replies compose the shared [`lk_agents_core::agent_run::AgentRun`].
 //!
 //! | Area | Read here |
 //! | --- | --- |
@@ -17,7 +17,7 @@
 //! | Transcript timing and publication | [`transcription`] and [`room_io`] |
 //! | Frame routing and buffering | [`data_plane`] |
 //! | Tool execution policy and run results | [`tool_executor`] and [`run_result`] |
-//! | Realtime provider observations | [`agent_activity::realtime`] |
+//! | Realtime provider observations | [`agent_session::machine::activity::realtime`] |
 //!
 //! The corresponding I/O owners live in `lk-agents-runtime/src/voice`, `room_io` and `avatar`.
 //! Use `docs/internals/rust-code-map.md` for the Python-to-Rust reading paths and test commands.
@@ -27,7 +27,6 @@
 extern crate self as lk_agents_voice;
 
 pub mod agent;
-pub mod agent_activity;
 pub mod agent_session;
 pub mod amd;
 pub mod audio;

@@ -17,8 +17,8 @@ use std::collections::BTreeSet;
 
 use lk_agents_abi::voice::events::CloseReason;
 use lk_agents_voice::{
-    agent_activity::scheduling::SpeechKind,
     agent_session::IoKind,
+    agent_session::machine::activity::scheduling::SpeechKind,
     events::{SessionEvent, SpeechOutcome, ToolLifecycle},
     trace::{
         CloseStep, CoreStep, GenerationStep, InterruptCause, InterruptStep, PlayoutStep, SinkCall,

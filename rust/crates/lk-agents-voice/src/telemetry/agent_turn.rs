@@ -6,7 +6,7 @@
 //! speech its turn, as 1.8.10 does.
 
 use super::participant_attrs;
-use crate::agent_activity::scheduling::SpeechId;
+use crate::agent_session::machine::activity::scheduling::SpeechId;
 use crate::events::SpeechOutcome;
 use crate::trace::InterruptCause;
 use lk_agents_abi::Ts;

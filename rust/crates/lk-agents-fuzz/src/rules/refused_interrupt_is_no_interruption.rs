@@ -2,7 +2,7 @@
 //! time it landed, interrupts nothing: the speech is not cut for it, and not reported interrupted
 //! when it ends. The handle kept the request after the refusal and turned it into an interruption
 //! when the speech played out (the reference raises in `interrupt()` and nothing changes).
-use lk_agents_voice::agent_activity::scheduling::SpeechId;
+use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
 use lk_agents_voice::trace::{InterruptCause, InterruptStep, Step};
 
 use crate::{

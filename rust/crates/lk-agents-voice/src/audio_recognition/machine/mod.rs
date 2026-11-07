@@ -11,8 +11,8 @@ use super::{
     TurnSnapshot, UserTurnCommitDecision, UserTurnCommitVerdict, UserTurnLimit, UserTurnTracker,
     WallAnchor, compute_end_of_turn_metrics,
 };
-use crate::agent_activity::options::{AgentSessionOptions, DetectorKind, SessionLegs};
 use crate::agent_session::effects::Timer;
+use crate::agent_session::options::{AgentSessionOptions, DetectorKind, SessionLegs};
 use crate::audio_recognition::effects::AudioRecognitionEffect;
 use crate::audio_recognition::overlap::OverlapJudge;
 use crate::endpointing::Endpointing;

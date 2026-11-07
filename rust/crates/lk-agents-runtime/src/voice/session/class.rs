@@ -11,8 +11,8 @@ use lk_agents_abi::voice::session::{
 };
 use lk_agents_abi::voice::session_options::{ResolvedSessionOptions, UpdateKwargs};
 use lk_agents_abi::{ChatItem, ToolSpec};
-use lk_agents_voice::agent_activity::DriverConfig;
-use lk_agents_voice::agent_activity::options::{
+use lk_agents_voice::agent_session::machine::activity::DriverConfig;
+use lk_agents_voice::agent_session::options::{
     AgentSessionOptions, DetectorKind, OverrideLayer, running_layer,
 };
 use lk_agents_voice::agent_session::{
@@ -161,7 +161,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         builder.session_id = args.session_id;
         builder.tracer = env.tracer.clone();
         builder.video_sampler = args.video_sampler.map(|(speaking, silent)| {
-            lk_agents_voice::agent_activity::video_sampler::VideoSampler::new(speaking, silent)
+            lk_agents_voice::agent_session::video_sampler::VideoSampler::new(speaking, silent)
         });
         builder.instructions = args.instructions.map(Instructions::plain).unwrap_or_default();
         builder.dynamic_instructions = args.dynamic_instructions;
@@ -309,10 +309,12 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         BoxFuture<'static, Result<lk_agents_abi::voice::session::VoiceTaskValue, VoiceTaskEnded>>,
         CommandRefused,
     > {
-        use lk_agents_voice::agent_activity::voice_task::{VoiceTaskCommand, VoiceTaskRun};
+        use lk_agents_voice::agent_session::machine::activity::voice_task::{
+            VoiceTaskCommand, VoiceTaskRun,
+        };
         let dtmf = dtmf
             .map(|options| {
-                use lk_agents_voice::workflows::dtmf::{DtmfCollector, DtmfEvent};
+                use lk_agents_voice::workflows::machine::dtmf::{DtmfCollector, DtmfEvent};
                 let stop = DtmfEvent::parse(&options.stop_event).ok_or_else(|| {
                     CommandRefused::Invalid(format!("{:?} is not a DTMF key", options.stop_event))
                 })?;
@@ -366,7 +368,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
         stop_event: String,
     ) -> Result<BoxFuture<'static, Result<String, VoiceTaskEnded>>, CommandRefused> {
         use lk_agents_voice::agent_session::DtmfCommand;
-        use lk_agents_voice::workflows::dtmf::{DtmfCollector, DtmfEvent, DtmfOutcome};
+        use lk_agents_voice::workflows::machine::dtmf::{DtmfCollector, DtmfEvent, DtmfOutcome};
         let stop = DtmfEvent::parse(&stop_event)
             .ok_or_else(|| CommandRefused::Invalid(format!("{stop_event:?} is not a DTMF key")))?;
         let timeout = Duration::try_from_secs_f64(timeout)
@@ -484,7 +486,7 @@ impl lk_agents_abi::voice::session::VoiceSession for VoiceSession {
     fn resolved_options(&self) -> Option<ResolvedSessionOptions> {
         self.host.options.as_ref()?;
         let view = Arc::clone(&self.view.borrow());
-        Some(lk_agents_voice::agent_activity::options::resolved_session_options(
+        Some(lk_agents_voice::agent_session::options::resolved_session_options(
             view.config.effective(),
             &view.config.stack.session,
         ))

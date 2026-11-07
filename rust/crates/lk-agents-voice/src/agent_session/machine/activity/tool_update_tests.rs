@@ -1,7 +1,7 @@
 //! A queued update must still name the exact callback that owns the running call.
 
-use crate::agent_activity::scheduling::SpeechId;
 use crate::agent_session::ToolUpdate;
+use crate::agent_session::machine::activity::scheduling::SpeechId;
 use crate::tool_executor::{HostedTool, Running, ToolOutcome};
 use lk_agents_abi::agent::{AgentCallbacks, Invocation};
 use lk_agents_abi::errors::HostError;
@@ -71,7 +71,10 @@ impl AgentCallbacks for UnusedHost {
     }
 }
 
-pub(in crate::agent_activity) fn running(invocation_id: &str, operation: u64) -> Running {
+pub(in crate::agent_session::machine::activity) fn running(
+    invocation_id: &str,
+    operation: u64,
+) -> Running {
     let speech = SpeechId(7);
     let call = lk_agents_abi::FunctionCall {
         id: "new-call-item".into(),

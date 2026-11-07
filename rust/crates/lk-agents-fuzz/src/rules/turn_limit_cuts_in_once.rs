@@ -5,7 +5,7 @@
 //! on an agent that is already answering.
 use lk_agents_abi::voice::events::CloseReason;
 use lk_agents_abi::voice::events::{AgentState, UserTurnExceededEvent};
-use lk_agents_voice::agent_activity::hooks::TurnLimitSkip;
+use lk_agents_voice::agent_session::machine::activity::hooks::TurnLimitSkip;
 use lk_agents_voice::agent_session::{HookId, HookKind};
 use lk_agents_voice::events::SessionEvent;
 use lk_agents_voice::trace::{HandoffStep, HookEnd, Step, TurnStep};

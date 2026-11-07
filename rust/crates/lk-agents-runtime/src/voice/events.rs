@@ -57,7 +57,7 @@ queue_events! {
     RoomEvent => |ev| VoiceRuntimeEvent::Input(VoiceEvent::Room(room_event_kind(&ev)));
     lk_agents_abi::voice::room_owner::RoomIoEvent => |ev| VoiceRuntimeEvent::Input(VoiceEvent::RoomIo(ev));
     GenEvent => |ev| VoiceRuntimeEvent::Input(VoiceEvent::Gen(ev));
-    lk_agents_voice::agent_activity::realtime::RealtimeWake => |wake| VoiceRuntimeEvent::Input(VoiceEvent::Realtime(wake));
+    lk_agents_voice::agent_session::machine::activity::realtime::RealtimeWake => |wake| VoiceRuntimeEvent::Input(VoiceEvent::Realtime(wake));
     lk_agents_abi::turn::detector::LegEvent<lk_agents_voice::audio_recognition::OverlapVerdict> =>
         |ev| VoiceRuntimeEvent::Input(VoiceEvent::Overlap(ev));
     ChannelEnd => |end| VoiceRuntimeEvent::Input(VoiceEvent::ChannelEnded(end));

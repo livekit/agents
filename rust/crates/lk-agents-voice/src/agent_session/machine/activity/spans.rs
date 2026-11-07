@@ -3,7 +3,7 @@
 //! knows), the agent turns its speeches own, and its lifecycle callbacks' spans with the
 //! `session_start` or `update_agent` they run in.
 
-use crate::agent_activity::scheduling::SpeechId;
+use crate::agent_session::machine::activity::scheduling::SpeechId;
 use crate::agent_session::{HookKind, VoiceDriver};
 use crate::audio_recognition::{EouDetected, TurnDetectionMode};
 use crate::events::SessionEvent;

@@ -1,8 +1,10 @@
 //! Recognition observations retained for diagnostics. These records never dispatch work.
 
 use super::{EndOfTurnInfo, TurnDetectionMode};
-use crate::agent_activity::false_interruption::{AudioInterruptTrigger, TurnSettled};
 use crate::agent_session::effects::AudioInterruptGuard;
+use crate::agent_session::machine::activity::false_interruption::{
+    AudioInterruptTrigger, TurnSettled,
+};
 
 #[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]
 pub enum RecognitionObservation {

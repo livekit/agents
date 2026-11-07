@@ -8,7 +8,7 @@
 //! about (`Emitted(SpeechCreated)`) has been told done (`Emitted(SpeechDone)`). An `Ok` with no
 //! such step behind it is an call the driver never decided.
 use lk_agents_voice::{
-    agent_activity::scheduling::{SpeechId, SpeechKind},
+    agent_session::machine::activity::scheduling::{SpeechId, SpeechKind},
     agent_session::{HookId, HookKind},
     events::SessionEvent,
     trace::{HandoffStep, HookEnd, SpeechStep, Step},

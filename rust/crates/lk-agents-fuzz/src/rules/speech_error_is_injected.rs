@@ -163,7 +163,7 @@ fn failed_without_injection() -> Recording {
 
 fn playback_timeout_record(deadline: bool, receipt: bool) -> Recording {
     use lk_agents_abi::{Ts, voice::io::PlaybackSegment};
-    use lk_agents_voice::agent_activity::scheduling::SpeechId;
+    use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
     let segment = PlaybackSegment { attachment: 8, segment: 3 };
     let mut authored = Authored::new();
     if deadline {
@@ -200,8 +200,8 @@ fn playback_timeout_after_a_console_receipt() -> Recording {
 }
 
 fn output_refusal_record(traced: bool) -> Recording {
-    use lk_agents_voice::agent_activity::scheduling::SpeechId;
-    use lk_agents_voice::agent_session::output::OutputBindingError;
+    use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
+    use lk_agents_voice::agent_session::machine::output::OutputBindingError;
     let reason = OutputBindingError::Capacity;
     let mut authored = Authored::new();
     if traced {

@@ -5,7 +5,7 @@
 //! to its end the parent's `on_exit` is never issued (nothing may replace an agent a task holds);
 //! its `on_enter` neither, through the restore up to the next command the driver takes. A close
 //! after the restore may still exit the parent: that is the close's exit, not the task's.
-use lk_agents_voice::agent_activity::voice_task::{TaskEnd, VoiceTaskId};
+use lk_agents_voice::agent_session::machine::activity::voice_task::{TaskEnd, VoiceTaskId};
 use lk_agents_voice::agent_session::{HookId, HookKind};
 use lk_agents_voice::trace::{CoreStep, HandoffStep, Step};
 
@@ -71,7 +71,7 @@ fn entered() -> Step {
         task: VoiceTaskId(1),
         parent: "desk".into(),
         agent: "email".into(),
-        speech: lk_agents_voice::agent_activity::scheduling::SpeechId(1),
+        speech: lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId(1),
     })
 }
 

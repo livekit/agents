@@ -69,8 +69,8 @@ and [`runtime::a2a`](../../rust/crates/lk-agents-runtime/src/a2a/mod.rs) only wh
 1. [`VoiceDriver`](../../rust/crates/lk-agents-voice/src/agent_session/machine/driver.rs) receives
    session events. [`AudioRecognition`](../../rust/crates/lk-agents-voice/src/audio_recognition/machine/mod.rs)
    determines user-turn observations; activity scheduling determines floor admission.
-2. [`agent_activity::speech`](../../rust/crates/lk-agents-voice/src/agent_activity/speech.rs) starts
-   a [`ReplyRun`](../../rust/crates/lk-agents-voice/src/agent_activity/reply_run.rs), which contains
+2. [`agent_activity::speech`](../../rust/crates/lk-agents-voice/src/agent_session/machine/activity/speech.rs) starts
+   a [`ReplyRun`](../../rust/crates/lk-agents-voice/src/agent_session/machine/activity/reply_run.rs), which contains
    an `AgentRun` with `Opening::Coordinated`.
 3. That opening lets voice supply request/history snapshots and floor constraints while the
    shared invocation owns approval, tool classification, retry and output decisions. The
@@ -85,7 +85,7 @@ and [`runtime::a2a`](../../rust/crates/lk-agents-runtime/src/a2a/mod.rs) only wh
 ## Realtime voice reply
 
 Follow the same `VoiceDriver` → `ReplyRun` → coordinated `AgentRun` ownership path, then read
-[`agent_activity::realtime`](../../rust/crates/lk-agents-voice/src/agent_activity/realtime/mod.rs)
+[`agent_activity::realtime`](../../rust/crates/lk-agents-voice/src/agent_session/machine/activity/realtime/mod.rs)
 and [`runtime::voice::generation::realtime_generation`](../../rust/crates/lk-agents-runtime/src/voice/generation/realtime_generation.rs).
 The provider owns server response initiation and protocol state; voice owns local floor,
 interruption and presentation. Shared invocation policy receives the reply/tool outcomes.
@@ -97,7 +97,7 @@ Do not infer that a server follow-up should also start a client-generated respon
 | --- | --- |
 | Approval, tool outcome, retry, accepted output | [`core/agent_run`](../../rust/crates/lk-agents-core/src/agent_run/mod.rs), [`core/tool_calls`](../../rust/crates/lk-agents-core/src/tool_calls/mod.rs) |
 | Backend agent/frame routing | [`core/text_session`](../../rust/crates/lk-agents-core/src/text_session/mod.rs) |
-| Voice scheduling, hook/handoff or close ordering | [`VoiceDriver`](../../rust/crates/lk-agents-voice/src/agent_session/machine/driver.rs), [`agent_activity`](../../rust/crates/lk-agents-voice/src/agent_activity/mod.rs) |
+| Voice scheduling, hook/handoff or close ordering | [`VoiceDriver`](../../rust/crates/lk-agents-voice/src/agent_session/machine/driver.rs), [`agent_activity`](../../rust/crates/lk-agents-voice/src/agent_session/machine/activity/mod.rs) |
 | Generated audio, authorization, interruption receipts | [`generation/effects.rs`](../../rust/crates/lk-agents-voice/src/generation/effects.rs) and its linked producers |
 | Room tracks, input/output attachment, transcription publication | [`voice/room_io`](../../rust/crates/lk-agents-voice/src/room_io/mod.rs), [`runtime/room_io`](../../rust/crates/lk-agents-runtime/src/room_io/mod.rs) |
 | Provider transport/retry execution | [`inference`](../../rust/crates/lk-agents-inference/src/lib.rs), [`net`](../../rust/crates/lk-agents-net/src/lib.rs) |

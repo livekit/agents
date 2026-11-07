@@ -2,7 +2,7 @@
 //! Voice supplies floor/interruption constraints; it does not select the tool outcome again.
 
 use crate::agent::{Source, Visibility};
-use crate::agent_activity::scheduling::SpeechId;
+use crate::agent_session::machine::activity::scheduling::SpeechId;
 use crate::agent_session::{HookCall, HookId, RequestId, VoiceDriver};
 use crate::events::{DiagnosticEvent, SessionEvent};
 use crate::tool_executor::{Delivery, Handling, StepEnd, ToolsExecutedEvent};
@@ -210,7 +210,7 @@ impl VoiceDriver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent_activity::scheduling::SpeechKind;
+    use crate::agent_session::machine::activity::scheduling::SpeechKind;
     use crate::speech_handle::SpeechState;
     use crate::tool_executor::{ToolOutcome, answer};
     use crate::trace::InterruptCause;
@@ -228,7 +228,7 @@ mod tests {
             SpeechKind::GenerateReply,
             true,
             true,
-            crate::agent_activity::scheduling::VoiceRunParticipation::Joins,
+            crate::agent_session::machine::activity::scheduling::VoiceRunParticipation::Joins,
         ));
         let call = FunctionCall {
             id: "flight-item".into(),

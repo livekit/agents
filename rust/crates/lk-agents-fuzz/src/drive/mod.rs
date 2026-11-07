@@ -65,11 +65,11 @@ use lk_agents_voice::remote_session::{
 };
 use lk_agents_voice::room_io::PRE_CONNECT_AUDIO_BUFFER_STREAM;
 use lk_agents_voice::{
-    agent_activity::options::{
+    agent_session::machine::activity::scheduling::SpeechId,
+    agent_session::options::{
         AgentSessionOptions, Deployment, InterruptionGate, InterruptionGateInputs, RealtimeGate,
         SttGate, TurnDetection, resolve_interruption_detector,
     },
-    agent_activity::scheduling::SpeechId,
     agent_session::{
         HoldId, HookId, IoKind, SpeechCommand, TurnCommand, VoiceCommandOrigin, VoiceHostEvent,
     },

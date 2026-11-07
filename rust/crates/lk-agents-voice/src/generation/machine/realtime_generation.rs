@@ -1,6 +1,6 @@
 //! Realtime message ordering, output modality and the server's retained transcript.
 
-use crate::agent_activity::realtime::response_id_of;
+use crate::agent_session::machine::activity::realtime::response_id_of;
 use crate::generation::effects::RealtimeGenerationEffect;
 use crate::transcription::Heard;
 use lk_agents_abi::AudioFrame;

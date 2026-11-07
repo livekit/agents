@@ -10,8 +10,10 @@ use lk_agents_abi::Ts;
 use lk_agents_abi::turn::detector::ReqId;
 
 use super::{EndOfTurnInfo, InterruptionSignal, TurnDetectionMode};
-use crate::agent_activity::false_interruption::{AudioInterruptTrigger, TurnSettled};
 use crate::agent_session::effects::{AudioInterruptGuard, FlushReason, StreamKind, Timer};
+use crate::agent_session::machine::activity::false_interruption::{
+    AudioInterruptTrigger, TurnSettled,
+};
 use crate::events::SessionEvent;
 
 /// Keep outcomes in transition order: in particular, teardown precedes a replacement deadline

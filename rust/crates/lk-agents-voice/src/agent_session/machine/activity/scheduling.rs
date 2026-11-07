@@ -85,7 +85,7 @@ mod speech_scheduler {
 
     /// `AgentActivity`'s scheduling state (`_speech_q`, `_current_speech`, `_scheduling_paused`,
     /// `_authorization_paused`, `_preemptive_generation`), and every live speech's state. Part of
-    /// the [`AgentActivity`](crate::agent_activity::AgentActivity).
+    /// the [`AgentActivity`](crate::agent_session::machine::activity::AgentActivity).
     #[derive(Debug)]
     pub struct SpeechScheduler {
         speeches: BTreeMap<SpeechId, Entry>,
@@ -556,7 +556,11 @@ mod speech_scheduler {
 
         /// The step was spoken: the current speech is released and becomes `Working` (requeueing
         /// is the way back). No `listening`: tools may still run.
-        pub(in crate::agent_activity) fn spoken(&mut self, speech: SpeechId, now: Ts) {
+        pub(in crate::agent_session::machine::activity) fn spoken(
+            &mut self,
+            speech: SpeechId,
+            now: Ts,
+        ) {
             if self.step != SchedulingStep::Current(speech) {
                 return;
             }

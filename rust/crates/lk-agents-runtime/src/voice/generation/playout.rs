@@ -8,8 +8,8 @@ use lk_agents_abi::voice::io::{
 };
 use lk_agents_abi::voice::rtc::frame_duration;
 use lk_agents_media::{AudioResampler, OnChange, Quality};
-use lk_agents_voice::agent_activity::scheduling::SpeechId;
 use lk_agents_voice::agent_session::DriverError;
+use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
 use lk_agents_voice::generation::GenEvent;
 use lk_agents_voice::generation::TurnAccumulator;
 use lk_agents_voice::generation::effects::AudioPlaybackEffect;

@@ -106,7 +106,7 @@ fn the_server_keeps_turn_detection_unless_a_local_vad_takes_it() {
 // hidden until the release, or a release taking out a layer other than its own.
 #[test]
 fn an_override_wins_leaf_by_leaf_until_its_own_release() {
-    use crate::agent_activity::DriverConfig;
+    use crate::agent_session::machine::activity::DriverConfig;
     use std::time::Duration;
     let ms = Duration::from_millis;
     let endpointing = |min: Option<u64>, max: Option<u64>| {

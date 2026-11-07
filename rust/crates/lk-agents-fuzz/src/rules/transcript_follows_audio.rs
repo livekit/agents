@@ -10,7 +10,7 @@
 //! finished whole shows the words still queued at once, their audio being over. Those come in one
 //! go, right before the segment's uninterrupted finish, with nothing played in between.
 use lk_agents_voice::{
-    agent_activity::scheduling::SpeechId,
+    agent_session::machine::activity::scheduling::SpeechId,
     trace::{PlayoutStep, Step},
 };
 

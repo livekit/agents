@@ -2,7 +2,7 @@
 //! scheduling to pause with nothing left to say; the session stays open.
 
 use super::Cx;
-use crate::agent_activity::hooks::Exit;
+use crate::agent_session::machine::activity::hooks::Exit;
 use crate::agent_session::machine::coordination::PauseResult;
 use crate::agent_session::{DrainRefused, HookId, RequestId};
 

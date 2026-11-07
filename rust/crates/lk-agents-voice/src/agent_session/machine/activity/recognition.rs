@@ -1,14 +1,16 @@
 //! The recognition hooks: STT and VAD input, the user turn and its commit, and the preemptive
 //! generation.
 
-use crate::agent_activity::ConfigDiff;
-use crate::agent_activity::false_interruption::{
+use crate::agent_session::effects::Timer;
+use crate::agent_session::machine::activity::ConfigDiff;
+use crate::agent_session::machine::activity::false_interruption::{
     AudioInterruptTrigger, InterruptOutcome, InterruptRefusal,
 };
-use crate::agent_activity::options::ConfigLayer;
-use crate::agent_activity::scheduling::{PreemptiveDiscard, PreemptiveRefusal, SpeechKind, Status};
-use crate::agent_activity::speech::SpeechSpec;
-use crate::agent_session::effects::Timer;
+use crate::agent_session::machine::activity::scheduling::{
+    PreemptiveDiscard, PreemptiveRefusal, SpeechKind, Status,
+};
+use crate::agent_session::machine::activity::speech::SpeechSpec;
+use crate::agent_session::options::ConfigLayer;
 use crate::agent_session::{Answer, CommitSuperseded, RequestId, TurnCommand, VoiceDriver};
 use crate::audio::{AudioChannel, Tagged};
 use crate::audio_recognition::{
@@ -53,7 +55,7 @@ use lk_agents_abi::{
 };
 use std::time::Duration;
 
-use crate::agent_activity::io::VadMetricsFold;
+use crate::agent_session::machine::activity::io::VadMetricsFold;
 
 impl super::AgentActivity {
     /// Decide from one activity snapshot and fold that exact verdict into recognition. Session
@@ -200,9 +202,9 @@ impl VoiceDriver {
 
         // A final is the interruption failsafe if VAD failed (`on_final_transcript`); with no VAD a
         // non-empty interim is the onset (`on_interim_transcript`). The gates are `decide_interrupt`'s.
-        let words = ev
-            .best_alternative()
-            .map_or(0, |a| crate::agent_activity::false_interruption::count_min_words(&a.text));
+        let words = ev.best_alternative().map_or(0, |a| {
+            crate::agent_session::machine::activity::false_interruption::count_min_words(&a.text)
+        });
         let has_vad = self.input.sinks.contains_key(&AudioChannel::Vad);
         let text = ev.best_alternative().map_or("", |a| a.text.as_str());
         match ev.kind {
@@ -316,7 +318,7 @@ impl VoiceDriver {
                 // preemptive generation may start for it (it would be a parked speech with no
                 // owner).
                 self.record_trace(TurnStep::PreemptiveRefused(
-                    crate::agent_activity::scheduling::PreemptiveRefusal::ManualTurn,
+                    crate::agent_session::machine::activity::scheduling::PreemptiveRefusal::ManualTurn,
                 ));
                 // 1.8.10's `manual` trigger: the wait opens, or is re-armed.
                 let delay = self.activity.audio_recognition.min_delay().as_secs_f64();

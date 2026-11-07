@@ -1,9 +1,6 @@
 //! The session decision core and the input vocabulary its runtime queue carries. Initialization
 //! and ordered recognition dispatch are implementations of this same driver, colocated here.
 
-use crate::agent_activity::false_interruption::PausedSpeech;
-use crate::agent_activity::scheduling::SpeechId;
-use crate::agent_activity::{AgentActivity, DriverConfig};
 use crate::agent_session::VoiceSessionState;
 use crate::agent_session::commands::{
     Answer, Close, Command, IvrCommand, RecorderHandle, RequestId, Sent, SpeechCall,
@@ -11,6 +8,9 @@ use crate::agent_session::commands::{
 };
 use crate::agent_session::effects::Timer;
 use crate::agent_session::effects::VoiceEffect;
+use crate::agent_session::machine::activity::false_interruption::PausedSpeech;
+use crate::agent_session::machine::activity::scheduling::SpeechId;
+use crate::agent_session::machine::activity::{AgentActivity, DriverConfig};
 use crate::agent_session::machine::coordination::{PendingInputOperation, VoiceCallback};
 use crate::agent_session::time::Now;
 use crate::agent_session::{NextId, SessionParts, SessionView};
@@ -62,10 +62,10 @@ pub enum VoiceEvent {
         read: Vec<lk_agents_abi::ChatItem>,
         history: Vec<lk_agents_abi::ChatItem>,
     },
-    StorageSettled(crate::agent_activity::scheduling::SpeechId),
-    StorageAbandoned(crate::agent_activity::scheduling::SpeechId),
-    StorageLost(crate::agent_activity::scheduling::SpeechId),
-    Realtime(crate::agent_activity::realtime::RealtimeWake),
+    StorageSettled(crate::agent_session::machine::activity::scheduling::SpeechId),
+    StorageAbandoned(crate::agent_session::machine::activity::scheduling::SpeechId),
+    StorageLost(crate::agent_session::machine::activity::scheduling::SpeechId),
+    Realtime(crate::agent_session::machine::activity::realtime::RealtimeWake),
     Eot(
         lk_agents_abi::turn::detector::ReqId,
         Result<lk_agents_abi::EotPrediction, lk_agents_abi::errors::ProviderError>,
@@ -96,12 +96,12 @@ pub enum VoiceEvent {
 /// The session's decision core: handed every [`VoiceEvent`] in arrival order by the
 /// runtime queue owner, it merges them with its timers and orchestrates the
 /// components in sequence: the `AgentSession`, its running
-/// [`AgentActivity`](crate::agent_activity::AgentActivity), and the [`AgentInput`](crate::agent_activity::io::AgentInput) legs. Every
+/// [`AgentActivity`](crate::agent_session::machine::activity::AgentActivity), and the [`AgentInput`](crate::agent_session::machine::activity::io::AgentInput) legs. Every
 /// decision is journalled, dated on the session clock.
 pub struct VoiceDriver {
     pub(crate) session: VoiceSessionState,
-    pub(crate) activity: crate::agent_activity::AgentActivity,
-    pub(crate) input: crate::agent_activity::io::AgentInput,
+    pub(crate) activity: crate::agent_session::machine::activity::AgentActivity,
+    pub(crate) input: crate::agent_session::machine::activity::io::AgentInput,
     pub(crate) timers: TimerSet<Timer>,
     pub(crate) journalled: bool,
     /// Decides ownership (a tool's hold is its run's).
@@ -414,9 +414,9 @@ impl VoiceDriver {
         self.activity.retire_speech_later(id);
         // The host stream still exists, so the speech is announced and ended on it like every other.
         let kind = if what == "say" {
-            crate::agent_activity::scheduling::SpeechKind::Say
+            crate::agent_session::machine::activity::scheduling::SpeechKind::Say
         } else {
-            crate::agent_activity::scheduling::SpeechKind::GenerateReply
+            crate::agent_session::machine::activity::scheduling::SpeechKind::GenerateReply
         };
         let announce = SessionEvent::SpeechCreated { speech: id, kind, user_initiated: true };
         self.emit_now(announce);
@@ -424,7 +424,7 @@ impl VoiceDriver {
         self.journal(Step::Speech(SpeechStep::ReplyCreated { speech: id }));
         self.journal(Step::Speech(SpeechStep::ScheduleRejected {
             speech: id,
-            reason: crate::agent_activity::scheduling::Rejected::Stopped,
+            reason: crate::agent_session::machine::activity::scheduling::Rejected::Stopped,
         }));
         self.journal(Step::Close(CloseStep::Performed(CloseAct::Released { speech: id })));
         let done =
@@ -527,7 +527,7 @@ impl VoiceDriver {
                 Timer::RecorderFlush => self.flush_recorder(now, true),
                 Timer::KeytermTimeout => self.on_keyterm_timeout(now),
                 Timer::DtmfDebounce => {
-                    self.dtmf_step(crate::workflows::dtmf::DtmfTaskEvent::Debounced)
+                    self.dtmf_step(crate::workflows::machine::dtmf::DtmfTaskEvent::Debounced)
                 }
                 Timer::EndCallReply => self.end_call_reply_timed_out(now),
                 // A realtime request the server never answered: the machine settles it.
@@ -592,7 +592,7 @@ pub enum DriverError {
     Provider(#[from] ProviderError),
 
     #[error("output admission refused: {0}")]
-    OutputBindingRefused(#[from] crate::agent_session::output::OutputBindingError),
+    OutputBindingRefused(#[from] crate::agent_session::machine::output::OutputBindingError),
 
     #[error("resample: {0}")]
     Resample(String),
@@ -680,7 +680,7 @@ pub struct InitialSession {
     pub expressive: ExpressiveLayers,
     pub sinks: BTreeMap<AudioChannel, ResourceId>,
     pub video_instance: Option<lk_agents_abi::resources::VideoInputRef>,
-    pub video_sampler: Option<crate::agent_activity::video_sampler::VideoSampler>,
+    pub video_sampler: Option<crate::agent_session::video_sampler::VideoSampler>,
     pub eot_thresholds: Option<lk_agents_abi::tokenize::language::ThresholdOptions>,
     pub eot_provider: Option<lk_agents_abi::ProviderId>,
     pub rt_session: Option<RealtimeRef>,
@@ -710,7 +710,7 @@ impl VoiceDriver {
         let mut session =
             VoiceSessionState::new(initial.config.clone(), initial.parts, initial.next_id);
         session.expressive = initial.expressive;
-        let input = crate::agent_activity::io::AgentInput::new(
+        let input = crate::agent_session::machine::activity::io::AgentInput::new(
             initial.sinks,
             initial.video_instance,
             initial.video_sampler,
@@ -719,7 +719,7 @@ impl VoiceDriver {
         if initial.journalled {
             outbox.push(crate::agent_session::effects::VoiceEffect::Journal(Box::new(Step::Core(
                 CoreStep::ConfigApplied {
-                    layer: crate::agent_activity::options::ConfigLayer::Session,
+                    layer: crate::agent_session::options::ConfigLayer::Session,
                     effective: Box::new(*initial.config.effective()),
                 },
             ))));

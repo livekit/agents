@@ -141,7 +141,7 @@ destination files remain.
 
 | Existing files | Destination | Resulting lines, approx. | Why |
 | --- | --- | ---: | --- |
-| `src/agent_activity/tool_results_tests.rs` (90) | `src/agent_activity/tool_results.rs` | 303 | Small local two-test suite can be an inline cfg(test) module beside the private policy; retain assertions unchanged. |
+| `src/agent_session/machine/activity/tool_results_tests.rs` (90) | `src/agent_session/machine/activity/tool_results.rs` | 303 | Small local two-test suite can be an inline cfg(test) module beside the private policy; retain assertions unchanged. |
 | `src/agent_session/nodes.rs` (11), `src/recorder_io.rs` (31) | `src/agent_session/mod.rs` | 747 | One-field OutputNodes snapshot is plain session data; put beside SessionParts/Outputs, keeping runtime live nodes separate. |
 | `src/room_io/ingress.rs` (46) | `src/room_io/mod.rs` | 51 | Small StreamBudget and three bounds are ordinary domain-level ingress data; parent currently five-line namespace. |
 | `src/run_view.rs` (147) | `src/run_result.rs` | 654 | Voice run recording/output projection and live run settlement are the same run-result feature; colocate distinct types and preserve each contract. |
@@ -221,7 +221,7 @@ check their joint size rather than treating each estimate independently. In part
 
 | File | Lines | Proposed destination | Condition / tradeoff  Disposition |
 | --- | ---: | --- | ---  --- |
-| `src/agent_activity/video_sampler.rs` | 50 | `src/agent_activity/io.rs` | 50-line video-admission predicate can join449-line activity I/O decisions; optional because sampling is independently reusable and tested through feature paths.  Retained |
+| `src/agent_session/video_sampler.rs` | 50 | `src/agent_session/machine/activity/io.rs` | 50-line video-admission predicate can join449-line activity I/O decisions; optional because sampling is independently reusable and tested through feature paths.  Retained |
 | `src/agent_session/machine/initial.rs` | 140 | `src/agent_session/machine/driver.rs` | Same VoiceDriver construction impl; optional flattening within existing machine boundary (~788 alone;871 with recognition).  Merged |
 | `src/agent_session/machine/recognition.rs` | 83 | `src/agent_session/machine/driver.rs` | 83-line recognition-effect dispatch is VoiceDriver coordination, not a new owner; optional flatten within machine (~731 alone;871 with initial).  Merged |
 | `src/session_start.rs` | 85 | `src/agent_session/lifecycle.rs` | Startup selection/lifetime facts can sit with lifecycle contracts (~226); retain distinct concepts and core OwnerLifecycle re-export, no new policy fusion.  Merged |
@@ -719,9 +719,9 @@ are proposed here.
 
 | File | Lines | Decision | Destination / reason |
 | --- | ---: | --- | --- |
-| `src/agent_activity/idle.rs` | 83 | Keep | Idle/waiter policy spans tools, turns and speech; do not fold into already1024-line speech scheduler. |
-| `src/agent_activity/tool_results_tests.rs` | 90 | Merge | `src/agent_activity/tool_results.rs`. Small local two-test suite can be an inline cfg(test) module beside the private policy; retain assertions unchanged. |
-| `src/agent_activity/video_sampler.rs` | 50 | Conditional | `src/agent_activity/io.rs`. 50-line video-admission predicate can join449-line activity I/O decisions; optional because sampling is independently reusable and tested through feature paths. |
+| `src/agent_session/machine/activity/idle.rs` | 83 | Keep | Idle/waiter policy spans tools, turns and speech; do not fold into already1024-line speech scheduler. |
+| `src/agent_session/machine/activity/tool_results_tests.rs` | 90 | Merge | `src/agent_session/machine/activity/tool_results.rs`. Small local two-test suite can be an inline cfg(test) module beside the private policy; retain assertions unchanged. |
+| `src/agent_session/video_sampler.rs` | 50 | Conditional | `src/agent_session/machine/activity/io.rs`. 50-line video-admission predicate can join449-line activity I/O decisions; optional because sampling is independently reusable and tested through feature paths. |
 | `src/agent_session/lifecycle.rs` | 141 | Keep | Lifecycle policy owner remains natural target for optional startup consolidation. |
 | `src/agent_session/machine/initial.rs` | 140 | Conditional | `src/agent_session/machine/driver.rs`. Same VoiceDriver construction impl; optional flattening within existing machine boundary (~788 alone;871 with recognition). |
 | `src/agent_session/machine/mod.rs` | 12 | Keep | Required crate/domain namespace or machine producer map; small namespace files are deliberate. |

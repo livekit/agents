@@ -277,7 +277,7 @@ mod voice_task {
     use lk_agents_fuzz::fakes::completion_value;
     use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref, ToolAnswer, ToolArgs};
     use lk_agents_fuzz::record::{Answer, Detail, Kind, Recording};
-    use lk_agents_voice::agent_activity::voice_task::{TaskEnd, VoiceTaskEnded};
+    use lk_agents_voice::agent_session::machine::activity::voice_task::{TaskEnd, VoiceTaskEnded};
     use lk_agents_voice::trace::{HandoffStep, Step};
 
     fn call(chat: u32) -> [Input; 3] {

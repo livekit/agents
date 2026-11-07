@@ -66,7 +66,7 @@ fn setter(allow: bool) -> Input {
 }
 
 fn said() -> Authored {
-    use lk_agents_voice::agent_activity::scheduling::SpeechKind;
+    use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechKind;
     Authored::new().speech_created(1, SpeechKind::Say)
 }
 

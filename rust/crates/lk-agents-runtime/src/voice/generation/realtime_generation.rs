@@ -14,8 +14,8 @@ use crate::voice::speech_handle::SpeechHandle;
 use lk_agents_abi::llm::realtime as rt;
 use lk_agents_abi::llm::realtime::Event;
 use lk_agents_abi::voice::io::TextOutput;
-use lk_agents_voice::agent_activity::realtime::RealtimeWake;
 use lk_agents_voice::agent_session::DriverError;
+use lk_agents_voice::agent_session::machine::activity::realtime::RealtimeWake;
 use lk_agents_voice::generation::effects::RealtimeGenerationEffect;
 use lk_agents_voice::generation::machine::realtime_generation::{
     RealtimeGeneration, RealtimeGenerationControl, RealtimeGenerationObservation, unheard_messages,

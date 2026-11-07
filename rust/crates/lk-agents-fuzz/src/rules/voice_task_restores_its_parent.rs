@@ -5,7 +5,7 @@
 //! and the agent installed next is the parent it suspended, read off the install itself rather
 //! than the end's own claim. The close ends every task before anything else: none is open once a
 //! close began, and none enters after it.
-use lk_agents_voice::agent_activity::voice_task::{TaskEnd, VoiceTaskId};
+use lk_agents_voice::agent_session::machine::activity::voice_task::{TaskEnd, VoiceTaskId};
 use lk_agents_voice::trace::{HandoffStep, Step};
 
 use crate::{
@@ -120,7 +120,7 @@ fn entered(task: u64, parent: &str, agent: &str) -> Step {
         task: VoiceTaskId(task),
         parent: parent.into(),
         agent: agent.into(),
-        speech: lk_agents_voice::agent_activity::scheduling::SpeechId(1),
+        speech: lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId(1),
     })
 }
 

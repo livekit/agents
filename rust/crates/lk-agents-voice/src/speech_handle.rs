@@ -1,7 +1,7 @@
 //! A speech's accepted state. The voice core owns it; the runtime's live `SpeechHandle` mirrors
 //! what the core publishes ([`SpeechUpdate`]) and turns the host's requests into queued inputs.
 
-use crate::agent_activity::scheduling::SpeechId;
+use crate::agent_session::machine::activity::scheduling::SpeechId;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::{ChatItem, MetricsReport};
 

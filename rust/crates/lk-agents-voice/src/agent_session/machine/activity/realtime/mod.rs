@@ -2,11 +2,13 @@
 //! generations), the driver's handling of the model's events, and the turn detection it agrees on.
 
 use crate::agent::{Source, Visibility};
-use crate::agent_activity::false_interruption::InterruptRefusal;
-use crate::agent_activity::options::TurnDetection;
-use crate::agent_activity::scheduling::{SpeechId, SpeechKind, VoiceRunParticipation};
-use crate::agent_activity::speech::{SAY_SHAPE_REFUSED_ON_REALTIME, SpeechSpec};
 use crate::agent_session::effects::Timer;
+use crate::agent_session::machine::activity::false_interruption::InterruptRefusal;
+use crate::agent_session::machine::activity::scheduling::{
+    SpeechId, SpeechKind, VoiceRunParticipation,
+};
+use crate::agent_session::machine::activity::speech::{SAY_SHAPE_REFUSED_ON_REALTIME, SpeechSpec};
+use crate::agent_session::options::TurnDetection;
 use crate::agent_session::{Close, ClosePhase, Closing, SpeechCall, VoiceDriver};
 use crate::audio_recognition::{ServerSpeech, TurnDetectionMode};
 use crate::events::{DiagnosticEvent, SessionEvent};
@@ -357,7 +359,7 @@ impl VoiceDriver {
                 let asked = Some(call.take());
                 let speech = self.start_realtime_speech(now, asked, false, allow, true, voice_run);
                 if *read_back {
-                    let ev = crate::workflows::dtmf::DtmfTaskEvent::ReadBack(Some(speech));
+                    let ev = crate::workflows::machine::dtmf::DtmfTaskEvent::ReadBack(Some(speech));
                     self.dtmf_step(ev);
                 }
                 Some(speech)
@@ -452,7 +454,7 @@ impl VoiceDriver {
             Request::GenerateReply { read_back, .. } => {
                 // A read-back that will never be spoken releases the collection's guard now.
                 if read_back {
-                    self.dtmf_step(crate::workflows::dtmf::DtmfTaskEvent::ReadBack(None));
+                    self.dtmf_step(crate::workflows::machine::dtmf::DtmfTaskEvent::ReadBack(None));
                 }
                 SpeechKind::GenerateReply
             }
@@ -640,7 +642,7 @@ impl VoiceDriver {
             rt.state.set_open_speech(&response_id, speech);
         }
         if read_back {
-            let ev = crate::workflows::dtmf::DtmfTaskEvent::ReadBack(Some(speech));
+            let ev = crate::workflows::machine::dtmf::DtmfTaskEvent::ReadBack(Some(speech));
             self.dtmf_step(ev);
         }
     }
@@ -938,7 +940,7 @@ impl VoiceDriver {
             vad: self.input.sinks.contains_key(&crate::audio::AudioChannel::Vad),
             detection: self.session.config.effective.turn.detection(),
             streaming_detector: self.session.config.legs.detector
-                == Some(crate::agent_activity::options::DetectorKind::Streaming),
+                == Some(crate::agent_session::options::DetectorKind::Streaming),
             interruption_given: self.session.config.effective.turn.interruption.mode.is_some(),
             turn_detection_mode: resolved,
         };

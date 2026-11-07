@@ -28,7 +28,7 @@ pub(crate) struct AgentInput {
     /// So the same leg handed back is a no-op. Runtime retains the object.
     pub(crate) video_instance: Option<lk_agents_abi::resources::VideoInputRef>,
     /// Shared: its rates are public attributes a caller may change mid-call.
-    video_sampler: Option<crate::agent_activity::video_sampler::VideoSampler>,
+    video_sampler: Option<crate::agent_session::video_sampler::VideoSampler>,
     /// A pipeline session has nowhere to push a frame: said the first time only.
     video_sink_warned: bool,
     next_open: u64,
@@ -56,7 +56,7 @@ impl AgentInput {
     pub(crate) fn new(
         sinks: std::collections::BTreeMap<crate::audio::AudioChannel, ResourceId>,
         video_instance: Option<lk_agents_abi::resources::VideoInputRef>,
-        video_sampler: Option<crate::agent_activity::video_sampler::VideoSampler>,
+        video_sampler: Option<crate::agent_session::video_sampler::VideoSampler>,
     ) -> Self {
         AgentInput {
             live_stt: sinks.get(&crate::audio::AudioChannel::Stt).copied(),

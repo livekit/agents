@@ -68,12 +68,43 @@ Most executor protocols are peers; `RoomIo` does not currently expose a `RoomIoE
 
 ### Effect and machine source layout
 
-The structural layout is implemented in the working tree: domain `machine` modules contain
-synchronous owners, category `effects.rs` files contain effect declarations, and crate effect
-indexes expose the same scoped public types without generic aliases. For example,
-`generation::machine::AudioPlayback` produces `generation::effects::AudioPlaybackEffect`.
-`VoiceDriver` is in `agent_session::machine`; `VoiceRuntime` executes it. `AudioInputRouter`
-routes source frames independently of generated-audio playback.
+Every decision subject in `lk-agents-core` and `lk-agents-voice` has the same three parts, so
+a reader can tell from the path what is state and what is output:
+
+```text
+<subject>/
+├── mod.rs       the subject: its records, configuration and re-exports
+├── machine.rs   the state machine: inputs in, effects out (machine/ once it has several owners)
+└── effects.rs   the machine's output: what it asks the runtime to do
+```
+
+- **`machine`** holds the synchronous owners: their private state, their input enum
+  (`AudioPlaybackEvent`, `AgentRunEvent`) and `handle(event, now) -> effects` with their domain
+  methods. Nothing in it performs I/O; it is what the DST drives.
+- **`effects.rs`** holds only the effect enums the subject's machines return, and their payload
+  types (`AudioPlaybackEffect`, `ToolCallEffect`). It is the subject's contract with its
+  executor in `lk-agents-runtime`: reading it tells you everything the machine can make
+  happen. Effects never carry behavior beyond data.
+- **`mod.rs`** is the subject's entry: `pub mod machine; pub mod effects;`, the re-exports
+  callers use, and the records both sides share. These are configuration, setup, limits and
+  observations that are neither state nor output (`AmdSetup`, `StreamBudget`).
+
+`machine` is a single file until it has several owners or outgrows the file limit, then a
+directory with one file per owner (`generation/machine/audio_playback.rs`,
+`room_io/machine/attachment.rs`); an owner large enough to need several files gets its own
+directory there (`agent_session/machine/activity/`, the active agent's state inside
+`VoiceDriver`, whose effects are `agent_session/effects.rs`). Inputs shared by several machines and also forwarded by the
+runtime (`generation::events::SpeechSegmentEvent`) get their own file beside `effects.rs`.
+Helpers that return values instead of effects (`transcription::filters`) sit beside the three
+parts.
+Each crate's `effects.rs` indexes every subject's effect enums with its producer and executor;
+a new effect enum is added there. Data-plane code in `lk-agents-media` and the async I/O
+crates do not use this layout.
+
+For example, `generation::machine::AudioPlayback` produces
+`generation::effects::AudioPlaybackEffect`. `VoiceDriver` is in `agent_session::machine`;
+`VoiceRuntime` executes it. `AudioInputRouter` routes source frames independently of
+generated-audio playback.
 
 Small helpers stay beside their component instead of introducing another module to learn.
 The current core/voice source locations are:

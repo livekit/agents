@@ -12,9 +12,9 @@ type Steps = Arc<Mutex<Vec<Step>>>;
 
 fn builder(name: &str) -> (DriverBuilder, Steps) {
     let time = Timebase::from_virtual(Arc::new(lk_agents_abi::VirtualClock::new()));
-    let config = lk_agents_voice::agent_activity::DriverConfig::new(
+    let config = lk_agents_voice::agent_session::machine::activity::DriverConfig::new(
         Default::default(),
-        lk_agents_voice::agent_activity::options::SessionLegs::none(),
+        lk_agents_voice::agent_session::options::SessionLegs::none(),
     );
     let steps: Steps = Arc::default();
     let observed = steps.clone();
@@ -93,7 +93,7 @@ async fn accepted_views_are_published_before_receipts() {
     let mut accepted = (**view.borrow()).clone();
     accepted
         .config
-        .configure(&lk_agents_voice::agent_activity::options::aec_warmup_layer(Some(9.0)));
+        .configure(&lk_agents_voice::agent_session::options::aec_warmup_layer(Some(9.0)));
     // The receipt's waker reads the view at the instant the answer is sent.
     struct ReadsView(
         tokio::sync::watch::Receiver<Arc<lk_agents_voice::agent_session::SessionView>>,

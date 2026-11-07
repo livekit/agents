@@ -1,7 +1,7 @@
 //! `voice/turn.py`: `TurnHandlingOptions`. One struct per group is both what a layer says (`None`
 //! and `NotGiven` are unsaid) and the resolved answer, where every leaf is said.
 
-use crate::agent_activity::options::{AgentSessionOptions, option_group};
+use crate::agent_session::options::{AgentSessionOptions, option_group};
 use crate::audio_recognition::TurnDetectionMode;
 use lk_agents_abi::voice::session_options::{
     EndpointingKwargs, EndpointingMode, InterruptionKwargs, InterruptionMode, PreemptiveKwargs,

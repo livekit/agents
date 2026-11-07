@@ -5,7 +5,7 @@
 //! completed call reported, a call answered `Completed` before the value came back, each such
 //! value is returned at most once, and a value comes back exactly when a task ended completed:
 //! a task ended any other way returns none.
-use lk_agents_voice::agent_activity::voice_task::TaskEnd;
+use lk_agents_voice::agent_session::machine::activity::voice_task::TaskEnd;
 use lk_agents_voice::trace::{HandoffStep, Step};
 
 use crate::{
@@ -122,16 +122,16 @@ fn complete() -> Input {
 
 fn entered() -> Step {
     Step::Handoff(HandoffStep::TaskEntered {
-        task: lk_agents_voice::agent_activity::voice_task::VoiceTaskId(1),
+        task: lk_agents_voice::agent_session::machine::activity::voice_task::VoiceTaskId(1),
         parent: "desk".into(),
         agent: "email".into(),
-        speech: lk_agents_voice::agent_activity::scheduling::SpeechId(1),
+        speech: lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId(1),
     })
 }
 
 fn ended(how: TaskEnd) -> Step {
     Step::Handoff(HandoffStep::TaskEnded {
-        task: lk_agents_voice::agent_activity::voice_task::VoiceTaskId(1),
+        task: lk_agents_voice::agent_session::machine::activity::voice_task::VoiceTaskId(1),
         how,
         restored: "desk".into(),
     })
@@ -179,7 +179,7 @@ fn returned_twice() -> Recording {
 
 /// The task ended completed, but `run()` got no value.
 fn completed_without_value() -> Recording {
-    use lk_agents_voice::agent_activity::voice_task::VoiceTaskEnded;
+    use lk_agents_voice::agent_session::machine::activity::voice_task::VoiceTaskEnded;
     Authored::new()
         .tool_call("call_parent", 1)
         .api_call(task_input())

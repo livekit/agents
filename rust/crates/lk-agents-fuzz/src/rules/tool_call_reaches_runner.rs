@@ -85,7 +85,7 @@ impl Rule for ToolCallReachesRunner {
 }
 
 fn started(call_id: &str, hosted: bool) -> Step {
-    use lk_agents_voice::agent_activity::scheduling::SpeechId;
+    use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
     Step::Tool(ToolStep::CallStarted {
         speech: SpeechId(1),
         call_id: call_id.into(),
@@ -95,7 +95,7 @@ fn started(call_id: &str, hosted: bool) -> Step {
 }
 
 fn admitted(call_id: &str) -> Step {
-    use lk_agents_voice::agent_activity::scheduling::SpeechId;
+    use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
     Step::Tool(ToolStep::CallAdmitted { speech: SpeechId(1), call_id: call_id.into() })
 }
 
@@ -110,7 +110,7 @@ fn admitted_and_run() -> Recording {
 }
 
 fn ended(call_id: &str) -> Step {
-    use lk_agents_voice::{agent_activity::scheduling::SpeechId, tool_executor::ToolEnd};
+    use lk_agents_voice::{agent_session::machine::activity::scheduling::SpeechId, tool_executor::ToolEnd};
     Step::Tool(ToolStep::CallEnded {
         speech: SpeechId(1),
         call_id: call_id.into(),
@@ -119,7 +119,7 @@ fn ended(call_id: &str) -> Step {
 }
 
 fn step_finished() -> Step {
-    use lk_agents_voice::agent_activity::scheduling::SpeechId;
+    use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
     Step::Tool(ToolStep::Finished { speech: SpeechId(1), committed: 2 })
 }
 

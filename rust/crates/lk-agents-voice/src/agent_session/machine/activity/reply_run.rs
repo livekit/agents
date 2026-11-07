@@ -4,8 +4,8 @@
 //! an interruption, `max_tool_steps` or a `function_tools_executed` handler leave of a step.
 
 use crate::agent::Source;
-use crate::agent_activity::scheduling::SpeechId;
 use crate::agent_session::effects::VoiceEffect;
+use crate::agent_session::machine::activity::scheduling::SpeechId;
 use crate::agent_session::{Answer, RequestId, VoiceDriver};
 use crate::events::SessionEvent;
 use crate::generation::{PlanSpec, PlannedReply};

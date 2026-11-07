@@ -4,7 +4,7 @@ use super::llm::LlmGenerationData;
 use super::{
     FinishInputs, GenEvent, ReplyContext, ReplySource, TurnAccumulator, TurnOutcome, TurnStats,
 };
-use crate::agent_activity::scheduling::SpeechId;
+use crate::agent_session::machine::activity::scheduling::SpeechId;
 use crate::generation::effects::ReplyStartupEffect;
 use lk_agents_abi::{MetricsMetadata, MetricsReport};
 use std::time::SystemTime;

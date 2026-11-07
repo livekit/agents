@@ -452,7 +452,7 @@ mod tests {
     use lk_agents_runtime::voice::session::Timebase;
     use lk_agents_runtime::voice::speech_handle::Requests;
 
-    use lk_agents_voice::agent_activity::scheduling::SpeechId;
+    use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
     use lk_agents_voice::tool_executor::HostedTool;
 
     #[tokio::test]

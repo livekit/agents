@@ -12,7 +12,7 @@
 //! brings is judged at that install.
 use std::time::Duration;
 
-use lk_agents_voice::agent_activity::options::{AgentSessionOptions, ConfigLayer, TurnDetection};
+use lk_agents_voice::agent_session::options::{AgentSessionOptions, ConfigLayer, TurnDetection};
 use lk_agents_voice::agent_session::VoiceCommandOrigin;
 use lk_agents_voice::trace::{CoreStep, HandoffStep, Step};
 

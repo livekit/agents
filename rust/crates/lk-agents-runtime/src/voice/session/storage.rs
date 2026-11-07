@@ -10,9 +10,9 @@ use lk_agents_abi::storage::voice::VoiceStore as _;
 use lk_agents_abi::storage::voice::{VoiceStorageCommand, VoiceStorageEvent};
 use lk_agents_abi::{ChatItem, storage::StorageError};
 use lk_agents_net::env::ProcessEnv;
-use lk_agents_storage::{context::store::ContextStore, namespace::Namespace, voice::VoiceStore};
-use lk_agents_voice::agent_activity::scheduling::SpeechId;
+use lk_agents_storage::{context::store::ContextStore, storage::Namespace, voice::VoiceStore};
 use lk_agents_voice::agent_session::VoiceEvent;
+use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
 use std::sync::Arc;
 use tokio::sync::OnceCell;
 

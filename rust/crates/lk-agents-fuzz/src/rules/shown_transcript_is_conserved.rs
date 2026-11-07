@@ -11,7 +11,7 @@
 //! no output replaced or switched by the speech's end, the voice never failed (a failed segment's
 //! words go out unpaced), some of its audio played and none of its segments was cut.
 use lk_agents_voice::{
-    agent_activity::scheduling::SpeechId,
+    agent_session::machine::activity::scheduling::SpeechId,
     trace::{PlayoutStep, Step},
 };
 

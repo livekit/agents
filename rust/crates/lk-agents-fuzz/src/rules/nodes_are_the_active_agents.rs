@@ -44,7 +44,7 @@ impl Rule for NodesAreTheActiveAgents {
         // Each task's parent, from its entry to its end.
         let mut suspended: Vec<(Observed, Observed, &str)> = Vec::new();
         let mut open: Vec<(
-            lk_agents_voice::agent_activity::voice_task::VoiceTaskId,
+            lk_agents_voice::agent_session::machine::activity::voice_task::VoiceTaskId,
             Observed,
             &str,
         )> = Vec::new();

@@ -1,5 +1,7 @@
 use crate::agent::{Source, Visibility};
-use crate::agent_activity::scheduling::{SpeechId, SpeechKind, VoiceRunParticipation};
+use crate::agent_session::machine::activity::scheduling::{
+    SpeechId, SpeechKind, VoiceRunParticipation,
+};
 use crate::agent_session::room::RoomLinkConfig;
 use crate::agent_session::{AmdSpan, Close, HookKind, Now, SessionParts, VoiceDriver};
 use crate::audio_recognition::{

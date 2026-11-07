@@ -1,8 +1,8 @@
 //! DTMF collection: the digits the caller presses on the keypad, debounced, with an optional
 //! read-back to confirm them; the collector, and the driver running it.
 
-use crate::agent_activity::scheduling::SpeechId;
 use crate::agent_session::effects::Timer;
+use crate::agent_session::machine::activity::scheduling::SpeechId;
 use crate::agent_session::machine::coordination::VoiceCallback;
 use crate::agent_session::{Answer, DtmfCommand, RequestId, VoiceDriver};
 use crate::events::SessionEvent;
@@ -495,7 +495,8 @@ impl VoiceDriver {
         // `session.generate_reply()` answers on a realtime model's own socket; the read-back's
         // speech is named when the server creates it.
         if self.activity.realtime().is_some() {
-            let role = crate::agent_activity::realtime::RealtimeReplyRole::ReadBack;
+            let role =
+                crate::agent_session::machine::activity::realtime::RealtimeReplyRole::ReadBack;
             self.realtime_reply(now, Some(user_input), None, None, None, None, role);
             return;
         }

@@ -2,8 +2,8 @@
 //! [`machine::AudioRecognition`] owns live turn state and transitions; [`effects`] declares
 //! its ordered work, [`observation`] records facts, and [`overlap`] supplies overlap judgments.
 
-use crate::agent_activity::false_interruption::count_min_words;
 use crate::agent_session::effects::Timer;
+use crate::agent_session::machine::activity::false_interruption::count_min_words;
 use lk_agents_abi::turn::detector::ReqId;
 use lk_agents_abi::{ChatContext, EotPrediction, Ts};
 use std::time::Duration;
@@ -171,7 +171,7 @@ impl UserTurnCommitVerdict {
 }
 
 /// `TurnDetectionMode`, as `AudioRecognition._turn_detection_mode` holds it: resolved once by
-/// [`crate::agent_activity::options::resolve_turn_detection_mode`]; changed only by
+/// [`crate::agent_session::options::resolve_turn_detection_mode`]; changed only by
 /// [`AudioRecognition::set_turn_detection_mode`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, lk_agents_abi::Vocabulary)]
 pub enum TurnDetectionMode {

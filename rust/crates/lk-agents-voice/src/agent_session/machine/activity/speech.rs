@@ -2,11 +2,11 @@
 //! `start_speech`, the generation's reports, the agent state, and `wait_for_idle`.
 
 use crate::agent::{Source, Visibility};
-use crate::agent_activity::realtime::RealtimeReplyRole;
-use crate::agent_activity::scheduling::{
+use crate::agent_session::effects::{GateCause, GateOp, SpeechHistory, Timer};
+use crate::agent_session::machine::activity::realtime::RealtimeReplyRole;
+use crate::agent_session::machine::activity::scheduling::{
     PreemptiveDiscard, SpeechId, SpeechKind, VoiceRunParticipation,
 };
-use crate::agent_session::effects::{GateCause, GateOp, SpeechHistory, Timer};
 use crate::agent_session::{
     Answer, ClosePhase, GenerateReplyRequest, IdleWaiter, SayText, SpeechCall, SpeechCommand,
     VoiceCommandOrigin, VoiceDriver,
@@ -400,7 +400,7 @@ impl VoiceDriver {
     /// Emitted once the reply speech exists so it carries its id; never for a turn with no reply.
     /// `metadata` names the detector (model, or mode with `model_name="unknown"`).
     pub(crate) fn emit_eou_metrics(&mut self, info: &EndOfTurnInfo, speech: Option<SpeechId>) {
-        use crate::agent_activity::options::TurnDetection;
+        use crate::agent_session::options::TurnDetection;
         let detection = self.session.config.effective.turn.detection();
         let metadata = match (self.activity.audio_recognition.eot_provider(), detection) {
             (Some(eot), _) => Some(eot.metadata()),

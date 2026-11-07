@@ -1,10 +1,10 @@
 //! Interruption: interruption, `interrupt()`, and the false-interruption pause
 //! ([`PausedSpeech`]).
 
-use crate::agent_activity::options::AgentSessionOptions;
-use crate::agent_activity::scheduling::{PreemptiveDiscard, SpeechId, Status};
 use crate::agent_session::effects::{AudioOp, VoiceEffect};
 use crate::agent_session::effects::{GateCause, GateOp, Timer};
+use crate::agent_session::machine::activity::scheduling::{PreemptiveDiscard, SpeechId, Status};
+use crate::agent_session::options::AgentSessionOptions;
 use crate::agent_session::{Answer, RequestId, VoiceCommandOrigin, VoiceDriver};
 use crate::audio_recognition::TurnDetectionMode;
 use crate::events::SessionEvent;
@@ -26,7 +26,7 @@ mod paused_speech {
 
     /// The false-interruption pause: `_paused_speech`, `_false_interruption_timer` and
     /// `_false_interruption_pending`, with the sink facts `_pause_enabled()` reads. Part of the
-    /// [`AgentActivity`](crate::agent_activity::AgentActivity).
+    /// [`AgentActivity`](crate::agent_session::machine::activity::AgentActivity).
     #[derive(Debug, Clone)]
     pub struct PausedSpeech {
         /// The interruption options, read off the resolved configuration at construction.
@@ -809,7 +809,8 @@ impl VoiceDriver {
     ) -> Result<Vec<SpeechId>, InterruptRefusal> {
         // `_cancel_preemptive_generation()`: the user taking the floor back invalidates a
         // preemptive generation.
-        let abandoned = crate::agent_activity::scheduling::PreemptiveDiscard::TurnAbandoned;
+        let abandoned =
+            crate::agent_session::machine::activity::scheduling::PreemptiveDiscard::TurnAbandoned;
         self.cancel_preemptive_generation(now, abandoned);
         let generating = self.activity.realtime_generating();
         let mut reached = Vec::new();

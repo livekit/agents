@@ -3,7 +3,7 @@
 //! waits for the floor only to play).
 use std::collections::BTreeMap;
 
-use lk_agents_voice::agent_activity::scheduling::{SpeechId, SpeechKind};
+use lk_agents_voice::agent_session::machine::activity::scheduling::{SpeechId, SpeechKind};
 use lk_agents_voice::events::{SessionEvent, SpeechOutcome};
 use lk_agents_voice::trace::{GenerationStep, SpeechStep, Step};
 

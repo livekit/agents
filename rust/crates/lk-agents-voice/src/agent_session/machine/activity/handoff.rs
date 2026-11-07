@@ -3,9 +3,9 @@
 
 use super::Cx;
 use crate::agent::TurnEdit;
-use crate::agent_activity::drain::DrainEvent;
-use crate::agent_activity::hooks::Exit;
-use crate::agent_activity::scheduling::PauseCause;
+use crate::agent_session::machine::activity::drain::DrainEvent;
+use crate::agent_session::machine::activity::hooks::Exit;
+use crate::agent_session::machine::activity::scheduling::PauseCause;
 use crate::agent_session::machine::coordination::{PauseResult, VoiceCallback};
 use crate::agent_session::{
     AgentUpdate, Answer, HandoffRefused, HookId, SpeechCommand, VoiceDriver,
@@ -295,7 +295,7 @@ impl VoiceDriver {
         // answered by the pause's refusal.
         self.drain_step(DrainEvent::Closing);
         // A DTMF collection started during the close ends with it: an owed answer is `Stopped`.
-        self.dtmf_step(crate::workflows::dtmf::DtmfTaskEvent::Stop);
+        self.dtmf_step(crate::workflows::machine::dtmf::DtmfTaskEvent::Stop);
         self.handoff_step(HandoffEvent::Closing);
         self.activity.on_exit.abandon();
         // Nothing pending is delivered, a render in flight is dropped.
@@ -427,7 +427,7 @@ impl VoiceDriver {
         self.session.config.legs.stt = legs.stt;
         self.session.config.legs.vad = legs.vad;
         let diff = self.session.config.set_agent(options);
-        self.apply_config(now, crate::agent_activity::options::ConfigLayer::Agent, diff);
+        self.apply_config(now, crate::agent_session::options::ConfigLayer::Agent, diff);
 
         // A realtime handoff is three commands on the same socket, not a reconnect. Ungated by the
         // `mutable_*` capabilities: a refusal on the wire is visible, a skipped push is not. The

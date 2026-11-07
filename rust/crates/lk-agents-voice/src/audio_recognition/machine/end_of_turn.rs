@@ -6,8 +6,8 @@ use super::{
     UserTurnCommitDecision, UserTurnCommitVerdict, UserTurnTracker, compute_end_of_turn_metrics,
     user_transcript,
 };
-use crate::agent_activity::false_interruption::TurnSettled;
 use crate::agent_session::effects::{FlushReason, StreamKind, Timer};
+use crate::agent_session::machine::activity::false_interruption::TurnSettled;
 use crate::audio_recognition::effects::{AudioRecognitionEffect, EouDetected, EouPredicted};
 use crate::audio_recognition::overlap::In;
 use crate::events::{

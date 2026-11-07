@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use lk_agents_abi::{RealtimeCommandKind, voice::events::UserState};
 use lk_agents_voice::{
-    agent_activity::scheduling::SpeechId,
+    agent_session::machine::activity::scheduling::SpeechId,
     agent_session::effects::{GateCause, GateOp, Timer},
     events::{SessionEvent, SpeechOutcome},
     trace::{
@@ -535,7 +535,7 @@ fn floor(holder: u64) -> Step {
 
 /// A reply that reached the speaker a moment after it was made.
 fn played_in_time() -> Recording {
-    use lk_agents_voice::agent_activity::scheduling::SpeechKind;
+    use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechKind;
     Authored::new()
         .speech_created(4, SpeechKind::GenerateReply)
         .speech(4, Handle::live())
@@ -550,7 +550,7 @@ fn played_in_time() -> Recording {
 
 /// A reply still waiting on its model at the bound.
 fn waited_on_the_model() -> Recording {
-    use lk_agents_voice::agent_activity::scheduling::SpeechKind;
+    use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechKind;
     Authored::new()
         .speech_created(4, SpeechKind::GenerateReply)
         .speech(4, Handle::live())
@@ -577,9 +577,9 @@ fn silent_beside_anothers_stalled_voice() -> Recording {
 /// Speech 4, silent; the stream `voice_of` asked for speaks "Hello there." with its first audio
 /// due `first_audio_ms` after it opened.
 fn voiced(first_audio_ms: u64, voice_of: u64) -> Recording {
-    use lk_agents_voice::agent_activity::scheduling::SpeechKind;
+    use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechKind;
     let asked = Step::Generation(GenerationStep::TtsRequested {
-        speech: lk_agents_voice::agent_activity::scheduling::SpeechId(voice_of),
+        speech: lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId(voice_of),
         segment: 0,
         text: "Hello there.".into(),
     });
@@ -618,7 +618,7 @@ fn silent_after_the_persons_utterance() -> Recording {
 }
 
 fn behind_a_paused_speech(case: Authored) -> Recording {
-    use lk_agents_voice::agent_activity::scheduling::SpeechKind;
+    use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechKind;
     case
         // The case's own speaker, not the room's: nobody need subscribe.
         .opens(Kind::Output, crate::record::Detail::Output { audio: true })

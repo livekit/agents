@@ -1,7 +1,7 @@
 //! Idle predicates and waiter ownership shared by speech, turns and tools.
 
 use super::AgentActivity;
-use crate::agent_activity::scheduling::{SpeechId, Status};
+use crate::agent_session::machine::activity::scheduling::{SpeechId, Status};
 use crate::agent_session::{IdleRefused, IdleWaiter, RequestId, VoiceDriver};
 use crate::trace::{SpeechStep, TurnStep};
 use lk_agents_abi::Ts;

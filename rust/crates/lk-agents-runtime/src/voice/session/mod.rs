@@ -45,9 +45,9 @@ use lk_agents_abi::{
     BoxFuture, HOST_TEARDOWN_TIMEOUT, HostRef, Llm, Maybe, Spawner, Stt, Tts, Vad,
 };
 use lk_agents_net::task::{TaskId, TaskSet};
-use lk_agents_voice::agent_activity::options::{ConfigStack, SessionLegs};
-use lk_agents_voice::agent_activity::scheduling::SpeechId;
 use lk_agents_voice::agent_session::lifecycle::{CloseAction, RecorderTarget, SessionLifecycle};
+use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
+use lk_agents_voice::agent_session::options::{ConfigStack, SessionLegs};
 use lk_agents_voice::agent_session::{
     AgentUpdate, Answer, Close, Command, DriverError, HookCall, RecorderCommand, RecorderHandle,
     RequestId, SayText, SessionView, SpeechCall, SpeechCommand, VoiceCommandOrigin, VoiceHostEvent,
@@ -115,7 +115,7 @@ type InterruptionPortFactory = Box<
             lk_agents_abi::WallAnchor,
             &telemetry::Cx,
         )
-            -> Arc<dyn lk_agents_voice::agent_activity::false_interruption::InterruptionPort>
+            -> Arc<dyn lk_agents_voice::agent_session::machine::activity::false_interruption::InterruptionPort>
         + Send,
 >;
 

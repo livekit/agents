@@ -7,7 +7,7 @@
 //! speeches (the driver's `Preemptive` kind, started from a preflight transcript before the turn
 //! ended); every other kind is authorized at creation and would pass trivially.
 use lk_agents_voice::{
-    agent_activity::scheduling::{SpeechId, SpeechKind},
+    agent_session::machine::activity::scheduling::{SpeechId, SpeechKind},
     trace::{
         PlayoutStep::SinkCalled,
         SinkCall::Push,

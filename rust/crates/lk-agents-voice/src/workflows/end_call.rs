@@ -3,9 +3,9 @@
 //! speaks that answer in a speech of its own: the session waits for it to start (five seconds at
 //! most) and closes once it is done.
 
-use crate::agent_activity::scheduling::SpeechId;
 use crate::agent_session::VoiceDriver;
 use crate::agent_session::commands::Close;
+use crate::agent_session::machine::activity::scheduling::SpeechId;
 use crate::events::SessionEvent;
 use lk_agents_abi::Ts;
 use lk_agents_abi::voice::events::CloseReason;

@@ -41,7 +41,7 @@ impl Rule for ToolCallArgumentsAreJson {
 }
 
 fn call(arguments: &str) -> Recording {
-    use lk_agents_voice::agent_activity::scheduling::SpeechId;
+    use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
     let call = lk_agents_abi::FunctionCall {
         id: "item_c1".into(),
         call_id: "c1".into(),

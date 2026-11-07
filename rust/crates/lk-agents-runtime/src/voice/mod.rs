@@ -35,7 +35,7 @@ use crate::voice::session::Tx;
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::voice::io::{AudioInput, InputFrame};
 use lk_agents_net::task::{TaskId, TaskSet};
-use lk_agents_voice::agent_activity::scheduling::SpeechId;
+use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
 use lk_agents_voice::agent_session::{
     Now, Sent, SpeechCommand, VoiceCommandOrigin, VoiceDriver, VoiceEvent,
 };
@@ -48,8 +48,8 @@ use session::{Calls, PeerHandle, QueueOwner, SessionCores, SessionShared};
 use speech_handle::Requests;
 use std::sync::Arc;
 
-pub use lk_agents_voice::agent_activity::options::InterruptionGateRules;
 pub use lk_agents_voice::agent_session::lifecycle::SessionStartPlans;
+pub use lk_agents_voice::agent_session::options::InterruptionGateRules;
 pub use lk_agents_voice::amd::machine::classifier::AmdRules;
 pub use lk_agents_voice::keyterm_detection::KeytermRules;
 pub use lk_agents_voice::tool_executor::VoiceAgentFrame;
@@ -94,7 +94,7 @@ pub struct VoiceRuntime {
     host_callbacks: std::collections::BTreeMap<(SpeechId, HostCallbackId), TaskId>,
     /// Each realtime speech's player, fed the socket's events (`Effect::RealtimePlayer`).
     realtime_players: std::collections::BTreeMap<
-        lk_agents_voice::agent_activity::scheduling::SpeechId,
+        lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId,
         tokio::sync::mpsc::Sender<lk_agents_abi::llm::realtime::Event>,
     >,
     /// The camera read now, its forwarder, and what a new forwarder is built from.
@@ -109,7 +109,7 @@ pub struct VoiceRuntime {
     /// The turn detector's predictions in flight, aborted at its close.
     predictions: Vec<TaskId>,
     interruption:
-        Option<Arc<dyn lk_agents_voice::agent_activity::false_interruption::InterruptionPort>>,
+        Option<Arc<dyn lk_agents_voice::agent_session::machine::activity::false_interruption::InterruptionPort>>,
     /// The executor's tasks: readers, drains, pumps, provider calls and closes. Most end at
     /// `Closing`; the run drains them within the cleanup bound and cancels the rest.
     tasks: Arc<TaskSet>,

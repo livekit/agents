@@ -99,10 +99,10 @@ use lk_agents_abi::telemetry::Cx;
 use lk_agents_abi::voice::events::CloseReason;
 use lk_agents_abi::voice::session::VoiceSession as _;
 use lk_agents_abi::{Maybe, OneOrStream};
-use lk_agents_voice::agent_activity::scheduling::SpeechId;
 use lk_agents_voice::agent_session::HandoffRefused;
 use lk_agents_voice::agent_session::commands::{ActivityCommand, HookId, HookOutcome, TurnCommand};
 use lk_agents_voice::agent_session::host_events::{HookCall, HookKind};
+use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
 use lk_agents_voice::agent_session::*;
 use lk_agents_voice::events::SessionEvent;
 use lk_agents_voice::generation::Instructions;
@@ -521,7 +521,7 @@ fn position(api: &Recorded, step: impl Fn(&Step) -> bool) -> Option<usize> {
 fn rejected(
     api: &Recorded,
     speech: SpeechId,
-) -> Option<lk_agents_voice::agent_activity::scheduling::Rejected> {
+) -> Option<lk_agents_voice::agent_session::machine::activity::scheduling::Rejected> {
     api.steps().iter().find_map(|s| match s {
         Step::Speech(lk_agents_voice::trace::SpeechStep::ScheduleRejected {
             speech: s,
@@ -585,7 +585,7 @@ async fn the_leaving_agents_own_say_during_a_handoff_is_still_refused() {
         HostSpeech::wait_until_created(&*handle).await.expect("created at once");
         assert_eq!(
             rejected(&api, handle.id()),
-            Some(lk_agents_voice::agent_activity::scheduling::Rejected::Draining),
+            Some(lk_agents_voice::agent_session::machine::activity::scheduling::Rejected::Draining),
             "{origin:?}: {:#?}",
             api.steps()
         );
@@ -767,7 +767,7 @@ async fn rare_host_calls_reach_a_running_session() {
 
 #[tokio::test(start_paused = true)]
 async fn options_view_changes_only_after_core_acceptance() {
-    use lk_agents_voice::agent_activity::options::aec_warmup_layer;
+    use lk_agents_voice::agent_session::options::aec_warmup_layer;
     let options =
         <SessionOptions as lk_agents_abi::voice::session::SessionOptions>::new(option_kwargs());
     let api = running(assembled(no_room(), None, Some(options))).await;

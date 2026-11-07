@@ -2,7 +2,7 @@
 //! Producer: `machine::VoiceDriver`; consumer: runtime `voice::VoiceRuntime`.
 //! Ordered dispatch, collectors, and timer execution are not part of this declaration file.
 
-use crate::agent_activity::scheduling::SpeechId;
+use crate::agent_session::machine::activity::scheduling::SpeechId;
 use crate::agent_session::{Answer, RequestId, VoiceHostEvent};
 use crate::audio_recognition::InterruptionSignal;
 use crate::events::SessionEvent;
@@ -145,7 +145,7 @@ pub enum VoiceEffect {
     /// The reply's agent validates an output candidate of `speech`'s run, reported as
     /// [`GenEvent::OutputValidated`](crate::generation::GenEvent::OutputValidated).
     ValidateOutput {
-        speech: crate::agent_activity::scheduling::SpeechId,
+        speech: crate::agent_session::machine::activity::scheduling::SpeechId,
         validation: lk_agents_abi::agent::run::ValidationId,
         candidate: lk_agents_abi::agent::OutputCandidate,
         hosted: crate::tool_executor::HostedTool,
@@ -154,7 +154,7 @@ pub enum VoiceEffect {
     },
     /// Cancel one output validator, leaving unrelated callbacks and background tools running.
     CancelOutputValidation {
-        speech: crate::agent_activity::scheduling::SpeechId,
+        speech: crate::agent_session::machine::activity::scheduling::SpeechId,
         validation: lk_agents_abi::agent::run::ValidationId,
     },
     /// Ask the host to format tool-handling prompt text (duplicate handling or a deferred
@@ -170,7 +170,7 @@ pub enum VoiceEffect {
     /// Cancel only this call's refusal renderer. Deferred tool-reply rendering and other
     /// calls keep their independent lifetimes. Idempotent when no renderer is pending.
     CancelToolRefusal {
-        speech: crate::agent_activity::scheduling::SpeechId,
+        speech: crate::agent_session::machine::activity::scheduling::SpeechId,
         call: lk_agents_core::agent_run::CallId,
     },
 }
@@ -210,7 +210,7 @@ pub enum Timer {
     /// `keyterm_detection.timeout`.
     KeytermTimeout,
     /// No `GenerationCreated` (or failure) back yet; on firing it fails with a timeout.
-    RealtimeRequest(crate::agent_activity::realtime::RequestKey),
+    RealtimeRequest(crate::agent_session::machine::activity::realtime::RequestKey),
     /// `RunContext.with_filler`.
     Filler(crate::filler_scheduler::FillerId),
     /// Re-armed by every digit, cancelled while either side speaks.

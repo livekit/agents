@@ -8,11 +8,11 @@ use lk_agents_abi::voice::events::CloseReason;
 
 use super::{HookId, RequestId};
 
-use crate::agent_activity::false_interruption::InterruptOutcome;
-use crate::agent_activity::handoff::HandoffEvent;
-use crate::agent_activity::hooks::Exit;
-use crate::agent_activity::scheduling::SpeechId;
 use crate::agent_session::effects::{Timer, VoiceEffect};
+use crate::agent_session::machine::activity::false_interruption::InterruptOutcome;
+use crate::agent_session::machine::activity::handoff::HandoffEvent;
+use crate::agent_session::machine::activity::hooks::Exit;
+use crate::agent_session::machine::activity::scheduling::SpeechId;
 use crate::agent_session::{
     ActivityCommand, Answer, Close, Command, DrainRefused, DtmfCommand, GenerateReplyRequest,
     HandoffRefused, IdleRefused, SpeechCommand, VoiceDriver,
@@ -24,7 +24,7 @@ use crate::trace::{
     CloseAct, CloseStep, CoreStep, HandoffStep, InputStep, InterruptCause, InterruptStep,
     SpeechStep, TurnStep,
 };
-use crate::workflows::dtmf::DtmfOutcome;
+use crate::workflows::machine::dtmf::DtmfOutcome;
 use std::time::Duration;
 
 /// Silence pushed into the recogniser so a streaming STT finalises: `stt_flush_duration`.
@@ -92,7 +92,7 @@ impl VoiceDriver {
         self.keyterms_step(now, crate::keyterm_detection::KeytermIn::Close);
         // DTMF collection stop, the first thing the close runs, stops listening: a key pressed
         // during the drain is not collected, a pending debounce never answers.
-        self.dtmf_step(crate::workflows::dtmf::DtmfTaskEvent::Stop);
+        self.dtmf_step(crate::workflows::machine::dtmf::DtmfTaskEvent::Stop);
         // Every VoiceTask ends first: the agent the close exits is the one they suspended.
         self.close_voice_tasks(now);
         let exit = self.plan_exit();
@@ -375,8 +375,11 @@ impl VoiceDriver {
                 return;
             }
             // A task somebody awaits: refused as closing; a late cancel has no task left.
-            Command::VoiceTask(crate::agent_activity::voice_task::VoiceTaskCommand::Run(run)) => {
-                let why = crate::agent_activity::voice_task::VoiceTaskEnded::Closing;
+            Command::VoiceTask(
+                crate::agent_session::machine::activity::voice_task::VoiceTaskCommand::Run(run),
+            ) => {
+                let why =
+                    crate::agent_session::machine::activity::voice_task::VoiceTaskEnded::Closing;
                 self.record_trace(crate::trace::HandoffStep::TaskRefused { why: why.clone() });
                 self.answer(Some(run.call), Answer::VoiceTask(Err(why)));
                 return;

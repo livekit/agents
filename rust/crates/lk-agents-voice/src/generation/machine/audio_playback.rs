@@ -8,7 +8,7 @@ use super::playout::{
     CutReceipt, Playout, SegmentFinish, SegmentFlow, drained,
 };
 pub use super::playout::{Next, SegmentEnd, SinkReport, SourceFailed};
-use crate::agent_activity::scheduling::SpeechId;
+use crate::agent_session::machine::activity::scheduling::SpeechId;
 use crate::agent_session::{DriverError, Now};
 use crate::generation::effects::AudioPlaybackEffect;
 use crate::generation::effects::{

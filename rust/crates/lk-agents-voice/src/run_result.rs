@@ -2,8 +2,8 @@
 //! distinct owners; work membership and liveness stay in lifecycle owners.
 
 use crate::agent::Source;
-use crate::agent_activity::scheduling::SpeechId;
 use crate::agent_session::VoiceDriver;
+use crate::agent_session::machine::activity::scheduling::SpeechId;
 use crate::events::{
     DiagnosticEvent, RunFailure, RunId, RunOutcome, RunRef, RunRefusal, SessionEvent,
 };
@@ -178,7 +178,8 @@ impl VoiceDriver {
     /// The run's own `generate_reply(..)`, pipeline or realtime; owned like any session reply.
     fn run_reply(&mut self, now: Ts, user_input: Option<String>) {
         if self.activity.realtime().is_some() {
-            let role = crate::agent_activity::realtime::RealtimeReplyRole::VoiceRun;
+            let role =
+                crate::agent_session::machine::activity::realtime::RealtimeReplyRole::VoiceRun;
             self.realtime_reply(now, user_input, None, None, None, None, role);
             return;
         }
@@ -373,8 +374,8 @@ mod tests {
 
     #[test]
     fn rejected_speech_is_attributed_before_its_immediate_terminal_release() {
-        use crate::agent_activity::scheduling::{PauseCause, SpeechKind};
-        use crate::agent_activity::speech::SpeechSpec;
+        use crate::agent_session::machine::activity::scheduling::{PauseCause, SpeechKind};
+        use crate::agent_session::machine::activity::speech::SpeechSpec;
         use crate::generation::ReplySource;
         let mut driver = crate::agent_session::tests::driver();
         driver.on_run(Ts::ZERO, RunSpec { user_input: None, host: None });
@@ -466,8 +467,8 @@ mod tests {
 
     #[test]
     fn unrelated_speech_neither_extends_the_run_nor_replaces_its_result() {
-        use crate::agent_activity::scheduling::SpeechKind;
-        use crate::agent_activity::speech::SpeechSpec;
+        use crate::agent_session::machine::activity::scheduling::SpeechKind;
+        use crate::agent_session::machine::activity::speech::SpeechSpec;
         use crate::generation::ReplySource;
         let mut driver = crate::agent_session::tests::driver();
         driver.on_run(Ts::ZERO, RunSpec { user_input: None, host: None });
@@ -478,7 +479,7 @@ mod tests {
         let unrelated = driver.start_speech(
             Ts::ZERO,
             SpeechSpec {
-                voice_run: crate::agent_activity::scheduling::VoiceRunParticipation::Outside,
+                voice_run: crate::agent_session::machine::activity::scheduling::VoiceRunParticipation::Outside,
                 ..SpeechSpec::new(SpeechKind::Say, ReplySource::Text("incidental".into()), true)
             },
         );

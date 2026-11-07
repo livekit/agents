@@ -2,11 +2,13 @@
 //! tool reply, and the fillers (`RunContext.with_filler`).
 
 use crate::agent::{Source, Visibility};
-use crate::agent_activity::realtime::{RealtimeReplyRole, Request};
-use crate::agent_activity::scheduling::{SpeechId, SpeechKind, VoiceRunParticipation};
-use crate::agent_activity::speech::SpeechSpec;
 use crate::agent_session::closing::SESSION_CLOSING;
 use crate::agent_session::effects::{Timer, VoiceEffect};
+use crate::agent_session::machine::activity::realtime::{RealtimeReplyRole, Request};
+use crate::agent_session::machine::activity::scheduling::{
+    SpeechId, SpeechKind, VoiceRunParticipation,
+};
+use crate::agent_session::machine::activity::speech::SpeechSpec;
 use crate::agent_session::{Answer, RequestId, VoiceCommandOrigin};
 use crate::agent_session::{FillerSource, FillerStart, HookCall, HookId, ToolUpdate, VoiceDriver};
 use crate::events::{DiagnosticEvent, SessionEvent, ToolEndStatus, ToolLifecycle, ToolReplyStatus};
@@ -607,7 +609,7 @@ impl VoiceDriver {
         let realtime = self.realtime_says();
         if self.session.tts.is_none() && self.session.outputs.plays_audio() && !realtime {
             self.record_trace(crate::trace::SpeechStep::SayRefused {
-                why: crate::agent_activity::speech::SAY_WITHOUT_TTS_REFUSED,
+                why: crate::agent_session::machine::activity::speech::SAY_WITHOUT_TTS_REFUSED,
             });
             return None;
         }
@@ -856,8 +858,10 @@ impl VoiceDriver {
             && !realtime
         {
             self.publish_event(SessionEvent::Diagnostic(
-                DiagnosticEvent::error(FILLER_STOPPED)
-                    .with("error", crate::agent_activity::speech::SAY_WITHOUT_TTS_REFUSED),
+                DiagnosticEvent::error(FILLER_STOPPED).with(
+                    "error",
+                    crate::agent_session::machine::activity::speech::SAY_WITHOUT_TTS_REFUSED,
+                ),
             ));
             self.end_filler(id, FillerEnd::Refused);
             return;

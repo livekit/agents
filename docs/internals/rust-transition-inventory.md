@@ -497,8 +497,8 @@ voice/room DST over the real runtime and port fakes:
 
 Source anchors: [driver handling and timers](../../rust/crates/lk-agents-voice/src/agent_session/machine/driver.rs),
 [callback settlement](../../rust/crates/lk-agents-voice/src/agent_session/machine/coordination.rs),
-[scheduling and authorization](../../rust/crates/lk-agents-voice/src/agent_activity/scheduling.rs),
-[idle/deferred work](../../rust/crates/lk-agents-voice/src/agent_activity/idle.rs), and
+[scheduling and authorization](../../rust/crates/lk-agents-voice/src/agent_session/machine/activity/scheduling.rs),
+[idle/deferred work](../../rust/crates/lk-agents-voice/src/agent_session/machine/activity/idle.rs), and
 [close progress](../../rust/crates/lk-agents-voice/src/agent_session/closing.rs).
 The automatic-scheduling redesign now implements these boundaries. The findings below retain
 their audit evidence; final combined regressions are recorded separately from that earlier audit.
@@ -608,7 +608,7 @@ voice-specific adapter binds it to speech, floor access, and runtime execution; 
 grow a second agent loop.
 
 The current implementation is in
-[reply_run.rs](../../rust/crates/lk-agents-voice/src/agent_activity/reply_run.rs), with the
+[reply_run.rs](../../rust/crates/lk-agents-voice/src/agent_session/machine/activity/reply_run.rs), with the
 shared coordinated contract in
 [agent_run/coordinated.rs](../../rust/crates/lk-agents-core/src/agent_run/machine/coordinated.rs).
 `ReplyRun` currently owns an `AgentRun` alongside its speech/request correlations and waiters.
@@ -1178,9 +1178,9 @@ treated as verified:
 | Non-final owned outputs can remain retained | `release` replaces the last-speech reference; settlement removes only that speech's output and close does not clear the map | Give intermediate outputs an explicit lifetime and release every non-selected value |
 
 Sources: [run_result.rs](../../rust/crates/lk-agents-voice/src/run_result.rs),
-[speech admission](../../rust/crates/lk-agents-voice/src/agent_activity/speech.rs),
-[realtime admission](../../rust/crates/lk-agents-voice/src/agent_activity/realtime/mod.rs), and
-[handoff](../../rust/crates/lk-agents-voice/src/agent_activity/handoff.rs).
+[speech admission](../../rust/crates/lk-agents-voice/src/agent_session/machine/activity/speech.rs),
+[realtime admission](../../rust/crates/lk-agents-voice/src/agent_session/machine/activity/realtime/mod.rs), and
+[handoff](../../rust/crates/lk-agents-voice/src/agent_session/machine/activity/handoff.rs).
 
 ### Resolved run behavior contracts
 
@@ -1278,7 +1278,7 @@ Today this forwarder accepts `AudioFrame` and implements audio-specific channel 
 resampling, silence substitution, and input accounting. Video does not use it: video input is
 read by a runtime task, sampled in the voice core, and accepted images are sent to the realtime
 model. See [audio forwarding](../../rust/crates/lk-agents-voice/src/data_plane/mod.rs) and
-[video decisions](../../rust/crates/lk-agents-voice/src/agent_activity/io.rs).
+[video decisions](../../rust/crates/lk-agents-voice/src/agent_session/machine/activity/io.rs).
 
 The long-term goal is understandable owners for session input, generation, playback, and
 transcript synchronization, not a generic media-forwarding framework. Keep common attachment,
@@ -1769,8 +1769,8 @@ I/O and waits still run through runtime ports.
 
 Source: [playback owner](../../rust/crates/lk-agents-voice/src/generation/machine/audio_playback.rs),
 [transcript owner](../../rust/crates/lk-agents-voice/src/transcription/machine/lifecycle.rs),
-[hook owner](../../rust/crates/lk-agents-voice/src/agent_activity/hooks.rs),
-[binding owner](../../rust/crates/lk-agents-voice/src/agent_session/output.rs), and
+[hook owner](../../rust/crates/lk-agents-voice/src/agent_session/machine/activity/hooks.rs),
+[binding owner](../../rust/crates/lk-agents-voice/src/agent_session/machine/output.rs), and
 [preparation owner](../../rust/crates/lk-agents-voice/src/generation/machine/preparation.rs).
 
 ### Verification of lifecycle grouping implementation

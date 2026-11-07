@@ -16,7 +16,7 @@ pub struct ErrorEvent {
     pub recoverable: bool,
     pub error: lk_agents_abi::errors::ProviderError,
     /// The speech whose request failed; `None` for the STT leg and the realtime socket.
-    pub speech: Option<crate::agent_activity::scheduling::SpeechId>,
+    pub speech: Option<crate::agent_session::machine::activity::scheduling::SpeechId>,
     /// The input processor that failed, for [`ErrorSource::AudioProcessing`].
     pub processor_failure: Option<lk_agents_abi::voice::rtc::ProcessorFailure>,
 }
@@ -27,7 +27,7 @@ impl ErrorEvent {
         source: ErrorSource,
         recoverable: bool,
         error: lk_agents_abi::errors::ProviderError,
-        speech: Option<crate::agent_activity::scheduling::SpeechId>,
+        speech: Option<crate::agent_session::machine::activity::scheduling::SpeechId>,
     ) -> Self {
         ErrorEvent { source, recoverable, error, speech, processor_failure: None }
     }
@@ -304,7 +304,7 @@ pub enum ToolLifecycle {
     Reply {
         update_ids: Vec<String>,
         status: ToolReplyStatus,
-        speech: crate::agent_activity::scheduling::SpeechId,
+        speech: crate::agent_session::machine::activity::scheduling::SpeechId,
     },
 }
 
@@ -374,8 +374,8 @@ pub enum SessionEvent {
     /// A speech was created, for every kind: the host's `speech_created` and
     /// `session.current_speech` for speeches it did not start itself.
     SpeechCreated {
-        speech: crate::agent_activity::scheduling::SpeechId,
-        kind: crate::agent_activity::scheduling::SpeechKind,
+        speech: crate::agent_session::machine::activity::scheduling::SpeechId,
+        kind: crate::agent_session::machine::activity::scheduling::SpeechKind,
         /// The host asked for this one (`say()`, `generate_reply()`).
         user_initiated: bool,
     },
@@ -402,12 +402,12 @@ pub enum SessionEvent {
     /// A speech ended, for every kind and cause, after every `ItemAdded` it produced; the handle is
     /// already `done()`.
     SpeechDone {
-        speech: crate::agent_activity::scheduling::SpeechId,
+        speech: crate::agent_session::machine::activity::scheduling::SpeechId,
         outcome: SpeechOutcome,
     },
     /// The floor changed hands (`None`: free); once per cycle, after the cycle's other effects.
     FloorChanged {
-        holder: Option<crate::agent_activity::scheduling::SpeechId>,
+        holder: Option<crate::agent_session::machine::activity::scheduling::SpeechId>,
     },
     /// The AMD machine released its verdict, once per machine.
     AmdResult {
@@ -417,7 +417,7 @@ pub enum SessionEvent {
     /// host (`Command::HostMetrics`). `speech` is the speech it belongs to.
     MetricsCollected {
         metrics: Box<lk_agents_abi::metrics::base::AgentMetrics>,
-        speech: Option<crate::agent_activity::scheduling::SpeechId>,
+        speech: Option<crate::agent_session::machine::activity::scheduling::SpeechId>,
         /// Already in the session's usage: a recognition stream's report, added to its request
         /// where it was built.
         counted: bool,
@@ -468,6 +468,6 @@ pub enum SessionEvent {
         run: RunRef,
         input_requirements: Vec<lk_agents_abi::agent::run::RunInputRequirement>,
         outcome: RunOutcome,
-        speech: Option<crate::agent_activity::scheduling::SpeechId>,
+        speech: Option<crate::agent_session::machine::activity::scheduling::SpeechId>,
     },
 }

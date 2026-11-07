@@ -14,7 +14,7 @@
 //! failed, every segment's end reported by the sink, and not cut by
 //! the session's close (which closes the synchroniser first).
 use lk_agents_voice::{
-    agent_activity::scheduling::SpeechId,
+    agent_session::machine::activity::scheduling::SpeechId,
     trace::{
         GenerationStep, InterruptCause, InterruptStep, PlayoutStep, SpeechStep, Step, ToolStep,
     },

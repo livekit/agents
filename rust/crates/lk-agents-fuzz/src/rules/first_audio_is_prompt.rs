@@ -12,7 +12,7 @@
 use std::collections::BTreeMap;
 
 use lk_agents_voice::{
-    agent_activity::scheduling::SpeechId,
+    agent_session::machine::activity::scheduling::SpeechId,
     agent_session::effects::{GateCause, GateOp},
     trace::{CloseStep, InterruptStep, PlayoutStep, SinkCall, SpeechStep, Step},
 };

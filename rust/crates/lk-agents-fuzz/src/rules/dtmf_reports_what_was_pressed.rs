@@ -12,7 +12,7 @@
 //! host's, or the session's own).
 use lk_agents_voice::events::SessionEvent;
 use lk_agents_voice::trace::{CloseStep, RoomLinkStep, RoomStep, Step};
-use lk_agents_voice::workflows::dtmf::{DtmfEvent, DtmfOutcome, GetDtmfResult};
+use lk_agents_voice::workflows::machine::dtmf::{DtmfEvent, DtmfOutcome, GetDtmfResult};
 
 use crate::{
     authored::Authored,

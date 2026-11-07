@@ -8,7 +8,7 @@
 //! c6881abb9, when no false-interruption timer was armed for its pause.
 use lk_agents_abi::voice::events::UserState;
 use lk_agents_voice::{
-    agent_activity::scheduling::SpeechId,
+    agent_session::machine::activity::scheduling::SpeechId,
     agent_session::effects::{GateCause, GateOp},
     events::SessionEvent,
     trace::{CloseStep, CoreStep, InterruptStep, SpeechStep, Step},

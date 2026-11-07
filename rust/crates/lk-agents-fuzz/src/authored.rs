@@ -11,7 +11,7 @@
 
 use lk_agents_abi::FunctionCall;
 use lk_agents_voice::{
-    agent_activity::scheduling::{SpeechId, SpeechKind},
+    agent_session::machine::activity::scheduling::{SpeechId, SpeechKind},
     events::{SessionEvent, SpeechOutcome, ToolEndStatus, ToolLifecycle},
     trace::Step,
 };

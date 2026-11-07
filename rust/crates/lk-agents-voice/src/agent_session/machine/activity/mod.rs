@@ -3,12 +3,10 @@
 //! Shared invocation decisions remain in the `AgentRun` composed by `reply_run`.
 
 use crate::agent::{CommitOutcome, Committed, Source, Visibility};
-use crate::agent_activity::false_interruption::PausedSpeech;
-use crate::agent_activity::options::{
-    AgentSessionOptions, ConfigStack, OverrideLayer, SessionLegs,
-};
-use crate::agent_activity::scheduling::{SpeechId, SpeechKind, SpeechScheduler};
 use crate::agent_session::effects::VoiceEffect;
+use crate::agent_session::machine::activity::false_interruption::PausedSpeech;
+use crate::agent_session::machine::activity::scheduling::{SpeechId, SpeechKind, SpeechScheduler};
+use crate::agent_session::options::{AgentSessionOptions, ConfigStack, OverrideLayer, SessionLegs};
 use crate::agent_session::{ActivityCommand, AudioInputHandle, VoiceDriver};
 use crate::audio_recognition::AudioRecognition;
 use crate::trace::{GenerationStep, InputStep, PlayoutStep, ToolStep};
@@ -26,7 +24,6 @@ pub mod handoff;
 pub mod hooks;
 mod idle;
 pub(crate) mod io;
-pub mod options;
 pub mod realtime;
 pub(crate) mod recognition;
 pub(crate) mod reply_run;
@@ -35,7 +32,6 @@ mod spans;
 pub(crate) mod speech;
 mod tool_results;
 pub(crate) mod tools;
-pub mod video_sampler;
 pub mod voice_task;
 
 /// How many of the latest speeches the driver remembers once settled (their agent, end, tool
@@ -125,31 +121,32 @@ pub(crate) struct AgentActivity {
     reply_plans:
         std::collections::VecDeque<(crate::agent_session::RequestId, crate::generation::ReplyPlan)>,
     /// Keeps the agent `thinking` across a filler `say` from inside a tool.
-    pub(crate) tools_in_flight: BTreeSet<SpeechId>,
+    pub(in crate::agent_session) tools_in_flight: BTreeSet<SpeechId>,
     /// The step's first frame transitions, once. Cleared when the step is spoken.
     spoke: BTreeSet<SpeechId>,
     /// `_current_speech` as last announced (`FloorChanged`); compared at the end of every cycle.
     announced_current_speech: Option<SpeechId>,
     /// `interrupt()`s waiting for their speeches' release.
-    interrupt_waiters: Vec<crate::agent_activity::false_interruption::InterruptWaiter>,
+    interrupt_waiters:
+        Vec<crate::agent_session::machine::activity::false_interruption::InterruptWaiter>,
     /// How long a hook whose answer is needed is waited on; `None` when no host runs hooks.
     hook_bound: Option<Duration>,
     /// The developer's callbacks in flight.
-    hooks: crate::agent_activity::hooks::Hooks,
+    hooks: crate::agent_session::machine::activity::hooks::Hooks,
     /// `update_agent()`: the switches asked for and in progress.
-    handoff: crate::agent_activity::handoff::Handoff,
+    handoff: crate::agent_session::machine::activity::handoff::Handoff,
     /// The `on_exit` each agent owes.
-    on_exit: crate::agent_activity::hooks::OnExit,
+    on_exit: crate::agent_session::machine::activity::hooks::OnExit,
     /// The host's `drain()`.
-    drain: crate::agent_activity::drain::Drain,
+    drain: crate::agent_session::machine::activity::drain::Drain,
     /// `VoiceTask.run()`: the tasks holding the floor and the parents they suspended.
-    voice_tasks: crate::agent_activity::voice_task::VoiceTasks,
+    voice_tasks: crate::agent_session::machine::activity::voice_task::VoiceTasks,
     /// DTMF collection while it runs.
-    dtmf: crate::workflows::dtmf::Dtmf,
+    dtmf: crate::workflows::machine::dtmf::Dtmf,
     /// `EndCallTool`: the speech whose goodbye the session closes after.
     end_call: Option<crate::workflows::end_call::EndCall>,
     /// `on_user_turn_exceeded`, waited for or running.
-    turn_limit: crate::agent_activity::hooks::TurnLimit,
+    turn_limit: crate::agent_session::machine::activity::hooks::TurnLimit,
     /// The user turn parked on `on_user_turn_completed` (`_user_turn_completed_atask`).
     pending_turn: Option<recognition::PendingTurn>,
     /// Decided turns waiting for `pending_turn`'s hook to return, in order.
@@ -187,7 +184,7 @@ struct RealtimeActivity {
     players: BTreeSet<SpeechId>,
     turn_detection_disabled: bool,
     resolved_mode: crate::audio_recognition::TurnDetectionMode,
-    requested_detection: crate::agent_activity::options::TurnDetection,
+    requested_detection: crate::agent_session::options::TurnDetection,
 }
 
 struct Preemptive {
@@ -327,7 +324,7 @@ impl AgentActivity {
     pub(crate) fn note_resolved_mode(
         &mut self,
         resolved: crate::audio_recognition::TurnDetectionMode,
-        detection: crate::agent_activity::options::TurnDetection,
+        detection: crate::agent_session::options::TurnDetection,
     ) -> bool {
         let Some(rt) = self.realtime_activity_mut() else { return false };
         let moved = resolved != rt.resolved_mode || detection != rt.requested_detection;
@@ -438,10 +435,12 @@ impl VoiceDriver {
                 if run.is_some() {
                     self.session.runs.participated();
                 }
-                self.handoff_step(crate::agent_activity::handoff::HandoffEvent::Asked {
-                    update,
-                    run,
-                })
+                self.handoff_step(
+                    crate::agent_session::machine::activity::handoff::HandoffEvent::Asked {
+                        update,
+                        run,
+                    },
+                )
             }
             ActivityCommand::UpdateInstructions(next) => {
                 self.activity.instructions = next.clone();
@@ -1022,7 +1021,9 @@ impl AgentActivity {
         if let Some(call) = self.dtmf.take_call() {
             effects.push(VoiceEffect::Answer(
                 call,
-                crate::agent_session::Answer::Dtmf(crate::workflows::dtmf::DtmfOutcome::Stopped),
+                crate::agent_session::Answer::Dtmf(
+                    crate::workflows::machine::dtmf::DtmfOutcome::Stopped,
+                ),
             ));
         }
         effects
@@ -1030,9 +1031,9 @@ impl AgentActivity {
     #[must_use]
     pub(crate) fn dtmf_transition(
         &mut self,
-        event: crate::workflows::dtmf::DtmfTaskEvent,
+        event: crate::workflows::machine::dtmf::DtmfTaskEvent,
         now: Ts,
-    ) -> Vec<crate::workflows::dtmf::DtmfTaskOutcome> {
+    ) -> Vec<crate::workflows::machine::dtmf::DtmfTaskOutcome> {
         self.dtmf.handle(event, now)
     }
     pub(crate) fn wait_for_interrupts(

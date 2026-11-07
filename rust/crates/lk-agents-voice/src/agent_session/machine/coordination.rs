@@ -1,9 +1,9 @@
 //! Private ordered session coordination. Pure transitions and dispatch; no I/O.
 
-use crate::agent_activity::drain::DrainEvent;
-use crate::agent_activity::false_interruption::AudioInterruptTrigger;
-use crate::agent_activity::handoff::{HandoffEvent, HandoffId};
-use crate::agent_activity::scheduling::PauseCause;
+use crate::agent_session::machine::activity::drain::DrainEvent;
+use crate::agent_session::machine::activity::false_interruption::AudioInterruptTrigger;
+use crate::agent_session::machine::activity::handoff::{HandoffEvent, HandoffId};
+use crate::agent_session::machine::activity::scheduling::PauseCause;
 use crate::agent_session::{
     AgentUpdate, Answer, HandoffRefused, HookCall, HookId, RequestId, VoiceDriver, VoiceHostEvent,
 };
@@ -446,7 +446,7 @@ impl VoiceDriver {
 #[derive(Debug)]
 pub(crate) enum VoiceCallback {
     EndOfTurn(crate::audio_recognition::EndOfTurnInfo),
-    TurnSettled(crate::agent_activity::false_interruption::TurnSettled),
+    TurnSettled(crate::agent_session::machine::activity::false_interruption::TurnSettled),
     AudioInterruptGuard(AudioInterruptGuard),
     InterruptByAudioActivity(AudioInterruptTrigger),
     SessionEvent(SessionEvent),
@@ -477,7 +477,7 @@ pub(crate) enum VoiceCallback {
     InterruptForDtmf,
     /// The digits read back for the caller to confirm.
     ReadBackDtmf(String),
-    DtmfFinished(crate::workflows::dtmf::DtmfOutcome),
+    DtmfFinished(crate::workflows::machine::dtmf::DtmfOutcome),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -568,9 +568,9 @@ impl VoiceDriver {
 
     pub(crate) fn record_drain_outcomes(
         &mut self,
-        outcomes: Vec<crate::agent_activity::drain::DrainOutcome>,
+        outcomes: Vec<crate::agent_session::machine::activity::drain::DrainOutcome>,
     ) {
-        use crate::agent_activity::drain::DrainOutcome;
+        use crate::agent_session::machine::activity::drain::DrainOutcome;
         for outcome in outcomes {
             match outcome {
                 DrainOutcome::Started { exit_hook } => {

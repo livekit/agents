@@ -321,6 +321,9 @@ STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
   through the injected `Spawner` and `Clock`, so the DST runs them on its deterministic
   scheduler. Tokio sync primitives are allowed; every `select!` is `biased;`. Sockets live in
   boundary adapters (the SDK room, the console's TCP port) that the DST replaces with port fakes.
+- A decision subject in core or voice is `mod.rs` (records, configuration, re-exports),
+  `machine` (the synchronous owners: inputs in, effects out) and `effects.rs` (the effect enums,
+  its output); see rust-core.md "Effect and machine source layout".
 - Move executors into the runtime by splitting: decisions stay in voice/core as synchronous
   state machines emitting effects; the runtime keeps pumps, node calls, timers and output
   binding. Never move a decision-bearing module into the runtime wholesale.

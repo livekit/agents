@@ -2,7 +2,7 @@
 //! The parent waits in memory, its tool still running, and is put back without its `on_exit` or
 //! `on_enter` once the task completes, fails, is cancelled, or the session closes.
 
-use crate::agent_activity::scheduling::SpeechId;
+use crate::agent_session::machine::activity::scheduling::SpeechId;
 use crate::agent_session::{
     AgentUpdate, Answer, GenerateReplyRequest, RequestId, SpeechCommand, VoiceDriver,
 };
@@ -22,14 +22,14 @@ pub struct VoiceTaskRun {
     /// The agent has no `on_enter` of its own: the task opens with a reply instead.
     pub opens_with_reply: bool,
     pub call: RequestId,
-    pub dtmf: Option<crate::workflows::dtmf::DtmfCollector>,
+    pub dtmf: Option<crate::workflows::machine::dtmf::DtmfCollector>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::agent_session::effects::VoiceEffect;
-    use crate::workflows::dtmf::{DtmfCollector, DtmfEvent, DtmfTaskEvent};
+    use crate::workflows::machine::dtmf::{DtmfCollector, DtmfEvent, DtmfTaskEvent};
     use std::time::Duration;
 
     #[test]
@@ -194,7 +194,10 @@ impl VoiceDriver {
         self.update_agent(now, *update);
         self.activity.on_exit.swapped();
         if let Some(collector) = dtmf {
-            self.dtmf_step(crate::workflows::dtmf::DtmfTaskEvent::Start { collector, call: None });
+            self.dtmf_step(crate::workflows::machine::dtmf::DtmfTaskEvent::Start {
+                collector,
+                call: None,
+            });
         }
         if opens_with_reply || self.activity.hook_bound.is_none() {
             self.agent_updated();
@@ -302,7 +305,7 @@ impl VoiceDriver {
         while self.activity.voice_tasks.stack.len() > from {
             let task = self.activity.voice_tasks.stack.pop().expect("stack longer than from");
             if task.dtmf {
-                self.dtmf_step(crate::workflows::dtmf::DtmfTaskEvent::Stop);
+                self.dtmf_step(crate::workflows::machine::dtmf::DtmfTaskEvent::Stop);
             }
             let last = self.activity.voice_tasks.stack.len() == from;
             let how = match how {
@@ -334,9 +337,9 @@ impl VoiceDriver {
     pub(crate) fn dtmf_task_finished(
         &mut self,
         now: Ts,
-        outcome: crate::workflows::dtmf::DtmfOutcome,
+        outcome: crate::workflows::machine::dtmf::DtmfOutcome,
     ) {
-        use crate::workflows::dtmf::DtmfOutcome;
+        use crate::workflows::machine::dtmf::DtmfOutcome;
         let Some(index) = self.activity.voice_tasks.stack.iter().rposition(|task| task.dtmf) else {
             return;
         };

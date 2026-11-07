@@ -3,9 +3,9 @@
 //! reserve -> activate -> settle/release, with pending cleanup retaining the same binding.
 //! Core owns admission and leases; the runtime owns physical audio/text resources.
 
-use super::effects::{AudioOp, VoiceEffect};
-use super::{Outputs, RequestId, VoiceDriver};
-use crate::agent_activity::scheduling::SpeechId;
+use crate::agent_session::effects::{AudioOp, VoiceEffect};
+use crate::agent_session::machine::activity::scheduling::SpeechId;
+use crate::agent_session::{Answer, Outputs, RequestId, VoiceDriver};
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::voice::io::PlaybackSegment;
 use std::collections::{BTreeMap, BTreeSet};
@@ -266,7 +266,7 @@ impl VoiceDriver {
                 crate::trace::PlayoutStep::OutputRefused { speech, reason: *reason },
             ));
         }
-        self.answer(Some(call), super::Answer::OutputBinding(binding));
+        self.answer(Some(call), Answer::OutputBinding(binding));
     }
 
     fn activate_output(&mut self, call: RequestId, binding: RequestId, speech: SpeechId) {
@@ -292,7 +292,7 @@ impl VoiceDriver {
         } else {
             Ok(activated)
         };
-        self.answer(Some(call), super::Answer::OutputActivation(result));
+        self.answer(Some(call), Answer::OutputActivation(result));
     }
 
     fn release_output(&mut self, request: RequestId, speech: SpeechId) {

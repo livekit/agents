@@ -78,7 +78,7 @@ impl Rule for ToolLifecycle {
 
 /// Started, ended, and the speech finished: the whole announced lifecycle.
 fn full_lifecycle() -> Recording {
-    use lk_agents_voice::{agent_activity::scheduling::SpeechKind, events::SpeechOutcome};
+    use lk_agents_voice::{agent_session::machine::activity::scheduling::SpeechKind, events::SpeechOutcome};
     Authored::new()
         .tool_call("c1", 1)
         .tool_started("c1")
@@ -120,7 +120,7 @@ fn ended_before_start() -> Recording {
 
 /// The speech finished and the runner moved on, with a started call never settled.
 fn speech_done_without_end() -> Recording {
-    use lk_agents_voice::{agent_activity::scheduling::SpeechKind, events::SpeechOutcome};
+    use lk_agents_voice::{agent_session::machine::activity::scheduling::SpeechKind, events::SpeechOutcome};
     Authored::new()
         .tool_call("c1", 1)
         .tool_started("c1")

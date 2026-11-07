@@ -22,7 +22,7 @@ use std::{
 
 use lk_agents_abi::{Ts, resources::ResourceId};
 use lk_agents_voice::{
-    agent_activity::scheduling::{SpeechId, SpeechKind},
+    agent_session::machine::activity::scheduling::{SpeechId, SpeechKind},
     agent_session::{HoldId, HookId, IdleRefused},
     events::{SessionEvent, ToolLifecycle},
     filler_scheduler::FillerId,
@@ -549,9 +549,11 @@ pub enum Answer {
     DrainOk,
     DrainRefused(lk_agents_voice::agent_session::DrainRefused),
     /// What a driver-run DTMF collection answered its `Start` with.
-    Dtmf(lk_agents_voice::workflows::dtmf::DtmfOutcome),
+    Dtmf(lk_agents_voice::workflows::machine::dtmf::DtmfOutcome),
     /// What `VoiceTask.run()` returned: its value's host object, or why it has none.
-    VoiceTask(Result<u64, lk_agents_voice::agent_activity::voice_task::VoiceTaskEnded>),
+    VoiceTask(
+        Result<u64, lk_agents_voice::agent_session::machine::activity::voice_task::VoiceTaskEnded>,
+    ),
     /// The channel closed without an answer.
     Lost,
     /// The host stopped awaiting it: the tool body that awaited a `VoiceTask.run()` ended first.

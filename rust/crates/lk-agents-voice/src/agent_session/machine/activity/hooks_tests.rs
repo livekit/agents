@@ -162,8 +162,8 @@ fn non_exit_completion_preserves_inline_order_ahead_of_queued_callbacks() {
 
 #[test]
 fn no_host_filler_source_refuses_once_instead_of_rescheduling_a_decline() {
-    use crate::agent_activity::scheduling::SpeechId;
     use crate::agent_session::FillerSource;
+    use crate::agent_session::machine::activity::scheduling::SpeechId;
     use crate::filler_scheduler::{FillerId, FillerScheduler};
     use crate::tool_executor::FillerRun;
     use crate::trace::{FillerEnd, GenerationStep};

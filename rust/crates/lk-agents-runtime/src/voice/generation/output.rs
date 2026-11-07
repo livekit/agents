@@ -15,14 +15,14 @@ use lk_agents_abi::voice::io::{
     PlaybackSegment, TextOutput,
 };
 use lk_agents_abi::voice::nodes::TextNode;
-use lk_agents_voice::agent_session::output::{OutputBindingEvent, SegmentBinding};
+use lk_agents_voice::agent_session::machine::output::{OutputBindingEvent, SegmentBinding};
 use lk_agents_voice::agent_session::{Answer, RequestId};
 use lk_agents_voice::generation::GenEvent;
 use std::sync::{Arc, Weak};
 
 pub(super) struct OutputBinding {
     shared: Arc<SessionShared>,
-    speech: lk_agents_voice::agent_activity::scheduling::SpeechId,
+    speech: lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId,
     request: RequestId,
     pub(super) binding: SegmentBinding,
     activated: bool,
@@ -35,7 +35,7 @@ pub(super) struct OutputBinding {
 /// Established before the grant is awaited, so cancellation still releases a late grant.
 struct PendingBinding {
     shared: Arc<SessionShared>,
-    speech: lk_agents_voice::agent_activity::scheduling::SpeechId,
+    speech: lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId,
     request: RequestId,
     transferred: bool,
 }
@@ -72,9 +72,9 @@ impl OutputBinding {
             }),
             call,
         );
-        let binding = answer
-            .await
-            .map_err(|_| lk_agents_voice::agent_session::output::OutputBindingError::ReplyLost)??;
+        let binding = answer.await.map_err(|_| {
+            lk_agents_voice::agent_session::machine::output::OutputBindingError::ReplyLost
+        })??;
         let Some(binding) = binding else { return Ok(None) };
         pending.transferred = true;
         Ok(Some(Self {
@@ -121,9 +121,9 @@ impl OutputBinding {
             }),
             call,
         );
-        let Some(binding) = answer
-            .await
-            .map_err(|_| lk_agents_voice::agent_session::output::OutputBindingError::ReplyLost)??
+        let Some(binding) = answer.await.map_err(|_| {
+            lk_agents_voice::agent_session::machine::output::OutputBindingError::ReplyLost
+        })??
         else {
             return Ok(false);
         };
@@ -137,10 +137,10 @@ impl OutputBinding {
         if !self.activated {
             self.shared.trace(lk_agents_voice::trace::PlayoutStep::OutputRefused {
                 speech: self.speech,
-                reason: lk_agents_voice::agent_session::output::OutputBindingError::ActivationUnavailable,
+                reason: lk_agents_voice::agent_session::machine::output::OutputBindingError::ActivationUnavailable,
             });
             return Err(
-                lk_agents_voice::agent_session::output::OutputBindingError::ActivationUnavailable
+                lk_agents_voice::agent_session::machine::output::OutputBindingError::ActivationUnavailable
                     .into(),
             );
         }
@@ -197,7 +197,7 @@ struct OutputSettlement {
     shared: Weak<SessionShared>,
     output: lk_agents_abi::resources::ResourceId,
     request: RequestId,
-    speech: lk_agents_voice::agent_activity::scheduling::SpeechId,
+    speech: lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId,
     segment: PlaybackSegment,
 }
 

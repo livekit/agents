@@ -1,6 +1,6 @@
 //! The host hears exactly one `SpeechDone` per speech, after its `SpeechCreated`, with the
 //! outcome the handle reports; and a handle that is done is announced.
-use lk_agents_voice::{agent_activity::scheduling::SpeechKind, events::SpeechOutcome};
+use lk_agents_voice::{agent_session::machine::activity::scheduling::SpeechKind, events::SpeechOutcome};
 
 use crate::{
     authored::Authored,

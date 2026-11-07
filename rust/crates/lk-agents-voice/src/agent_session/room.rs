@@ -132,20 +132,20 @@ impl VoiceDriver {
                 // `_on_room_io_participant_linked`: an outbound SIP call has no warmup, unless the
                 // application set `aec_warmup_duration` itself.
                 if *outbound_sip && !self.session.config.aec_warmup_given() {
-                    let patch = crate::agent_activity::options::aec_warmup_layer(None);
+                    let patch = crate::agent_session::options::aec_warmup_layer(None);
                     let diff = self.session.config.configure(&patch);
-                    let layer = crate::agent_activity::options::ConfigLayer::Session;
+                    let layer = crate::agent_session::options::ConfigLayer::Session;
                     self.apply_config(now, layer, diff);
                 }
             }
             RoomIoEvent::KeyPressed(digit) => {
-                let key = crate::workflows::dtmf::DtmfEvent::parse(digit);
+                let key = crate::workflows::machine::dtmf::DtmfEvent::parse(digit);
                 self.record_trace(RoomStep::Link(RoomLinkStep::KeyPressed { key }));
                 {
                     let updates = self.session.states.reset_away_timer(now, closing);
                     self.apply_user_state_updates(updates);
                 };
-                let digit = crate::workflows::dtmf::DtmfTaskEvent::Digit(digit.clone());
+                let digit = crate::workflows::machine::dtmf::DtmfTaskEvent::Digit(digit.clone());
                 return self.dtmf_step(digit);
             }
             RoomIoEvent::InputProcessorFailed(failure) => {

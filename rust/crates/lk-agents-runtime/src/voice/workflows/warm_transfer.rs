@@ -26,14 +26,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::twilio as twilio_http;
-use lk_agents_voice::workflows::twilio::{self, TwilioError};
-use lk_agents_voice::workflows::warm_transfer::{
+use lk_agents_voice::workflows::machine::warm_transfer::{
     Origination, Transfer, TransferFailure, TransferOutcome, TransferPlan, TransferTool,
     ends_merged_call, human_agent_room_name, transfer_tools,
 };
+use lk_agents_voice::workflows::twilio::{self, TwilioError};
 
 use lk_agents_net::env::ProcessEnv;
-pub use lk_agents_voice::workflows::warm_transfer::TransferConfig;
+pub use lk_agents_voice::workflows::machine::warm_transfer::TransferConfig;
 
 pub use lk_agents_abi::voice::workflows::warm_transfer::TransferHost;
 
@@ -732,7 +732,7 @@ mod tests {
         RemoteParticipant, RoomEventSink, RtcError, TextStreamIngress,
     };
     use lk_agents_abi::voice::workflows::IoEnableState;
-    use lk_agents_voice::workflows::warm_transfer as p;
+    use lk_agents_voice::workflows::machine::warm_transfer as p;
 
     /// A caller room these tests never reach: each stops before the transfer touches it.
     struct Untouched;
