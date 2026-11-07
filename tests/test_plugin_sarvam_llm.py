@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, cast
 from unittest.mock import MagicMock
 
+import httpx2 as httpx
 import openai
 import pytest
 
@@ -17,6 +18,7 @@ from livekit.plugins.sarvam.llm.client import (
     SARVAM_LLM_BASE_URL_V2,
     USER_AGENT,
     _filter_extra_body,
+    _with_api_version,
 )
 
 pytestmark = pytest.mark.unit
@@ -640,3 +642,83 @@ def test_explicit_base_url_overrides_conversations_v1() -> None:
     import asyncio
 
     asyncio.get_event_loop().run_until_complete(llm.aclose())
+
+
+# ---------------------------------------------------------------------------
+# Runtime model switching
+# ---------------------------------------------------------------------------
+
+
+async def _sent_url(llm: SarvamLLM) -> str:
+    """Run one turn and return the URL the request went to."""
+    urls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        urls.append(str(request.url))
+        return httpx.Response(
+            200,
+            content=b"data: [DONE]\n\n",
+            headers={"content-type": "text/event-stream"},
+        )
+
+    llm._client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    async with llm.chat(chat_ctx=_chat_ctx()) as stream:
+        async for _ in stream:
+            pass
+    return urls[0]
+
+
+async def test_model_switch_moves_to_the_new_endpoint_on_the_same_http_client() -> None:
+    timeout = httpx.Timeout(30.0)
+    llm = SarvamLLM(model="sarvam-105b", api_key="sk_test", timeout=timeout)
+    http_client = llm._client._client
+
+    llm.update_options(model="sarvam-105b-conversations")
+
+    # the switched client keeps the caller's timeout and the pool aclose() releases
+    assert llm._client._client is http_client
+    assert llm._client.timeout == timeout
+    assert llm.model == "sarvam-105b-conversations"
+    assert await _sent_url(llm) == f"{SARVAM_LLM_BASE_URL_V1}/chat/completions"
+
+    llm.update_options(model="sarvam-105b")
+    assert await _sent_url(llm) == f"{SARVAM_LLM_BASE_URL_V2}/chat/completions"
+    await llm.aclose()
+
+
+async def test_model_switch_keeps_an_explicit_base_url() -> None:
+    proxy = "https://proxy.example.com/sarvam"
+    llm = SarvamLLM(model="sarvam-105b", api_key="sk_test", base_url=f"{proxy}/v2")
+
+    # the conversations model only exists on /v1, so the version follows the model
+    llm.update_options(model="sarvam-105b-conversations")
+    assert await _sent_url(llm) == f"{proxy}/v1/chat/completions"
+
+    llm.update_options(model="gemma4")
+    assert await _sent_url(llm) == f"{proxy}/v2/chat/completions"
+    await llm.aclose()
+
+
+async def test_model_switch_leaves_a_base_url_without_a_version() -> None:
+    gateway = "https://gateway.example.com/sarvam-llm"
+    llm = SarvamLLM(model="sarvam-105b", api_key="sk_test", base_url=gateway)
+
+    llm.update_options(model="sarvam-105b-conversations")
+
+    assert await _sent_url(llm) == f"{gateway}/chat/completions"
+    await llm.aclose()
+
+
+@pytest.mark.parametrize(
+    ("base_url", "expected"),
+    [
+        ("https://api.sarvam.ai/v2/", "https://api.sarvam.ai/v1/"),
+        (
+            "https://proxy.example.com/sarvam/v2/?tenant=acme",
+            "https://proxy.example.com/sarvam/v1/?tenant=acme",
+        ),
+        ("https://gateway.example.com/sarvam-llm/", "https://gateway.example.com/sarvam-llm/"),
+    ],
+)
+def test_with_api_version_swaps_only_the_path(base_url: str, expected: str) -> None:
+    assert str(_with_api_version(httpx.URL(base_url), "v1")) == expected
