@@ -287,8 +287,15 @@ class ResponseSnapshot(BaseModel):
     incomplete_details: dict[str, Any] | None = None
 
 
+class OutputText(BaseModel):
+    """A text content part in a completed backend message."""
+
+    type: str | None = None
+    text: str | None = None
+
+
 class OutputItem(BaseModel):
-    """Fields needed to dispatch a completed backend function call."""
+    """Fields needed to dispatch calls and recognize a backend's completed answer."""
 
     id: str | None = None
     type: str | None = None
@@ -296,6 +303,7 @@ class OutputItem(BaseModel):
     call_id: str | None = None
     name: str | None = None
     arguments: str | None = None
+    content: list[OutputText] = []
 
 
 class ResponsesEvent(BaseModel):
@@ -303,6 +311,7 @@ class ResponsesEvent(BaseModel):
 
     type: str = ""
     response: ResponseSnapshot | None = None
+    delta: str | None = None
     # OpenAI's lenient parser needs a weak-referenceable union on Python 3.13.
     item: Optional[OutputItem] = None  # noqa: UP045
 

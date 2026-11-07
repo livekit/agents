@@ -337,6 +337,7 @@ class _DuplexRealtimeSession(RealtimeSession):
         # what a context update diffs against, and only what is new reaches the model
         self._chat_ctx = ChatContext.empty()
 
+        duplex.on("tool_reply_changed", lambda: self.emit("tool_reply_changed"))
         duplex.on("transcript_delta", self._on_transcript_delta)
         duplex.on("function_call", self._on_function_call)
         duplex.on("session_reconnected", self._on_session_reconnected)
@@ -406,6 +407,8 @@ class _DuplexRealtimeSession(RealtimeSession):
             burst = self._burst = self._burst or self._open_burst()
             if not burst.audio_ch.closed:
                 burst.audio_ch.send_nowait(f.frame)
+            # The generation owns this frame before a ready provider wait is released.
+            self._duplex._on_audio_output()
             self._audio_ms += round(f.frame.duration * 1000)
             burst.heard_ms = self._audio_ms
             self._attach_fragments(burst)
@@ -440,6 +443,7 @@ class _DuplexRealtimeSession(RealtimeSession):
             function_stream=burst.function_ch,
             user_initiated=False,
             response_id=burst.id,
+            is_tool_reply=kind == "speech",
         )
         # the model answers on the one stream it has, so speech opening is the reply asked for; a
         # call on its own is not unless the ask forced one, nor is text for sound already played:
@@ -553,9 +557,15 @@ class _DuplexRealtimeSession(RealtimeSession):
         self._close_burst()
         self._last_burst = None
         self._fail_pending_reply("the session reconnected before the model replied")
+        self.emit("tool_reply_changed")
         self.emit("session_reconnected", ev)
 
     # RealtimeSession
+
+    @property
+    def pending_tool_reply(self) -> bool | None:
+        """Use the provider's continuation lifecycle when it reports one."""
+        return self._duplex.pending_tool_reply
 
     @property
     def duplex_session(self) -> DuplexSession:

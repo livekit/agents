@@ -63,6 +63,7 @@ _FORWARDED_EVENTS: tuple[EventTypes, ...] = (
     "input_audio_transcription_completed",
     "generation_created",
     "session_reconnected",
+    "tool_reply_changed",
     "metrics_collected",
     "remote_item_added",
 )
@@ -175,14 +176,16 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
         self._tool_choice: NotGivenOr[ToolChoice | None] = NOT_GIVEN
 
         # stable per-event forwarders so they can be detached on swap
-        def _make_forwarder(event: EventTypes) -> Callable[[object], None]:
-            # callbacks receive only the payload, so bind the event name per forwarder
-            def _forward(ev: object) -> None:
-                self.emit(event, ev)
+        def _make_forwarder(event: EventTypes) -> Callable[..., None]:
+            # Bind the event name while preserving both payloads and payloadless notifications.
+            def _forward(*args: object) -> None:
+                if event == "tool_reply_changed" and self._swapping:
+                    return  # publish once startup and any regenerated speech are installed
+                self.emit(event, *args)
 
             return _forward
 
-        self._forwarders: dict[EventTypes, Callable[[object], None]] = {
+        self._forwarders: dict[EventTypes, Callable[..., None]] = {
             event: _make_forwarder(event) for event in _FORWARDED_EVENTS
         }
         self._extra_forwarders: dict[str, Callable[..., None]] = {}
@@ -198,6 +201,7 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
 
         # audio during a swap is dropped; replaying it would lag the model behind realtime
         self._swapping = False
+        self._swap_tool_reply_pending = False
 
         self._active_index = 0
         self._active_bound = False
@@ -353,6 +357,7 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
                     self._set_available(index, False)
                     return e
 
+            self._swap_tool_reply_pending = self._active.pending_tool_reply is True
             self._swapping = True
             try:
                 # close the old child; best-effort since the provider may already be dead
@@ -369,6 +374,7 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
                     error = await _bring_up(nxt)
             finally:
                 self._swapping = False
+                self._swap_tool_reply_pending = False
 
             if error is not None:
                 # every model failed to start; escalate so AgentSession can close instead of
@@ -384,9 +390,6 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
                 )
                 return
 
-            # a swap is a reconnect from the caller's perspective
-            self.emit("session_reconnected", RealtimeSessionReconnectedEvent())
-
             # re-issue the interrupted reply on the new session
             if (
                 was_speaking
@@ -395,10 +398,23 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
             ):
                 self._agent_session.generate_reply()
 
+            # Closing the old child happens after unbinding its events. Publish the
+            # replacement after installing any new speech, so cleanup cannot signal idle
+            # in the gap between abandoning the old reply and requesting its replacement.
+            self.emit("tool_reply_changed")
+            self.emit("session_reconnected", RealtimeSessionReconnectedEvent())
+
     @property
     def capabilities(self) -> RealtimeCapabilities:
         # the active model's caps, so per-turn consumers see the model actually in use
         return self._active.realtime_model.capabilities
+
+    @property
+    def pending_tool_reply(self) -> bool | None:
+        """Follow the active provider's continuation lifecycle across fallback."""
+        # The old child clears its state during close, before replacement work is
+        # installed. Retain ownership of that wait until the swap can publish it.
+        return self._swap_tool_reply_pending or self._active.pending_tool_reply
 
     @property
     def chat_ctx(self) -> ChatContext:
@@ -407,6 +423,22 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
     @property
     def tools(self) -> ToolContext:
         return self._active.tools
+
+    async def _update_session(
+        self,
+        *,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
+        tools: NotGivenOr[list[Tool]] = NOT_GIVEN,
+    ) -> None:
+        """Configure the child as a whole, including providers that wait for startup config."""
+        if is_given(instructions):
+            self._instructions = instructions
+        if is_given(tools):
+            self._tools = tools
+        await self._active._update_session(
+            instructions=instructions, chat_ctx=chat_ctx, tools=tools
+        )
 
     async def update_instructions(self, instructions: str) -> None:
         self._instructions = instructions

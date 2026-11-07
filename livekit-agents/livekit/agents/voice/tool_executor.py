@@ -319,6 +319,11 @@ class _ToolExecutor:
         return bool(self._running_tasks)
 
     @property
+    def has_pending_replies(self) -> bool:
+        """Whether buffered tool updates still require a deferred reply to be scheduled."""
+        return bool(self._pending_updates)
+
+    @property
     def has_cancellable_running_tasks(self) -> bool:
         return any(t.allow_cancellation for t in self._running_tasks.values())
 

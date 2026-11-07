@@ -654,3 +654,45 @@ async def test_emits_availability_changed_on_recovery() -> None:
     await session._swap_task
 
     assert any(e.realtime_model is primary and e.available is True for e in events)
+
+
+@pytest.mark.parametrize("backup_pending", [False, None])
+async def test_tool_reply_lifecycle_follows_active_provider(
+    monkeypatch: pytest.MonkeyPatch,
+    backup_pending: bool | None,
+) -> None:
+    """The wrapper must preserve lifecycle notifications and drop the old wait on swap."""
+    primary = FakeRealtimeModel()
+    backup = FakeRealtimeModel()
+    adapter = RealtimeModelFallbackAdapter([primary, backup])
+    session = adapter.session()
+    monkeypatch.setattr(
+        type(primary.active_session),
+        "pending_tool_reply",
+        property(lambda child: True if child is primary.active_session else backup_pending),
+    )
+    notifications = []
+    session.on("tool_reply_changed", lambda: notifications.append(True))
+    try:
+        assert session.pending_tool_reply is True
+        primary.active_session.emit("tool_reply_changed")
+        assert notifications == [True]
+        primary.active_session.emit_error(recoverable=False)
+        await session._swap_task
+        assert session.pending_tool_reply is backup_pending
+        assert notifications == [True, True]
+    finally:
+        await session.aclose()
+
+
+async def test_payloadless_tool_reply_event_preserves_argument_count() -> None:
+    """Forward a notification with no arguments, rather than inventing a None payload."""
+    primary = FakeRealtimeModel()
+    session = RealtimeModelFallbackAdapter([primary]).session()
+    events: list[tuple[object, ...]] = []
+    session.on("tool_reply_changed", lambda *args: events.append(args))
+    try:
+        primary.active_session.emit("tool_reply_changed")
+        assert events == [()]
+    finally:
+        await session.aclose()

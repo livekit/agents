@@ -132,6 +132,24 @@ class GPTLiveDelegation:
 
 
 @dataclass
+class _ToolReply:
+    """A delegated call, its submitted result, and eligibility for audio handoff."""
+
+    delegation_id: str | None
+    submitted: bool = False
+    ready: bool = False
+
+
+@dataclass
+class _ToolReplyCandidate:
+    """Results visible to one backend response and the kinds of output it produced."""
+
+    results: set[str]
+    has_tool_calls: bool = False
+    has_text: bool = False
+
+
+@dataclass
 class _Speech:
     """One speaker's fragments so far: the message they grow into and, for the user, their turn."""
 
@@ -470,6 +488,10 @@ class GPTLiveSession(
         self._backend_running_responses: dict[str | None, set[str]] = {}
         self._backend_open_calls: set[str] = set()
         self._backend_response_pending = False
+        self._tool_replies: dict[str, _ToolReply] = {}
+        # Snapshot results visible when a backend response starts. A continuation
+        # can both answer those results and ask for more work.
+        self._backend_reply_candidates: dict[str | None, _ToolReplyCandidate] = {}
 
         # the newest history item the last ask was about, so an ask never repeats one
         self._asked_item_id: str | None = None
@@ -663,6 +685,8 @@ class GPTLiveSession(
         self._backend_running_responses.clear()
         self._backend_open_calls.clear()
         self._backend_response_pending = False
+        self._tool_replies.clear()
+        self._backend_reply_candidates.clear()
         self._usage_total = types.Usage()
         self._session_id = None
 
@@ -970,11 +994,36 @@ class GPTLiveSession(
 
         if event.type == "response.created":
             self._backend_running_responses[d_id] = set()
+            self._backend_reply_candidates[d_id] = _ToolReplyCandidate(
+                results={
+                    call
+                    for call, reply in self._tool_replies.items()
+                    if reply.submitted and reply.delegation_id == d_id
+                }
+            )
+
+        elif event.type == "response.output_text.delta":
+            if (
+                event.delta
+                and event.delta.strip()
+                and (candidate := self._backend_reply_candidates.get(d_id)) is not None
+            ):
+                candidate.has_text = True
 
         elif event.type == "response.output_item.done":
             # only the completed item carries the name, call id and arguments together
             item = event.item
-            if item is None or item.type != "function_call":
+            if item is None:
+                return
+            if item.type == "message" and item.status == "completed":
+                if any(
+                    part.type == "output_text" and part.text and part.text.strip()
+                    for part in item.content
+                ):
+                    if (candidate := self._backend_reply_candidates.get(d_id)) is not None:
+                        candidate.has_text = True
+                return
+            if item.type != "function_call":
                 return
             if item.status != "completed":
                 logger.debug(
@@ -997,6 +1046,8 @@ class GPTLiveSession(
             if item.call_id in calls:
                 return
             calls.add(item.call_id)
+            if (candidate := self._backend_reply_candidates.get(d_id)) is not None:
+                candidate.has_tool_calls = True
 
             fnc_call = llm.FunctionCall(
                 id=item.id or utils.shortuuid("fc_"),
@@ -1004,6 +1055,7 @@ class GPTLiveSession(
                 name=item.name,
                 arguments=item.arguments,
             )
+            self._tool_replies[item.call_id] = _ToolReply(d_id)
             self._history.insert(fnc_call)
             self.emit("function_call", fnc_call)
 
@@ -1036,6 +1088,13 @@ class GPTLiveSession(
                 )
             if (calls := self._backend_running_responses.pop(d_id, None)) is not None:
                 self._backend_open_calls |= calls
+            candidate = self._backend_reply_candidates.pop(d_id, None)
+            if candidate is not None and (not candidate.has_tool_calls or candidate.has_text):
+                # A mixed response may answer the old results while starting new
+                # tools. Only a response with calls but no answer extends their wait.
+                for call in candidate.results:
+                    if (reply := self._tool_replies.get(call)) is not None:
+                        reply.ready = True
             self._maybe_continue_response()
 
         elif event.type in ("response.failed", "response.incomplete"):
@@ -1051,6 +1110,14 @@ class GPTLiveSession(
             # the service discards a failed response's calls: an output for one is refused, so
             # it goes to the voice model as context instead
             self._backend_running_responses.pop(d_id, None)
+            self._tool_replies = {
+                call: reply
+                for call, reply in self._tool_replies.items()
+                # A later failure cannot discard an earlier completed answer.
+                if reply.delegation_id != d_id or reply.ready
+            }
+            self._backend_reply_candidates.pop(d_id, None)
+            self.emit("tool_reply_changed")
             self._maybe_continue_response()
 
     def _maybe_continue_response(self) -> None:
@@ -1235,11 +1302,32 @@ class GPTLiveSession(
 
     async def aclose(self) -> None:
         await super().aclose()
+        self._tool_replies.clear()
+        self._backend_reply_candidates.clear()
+        self.emit("tool_reply_changed")
         if not self._session_started_fut.done():
             self._session_started_fut.cancel()
         self._msg_ch.close()
         with contextlib.suppress(asyncio.CancelledError):
             await self._main_atask
+
+    @property
+    def pending_tool_reply(self) -> bool:
+        """Results accepted by the backend but not yet answered audibly or failed."""
+        return any(reply.submitted for reply in self._tool_replies.values())
+
+    def _on_audio_output(self) -> None:
+        """Transfer only results whose backend continuation has completed to audible output.
+
+        Speech can continue independently of delegated work. Earlier audio cannot answer
+        results that the backend has not processed, and a newer batch may still be running.
+        """
+        if not self._tool_replies:
+            return
+        pending = self._tool_replies
+        self._tool_replies = {call: reply for call, reply in pending.items() if not reply.ready}
+        if len(self._tool_replies) != len(pending):
+            self.emit("tool_reply_changed")
 
     # framework hooks
 
@@ -1297,6 +1385,7 @@ class GPTLiveSession(
             self.append_thinking("\n".join(lines))
 
         for output in backend_outputs:
+            self._tool_replies.setdefault(output.call_id, _ToolReply(None)).submitted = True
             self.send_event(
                 types.ResponseItemCreateEvent(
                     event_id=utils.shortuuid("tool_output_"),
@@ -1309,6 +1398,7 @@ class GPTLiveSession(
             for calls in self._backend_running_responses.values():
                 calls.discard(output.call_id)
         if backend_outputs:
+            self.emit("tool_reply_changed")
             if silenced := [o.name or o.call_id for o in backend_outputs if not o.reply_required]:
                 logger.warning(
                     "a tool result wants no reply, but GPT Live will answer it anyway: the "
