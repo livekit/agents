@@ -130,6 +130,9 @@ impl VoiceDriver {
                     if let Some(required) = reply_required.get(&output.call_id) {
                         output.reply_required = *required;
                     }
+                    // Recorded now: after every item the session stamped before it, so the
+                    // history holds two replies' questions in the order they were put.
+                    output.created_at = output.created_at.max(self.step.wall());
                 }
                 // A cut speech never put its question: the person's next words do not answer it.
                 ChatItem::FunctionCall(call) if interrupted => {

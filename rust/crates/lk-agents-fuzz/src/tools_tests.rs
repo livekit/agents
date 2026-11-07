@@ -564,6 +564,23 @@ mod cut_question {
     }
 }
 
+mod questions_in_recorded_order {
+    //! Questions wait in the order the session recorded them.
+    use lk_agents_fuzz::search;
+
+    // Catches: an output stamped from its run's anchor, before an output the session recorded
+    // ahead of it, so the history put the later question first and the person's words answered
+    // it (campaign seed 5264 Arrival, tool_output_follows_outcome).
+    #[test]
+    fn the_next_words_answer_the_question_recorded_first() {
+        let seed = 5264;
+        let setup = search::sample_setup(&mut fastrand::Rng::with_seed(seed));
+        let outcome = search::explore(setup, seed, 3000);
+        let failed: Vec<_> = outcome.failures.iter().map(|f| f.contract.to_string()).collect();
+        assert!(!failed.iter().any(|c| c == "tool_output_follows_outcome"), "{failed:?}");
+    }
+}
+
 mod tool_update_as_first_report {
     //! A body's first report from the host: progress detaches it, an end answers its call.
     use lk_agents_fuzz::check::check_all;
