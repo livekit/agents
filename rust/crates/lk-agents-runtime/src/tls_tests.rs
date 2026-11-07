@@ -9,7 +9,7 @@ use base64::Engine as _;
 use futures_util::{SinkExt, StreamExt};
 use lk_agents_abi::storage::Storage as _;
 use lk_agents_net::{env::ProcessEnv, tls, websocket};
-use lk_agents_storage::namespace::Namespace;
+use lk_agents_storage::storage::Namespace;
 use lk_agents_worker::transport::{WorkerTransport, WtTransport};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

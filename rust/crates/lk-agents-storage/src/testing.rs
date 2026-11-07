@@ -17,8 +17,8 @@ use lk_agents_abi::storage::Storage as _;
 use lk_agents_net::env::ProcessEnv;
 
 use crate::backends::sqlite::FileConnection;
-use crate::namespace::Namespace;
 use crate::sql::{BatchResult, Row, Statement};
+use crate::storage::Namespace;
 use crate::thread::{LeaseTiming, SchemaCell};
 use crate::{Storage, Thread, ThreadDbConnection, shortuuid};
 
@@ -198,13 +198,13 @@ impl ThreadDbConnection for Faulty {
 
     async fn batch(&self, statements: Vec<Statement>) -> Result<BatchResult, StorageError> {
         self.reachable()?;
-        let is_commit = statements.iter().any(|s| s.sql.contains("version = version + 1"));
+        let is_commit = statements.iter().any(|s| s.sql().contains("version = version + 1"));
         // only a commit carrying staged writes can outgrow the database's frame: a run closed
         // with nothing of its own writes the lane and its journal, and leaves the fault armed
         let staged = statements.iter().any(|s| {
             !["version = version + 1", "INTO events", "INTO lanes"]
                 .iter()
-                .any(|w| s.sql.contains(w))
+                .any(|w| s.sql().contains(w))
         });
         let fault = match *self.commit.lock() {
             Some(CommitFault::RefuseTooLarge) if !staged => None,

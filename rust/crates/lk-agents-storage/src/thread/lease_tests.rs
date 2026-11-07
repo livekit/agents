@@ -155,8 +155,9 @@ impl lk_agents_storage::ThreadDbConnection for SlowReplies {
         &self,
         statements: Vec<lk_agents_storage::sql::Statement>,
     ) -> Result<lk_agents_storage::sql::BatchResult, StorageError> {
-        let renewal = statements.iter().any(|s| s.sql.contains("SET lease_until = unixepoch() +"));
-        let acquire = statements.iter().any(|s| s.sql.contains("RETURNING version"));
+        let renewal =
+            statements.iter().any(|s| s.sql().contains("SET lease_until = unixepoch() +"));
+        let acquire = statements.iter().any(|s| s.sql().contains("RETURNING version"));
         if renewal {
             let attempt = {
                 let mut attempts = self.attempts.lock();

@@ -2,17 +2,26 @@
 //! run's outcome and usage, and what a run commits ([`run_commit`]): the changed and deleted
 //! items, the journal entries, the task rows, the snapshot that changed and `run_ended`.
 
-use std::collections::BTreeMap;
+use std::time::Duration;
 
+use crate::thread::db::{Commit, Committed, EventWrite, Fenced, Resolution};
+use crate::thread::lease::LanePoll;
+use crate::thread::schema::*;
+use crate::{LaneAccess, LeaseAfterCommit, StorageError, TaskPickup, TaskWrite, WhenHeld};
+use livekit_protocol::agent::chat_context::ChatItem;
+use lk_agents_abi::storage::context::{AppStatement, ContextScope, ContextScopeWrite};
+use lk_agents_abi::storage::journal::{JournalEvent, RunEnded, RunStarted};
+use lk_agents_abi::usage::Usage;
 use serde_json::Value;
 
-use crate::TaskWrite;
-use crate::thread::db::{Commit, EventWrite};
-use crate::thread::schema::EventRow;
+use crate::shortuuid;
+use crate::thread::lease::Lease;
+use lk_agents_net::clock::unix_now_ms;
+
+use super::{Lane, db};
+use std::collections::BTreeMap;
+
 pub use crate::thread::schema::{ItemRow, LaneRow, TaskRow};
-use crate::{LaneAccess, StorageError};
-use livekit_protocol::agent::chat_context::ChatItem;
-use lk_agents_abi::storage::journal::{JournalEvent, RunEnded, RunStarted};
 
 /// a waiter that has not acquired after 60 s fails `lease-timeout`.
 pub use lk_agents_abi::a2a::options::LEASE_WAIT_TIMEOUT;
@@ -22,7 +31,6 @@ pub use lk_agents_abi::storage::thread::{
     REASON_LEASE_TIMEOUT, REASON_STORAGE_UNAVAILABLE, REASON_THREAD_NOT_FOUND, REASON_WORKER_LOST,
     RunOutcome, SUBMIT_CHANNEL, TaskPatch, WaitOptions, agent_message, merge_write, wait_patch,
 };
-use lk_agents_abi::usage::Usage;
 
 /// Everything a run commits, as staged by its owner.
 pub struct RunWrites<'a> {
@@ -198,6 +206,420 @@ impl RunSummary {
 pub const LOOKUP_LIMIT: i64 = 500;
 /// How many `input-required` rows `pending_ask` scans.
 pub const PENDING_ASK_LIMIT: i64 = 50;
+
+#[derive(Debug, Clone)]
+pub struct RunOptions {
+    /// Idempotency key: a `run_id` that already committed yields a closed run.
+    pub run_id: String,
+    /// The A2A task this run serves.
+    pub task_id: String,
+    pub access: LaneAccess,
+    /// The request's channel, for the `run_started` event.
+    pub channel: Option<String>,
+    pub wait_timeout: Duration,
+    /// What the acquire does with `task_id`'s row (`Run::picked_up`).
+    pub pickup: TaskPickup,
+}
+
+impl RunOptions {
+    pub fn new(run_id: impl Into<String>, task_id: impl Into<String>) -> Self {
+        Self {
+            run_id: run_id.into(),
+            task_id: task_id.into(),
+            access: LaneAccess::Exclusive(WhenHeld::Wait),
+            channel: None,
+            wait_timeout: LEASE_WAIT_TIMEOUT,
+            pickup: TaskPickup::Leave,
+        }
+    }
+}
+
+/// What this run appends to the lane's journal, stamped as recorded.
+#[derive(Default)]
+pub struct EventLog {
+    new: Vec<EventWrite>,
+}
+
+impl EventLog {
+    pub fn append(&mut self, event: JournalEvent) {
+        self.new.push(EventWrite::new(unix_now_ms(), event));
+    }
+}
+
+/// How long a commit whose acknowledgment was lost is resolved before the caller is answered
+/// [`StorageError::Uncertain`]; the run then still holds the commit for [`Run::resolve_later`].
+pub const RESOLVE_WAIT: Duration = Duration::from_secs(10);
+/// How long a resolver keeps checking a commit nobody could resolve in the caller's wait.
+pub const RESOLVE_LATER: Duration = Duration::from_secs(3600);
+
+/// What [`Run::commit`] does besides writing the run.
+#[derive(Debug, Clone, Default)]
+pub struct CommitOptions {
+    pub lease: LeaseAfterCommit,
+    /// The last inbox row a drain consumed.
+    pub drained_id: Option<i64>,
+    /// The task the turn answers, read back with the commit.
+    pub answer_task: Option<String>,
+}
+
+/// Everything a run reads and writes, committed together.
+pub struct Run {
+    pub(super) lane: Lane,
+    /// The lease the run holds; `None` under the `concurrent` policy, which takes none.
+    pub(super) lease: Option<Lease>,
+    pub(super) access: LaneAccess,
+    pub holder: String,
+    pub run_id: String,
+    pub task_id: String,
+    pub channel: Option<String>,
+    /// A `run_id` that already committed: the run writes nothing and answers nothing twice.
+    pub closed: bool,
+    /// The whole history, loaded; append as the model and the tools speak, delete by removing.
+    pub history: Vec<ItemRow>,
+    /// What was loaded, by id, in order.
+    pub(super) loaded: Vec<(String, ChatItem)>,
+    /// The state snapshot as loaded, `None` for a fresh lane; the caller can replace it
+    /// explicitly, and the commit writes it when it differs from what was loaded.
+    pub state: Option<Value>,
+    pub context_scopes: Vec<ContextScope>,
+    pub scope_writes: Vec<ContextScopeWrite>,
+    /// Application statements managed transactions staged, applied first in the commit.
+    pub app_writes: Vec<AppStatement>,
+    pub(super) loaded_state: Option<Value>,
+    pub events: EventLog,
+    pub tasks: Tasks,
+    /// Whether the acquire's `pickup` took the row to `working`.
+    pub picked_up: bool,
+    pub usage: Usage,
+    pub outcome: RunOutcome,
+    pub reason: Option<String>,
+    pub(super) finished: bool,
+    /// The commit [`Run::commit`] could not resolve in its wait, and whether it kept the lease.
+    pub(super) unresolved: Option<(Commit, LeaseAfterCommit)>,
+}
+
+impl Run {
+    pub fn lease(&self) -> Option<&Lease> {
+        self.lease.as_ref()
+    }
+
+    /// The version loaded: the commit's fence; `0` for a run that took no lease.
+    pub fn version(&self) -> i64 {
+        self.lease.as_ref().map_or(0, |l| l.fence().version)
+    }
+
+    /// The run's writes, as the core composes them.
+    pub fn writes(&self, opts: CommitOptions) -> Result<Commit, StorageError> {
+        let mut commit = run_commit(RunWrites {
+            run_id: &self.run_id,
+            task_id: &self.task_id,
+            channel: self.channel.as_deref(),
+            access: self.access,
+            history: &self.history,
+            loaded: &self.loaded,
+            state: self.state.as_ref(),
+            loaded_state: self.loaded_state.as_ref(),
+            events: &self.events.new,
+            tasks: self.tasks.writes(),
+            usage: &self.usage,
+            outcome: self.outcome,
+            reason: self.reason.as_deref(),
+            now_ms: unix_now_ms(),
+            drained_id: opts.drained_id,
+            answer_task: opts.answer_task,
+        })?;
+        commit.context_scopes = self.context_scopes.clone();
+        commit.scope_writes = self.scope_writes.clone();
+        commit.app_writes = self.app_writes.clone();
+        Ok(commit)
+    }
+
+    fn finish(&mut self) -> Result<(), StorageError> {
+        if self.finished {
+            return Err(StorageError::Invalid(format!("run {} already ended", self.run_id)));
+        }
+        self.finished = true;
+        if let Some(lease) = &self.lease {
+            lease.stop();
+        }
+        Ok(())
+    }
+
+    /// Leaving normally: one fenced write of everything the run holds. A closed run releases the
+    /// lease and writes nothing. `VersionConflict` means its token or version was replaced.
+    pub async fn commit(&mut self, opts: CommitOptions) -> Result<Committed, StorageError> {
+        self.finish()?;
+        let version = self.version();
+        if let Some(lease) = &self.lease
+            && self.closed
+        {
+            lease.release(None).await?;
+            return Ok(Committed { version, task: None });
+        }
+        if self.lease.is_none() {
+            self.lane.thread.ensure_schema().await?;
+        }
+        let lease = opts.lease;
+        let commit = self.writes(opts)?;
+        match self.send(&commit, lease).await {
+            Err(StorageError::Uncertain(why)) => self.resolve_lost_ack(commit, lease, why).await,
+            Err(StorageError::Invalid(why)) if !commit.app_writes.is_empty() => {
+                Err(self.refused_commit(&commit, why).await)
+            }
+            out => out,
+        }
+    }
+
+    /// Resolves a commit whose acknowledgment was lost, keeping it for a later resolution
+    /// while the answer is still uncertain.
+    async fn resolve_lost_ack(
+        &mut self,
+        commit: Commit,
+        lease: LeaseAfterCommit,
+        why: String,
+    ) -> Result<Committed, StorageError> {
+        log::warn!(target: lk_agents_abi::LOG_TARGET, lane = self.lane.name(), runId = self.run_id.as_str(); "commit acknowledgment lost, resolving: {why}");
+        let resolved = self.resolve(&commit, lease, RESOLVE_WAIT).await;
+        if matches!(resolved, Err(StorageError::Uncertain(_))) {
+            self.unresolved = Some((commit, lease));
+        }
+        resolved
+    }
+
+    /// A commit carrying application SQL the database refused: a lane that moved on aborted it
+    /// at its fence (`VersionConflict`); otherwise an application statement was refused.
+    async fn refused_commit(&self, commit: &Commit, why: String) -> StorageError {
+        let fence = self.lease.as_ref().map(Lease::fence);
+        let (conn, read_task) = (&*self.lane.thread.conn, commit.read_task.as_deref());
+        match db::resolve_commit(conn, self.lane.name(), &self.run_id, fence, read_task).await {
+            Ok(Resolution::Rejected) => StorageError::VersionConflict {
+                lane: self.lane.name().to_owned(),
+                expected: fence.map_or(0, |f| f.version),
+            },
+            _ => StorageError::Invalid(why),
+        }
+    }
+
+    /// Sends the run's one write, fenced on its lease when it holds one.
+    async fn send(
+        &self,
+        commit: &Commit,
+        after: LeaseAfterCommit,
+    ) -> Result<Committed, StorageError> {
+        let fenced = self.lease.as_ref().map(|lease| Fenced {
+            fence: lease.fence(),
+            keep: (after == LeaseAfterCommit::Keep).then(|| self.lane.thread.timing.secs()),
+        });
+        db::commit(&*self.lane.thread.conn, self.lane.name(), commit, fenced).await
+    }
+
+    /// A commit whose acknowledgment was lost, resolved by the run's identity: committed (its
+    /// record), not applied while the fence holds (sent again: the fence and the run id make it
+    /// safe), or rejected (`VersionConflict`: the lane moved on without it). `Uncertain` once
+    /// `wait` passes with no authoritative answer.
+    async fn resolve(
+        &self,
+        commit: &Commit,
+        lease: LeaseAfterCommit,
+        wait: Duration,
+    ) -> Result<Committed, StorageError> {
+        let fence = self.lease.as_ref().map(Lease::fence);
+        let epoch = tokio::time::Instant::now();
+        let mut poll = LanePoll::new(epoch.elapsed(), wait);
+        let mut last: String;
+        loop {
+            let (conn, read_task) = (&*self.lane.thread.conn, commit.read_task.as_deref());
+            match db::resolve_commit(conn, self.lane.name(), &self.run_id, fence, read_task).await {
+                Ok(Resolution::Committed(committed)) => return Ok(*committed),
+                Ok(Resolution::Rejected) => {
+                    return Err(StorageError::VersionConflict {
+                        lane: self.lane.name().to_owned(),
+                        expected: fence.map_or(0, |f| f.version),
+                    });
+                }
+                Ok(Resolution::NotApplied) => match self.send(commit, lease).await {
+                    Err(StorageError::Uncertain(why) | StorageError::Unavailable(why)) => {
+                        last = why
+                    }
+                    out => return out,
+                },
+                Err(e) => last = e.to_string(),
+            }
+            let Some(at) = poll.next(epoch.elapsed()) else {
+                return Err(StorageError::Uncertain(format!(
+                    "run {} unresolved after {}s: {last}",
+                    self.run_id,
+                    wait.as_secs_f64()
+                )));
+            };
+            tokio::time::sleep_until(epoch + at).await;
+        }
+    }
+
+    /// Keeps resolving a commit [`Run::commit`] left uncertain, up to [`RESOLVE_LATER`]: the
+    /// authoritative outcome, never a guess. `None` when nothing was left unresolved.
+    pub async fn resolve_later(mut self) -> Option<Result<Committed, StorageError>> {
+        let (commit, lease) = self.unresolved.take()?;
+        Some(self.resolve(&commit, lease, RESOLVE_LATER).await)
+    }
+
+    /// Leaving by error: `run_ended` with the outcome and the reason, and the release; nothing
+    /// else. A `run_ended` that could not be written is logged.
+    pub async fn abandon(
+        &mut self,
+        outcome: RunOutcome,
+        reason: impl Into<String>,
+    ) -> Result<(), StorageError> {
+        self.finish()?;
+        let Some(lease) = &self.lease else { return Ok(()) };
+        if self.closed {
+            return lease.release(None).await;
+        }
+        let ended = EventWrite::new(
+            unix_now_ms(),
+            JournalEvent::RunEnded(RunEnded { outcome, reason: Some(reason.into()) }),
+        );
+        if let Err(e) = lease.release(Some((&self.run_id, &ended))).await {
+            log::warn!(target: lk_agents_abi::LOG_TARGET, lane = self.lane.name(), runId = self.run_id.as_str(); "run_ended could not be written after a failed run: {e}");
+        }
+        Ok(())
+    }
+}
+
+/// The lane's task rows as this run writes them.
+pub struct Tasks {
+    lane: Lane,
+    /// In write order.
+    writes: Vec<TaskWrite>,
+    /// The lane's newest rows as the acquire loaded them, newest first: what the run's lookups
+    /// read instead of the database. Complete when shorter than [`LOOKUP_LIMIT`].
+    loaded: Option<Vec<TaskRow>>,
+}
+
+impl Tasks {
+    pub fn new(lane: Lane) -> Self {
+        Self { lane, writes: Vec::new(), loaded: None }
+    }
+
+    /// Over the rows an acquire loaded, newest first.
+    pub fn loaded(lane: Lane, loaded: Vec<TaskRow>) -> Self {
+        Self { lane, writes: Vec::new(), loaded: Some(loaded) }
+    }
+
+    /// The loaded rows, when they are the whole lane.
+    fn snapshot(&self) -> Option<&[TaskRow]> {
+        self.loaded.as_deref().filter(|rows| rows.len() < LOOKUP_LIMIT as usize)
+    }
+
+    /// The lane's newest rows, `limit` of them, as of the acquire.
+    pub async fn recent(&self, limit: i64) -> Result<Vec<TaskRow>, StorageError> {
+        if let Some(rows) = self.loaded.as_deref() {
+            return Ok(rows.iter().take(limit as usize).cloned().collect());
+        }
+        self.lane.tasks(None, limit).await
+    }
+
+    /// The `working` rows, oldest first: a dead holder's, as of the acquire.
+    pub async fn working(&self) -> Result<Vec<TaskRow>, StorageError> {
+        if let Some(rows) = self.snapshot() {
+            return Ok(rows
+                .iter()
+                .rev()
+                .filter(|r| r.status == TaskState::Working)
+                .cloned()
+                .collect());
+        }
+        let working = self.lane.tasks(Some(TaskState::Working), LOOKUP_LIMIT).await?;
+        Ok(working.into_iter().rev().collect())
+    }
+
+    /// The pending writes, in the order they were first made.
+    pub fn writes(&self) -> &[TaskWrite] {
+        &self.writes
+    }
+
+    /// The first loaded row that matches, else, when the loaded rows are not the whole lane, the
+    /// stored one `read` finds.
+    async fn find(
+        &self,
+        matches: impl Fn(&TaskRow) -> bool,
+        read: impl std::future::Future<Output = Result<Option<TaskRow>, StorageError>>,
+    ) -> Result<Option<TaskRow>, StorageError> {
+        match self.loaded.as_deref().and_then(|rows| rows.iter().find(|r| matches(r))) {
+            Some(r) => Ok(Some(r.clone())),
+            None if self.snapshot().is_some() => Ok(None),
+            None => read.await,
+        }
+    }
+
+    /// The requested pending question, or the newest one when no task was named.
+    pub async fn pending_ask(
+        &self,
+        task_id: Option<&str>,
+    ) -> Result<Option<TaskRow>, StorageError> {
+        if let Some(task_id) = task_id {
+            return Ok(self
+                .find(|row| row.task_id == task_id, self.lane.task(task_id))
+                .await?
+                .filter(|row| {
+                    row.status == TaskState::InputRequired
+                        && row.internal.as_ref().is_some_and(|internal| internal.ask.is_some())
+                }));
+        }
+
+        if let Some(rows) = self.snapshot() {
+            return Ok(rows
+                .iter()
+                .find(|r| {
+                    r.status == TaskState::InputRequired
+                        && r.internal.as_ref().is_some_and(|i| i.ask.is_some())
+                })
+                .cloned());
+        }
+        Ok(self
+            .lane
+            .tasks(Some(TaskState::InputRequired), PENDING_ASK_LIMIT)
+            .await?
+            .into_iter()
+            .find(|r| r.internal.as_ref().is_some_and(|i| i.ask.is_some())))
+    }
+
+    /// Insert or update one row; what the patch leaves `None` keeps the existing row's value. A
+    /// stored row that is already terminal (a client canceled it mid-turn) stays as it is, as the
+    /// commit would leave it; rewriting this run's own terminal write is refused.
+    pub async fn write(
+        &mut self,
+        task_id: &str,
+        status: TaskState,
+        patch: TaskPatch,
+    ) -> Result<(), StorageError> {
+        let base = match self.writes.iter().find(|w| w.task_id == task_id) {
+            Some(w) => Some(w.clone()),
+            None => match self.find(|r| r.task_id == task_id, self.lane.task(task_id)).await? {
+                Some(row) if row.terminal() => return Ok(()),
+                row => row.map(TaskWrite::from),
+            },
+        };
+        let write = merge_write(task_id, base.as_ref(), status, patch)?;
+        match self.writes.iter().position(|w| w.task_id == task_id) {
+            Some(i) => self.writes[i] = write,
+            None => self.writes.push(write),
+        }
+        Ok(())
+    }
+
+    /// `input-required`: the question is the status message, `ask` the pending transition.
+    pub async fn wait(
+        &mut self,
+        task_id: &str,
+        question: &str,
+        opts: WaitOptions,
+    ) -> Result<(), StorageError> {
+        let patch = wait_patch(task_id, question, opts, shortuuid("msg_"));
+        self.write(task_id, TaskState::InputRequired, patch).await?;
+        Ok(())
+    }
+}
 
 #[cfg(test)]
 mod tests {

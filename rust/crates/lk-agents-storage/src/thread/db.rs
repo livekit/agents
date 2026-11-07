@@ -121,9 +121,9 @@ impl Batch {
 /// The DDL and the `schema_version` row of a database no SDK wrote yet.
 pub fn bootstrap() -> Vec<Statement> {
     let mut out: Vec<Statement> =
-        crate::sql::schema_statements(THREAD_SCHEMA).map(Statement::raw).collect();
+        crate::sql::schema_statements(THREAD_SCHEMA).map(Statement::ddl).collect();
     out.push(InsertSchemaVersion { version: THREAD_SCHEMA_VERSION }.bind());
-    out.push(Statement::raw(crate::context::db::SCHEMA));
+    out.push(Statement::ddl(crate::thread::schema::CONTEXT_SCHEMA));
     out
 }
 
@@ -199,7 +199,7 @@ pub(crate) async fn acquire(
 ) -> Result<Option<Acquired>, StorageError> {
     let (lane, token) = (req.lane, req.token);
     let mut b = Batch(schema);
-    b.0.push(Statement::raw(crate::context::db::SCHEMA));
+    b.0.push(Statement::ddl(crate::thread::schema::CONTEXT_SCHEMA));
     b.add(InsertLane { lane });
     let take = b.add(TakeLease {
         lane,
@@ -223,7 +223,7 @@ pub(crate) async fn acquire(
     let items = b.add(SelectItems { lane });
     let lane_row = b.add(SelectLane { lane });
     let tasks = b.add(SelectTasks { lane, limit: req.tasks_limit });
-    b.0.push(crate::context::db::select(lane));
+    b.0.push(crate::thread::schema::SelectScopes { lane }.bind());
     let context_scopes = b.0.len() - 1;
     let out = conn.batch(b.0).await?;
 
@@ -251,7 +251,7 @@ pub(crate) async fn acquire(
         lane: LaneRow::from_row(lane_row)?,
         items: rows(&out, items, ItemRow::from_row)?,
         tasks: rows(&out, tasks, TaskRow::from_row)?,
-        context_scopes: crate::context::db::from_rows(out.at(context_scopes)?.rows())?,
+        context_scopes: crate::context::scopes_from_rows(out.at(context_scopes)?.rows())?,
         picked_up,
     }))
 }
@@ -442,7 +442,7 @@ fn add_fenced_rows(
 ) -> Result<(), StorageError> {
     let (version, token) = (fence.version, fence.token.as_str());
     for write in &c.scope_writes {
-        b.0.push(crate::context::db::write(lane, write, Some(fence))?);
+        b.0.push(crate::context::scope_write(lane, write, Some(fence))?);
     }
     for item in &c.items {
         b.add(InsertItem {
@@ -780,7 +780,7 @@ pub(crate) async fn list_items(
         if items.len() as i64 == limit {
             return Ok(ItemPage { items, next: Some(format!("{scope}:{last}")) });
         }
-        let item = ItemRow::from_row(&row[2..].to_vec())?;
+        let item = ItemRow::from_row(&row[3..].to_vec())?;
         items.push(PagedItem { seq: pos, lane: row_lane.to_owned(), item });
         last = pos;
     }

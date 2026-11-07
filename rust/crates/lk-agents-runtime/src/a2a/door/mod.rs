@@ -22,7 +22,7 @@ use lk_agents_core::a2a::wire;
 use lk_agents_net::clock::unix_now_ms;
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::task::{TaskSet, TokioSpawner};
-use lk_agents_storage::namespace::Namespace;
+use lk_agents_storage::storage::Namespace;
 use lk_agents_storage::thread::db::TaskQuery;
 use lk_agents_storage::thread::schema::TaskRow;
 use lk_agents_storage::{Thread, shortuuid};

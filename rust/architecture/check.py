@@ -251,10 +251,7 @@ def without_test_modules(text: str) -> str:
         kept.append(text[at : match.start()])
         at = match.end()
         if match.group(1) == "{":
-            depth = 1
-            while depth and at < len(text):
-                depth += {"{": 1, "}": -1}.get(text[at], 0)
-                at += 1
+            at = brace_end(text, match.end() - 1)
     kept.append(text[at:])
     return "".join(kept)
 
@@ -449,6 +446,54 @@ def cx_none_violations(root: Path, paths: list[str]) -> dict[str, int]:
         text = without_test_modules(NOT_CODE.sub(blank, (root / path).read_text()))
         if count := len(CX_NONE.findall(text)):
             violations[f"cx-none:{path}"] = count
+    return violations
+
+
+# The framework's SQL is declared with lk-agents-storage's `statement!`, which checks every
+# `:placeholder` against the statement's fields at compile time. Any other string literal that
+# reads or writes rows is inline SQL; a schema's DDL (a literal starting with CREATE) is not.
+SQL_DML = re.compile(
+    r"\b(?:SELECT\s|INSERT\s+INTO\b|UPDATE\s+\w+\s+SET\b|DELETE\s+FROM\b|REPLACE\s+INTO\b)"
+)
+STATEMENT_MACRO = re.compile(r"\bstatement!\s*\{")
+
+
+def brace_end(code: str, start: int) -> int:
+    """The index past the `}` closing the `{` at `start`, in code with strings blanked."""
+    depth, at = 0, start
+    while at < len(code):
+        depth += {"{": 1, "}": -1}.get(code[at], 0)
+        at += 1
+        if depth == 0:
+            break
+    return at
+
+
+def inline_sql_violations(root: Path, paths: list[str]) -> dict[str, int]:
+    """Every row-reading or row-writing SQL literal outside `statement!` and tests, per file."""
+    violations = {}
+    for path in paths:
+        if Path(path).parts[:2] != ("rust", "crates") or path.endswith("_tests.rs"):
+            continue
+        text = (root / path).read_text()
+        if generated(text):
+            continue
+        code = NOT_CODE.sub(blank, text)
+        allowed = [(m.start(), brace_end(code, m.end() - 1)) for m in STATEMENT_MACRO.finditer(code)]
+        for module in TEST_MODULE.finditer(code):
+            if module.group(1) == "{":
+                allowed.append((module.start(), brace_end(code, module.end() - 1)))
+        count = 0
+        for literal in NOT_CODE.finditer(text):
+            body = literal.group(0)
+            if body[0] not in "\"rb" or not SQL_DML.search(body):
+                continue
+            if body.lstrip('br#"').lstrip().startswith("CREATE"):
+                continue
+            if not any(start <= literal.start() < end for start, end in allowed):
+                count += 1
+        if count:
+            violations[f"inline-sql:{path}"] = count
     return violations
 
 
@@ -681,6 +726,7 @@ def check_boundaries(metadata: dict) -> int:
         ("uses", use_violations(root, paths)),
         ("telemetry-spelling", telemetry_spelling_violations(root, paths)),
         ("cx-none", cx_none_violations(root, paths)),
+        ("inline-sql", inline_sql_violations(root, paths)),
     ):
         path = f"rust/architecture/{name}-baseline.json"
         baseline = json.loads((root / path).read_text())

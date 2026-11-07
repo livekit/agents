@@ -15,6 +15,7 @@ from check import (
     host_call_violations,
     telemetry_spelling_violations,
     cx_none_violations,
+    inline_sql_violations,
     length_violations,
     nesting_violations,
     path_violations,
@@ -571,6 +572,36 @@ class HostCallContracts(unittest.TestCase):
             self.assertEqual(
                 cx_none_violations(root, list(files)),
                 {"cx-none:rust/crates/lk-agents-runtime/src/voice/io.rs": 2},
+            )
+
+    def test_sql_outside_statement_declarations_and_tests_is_inline(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            files = {
+                # Violations: a hand-numbered statement, a format string, a raw string.
+                "rust/crates/lk-agents-storage/src/registry.rs": (
+                    'fn f() { s("SELECT id FROM threads WHERE id = ?1"); }\n'
+                    'fn g() { format!("UPDATE threads SET {} = ?1", c); }\n'
+                    'fn h() { s(r#"DELETE FROM threads"#); }\n'
+                ),
+                # Allowed: declarations, DDL, comments, prose, test modules and test files.
+                "rust/crates/lk-agents-storage/src/schema.rs": (
+                    'statement! {\n    /// A doc { brace.\n    SelectThread<\'a> { id: &\'a str } => r#"\n'
+                    'SELECT id FROM threads WHERE id = :id\n"#\n}\n'
+                    'const SCHEMA: &str = "CREATE TABLE t (a TEXT);\nINSERT INTO t VALUES (1)";\n'
+                    '// SELECT id FROM threads\n'
+                    'const E: &str = "expected one SQL statement";\n'
+                    '#[cfg(test)]\nmod tests { fn t() { s("INSERT INTO t VALUES (1)"); } }\n'
+                ),
+                "rust/crates/lk-agents-storage/src/voice_tests.rs": 's("UPDATE lanes SET a = 1");\n',
+            }
+            for path, text in files.items():
+                file = root / path
+                file.parent.mkdir(parents=True, exist_ok=True)
+                file.write_text(text)
+            self.assertEqual(
+                inline_sql_violations(root, list(files)),
+                {"inline-sql:rust/crates/lk-agents-storage/src/registry.rs": 3},
             )
 
     def test_a_host_call_outside_the_entry_is_a_violation(self):

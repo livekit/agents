@@ -44,8 +44,8 @@ fn to_wire(v: &SqlValue) -> wire::Value {
 /// A statement as the wire carries it.
 pub fn statement(s: &Statement) -> wire::Statement {
     wire::Statement {
-        sql: s.sql.to_string(),
-        params: s.params.iter().map(to_wire).collect(),
+        sql: s.sql().to_owned(),
+        params: s.params().iter().map(to_wire).collect(),
         lang: 0,
     }
 }

@@ -10,7 +10,8 @@ use lk_agents_net::a2a_auth::Credentials;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::sql::{Row, SqlValue, Statement, Table};
+use crate::sql::{Bind, Row, SqlValue, Table};
+use crate::thread::schema::{SelectItemsAfter, SelectItemsBefore, SelectThreadTasksInserted};
 use crate::{Storage, StorageError, TaskState, Thread};
 use generated::*;
 use livekit_protocol::agent::agent_thread;
@@ -398,19 +399,13 @@ async fn items(
     let after = position(&request.page_cursor, &listing, if desc { i64::MAX } else { 0 })?;
     let limit = page_size(request.page_page_size)?;
     thread.ensure_schema().await?;
-    let rows = thread
-        .conn()
-        .query(Statement {
-            sql: format!(
-                "SELECT pos, lane, seq, id, message_id, json(payload) FROM items \
-            WHERE (?1 = '' OR lane = ?1) AND pos {} ?2 ORDER BY pos {} LIMIT ?3",
-                if desc { "<" } else { ">" },
-                if desc { "DESC" } else { "ASC" }
-            )
-            .into(),
-            params: vec![request.agent.into(), after.into(), (limit + 1).into()],
-        })
-        .await?;
+    let lane = Some(request.agent.as_str()).filter(|lane| !lane.is_empty());
+    let page = if desc {
+        SelectItemsBefore { lane, before: after, limit: limit + 1 }.bind()
+    } else {
+        SelectItemsAfter { lane, after, limit: limit + 1 }.bind()
+    };
+    let rows = thread.conn().query(page).await?;
     let more = rows.len() > limit as usize;
     let mut items = Vec::new();
     let mut last = after;
@@ -470,19 +465,14 @@ async fn tasks(
     let after = position(&request.page_cursor, &listing, 0)?;
     let limit = page_size(request.page_page_size)?;
     thread.ensure_schema().await?;
-    let rows = thread
-        .conn()
-        .query(Statement {
-            sql: format!(
-                "SELECT pos, {} FROM tasks \
-                 WHERE pos > ?1 AND (?2 IS NULL OR status = ?2) \
-                 ORDER BY pos LIMIT ?3",
-                crate::thread::schema::TaskRow::SELECT
-            )
-            .into(),
-            params: vec![after.into(), status.into(), (limit + 1).into()],
-        })
-        .await?;
+    let page = SelectThreadTasksInserted {
+        lane: None,
+        status,
+        updated_after: i64::MIN,
+        after,
+        limit: limit + 1,
+    };
+    let rows = thread.conn().query(page.bind()).await?;
     let more = rows.len() > limit as usize;
     let mut items = Vec::new();
     let mut last = after;

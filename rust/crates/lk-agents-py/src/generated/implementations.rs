@@ -72,12 +72,12 @@ impl super::Implementations for Selected {
     type LlmMetricState = ::lk_agents_runtime::cores::LlmMetricState;
     type TtsMetricState = ::lk_agents_runtime::cores::TtsMetricState;
     type SessionRecorder = ::lk_agents_runtime::recording::SessionRecorder;
-    type Storage = ::lk_agents_runtime::storage::namespace::Namespace;
+    type Storage = ::lk_agents_runtime::storage::storage::Namespace;
     type ContextActivation = ::lk_agents_runtime::storage::context::store::ContextStore;
     type AppTransaction = ::lk_agents_runtime::storage::context::transaction::Transaction;
     type Thread = ::lk_agents_runtime::storage::Thread;
-    type Run = ::lk_agents_runtime::storage::namespace::RunHandle;
-    type ThreadHandle = ::lk_agents_runtime::storage::handle::ThreadHandle;
+    type Run = ::lk_agents_runtime::storage::storage::RunHandle;
+    type ThreadHandle = ::lk_agents_runtime::storage::storage::ThreadHandle;
     type ThreadServer = ::lk_agents_runtime::storage::http::ThreadServer;
     type VoiceStore = ::lk_agents_runtime::storage::voice::VoiceStore;
     type FallbackStt = ::lk_agents_runtime::inference::fallback::FallbackStt;

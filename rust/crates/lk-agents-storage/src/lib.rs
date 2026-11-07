@@ -3,16 +3,15 @@
 //! - [`backends`]: lifecycle and database connections for both backends.
 //! - [`thread`]: thread/lane/run execution, leases, commits and typed database operations.
 //! - [`context`], [`voice`]: persisted application context and voice-session storage.
-//! - [`namespace`]: native host adapters for namespaces, threads and runs.
+//! - [`storage`]: the host's `Storage` class, `ctx.thread`, and the thread and run handles.
 //! - [`http`]: the generated ThreadService contract and its local listener.
 //! - [`sql`]: bound statements, results, row decoding and schema validation.
 
 pub mod backends;
 pub mod context;
-pub mod handle;
 pub mod http;
-pub mod namespace;
 pub mod sql;
+pub mod storage;
 #[cfg(feature = "testing")]
 pub mod testing;
 pub mod thread;

@@ -8,7 +8,7 @@ use lk_agents_abi::storage::context::ContextActivation as _;
 use lk_agents_abi::{BoxFuture, errors::HostError};
 use lk_agents_core::resource_lifecycle::{CloseOwner, OwnerLifecycle, StartOwner, StoragePlan};
 use lk_agents_net::{env::ProcessEnv, task::TaskSet};
-use lk_agents_storage::{context::store::ContextStore, namespace::Namespace};
+use lk_agents_storage::{context::store::ContextStore, storage::Namespace};
 use parking_lot::Mutex;
 use std::sync::{Arc, OnceLock};
 use tokio::sync::watch;

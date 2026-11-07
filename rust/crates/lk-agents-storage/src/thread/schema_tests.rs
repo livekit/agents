@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_trait::async_trait;
 use lk_agents_storage::backends::sqlite::FileConnection;
-use lk_agents_storage::sql::{BatchResult, Row, SqlValue, Statement};
+use lk_agents_storage::sql::{BatchResult, Row, Statement};
 use lk_agents_storage::testing::Backend;
 use lk_agents_storage::thread::db;
 use lk_agents_storage::thread::{LeaseTiming, SchemaCell};
@@ -49,10 +49,9 @@ impl ThreadDbConnection for Diagnostics {
             self.contender.batch(db::bootstrap()).await?;
             if let Some(version) = self.contender_version {
                 self.contender
-                    .batch(vec![Statement {
-                        sql: "UPDATE schema_version SET version = ?".into(),
-                        params: vec![SqlValue::Int(version)],
-                    }])
+                    .batch(vec![Statement::raw(format!(
+                        "UPDATE schema_version SET version = {version}"
+                    ))])
                     .await?;
             }
             self.unreachable.store(self.lost_after_race, Ordering::Relaxed);

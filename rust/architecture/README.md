@@ -47,6 +47,11 @@ From the repository root, `make -C rust check` runs this enforcement gate.
   outside tests) use no Tokio runtime (`tokio::spawn`, `tokio::time`, `tokio::net`, `Handle`) and
   no unbiased `select!`; per file and kind, counts are ceilings in the shrink-only
   `executors-baseline.json`.
+- The framework's SQL is declared with `statement!` (`lk-agents-storage/src/sql.rs`), which checks
+  its `:placeholders` against its fields at compile time; `Statement` has no other public
+  constructor but DDL and the application's SQL. A string literal outside `statement!` and tests
+  that reads or writes rows (DDL starting with `CREATE` excepted) counts, per file, in the
+  shrink-only `inline-sql-baseline.json`, which is empty.
 - A workspace Clippy pass compiles every crate and target with FFmpeg enabled,
   replacing a separate workspace `cargo check`. Metadata is resolved once for
   dependency and warning checks; Cargo's reported executable is reused for the

@@ -149,7 +149,7 @@ pub(crate) fn script(m: &pb::ClientMessage) -> Vec<pb::ServerMessage> {
 }
 
 fn st(sql: &'static str, params: Vec<SqlValue>) -> Statement {
-    Statement { sql: sql.into(), params }
+    Statement::raw(sql).with(params)
 }
 
 fn minter() -> TokenMinter {

@@ -595,11 +595,20 @@ SELECT id, message_id, json(payload) FROM items WHERE lane = :lane ORDER BY seq
 
 statement! {
     /// One page of the thread's items in insertion order (`pos`), after `after`, of one lane
-    /// when given: each row its position and lane, then the item.
+    /// when given: each row its position, lane and seq, then the item.
     SelectItemsAfter<'a> { lane: Option<&'a str>, after: i64, limit: i64 } => r#"
-SELECT pos, lane, id, message_id, json(payload) FROM items
+SELECT pos, lane, seq, id, message_id, json(payload) FROM items
 WHERE (:lane IS NULL OR lane = :lane) AND pos > :after
 ORDER BY pos LIMIT :limit
+"#
+}
+
+statement! {
+    /// [`SelectItemsAfter`] newest first: the page before `before`.
+    SelectItemsBefore<'a> { lane: Option<&'a str>, before: i64, limit: i64 } => r#"
+SELECT pos, lane, seq, id, message_id, json(payload) FROM items
+WHERE (:lane IS NULL OR lane = :lane) AND pos < :before
+ORDER BY pos DESC LIMIT :limit
 "#
 }
 
@@ -748,6 +757,52 @@ statement! {
     SelectInboxPending<'a> { lane: &'a str } => r#"
 SELECT id, lane, task_id, message_id, json(message), received_at FROM inbox
 WHERE lane = :lane AND id > (SELECT drained_id FROM lanes WHERE lane = :lane) ORDER BY id
+"#
+}
+
+// Scope records are framework-private schema, independent of the platform's v1 thread tables.
+pub const CONTEXT_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS context_scopes (
+        scope_id TEXT PRIMARY KEY,
+        lane TEXT NOT NULL,
+        revision INTEGER NOT NULL,
+        fields JSONB NOT NULL,
+        contracts JSONB NOT NULL,
+        manifests JSONB NOT NULL
+    )";
+
+statement! {
+    /// The lane's scopes.
+    SelectScopes<'a> { lane: &'a str } => r#"
+SELECT scope_id, revision, json(fields), json(contracts), json(manifests)
+FROM context_scopes WHERE lane = :lane ORDER BY scope_id
+"#
+}
+
+statement! {
+    /// Writes a scope when its stored revision is `expected_revision` (a missing scope is at
+    /// 0) and it is not another lane's; under the lane's lease when a fence is given.
+    UpsertScope<'a> {
+        scope_id: &'a str,
+        lane: &'a str,
+        expected_revision: i64,
+        revision: i64,
+        fields: SqlValue,
+        contracts: SqlValue,
+        manifests: SqlValue,
+        version: Option<i64>,
+        token: Option<&'a str>,
+    } => r#"
+INSERT INTO context_scopes (scope_id, lane, revision, fields, contracts, manifests)
+SELECT :scope_id, :lane,
+  CASE WHEN COALESCE((SELECT revision FROM context_scopes WHERE scope_id = :scope_id), 0)
+            = :expected_revision
+       THEN :revision ELSE NULL END,
+  jsonb(:fields), jsonb(:contracts), jsonb(:manifests)
+WHERE :version IS NULL OR EXISTS
+  (SELECT 1 FROM lanes WHERE lane = :lane AND version = :version AND lease_token = :token)
+ON CONFLICT(scope_id) DO UPDATE SET
+  revision = CASE WHEN context_scopes.lane = excluded.lane THEN excluded.revision ELSE NULL END,
+  fields = excluded.fields, contracts = excluded.contracts, manifests = excluded.manifests
 "#
 }
 

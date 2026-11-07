@@ -70,13 +70,16 @@ The crate groups implementation by responsibility:
 
 | Location | Responsibility |
 | --- | --- |
-| `backends/` | Backend contracts, Cloud AgentDB transport and pooling, and local SQLite files |
-| `thread/` | Shared thread/lane/run execution, lease ownership, commits, schema and database operations |
-| `context.rs` | Context scope validation, persistence, activation lifetime and application transactions |
-| `namespace.rs` | Native host views of storage namespaces, thread handles and run handles |
+| `backends/` | Backend contracts; `agentdb/` and `sqlite/` each hold the backend (`mod.rs`) and its connection (`connection.rs`), and SQLite its cross-process `lifecycle.rs` |
+| `thread/` | `Thread` (`mod.rs`), `Lane` (`lane.rs`), `Run` and its commit (`run.rs`), lease ownership (`lease.rs`), batched operations (`db.rs`) and every thread-database statement (`schema.rs`) |
+| `context/` | Context scope validation and activation (`mod.rs`), the host's field store (`store.rs`) and application transactions (`transaction.rs`) |
+| `storage.rs` | The host's `Storage` class, `ctx.thread`, and the thread and run handles |
 | `voice.rs` | Voice-session storage over a thread lane |
 | `http/` | Generated ThreadService contract, request handling and the local listener |
 | `sql.rs` | Bound statements, typed results, row decoding and schema splitting |
+
+SQL is declared with `statement!` beside the database it runs on: the thread database's in
+`thread/schema.rs`, the local registry's in `backends/sqlite/mod.rs`.
 
 Backend helpers stay with their implementation. Tests sit beside their subject; Cargo declares
 the integration targets explicitly.

@@ -99,17 +99,44 @@ pub fn first_cell(rows: &[Row]) -> Option<&SqlValue> {
     rows.first().and_then(|row| row.first())
 }
 
-/// One executable statement: SQL with positional `?N` parameters and the values they bind.
+/// One executable statement: SQL with positional `?N` parameters and the values they bind. The
+/// framework's own statements are declared with `statement!`; nothing else builds one but a
+/// schema's DDL and the application's own SQL.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Statement {
-    pub sql: Cow<'static, str>,
-    pub params: Vec<SqlValue>,
+    sql: Cow<'static, str>,
+    params: Vec<SqlValue>,
 }
 
 impl Statement {
-    /// A statement that binds nothing: DDL.
-    pub fn raw(sql: &'static str) -> Self {
+    /// A schema's DDL: binds nothing.
+    pub fn ddl(sql: &'static str) -> Self {
         Self { sql: Cow::Borrowed(sql), params: Vec::new() }
+    }
+
+    /// SQL the application wrote, with its values.
+    pub(crate) fn app(sql: String, params: Vec<SqlValue>) -> Self {
+        Self { sql: sql.into(), params }
+    }
+
+    /// Any SQL, binding nothing: a test's setup or probe.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn raw(sql: impl Into<Cow<'static, str>>) -> Self {
+        Self { sql: sql.into(), params: Vec::new() }
+    }
+
+    /// A test's statement with these values.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn with(self, params: Vec<SqlValue>) -> Self {
+        Self { params, ..self }
+    }
+
+    pub fn sql(&self) -> &str {
+        &self.sql
+    }
+
+    pub fn params(&self) -> &[SqlValue] {
+        &self.params
     }
 }
 
@@ -300,8 +327,15 @@ pub(crate) trait Bind {
     const FIELDS: &'static [&'static str];
     /// As sent: each `:field` as `?N`.
     fn sql() -> &'static str;
+    /// The values, in [`Self::FIELDS`] order.
+    fn values(self) -> Vec<SqlValue>;
     /// The executable statement with this declaration's values.
-    fn bind(self) -> Statement;
+    fn bind(self) -> Statement
+    where
+        Self: Sized,
+    {
+        Statement { sql: Cow::Borrowed(Self::sql()), params: self.values() }
+    }
 }
 
 /// [`Statement::SQL`] with each `:field` as `?N`, `N` the field's position in `fields`.
@@ -388,11 +422,8 @@ macro_rules! statement {
                     std::sync::LazyLock::new(|| $crate::sql::numbered(<$name>::SQL, <$name>::FIELDS));
                 &SENT
             }
-            fn bind(self) -> $crate::sql::Statement {
-                $crate::sql::Statement {
-                    sql: std::borrow::Cow::Borrowed(<Self as $crate::sql::Bind>::sql()),
-                    params: vec![$(self.$field.into()),*],
-                }
+            fn values(self) -> Vec<$crate::sql::SqlValue> {
+                vec![$(self.$field.into()),*]
             }
         }
     };
