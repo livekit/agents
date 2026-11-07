@@ -21,12 +21,12 @@ Otherwise the agent waits for someone to join the room.
 
 - `src/agent.py` is the entrypoint for the `restaurant-ordering` agent. It sets up the session and
   starts the right call.
-- `src/gabby.py` holds Gabby's two roles, `TakeOrder` and `DeliveryUpdate`, with their
+- `src/order_desk.py` holds Gabby's two roles, `TakeOrder` and `DeliveryUpdate`, with their
   instructions and tools.
 - `src/pizzeria.py` is the point of sale: the menu, the order being taken, and order #214. It
   checks every change against the restaurant's rules and publishes it as a `restaurant.*`
   attribute for the demo page.
-- `src/zappis.json` seeds the menu, prices, fees, hours, and allergens.
+- `src/pizzeria.json` seeds the menu, prices, fees, hours, and allergens.
 - `src/simulation.py` grades a simulated call on what the point of sale ended up with, against the
   scenario's `expected` userdata.
 - `src/suggested_replies.py` suggests what the caller could say next after each of Gabby's turns,

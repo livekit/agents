@@ -8,18 +8,16 @@ from pathlib import Path
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
-SCHEDULE = json.loads((Path(__file__).parent / "schedule.json").read_text())
+SEED = json.loads((Path(__file__).parent / "clinic.json").read_text())
 
-CLINIC_NAME = SCHEDULE["clinic"]
-DOCTOR = SCHEDULE["doctor"]
+CLINIC_NAME = SEED["clinic"]
+DOCTOR = SEED["doctor"]
 # most people trying the demo are on the West Coast
 CLINIC_TZ = ZoneInfo("America/Los_Angeles")
 CLINIC_TZ_NAME = "Pacific time"
-CLINIC_DAYS = len(SCHEDULE["busy"])
-SLOT_TIMES = [time.fromisoformat(t) for t in SCHEDULE["times"]]
-PATIENTS_ON_FILE = {
-    p["name"]: date.fromisoformat(p["dob"]) for p in SCHEDULE["patients"]
-}
+CLINIC_DAYS = len(SEED["busy"])
+SLOT_TIMES = [time.fromisoformat(t) for t in SEED["times"]]
+PATIENTS_ON_FILE = {p["name"]: date.fromisoformat(p["dob"]) for p in SEED["patients"]}
 
 PartOfDay = Literal["morning", "afternoon", "any"]
 
@@ -67,10 +65,10 @@ class Clinic:
         days = self.clinic_days()
         self.busy = {
             _at(day, time.fromisoformat(t))
-            for day, times in zip(days, SCHEDULE["busy"], strict=True)
+            for day, times in zip(days, SEED["busy"], strict=True)
             for t in times
         }
-        for a in SCHEDULE["appointments"]:
+        for a in SEED["appointments"]:
             self._add(
                 a["patient"],
                 _at(days[a["day"]], time.fromisoformat(a["time"])),

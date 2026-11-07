@@ -1,6 +1,6 @@
 # Zappi's Pizzeria: fourteen calls in, and ten calls to a customer whose delivery is about to go out.
 #
-# Calls in start with an empty order. Prices come from src/zappis.json: tax is 9% of the food,
+# Calls in start with an empty order. Prices come from src/pizzeria.json: tax is 9% of the food,
 # delivery is $4.99, and an order under $15 has a $2.99 small-order fee. The Buffalo Cauliflower
 # is sold out. A large pizza is 14 inches, 8 slices. Wing sauces are hot, mild, BBQ, garlic
 # parmesan, lemon pepper, Thai chili peanut, or plain; there's no honey garlic or honey mustard.

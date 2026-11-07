@@ -22,7 +22,7 @@ from livekit.agents.beta.tools import EndCallTool
 from livekit.agents.utils.participant import wait_for_participant_attribute
 from livekit.plugins import ai_coustics
 
-from gabby import (
+from order_desk import (
     GREETING,
     PERSONA,
     DeliveryUpdate,

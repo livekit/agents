@@ -14,7 +14,7 @@ from clinic import (
     CLINIC_TZ,
     CLINIC_TZ_NAME,
     DOCTOR,
-    SCHEDULE,
+    SEED,
     Appointment,
     Clinic,
     ClinicError,
@@ -335,7 +335,7 @@ def caller_script(clinic: Clinic, state: CallState) -> str:
     you = clinic.appointments[0]
     born = clinic.patients[you.patient].strftime("%B %-d, %Y")
     target = days[3]
-    seeded = SCHEDULE["appointments"][0]
+    seeded = SEED["appointments"][0]
     was_at = datetime.combine(
         days[seeded["day"]], time.fromisoformat(seeded["time"]), tzinfo=CLINIC_TZ
     )

@@ -25,7 +25,7 @@ join the room.
   instructions and tools.
 - `src/clinic.py` is the made-up clinic: its charts, calendar, and appointments. It publishes each
   change as a `clinic.*` attribute for the demo page.
-- `src/schedule.json` seeds the clinic, its patients, open times, and appointments.
+- `src/clinic.json` seeds the clinic, its patients, open times, and appointments.
 - `src/simulation.py` grades a simulated call on what the clinic ended up with, against the
   scenario's `expected` userdata.
 - `src/suggested_replies.py` suggests what the caller could say next after each of Riley's turns,

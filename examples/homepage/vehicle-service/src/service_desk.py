@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
-SEED = json.loads((Path(__file__).parent / "bayside.json").read_text())
+SEED = json.loads((Path(__file__).parent / "service_desk.json").read_text())
 
 DEALERSHIP: str = SEED["dealership"]
 SHOP_TZ = ZoneInfo(SEED["timezone"])

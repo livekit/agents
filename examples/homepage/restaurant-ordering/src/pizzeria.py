@@ -16,32 +16,32 @@ from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import Any, Literal
 
-DATA = json.loads((Path(__file__).parent / "zappis.json").read_text())
+SEED = json.loads((Path(__file__).parent / "pizzeria.json").read_text())
 
-RESTAURANT: str = DATA["restaurant"]
-NEIGHBORHOOD: str = DATA["neighborhood"]
-HOURS: str = DATA["hours"]
-PIZZA_SIZES: dict[str, str] = DATA["pizzaSizes"]
-CRUST: str = DATA["crust"]
-DRINK_SIZES: dict[str, str] = DATA["drinkSizes"]
-TAX_RATE = Decimal(DATA["taxRate"])
-DELIVERY_FEE = Decimal(DATA["deliveryFee"])
-SMALL_ORDER_FEE = Decimal(DATA["smallOrderFee"])
-SMALL_ORDER_UNDER = Decimal(DATA["smallOrderUnder"])
-TOPPING_PRICE = Decimal(DATA["toppingPrice"])
+RESTAURANT: str = SEED["restaurant"]
+NEIGHBORHOOD: str = SEED["neighborhood"]
+HOURS: str = SEED["hours"]
+PIZZA_SIZES: dict[str, str] = SEED["pizzaSizes"]
+CRUST: str = SEED["crust"]
+DRINK_SIZES: dict[str, str] = SEED["drinkSizes"]
+TAX_RATE = Decimal(SEED["taxRate"])
+DELIVERY_FEE = Decimal(SEED["deliveryFee"])
+SMALL_ORDER_FEE = Decimal(SEED["smallOrderFee"])
+SMALL_ORDER_UNDER = Decimal(SEED["smallOrderUnder"])
+TOPPING_PRICE = Decimal(SEED["toppingPrice"])
 MOST_OF_ONE_ITEM = 20
 MOST_TIP = Decimal("100")
-OUT = DATA["outForDelivery"]
+OUT = SEED["outForDelivery"]
 
 Size = Literal["small", "medium", "large", "half_dozen", "dozen"]
 Mode = Literal["pickup", "delivery"]
 EndedEarly = Literal["wrong_person", "call_back_later", "declined"]
-ItemId = Literal[tuple(m["id"] for m in DATA["menu"])]  # type: ignore[valid-type]
-ToppingId = Literal[tuple(t["id"] for t in DATA["toppings"])]  # type: ignore[valid-type]
-SauceId = Literal[tuple(s["id"] for s in DATA["sauces"])]  # type: ignore[valid-type]
-Allergen = Literal[tuple(DATA["allergens"])]  # type: ignore[valid-type]
+ItemId = Literal[tuple(m["id"] for m in SEED["menu"])]  # type: ignore[valid-type]
+ToppingId = Literal[tuple(t["id"] for t in SEED["toppings"])]  # type: ignore[valid-type]
+SauceId = Literal[tuple(s["id"] for s in SEED["sauces"])]  # type: ignore[valid-type]
+Allergen = Literal[tuple(SEED["allergens"])]  # type: ignore[valid-type]
 Ingredient = Literal[  # type: ignore[valid-type]
-    tuple(sorted({i for m in DATA["menu"] for i in m.get("ingredients", [])}))
+    tuple(sorted({i for m in SEED["menu"] for i in m.get("ingredients", [])}))
 ]
 
 ENDED_EARLY: dict[str, str] = {
@@ -99,12 +99,12 @@ MENU: dict[str, MenuItem] = {
         allergens=frozenset(m["allergens"]),
         details=m.get("details", ""),
     )
-    for m in DATA["menu"]
+    for m in SEED["menu"]
 }
-TOPPINGS: dict[str, Option] = {t["id"]: _option(t) for t in DATA["toppings"]}
-SAUCES: dict[str, Option] = {s["id"]: _option(s) for s in DATA["sauces"]}
+TOPPINGS: dict[str, Option] = {t["id"]: _option(t) for t in SEED["toppings"]}
+SAUCES: dict[str, Option] = {s["id"]: _option(s) for s in SEED["sauces"]}
 PLAIN = "plain"  # the wings' choice of no sauce at all
-SOLD_OUT_TODAY = frozenset(m["id"] for m in DATA["menu"] if m.get("soldOut"))
+SOLD_OUT_TODAY = frozenset(m["id"] for m in SEED["menu"] if m.get("soldOut"))
 
 
 def size_words(size: str | None) -> str:
@@ -292,7 +292,7 @@ class Pizzeria:
     # only good for the revision it read
     revision: int = 0
     _next_line: int = 1
-    _next_order: int = DATA["firstOrderNumber"]
+    _next_order: int = SEED["firstOrderNumber"]
 
     @classmethod
     def out_for_delivery(
@@ -550,10 +550,10 @@ class Pizzeria:
     async def place(self) -> Order:
         self._ready_to_place()
         if self.fulfillment.mode == "delivery":
-            lo, hi = DATA["deliveryMinutes"]
+            lo, hi = SEED["deliveryMinutes"]
             ready_in = f"delivered in about {lo} to {hi} minutes"
         else:
-            ready_in = f"ready for pickup in about {DATA['pickupMinutes']} minutes"
+            ready_in = f"ready for pickup in about {SEED['pickupMinutes']} minutes"
         self.order = Order(str(self._next_order), ready_in)
         self._next_order += 1
         await self.publish({"order": self._order_json()})

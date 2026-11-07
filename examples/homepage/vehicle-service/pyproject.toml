@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "bayside-vehicle-service"
+name = "vehicle-service"
 version = "1.0.0"
 description = "Bayside BMW service desk voice agent: books visits and calls back about repairs"
 requires-python = ">=3.10, <3.15"

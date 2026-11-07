@@ -85,7 +85,7 @@ When they're all set, ask if there's anything else. Once they say that's all, or
 """.strip()
 
 
-class _CardDesk(Agent):
+class CardDesk(Agent):
     """What both calls can do on the card once the caller is verified."""
 
     def __init__(self, bank: Bank, *, instructions: str) -> None:
@@ -138,7 +138,7 @@ class _CardDesk(Agent):
         )
 
 
-class CardServices(_CardDesk):
+class CardServices(CardDesk):
     """Avery taking a call to card services, playing the bank agent for the demo."""
 
     def __init__(self, bank: Bank) -> None:
@@ -230,7 +230,7 @@ Once they're verified, if they haven't said what they need yet, say exactly: "Gr
         return f"The card ending in {card.last_four} is locked. Nothing new can go through on it."
 
 
-class FraudAlert(_CardDesk):
+class FraudAlert(CardDesk):
     """Avery calling about a flagged purchase abroad, playing the bank's fraud team for the demo."""
 
     def __init__(self, bank: Bank) -> None:

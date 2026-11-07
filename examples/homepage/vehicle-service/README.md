@@ -28,7 +28,7 @@ the calendar starts from. Otherwise the agent waits for someone to join the room
 - `src/service_desk.py` is the service desk for one call: the customer's file, the visit being put
   together, the calendar, and the car in the shop on the callback. Every rule lives here, and it
   publishes each change as a `service.*` attribute for the demo page.
-- `src/bayside.json` seeds the dealership, its customers, service menu, recalls, calendar, and the
+- `src/service_desk.json` seeds the dealership, its customers, service menu, recalls, calendar, and the
   repair the technician finds.
 - `src/simulation.py` grades a simulated call on what the desk ended up with, against the
   scenario's `expected` userdata.

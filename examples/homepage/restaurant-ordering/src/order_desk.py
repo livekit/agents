@@ -106,7 +106,7 @@ def _facts(**fields: Any) -> str:
     return json.dumps(fields)
 
 
-class Gabby(Agent):
+class OrderDesk(Agent):
     """What both of Gabby's calls share: the order, read-backs, a tip, cancelling, and hanging
     up."""
 
@@ -218,7 +218,7 @@ class Gabby(Agent):
         return quote.facts() if quote else {}
 
 
-class TakeOrder(Gabby):
+class TakeOrder(OrderDesk):
     """Gabby answering the phone: takes the order, how it gets to them, and who it's for, reads
     it back, and sends it to the kitchen."""
 
@@ -412,7 +412,7 @@ class TakeOrder(Gabby):
         )
 
 
-class DeliveryUpdate(Gabby):
+class DeliveryUpdate(OrderDesk):
     """Gabby calling the customer whose delivery is about to go out: something in it ran out,
     and anything else they'd like to change before it leaves."""
 

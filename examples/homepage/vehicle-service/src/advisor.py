@@ -79,7 +79,7 @@ def _facts(**fields: Any) -> str:
     return json.dumps(fields)
 
 
-class Nick(Agent):
+class Advisor(Agent):
     """What both of Nick's calls share: the desk, read-backs, and hanging up."""
 
     def __init__(self, desk: ServiceDesk, *, instructions: str) -> None:
@@ -99,7 +99,7 @@ class Nick(Agent):
         self._review = Review(action, target, self._desk.revision)
 
 
-class ServiceAdvisor(Nick):
+class ServiceAdvisor(Advisor):
     """Nick answering the phone: finds the caller's file and the car, takes down the problem,
     books the visit, and moves or cancels what's already booked."""
 
@@ -449,7 +449,7 @@ class ServiceAdvisor(Nick):
         )
 
 
-class RepairCallback(Nick):
+class RepairCallback(Advisor):
     """Nick calling the customer back: what the technician found, what it costs, and how they'll
     get the car back."""
 
