@@ -83,7 +83,6 @@ pub fn tool_choice(choice: Option<&lk_agents_abi::ToolChoice>) -> Choice {
 #[serde(untagged)]
 pub enum Tool {
     Function(FunctionTool),
-    XaiFunction(XaiFunctionTool),
     Provider(Value),
 }
 
@@ -95,38 +94,15 @@ pub struct FunctionTool {
     pub parameters: Value,
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "type", rename = "function")]
-pub struct XaiFunctionTool {
-    pub function: FunctionDefinition,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct FunctionDefinition {
-    pub name: String,
-    pub description: String,
-    pub parameters: Value,
-}
-
-pub fn tool_spec(tool: &lk_agents_abi::ToolSpec, provider: RealtimeProvider) -> Tool {
+pub fn tool_spec(tool: &lk_agents_abi::ToolSpec) -> Tool {
     if let Some(declaration) = &tool.provider_tool {
         return Tool::Provider(declaration.payload.clone());
     }
-    if provider == RealtimeProvider::Xai {
-        Tool::XaiFunction(XaiFunctionTool {
-            function: FunctionDefinition {
-                name: tool.name.clone(),
-                description: tool.description.clone(),
-                parameters: tool.json_schema.clone(),
-            },
-        })
-    } else {
-        Tool::Function(FunctionTool {
-            name: tool.name.clone(),
-            description: tool.description.clone(),
-            parameters: tool.json_schema.clone(),
-        })
-    }
+    Tool::Function(FunctionTool {
+        name: tool.name.clone(),
+        description: tool.description.clone(),
+        parameters: tool.json_schema.clone(),
+    })
 }
 
 /// An absent field leaves the remote option alone; Some(Value::Null) clears it.

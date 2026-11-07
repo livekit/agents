@@ -120,7 +120,7 @@ fn explicit_nulls_clear_settings_and_absent_fields_leave_them_alone() {
 }
 
 #[test]
-fn xai_sessions_match_its_schema_including_nested_function_tools() {
+fn xai_sessions_match_its_schema_with_flat_function_tools() {
     let opts = SessionOptions::from_dialect(&XAI, false);
     let event = value(encode::session_options("e", &opts, &XAI));
     let session = &event["session"];
@@ -142,9 +142,10 @@ fn xai_sessions_match_its_schema_including_nested_function_tools() {
     let event = value(encode::tools_update("e", &[tool], &opts.model, &XAI));
     assert_eq!(
         event["session"]["tools"][0],
-        json!({"type":"function", "function":{
-            "name":"weather", "description":"forecast", "parameters":{"type":"object"}
-        }})
+        json!({
+            "type":"function", "name":"weather", "description":"forecast",
+            "parameters":{"type":"object"}
+        })
     );
     let event = value(encode::options_update(
         "e",

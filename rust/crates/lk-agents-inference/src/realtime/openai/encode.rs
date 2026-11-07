@@ -80,7 +80,7 @@ pub fn tools_update(
         event_id,
         SessionConfig {
             model: Some(model.to_owned()),
-            tools: Some(tools.iter().map(|tool| wire::tool_spec(tool, dialect.provider)).collect()),
+            tools: Some(tools.iter().map(wire::tool_spec).collect()),
             ..Default::default()
         },
         dialect,
