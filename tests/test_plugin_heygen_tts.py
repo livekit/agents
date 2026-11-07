@@ -239,6 +239,22 @@ async def test_audio_and_word_times_follow_the_audio_clock(server: _Server) -> N
     ]
 
 
+async def test_parsed_break_is_not_a_timed_word() -> None:
+    async def speak(ws: web.WebSocketResponse, server: _Server) -> None:
+        async for msg in ws:
+            data = json.loads(msg.data)
+            if data.get("close_context"):
+                context_id = data["context_id"]
+                await ws.send_json(_frame(context_id, "Wait. <pause:1s> Now<pause:1s>.", 1000))
+                await ws.send_json(_final(context_id))
+
+    async with _Server(speak) as s:
+        _, timed = await _turn(s.tts(), FIRST)
+
+    assert [str(word) for word in timed] == ["Wait. ", "Now."]
+    assert timed[1].start_time > timed[0].start_time
+
+
 async def test_turn_without_text_sends_nothing(server: _Server) -> None:
     audio, _ = await _turn(server.tts())
 

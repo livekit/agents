@@ -71,6 +71,8 @@ _CLOSE_TIMEOUT = 1.0
 
 # Without `enable_ssml_parsing` the server closes the socket on a break tag, losing the turn.
 _BREAK_TAG = re.compile(r"\s*<break\b[^>]*>", re.IGNORECASE)
+# How a parsed break tag comes back in the alignment. It is a pause, not a spoken word.
+_PAUSE_MARKER = re.compile(r"<pause:[^>]*>\s*")
 
 
 @dataclass
@@ -562,7 +564,7 @@ class _WordTimer:
 
         timed = [
             TimedString(
-                text=self._text[start:end],
+                text=_PAUSE_MARKER.sub("", self._text[start:end]),
                 start_time=self._starts_ms[start] / 1000,
                 end_time=(self._starts_ms[end] if end < len(self._text) else self._end_ms) / 1000,
             )
@@ -571,7 +573,7 @@ class _WordTimer:
         if timed:
             self._text = self._text[bounds[-1] :]
             self._starts_ms = self._starts_ms[bounds[-1] :]
-        return timed
+        return [word for word in timed if word]
 
 
 def _shared_params(opts: _TTSOptions) -> dict[str, Any]:
