@@ -970,6 +970,73 @@ class LLM(llm.LLM):
             tool_choice=NOT_GIVEN,
         )
 
+    @staticmethod
+    def with_litellm(
+        *,
+        model: str,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        client: openai.AsyncClient | None = None,
+        user: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: ToolChoice = "auto",
+        reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
+        safety_identifier: NotGivenOr[str] = NOT_GIVEN,
+        prompt_cache_key: NotGivenOr[str] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
+        max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
+        extra_body: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+        extra_headers: NotGivenOr[dict[str, str]] = NOT_GIVEN,
+        timeout: httpx.Timeout | None = None,
+    ) -> LLM:
+        """
+        Create a new instance of LLM that calls a LiteLLM proxy (OpenAI-compatible).
+
+        The LiteLLM proxy routes one OpenAI-compatible API to many providers. ``model`` is
+        a model name from the proxy's config, for example ``"gpt-4o"`` or
+        ``"anthropic/claude-sonnet-4-5"``.
+
+        ``api_key`` must be set to a LiteLLM virtual key or the proxy's master key, either
+        using the argument or by setting the ``LITELLM_PROXY_API_KEY`` environment variable.
+
+        ``base_url`` is the proxy URL. If it is not set, the ``LITELLM_PROXY_API_BASE``
+        environment variable is used, then ``http://localhost:4000``.
+        """
+        base_url = base_url or os.environ.get("LITELLM_PROXY_API_BASE") or "http://localhost:4000"
+        parsed = urlparse(base_url)
+        if parsed.scheme not in {"http", "https"}:
+            raise ValueError(f"Invalid URL scheme: '{parsed.scheme}'. Must be 'http' or 'https'.")
+        if not parsed.netloc:
+            raise ValueError(f"URL '{base_url}' is missing a network location (e.g., domain name).")
+
+        api_key = api_key or os.environ.get("LITELLM_PROXY_API_KEY")
+        if api_key is None:
+            raise ValueError(
+                "LiteLLM API key is required, either as argument or set"
+                " LITELLM_PROXY_API_KEY environment variable"
+            )
+
+        return LLM(
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            client=client,
+            user=user,
+            temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+            reasoning_effort=reasoning_effort,
+            safety_identifier=safety_identifier,
+            prompt_cache_key=prompt_cache_key,
+            top_p=top_p,
+            max_completion_tokens=max_completion_tokens,
+            extra_body=extra_body,
+            extra_headers=extra_headers,
+            timeout=timeout,
+            _strict_tool_schema=False,
+        )
+
     def chat(
         self,
         *,
