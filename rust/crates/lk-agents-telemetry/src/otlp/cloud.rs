@@ -19,17 +19,20 @@ const RESPONSE_BYTES: usize = 64 * 1024;
 /// Other 401s must not disable uploads.
 const DISABLED_MARKERS: [&str; 2] = ["data recording is disabled", "disabled by owner"];
 
-/// How an endpoint answered a request it received.
-#[derive(Debug)]
-pub(crate) enum Answer {
-    Sent,
+/// Why a request did not land.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum PostError {
     /// The project disabled recording (Cloud only): the job's other exports stop too.
+    #[error("the project owner disabled recording")]
     Disabled,
     /// Another status, with the start of its body.
-    Refused {
-        status: u16,
-        body: Vec<u8>,
-    },
+    #[error("answered HTTP {status}")]
+    Refused { status: u16, body: Vec<u8> },
+    /// The client or the bearer could not be made: retrying does not help.
+    #[error("{0}")]
+    Setup(String),
+    #[error("{0}")]
+    Transport(#[from] reqwest::Error),
 }
 
 /// The process's client: no retries or redirects (each caller owns its attempts).
@@ -50,11 +53,11 @@ pub(crate) async fn client() -> Result<reqwest::Client, lk_agents_net::tls::TlsE
     Ok(client.clone())
 }
 
-/// Reads `response` into an [`Answer`]; `cloud` recognizes the owner's refusal.
-pub(crate) async fn answer(response: reqwest::Response, cloud: bool) -> Answer {
+/// Reads a refused `response` into its [`PostError`]; `cloud` recognizes the owner's refusal.
+pub(crate) async fn answer(response: reqwest::Response, cloud: bool) -> Result<(), PostError> {
     let status = response.status();
     if status.is_success() {
-        return Answer::Sent;
+        return Ok(());
     }
     let mut body = Vec::new();
     let mut chunks = response.bytes_stream();
@@ -67,9 +70,9 @@ pub(crate) async fn answer(response: reqwest::Response, cloud: bool) -> Answer {
     }
     let status = status.as_u16();
     if cloud && is_disabled(status, &body) {
-        return Answer::Disabled;
+        return Err(PostError::Disabled);
     }
-    Answer::Refused { status, body }
+    Err(PostError::Refused { status, body })
 }
 
 fn is_disabled(status: u16, body: &[u8]) -> bool {
@@ -79,29 +82,19 @@ fn is_disabled(status: u16, body: &[u8]) -> bool {
     }
 }
 
-/// A request that never reached the endpoint.
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum Unsent {
-    /// The client or the bearer could not be made: retrying does not help.
-    #[error("{0}")]
-    Setup(String),
-    #[error("{0}")]
-    Transport(#[from] reqwest::Error),
-}
-
 impl CloudEndpoint {
     /// Posts to `/observability/{path}` with the job's bearer; `request` adds the body.
     pub(crate) async fn post(
         &self,
         path: &str,
         request: impl FnOnce(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
-    ) -> Result<Answer, Unsent> {
-        let client = client().await.map_err(|error| Unsent::Setup(error.to_string()))?;
+    ) -> Result<(), PostError> {
+        let client = client().await.map_err(|error| PostError::Setup(error.to_string()))?;
         let bearer = lk_agents_net::token::observability_bearer(&self.api_key, &self.api_secret)
-            .map_err(|error| Unsent::Setup(error.to_string()))?;
+            .map_err(|error| PostError::Setup(error.to_string()))?;
         let url = format!("{}/observability/{path}", self.base_url.trim_end_matches('/'));
         let response = request(client.post(url).bearer_auth(bearer)).send().await?;
-        Ok(answer(response, true).await)
+        answer(response, true).await
     }
 }
 

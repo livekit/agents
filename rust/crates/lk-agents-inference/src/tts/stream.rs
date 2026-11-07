@@ -26,14 +26,9 @@ impl TtsStream {
                 .with_retryable(false)
                 .into());
         }
-        self.sink.as_ref().ok_or_else(|| ProviderError::Host {
-            error: HostError {
-                class: "RuntimeError".into(),
-                ..HostError::new("this is a synthesize() stream; its text was given at the call")
-            },
-            api_kind: None,
-            retryable: false,
-            status_code: None,
+        self.sink.as_ref().ok_or_else(|| {
+            let message = "this is a synthesize() stream; its text was given at the call";
+            HostError { class: "RuntimeError".into(), ..HostError::new(message) }.into()
         })
     }
 }

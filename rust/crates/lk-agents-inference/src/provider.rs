@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use lk_agents_abi::HostRef;
-use lk_agents_abi::errors::{ApiError, ApiErrorKind, HostError, ProviderError};
+use lk_agents_abi::errors::{ApiError, ApiErrorKind, ProviderError};
 use lk_agents_abi::invoke::CallContext;
 use lk_agents_net::task::Cancellation;
 use parking_lot::Mutex;
@@ -445,7 +445,7 @@ impl ProviderAttempts {
                 }
                 Err(error) => error,
             };
-            let produced = self.host.produced().map_err(host_error)?;
+            let produced = self.host.produced().map_err(ProviderError::from)?;
             let now = self.now();
             let decision = self.state.lock().machine.failure(error.clone(), produced, now)?;
             match decision {
@@ -543,11 +543,6 @@ fn stalled_cleanup() {
         target: lk_agents_abi::LOG_TARGET,
         "provider cleanup incomplete; its host task retains ownership until settlement"
     );
-}
-
-/// A host failure outside the API taxonomy: never retried.
-fn host_error(error: HostError) -> ProviderError {
-    ProviderError::Host { error, api_kind: None, retryable: false, status_code: None }
 }
 
 #[cfg(test)]

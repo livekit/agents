@@ -39,15 +39,11 @@ impl StreamOutput<SpeechEvent> for Attempt {
         Box::pin(async move {
             match std::mem::replace(self, Attempt::Done) {
                 Attempt::Fail => Err(ApiError::new("hiccup").into()),
-                Attempt::Cancelled => Err(ProviderError::Host {
-                    error: lk_agents_abi::errors::HostError {
-                        kind: lk_agents_abi::errors::HostErrorKind::Cancelled,
-                        ..lk_agents_abi::errors::HostError::new("")
-                    },
-                    api_kind: None,
-                    retryable: false,
-                    status_code: None,
-                }),
+                Attempt::Cancelled => Err(lk_agents_abi::errors::HostError {
+                    kind: lk_agents_abi::errors::HostErrorKind::Cancelled,
+                    ..lk_agents_abi::errors::HostError::new("")
+                }
+                .into()),
                 Attempt::Final => Ok(Some(SpeechEvent::new(SpeechEventType::FinalTranscript))),
                 Attempt::Done => Ok(None),
             }

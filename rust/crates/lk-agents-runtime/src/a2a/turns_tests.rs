@@ -246,12 +246,9 @@ impl TurnHost for Fake {
             // cancelled as the host cancels its task: the run stops where it waits
             tokio::select! {
                 biased;
-                () = cancel.cancelled() => Err(ProviderError::Host {
-                    error: HostError { kind: HostErrorKind::Cancelled, ..HostError::new("") },
-                    api_kind: None,
-                    retryable: false,
-                    status_code: None,
-                }),
+                () = cancel.cancelled() => {
+                    Err(HostError { kind: HostErrorKind::Cancelled, ..HostError::new("") }.into())
+                }
                 out = self.run(ctx.clone(), &mut checkpoints) => out.map(host_output),
             }
         })

@@ -151,9 +151,7 @@ impl AvatarMedia for Media {
 
 fn provider_error(error: RtcError) -> ProviderError {
     match error {
-        RtcError::Host(error) => {
-            ProviderError::Host { error, api_kind: None, retryable: false, status_code: None }
-        }
+        RtcError::Host(error) => error.into(),
         RtcError::Stream(error) => error,
         error => lk_agents_abi::errors::ApiError::new(error.to_string()).into(),
     }

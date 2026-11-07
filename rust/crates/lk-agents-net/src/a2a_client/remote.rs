@@ -400,12 +400,7 @@ impl Interaction {
 
 /// A host callback's failure, raised as it was.
 fn host_error(error: HostError) -> AgentClientError {
-    AgentClientError::Provider(ProviderError::Host {
-        error,
-        api_kind: None,
-        retryable: false,
-        status_code: None,
-    })
+    AgentClientError::Provider(error.into())
 }
 
 fn unavailable(error: crate::env::ProcessError) -> AgentClientError {

@@ -463,17 +463,13 @@ mod tests {
     // met losing its kind.
     #[test]
     fn host_failures_map_to_storage_errors() {
-        let host = |kind| ProviderError::Host {
-            error: lk_agents_abi::errors::HostError {
+        let host = |kind| {
+            let class = "VersionConflict".into();
+            ProviderError::from(lk_agents_abi::errors::HostError {
                 kind,
-                class: "VersionConflict".into(),
-                message: "m".into(),
-                host_ref: None,
-                traceback: None,
-            },
-            api_kind: None,
-            retryable: false,
-            status_code: None,
+                class,
+                ..lk_agents_abi::errors::HostError::new("m")
+            })
         };
         assert!(matches!(
             host_error(host(HostErrorKind::Cancelled)),

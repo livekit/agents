@@ -20,9 +20,9 @@ use lk_agents_abi::telemetry::report::{RecordingOptions, SessionReport};
 use lk_agents_core::telemetry::report;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
+use crate::otlp::cloud::PostError;
 use crate::otlp::{CloudEndpoint, Exporter};
 pub use events::EventRetention;
-pub use recording::Uploaded;
 
 /// Whether the recording upload carries the job's profile: on once Cloud ingest accepts the
 /// `profile` part (an unknown part fails the whole upload).
@@ -42,13 +42,7 @@ async fn write_profile(audio: &str, profile: Vec<u8>) {
     };
     let file = dir.join("profile.pb.gz");
     let io = lk_agents_net::blocking_io::blocking_io();
-    let written =
-        io.run((), move || std::fs::write(file, profile).map_err(|e| e.to_string())).await;
-    if let Some(error) = match written {
-        Ok(Ok(())) => None,
-        Ok(Err(error)) => Some(error),
-        Err(_) => Some("the write panicked".to_owned()),
-    } {
+    if let Err(error) = io.try_run((), move || std::fs::write(file, profile)).await {
         log::debug!(target: lk_agents_abi::LOG_TARGET, "the job's profile was not written: {error}");
     }
 }
@@ -111,15 +105,22 @@ pub async fn export(
         send_profile && fits
     });
     let limit = deadline.saturating_duration_since(clock.now());
-    if recording::upload(cloud, &upload, profile.as_deref(), clock, limit).await?
-        == Uploaded::Disabled
-    {
-        log::warn!(target: lk_agents_abi::LOG_TARGET, "session recording is disabled by the project owner");
-        if let Some(exporter) = exporter {
-            exporter.disable_job(key);
+    let uploaded = recording::upload(cloud, &upload, profile.as_deref(), clock);
+    let uploaded = lk_agents_abi::timeout(clock, limit, uploaded)
+        .await
+        .map_err(|_| UploadError("session recording upload deadline elapsed".into()))?;
+    match uploaded {
+        Ok(()) => Ok(()),
+        Err(PostError::Disabled) => {
+            log::warn!(target: lk_agents_abi::LOG_TARGET, "session recording is disabled by the project owner");
+            if let Some(exporter) = exporter {
+                exporter.disable_job(key);
+            }
+            Ok(())
         }
+        Err(PostError::Setup(error)) => Err(UploadError(error)),
+        Err(error) => Err(UploadError(format!("recording upload failed: {error}"))),
     }
-    Ok(())
 }
 
 /// The session report's files.

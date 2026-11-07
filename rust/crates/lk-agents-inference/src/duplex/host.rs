@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use lk_agents_abi::errors::{HostError, ProviderError};
+use lk_agents_abi::errors::HostError;
 use lk_agents_abi::llm::duplex as abi;
 use lk_agents_abi::llm::inference::InvalidPayload;
 use lk_agents_abi::llm::realtime::{
@@ -114,10 +114,6 @@ impl SessionGate {
 /// `{type(e).__name__}: {e}`, as the output stream's failure is reported.
 fn describe(e: &HostError) -> String {
     format!("{}: {}", e.class, e.message)
-}
-
-pub(super) fn provider_error(e: HostError) -> ProviderError {
-    ProviderError::Local(lk_agents_abi::errors::ApiError::new(e.message))
 }
 
 // ------------------------------------------------------------------------------------ the host

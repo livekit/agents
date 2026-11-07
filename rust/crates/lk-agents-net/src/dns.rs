@@ -8,9 +8,8 @@ use std::net::{SocketAddr, ToSocketAddrs};
 /// The addresses `addr` (`(host, port)` or `"host:port"`) resolves to.
 pub async fn lookup(addr: impl ToSocketAddrs + Send + 'static) -> io::Result<Vec<SocketAddr>> {
     crate::blocking_io::blocking_io()
-        .run((), move || addr.to_socket_addrs().map(Iterator::collect))
+        .try_run((), move || addr.to_socket_addrs().map(Iterator::collect))
         .await
-        .map_err(io::Error::other)?
 }
 
 /// A TCP connection to the first address of `addr` that accepts, with Nagle off: a small request

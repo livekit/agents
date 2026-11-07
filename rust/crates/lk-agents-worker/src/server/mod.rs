@@ -99,7 +99,7 @@ pub fn simulated_job(
     room: &str,
     options: SimulatedJobOptions,
 ) -> Result<RunningJobInfo, WorkerError> {
-    let invalid = |error: lk_agents_net::token::TokenError| WorkerError::Invalid(error.to_string());
+    let invalid = |error: lk_agents_abi::errors::ApiError| WorkerError::Invalid(error.to_string());
     let SimulatedJobOptions { fake_job, agent_identity, room_info, token } = options;
     let token = token.filter(|t| !t.is_empty());
     let agent_identity = match (&token, agent_identity) {

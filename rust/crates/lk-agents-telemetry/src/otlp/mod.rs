@@ -29,7 +29,7 @@ use lk_agents_abi::{Clock, OwnedTask, Spawner, SpawnerExt as _, Ts, before, time
 use parking_lot::Mutex;
 use tokio::sync::Notify;
 
-use cloud::Answer;
+use cloud::PostError;
 pub use config::{
     AppConfig, CloudEndpoint, CloudRecording, ProcessIdentity, SdkName, SessionIdentity,
     Temporality,
@@ -266,13 +266,6 @@ async fn run(shared: Arc<Shared>) {
     }
 }
 
-enum Outcome {
-    Sent,
-    Failed(String),
-    /// The project disabled recording (Cloud only).
-    Disabled,
-}
-
 /// Counts an export in progress until dropped, cancellation included.
 struct InFlight<'a>(&'a Shared);
 
@@ -314,16 +307,16 @@ impl Shared {
                 Batch::App { .. } => None,
             };
             match timeout(&*self.clock, limit, self.export(batch)).await {
-                Ok(Outcome::Sent) => {}
-                Ok(Outcome::Disabled) => {
+                Ok(Ok(())) => {}
+                Ok(Err(PostError::Disabled)) => {
                     add(&self.counters.recording_disabled, 1);
                     if let Some(job) = job {
                         self.state.lock().disable_job(&job);
                     }
                 }
-                Ok(Outcome::Failed(reason)) => {
+                Ok(Err(error)) => {
                     add(&self.counters.failed, records);
-                    log::warn!(target: lk_agents_abi::LOG_TARGET, "telemetry export failed: {reason}");
+                    log::warn!(target: lk_agents_abi::LOG_TARGET, "telemetry export failed: {error}");
                 }
                 Err(_) => {
                     add(&self.counters.failed, records);
@@ -350,24 +343,17 @@ impl Shared {
         }
     }
 
-    async fn export(&self, batch: Batch) -> Outcome {
+    async fn export(&self, batch: Batch) -> Result<(), PostError> {
         let (process, cloud) = {
             let state = self.state.lock();
             (state.process.clone(), state.cloud.clone())
         };
         match batch {
             Batch::Cloud { identity, recording, payload, .. } => {
-                let Some(cloud) = cloud else { return Outcome::Sent };
+                let Some(cloud) = cloud else { return Ok(()) };
                 let (signal, body) = cloud_request(&process, &identity, &recording, payload);
-                let body = match body {
-                    Ok(body) => body,
-                    Err(error) => return Outcome::Failed(error.to_string()),
-                };
                 let path = format!("{}/otlp/v0", signal.path());
-                match cloud.post(&path, |request| body.attach(request)).await {
-                    Ok(answer) => Outcome::of(answer, &path),
-                    Err(error) => Outcome::Failed(error.to_string()),
-                }
+                cloud.post(&path, |request| body.attach(request)).await
             }
             Batch::App { config, payload } => export_app(&process, &config, payload).await,
         }
@@ -381,7 +367,7 @@ fn cloud_request(
     identity: &SessionIdentity,
     recording: &CloudRecording,
     payload: Cloud,
-) -> (Signal, std::io::Result<encode::Body>) {
+) -> (Signal, encode::Body) {
     let resource = encode::cloud_resource(process, identity);
     let stamp = encode::cloud_stamp(process, identity, recording);
     let policy = ContentPolicy::cloud(recording.redaction);
@@ -406,7 +392,11 @@ fn cloud_request(
     }
 }
 
-async fn export_app(process: &ProcessIdentity, config: &AppConfig, payload: App) -> Outcome {
+async fn export_app(
+    process: &ProcessIdentity,
+    config: &AppConfig,
+    payload: App,
+) -> Result<(), PostError> {
     let resource = encode::app_resource(process, &config.resource);
     let (url, body) = match payload {
         App::Spans(spans) => {
@@ -419,23 +409,13 @@ async fn export_app(process: &ProcessIdentity, config: &AppConfig, payload: App)
             (&config.metrics_endpoint, encode::body(&request, config.gzip))
         }
     };
-    let Some(url) = url else { return Outcome::Sent };
-    let body = match body {
-        Ok(body) => body,
-        Err(error) => return Outcome::Failed(error.to_string()),
-    };
-    let client = match cloud::client().await {
-        Ok(client) => client,
-        Err(error) => return Outcome::Failed(error.to_string()),
-    };
+    let Some(url) = url else { return Ok(()) };
+    let client = cloud::client().await.map_err(|error| PostError::Setup(error.to_string()))?;
     let mut request = body.attach(client.post(url));
     for (key, value) in &config.headers {
         request = request.header(key, value);
     }
-    match request.send().await {
-        Ok(response) => Outcome::of(cloud::answer(response, false).await, url),
-        Err(error) => Outcome::Failed(error.to_string()),
-    }
+    cloud::answer(request.send().await?, false).await
 }
 
 /// The application's content policy, then its job stamp and metadata, on each span.
@@ -456,18 +436,6 @@ fn stamp_app_spans(
         queued.span
     });
     stamped.collect()
-}
-
-impl Outcome {
-    fn of(answer: Answer, url: &str) -> Outcome {
-        match answer {
-            Answer::Sent => Outcome::Sent,
-            Answer::Disabled => Outcome::Disabled,
-            Answer::Refused { status, .. } => {
-                Outcome::Failed(format!("{url} answered HTTP {status}"))
-            }
-        }
-    }
 }
 
 #[cfg(test)]

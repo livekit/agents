@@ -238,6 +238,12 @@ impl<C: Class> Drop for Permit<C> {
 #[error("worker job panicked")]
 pub struct JobPanicked;
 
+impl From<JobPanicked> for std::io::Error {
+    fn from(error: JobPanicked) -> Self {
+        std::io::Error::other(error)
+    }
+}
+
 struct Slot<T> {
     result: Option<Result<T, JobPanicked>>,
     waker: Option<Waker>,
@@ -368,6 +374,15 @@ impl<C: Class> Pool<C> {
                 Err(_) => self.wait_for_capacity(class).await,
             }
         }
+    }
+
+    /// [`Pool::run`] for fallible work: a panic is the work's own failure.
+    pub async fn try_run<T: Send + 'static, E: From<JobPanicked> + Send + 'static>(
+        &self,
+        class: C,
+        work: impl FnOnce() -> Result<T, E> + Send + 'static,
+    ) -> Result<T, E> {
+        self.run(class, work).await?
     }
 
     /// Run work under a reservation taken earlier, so callers can move owned state after

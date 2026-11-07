@@ -15,9 +15,8 @@ use lk_agents_core::telemetry::report::RecordingUpload;
 use prost::Message;
 
 use super::ReportAdmission;
-use super::UploadError;
 use crate::otlp::CloudEndpoint;
-use crate::otlp::cloud::{Answer, Unsent};
+use crate::otlp::cloud::PostError;
 
 const CHUNK_BYTES: usize = 64 * 1024;
 /// Four attempts, bounded together by the caller's limit; a `RetryInfo` delay overrides the
@@ -31,53 +30,29 @@ const ATTEMPTS: RequestPolicy = RequestPolicy {
     retry_interval: Duration::from_secs(2),
 };
 
-/// What Cloud made of an upload.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Uploaded {
-    Sent,
-    /// The project disabled recording: the job's other exports stop too.
-    Disabled,
-}
-
-/// Uploads `recording` to `cloud` within `limit`, retrying refusals that carry a `RetryInfo` and
-/// transport failures. A missing audio file uploads the rest.
-pub async fn upload(
+/// Uploads `recording` to `cloud`, retrying refusals that carry a `RetryInfo` and transport
+/// failures; the last failure when it gives up. A missing audio file uploads the rest.
+pub(crate) async fn upload(
     cloud: &CloudEndpoint,
     recording: &RecordingUpload,
     profile: Option<&[u8]>,
     clock: &dyn Clock,
-    limit: Duration,
-) -> Result<Uploaded, UploadError> {
-    let send = async {
-        let _permit = ReportAdmission::process().upload().await;
-        attempts(cloud, recording, profile, clock).await
-    };
-    lk_agents_abi::timeout(clock, limit, send)
-        .await
-        .map_err(|_| UploadError("session recording upload deadline elapsed".into()))?
-}
-
-/// One request per attempt: this is the retry loop.
-async fn attempts(
-    cloud: &CloudEndpoint,
-    recording: &RecordingUpload,
-    profile: Option<&[u8]>,
-    clock: &dyn Clock,
-) -> Result<Uploaded, UploadError> {
+) -> Result<(), PostError> {
+    let _permit = ReportAdmission::process().upload().await;
     let mut steps = Vec::new();
     let mut attempts = Attempts::start(ATTEMPTS, clock.now(), &mut steps);
-    let mut failure = String::new();
+    let mut failure = PostError::Setup("no upload attempt was made".into());
     loop {
         let mut launched = None;
         for step in steps.drain(..) {
             match step {
                 AttemptStep::Launch(attempt) => launched = Some(attempt),
-                AttemptStep::GiveUp(_) => return Err(UploadError(failure)),
+                AttemptStep::GiveUp(_) => return Err(failure),
                 _ => {}
             }
         }
         let Some(attempt) = launched else {
-            let Some(at) = attempts.wake_at(None) else { return Err(UploadError(failure)) };
+            let Some(at) = attempts.wake_at(None) else { return Err(failure) };
             clock.wait_until(at).await;
             attempts.wake(clock.now(), None, &mut steps);
             continue;
@@ -92,21 +67,22 @@ async fn attempts(
             })
             .await;
         let (error, retry_after) = match result {
-            Ok(Answer::Sent) => return Ok(Uploaded::Sent),
-            Ok(Answer::Disabled) => return Ok(Uploaded::Disabled),
-            Ok(Answer::Refused { status, body }) => {
-                failure = format!("recording upload failed with HTTP {status}");
+            Ok(()) => return Ok(()),
+            Err(PostError::Refused { status, body }) => {
+                let message = format!("recording upload failed with HTTP {status}");
                 let retry_after = retry_delay(&body);
-                let error = ApiError::from_http(&failure, status.into(), None);
+                let error = ApiError::from_http(&message, status.into(), None);
                 let retryable = error.retryable || retry_after.is_some();
+                failure = PostError::Refused { status, body };
                 (error.with_retryable(retryable), retry_after)
             }
-            Err(Unsent::Setup(error)) => return Err(UploadError(error)),
-            Err(Unsent::Transport(err)) => {
-                failure = format!("recording upload transport failed: {err}");
+            Err(PostError::Transport(err)) => {
+                let message = format!("recording upload transport failed: {err}");
                 let retryable = err.is_connect() || err.is_timeout() || err.is_body();
-                (ApiError::connection(Some(failure.clone())).with_retryable(retryable), None)
+                failure = PostError::Transport(err);
+                (ApiError::connection(Some(message)).with_retryable(retryable), None)
             }
+            Err(error) => return Err(error),
         };
         let retry_after = Duration::from_millis(retry_after.unwrap_or(0));
         attempts.failed_retry_after(attempt, error, retry_after, clock.now(), &mut steps);
@@ -168,14 +144,13 @@ impl Multipart {
             let io = io.clone();
             async move {
                 let (file, bytes) = io
-                    .run((), move || {
+                    .try_run((), move || {
                         let mut bytes = vec![0; CHUNK_BYTES];
                         let read = std::io::Read::read(&mut file, &mut bytes)?;
                         bytes.truncate(read);
                         Ok::<_, std::io::Error>((file, bytes))
                     })
-                    .await
-                    .map_err(std::io::Error::other)??;
+                    .await?;
                 Ok::<_, std::io::Error>(
                     (!bytes.is_empty()).then(|| (bytes::Bytes::from(bytes), file)),
                 )
@@ -207,26 +182,20 @@ fn part(out: &mut Vec<u8>, boundary: &str, name: &str, file: &str, kind: &str, b
 async fn open(path: &str) -> Option<(std::fs::File, u64)> {
     let owned = path.to_owned();
     let opened = lk_agents_net::blocking_io::blocking_io()
-        .run((), move || {
+        .try_run((), move || {
             let file = std::fs::File::open(owned)?;
             let len = file.metadata()?.len();
             Ok::<_, std::io::Error>((file, len))
         })
         .await;
-    match opened {
-        Ok(Ok(opened)) => Some(opened),
-        Ok(Err(error)) => {
+    opened
+        .inspect_err(|error| {
             log::warn!(
                 target: lk_agents_abi::LOG_TARGET,
                 "failed to read the audio recording, uploading without it (path={path}): {error}"
             );
-            None
-        }
-        Err(error) => {
-            log::warn!(target: lk_agents_abi::LOG_TARGET, "failed to read the audio recording: {error}");
-            None
-        }
-    }
+        })
+        .ok()
 }
 
 pub(super) fn encode_header(h: &RecordingHeader) -> Vec<u8> {

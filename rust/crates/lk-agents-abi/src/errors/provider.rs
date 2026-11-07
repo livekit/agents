@@ -24,6 +24,13 @@ pub enum ProviderError {
     Local(#[from] ApiError),
 }
 
+/// A host failure outside the API taxonomy: raised as it was, never retried.
+impl From<HostError> for ProviderError {
+    fn from(error: HostError) -> Self {
+        ProviderError::Host { error, api_kind: None, retryable: false, status_code: None }
+    }
+}
+
 impl ProviderError {
     /// The same failure, no longer to be retried: whoever spent the budget already gave up.
     pub fn into_final(self) -> ProviderError {

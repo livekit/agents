@@ -135,10 +135,9 @@ async fn the_upload_follows_the_ingest_contract() {
     std::fs::write(&path, &audio).unwrap();
     let (url, mut rx) = peer(vec![]).await;
     let upload = recording(Some(path.to_str().unwrap().to_owned()));
-    let sent =
-        recording::upload(&cloud(&url), &upload, None, &*clock(), Duration::from_secs(10)).await;
+    let sent = recording::upload(&cloud(&url), &upload, None, &*clock()).await;
     std::fs::remove_file(path).unwrap();
-    assert_eq!(sent.unwrap(), Uploaded::Sent);
+    sent.unwrap();
     let request = rx.recv().await.unwrap();
     assert_eq!(request.path, "/observability/recordings/v0");
     assert_eq!(request.header("content-encoding"), None);
@@ -176,9 +175,7 @@ async fn a_missing_audio_file_uploads_the_rest() {
     let upload = recording(Some("/nonexistent/recording.ogg".into()));
     let body = Multipart::new(&upload, None).await;
     assert!(!body.content_type().is_empty());
-    let sent =
-        recording::upload(&cloud(&url), &upload, None, &*clock(), Duration::from_secs(10)).await;
-    assert_eq!(sent.unwrap(), Uploaded::Sent);
+    recording::upload(&cloud(&url), &upload, None, &*clock()).await.unwrap();
     let names: Vec<String> = parts(&rx.recv().await.unwrap())
         .into_iter()
         .map(|(h, _)| h.split("name=\"").nth(1).unwrap().split('"').next().unwrap().to_owned())
@@ -197,14 +194,12 @@ async fn retries_follow_retry_info_and_disabled_recording_stops() {
     let body = status.encode_to_vec();
     assert_eq!(retry_delay(&body), Some(0));
     let (url, mut rx) = peer(vec![(429, body)]).await;
-    let sent = send(&url).await;
-    assert_eq!(sent.unwrap(), Uploaded::Sent);
+    send(&url).await.unwrap();
     assert!(rx.recv().await.is_some() && rx.recv().await.is_some());
 
     let disabled = b"project data recording is disabled by owner".to_vec();
     let (url, mut rx) = peer(vec![(401, disabled), (500, Vec::new())]).await;
-    let sent = send(&url).await;
-    assert_eq!(sent.unwrap(), Uploaded::Disabled);
+    assert!(matches!(send(&url).await, Err(PostError::Disabled)));
     rx.recv().await.unwrap();
     assert!(rx.try_recv().is_err());
 
@@ -213,8 +208,8 @@ async fn retries_follow_retry_info_and_disabled_recording_stops() {
     assert!(sent.is_err());
 }
 
-async fn send(url: &str) -> Result<Uploaded, UploadError> {
-    recording::upload(&cloud(url), &recording(None), None, &*clock(), Duration::from_secs(10)).await
+async fn send(url: &str) -> Result<(), PostError> {
+    recording::upload(&cloud(url), &recording(None), None, &*clock()).await
 }
 
 fn job_exporter(url: &str) -> Exporter {
@@ -294,15 +289,7 @@ async fn a_profile_rides_as_its_own_part_before_the_audio() {
     let (url, mut rx) = peer(vec![]).await;
     let upload = recording(None);
     let profile = [0x1f_u8, 0x8b, 1, 2, 3];
-    let sent = recording::upload(
-        &cloud(&url),
-        &upload,
-        Some(&profile),
-        &*clock(),
-        Duration::from_secs(10),
-    )
-    .await;
-    assert_eq!(sent.unwrap(), Uploaded::Sent);
+    recording::upload(&cloud(&url), &upload, Some(&profile), &*clock()).await.unwrap();
     let parts = parts(&rx.recv().await.unwrap());
     let names: Vec<&str> = parts
         .iter()

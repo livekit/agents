@@ -17,28 +17,26 @@ pub const RELOAD_EXTENSION: Duration = Duration::from_secs(3600);
 /// How long an agent database token lives.
 pub const DATABASE_TOKEN_TTL: Duration = Duration::from_secs(3600);
 
-#[derive(Debug, thiserror::Error)]
-pub enum TokenError {
-    #[error("api key and api secret are required")]
-    MissingCredentials,
-    #[error("{0}")]
-    Token(#[from] AccessTokenError),
+/// A credential that cannot be signed or read: retrying does not help.
+fn refused(error: AccessTokenError) -> ApiError {
+    ApiError::new(error.to_string()).with_retryable(false)
 }
 
-fn require(api_key: &str, api_secret: &str) -> Result<(), TokenError> {
+fn require(api_key: &str, api_secret: &str) -> Result<(), ApiError> {
     if api_key.is_empty() || api_secret.is_empty() {
-        return Err(TokenError::MissingCredentials);
+        return Err(ApiError::new("api key and api secret are required").with_retryable(false));
     }
     Ok(())
 }
 
 /// The worker's registration credential; re-minted before every connect attempt so a token never
 /// expires mid-outage.
-pub fn worker_token(api_key: &str, api_secret: &str) -> Result<String, TokenError> {
+pub fn worker_token(api_key: &str, api_secret: &str) -> Result<String, ApiError> {
     require(api_key, api_secret)?;
-    Ok(AccessToken::with_api_key(api_key, api_secret)
+    AccessToken::with_api_key(api_key, api_secret)
         .with_grants(VideoGrants { agent: true, ..Default::default() })
-        .to_jwt()?)
+        .to_jwt()
+        .map_err(refused)
 }
 
 #[derive(Default)]
@@ -55,7 +53,7 @@ pub fn room_join_token(
     identity: &str,
     room: &str,
     options: RoomJoinOptions,
-) -> Result<String, TokenError> {
+) -> Result<String, ApiError> {
     let RoomJoinOptions { agent, ttl } = options;
     require(api_key, api_secret)?;
     let mut token = AccessToken::with_api_key(api_key, api_secret)
@@ -75,18 +73,14 @@ pub fn room_join_token(
     if let Some(ttl) = ttl {
         token = token.with_ttl(ttl);
     }
-    Ok(token.to_jwt()?)
+    token.to_jwt().map_err(refused)
 }
 
 /// Verify an SFU-issued join token and refresh its lifetime to [`RELOAD_EXTENSION`].
 /// Preserves all modelled claims and checks the issuer and expiration.
-pub fn extend_job_token(
-    token: &str,
-    api_key: &str,
-    api_secret: &str,
-) -> Result<String, TokenError> {
+pub fn extend_job_token(token: &str, api_key: &str, api_secret: &str) -> Result<String, ApiError> {
     require(api_key, api_secret)?;
-    let c = TokenVerifier::with_api_key(api_key, api_secret).verify(token)?;
+    let c = TokenVerifier::with_api_key(api_key, api_secret).verify(token).map_err(refused)?;
     let mut t = AccessToken::with_api_key(api_key, api_secret)
         .with_ttl(RELOAD_EXTENSION)
         .with_identity(&c.sub)
@@ -100,22 +94,23 @@ pub fn extend_job_token(
     if let Some(rc) = c.room_config {
         t = t.with_room_config(rc);
     }
-    Ok(t.to_jwt()?)
+    t.to_jwt().map_err(refused)
 }
 
 /// The `sub` of a token without verifying it. Only for `simulate_job`, where the caller supplied
 /// the token and is asking what identity it names.
-pub fn token_identity(token: &str) -> Result<String, TokenError> {
-    Ok(Claims::from_unverified(token)?.sub)
+pub fn token_identity(token: &str) -> Result<String, ApiError> {
+    Ok(Claims::from_unverified(token).map_err(refused)?.sub)
 }
 
 /// The agent database's credential: [`DATABASE_TOKEN_TTL`] long, with `agent.databaseAdmin`.
-pub fn database_admin_token(api_key: &str, api_secret: &str) -> Result<String, TokenError> {
+pub fn database_admin_token(api_key: &str, api_secret: &str) -> Result<String, ApiError> {
     require(api_key, api_secret)?;
-    Ok(AccessToken::with_api_key(api_key, api_secret)
+    AccessToken::with_api_key(api_key, api_secret)
         .with_ttl(DATABASE_TOKEN_TTL)
         .with_agent_grants(AgentGrants { database_admin: true, ..Default::default() })
-        .to_jwt()?)
+        .to_jwt()
+        .map_err(refused)
 }
 
 /// How long a gateway token lives; each request signs its own.
@@ -247,8 +242,8 @@ mod tests {
             assert!(c.video.agent, "{c:?}");
             assert_eq!((c.sub.as_str(), c.iss.as_str(), c.kind.as_str()), ("", KEY, ""));
             assert!(!c.video.room_join);
-            assert!(matches!(worker_token("", SECRET), Err(TokenError::MissingCredentials)));
-            assert!(matches!(worker_token(KEY, ""), Err(TokenError::MissingCredentials)));
+            assert!(worker_token("", SECRET).is_err_and(|e| !e.retryable));
+            assert!(worker_token(KEY, "").is_err_and(|e| !e.retryable));
         }
 
         // Catches: the simulated agent joining without `kind="agent"` or without its room.
@@ -304,10 +299,7 @@ mod tests {
                 "foreign issuer accepted"
             );
             // `exp`/`nbf` enforcement (with a 60 s leeway) is `TokenVerifier`'s, pinned in `livekit-token`.
-            assert!(matches!(
-                extend_job_token(&original, KEY, ""),
-                Err(TokenError::MissingCredentials)
-            ));
+            assert!(extend_job_token(&original, KEY, "").is_err_and(|e| !e.retryable));
         }
     }
 }

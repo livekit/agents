@@ -13,6 +13,12 @@ use rustls::{ClientConfig, RootCertStore};
 #[error("{0}")]
 pub struct TlsError(String);
 
+impl From<crate::blocking_io::JobPanicked> for TlsError {
+    fn from(error: crate::blocking_io::JobPanicked) -> Self {
+        TlsError(error.to_string())
+    }
+}
+
 static CONFIG: OnceLock<Result<Arc<ClientConfig>, TlsError>> = OnceLock::new();
 
 /// The shared trust configuration. The first call performs blocking certificate I/O.
@@ -48,10 +54,7 @@ pub async fn config() -> Result<Arc<ClientConfig>, TlsError> {
     if let Some(config) = CONFIG.get() {
         return config.clone();
     }
-    crate::blocking_io::blocking_io()
-        .run((), client_config)
-        .await
-        .map_err(|error| TlsError(error.to_string()))?
+    crate::blocking_io::blocking_io().try_run((), client_config).await
 }
 
 /// An HTTP builder using the same trust configuration as the socket transports.

@@ -284,16 +284,16 @@ impl Body {
     }
 }
 
-pub(crate) fn body(message: &impl prost::Message, gzip: bool) -> std::io::Result<Body> {
+pub(crate) fn body(message: &impl prost::Message, gzip: bool) -> Body {
     let bytes = message.encode_to_vec();
     let bytes = if gzip {
         let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
-        encoder.write_all(&bytes)?;
-        encoder.finish()?
+        // Writing into a `Vec` cannot fail.
+        encoder.write_all(&bytes).and_then(|()| encoder.finish()).expect("gzip into memory")
     } else {
         bytes
     };
-    Ok(Body { bytes, gzip })
+    Body { bytes, gzip }
 }
 
 /// The retained bytes a queued record is charged: its strings and values, plus overhead.

@@ -8,7 +8,7 @@ use tokio::sync::{Mutex as AsyncMutex, Notify};
 
 use parking_lot::Mutex;
 
-use super::host::{HostSession, SessionGate, provider_error};
+use super::host::{HostSession, SessionGate};
 pub use crate::duplex::{
     AdaptiveNoiseGate, AudioGate, DuplexCapabilities, DuplexCommand, DuplexEvent, FixedGate,
     Fragment, Segmenter, Step,
@@ -48,8 +48,8 @@ impl Realtime for DuplexAdapterModel {
         _turn_detection_disabled: bool,
     ) -> lk_agents_abi::BoxFuture<'_, Result<Arc<dyn RealtimeSession>, ProviderError>> {
         Box::pin(async move {
-            let gate = SessionGate::new(self.host.gate().map_err(provider_error)?);
-            let view = self.host.session(&cx).await.map_err(provider_error)?;
+            let gate = SessionGate::new(self.host.gate().map_err(ProviderError::from)?);
+            let view = self.host.session(&cx).await.map_err(ProviderError::from)?;
             let host = HostSession::open(view, self.label.clone(), &self.spawner);
             host.observe(cx);
             let segmenter = Segmenter::new(
