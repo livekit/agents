@@ -34,7 +34,6 @@ MODEL_SAMPLE_RATES: dict[str, int] = {
 # Audio output formats
 OutputFormat = Literal[
     "pcm_s16le",  # 16-bit PCM (recommended for LiveKit)
-    "pcm_s32le",  # 32-bit PCM (highest quality)
     "wav",  # WAV with headers
     "flac",  # Lossless compression
     "adts",  # Streaming format
