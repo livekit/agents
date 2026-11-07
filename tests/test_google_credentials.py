@@ -60,16 +60,33 @@ class TestSTTCredentials:
             "projects/explicit-project/locations/global/recognizers/_"
         )
 
-    async def test_clear_error_when_project_unresolvable(self, monkeypatch) -> None:
-        # no project on the credentials and no ADC available: the error must
-        # say what is wrong instead of a confusing "default credentials not
-        # found" at transcription time (Devin finding on #6618)
-        monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
+    async def test_clear_error_when_project_unresolvable(self) -> None:
+        # no project on the credentials: the error must say what is wrong instead
+        # of a confusing "default credentials not found" at transcription time
+        # (Devin finding on #6618)
         creds = AnonymousCredentials()
         stt_instance = STT(credentials=creds)
         client = await stt_instance._create_client(timeout=1.0)
         with pytest.raises(APIConnectionError, match="could not determine the GCP project id"):
             stt_instance._get_recognizer(client)
+
+    async def test_supplied_credentials_never_fall_back_to_adc(self, monkeypatch) -> None:
+        # credentials supplied by the caller must not be topped up with a project
+        # from Application Default Credentials: on a host that has unrelated ADC
+        # configured that silently sends audio to the wrong GCP project
+        calls: list[object] = []
+
+        def _tracked_default(*args, **kwargs):
+            calls.append(args)
+            return AnonymousCredentials(), "unrelated-ambient-project"
+
+        monkeypatch.setattr("google.auth.default", _tracked_default)
+
+        stt_instance = STT(credentials=AnonymousCredentials())
+        client = await stt_instance._create_client(timeout=1.0)
+        with pytest.raises(APIConnectionError, match="could not determine the GCP project id"):
+            stt_instance._get_recognizer(client)
+        assert calls == [], "ADC was consulted despite credentials being supplied"
 
 
 class TestTTSCredentials:
