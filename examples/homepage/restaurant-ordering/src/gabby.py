@@ -2,8 +2,8 @@
 about to go out when something in it ran out.
 
 Tools return facts and the next step; how to say things lives in the instructions, once. Placing,
-cancelling, or dropping an order is read back first and done only after the caller has heard the
-read-back in full and answered it (conversation.py)."""
+cancelling, or dropping an order takes two calls: the first returns what to read back, the
+second, once the caller agrees, does it."""
 
 from __future__ import annotations
 
@@ -17,7 +17,6 @@ from livekit.agents import Agent, RunContext, function_tool
 from livekit.agents.llm import ToolError
 from pydantic import BaseModel, Field
 
-from conversation import answered, caller_spoke_last, heard
 from pizzeria import (
     CRUST,
     DRINK_SIZES,
@@ -53,11 +52,10 @@ You're on a phone call, so talk like a person, not a document:
 - Only state a price, total, or order number that a tool gave you.
 - Never say you've done something, or that you're about to, without calling its tool in that same reply.
 - When a tool refuses, fix what it says with your tools. Tell the caller only what changes for them.
-- A read-back counts only when it comes from its tool: if they cut one off, call that tool again and read all of what it returns, never from memory. Never say there's trouble on your end.
 - You handle everything yourself. There's nobody to transfer to, and no callbacks to promise.
 - They pay in person, cash or card, never over the phone: never take card details. There are no discount codes.
 - A tip only if they ask to add one: set_tip.
-- When they're done, say a short goodbye and call end_call in that same reply."""
+- When they're done, say a short goodbye and call end_call in that same reply. If they say goodbye with an order that isn't placed, ask whether to place it first."""
 
 
 class OrderItem(BaseModel):
@@ -94,7 +92,6 @@ class Review:
 
     action: str
     revision: int
-    token: str
 
 
 @contextmanager
@@ -116,20 +113,14 @@ class Gabby(Agent):
     def __init__(self, pos: Pizzeria, *, instructions: str) -> None:
         self._pos = pos
         self._review: Review | None = None
-        # what the caller must hear before the call can end, and the call that said it
-        self._must_hear: dict[str, str] = {}
         super().__init__(instructions=instructions)
 
-    def _answered_review(self, ctx: RunContext, action: str) -> bool:
+    def _read_back_matches(self, action: str) -> bool:
         r = self._review
-        return (
-            r is not None
-            and (r.action, r.revision) == (action, self._pos.revision)
-            and answered(ctx.session.history.items, r.token)
-        )
+        return r is not None and (r.action, r.revision) == (action, self._pos.revision)
 
-    def _read_back(self, ctx: RunContext, action: str) -> None:
-        self._review = Review(action, self._pos.revision, ctx.function_call.call_id)
+    def _read_back(self, action: str) -> None:
+        self._review = Review(action, self._pos.revision)
 
     def _read_back_status(self) -> dict[str, str]:
         """After a change to something already read back: get the new read-back first."""
@@ -142,10 +133,6 @@ class Gabby(Agent):
             "readBack": f"Out of date: this changed what you read back. Call {tool} for the "
             "new read-back and read it to them before they agree."
         }
-
-    def _must_tell(self, ctx: RunContext, what: str) -> None:
-        # the latest outcome is the one they need: a cancellation supersedes the order number
-        self._must_hear = {what: ctx.function_call.call_id}
 
     @function_tool
     async def set_tip(
@@ -173,10 +160,9 @@ class Gabby(Agent):
         the first call returns what to confirm with them. Call it again once they agree."""
         if self._pos.order is None:
             return await self._drop_unplaced(ctx)
-        if self._answered_review(ctx, "cancel"):
+        if self._read_back_matches("cancel"):
             with _pos_rules():
                 order = await self._pos.cancel()
-            self._must_tell(ctx, "that the order is cancelled and nothing is due")
             return _facts(
                 cancelled=f"order {order.number}",
                 due=money(self._pos.due_now()),
@@ -185,7 +171,7 @@ class Gabby(Agent):
             )
         with _pos_rules():
             read_back = self._pos.cancel_read_back()
-        self._read_back(ctx, "cancel")
+        self._read_back("cancel")
         return _facts(
             cancelled=False,
             readBack=read_back,
@@ -199,17 +185,15 @@ class Gabby(Agent):
         """Cancelling before anything's placed: there's nothing to cancel, but what they've
         ordered so far comes off only once they've agreed to drop all of it."""
         if not self._pos.lines:
-            self._must_tell(ctx, "that nothing was placed, so nothing is due")
             return _facts(
                 cancelled=False,
                 placed=False,
                 next="Nothing was placed, so there's nothing to cancel and nothing is due. "
                 "Tell them.",
             )
-        if self._answered_review(ctx, "drop"):
+        if self._read_back_matches("drop"):
             with _pos_rules():
                 await self._pos.drop()
-            self._must_tell(ctx, "that the order is dropped and nothing is due")
             return _facts(
                 dropped=True,
                 due=money(self._pos.due_now()),
@@ -219,7 +203,7 @@ class Gabby(Agent):
             )
         with _pos_rules():
             read_back = self._pos.drop_read_back()
-        self._read_back(ctx, "drop")
+        self._read_back("drop")
         return _facts(
             dropped=False,
             readBack=read_back,
@@ -228,29 +212,6 @@ class Gabby(Agent):
             "using this, whether to drop the whole order, and wait for their answer. Call "
             "cancel_order again only once they agree to drop all of it.",
         )
-
-    @function_tool
-    async def end_call(self, ctx: RunContext) -> str | None:
-        """Hang up. Only once the caller has nothing else, and after a short goodbye in this
-        same reply."""
-        # what this same reply says lands in the history once it has played
-        await ctx.wait_for_playout()
-        items = ctx.session.history.items
-        if unheard := [
-            w for w, token in self._must_hear.items() if not heard(items, token)
-        ]:
-            self._must_hear[unheard[0]] = ctx.function_call.call_id
-            raise ToolError(f"Don't hang up yet: first tell them {unheard[0]}.")
-        if missing := self._unfinished():
-            raise ToolError(f"Don't hang up yet: {missing}")
-        # the call ends once this reply has played, a goodbye included
-        ctx.speech_handle.add_done_callback(lambda _: ctx.session.shutdown())
-        if caller_spoke_last(items):
-            return "Say a short goodbye."
-        return None
-
-    def _unfinished(self) -> str | None:
-        return None
 
     def _money_facts(self) -> dict[str, Any]:
         quote = self._pos.quote()
@@ -429,10 +390,9 @@ class TakeOrder(Gabby):
         """Send the order to the kitchen. The first call checks it's ready and returns what to
         read back; call it again once the caller has said it's right. After any change it's
         read back again."""
-        if self._answered_review(ctx, "place"):
+        if self._read_back_matches("place"):
             with _pos_rules():
                 order = await self._pos.place()
-            self._must_tell(ctx, "their order number and when it'll be ready")
             return _facts(
                 orderNumber=order.number,
                 readyIn=order.ready_in,
@@ -441,7 +401,7 @@ class TakeOrder(Gabby):
             )
         with _pos_rules():
             read_back = self._pos.order_read_back()
-        self._read_back(ctx, "place")
+        self._read_back("place")
         return _facts(
             placed=False,
             readBack=read_back,
@@ -450,14 +410,6 @@ class TakeOrder(Gabby):
             "total with what it includes) and wait for their answer. Call place_order again "
             "only once they agree.",
         )
-
-    def _unfinished(self) -> str | None:
-        if self._pos.order is None and self._pos.lines:
-            return (
-                "their order isn't placed. Ask whether to place it; if they want none of it, "
-                "cancel_order."
-            )
-        return None
 
 
 class DeliveryUpdate(Gabby):
@@ -523,9 +475,6 @@ class DeliveryUpdate(Gabby):
         change."""
         with _pos_rules():
             facts = await self._pos.read_back_changes()
-        self._must_tell(
-            ctx, "what changed, what's due at the door, and when the driver gets there"
-        )
         return _facts(
             **facts,
             next="Say each change once (not the whole order), with any code or unit number "
@@ -545,7 +494,6 @@ class DeliveryUpdate(Gabby):
         """
         with _pos_rules():
             await self._pos.end_early(reason)
-        self._must_hear.clear()
         if reason == "wrong_person":
             return _facts(
                 next="Apologize for the mix-up and say goodbye. Say nothing about the order, "

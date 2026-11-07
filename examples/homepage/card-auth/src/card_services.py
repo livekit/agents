@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
-from livekit.agents import Agent, RunContext, function_tool
+from livekit.agents import Agent, function_tool
 from livekit.agents.llm import ToolError
 
 from bank import (
@@ -21,7 +21,6 @@ from bank import (
     birth_date,
     card_digits,
 )
-from conversation import caller_spoke_last, heard
 
 BANK_TZ = ZoneInfo("America/New_York")
 
@@ -91,32 +90,10 @@ class _CardDesk(Agent):
 
     def __init__(self, bank: Bank, *, instructions: str) -> None:
         self._bank = bank
-        self._must_hear: dict[str, str] = {}
         super().__init__(instructions=instructions)
 
-    def _must_tell(self, ctx: RunContext, what: str) -> None:
-        self._must_hear[what] = ctx.function_call.call_id
-
     @function_tool
-    async def end_call(self, ctx: RunContext) -> None:
-        """Hang up. Only once the caller has nothing else, and after a short goodbye in this
-        same reply."""
-        await ctx.wait_for_playout()
-        items = ctx.session.history.items
-        if unheard := [
-            w for w, token in self._must_hear.items() if not heard(items, token)
-        ]:
-            self._must_hear[unheard[0]] = ctx.function_call.call_id
-            raise ToolError(f"Don't hang up yet: first tell them {unheard[0]}.")
-        if caller_spoke_last(items):
-            raise ToolError(
-                "Not hung up yet. Answer what they just said with a short goodbye, and call "
-                "end_call again in that same reply."
-            )
-        ctx.speech_handle.add_done_callback(lambda _: ctx.session.shutdown())
-
-    @function_tool
-    async def report_purchase(self, ctx: RunContext, made_by_cardholder: bool) -> str:
+    async def report_purchase(self, made_by_cardholder: bool) -> str:
         """Record whether the cardholder made the flagged purchase. If they didn't, the card is locked and the case goes to loss prevention.
 
         Args:
@@ -129,7 +106,6 @@ class _CardDesk(Agent):
                 "Marked as the cardholder's purchase. Ask whether they're traveling, "
                 "and if so until when."
             )
-        self._must_tell(ctx, "that the card is locked and the case number")
         return json.dumps(
             {
                 "card": "locked",
@@ -140,9 +116,7 @@ class _CardDesk(Agent):
         )
 
     @function_tool
-    async def set_travel_notice(
-        self, ctx: RunContext, destination: str, back_on: str
-    ) -> str:
+    async def set_travel_notice(self, destination: str, back_on: str) -> str:
         """Note that the cardholder is traveling, so purchases there don't trigger a call.
 
         Args:
@@ -157,7 +131,6 @@ class _CardDesk(Agent):
         with _as_tool_error():
             card = await self._bank.set_travel_notice(destination, until, today)
         assert card.travel is not None
-        self._must_tell(ctx, "the travel notice")
         return (
             f"Travel notice set for {card.travel.destination} through "
             f"{until:%A, %B} {until.day}, {(until - today).days} days from today. "
@@ -208,7 +181,6 @@ Once they're verified, if they haven't said what they need yet, say exactly: "Gr
     @function_tool
     async def verify_identity(
         self,
-        ctx: RunContext,
         full_name: str,
         date_of_birth: str,
         card_last_four: str,
@@ -236,7 +208,6 @@ Once they're verified, if they haven't said what they need yet, say exactly: "Gr
                 result["recent_charge"] = _charge(await self._bank.recent_charges())
             elif result["verified"] and request == "lock":
                 card = await self._bank.lock_card()
-                self._must_tell(ctx, "that the card is locked")
                 result["card"] = (
                     f"locked: nothing new can go through on the card ending in {card.last_four}"
                 )
@@ -252,11 +223,10 @@ Once they're verified, if they haven't said what they need yet, say exactly: "Gr
         return json.dumps({"recent_charge": _charge(alert)})
 
     @function_tool
-    async def lock_card(self, ctx: RunContext) -> str:
+    async def lock_card(self) -> str:
         """Lock the verified caller's card, so nothing new can go through on it."""
         with _as_tool_error():
             card = await self._bank.lock_card()
-        self._must_tell(ctx, "that the card is locked")
         return f"The card ending in {card.last_four} is locked. Nothing new can go through on it."
 
 

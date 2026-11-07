@@ -18,7 +18,6 @@ from clinic import (
     ClinicError,
     PartOfDay,
 )
-from conversation import caller_spoke_last, heard
 
 GREETING = (
     f"Thanks for calling {CLINIC_NAME}, this is Riley. What can I help you with today?"
@@ -65,29 +64,7 @@ class FrontDesk(Agent):
 
     def __init__(self, clinic: Clinic, *, instructions: str) -> None:
         self._clinic = clinic
-        self._must_hear: dict[str, str] = {}
         super().__init__(instructions=instructions)
-
-    def _must_tell(self, context: RunContext[CallState], what: str) -> None:
-        self._must_hear[what] = context.function_call.call_id
-
-    @function_tool
-    async def end_call(self, context: RunContext[CallState]) -> None:
-        """Hang up. Only once the caller has nothing else, and after a short goodbye in this
-        same reply."""
-        await context.wait_for_playout()
-        items = context.session.history.items
-        if unheard := [
-            w for w, token in self._must_hear.items() if not heard(items, token)
-        ]:
-            self._must_hear[unheard[0]] = context.function_call.call_id
-            raise ToolError(f"Don't hang up yet: first tell them {unheard[0]}.")
-        if caller_spoke_last(items):
-            raise ToolError(
-                "Not hung up yet. Answer what they just said with a short goodbye, and call "
-                "end_call again in that same reply."
-            )
-        context.speech_handle.add_done_callback(lambda _: context.session.shutdown())
 
     @function_tool
     async def check_availability(
@@ -134,7 +111,6 @@ class FrontDesk(Agent):
             )
         except ClinicError as e:
             raise ToolError(str(e)) from e
-        self._must_tell(context, "the day and time it's moved to")
         return f"Moved {appointment.reason} to {_spoken(appointment.starts_at)}."
 
 
@@ -251,7 +227,6 @@ To find a time, call check_availability for what they asked, and offer the one o
             )
         except ClinicError as e:
             raise ToolError(str(e)) from e
-        self._must_tell(context, "the day and time it's booked for")
         return f"Booked {appointment.reason} for {_spoken(appointment.starts_at)}."
 
 
@@ -314,7 +289,6 @@ When they're all set, remind them of the day and time and ask if there's anythin
             )
         except ClinicError as e:
             raise ToolError(str(e)) from e
-        self._must_tell(context, "that it's confirmed")
         return f"Confirmed {appointment.reason} for {_spoken(appointment.starts_at)}."
 
     @function_tool

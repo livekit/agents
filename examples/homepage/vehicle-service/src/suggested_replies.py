@@ -1,7 +1,13 @@
 """Suggests what the caller could say next, for the demo page's "try saying" line.
 
-After each of the agent's turns a small model proposes one to three short replies the
-caller could say, published on the agent participant as ``lk.agent.suggestions``.
+This is plumbing for the homepage demo page, not part of the voice agent: the agent works the
+same without it, and never reads what it publishes. Many people trying the demo don't know
+what to say to a pizzeria or a service desk, so after each of the agent's turns a second, small
+model reads the call so far and the caller's script below (who they are and what they want
+right now) and proposes one to three short lines the caller could say next. They're published
+on the agent participant as the ``lk.agent.suggestions`` attribute, which the page shows as its
+"try saying" line and lets the visitor click to send as text.
+
 Attached in one line after the session is built:
 
     SuggestedReplies(session, ctx.room, llm=inference.LLM(SUGGESTIONS_MODEL),
@@ -108,6 +114,8 @@ class SuggestedReplies:
                     raw += chunk.delta.content
         finally:
             await stream.aclose()
+        if self._session.user_state == "speaking":
+            return
         await self._publish(parse_suggestions(raw))
 
     def _prompt(self, line: str) -> str:

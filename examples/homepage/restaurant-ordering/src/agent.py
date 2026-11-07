@@ -18,6 +18,7 @@ from livekit.agents import (
     inference,
     room_io,
 )
+from livekit.agents.beta.tools import EndCallTool
 from livekit.plugins import ai_coustics
 
 from gabby import (
@@ -28,7 +29,7 @@ from gabby import (
     caller_script,
     delivery_opener,
 )
-from phone import PHONE, outbound_line, ring
+from phone import PHONE, dial_phone, outbound_line
 from pizzeria import Pizzeria
 from simulation import on_simulation_end
 from suggested_replies import SUGGESTIONS_MODEL, SuggestedReplies
@@ -82,7 +83,7 @@ async def restaurant(ctx: JobContext) -> None:
     await ctx.connect()
 
     dial = meta.get("dial")
-    if dial and await ring(ctx, dial, *outbound_line(meta)) is None:
+    if dial and await dial_phone(ctx, dial, *outbound_line(meta)) is None:
         ctx.delete_room()
         return
     phone = next(
@@ -130,6 +131,12 @@ async def restaurant(ctx: JobContext) -> None:
             preemptive_generation={"enabled": True},
         ),
         expressive=True,
+        tools=[
+            EndCallTool(
+                end_instructions="Say what any tool called with this one returned, then a "
+                "short goodbye if you haven't said one."
+            )
+        ],
     )
     session.on("close", lambda _: ctx.delete_room())
     if not ctx.is_fake_job():

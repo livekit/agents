@@ -16,6 +16,7 @@ from livekit.agents import (
     inference,
     room_io,
 )
+from livekit.agents.beta.tools import EndCallTool
 from livekit.plugins import ai_coustics
 
 from bank import BANK_NAME, Bank
@@ -27,7 +28,7 @@ from card_services import (
     outbound_caller_script,
     outbound_greeting,
 )
-from phone import outbound_line, ring
+from phone import dial_phone, outbound_line
 from simulation import on_simulation_end
 from suggested_replies import SUGGESTIONS_MODEL, SuggestedReplies
 
@@ -60,7 +61,7 @@ async def card_verification(ctx: JobContext) -> None:
     }
     await ctx.connect()
     if dial := meta.get("dial"):
-        caller = await ring(ctx, dial, *outbound_line(meta))
+        caller = await dial_phone(ctx, dial, *outbound_line(meta))
         if caller is None:
             ctx.delete_room()
             return
@@ -98,6 +99,12 @@ async def card_verification(ctx: JobContext) -> None:
             interruption={"mode": "adaptive"},
             preemptive_generation={"enabled": True},
         ),
+        tools=[
+            EndCallTool(
+                end_instructions="Say what any tool called with this one returned, then a "
+                "short goodbye if you haven't said one."
+            )
+        ],
     )
     if outbound:
         await bank.open_alert()

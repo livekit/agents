@@ -27,8 +27,6 @@ Otherwise the agent waits for someone to join the room.
   checks every change against the restaurant's rules and publishes it as a `restaurant.*`
   attribute for the demo page.
 - `src/zappis.json` seeds the menu, prices, fees, hours, and allergens.
-- `src/conversation.py` reads the session history to tell whether the caller actually heard
-  something, like the read-back, and has answered since.
 - `src/simulation.py` grades a simulated call on what the point of sale ended up with, against the
   scenario's `expected` userdata.
 - `src/suggested_replies.py` suggests what the caller could say next after each of Gabby's turns,
@@ -68,7 +66,6 @@ uv run pytest
 lk agent simulate text --scenarios scenarios.yaml
 ```
 
-`tests/test_agent.py` runs turns against the real LLM, so it needs the credentials in `.env.local`.
 Each scenario's `expected` userdata says what the order should end up as, and `src/simulation.py`
 fails the run if it doesn't.
 

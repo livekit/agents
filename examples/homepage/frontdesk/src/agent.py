@@ -16,10 +16,11 @@ from livekit.agents import (
     inference,
     room_io,
 )
+from livekit.agents.beta.tools import EndCallTool
 from livekit.plugins import ai_coustics
 
 from clinic import Clinic
-from phone import outbound_line, ring
+from phone import dial_phone, outbound_line
 from receptionist import (
     GREETING,
     CallState,
@@ -61,7 +62,7 @@ async def front_desk(ctx: JobContext) -> None:
     }
     await ctx.connect()
     if dial := meta.get("dial"):
-        caller = await ring(ctx, dial, *outbound_line(meta))
+        caller = await dial_phone(ctx, dial, *outbound_line(meta))
         if caller is None:
             ctx.delete_room()
             return
@@ -98,6 +99,12 @@ async def front_desk(ctx: JobContext) -> None:
             interruption={"mode": "adaptive"},
             preemptive_generation={"enabled": True},
         ),
+        tools=[
+            EndCallTool(
+                end_instructions="Say what any tool called with this one returned, then a "
+                "short goodbye if you haven't said one."
+            )
+        ],
     )
     confirming = clinic.appointments[0]
     session.on("close", lambda _: ctx.delete_room())

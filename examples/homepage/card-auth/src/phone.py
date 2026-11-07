@@ -17,7 +17,7 @@ def outbound_line(meta: dict[str, str]) -> tuple[str, str]:
     return meta.get("trunk") or "", meta.get("from") or ""
 
 
-async def ring(
+async def dial_phone(
     ctx: JobContext, number: str, trunk: str, from_number: str
 ) -> rtc.RemoteParticipant | None:
     """Rings a real phone and returns it once someone picks up; None if nobody did, after telling

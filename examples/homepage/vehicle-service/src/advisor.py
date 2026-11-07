@@ -2,8 +2,8 @@
 technician has found the cause of the problem they called about.
 
 Tools return facts and the next step; how to say things lives in the instructions, once. Anything
-that books, moves, cancels, or approves work is read back first and done only after the caller has
-heard the read-back in full and answered it (conversation.py)."""
+that books, moves, cancels, or approves work takes two calls: the first returns what to read
+back, the second, once the caller agrees, does it."""
 
 from __future__ import annotations
 
@@ -16,7 +16,6 @@ from typing import Any
 from livekit.agents import Agent, RunContext, function_tool
 from livekit.agents.llm import ToolError
 
-from conversation import answered, caller_spoke_last, heard
 from service_desk import (
     DEALERSHIP,
     LOANER_MIN_HOURS,
@@ -53,7 +52,6 @@ You're on a phone call, so talk like a person, not a document:
 - Only a tool's result says whether something is done. Until one says it's booked, approved, moved, or cancelled, never say it is, or that they're "all set", "I have you down", or "updated". When a result says it isn't done yet, do what its next says.
 - One call per thing: never call the same tool twice at once for the same repair, service, or time, and never with answers that disagree.
 - When a tool refuses, fix what it says with your tools. Tell the caller only what changes for them, as the rule itself: never "the system".
-- A read-back counts only when it comes from its tool: if they cut one off, call that tool again and read all of what it returns, never from memory. Never say there's trouble on your end.
 - The caller can't see anything: never "does that look right".
 - You handle everything yourself. There's nobody to transfer to, and no callbacks to promise or messages to pass on.
 - Payment is in person at the service desk at pickup, cash or card. Nothing is paid over the phone, and there are no discount codes.
@@ -67,7 +65,6 @@ class Review:
     action: str
     target: str
     revision: int
-    token: str
 
 
 @contextmanager
@@ -88,50 +85,18 @@ class Nick(Agent):
     def __init__(self, desk: ServiceDesk, *, instructions: str) -> None:
         self._desk = desk
         self._review: Review | None = None
-        # what the caller must hear before the call can end, by what it is
-        self._must_hear: dict[str, str] = {}
         super().__init__(instructions=instructions)
 
-    def _answered_review(self, ctx: RunContext, action: str, target: str) -> bool:
+    def _read_back_matches(self, action: str, target: str) -> bool:
         r = self._review
-        return (
-            r is not None
-            and (r.action, r.target, r.revision)
-            == (action, target, self._desk.revision)
-            and answered(ctx.session.history.items, r.token)
+        return r is not None and (r.action, r.target, r.revision) == (
+            action,
+            target,
+            self._desk.revision,
         )
 
-    def _read_back(self, ctx: RunContext, action: str, target: str) -> None:
-        self._review = Review(
-            action, target, self._desk.revision, ctx.function_call.call_id
-        )
-
-    def _must_tell(self, ctx: RunContext, what: str) -> None:
-        self._must_hear[what] = ctx.function_call.call_id
-
-    @function_tool
-    async def end_call(self, ctx: RunContext) -> None:
-        """Hang up. Only once the caller has nothing else, and after a short goodbye in this
-        same reply."""
-        # what this same reply says, a goodbye with the booking in it, lands once it has played
-        await ctx.wait_for_playout()
-        items = ctx.session.history.items
-        if unheard := [
-            w for w, token in self._must_hear.items() if not heard(items, token)
-        ]:
-            self._must_hear[unheard[0]] = ctx.function_call.call_id
-            raise ToolError(f"Don't hang up yet: first tell them {unheard[0]}.")
-        if missing := self._unfinished():
-            raise ToolError(f"Don't hang up yet: {missing}")
-        if caller_spoke_last(items):
-            raise ToolError(
-                "Not hung up yet. Answer what they just said with a short goodbye, and call "
-                "end_call again in that same reply."
-            )
-        ctx.speech_handle.add_done_callback(lambda _: ctx.session.shutdown())
-
-    def _unfinished(self) -> str | None:
-        return None
+    def _read_back(self, action: str, target: str) -> None:
+        self._review = Review(action, target, self._desk.revision)
 
 
 class ServiceAdvisor(Nick):
@@ -382,10 +347,9 @@ class ServiceAdvisor(Nick):
         """Book the visit. The first call checks it and returns what to read back to the caller.
         Call it again once they've said it's right. After any change, it's read back again; a
         visit already booked on this call is updated under the same confirmation."""
-        if self._answered_review(ctx, "book", ""):
+        if self._read_back_matches("book", ""):
             with _desk_rules():
                 appointment = await self._desk.book()
-            self._must_tell(ctx, "their booking")
             return _facts(
                 booked=appointment.to_json(),
                 next="Tell them they're booked: the day, time, advisor, and ride. Then ask if "
@@ -393,7 +357,7 @@ class ServiceAdvisor(Nick):
             )
         with _desk_rules():
             visit = self._desk.read_back()
-        self._read_back(ctx, "book", "")
+        self._read_back("book", "")
         return _facts(
             booked=False,
             readBack=visit,
@@ -414,14 +378,13 @@ class ServiceAdvisor(Nick):
             slot_id: A slotId from find_times for that appointment.
         """
         target = f"{appointment_id}@{slot_id}"
-        if self._answered_review(ctx, "move", target):
+        if self._read_back_matches("move", target):
             with _desk_rules():
                 appointment = await self._desk.move(appointment_id, slot_id)
-            self._must_tell(ctx, f"the move of {appointment_id}")
             return _facts(moved=appointment.to_json())
         with _desk_rules():
             move = self._desk.move_read_back(appointment_id, slot_id)
-        self._read_back(ctx, "move", target)
+        self._read_back("move", target)
         return _facts(
             moved=False,
             readBack=move,
@@ -438,14 +401,13 @@ class ServiceAdvisor(Nick):
         Args:
             appointment_id: The appointmentId from their file.
         """
-        if self._answered_review(ctx, "cancel", appointment_id):
+        if self._read_back_matches("cancel", appointment_id):
             with _desk_rules():
                 appointment = await self._desk.cancel(appointment_id)
-            self._must_tell(ctx, f"the cancellation of {appointment_id}")
             return _facts(cancelled=appointment.to_json(), due=0)
         with _desk_rules():
             cancellation = self._desk.cancel_read_back(appointment_id)
-        self._read_back(ctx, "cancel", appointment_id)
+        self._read_back("cancel", appointment_id)
         return _facts(
             cancelled=False,
             readBack=cancellation,
@@ -503,7 +465,7 @@ class RepairCallback(Nick):
             finding = await desk.share_findings()
         ready = desk.ready_at([finding])
         # what they hear next is the read-back their yes approves
-        self._read_back(ctx, "approve", finding.id)
+        self._read_back("approve", finding.id)
         return _facts(
             repairId=finding.id,
             repair=finding.title,
@@ -532,10 +494,8 @@ class RepairCallback(Nick):
         assert shop is not None
         with _desk_rules():
             finding = shop.finding(repair_id)
-        if decision == "approved" and not self._answered_review(
-            ctx, "approve", repair_id
-        ):
-            self._read_back(ctx, "approve", repair_id)
+        if decision == "approved" and not self._read_back_matches("approve", repair_id):
+            self._read_back("approve", repair_id)
             return _facts(
                 approved=False,
                 readBack={"repair": finding.title, "price": finding.price},
@@ -554,7 +514,7 @@ class RepairCallback(Nick):
             warning = (
                 f"First say once, plainly and without pushing: {finding.can_wait} "
             )
-        return self._pickup_facts(ctx, warning=warning, **extra)
+        return self._pickup_facts(warning=warning, **extra)
 
     @function_tool
     async def arrange_pickup(
@@ -575,7 +535,7 @@ class RepairCallback(Nick):
         """
         with _desk_rules():
             await self._desk.arrange_pickup(ride, shuttle_from, collected_by)
-        return self._pickup_facts(ctx)
+        return self._pickup_facts()
 
     @function_tool
     async def note_new_concern(self, ctx: RunContext, concern: str) -> str:
@@ -601,7 +561,6 @@ class RepairCallback(Nick):
         """
         with _desk_rules():
             await self._desk.end_early(reason)
-        self._must_hear.clear()
         return _facts(
             next="Apologize for the mix-up and say goodbye. Share nothing about the car, and "
             "don't offer to pass anything on."
@@ -610,11 +569,10 @@ class RepairCallback(Nick):
             "goodbye.",
         )
 
-    def _pickup_facts(self, ctx: RunContext, warning: str = "", **extra: Any) -> str:
-        self._must_tell(ctx, "when the car's ready and the total due")
+    def _pickup_facts(self, warning: str = "", **extra: Any) -> str:
         if later := self._raising():
             # bringing up a repair that can wait, with its price, is its read-back
-            self._read_back(ctx, "approve", later.id)
+            self._read_back("approve", later.id)
         return _facts(
             **self._desk.pickup_summary(), **extra, next=warning + self._next_step()
         )
@@ -645,16 +603,6 @@ class RepairCallback(Nick):
                 "coming in themselves."
             )
         return "Tell them when it's ready and the total due, then ask if there's anything else."
-
-    def _unfinished(self) -> str | None:
-        shop = self._desk.shop
-        if shop is None or shop.ended_early:
-            return None
-        if left := self._desk.undecided():
-            return f"ask what they'd like to do about the {left[0].title.lower()}."
-        if shop.ride is None:
-            return "ask how they'll get back for the car."
-        return None
 
 
 def callback_opener(desk: ServiceDesk) -> str:
