@@ -1,4 +1,3 @@
-import asyncio
 import json
 import logging
 import os
@@ -19,6 +18,7 @@ from livekit.agents import (
     room_io,
 )
 from livekit.agents.beta.tools import EndCallTool
+from livekit.agents.utils.participant import wait_for_participant_attribute
 from livekit.plugins import ai_coustics
 
 from gabby import (
@@ -163,31 +163,18 @@ async def restaurant(ctx: JobContext) -> None:
         ),
     )
 
-    if phone and not await _answered(ctx.room, phone):
-        ctx.shutdown(reason="the call was not answered")
-        return
+    if phone:
+        try:
+            await wait_for_participant_attribute(
+                ctx.room,
+                identity=phone.identity,
+                attribute="sip.callStatus",
+                value="active",
+            )
+        except RuntimeError:
+            ctx.shutdown(reason="the call was not answered")
+            return
     session.say(delivery_opener(pos) if delivery_update else GREETING)
-
-
-async def _answered(room: rtc.Room, caller: rtc.RemoteParticipant) -> bool:
-    answered: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
-
-    def check(*_: object) -> None:
-        if not answered.done() and caller.attributes.get("sip.callStatus") == "active":
-            answered.set_result(True)
-
-    def left(participant: rtc.RemoteParticipant, *_: object) -> None:
-        if not answered.done() and participant.identity == caller.identity:
-            answered.set_result(False)
-
-    room.on("participant_attributes_changed", check)
-    room.on("participant_disconnected", left)
-    check()
-    try:
-        return await answered
-    finally:
-        room.off("participant_attributes_changed", check)
-        room.off("participant_disconnected", left)
 
 
 def check_in_when_user_away(session: AgentSession) -> None:

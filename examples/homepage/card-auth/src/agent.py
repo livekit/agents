@@ -1,4 +1,3 @@
-import asyncio
 import json
 import logging
 from typing import Any
@@ -17,6 +16,7 @@ from livekit.agents import (
     room_io,
 )
 from livekit.agents.beta.tools import EndCallTool
+from livekit.agents.utils.participant import wait_for_participant_attribute
 from livekit.plugins import ai_coustics
 
 from bank import BANK_NAME, Bank
@@ -135,31 +135,18 @@ async def card_verification(ctx: JobContext) -> None:
         ),
     )
 
-    if on_phone and not await _answered(ctx.room, caller):
-        ctx.shutdown(reason="the call was not answered")
-        return
+    if on_phone:
+        try:
+            await wait_for_participant_attribute(
+                ctx.room,
+                identity=caller.identity,
+                attribute="sip.callStatus",
+                value="active",
+            )
+        except RuntimeError:
+            ctx.shutdown(reason="the call was not answered")
+            return
     session.say(outbound_greeting() if outbound else GREETING)
-
-
-async def _answered(room: rtc.Room, caller: rtc.RemoteParticipant) -> bool:
-    answered: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
-
-    def check(*_: object) -> None:
-        if not answered.done() and caller.attributes.get("sip.callStatus") == "active":
-            answered.set_result(True)
-
-    def left(participant: rtc.RemoteParticipant, *_: object) -> None:
-        if not answered.done() and participant.identity == caller.identity:
-            answered.set_result(False)
-
-    room.on("participant_attributes_changed", check)
-    room.on("participant_disconnected", left)
-    check()
-    try:
-        return await answered
-    finally:
-        room.off("participant_attributes_changed", check)
-        room.off("participant_disconnected", left)
 
 
 def _masked(number: str) -> str | None:
