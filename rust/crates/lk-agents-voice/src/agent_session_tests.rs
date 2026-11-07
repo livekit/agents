@@ -661,3 +661,67 @@ fn the_opening_ends_session_start_on_the_event_stream() {
     assert_eq!((span.name.as_ref(), span.context), ("session_start", start));
     assert_eq!(driver.session_start_span(), None);
 }
+
+// Catches: the terminal admission pass dropping the speech updates and stream events of a
+// say()/generate_reply() it refuses, so the runtime answers `created` with no handle behind it.
+#[test]
+fn a_speech_refused_at_finish_is_created_viewed_released_and_answered() {
+    use crate::agent_session::effects::VoiceEffect;
+    use crate::speech_handle::SpeechUpdate;
+
+    let host = |command| VoiceEvent::Host(Sent { origin: VoiceCommandOrigin::Host, command });
+    let (say, reply) = ((RequestId(1), SpeechId(71)), (RequestId(2), SpeechId(72)));
+    let call = |(id, speech)| Some(SpeechCall { id, speech });
+    let mut driver = driver();
+    driver.take_outbox();
+    let effects = driver.finish(vec![
+        host(Command::Speech(SpeechCommand::Say {
+            text: SayText::Text("hello".into()),
+            allow_interruptions: None,
+            add_to_chat_ctx: true,
+            call: call(say),
+        })),
+        host(Command::Speech(SpeechCommand::GenerateReply(GenerateReplyRequest {
+            user_input: None,
+            instructions: None,
+            allow_interruptions: None,
+            tool_choice: None,
+            chat_ctx: None,
+            toolset: None,
+            tool_names: None,
+            on_enter: false,
+            call: call(reply),
+        }))),
+    ]);
+    for (request, speech) in [say, reply] {
+        let updates: Vec<_> = effects
+            .iter()
+            .filter_map(|effect| match effect {
+                VoiceEffect::Speech(id, update) if *id == speech => Some(update),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            matches!(
+                updates[..],
+                [SpeechUpdate::Created, SpeechUpdate::View(view), SpeechUpdate::Released]
+                    if view.done()
+            ),
+            "{speech:?}: {updates:?}"
+        );
+        assert!(effects.iter().any(|effect| matches!(effect,
+            VoiceEffect::Answer(id, Answer::Speech) if *id == request
+        )));
+        for announced in [true, false] {
+            assert!(effects.iter().any(|effect| match effect {
+                VoiceEffect::Emit(SessionEvent::SpeechCreated { speech: created, .. }) => {
+                    announced && *created == speech
+                }
+                VoiceEffect::Emit(SessionEvent::SpeechDone { speech: done, .. }) => {
+                    !announced && *done == speech
+                }
+                _ => false,
+            }));
+        }
+    }
+}
