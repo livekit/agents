@@ -30,6 +30,7 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given, resolve_env_int
 
 from . import gpt_live_types as types
+from ._gpt_live_telemetry import BackendRequest, BackendTrace, ProtocolTrace
 from .gpt_live_types import DecisionEventEnvelope as DecisionEventEnvelope
 
 SAMPLE_RATE = 24000
@@ -468,6 +469,8 @@ class GPTLiveSession(
         # call_ids move to the open set, and stay there until each output is sent to the backend.
         # response_pending is set once an output is sent and cleared by the response.create
         self._backend_running_responses: dict[str | None, set[str]] = {}
+        self._backend_trace = BackendTrace(self._backend_request)
+        self._protocol_trace = ProtocolTrace()
         self._backend_open_calls: set[str] = set()
         self._backend_response_pending = False
 
@@ -798,6 +801,9 @@ class GPTLiveSession(
                 await _close_ws()
         finally:
             await utils.aio.cancel_and_wait(*tasks)
+            # both closes guard their own errors, so the socket below always closes
+            self._backend_trace.close()
+            self._protocol_trace.close()
             await ws_conn.close()
 
     async def _ws_send(
@@ -809,12 +815,15 @@ class GPTLiveSession(
             logger.debug("gpt-live client event", extra={"lk.pii.event": raw})
         try:
             await ws_conn.send_str(json.dumps(raw))
+            self._protocol_trace.record("sent", raw)
         except (aiohttp.ClientError, ConnectionError, asyncio.TimeoutError):
+            self._protocol_trace.record("send_failed", raw)
             raise APIConnectionError("GPT-Live send failed") from None
 
     # inbound events
 
     def _handle_event(self, event: dict[str, Any]) -> None:
+        self._protocol_trace.record("received", event)
         etype = event.get("type", "")
         if lk_oai_debug and etype != "session.output_audio.delta":
             logger.debug("gpt-live server event", extra={"lk.pii.event": event})
@@ -909,6 +918,9 @@ class GPTLiveSession(
             speech.end_ms = max(speech.end_ms or 0, event.end_ms)
         if isinstance(message := self._history.get_by_id(speech.message_id), llm.ChatMessage):
             message.content[0] = speech.text
+        self._protocol_trace.speech(
+            speech.message_id, role, speech.text, event.start_ms, speech.end_ms
+        )
 
         if role == "user":
             self.emit(
@@ -931,7 +943,10 @@ class GPTLiveSession(
 
     def _end_speech(self, role: Role) -> None:
         """Close a speaker's message; for the user this is the end of their turn."""
-        if (speech := self._speech.pop(role, None)) is None or role != "user":
+        if (speech := self._speech.pop(role, None)) is None:
+            return
+        self._protocol_trace.end_speech(speech.message_id)
+        if role != "user":
             return
         # the final transcript goes out first, so nothing waits for one after the stop
         self.emit(
@@ -960,7 +975,17 @@ class GPTLiveSession(
                 ),
             )
 
+    def _backend_request(self) -> BackendRequest:
+        return BackendRequest(
+            provider=self._live_model.provider,
+            model=self._opts.responses.get("model", DEFAULT_BACKEND_MODEL),
+            instructions=self._opts.responses.get("instructions"),
+            tools=self._tools.flatten(),
+        )
+
     def _handle_response_event(self, envelope: types.ResponseEventEnvelope) -> None:
+        # tracing guards its own errors: a dropped dispatch would stall the delegation
+        self._backend_trace.response_event(envelope)
         # the inner event carries no response id, so a delegation's responses are followed in
         # sequence: a continuation is the next response.created under the same delegation, and a
         # response the application started itself has a null delegation
@@ -1006,6 +1031,7 @@ class GPTLiveSession(
             )
             self._history.insert(fnc_call)
             self.emit("function_call", fnc_call)
+            self._backend_trace.function_call(d_id, fnc_call)
 
         elif event.type == "response.completed":
             if response is not None and (usage := response.usage) is not None:
