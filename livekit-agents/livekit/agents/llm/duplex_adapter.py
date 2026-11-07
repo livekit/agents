@@ -16,6 +16,7 @@ from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr, TimedString
 from ..utils import aio, is_given, shortuuid
 from .chat_context import ChatContext, ChatMessage, FunctionCall
+from .delegation import DelegationDetectionOptions
 from .duplex import (
     DuplexAudioFrame,
     DuplexCapabilities,
@@ -344,6 +345,7 @@ class _DuplexRealtimeSession(RealtimeSession):
         duplex.on("input_speech_started", lambda ev: self.emit("input_speech_started", ev))
         duplex.on("input_speech_stopped", lambda ev: self.emit("input_speech_stopped", ev))
         duplex.on("metrics_collected", lambda ev: self.emit("metrics_collected", ev))
+        duplex.on("delegation_created", lambda ev: self.emit("delegation_created", ev))
         duplex.on("error", lambda ev: self.emit("error", ev))
 
         self._segment_atask = asyncio.create_task(
@@ -668,6 +670,13 @@ class _DuplexRealtimeSession(RealtimeSession):
 
     def interrupt(self) -> None:
         pass  # barge-in is the model's own, and it cannot be cancelled
+
+    def delegate(self, instructions: str | None = None) -> None:
+        self._duplex.delegate(instructions)
+
+    @property
+    def _delegation_detection(self) -> DelegationDetectionOptions | None:
+        return self._duplex._delegation_detection
 
     def truncate(
         self,

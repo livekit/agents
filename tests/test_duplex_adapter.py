@@ -1109,3 +1109,14 @@ async def test_a_duplex_model_starts_outside_a_text_simulation() -> None:
     session = AgentSession(llm=_FakeDuplexModel())
     await session.start(Agent(instructions="hi"))
     await session.aclose()
+
+
+async def test_delegation_passes_through_to_the_duplex_session(duplex) -> None:
+    fake, session, _ = duplex
+    created: list[llm.DelegationCreatedEvent] = []
+    session.on("delegation_created", created.append)
+    fake.emit("delegation_created", llm.DelegationCreatedEvent(id="d1"))
+    assert [d.id for d in created] == ["d1"]
+    assert session._delegation_detection is None
+    with pytest.raises(llm.RealtimeError):
+        session.delegate()  # the fake duplex session cannot delegate

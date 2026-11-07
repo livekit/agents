@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, Awaitable
 from dataclasses import dataclass
 from types import TracebackType
-from typing import Generic, Literal, TypeVar
+from typing import TYPE_CHECKING, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -14,6 +14,9 @@ from livekit import rtc
 
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
+
+if TYPE_CHECKING:
+    from .delegation import DelegationDetectionOptions
 from ..utils import is_given
 from .chat_context import ChatContext, ChatItem, FunctionCall, MetricsMetadata
 from .tool_context import Tool, ToolChoice, ToolContext
@@ -165,6 +168,7 @@ EventTypes = Literal[
     "session_reconnected",
     "metrics_collected",
     "remote_item_added",
+    "delegation_created",  # a DelegationCreatedEvent, for a model that delegates
     "error",
 ]
 
@@ -187,6 +191,9 @@ class InputTranscriptionCompleted:
     generating should set this, so the user message can be placed on the session
     timeline where the turn happened rather than where the transcript arrived.
     """
+    delegated: bool | None = None
+    """On a final transcript, whether the model delegated the turn or work it already runs
+    covers it; None for a model that does not delegate."""
 
 
 @dataclass
@@ -287,6 +294,18 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
     # cancel the current generation (do nothing if no generation is in progress)
     @abstractmethod
     def interrupt(self) -> None: ...
+
+    def delegate(self, instructions: str | None = None) -> None:
+        """Start a delegation on the conversation so far, for a turn the model did not delegate.
+
+        It emits ``delegation_created`` like one the model starts, with ``source="manual"``.
+        """
+        raise RealtimeError(f"{type(self).__name__} cannot delegate")
+
+    @property
+    def _delegation_detection(self) -> DelegationDetectionOptions | None:
+        """The model's options for delegating turns it should have and did not."""
+        return None
 
     # message_id is the ID of the message to truncate (inside the ChatCtx)
     @abstractmethod
