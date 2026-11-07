@@ -2,7 +2,7 @@ use parking_lot::Mutex;
 use std::io;
 use std::sync::mpsc as sync_mpsc;
 
-use lk_agents_media::recorder::{EncodeError, PCM_ENCODER_TRAILER};
+use lk_agents_media::recorder::PCM_ENCODER_TRAILER;
 
 use super::*;
 use lk_agents_media::pool::{MediaPool, MediaPoolLimits};
@@ -38,11 +38,11 @@ fn frame(samples: &[i16]) -> AudioFrame {
 struct Encoder(Arc<Mutex<Vec<&'static str>>>);
 
 impl OggOpusEncoder for Encoder {
-    fn push(&mut self, pcm: &[i16]) -> Result<Vec<u8>, EncodeError> {
+    fn push(&mut self, pcm: &[i16]) -> lk_agents_media::Result<Vec<u8>> {
         self.0.lock().push("encode");
         Ok(lk_agents_media::pcm_bytes(pcm))
     }
-    fn finish(self) -> Result<Vec<u8>, EncodeError> {
+    fn finish(self) -> lk_agents_media::Result<Vec<u8>> {
         self.0.lock().push("finalize");
         Ok(PCM_ENCODER_TRAILER.to_vec())
     }

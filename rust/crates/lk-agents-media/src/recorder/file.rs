@@ -185,8 +185,7 @@ impl RecordingFile<crate::ffmpeg::OggOpusEncoder, std::fs::File> {
             std::fs::create_dir_all(parent).map_err(io)?;
         }
         let file = std::fs::File::create(path).map_err(io)?;
-        let encoder = crate::ffmpeg::OggOpusEncoder::new(sample_rate, 2, bitrate)
-            .map_err(|error| RecordingFailure::Encode(error.to_string()))?;
+        let encoder = crate::ffmpeg::OggOpusEncoder::new(sample_rate, 2, bitrate)?;
         Ok(Self::new(encoder, file, sample_rate, t0, limits))
     }
 }
@@ -331,24 +330,15 @@ impl<E: OggOpusEncoder, W: Write> RecordingFile<E, W> {
                 flush(recorder, &mut self.writer, until, &mut self.summary, block, between)?;
             }
             RecordingCommand::FinishRecording(_) => {
-                recorder.flush_resamplers().map_err(encode_failure)?;
+                recorder.flush_resamplers()?;
                 flush(recorder, &mut self.writer, now, &mut self.summary, block, between)?;
-                let tail = self
-                    .recording
-                    .take()
-                    .expect("recording initialized")
-                    .finish()
-                    .map_err(encode_failure)?;
+                let tail = self.recording.take().expect("recording initialized").finish()?;
                 write(&mut self.writer, &tail, &mut self.summary)?;
                 return Ok(true);
             }
         }
         Ok(false)
     }
-}
-
-fn encode_failure(error: impl std::fmt::Display) -> RecordingFailure {
-    RecordingFailure::Encode(error.to_string())
 }
 
 /// The frame in blocks of `block` seconds, as PCM.
@@ -378,7 +368,7 @@ fn flush<E: OggOpusEncoder, W: Write>(
             ));
         }
         cursor = next;
-        let encoded = recorder.flush_until(cursor).map_err(encode_failure)?;
+        let encoded = recorder.flush_until(cursor)?;
         write(writer, &encoded, summary)?;
         summary.last_flushed = Some(cursor);
     }

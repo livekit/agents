@@ -4,6 +4,7 @@
 use std::collections::VecDeque;
 
 use lk_agents_abi::AudioFrame;
+use lk_agents_abi::recorder::RecordingFailure;
 
 use crate::{AudioResampler, OnChange, Quality, ResampleError};
 
@@ -49,33 +50,22 @@ impl PcmFrame {
 
 #[cfg(feature = "ffmpeg")]
 impl OggOpusEncoder for crate::ffmpeg::OggOpusEncoder {
-    fn push(&mut self, pcm: &[i16]) -> Result<Vec<u8>, EncodeError> {
-        crate::ffmpeg::OggOpusEncoder::push(self, pcm).map_err(|e| EncodeError(e.to_string()))
+    fn push(&mut self, pcm: &[i16]) -> crate::Result<Vec<u8>> {
+        crate::ffmpeg::OggOpusEncoder::push(self, pcm)
     }
 
-    fn finish(self) -> Result<Vec<u8>, EncodeError> {
-        crate::ffmpeg::OggOpusEncoder::finish(self).map_err(|e| EncodeError(e.to_string()))
+    fn finish(self) -> crate::Result<Vec<u8>> {
+        crate::ffmpeg::OggOpusEncoder::finish(self)
     }
 }
 
 /// Still a trait because the real encoder is behind the non-default `ffmpeg` feature.
 pub trait OggOpusEncoder {
-    fn push(&mut self, pcm: &[i16]) -> Result<Vec<u8>, EncodeError>;
-    fn finish(self) -> Result<Vec<u8>, EncodeError>
+    fn push(&mut self, pcm: &[i16]) -> crate::Result<Vec<u8>>;
+    fn finish(self) -> crate::Result<Vec<u8>>
     where
         Self: Sized;
 }
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EncodeError(pub String);
-
-impl std::fmt::Display for EncodeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl std::error::Error for EncodeError {}
 
 /// Keeps the PCM instead of encoding it; public because the driver's tests need it too.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -87,12 +77,12 @@ pub struct PcmRecordingEncoder {
 pub const PCM_ENCODER_TRAILER: &[u8] = b"EOS";
 
 impl OggOpusEncoder for PcmRecordingEncoder {
-    fn push(&mut self, pcm: &[i16]) -> Result<Vec<u8>, EncodeError> {
+    fn push(&mut self, pcm: &[i16]) -> crate::Result<Vec<u8>> {
         self.pcm.extend_from_slice(pcm);
         Ok(Vec::new())
     }
 
-    fn finish(self) -> Result<Vec<u8>, EncodeError> {
+    fn finish(self) -> crate::Result<Vec<u8>> {
         Ok(PCM_ENCODER_TRAILER.to_vec())
     }
 }
@@ -535,22 +525,24 @@ impl<E: OggOpusEncoder> Recorder<E> {
 
     /// Drain conversion history before writing the final timeline block; otherwise the last
     /// samples retained by a resampler would be replaced with silence in that block.
-    pub fn flush_resamplers(&mut self) -> Result<(), EncodeError> {
-        self.mixer.flush_resamplers().map_err(|error| EncodeError(error.to_string()))
+    pub fn flush_resamplers(&mut self) -> Result<(), RecordingFailure> {
+        self.mixer.flush_resamplers().map_err(|error| RecordingFailure::Encode(error.to_string()))
     }
 
     /// Empty output is normal: opus buffers.
-    pub fn flush_until(&mut self, until: f64) -> Result<Vec<u8>, EncodeError> {
+    pub fn flush_until(&mut self, until: f64) -> Result<Vec<u8>, RecordingFailure> {
         for track in &mut self.mixer.tracks {
             if let (Some(received), Some(emitted)) = (track.received_until, track.emitted_until())
                 && until >= received
                 && until > emitted
             {
-                track.flush_resampler().map_err(|error| EncodeError(error.to_string()))?;
+                track
+                    .flush_resampler()
+                    .map_err(|error| RecordingFailure::Encode(error.to_string()))?;
             }
         }
         match self.mixer.flush_until(until) {
-            Some(pcm) => self.encoder.push(&pcm),
+            Some(pcm) => Ok(self.encoder.push(&pcm)?),
             None => Ok(Vec::new()),
         }
     }
@@ -567,8 +559,8 @@ impl<E: OggOpusEncoder> Recorder<E> {
         &self.encoder
     }
 
-    pub fn finish(self) -> Result<Vec<u8>, EncodeError> {
-        self.encoder.finish()
+    pub fn finish(self) -> Result<Vec<u8>, RecordingFailure> {
+        Ok(self.encoder.finish()?)
     }
 }
 

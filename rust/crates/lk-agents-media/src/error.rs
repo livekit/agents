@@ -46,4 +46,10 @@ pub enum CodecError {
     Ffmpeg { op: &'static str, detail: String },
 }
 
+impl From<CodecError> for lk_agents_abi::recorder::RecordingFailure {
+    fn from(error: CodecError) -> Self {
+        Self::Encode(error.to_string())
+    }
+}
+
 pub type Result<T> = std::result::Result<T, CodecError>;
