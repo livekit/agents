@@ -3,6 +3,7 @@
 # Written by `cargo run -p lk-agents-codegen -- --write` (in `rust/`) from the `#[host(record)]`
 # declarations in:
 #     rust/crates/lk-agents-abi/src/tokenize/language/eot_thresholds.rs
+#     rust/crates/lk-agents-abi/src/turn/detector.rs
 #     rust/crates/lk-agents-abi/src/turn/eot.rs
 #     rust/crates/lk-agents-abi/src/turn/events.rs
 #
@@ -16,6 +17,10 @@ from inspect import get_annotations
 from typing import Literal, TypeAlias
 
 TurnDetectorModel: TypeAlias = Literal["turn-detector-v1", "turn-detector-v1-mini"]
+
+
+FlushReason: TypeAlias = Literal["turn committed", "clear_user_turn"]
+"""Why the session flushes the detector's segment; the host logs these words."""
 
 
 @dataclass

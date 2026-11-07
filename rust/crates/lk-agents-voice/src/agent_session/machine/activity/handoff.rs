@@ -355,7 +355,7 @@ impl VoiceDriver {
     /// socket, pump and unchanged streams keep running; only what the next plan reads and the
     /// changed legs move.
     pub(crate) fn update_agent(&mut self, now: Ts, update: AgentUpdate) {
-        let reopened = update.reopens();
+        let (stt_reopened, vad_reopened) = (update.stt.is_given(), update.vad.is_given());
         let AgentUpdate {
             agent,
             instructions,
@@ -449,7 +449,8 @@ impl VoiceDriver {
             agent: self.activity.agent.clone(),
             tools: count,
             chat_ctx: replaced_ctx,
-            reopened,
+            stt_reopened,
+            vad_reopened,
             legs,
         });
     }

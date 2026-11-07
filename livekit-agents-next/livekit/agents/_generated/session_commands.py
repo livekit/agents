@@ -16,6 +16,7 @@ from ..utils import is_given
 from ..llm import ChatContext
 from ..voice._session_callbacks import _items
 from ..voice._session_callbacks import _origin
+from typing import Literal
 from collections.abc import AsyncIterable
 from .rtc_frames import AudioFrame
 from .usage import Usage
@@ -85,7 +86,7 @@ class SessionCommands:
 
     async def drain(self) -> None:
         """`AgentSession.drain()`: the driving agent's `on_exit`, then scheduling paused until no
-        speech is left. Answers `None`, `"activity_changing"` or `"closing"`.
+        speech is left. Answers `None`, or why it was refused.
         """
         await self._running.drain()
 

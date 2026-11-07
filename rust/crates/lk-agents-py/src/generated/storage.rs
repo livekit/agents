@@ -953,13 +953,13 @@ impl Thread {
         })
     }
 
-    #[pyo3(signature = (lane = None, status = None, order = "updated".to_owned(), page_size = 50, page_token = None))]
+    #[pyo3(signature = (lane = None, status = None, order = None, page_size = 50, page_token = None))]
     fn list_tasks<'py>(
         &self,
         py: Python<'py>,
         lane: ::std::option::Option<::std::string::String>,
         status: Option<Bound<'_, PyAny>>,
-        order: ::std::string::String,
+        order: Option<Bound<'_, PyAny>>,
         #[pyo3(from_py_with = _extract_thread_list_tasks_page_size)]
         page_size: ThreadListTasksPageSizeInput,
         page_token: ::std::option::Option<::std::string::String>,
@@ -967,6 +967,9 @@ impl Thread {
         crate::py_calls::check_pid()?;
         let status = status
             .map(|v| crate::generated::records::storage_class::task_state_from_py(v.as_any()))
+            .transpose()?;
+        let order = order
+            .map(|v| crate::generated::records::storage_class::task_order_from_py(v.as_any()))
             .transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
@@ -1241,10 +1244,12 @@ impl Run {
     fn abandon<'py>(
         &self,
         py: Python<'py>,
-        outcome: ::std::string::String,
+        outcome: Bound<'_, PyAny>,
         reason: ::std::string::String,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
+        let outcome =
+            crate::generated::records::storage_class::run_outcome_from_py(outcome.as_any())?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
             let () = <RunImpl as ::lk_agents_abi::storage::handles::Run>::abandon(&this, outcome, reason)
@@ -1440,13 +1445,13 @@ impl CoreThreadHandle {
     /// last updated first (`"updated"`) as A2A `tasks/list` lists them; of `agent`'s lane and
     /// `status` when given. Pass the page's `next_page_token` to read the next; a token is bound
     /// to its listing.
-    #[pyo3(signature = (*, agent = None, status = None, order = "inserted".to_owned(), page_token = None, limit = 50))]
+    #[pyo3(signature = (*, agent = None, status = None, order = None, page_token = None, limit = 50))]
     fn list_tasks<'py>(
         &self,
         py: Python<'py>,
         agent: ::std::option::Option<::std::string::String>,
         status: Option<Bound<'_, PyAny>>,
-        order: ::std::string::String,
+        order: Option<Bound<'_, PyAny>>,
         page_token: ::std::option::Option<::std::string::String>,
         #[pyo3(from_py_with = _extract_thread_handle_list_tasks_limit)]
         limit: ThreadHandleListTasksLimitInput,
@@ -1454,6 +1459,9 @@ impl CoreThreadHandle {
         crate::py_calls::check_pid()?;
         let status = status
             .map(|v| crate::generated::records::storage_class::task_state_from_py(v.as_any()))
+            .transpose()?;
+        let order = order
+            .map(|v| crate::generated::records::storage_class::task_order_from_py(v.as_any()))
             .transpose()?;
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {

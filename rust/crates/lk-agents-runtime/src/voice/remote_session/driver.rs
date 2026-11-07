@@ -10,12 +10,13 @@ use std::time::Duration;
 use crate::voice::session::Timebase;
 use lk_agents_abi::Spawner;
 use lk_agents_abi::errors::HostError;
+use lk_agents_abi::worker::remote_session::RemoteSessionRequestKind;
 use lk_agents_net::task::TaskSet;
 use tokio::sync::mpsc;
 
 use super::{
     ConsoleSink, NonFiniteStamp, SessionHost, SessionPort, SessionTransport, WireEvent, proto,
-    request_name, stamp_event,
+    request_kind, stamp_event,
 };
 use proto::agent_session_message::Message;
 
@@ -309,7 +310,8 @@ async fn recv_loop(
             (Some(Message::Request(req)), _) => {
                 let host = sh.state.lock().host.clone();
                 if let Some(host) = host {
-                    let name = req.request.as_ref().map(request_name).unwrap_or("unknown");
+                    let kind = req.request.as_ref().map(request_kind);
+                    let name = kind.map_or("unknown", RemoteSessionRequestKind::as_str);
                     sh.handlers.spawn(
                         &*sh.spawner,
                         name,

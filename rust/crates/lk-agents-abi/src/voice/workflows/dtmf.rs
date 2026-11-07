@@ -40,6 +40,8 @@ pub trait DtmfIo {
     enum,
     enum_base = "StrEnum"
 ))]
+#[crate::host(wire_strs(msg = format!("unknown DTMF symbol {s:?}")))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DtmfEvent {
     #[host(rename = "1")]
     One,

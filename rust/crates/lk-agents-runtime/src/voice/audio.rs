@@ -9,7 +9,6 @@ use lk_agents_voice::audio::{AudioChannel, ChannelEnd, Tagged};
 use lk_agents_voice::trace::ChannelEndCause;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
-const VIDEO_IN_LEG: &str = "video_in";
 
 struct TaggedSource<T> {
     stream: ResourceId,
@@ -77,7 +76,8 @@ impl VideoForwarding {
                 return;
             }
         };
-        let end = ChannelEnd { leg: VIDEO_IN_LEG, cause, sink: None, closed: None, error: None };
+        let leg = lk_agents_voice::trace::Leg::VideoIn;
+        let end = ChannelEnd { leg, cause, sink: None, closed: None, error: None };
         let _ = p.queue.send(end);
     }
 }
@@ -98,7 +98,7 @@ pub fn spawn_drain<T: Into<crate::voice::VoiceRuntimeEvent> + Send + 'static>(
         // Always, bounded on the session clock (dropping doesn't cancel a host stream).
         let deadline = time.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
         let closed = source.close(deadline).await;
-        let leg = channel.label();
+        let leg = channel.leg();
         let _ =
             queue.send(ChannelEnd { leg, cause, sink: Some(sink), closed: Some(closed), error });
     });

@@ -71,7 +71,8 @@ fn swapped() -> Step {
         agent: "agent".into(),
         tools: 0,
         chat_ctx: false,
-        reopened: "",
+        stt_reopened: false,
+        vad_reopened: false,
         legs: Default::default(),
     })
 }

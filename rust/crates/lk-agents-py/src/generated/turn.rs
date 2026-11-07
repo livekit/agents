@@ -308,12 +308,11 @@ impl EotStream {
 
     /// A segment boundary, not a close.
     #[pyo3(signature = (reason = None))]
-    fn flush(
-        &self,
-        py: Python<'_>,
-        reason: ::std::option::Option<::std::string::String>,
-    ) -> PyResult<()> {
+    fn flush(&self, py: Python<'_>, reason: Option<Bound<'_, PyAny>>) -> PyResult<()> {
         crate::py_calls::check_pid()?;
+        let reason = reason
+            .map(|v| crate::generated::records::turn_events::flush_reason_from_py(v.as_any()))
+            .transpose()?;
         py.detach(|| {
             <EotStreamImpl as ::lk_agents_abi::turn::inference::EotStream>::flush(&self.0, reason)
         });
@@ -646,7 +645,7 @@ impl ::lk_agents_abi::EotDetector for EotDetectorProxy {
         );
     }
 
-    fn flush(&self, reason: ::std::option::Option<::std::string::String>) {
+    fn flush(&self, reason: ::std::option::Option<::lk_agents_abi::turn::detector::FlushReason>) {
         let host = ::std::sync::Arc::clone(&self.host);
         let reason_arg = reason;
         ::lk_agents_runtime::host::notify(
@@ -656,8 +655,10 @@ impl ::lk_agents_abi::EotDetector for EotDetectorProxy {
             &[],
             false,
             ::std::boxed::Box::new(move |py| {
-                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] =
-                    [::pyo3::IntoPyObjectExt::into_bound_py_any(reason_arg, py)?];
+                let args: [::pyo3::Bound<'_, ::pyo3::PyAny>; 1] = [match reason_arg {
+                    None => py.None().into_bound(py),
+                    Some(x) => crate::generated::records::turn_events::flush_reason_to_py(py, x)?,
+                }];
                 Ok((
                     host.bind(py).getattr("stream")?.getattr("flush")?,
                     ::pyo3::types::PyTuple::new(py, args)?,

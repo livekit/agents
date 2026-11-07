@@ -3,6 +3,7 @@
 
 use crate::agent_session::machine::activity::false_interruption::InterruptRefusal;
 use crate::agent_session::machine::activity::scheduling::SpeechId;
+use crate::agent_session::machine::activity::voice_task::VoiceTaskCommandKind;
 use crate::filler_scheduler::FillerId;
 use crate::generation::Instructions;
 use crate::tool_executor::Toolset;
@@ -12,9 +13,13 @@ use std::sync::Arc;
 
 /// Enqueueing a command does not mean the operation was accepted or completed.
 #[derive(Debug, lk_agents_abi::Vocabulary)]
+#[vocabulary(kind = CommandKind)]
 pub enum Command {
+    #[vocabulary(kind = SpeechCommandKind)]
     Speech(SpeechCommand),
+    #[vocabulary(kind = ActivityCommandKind)]
     Activity(ActivityCommand),
+    #[vocabulary(kind = TurnCommandKind)]
     Turn(TurnCommand),
     /// The pixels stay in the host frame (`ImageSource::Frame`); the host mints the `img_` id.
     Video(lk_agents_abi::ImageContent),
@@ -27,14 +32,18 @@ pub enum Command {
     /// Plugin-measured only (VAD, realtime usage, EOT/interruption); LLM/TTS/STT/EOU never come
     /// from here.
     HostMetrics(Box<lk_agents_abi::metrics::base::AgentMetrics>),
+    #[vocabulary(kind = IvrCommandKind)]
     Ivr(IvrCommand),
     /// `update_options(keyterms=..)`: replaces the user list; the effective list is pushed to the
     /// STT.
     SetStaticKeyterms(Vec<String>),
+    #[vocabulary(kind = RecorderCommandKind)]
     Recorder(RecorderCommand),
+    #[vocabulary(kind = DtmfCommandKind)]
     Dtmf(DtmfCommand),
     /// Answered by `RunStarted` or `RunRefused`, settled by `RunSettled`.
     Run(Box<crate::run_result::RunSpec>),
+    #[vocabulary(kind = VoiceTaskCommandKind)]
     VoiceTask(crate::agent_session::machine::activity::voice_task::VoiceTaskCommand),
     /// From `VoiceCommandOrigin::Amd`: the detector attached or released its verdict; its `amd`
     /// span is the session trace's.
@@ -58,6 +67,7 @@ pub struct HookId(pub u64);
 
 /// `AMD.execute()` sends `AddTools`, `Start` then `SeedTranscript` on a `machine-ivr` verdict.
 #[derive(Debug, Clone, lk_agents_abi::Vocabulary)]
+#[vocabulary(kind = IvrCommandKind)]
 pub enum IvrCommand {
     /// A running navigator stands.
     Start {
@@ -192,41 +202,6 @@ pub struct Sent {
     pub command: Command,
 }
 
-impl Command {
-    pub fn kind(&self) -> &'static str {
-        macro_rules! leaf {
-            ($c:expr; $E:ident: $($V:ident),* $(,)?) => {
-                match $c { $($E::$V { .. } => concat!(stringify!($E), "::", stringify!($V)),)* }
-            };
-        }
-        match self {
-            Command::Speech(c) => leaf!(c; SpeechCommand: Say, GenerateReply, Interrupt,
-                InterruptSpeech, CommitUserTurn, WaitForIdle, WaitForIdleAndHold, ReleaseIdleHold, ClaimUserTurn,
-                ReleaseUserTurn, SetAllowInterruptions, HoldInterruptions, EndCall, ToolUpdate, FillerStart,
-                FillerStop, PauseAuthorization, ResumeAuthorization),
-            Command::Activity(c) => leaf!(c; ActivityCommand: Update, UpdateInstructions,
-                UpdateTools, UpdateExpressive, SetAudioInput, SetVideoInput, SetIoEnabled, UpdateChatCtx, SetAudioOutput, SetTranscriptionOutput, UpdateModels, Drain),
-            Command::Turn(c) => leaf!(c; TurnCommand: Commit, Clear, Configure, Override,
-                ReleaseOverride, SkipReplies),
-            Command::Ivr(c) => leaf!(c; IvrCommand: Start, SeedTranscript, Close, AddTools),
-            Command::Dtmf(c) => leaf!(c; DtmfCommand: Start, Cancel),
-            Command::VoiceTask(c) => {
-                use crate::agent_session::machine::activity::voice_task::VoiceTaskCommand;
-                leaf!(c; VoiceTaskCommand: Run, Cancel)
-            }
-            Command::Video(_) => "Command::Video",
-            Command::Close(_) => "Command::Close",
-            Command::HookDone { .. } => "Command::HookDone",
-            Command::HostMetrics(_) => "Command::HostMetrics",
-            Command::SetStaticKeyterms(_) => "Command::SetStaticKeyterms",
-            Command::Run(_) => "Command::Run",
-            Command::AmdSpan(_) => "Command::AmdSpan",
-            Command::Recorder(RecorderCommand::Attach(_)) => "Command::Recorder::Attach",
-            Command::Recorder(RecorderCommand::Detach) => "Command::Recorder::Detach",
-        }
-    }
-}
-
 #[derive(Debug)]
 pub struct Close {
     pub reason: lk_agents_abi::voice::events::CloseReason,
@@ -285,6 +260,7 @@ impl From<TurnCommand> for Command {
 
 /// Outlives the agent across handoffs.
 #[derive(Debug, lk_agents_abi::Vocabulary)]
+#[vocabulary(kind = TurnCommandKind)]
 pub enum TurnCommand {
     /// Commit the turn now (`commit_user_turn`'s tail); a typed turn is
     /// `generate_reply(user_input=)`.
@@ -309,6 +285,7 @@ pub enum TurnCommand {
 
 /// One collection at a time.
 #[derive(Debug, lk_agents_abi::Vocabulary)]
+#[vocabulary(kind = DtmfCommandKind)]
 pub enum DtmfCommand {
     /// Answered once with the first outcome, or `Stopped`; the confirm arm is spoken by the
     /// driver.
@@ -324,6 +301,7 @@ impl From<DtmfCommand> for Command {
 }
 
 #[derive(Debug, lk_agents_abi::Vocabulary)]
+#[vocabulary(kind = SpeechCommandKind)]
 pub enum SpeechCommand {
     Say {
         /// A stream is one segment per chunk.
@@ -498,7 +476,8 @@ macro_rules! host_handle_debug {
 host_handle_debug!(AudioInputHandle);
 host_handle_debug!(RecorderHandle);
 
-#[derive(Debug)]
+#[derive(Debug, lk_agents_abi::Vocabulary)]
+#[vocabulary(kind = RecorderCommandKind)]
 pub enum RecorderCommand {
     /// Flushes every 2.5 s of session time.
     Attach(RecorderHandle),
@@ -508,14 +487,7 @@ pub enum RecorderCommand {
 
 pub struct RecorderHandle(pub ResourceId);
 
-/// Video input is handled at the source.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub enum IoKind {
-    AudioInput,
-    AudioOutput,
-    Transcription,
-}
+pub use lk_agents_abi::voice::session::{DrainRefused, IoKind};
 
 /// Providers replaced together by one session update.
 #[derive(Debug)]
@@ -528,6 +500,7 @@ pub struct ModelUpdate {
 
 /// Scheduling pauses are the driver's own, never a command.
 #[derive(Debug, lk_agents_abi::Vocabulary)]
+#[vocabulary(kind = ActivityCommandKind)]
 pub enum ActivityCommand {
     /// No stream is torn down, so no word is dropped. Order (`_update_activity`): refuse when
     /// closing; `on_exit` before the pause; drain; closing re-check; swap; `on_enter` not awaited.
@@ -565,26 +538,6 @@ pub enum ActivityCommand {
     Drain {
         call: Option<RequestId>,
     },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, lk_agents_abi::Vocabulary)]
-pub enum DrainRefused {
-    /// The loop ended with no close to answer the drain.
-    Closing,
-    /// Scheduling was resumed under the drain's pause: the agent runs again.
-    ActivityChanging,
-    /// A `VoiceTask` holds the floor; its parent waits on it.
-    TaskRunning,
-}
-
-impl DrainRefused {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            DrainRefused::Closing => "closing",
-            DrainRefused::ActivityChanging => "activity_changing",
-            DrainRefused::TaskRunning => "voice_task_running",
-        }
-    }
 }
 
 pub struct AgentUpdate {
@@ -726,15 +679,6 @@ impl AgentUpdate {
         ]
         .into_iter()
         .flatten()
-    }
-
-    pub(crate) fn reopens(&self) -> &'static str {
-        match (self.stt.is_given(), self.vad.is_given()) {
-            (false, false) => "",
-            (true, false) => "stt",
-            (false, true) => "vad",
-            (true, true) => "stt+vad",
-        }
     }
 }
 

@@ -1,35 +1,26 @@
 //! Session provider precedence over runtime-owned resource identities.
 
+pub use lk_agents_abi::voice::session::ModelSlot;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// The model slots the session understands. Extension names preserve the existing internal
 /// host-map round trip without treating arbitrary strings as one of the built-in models.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ProviderSlot {
-    Llm,
-    Stt,
-    Tts,
-    Vad,
+    Model(ModelSlot),
     Extension(String),
 }
+
 impl From<String> for ProviderSlot {
     fn from(name: String) -> Self {
-        match name.as_str() {
-            "llm" => Self::Llm,
-            "stt" => Self::Stt,
-            "tts" => Self::Tts,
-            "vad" => Self::Vad,
-            _ => Self::Extension(name),
-        }
+        ModelSlot::from_wire(&name).map_or(Self::Extension(name), Self::Model)
     }
 }
+
 impl ProviderSlot {
     pub fn into_name(self) -> String {
         match self {
-            Self::Llm => "llm".into(),
-            Self::Stt => "stt".into(),
-            Self::Tts => "tts".into(),
-            Self::Vad => "vad".into(),
+            Self::Model(slot) => slot.as_str().to_owned(),
             Self::Extension(name) => name,
         }
     }
@@ -136,14 +127,17 @@ mod tests {
     #[test]
     fn the_effective_provider_is_the_topmost_layers_else_the_bases() {
         let mut layers = ProviderLayers::default();
-        let tts = ProviderSlot::Tts;
+        let tts = ProviderSlot::Model(ModelSlot::Tts);
         assert_eq!(layers.effective(&tts), None);
         layers.update(providers(&[("tts", 1), ("stt", 2)]));
         layers.push(ProviderOverrideId(10), providers(&[("tts", 3)]));
         layers.push(ProviderOverrideId(11), providers(&[("tts", 4)]));
         layers.update(providers(&[("tts", 5)]));
         assert_eq!(layers.effective(&tts), Some(ProviderObjectId(4)));
-        assert_eq!(layers.effective(&ProviderSlot::Stt), Some(ProviderObjectId(2)));
+        assert_eq!(
+            layers.effective(&ProviderSlot::Model(ModelSlot::Stt)),
+            Some(ProviderObjectId(2))
+        );
         layers.release(ProviderOverrideId(11));
         assert_eq!(layers.effective(&tts), Some(ProviderObjectId(3)));
         layers.release(ProviderOverrideId(10));

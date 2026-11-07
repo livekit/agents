@@ -81,6 +81,7 @@ mod tests {
 }
 
 #[derive(Debug, lk_agents_abi::Vocabulary)]
+#[vocabulary(kind = VoiceTaskCommandKind)]
 pub enum VoiceTaskCommand {
     /// From the tool that awaits it (`VoiceCommandOrigin::Tool`).
     Run(Box<VoiceTaskRun>),

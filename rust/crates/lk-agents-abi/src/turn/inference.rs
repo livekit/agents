@@ -133,7 +133,7 @@ pub trait EotStream: crate::EotDetector + Sized + 'static {
 
     /// A segment boundary, not a close.
     #[host(call)]
-    fn flush(&self, #[host(default = None)] reason: Option<String>) {
+    fn flush(&self, #[host(default = None)] reason: Option<crate::turn::detector::FlushReason>) {
         crate::EotDetector::flush(self, reason);
     }
 

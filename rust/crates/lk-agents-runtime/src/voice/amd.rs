@@ -22,7 +22,7 @@ use lk_agents_voice::amd::machine::classifier::{
 use lk_agents_voice::amd::{Callee, feed_input, tap_input};
 use lk_agents_voice::events::SessionEvent;
 use lk_agents_voice::trace::{
-    ChannelEndCause, CoreStep, DetectorName, DetectorStep, InputStep, Step, TimerName,
+    ChannelEndCause, CoreStep, DetectorStep, InputStep, Leg, Step, TimerName,
 };
 use std::fmt;
 use std::sync::Arc;
@@ -33,7 +33,6 @@ pub use lk_agents_voice::amd::machine::classifier::{
     POSTPONE_TERMINATION_TOOL, SAVE_PREDICTION_TOOL,
 };
 use lk_agents_voice::amd::machine::classifier::{classification_request, classification_verdicts};
-const TAP: &str = "amd";
 
 /// The host's end of the system: `Start`, `Verdict::Settle`, `Close`.
 #[derive(Clone)]
@@ -287,7 +286,7 @@ impl AmdSystem {
         msgs.close();
         while let Some(msg) = msgs.recv().await {
             if let Msg::SttOpened(Ok((opened, _))) = msg {
-                self.peer.journal(Step::Input(InputStep::LegOpenDiscarded { leg: TAP }));
+                self.peer.journal(Step::Input(InputStep::LegOpenDiscarded { leg: Leg::Amd }));
                 opened.retire(&self.tasks);
             }
         }
@@ -414,7 +413,7 @@ impl AmdSystem {
     /// One classification with `tool_choice="required"`.
     fn request_classification(&mut self, req: ClassifyRequest) {
         let n = req.id;
-        self.peer.journal(Step::Input(InputStep::LegRequested { leg: DetectorName::Amd, req: n }));
+        self.peer.journal(Step::Input(InputStep::LegRequested { leg: Leg::Amd, req: n }));
         let request = classification_request(
             &self.prompt,
             self.tools_host.clone(),
@@ -453,13 +452,11 @@ impl AmdSystem {
             self.inflight = None;
         }
         if failed {
-            self.peer.journal(Step::Input(InputStep::LegFailed {
-                leg: DetectorName::Amd,
-                recoverable: true,
-            }));
+            self.peer
+                .journal(Step::Input(InputStep::LegFailed { leg: Leg::Amd, recoverable: true }));
             return;
         }
-        self.peer.journal(Step::Input(InputStep::LegVerdict { leg: DetectorName::Amd, req }));
+        self.peer.journal(Step::Input(InputStep::LegVerdict { leg: Leg::Amd, req }));
         for verdict in classification_verdicts(calls, &transcript) {
             self.step(now, In::Verdict(verdict));
         }
@@ -515,7 +512,7 @@ impl AmdSystem {
     fn on_tap_opened(&mut self, outcome: Result<(OpeningLeg, Arc<AtomicBool>), ProviderError>) {
         if !matches!(self.stt, SttLeg::Opening) {
             if let Ok((opened, _)) = outcome {
-                self.peer.journal(Step::Input(InputStep::LegOpenDiscarded { leg: TAP }));
+                self.peer.journal(Step::Input(InputStep::LegOpenDiscarded { leg: Leg::Amd }));
                 opened.retire(&self.tasks);
             }
             return;
@@ -546,7 +543,7 @@ impl AmdSystem {
             return;
         }
         self.stt = SttLeg::Installed { gate, tap };
-        self.peer.journal(Step::Input(InputStep::StreamOpened { leg: TAP }));
+        self.peer.journal(Step::Input(InputStep::StreamOpened { leg: Leg::Amd }));
         if !spawn_tap_drain(&self.tasks, self.peer.clone(), opened, tap, self.tx.clone()) {
             self.stt = SttLeg::Done;
             self.peer.remove_audio_tap(tap);
@@ -641,9 +638,9 @@ fn spawn_tap_drain(
             let cause = forward_transcripts(source, &closing, &tx).await;
             peer.remove_audio_tap(tap);
             let closed = opened.close().await;
-            peer.journal(Step::Input(InputStep::ChannelEnded { leg: TAP, cause }));
+            peer.journal(Step::Input(InputStep::ChannelEnded { leg: Leg::Amd, cause }));
             if let Some(how) = closed {
-                peer.journal(Step::Input(InputStep::HostStreamClosed { label: TAP, how }));
+                peer.journal(Step::Input(InputStep::HostStreamClosed { leg: Leg::Amd, how }));
             }
         })
         .is_some()
