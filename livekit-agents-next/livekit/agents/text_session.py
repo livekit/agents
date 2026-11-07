@@ -12,13 +12,14 @@ from typing import Any, Generic
 from . import _core, llm, utils
 from ._generated import text_session as records
 from ._generated.agent_run import RunSettled
+from ._generated.run_result import Output_T
 from ._generated.text_session import TextSessionState
 from .storage.context import ContextStore
 from .types import DEFAULT_API_CONNECT_OPTIONS
 from .voice import Agent, AgentRetries, _BindingContextVar, _LocalAgentTool
 from .voice.agent_run import _TextRun, door_hooks, run_error, run_resources, settled_result
 from .voice.events import Context_T
-from .voice.run_result import Output_T, RunResult, RunStream, _Started
+from .voice.run_result import RunResult, RunStream, _Started
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -158,8 +159,8 @@ class TextSession(Generic[Context_T, Output_T]):
                 def settle(finished: records.TextSessionSettled) -> TextSessionTurn[Output_T]:
                     frame = finished.turn.state.frames[finished.turn.state.active_frame_id]
                     result = settled_result(
-                        runs[frame.agent_name],
                         RunSettled(result=finished.turn.result, output=finished.output),
+                        runs[frame.agent_name].hooks,
                     )
                     if hooks is not None and hooks.on_result is not None:
                         hooks.on_result(result)

@@ -1,5 +1,6 @@
-//! Voice-run identity, result selection and host recording. Recording and settlement retain
-//! distinct owners; work membership and liveness stay in lifecycle owners.
+//! Voice-run identity, result selection and recording. A run settles into the `RunResult` a text
+//! run settles into: its items, usage and outcome are the core's. Work membership and liveness
+//! stay in lifecycle owners.
 
 use crate::agent::Source;
 use crate::agent_session::VoiceDriver;
@@ -7,11 +8,13 @@ use crate::agent_session::machine::activity::scheduling::SpeechId;
 use crate::events::{
     DiagnosticEvent, RunFailure, RunId, RunOutcome, RunRef, RunRefusal, SessionEvent,
 };
-use lk_agents_abi::agent::run::{RunError, RunInputRequirement, RunQuestion};
-use lk_agents_abi::voice::run_view::{VoiceRun as Contract, VoiceRunOutput};
-use lk_agents_abi::{ChatItem, Role};
-use lk_agents_abi::{HostRef, Ts};
+use lk_agents_abi::agent::run::{
+    Output, RunError, RunInputRequirement, RunOutcome as Outcome, RunResult, RunSettled,
+};
+use lk_agents_abi::errors::ProviderError;
+use lk_agents_abi::{ChatItem, HostRef, Role, Ts};
 use lk_agents_core::tts::markup::ChatMessageExt;
+use lk_agents_core::usage::{Ledger, ModelKind};
 use std::collections::BTreeMap;
 
 /// `session._run(user_input=)`: the remote session's typed input and the voice test harness.
@@ -19,7 +22,8 @@ use std::collections::BTreeMap;
 pub struct RunSpec {
     /// The run's opening reply; `None` owns whatever follows (e.g. `on_enter`).
     pub user_input: Option<String>,
-    /// The host's own object for the run (its `RunResult`), handed back on every run event.
+    /// The host's own object for the run (the future its `_run()` awaits), handed back when the
+    /// run settles.
     pub host: Option<HostRef>,
 }
 
@@ -27,20 +31,105 @@ struct OpenRun {
     run: RunRef,
     participated: bool,
     input_requirements: Vec<RunInputRequirement>,
-    /// `__last_speech_handle`, and whether it failed: its error and output decide the verdict.
-    last: Option<(SpeechId, bool)>,
+    /// `__last_speech_handle`, and the error it failed with: they decide the verdict.
+    last: Option<(SpeechId, Option<ProviderError>)>,
+    /// What the run recorded, each item once by identity, in time order.
+    items: Vec<ChatItem>,
+    /// The requests and tool bodies of the speeches the run owns (usage.md).
+    usage: Ledger,
 }
 
-pub(super) enum Decided {
-    /// Still owed something, or nothing was released since the last check.
-    Open,
-    /// Nothing is owned: the run is over.
-    Settled {
-        run: RunRef,
-        outcome: RunOutcome,
-        speech: Option<SpeechId>,
-        input_requirements: Vec<RunInputRequirement>,
-    },
+impl OpenRun {
+    /// The run's item, replacing an earlier version of it; only messages, calls and outputs.
+    fn record(&mut self, item: &ChatItem) {
+        if !matches!(
+            item,
+            ChatItem::Message(_) | ChatItem::FunctionCall(_) | ChatItem::FunctionCallOutput(_)
+        ) {
+            return;
+        }
+        if let Some(known) = self.items.iter_mut().find(|known| {
+            known.id() == item.id()
+                && std::mem::discriminant(*known) == std::mem::discriminant(item)
+        }) {
+            *known = item.clone();
+            return;
+        }
+        let index = self
+            .items
+            .iter()
+            .rposition(|known| known.created_at() <= item.created_at())
+            .map_or(0, |index| index + 1);
+        self.items.insert(index, item.clone());
+    }
+
+    /// The settled run: the last speech's failure or output decides; without one, the last
+    /// assistant reply's text, else no output. `history` is the session's after the run.
+    fn settle(
+        mut self,
+        output: Option<RunOutcome>,
+        history: Vec<ChatItem>,
+    ) -> (RunRef, Result<Box<RunSettled>, RunFailure>) {
+        self.usage.settle();
+        let failure = |error, provider_error, input_requirements| RunFailure {
+            error,
+            provider_error,
+            input_requirements,
+        };
+        let (outcome, value) = match (self.last.and_then(|(_, error)| error), output) {
+            // `__last_speech_handle._error` (`run_result.RunResult._mark_done`).
+            (Some(error), _) => {
+                let model = RunError::Model(error.to_string());
+                return (self.run, Err(failure(model, Some(error), self.input_requirements)));
+            }
+            (None, Some(RunOutcome::Failed(error))) => {
+                return (self.run, Err(failure(error, None, self.input_requirements)));
+            }
+            (None, Some(RunOutcome::Completed { validation, final_output })) => {
+                (Outcome::Completed { output: Output::Validated(validation) }, Some(final_output))
+            }
+            (None, Some(RunOutcome::InputRequired(question))) => {
+                (Outcome::InputRequired(question), None)
+            }
+            (None, None) => {
+                let text = self.items.iter().rev().find_map(|item| match item {
+                    ChatItem::Message(message) if message.role == Role::Assistant => Some(message),
+                    _ => None,
+                });
+                match text.and_then(|message| message.text_content()) {
+                    Some(text) => (Outcome::Completed { output: Output::Text(text) }, None),
+                    None => (Outcome::NoOutput, None),
+                }
+            }
+        };
+        let verbatim = match &outcome {
+            Outcome::InputRequired(question) if question.verbatim => {
+                Some(question.question.clone())
+            }
+            _ => None,
+        };
+        let result = RunResult {
+            outcome,
+            interrupted: false,
+            new_messages: self.items,
+            all_messages: history,
+            usage: self.usage.snapshot(),
+            verbatim,
+            pending_call: None,
+            input_requirements: self.input_requirements,
+        };
+        (self.run, Ok(Box::new(RunSettled { result, output: value })))
+    }
+
+    /// The session closed under the run: `RuntimeError` (`AgentSession._aclose_impl`).
+    fn close(self) -> (RunRef, Result<Box<RunSettled>, RunFailure>) {
+        let failure = RunFailure {
+            error: RunError::SessionClosed,
+            provider_error: None,
+            input_requirements: self.input_requirements,
+        };
+        (self.run, Err(failure))
+    }
 }
 
 /// The driver's run state: at most one open run and the recorded tool outputs.
@@ -68,13 +157,15 @@ impl Runs {
             participated: false,
             input_requirements: Vec::new(),
             last: None,
+            items: Vec::new(),
+            usage: Ledger::default(),
         });
         Ok(run)
     }
 
     /// The open run's verdict will name `speech` when it settles.
     pub(super) fn names(&self, speech: SpeechId) -> bool {
-        self.open.as_ref().and_then(|r| r.last).is_some_and(|(last, _)| last == speech)
+        self.open.as_ref().and_then(|r| r.last.as_ref()).is_some_and(|(last, _)| *last == speech)
     }
 
     /// The open run, as its events name it.
@@ -87,6 +178,18 @@ impl Runs {
         if let Some(run) = &mut self.open {
             run.participated = true;
         }
+    }
+
+    /// The open run's item: one its speeches recorded, or a call one of them started.
+    pub(crate) fn record(&mut self, item: &ChatItem) {
+        if let Some(run) = &mut self.open {
+            run.record(item);
+        }
+    }
+
+    /// The open run's usage, fed alongside the session's for the requests its speeches start.
+    pub(crate) fn usage(&mut self) -> Option<&mut Ledger> {
+        self.open.as_mut().map(|run| &mut run.usage)
     }
 
     pub(crate) fn retain_input_requirements(&mut self, requirements: &[RunInputRequirement]) {
@@ -104,9 +207,9 @@ impl Runs {
 
     /// Keep only the last completed participating speech's result. Intermediate host values
     /// are released as soon as result precedence moves to another speech.
-    fn speech_ended(&mut self, speech: SpeechId, failed: bool) {
+    fn speech_ended(&mut self, speech: SpeechId, error: Option<ProviderError>) {
         if let Some(run) = &mut self.open
-            && let Some((previous, _)) = run.last.replace((speech, failed))
+            && let Some((previous, _)) = run.last.replace((speech, error))
             && previous != speech
         {
             self.outputs.remove(&previous);
@@ -114,28 +217,19 @@ impl Runs {
     }
 
     /// Settle after attributed owner lifecycles finish; a capture run first needs participation.
-    pub(super) fn decide(&mut self, has_work: bool) -> Decided {
-        let Some(r) = self.open.as_ref() else { return Decided::Open };
+    /// The run and the last speech's output, when it is over.
+    fn decide(&mut self, has_work: bool) -> Option<(OpenRun, Option<RunOutcome>)> {
+        let r = self.open.as_ref()?;
         if !r.participated || has_work {
-            return Decided::Open;
+            return None;
         }
-        let speech = r.last.map(|(speech, _)| speech);
-        let output = speech.and_then(|speech| self.outputs.remove(&speech));
-        let failed = r.last.is_some_and(|(_, failed)| failed);
-        let outcome = match (failed, output) {
-            // `__last_speech_handle._error` (`run_result.RunResult._mark_done`).
-            (true, _) => RunOutcome::Failed(RunFailure::Speech),
-            (false, Some(outcome)) => outcome,
-            (false, None) => RunOutcome::Completed { final_output: None },
-        };
-        let run = r.run.clone();
-        let input_requirements = self.open.take().expect("open run checked").input_requirements;
-        Decided::Settled { run, outcome, speech, input_requirements }
+        let output = r.last.as_ref().and_then(|(speech, _)| self.outputs.remove(speech));
+        self.open.take().map(|run| (run, output))
     }
 
-    pub(super) fn close(&mut self) -> Option<(RunRef, Option<SpeechId>, Vec<RunInputRequirement>)> {
+    fn close(&mut self) -> Option<OpenRun> {
         self.outputs.clear();
-        self.open.take().map(|r| (r.run, r.last.map(|(speech, _)| speech), r.input_requirements))
+        self.open.take()
     }
 }
 
@@ -172,9 +266,9 @@ impl VoiceDriver {
 
     /// Membership lives with the scheduler entry and is installed before admission can reject
     /// a speech. Completion includes playout: only this terminal release chooses the result.
-    pub(crate) fn run_speech_ended(&mut self, speech: SpeechId, failed: bool) {
+    pub(crate) fn run_speech_ended(&mut self, speech: SpeechId, error: Option<ProviderError>) {
         if self.run_contains_speech(speech) {
-            self.session.runs.speech_ended(speech, failed);
+            self.session.runs.speech_ended(speech, error);
         } else {
             self.session.runs.outputs.remove(&speech);
         }
@@ -187,6 +281,23 @@ impl VoiceDriver {
             .is_some_and(|run| self.activity.speech_belongs_to_run(speech, run.id))
     }
 
+    /// A provider request of `speech` started: the open run counts it when the speech is its.
+    pub(crate) fn start_request(
+        &mut self,
+        speech: Option<SpeechId>,
+        kind: ModelKind,
+        provider: &str,
+        model: &str,
+    ) -> u64 {
+        let request = self.session.start_request(kind, provider, model);
+        if speech.is_some_and(|speech| self.run_contains_speech(speech))
+            && let Some(usage) = self.session.runs.usage()
+        {
+            usage.start(request, kind, provider, model);
+        }
+        request
+    }
+
     /// The reply of `speech` ended on a framework failure (a budget spent, a validator failed): a
     /// run settling on the speech fails with it, as `agent.run()` does.
     pub(crate) fn run_failed(&mut self, speech: SpeechId, error: RunError) {
@@ -197,30 +308,29 @@ impl VoiceDriver {
                 .with("speech_id", speech.0.to_string());
             self.publish_event(SessionEvent::Diagnostic(d));
         }
-        self.session.runs.outputs.insert(speech, RunOutcome::Failed(RunFailure::Run(error)));
+        self.session.runs.outputs.insert(speech, RunOutcome::Failed(error));
     }
 
-    /// The run an item belongs to: the open run for its own speeches and the handoff record. The
-    /// `run(user_input=)` user message is not the run's, as in the reference (`RunResult.events`
-    /// opens with the reply), and neither is a committed call: a call became the run's when it
-    /// started (`RunItemAdded`).
-    pub(crate) fn run_of_item(&self, source: &Source) -> Option<RunRef> {
-        let open = self.session.runs.current()?;
+    /// Whether an item is the open run's: its own speeches' items and the handoff record. The
+    /// `run(user_input=)` user message is not, as in the reference (`RunResult.events` opens with
+    /// the reply), and neither is a committed call: a call became the run's when it started.
+    pub(crate) fn run_owns_item(&self, source: &Source) -> bool {
+        let Some(open) = self.session.runs.current() else { return false };
         match source {
             Source::Reply { speech, .. }
             | Source::Say { speech }
             | Source::ToolOutput { speech, .. }
             | Source::ToolUpdate { speech, .. } => {
-                self.activity.speech_belongs_to_run(*speech, open.id).then_some(open)
+                self.activity.speech_belongs_to_run(*speech, open.id)
             }
-            Source::Handoff => Some(open),
+            Source::Handoff => true,
             Source::UserInput { .. }
             | Source::ToolCall { .. }
             | Source::UserTurn { .. }
             | Source::ConfigUpdate
             | Source::HostCtx
             | Source::UserTyped
-            | Source::Remote { .. } => None,
+            | Source::Remote { .. } => false,
         }
     }
 
@@ -229,39 +339,26 @@ impl VoiceDriver {
         let has_work = self.session.runs.current().is_some_and(|run| {
             self.activity.has_run_work(run.id) || self.session.idle.has_run_work(run.id)
         });
-        if let Decided::Settled { run, outcome, speech, input_requirements } =
-            self.session.runs.decide(has_work)
-        {
-            self.publish_event(SessionEvent::RunSettled {
-                run,
-                outcome,
-                speech,
-                input_requirements,
-            });
+        if let Some((open, output)) = self.session.runs.decide(has_work) {
+            let history = self.session.chat_ctx.history().cloned().collect();
+            let (run, result) = open.settle(output, history);
+            self.publish_event(SessionEvent::RunSettled { run, result });
         }
     }
 
-    /// The close's hard edge: an open run ends `Closed`, before `Close`.
+    /// The close's hard edge: an open run fails `SessionClosed`, before `Close`.
     pub(crate) fn run_close(&mut self) {
-        if let Some((run, speech, input_requirements)) = self.session.runs.close() {
-            self.publish_event(SessionEvent::RunSettled {
-                run,
-                outcome: RunOutcome::Closed,
-                speech,
-                input_requirements,
-            });
+        if let Some(open) = self.session.runs.close() {
+            let (run, result) = open.close();
+            self.publish_event(SessionEvent::RunSettled { run, result });
         }
     }
 
-    /// The loop ended with a run open: settled `Closed` directly on the stream.
+    /// The loop ended with a run open: failed `SessionClosed` directly on the stream.
     pub(crate) fn run_close_at_end(&mut self) {
-        if let Some((run, speech, input_requirements)) = self.session.runs.close() {
-            self.emit_now(SessionEvent::RunSettled {
-                run,
-                outcome: RunOutcome::Closed,
-                speech,
-                input_requirements,
-            });
+        if let Some(open) = self.session.runs.close() {
+            let (run, result) = open.close();
+            self.emit_now(SessionEvent::RunSettled { run, result });
         }
     }
 }
@@ -269,6 +366,9 @@ impl VoiceDriver {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lk_agents_abi::ChatMessage;
+    use lk_agents_abi::agent::run::RunQuestion;
+    use std::time::{Duration, SystemTime};
 
     fn capture() -> Runs {
         let mut runs = Runs::default();
@@ -279,11 +379,11 @@ mod tests {
     #[test]
     fn capture_waits_for_participation_and_then_for_owner_liveness() {
         let mut runs = capture();
-        assert!(matches!(runs.decide(false), Decided::Open));
+        assert!(runs.decide(false).is_none());
         runs.participated();
-        assert!(matches!(runs.decide(true), Decided::Open));
-        assert!(matches!(runs.decide(false), Decided::Settled { .. }));
-        assert!(matches!(runs.decide(false), Decided::Open), "settlement is emitted once");
+        assert!(runs.decide(true).is_none());
+        assert!(runs.decide(false).is_some());
+        assert!(runs.decide(false).is_none(), "settlement is emitted once");
     }
 
     #[test]
@@ -300,20 +400,20 @@ mod tests {
                 answer_tool: None,
             }),
         );
-        runs.speech_ended(first, false);
+        runs.speech_ended(first, None);
         assert!(runs.outputs.contains_key(&first));
-        runs.speech_ended(last, false);
+        runs.speech_ended(last, None);
         assert!(!runs.outputs.contains_key(&first));
-        assert!(matches!(runs.decide(false), Decided::Settled {
-            outcome: RunOutcome::Completed { final_output: None }, speech: Some(id), ..
-        } if id == last));
+        let (open, output) = runs.decide(false).expect("settled");
+        assert!(output.is_none());
+        assert!(matches!(open.last, Some((id, None)) if id == last));
         assert!(runs.outputs.is_empty());
     }
 
     #[test]
     fn close_releases_all_result_references_and_settles_once() {
         let mut runs = capture();
-        runs.outputs.insert(SpeechId(1), RunOutcome::Failed(RunFailure::Run(RunError::Cancelled)));
+        runs.outputs.insert(SpeechId(1), RunOutcome::Failed(RunError::Cancelled));
         assert!(runs.close().is_some());
         assert!(runs.outputs.is_empty());
         assert!(runs.close().is_none());
@@ -332,12 +432,87 @@ mod tests {
                 answer_tool: None,
             }),
         );
-        runs.speech_ended(speech, true);
-        assert!(matches!(
-            runs.decide(false),
-            Decided::Settled { outcome: RunOutcome::Failed(RunFailure::Speech), .. }
-        ));
+        let error = ProviderError::Local(lk_agents_abi::errors::ApiError::new("tts failed"));
+        runs.speech_ended(speech, Some(error.clone()));
+        let (open, output) = runs.decide(false).expect("settled");
         assert!(runs.outputs.is_empty());
+        let (_, result) = open.settle(output, Vec::new());
+        let failure = result.expect_err("the speech's failure decides");
+        assert_eq!(failure.provider_error, Some(error));
+        assert!(matches!(failure.error, RunError::Model(_)));
+    }
+
+    fn reply(id: &str, text: &str, seconds: u64) -> ChatItem {
+        let at = SystemTime::UNIX_EPOCH + Duration::from_secs(seconds);
+        ChatMessage::text(id, Role::Assistant, text, at).into()
+    }
+
+    #[test]
+    fn recording_replaces_identity_orders_equal_stamps_and_answers_the_last_reply() {
+        let mut runs = capture();
+        runs.participated();
+        runs.record(&reply("later", "old", 2));
+        runs.record(&reply("earlier", "first", 1));
+        runs.record(&reply("later", "updated", 2));
+        runs.record(&reply("equal", "last", 2));
+        let (open, output) = runs.decide(false).expect("settled");
+        let (_, result) = open.settle(output, Vec::new());
+        let settled = result.expect("completed");
+        assert_eq!(
+            settled.result.new_messages.iter().map(ChatItem::id).collect::<Vec<_>>(),
+            vec!["earlier", "later", "equal"]
+        );
+        assert!(settled.result.usage.settled);
+        assert!(matches!(
+            &settled.result.outcome,
+            Outcome::Completed { output: Output::Text(text) } if text == "last"
+        ));
+    }
+
+    #[test]
+    fn a_question_is_the_outcome_not_the_preceding_assistant_text() {
+        let mut runs = capture();
+        runs.participated();
+        runs.record(&reply("message", "earlier reply", 0));
+        let speech = SpeechId(3);
+        let question =
+            RunQuestion { question: "Confirm?".into(), verbatim: true, answer_tool: None };
+        runs.outputs.insert(speech, RunOutcome::InputRequired(question.clone()));
+        runs.speech_ended(speech, None);
+        let (open, output) = runs.decide(false).expect("settled");
+        let settled = open.settle(output, Vec::new()).1.expect("asks");
+        assert_eq!(settled.result.outcome, Outcome::InputRequired(question));
+        assert_eq!(settled.result.verbatim.as_deref(), Some("Confirm?"));
+    }
+
+    #[test]
+    fn a_last_assistant_message_without_text_is_no_output() {
+        let mut runs = capture();
+        runs.participated();
+        runs.record(&reply("old", "older reply", 0));
+        let mut latest = ChatMessage::text("new", Role::Assistant, "", SystemTime::UNIX_EPOCH);
+        latest.content.clear();
+        runs.record(&latest.into());
+        let (open, output) = runs.decide(false).expect("settled");
+        let settled = open.settle(output, Vec::new()).1.expect("settles");
+        assert_eq!(settled.result.outcome, Outcome::NoOutput);
+    }
+
+    #[test]
+    fn the_run_counts_only_its_own_speeches_requests() {
+        use crate::agent_session::machine::activity::scheduling::SpeechKind;
+        use crate::agent_session::machine::activity::speech::SpeechSpec;
+        use crate::generation::ReplySource;
+        let mut driver = crate::agent_session::tests::driver();
+        driver.on_run(Ts::ZERO, RunSpec { user_input: None, host: None });
+        let speech = driver.start_speech(
+            Ts::ZERO,
+            SpeechSpec::new(SpeechKind::Say, ReplySource::Text("owned".into()), true),
+        );
+        driver.start_request(Some(speech), ModelKind::Tts, "cartesia", "sonic");
+        driver.start_request(None, ModelKind::Llm, "openai", "gpt");
+        assert_eq!(driver.session.runs.usage().expect("open").snapshot().requests, 1);
+        assert_eq!(driver.session.usage.snapshot().requests, 2);
     }
     #[test]
     fn no_host_enter_completion_counts_as_participation_without_stranding_capture() {
@@ -371,23 +546,22 @@ mod tests {
             Ts::ZERO,
             SpeechSpec::new(SpeechKind::Say, ReplySource::Text("hello".into()), true),
         );
+        assert!(
+            driver.session.runs.names(speech),
+            "the rejected admission still determines its run result"
+        );
         driver.run_check();
         assert!(
             driver.session.runs.current().is_none(),
             "a terminal speech must not remain pending"
         );
-        let settled = driver.settle_step().into_iter().find_map(|effect| match effect {
-            crate::agent_session::effects::VoiceEffect::Emit(SessionEvent::RunSettled {
-                speech,
-                ..
-            }) => Some(speech),
-            _ => None,
+        let settled = driver.settle_step().into_iter().filter(|effect| {
+            matches!(
+                effect,
+                crate::agent_session::effects::VoiceEffect::Emit(SessionEvent::RunSettled { .. })
+            )
         });
-        assert_eq!(
-            settled,
-            Some(Some(speech)),
-            "the rejected admission still determines its run result"
-        );
+        assert_eq!(settled.count(), 1);
     }
 
     #[test]
@@ -407,10 +581,9 @@ mod tests {
         // A coordinated step and its terminal envelope report the same request. Keep one
         // correlated obligation even when success/failure projections overlap.
         runs.retain_input_requirements(std::slice::from_ref(&requirement));
-        runs.speech_ended(SpeechId(1), false);
-        runs.speech_ended(SpeechId(2), false);
-        let (_, _, requirements) = runs.close().unwrap();
-        assert_eq!(requirements, [requirement]);
+        runs.speech_ended(SpeechId(1), None);
+        runs.speech_ended(SpeechId(2), None);
+        assert_eq!(runs.close().unwrap().input_requirements, [requirement]);
     }
 
     #[test]
@@ -495,156 +668,15 @@ mod tests {
             .into_iter()
             .filter_map(|effect| match effect {
                 crate::agent_session::effects::VoiceEffect::Emit(SessionEvent::RunSettled {
-                    outcome,
+                    result: Ok(settled),
                     ..
-                }) => Some(outcome),
+                }) => Some(settled.result.outcome),
                 _ => None,
             })
             .collect();
         assert!(
-            matches!(settled.as_slice(), [RunOutcome::InputRequired(ask)] if ask.question == "owned?")
+            matches!(settled.as_slice(), [Outcome::InputRequired(ask)] if ask.question == "owned?")
         );
         assert!(driver.session.runs.outputs.is_empty());
-    }
-}
-
-pub struct VoiceRun {
-    items: Vec<ChatItem>,
-    settled: bool,
-    status: String,
-    output: Option<HostRef>,
-    question: Option<RunQuestion>,
-}
-
-impl Contract for VoiceRun {
-    fn new() -> Self {
-        Self {
-            items: Vec::new(),
-            settled: false,
-            status: "completed".into(),
-            output: None,
-            question: None,
-        }
-    }
-    fn record(&mut self, item: ChatItem) {
-        if self.settled
-            || !matches!(
-                item,
-                ChatItem::Message(_) | ChatItem::FunctionCall(_) | ChatItem::FunctionCallOutput(_)
-            )
-        {
-            return;
-        }
-        if let Some(known) = self.items.iter_mut().find(|known| {
-            known.id() == item.id()
-                && std::mem::discriminant(*known) == std::mem::discriminant(&item)
-        }) {
-            *known = item;
-            return;
-        }
-        let index = self
-            .items
-            .iter()
-            .rposition(|known| known.created_at() <= item.created_at())
-            .map_or(0, |index| index + 1);
-        self.items.insert(index, item);
-    }
-    fn settle(&mut self, status: String, output: Option<HostRef>, question: Option<RunQuestion>) {
-        if self.settled {
-            return;
-        }
-        self.settled = true;
-        self.status = status;
-        self.output = output;
-        self.question = question;
-    }
-    fn status(&self) -> String {
-        self.status.clone()
-    }
-    fn output(&self) -> Option<VoiceRunOutput> {
-        if self.status != "completed" {
-            return None;
-        }
-        if let Some(value) = &self.output {
-            return Some(VoiceRunOutput::Value(value.clone()));
-        }
-        self.items
-            .iter()
-            .rev()
-            .find_map(|item| match item {
-                ChatItem::Message(message) if message.role == Role::Assistant => Some(message),
-                _ => None,
-            })
-            .and_then(|message| message.text_content().map(VoiceRunOutput::Text))
-    }
-    fn question(&self) -> Option<String> {
-        self.question.as_ref().map(|q| q.question.clone())
-    }
-    fn verbatim(&self) -> Option<String> {
-        self.question.as_ref().filter(|q| q.verbatim).map(|q| q.question.clone())
-    }
-    fn items(&self) -> Vec<ChatItem> {
-        self.items.clone()
-    }
-}
-
-#[cfg(test)]
-mod recording_tests {
-    use super::*;
-    use lk_agents_abi::ChatMessage;
-    use std::time::{Duration, SystemTime};
-
-    #[test]
-    fn recording_replaces_identity_orders_equal_stamps_and_freezes_on_settlement() {
-        let mut run = VoiceRun::new();
-        let message = |id, text, seconds| {
-            ChatMessage::text(
-                id,
-                Role::Assistant,
-                text,
-                SystemTime::UNIX_EPOCH + Duration::from_secs(seconds),
-            )
-            .into()
-        };
-        run.record(message("later", "old", 2));
-        run.record(message("earlier", "first", 1));
-        run.record(message("later", "updated", 2));
-        run.record(message("equal", "last", 2));
-        run.settle("completed".into(), None, None);
-        run.record(message("late", "ignored", 3));
-        assert_eq!(
-            run.items().iter().map(ChatItem::id).collect::<Vec<_>>(),
-            vec!["earlier", "later", "equal"]
-        );
-        assert!(matches!(run.output(), Some(VoiceRunOutput::Text(text)) if text == "last"));
-    }
-
-    #[test]
-    fn a_question_cannot_fall_back_to_preceding_assistant_text() {
-        let mut run = VoiceRun::new();
-        run.record(
-            ChatMessage::text("message", Role::Assistant, "earlier reply", SystemTime::UNIX_EPOCH)
-                .into(),
-        );
-        run.settle(
-            "input_required".into(),
-            None,
-            Some(RunQuestion { question: "Confirm?".into(), verbatim: true, answer_tool: None }),
-        );
-        assert!(run.output().is_none());
-        assert_eq!(run.verbatim().as_deref(), Some("Confirm?"));
-    }
-
-    #[test]
-    fn a_last_assistant_message_without_text_cannot_reuse_an_older_reply() {
-        let mut run = VoiceRun::new();
-        run.record(
-            ChatMessage::text("old", Role::Assistant, "older reply", SystemTime::UNIX_EPOCH).into(),
-        );
-        let mut latest = ChatMessage::text("new", Role::Assistant, "", SystemTime::UNIX_EPOCH);
-        latest.content.clear();
-        run.record(latest.into());
-        run.settle("completed".into(), None, None);
-        assert!(run.output().is_none());
     }
 }

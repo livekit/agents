@@ -207,7 +207,7 @@ fn shared_run_cleanup_deadline_wakes_voice_without_a_domain_timer() {
     assert!(matches!(driver.activity.tools.replies[&speech].next, Some(StepNext::Done)));
     assert_eq!(
         driver.session.runs.outputs.get(&speech),
-        Some(&VoiceRunOutcome::Failed(RunFailure::Run(RunError::Host("validator failed".into()))))
+        Some(&VoiceRunOutcome::Failed(RunError::Host("validator failed".into())))
     );
 }
 
@@ -309,17 +309,13 @@ fn failed_reply_keeps_correlated_input_requirements_in_the_voice_run_failure() {
         .settle_step()
         .into_iter()
         .find_map(|effect| match effect {
-            VoiceEffect::Emit(SessionEvent::RunSettled { outcome, input_requirements, .. }) => {
-                Some((outcome, input_requirements))
-            }
+            VoiceEffect::Emit(crate::events::SessionEvent::RunSettled {
+                result: Err(failure),
+                ..
+            }) => Some(failure),
             _ => None,
         })
         .unwrap();
-    assert!(matches!(
-        settled.0,
-        crate::events::RunOutcome::Failed(crate::events::RunFailure::Run(
-            RunError::ToolRetriesExceeded { .. }
-        ))
-    ));
-    assert_eq!(settled.1, [requirement]);
+    assert!(matches!(settled.error, RunError::ToolRetriesExceeded { .. }));
+    assert_eq!(settled.input_requirements, [requirement]);
 }

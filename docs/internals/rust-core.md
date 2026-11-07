@@ -138,7 +138,10 @@ not fire recursively within the transition that changed them. Only input flush/o
 identity resolution remains deferred privately until that transition installs its resources.
 
 Run completion queries attributed speech, hook, handoff and hold owners rather than a
-second pending-work registry. `RunResult.input_requirements` preserves every correlated
+second pending-work registry. A voice run settles into the `RunSettled` record a text run
+settles into: the core records the run's items, counts the requests and tool bodies of the
+speeches it owns in its own usage ledger, and the host builds the caller's `RunResult` with the
+same `settled_result`. `RunResult.input_requirements` preserves every correlated
 request; the singular status/question is a compatibility projection. Supplied history retains
 which request that projection exposed so the next human answer cannot answer other waiting
 calls accidentally. Deadline/event ties preserve deadline-first processing, including a
@@ -1469,11 +1472,23 @@ importing a facade that is still defining those same types. Other public datacla
 their annotation expressions before assigning their public module identity. Neither path
 recursively evaluates a callback's forward references during package import.
 
+Public result unions are generated as well. A dataclass record may subclass another of its
+module (`base = "_Settled"`), inheriting its fields and members; it declares a model only,
+since its Rust struct holds none of the base's fields. `generic = "Output_T"` makes a dataclass
+`Generic[Output_T]` and a transparent union a `TypeAliasType` over that parameter, which the
+module declares as a type variable defaulting to `Any`; a union member names its parameter
+with `annotation = "RunCompleted[Output_T]"`. A `cached` property keeps a stateful view (the
+`expect` cursor) on an unslotted dataclass. Member annotations are imported for the type
+checker only, except a toggle's class, tested at run time. `RunResult[Output]` is
+`RunCompleted[Output_T] | RunInputRequired | RunNoOutput` over `_Settled`, whose
+`new_messages()`, `all_messages()` and `expect` are `_bindings` hooks; `settled_result` builds a
+branch from a `RunSettled`.
+
 A `codec(..., flag(module = "..."))` generates a Python `Flag` from the native newtype's public
 bit constants; the generator discovers those constants by resolved type identity. Exception
 schemas preserve read-only message properties, no-argument constructors and qualified bases.
-Python controllers, interpreter state, generic result wrappers, SDK resource adapters and
-provider plugin implementations remain authored Python; their existence does not make them
+Python controllers, interpreter state, SDK resource adapters and provider plugin
+implementations remain authored Python; their existence does not make them
 shared boundary records.
 
 Native newtypes can declare `codec(via = u8)` to generate checked `TryFrom`/`Into` conversions.

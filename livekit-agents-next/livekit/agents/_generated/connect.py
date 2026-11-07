@@ -4,12 +4,15 @@
 
 from __future__ import annotations
 
-from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from inspect import get_annotations
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from .session_wire import DEFAULT_MAX_UNRECOVERABLE_ERRORS
+
+if TYPE_CHECKING:
+    from contextlib import AbstractAsyncContextManager
+
 
 # Record declarations:
 #     rust/crates/lk-agents-abi/src/voice/session_options.rs

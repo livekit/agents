@@ -30,12 +30,12 @@ impl Resolver<'_> {
         let mapping = voc::find(&record.nested, "mapping").is_some();
         let typed_dict = voc::find(&record.nested, "typed_dict").is_some() || mapping;
         let pydantic = match voc::find(&record.nested, "pydantic") {
-            None if ["base", "repr", "validator", "serializer"]
+            None if ["repr", "validator", "serializer"]
                 .iter()
                 .any(|w| voc::find(&record.nested, w).is_some()) =>
             {
                 return Err(format!(
-                    "{at}: `base`, `repr` and `validator` shape a pydantic record's model"
+                    "{at}: `repr`, `validator` and `serializer` shape a pydantic record's model"
                 ));
             }
             None => None,
@@ -85,7 +85,13 @@ impl Resolver<'_> {
             {
                 return Err(format!("{at}: a mutable dataclass record is a plain model struct"));
             }
+            Some(_) if voc::find(&record.nested, "base").is_some() && (extract || emit) => {
+                return Err(format!(
+                    "{at}: a dataclass subclass is a model only: its Rust struct holds none of its base's fields"
+                ));
+            }
             Some(_) => Some(Dataclass {
+                base: voc::text(at, &record.nested, "base")?,
                 frozen: voc::find(&record.nested, "frozen").is_some(),
                 deferred: voc::find(&record.nested, "deferred").is_some(),
                 kw_only: voc::find(&record.nested, "kw_only").is_some(),
@@ -115,6 +121,21 @@ impl Resolver<'_> {
                 },
             }),
         };
+        if pydantic.is_none() && dataclass.is_none() && voc::find(&record.nested, "base").is_some()
+        {
+            return Err(format!(
+                "{at}: `base` names the model a pydantic or dataclass model subclasses"
+            ));
+        }
+        let generic = voc::text(at, &record.nested, "generic")?;
+        if let Some(name) = &generic
+            && (syn::parse_str::<syn::Ident>(name).is_err()
+                || !(dataclass.is_some() || (transparent && matches!(item, syn::Item::Enum(_)))))
+        {
+            return Err(format!(
+                "{at}: generic = \"T\" names the type variable of a dataclass or transparent union"
+            ));
+        }
         if dataclass.is_none() && voc::find(&record.nested, "host_fields").is_some() {
             return Err(format!("{at}: `host_fields` shape a mutable dataclass model"));
         }
@@ -312,6 +333,11 @@ impl Resolver<'_> {
                     "{at}: properties take no arguments; model methods require pydantic or dataclass"
                 ));
             }
+            if member.cached && !dataclass.as_ref().is_some_and(|d| !d.slots) {
+                return Err(format!(
+                    "{at}: a cached property keeps its value on the instance: an unslotted dataclass"
+                ));
+            }
             if fields.iter().any(|field| field.host_name() == member.name)
                 || members[..i].iter().any(|other| other.name == member.name)
             {
@@ -418,6 +444,7 @@ impl Resolver<'_> {
             members,
             dispatch,
             discriminator,
+            generic,
             body,
         })
     }
@@ -457,7 +484,7 @@ impl Resolver<'_> {
             }
             syn::Fields::Unnamed(unnamed) => {
                 let allowed = if transparent {
-                    &["name", "field", "skip", "default", "host_type"][..]
+                    &["name", "field", "skip", "default", "host_type", "annotation"][..]
                 } else {
                     &["name", "field", "skip", "default"][..]
                 };
@@ -501,7 +528,7 @@ impl Resolver<'_> {
                         factory: None,
                         host_type: None,
                         private: false,
-                        annotation: None,
+                        annotation: voc::text(&at, &entries, "annotation")?,
                         rename: None,
                         doc: Vec::new(),
                     })))
@@ -812,6 +839,7 @@ pub(super) fn record_target(
             "frozen",
             "private",
             "discriminator",
+            "generic",
             // Rust's own: the record marker expands `ModelDump` (`model_dump(mode="json")`).
             "model_dump",
             "mapping",

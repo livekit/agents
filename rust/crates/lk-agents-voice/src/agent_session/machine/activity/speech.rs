@@ -769,7 +769,7 @@ impl VoiceDriver {
                 self.record_trace(InterruptStep::PlayoutGate { speech, op: GateOp::Resume, cause })
             }
             GenEvent::RequestStarted { speech, kind, provider, model } => {
-                let request = self.session.start_request(kind, &provider, &model);
+                let request = self.start_request(Some(speech), kind, &provider, &model);
                 self.session.requests.entry((speech, kind)).or_default().push_back(request);
             }
             GenEvent::LlmRequestFinished { speech, step, error } => {
@@ -1014,10 +1014,16 @@ impl VoiceDriver {
     }
 
     pub(crate) fn release_speech(&mut self, now: Ts, speech: SpeechId) {
-        let (requests, usage) = (&mut self.session.requests, &mut self.session.usage);
+        let s = &mut self.session;
+        let (requests, usage, mut run) = (&mut s.requests, &mut s.usage, s.runs.usage());
         requests.retain(|(of, _), unmeasured| {
             if *of == speech {
-                unmeasured.drain(..).for_each(|request| usage.finish(request, false));
+                for request in unmeasured.drain(..) {
+                    usage.finish(request, false);
+                    if let Some(run) = run.as_deref_mut() {
+                        run.finish(request, false);
+                    }
+                }
             }
             *of != speech
         });
@@ -1053,12 +1059,11 @@ impl VoiceDriver {
             // A host `interrupt()` queued after the input that ended it arrives too late.
             state.mark_done(None);
             let view = state.view();
-            let (outcome, failed) = (view.outcome(), view.error().is_some());
-            let error = view.error().cloned();
-            self.agent_turn_done(speech, outcome, error);
+            let (outcome, error) = (view.outcome(), view.error().cloned());
+            self.agent_turn_done(speech, outcome, error.clone());
             self.publish_event(SessionEvent::SpeechDone { speech, outcome });
             // The run that owned it lets it go, and its verdict moves to this speech.
-            self.run_speech_ended(speech, failed);
+            self.run_speech_ended(speech, error);
         }
         // The deferred tool reply's fate is read off the handle; the tools' fillers go with it.
         self.tool_reply_done(speech);

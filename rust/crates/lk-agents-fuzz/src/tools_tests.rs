@@ -689,6 +689,7 @@ mod canonical_terminal_tool_result {
     //! One canonical question wins in model order, regardless of body completion order.
     use std::collections::BTreeMap;
 
+    use lk_agents_abi::agent::run::RunOutcome;
     use lk_agents_abi::llm::tool_executor::WAITING_PREFIX;
     use lk_agents_abi::{ChatItem, Role};
     use lk_agents_fuzz::drive::{Run, Setup, simulate};
@@ -696,7 +697,7 @@ mod canonical_terminal_tool_result {
         AgentText, Input, Millis, Ref, ToolAnswer, ToolArgs, TurnMode, UserText,
     };
     use lk_agents_fuzz::record::{Detail, Kind};
-    use lk_agents_voice::events::{RunOutcome, SessionEvent};
+    use lk_agents_voice::events::SessionEvent;
 
     const QUESTION: &str = "Which day?";
     const UNSELECTED_QUESTION: &str = "Which city?";
@@ -759,15 +760,15 @@ mod canonical_terminal_tool_result {
             run.apply(&Input::Advance { ms: Millis(5_000) }).await;
 
             let events = run.record.host_view().events();
-            let requirements: Vec<_> = events
+            let settled: Vec<_> = events
                 .iter()
-                .flat_map(|(_, event)| match event {
-                    SessionEvent::RunSettled { input_requirements, .. } => {
-                        input_requirements.as_slice()
-                    }
-                    _ => &[],
+                .filter_map(|(_, event)| match event {
+                    SessionEvent::RunSettled { result: Ok(settled), .. } => Some(&settled.result),
+                    _ => None,
                 })
                 .collect();
+            let requirements: Vec<_> =
+                settled.iter().flat_map(|result| result.input_requirements.iter()).collect();
             assert_eq!(
                 requirements
                     .iter()
@@ -782,13 +783,7 @@ mod canonical_terminal_tool_result {
                     .collect::<Vec<_>>(),
                 [QUESTION, UNSELECTED_QUESTION]
             );
-            let results: Vec<_> = events
-                .iter()
-                .filter_map(|(_, event)| match event {
-                    SessionEvent::RunSettled { outcome, .. } => Some(outcome.clone()),
-                    _ => None,
-                })
-                .collect();
+            let results: Vec<_> = settled.iter().map(|result| result.outcome.clone()).collect();
             assert_eq!(
                 results,
                 [RunOutcome::InputRequired(lk_agents_abi::agent::run::RunQuestion {

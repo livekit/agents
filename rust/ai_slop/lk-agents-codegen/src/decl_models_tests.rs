@@ -598,3 +598,54 @@ fn only_a_record_whose_rust_type_derives_hash_is_frozen() {
         "{ids}"
     );
 }
+
+// Catches: a generic result union losing its type parameter (`RunResult[str]` unsubscriptable at
+// run time), a branch not inheriting its base's fields and methods, an assertion cursor rebuilt on
+// every read, or a cached view on a slotted model (no `__dict__` to keep it in).
+#[test]
+fn a_generic_union_of_dataclass_subclasses_shares_its_base_and_caches_a_view() {
+    let source = |base: &str| {
+        format!(
+            r#"
+        #[crate::host(record(module = "results", name = "_Base", {base}))]
+        #[python(
+            method(name = "items", ret = "list[int]", hook = "base_items"),
+            property(name = "cursor", ret = "int", hook = "base_cursor", cached)
+        )]
+        pub struct Base {{ #[host(rename = "_items")] pub items: Vec<i64> }}
+        #[crate::host(record(module = "results", path = "pkg.results", dataclass, kw_only,
+            base = "_Base", generic = "T", constant(status = "done")))]
+        pub struct Done {{ #[host(annotation = "T")] pub value: String }}
+        #[crate::host(record(module = "results", path = "pkg.results", dataclass, kw_only,
+            base = "_Base", constant(status = "empty")))]
+        pub struct Empty {{}}
+        #[crate::host(record(module = "results", name = "Outcome", path = "pkg.results",
+            transparent, generic = "T"))]
+        pub enum Outcome {{ #[host(annotation = "Done[T]")] Done(Done), Empty(Empty) }}
+        "#
+        )
+    };
+    let decls = read(&source("dataclass, kw_only")).expect("resolves");
+    let models = crate::records::python(&decls).expect("models");
+    let text = &models.iter().find(|o| o.path == "results.py").expect("results.py").text;
+    assert!(
+        text.contains("T = TypeVar(\"T\", default=Any)\n")
+            && text.contains("class Done(_Base, Generic[T]):\n")
+            && text.contains("class Empty(_Base):\n")
+            && text.contains("    @functools.cached_property\n    def cursor(self) -> int:\n")
+            && text.contains("        return _bindings.base_items(self)\n")
+            && text.contains(
+                "Outcome = TypeAliasType(\n    \"Outcome\",\n    Done[T] | Empty,\n    type_params=(T,),\n)"
+            ),
+        "{text}"
+    );
+    let slotted = read(&source("dataclass, kw_only, slots"));
+    assert!(slotted.err().is_some_and(|e| e.contains("unslotted")));
+    let crossing = read(
+        r#"#[crate::host(record(module = "results", name = "_Base", dataclass))]
+        pub struct Base { pub items: Vec<i64> }
+        #[crate::host(record(module = "results", dataclass, base = "_Base", emit))]
+        pub struct Done { pub value: String }"#,
+    );
+    assert!(crossing.err().is_some_and(|e| e.contains("model only")));
+}

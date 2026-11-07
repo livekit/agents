@@ -2717,6 +2717,8 @@ pub mod agent_run {
         ::pyo3::sync::PyOnceLock::new();
     static RUN_ERROR_OUTPUT_RETRIES_EXCEEDED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
+    static RUN_ERROR_SESSION_CLOSED: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
 
     pub fn run_error_to_py<'py>(
         py: Python<'py>,
@@ -2802,6 +2804,13 @@ pub mod agent_run {
                     Some(&kwargs),
                 )
             }
+            ::lk_agents_abi::agent::run::RunError::SessionClosed => crate::py_calls::call(
+                RUN_ERROR_SESSION_CLOSED
+                    .import(py, "livekit.agents._generated.agent_run", "RunErrorSessionClosed")?
+                    .as_any(),
+                (),
+                None,
+            ),
         }
     }
 
@@ -13557,13 +13566,8 @@ pub mod session_wire {
         py: Python<'py>,
         value: ::lk_agents_abi::voice::events::ItemAddedWire,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let ::lk_agents_abi::voice::events::ItemAddedWire {
-            item: _,
-            host_item,
-            agent,
-            visibility,
-            run,
-        } = value;
+        let ::lk_agents_abi::voice::events::ItemAddedWire { item: _, host_item, agent, visibility } =
+            value;
         let kwargs = ::pyo3::types::PyDict::new(py);
         kwargs.set_item(
             "host_item",
@@ -13576,13 +13580,6 @@ pub mod session_wire {
         kwargs.set_item(
             "visibility",
             ::pyo3::IntoPyObjectExt::into_bound_py_any(visibility.as_str(), py)?,
-        )?;
-        kwargs.set_item(
-            "run",
-            match run {
-                None => py.None().into_bound(py),
-                Some(x) => crate::py_objects::object_ref_to_py(py, x)?,
-            },
         )?;
         crate::py_calls::call(
             ITEM_ADDED_WIRE
@@ -13649,34 +13646,6 @@ pub mod session_wire {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
-    static RUN_ITEM_ADDED_WIRE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
-        ::pyo3::sync::PyOnceLock::new();
-
-    pub fn run_item_added_wire_to_py<'py>(
-        py: Python<'py>,
-        value: ::lk_agents_abi::voice::events::RunItemAddedWire,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let ::lk_agents_abi::voice::events::RunItemAddedWire { run, item } = value;
-        let kwargs = ::pyo3::types::PyDict::new(py);
-        kwargs.set_item(
-            "run",
-            match run {
-                None => py.None().into_bound(py),
-                Some(x) => crate::py_objects::object_ref_to_py(py, x)?,
-            },
-        )?;
-        kwargs
-            .set_item("item", crate::generated::records::chat_items::chat_item_to_py(py, item)?)?;
-        crate::py_calls::call(
-            RUN_ITEM_ADDED_WIRE
-                .import(py, "livekit.agents._generated.session_wire", "RunItemAddedWire")?
-                .as_any(),
-            (),
-            Some(&kwargs),
-        )
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
     static RUN_STARTED_WIRE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
@@ -13731,23 +13700,59 @@ pub mod session_wire {
     }
 
     // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
-    static RUN_SETTLED_WIRE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+    static RUN_FINISHED_WIRE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
         ::pyo3::sync::PyOnceLock::new();
 
-    pub fn run_settled_wire_to_py<'py>(
+    pub fn run_finished_wire_to_py<'py>(
         py: Python<'py>,
-        value: ::lk_agents_abi::voice::events::RunSettledWire,
+        value: ::lk_agents_abi::voice::events::RunFinishedWire,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let ::lk_agents_abi::voice::events::RunSettledWire {
-            input_requirements,
+        let ::lk_agents_abi::voice::events::RunFinishedWire { run, settled } = value;
+        let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item(
+            "run",
+            match run {
+                None => py.None().into_bound(py),
+                Some(x) => crate::py_objects::object_ref_to_py(py, x)?,
+            },
+        )?;
+        kwargs.set_item(
+            "settled",
+            crate::generated::records::agent_run::run_settled_to_py(py, settled)?,
+        )?;
+        crate::py_calls::call(
+            RUN_FINISHED_WIRE
+                .import(py, "livekit.agents._generated.session_wire", "RunFinishedWire")?
+                .as_any(),
+            (),
+            Some(&kwargs),
+        )
+    }
+
+    // Declared in rust/crates/lk-agents-abi/src/voice/events.rs.
+    static RUN_FAILED_WIRE: ::pyo3::sync::PyOnceLock<Py<::pyo3::types::PyType>> =
+        ::pyo3::sync::PyOnceLock::new();
+
+    pub fn run_failed_wire_to_py<'py>(
+        py: Python<'py>,
+        value: ::lk_agents_abi::voice::events::RunFailedWire,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let ::lk_agents_abi::voice::events::RunFailedWire {
             run,
-            outcome,
-            final_output,
-            question,
-            run_error,
-            speech_handle,
+            error,
+            input_requirements,
+            provider_error,
         } = value;
         let kwargs = ::pyo3::types::PyDict::new(py);
+        kwargs.set_item(
+            "run",
+            match run {
+                None => py.None().into_bound(py),
+                Some(x) => crate::py_objects::object_ref_to_py(py, x)?,
+            },
+        )?;
+        kwargs
+            .set_item("error", crate::generated::records::agent_run::run_error_to_py(py, error)?)?;
         kwargs.set_item(
             "input_requirements",
             ::pyo3::types::PyList::new(
@@ -13762,41 +13767,15 @@ pub mod session_wire {
             .into_any(),
         )?;
         kwargs.set_item(
-            "run",
-            match run {
+            "provider_error",
+            match provider_error {
                 None => py.None().into_bound(py),
-                Some(x) => crate::py_objects::object_ref_to_py(py, x)?,
+                Some(x) => crate::py_errors::ExceptionValue::to_exception(x, py)?,
             },
         )?;
-        kwargs.set_item(
-            "outcome",
-            ::pyo3::IntoPyObjectExt::into_bound_py_any(outcome.as_str(), py)?,
-        )?;
-        kwargs.set_item(
-            "final_output",
-            match final_output {
-                None => py.None().into_bound(py),
-                Some(x) => crate::py_objects::object_ref_to_py(py, x)?,
-            },
-        )?;
-        kwargs.set_item(
-            "question",
-            match question {
-                None => py.None().into_bound(py),
-                Some(x) => crate::generated::records::agent_run::run_question_to_py(py, x)?,
-            },
-        )?;
-        kwargs.set_item(
-            "run_error",
-            match run_error {
-                None => py.None().into_bound(py),
-                Some(x) => crate::generated::records::agent_run::run_error_to_py(py, x)?,
-            },
-        )?;
-        kwargs.set_item("speech_handle", match speech_handle { None => py.None().into_bound(py), Some(x) => <dyn ::lk_agents_abi::voice::speech_handle::Speech as crate::generated::NativeToHost>::to_host(py, x)? })?;
         crate::py_calls::call(
-            RUN_SETTLED_WIRE
-                .import(py, "livekit.agents._generated.session_wire", "RunSettledWire")?
+            RUN_FAILED_WIRE
+                .import(py, "livekit.agents._generated.session_wire", "RunFailedWire")?
                 .as_any(),
             (),
             Some(&kwargs),
@@ -14131,14 +14110,14 @@ pub mod session_wire {
             ::lk_agents_abi::voice::events::HostWire::RunStarted(x) => {
                 crate::generated::records::session_wire::run_started_wire_to_py(py, x)?
             }
-            ::lk_agents_abi::voice::events::HostWire::RunItemAdded(x) => {
-                crate::generated::records::session_wire::run_item_added_wire_to_py(py, x)?
-            }
             ::lk_agents_abi::voice::events::HostWire::RunRefused(x) => {
                 crate::generated::records::session_wire::run_refused_wire_to_py(py, x)?
             }
-            ::lk_agents_abi::voice::events::HostWire::RunSettled(x) => {
-                crate::generated::records::session_wire::run_settled_wire_to_py(py, x)?
+            ::lk_agents_abi::voice::events::HostWire::RunFinished(x) => {
+                crate::generated::records::session_wire::run_finished_wire_to_py(py, x)?
+            }
+            ::lk_agents_abi::voice::events::HostWire::RunFailed(x) => {
+                crate::generated::records::session_wire::run_failed_wire_to_py(py, x)?
             }
             ::lk_agents_abi::voice::events::HostWire::SpeechDone(x) => {
                 crate::generated::records::session_wire::speech_done_wire_to_py(py, x)?
@@ -14260,22 +14239,6 @@ pub mod session_wire {
             (),
             Some(&kwargs),
         )
-    }
-
-    // Declared in rust/crates/lk-agents-abi/src/voice/run_view.rs.
-
-    pub fn voice_run_output_to_py<'py>(
-        py: Python<'py>,
-        value: ::lk_agents_abi::voice::run_view::VoiceRunOutput,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        Ok(match value {
-            ::lk_agents_abi::voice::run_view::VoiceRunOutput::Text(x) => {
-                ::pyo3::IntoPyObjectExt::into_bound_py_any(x, py)?
-            }
-            ::lk_agents_abi::voice::run_view::VoiceRunOutput::Value(x) => {
-                crate::py_objects::object_ref_to_py(py, x)?
-            }
-        })
     }
 
     // Declared in rust/crates/lk-agents-abi/src/voice/session_effects.rs.

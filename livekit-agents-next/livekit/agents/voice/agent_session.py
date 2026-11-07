@@ -13,7 +13,7 @@ import contextlib
 import contextvars
 import copy
 from collections import deque
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from typing import TYPE_CHECKING, Any, Generic, cast, overload
 
 from livekit import rtc
@@ -65,6 +65,7 @@ from ._session_callbacks import (
     _origin as _origin,
     _SessionNodes as _SessionNodes,
 )
+from .agent_run import settled_result
 from .events import (
     AgentEvent,
     AgentState,
@@ -78,10 +79,11 @@ from .room_io import (
     RoomOptions,
     TextInputCallback,
 )
-from .run_result import _VoiceRun
+from .run_result import RunResult
 
 if TYPE_CHECKING:
     from .._core import VoiceSession as _NativeSession, _core_SessionState as _SessionState
+    from .._generated.agent_run import RunSettled
     from ..storage import Thread
     from ..storage.context import ContextStore
     from .amd import AMD
@@ -384,12 +386,16 @@ class VoiceSession(SessionCommands, rtc.EventEmitter[EventTypes], Generic[Contex
 
     # --- commands ------------------------------------------------------------------------
 
-    def _run(self, *, user_input: str) -> _VoiceRun:
-        """Reply to typed ``user_input`` and record what the reply did (the remote session's text
-        input and the voice conformance tests)."""
-        run = _VoiceRun(session=self)
-        self._running.run(user_input=user_input, origin=_origin(), host=run)
-        return run
+    def _run(self, *, user_input: str) -> Awaitable[RunResult[Any]]:
+        """Reply to typed ``user_input`` now; awaited, the run settles as a text run does (the
+        remote session's text input and the voice conformance tests)."""
+        settled: asyncio.Future[RunSettled] = asyncio.get_running_loop().create_future()
+        self._running.run(user_input=user_input, origin=_origin(), host=settled)
+
+        async def result() -> RunResult[Any]:
+            return settled_result(await asyncio.shield(settled), None)
+
+        return result()
 
     @contextlib.asynccontextmanager
     async def _claim_user_turn(self) -> AsyncIterator[None]:

@@ -441,6 +441,11 @@ class RunErrorOutputRetriesExceeded:
     retries: int
 
 
+@dataclass(kw_only=True, slots=True)
+class RunErrorSessionClosed:
+    """The voice session closed before the run settled."""
+
+
 RunError: TypeAlias = (
     RunErrorNoModel
     | RunErrorCancelled
@@ -448,6 +453,7 @@ RunError: TypeAlias = (
     | RunErrorHost
     | RunErrorToolRetriesExceeded
     | RunErrorOutputRetriesExceeded
+    | RunErrorSessionClosed
 )
 """Why an invocation settled without a result."""
 

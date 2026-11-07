@@ -219,13 +219,12 @@ impl SessionEvent {
                 })
             }
             SessionEvent::AmdResult { verdict } => HostWire::AmdResult(verdict.clone()),
-            SessionEvent::ConversationItemAdded { item, agent, visibility, run, .. } => {
+            SessionEvent::ConversationItemAdded { item, agent, visibility, .. } => {
                 HostWire::ItemAdded(w::ItemAddedWire {
                     item: (**item).clone(),
                     host_item: None,
                     agent: agent.clone(),
                     visibility: *visibility,
-                    run: run.as_ref().and_then(|r| r.host.clone()),
                 })
             }
             // The host moves these ids between its context projections; no item crosses.
@@ -239,20 +238,22 @@ impl SessionEvent {
             SessionEvent::RunStarted { run } => {
                 HostWire::RunStarted(w::RunStartedWire { run: run.host.clone() })
             }
-            SessionEvent::RunItemAdded { run, item } => {
-                HostWire::RunItemAdded(w::RunItemAddedWire {
-                    run: run.host.clone(),
-                    item: (**item).clone(),
-                })
-            }
             SessionEvent::RunRefused { cause, host } => {
                 HostWire::RunRefused(w::RunRefusedWire { run: host.clone(), cause: *cause })
             }
-            // What `RunResult._mark_done` reads; the binding resolves the refs off its side table.
-            SessionEvent::RunSettled { run, outcome, speech, input_requirements } => {
-                let mut settled = run_settled_wire(run, outcome, input_requirements);
-                settled.speech_handle = speech.map(speeches);
-                HostWire::RunSettled(settled)
+            SessionEvent::RunSettled { run, result: Ok(settled) } => {
+                HostWire::RunFinished(w::RunFinishedWire {
+                    run: run.host.clone(),
+                    settled: (**settled).clone(),
+                })
+            }
+            SessionEvent::RunSettled { run, result: Err(failure) } => {
+                HostWire::RunFailed(w::RunFailedWire {
+                    run: run.host.clone(),
+                    error: failure.error.clone(),
+                    input_requirements: failure.input_requirements.clone(),
+                    provider_error: failure.provider_error.clone(),
+                })
             }
             SessionEvent::SpeechDone { speech, outcome } => {
                 HostWire::SpeechDone(w::SpeechDoneWire {
@@ -283,32 +284,6 @@ impl SessionEvent {
                 HostWire::ToolExecutionUpdated(w::ToolExecutionUpdated { update: update.wire() })
             }
         })
-    }
-}
-
-/// `run_settled`'s payload with no speech handle: the final output, the run's error or the
-/// question it asks, by its outcome.
-fn run_settled_wire(
-    run: &crate::events::RunRef,
-    outcome: &crate::events::RunOutcome,
-    input_requirements: &[lk_agents_abi::agent::run::RunInputRequirement],
-) -> lk_agents_abi::voice::events::RunSettledWire {
-    use crate::events::{RunFailure, RunOutcome};
-    use lk_agents_abi::voice::events as w;
-    let (final_output, run_error, question) = match outcome {
-        RunOutcome::Completed { final_output } => (final_output.clone(), None, None),
-        RunOutcome::Failed(RunFailure::Run(err)) => (None, Some(err.clone()), None),
-        RunOutcome::InputRequired(question) => (None, None, Some(question.clone())),
-        RunOutcome::Failed(RunFailure::Speech) | RunOutcome::Closed => (None, None, None),
-    };
-    w::RunSettledWire {
-        input_requirements: input_requirements.to_vec(),
-        run: run.host.clone(),
-        outcome: outcome.kind(),
-        final_output,
-        question,
-        run_error,
-        speech_handle: None,
     }
 }
 

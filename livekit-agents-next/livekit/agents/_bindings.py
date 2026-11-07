@@ -40,6 +40,7 @@ if TYPE_CHECKING:
     from ._generated.llm import ChatChunk
     from ._generated.llm_fallback import AvailabilityChanged
     from ._generated.overlap import OverlappingSpeechEvent
+    from ._generated.run_result import _Settled
     from ._generated.session_events import ErrorEvent, FunctionToolsExecutedEvent
     from ._generated.stt import STT, SpeechData, SpeechEvent
     from ._generated.tool_options import ProviderToolDeclaration, ToolSpec
@@ -52,6 +53,7 @@ if TYPE_CHECKING:
     from .voice.agent_session import VoiceSession
     from .voice.io import _StreamingTurnDetector
     from .voice.room_io import TextInputEvent
+    from .voice.run_result import RunAssert
 
 _T = TypeVar("_T")
 _FunctionToolsEventT = TypeVar("_FunctionToolsEventT", bound="FunctionToolsExecutedEvent")
@@ -308,6 +310,20 @@ def chat_message_raw_text_content(message: ChatMessage) -> str | None:
 
 def chat_message_text_content(message: ChatMessage) -> str | None:
     return _core.chat_message_text_content(_text_parts(message), message.role == "assistant")
+
+
+def run_new_messages(result: _Settled) -> list[ChatItem]:
+    return list(result._new_messages)
+
+
+def run_all_messages(result: _Settled) -> list[ChatItem]:
+    return list(result._all_messages)
+
+
+def run_expect(result: _Settled) -> RunAssert:
+    from .voice.run_result import RunAssert, _events
+
+    return RunAssert(_events(result._new_messages))
 
 
 def metrics_repr(metrics: BaseModel) -> str:

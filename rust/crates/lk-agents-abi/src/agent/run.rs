@@ -89,6 +89,111 @@ pub enum Output {
     Validated(ValidationId),
 }
 
+/// What every branch of the caller's `RunResult` exposes: its history, usage and correlated
+/// input requests. The host builds a branch from a `RunSettled`.
+#[crate::host(record(module = "run_result", name = "_Settled", dataclass, kw_only))]
+#[python(
+    method(
+        name = "new_messages",
+        ret = "list[.chat_items.ChatItem]",
+        hook = "run_new_messages",
+        doc = "This invocation's input and everything it recorded, tool calls and results included."
+    ),
+    method(
+        name = "all_messages",
+        ret = "list[.chat_items.ChatItem]",
+        hook = "run_all_messages",
+        doc = "The supplied history plus this invocation, without instructions: the next direct\nrun's ``message_history``."
+    ),
+    property(
+        name = "expect",
+        ret = "livekit.agents.voice.run_result.RunAssert",
+        hook = "run_expect",
+        cached,
+        doc = "Assertions over this invocation's events, in order (testing.md)."
+    )
+)]
+#[derive(Debug, Clone)]
+pub struct SettledRun {
+    #[host(rename = "_new_messages", hide_repr)]
+    pub new_messages: Vec<ChatItem>,
+    #[host(rename = "_all_messages", hide_repr)]
+    pub all_messages: Vec<ChatItem>,
+    /// What this invocation consumed: an immutable, settled snapshot (usage.md).
+    #[host(hide_repr)]
+    pub usage: crate::usage::Usage,
+    /// The part of the answer, or of the question, that reached the person exactly as written;
+    /// `None` when nothing did (tools.md "Verbatim").
+    #[host(hide_repr)]
+    pub verbatim: Option<String>,
+    #[host(rename = "_pending_call", default = None, hide_repr)]
+    pub pending_call: Option<crate::a2a::turn::PendingCall>,
+    /// All correlated tool requests awaiting input, in model order. This metadata does not select
+    /// a presentation order or answer additional requests automatically.
+    #[host(default_factory = "list", hide_repr)]
+    pub input_requirements: Vec<RunInputRequirement>,
+}
+
+/// `RunResult` with `status == "completed"`: `output` is the accepted value.
+#[crate::host(record(
+    module = "run_result",
+    path = "livekit.agents.voice.run_result",
+    dataclass,
+    kw_only,
+    base = "_Settled",
+    generic = "Output_T",
+    constant(status = "completed")
+))]
+#[derive(Debug, Clone)]
+pub struct RunCompleted {
+    #[host(annotation = "Output_T")]
+    pub output: HostRef,
+}
+
+/// `RunResult` with `status == "input_required"`: the invocation asks `question`.
+#[crate::host(record(
+    module = "run_result",
+    path = "livekit.agents.voice.run_result",
+    dataclass,
+    kw_only,
+    base = "_Settled",
+    constant(status = "input_required")
+))]
+#[derive(Debug, Clone)]
+pub struct RunInputRequired {
+    pub question: String,
+}
+
+/// `RunResult` with `status == "no_output"`: the turn ended without an output, on
+/// `StopResponse`, a tool result asking for no reply, a silent step or an interruption.
+#[crate::host(record(
+    module = "run_result",
+    path = "livekit.agents.voice.run_result",
+    dataclass,
+    kw_only,
+    base = "_Settled",
+    constant(status = "no_output")
+))]
+#[derive(Debug, Clone)]
+pub struct RunNoOutput {}
+
+/// One agent invocation (agents.md "Running a turn"): narrow on `status` for `output` or
+/// `question`; every branch exposes `new_messages()`, `all_messages()` and `usage`.
+#[crate::host(record(
+    module = "run_result",
+    name = "RunResult",
+    path = "livekit.agents.voice.run_result",
+    transparent,
+    generic = "Output_T"
+))]
+#[derive(Debug, Clone)]
+pub enum CallerRunResult {
+    #[host(annotation = "RunCompleted[Output_T]")]
+    Completed(RunCompleted),
+    InputRequired(RunInputRequired),
+    NoOutput(RunNoOutput),
+}
+
 /// Why an invocation settled without a result.
 #[crate::host(record(module = "agent_run", emit))]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -111,6 +216,8 @@ pub enum RunError {
     OutputRetriesExceeded {
         retries: u32,
     },
+    /// The voice session closed before the run settled.
+    SessionClosed,
 }
 
 impl std::fmt::Display for RunError {
@@ -126,6 +233,7 @@ impl std::fmt::Display for RunError {
             RunError::OutputRetriesExceeded { retries } => {
                 write!(f, "exceeded maximum retries ({retries}) for output validation")
             }
+            RunError::SessionClosed => f.write_str("the session closed before the run settled"),
         }
     }
 }
@@ -202,7 +310,7 @@ pub struct RunRequest {
 
 /// A settled invocation, with the value the host validated when the output is one.
 #[crate::host(record(module = "agent_run", emit))]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RunSettled {
     pub result: RunResult,
     pub output: Option<HostRef>,

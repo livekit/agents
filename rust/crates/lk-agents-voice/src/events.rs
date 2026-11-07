@@ -185,27 +185,27 @@ pub struct RunRef {
     pub host: Option<lk_agents_abi::HostRef>,
 }
 
-/// How a run ended (`RunResult._mark_done`), read off the last owned speech.
-#[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]
-#[vocabulary(kind_is = lk_agents_abi::voice::events::RunOutcomeKind)]
+/// What a speech's reply settles the open run with, when the run ends on that speech.
+#[derive(Debug, Clone, PartialEq)]
 pub enum RunOutcome {
-    /// Nothing the run owned is live. `final_output` is what accepted output got, if anything.
-    Completed { final_output: Option<lk_agents_abi::HostRef> },
+    /// The agent accepted `final_output`, validated as `validation`.
+    Completed {
+        validation: lk_agents_abi::agent::run::ValidationId,
+        final_output: lk_agents_abi::HostRef,
+    },
     /// The run ends on a question for the person (`InputRequired`).
     InputRequired(lk_agents_abi::agent::run::RunQuestion),
-    /// The run raises: the last speech failed, or a tool completed its task with an exception.
-    Failed(RunFailure),
-    /// The session closed under the run: `RuntimeError("session closed")`
-    /// (`AgentSession._aclose_impl`).
-    Closed,
+    /// The reply ended on a framework outcome, as `agent.run()` raises it.
+    Failed(lk_agents_abi::agent::run::RunError),
 }
 
-#[derive(Debug, Clone, PartialEq, lk_agents_abi::Vocabulary)]
-pub enum RunFailure {
-    /// The last owned speech failed; its `exception()` is the error.
-    Speech,
-    /// The last speech's reply ended on a framework outcome, as `agent.run()` raises it.
-    Run(lk_agents_abi::agent::run::RunError),
+/// Why a run settled without a result, as a text run's `Failed` update reads.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RunFailure {
+    pub error: lk_agents_abi::agent::run::RunError,
+    /// The provider failure the run's last speech ended on.
+    pub provider_error: Option<lk_agents_abi::errors::ProviderError>,
+    pub input_requirements: Vec<lk_agents_abi::agent::run::RunInputRequirement>,
 }
 
 /// One entry of a tool call's lifecycle (`ToolExecutionUpdatedEvent.update`).
@@ -367,7 +367,6 @@ pub enum SessionEvent {
         source: crate::agent::Source,
         /// Which of the host's two projections take it; the host decides nothing by item kind.
         visibility: crate::agent::Visibility,
-        run: Option<RunRef>,
     },
     /// The arriving agent took over the leaving agent's conversation. `items` were already
     /// announced under `from`; no new `ItemAdded`.
@@ -380,22 +379,14 @@ pub enum SessionEvent {
     RunStarted {
         run: RunRef,
     },
-    /// A tool of a speech the open run owns started: its call is the run's from now, not when the
-    /// call is committed (`speech_handle._item_added([fnc_call])`, agent_activity.py:3416).
-    RunItemAdded {
-        run: RunRef,
-        item: Box<lk_agents_abi::ChatItem>,
-    },
     /// `Command::Run` opened nothing; the host raises the reference's error for the cause.
     RunRefused {
         cause: RunRefusal,
         host: Option<lk_agents_abi::HostRef>,
     },
-    /// The run is over. `speech` is the last owned speech (`__last_speech_handle`).
+    /// The run is over: settled as a text run settles, or failed.
     RunSettled {
         run: RunRef,
-        input_requirements: Vec<lk_agents_abi::agent::run::RunInputRequirement>,
-        outcome: RunOutcome,
-        speech: Option<crate::agent_session::machine::activity::scheduling::SpeechId>,
+        result: Result<Box<lk_agents_abi::agent::run::RunSettled>, RunFailure>,
     },
 }

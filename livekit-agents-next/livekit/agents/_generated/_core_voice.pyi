@@ -33,7 +33,6 @@ from livekit.rtc import VideoFrame
 from .._core import SessionRecorder, Storage, VoiceAgent, _core_ContextActivation, _core_VoiceStore
 from ..types import NotGivenOr
 from .agent_nodes import NodeFrame
-from .agent_run import RunQuestion
 from .amd import AMDConfig, AmdConstants, AMDPredictionEvent
 from .avatar import AudioReceiverFrame, MediaFrame
 from .avatar_options import AvatarOptions
@@ -55,7 +54,7 @@ from .session_options import (
     UpdateKwargs,
 )
 from .session_owner import SessionJobInfo
-from .session_wire import DefaultModelPlan, ExceededTurnReply, VoiceRunOutput
+from .session_wire import DefaultModelPlan, ExceededTurnReply
 from .stream_info import StreamInfo
 from .stt import SpeechEvent
 from .telemetry import RecordingOptions, ReportJob, SessionReport, SpanContext
@@ -451,21 +450,6 @@ class RpcHandler:
 class _core_RoomRpcRouter:
     """Private room-adapter service; unrelated rooms never share mutable RPC routes."""
     def __new__(cls) -> Self: ...
-
-class _core_VoiceRun:
-    def __new__(cls) -> Self: ...
-    def record(self, item: ChatItem) -> None: ...
-    def settle(self, status: str, output: object | None, question: RunQuestion | None) -> None: ...
-    @property
-    def status(self) -> str: ...
-    @property
-    def output(self) -> VoiceRunOutput | None: ...
-    @property
-    def question(self) -> str | None: ...
-    @property
-    def verbatim(self) -> str | None: ...
-    @property
-    def items(self) -> list[ChatItem]: ...
 
 class SessionOptions:
     """`AgentSession(**kwargs)`'s options before the session holds them: the raw kwargs, read once,

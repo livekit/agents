@@ -95,8 +95,8 @@ read the session as of that event: the history ends with the items that event
 delivered and omits items added after it, and an `"agent_state_changed"`
 callback reads its own `new_state`, even when the callback reads them later.
 Anywhere else they are the latest the session's events have delivered. The items are the session's own objects: the item of a
-`"conversation_item_added"` event, a run's items and every later
-`session.history` are the same Python objects. Each read returns a new
+`"conversation_item_added"` event and every later `session.history` are the same Python
+objects. Each read returns a new
 `ChatContext`, so editing it does not change the session; use
 `update_agent(agent, chat_ctx=)` or `Agent.update_chat_ctx()` to supply a different history.
 

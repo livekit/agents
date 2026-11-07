@@ -8,6 +8,12 @@ from .run_events import (
     FunctionCallEvent as FunctionCallEvent,
     FunctionCallOutputEvent as FunctionCallOutputEvent,
 )
+from .run_result import (
+    RunCompleted as RunCompleted,
+    RunInputRequired as RunInputRequired,
+    RunNoOutput as RunNoOutput,
+    RunResult as RunResult,
+)
 from .run_stream_events import (
     ProgressEvent as ProgressEvent,
     TextDeltaEvent as TextDeltaEvent,
@@ -17,6 +23,10 @@ from .run_stream_events import (
 )
 
 __all__ = [
+    "RunCompleted",
+    "RunInputRequired",
+    "RunNoOutput",
+    "RunResult",
     "TextDeltaEvent",
     "TextEndEvent",
     "ToolCallEvent",

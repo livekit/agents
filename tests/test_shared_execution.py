@@ -138,10 +138,10 @@ async def _voice(agent: Agent[Any, Any], *messages: str, context: Any = None) ->
         for message in messages:
             result = await session._run(user_input=message)
         return Settled(
-            output=result.output,
+            output=result.output if result.status == "completed" else None,
             expect=result.expect,
             status=result.status,
-            question=result.question,
+            question=result.question if result.status == "input_required" else None,
             history=result.all_messages(),
         )
 

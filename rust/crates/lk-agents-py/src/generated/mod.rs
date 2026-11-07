@@ -192,7 +192,6 @@ pub trait Implementations: 'static {
     type TextStreamSender: ::lk_agents_abi::voice::rtc::ports::TextStreamSender;
     type RpcHandler: ::lk_agents_abi::voice::rtc::ports::RpcHandler;
     type RoomRpcRouter: ::lk_agents_abi::voice::rtc::ports::RoomRpcRouter;
-    type VoiceRun: ::lk_agents_abi::voice::run_view::VoiceRun;
     type SessionOptions: ::lk_agents_abi::voice::session::SessionOptions;
     type VoiceSession: ::lk_agents_abi::voice::session::VoiceSession<
             Options = Self::SessionOptions,
@@ -479,7 +478,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<voice::TextStreamSender>()?;
     m.add_class::<voice::RpcHandler>()?;
     m.add_class::<voice::CoreRoomRpcRouter>()?;
-    m.add_class::<voice::CoreVoiceRun>()?;
     m.add_class::<voice::SessionOptions>()?;
     m.add_class::<voice::VoiceSession>()?;
     m.add_function(wrap_pyfunction!(voice::default_session_models, m)?)?;

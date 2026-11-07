@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import contextvars
-import functools
 import inspect
 import weakref
 from collections.abc import AsyncIterator, Awaitable, Callable, Generator
@@ -16,14 +15,12 @@ from typing import (
     Generic,
     Literal,
     NoReturn,
-    NotRequired,
     TypeVar,
     cast,
     overload,
 )
 
 from pydantic import JsonValue as JsonValue
-from typing_extensions import TypeAliasType, TypedDict, TypeVar as TypeVarDefault, Unpack
 
 from .. import _core, llm
 from .._generated import agent_run as records, text_session as session_records
@@ -32,7 +29,6 @@ from .._generated.agent_run import (
     EventExpectationFunctionCall,
     EventExpectationFunctionCallOutput,
     EventExpectationMessage,
-    RunInputRequirement,
 )
 from .._generated.public_voice_run_result import *  # noqa: F403
 from .._generated.run_events import ChatMessageEvent, FunctionCallEvent, FunctionCallOutputEvent
@@ -43,112 +39,13 @@ from .._generated.run_stream_events import (
     ToolCallEvent,
     ToolResultEvent,
 )
-from .._generated.storage_turn import PendingCall
 from .._generated.usage import Usage
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
 
 if TYPE_CHECKING:
-    from .._generated.agent_run import RunQuestion
     from . import Agent
     from .agent_session import VoiceSession
-
-Output_T = TypeVarDefault("Output_T", default=Any)
-
-
-class _SettledArgs(TypedDict):
-    new_messages: list[llm.ChatItem]
-    all_messages: list[llm.ChatItem]
-    usage: Usage
-    verbatim: str | None
-    _pending_call: NotRequired[PendingCall | None]
-    input_requirements: NotRequired[list[RunInputRequirement]]
-
-
-class _Settled:
-    """What every branch of a settled invocation exposes: its history and usage."""
-
-    def __init__(
-        self,
-        *,
-        new_messages: list[llm.ChatItem],
-        all_messages: list[llm.ChatItem],
-        usage: Usage,
-        verbatim: str | None,
-        _pending_call: PendingCall | None = None,
-        input_requirements: list[RunInputRequirement] | None = None,
-    ) -> None:
-        self._new_messages = new_messages
-        self._all_messages = all_messages
-        self.usage = usage
-        """What this invocation consumed: an immutable, settled snapshot (usage.md)."""
-        self._pending_call = _pending_call
-        self.input_requirements = list(input_requirements or [])
-        """All correlated tool requests awaiting input, in model order. This metadata does not
-        select a presentation order or answer additional requests automatically."""
-        self.verbatim = verbatim
-        """The part of the answer, or of the question, that reached the person exactly as
-        written; ``None`` when nothing did (tools.md "Verbatim")."""
-
-    def new_messages(self) -> list[llm.ChatItem]:
-        """This invocation's input and everything it recorded, tool calls and results included."""
-        return list(self._new_messages)
-
-    def all_messages(self) -> list[llm.ChatItem]:
-        """The supplied history plus this invocation, without instructions: the next direct
-        run's ``message_history``."""
-        return list(self._all_messages)
-
-    @functools.cached_property
-    def expect(self) -> RunAssert:
-        """Assertions over this invocation's events, in order (testing.md)."""
-        return RunAssert(_events(self._new_messages))
-
-
-class RunCompleted(_Settled, Generic[Output_T]):
-    """``RunResult`` with ``status == "completed"``: ``output`` is the accepted value."""
-
-    status: Literal["completed"] = "completed"
-
-    def __init__(self, *, output: Output_T, **settled: Unpack[_SettledArgs]) -> None:
-        super().__init__(**settled)
-        self.output = output
-
-    def __repr__(self) -> str:
-        return f"RunCompleted(output={self.output!r})"
-
-
-class RunInputRequired(_Settled):
-    """``RunResult`` with ``status == "input_required"``: the invocation asks ``question``."""
-
-    status: Literal["input_required"] = "input_required"
-
-    def __init__(self, *, question: str, **settled: Unpack[_SettledArgs]) -> None:
-        super().__init__(**settled)
-        self.question = question
-
-    def __repr__(self) -> str:
-        return f"RunInputRequired(question={self.question!r})"
-
-
-class RunNoOutput(_Settled):
-    """``RunResult`` with ``status == "no_output"``: the turn ended without an output, on
-    ``StopResponse``, a tool result asking for no reply, a silent step or an interruption."""
-
-    status: Literal["no_output"] = "no_output"
-
-    def __repr__(self) -> str:
-        return "RunNoOutput()"
-
-
-RunResult = TypeAliasType(
-    "RunResult",
-    RunCompleted[Output_T] | RunInputRequired | RunNoOutput,
-    type_params=(Output_T,),
-)
-"""One agent invocation (agents.md "Running a turn"): narrow on ``status`` for ``output`` or
-``question``; every branch exposes ``new_messages()``, ``all_messages()`` and ``usage``."""
-
 
 RunEvent = ChatMessageEvent | FunctionCallEvent | FunctionCallOutputEvent
 
@@ -164,95 +61,6 @@ def _events(items: list[llm.ChatItem]) -> list[RunEvent]:
         elif item.type == "function_call_output":
             events.append(FunctionCallOutputEvent(item=item))
     return events
-
-
-class _VoiceRun:
-    """One reply on a call to typed text (the remote session's text input), recorded until it
-    settles. Once awaited it reads as a ``RunResult``: ``status`` is ``"completed"`` with
-    ``output``, or ``"input_required"`` with ``question``."""
-
-    def __init__(self, *, session: VoiceSession) -> None:
-        self._done_fut = asyncio.Future[None]()
-        self._session = session
-        self._core = _core._core_VoiceRun()
-        self.input_requirements: list[RunInputRequirement] = []
-
-    @property
-    def status(self) -> Literal["completed", "input_required"]:
-        """``"input_required"`` when the run ended on a question for the person."""
-        return cast(Literal["completed", "input_required"], self._core.status)
-
-    @property
-    def output(self) -> Any:
-        """The accepted output of a completed run: what a tool completed it with, else the last
-        reply's text. ``None`` when the run asks the person."""
-        return self._core.output
-
-    @property
-    def question(self) -> str | None:
-        """What an ``"input_required"`` run asks the person."""
-        return self._core.question
-
-    @property
-    def verbatim(self) -> str | None:
-        """The question, when it reaches the person exactly as written."""
-        return self._core.verbatim
-
-    @property
-    def _recorded_items(self) -> list[RunEvent]:
-        events: list[RunEvent] = []
-        for item in self._core.items:
-            if item.type == "message":
-                events.append(ChatMessageEvent(item=item))
-            elif item.type == "function_call":
-                events.append(FunctionCallEvent(item=item))
-            elif item.type == "function_call_output":
-                events.append(FunctionCallOutputEvent(item=item))
-        return events
-
-    def new_messages(self) -> list[llm.ChatItem]:
-        """What this run added to the history."""
-        return [event.item for event in self._recorded_items]
-
-    def all_messages(self) -> list[llm.ChatItem]:
-        """The history after the run, without the instructions."""
-        return list(self._session.history.items)
-
-    @functools.cached_property
-    def expect(self) -> RunAssert:
-        """Assertions over the events this run recorded, in order (testing.md)."""
-        return RunAssert(self._recorded_items)
-
-    def __await__(self) -> Generator[None, None, _VoiceRun]:
-        async def _await_impl() -> _VoiceRun:
-            await asyncio.shield(self._done_fut)
-            return self
-
-        return _await_impl().__await__()
-
-    def _item_added(self, item: llm.ChatItem) -> None:
-        self._core.record(item)
-
-    def _settle(
-        self,
-        *,
-        output: Any,
-        error: BaseException | None,
-        question: RunQuestion | None = None,
-        input_requirements: list[RunInputRequirement] | None = None,
-        status: str = "completed",
-    ) -> None:
-        """The core settled the run: ``output`` is what a tool completed it with, if any;
-        ``question`` what the run asks the person instead."""
-        if self._done_fut.done():
-            return
-        self.input_requirements = list(input_requirements or [])
-        self._core.settle(status, output, question)
-        if error is not None:
-            error.__dict__["input_requirements"] = list(self.input_requirements)
-            self._done_fut.set_exception(error)
-        else:
-            self._done_fut.set_result(None)
 
 
 EventType = Literal["message", "function_call", "function_call_output"]
@@ -738,6 +546,10 @@ class _Started(Generic[ResultT]):
 
 __all__ = [
     "ProgressEvent",
+    "RunCompleted",
+    "RunInputRequired",
+    "RunNoOutput",
+    "RunResult",
     "RunStream",
     "StreamEvent",
     "TextDeltaEvent",

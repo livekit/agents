@@ -357,6 +357,11 @@ impl SessionChatCtx {
         self.ids.contains(id)
     }
 
+    /// `session.history`: every item the history shows, in record order.
+    pub fn history(&self) -> impl Iterator<Item = &ChatItem> + Clone {
+        self.items.iter().filter(|c| c.visibility.history()).map(|c| &c.item)
+    }
+
     /// Every item of every agent, in record order.
     pub fn items(&self) -> impl Iterator<Item = &ChatItem> + Clone {
         self.items.iter().map(|c| &c.item)

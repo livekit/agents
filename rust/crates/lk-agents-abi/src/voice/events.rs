@@ -488,9 +488,6 @@ pub struct ItemAddedWire {
     /// Which agent's frame produced it, as the opaque id the host gave the core.
     pub agent: String,
     pub visibility: Visibility,
-    /// The open run's host object when an owned speech produced it or it is the handoff
-    /// record, else `None`.
-    pub run: Option<crate::HostRef>,
 }
 
 /// `function_tools_executed`, as the driver emits it; calls and outputs are parallel lists. The
@@ -534,22 +531,14 @@ pub struct DiagnosticWire {
     pub fields: BTreeMap<String, String>,
 }
 
-// The run: three host-only events `RunResult` is projected from; the call site fills each shape.
-
-/// `run_item_added`'s payload: an item that is the run's before it is committed (a started call).
-#[crate::host(record(module = "session_wire", emit))]
-#[derive(Debug, Clone)]
-pub struct RunItemAddedWire {
-    /// The host's object for the run (its `RunResult`).
-    pub run: Option<crate::HostRef>,
-    pub item: crate::ChatItem,
-}
+// The run: host-only events; the run settles as a text run's last update does.
 
 /// `run_started`'s payload.
 #[crate::host(record(module = "session_wire", emit))]
 #[derive(Debug, Clone)]
 pub struct RunStartedWire {
-    /// The host's object for the run (its run recorder); `None` when the host passed none.
+    /// The host's object for the run (the future its `_run()` awaits); `None` when the host
+    /// passed none.
     pub run: Option<crate::HostRef>,
 }
 
@@ -562,42 +551,36 @@ pub enum RunRefusal {
     Closing,
 }
 
-/// How a run ended, as `RunResult._settle` reads it.
-#[crate::host(wire_strs)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RunOutcomeKind {
-    Completed,
-    InputRequired,
-    Failed,
-    Closed,
-}
-
 /// `run_refused`'s payload.
 #[crate::host(record(module = "session_wire", emit))]
 #[derive(Debug, Clone)]
 pub struct RunRefusedWire {
-    /// The host's object for the refused run (its `RunResult`).
+    /// The host's object for the refused run (the future its `_run()` awaits).
     pub run: Option<crate::HostRef>,
     pub cause: RunRefusal,
 }
 
-/// `run_settled`'s payload: the outcome as `RunResult._settle` reads it.
+/// `run_finished`'s payload: the run settled with a result, as a text run's `Finished` update.
 #[crate::host(record(module = "session_wire", emit))]
 #[derive(Debug, Clone)]
-pub struct RunSettledWire {
+pub struct RunFinishedWire {
+    /// The host's object for the run (the future its `_run()` awaits).
+    pub run: Option<crate::HostRef>,
+    pub settled: crate::agent::run::RunSettled,
+}
+
+/// `run_failed`'s payload: the run settled without a result, as a text run's `Failed` update.
+#[crate::host(record(module = "session_wire", emit))]
+#[derive(Debug, Clone)]
+pub struct RunFailedWire {
+    /// The host's object for the run (the future its `_run()` awaits).
+    pub run: Option<crate::HostRef>,
+    pub error: crate::agent::run::RunError,
     #[host(default_factory = "list")]
     pub input_requirements: Vec<crate::agent::run::RunInputRequirement>,
-    /// The host's object for the run (its `RunResult`).
-    pub run: Option<crate::HostRef>,
-    pub outcome: RunOutcomeKind,
-    /// The output the run's last reply accepted, resolved; `None` otherwise.
-    pub final_output: Option<crate::HostRef>,
-    /// What an `"input_required"` run asks the person.
-    pub question: Option<crate::agent::run::RunQuestion>,
-    /// Why the run settled without a result, as `agent.run()` raises it (a tool's retries spent).
-    pub run_error: Option<crate::agent::run::RunError>,
-    /// The last owned speech's `_core.SpeechHandle`; `None` when the run owned none.
-    pub speech_handle: Option<std::sync::Arc<dyn crate::voice::speech_handle::Speech>>,
+    /// The provider failure the run's last speech ended on, raised as itself.
+    #[host(default = None)]
+    pub provider_error: Option<crate::errors::ProviderError>,
 }
 
 /// How a speech ended.
@@ -826,9 +809,9 @@ pub enum HostWire {
     ItemAdded(ItemAddedWire),
     ContextCarried(ContextCarriedWire),
     RunStarted(RunStartedWire),
-    RunItemAdded(RunItemAddedWire),
     RunRefused(RunRefusedWire),
-    RunSettled(RunSettledWire),
+    RunFinished(RunFinishedWire),
+    RunFailed(RunFailedWire),
     // A speech's handle learns its end natively (`SpeechHandle.wait_reported`).
     #[host(ignored)]
     SpeechDone(SpeechDoneWire),

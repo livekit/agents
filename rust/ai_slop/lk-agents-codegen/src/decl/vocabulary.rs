@@ -74,6 +74,7 @@
 //! | record | `record(.., path = "module")` | the public module its classes report as `__module__`; defaults to the file's `file(path = "..")` for a record of the file's module |
 //! | record struct | `record(.., constant(type = "x"))` | a model field at that fixed value (a discriminator its readers compare), never Rust state: read past, emitted by its default |
 //! | transparent unit variant | `host_type = "module.Name"` | read and emit that existing marker class; without it the unit crosses as `None` |
+//! | transparent tuple variant | `annotation = ".."` | the union member's annotation, when its value's own is not it (`RunCompleted[Output_T]` in a generic union) |
 //! | record enum | `record(.., transparent)` | every variant is one value crossing as itself (`str \| Message`, `Policy \| dict[str, Policy] \| None`), told apart by its class (a model class, a literal record's `str`, else its Python type; a `float` takes an `int`); one unit variant may cross as `None` (a field of the record then takes `default = None`): the model is a union alias, no class per variant |
 //! | record struct | `record(.., nested_in = "Owner")` | its model is a class nested in the record struct `Owner`'s model of the same module, named `Owner.Name` (`RealtimeModelMetrics.InputTokenDetails`) |
 //! | record enum | `record(.., transparent, dispatch = "session_dispatch")` | the host routes its members by model class through `_generated/<dispatch>.py` (`PUBLIC_EVENTS`, `IGNORED_EVENTS`, and `EventTypes` and `AgentEvent`: every public event) |
@@ -91,6 +92,9 @@
 //! | record field | `default_factory = "module.name"` | the model's default: that host callable, called at construction (`time.time`; a call with its arguments, `..utils.shortuuid("item_")`, `..` a module of the package; `.usage.TokenUsage` a record class of another generated module); with `skip`, Rust never sends it and the host stamps it, read back on extract |
 //! | record struct | `record(.., dataclass)` | a mutable, positional `@dataclass` (built by position, read with `dataclasses.asdict`), not a keyword-only one; a field without a default never follows a defaulted one |
 //! | record struct | `record(.., dataclass, post_init = "hook")` | its `__post_init__` calls `_bindings.hook(self)`: a host-side normalisation of what was given |
+//! | record struct | `record(.., dataclass, base = "Name")` | the model subclasses the dataclass record `Name` of the same module, inheriting its fields and members; model-only, as its Rust struct holds none of the base's fields |
+//! | record | `record(.., generic = "T")` | the model is generic over `T`, which its module declares as a `TypeVar` defaulting to `Any` and a field's `annotation` names: a dataclass subclasses `Generic[T]`, a transparent union is `TypeAliasType("Name", A[T] \| B, type_params=(T,))` (a member's `annotation = "A[T]"`) |
+//! | record | `#[python(property(.., hook = "fn", cached))]` | computed once per instance (`functools.cached_property`): a view keeping state across reads (an assertion cursor); the record is an unslotted dataclass |
 //! | record field | `rename = "type"` | the Python attribute, when the Rust name cannot be it |
 //! | record struct | `record(.., pydantic, constants_after = "id")` | the constants follow that field instead of leading the model's fields |
 //! | record struct | `record(.., pydantic, private(_name = "annotation"))` | a host-only `PrivateAttr` no Rust field holds, defaulting to an empty value of its container |

@@ -111,6 +111,18 @@ pub fn python(decls: &Declarations) -> Result<Vec<Out>, String> {
         let mut runtime = Imports::default();
         let mut typing = Imports::new(decls);
         let mut body = String::new();
+        // A generic model's type variable, declared before the classes naming it.
+        let mut generics: Vec<&str> = Vec::new();
+        for generic in records.iter().filter_map(|r| r.generic.as_deref()) {
+            if !generics.contains(&generic) {
+                generics.push(generic);
+            }
+        }
+        for generic in generics {
+            runtime.add("typing", "Any");
+            runtime.add("typing_extensions", "TypeVar");
+            body.push_str(&format!("\n\n{generic} = TypeVar({generic:?}, default=Any)\n"));
+        }
         let own: Vec<String> = records
             .iter()
             .flat_map(|r| match &r.body {
@@ -179,6 +191,9 @@ pub fn python(decls: &Declarations) -> Result<Vec<Out>, String> {
         for imports in [&mut runtime, &mut typing] {
             imports.remove_module(&format!(".{module}"));
             imports.remove_module(&format!("{PACKAGE}.{module}"));
+        }
+        for (module, name) in runtime.entries().to_vec() {
+            typing.remove(&module, &name);
         }
         let typing = typing.render(&[]);
         if !typing.is_empty() {
@@ -473,7 +488,18 @@ fn model(
                 } else {
                     format!("({})", options.join(", "))
                 };
-                format!("\n\n@dataclass{options}\nclass {name}:\n")
+                let bases: Vec<String> = dataclass
+                    .base
+                    .iter()
+                    .cloned()
+                    .chain(r.generic.iter().map(|t| format!("Generic[{t}]")))
+                    .collect();
+                let bases = if bases.is_empty() {
+                    String::new()
+                } else {
+                    format!("({})", bases.join(", "))
+                };
+                format!("\n\n@dataclass{options}\nclass {name}{bases}:\n")
             }
             None if r.hashable => {
                 format!("\n\n@dataclass(frozen=True, kw_only=True, slots=True)\nclass {name}:\n")
@@ -678,11 +704,14 @@ fn model(
                     "\n    def __repr__(self) -> str:\n        return _bindings.{repr}(self)\n"
                 ));
             }
-            s.push_str(&properties(r, runtime));
+            s.push_str(&properties(r, runtime, typing));
             s
         }
         RecordBody::Struct(fields) => {
             runtime.add("dataclasses", "dataclass");
+            if r.generic.is_some() {
+                runtime.add("typing", "Generic");
+            }
             // A mutable dataclass's annotations resolve at runtime (`typing.get_type_hints`), as a
             // pydantic model's do; a frozen record's are for the type checker only.
             let imports = if r.dataclass.as_ref().is_some_and(|d| !d.deferred) {
@@ -712,6 +741,13 @@ fn model(
             if !r.constants.is_empty() {
                 runtime.add("typing", "Literal");
                 s = s.replace("    pass\n", "");
+                // A class docstring is set apart from the constants that follow it.
+                if !r.doc.is_empty()
+                    && s.ends_with("\"\"\"\n")
+                    && !fields.iter().any(|f| f.modeled())
+                {
+                    s.push('\n');
+                }
             }
             s.push_str(&constants);
             if let Some(hook) = r.dataclass.as_ref().and_then(|d| d.post_init.as_deref()) {
@@ -731,7 +767,7 @@ fn model(
                     ));
                 }
             }
-            s.push_str(&properties(r, runtime));
+            s.push_str(&properties(r, runtime, typing));
             if r.persisted {
                 let (persist, restore) = r.persistence();
                 s.push_str(&format!(
@@ -742,7 +778,9 @@ fn model(
             s
         }
         RecordBody::Variants(variants) if r.transparent => {
-            runtime.add("typing", "TypeAlias");
+            if r.generic.is_none() {
+                runtime.add("typing", "TypeAlias");
+            }
             let members: Vec<String> = variants
                 .iter()
                 .filter_map(|v| match &v.shape {
@@ -752,6 +790,9 @@ fn model(
                             runtime.add(host_module, name);
                         }
                         Some(name.clone())
+                    }
+                    VariantShape::Tuple(Some(f)) if let Some(text) = &f.annotation => {
+                        Some(runtime.annotation(text, &r.rust))
                     }
                     VariantShape::Tuple(Some(f)) => {
                         Some(annotation(&f.ty, module, own, false, runtime))
@@ -779,6 +820,14 @@ fn model(
                     runtime.add("pydantic", "Field");
                     format!(
                         "{}: TypeAlias = Annotated[\n    {},\n    Field(discriminator={key:?}),\n]",
+                        r.name,
+                        members.join(" | ")
+                    )
+                }
+                None if let Some(t) = &r.generic => {
+                    runtime.add("typing_extensions", "TypeAliasType");
+                    format!(
+                        "{0} = TypeAliasType(\n    {0:?},\n    {1},\n    type_params=({t},),\n)",
                         r.name,
                         members.join(" | ")
                     )
@@ -840,21 +889,26 @@ fn model(
 }
 
 /// A record's computed views, answered by `_core`; a pydantic model's are host hooks
-/// (`_bindings`), properties or methods, run on the host's own object without crossing.
-fn properties(r: &RecordDecl, runtime: &mut Imports) -> String {
+/// (`_bindings`), properties or methods, run on the host's own object without crossing. Their
+/// annotations are the type checker's, except a toggle's class, which it tests at run time.
+fn properties(r: &RecordDecl, runtime: &mut Imports, typing: &mut Imports) -> String {
     let mut s = String::new();
     for member in &r.members {
-        if member.is_property {
+        if member.cached {
+            runtime.add_module("functools");
+            s.push_str("\n    @functools.cached_property\n");
+        } else if member.is_property {
             s.push_str("\n    @property\n");
         } else {
             s.push('\n');
         }
+        let imports = if member.toggle.is_some() { &mut *runtime } else { &mut *typing };
         let params = if member.args.is_empty() {
             String::new()
         } else {
-            format!(", {}", runtime.annotation(&member.args, &r.rust))
+            format!(", {}", imports.annotation(&member.args, &r.rust))
         };
-        let ret = runtime.annotation(&member.ret, &r.rust);
+        let ret = imports.annotation(&member.ret, &r.rust);
         s.push_str(&format!("    def {}(self{params}) -> {ret}:\n", member.name));
         s.push_str(&docstring(
             &member.doc.lines().map(str::to_owned).collect::<Vec<_>>(),

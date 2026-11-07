@@ -26,9 +26,9 @@ from .._generated.session_wire import (
     ItemAddedWire,
     MetricsCollectedWire,
     OverlappingSpeechWire,
-    RunItemAddedWire,
+    RunFailedWire,
+    RunFinishedWire,
     RunRefusedWire,
-    RunSettledWire,
     SessionErrorWire,
     SpeechCreatedWire,
     TextInputWire,
@@ -71,9 +71,9 @@ from .events import (
 )
 from .io import SpeechHandle
 from .room_io import AudioProcessingError, TextInputEvent
-from .run_result import _VoiceRun
 
 if TYPE_CHECKING:
+    from .._generated.agent_run import RunSettled
     from .agent_session import UserTurnExceededHook, VoiceSession
 
 
@@ -406,43 +406,29 @@ def _on_speech_created(self: VoiceSession[Any], wire: SpeechCreatedWire) -> None
 
 
 def _on_item_added(self: VoiceSession[Any], wire: ItemAddedWire) -> None:
-    # the history's own object: the event, the run and `session.history` share it
+    # the history's own object: the event and `session.history` share it
     if (item := wire.host_item) is None:
         return
-    if (run := _wire_run(wire.run)) is not None and item.type != "agent_handoff":
-        run._item_added(item)
     if item.type in ("message", "agent_handoff"):
         self.emit("conversation_item_added", ConversationItemAddedEvent(item=item))
 
 
-def _on_run_item(self: VoiceSession[Any], wire: RunItemAddedWire) -> None:
-    if (run := _wire_run(wire.run)) is not None:
-        run._item_added(wire.item)
-
-
 def _on_run_refused(self: VoiceSession[Any], wire: RunRefusedWire) -> None:
-    if (run := _wire_run(wire.run)) is not None:
-        run._settle(output=None, error=RuntimeError(f"run refused: {wire.cause}"))
+    if (run := _wire_run(wire.run)) is not None and not run.done():
+        run.set_exception(RuntimeError(f"run refused: {wire.cause}"))
 
 
-def _on_run_settled(self: VoiceSession[Any], wire: RunSettledWire) -> None:
-    if (run := _wire_run(wire.run)) is None:
+def _on_run_finished(self: VoiceSession[Any], wire: RunFinishedWire) -> None:
+    if (run := _wire_run(wire.run)) is not None and not run.done():
+        run.set_result(wire.settled)
+
+
+def _on_run_failed(self: VoiceSession[Any], wire: RunFailedWire) -> None:
+    if (run := _wire_run(wire.run)) is None or run.done():
         return
-    error: BaseException | None = None
-    if (failure := wire.run_error) is not None:
-        error = run_error(failure)
-    speech = cast("_core.SpeechHandle | None", wire.speech_handle)
-    if wire.outcome == "failed" and error is None and speech is not None:
-        error = speech.exception()
-    if wire.outcome == "closed":
-        error = RuntimeError("the session closed before the run settled")
-    run._settle(
-        status=wire.outcome,
-        output=wire.final_output,
-        error=error,
-        question=wire.question,
-        input_requirements=list(wire.input_requirements),
-    )
+    error = wire.provider_error or run_error(wire.error)
+    error.__dict__["input_requirements"] = list(wire.input_requirements)
+    run.set_exception(error)
 
 
 def _on_tool_update(self: VoiceSession[Any], wire: ToolExecutionUpdatedWire) -> None:
@@ -554,18 +540,18 @@ _ERROR_RECORDS: dict[str, tuple[Any, str]] = {
 }
 
 
-def _wire_run(run: object | None) -> _VoiceRun | None:
-    """A wire's run: the `_VoiceRun` the host handed the core."""
-    return cast("_VoiceRun | None", run)
+def _wire_run(run: object | None) -> asyncio.Future[RunSettled] | None:
+    """A wire's run: the future `VoiceSession._run()` handed the core."""
+    return cast("asyncio.Future[RunSettled] | None", run)
 
 
 # The `HostWire` members with host behaviour, by record class.
 _HANDLERS: dict[type, Callable[[VoiceSession[Any], Any], None]] = {
     SpeechCreatedWire: _on_speech_created,
     ItemAddedWire: _on_item_added,
-    RunItemAddedWire: _on_run_item,
     RunRefusedWire: _on_run_refused,
-    RunSettledWire: _on_run_settled,
+    RunFinishedWire: _on_run_finished,
+    RunFailedWire: _on_run_failed,
     ToolExecutionUpdatedWire: _on_tool_update,
     MetricsCollectedWire: _on_metrics,
     OverlappingSpeechWire: _on_overlapping_speech,

@@ -453,7 +453,7 @@ class Agent(Generic[Context_T, Output_T]):
 
             def settle(finished: RunSettled | None) -> RunResult[Output_T]:
                 assert finished is not None
-                result = settled_result(run, finished)
+                result = settled_result(finished, run.hooks)
                 if run.hooks is not None and run.hooks.on_result is not None:
                     run.hooks.on_result(result)
                 return result

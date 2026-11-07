@@ -308,7 +308,12 @@ impl VoiceDriver {
                 _ => None,
             });
             match started {
-                Some(request) => self.session.usage.finish_measured(request, metrics),
+                Some(request) => {
+                    self.session.usage.finish_measured(request, metrics);
+                    if let Some(usage) = self.session.runs.usage() {
+                        usage.finish_measured(request, metrics);
+                    }
+                }
                 None => self.session.usage.observe(metrics),
             }
         }
@@ -400,7 +405,6 @@ impl VoiceDriver {
             | SessionEvent::FloorChanged { .. }
             | SessionEvent::AmdResult { .. }
             | SessionEvent::RunStarted { .. }
-            | SessionEvent::RunItemAdded { .. }
             | SessionEvent::RunRefused { .. }
             | SessionEvent::RunSettled { .. }
             | SessionEvent::ContextCarried { .. }

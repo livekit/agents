@@ -11,7 +11,7 @@ import inspect
 import uuid
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Generic, get_type_hints
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, get_type_hints
 
 from pydantic import TypeAdapter, ValidationError
 from pydantic_core import PydanticSerializationError, to_jsonable_python
@@ -42,6 +42,7 @@ from .._generated.agent_run import (
     RunErrorModel,
     RunErrorNoModel,
     RunErrorOutputRetriesExceeded,
+    RunErrorSessionClosed,
     RunErrorToolRetriesExceeded,
     RunOutcomeCompleted,
     RunOutcomeInputRequired,
@@ -60,6 +61,7 @@ from .._generated.agent_run import (
     ValidatedOutputFailed,
     ValidatedOutputRetry,
 )
+from .._generated.run_result import Output_T
 from .._generated.text_session import FrameId
 from .._generated.tool_report import (
     ToolOutcomeCancelled,
@@ -105,12 +107,10 @@ from . import _BindingContextVar, _VoiceBinding
 from .events import Context_T, RunContext
 from .io import SpeechHandle
 from .run_result import (
-    Output_T,
     RunCompleted,
     RunInputRequired,
     RunNoOutput,
     RunResult,
-    _SettledArgs,
     _tool_body,
 )
 
@@ -160,6 +160,7 @@ def door_hooks() -> RunHooks | None:
 
 
 _HooksToken = tuple[contextvars.Token[RunHooks | None], contextvars.Token[Any]]
+_R = TypeVar("_R")
 
 
 def set_run_hooks(hooks: RunHooks | None) -> _HooksToken:
@@ -333,29 +334,33 @@ async def start_run(
     return run
 
 
-def settled_result(run: _TextRun[Any], settled: RunSettled) -> RunResult[Any]:
-    """The settled invocation as the caller's ``RunResult``."""
+def settled_result(settled: RunSettled, hooks: RunHooks | None) -> RunResult[Any]:
+    """The settled invocation as the caller's ``RunResult``, a text run's or a voice run's."""
 
     result = settled.result
-    if result.interrupted and run.hooks is not None:
-        run.hooks.interrupted = True
-    common: _SettledArgs = {
-        "new_messages": list(result.new_messages),
-        "all_messages": list(result.all_messages),
-        "usage": result.usage,
-        "verbatim": result.verbatim,
-        "_pending_call": result.pending_call,
-        "input_requirements": list(result.input_requirements),
-    }
+    if result.interrupted and hooks is not None:
+        hooks.interrupted = True
+
+    def branch(cls: Callable[..., _R], **own: Any) -> _R:
+        return cls(
+            _new_messages=list(result.new_messages),
+            _all_messages=list(result.all_messages),
+            usage=result.usage,
+            verbatim=result.verbatim,
+            _pending_call=result.pending_call,
+            input_requirements=list(result.input_requirements),
+            **own,
+        )
+
     match result.outcome:
         case RunOutcomeInputRequired(question=RunQuestion(question=question)):
-            return RunInputRequired(question=question, **common)
+            return branch(RunInputRequired, question=question)
         case RunOutcomeCompleted(output=OutputText(text=text)):
-            return RunCompleted(output=text, **common)
+            return branch(RunCompleted, output=text)
         case RunOutcomeCompleted(output=OutputValidated()):
-            return RunCompleted(output=settled.output, **common)
+            return branch(RunCompleted, output=settled.output)
         case RunOutcomeNoOutput():
-            return RunNoOutput(**common)
+            return branch(RunNoOutput)
     raise AssertionError(f"unsupported run outcome: {result.outcome!r}")
 
 
@@ -378,6 +383,8 @@ def run_error(error: RunError) -> BaseException:
             return RuntimeError(message)
         case RunErrorNoModel():
             return RuntimeError("the agent has no model")
+        case RunErrorSessionClosed():
+            return RuntimeError("the session closed before the run settled")
 
 
 def tool_infos(tools: ToolContext) -> list[FunctionToolInfo]:

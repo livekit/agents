@@ -646,14 +646,15 @@ impl VoiceDriver {
             let (entry, _) = self.session.chat_ctx.commit(item, source, visibility, &agent);
             replaced = true;
             if entry.visibility.history() {
-                let run = self.run_of_item(&entry.source);
+                if self.run_owns_item(&entry.source) {
+                    self.session.runs.record(&entry.item);
+                }
                 self.item_turn(&entry.item, &entry.source);
                 self.publish_event(crate::events::SessionEvent::ConversationItemAdded {
                     item: Box::new(entry.item),
                     agent: entry.agent,
                     source: entry.source,
                     visibility: entry.visibility,
-                    run,
                 });
             }
         }
@@ -686,14 +687,15 @@ impl VoiceDriver {
                 {
                     self.answer_pending_input(&m.text_content().unwrap_or_default());
                 }
-                let run = self.run_of_item(&entry.source);
+                if self.run_owns_item(&entry.source) {
+                    self.session.runs.record(&entry.item);
+                }
                 self.item_turn(&entry.item, &entry.source);
                 self.publish_event(crate::events::SessionEvent::ConversationItemAdded {
                     item: Box::new(entry.item),
                     agent: entry.agent,
                     source: entry.source,
                     visibility: entry.visibility,
-                    run,
                 });
             }
             CommitOutcome::Added | CommitOutcome::Replaced | CommitOutcome::Filtered => {}

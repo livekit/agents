@@ -370,7 +370,6 @@ are proposed here.
 | `src/voice/rtc/media.rs` | 48 | Keep | Distinct room/RTC capability or port contract, kept visible at the runtime/fake boundary. |
 | `src/voice/rtc/playout.rs` | 18 | Conditional | `src/voice/rtc/media.rs`. The 18-line playout ledger and 48-line source/synchronizer contracts can form one RTC media-source category (~66 lines). Optional: ledger is a distinct capability and its existing direct module path is also defensible. |
 | `src/voice/rtc/ports.rs` | 100 | Keep | Distinct room/RTC capability or port contract, kept visible at the runtime/fake boundary. |
-| `src/voice/run_view.rs` | 31 | Keep | Named voice boundary with its own owner or host API (session, room, avatar, console, workflow, run view); small size is not evidence to merge it into session. |
 | `src/voice/session_owner.rs` | 149 | Keep | Named voice boundary with its own owner or host API (session, room, avatar, console, workflow, run view); small size is not evidence to merge it into session. |
 | `src/voice/session_storage.rs` | 44 | Keep | Named voice boundary with its own owner or host API (session, room, avatar, console, workflow, run view); small size is not evidence to merge it into session. |
 | `src/voice/speech.rs` | 21 | Conditional | `src/voice/speech_handle.rs`. Speech priorities and default modality are read by the SpeechHandle boundary; colocate (~147 lines), but preserve speech_defaults generated-module metadata. Verify codegen file metadata before implementing. |

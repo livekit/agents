@@ -245,7 +245,6 @@ fn reply(interrupted: bool, llm: Option<MetricsMetadata>) -> Step {
         agent: "agent".into(),
         source: Source::Reply { speech: SpeechId(3), step: 1 },
         visibility: lk_agents_voice::agent::Visibility::Both,
-        run: None,
     })
 }
 

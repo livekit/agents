@@ -555,13 +555,14 @@ impl VoiceDriver {
 
     /// `_on_generation_created`: a request's answer, or a server-initiated turn.
     fn on_generation_created(&mut self, now: Ts, response_id: String, req_id: Option<String>) {
+        let pending = req_id.as_deref().map(|id| self.take_pending(id));
         // Every response the server created is a request, the discarded ones included.
         if let Some(rt) = self.activity.realtime() {
             let (provider, model) = (rt.provider.provider.clone(), rt.provider.model.clone());
-            let request = self.session.start_request(ModelKind::Llm, &provider, &model);
+            let speech = pending.as_ref().and_then(|p| p.as_ref()).and_then(|p| p.speech);
+            let request = self.start_request(speech, ModelKind::Llm, &provider, &model);
             self.session.realtime_requests.insert(response_id.clone(), request);
         }
-        let pending = req_id.as_deref().map(|id| self.take_pending(id));
         // The speech announced for it is over: nothing plays the answer.
         let Some(rt) = self.activity.realtime_activity_mut() else { return };
         let players = &rt.players;

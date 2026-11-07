@@ -219,7 +219,6 @@ fn emitted(item: ChatItem, step: u32) -> Step {
         agent: "agent".into(),
         source: lk_agents_voice::agent::Source::ToolOutput { speech: SpeechId(1), step },
         visibility: lk_agents_voice::agent::Visibility::Both,
-        run: None,
     })
 }
 
@@ -271,7 +270,6 @@ fn said(text: &str) -> Step {
         agent: "agent".into(),
         source: lk_agents_voice::agent::Source::UserTyped,
         visibility: lk_agents_voice::agent::Visibility::Both,
-        run: None,
     })
 }
 

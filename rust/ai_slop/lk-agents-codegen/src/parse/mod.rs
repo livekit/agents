@@ -65,7 +65,7 @@ pub fn members(attrs: &[syn::Attribute], outer: &str, owner: &str) -> Result<Vec
         voc::only(
             owner,
             keys,
-            &["name", "args", "ret", "doc", "hook", "getter", "core", "toggle", "opt_in"],
+            &["name", "args", "ret", "doc", "hook", "getter", "core", "toggle", "opt_in", "cached"],
         )?;
         let name = required(owner, keys, "name")?;
         let getter = voc::text(owner, keys, "getter")?;
@@ -96,6 +96,12 @@ pub fn members(attrs: &[syn::Attribute], outer: &str, owner: &str) -> Result<Vec
             ));
         }
         let toggle = toggle.map(|field| (field, voc::find(keys, "opt_in").is_some()));
+        let cached = voc::find(keys, "cached").is_some();
+        if cached && (entry.key != "property" || getter.is_some()) {
+            return Err(format!(
+                "{owner}.{name}: cached is a computed property's, not a method's or a getter's"
+            ));
+        }
         let args = voc::text(owner, keys, "args")?.unwrap_or_default();
         out.push(Member {
             hook: voc::text(owner, keys, "hook")?
@@ -109,6 +115,7 @@ pub fn members(attrs: &[syn::Attribute], outer: &str, owner: &str) -> Result<Vec
             getter,
             core,
             toggle,
+            cached,
         });
     }
     Ok(out)

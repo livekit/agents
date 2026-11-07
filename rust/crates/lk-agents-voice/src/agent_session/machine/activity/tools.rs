@@ -166,11 +166,8 @@ impl VoiceDriver {
         }
         // The call is the run's once it starts, whichever run is open when it is committed: one
         // answered without running (an unknown tool) too, as its output is.
-        if let Some(run) = self.session.runs.current()
-            && self.run_contains_speech(speech)
-        {
-            let item = Box::new(lk_agents_abi::ChatItem::FunctionCall(call.clone()));
-            self.publish_event(SessionEvent::RunItemAdded { run, item });
+        if self.run_contains_speech(speech) {
+            self.session.runs.record(&lk_agents_abi::ChatItem::FunctionCall(call.clone()));
         }
         let running = hosted.clone()?;
         let closing = self.session.closing_past_edge();

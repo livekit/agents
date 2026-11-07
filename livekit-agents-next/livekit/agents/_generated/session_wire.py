@@ -29,8 +29,8 @@ if TYPE_CHECKING:
     from livekit.agents.llm import ChatItem
     from livekit.agents.llm.tool_context import ToolChoice
 
-    from .agent_run import RunError, RunInputRequirement, RunQuestion
-    from .chat_items import ChatItem, FunctionCall
+    from .agent_run import RunError, RunInputRequirement, RunSettled
+    from .chat_items import FunctionCall
     from .events import CloseReason
     from .metrics import AgentMetrics
     from .overlap import OverlappingSpeechEvent
@@ -41,7 +41,6 @@ if TYPE_CHECKING:
 # Record declarations:
 #     rust/crates/lk-agents-abi/src/voice/events.rs
 #     rust/crates/lk-agents-abi/src/voice/room_io.rs
-#     rust/crates/lk-agents-abi/src/voice/run_view.rs
 
 
 @dataclass(kw_only=True, slots=True)
@@ -124,10 +123,6 @@ class ItemAddedWire:
     agent: str
     """Which agent's frame produced it, as the opaque id the host gave the core."""
     visibility: Literal["model", "history", "both"]
-    run: object | None
-    """The open run's host object when an owned speech produced it or it is the handoff
-    record, else `None`.
-    """
 
 
 @dataclass(kw_only=True, slots=True)
@@ -150,20 +145,13 @@ class DiagnosticWire:
 
 
 @dataclass(kw_only=True, slots=True)
-class RunItemAddedWire:
-    """`run_item_added`'s payload: an item that is the run's before it is committed (a started call)."""
-
-    run: object | None
-    """The host's object for the run (its `RunResult`)."""
-    item: ChatItem
-
-
-@dataclass(kw_only=True, slots=True)
 class RunStartedWire:
     """`run_started`'s payload."""
 
     run: object | None
-    """The host's object for the run (its run recorder); `None` when the host passed none."""
+    """The host's object for the run (the future its `_run()` awaits); `None` when the host
+    passed none.
+    """
 
 
 @dataclass(kw_only=True, slots=True)
@@ -171,26 +159,29 @@ class RunRefusedWire:
     """`run_refused`'s payload."""
 
     run: object | None
-    """The host's object for the refused run (its `RunResult`)."""
+    """The host's object for the refused run (the future its `_run()` awaits)."""
     cause: Literal["nested", "closing"]
 
 
 @dataclass(kw_only=True, slots=True)
-class RunSettledWire:
-    """`run_settled`'s payload: the outcome as `RunResult._settle` reads it."""
+class RunFinishedWire:
+    """`run_finished`'s payload: the run settled with a result, as a text run's `Finished` update."""
 
-    input_requirements: list[RunInputRequirement] = field(default_factory=list)
     run: object | None
-    """The host's object for the run (its `RunResult`)."""
-    outcome: Literal["completed", "input_required", "failed", "closed"]
-    final_output: object | None
-    """The output the run's last reply accepted, resolved; `None` otherwise."""
-    question: RunQuestion | None
-    """What an `"input_required"` run asks the person."""
-    run_error: RunError | None
-    """Why the run settled without a result, as `agent.run()` raises it (a tool's retries spent)."""
-    speech_handle: SpeechHandle | None
-    """The last owned speech's `_core.SpeechHandle`; `None` when the run owned none."""
+    """The host's object for the run (the future its `_run()` awaits)."""
+    settled: RunSettled
+
+
+@dataclass(kw_only=True, slots=True)
+class RunFailedWire:
+    """`run_failed`'s payload: the run settled without a result, as a text run's `Failed` update."""
+
+    run: object | None
+    """The host's object for the run (the future its `_run()` awaits)."""
+    error: RunError
+    input_requirements: list[RunInputRequirement] = field(default_factory=list)
+    provider_error: BaseException | None = None
+    """The provider failure the run's last speech ended on, raised as itself."""
 
 
 @dataclass(kw_only=True, slots=True)
@@ -343,9 +334,9 @@ HostWire: TypeAlias = (
     | ItemAddedWire
     | ContextCarriedWire
     | RunStartedWire
-    | RunItemAddedWire
     | RunRefusedWire
-    | RunSettledWire
+    | RunFinishedWire
+    | RunFailedWire
     | SpeechDoneWire
     | FloorChangedWire
     | CloseWire
@@ -365,9 +356,6 @@ dropped, both via `_generated/session_dispatch.py`; the rest have host behaviour
 `#[host(emits = "Model")]` names the public event that behaviour emits, so the generated
 `EventTypes` and `AgentEvent` list every public session event.
 """
-
-
-VoiceRunOutput: TypeAlias = str | object
 
 
 DEFAULT_HOOK_BOUND: Final = 15.0

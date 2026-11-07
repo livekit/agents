@@ -810,8 +810,6 @@ def test_generated_grant_preserves_sequence_authoring_and_frozen_public_identity
 
 
 def test_settled_run_preserves_every_correlated_input_requirement() -> None:
-    from types import SimpleNamespace
-
     from livekit.agents._generated.agent_run import (
         RunInputRequirement,
         RunOutcomeNoOutput,
@@ -841,7 +839,7 @@ def test_settled_run_preserves_every_correlated_input_requirement() -> None:
         pending_call=None,
         input_requirements=requirements,
     )
-    result = settled_result(SimpleNamespace(hooks=None), RunSettled(result=native, output=None))
+    result = settled_result(RunSettled(result=native, output=None), None)
     assert result.status == "no_output"
     assert result.input_requirements == requirements
     assert result.input_requirements is not requirements
@@ -851,16 +849,22 @@ def test_settled_run_preserves_every_correlated_input_requirement() -> None:
     ]
 
 
-@pytest.mark.parametrize("cancelled", [False, True])
-async def test_voice_failure_keeps_input_requirements_on_the_original_exception(
-    cancelled: bool,
+@pytest.mark.parametrize("provider", [False, True])
+async def test_voice_failure_keeps_input_requirements_on_the_raised_exception(
+    provider: bool,
 ) -> None:
     import asyncio
     from types import SimpleNamespace
 
-    from livekit.agents._generated.agent_run import RunInputRequirement
+    from livekit.agents import APIError
+    from livekit.agents._generated.agent_run import (
+        RunErrorModel,
+        RunErrorSessionClosed,
+        RunInputRequirement,
+    )
+    from livekit.agents._generated.session_wire import RunFailedWire
     from livekit.agents._generated.storage_turn import PendingCall
-    from livekit.agents.voice.run_result import _VoiceRun
+    from livekit.agents.voice._session_callbacks import _on_run_failed
 
     requirements = [
         RunInputRequirement(
@@ -870,21 +874,22 @@ async def test_voice_failure_keeps_input_requirements_on_the_original_exception(
             verbatim=True,
         )
     ]
-    error = asyncio.CancelledError("cancelled") if cancelled else RuntimeError("retry failed")
-    run = _VoiceRun(session=SimpleNamespace())
-    run._settle(
-        output=None,
-        error=error,
-        status="failed",
+    run: asyncio.Future[object] = asyncio.get_running_loop().create_future()
+    original = APIError("tts failed") if provider else None
+    failed = RunFailedWire(
+        run=run,
+        error=RunErrorModel(message="tts failed"),
         input_requirements=requirements,
+        provider_error=original,
     )
-    with pytest.raises(type(error)) as raised:
+    _on_run_failed(SimpleNamespace(), failed)  # type: ignore[arg-type]
+    with pytest.raises(APIError) as raised:
         await run
-    assert raised.value is error
-    assert error.__dict__["input_requirements"] == requirements
-    assert error.__dict__["input_requirements"] is not requirements
-    assert run.input_requirements == requirements
+    if original is not None:
+        assert raised.value is original
+    assert raised.value.__dict__["input_requirements"] == requirements
+    assert raised.value.__dict__["input_requirements"] is not requirements
 
-    run._settle(output=None, error=RuntimeError("late failure"), input_requirements=[])
-    assert error.__dict__["input_requirements"] == requirements
-    assert run.input_requirements == requirements
+    late = RunFailedWire(run=run, error=RunErrorSessionClosed(), input_requirements=[])
+    _on_run_failed(SimpleNamespace(), late)  # type: ignore[arg-type]
+    assert raised.value.__dict__["input_requirements"] == requirements

@@ -57,7 +57,6 @@ fn call(arguments: &str) -> Recording {
             agent: "agent".into(),
             source: lk_agents_voice::agent::Source::ToolCall { speech: SpeechId(1), step: 1 },
             visibility: lk_agents_voice::agent::Visibility::Both,
-            run: None,
         }))
         .done()
 }

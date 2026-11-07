@@ -12,9 +12,10 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from inspect import get_annotations
-from typing import Literal, TypeAlias
+from typing import TYPE_CHECKING, Literal, TypeAlias
 
-from .storage_class import ThreadInfo
+if TYPE_CHECKING:
+    from .storage_class import ThreadInfo
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)

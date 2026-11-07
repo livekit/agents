@@ -7,7 +7,7 @@ use crate::agent::Source;
 use crate::agent_session::effects::VoiceEffect;
 use crate::agent_session::machine::activity::scheduling::SpeechId;
 use crate::agent_session::{Answer, RequestId, VoiceDriver};
-use crate::events::{RunFailure, RunOutcome as VoiceRunOutcome, SessionEvent};
+use crate::events::RunOutcome as VoiceRunOutcome;
 use crate::generation::{PlanSpec, PlannedReply};
 use crate::tool_executor::{
     APPROVAL_KEY, AgentFrame, CallId, HostedTool, NextReply, Rendering, StepEnd, StepNext, ToolGo,
@@ -84,21 +84,22 @@ impl ReplyRun {
                 error @ (RunError::ToolRetriesExceeded { .. }
                 | RunError::OutputRetriesExceeded { .. }
                 | RunError::Host(_)),
-            ) => return (Some(VoiceRunOutcome::Failed(RunFailure::Run(error))), false),
+            ) => return (Some(VoiceRunOutcome::Failed(error)), false),
             // The session reports a model's failure on the speech; a cancelled run is the
             // person's cut.
             Err(_) => return (None, false),
         };
         let output = match outcome {
-            RunOutcome::Completed { output: Output::Validated(v) } => self
+            RunOutcome::Completed { output: Output::Validated(validation) } => self
                 .accepted
-                .remove(&v)
-                .map(|v| VoiceRunOutcome::Completed { final_output: Some(v) }),
+                .remove(&validation)
+                .map(|final_output| VoiceRunOutcome::Completed { validation, final_output }),
             // A validated text: the agent's accepted value, the last validation's.
-            RunOutcome::Completed { output: Output::Text(_) } => self
-                .accepted
-                .pop_last()
-                .map(|(_, v)| VoiceRunOutcome::Completed { final_output: Some(v) }),
+            RunOutcome::Completed { output: Output::Text(_) } => {
+                self.accepted.pop_last().map(|(validation, final_output)| {
+                    VoiceRunOutcome::Completed { validation, final_output }
+                })
+            }
             RunOutcome::NoOutput => None,
             RunOutcome::InputRequired(ask) => Some(VoiceRunOutcome::InputRequired(ask)),
         };
@@ -311,6 +312,11 @@ impl VoiceDriver {
                 }
                 AgentRunEffect::ToolExecute { call, function_call, .. } => {
                     self.session.usage.tool_started();
+                    if self.run_contains_speech(speech)
+                        && let Some(usage) = self.session.runs.usage()
+                    {
+                        usage.tool_started();
+                    }
                     self.reply_executes(speech, call, &function_call);
                     let item = Box::new(function_call);
                     self.activity.reply_move(speech, call, ToolGo::Execute { item });
@@ -432,11 +438,8 @@ impl VoiceDriver {
         if !call.extra.contains_key(APPROVAL_KEY) {
             return;
         }
-        if let Some(run) = self.session.runs.current()
-            && self.run_contains_speech(speech)
-        {
-            let item = Box::new(ChatItem::FunctionCall(call.clone()));
-            self.publish_event(SessionEvent::RunItemAdded { run, item });
+        if self.run_contains_speech(speech) {
+            self.session.runs.record(&ChatItem::FunctionCall(call.clone()));
         }
     }
 
@@ -628,7 +631,7 @@ impl VoiceDriver {
             self.answer(Some(go), Answer::ToolGo(ToolGo::Gone));
         }
         match output {
-            Some(VoiceRunOutcome::Failed(RunFailure::Run(error))) => self.run_failed(speech, error),
+            Some(VoiceRunOutcome::Failed(error)) => self.run_failed(speech, error),
             Some(output) => {
                 self.session.runs.outputs.insert(speech, output);
             }

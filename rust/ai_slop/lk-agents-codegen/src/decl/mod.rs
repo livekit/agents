@@ -66,6 +66,9 @@ pub struct Member {
     /// return annotation's class: the field's own options, a default one when the field is
     /// `True` (or, without `opt_in`, not given), else `None`.
     pub toggle: Option<(String, bool)>,
+    /// `cached`: a property computed once per instance (`functools.cached_property`), for a view
+    /// that keeps state across reads (a cursor); its record is an unslotted dataclass.
+    pub cached: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -252,6 +255,11 @@ pub struct RecordDecl {
     /// `record(.., transparent, discriminator = "type")`: the union alias is pydantic's
     /// `Annotated[.., Field(discriminator=..)]` over its model members.
     pub discriminator: Option<String>,
+    /// `record(.., generic = "Output_T")`: the model is generic over that type variable, which
+    /// its module declares (defaulting to `Any`) and a field's `annotation` names; a dataclass
+    /// subclasses `Generic[Output_T]`, a transparent union is a `TypeAliasType` with it as its
+    /// parameter.
+    pub generic: Option<String>,
     pub body: RecordBody,
 }
 
@@ -286,6 +294,9 @@ pub struct Pydantic {
 /// `__post_init__` calls (a host-side normalisation of what was given).
 #[derive(Debug, Clone, Default)]
 pub struct Dataclass {
+    /// `base = "Name"`: the dataclass record of the same module this model subclasses, inheriting
+    /// its fields and members. The Rust struct holds only its own fields: a model-only record.
+    pub base: Option<String>,
     pub frozen: bool,
     /// Keep postponed annotations for Python callbacks whose facade is still initializing.
     pub deferred: bool,

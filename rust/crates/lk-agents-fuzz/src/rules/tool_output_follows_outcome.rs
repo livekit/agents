@@ -238,7 +238,6 @@ fn output(call_id: &str, text: &str, is_error: bool, reply_required: bool) -> St
         agent: "agent".into(),
         source: lk_agents_voice::agent::Source::ToolOutput { speech: SpeechId(1), step: 1 },
         visibility: lk_agents_voice::agent::Visibility::Both,
-        run: None,
     })
 }
 
@@ -250,7 +249,6 @@ fn user(text: &str) -> Step {
         agent: "agent".into(),
         source: lk_agents_voice::agent::Source::UserTyped,
         visibility: lk_agents_voice::agent::Visibility::Both,
-        run: None,
     })
 }
 
@@ -281,7 +279,6 @@ fn selected_question(call_id: &str) -> Step {
             step: 1,
         },
         visibility: lk_agents_voice::agent::Visibility::Both,
-        run: None,
     })
 }
 
