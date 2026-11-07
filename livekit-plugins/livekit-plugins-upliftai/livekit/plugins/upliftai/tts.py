@@ -119,7 +119,6 @@ class TTS(tts.TTS):
                 - 'MP3_22050_128': MP3 format, 22.05kHz, 128kbps
                 - 'OGG_22050_16': OGG format, 22.05kHz, 16-bit
                 - 'ULAW_8000_8': μ-law format, 8kHz, 8-bit
-            sample_rate: Sample rate for audio output. Defaults to 22050
             num_channels: Number of audio channels. Defaults to 1 (mono)
             phrase_replacement_config_id: Optional ID for phrase replacement configuration
             word_tokenizer: Tokenizer for processing text. Defaults to `livekit.agents.tokenize.basic.WordTokenizer`.
