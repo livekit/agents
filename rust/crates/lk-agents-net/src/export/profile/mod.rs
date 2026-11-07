@@ -160,7 +160,7 @@ impl Profile {
             period: PERIOD_NANOS,
             ..Default::default()
         };
-        crate::http::gzip(&profile.encode_to_vec(), 6)
+        crate::http::gzip(&profile.encode_to_vec())
     }
 
     /// The stack's id; none when it is new and [`STACKS`] are kept already (nothing interned).

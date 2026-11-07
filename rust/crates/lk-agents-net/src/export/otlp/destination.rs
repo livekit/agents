@@ -312,7 +312,7 @@ impl State {
     ) {
         let Some(app) = &mut self.app else { return };
         match record {
-            Record::Span(span) if app.config.traces_endpoint.is_some() => {
+            Record::Span(span) if app.config.traces.is_some() => {
                 if app.usage.admit(&self.limits, bytes) {
                     app.spans.push_back((AppSpan { span: span.clone(), job: identity }, bytes));
                     admitted.batch_ready |= app.spans.len() >= BATCH_RECORDS;
@@ -320,7 +320,7 @@ impl State {
                     admitted.dropped += 1;
                 }
             }
-            Record::Measurement(m) if app.config.metrics_endpoint.is_some() => {
+            Record::Measurement(m) if app.config.metrics.is_some() => {
                 admitted.dropped += u64::from(!app.metrics.record(m));
             }
             _ => {}

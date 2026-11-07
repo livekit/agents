@@ -283,10 +283,10 @@ impl Body {
     }
 }
 
-/// `message` encoded, gzipped (fastest level) when asked.
+/// `message` encoded, gzipped when asked.
 pub(crate) fn body(message: &impl prost::Message, gzip: bool) -> Body {
     let bytes = message.encode_to_vec();
-    let bytes = if gzip { crate::http::gzip(&bytes, 1) } else { bytes };
+    let bytes = if gzip { crate::http::gzip(&bytes) } else { bytes };
     Body { bytes, gzip }
 }
 

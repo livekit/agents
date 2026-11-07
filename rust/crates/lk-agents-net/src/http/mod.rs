@@ -17,14 +17,15 @@ use lk_agents_abi::{Clock, Ts};
 use lk_agents_core::request::AttemptFailure;
 use tokio::sync::{Notify, mpsc};
 
-/// `bytes` as one gzip member (RFC 1952) at deflate `level` (0-10), for a `Content-Encoding: gzip`
-/// body or a `.gz` file. Compressing in memory cannot fail, so neither can this.
-pub fn gzip(bytes: &[u8], level: u8) -> Vec<u8> {
+/// `bytes` as one gzip member (RFC 1952), for a `Content-Encoding: gzip` body or a `.gz` file.
+/// The fastest deflate level: every body is small and the network dominates. Compressing in
+/// memory cannot fail, so neither can this.
+pub fn gzip(bytes: &[u8]) -> Vec<u8> {
     let mut crc = flate2::Crc::new();
     crc.update(bytes);
     // ID1 ID2, deflate, no flags, no modification time, no extra flags, unknown OS.
     let mut out = vec![0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 0xff];
-    out.extend(miniz_oxide::deflate::compress_to_vec(bytes, level));
+    out.extend(miniz_oxide::deflate::compress_to_vec(bytes, 1));
     out.extend(crc.sum().to_le_bytes());
     // ISIZE: the input length modulo 2^32.
     out.extend(&bytes.len().to_le_bytes()[..4]);
@@ -415,7 +416,7 @@ mod tests {
         use std::io::Read as _;
         for input in [&b""[..], b"hello", &[7u8; 100_000][..]] {
             let mut out = Vec::new();
-            flate2::read::GzDecoder::new(&gzip(input, 1)[..]).read_to_end(&mut out).unwrap();
+            flate2::read::GzDecoder::new(&gzip(input)[..]).read_to_end(&mut out).unwrap();
             assert_eq!(out, input);
         }
     }

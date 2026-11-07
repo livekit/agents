@@ -31,8 +31,8 @@ use tokio::sync::Notify;
 
 use cloud::PostError;
 pub use config::{
-    AppConfig, CloudEndpoint, CloudRecording, ProcessIdentity, SdkName, SessionIdentity,
-    Temporality,
+    AppConfig, CloudEndpoint, CloudRecording, ProcessIdentity, SdkName, SessionIdentity, Target,
+    Temporality, framework_resource,
 };
 pub use destination::Limits;
 use destination::{App, AppSpan, Batch, Cloud, State, Take};
@@ -398,21 +398,20 @@ async fn export_app(
     payload: App,
 ) -> Result<(), PostError> {
     let resource = encode::app_resource(process, &config.resource);
-    let (url, body) = match payload {
+    let (target, request) = match payload {
         App::Spans(spans) => {
+            let Some(target) = &config.traces else { return Ok(()) };
             let spans = stamp_app_spans(process, config, spans);
-            let body = encode::body(&encode::traces_request(resource, &spans), config.traces_gzip);
-            (&config.traces_endpoint, body)
+            (target, encode::body(&encode::traces_request(resource, &spans), target.gzip))
         }
         App::Metrics(metrics) => {
-            let request = encode::metrics_request(resource, metrics);
-            (&config.metrics_endpoint, encode::body(&request, config.metrics_gzip))
+            let Some(target) = &config.metrics else { return Ok(()) };
+            (target, encode::body(&encode::metrics_request(resource, metrics), target.gzip))
         }
     };
-    let Some(url) = url else { return Ok(()) };
     let client = cloud::client().await.map_err(|error| PostError::Setup(error.to_string()))?;
-    let mut request = body.attach(client.post(url));
-    for (key, value) in &config.headers {
+    let mut request = request.attach(client.post(&target.url));
+    for (key, value) in &target.headers {
         request = request.header(key, value);
     }
     cloud::answer(request.send().await?, false).await

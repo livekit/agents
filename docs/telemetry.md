@@ -36,11 +36,12 @@ telemetry.configure(
 | `telemetry.configure(...)` | Environment | Default |
 | --- | --- | --- |
 | `endpoint=` | `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | none: no application destination |
-| `headers=` | `OTEL_EXPORTER_OTLP_HEADERS` | none |
+| `headers=` | `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_EXPORTER_OTLP_TRACES_HEADERS`, `OTEL_EXPORTER_OTLP_METRICS_HEADERS` | none |
+| none | `OTEL_EXPORTER_OTLP_COMPRESSION`, `OTEL_EXPORTER_OTLP_TRACES_COMPRESSION`, `OTEL_EXPORTER_OTLP_METRICS_COMPRESSION` (`gzip` or `none`) | `none` |
 | `metadata=` | none | none |
 | `allow_pii=` | `LIVEKIT_TELEMETRY_ALLOW_PII` | `False` |
 
-The destination speaks OTLP/HTTP protobuf; `OTEL_EXPORTER_OTLP_PROTOCOL` set to anything
+A signal's own variable overrides the shared one. The destination speaks OTLP/HTTP protobuf; `OTEL_EXPORTER_OTLP_PROTOCOL` set to anything
 else logs a warning and is ignored. Arguments override the environment. A later call replaces the earlier
 configuration for records exported afterwards. `OTEL_SERVICE_NAME` and
 `OTEL_RESOURCE_ATTRIBUTES` set the resource of what this destination receives.

@@ -523,11 +523,11 @@ async fn the_application_endpoint_speaks_protobuf_with_its_headers() {
     let (proto_url, mut proto_rx) = endpoint(|_| Some((500, b"" as &[u8]))).await;
     let exporter = exporter(Limits::default());
     let mut first = AppConfig::with_endpoint(&first_url);
-    first.headers = vec![("x-api-key".into(), "abc".into())];
+    first.set_headers(&[("x-api-key".into(), "abc".into())]);
     exporter.configure_app(Some(first));
     exporter.record(span("first", None, vec![("n".into(), Value::Int(3))]));
     let mut proto = AppConfig::with_endpoint(&proto_url);
-    proto.traces_gzip = true;
+    proto.traces.as_mut().unwrap().gzip = true;
     exporter.configure_app(Some(proto));
     exporter.record(span("second", None, vec![]));
     assert!(exporter.flush(None, LIMIT).await);

@@ -214,15 +214,13 @@ impl lk_agents_abi::telemetry::host::Telemetry for Telemetry {
             ..AppConfig::default()
         });
         if let Some(endpoint) = endpoint {
-            let base = AppConfig::with_endpoint(&endpoint);
-            config.traces_endpoint = base.traces_endpoint;
-            config.metrics_endpoint = base.metrics_endpoint;
+            config.set_endpoint(&endpoint);
             if config.resource.is_empty() {
-                config.resource = base.resource;
+                config.resource = lk_agents_net::export::otlp::framework_resource();
             }
         }
         if let Some(headers) = headers {
-            config.headers = headers.into_iter().collect();
+            config.set_headers(&headers.into_iter().collect::<Vec<_>>());
         }
         if let Some(metadata) = metadata {
             config.metadata = metadata
@@ -233,8 +231,7 @@ impl lk_agents_abi::telemetry::host::Telemetry for Telemetry {
         if let Some(allow_pii) = allow_pii {
             config.allow_pii = allow_pii;
         }
-        let config = (config.traces_endpoint.is_some() || config.metrics_endpoint.is_some())
-            .then_some(config);
+        let config = (config.traces.is_some() || config.metrics.is_some()).then_some(config);
         *PROCESS.app.lock() = config.clone();
         if let Some(exporter) = PROCESS.slot.get() {
             exporter.configure_app(config);

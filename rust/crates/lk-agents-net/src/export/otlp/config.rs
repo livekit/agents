@@ -84,18 +84,24 @@ pub enum Temporality {
     Delta,
 }
 
+/// One signal's OTLP/HTTP destination. The specification configures endpoint, headers and
+/// compression per signal, each falling back to the shared variable.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Target {
+    /// Full URL (`.../v1/traces`).
+    pub url: String,
+    pub headers: Vec<(String, String)>,
+    /// `Content-Encoding: gzip`; the specification's default is no compression.
+    pub gzip: bool,
+}
+
 /// The application's OTLP/HTTP endpoint: traces and metrics, never report records.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct AppConfig {
-    /// Full URL; `None` sends no spans.
-    pub traces_endpoint: Option<String>,
-    /// Full URL; `None` sends no metrics.
-    pub metrics_endpoint: Option<String>,
-    pub headers: Vec<(String, String)>,
-    /// `Content-Encoding: gzip` for spans; the specification's default is no compression.
-    pub traces_gzip: bool,
-    /// `Content-Encoding: gzip` for metrics.
-    pub metrics_gzip: bool,
+    /// `None` sends no spans.
+    pub traces: Option<Target>,
+    /// `None` sends no metrics.
+    pub metrics: Option<Target>,
     pub temporality: Temporality,
     /// Resource attributes, `service.name` included.
     pub resource: Vec<(String, String)>,
@@ -106,18 +112,32 @@ pub struct AppConfig {
 }
 
 impl AppConfig {
-    /// Both signals under an OTLP base endpoint (`.../v1/traces`, `.../v1/metrics`).
+    /// Both signals under an OTLP base endpoint, uncompressed and without headers.
     pub fn with_endpoint(endpoint: &str) -> Self {
-        let mut config = AppConfig::default();
-        config.set_base(endpoint);
-        config.resource = vec![(SERVICE_NAME.into(), FRAMEWORK.into())];
+        let mut config = AppConfig { resource: framework_resource(), ..AppConfig::default() };
+        config.set_endpoint(endpoint);
         config
     }
 
-    fn set_base(&mut self, endpoint: &str) {
-        let base = endpoint.trim_end_matches('/');
-        self.traces_endpoint = Some(format!("{base}/v1/{}", Signal::Traces.path()));
-        self.metrics_endpoint = Some(format!("{base}/v1/{}", Signal::Metrics.path()));
+    /// Both signals under an OTLP base endpoint (`.../v1/traces`, `.../v1/metrics`); a signal
+    /// already configured keeps its headers and compression.
+    pub fn set_endpoint(&mut self, endpoint: &str) {
+        for (signal, target) in
+            [(Signal::Traces, &mut self.traces), (Signal::Metrics, &mut self.metrics)]
+        {
+            let url = signal_url(endpoint, signal);
+            match target {
+                Some(target) => target.url = url,
+                None => *target = Some(Target { url, headers: Vec::new(), gzip: false }),
+            }
+        }
+    }
+
+    /// The same headers on every configured signal.
+    pub fn set_headers(&mut self, headers: &[(String, String)]) {
+        for target in [&mut self.traces, &mut self.metrics].into_iter().flatten() {
+            target.headers = headers.to_vec();
+        }
     }
 
     /// From the standard `OTEL_*` variables; `None` when no endpoint is set.
@@ -126,33 +146,16 @@ impl AppConfig {
     }
 
     pub(crate) fn from_vars(var: impl Fn(&str) -> Option<String>) -> Option<Self> {
-        let mut config = AppConfig::default();
-        if let Some(base) = var("OTEL_EXPORTER_OTLP_ENDPOINT") {
-            config.set_base(&base);
-        }
-        if let Some(url) = var("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT") {
-            config.traces_endpoint = Some(url);
-        }
-        if let Some(url) = var("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT") {
-            config.metrics_endpoint = Some(url);
-        }
-        if config.traces_endpoint.is_none() && config.metrics_endpoint.is_none() {
-            return None;
-        }
-        config.headers = var("OTEL_EXPORTER_OTLP_HEADERS").map(|v| pairs(&v)).unwrap_or_default();
-        if let Some(other) = var("OTEL_EXPORTER_OTLP_PROTOCOL").filter(|p| p != "http/protobuf") {
-            static WARNED: std::sync::Once = std::sync::Once::new();
-            WARNED.call_once(|| {
-                log::warn!(
-                    target: lk_agents_abi::LOG_TARGET,
-                    "unsupported OTLP protocol {other:?}; using http/protobuf"
-                );
-            });
-        }
-        let gzip = |signal: &str| {
-            let value = var(&format!("OTEL_EXPORTER_OTLP_{signal}_COMPRESSION"))
-                .or_else(|| var("OTEL_EXPORTER_OTLP_COMPRESSION"));
-            match value.as_deref() {
+        let base = var("OTEL_EXPORTER_OTLP_ENDPOINT");
+        let target = |signal: Signal| {
+            let name = signal.path().to_ascii_uppercase();
+            let own = |key: &str| {
+                var(&format!("OTEL_EXPORTER_OTLP_{name}_{key}"))
+                    .or_else(|| var(&format!("OTEL_EXPORTER_OTLP_{key}")))
+            };
+            let url = var(&format!("OTEL_EXPORTER_OTLP_{name}_ENDPOINT"))
+                .or_else(|| base.as_deref().map(|base| signal_url(base, signal)))?;
+            let gzip = match own("COMPRESSION").as_deref() {
                 Some("gzip") => true,
                 None | Some("none") => false,
                 Some(other) => {
@@ -162,10 +165,27 @@ impl AppConfig {
                     );
                     false
                 }
-            }
+            };
+            let headers = own("HEADERS").map(|v| pairs(&v)).unwrap_or_default();
+            Some(Target { url, headers, gzip })
         };
-        config.traces_gzip = gzip("TRACES");
-        config.metrics_gzip = gzip("METRICS");
+        let mut config = AppConfig {
+            traces: target(Signal::Traces),
+            metrics: target(Signal::Metrics),
+            ..AppConfig::default()
+        };
+        if config.traces.is_none() && config.metrics.is_none() {
+            return None;
+        }
+        if let Some(other) = var("OTEL_EXPORTER_OTLP_PROTOCOL").filter(|p| p != "http/protobuf") {
+            static WARNED: std::sync::Once = std::sync::Once::new();
+            WARNED.call_once(|| {
+                log::warn!(
+                    target: lk_agents_abi::LOG_TARGET,
+                    "unsupported OTLP protocol {other:?}; using http/protobuf"
+                );
+            });
+        }
         config.temporality = match var("OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE")
             .as_deref()
         {
@@ -183,6 +203,16 @@ impl AppConfig {
         config.resource = resource;
         Some(config)
     }
+}
+
+/// The resource of an application that names no service: `service.name` is the framework.
+pub fn framework_resource() -> Vec<(String, String)> {
+    vec![(SERVICE_NAME.into(), FRAMEWORK.into())]
+}
+
+/// `signal`'s path under an OTLP base endpoint.
+fn signal_url(base: &str, signal: Signal) -> String {
+    format!("{}/v1/{}", base.trim_end_matches('/'), signal.path())
 }
 
 /// `k1=v1,k2=v2` with percent-encoded values, as the OTel environment specification writes
@@ -226,8 +256,8 @@ mod tests {
         move |name| entries.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone())
     }
 
-    // Catches: signal endpoints or compressions not overriding the shared ones, or headers and
-    // resource attributes read without percent-decoding.
+    // Catches: a signal's own endpoint, headers or compression not overriding the shared one, or
+    // headers and resource attributes read without percent-decoding.
     #[test]
     fn the_environment_follows_the_otel_specification() {
         assert_eq!(AppConfig::from_vars(vars(&[("OTEL_SERVICE_NAME", "x")])), None);
@@ -237,19 +267,30 @@ mod tests {
             ("OTEL_EXPORTER_OTLP_HEADERS", "authorization=Bearer%20abc, x-team = voice ,bad"),
             ("OTEL_EXPORTER_OTLP_COMPRESSION", "gzip"),
             ("OTEL_EXPORTER_OTLP_METRICS_COMPRESSION", "none"),
+            ("OTEL_EXPORTER_OTLP_METRICS_HEADERS", "x-metrics=1"),
             ("OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE", "Delta"),
             ("OTEL_RESOURCE_ATTRIBUTES", "service.name=ignored,deployment.environment=prod%2Ceu"),
             ("OTEL_SERVICE_NAME", "front-desk"),
         ]))
         .unwrap();
-        assert_eq!(config.traces_endpoint.as_deref(), Some("http://collector:4318/v1/traces"));
-        assert_eq!(config.metrics_endpoint.as_deref(), Some("http://metrics/custom"));
+        let shared_headers =
+            vec![("authorization".into(), "Bearer abc".into()), ("x-team".into(), "voice".into())];
         assert_eq!(
-            config.headers,
-            vec![("authorization".into(), "Bearer abc".into()), ("x-team".into(), "voice".into())]
+            config.traces,
+            Some(Target {
+                url: "http://collector:4318/v1/traces".into(),
+                headers: shared_headers,
+                gzip: true,
+            })
         );
-        assert!(config.traces_gzip, "the shared compression applies to spans");
-        assert!(!config.metrics_gzip, "a signal's own compression overrides it");
+        assert_eq!(
+            config.metrics,
+            Some(Target {
+                url: "http://metrics/custom".into(),
+                headers: vec![("x-metrics".into(), "1".into())],
+                gzip: false,
+            })
+        );
         assert_eq!(config.temporality, Temporality::Delta);
         assert_eq!(
             config.resource,
@@ -263,7 +304,7 @@ mod tests {
             "http://t/v1/traces",
         )]))
         .unwrap();
-        assert_eq!(traces_only.metrics_endpoint, None);
+        assert_eq!(traces_only.metrics, None);
         assert_eq!(traces_only.temporality, Temporality::Cumulative);
         assert_eq!(traces_only.resource, vec![("service.name".into(), "livekit-agents".into())]);
     }

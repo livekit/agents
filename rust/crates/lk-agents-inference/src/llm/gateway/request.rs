@@ -115,7 +115,7 @@ fn encode_body(
         serde_json::to_vec(body).map_err(|e| invalid(e.to_string()))?
     };
     if encoding.gzip {
-        bytes = lk_agents_net::http::gzip(&bytes, 5);
+        bytes = lk_agents_net::http::gzip(&bytes);
         headers.set("Content-Encoding", "gzip");
     }
     Ok(bytes)
