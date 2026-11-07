@@ -1404,6 +1404,56 @@ async def test_a_continuation_waits_for_every_open_call_in_the_conversation(
         await model.aclose()
 
 
+async def test_an_answer_waits_for_a_continuation_that_had_no_response_created(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A continuation's calls can arrive with no response.created before them; while that
+    response is still streaming, an answer to one of its calls must not send response.create."""
+    ws = _connect_hook(monkeypatch)
+
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        await session._update_session()
+        await asyncio.sleep(0.05)
+        session._handle_event(
+            _response_event("item_d1", {"type": "response.created", "response": {"id": "resp_1"}})
+        )
+        session._handle_event(_response_event("item_d1", _function_call_done("call_1")))
+        session._handle_event(_response_event("item_d1", _completed("resp_1")))
+        await session._append_items(
+            [llm.FunctionCallOutput(call_id="call_1", output="one", is_error=False)]
+        )
+        await asyncio.sleep(0.05)
+        assert [e["type"] for e in ws.sent[1:]] == ["response.item.create", "response.create"]
+
+        # the continuation asks for a call, and its answer is back before the response ends
+        session._handle_event(_response_event("item_d1", _function_call_done("call_2")))
+        await session._append_items(
+            [llm.FunctionCallOutput(call_id="call_2", output="two", is_error=False)]
+        )
+        await asyncio.sleep(0.05)
+        assert [e["type"] for e in ws.sent[1:]] == [
+            "response.item.create",
+            "response.create",
+            "response.item.create",
+        ]
+
+        session._handle_event(_response_event("item_d1", _completed("resp_2")))
+        await asyncio.sleep(0.05)
+        assert [e["type"] for e in ws.sent[1:]] == [
+            "response.item.create",
+            "response.create",
+            "response.item.create",
+            "response.create",
+        ]
+        assert not session._backend_running_responses and not session._backend_open_calls
+        assert not session._backend_response_pending
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
 async def test_a_failed_response_releases_the_continuation_it_held_back(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
