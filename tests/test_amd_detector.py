@@ -39,6 +39,22 @@ class _RecordingClassifier:
         self.settled.append((category, reason))
 
 
+class _FakeRoom:
+    def __init__(self, remote_participants: dict[str, object]) -> None:
+        self.remote_participants = remote_participants
+        self._handlers: dict[str, list[object]] = {}
+
+    def on(self, event: str, callback: object) -> None:
+        self._handlers.setdefault(event, []).append(callback)
+
+    def off(self, event: str, callback: object) -> None:
+        self._handlers.get(event, []).remove(callback)
+
+    def emit(self, event: str, *args: object) -> None:
+        for callback in list(self._handlers.get(event, [])):
+            callback(*args)  # type: ignore[operator]
+
+
 class TestAMDDetector:
     def test_detection_option_max_endpointing_delay_overrides_activity(self) -> None:
         llm = FakeLLM()
@@ -256,9 +272,7 @@ class TestAMDDetector:
         session = SimpleNamespace(
             llm=llm,
             _activity=None,
-            _room_io=SimpleNamespace(
-                room=SimpleNamespace(remote_participants={"callee": publisher})
-            ),
+            _room_io=SimpleNamespace(room=_FakeRoom({"callee": publisher})),
         )
         detector = AMD(
             session,  # type: ignore[arg-type]
@@ -273,6 +287,59 @@ class TestAMDDetector:
         assert classifier.timer_calls == 1
         assert classifier.listening is True
         assert classifier.settled == []
+
+    async def test_execute_settles_when_participant_hangs_up_while_listening(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def fake_wait_for_track_publication(**_: object) -> SimpleNamespace:
+            return SimpleNamespace(sid="track_sid")
+
+        monkeypatch.setattr(
+            amd_detector,
+            "wait_for_track_publication",
+            fake_wait_for_track_publication,
+        )
+
+        llm = FakeLLM()
+        publisher = SimpleNamespace(
+            kind=object(),
+            identity="callee",
+            track_publications={"track_sid": object()},
+        )
+        room = _FakeRoom({"callee": publisher})
+        session = SimpleNamespace(
+            llm=llm,
+            _activity=None,
+            _session_host=None,
+            _amd=None,
+            _room_io=SimpleNamespace(room=room),
+        )
+        detector = AMD(
+            session,  # type: ignore[arg-type]
+            llm=llm,
+            suppress_compatibility_warning=True,
+        )
+        detector._stt = None
+        classifier = detector._resolve_classifier(session)  # type: ignore[arg-type]
+        assert classifier is not None
+        classifier.on("amd_prediction", detector._on_amd_prediction)
+        detector._classifier = classifier
+        detector._session = session  # type: ignore[assignment]
+
+        await detector._setup(session)  # type: ignore[arg-type]
+        execute_task = asyncio.create_task(detector.execute())
+
+        # the callee starts their greeting, then hangs up before a verdict
+        classifier.on_user_speech_started()
+        await asyncio.sleep(0)
+        room.emit("participant_disconnected", publisher)
+        # session teardown closes AMD right after the disconnect
+        await detector.aclose()
+
+        result = await execute_task
+        assert result.category == AMDCategory.UNCERTAIN
+        assert result.reason == "participant_missing"
+        assert room._handlers["participant_disconnected"] == []
 
     async def test_setup_settles_when_participant_disconnects_before_track(
         self, monkeypatch: pytest.MonkeyPatch
