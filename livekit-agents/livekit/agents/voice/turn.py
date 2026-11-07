@@ -185,6 +185,15 @@ class InterruptionOptions(TypedDict, total=False):
     different values for start and end separately. ``None`` disables. Defaults
     to ``(1.0, 1.0)``. The end value preserves transcripts received near the
     end of agent speech."""
+    base_url: str
+    """LiveKit Inference URL for the adaptive interruption detector. Defaults to
+    the ``LIVEKIT_INFERENCE_URL`` environment variable."""
+    api_key: str
+    """LiveKit Inference API key for the adaptive interruption detector. Defaults
+    to the ``LIVEKIT_INFERENCE_API_KEY`` or ``LIVEKIT_API_KEY`` environment variable."""
+    api_secret: str
+    """LiveKit Inference API secret for the adaptive interruption detector. Defaults
+    to the ``LIVEKIT_INFERENCE_API_SECRET`` or ``LIVEKIT_API_SECRET`` environment variable."""
 
 
 _INTERRUPTION_DEFAULTS: InterruptionOptions = {
