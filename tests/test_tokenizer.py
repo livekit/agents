@@ -92,9 +92,7 @@ SENT_TOKENIZERS = [
 @pytest.mark.parametrize("tokenizer, expected", SENT_TOKENIZERS)
 def test_sent_tokenizer(tokenizer: tokenize.SentenceTokenizer, expected: list[str]):
     segmented = tokenizer.tokenize(text=TEXT)
-    print(segmented)
-    for i, segment in enumerate(expected):
-        assert segment == segmented[i]
+    assert segmented == expected
 
 
 @pytest.mark.parametrize("tokenizer, expected", SENT_TOKENIZERS)
@@ -117,9 +115,7 @@ async def test_streamed_sent_tokenizer(tokenizer: tokenize.SentenceTokenizer, ex
 
     stream.end_input()
 
-    for i in range(len(expected)):
-        ev = await stream.__anext__()
-        assert ev.token == expected[i]
+    assert [ev.token async for ev in stream] == expected
 
 
 MULTILINGUAL_SENT_CASES = [
@@ -211,8 +207,7 @@ WORD_TOKENIZERS = [basic.WordTokenizer()]
 @pytest.mark.parametrize("tokenizer", WORD_TOKENIZERS)
 def test_word_tokenizer(tokenizer: tokenize.WordTokenizer):
     tokens = tokenizer.tokenize(text=WORDS_TEXT)
-    for i, token in enumerate(WORDS_EXPECTED):
-        assert token == tokens[i]
+    assert tokens == WORDS_EXPECTED
 
 
 @pytest.mark.parametrize("tokenizer", WORD_TOKENIZERS)
@@ -235,9 +230,7 @@ async def test_streamed_word_tokenizer(tokenizer: tokenize.WordTokenizer):
 
     stream.end_input()
 
-    for i in range(len(WORDS_EXPECTED)):
-        ev = await stream.__anext__()
-        assert ev.token == WORDS_EXPECTED[i]
+    assert [ev.token async for ev in stream] == WORDS_EXPECTED
 
 
 WORDS_PUNCT_TEXT = (
@@ -289,8 +282,7 @@ WORD_PUNCT_TOKENIZERS = [basic.WordTokenizer(ignore_punctuation=False, split_cha
 @pytest.mark.parametrize("tokenizer", WORD_PUNCT_TOKENIZERS)
 def test_punct_word_tokenizer(tokenizer: tokenize.WordTokenizer):
     tokens = tokenizer.tokenize(text=WORDS_PUNCT_TEXT)
-    for i, token in enumerate(WORDS_PUNCT_EXPECTED):
-        assert token == tokens[i]
+    assert tokens == WORDS_PUNCT_EXPECTED
 
 
 @pytest.mark.parametrize("tokenizer", WORD_PUNCT_TOKENIZERS)
@@ -313,9 +305,7 @@ async def test_streamed_punct_word_tokenizer(tokenizer: tokenize.WordTokenizer):
 
     stream.end_input()
 
-    for i in range(len(WORDS_PUNCT_EXPECTED)):
-        ev = await stream.__anext__()
-        assert ev.token == WORDS_PUNCT_EXPECTED[i]
+    assert [ev.token async for ev in stream] == WORDS_PUNCT_EXPECTED
 
 
 @pytest.mark.parametrize(
