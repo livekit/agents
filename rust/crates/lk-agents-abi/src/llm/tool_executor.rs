@@ -77,6 +77,30 @@ pub enum ToolOutcome {
     Working(Option<String>),
 }
 
+impl ToolOutcome {
+    /// How the call's run ended (`ToolCallEnded.status`); `None` while `ctx.update()` detached
+    /// it: the step is answered and the tool keeps running.
+    pub fn end_status(&self) -> Option<crate::voice::events::ToolEndStatus> {
+        use crate::voice::events::ToolEndStatus;
+        Some(match self {
+            ToolOutcome::Update { .. } => return None,
+            ToolOutcome::Cancelled => ToolEndStatus::Cancelled,
+            ToolOutcome::ToolError(_)
+            | ToolOutcome::ModelRetry(_)
+            | ToolOutcome::Internal
+            | ToolOutcome::Invalid => ToolEndStatus::Error,
+            ToolOutcome::Value { .. }
+            | ToolOutcome::Nothing
+            | ToolOutcome::StopResponse
+            | ToolOutcome::Completed { .. }
+            | ToolOutcome::Failed(_)
+            | ToolOutcome::Rejected(_)
+            | ToolOutcome::InputRequired { .. }
+            | ToolOutcome::Working(_) => ToolEndStatus::Done,
+        })
+    }
+}
+
 /// How a call of a tool that requires approval went: it asked for approval with its read-back,
 /// or ran on the person's answer. Marked on the call for the next to read.
 #[crate::host(record(module = "tool_report", extract, emit))]

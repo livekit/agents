@@ -16,8 +16,8 @@ use crate::filler_scheduler::{FillerAction, FillerId, FillerScheduler};
 use crate::generation::ReplySource;
 use crate::tool_executor::{
     Batch, CallId, Deferred, Delivery, FillerRun, HostedTool, MadeCall, Pending, Rendering,
-    Running, ToolEnd, ToolExecution, ToolGo, ToolOutcome, ToolReply, answer,
-    default_reply_instructions, pair_for, tool_ended,
+    Running, ToolExecution, ToolGo, ToolOutcome, ToolReply, answer, default_reply_instructions,
+    pair_for, tool_ended,
 };
 use crate::trace::{FillerEnd, GenerationStep, ToolStep as TraceToolStep};
 use lk_agents_abi::agent::{ArgumentIdentity, ReadBackAnswer, ToolTemplate};
@@ -248,7 +248,7 @@ impl VoiceDriver {
         now: Ts,
         (speech, call): (SpeechId, Option<CallId>),
         call_id: String,
-        end: ToolEnd,
+        end: Option<ToolEndStatus>,
         message: Option<String>,
         outcome: ToolOutcome,
     ) {
@@ -261,14 +261,12 @@ impl VoiceDriver {
         }
         self.record_trace(TraceToolStep::CallEnded { speech, call_id: call_id.clone(), end });
         // Ending the wrong call leaves one the close would answer twice.
-        if !self.activity.tools.end(speech, call, end == ToolEnd::Detached) {
+        if !self.activity.tools.end(speech, call, end.is_none()) {
             return;
         }
         let status = match end {
-            ToolEnd::Done => ToolEndStatus::Done,
-            ToolEnd::Error => ToolEndStatus::Error,
-            ToolEnd::Cancelled => ToolEndStatus::Cancelled,
-            ToolEnd::Detached => {
+            Some(status) => status,
+            None => {
                 self.open_expert(&call_id);
                 self.fillers_reset_dwell(now, &call_id);
                 self.publish_event(SessionEvent::ToolExecutionUpdated(ToolLifecycle::Updated {
@@ -501,8 +499,10 @@ impl VoiceDriver {
                 }
                 let pair = pair_for(&running, &id, report, wall, || self.session.ids.mint("item"));
                 let status = match pair.end {
-                    ToolEnd::Error => ToolEndStatus::Error,
-                    ToolEnd::Done | ToolEnd::Cancelled | ToolEnd::Detached => ToolEndStatus::Done,
+                    Some(ToolEndStatus::Error) => ToolEndStatus::Error,
+                    Some(ToolEndStatus::Done | ToolEndStatus::Cancelled) | None => {
+                        ToolEndStatus::Done
+                    }
                 };
                 self.publish_event(tool_ended(
                     id.clone(),

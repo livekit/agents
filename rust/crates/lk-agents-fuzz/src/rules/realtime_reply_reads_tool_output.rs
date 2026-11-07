@@ -71,7 +71,7 @@ fn ended() -> Step {
     Step::Tool(ToolStep::CallEnded {
         speech: lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId(1),
         call_id: "call_1".into(),
-        end: lk_agents_voice::tool_executor::ToolEnd::Done,
+        end: Some(lk_agents_voice::events::ToolEndStatus::Done),
     })
 }
 

@@ -110,11 +110,12 @@ fn admitted_and_run() -> Recording {
 }
 
 fn ended(call_id: &str) -> Step {
-    use lk_agents_voice::{agent_session::machine::activity::scheduling::SpeechId, tool_executor::ToolEnd};
+    use lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId;
+    use lk_agents_voice::events::ToolEndStatus;
     Step::Tool(ToolStep::CallEnded {
         speech: SpeechId(1),
         call_id: call_id.into(),
-        end: ToolEnd::Done,
+        end: Some(ToolEndStatus::Done),
     })
 }
 

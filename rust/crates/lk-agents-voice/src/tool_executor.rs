@@ -458,8 +458,9 @@ pub use lk_agents_abi::llm::tool_executor::{ToolOutcome, ToolReport};
 pub struct ToolExecution {
     pub call: FunctionCall,
     pub output: FunctionCallOutput,
-    /// How the run ended; a detached call is still running after its output is committed.
-    pub end: ToolEnd,
+    /// How the run ended; `None`: detached by `ctx.update()`, still running after its output is
+    /// committed.
+    pub end: Option<ToolEndStatus>,
     /// The first update as the tool wrote it (`ToolCallUpdated.message`), for a detached call.
     pub raw_update: Option<String>,
     /// What the person gets because of this call, once its output is committed.
@@ -470,10 +471,12 @@ impl ToolExecution {
     /// The lifecycle event's text: nothing for a silent return, handoff or cancellation.
     pub fn ended_message(&self) -> Option<String> {
         match self.end {
-            ToolEnd::Done => (!self.output.output.is_empty()).then(|| self.output.output.clone()),
-            ToolEnd::Error => Some(self.output.output.clone()),
-            ToolEnd::Detached => self.raw_update.clone(),
-            ToolEnd::Cancelled => None,
+            Some(ToolEndStatus::Done) => {
+                (!self.output.output.is_empty()).then(|| self.output.output.clone())
+            }
+            Some(ToolEndStatus::Error) => Some(self.output.output.clone()),
+            Some(ToolEndStatus::Cancelled) => None,
+            None => self.raw_update.clone(),
         }
     }
 }
@@ -500,40 +503,6 @@ pub struct Ask {
     pub verbatim: bool,
     /// `InputRequired(tool=)`: the tool the answer goes to.
     pub tool: Option<String>,
-}
-
-/// How a tool's run ended (`ToolCallEnded{status}`), plus `Detached`, which is not an end.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ToolEnd {
-    /// A value, a transition, a silent return: `status: "done"`.
-    Done,
-    /// An exception the model reads: `status: "error"`.
-    Error,
-    /// The host cancelled the tool: `status: "cancelled"`, an empty output, no reply.
-    Cancelled,
-    /// `ctx.update()`: the step is answered and the tool keeps running.
-    Detached,
-}
-
-impl ToolEnd {
-    fn of(outcome: &ToolOutcome) -> ToolEnd {
-        match outcome {
-            ToolOutcome::Update { .. } => ToolEnd::Detached,
-            ToolOutcome::Cancelled => ToolEnd::Cancelled,
-            ToolOutcome::ToolError(_)
-            | ToolOutcome::ModelRetry(_)
-            | ToolOutcome::Internal
-            | ToolOutcome::Invalid => ToolEnd::Error,
-            ToolOutcome::Value { .. }
-            | ToolOutcome::Nothing
-            | ToolOutcome::StopResponse
-            | ToolOutcome::Completed { .. }
-            | ToolOutcome::Failed(_)
-            | ToolOutcome::Rejected(_)
-            | ToolOutcome::InputRequired { .. }
-            | ToolOutcome::Working(_) => ToolEnd::Done,
-        }
-    }
 }
 
 /// Constructed only as a whole.
@@ -744,7 +713,7 @@ pub fn answer(call: &FunctionCall, report: ToolReport, now: SystemTime) -> ToolE
     output.name = call.name.clone();
     output.reply_required = shape.reply_required;
     let mut call = call.clone();
-    let end = ToolEnd::of(&outcome);
+    let end = outcome.end_status();
     // A transition the host accepted for a VoiceTask asks for no reply: the parent gets the floor.
     let task_end = match (&outcome, &transition) {
         (ToolOutcome::Completed { .. }, Some(value)) => Some(Delivery::Complete(value.clone())),

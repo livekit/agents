@@ -14,7 +14,7 @@ use crate::audio_recognition::EndOfTurnInfo;
 use crate::events::{SessionEvent, ToolEndStatus, ToolLifecycle};
 use crate::experts::{ExpertTool, Floor, Presentation};
 use crate::generation::ReplySource;
-use crate::tool_executor::{Delivery, ToolEnd, ToolOutcome, answer};
+use crate::tool_executor::{Delivery, ToolOutcome, answer};
 use lk_agents_abi::llm::tool_executor::ASK_IN_OWN_WORDS;
 use lk_agents_abi::{ChatItem, Ts};
 use lk_agents_core::tts::markup::ChatMessageExt;
@@ -135,11 +135,7 @@ impl VoiceDriver {
         // The application replaced the record meanwhile: nothing is left to resolve.
         let (Some(call), Some(pending)) = (call, pending) else { return };
         let mut execution = answer(&call, outcome.into(), self.step.wall());
-        let status = match execution.end {
-            ToolEnd::Error => ToolEndStatus::Error,
-            ToolEnd::Cancelled => ToolEndStatus::Cancelled,
-            ToolEnd::Done | ToolEnd::Detached => ToolEndStatus::Done,
-        };
+        let status = execution.end.unwrap_or(ToolEndStatus::Done);
         self.agent_turn_tool_ended(call_id);
         self.publish_event(SessionEvent::ToolExecutionUpdated(ToolLifecycle::Ended {
             id: call_id.to_owned(),

@@ -354,7 +354,8 @@ pub enum ToolStep {
     CallEnded {
         speech: SpeechId,
         call_id: String,
-        end: crate::tool_executor::ToolEnd,
+        /// `None`: detached by `ctx.update()`.
+        end: Option<crate::events::ToolEndStatus>,
     },
     Updated {
         call_id: String,

@@ -147,7 +147,8 @@ pub enum GenEvent {
         speech: SpeechId,
         call: Option<crate::tool_executor::CallId>,
         call_id: String,
-        end: crate::tool_executor::ToolEnd,
+        /// `None`: detached by `ctx.update()`.
+        end: Option<crate::events::ToolEndStatus>,
         message: Option<String>,
         outcome: crate::tool_executor::ToolOutcome,
     },
