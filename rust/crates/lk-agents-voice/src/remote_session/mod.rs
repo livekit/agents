@@ -53,7 +53,9 @@ fn encode_amd_category(c: AmdCategory) -> proto::AmdCategory {
 /// `Ok(None)` for a tool status outside `_TOOL_CALL_STATUS_MAP` / `_TOOL_REPLY_STATUS_MAP`
 /// (`remote_session.py:295-301`), which the reference drops; a malformed debug payload is refused.
 /// `language` and the hand-built tool calls' `id`/`created_at` go out unset, as in the reference.
-pub fn encode_wire(ev: WireEvent) -> Result<Option<proto::agent_session_event::Event>, String> {
+pub fn encode_wire(
+    ev: WireEvent,
+) -> Result<Option<proto::agent_session_event::Event>, prost::DecodeError> {
     use proto::agent_session_event::{self as pb, Event};
     let call = |c: FunctionCallRef| proto::FunctionCall {
         name: c.name,
@@ -133,9 +135,7 @@ pub fn encode_wire(ev: WireEvent) -> Result<Option<proto::agent_session_event::E
         WireEvent::DebugMessage(v) => Event::DebugMessage(proto::DebugMessage {
             payload: match v.payload {
                 None => None,
-                Some(raw) => {
-                    decode_debug_message(&raw).map_err(|e| format!("not a DebugMessage: {e}"))?
-                }
+                Some(raw) => decode_debug_message(&raw)?,
             },
         }),
         WireEvent::ToolExecutionUpdated(ToolExecutionUpdatedWire { update }) => {

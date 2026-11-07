@@ -139,7 +139,7 @@ pub struct Settled {
 /// A final-output call candidate left for the parent to validate.
 pub(crate) struct FinalCandidate {
     pub(crate) call: CallId,
-    pub(crate) value: Result<Value, String>,
+    pub(crate) value: Result<Value, lk_agents_abi::agent::ToolArgumentError>,
 }
 
 /// One settled call, in model order.
@@ -241,7 +241,7 @@ impl ToolCalls {
     pub fn read_back<'h, E: From<ToolCallEffect>>(
         &mut self,
         id: CallId,
-        answer: Result<ReadBackAnswer, String>,
+        answer: Result<ReadBackAnswer, lk_agents_abi::errors::HostError>,
         tools: &[FunctionToolInfo],
         history: impl Iterator<Item = &'h ChatItem> + Clone,
         running: &[RunningToolExecution],
@@ -704,7 +704,7 @@ fn start<E: From<ToolCallEffect>>(
     };
     let parsed = match tool_arguments::parse(&item.arguments) {
         Ok(parsed) => parsed,
-        Err(error) => return failed(error, fx),
+        Err(error) => return failed(error.message, fx),
     };
     if let Some(repair) = parsed.repair {
         fx.push(
@@ -748,7 +748,10 @@ fn with_defaults(arguments: Map<String, Value>, schema: &Value) -> Map<String, V
 }
 
 /// A `final_result` call's value: its arguments, unwrapped when the schema was wrapped.
-fn final_value(agent: &AgentDefinition, raw: &str) -> Result<Value, String> {
+fn final_value(
+    agent: &AgentDefinition,
+    raw: &str,
+) -> Result<Value, lk_agents_abi::agent::ToolArgumentError> {
     let arguments = tool_arguments::parse(raw)?.arguments;
     if !agent::output_wrapped(agent) {
         return Ok(Value::Object(arguments));
@@ -756,7 +759,7 @@ fn final_value(agent: &AgentDefinition, raw: &str) -> Result<Value, String> {
     let mut arguments = arguments;
     arguments
         .remove(WRAPPED_RESULT_KEY)
-        .ok_or_else(|| format!("missing required argument `{WRAPPED_RESULT_KEY}`"))
+        .ok_or_else(|| format!("missing required argument `{WRAPPED_RESULT_KEY}`").into())
 }
 
 fn value_outcome(text: &str) -> ToolOutcome {

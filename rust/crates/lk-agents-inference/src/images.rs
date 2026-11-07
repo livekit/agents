@@ -31,8 +31,14 @@ impl ImageResolver for NoImagePreparation {
     fn resolve(
         &self,
         image: &lk_agents_abi::ImageContent,
-    ) -> Result<lk_agents_abi::llm::provider_format::SerializedImage, String> {
-        Err(format!("image {}: no image preparation in this build", image.id))
+    ) -> Result<
+        lk_agents_abi::llm::provider_format::SerializedImage,
+        lk_agents_abi::llm::provider_format::FormatError,
+    > {
+        Err(lk_agents_abi::llm::provider_format::FormatError::Image {
+            image_id: image.id.clone(),
+            reason: "no image preparation in this build".into(),
+        })
     }
 }
 

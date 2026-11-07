@@ -39,7 +39,6 @@ impl lk_agents_abi::llm::provider_format::host::LlmAlgorithms for LlmAlgorithms 
             .map_err(|error| LlmAlgorithmError(error.to_string()))?
             .await
             .map_err(|error| LlmAlgorithmError(error.to_string()))?
-            .map_err(LlmAlgorithmError)
     }
     fn convert_mid_conversation_instructions(
         items: Vec<ChatItem>,
@@ -60,7 +59,6 @@ impl lk_agents_abi::llm::provider_format::host::LlmAlgorithms for LlmAlgorithms 
             tool_behavior.as_deref(),
             use_parameters_json_schema,
         )
-        .map_err(LlmAlgorithmError)
     }
     fn to_strict_json_schema(
         schema: &Value,
@@ -102,7 +100,7 @@ impl lk_agents_abi::llm::provider_format::host::LlmAlgorithms for LlmAlgorithms 
         schema::to_openai_response_format(name, schema)
     }
     fn parse_function_arguments(raw: &str) -> Result<Map<String, Value>, LlmAlgorithmError> {
-        tool_arguments::parse_logged(raw).map_err(LlmAlgorithmError)
+        tool_arguments::parse_logged(raw).map_err(|error| LlmAlgorithmError(error.message))
     }
     fn inject_confirm_duplicate(parameters: &Value) -> Map<String, Value> {
         provider_format::tools::inject_confirm_duplicate(parameters)

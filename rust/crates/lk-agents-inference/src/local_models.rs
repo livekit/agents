@@ -76,7 +76,7 @@ mod tests {
     struct Half;
 
     impl LocalEotModel for Half {
-        fn predict(&self, _pcm: &[i16]) -> Result<f64, String> {
+        fn predict(&self, _pcm: &[i16]) -> Result<f64, lk_agents_abi::errors::HostError> {
             Ok(0.5)
         }
     }

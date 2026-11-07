@@ -75,7 +75,7 @@ impl WorkerTransport for ScriptedTransport {
     ) -> Result<Connected, TransportError> {
         self.wire.lock().attempts += 1;
         match self.script.lock().pop_front() {
-            Some(Step::ConnectFails) | None => Err(TransportError::Io("refused".into())),
+            Some(Step::ConnectFails) | None => Err(TransportError::Failed("refused".into())),
             Some(Step::Serves(frames)) => Ok(Connected {
                 sink: Arc::new(Sink(self.wire.clone())),
                 stream: Box::new(Stream(frames.into())),
@@ -221,7 +221,7 @@ impl WorkerSink for ChannelSink {
         if self.stall_writes.load(std::sync::atomic::Ordering::SeqCst) {
             return std::future::pending().await;
         }
-        self.sent.send(message).map_err(|e| TransportError::Io(e.to_string()))
+        self.sent.send(message).map_err(|e| TransportError::Failed(e.to_string()))
     }
     async fn close(&self) {
         self.closed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -237,7 +237,7 @@ impl WorkerStream for ChannelStream {
         self.0
             .recv()
             .await
-            .unwrap_or_else(|| Err(TransportError::Closed("peer ended".into())))
+            .unwrap_or_else(|| Err(TransportError::Failed("peer ended".into())))
             .map(Box::new)
             .map(TransportEvent::ServerMessage)
     }
@@ -254,7 +254,7 @@ impl WorkerTransport for ChannelTransport {
             .incoming
             .lock()
             .pop_front()
-            .ok_or_else(|| TransportError::Io("no more connections".into()))?;
+            .ok_or_else(|| TransportError::Failed("no more connections".into()))?;
         Ok(Connected {
             sink: Arc::new(ChannelSink {
                 sent: self.sent.clone(),

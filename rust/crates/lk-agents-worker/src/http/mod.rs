@@ -495,17 +495,14 @@ fn metadata(preamble: StreamPreamble) -> Result<RequestMetadata, TransportError>
         Ok(AgentEndpointKind::AekHttp) => EndpointKind::Http,
         Ok(AgentEndpointKind::AekText) => EndpointKind::Text,
         _ => {
-            return Err(TransportError::Protocol(format!(
-                "unknown endpoint kind {}",
-                preamble.kind
-            )));
+            return Err(TransportError::Failed(format!("unknown endpoint kind {}", preamble.kind)));
         }
     };
     let scheme = match preamble.scheme.as_str() {
         "http" => HttpScheme::Http,
         "https" => HttpScheme::Https,
         scheme => {
-            return Err(TransportError::Protocol(format!("unknown client scheme {scheme:?}")));
+            return Err(TransportError::Failed(format!("unknown client scheme {scheme:?}")));
         }
     };
     Ok(RequestMetadata {
@@ -559,7 +556,7 @@ mod tests {
         ] {
             assert!(matches!(
                 metadata(StreamPreamble { kind, scheme: scheme.into(), ..Default::default() }),
-                Err(TransportError::Protocol(_))
+                Err(TransportError::Failed(_))
             ));
         }
     }

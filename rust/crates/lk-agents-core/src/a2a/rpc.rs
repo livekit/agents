@@ -101,7 +101,7 @@ pub fn rpc_error(code: i32, message: impl Into<String>) -> JsonRpcError {
     JsonRpcError { code, message: message.into(), data: None }
 }
 
-fn invalid_params(message: impl Into<String>) -> JsonRpcError {
+pub(crate) fn invalid_params(message: impl Into<String>) -> JsonRpcError {
     rpc_error(error_code::INVALID_PARAMS, message)
 }
 
@@ -229,7 +229,7 @@ fn send(params: Map<String, Value>, streaming: bool) -> Result<Call, JsonRpcErro
     {
         return Err(invalid_params("a message needs a messageId"));
     }
-    crate::a2a::attachments::validate_wire_parts(&params["message"]).map_err(invalid_params)?;
+    crate::a2a::attachments::validate_wire_parts(&params["message"])?;
     let r: SendMessageRequest = typed(params)?;
     let mut message = r.message;
     message.task_id = message.task_id.filter(|s| !s.is_empty());

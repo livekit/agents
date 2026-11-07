@@ -21,11 +21,18 @@ pub fn is_evaluated_model(model: &str, evaluated: &[&str]) -> bool {
 }
 
 /// [`is_evaluated_model`] against the `"llm"` or `"stt"` table; any other kind is refused.
-pub fn is_evaluated_model_of_kind(model: &str, kind: &str) -> Result<bool, String> {
+pub fn is_evaluated_model_of_kind(
+    model: &str,
+    kind: &str,
+) -> Result<bool, lk_agents_abi::inference::InvalidOption> {
     let table = match kind {
         "llm" => EVALUATED_LLM_MODELS,
         "stt" => EVALUATED_STT_MODELS,
-        other => return Err(format!("unknown model kind {other:?}")),
+        other => {
+            return Err(lk_agents_abi::inference::InvalidOption(format!(
+                "unknown model kind {other:?}"
+            )));
+        }
     };
     Ok(is_evaluated_model(model, table))
 }

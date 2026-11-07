@@ -621,8 +621,12 @@ impl RealtimeMachine {
             Command::UpdateTools(lk_agents_abi::llm::realtime::UpdateTools { tools }) => {
                 let tools = match self.dialect.prepare_tools(tools) {
                     Ok(tools) => tools,
-                    Err(message) => {
-                        return Step::event(Event::Error(self.error(now, message, false)));
+                    Err(error) => {
+                        return Step::event(Event::Error(self.error(
+                            now,
+                            error.to_string(),
+                            false,
+                        )));
                     }
                 };
                 self.tools = Arc::new(tools);

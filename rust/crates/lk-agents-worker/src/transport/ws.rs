@@ -29,7 +29,7 @@ impl WorkerTransport for WebSocketTransport {
     ) -> Result<Connected, TransportError> {
         let heartbeat = self.heartbeat;
         if heartbeat.is_zero() {
-            return Err(TransportError::Io("heartbeat must be positive".into()));
+            return Err(TransportError::Failed("heartbeat must be positive".into()));
         }
         let url = super::agent_url(url, worker_token, false);
         let ws = connect_with_limit(
@@ -38,7 +38,7 @@ impl WorkerTransport for WebSocketTransport {
             Some(super::MAX_CONTROL_MESSAGE),
         )
         .await
-        .map_err(|error| TransportError::Io(error.to_string()))?;
+        .map_err(|error| TransportError::Failed(error.to_string()))?;
         let (write, read) = ws.split();
         let write = Arc::new(Mutex::new(write));
 
@@ -78,14 +78,14 @@ impl WorkerSink for WsSink {
     async fn send(&self, message: WorkerMessage) -> Result<(), TransportError> {
         let bytes = message.encode_to_vec();
         if bytes.len() > super::MAX_CONTROL_MESSAGE {
-            return Err(TransportError::Protocol("control message exceeds 1 MiB".into()));
+            return Err(TransportError::Failed("control message exceeds 1 MiB".into()));
         }
         self.write
             .lock()
             .await
             .send(Message::Binary(bytes.into()))
             .await
-            .map_err(|e| TransportError::Io(e.to_string()))
+            .map_err(|e| TransportError::Failed(e.to_string()))
     }
 
     async fn close(&self) {
@@ -108,28 +108,30 @@ impl WorkerStream for WsStream {
         loop {
             let next = match tokio::time::timeout_at(self.idle_deadline, self.read.next()).await {
                 Ok(n) => n,
-                // No frame and no pong for two heartbeats: report a close so the caller reconnects.
+                // No frame and no pong for two heartbeats: fail so the caller reconnects.
                 Err(_) => {
-                    return Err(TransportError::Closed("websocket heartbeat timed out".into()));
+                    return Err(TransportError::Failed("websocket heartbeat timed out".into()));
                 }
             };
             if matches!(next, Some(Ok(_))) {
                 self.idle_deadline = tokio::time::Instant::now() + self.idle;
             }
             match next {
-                None => return Err(TransportError::Closed("websocket ended".into())),
-                Some(Err(e)) => return Err(TransportError::Io(e.to_string())),
+                None => return Err(TransportError::Failed("websocket ended".into())),
+                Some(Err(e)) => return Err(TransportError::Failed(e.to_string())),
                 Some(Ok(Message::Binary(b))) => {
                     return ServerMessage::decode(b.as_ref())
                         .map(Box::new)
                         .map(TransportEvent::ServerMessage)
-                        .map_err(|e| TransportError::Protocol(e.to_string()));
+                        .map_err(|e| {
+                            TransportError::Failed(format!("invalid control message: {e}"))
+                        });
                 }
                 Some(Ok(Message::Close(c))) => {
                     let reason = c
                         .map(|c| format!("websocket code {}: {}", c.code, c.reason))
                         .unwrap_or_else(|| "websocket closed without a status code".into());
-                    return Err(TransportError::Closed(reason));
+                    return Err(TransportError::Failed(format!("connection closed: {reason}")));
                 }
                 Some(Ok(Message::Text(t))) => {
                     log::warn!(target: lk_agents_abi::LOG_TARGET, ws_data = truncate_ws_data(&t).as_str();
@@ -196,7 +198,7 @@ mod tests {
             assert!(matches!(stream.recv().await.unwrap(), TransportEvent::ServerMessage(m) if m.message.is_none()));
             assert!(matches!(stream.recv().await.unwrap(), TransportEvent::ServerMessage(m) if m.message.is_none()));
             let err = stream.recv().await.unwrap_err();
-            assert!(matches!(&err, TransportError::Closed(reason) if reason.contains("1001") && reason.contains("draining")), "{err:?}");
+            assert!(matches!(&err, TransportError::Failed(reason) if reason.contains("1001") && reason.contains("draining")), "{err:?}");
         }).await;
         received.expect("control receive must skip text and ping without stalling");
         sink.close().await;
@@ -222,7 +224,7 @@ mod tests {
         }
         let result = tokio::time::timeout(Duration::from_millis(500), stream.recv()).await.unwrap();
         assert!(
-            matches!(result, Err(TransportError::Closed(reason)) if reason.contains("heartbeat"))
+            matches!(result, Err(TransportError::Failed(reason)) if reason.contains("heartbeat"))
         );
         sink.close().await;
         let _ = release.send(());

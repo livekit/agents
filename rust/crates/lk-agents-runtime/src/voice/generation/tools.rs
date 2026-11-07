@@ -5,6 +5,7 @@ use crate::telemetry;
 use crate::voice::session::SessionShared;
 use crate::voice::speech_handle::SpeechHandle;
 use lk_agents_abi::FunctionCall;
+use lk_agents_abi::errors::HostError;
 use lk_agents_core::tool_calls::PrepareFailure;
 use lk_agents_voice::agent_session::Answer;
 use lk_agents_voice::generation::{GenEvent, ReplySource};
@@ -192,11 +193,11 @@ impl HostedCall<'_> {
     async fn read_back(
         &self,
         prepared: Option<lk_agents_abi::HostRef>,
-    ) -> Result<lk_agents_abi::agent::ReadBackAnswer, String> {
+    ) -> Result<lk_agents_abi::agent::ReadBackAnswer, HostError> {
         let (Some(h), Some(args)) = (&self.host, prepared) else {
-            return Err("no prepared arguments".to_owned());
+            return Err(HostError::new("no prepared arguments"));
         };
-        h.host.read_back(&self.turn_cx(), &h.invocation, &args).await.map_err(|e| e.to_string())
+        h.host.read_back(&self.turn_cx(), &h.invocation, &args).await
     }
 
     /// Reports the event built for the answer's request id, and awaits the call's next move.

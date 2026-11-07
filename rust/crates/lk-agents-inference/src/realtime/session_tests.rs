@@ -575,7 +575,10 @@ async fn realtime_image_preparation_cannot_hold_close_or_publish_a_stale_result(
         settled: parking_lot::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
     }
     impl ImageResolver for StalledImage {
-        fn resolve(&self, image: &lk_agents_abi::ImageContent) -> Result<SerializedImage, String> {
+        fn resolve(
+            &self,
+            image: &lk_agents_abi::ImageContent,
+        ) -> Result<SerializedImage, lk_agents_abi::llm::provider_format::FormatError> {
             assert_eq!(image.id, "frame_1");
             if let Some(started) = self.started.lock().take() {
                 let _ = started.send(());

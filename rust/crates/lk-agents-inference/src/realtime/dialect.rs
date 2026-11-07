@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use lk_agents_abi::llm::realtime::RealtimeProvider;
+use lk_agents_abi::llm::realtime::{RealtimeConfigurationError, RealtimeProvider};
 use serde_json::{Value, json};
 
 use lk_agents_abi::llm::realtime::RealtimeCapabilities;
@@ -189,7 +189,7 @@ impl Dialect {
     pub fn prepare_tools(
         &self,
         tools: Vec<lk_agents_abi::ToolSpec>,
-    ) -> Result<Vec<lk_agents_abi::ToolSpec>, String> {
+    ) -> Result<Vec<lk_agents_abi::ToolSpec>, RealtimeConfigurationError> {
         use serde::Deserialize as _;
         // Current OpenAI/Azure realtime dialects support client functions. xAI additionally
         // supports its own server-side declarations; foreign SDK tools stay in the host pool.
@@ -210,7 +210,10 @@ impl Dialect {
         for tool in &tools {
             let Some(declaration) = &tool.provider_tool else { continue };
             let provider = XaiProviderTool::deserialize(&declaration.payload).map_err(|_| {
-                format!("xAI provider tool {:?} has an invalid declaration", tool.name)
+                RealtimeConfigurationError::Invalid(format!(
+                    "xAI provider tool {:?} has an invalid declaration",
+                    tool.name
+                ))
             })?;
             let conflicts = provider
                 .reserved_names()
@@ -219,11 +222,11 @@ impl Dialect {
                 .filter(|name| function_names.contains(name))
                 .collect::<std::collections::BTreeSet<_>>();
             if !conflicts.is_empty() {
-                return Err(format!(
+                return Err(RealtimeConfigurationError::Invalid(format!(
                     "xAI provider tool {:?} already uses function name(s) {}. Rename or remove the client functions.",
                     tool.name,
                     conflicts.into_iter().collect::<Vec<_>>().join(", "),
-                ));
+                )));
             }
         }
         Ok(tools)

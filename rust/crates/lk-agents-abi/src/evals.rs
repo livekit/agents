@@ -11,7 +11,10 @@ use crate::utils::host_ref::HostRef;
 use crate::{ChatItem, Llm};
 
 /// What a judge decided.
-#[crate::host(wire_enum(msg = format!("verdict must be 'pass', 'fail' or 'maybe', got {s:?}")))]
+#[crate::host(wire_enum(
+    err = InvalidJudgment,
+    msg = InvalidJudgment(format!("verdict must be 'pass', 'fail' or 'maybe', got {s:?}"))
+))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, SpanValue)]
 #[span_value(wire_strs)]
 #[serde(rename_all = "snake_case")]

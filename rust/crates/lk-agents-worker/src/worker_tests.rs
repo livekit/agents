@@ -58,7 +58,7 @@ async fn a_closed_connection_reconnects_and_the_machine_is_told() {
         vec![
             Step::Serves(vec![
                 register_message("W-1"),
-                Err(TransportError::Closed("peer disconnected".into())),
+                Err(TransportError::Failed("peer disconnected".into())),
             ]),
             Step::Serves(vec![register_message("W-2")]),
         ],
@@ -80,7 +80,7 @@ async fn a_connection_restores_the_retry_budget() {
             Step::ConnectFails,
             Step::Serves(vec![
                 register_message("W-1"),
-                Err(TransportError::Closed("peer disconnected".into())),
+                Err(TransportError::Failed("peer disconnected".into())),
             ]),
             Step::Serves(vec![register_message("W-2")]),
         ],
@@ -405,7 +405,7 @@ async fn disconnect_cancels_pending_host_decisions_before_reconnect_finishes() {
     peer.send(Ok(offer("pending"))).unwrap();
     let task = tokio::spawn(async move { runtime.run().await });
     assert_eq!(started.recv().await, Some("decision"));
-    peer.send(Err(TransportError::Closed("peer disconnected".into()))).unwrap();
+    peer.send(Err(TransportError::Failed("peer disconnected".into()))).unwrap();
     tokio::time::timeout(Duration::from_secs(1), async {
         while dropped.load(std::sync::atomic::Ordering::SeqCst) == 0 {
             tokio::task::yield_now().await;
@@ -817,7 +817,7 @@ mod contracts {
         let (mut rig, task) = running(runtime_rig_with_retry(1), 0);
         rig.launch("a").await;
         let _next = rig.next_peer();
-        rig.peer.send(Err(TransportError::Closed("lost".into()))).unwrap();
+        rig.peer.send(Err(TransportError::Failed("lost".into()))).unwrap();
         until_sent(&mut rig.sent, |m| matches!(m.message, Some(Sent::Register(_)))).await;
         let migrated =
             until_sent(&mut rig.sent, |m| matches!(m.message, Some(Sent::MigrateJob(_)))).await;

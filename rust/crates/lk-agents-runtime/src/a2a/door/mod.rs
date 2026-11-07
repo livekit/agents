@@ -321,12 +321,12 @@ impl Inner {
     }
 
     /// The thread a message is for: the one it names, else a new one in the grant's scope;
-    /// `Err` names a thread that does not exist.
+    /// `None` when the named thread does not exist.
     async fn context(
         &self,
         principal: &AuthPrincipal,
         context: Option<&str>,
-    ) -> Result<Result<String, String>, DoorError> {
+    ) -> Result<Option<String>, DoorError> {
         let (id, scope) = match context {
             None => {
                 let request = livekit_protocol::agent::agent_thread::CreateRequest {
@@ -343,7 +343,7 @@ impl Inner {
             },
         };
         authorize(principal, AuthOperation::Write, &id, scope.as_deref())?;
-        Ok(if scope.is_some() { Ok(id) } else { Err(id) })
+        Ok(scope.is_some().then_some(id))
     }
 
     #[allow(clippy::too_many_arguments, reason = "one request's exchange")]
@@ -358,8 +358,9 @@ impl Inner {
         call: TurnCall,
     ) -> Result<Vec<DoorFrame>, DoorError> {
         let context = match self.context(principal, message.context_id.as_deref()).await? {
-            Ok(context) => context,
-            Err(unknown) => {
+            Some(context) => context,
+            None => {
+                let unknown = message.context_id.unwrap_or_default();
                 let row = rpc::unknown_thread_task(
                     &shortuuid("AST_"),
                     &self.lane,

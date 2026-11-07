@@ -3,7 +3,7 @@
 //! and reads a host frame's pixels from the frame itself.
 
 use super::{EncodeOptions, ImageFormat, MediaError, ResizeOptions, RgbaFrame};
-use lk_agents_abi::llm::provider_format::{ImageResolver, SerializedImage};
+use lk_agents_abi::llm::provider_format::{FormatError, ImageResolver, SerializedImage};
 use lk_agents_abi::media::images::{ImageEncodeOptions, ImageInput, PreparedImage, ResizeStrategy};
 use lk_agents_abi::utils::video::VideoBufferType;
 use lk_agents_abi::{ImageContent, ImageSource};
@@ -88,11 +88,12 @@ impl Write for ImageBytes {
 pub struct Images;
 
 impl ImageResolver for Images {
-    fn resolve(&self, image: &ImageContent) -> Result<SerializedImage, String> {
+    fn resolve(&self, image: &ImageContent) -> Result<SerializedImage, FormatError> {
+        let refused = |reason: String| FormatError::Image { image_id: image.id.clone(), reason };
         let input = match &image.image {
             ImageSource::Url(url) => {
                 if url.len() > MAX_IMAGE_BYTES {
-                    return Err("realtime image URL exceeds 16 MiB".into());
+                    return Err(refused("realtime image URL exceeds 16 MiB".into()));
                 }
                 ImageInput::Url { url: url.clone(), mime_type: image.mime_type.clone() }
             }
@@ -112,7 +113,7 @@ impl ImageResolver for Images {
                 ..Default::default()
             },
         )
-        .map_err(|cause| format!("image {}: {cause}", image.id))?;
+        .map_err(|cause| refused(cause.to_string()))?;
         if let Some(header) = prepared.overridden_mime {
             log::warn!(target: lk_agents_abi::LOG_TARGET, declared_mime = image.mime_type.as_deref().unwrap_or_default(), header_mime = header.as_str(); "image MIME declaration overrides data URL header");
         }

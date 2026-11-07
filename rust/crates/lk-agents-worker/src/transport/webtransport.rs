@@ -122,7 +122,7 @@ impl SendHalf {
                 use tokio::io::AsyncWriteExt as _;
                 half.write_all(bytes).await.map_err(transport_err)
             }
-            SendHalf::Tcp(None) => Err(TransportError::Closed("endpoint response ended".into())),
+            SendHalf::Tcp(None) => Err(TransportError::Failed("endpoint response ended".into())),
         }
     }
 
@@ -174,7 +174,7 @@ impl EndpointReader {
     pub async fn read(&mut self, buf: &mut [u8]) -> Result<Option<usize>, TransportError> {
         if self.control.0.borrow().stop.is_some() {
             self.apply_control();
-            return Err(TransportError::Closed("endpoint request stopped".into()));
+            return Err(TransportError::Failed("endpoint request stopped".into()));
         }
         let mut control = self.control.0.subscribe();
         let result = {
@@ -198,7 +198,7 @@ impl EndpointReader {
             }
             None => {
                 self.apply_control();
-                Err(TransportError::Closed("endpoint request stopped".into()))
+                Err(TransportError::Failed("endpoint request stopped".into()))
             }
         }
     }
@@ -228,7 +228,7 @@ impl EndpointWriter {
         };
         if res {
             self.apply_control()?;
-            return Err(TransportError::Closed("endpoint response stopped".into()));
+            return Err(TransportError::Failed("endpoint response stopped".into()));
         }
         let mut control = self.control.0.subscribe();
         let result = {
@@ -252,7 +252,7 @@ impl EndpointWriter {
             }
             None => {
                 self.apply_control()?;
-                Err(TransportError::Closed("endpoint response stopped".into()))
+                Err(TransportError::Failed("endpoint response stopped".into()))
             }
         }
     }
@@ -277,12 +277,12 @@ impl EndpointStream {
         self.read_exact(&mut header).await?;
         let n = u32::from_be_bytes(header) as usize;
         if n > MAX_PREAMBLE {
-            return Err(TransportError::Protocol(format!("preamble too large: {n} bytes")));
+            return Err(TransportError::Failed(format!("preamble too large: {n} bytes")));
         }
         let mut body = vec![0u8; n];
         self.read_exact(&mut body).await?;
         <StreamPreamble as prost::Message>::decode(body.as_slice())
-            .map_err(|e| TransportError::Protocol(format!("preamble: {e}")))
+            .map_err(|e| TransportError::Failed(format!("preamble: {e}")))
     }
 
     async fn read_exact(&mut self, buf: &mut [u8]) -> Result<(), TransportError> {
@@ -291,9 +291,7 @@ impl EndpointStream {
             match self.recv.read(&mut buf[filled..]).await.map_err(transport_err)? {
                 Some(n) => filled += n,
                 None => {
-                    return Err(TransportError::Protocol(
-                        "stream ended inside the preamble".into(),
-                    ));
+                    return Err(TransportError::Failed("stream ended inside the preamble".into()));
                 }
             }
         }
@@ -320,7 +318,7 @@ pub struct WtTransport {
 }
 
 fn transport_err(e: impl std::fmt::Display) -> TransportError {
-    TransportError::Io(e.to_string())
+    TransportError::Failed(e.to_string())
 }
 
 fn loopback_url(url: &url::Url) -> bool {
@@ -347,7 +345,7 @@ impl WorkerTransport for WtTransport {
         let url = super::agent_url(url, worker_token, true);
         let mut url = url.parse::<url::Url>().map_err(transport_err)?;
         if self.insecure && !loopback_url(&url) {
-            return Err(TransportError::Io(
+            return Err(TransportError::Failed(
                 "insecure worker transport is only allowed for loopback URLs".into(),
             ));
         }
@@ -405,7 +403,7 @@ fn parse_control(buf: &[u8]) -> Result<Option<(Vec<u8>, usize)>, TransportError>
     }
     let n = u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
     if n > MAX_CONTROL_MESSAGE {
-        return Err(TransportError::Io(format!("control message too large: {n} bytes")));
+        return Err(TransportError::Failed(format!("control message too large: {n} bytes")));
     }
     if buf.len() < 4 + n {
         return Ok(None);
@@ -429,7 +427,7 @@ impl WorkerSink for WtSink {
     async fn send(&self, message: WorkerMessage) -> Result<(), TransportError> {
         let bytes = message.encode_to_vec();
         if bytes.len() > MAX_CONTROL_MESSAGE {
-            return Err(TransportError::Io(format!(
+            return Err(TransportError::Failed(format!(
                 "control message too large: {} bytes",
                 bytes.len()
             )));
@@ -458,7 +456,7 @@ impl WorkerStream for WtStream {
                 return ServerMessage::decode(msg.as_slice())
                     .map(Box::new)
                     .map(TransportEvent::ServerMessage)
-                    .map_err(|e| TransportError::Protocol(e.to_string()));
+                    .map_err(|e| TransportError::Failed(format!("invalid control message: {e}")));
             }
             let mut chunk = [0u8; 16 * 1024];
             let read = tokio::select! {
@@ -470,16 +468,14 @@ impl WorkerStream for WtStream {
             };
             match read {
                 Ok(Some(n)) => self.buf.extend_from_slice(&chunk[..n]),
-                // Control stream finished or session gone: `Closed` is what the loop reconnects on.
+                // Control stream finished or session gone: the loop reconnects.
                 Ok(None) if !self.buf.is_empty() => {
-                    return Err(TransportError::Protocol("truncated control message".into()));
+                    return Err(TransportError::Failed("truncated control message".into()));
                 }
                 Ok(None) => {
-                    return Err(TransportError::Closed("webtransport control stream ended".into()));
+                    return Err(TransportError::Failed("webtransport control stream ended".into()));
                 }
-                Err(e) => {
-                    return Err(TransportError::Closed(format!("webtransport: {e}")));
-                }
+                Err(e) => return Err(TransportError::Failed(format!("webtransport: {e}"))),
             }
         }
     }
@@ -499,7 +495,7 @@ mod tests {
                 .connect(&format!("https://{host}:443"), None, vec![])
                 .await;
             assert!(
-                matches!(result, Err(TransportError::Io(message)) if message.contains("loopback"))
+                matches!(result, Err(TransportError::Failed(message)) if message.contains("loopback"))
             );
         }
         for host in ["localhost", "127.0.0.1", "127.0.1.2", "[::1]"] {

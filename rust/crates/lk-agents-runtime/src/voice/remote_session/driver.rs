@@ -93,14 +93,23 @@ impl SessionServer {
     }
 
     /// Encode one session event from the facts the host reports and queue it, stamped `created_at`
-    /// (now when `None`). `false` when the event has no wire form (a tool status outside the closed
-    /// set), which the reference drops.
-    pub fn send_wire(&self, event: WireEvent, created_at: Option<f64>) -> Result<bool, String> {
-        let Some(ev) = super::encode_wire(event)? else { return Ok(false) };
+    /// (now when `None`). An event with no wire form (a tool status outside the closed set) is
+    /// dropped, as the reference does; one that cannot be encoded is logged.
+    pub fn send_wire(&self, event: WireEvent, created_at: Option<f64>) {
+        let unsent = |error: &dyn std::fmt::Display| {
+            log::error!(target: lk_agents_abi::LOG_TARGET, error = error.to_string().as_str();
+                "failed to forward a session event to the remote client");
+        };
+        let ev = match super::encode_wire(event) {
+            Ok(Some(ev)) => ev,
+            Ok(None) => return,
+            Err(error) => return unsent(&error),
+        };
         let at = created_at.unwrap_or_else(|| self.shared.time.wall_secs());
         let ev = proto::AgentSessionEvent { created_at: None, event: Some(ev) };
-        self.send_event(ev, at).map_err(|e| e.to_string())?;
-        Ok(true)
+        if let Err(error) = self.send_event(ev, at) {
+            unsent(&error);
+        }
     }
 
     /// `start()`: transport, then writer and receive loop. Idempotent; a failed start still counts
@@ -241,10 +250,7 @@ impl RemoteSessionLink {
     }
 
     fn send(&self, event: WireEvent, at: Option<f64>) {
-        if let Err(e) = self.host.send_wire(event, at) {
-            log::error!(target: lk_agents_abi::LOG_TARGET, error = e.as_str();
-                "failed to forward a session event to the remote client");
-        }
+        self.host.send_wire(event, at);
     }
 
     pub async fn start(&self) -> Result<(), HostError> {
@@ -576,14 +582,12 @@ mod tests {
             Arc::new(lk_agents_net::task::TokioSpawner::current()),
         );
         let before = time.wall_secs();
-        runtime
-            .send_wire(
-                WireEvent::Error(lk_agents_abi::worker::remote_session::ErrorWire {
-                    message: "clock".into(),
-                }),
-                None,
-            )
-            .unwrap();
+        runtime.send_wire(
+            WireEvent::Error(lk_agents_abi::worker::remote_session::ErrorWire {
+                message: "clock".into(),
+            }),
+            None,
+        );
         runtime.start(transport.clone(), None).await.unwrap();
         runtime.aclose(Duration::from_secs(1)).await;
         let sent = transport.sent.lock();

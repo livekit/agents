@@ -180,7 +180,7 @@ pub(crate) fn split_content<P>(
     let mut parts = Vec::new();
     for content in &message.content {
         if let ChatContent::Image(image) = content {
-            parts.push(to_image(&resolve(image, images)?));
+            parts.push(to_image(&images.resolve(image)?));
         }
     }
     let text = text_content(message);
@@ -191,15 +191,6 @@ pub(crate) fn split_content<P>(
         parts.push(to_text(text));
     }
     Ok(Content::Parts(parts))
-}
-
-pub(crate) fn resolve(
-    image: &lk_agents_abi::ImageContent,
-    images: &dyn ImageResolver,
-) -> Result<SerializedImage, FormatError> {
-    images
-        .resolve(image)
-        .map_err(|reason| FormatError::Image { image_id: image.id.clone(), reason })
 }
 
 pub(crate) fn image_url(image: &SerializedImage) -> String {

@@ -31,7 +31,7 @@ impl EotTransport for CloudFailure {
 
 struct Model(Arc<Mutex<Vec<Vec<i16>>>>);
 impl LocalEotModel for Model {
-    fn predict(&self, pcm: &[i16]) -> Result<f64, String> {
+    fn predict(&self, pcm: &[i16]) -> Result<f64, lk_agents_abi::errors::HostError> {
         self.0.lock().push(pcm.to_vec());
         Ok(0.7)
     }

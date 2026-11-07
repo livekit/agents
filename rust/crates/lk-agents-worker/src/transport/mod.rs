@@ -9,14 +9,11 @@ use livekit_protocol::{ServerMessage, WorkerMessage};
 
 pub(crate) const MAX_CONTROL_MESSAGE: usize = 1 << 20;
 
+/// A lost or refused connection; only the unanswered first connection decides anything.
 #[derive(Debug, thiserror::Error)]
 pub enum TransportError {
     #[error("{0}")]
-    Io(String),
-    #[error("connection closed: {0}")]
-    Closed(String),
-    #[error("invalid control message: {0}")]
-    Protocol(String),
+    Failed(String),
     #[error("no answer within {0:?}")]
     TimedOut(Duration),
 }

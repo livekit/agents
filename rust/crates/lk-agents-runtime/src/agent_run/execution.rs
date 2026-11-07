@@ -250,7 +250,7 @@ impl Execution {
         let cx = self.cx.clone();
         let function_call = self.calls.get(&call).cloned();
         self.invoke(Work::Call(call), function_call, None, move |inv, events| async move {
-            let result = host.read_back(&cx, &inv, &args).await.map_err(|e| e.to_string());
+            let result = host.read_back(&cx, &inv, &args).await;
             let event = AgentRunEvent::ReadBackRendered { call, result };
             let _ = events.send(Report::Core(event)).await;
         });

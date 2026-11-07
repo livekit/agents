@@ -48,9 +48,9 @@ impl SerializedImage {
     }
 }
 
-/// Implemented above the purity line. A `String` error so the encoder need not know `FormatError`.
+/// Implemented above the purity line; a refused image is [`super::FormatError::Image`].
 pub trait ImageResolver {
-    fn resolve(&self, image: &ImageContent) -> Result<SerializedImage, String>;
+    fn resolve(&self, image: &ImageContent) -> Result<SerializedImage, super::FormatError>;
 }
 
 /// Tagged bytes leaf consumed by generated provider-value conversions.

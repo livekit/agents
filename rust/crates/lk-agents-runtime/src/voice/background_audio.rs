@@ -649,7 +649,7 @@ impl FileInput {
         &mut self,
         sample_rate: u32,
         num_channels: u16,
-    ) -> Option<Result<Vec<i16>, String>> {
+    ) -> Option<Result<Vec<i16>, DecoderError>> {
         if self.decoder.is_none() {
             let opened = AudioDecoder::open_file(
                 &lk_agents_media::pool::media_pool(),
@@ -658,8 +658,7 @@ impl FileInput {
                 sample_rate,
                 num_channels,
                 decoder_limits(sample_rate, num_channels),
-            )
-            .map_err(|e| e.to_string());
+            );
             match opened {
                 Ok(decoder) => self.decoder = Some(decoder),
                 Err(error) => return Some(Err(error)),
@@ -668,7 +667,7 @@ impl FileInput {
         match self.decoder.as_mut().unwrap().next().await {
             Ok(Some(frame)) => Some(Ok(lk_agents_media::pcm_samples(&frame.data))),
             Ok(None) => None,
-            Err(error) => Some(Err(error.to_string())),
+            Err(error) => Some(Err(error)),
         }
     }
 

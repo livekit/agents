@@ -883,11 +883,11 @@ async fn the_handshake_uses_a_ws_url_a_bearer_token_and_a_local_session_id() {
 /// Records the PCM the model was handed, so the snapshot rule is observable.
 struct RecordingModel {
     seen: Arc<Mutex<Vec<Vec<i16>>>>,
-    answer: Result<f64, String>,
+    answer: Result<f64, lk_agents_abi::errors::HostError>,
 }
 
 impl LocalEotModel for RecordingModel {
-    fn predict(&self, pcm: &[i16]) -> Result<f64, String> {
+    fn predict(&self, pcm: &[i16]) -> Result<f64, lk_agents_abi::errors::HostError> {
         self.seen.lock().push(pcm.to_vec());
         self.answer.clone()
     }
@@ -937,7 +937,7 @@ async fn a_model_that_raises_scores_the_turn_zero_and_says_so() {
     let transport = LocalTransport::new(
         Arc::new(RecordingModel {
             seen: Arc::new(Mutex::new(Vec::new())),
-            answer: Err("weights not loaded".to_owned()),
+            answer: Err(lk_agents_abi::errors::HostError::new("weights not loaded")),
         }),
         sink.clone() as Arc<dyn PredictionListener>,
         test_pool(),

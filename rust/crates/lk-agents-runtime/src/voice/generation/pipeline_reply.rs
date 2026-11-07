@@ -10,7 +10,6 @@ use crate::voice::generation::realtime_generation::realtime_generation_task;
 use crate::voice::session::SessionShared;
 use crate::voice::speech_handle::SpeechHandle;
 use lk_agents_abi::ChatMessage;
-use lk_agents_abi::errors::ProviderError;
 use lk_agents_voice::agent_session::DriverError;
 use lk_agents_voice::generation::SpeechSegmentEvent;
 use lk_agents_voice::generation::effects::ReplyStartupEffect;
@@ -42,7 +41,7 @@ pub(crate) async fn pipeline_reply_task(
         }
         Err(DriverError::Provider(error)) => error,
         Err(DriverError::TextOutput(lk_agents_abi::voice::io::IoError::Host(error))) => {
-            ProviderError::Host { error, api_kind: None, retryable: false, status_code: None }
+            error.into()
         }
         // Reachable from the host (`Agent(llm=None)` then `generate_reply()`).
         Err(DriverError::Missing(what)) => {

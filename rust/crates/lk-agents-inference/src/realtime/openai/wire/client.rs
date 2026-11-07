@@ -431,7 +431,7 @@ fn wire_content(m: &ChatMessage, images: &dyn ImageResolver) -> Result<Vec<Conte
         if m.role != Role::User {
             continue;
         }
-        let resolved = images.resolve(image).map_err(EncodeError)?;
+        let resolved = images.resolve(image).map_err(|error| EncodeError(error.to_string()))?;
         if resolved.external_url.is_some() {
             return Err(EncodeError(
                 "realtime images require an inline data URL; external URLs are unsupported".into(),

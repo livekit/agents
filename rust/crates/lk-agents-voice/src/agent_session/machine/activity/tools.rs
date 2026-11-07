@@ -234,7 +234,7 @@ impl VoiceDriver {
         &mut self,
         speech: SpeechId,
         call: CallId,
-        result: Result<ReadBackAnswer, String>,
+        result: Result<ReadBackAnswer, lk_agents_abi::errors::HostError>,
         go: RequestId,
     ) {
         let event = AgentRunEvent::ReadBackRendered { call, result };

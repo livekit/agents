@@ -4,7 +4,6 @@ use super::group::{
     DEFAULT_INLINE_INSTRUCTIONS_TEMPLATE, Dropped, GroupItem,
     convert_mid_conversation_instructions, group_tool_calls,
 };
-use super::openai::resolve;
 use super::{FormatError, ImageResolver, SerializedImage};
 use lk_agents_abi::{
     ChatContent, ChatContext, ChatMessage, FunctionCall, FunctionCallOutput, Role,
@@ -128,7 +127,7 @@ fn push_message_blocks<D: Dialect>(
     for part in &message.content {
         match part {
             ChatContent::Image(image) if !D::USER_IMAGES_ONLY || message.role == Role::User => {
-                content.push(dialect.image(&resolve(image, images)?)?);
+                content.push(dialect.image(&images.resolve(image)?)?);
             }
             ChatContent::Text(text) if !text.is_empty() => content.push(dialect.text(text)),
             ChatContent::Audio(_) | ChatContent::Image(_) | ChatContent::Text(_) => {}

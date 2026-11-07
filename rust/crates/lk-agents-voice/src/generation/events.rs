@@ -138,7 +138,7 @@ pub enum GenEvent {
     ReadBackRendered {
         speech: SpeechId,
         call: crate::tool_executor::CallId,
-        answer: Result<lk_agents_abi::agent::ReadBackAnswer, String>,
+        answer: Result<lk_agents_abi::agent::ReadBackAnswer, lk_agents_abi::errors::HostError>,
         go: crate::agent_session::RequestId,
     },
     /// As the call's answer arrives; `message` is `None` when there is nothing to say. `call`:

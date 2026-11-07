@@ -302,7 +302,7 @@ impl Outbox {
         use livekit_protocol::worker_message::Message as M;
         use prost::Message;
         if message.encoded_len() > crate::transport::MAX_CONTROL_MESSAGE {
-            return Err(TransportError::Protocol("control message exceeds 1 MiB".into()));
+            return Err(TransportError::Failed("control message exceeds 1 MiB".into()));
         }
         // A status sample supersedes older unsent samples, including when entering drain.
         match &message.message {
@@ -315,7 +315,7 @@ impl Outbox {
             _ => {}
         }
         if self.pending.len() >= MAX_PENDING_WRITES {
-            return Err(TransportError::Io("control write queue is full".into()));
+            return Err(TransportError::Failed("control write queue is full".into()));
         }
         self.pending.push_back(PendingWrite {
             message,
@@ -487,7 +487,7 @@ impl ActiveConnection {
             }
             received = self.transport.stream.recv() => self.receive(received?),
             _ = wait_for_deadline(self.registration_deadline) => {
-                Err(TransportError::Io("registration timed out".into()).into())
+                Err(TransportError::Failed("registration timed out".into()).into())
             }
         }
     }
@@ -531,7 +531,7 @@ async fn wait_for_deadline(deadline: Option<Instant>) {
 
 impl PendingWrite {
     async fn send(self, sink: Arc<dyn WorkerSink>) -> Result<Option<String>, TransportError> {
-        let expired = || TransportError::Io("control write deadline exceeded".into());
+        let expired = || TransportError::Failed("control write deadline exceeded".into());
         if Instant::now() >= self.deadline {
             return Err(expired());
         }

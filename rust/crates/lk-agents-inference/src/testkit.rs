@@ -16,9 +16,15 @@ pub struct NoImages;
 impl lk_agents_abi::llm::provider_format::ImageResolver for NoImages {
     fn resolve(
         &self,
-        _image: &lk_agents_abi::ImageContent,
-    ) -> Result<lk_agents_abi::llm::provider_format::SerializedImage, String> {
-        Err("no image resolver is attached to this inference client".to_owned())
+        image: &lk_agents_abi::ImageContent,
+    ) -> Result<
+        lk_agents_abi::llm::provider_format::SerializedImage,
+        lk_agents_abi::llm::provider_format::FormatError,
+    > {
+        Err(lk_agents_abi::llm::provider_format::FormatError::Image {
+            image_id: image.id.clone(),
+            reason: "no image resolver is attached to this inference client".into(),
+        })
     }
 }
 

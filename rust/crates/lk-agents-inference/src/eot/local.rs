@@ -5,7 +5,7 @@ use parking_lot::Mutex;
 use std::time::Instant;
 
 use async_trait::async_trait;
-use lk_agents_abi::errors::ApiError;
+use lk_agents_abi::errors::{ApiError, HostError};
 use lk_agents_media::pool::JobClass;
 use lk_agents_media::pool::MediaPool;
 use tokio::sync::mpsc;
@@ -26,7 +26,7 @@ pub const CLIENT_BUFFER_SAMPLES: usize =
 /// The mini model. Blocking; the transport runs it on the process's media worker pool.
 pub trait LocalEotModel: Send + Sync + 'static {
     /// End-of-turn probability for `pcm`, 16 kHz mono. `Err` is the model raising; scored 0.0.
-    fn predict(&self, pcm: &[i16]) -> Result<f64, String>;
+    fn predict(&self, pcm: &[i16]) -> Result<f64, HostError>;
 }
 
 /// Recent mono samples, already resampled by the host. An oversized frame keeps its newest
@@ -151,12 +151,12 @@ impl EotTransport for LocalTransport {
                 .media_pool
                 .spawn_admitted(permit, move || model.predict(&pcm))
                 .await
-                .unwrap_or_else(|panicked| Err(panicked.to_string()));
+                .unwrap_or_else(|panicked| Err(HostError::new(panicked.to_string())));
             let inference_duration = started.elapsed().as_secs_f64();
 
             // Any failure (panic included) scores 0.0 (`transports.py:421`): "no end of turn".
-            let probability = result.unwrap_or_else(|reason| {
-                self.sink.warn(EotWarning::LocalPredictionFailed { reason });
+            let probability = result.unwrap_or_else(|error| {
+                self.sink.warn(EotWarning::LocalPredictionFailed { reason: error.to_string() });
                 0.0
             });
 

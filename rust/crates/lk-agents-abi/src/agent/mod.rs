@@ -136,10 +136,11 @@ pub struct PreparedArguments {
     pub identity: ArgumentIdentity,
 }
 
-/// Binding or validation of a call's arguments failed: feedback for the model. The host raises
-/// it; its message is the feedback.
+/// Decoding, binding or validation of a call's arguments failed: feedback for the model. The
+/// framework (decoding) or the host raises it; its message is the feedback.
 #[crate::host(error(raised = "livekit.agents.voice.agent_run.ToolArgumentError"))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{message}")]
 pub struct ToolArgumentError {
     pub message: String,
 }

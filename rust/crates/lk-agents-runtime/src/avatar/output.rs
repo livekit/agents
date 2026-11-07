@@ -64,7 +64,7 @@ struct Inner {
     clock: Arc<dyn Clock>,
     spawner: Arc<dyn Spawner>,
     /// `None` while starting, then whether the avatar became ready.
-    started: watch::Sender<Option<std::result::Result<(), String>>>,
+    started: watch::Sender<Option<rtc::Result<()>>>,
     /// The open segment. Its stream is opened, written and closed by tasks of their own, so a
     /// capture the playout drops mid-write leaves the stream to the segment's close.
     segment: Mutex<Segments>,
@@ -104,7 +104,7 @@ impl Inner {
     /// its track published, when asked).
     async fn start(self: Arc<Self>) {
         let outcome = self.wait_until_ready().await;
-        self.started.send_replace(Some(outcome.map_err(|error| error.to_string())));
+        self.started.send_replace(Some(outcome));
     }
 
     async fn wait_until_ready(self: &Arc<Self>) -> rtc::Result<()> {
@@ -362,7 +362,7 @@ impl Inner {
             let mut segments = self.segment.lock();
             segments.core.close().and_then(|key| segments.writers.get(&key).cloned())
         };
-        self.started.send_replace(Some(Err("the avatar output closed".into())));
+        self.started.send_replace(Some(Err(RtcError::Closed("the avatar output"))));
         if let Some(segment) = segment {
             self.close_segment(segment);
         }
@@ -528,11 +528,7 @@ impl AudioOutput for DataStreamAudioOutput {
         Box::pin(async move {
             let mut started = self.inner.started.subscribe();
             let ready = started.wait_for(Option::is_some).await.map(|s| s.clone()).ok().flatten();
-            match ready {
-                Some(Ok(())) => {}
-                Some(Err(e)) => return Err(IoError::Rtc(e)),
-                None => return Err(IoError::Rtc("the avatar output closed".into())),
-            }
+            ready.unwrap_or(Err(RtcError::Closed("the avatar output")))?;
             let segment = {
                 let mut state = self.inner.segment.lock();
                 let key = self

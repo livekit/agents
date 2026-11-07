@@ -478,8 +478,13 @@ impl Parser {
         if values.len() == 1 { values.pop().unwrap() } else { Value::Array(values) }
     }
 }
+/// The input nests deeper than the repair follows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("JSON repair exceeded maximum nesting depth")]
+pub struct NestingTooDeep;
+
 /// JSON-compatible recovery. No file handles, language runtimes, schema callbacks or logging sinks.
-pub fn repair(raw: &str) -> Result<Value, String> {
+pub fn repair(raw: &str) -> Result<Value, NestingTooDeep> {
     if let Ok(value) = serde_json::from_str(raw) {
         return Ok(value);
     }
@@ -491,11 +496,7 @@ pub fn repair(raw: &str) -> Result<Value, String> {
         limit_hit: false,
     };
     let value = parser.parse();
-    if parser.limit_hit {
-        Err("JSON repair exceeded maximum nesting depth".into())
-    } else {
-        Ok(value)
-    }
+    if parser.limit_hit { Err(NestingTooDeep) } else { Ok(value) }
 }
 
 #[cfg(test)]

@@ -7,7 +7,8 @@ use super::{
     EotTransport, LocalEotModel, LocalTransport, MetricsCallback, MountedTransport,
     TransportFactory,
 };
-use lk_agents_abi::errors::{ApiError, ProviderError};
+use lk_agents_abi::errors::{ApiError, HostError, ProviderError};
+use lk_agents_abi::inference::InvalidOption;
 use lk_agents_abi::tokenize::language::{
     LanguageCode, ThresholdOptions, ThresholdOverride, TurnDetectorModel,
 };
@@ -182,8 +183,8 @@ impl lk_agents_abi::turn::inference::InferenceEot for AudioEot {
 struct HostModel(Arc<dyn EotModel>);
 
 impl LocalEotModel for HostModel {
-    fn predict(&self, pcm: &[i16]) -> Result<f64, String> {
-        self.0.predict(pcm.to_vec()).map_err(|e| e.to_string())
+    fn predict(&self, pcm: &[i16]) -> Result<f64, HostError> {
+        self.0.predict(pcm.to_vec())
     }
 }
 
@@ -215,7 +216,7 @@ pub fn select(
     key: &str,
     secret: &str,
     local_fallback: bool,
-) -> Result<(TurnDetectorModel, bool, Vec<String>), String> {
+) -> Result<(TurnDetectorModel, bool, Vec<String>), InvalidOption> {
     let mut cloud = version.map_or(hosted || dev, |v| v == "v1");
     let mut warnings = vec![];
     if cloud {
@@ -231,9 +232,9 @@ pub fn select(
         if !missing.is_empty() {
             let missing = missing.join(", ");
             if version.is_some() {
-                return Err(format!(
+                return Err(InvalidOption(format!(
                     "TurnDetector(version='v1') requires {missing} (env or constructor argument)."
-                ));
+                )));
             }
             warnings.push(format!("LIVEKIT_INFERENCE_URL is set but {missing} missing; falling back to the turn-detector-v1-mini model"));
             cloud = false;

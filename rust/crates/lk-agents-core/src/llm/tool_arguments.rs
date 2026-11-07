@@ -1,4 +1,5 @@
 //! Host-independent tool argument decoding and bounded recovery of incomplete model output.
+use lk_agents_abi::agent::ToolArgumentError;
 use serde_json::{Map, Value};
 use std::sync::LazyLock;
 
@@ -56,7 +57,7 @@ fn prefix(text: &str) -> String {
 
 /// `parse_function_arguments`: the model's JSON arguments as an object, repaired when malformed
 /// (the repair is logged, never raised).
-pub fn parse_logged(raw: &str) -> Result<Map<String, Value>, String> {
+pub fn parse_logged(raw: &str) -> Result<Map<String, Value>, ToolArgumentError> {
     let parsed = parse(raw)?;
     if let Some(Repair { error, repaired }) = &parsed.repair {
         let raw_arguments: String = raw.chars().take(500).collect();
@@ -75,16 +76,18 @@ pub fn parse_logged(raw: &str) -> Result<Map<String, Value>, String> {
     Ok(parsed.arguments)
 }
 
-pub fn parse(raw: &str) -> Result<ParsedArguments, String> {
+pub fn parse(raw: &str) -> Result<ParsedArguments, ToolArgumentError> {
     let (mut value, mut repair) = match serde_json::from_str::<Value>(raw) {
         Ok(value) => (value, None),
         Err(error) => {
-            let value = crate::llm::json_repair::repair(raw)?;
+            let value = crate::llm::json_repair::repair(raw)
+                .map_err(|too_deep| ToolArgumentError::from(too_deep.to_string()))?;
             if value.as_str() == Some("") {
                 return Err(format!(
                     "could not parse function arguments as JSON: {error}: {}",
                     prefix(raw)
-                ));
+                )
+                .into());
             }
             let value = strip_template_tokens(value);
             (value.clone(), Some(Repair { error: error.to_string(), repaired: value }))
@@ -113,11 +116,12 @@ pub fn parse(raw: &str) -> Result<ParsedArguments, String> {
                 return Err(format!(
                     "expected dict from function arguments, got {kind}: {}",
                     prefix(raw)
-                ));
+                )
+                .into());
             }
         }
     }
-    Err("function arguments exceed maximum encoded nesting depth".into())
+    Err("function arguments exceed maximum encoded nesting depth".to_owned().into())
 }
 
 #[cfg(test)]

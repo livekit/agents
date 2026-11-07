@@ -143,7 +143,7 @@ pub enum AgentRunEvent {
     },
     ReadBackRendered {
         call: CallId,
-        result: Result<ReadBackAnswer, String>,
+        result: Result<ReadBackAnswer, HostError>,
     },
     /// The host rendered the call's template; `None` keeps the framework's text.
     ToolHandlingTemplateRendered {
@@ -729,7 +729,7 @@ impl AgentRun {
         };
         let value = match value {
             Ok(value) => value,
-            Err(reason) => return acting.calls.final_settled(call, Some(reason), fx),
+            Err(reason) => return acting.calls.final_settled(call, Some(reason.message), fx),
         };
         let validation = ValidationId(self.mint());
         let candidate = OutputCandidate::Value(value);

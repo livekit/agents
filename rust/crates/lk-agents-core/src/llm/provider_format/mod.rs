@@ -161,11 +161,11 @@ impl PreResolved {
 }
 
 impl ImageResolver for PreResolved {
-    fn resolve(&self, image: &ImageContent) -> Result<SerializedImage, String> {
-        self.0
-            .get(&image.id)
-            .cloned()
-            .ok_or_else(|| format!("no SerializedImage was resolved for {}", image.id))
+    fn resolve(&self, image: &ImageContent) -> Result<SerializedImage, FormatError> {
+        self.0.get(&image.id).cloned().ok_or_else(|| FormatError::Image {
+            image_id: image.id.clone(),
+            reason: "no SerializedImage was resolved".into(),
+        })
     }
 }
 

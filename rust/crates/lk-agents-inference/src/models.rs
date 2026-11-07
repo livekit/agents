@@ -78,7 +78,7 @@ impl InferenceModels for Models {
     }
 
     fn amd_is_evaluated_model(model: String, kind: String) -> Result<bool, InvalidOption> {
-        crate::amd::is_evaluated_model_of_kind(&model, &kind).map_err(InvalidOption)
+        crate::amd::is_evaluated_model_of_kind(&model, &kind)
     }
 
     fn llm_unsupported_params(
@@ -108,7 +108,6 @@ impl InferenceModels for Models {
         local_fallback: bool,
     ) -> Result<(TurnDetectorModel, bool, Vec<String>), InvalidOption> {
         crate::eot::select(version.as_deref(), hosted, dev, &url, &key, &secret, local_fallback)
-            .map_err(InvalidOption)
     }
 
     fn stt_resolve_vad_for_model(model: Option<String>, has_vad: bool) -> VadResolution {
