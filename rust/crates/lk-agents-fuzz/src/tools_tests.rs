@@ -611,6 +611,40 @@ mod tool_update_as_first_report {
         assert!(!failed.iter().any(|c| misread.contains(&c.as_str())), "{failed:?}");
     }
 
+    // Catches: a host update ending the body and the body's own answer, both in before the
+    // runtime's body task next ran: the task took the answer and dropped the update the host had
+    // sent first (survey seed 4271 TaskBridge, tool_output_follows_outcome).
+    #[test]
+    fn an_end_with_the_answer_in_one_instant_answers_the_call() {
+        for schedule in 0..8 {
+            let setup = Setup { tools: vec!["lookup".into()], ..Setup::default() };
+            let inputs = [
+                Input::GenerateReply { user_input: None, instructions: None, allow: None },
+                Input::Advance { ms: Millis(100) },
+                Input::LlmToolCall {
+                    chat: Ref::new(0),
+                    name: "lookup".into(),
+                    args: ToolArgs("{}".into()),
+                },
+                Input::LlmEnd { chat: Ref::new(0) },
+                Input::Advance { ms: Millis(100) },
+                update(None, ToolAnswer::Recorded),
+                answer(ToolAnswer::Value, "Your balance is $1,204.55."),
+                Input::Advance { ms: Millis(3_000) },
+            ];
+            let run = simulate(async {
+                let policy = lk_agents_fuzz::drive::Policy::TaskBridge;
+                let mut run = Run::start(&setup, schedule, policy).await;
+                for input in &inputs {
+                    run.apply(input).await;
+                }
+                run
+            });
+            let failed = failed(&run);
+            assert!(!failed.iter().any(|c| c == "tool_output_follows_outcome"), "{failed:?}");
+        }
+    }
+
     // Catches: the rule held the body's own answer to the call's output, though a host update
     // ending the body first answered the call and the driver refused the later answer (seed 211
     // Arrival, tool_output_follows_outcome).

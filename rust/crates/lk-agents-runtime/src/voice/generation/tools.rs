@@ -284,7 +284,8 @@ struct ToolBody {
 
 impl ToolBody {
     /// Answers the step with the body's report, or with its first progress update; then the
-    /// body's own report reaches the core as a tool update.
+    /// body's own report reaches the core as a tool update. An update already sent when the body
+    /// has also returned came first: the body sends it before returning.
     async fn run(
         self,
         span: Option<telemetry::ScopedSpan<telemetry::FunctionTool>>,
@@ -294,8 +295,8 @@ impl ToolBody {
         let execute = self.execute(span);
         tokio::pin!(execute);
         let first = tokio::select! { biased;
-            report = &mut execute => Ok(report),
             update = &mut progress => Err(update),
+            report = &mut execute => Ok(report),
         };
         match first {
             Ok(report) => {
