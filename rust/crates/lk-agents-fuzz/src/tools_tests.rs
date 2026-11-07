@@ -892,7 +892,7 @@ mod detached_duplicate_admission {
 
 mod host_body_close_ownership {
     use lk_agents_fuzz::drive::{Case, Setup, run};
-    use lk_agents_fuzz::input::{Input, Millis, Ref, ToolAnswer, ToolArgs};
+    use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref, ToolAnswer, ToolArgs};
 
     // Seed 2 / Arrival / budget 3000 exposed this sequence: a semantic terminal update
     // releases the core's call while the actual host body remains alive. The body still owns
@@ -934,6 +934,29 @@ mod host_body_close_ownership {
         assert!(outcome.ok(), "{:?}", outcome.failures);
         assert!(!outcome.stopped_early, "{:?}", outcome.ending);
     }
+    // Catches: the body answering `Detached` after its terminal update had already ended the
+    // call. The core refused the detached body's report, and every later one, yet the harness
+    // kept the tool running for a final update that could never land: the release phase sent it
+    // forever and the run never went quiet (survey seed 210 / Arrival).
+    #[test]
+    fn a_body_detaching_after_its_terminal_update_is_over() {
+        let mut case = case(false);
+        case.inputs.truncate(5);
+        case.inputs.extend([
+            Input::ToolUpdate { tool: Ref::new(0), progress: None, end: ToolAnswer::Recorded },
+            Input::Advance { ms: Millis(100) },
+            Input::ToolAnswered {
+                tool: Ref::new(0),
+                answer: ToolAnswer::Detached,
+                text: AgentText("Checking.".into()),
+            },
+            Input::Advance { ms: Millis(100) },
+        ]);
+        let outcome = run(case);
+        assert!(outcome.ok(), "{:?}", outcome.failures);
+        assert!(!outcome.stopped_early, "{:?}", outcome.ending);
+    }
+
     #[test]
     fn a_host_refusing_close_cancellation_still_obeys_the_existing_cleanup_bound() {
         let outcome = run(case(true));

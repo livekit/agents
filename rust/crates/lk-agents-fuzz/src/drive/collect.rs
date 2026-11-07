@@ -295,6 +295,16 @@ impl Run {
                         self.record.close(at, Kind::Tool, nth);
                     }
                 }
+                // A body that detached after its call had already ended: the driver refuses its
+                // report, as it will its final update, so nothing is left for it to end.
+                Step::Tool(ToolStep::UpdateRefused { call_id }) => {
+                    if let Some(nth) = self.tool_by_call_id(call_id)
+                        && self.tool_detached(nth)
+                    {
+                        self.controls.remove(&Slot { kind: Kind::Tool, nth });
+                        self.record.close(at, Kind::Tool, nth);
+                    }
+                }
                 _ => {}
             }
             self.record.record_journal(at, step);
