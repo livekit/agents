@@ -49,6 +49,7 @@ from livekit.agents.evals import (
     task_completion_judge,
     tool_use_judge,
 )
+from livekit.agents.simulation import choose
 from livekit.agents.voice import UserStateChangedEvent
 
 load_dotenv()
@@ -354,7 +355,14 @@ async def frontdesk_agent(ctx: JobContext):
     session = AgentSession[Userdata](
         userdata=userdata,
         stt=inference.STT("deepgram/nova-3"),
-        llm=inference.LLM("google/gemma-4-31b-it"),
+        # `lk agent simulate --compare llm=gemma,gpt-5-mini` runs every scenario on both
+        llm=inference.LLM(
+            choose(
+                "llm",
+                {"gemma": "google/gemma-4-31b-it", "gpt-5-mini": "openai/gpt-5-mini"},
+                default="gemma",
+            )
+        ),
         tts=inference.TTS(
             "inworld/inworld-tts-2",
             voice="Nadia",

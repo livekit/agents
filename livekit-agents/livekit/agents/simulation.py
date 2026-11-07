@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, TypeAlias, Union
+from typing import TYPE_CHECKING, Any, TypeAlias, TypeVar, Union
 
 from livekit.protocol import agent_simulation as proto
 
@@ -20,6 +21,8 @@ SimulationMode = proto.SimulationMode
 # JSON-encoded string; in a scenarios.yaml it is written as a nested mapping.
 ScenarioUserdata: TypeAlias = dict[str, Union["ScenarioUserdata", Any]]
 
+T = TypeVar("T")
+
 __all__ = [
     "Scenario",
     "ScenarioGroup",
@@ -29,6 +32,7 @@ __all__ = [
     "ScenarioUserdata",
     "SimulationVerdict",
     "SimulationContext",
+    "choose",
 ]
 
 
@@ -114,6 +118,12 @@ class SimulationContext:
         return self._simulator_verdict
 
     @property
+    def choices(self) -> Mapping[str, str]:
+        """Knob -> option this job runs, as dispatched by ``lk agent simulate --compare``.
+        Empty when the run compares nothing."""
+        return self._dispatch.choices
+
+    @property
     def job_context(self) -> JobContext:
         """The :class:`JobContext` for this run; use it to reach the running session
         (``job_context.primary_session``), the room, and other job state."""
@@ -149,3 +159,43 @@ class SimulationContext:
     def user_verdict(self) -> SimulationVerdict | None:
         """Your veto set via :meth:`fail`, or None if you didn't veto the run."""
         return self._user_verdict
+
+
+def choose(knob: str, options: Mapping[str, T], *, default: str) -> T:
+    """Pick the option of ``knob`` this job runs, so a simulation run can compare them
+    (``lk agent simulate --compare llm=gpt-5,gemini``).
+
+    Returns ``options[default]`` outside a simulation, or when the simulation names no
+    option for ``knob``. Otherwise returns the named option. Raises :class:`ValueError`
+    if ``default`` or the named option is not a key of ``options``; ``default`` is
+    checked on every call, so a bad default fails in production too.
+
+    Must be called inside a job (e.g. the entrypoint): the dispatch is only known once
+    the job starts, so a call at import or in prewarm always returns the default.
+
+    Example::
+
+        session = AgentSession(
+            llm=simulation.choose(
+                "llm",
+                {"gpt-5": "openai/gpt-5", "gemini": "google/gemini-2.5-flash"},
+                default="gpt-5",
+            ),
+        )
+    """
+    from .job import current_simulation
+
+    if default not in options:
+        raise ValueError(
+            f"default option {default!r} for knob {knob!r} is not one of "
+            f"the available options {list(options)}"
+        )
+
+    sim = current_simulation()
+    chosen = sim.choices.get(knob, default) if sim is not None else default
+    if chosen not in options:
+        raise ValueError(
+            f"simulation chose option {chosen!r} for knob {knob!r}, "
+            f"but the available options are {list(options)}"
+        )
+    return options[chosen]
