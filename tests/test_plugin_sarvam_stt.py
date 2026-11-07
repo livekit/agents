@@ -420,8 +420,9 @@ async def test_sarvam_stt_stream_forces_single_attempt_conn_options(
             conn_options: APIConnectOptions,
             api_key: str,
             http_session: object,
+            user_keyterms: object,
         ) -> None:
-            del stt, opts, api_key
+            del stt, opts, api_key, user_keyterms
             captured["conn_options"] = conn_options
             captured["http_session"] = http_session
 
@@ -556,3 +557,63 @@ async def test_sarvam_stt_aclose_closes_session_of_garbage_collected_stream(
     await stt.aclose()
 
     assert session.closed, "STT.aclose() must close the session of a stream the caller dropped"
+
+
+class _ReconnectWS:
+    """Like Sarvam's endpoint, it never closes the socket on its own."""
+
+    close_code = 1000
+
+    def __init__(self, url: str) -> None:
+        self.url = url
+        self.closed = False
+        self._closed = asyncio.Event()
+
+    async def send_str(self, data: str) -> None:
+        pass
+
+    async def receive(self) -> sarvam_stt.aiohttp.WSMessage:
+        await self._closed.wait()
+        return sarvam_stt.aiohttp.WSMessage(sarvam_stt.aiohttp.WSMsgType.CLOSED, 1000, "")
+
+    async def close(self) -> None:
+        self.closed = True
+        self._closed.set()
+
+
+class _ReconnectSession:
+    def __init__(self) -> None:
+        self.closed = False
+        self.sockets: list[_ReconnectWS] = []
+
+    async def ws_connect(self, url: str, **_: object) -> _ReconnectWS:
+        ws = _ReconnectWS(url)
+        self.sockets.append(ws)
+        return ws
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+async def test_sarvam_stt_stream_update_options_reconnects_instead_of_ending(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _ReconnectSession()
+    monkeypatch.setattr(sarvam_stt.aiohttp, "ClientSession", lambda *a, **k: session)
+    stt = sarvam_stt.STT(api_key="sk_test")
+    stream = stt.stream()
+
+    async def _wait_for_connections(count: int) -> None:
+        while len(session.sockets) < count:
+            await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(_wait_for_connections(1), timeout=2)
+    stream.update_options(language="hi-IN", model="saaras:v4")
+
+    await asyncio.wait_for(_wait_for_connections(2), timeout=2)
+    assert session.sockets[0].closed
+    assert "language-code=hi-IN" in session.sockets[1].url
+    assert not session.sockets[1].closed
+
+    await stream.aclose()
+    await stt.aclose()
