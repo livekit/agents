@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import date, datetime, time
 
@@ -59,6 +61,14 @@ def verified_caller(context: RunContext[CallState]) -> Caller:
     return caller
 
 
+@contextmanager
+def _clinic_rules() -> Iterator[None]:
+    try:
+        yield
+    except ClinicError as e:
+        raise ToolError(str(e)) from e
+
+
 class FrontDesk(Agent):
     """What every call at the front desk can do with the chart: find open times and move a visit."""
 
@@ -82,12 +92,10 @@ class FrontDesk(Agent):
             part_of_day: "morning", "afternoon", or "any".
         """
         verified_caller(context)
-        try:
+        with _clinic_rules():
             openings = await self._clinic.check_availability(
                 _date(earliest_date), _date(latest_date), part_of_day
             )
-        except ClinicError as e:
-            raise ToolError(str(e)) from e
         return json.dumps(
             [
                 {"starts_at": f"{o:%Y-%m-%dT%H:%M}", "spoken": _spoken(o)}
@@ -105,12 +113,10 @@ class FrontDesk(Agent):
             appointment_id: The appointment to move.
             starts_at: The opening's starts_at from check_availability.
         """
-        try:
+        with _clinic_rules():
             appointment = await self._clinic.reschedule(
                 verified_caller(context).name, appointment_id, _datetime(starts_at)
             )
-        except ClinicError as e:
-            raise ToolError(str(e)) from e
         return f"Moved {appointment.reason} to {_spoken(appointment.starts_at)}."
 
 
@@ -203,10 +209,8 @@ To find a time, call check_availability for what they asked, and offer the one o
             raise ToolError(
                 "Both a first and a last name are needed, letter by letter."
             )
-        try:
+        with _clinic_rules():
             await self._clinic.register(name, born)
-        except ClinicError as e:
-            raise ToolError(str(e)) from e
         context.userdata.caller = Caller(name, born)
         return f"Registered and verified {name}."
 
@@ -220,12 +224,10 @@ To find a time, call check_availability for what they asked, and offer the one o
             starts_at: The opening's starts_at from check_availability.
             reason: What the visit is for, in a few words.
         """
-        try:
+        with _clinic_rules():
             appointment = await self._clinic.book(
                 verified_caller(context).name, _datetime(starts_at), reason
             )
-        except ClinicError as e:
-            raise ToolError(str(e)) from e
         return f"Booked {appointment.reason} for {_spoken(appointment.starts_at)}."
 
 
@@ -282,12 +284,10 @@ When they're all set, remind them of the day and time and ask if there's anythin
         Args:
             appointment_id: The appointment to confirm.
         """
-        try:
+        with _clinic_rules():
             appointment = await self._clinic.confirm(
                 verified_caller(context).name, appointment_id
             )
-        except ClinicError as e:
-            raise ToolError(str(e)) from e
         return f"Confirmed {appointment.reason} for {_spoken(appointment.starts_at)}."
 
     @function_tool
@@ -300,12 +300,10 @@ When they're all set, remind them of the day and time and ask if there's anythin
             appointment_id: The appointment the note is for.
             note: What the patient said, in their own words, as one or two short sentences.
         """
-        try:
+        with _clinic_rules():
             await self._clinic.add_note(
                 verified_caller(context).name, appointment_id, note
             )
-        except ClinicError as e:
-            raise ToolError(str(e)) from e
         return f"Added for {DOCTOR}: {note.strip()}"
 
 
