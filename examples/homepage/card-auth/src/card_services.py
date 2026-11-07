@@ -99,7 +99,7 @@ class _CardDesk(Agent):
         Args:
             made_by_cardholder: True if the cardholder says they made the purchase, False if they didn't.
         """
-        with _as_tool_error():
+        with _bank_rules():
             card = await self._bank.record_answer(made_by_cardholder)
         if made_by_cardholder:
             return (
@@ -128,7 +128,7 @@ class _CardDesk(Agent):
         except ValueError as e:
             raise ToolError(f"Use YYYY-MM-DD, got {back_on!r}.") from e
         today = _today()
-        with _as_tool_error():
+        with _bank_rules():
             card = await self._bank.set_travel_notice(destination, until, today)
         assert card.travel is not None
         return (
@@ -195,7 +195,7 @@ Once they're verified, if they haven't said what they need yet, say exactly: "Gr
             request: What they called about: "charge" for a charge they don't recognize, "lock" to lock their card, "travel" for a travel notice, or "other".
         """
         result: dict[str, Any] = {}
-        with _as_tool_error():
+        with _bank_rules():
             if not full_name.strip():
                 raise BankError("Ask for their full name first.")
             claimed = Identity(
@@ -218,14 +218,14 @@ Once they're verified, if they haven't said what they need yet, say exactly: "Gr
     @function_tool
     async def look_up_recent_charges(self) -> str:
         """Look up the recent charge on the verified caller's card, when they're asking about one they don't recognize."""
-        with _as_tool_error():
+        with _bank_rules():
             alert = await self._bank.recent_charges()
         return json.dumps({"recent_charge": _charge(alert)})
 
     @function_tool
     async def lock_card(self) -> str:
         """Lock the verified caller's card, so nothing new can go through on it."""
-        with _as_tool_error():
+        with _bank_rules():
             card = await self._bank.lock_card()
         return f"The card ending in {card.last_four} is locked. Nothing new can go through on it."
 
@@ -266,7 +266,7 @@ Once verified, describe the flagged purchase exactly as it came back: where, whi
             full_name: The name they gave.
             date_of_birth: The date of birth they gave, YYYY-MM-DD.
         """
-        with _as_tool_error():
+        with _bank_rules():
             if not full_name.strip():
                 raise BankError("Ask who you're speaking with first.")
             birth_date(date_of_birth, _today())
@@ -288,7 +288,7 @@ def _charge(alert: Alert) -> dict[str, str]:
 
 
 @contextmanager
-def _as_tool_error() -> Iterator[None]:
+def _bank_rules() -> Iterator[None]:
     try:
         yield
     except BankError as e:
