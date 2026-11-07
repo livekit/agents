@@ -64,20 +64,15 @@ pub struct ActiveRun {
 #[derive(Clone)]
 pub struct Progress(mpsc::Sender<(u64, String)>);
 
-/// Why an update did not reach its run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProgressRefused {
-    /// [`PROGRESS_QUEUE`] updates are waiting: this one is dropped.
-    Full,
-    Ended,
-}
-
 impl Progress {
-    pub fn report(&self, operation: u64, message: String) -> Result<(), ProgressRefused> {
-        self.0.try_send((operation, message)).map_err(|e| match e {
-            mpsc::error::TrySendError::Full(_) => ProgressRefused::Full,
-            mpsc::error::TrySendError::Closed(_) => ProgressRefused::Ended,
-        })
+    /// `Full` when [`PROGRESS_QUEUE`] updates are waiting (this one is dropped), `Closed` once
+    /// the run ended.
+    pub fn report(
+        &self,
+        operation: u64,
+        message: String,
+    ) -> Result<(), mpsc::error::TrySendError<(u64, String)>> {
+        self.0.try_send((operation, message))
     }
 
     pub fn ended(&self) -> bool {

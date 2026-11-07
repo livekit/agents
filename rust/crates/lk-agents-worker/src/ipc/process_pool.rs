@@ -14,7 +14,7 @@ use lk_agents_abi::worker::ipc_host::{
 use lk_agents_abi::worker::types::RunningJobInfo;
 
 use super::owner::JobSupervisor;
-use super::pool::{Executors, LaunchError, PoolJoinOutcome, PoolOptions, ProcPool};
+use super::pool::{Executors, LaunchError, PoolOptions, ProcPool};
 use super::supervisor::runner_log;
 use super::{SupervisorCallbacks, secs};
 use lk_agents_net::env::ProcessEnv;
@@ -96,11 +96,9 @@ impl Executors for HostExecutors {
         }
     }
 
-    async fn join(&self, proc: &Executor) -> Result<PoolJoinOutcome, HostError> {
-        Ok(match proc.0.join().await {
-            true => PoolJoinOutcome::Reaped,
-            false => PoolJoinOutcome::NotLaunched,
-        })
+    async fn join(&self, proc: &Executor) -> Result<(), HostError> {
+        proc.0.join().await;
+        Ok(())
     }
 
     fn emit(&self, event: ProcessEvent, proc: &Executor) {
@@ -192,14 +190,8 @@ impl lk_agents_abi::worker::ipc_host::ProcessPool for ProcessPool {
         let pool = self.pool.clone();
         self.spawner.run(async move { pool.launch_job(info, cx).await }).await.map_err(|error| {
             match error {
-                LaunchError::Admission(reason) => WorkerError::Failed(reason.to_string()),
-                LaunchError::AcquireExhausted { attempts } => WorkerError::Failed(format!(
-                    "no process became available after {attempts} attempts"
-                )),
-                LaunchError::NoProcess => {
-                    WorkerError::Failed("no process became available after 3 attempts".into())
-                }
                 LaunchError::Launch(error) => WorkerError::Host(error),
+                error => WorkerError::Failed(error.to_string()),
             }
         })
     }

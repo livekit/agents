@@ -634,9 +634,7 @@ async fn recv_skipping_pings(child: &Child) -> ToChild {
     }
 }
 
-async fn waits(
-    sup: &RunnerSupervisor,
-) -> tokio::task::JoinHandle<Result<Option<Duration>, InitError>> {
+async fn waits(sup: &RunnerSupervisor) -> tokio::task::JoinHandle<Result<Duration, InitError>> {
     let sup = sup.clone();
     let init = tokio::spawn(async move { sup.initialize(hello()).await });
     tokio::task::yield_now().await;
@@ -652,7 +650,7 @@ async fn initialize_sends_hello_and_logs_the_elapsed_time() {
     assert_eq!(recv(&child).await, ToChild::Hello(hello()));
     tokio::time::sleep(Duration::from_millis(1234)).await;
     write(&child, &ToParent::Ready { error: None }).await.unwrap();
-    let elapsed = init.await.unwrap().unwrap().unwrap();
+    let elapsed = init.await.unwrap().unwrap();
     assert!(elapsed >= Duration::from_millis(1234));
     assert_eq!(host.messages(), ["initializing process", "process initialized"]);
     let line = host.find("process initialized").unwrap();
@@ -708,7 +706,7 @@ async fn initialize_raises_the_child_error_and_a_version_mismatch() {
 async fn initialize_timeout_kills_the_process() {
     let (sup, host, _child) = setup(opts());
     let start = Instant::now();
-    assert!(sup.initialize(hello()).await.unwrap().is_none());
+    assert!(matches!(sup.initialize(hello()).await, Err(InitError::TimedOut)));
     assert_eq!(start.elapsed(), Duration::from_secs(10));
     assert_eq!(host.kills.load(Ordering::SeqCst), 1);
     assert_eq!(host.messages(), ["initializing process", "stopping process"]);
@@ -1030,7 +1028,7 @@ async fn repeated_initialize_callers_are_refused_without_replacing_the_first_wai
     assert!(matches!(recv(&child).await, ToChild::Hello(_)));
     assert!(matches!(sup.initialize(hello()).await, Err(InitError::AlreadyInitializing)));
     write(&child, &ToParent::Ready { error: None }).await.unwrap();
-    assert!(first.await.unwrap().unwrap().is_some());
+    first.await.unwrap().unwrap();
     assert!(matches!(sup.initialize(hello()).await, Err(InitError::AlreadyInitializing)));
 }
 

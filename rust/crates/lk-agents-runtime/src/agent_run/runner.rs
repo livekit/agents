@@ -13,9 +13,10 @@ use lk_agents_abi::utils::stream::StreamOutput;
 use lk_agents_abi::{ChatItem, Clock, Closed, Llm, Ts, WallAnchor};
 use lk_agents_core::tool_outcome::Mode;
 use lk_agents_core::{Opening, RunInput};
+use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, watch};
 
-use super::{ActiveRun, PROGRESS_QUEUE, Progress, ProgressRefused, RunSetup, start};
+use super::{ActiveRun, PROGRESS_QUEUE, Progress, RunSetup, start};
 use crate::telemetry;
 use lk_agents_net::env::ProcessEnv;
 
@@ -163,11 +164,11 @@ impl AgentRunner for Runner {
         };
         match reported {
             Some(Ok(())) => Ok(()),
-            Some(Err(ProgressRefused::Full)) => {
+            Some(Err(TrySendError::Full(_))) => {
                 log::warn!(target: lk_agents_abi::LOG_TARGET, "invocation {invocation_id}: a progress update was dropped, {PROGRESS_QUEUE} are waiting");
                 Ok(())
             }
-            None | Some(Err(ProgressRefused::Ended)) => {
+            None | Some(Err(TrySendError::Closed(_))) => {
                 Err(InvalidRun(format!("invocation {invocation_id} is not running")))
             }
         }

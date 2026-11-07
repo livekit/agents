@@ -18,9 +18,7 @@ use livekit_protocol::{
     AvailabilityRequest, Job, JobAssignment, JobStatus, RegisterWorkerResponse, ServerMessage,
     WorkerMessage,
 };
-use lk_agents_abi::worker::types::{
-    DrainOutcome, RegisteredInfo, WorkerDrainFinished, WorkerDrainTimedOut,
-};
+use lk_agents_abi::worker::types::{DrainOutcome, RegisteredInfo};
 
 /// One offered job's place while it is decided, assigned and launched.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -135,8 +133,7 @@ impl Worker {
                 }
                 WorkerTimer::DrainDeadline => {
                     self.drain_reported = true;
-                    self.shared().drain_outcome = Some(DrainOutcome::TimedOut);
-                    self.notify(WorkerNotification::DrainTimedOut(WorkerDrainTimedOut {}));
+                    self.drained(DrainOutcome::TimedOut);
                 }
                 WorkerTimer::Assignment(slot) => self.on_assignment_timeout(slot),
             }
@@ -169,10 +166,14 @@ impl Worker {
         {
             self.drain_reported = true;
             self.timers.clear_deadline(WorkerTimer::DrainDeadline);
-            self.shared().drain_outcome = Some(DrainOutcome::Finished);
-            self.notify(WorkerNotification::DrainFinished(WorkerDrainFinished {}));
+            self.drained(DrainOutcome::Finished);
         }
         self.check_rollover();
+    }
+
+    fn drained(&mut self, outcome: DrainOutcome) {
+        self.shared().drain_outcome = Some(outcome);
+        self.notify(WorkerNotification::Drained(outcome));
     }
 
     /// A new connection: registration goes out first.

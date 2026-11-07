@@ -26,6 +26,7 @@ use lk_agents_core::tool_outcome::Mode;
 use lk_agents_net::clock::RealClock;
 use serde_json::{Map, Value, json};
 use tokio::sync::Notify;
+use tokio::sync::mpsc::error::TrySendError;
 
 use super::*;
 
@@ -452,12 +453,12 @@ async fn progress_past_its_bound_is_refused_not_queued() {
     let (tx, mut rx) = mpsc::channel(PROGRESS_QUEUE);
     let progress = Progress(tx);
     for i in 0..PROGRESS_QUEUE {
-        assert_eq!(progress.report(1, format!("{i}")), Ok(()));
+        assert!(progress.report(1, format!("{i}")).is_ok());
     }
-    assert_eq!(progress.report(1, "over".into()), Err(ProgressRefused::Full));
+    assert!(matches!(progress.report(1, "over".into()), Err(TrySendError::Full(_))));
     assert_eq!(rx.recv().await.map(|(_, m)| m).as_deref(), Some("0"));
     drop(rx);
-    assert_eq!(progress.report(1, "late".into()), Err(ProgressRefused::Ended));
+    assert!(matches!(progress.report(1, "late".into()), Err(TrySendError::Closed(_))));
 }
 
 // Catches: a callback run without its call's invocation scope (or a scope leaking into another

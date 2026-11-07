@@ -65,6 +65,8 @@ pub enum InitError {
     AlreadyInitializing,
     #[error("duplex closed")]
     Closed,
+    #[error("initialization timed out")]
+    TimedOut,
     #[error("first message must be Ready")]
     Unexpected,
     #[error("process initialization failed: {0}")]
@@ -203,7 +205,7 @@ const QUEUE: usize = 16;
 
 enum Command {
     Supervise,
-    Initialize(Hello, oneshot::Sender<Result<Option<Duration>, InitError>>),
+    Initialize(Hello, oneshot::Sender<Result<Duration, InitError>>),
     StartJob(StartJob, oneshot::Sender<Result<(), StartJobError>>),
 }
 
@@ -301,7 +303,7 @@ impl RunnerSupervisor {
         let _ = status.wait_for(|s| s.cleaned || s.incomplete).await;
     }
 
-    pub async fn initialize(&self, hello: Hello) -> Result<Option<Duration>, InitError> {
+    pub async fn initialize(&self, hello: Hello) -> Result<Duration, InitError> {
         let (tx, rx) = oneshot::channel();
         self.commands.send(Command::Initialize(hello, tx)).await.map_err(|_| InitError::Closed)?;
         rx.await.unwrap_or(Err(InitError::Closed))
@@ -386,7 +388,7 @@ struct Driver {
     blocking_io: lk_agents_net::blocking_io::BlockingIo,
     runner: Arc<dyn Runner>,
     channel: Arc<Connection>,
-    init_reply: Option<oneshot::Sender<Result<Option<Duration>, InitError>>>,
+    init_reply: Option<oneshot::Sender<Result<Duration, InitError>>>,
     job_reply: Option<(u64, oneshot::Sender<Result<(), StartJobError>>)>,
     next_job_id: u64,
     status: watch::Sender<Status>,
@@ -526,7 +528,7 @@ impl Driver {
     fn initialize_requested(
         &mut self,
         hello: Hello,
-        reply: oneshot::Sender<Result<Option<Duration>, InitError>>,
+        reply: oneshot::Sender<Result<Duration, InitError>>,
     ) {
         if self.stopping() {
             let _ = reply.send(Err(InitError::Closed));
@@ -625,7 +627,7 @@ impl Driver {
         }
     }
 
-    fn reply_init(&mut self, result: Result<Option<Duration>, InitError>) {
+    fn reply_init(&mut self, result: Result<Duration, InitError>) {
         if let Some(init) = self.init_reply.take() {
             let _ = init.send(result);
         }
@@ -777,7 +779,7 @@ impl Driver {
             && init.deadline <= now
         {
             self.take_initialization();
-            self.reply_init(Ok(None));
+            self.reply_init(Err(InitError::TimedOut));
             self.end();
         }
         if let Job::Pending { request_id, deadline } = self.lifecycle.job()
@@ -871,7 +873,7 @@ impl Driver {
             ToParent::Ready { error: None } => {
                 let elapsed = now.saturating_sub(started);
                 runner_log!(self.host.runner(), log::Level::Info, elapsed_time = round(elapsed.as_secs_f64(), 2); "{} initialized", runner_name(&self.opts));
-                Ok(Some(elapsed))
+                Ok(elapsed)
             }
             _ => Err(InitError::Unexpected),
         };

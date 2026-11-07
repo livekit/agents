@@ -143,14 +143,6 @@ pub struct RegisteredInfo {
     pub cloud: bool,
 }
 
-/// `drain()` finished within its deadline. `kind: "drain_finished"`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct WorkerDrainFinished {}
-
-/// `drain()` hit its deadline; the caller is still expected to close the worker.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct WorkerDrainTimedOut {}
-
 /// `run()` returned, and why. `kind: "stopped"`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkerStopped {

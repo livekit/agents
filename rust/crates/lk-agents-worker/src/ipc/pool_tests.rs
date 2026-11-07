@@ -152,7 +152,7 @@ impl Executors for Host {
             exited.await;
         }
     }
-    async fn join(&self, p: &Executor) -> Result<PoolJoinOutcome, HostError> {
+    async fn join(&self, p: &Executor) -> Result<(), HostError> {
         loop {
             let exited = self.exits.notified();
             tokio::pin!(exited);
@@ -164,7 +164,7 @@ impl Executors for Host {
                 if let Some(gate) = &self.reap_gate {
                     let _ = gate.subscribe().wait_for(|reaped| *reaped).await;
                 }
-                return Ok(PoolJoinOutcome::Reaped);
+                return Ok(());
             }
             exited.await;
         }

@@ -236,7 +236,7 @@ async fn drain_timeout_is_reported_while_a_host_decision_is_pending() {
     assert_eq!(handle.snapshot().drain_outcome, Some(DrainOutcome::TimedOut));
     let mut observed = false;
     while let Ok(event) = notifications.try_recv() {
-        observed |= matches!(event, WorkerNotification::DrainTimedOut(_));
+        observed |= matches!(event, WorkerNotification::Drained(DrainOutcome::TimedOut));
     }
     assert!(observed);
     handle.send(WorkerCommand::Close).unwrap();
@@ -1238,8 +1238,10 @@ mod generated_sequences {
             let mut drain_finished = 0;
             while let Ok(event) = notifications.try_recv() {
                 match event {
-                    WorkerNotification::DrainFinished(_) => drain_finished += 1,
-                    WorkerNotification::DrainTimedOut(_) => panic!("drain timed out: seed {seed}"),
+                    WorkerNotification::Drained(DrainOutcome::Finished) => drain_finished += 1,
+                    WorkerNotification::Drained(DrainOutcome::TimedOut) => {
+                        panic!("drain timed out: seed {seed}")
+                    }
                     _ => {}
                 }
             }

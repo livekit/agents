@@ -69,14 +69,11 @@ pub enum WorkerCommand {
 #[derive(Debug, Clone, PartialEq)]
 pub enum WorkerNotification {
     Registered(RegisteredInfo),
-    DrainFinished(WorkerDrainFinished),
-    DrainTimedOut(WorkerDrainTimedOut),
+    Drained(DrainOutcome),
     Stopped(WorkerStopped),
 }
 
-pub use lk_agents_abi::worker::types::{
-    DrainOutcome, RegisteredInfo, Snapshot, WorkerDrainFinished, WorkerDrainTimedOut, WorkerStopped,
-};
+pub use lk_agents_abi::worker::types::{DrainOutcome, RegisteredInfo, Snapshot, WorkerStopped};
 
 /// A drain's semantic failure. Error messages are display text, never discriminants.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

@@ -238,14 +238,14 @@ impl ipc_host::JobSupervisor for JobSupervisor {
                 outcome
             })
             .await;
-        self.settle(matches!(outcome, Ok(Some(_))));
+        self.settle(outcome.is_ok());
         match outcome {
-            Ok(Some(elapsed)) => {
+            Ok(elapsed) => {
                 let elapsed = elapsed.as_secs_f64();
                 self.state.lock().initialize_time = Some(elapsed);
                 Ok(elapsed)
             }
-            Ok(None) => Err(WorkerError::TimedOut("initialization timed out".into())),
+            Err(error @ InitError::TimedOut) => Err(WorkerError::TimedOut(error.to_string())),
             Err(InitError::Closed) => Err(WorkerError::Closed),
             Err(error) => Err(WorkerError::Failed(error.to_string())),
         }

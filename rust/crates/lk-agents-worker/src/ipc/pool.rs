@@ -36,12 +36,6 @@ pub struct ProcessId(pub u64);
 struct ReservationId(u64);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PoolJoinOutcome {
-    Reaped,
-    NotLaunched,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PoolAdmissionError {
     NotStarted,
     Draining,
@@ -89,7 +83,8 @@ pub trait Executors: Send + Sync + 'static {
         log::error!(target: lk_agents_abi::LOG_TARGET, observation:? = observation; "process pool cleanup incomplete");
     }
     async fn wait_exit(&self, proc: &Executor<Self::Process>) -> Result<(), HostError>;
-    async fn join(&self, proc: &Executor<Self::Process>) -> Result<PoolJoinOutcome, HostError>;
+    /// Returns once the process is reaped, or was never launched.
+    async fn join(&self, proc: &Executor<Self::Process>) -> Result<(), HostError>;
     fn emit(&self, event: ProcessEvent, proc: &Executor<Self::Process>);
 }
 
@@ -100,12 +95,18 @@ pub struct PoolOptions {
     pub close_timeout: Duration,
 }
 
-#[derive(Debug)]
+/// Why a job found no process to run on.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum LaunchError {
-    NoProcess,
-    AcquireExhausted { attempts: u32 },
-    Launch(HostError),
+    #[error("{0}")]
     Admission(PoolAdmissionError),
+    #[error("no process became available after {attempts} attempts")]
+    AcquireExhausted { attempts: u32 },
+    #[error("no process launched the job after {MAX_LAUNCH_ATTEMPTS} attempts")]
+    LaunchExhausted,
+    /// The last launch failure, once launching ran out of attempts.
+    #[error(transparent)]
+    Launch(HostError),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -135,18 +136,11 @@ enum Phase {
     Retiring,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Failure {
-    AcquireExhausted { attempts: u32 },
-    LaunchExhausted,
-    Closed,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum ReservationState {
     Waiting,
     Reserved(ProcessId),
-    Failed(Failure),
+    Failed(LaunchError),
 }
 
 struct Process<P> {
@@ -158,8 +152,8 @@ struct Process<P> {
     job: Option<(String, ReservationId)>,
     /// The host's close returned.
     closed: bool,
-    /// The reaping receipt, once a join returned one.
-    receipt: Option<PoolJoinOutcome>,
+    /// A join returned the reaping receipt.
+    receipt: bool,
     /// A join is running or scheduled.
     joining: bool,
 }
@@ -205,7 +199,7 @@ struct State<P> {
 
 impl<P> State<P> {
     fn reservation(&self, id: ReservationId) -> Option<ReservationState> {
-        self.requests.get(&id).map(|request| request.state)
+        self.requests.get(&id).map(|request| request.state.clone())
     }
 
     fn executor(&self, id: ProcessId) -> Option<Executor<P>> {
@@ -258,13 +252,13 @@ impl<P> State<P> {
     fn acquired(
         &self,
         request: ReservationId,
-    ) -> Option<Result<(ProcessId, Executor<P>), Failure>> {
+    ) -> Option<Result<(ProcessId, Executor<P>), LaunchError>> {
         match self.reservation(request) {
             Some(ReservationState::Reserved(id)) => {
                 self.executor(id).map(|executor| Ok((id, executor)))
             }
             Some(ReservationState::Failed(failure)) => Some(Err(failure)),
-            None => Some(Err(Failure::Closed)),
+            None => Some(Err(LaunchError::Admission(PoolAdmissionError::Closed))),
             Some(ReservationState::Waiting) => None,
         }
     }
@@ -521,7 +515,7 @@ impl<P: Send + Sync + 'static> ProcPool<P> {
                 request: None,
                 job: None,
                 closed: false,
-                receipt: None,
+                receipt: false,
                 joining: false,
             },
         );
@@ -629,9 +623,9 @@ impl<P: Send + Sync + 'static> ProcPool<P> {
                 request.launch_attempts += 1;
             }
             let failure = if request.launch_attempts >= MAX_LAUNCH_ATTEMPTS {
-                Some(Failure::LaunchExhausted)
+                Some(LaunchError::LaunchExhausted)
             } else if request.acquire_attempts >= MAX_ACQUIRE_ATTEMPTS {
-                Some(Failure::AcquireExhausted { attempts: request.acquire_attempts })
+                Some(LaunchError::AcquireExhausted { attempts: request.acquire_attempts })
             } else {
                 None
             };
@@ -668,7 +662,7 @@ impl<P: Send + Sync + 'static> ProcPool<P> {
             pool.update(|pool, st| {
                 let Some(process) = st.processes.get_mut(&id) else { return };
                 process.closed = true;
-                if process.receipt.is_some() {
+                if process.receipt {
                     pool.release(st, id);
                 } else if !process.joining {
                     process.joining = true;
@@ -685,17 +679,17 @@ impl<P: Send + Sync + 'static> ProcPool<P> {
         self.own(st, async move {
             tokio::time::sleep(after).await;
             match pool.0.host.join(&executor).await {
-                Ok(outcome) => pool.update(|pool, st| pool.joined(st, id, outcome)),
+                Ok(()) => pool.update(|pool, st| pool.joined(st, id)),
                 Err(error) => pool.join_failed(&executor, id, error),
             }
         });
     }
 
     /// The process's reaping receipt takes it out of service; a closed one is released.
-    fn joined(&self, st: &mut State<P>, id: ProcessId, outcome: PoolJoinOutcome) {
+    fn joined(&self, st: &mut State<P>, id: ProcessId) {
         let Some(process) = st.processes.get_mut(&id) else { return };
         process.joining = false;
-        process.receipt = Some(outcome);
+        process.receipt = true;
         self.retire(st, id);
         if st.processes.get(&id).is_some_and(|process| process.closed) {
             self.release(st, id);
@@ -764,7 +758,10 @@ impl<P: Send + Sync + 'static> ProcPool<P> {
         }
     }
 
-    async fn acquire(&self, request: ReservationId) -> Result<(ProcessId, Executor<P>), Failure> {
+    async fn acquire(
+        &self,
+        request: ReservationId,
+    ) -> Result<(ProcessId, Executor<P>), LaunchError> {
         loop {
             let changed = self.0.changed.notified();
             tokio::pin!(changed);
@@ -787,10 +784,11 @@ impl<P: Send + Sync + 'static> ProcPool<P> {
         let _waiting = Waiting { pool: self.clone(), request };
         let mut last_error = None;
         loop {
-            let (id, process) = self
-                .acquire(request)
-                .await
-                .map_err(|failure| launch_error(failure, last_error.take()))?;
+            let (id, process) =
+                self.acquire(request).await.map_err(|error| match (error, last_error.take()) {
+                    (LaunchError::LaunchExhausted, Some(last)) => LaunchError::Launch(last),
+                    (error, _) => error,
+                })?;
             if let Err(error) = self.0.host.launch(&process, &job, &cx).await {
                 last_error = Some(error);
                 self.update(|pool, st| pool.launch_failed(st, request, id));
@@ -845,7 +843,8 @@ impl<P: Send + Sync + 'static> ProcPool<P> {
         let reservations: Vec<_> = st.requests.keys().copied().collect();
         for id in reservations {
             let request = st.requests.get_mut(&id).unwrap();
-            request.state = ReservationState::Failed(Failure::Closed);
+            request.state =
+                ReservationState::Failed(LaunchError::Admission(PoolAdmissionError::Closed));
             let job_id = request.job_id.clone();
             st.release_job(&job_id, id);
         }
@@ -890,15 +889,6 @@ impl<P: Send + Sync + 'static> ProcPool<P> {
                 }
             }
         }
-    }
-}
-
-/// Why a launch found no process, with the last launch failure when launching was what ran out.
-fn launch_error(failure: Failure, last_error: Option<HostError>) -> LaunchError {
-    match failure {
-        Failure::AcquireExhausted { attempts } => LaunchError::AcquireExhausted { attempts },
-        Failure::LaunchExhausted => last_error.map_or(LaunchError::NoProcess, LaunchError::Launch),
-        Failure::Closed => LaunchError::Admission(PoolAdmissionError::Closed),
     }
 }
 
