@@ -215,10 +215,17 @@ class STTv2(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechStreamv2:
+        # copy the options so the language applies to this stream only
+        config = replace(self._opts)
+        if is_given(language) and language:
+            config.language = LanguageCode(language)
+            # "multi" means auto-detect, which is what Flux does without a hint. Like any
+            # hint, it is only sent while the model is flux-general-multi.
+            config.language_hint = [] if config.language == "multi" else [config.language]
         stream = SpeechStreamv2(
             stt=self,
             conn_options=conn_options,
-            opts=self._opts,
+            opts=config,
             api_key=self._api_key,
             http_session=self._ensure_session(),
             base_url=self._opts.endpoint_url,

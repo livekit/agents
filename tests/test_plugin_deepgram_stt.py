@@ -966,6 +966,86 @@ async def test_flux_multilingual_model_still_sends_the_language_hint(caplog):
         await stt.aclose()
 
 
+async def test_flux_stream_language_is_sent_as_that_streams_hint():
+    stt, default_stream, session = _v2_stt_and_stream(
+        model="flux-general-multi", language_hint=["en"]
+    )
+    es_stream = stt.stream(language="spanish")
+    await _wait_until(lambda: len(session.urls) == 2)
+    try:
+        # streams connect concurrently, so the URL order is not fixed
+        hints = sorted(parse_qs(urlsplit(url).query)["language_hint"] for url in session.urls)
+        assert hints == [["en"], ["es"]]
+        assert es_stream._opts.language == "es"
+        # the provider and its other streams keep their own hint
+        assert stt._opts.language_hint == ["en"]
+        assert default_stream._opts.language_hint == ["en"]
+    finally:
+        await es_stream.aclose()
+        await default_stream.aclose()
+        await stt.aclose()
+
+
+async def test_flux_stream_language_multi_clears_the_hint():
+    # "multi" asks for auto-detection, so the provider's hint is dropped for that stream
+    from typing import Any, cast
+
+    from livekit.plugins.deepgram import STTv2
+
+    session = _ConnectRecordingSession()
+    stt = STTv2(
+        api_key="test-key",
+        model="flux-general-multi",
+        language_hint=["en"],
+        http_session=cast(Any, session),
+    )
+    stream = stt.stream(language="multi")
+    await _wait_until(lambda: len(session.urls) == 1)
+    try:
+        assert "language_hint" not in session.last_params()
+        assert stt._opts.language_hint == ["en"]
+    finally:
+        await stream.aclose()
+        await stt.aclose()
+
+
+async def test_flux_stream_language_waits_for_a_multilingual_model(caplog):
+    # on a monolingual model the hint stays off the wire, and is sent once the stream
+    # switches to flux-general-multi
+    from typing import Any, cast
+
+    from livekit.plugins.deepgram import STTv2
+
+    caplog.set_level(logging.WARNING)
+    session = _ConnectRecordingSession()
+    stt = STTv2(api_key="test-key", model="flux-general-en", http_session=cast(Any, session))
+    stream = stt.stream(language="es")
+    await _wait_until(lambda: len(session.urls) == 1)
+    try:
+        assert "language_hint" not in session.last_params()
+        assert "not sending `language_hint`" in caplog.text
+
+        stt.update_options(model="flux-general-multi")
+        await _wait_until(lambda: len(session.urls) == 2)
+        assert session.last_params()["language_hint"] == ["es"]
+    finally:
+        await stream.aclose()
+        await stt.aclose()
+
+
+async def test_flux_stream_empty_language_is_ignored():
+    stt, stream, session = _v2_stt_and_stream(model="flux-general-multi", language_hint=["en"])
+    empty = stt.stream(language="")
+    await _wait_until(lambda: len(session.urls) == 2)
+    try:
+        assert all(parse_qs(urlsplit(u).query)["language_hint"] == ["en"] for u in session.urls)
+        assert empty._opts.language == "en"
+    finally:
+        await empty.aclose()
+        await stream.aclose()
+        await stt.aclose()
+
+
 async def test_flux_clears_the_language_hint_with_an_explicit_empty_list(caplog):
     # Flux keeps omitted fields, so a clear has to reach the connection as an empty
     # array — the one value Deepgram reads as "clear all" — or the language bias from
