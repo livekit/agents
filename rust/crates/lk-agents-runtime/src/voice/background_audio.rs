@@ -248,7 +248,11 @@ impl BackgroundAudioPlayer {
     }
 
     fn start_source(&self, mut source: Source) -> SourceReader {
-        let (audio, frames) = media_queue::audio(Policy::CatchUp(self.timeout));
+        let (audio, frames) = media_queue::audio(
+            Policy::CatchUp(self.timeout),
+            telemetry::AudioConsumer::BackgroundAudio,
+            self.clock.clone(),
+        );
         let request = Arc::new(tokio::sync::Notify::new());
         let stop = CancellationToken::new();
         let (requested, stopped) = (request.clone(), stop.clone());

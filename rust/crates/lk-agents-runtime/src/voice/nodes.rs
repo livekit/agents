@@ -20,7 +20,6 @@ use lk_agents_abi::{
     TtsCapabilities, TtsSink, TtsSource,
 };
 use lk_agents_media::media_queue::{self, Item, Policy};
-use lk_agents_net::audio_drops::AudioDrops;
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::task::TaskSet;
 use std::convert::Infallible;
@@ -114,8 +113,7 @@ impl NodeFactory for AgentNodes {
     > {
         let cx = cx.clone();
         Box::pin(async move {
-            let (sink, input) = audio_channel();
-            sink.drops.observe(cx.clone());
+            let (sink, input) = audio_channel(Arc::clone(&self.clock), cx.clone());
             let calls = Arc::new(NodeCalls::default());
             let out = self.host.stt(&cx, Box::new(input), calls.clone()).await?;
             let map = move |mut event: SpeechEvent| {
@@ -418,15 +416,15 @@ const NODE_AUDIO_POLICY: Policy = Policy::CatchUp(Duration::from_secs(10));
 struct AudioSink {
     /// `None` once the input ended.
     audio: Mutex<Option<media_queue::AudioSender<Infallible>>>,
-    drops: AudioDrops,
 }
 
 struct AudioSource(media_queue::AudioReceiver<Infallible>);
 
-fn audio_channel() -> (AudioSink, AudioSource) {
-    let (tx, rx) = media_queue::audio(NODE_AUDIO_POLICY);
-    let drops = AudioDrops::new(telemetry::AudioConsumer::SttNode, NODE_AUDIO_POLICY);
-    (AudioSink { audio: Mutex::new(Some(tx)), drops }, AudioSource(rx))
+/// The queue measures its drops and head drain under `cx`'s job.
+fn audio_channel(clock: Arc<dyn Clock>, cx: telemetry::Cx) -> (AudioSink, AudioSource) {
+    let (tx, rx) = media_queue::audio(NODE_AUDIO_POLICY, telemetry::AudioConsumer::SttNode, clock);
+    tx.observe(cx);
+    (AudioSink { audio: Mutex::new(Some(tx)) }, AudioSource(rx))
 }
 
 impl AudioSink {
@@ -437,12 +435,13 @@ impl AudioSink {
 
 impl StreamInput<AudioFrame> for AudioSink {
     fn push(&self, frame: AudioFrame) -> Result<(), ProviderError> {
-        let dropped = match self.audio.lock().as_ref() {
-            Some(audio) if !audio.is_closed() => audio.push(frame),
-            _ => return Err(Self::closed()),
-        };
-        self.drops.record(dropped);
-        Ok(())
+        match self.audio.lock().as_ref() {
+            Some(audio) if !audio.is_closed() => {
+                audio.push(frame);
+                Ok(())
+            }
+            _ => Err(Self::closed()),
+        }
     }
 
     fn head(&self, frame: AudioFrame) -> Result<(), ProviderError> {
@@ -892,7 +891,8 @@ mod tests {
     // than its bound once it catches up.
     #[tokio::test]
     async fn a_slow_stt_node_keeps_the_newest_ten_seconds_and_never_refuses() {
-        let (sink, mut source) = audio_channel();
+        let clock = Arc::new(lk_agents_abi::VirtualClock::new());
+        let (sink, mut source) = audio_channel(clock, telemetry::Cx::NONE);
         for n in 0..1200u16 {
             sink.push(AudioFrame::new(n.to_le_bytes().repeat(160), 16_000, 1, 160)).unwrap();
         }

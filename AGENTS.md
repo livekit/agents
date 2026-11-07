@@ -279,7 +279,7 @@ STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
 - Dependency direction is `lk-agents-py -> lk-agents-runtime -> sans-I/O and async I/O crates ->
   lk-agents-abi`; `voice -> core`, `voice -> media`, `inference -> media`, `inference -> core`,
   `net -> core`, `net -> media`, `py -> abi`, `runtime -> cli -> worker/net/abi`, async I/O
-  crates `-> net`, `voice/net/inference/worker/runtime/fuzz -> telemetry` (span recording,
+  crates `-> net`, `voice/media/net/inference/worker/runtime/fuzz -> telemetry` (span recording,
   which depends only on abi), `fuzz -> sans-I/O crates + abi`, `fuzz -> runtime` (the DST runs the runtime's real
   executors over faked ports, the fake room among them) are allowed composition edges.
   `lk-agents-py` depends only on the runtime and ABI (the runtime re-exports the
@@ -338,7 +338,8 @@ STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
   unbounded channels, locks, host-shared atomics and randomly ordered decision state.
   Media has two exempt modules: its optional thread pool, added only for a measured need, is
   its one allowed spawn site, and `media_queue` holds a lock and a waker (no thread, no spawn,
-  no clock). Storage, inference, worker and net are unrestricted async crates.
+  no ambient clock) and records an audio queue's drop and catch-up metrics on the clock it is
+  given. Storage, inference, worker and net are unrestricted async crates.
   Supply time and IDs as inputs; keep live resources and execution in runtime or the async I/O
   crates.
 - Audio into a consumer goes through a `media_queue` (`CatchUp` or `Now`); a bounded channel

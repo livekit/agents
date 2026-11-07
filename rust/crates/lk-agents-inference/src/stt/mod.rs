@@ -339,7 +339,7 @@ impl GatewayStt {
             .map_err(|error| ApiError::new(error.to_string()).with_retryable(false))?;
         let keyterms = self.shared.session_keyterms.lock().clone();
 
-        let (audio, audio_rx) = AudioInput::new();
+        let (audio, audio_rx) = AudioInput::new(self.shared.clock.clone());
         let (event_tx, event_rx) = mpsc::channel::<Result<SpeechEvent, ApiError>>(STREAM_QUEUE);
         let (update_tx, update_rx) = mpsc::unbounded_channel::<serde_json::Value>();
         let stop = tokio_util::sync::CancellationToken::new();

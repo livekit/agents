@@ -12,7 +12,6 @@ use lk_agents_abi::{
     VadSink, VadSource,
 };
 use lk_agents_media::media_queue::{AudioReceiver, Item};
-use lk_agents_net::audio_drops::AudioDrops;
 use lk_agents_telemetry as telemetry;
 use tokio_util::sync::CancellationToken;
 
@@ -30,9 +29,8 @@ impl PluginInput {
     ) -> DuplexStream<VadSink, VadSource> {
         let (sink, events) = stream.split();
         let cancelled = CancellationToken::new();
-        let (input, audio) = Input::open(cancelled.clone(), cx);
-        let pump =
-            Pump { audio, sink, sending: None, ended: false, drops: input.drops.clone(), clock };
+        let (input, audio) = Input::open(cancelled.clone(), cx, clock);
+        let pump = Pump { audio, sink, sending: None, ended: false };
         DuplexStream::new(Box::new(input), Box::new(Source { events, pump, cancelled }))
     }
 }
@@ -42,8 +40,6 @@ struct Pump {
     sink: Box<dyn StreamInput<AudioFrame>>,
     sending: Option<BoxFuture<'static, Result<(), ProviderError>>>,
     ended: bool,
-    drops: Arc<AudioDrops>,
-    clock: Arc<dyn Clock>,
 }
 
 impl Pump {
@@ -60,7 +56,6 @@ impl Pump {
             if self.ended {
                 return std::future::pending().await;
             }
-            self.drops.catching_up(self.audio.head(), self.clock.now());
             let entry = match self.audio.recv().await {
                 Some(Item::Media(frame)) => Entry::Item(frame),
                 Some(Item::Gap(_) | Item::Event(Flush)) => Entry::Flush,

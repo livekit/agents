@@ -48,7 +48,11 @@ struct Frames {
 
 impl Frames {
     fn new() -> (Arc<Self>, AudioSender<()>) {
-        let (send, frames) = media_queue::audio(Policy::CatchUp(Duration::from_secs(1)));
+        let (send, frames) = media_queue::audio(
+            Policy::CatchUp(Duration::from_secs(1)),
+            telemetry::AudioConsumer::BackgroundAudio,
+            Arc::new(lk_agents_abi::VirtualClock::new()),
+        );
         (
             Arc::new(Self {
                 frames: tokio::sync::Mutex::new(frames),

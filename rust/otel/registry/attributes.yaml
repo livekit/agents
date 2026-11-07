@@ -75,6 +75,12 @@
                 "value": "duplex",
                 "brief": "duplex",
                 "stability": "development"
+              },
+              {
+                "id": "background_audio",
+                "value": "background_audio",
+                "brief": "background_audio",
+                "stability": "development"
               }
             ]
           },

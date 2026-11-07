@@ -308,6 +308,8 @@ pub enum AudioConsumer {
     Recording,
     /// A duplex model's input audio.
     Duplex,
+    /// A background audio source's frames, ahead of the mixer.
+    BackgroundAudio,
 }
 
 /// Input tokens of each LLM response, one measurement per modality.

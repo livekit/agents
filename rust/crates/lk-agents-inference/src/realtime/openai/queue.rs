@@ -166,7 +166,6 @@ pub(super) struct Ingress {
     /// Audio and every command, in one ordered queue: a commit, clear or reply is never
     /// reordered against the audio before it.
     pub(super) input: media_queue::AudioSender<Cmd>,
-    pub(super) drops: lk_agents_net::audio_drops::AudioDrops,
     pub(super) events: Delivery,
     pub(super) clock: Arc<dyn Clock>,
     pub(super) label: String,
@@ -175,7 +174,8 @@ pub(super) struct Ingress {
 impl Ingress {
     pub(super) fn send(&self, command: Cmd) {
         if let Cmd::Core(Command::PushAudio(PushAudio { frame })) = command {
-            return self.drops.record(self.input.push(frame));
+            self.input.push(frame);
+            return;
         }
         let reply = match &command {
             Cmd::Core(Command::GenerateReply(GenerateReply { req_id, .. }))
@@ -307,18 +307,11 @@ mod tests {
     #[tokio::test]
     async fn ingress_keeps_pre_connect_audio_in_full() {
         let policy = media_queue::Policy::CatchUp(std::time::Duration::from_millis(100));
-        let (input, mut rx) = media_queue::audio(policy);
+        let clock: Arc<dyn Clock> = Arc::new(lk_agents_net::clock::RealClock::default());
+        let realtime = lk_agents_telemetry::AudioConsumer::Realtime;
+        let (input, mut rx) = media_queue::audio(policy, realtime, clock.clone());
         let (events, _receiver) = events();
-        let ingress = Ingress {
-            input,
-            drops: lk_agents_net::audio_drops::AudioDrops::new(
-                lk_agents_telemetry::AudioConsumer::Realtime,
-                policy,
-            ),
-            events,
-            clock: Arc::new(lk_agents_net::clock::RealClock::default()),
-            label: "model".into(),
-        };
+        let ingress = Ingress { input, events, clock, label: "model".into() };
         let frame = || lk_agents_abi::AudioFrame::new(vec![0u8; 480], 24_000, 1, 240);
         for _ in 0..30 {
             ingress.head(frame());

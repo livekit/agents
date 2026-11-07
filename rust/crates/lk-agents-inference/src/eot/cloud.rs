@@ -10,7 +10,6 @@ use async_trait::async_trait;
 use lk_agents_abi::errors::{ApiError, TimeoutPhase};
 use lk_agents_abi::{ApiConnectOptions, AudioFrame, Clock, Elapsed, EotInferenceMetrics};
 use lk_agents_media::media_queue::{self, AudioReceiver, AudioSender, Item, Policy};
-use lk_agents_net::audio_drops::AudioDrops;
 use lk_agents_net::transport::{
     TransportError, WsMessage, WsReceiver, WsSender, WsTransport, close_status,
 };
@@ -82,7 +81,6 @@ pub struct CloudTransport {
     /// The queue's consumer, taken by the connection.
     receiver: Mutex<Option<AudioReceiver<Message>>>,
     clock: Arc<dyn Clock>,
-    drops: AudioDrops,
 }
 
 impl CloudTransport {
@@ -92,7 +90,8 @@ impl CloudTransport {
         transport: Arc<dyn WsTransport>,
         clock: Arc<dyn Clock>,
     ) -> Self {
-        let (send, receiver) = media_queue::audio(INPUT_POLICY);
+        let end_of_turn = telemetry::AudioConsumer::EndOfTurn;
+        let (send, receiver) = media_queue::audio(INPUT_POLICY, end_of_turn, clock.clone());
         CloudTransport {
             opts,
             sink,
@@ -100,7 +99,6 @@ impl CloudTransport {
             state: Mutex::new(CloudState { send: Some(send), connected: false, session_id: None }),
             receiver: Mutex::new(Some(receiver)),
             clock,
-            drops: AudioDrops::new(telemetry::AudioConsumer::EndOfTurn, INPUT_POLICY),
         }
     }
 
@@ -272,7 +270,6 @@ impl CloudTransport {
         closing: &AtomicBool,
     ) -> Result<(), ApiError> {
         loop {
-            self.drops.catching_up(send_rx.head(), self.clock.now());
             let Some(item) = send_rx.recv().await else { return Ok(()) };
             let message = client_message(item);
             if matches!(message, Message::SessionClose(_)) {
@@ -352,9 +349,8 @@ impl EotTransport for CloudTransport {
         if frame.data.is_empty() {
             return;
         }
-        let dropped = self.state.lock().send.as_ref().map(|send| send.push(frame.clone()));
-        if let Some(dropped) = dropped {
-            self.drops.record(dropped);
+        if let Some(send) = self.state.lock().send.as_ref() {
+            send.push(frame.clone());
         }
     }
 
@@ -365,7 +361,9 @@ impl EotTransport for CloudTransport {
     }
 
     fn observe(&self, cx: telemetry::Cx) {
-        self.drops.observe(cx);
+        if let Some(send) = self.state.lock().send.as_ref() {
+            send.observe(cx);
+        }
     }
 
     fn flush(&self) {

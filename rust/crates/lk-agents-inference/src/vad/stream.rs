@@ -10,7 +10,6 @@ use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::{AudioFrame, Clock, Closed, StreamInput, StreamOutput, Ts};
 use lk_agents_media::media_queue::{self, AudioReceiver, AudioSender, Item, Policy};
 use lk_agents_media::pool::{Job, JobClass, MediaPool};
-use lk_agents_net::audio_drops::AudioDrops;
 use lk_agents_telemetry as telemetry;
 use parking_lot::Mutex;
 use tokio::sync::{mpsc, watch};
@@ -34,20 +33,19 @@ pub(super) struct Flush;
 pub(super) struct Input {
     /// `None` once the input ended.
     audio: Mutex<Option<AudioSender<Flush>>>,
-    pub(super) drops: Arc<AudioDrops>,
     cancelled: CancellationToken,
 }
 
 impl Input {
-    /// Refuses audio once `cancelled`; drops are measured under `cx`'s job.
+    /// Refuses audio once `cancelled`; the queue is measured under `cx`'s job.
     pub(super) fn open(
         cancelled: CancellationToken,
         cx: &telemetry::Cx,
+        clock: Arc<dyn Clock>,
     ) -> (Self, AudioReceiver<Flush>) {
-        let (audio, rx) = media_queue::audio(INPUT_POLICY);
-        let drops = Arc::new(AudioDrops::new(telemetry::AudioConsumer::Vad, INPUT_POLICY));
-        drops.observe(cx.clone());
-        (Input { audio: Mutex::new(Some(audio)), drops, cancelled }, rx)
+        let (audio, rx) = media_queue::audio(INPUT_POLICY, telemetry::AudioConsumer::Vad, clock);
+        audio.observe(cx.clone());
+        (Input { audio: Mutex::new(Some(audio)), cancelled }, rx)
     }
 
     fn send<R>(&self, op: impl FnOnce(&AudioSender<Flush>) -> R) -> Result<R, ProviderError> {
@@ -65,8 +63,7 @@ impl Input {
 
 impl StreamInput<AudioFrame> for Input {
     fn push(&self, frame: AudioFrame) -> Result<(), ProviderError> {
-        let dropped = self.send(|audio| audio.push(frame))?;
-        self.drops.record(dropped);
+        self.send(|audio| audio.push(frame))?;
         Ok(())
     }
 
@@ -154,14 +151,11 @@ struct Detection {
     input: AudioReceiver<Flush>,
     output: mpsc::Sender<VadOutput>,
     stop: CancellationToken,
-    catch_up: Arc<AudioDrops>,
-    clock: Arc<dyn Clock>,
 }
 
 impl Detection {
     async fn run(mut self) -> Result<(), ProviderError> {
         loop {
-            self.catch_up.catching_up(self.input.head(), self.clock.now());
             let item = tokio::select! {
                 biased;
                 () = self.stop.cancelled() => return Ok(()),
@@ -241,9 +235,8 @@ pub(super) fn open(
     cx: &telemetry::Cx,
 ) -> Result<DetectionStream, ProviderError> {
     let cancelled = CancellationToken::new();
-    let (sink, input) = Input::open(cancelled.clone(), cx);
+    let (sink, input) = Input::open(cancelled.clone(), cx, clock.clone());
     let (output, events) = mpsc::channel(OUTPUT_CAPACITY);
-    let (catch_up, worker_clock) = (sink.drops.clone(), clock.clone());
     let stop = cancelled.clone();
     // Only channel descriptors precede admission; refusal constructs no model and retains no
     // queued audio. The same worker owns the recurrent state until settlement.
@@ -251,16 +244,7 @@ pub(super) fn open(
         .try_spawn(JobClass::VadModel, move || {
             let machine = VadMachine::new(*options.borrow_and_update());
             let model = models.create();
-            let detection = Detection {
-                machine,
-                model,
-                options,
-                input,
-                output,
-                stop,
-                catch_up,
-                clock: worker_clock,
-            };
+            let detection = Detection { machine, model, options, input, output, stop };
             runtime.block_on(detection.run())
         })
         .map_err(|error| failed(error.to_string()))?;

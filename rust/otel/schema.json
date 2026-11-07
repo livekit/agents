@@ -4410,7 +4410,8 @@
             "end_of_turn",
             "stt_node",
             "recording",
-            "duplex"
+            "duplex",
+            "background_audio"
           ],
           "label": true
         }
@@ -4462,7 +4463,8 @@
             "end_of_turn",
             "stt_node",
             "recording",
-            "duplex"
+            "duplex",
+            "background_audio"
           ],
           "label": true
         }

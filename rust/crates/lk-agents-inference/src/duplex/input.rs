@@ -10,7 +10,6 @@ use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::llm::duplex::{self as abi, DuplexInputGap, DuplexInputItem, DuplexInputMute};
 use lk_agents_abi::{AudioFrame, Clock};
 use lk_agents_media::media_queue::{self, AudioReceiver, AudioSender, Item, Policy, Stuck};
-use lk_agents_net::audio_drops::AudioDrops;
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_telemetry as telemetry;
 
@@ -25,8 +24,6 @@ enum Event {
 pub struct DuplexInput {
     tx: AudioSender<Event>,
     rx: tokio::sync::Mutex<AudioReceiver<Event>>,
-    drops: AudioDrops,
-    clock: Arc<dyn Clock>,
 }
 
 fn stuck(_: Stuck) -> ApiError {
@@ -35,16 +32,14 @@ fn stuck(_: Stuck) -> ApiError {
 
 impl DuplexInput {
     pub fn new(clock: Arc<dyn Clock>) -> Self {
-        let (tx, rx) = media_queue::audio(INPUT_POLICY);
-        let drops = AudioDrops::new(telemetry::AudioConsumer::Duplex, INPUT_POLICY);
-        Self { tx, rx: tokio::sync::Mutex::new(rx), drops, clock }
+        let (tx, rx) = media_queue::audio(INPUT_POLICY, telemetry::AudioConsumer::Duplex, clock);
+        Self { tx, rx: tokio::sync::Mutex::new(rx) }
     }
 
     /// The next item, pending audio merged; one puller at a time.
     pub async fn recv(&self) -> Option<DuplexInputItem> {
         let mut rx = self.rx.lock().await;
         loop {
-            self.drops.catching_up(rx.head(), self.clock.now());
             return Some(match rx.recv().await? {
                 Item::Media(frame) => DuplexInputItem::Audio(frame),
                 Item::Gap(gap) => {
@@ -59,7 +54,7 @@ impl DuplexInput {
 
 impl abi::DuplexInputQueue for DuplexInput {
     fn push(&self, frame: AudioFrame) {
-        self.drops.record(self.tx.push(frame));
+        self.tx.push(frame);
     }
 
     fn head(&self, frame: AudioFrame) {
@@ -67,7 +62,7 @@ impl abi::DuplexInputQueue for DuplexInput {
     }
 
     fn observe(&self, cx: &telemetry::Cx) {
-        self.drops.observe(cx.clone());
+        self.tx.observe(cx.clone());
     }
 }
 

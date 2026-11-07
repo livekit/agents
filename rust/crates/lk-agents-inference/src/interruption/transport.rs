@@ -22,7 +22,6 @@ use lk_agents_abi::types::retry::{RequestKind, RetryDecision};
 use lk_agents_abi::{OwnedTask, SpawnerExt, TaskError};
 use lk_agents_core::request::{Request, Retry};
 use lk_agents_media::media_queue::{self, AudioSender, Item, Policy};
-use lk_agents_net::audio_drops::AudioDrops;
 use lk_agents_net::task::TokioSpawner;
 use lk_agents_net::token::{INFERENCE_TOKEN_TTL, inference_bearer_with_ttl};
 use lk_agents_net::transport::{
@@ -103,11 +102,14 @@ impl AdaptiveInterruptionDetector {
         let reconnect = Arc::new(Notify::new());
         self.streams.lock().push(Arc::downgrade(&reconnect));
 
-        let (queue, input_rx) = media_queue::audio(INPUT_POLICY);
+        let (queue, input_rx) = media_queue::audio(
+            INPUT_POLICY,
+            telemetry::AudioConsumer::Interruption,
+            self.clock.clone(),
+        );
         let (input_failure, _) = watch::channel(None);
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let closed = Arc::new(AtomicBool::new(false));
-        let drops = Arc::new(AudioDrops::new(telemetry::AudioConsumer::Interruption, INPUT_POLICY));
 
         let ctx = StreamContext {
             opts: self.opts.clone(),
@@ -117,11 +119,9 @@ impl AdaptiveInterruptionDetector {
             reconnect: reconnect.clone(),
             closed: closed.clone(),
             input_failure: input_failure.clone(),
-            drops: drops.clone(),
         };
         let input_tx = InterruptionInput(Arc::new(InputShared {
             queue: Mutex::new(Some(queue)),
-            drops,
             failure: input_failure,
         }));
         let task = TokioSpawner::current().spawn(main_task(ctx, input_rx));
@@ -146,8 +146,6 @@ struct StreamContext {
     reconnect: Arc<Notify>,
     closed: Arc<AtomicBool>,
     input_failure: watch::Sender<Option<ApiError>>,
-    /// The input's drops and catch-up, measured where each is seen.
-    drops: Arc<AudioDrops>,
 }
 
 impl StreamContext {
@@ -203,18 +201,18 @@ pub struct InterruptionInput(Arc<InputShared>);
 struct InputShared {
     /// `None` once the input ended.
     queue: Mutex<Option<AudioSender<InputEvent>>>,
-    drops: Arc<AudioDrops>,
     failure: watch::Sender<Option<ApiError>>,
 }
 
 impl InterruptionInput {
     pub fn send(&self, event: InputEvent) -> Result<(), StreamClosed> {
-        let shared = &*self.0;
         let queue = self.open()?;
         match event {
-            InputEvent::Audio(frame) => shared.drops.record(queue.push(frame)),
+            InputEvent::Audio(frame) => {
+                queue.push(frame);
+            }
             event => queue.event(event).map_err(|stuck| {
-                shared.failure.send_replace(Some(ApiError::new(stuck.to_string())));
+                self.0.failure.send_replace(Some(ApiError::new(stuck.to_string())));
                 StreamClosed::Stuck
             })?,
         }
@@ -238,9 +236,11 @@ impl InterruptionInput {
         .map_err(|_| StreamClosed::InputEnded)
     }
 
-    /// Measures the audio the queue drops under `cx`'s job.
+    /// Measures the queue under `cx`'s job.
     pub fn observe(&self, cx: telemetry::Cx) {
-        self.0.drops.observe(cx);
+        if let Some(queue) = self.0.queue.lock().as_ref() {
+            queue.observe(cx);
+        }
     }
 
     /// Ends the input for every clone: the detector drains what was queued, then closes.
@@ -450,7 +450,6 @@ async fn run_once(
     let mut data_tx = Some(data_tx);
 
     let outcome = loop {
-        ctx.drops.catching_up(input_rx.head(), ctx.clock.now());
         let deadline = core.lock().next_deadline();
         let inference_deadline = async {
             match deadline {

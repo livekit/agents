@@ -152,7 +152,9 @@ async fn reconnect_and_live_commands_survive_asynchronous_cleanup_backpressure()
         settled,
         media_pool.clone(),
     ));
-    let (commands, incoming) = media_queue::audio(INPUT_POLICY);
+    let clock = Arc::new(lk_agents_abi::VirtualClock::new());
+    let realtime = lk_agents_telemetry::AudioConsumer::Realtime;
+    let (commands, incoming) = media_queue::audio(INPUT_POLICY, realtime, clock);
     let running = tokio::spawn(pump.run(incoming));
     wait_for_wire(&ws, "session update", |frames| {
         frames.iter().any(|frame| frame["type"] == "session.update")

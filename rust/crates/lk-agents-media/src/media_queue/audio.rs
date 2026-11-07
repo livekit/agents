@@ -1,13 +1,22 @@
 //! Audio: bounded by its queued duration under a [`Policy`], what the bound drops reported as one
-//! gap, a backlog merged into frames of up to [`MERGED_FRAME`].
+//! gap and measured, a backlog merged into frames of up to [`MERGED_FRAME`].
 
 use super::core::{Consumer, Core, Producer, channel};
+use super::metrics::Meter;
 use super::{Head, Item, MERGED_FRAME, Policy, Stuck};
-use lk_agents_abi::AudioFrame;
 use lk_agents_abi::voice::rtc::frame_duration;
+use lk_agents_abi::{AudioFrame, Clock};
+use lk_agents_telemetry as telemetry;
+use std::sync::Arc;
 use std::time::Duration;
 
-pub fn audio<E>(policy: Policy) -> (AudioSender<E>, AudioReceiver<E>) {
+/// An audio queue feeding `consumer`, the label its drops and head drain are measured under;
+/// `clock` times the drain.
+pub fn audio<E>(
+    policy: Policy,
+    consumer: telemetry::AudioConsumer,
+    clock: Arc<dyn Clock>,
+) -> (AudioSender<E>, AudioReceiver<E>) {
     let queue = AudioQueue {
         core: Core::new(),
         policy,
@@ -15,8 +24,10 @@ pub fn audio<E>(policy: Policy) -> (AudioSender<E>, AudioReceiver<E>) {
         head_items: 0,
         head_received: Duration::ZERO,
     };
+    let meter = Arc::new(Meter::new(consumer, policy, clock));
     let (producer, consumer) = channel(queue);
-    (AudioSender(producer), AudioReceiver { queue: consumer, rest: Vec::new() })
+    let receiver = AudioReceiver { queue: consumer, rest: Vec::new(), meter: Arc::clone(&meter) };
+    (AudioSender { queue: producer, meter }, receiver)
 }
 
 struct AudioQueue<E> {
@@ -144,33 +155,43 @@ fn merge(first: AudioFrame, rest: &mut Vec<AudioFrame>) -> AudioFrame {
 }
 
 /// The producer. Not `Clone`: one owner, so dropping it closes the queue.
-pub struct AudioSender<E>(Producer<AudioQueue<E>>);
+pub struct AudioSender<E> {
+    queue: Producer<AudioQueue<E>>,
+    meter: Arc<Meter>,
+}
 
 impl<E> AudioSender<E> {
     /// Never fails and never blocks; the policy decides what is kept. Returns the audio it
-    /// dropped, for the owner to report.
+    /// dropped, which the queue has measured.
     pub fn push(&self, frame: AudioFrame) -> Duration {
-        self.0.apply(|queue| queue.push(frame)).unwrap_or_default()
+        let dropped = self.queue.apply(|queue| queue.push(frame)).unwrap_or_default();
+        self.meter.dropped(dropped);
+        dropped
+    }
+
+    /// Measures the queue under `cx`'s job from now on.
+    pub fn observe(&self, cx: telemetry::Cx) {
+        self.meter.observe(cx);
     }
 
     /// Pre-connect audio: kept in full, outside both policies.
     pub fn head(&self, frame: AudioFrame) {
-        self.0.apply(|queue| queue.head(frame));
+        self.queue.apply(|queue| queue.head(frame));
     }
 
     /// In order with the audio pushed before it. `Stuck` when the consumer stopped draining.
     pub fn event(&self, event: E) -> Result<(), Stuck> {
-        self.0.apply(|queue| queue.core.event(event)).unwrap_or(Ok(()))
+        self.queue.apply(|queue| queue.core.event(event)).unwrap_or(Ok(()))
     }
 
     /// Drops all queued audio, then queues `event`: start over from here. No `Gap`.
     pub fn flush(&self, event: E) -> Result<(), Stuck> {
-        self.0.apply(|queue| queue.flush(event)).unwrap_or(Ok(()))
+        self.queue.apply(|queue| queue.flush(event)).unwrap_or(Ok(()))
     }
 
     /// The receiver is gone: what is pushed goes nowhere.
     pub fn is_closed(&self) -> bool {
-        self.0.is_closed()
+        self.queue.is_closed()
     }
 }
 
@@ -179,12 +200,14 @@ pub struct AudioReceiver<E> {
     queue: Consumer<AudioQueue<E>>,
     /// The frames merging into the one received, reused across calls.
     rest: Vec<AudioFrame>,
+    meter: Arc<Meter>,
 }
 
 impl<E> AudioReceiver<E> {
     /// The next item, pending audio merged. `None` once the sender is gone and the queue is
-    /// drained. Cancel-safe, no allocation in steady state.
+    /// drained. Cancel-safe, no allocation in steady state. Measures the head's drain.
     pub async fn recv(&mut self) -> Option<Item<AudioFrame, E>> {
+        self.meter.receiving(self.head());
         let rest = &mut self.rest;
         let item = self.queue.recv(|queue| queue.pop(rest)).await?;
         Some(match item {

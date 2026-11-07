@@ -293,7 +293,11 @@ impl OpenAIRealtime {
                 self.clock.wall() - Duration::from_nanos(self.clock.now().as_nanos()),
             );
 
-        let (input, input_rx) = media_queue::audio(INPUT_POLICY);
+        let (input, input_rx) = media_queue::audio(
+            INPUT_POLICY,
+            telemetry::AudioConsumer::Realtime,
+            self.clock.clone(),
+        );
         let (ev_tx, ev_rx) = super::queue::events();
         let shared = Arc::new(Shared {
             machine: Mutex::new(machine),
@@ -308,10 +312,6 @@ impl OpenAIRealtime {
         });
         let commands = Arc::new(super::queue::Ingress {
             input,
-            drops: lk_agents_net::audio_drops::AudioDrops::new(
-                telemetry::AudioConsumer::Realtime,
-                INPUT_POLICY,
-            ),
             events: ev_tx.clone(),
             clock: self.clock.clone(),
             label: label.clone(),
@@ -963,7 +963,7 @@ impl lk_agents_abi::Realtime for OpenAIRealtime {
         Box::pin(async move {
             // Infallible: a connect failure arrives as `Event::Error`, like a reconnect failure.
             let session = OpenAIRealtime::session(self, turn_detection_disabled).await;
-            session.commands.drops.observe(cx);
+            session.commands.input.observe(cx);
             Ok(Arc::new(session) as Arc<dyn lk_agents_abi::RealtimeSession>)
         })
     }

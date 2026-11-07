@@ -10,10 +10,12 @@
 //!
 //! One producer that never blocks and one async consumer share the queue: the lock is held only
 //! for the queue's own short work, the receiver's waker is registered under it and woken after it
-//! is released, and a merged frame is built outside it. No thread, no spawn, no clock.
+//! is released, and a merged frame is built outside it. No thread, no spawn, no ambient clock: an
+//! audio queue measures its own drops and head drain (`metrics`) on the clock it is given.
 
 mod audio;
 mod core;
+mod metrics;
 mod video;
 
 pub use audio::{AudioReceiver, AudioSender, audio};

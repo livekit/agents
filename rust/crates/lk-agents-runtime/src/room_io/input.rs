@@ -16,7 +16,6 @@ use lk_agents_abi::{AudioFrame, Clock, Closed, HOST_TEARDOWN_TIMEOUT, Spawner, S
 use lk_agents_media::media_queue::{
     self, AudioReceiver, AudioSender, Item, Stuck, VideoReceiver, VideoSender,
 };
-use lk_agents_net::audio_drops::AudioDrops;
 use lk_agents_net::task::TaskSet;
 use lk_agents_voice::room_io::machine::input::{
     AUDIO_SOURCES, Admit, Open, Owner, ParticipantInput, ProcessorSpans, Publication,
@@ -43,8 +42,8 @@ enum InputEvent {
 trait ReaderSink: Send + Sync + 'static {
     type Frame: Send + 'static;
     type Receiver: Send + 'static;
-    /// Returns the audio the push dropped.
-    fn push(&self, frame: Self::Frame) -> Duration;
+    /// The queue measures what its bound drops.
+    fn push(&self, frame: Self::Frame);
     fn event(&self, event: InputEvent) -> std::result::Result<(), Stuck>;
     fn flush(&self, event: InputEvent) -> std::result::Result<(), Stuck>;
     fn is_closed(&self) -> bool;
@@ -53,13 +52,15 @@ trait ReaderSink: Send + Sync + 'static {
     ) -> impl Future<Output = Option<Item<Self::Frame, InputEvent>>> + Send;
     /// The pre-connect audio received so far.
     fn head(receiver: &Self::Receiver) -> Duration;
+    /// Measures the queue under `cx`'s job; video measures nothing.
+    fn observe(&self, _cx: telemetry::Cx) {}
 }
 
 impl ReaderSink for AudioSender<InputEvent> {
     type Frame = AudioFrame;
     type Receiver = AudioReceiver<InputEvent>;
-    fn push(&self, frame: AudioFrame) -> Duration {
-        AudioSender::push(self, frame)
+    fn push(&self, frame: AudioFrame) {
+        AudioSender::push(self, frame);
     }
     fn event(&self, event: InputEvent) -> std::result::Result<(), Stuck> {
         AudioSender::event(self, event)
@@ -78,14 +79,16 @@ impl ReaderSink for AudioSender<InputEvent> {
     fn head(receiver: &AudioReceiver<InputEvent>) -> Duration {
         receiver.head().received
     }
+    fn observe(&self, cx: telemetry::Cx) {
+        AudioSender::observe(self, cx);
+    }
 }
 
 impl ReaderSink for VideoSender<InputEvent> {
     type Frame = VideoFrameRef;
     type Receiver = VideoReceiver<InputEvent>;
-    fn push(&self, frame: VideoFrameRef) -> Duration {
+    fn push(&self, frame: VideoFrameRef) {
         VideoSender::push(self, frame);
-        Duration::ZERO
     }
     fn event(&self, event: InputEvent) -> std::result::Result<(), Stuck> {
         VideoSender::event(self, event)
@@ -116,21 +119,14 @@ struct Readers<Q: ReaderSink> {
     state: Mutex<State<Q>>,
     queue: tokio::sync::Mutex<Q::Receiver>,
     changed: Notify,
-    /// Where an audio queue's drops are reported.
-    drops: Option<AudioDrops>,
 }
 
 impl<Q: ReaderSink> Readers<Q> {
-    fn new(
-        sources: &'static [TrackSource],
-        (tx, rx): (Q, Q::Receiver),
-        drops: Option<AudioDrops>,
-    ) -> Self {
+    fn new(sources: &'static [TrackSource], (tx, rx): (Q, Q::Receiver)) -> Self {
         Self {
             state: Mutex::new(State { readers: ParticipantInput::new(sources), queue: Some(tx) }),
             queue: tokio::sync::Mutex::new(rx),
             changed: Notify::new(),
-            drops,
         }
     }
 
@@ -163,29 +159,29 @@ impl<Q: ReaderSink> Readers<Q> {
             Ok(frame) => queue.push(frame),
             Err(error) => {
                 let _ = queue.event(InputEvent::Failed(error));
-                Duration::ZERO
             }
         })
     }
 
-    /// Hands a frame of the reader of `generation` to `deliver` as voice admits it, and reports
-    /// the audio its push dropped. `false` stops the reader.
-    fn admitted(&self, generation: u64, deliver: impl FnOnce(&Q) -> Duration) -> bool {
-        let (open, dropped) = {
-            let state = self.state.lock();
-            match (state.readers.admit(generation), &state.queue) {
-                (Admit::Stop, _) | (Admit::Deliver, None) => (false, Duration::ZERO),
-                (Admit::Drop, _) => (true, Duration::ZERO),
-                (Admit::Deliver, Some(queue)) => {
-                    let dropped = deliver(queue);
-                    (!queue.is_closed(), dropped)
-                }
+    /// Hands a frame of the reader of `generation` to `deliver` as voice admits it. `false` stops
+    /// the reader.
+    fn admitted(&self, generation: u64, deliver: impl FnOnce(&Q)) -> bool {
+        let state = self.state.lock();
+        match (state.readers.admit(generation), &state.queue) {
+            (Admit::Stop, _) | (Admit::Deliver, None) => false,
+            (Admit::Drop, _) => true,
+            (Admit::Deliver, Some(queue)) => {
+                deliver(queue);
+                !queue.is_closed()
             }
-        };
-        if let Some(drops) = &self.drops {
-            drops.record(dropped);
         }
-        open
+    }
+
+    /// Measures the queue under `cx`'s job.
+    fn observe(&self, cx: telemetry::Cx) {
+        if let Some(queue) = &self.state.lock().queue {
+            queue.observe(cx);
+        }
     }
 
     /// Resolves once voice retires the reader of `generation`.
@@ -410,7 +406,6 @@ impl ParticipantVideoInput {
             readers: Readers::new(
                 VIDEO_SOURCES,
                 media_queue::video(lk_agents_abi::voice::rtc::VIDEO_QUEUE_FRAMES),
-                None,
             ),
             pumps: Arc::default(),
         })
@@ -516,6 +511,8 @@ impl ParticipantAudioInput {
         pre_connect: Option<Arc<PreConnectAudioHandler>>,
         failures: tokio::sync::mpsc::Sender<ProcessorFailure>,
     ) -> Arc<Self> {
+        let audio =
+            media_queue::audio(AUDIO_POLICY, telemetry::AudioConsumer::RoomInput, clock.clone());
         Arc::new(Self {
             room,
             spawner,
@@ -523,11 +520,7 @@ impl ParticipantAudioInput {
             config,
             pre_connect,
             failures,
-            readers: Readers::new(
-                AUDIO_SOURCES,
-                media_queue::audio(AUDIO_POLICY),
-                Some(AudioDrops::new(telemetry::AudioConsumer::RoomInput, AUDIO_POLICY)),
-            ),
+            readers: Readers::new(AUDIO_SOURCES, audio),
             pumps: Arc::default(),
             first_frame: Mutex::new(None),
         })
@@ -541,9 +534,7 @@ impl ParticipantAudioInput {
 
     /// Reports the audio the input drops under `cx`'s job.
     pub fn observe(&self, cx: telemetry::Cx) {
-        if let Some(drops) = &self.readers.drops {
-            drops.observe(cx);
-        }
+        self.readers.observe(cx);
     }
 
     fn track_subscribed(&self, sid: &TrackSid, source: TrackSource) {
@@ -637,10 +628,7 @@ impl ParticipantAudioInput {
             };
             for item in items {
                 let Some(frame) = self.admit(spans, item).await else { continue };
-                let queued = self.readers.admitted(generation, |queue| {
-                    queue.head(frame);
-                    Duration::ZERO
-                });
+                let queued = self.readers.admitted(generation, |queue| queue.head(frame));
                 if !queued {
                     return false;
                 }

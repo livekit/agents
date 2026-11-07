@@ -37,6 +37,8 @@ soxr-sys = "0.1.3"
 #
 # Provider image records live in ABI; this crate produces them without putting encoders in ABI.
 lk-agents-abi = { path = "../lk-agents-abi" }
+# `media_queue`'s own metrics: an audio queue measures its drops and head drain.
+lk-agents-telemetry = { path = "../lk-agents-telemetry" }
 image = { workspace = true, optional = true }
 
 [build-dependencies]

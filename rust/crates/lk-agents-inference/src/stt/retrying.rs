@@ -162,7 +162,7 @@ pub async fn stream(
     let deadline = attempts.wake_at(None);
     wake_attempts(&mut attempts, clock.now(), &*stt)?;
     let offset = start_time_offset.unwrap_or(0.0);
-    let (input, audio) = AudioInput::new();
+    let (input, audio) = AudioInput::new(clock.clone());
     input.observe(cx.clone());
     let mut pump = Pump { audio, sink: None, sending: None, ended: false, gaps: Gaps::default() };
     let opened = before(&*clock, deadline, stt.stream(cx, language, Some(offset))).await;

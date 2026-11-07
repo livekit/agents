@@ -18,7 +18,8 @@ CARGO_RUNNER = os.environ.get("CARGO_RUNNER", "cargo")
 CORES = {f"lk-agents-{name}" for name in ("core", "voice", "media")}
 PURE = CORES | {"lk-agents-abi"}
 # Outside the Clippy policy: media's worker pool, its one threaded module (decisions 84, 85), and
-# media_queue, a lock and a waker shared by a producer and a consumer (no thread, spawn or clock).
+# media_queue, a lock and a waker shared by a producer and a consumer (no thread, spawn or ambient
+# clock), which records its audio metrics through the recording crate.
 UNRESTRICTED = (
     "rust/crates/lk-agents-media/src/pool.rs",
     "rust/crates/lk-agents-media/src/pool_tests.rs",
@@ -45,7 +46,8 @@ GRAPH = {
     "lk-agents-abi": set(),
     "lk-agents-core": {"lk-agents-abi"},
     "lk-agents-voice": {"lk-agents-abi", "lk-agents-core", "lk-agents-media", RECORDING},
-    "lk-agents-media": {"lk-agents-abi"},
+    # media -> telemetry: an audio media_queue records its own drop and catch-up metrics.
+    "lk-agents-media": {"lk-agents-abi", RECORDING},
     # inference -> core: chat formatting, strict tool schemas and JSON repair.
     "lk-agents-inference": {
         "lk-agents-abi",

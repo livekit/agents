@@ -12,8 +12,6 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use lk_agents_abi::AudioFrame;
-#[cfg(any(test, feature = "media-ffmpeg"))]
-use lk_agents_abi::Clock;
 use lk_agents_abi::recorder::AudioRecorder;
 use lk_agents_media::media_queue::AudioSender;
 #[cfg(any(test, feature = "media-ffmpeg"))]
@@ -23,7 +21,6 @@ use lk_agents_media::pool::{JobClass, MediaPool};
 #[cfg(any(test, feature = "media-ffmpeg"))]
 use lk_agents_media::recorder::{FileLimits, OggOpusEncoder, RecordingFile};
 use lk_agents_media::recorder::{RESYNC_TOLERANCE, RecordingCommand, RecordingLimits};
-use lk_agents_net::audio_drops::AudioDrops;
 use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::task::{TaskSet, TokioSpawner};
 use tokio::sync::{RwLock, mpsc, oneshot, watch};
@@ -89,7 +86,6 @@ struct Input {
 pub struct SessionRecorder {
     tx: mpsc::Sender<Queued>,
     input: parking_lot::Mutex<Input>,
-    drops: Arc<AudioDrops>,
     shared: Arc<Shared>,
     runtime: tokio::runtime::Handle,
     /// The worker's supervisor and the finalization, which the recording owns past any waiter.
@@ -196,12 +192,12 @@ impl SessionRecorder {
             limits,
         });
         let (tx, rx) = mpsc::channel(limits.queued_commands + 1);
-        let (audio, input) = media_queue::audio(INPUT_POLICY);
-        let drops = Arc::new(AudioDrops::new(telemetry::AudioConsumer::Recording, INPUT_POLICY));
+        let clock = Arc::new(lk_agents_net::clock::RealClock::new());
+        let (audio, input) =
+            media_queue::audio(INPUT_POLICY, telemetry::AudioConsumer::Recording, clock);
         let recorder = Self {
             tx,
             input: parking_lot::Mutex::new(Input { audio, until: None, head: false }),
-            drops: drops.clone(),
             shared: shared.clone(),
             runtime: runtime.clone(),
             tasks: Arc::default(),
@@ -218,7 +214,7 @@ impl SessionRecorder {
                     }
                 };
                 worker_shared.ready.send_replace(Some(Ok(())));
-                run(file, rx, input, &drops, worker_shared, &worker_runtime)
+                run(file, rx, input, worker_shared, &worker_runtime)
             })
             .map_err(|error| RecordingFailure::Worker(error.to_string()))?;
         let spawner = TokioSpawner::new(runtime.clone());
@@ -365,16 +361,13 @@ impl SessionRecorder {
         if run && input.audio.event(start).is_ok() {
             input.until = Some(start);
         }
-        let dropped = if head {
+        if head {
             input.audio.head(frame.clone());
-            Duration::ZERO
         } else {
-            input.audio.push(frame.clone())
-        };
+            input.audio.push(frame.clone());
+        }
         input.until = Some(input.until.unwrap_or(start) + duration);
         input.head = head;
-        drop(input);
-        self.drops.record(dropped);
         Ok(())
     }
 
@@ -489,7 +482,7 @@ impl AudioRecorder for SessionRecorder {
         let _ = self.input(now, frame, true);
     }
     fn observe(&self, cx: &telemetry::Cx) {
-        self.drops.observe(cx.clone());
+        self.input.lock().audio.observe(cx.clone());
     }
     fn capture_frame(&self, now: f64, frame: &AudioFrame) {
         let _ = self.record(RecordingCommand::Capture(now, frame.clone()));
@@ -513,11 +506,10 @@ fn run<E: OggOpusEncoder, W: Write>(
     mut file: RecordingFile<E, W>,
     rx: mpsc::Receiver<Queued>,
     input: AudioReceiver<f64>,
-    drops: &AudioDrops,
     shared: Arc<Shared>,
     runtime: &tokio::runtime::Handle,
 ) -> Outcome {
-    let outcome = runtime.block_on(process(&mut file, rx, input, drops, &shared));
+    let outcome = runtime.block_on(process(&mut file, rx, input, &shared));
     if let Err(error) = &outcome {
         shared.fail(error.clone());
     }
@@ -540,7 +532,6 @@ async fn process<E: OggOpusEncoder, W: Write>(
     file: &mut RecordingFile<E, W>,
     mut rx: mpsc::Receiver<Queued>,
     input: AudioReceiver<f64>,
-    drops: &AudioDrops,
     shared: &Shared,
 ) -> Outcome {
     // Between blocks: stop on a failure reported elsewhere, and let other workers run.
@@ -549,11 +540,10 @@ async fn process<E: OggOpusEncoder, W: Write>(
         std::thread::yield_now();
         Ok(())
     };
-    let clock = lk_agents_net::clock::RealClock::new();
     let mut input = Some(input);
     let mut timeline = Timeline::default();
     loop {
-        match next(&mut input, &mut rx, drops, &clock).await {
+        match next(&mut input, &mut rx).await {
             Next::Input(None, _) => input = None,
             Next::Input(Some(item), before) => {
                 shared.check_failure()?;
@@ -575,15 +565,9 @@ async fn process<E: OggOpusEncoder, W: Write>(
 
 /// The next microphone item, ahead of the next command; only commands once the audio ended.
 #[cfg(any(test, feature = "media-ffmpeg"))]
-async fn next(
-    input: &mut Option<AudioReceiver<f64>>,
-    rx: &mut mpsc::Receiver<Queued>,
-    drops: &AudioDrops,
-    clock: &dyn Clock,
-) -> Next {
+async fn next(input: &mut Option<AudioReceiver<f64>>, rx: &mut mpsc::Receiver<Queued>) -> Next {
     let Some(audio) = input else { return Next::Command(rx.recv().await) };
     let head = audio.head();
-    drops.catching_up(head, clock.now());
     tokio::select! {
         biased;
         item = audio.recv() => Next::Input(item, head.received),

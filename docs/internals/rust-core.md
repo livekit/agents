@@ -220,7 +220,7 @@ lk-agents-inference -> lk-agents-core
 lk-agents-net -> lk-agents-core
 lk-agents-net -> lk-agents-media (the worker pool primitive)
 inference, worker, storage -> lk-agents-net
-voice, net, inference, worker, runtime, fuzz -> lk-agents-telemetry -> lk-agents-abi
+voice, media, net, inference, worker, runtime, fuzz -> lk-agents-telemetry -> lk-agents-abi
 async I/O crates -> lk-agents-abi
 fuzz -> sans-I/O crates + lk-agents-abi
 lk-agents-fuzz -> lk-agents-runtime (voice and room executors over fake ports)
@@ -1721,7 +1721,8 @@ and `lk-agents-media`. Packages requiring a different policy use a separate
 Clippy invocation with their own config and explicit package list.
 Media has two exempt modules: its optional thread pool, added only for a measured
 need, is its one allowed spawn site, and `media_queue` holds a lock and a waker
-(no thread, no spawn, no clock). Storage, inference, worker and net are
+(no thread, no spawn, no ambient clock) and records an audio queue's drop and
+catch-up metrics on the clock it is given. Storage, inference, worker and net are
 unrestricted async crates. Banned constructs include task/thread spawns,
 `select!`/`join!`, ambient monotonic/wall clocks, random or UUID generation,
 environment/process reads, unbounded tokio/std/futures/crossbeam channels,

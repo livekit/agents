@@ -1698,6 +1698,7 @@ dependencies = [
  "cc",
  "image",
  "lk-agents-abi",
+ "lk-agents-telemetry",
  "log",
  "pkg-config",
  "sha2",

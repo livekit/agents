@@ -7,6 +7,12 @@ use std::task::{Context, Poll, Waker};
 
 const CATCH_UP: Policy = Policy::CatchUp(Duration::from_millis(100));
 
+/// A queue on a virtual clock; what it measures goes nowhere.
+fn queue<E>(policy: Policy) -> (AudioSender<E>, AudioReceiver<E>) {
+    let clock = Arc::new(lk_agents_abi::VirtualClock::new());
+    audio(policy, lk_agents_telemetry::AudioConsumer::Vad, clock)
+}
+
 /// `ms` of 16 kHz mono, every sample `tag`.
 fn frame(ms: u32, tag: i16) -> AudioFrame {
     let samples = 16 * ms;
@@ -64,7 +70,7 @@ fn samples(items: &[Item<AudioFrame, &'static str>]) -> Vec<i16> {
 // what it hears.
 #[test]
 fn a_consumer_that_keeps_up_receives_the_pushed_frames_themselves() {
-    let (tx, mut rx) = audio::<&str>(CATCH_UP);
+    let (tx, mut rx) = queue::<&str>(CATCH_UP);
     for tag in 0..5 {
         let pushed = frame(10, tag);
         let data = pushed.data.as_ptr();
@@ -79,7 +85,7 @@ fn a_consumer_that_keeps_up_receives_the_pushed_frames_themselves() {
 // Catches: a backlog delivered one 10 ms item at a time, or merged past 50 ms, or reordered.
 #[test]
 fn a_backlog_comes_out_as_frames_of_at_most_50ms_in_order() {
-    let (tx, mut rx) = audio::<&str>(Policy::CatchUp(ms(10_000)));
+    let (tx, mut rx) = queue::<&str>(Policy::CatchUp(ms(10_000)));
     for tag in 0..23 {
         tx.push(frame(10, tag));
     }
@@ -101,7 +107,7 @@ fn a_backlog_comes_out_as_frames_of_at_most_50ms_in_order() {
 // Catches: merging that waits for a frame to fill, delivering a sample later than unmerged.
 #[test]
 fn a_merged_frame_is_never_later_than_the_frames_unmerged() {
-    let (tx, mut rx) = audio::<&str>(Policy::CatchUp(ms(10_000)));
+    let (tx, mut rx) = queue::<&str>(Policy::CatchUp(ms(10_000)));
     tx.push(frame(10, 1));
     tx.push(frame(10, 2));
     assert_eq!(timeline(&drain(&mut rx)), [("audio", 20, 1)], "pending audio, at once");
@@ -110,7 +116,7 @@ fn a_merged_frame_is_never_later_than_the_frames_unmerged() {
 // Catches: a merged frame over 50 ms for any mix of frame sizes.
 #[test]
 fn no_merged_frame_exceeds_50ms() {
-    let (tx, mut rx) = audio::<&str>(Policy::CatchUp(ms(10_000)));
+    let (tx, mut rx) = queue::<&str>(Policy::CatchUp(ms(10_000)));
     for size in [10, 20, 30, 40, 50, 10, 10, 25, 5, 45, 15, 20] {
         tx.push(frame(size, 0));
     }
@@ -124,7 +130,7 @@ fn no_merged_frame_exceeds_50ms() {
 // Catches: merging across a format change, an event or a gap.
 #[test]
 fn merging_stops_at_a_format_change_an_event_and_a_gap() {
-    let (tx, mut rx) = audio::<&str>(Policy::CatchUp(ms(30)));
+    let (tx, mut rx) = queue::<&str>(Policy::CatchUp(ms(30)));
     tx.push(frame(10, 1));
     tx.push(AudioFrame::new(vec![0; 640], 32_000, 1, 320));
     tx.push(frame(10, 2));
@@ -144,7 +150,7 @@ fn merging_stops_at_a_format_change_an_event_and_a_gap() {
 // that are not counted.
 #[test]
 fn catch_up_drops_the_oldest_frames_into_one_gap() {
-    let (tx, mut rx) = audio::<&str>(CATCH_UP);
+    let (tx, mut rx) = queue::<&str>(CATCH_UP);
     for tag in 0..15 {
         assert_eq!(tx.push(frame(10, tag)), if tag > 9 { ms(10) } else { Duration::ZERO });
     }
@@ -159,7 +165,7 @@ fn catch_up_drops_the_oldest_frames_into_one_gap() {
 // still loses audio.
 #[test]
 fn received_audio_no_longer_counts_against_the_bound() {
-    let (tx, mut rx) = audio::<&str>(CATCH_UP);
+    let (tx, mut rx) = queue::<&str>(CATCH_UP);
     for tag in 0..100 {
         tx.push(frame(10, tag));
         next(&mut rx);
@@ -170,7 +176,7 @@ fn received_audio_no_longer_counts_against_the_bound() {
 // Catches: a lagging `Now` consumer handed a bounded backlog of old audio instead of the present.
 #[test]
 fn now_drops_to_the_newest_frame_once_the_consumer_lags() {
-    let (tx, mut rx) = audio::<&str>(Policy::Now(ms(50)));
+    let (tx, mut rx) = queue::<&str>(Policy::Now(ms(50)));
     for tag in 0..5 {
         tx.push(frame(10, tag));
     }
@@ -182,7 +188,7 @@ fn now_drops_to_the_newest_frame_once_the_consumer_lags() {
 // Catches: the pre-connect head dropped by `Now`, losing the start of the first sentence.
 #[test]
 fn the_head_is_kept_in_full_under_now() {
-    let (tx, mut rx) = audio::<&str>(Policy::Now(ms(20)));
+    let (tx, mut rx) = queue::<&str>(Policy::Now(ms(20)));
     for tag in 0..10 {
         tx.head(frame(10, tag));
     }
@@ -198,7 +204,7 @@ fn the_head_is_kept_in_full_under_now() {
 // catch-up, or a merged frame that straddles the end of the head.
 #[test]
 fn head_progress_counts_the_head_received_and_never_merges_it_with_live_audio() {
-    let (tx, mut rx) = audio::<&str>(Policy::Now(ms(500)));
+    let (tx, mut rx) = queue::<&str>(Policy::Now(ms(500)));
     for tag in 0..8 {
         tx.head(frame(10, tag));
     }
@@ -218,7 +224,7 @@ fn head_progress_counts_the_head_received_and_never_merges_it_with_live_audio() 
 // Catches: the bound dropping audio an event was ordered after (a committed buffer).
 #[test]
 fn audio_before_an_event_is_never_dropped_by_the_bound() {
-    let (tx, mut rx) = audio::<&str>(CATCH_UP);
+    let (tx, mut rx) = queue::<&str>(CATCH_UP);
     for tag in 0..20 {
         tx.push(frame(10, tag));
     }
@@ -237,7 +243,7 @@ fn audio_before_an_event_is_never_dropped_by_the_bound() {
 // Catches: `flush` keeping media, dropping an event, or reporting the flushed audio as a gap.
 #[test]
 fn flush_drops_the_queued_media_and_keeps_the_events() {
-    let (tx, mut rx) = audio::<&str>(CATCH_UP);
+    let (tx, mut rx) = queue::<&str>(CATCH_UP);
     tx.push(frame(10, 1));
     tx.event("commit").unwrap();
     for tag in 2..20 {
@@ -253,7 +259,7 @@ fn flush_drops_the_queued_media_and_keeps_the_events() {
 // flush keeping the media it was asked to drop.
 #[test]
 fn a_consumer_that_stops_draining_events_is_stuck() {
-    let (tx, mut rx) = audio::<u32>(CATCH_UP);
+    let (tx, mut rx) = queue::<u32>(CATCH_UP);
     for n in 0..MAX_EVENTS as u32 {
         tx.event(n).unwrap();
     }
@@ -305,7 +311,7 @@ fn first_sample(item: &Item<AudioFrame, &str>) -> i16 {
 // rules.
 #[test]
 fn recv_hands_over_the_pushed_frame_and_merges_a_backlog() {
-    let (tx, mut rx) = audio::<&str>(Policy::CatchUp(Duration::from_secs(10)));
+    let (tx, mut rx) = queue::<&str>(Policy::CatchUp(Duration::from_secs(10)));
     let pushed = frame(10, 1);
     let data = pushed.data.as_ptr();
     tx.push(pushed);
@@ -322,7 +328,7 @@ fn recv_hands_over_the_pushed_frame_and_merges_a_backlog() {
 // Catches: `recv` never ending after the sender hangs up, or hang-up discarding what is queued.
 #[test]
 fn recv_drains_then_ends_when_the_sender_hangs_up() {
-    let (tx, mut rx) = audio::<&str>(CATCH_UP);
+    let (tx, mut rx) = queue::<&str>(CATCH_UP);
     tx.push(frame(10, 1));
     tx.event("end").unwrap();
     drop(tx);
@@ -334,7 +340,7 @@ fn recv_drains_then_ends_when_the_sender_hangs_up() {
 // Catches: a torn-down consumer still collecting media, or a closed queue failing its producer.
 #[test]
 fn a_dropped_receiver_closes_the_queue() {
-    let (tx, rx) = audio::<&str>(CATCH_UP);
+    let (tx, rx) = queue::<&str>(CATCH_UP);
     assert!(!tx.is_closed());
     drop(rx);
     assert!(tx.is_closed());
@@ -347,7 +353,7 @@ fn a_dropped_receiver_closes_the_queue() {
 // Catches: a `select!` arm dropping the in-flight `recv` and taking media with it.
 #[test]
 fn an_abandoned_recv_does_not_consume_media() {
-    let (tx, mut rx) = audio::<&str>(CATCH_UP);
+    let (tx, mut rx) = queue::<&str>(CATCH_UP);
     {
         let waiting = pin!(rx.recv());
         assert!(waiting.poll(&mut Context::from_waker(Waker::noop())).is_pending());
@@ -360,7 +366,7 @@ fn an_abandoned_recv_does_not_consume_media() {
 // synchronous host code.
 #[test]
 fn a_push_racing_the_receiver_still_wakes_it() {
-    let (tx, mut rx) = audio::<&str>(Policy::CatchUp(Duration::from_secs(10)));
+    let (tx, mut rx) = queue::<&str>(Policy::CatchUp(Duration::from_secs(10)));
     let start = Arc::new(std::sync::Barrier::new(2));
     let producer = {
         let start = Arc::clone(&start);
