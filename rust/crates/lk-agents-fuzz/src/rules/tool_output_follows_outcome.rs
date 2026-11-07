@@ -8,7 +8,8 @@
 //! A step cut short records its outputs asking for no reply, and the close settles calls still
 //! running as an error, so neither is held to the reply flag; a body cancelled has no outcome. A
 //! `VoiceTask`'s speech runs its tools on the task's runner, whose `Completed` ends the task: its
-//! agent asks for no reply to it.
+//! agent asks for no reply to it. A body its first `ctx.update()` detached answers with its final,
+//! recorded under `<call_id>_final`; a host update ending a body first answers its call.
 use lk_agents_abi::{ChatItem, FunctionCall, Role, llm::tool_executor::WAITING_PREFIX};
 use lk_agents_core::tts::markup::ChatMessageExt;
 use lk_agents_voice::{
@@ -78,20 +79,48 @@ impl Rule for ToolOutputFollowsOutcome {
             let created = host.speech(speech).created_at();
             created.is_some_and(|c| stretches.iter().any(|(from, to)| *from < c && c <= *to))
         };
+        // A tool's first report may be the host's: progress detaches the body, which answers
+        // with its final; an end answers the call, and the body's own answer comes too late.
+        let mut detached = BTreeSet::new();
+        let mut ended = BTreeSet::new();
         for applied in inputs.accepted() {
-            let Input::ToolAnswered { tool, answer, text: AgentText(text) } = &applied.input else {
-                continue;
+            let (tool, answer, outcome) = match &applied.input {
+                Input::ToolUpdate { tool, progress, end } => {
+                    if detached.contains(&tool.nth) || ended.contains(&tool.nth) {
+                        continue;
+                    }
+                    if progress.is_some() {
+                        detached.insert(tool.nth);
+                        continue;
+                    }
+                    ended.insert(tool.nth);
+                    (tool, end, crate::fakes::tools::update_outcome(None, *end))
+                }
+                Input::ToolAnswered { tool, answer, text: AgentText(text) } => {
+                    if *answer == ToolAnswer::Detached {
+                        detached.insert(tool.nth);
+                    }
+                    if ended.contains(&tool.nth)
+                        || matches!(answer, ToolAnswer::Cancelled | ToolAnswer::Detached)
+                    {
+                        continue;
+                    }
+                    (tool, answer, crate::fakes::tools::outcome_of(*answer, text))
+                }
+                _ => continue,
             };
-            if matches!(answer, ToolAnswer::Cancelled | ToolAnswer::Detached) {
-                continue;
-            }
             let Some(Detail::Tool { call_id, speech, .. }) =
                 r.resource(Kind::Tool, tool.nth).map(|t| t.detail().clone())
             else {
                 continue;
             };
+            let recorded = if detached.contains(&tool.nth) {
+                format!("{call_id}_final")
+            } else {
+                call_id.clone()
+            };
             let Some((at, ChatItem::FunctionCallOutput(output), _)) = announced.iter().find(
-                |(_, i, _)| matches!(i, ChatItem::FunctionCallOutput(o) if o.call_id == call_id),
+                |(_, i, _)| matches!(i, ChatItem::FunctionCallOutput(o) if o.call_id == recorded),
             ) else {
                 continue;
             };
@@ -99,7 +128,6 @@ impl Rule for ToolOutputFollowsOutcome {
             if closing.is_some_and(|c| c <= *at) || host.speech(speech).is_interrupted() {
                 continue;
             }
-            let outcome = crate::fakes::tools::outcome_of(*answer, text);
             let mut shape = lk_agents_core::tool_outcome::shape(
                 &outcome,
                 lk_agents_core::tool_outcome::Mode::Voice,
@@ -133,7 +161,8 @@ impl Rule for ToolOutputFollowsOutcome {
         for (i, (at, item, speech)) in announced.iter().enumerate() {
             match item {
                 ChatItem::FunctionCall(call) => {
-                    let flag = call.extra.get(lk_agents_core::agent_run::planning::INPUT_REQUESTED_KEY);
+                    let flag =
+                        call.extra.get(lk_agents_core::agent_run::planning::INPUT_REQUESTED_KEY);
                     if flag.is_some_and(|flag| {
                         flag.as_bool() == Some(true) || flag.as_str() == Some("true")
                     }) {

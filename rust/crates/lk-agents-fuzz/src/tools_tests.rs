@@ -547,6 +547,84 @@ mod tool_update_before_detach_heard {
     }
 }
 
+mod tool_update_as_first_report {
+    //! A body's first report from the host: progress detaches it, an end answers its call.
+    use lk_agents_fuzz::check::check_all;
+    use lk_agents_fuzz::drive::{Run, Setup, simulate};
+    use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref, ToolAnswer, ToolArgs};
+
+    fn reported(reports: &[Input]) -> Run {
+        let setup = Setup { tools: vec!["lookup".into()], ..Setup::default() };
+        let mut inputs = vec![
+            Input::GenerateReply { user_input: None, instructions: None, allow: None },
+            Input::Advance { ms: Millis(100) },
+            Input::LlmToolCall {
+                chat: Ref::new(0),
+                name: "lookup".into(),
+                args: ToolArgs("{}".into()),
+            },
+            Input::LlmEnd { chat: Ref::new(0) },
+            Input::Advance { ms: Millis(100) },
+        ];
+        for report in reports {
+            inputs.push(report.clone());
+            inputs.push(Input::Advance { ms: Millis(100) });
+        }
+        inputs.push(Input::Advance { ms: Millis(3_000) });
+        simulate(async {
+            let mut run = Run::start(&setup, 0, Default::default()).await;
+            for input in &inputs {
+                run.apply(input).await;
+            }
+            run
+        })
+    }
+
+    fn update(progress: Option<&str>, end: ToolAnswer) -> Input {
+        Input::ToolUpdate {
+            tool: Ref::new(0),
+            progress: progress.map(|p| AgentText(p.into())),
+            end,
+        }
+    }
+
+    fn answer(answer: ToolAnswer, text: &str) -> Input {
+        Input::ToolAnswered { tool: Ref::new(0), answer, text: AgentText(text.into()) }
+    }
+
+    fn failed(run: &Run) -> Vec<String> {
+        check_all(&run.record).0.into_iter().map(|f| f.contract.to_string()).collect()
+    }
+
+    // Catches: the rules took a body's first `ctx.update()` for a later update owed a
+    // `<call_id>_update_<n>` (seed 126 TaskBridge, tool_updates_are_told) and its answer for the
+    // call's output, though the product tells the update as the detach and records the answer as
+    // the `<call_id>_final` call.
+    #[test]
+    fn a_first_update_is_the_detach() {
+        let run = reported(&[
+            update(Some("Checking."), ToolAnswer::Return),
+            answer(ToolAnswer::Value, "12C"),
+        ]);
+        let failed = failed(&run);
+        let misread = ["tool_updates_are_told", "tool_output_follows_outcome"];
+        assert!(!failed.iter().any(|c| misread.contains(&c.as_str())), "{failed:?}");
+    }
+
+    // Catches: the rule held the body's own answer to the call's output, though a host update
+    // ending the body first answered the call and the driver refused the later answer (seed 211
+    // Arrival, tool_output_follows_outcome).
+    #[test]
+    fn an_end_before_the_answer_answers_the_call() {
+        let run = reported(&[
+            update(None, ToolAnswer::Ask),
+            answer(ToolAnswer::Verbatim, "Tuesday at 9 works."),
+        ]);
+        let failed = failed(&run);
+        assert!(!failed.iter().any(|c| c == "tool_output_follows_outcome"), "{failed:?}");
+    }
+}
+
 mod canonical_terminal_tool_result {
     //! One canonical question wins in model order, regardless of body completion order.
     use std::collections::BTreeMap;
