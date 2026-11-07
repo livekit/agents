@@ -160,9 +160,9 @@ impl TurnAccumulator {
         self.cut_at = Some(position);
     }
 
-    /// Whether a segment of this step played its own audio.
-    pub fn has_played(&self) -> bool {
-        self.cut_at.is_some()
+    /// Where the last segment that played its own audio stopped, if one did.
+    pub fn played_at(&self) -> Option<std::time::Duration> {
+        self.cut_at
     }
 
     /// One forwarded segment's text (`segment_outputs.append(out)`).

@@ -498,6 +498,69 @@ mod playout_finish_lost {
         assert!(speech.is_done(), "the speech still waits on a finish the output lost");
     }
 
+    // Catches: a reply whose model failed after its words and a tool call, its words still played,
+    // then cut with the cut's report lost, ended its agent_turn interrupted with no
+    // lk.playout.position: the failed step reported itself spoken without where its audio stopped
+    // (`spans_nest_and_end`, survey seed 544). The turn records the progress the output confirmed.
+    #[test]
+    fn a_cut_turn_whose_model_failed_reports_where_its_audio_stopped() {
+        use lk_agents_abi::telemetry::record::{Record, Value};
+        use lk_agents_fuzz::input::ToolArgs;
+        use lk_agents_voice::events::SessionEvent;
+        let inputs = [
+            Input::GenerateReply { user_input: None, instructions: None, allow: None },
+            Input::Advance { ms: Millis(20) },
+            Input::LlmText { chat: Ref::new(0), text: AgentText("Let me look that up.".into()) },
+            Input::LlmToolCall {
+                chat: Ref::new(0),
+                name: "lookup".into(),
+                args: ToolArgs("{}".into()),
+            },
+            Input::LlmFail { chat: Ref::new(0) },
+            Input::Advance { ms: Millis(20) },
+            Input::PlayoutStarted { segment: Ref::new(0) },
+            Input::PlayoutProgressed { segment: Ref::new(0), ms: Millis(1_000) },
+            // The output reports nothing more of this segment, the cut's receipt included.
+            Input::PlayoutFinishLost { segment: Ref::new(0) },
+            Input::Advance { ms: Millis(100) },
+            Input::Interrupt { force: true, wait: false },
+            Input::Advance { ms: Millis(5_000) },
+            Input::Close { drain: false },
+            Input::AwaitExit {},
+        ];
+        let run = simulate(async {
+            let mut run = Run::start(&Setup::default(), 0, Default::default()).await;
+            for input in &inputs {
+                run.apply(input).await;
+            }
+            run
+        });
+        let turns: Vec<_> = run
+            .record
+            .host_view()
+            .events()
+            .iter()
+            .filter_map(|(_, event)| match event {
+                SessionEvent::Telemetry(records) => Some(records.iter()),
+                _ => None,
+            })
+            .flatten()
+            .filter_map(|record| match record {
+                Record::Span(span) if span.name == "agent_turn" => Some(span.attributes.clone()),
+                _ => None,
+            })
+            .collect();
+        let [turn] = &turns[..] else { panic!("one agent_turn, got {}", turns.len()) };
+        let interrupted =
+            turn.iter().any(|(k, v)| k == "lk.interrupted" && *v == Value::Bool(true));
+        assert!(interrupted, "the scenario: the turn was cut, {turn:?}");
+        let position = turn.iter().find_map(|(k, v)| match v {
+            Value::Double(seconds) if k == "lk.playout.position" => Some(*seconds),
+            _ => None,
+        });
+        assert!(position.is_some_and(|seconds| seconds > 0.0), "{turn:?}");
+    }
+
     // Catches: a sink that reset mid-speech, dropping what it held, then lost the finish of the
     // speech's later audio held the speech until the close: the dropped audio never counted as
     // played, so the margin never armed (DST seed 10521 with the lost-finish fault).

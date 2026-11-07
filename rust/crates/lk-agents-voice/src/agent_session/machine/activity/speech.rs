@@ -741,7 +741,7 @@ impl VoiceDriver {
                 }
             }
 
-            GenEvent::PlaybackFinished { speech, position, .. } => {
+            GenEvent::PlayedTo { speech, position } => {
                 if let Some(turn) = self.agent_turn(speech) {
                     turn.played(position);
                 }

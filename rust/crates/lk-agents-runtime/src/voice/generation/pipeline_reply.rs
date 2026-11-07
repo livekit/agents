@@ -58,7 +58,7 @@ fn step_spoken(
     shared: &SessionShared,
     handle: &SpeechHandle,
     step: u32,
-    interrupted: bool,
+    (interrupted, cut_at): (bool, Option<std::time::Duration>),
     has_tool_output: bool,
     tools_running: bool,
     item: Option<ChatMessage>,
@@ -70,7 +70,7 @@ fn step_spoken(
         has_tool_output,
         tools_running,
         item: item.map(Box::new),
-        cut_at: None,
+        cut_at: cut_at.filter(|_| interrupted),
     });
 }
 
@@ -228,7 +228,8 @@ async fn pipeline_reply_task_impl(
             // A step that took the floor gives it back before its tools are waited for, as
             // `_mark_generation_done` precedes `await exe_task`: a tool waiting for idle would
             // otherwise wait on its own speech.
-            if matches!(spoken, Ok(Some(_))) {
+            // Its words played even though the model failed: where the cut stopped them.
+            if let Ok(Some(spoken)) = &spoken {
                 let has_tools = !tools.is_empty();
                 let tools_running = has_tools && !handle.interrupted();
                 let interrupted = handle.interrupted();
@@ -236,7 +237,7 @@ async fn pipeline_reply_task_impl(
                     shared,
                     handle,
                     ctx.plan.step,
-                    interrupted,
+                    (interrupted, spoken.acc.played_at()),
                     has_tools,
                     tools_running,
                     None,
@@ -251,7 +252,15 @@ async fn pipeline_reply_task_impl(
         // authorization granted in that instant marks the step spoken first, so a tool awaiting its
         // own playout does not deadlock.
         if handle.step_authorized(ctx.plan.step) {
-            step_spoken(shared, handle, ctx.plan.step, true, !tools.is_empty(), false, None);
+            step_spoken(
+                shared,
+                handle,
+                ctx.plan.step,
+                (true, None),
+                !tools.is_empty(),
+                false,
+                None,
+            );
         }
         let _ = run_tools(shared, handle, ctx, tools, true, false).await;
         let outcome = empty_outcome(shared, ctx, true);
