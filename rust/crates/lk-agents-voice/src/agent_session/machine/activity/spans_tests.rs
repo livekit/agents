@@ -611,8 +611,8 @@ fn an_interrupted_reply_records_its_wait_cause_and_playout() {
     s.d.agent_turn_speaking(SpeechId(1), 1.4);
     s.turn(1).interrupted(InterruptCause::ByAudioActivity);
     s.turn(1).interrupted(InterruptCause::Host);
-    s.turn(1).played(Duration::from_millis(300), false);
-    s.turn(1).played(Duration::from_millis(1_200), true);
+    s.turn(1).played(Duration::from_millis(300));
+    s.turn(1).played(Duration::from_millis(1_200));
     s.release(1_700, 1, SpeechOutcome::Interrupted);
     // Interrupted with no recorded cause: programmatic.
     s.speech(1_800, 2, reply(None));
@@ -643,6 +643,23 @@ fn an_interrupted_reply_records_its_wait_cause_and_playout() {
         m.labels,
         [("model_provider".into(), st("api.openai.com")), ("model_name".into(), st("gpt-4o"))]
     );
+}
+
+// Catches: a reply whose audio played out whole and was then interrupted (closing while its tools
+// ran) ending its turn with no `lk.playout.position` (DST seed 54).
+#[test]
+fn an_interruption_after_the_audio_played_out_reports_where_it_stopped() {
+    let mut s = opened();
+    s.speech(100, 1, reply(None));
+    s.at(400);
+    s.d.agent_turn_speaking(SpeechId(1), 0.4);
+    s.turn(1).played(Duration::from_millis(4_950));
+    s.turn(1).interrupted(InterruptCause::Closing);
+    s.release(5_400, 1, SpeechOutcome::Interrupted);
+    let spans = spans_of(s.close_records(5_500));
+    let turn = named(&spans, "agent_turn")[0];
+    assert_eq!(attr(turn, "lk.interrupted"), Some(&Value::Bool(true)));
+    assert_eq!(attr(turn, "lk.playout.position"), Some(&Value::Double(4.95)));
 }
 
 // Catches: a realtime turn without its function calls, or with a pipeline reply's input keys.

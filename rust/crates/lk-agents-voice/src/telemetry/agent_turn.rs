@@ -182,11 +182,9 @@ impl AgentTurnSpan {
         self.progress.interruption.get_or_insert(interruption_source(cause));
     }
 
-    /// One of the speech's segments finished playing at `position`.
-    pub(crate) fn played(&mut self, position: Duration, interrupted: bool) {
-        if !interrupted {
-            return;
-        }
+    /// One of the speech's segments finished playing at `position`: where the playout stopped if
+    /// the speech ends interrupted, even after the segment played out whole.
+    pub(crate) fn played(&mut self, position: Duration) {
         // A realtime response's messages play one after the other; a pipeline step is one.
         let base = self.progress.playout.filter(|_| self.reply.realtime).unwrap_or(0.0);
         self.progress.playout = Some(base + position.as_secs_f64());

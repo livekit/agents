@@ -684,7 +684,7 @@ impl VoiceDriver {
                 if let Some(position) = cut_at
                     && let Some(turn) = self.agent_turn(speech)
                 {
-                    turn.played(position, true);
+                    turn.played(position);
                 }
                 if tools_running {
                     self.activity.tools_in_flight.insert(speech);
@@ -744,9 +744,9 @@ impl VoiceDriver {
                 }
             }
 
-            GenEvent::PlaybackFinished { speech, position, interrupted } => {
+            GenEvent::PlaybackFinished { speech, position, .. } => {
                 if let Some(turn) = self.agent_turn(speech) {
-                    turn.played(position, interrupted);
+                    turn.played(position);
                 }
             }
             GenEvent::PlaybackStarted { speech } => {
