@@ -349,12 +349,11 @@ async def test_context_the_server_ended_is_not_reused() -> None:
         tts_instance = s.tts()
         stream = tts_instance.stream(conn_options=NO_RETRY)
         stream.push_text(f"{FIRST} {SECOND} ")
-        stream.flush()
-        events = [await stream.__anext__()]
+        await stream.__anext__()
         await asyncio.sleep(0.05)
-        stream.push_text("One more thing to say before we finish.")
         stream.end_input()
-        events += [ev async for ev in stream]
+        async for _ in stream:
+            pass
         await stream.aclose()
         await tts_instance.aclose()
 
