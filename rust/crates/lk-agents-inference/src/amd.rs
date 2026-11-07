@@ -24,14 +24,12 @@ pub fn is_evaluated_model(model: &str, evaluated: &[&str]) -> bool {
 pub fn is_evaluated_model_of_kind(
     model: &str,
     kind: &str,
-) -> Result<bool, lk_agents_abi::inference::InvalidOption> {
+) -> Result<bool, lk_agents_abi::errors::Invalid> {
     let table = match kind {
         "llm" => EVALUATED_LLM_MODELS,
         "stt" => EVALUATED_STT_MODELS,
         other => {
-            return Err(lk_agents_abi::inference::InvalidOption(format!(
-                "unknown model kind {other:?}"
-            )));
+            return Err(lk_agents_abi::errors::Invalid(format!("unknown model kind {other:?}")));
         }
     };
     Ok(is_evaluated_model(model, table))

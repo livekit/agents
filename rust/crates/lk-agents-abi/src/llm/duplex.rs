@@ -5,7 +5,6 @@ use std::any::Any;
 use std::sync::Arc;
 
 use crate::errors::{ApiError, HostError};
-use crate::llm::inference::InvalidPayload;
 use crate::llm::realtime::Event;
 use crate::{AudioFrame, ChatItem, ToolChoice};
 
@@ -34,7 +33,7 @@ pub trait FixedGate: Send + Sync + Sized + 'static {
 
     /// True while the frame belongs to an open burst of output.
     #[host(call)]
-    fn update(&self, frame: AudioFrame) -> Result<bool, InvalidPayload>;
+    fn update(&self, frame: AudioFrame) -> Result<bool, HostError>;
 
     /// End the open burst, keeping whatever has been learned about the model.
     #[host(call)]
@@ -55,7 +54,7 @@ pub trait AdaptiveNoiseGate: Send + Sync + Sized + 'static {
 
     /// True while the frame belongs to an open burst of output.
     #[host(call)]
-    fn update(&self, frame: AudioFrame) -> Result<bool, InvalidPayload>;
+    fn update(&self, frame: AudioFrame) -> Result<bool, HostError>;
 
     /// End the open burst, keeping whatever has been learned about the model.
     #[host(call)]

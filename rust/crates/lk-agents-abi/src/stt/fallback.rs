@@ -2,9 +2,9 @@
 
 use std::sync::Arc;
 
+use crate::errors::Invalid;
 use crate::errors::ProviderError;
 use crate::llm::fallback::ChainObserver;
-use crate::llm::inference::InvalidPayload;
 use crate::tokenize::language::LanguageCode;
 use crate::utils::stream::{StreamInput, StreamOutput};
 use crate::{ApiConnectOptions, AudioFrame, SpeechEvent, Stt, SttCapabilities};
@@ -44,7 +44,7 @@ pub trait FallbackStt: Send + Sync + Sized + 'static {
         #[host(default = 1)] max_retry_per_stt: u32,
         #[host(default = 5.0)] retry_interval: f64,
         #[host(default = None)] on_availability: Option<Arc<dyn ChainObserver>>,
-    ) -> Result<Self, InvalidPayload>;
+    ) -> Result<Self, Invalid>;
 
     /// Which entry most recently served, as a position in the host's list.
     #[host(getter)]

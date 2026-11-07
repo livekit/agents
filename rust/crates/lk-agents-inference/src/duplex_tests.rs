@@ -571,8 +571,8 @@ fn startup_history_seeds_both_the_adapter_and_the_model() {
 struct Failing;
 
 impl AudioGate for Failing {
-    fn update(&mut self, _frame: &AudioFrame) -> Result<bool, String> {
-        Err("Boom".into())
+    fn update(&mut self, _frame: &AudioFrame) -> Result<bool, lk_agents_abi::errors::HostError> {
+        Err(lk_agents_abi::errors::HostError::new("Boom"))
     }
     fn deactivate(&mut self) {}
 }

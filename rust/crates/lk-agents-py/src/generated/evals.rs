@@ -86,8 +86,13 @@ impl CoreJudgeRunner {
         let cx = crate::py_calls::entry_cx();
         let this = ::std::sync::Arc::clone(&self.0);
         crate::py_calls::future_into_py(py, async move {
-            let out = <CoreJudgeRunnerImpl as ::lk_agents_abi::evals::JudgeRunner>::evaluate(&this, judges, chat_ctx, reference, context, cx)
-                .await.map_err(|e: ::lk_agents_abi::evals::InvalidJudgment| <::lk_agents_abi::evals::InvalidJudgment as crate::py_errors::HostException>::to_py_err(&e))?;
+            let out = <CoreJudgeRunnerImpl as ::lk_agents_abi::evals::JudgeRunner>::evaluate(
+                &this, judges, chat_ctx, reference, context, cx,
+            )
+            .await
+            .map_err(|e: ::lk_agents_abi::errors::Invalid| {
+                <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e)
+            })?;
             Python::attach(|py| {
                 ::pyo3::IntoPyObjectExt::into_py_any(
                     ::pyo3::types::PyList::new(
@@ -280,12 +285,6 @@ impl ::lk_agents_abi::evals::EvaluationHost for EvaluationHostProxy {
                 Ok(out)
             })
         })
-    }
-}
-
-impl crate::py_errors::HostException for ::lk_agents_abi::evals::InvalidJudgment {
-    fn to_py_err(&self) -> ::pyo3::PyErr {
-        ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
     }
 }
 

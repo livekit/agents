@@ -45,7 +45,7 @@ pub trait InferenceTts: Send + Sync + Sized + 'static {
         extra_kwargs: Option<serde_json::Map<String, serde_json::Value>>,
         #[host(default = None, shape_error(items, kind = "ValueError", message = "each fallback entry must be a dict"))]
         fallback: Option<Vec<TtsFallbackModel>>,
-    ) -> Result<Self, crate::llm::inference::InvalidPayload>;
+    ) -> Result<Self, crate::errors::Invalid>;
     #[host(getter)]
     fn sample_rate(&self) -> u32;
     #[host(getter)]

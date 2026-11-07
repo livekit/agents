@@ -7,6 +7,7 @@ pub mod models;
 pub mod stt_wire;
 pub mod tts_wire;
 
+use crate::errors::Invalid;
 use serde_json::Value;
 
 /// The inference gateway's credentials and identification. The core reads
@@ -45,7 +46,7 @@ pub trait InferenceCredentials {
         server_url: Option<String>,
         server_api_key: Option<String>,
         server_api_secret: Option<String>,
-    ) -> Result<(String, String, String), InvalidOption>;
+    ) -> Result<(String, String, String), Invalid>;
 
     /// An inference request's identification headers, in order: `user_agent`, the priority of a
     /// nonempty `inference_class`, and in a job (`job_headers` given) its nonempty room, job and
@@ -103,7 +104,7 @@ pub trait InferenceModels {
 
     /// Whether `model` is in AMD's evaluated `"llm"` or `"stt"` table.
     #[host(function)]
-    fn amd_is_evaluated_model(model: String, kind: String) -> Result<bool, InvalidOption>;
+    fn amd_is_evaluated_model(model: String, kind: String) -> Result<bool, Invalid>;
 
     /// The parameters the given model refuses. `has_tools` is `bool(tools)`; `reasoning_effort`
     /// is the request's `reasoning_effort` and `reasoning` the effort of its Responses
@@ -127,7 +128,7 @@ pub trait InferenceModels {
         key: String,
         secret: String,
         local_fallback: bool,
-    ) -> Result<(crate::tokenize::language::TurnDetectorModel, bool, Vec<String>), InvalidOption>;
+    ) -> Result<(crate::tokenize::language::TurnDetectorModel, bool, Vec<String>), Invalid>;
 
     /// `_resolve_vad_for_model`: what the host does with the caller's VAD for this model.
     #[host(function)]
@@ -167,7 +168,7 @@ pub trait InferenceModels {
     #[host(function)]
     fn merge_realtime_capabilities(
         caps: Vec<crate::llm::realtime::RealtimeCapabilities>,
-    ) -> Result<crate::llm::realtime::RealtimeCapabilities, InvalidOption>;
+    ) -> Result<crate::llm::realtime::RealtimeCapabilities, Invalid>;
 }
 
 /// What `_resolve_vad_for_model` decides; the host performs it.
@@ -183,11 +184,5 @@ pub enum VadResolution {
     /// Nothing to do.
     None,
 }
-
-/// An option value the inference lookups do not know.
-#[crate::host(error(kind = "ValueError"))]
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("{0}")]
-pub struct InvalidOption(pub String);
 
 pub mod tts_client;

@@ -119,9 +119,10 @@ impl ToolChoice {
 }
 
 impl TryFrom<serde_json::Value> for ToolChoice {
-    type Error = String;
-    fn try_from(value: serde_json::Value) -> Result<Self, Self::Error> {
-        Self::from_host_json(&value).ok_or_else(|| format!("invalid tool_choice {value}"))
+    type Error = crate::errors::Invalid;
+    fn try_from(value: serde_json::Value) -> Result<Self, crate::errors::Invalid> {
+        Self::from_host_json(&value)
+            .ok_or_else(|| crate::errors::Invalid(format!("invalid tool_choice {value}")))
     }
 }
 

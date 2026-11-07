@@ -18,8 +18,8 @@ use lk_agents_abi::HOST_TEARDOWN_TIMEOUT;
 use lk_agents_abi::OwnedTask;
 use lk_agents_abi::Ts;
 use lk_agents_abi::errors::ApiErrorKind;
+use lk_agents_abi::errors::Invalid;
 use lk_agents_abi::errors::{ApiError, ProviderError};
-use lk_agents_abi::llm::inference::InvalidPayload;
 use lk_agents_abi::resources::ResourceId;
 use lk_agents_abi::{BoxFuture, Spawner, SpawnerExt};
 use lk_agents_net::task::{TaskId, TaskSet};
@@ -149,9 +149,9 @@ impl<B: Backend> FallbackChain<B> {
         clock: Arc<dyn Clock>,
         spawner: Arc<dyn Spawner>,
         observer: Arc<dyn ChainObserver>,
-    ) -> Result<Self, InvalidPayload> {
+    ) -> Result<Self, Invalid> {
         if entries.is_empty() {
-            return Err(InvalidPayload("at least one backend instance must be provided".into()));
+            return Err(Invalid("at least one backend instance must be provided".into()));
         }
         let labels = entries.iter().map(|b| b.label()).collect();
         let status: Vec<Status> = entries

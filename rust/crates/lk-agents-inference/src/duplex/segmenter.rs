@@ -162,7 +162,7 @@ impl Segmenter {
         wall: SystemTime,
         frame: AudioFrame,
         start_ms: Option<i64>,
-        gate_open: Result<bool, String>,
+        gate_open: Result<bool, lk_agents_abi::errors::HostError>,
     ) -> Step {
         let mut out = Step::default();
         if matches!(self.phase, Phase::Failed) {
@@ -176,12 +176,12 @@ impl Segmenter {
         // producing output, its own pauses inside an utterance included
         let open = match gate_open {
             Ok(open) => open,
-            Err(message) => {
-                log::error!(target: lk_agents_abi::LOG_TARGET, "duplex audio stream failed: {message}");
+            Err(error) => {
+                log::error!(target: lk_agents_abi::LOG_TARGET, "duplex audio stream failed: {error}");
                 out.events.push(Event::Error(RealtimeModelError {
                     timestamp: now,
                     label: self.label.clone(),
-                    message,
+                    message: error.to_string(),
                     recoverable: false,
                     req_id: None,
                     code: None,

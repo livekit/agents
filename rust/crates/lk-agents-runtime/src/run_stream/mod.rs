@@ -9,9 +9,9 @@ mod tests;
 use crate::agent_run::resources::RunResources;
 use input::{Input, Message};
 use lk_agents_abi::agent::resources::RunResources as _;
-use lk_agents_abi::agent::run::InvalidRun;
 use lk_agents_abi::agent::stream::PresentedEvent;
 use lk_agents_abi::agent::stream::{self, StreamError, StreamOutcome, StreamRefused};
+use lk_agents_abi::errors::Invalid;
 use lk_agents_abi::text_session::TextSessionDelivery;
 use lk_agents_abi::usage::Usage;
 use lk_agents_abi::{BoxFuture, Spawner};
@@ -47,10 +47,10 @@ impl RunStream {
     pub(crate) fn bind(
         &self,
         resources: Arc<RunResources>,
-        build: impl FnOnce() -> Result<Box<dyn Input>, InvalidRun>,
-    ) -> Result<(), InvalidRun> {
-        let spawner = (self.0.env.spawner)().map_err(|e| InvalidRun(e.to_string()))?;
-        self.0.policy.lock().attach().map_err(|e| InvalidRun(e.to_string()))?;
+        build: impl FnOnce() -> Result<Box<dyn Input>, Invalid>,
+    ) -> Result<(), Invalid> {
+        let spawner = (self.0.env.spawner)().map_err(|e| Invalid(e.to_string()))?;
+        self.0.policy.lock().attach().map_err(|e| Invalid(e.to_string()))?;
         let _ = self.0.spawner.set(spawner);
         let _ = self.0.resources.set(resources);
         match build() {

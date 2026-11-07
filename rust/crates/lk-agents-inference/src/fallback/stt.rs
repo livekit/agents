@@ -19,7 +19,7 @@ use lk_agents_abi::{BoxFuture, Spawner};
 use lk_agents_abi::{Clock, HOST_TEARDOWN_TIMEOUT};
 use parking_lot::Mutex;
 
-use lk_agents_abi::llm::inference::InvalidPayload;
+use lk_agents_abi::errors::Invalid;
 use lk_agents_net::env::ProcessEnv;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -434,7 +434,7 @@ impl FallbackStt {
         clock: Arc<dyn Clock>,
         spawner: Arc<dyn Spawner>,
         observer: Arc<dyn ChainObserver>,
-    ) -> Result<Self, InvalidPayload> {
+    ) -> Result<Self, Invalid> {
         let entries: Vec<Arc<SttBackend>> =
             stts.iter().map(|s| SttBackend::new(s, Arc::clone(&clock))).collect();
         let not_streaming: Vec<String> = entries
@@ -443,7 +443,7 @@ impl FallbackStt {
             .map(|b| b.inner.label())
             .collect();
         if !not_streaming.is_empty() {
-            return Err(InvalidPayload(format!(
+            return Err(Invalid(format!(
                 "STTs do not support streaming: {}. Wrap them with stt.StreamAdapter first.",
                 not_streaming.join(", ")
             )));
@@ -486,7 +486,7 @@ impl lk_agents_abi::stt::fallback::FallbackStt for FallbackStt {
         max_retry_per_stt: u32,
         retry_interval: f64,
         on_availability: Option<Arc<dyn ChainObserver>>,
-    ) -> Result<Self, InvalidPayload> {
+    ) -> Result<Self, Invalid> {
         let policy = ChainPolicy {
             max_retry_per_backend: max_retry_per_stt,
             attempt_timeout: Some(attempt_timeout),
@@ -498,7 +498,7 @@ impl lk_agents_abi::stt::fallback::FallbackStt for FallbackStt {
             stts,
             policy,
             env.clock.clone(),
-            (env.spawner)().map_err(|e| InvalidPayload(e.to_string()))?,
+            (env.spawner)().map_err(|e| Invalid(e.to_string()))?,
             observer,
         )
     }

@@ -5,15 +5,16 @@
 use std::collections::VecDeque;
 
 use lk_agents_abi::AudioFrame;
+use lk_agents_abi::errors::HostError;
 
 /// A floor this low is digital silence; it keeps the gate's ratios finite when a model emits zeros.
 pub const SILENCE_FLOOR: f64 = 1e-4;
 
 /// `update` is true while the frame belongs to an open burst of output; `deactivate` ends the open
-/// burst, keeping whatever has been learned about the model. `Err` is a gate that failed (a host
-/// gate raised): the output stream is then unusable.
+/// burst, keeping whatever has been learned about the model. `Err` is a host gate that raised: the
+/// output stream is then unusable.
 pub trait AudioGate: Send {
-    fn update(&mut self, frame: &AudioFrame) -> Result<bool, String>;
+    fn update(&mut self, frame: &AudioFrame) -> Result<bool, HostError>;
     fn deactivate(&mut self);
 }
 
@@ -99,7 +100,7 @@ impl FixedGate {
 }
 
 impl AudioGate for FixedGate {
-    fn update(&mut self, frame: &AudioFrame) -> Result<bool, String> {
+    fn update(&mut self, frame: &AudioFrame) -> Result<bool, HostError> {
         Ok(self.h.step(rms(frame), self.floor, frame.duration()))
     }
 
@@ -151,7 +152,7 @@ impl Default for AdaptiveNoiseGate {
 }
 
 impl AudioGate for AdaptiveNoiseGate {
-    fn update(&mut self, frame: &AudioFrame) -> Result<bool, String> {
+    fn update(&mut self, frame: &AudioFrame) -> Result<bool, HostError> {
         let level = rms(frame);
         let duration = frame.duration();
         if !self.h.open {

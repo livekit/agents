@@ -81,7 +81,20 @@ impl FallbackStt {
         let on_availability = on_availability
             .map(|v| crate::generated::llm::ChainObserverProxy::from_host(v.as_any()))
             .transpose()?;
-        let out = py.detach(|| <FallbackSttImpl as ::lk_agents_abi::stt::fallback::FallbackStt>::new(&env, members, attempt_timeout, max_retry_per_stt, retry_interval, on_availability)).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as crate::py_errors::HostException>::to_py_err(&e))?;
+        let out = py
+            .detach(|| {
+                <FallbackSttImpl as ::lk_agents_abi::stt::fallback::FallbackStt>::new(
+                    &env,
+                    members,
+                    attempt_timeout,
+                    max_retry_per_stt,
+                    retry_interval,
+                    on_availability,
+                )
+            })
+            .map_err(|e: ::lk_agents_abi::errors::Invalid| {
+                <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e)
+            })?;
         ::pyo3::PyResult::Ok(FallbackStt(::std::sync::Arc::new(out)))
     }
 

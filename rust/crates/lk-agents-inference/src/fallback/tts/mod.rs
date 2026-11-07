@@ -14,9 +14,9 @@ use crate::tts::sentence_adapter::StreamAdapter;
 use crate::tts::stream::TtsStream;
 use async_trait::async_trait;
 use lk_agents_abi::ApiConnectOptions;
+use lk_agents_abi::errors::Invalid;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::llm::fallback as port;
-use lk_agents_abi::llm::inference::InvalidPayload;
 use lk_agents_abi::tts::stream_adapter::{SplitterFactory, TextProcessorFactory};
 use lk_agents_abi::types::provider::NativeLabel;
 use lk_agents_abi::utils::stream::ProviderStream;
@@ -364,17 +364,17 @@ impl FallbackTts {
         clock: Arc<dyn Clock>,
         spawner: Arc<dyn Spawner>,
         observer: Arc<dyn ChainObserver>,
-    ) -> Result<Self, InvalidPayload> {
+    ) -> Result<Self, Invalid> {
         let capabilities =
             merge_capabilities(&ttss.iter().map(|t| t.capabilities()).collect::<Vec<_>>());
         let entries: Vec<Arc<TtsBackend>> =
             ttss.iter().map(|t| TtsBackend::new(t, Arc::clone(&clock))).collect();
         let channels: Vec<u16> = entries.iter().map(|b| b.inner.num_channels()).collect();
         let Some(&num_channels) = channels.first() else {
-            return Err(InvalidPayload("at least one TTS instance must be provided".into()));
+            return Err(Invalid("at least one TTS instance must be provided".into()));
         };
         if channels.iter().any(|c| *c != num_channels) {
-            return Err(InvalidPayload(format!(
+            return Err(Invalid(format!(
                 "all TTS must have the same number of channels, got {channels:?}"
             )));
         }
@@ -658,7 +658,7 @@ impl port::FallbackTts for FallbackTts {
         attempt_timeout: Option<f64>,
         sample_rate: Option<u32>,
         on_availability: Option<Arc<dyn ChainObserver>>,
-    ) -> Result<Self, InvalidPayload> {
+    ) -> Result<Self, Invalid> {
         // `sample_rate = None` takes the maximum of the entries' rates and upsamples the rest.
         let policy = ChainPolicy {
             max_retry_per_backend: max_retry_per_tts,
@@ -666,7 +666,7 @@ impl port::FallbackTts for FallbackTts {
             ..ChainPolicy::tts_defaults()
         };
         let observer = on_availability.unwrap_or_else(|| Arc::new(crate::fallback::IgnoreEvents));
-        let spawner = (env.spawner)().map_err(|e| InvalidPayload(e.to_string()))?;
+        let spawner = (env.spawner)().map_err(|e| Invalid(e.to_string()))?;
         FallbackTts::new(ttss, sample_rate, policy, env.clock.clone(), spawner, observer)
     }
     fn active_index(&self) -> usize {

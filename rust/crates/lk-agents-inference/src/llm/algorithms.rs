@@ -1,7 +1,7 @@
 //! The shared LLM algorithms plugins call (`llm.utils`, `_provider_format`): the core's
 //! formatting, schemas and tool-argument rules, with provider formatting run on an admitted
 //! media worker of the hosting process.
-use lk_agents_abi::llm::provider_format::host::LlmAlgorithmError;
+use lk_agents_abi::errors::Invalid;
 use lk_agents_abi::llm::provider_format::{SerializedImage, StrictError};
 use lk_agents_abi::llm::schema::SchemaError;
 use lk_agents_abi::{ChatItem, Role};
@@ -24,7 +24,7 @@ impl lk_agents_abi::llm::provider_format::host::LlmAlgorithms for LlmAlgorithms 
         inject_dummy_user_message: bool,
         inject_trailing_user_message: bool,
         thought_signatures: Option<BTreeMap<String, Vec<u8>>>,
-    ) -> Result<(Vec<Value>, Value), LlmAlgorithmError> {
+    ) -> Result<(Vec<Value>, Value), Invalid> {
         lk_agents_media::pool::media_pool()
             .try_spawn(lk_agents_media::pool::JobClass::Formatting, move || {
                 provider_format::host::to_provider_format(
@@ -36,9 +36,9 @@ impl lk_agents_abi::llm::provider_format::host::LlmAlgorithms for LlmAlgorithms 
                     thought_signatures,
                 )
             })
-            .map_err(|error| LlmAlgorithmError(error.to_string()))?
+            .map_err(|error| Invalid(error.to_string()))?
             .await
-            .map_err(|error| LlmAlgorithmError(error.to_string()))?
+            .map_err(|error| Invalid(error.to_string()))?
     }
     fn convert_mid_conversation_instructions(
         items: Vec<ChatItem>,
@@ -52,7 +52,7 @@ impl lk_agents_abi::llm::provider_format::host::LlmAlgorithms for LlmAlgorithms 
         tools: Vec<Value>,
         tool_behavior: Option<String>,
         use_parameters_json_schema: bool,
-    ) -> Result<Vec<Value>, LlmAlgorithmError> {
+    ) -> Result<Vec<Value>, Invalid> {
         provider_format::host::to_fnc_ctx(
             format,
             tools,
@@ -99,8 +99,8 @@ impl lk_agents_abi::llm::provider_format::host::LlmAlgorithms for LlmAlgorithms 
     ) -> Result<Map<String, Value>, SchemaError> {
         schema::to_openai_response_format(name, schema)
     }
-    fn parse_function_arguments(raw: &str) -> Result<Map<String, Value>, LlmAlgorithmError> {
-        tool_arguments::parse_logged(raw).map_err(|error| LlmAlgorithmError(error.message))
+    fn parse_function_arguments(raw: &str) -> Result<Map<String, Value>, Invalid> {
+        tool_arguments::parse_logged(raw).map_err(|error| Invalid(error.message))
     }
     fn inject_confirm_duplicate(parameters: &Value) -> Map<String, Value> {
         provider_format::tools::inject_confirm_duplicate(parameters)

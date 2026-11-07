@@ -4,8 +4,9 @@
 use parking_lot::Mutex;
 use std::sync::Arc;
 
-use lk_agents_abi::agent::run::{AgentRunner, InvalidRun, RunRequest, RunUpdate};
+use lk_agents_abi::agent::run::{AgentRunner, RunRequest, RunUpdate};
 use lk_agents_abi::agent::{AgentCallbacks, AgentDefinition, Invocation};
+use lk_agents_abi::errors::Invalid;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::resources::{LlmRef, ResourceId};
 use lk_agents_abi::usage::Usage;
@@ -46,8 +47,8 @@ impl AgentRunner for Runner {
         definition: AgentDefinition,
         llm: Arc<dyn Llm>,
         host: Arc<dyn AgentCallbacks>,
-    ) -> Result<Self, InvalidRun> {
-        lk_agents_core::agent::validate(&definition).map_err(|e| InvalidRun(e.to_string()))?;
+    ) -> Result<Self, Invalid> {
+        lk_agents_core::agent::validate(&definition).map_err(|e| Invalid(e.to_string()))?;
         Ok(Runner {
             definition,
             llm,
@@ -59,11 +60,11 @@ impl AgentRunner for Runner {
         })
     }
 
-    fn run(&self, request: RunRequest) -> Result<Updates, InvalidRun> {
+    fn run(&self, request: RunRequest) -> Result<Updates, Invalid> {
         let ChatItem::Message(mut message) = request.message else {
-            return Err(InvalidRun("a run's message is a chat message".into()));
+            return Err(Invalid("a run's message is a chat message".into()));
         };
-        let runtime = (self.runtime)().map_err(|error| InvalidRun(error.to_string()))?;
+        let runtime = (self.runtime)().map_err(|error| Invalid(error.to_string()))?;
         let execution_id = lk_agents_core::agent_run::execution::bind(
             &mut message,
             &request.history,
@@ -118,7 +119,7 @@ impl AgentRunner for Runner {
         let invocation_id = input.invocation_id.clone();
         let (handle, updates) =
             start(&runtime, self.definition.clone(), input, setup, span, UPDATE_QUEUE)
-                .map_err(|e| InvalidRun(e.to_string()))?;
+                .map_err(|e| Invalid(e.to_string()))?;
         let mut running = self.running.lock();
         running.retain(|(_, progress, _)| !progress.ended());
         running.push((invocation_id, handle.progress(), handle.usage()));
@@ -130,7 +131,7 @@ impl AgentRunner for Runner {
         request: RunRequest,
         stream: Arc<Self::Stream>,
         resources: Arc<Self::Resources>,
-    ) -> Result<(), InvalidRun> {
+    ) -> Result<(), Invalid> {
         stream.bind(resources, || {
             let invocation = request.invocation_id.clone();
             let updates = self.run(request)?;
@@ -144,10 +145,10 @@ impl AgentRunner for Runner {
         })
     }
 
-    fn usage(&self, invocation_id: &str) -> Result<Usage, InvalidRun> {
+    fn usage(&self, invocation_id: &str) -> Result<Usage, Invalid> {
         let running = self.running.lock();
         let usage = running.iter().find(|(id, ..)| id == invocation_id).map(|(.., u)| u);
-        let usage = usage.ok_or_else(|| InvalidRun(format!("no invocation {invocation_id}")))?;
+        let usage = usage.ok_or_else(|| Invalid(format!("no invocation {invocation_id}")))?;
         Ok(usage.borrow().clone())
     }
 
@@ -156,7 +157,7 @@ impl AgentRunner for Runner {
         invocation_id: &str,
         operation: u64,
         message: String,
-    ) -> Result<(), InvalidRun> {
+    ) -> Result<(), Invalid> {
         let reported = {
             let running = self.running.lock();
             let progress = running.iter().find(|(id, ..)| id == invocation_id).map(|(_, p, _)| p);
@@ -169,7 +170,7 @@ impl AgentRunner for Runner {
                 Ok(())
             }
             None | Some(Err(TrySendError::Closed(_))) => {
-                Err(InvalidRun(format!("invocation {invocation_id} is not running")))
+                Err(Invalid(format!("invocation {invocation_id} is not running")))
             }
         }
     }

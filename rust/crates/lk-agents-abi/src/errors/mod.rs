@@ -66,3 +66,9 @@ impl From<JobPanicked> for std::io::Error {
     RedactedCause(base = "Exception", doc = "A provider cause with its type and traceback, without sensitive message text.")
 )))]
 const _: () = ();
+
+/// An input, option, payload or definition the operation cannot use: what is wrong with it.
+#[crate::host(error(kind = "ValueError"))]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{0}")]
+pub struct Invalid(pub String);

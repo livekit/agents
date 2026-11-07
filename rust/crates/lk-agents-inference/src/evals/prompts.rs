@@ -1,7 +1,8 @@
 //! Every string a judge model sees, and the reading of its answers: a wording change moves
 //! verdict rates. Pure: data in, data out.
 
-use lk_agents_abi::evals::{EvaluationScore, InvalidJudgment, JudgeVerdict, Judgment};
+use lk_agents_abi::errors::Invalid;
+use lk_agents_abi::evals::{EvaluationScore, JudgeVerdict, Judgment};
 use lk_agents_abi::{ChatItem, ToolFlags, ToolSpec};
 use serde_json::{Value, json};
 
@@ -222,13 +223,13 @@ pub fn request_extra(model: &str) -> lk_agents_abi::Extra {
 }
 
 /// `submit_verdict`'s arguments, strictly: a malformed payload is no verdict.
-pub fn parse_verdict(arguments: &str) -> Result<(JudgeVerdict, String), InvalidJudgment> {
+pub fn parse_verdict(arguments: &str) -> Result<(JudgeVerdict, String), Invalid> {
     let value: Value =
-        serde_json::from_str(arguments).map_err(|e| InvalidJudgment(format!("not JSON: {e}")))?;
+        serde_json::from_str(arguments).map_err(|e| Invalid(format!("not JSON: {e}")))?;
     let verdict = match value.get("verdict") {
         Some(Value::String(v)) => v.parse()?,
         other => {
-            return Err(InvalidJudgment(format!(
+            return Err(Invalid(format!(
                 "verdict must be 'pass', 'fail' or 'maybe', got {}",
                 shown(other)
             )));
@@ -237,19 +238,16 @@ pub fn parse_verdict(arguments: &str) -> Result<(JudgeVerdict, String), InvalidJ
     let reasoning = match value.get("reasoning") {
         Some(Value::String(r)) => r.clone(),
         other => {
-            return Err(InvalidJudgment(format!(
-                "reasoning must be a string, got {}",
-                shown(other)
-            )));
+            return Err(Invalid(format!("reasoning must be a string, got {}", shown(other))));
         }
     };
     Ok((verdict, reasoning))
 }
 
 /// `check_intent`'s arguments: repaired JSON, then a lax boolean.
-pub fn parse_intent(arguments: &str) -> Result<(bool, String), InvalidJudgment> {
+pub fn parse_intent(arguments: &str) -> Result<(bool, String), Invalid> {
     let value = lk_agents_core::llm::json_repair::repair(arguments)
-        .map_err(|too_deep| InvalidJudgment(too_deep.to_string()))?;
+        .map_err(|too_deep| Invalid(too_deep.to_string()))?;
     let success = match value.get("success") {
         Some(Value::Bool(b)) => *b,
         Some(Value::Number(n)) if n.as_i64() == Some(1) => true,
@@ -257,16 +255,16 @@ pub fn parse_intent(arguments: &str) -> Result<(bool, String), InvalidJudgment> 
         Some(Value::String(s)) => match s.to_ascii_lowercase().as_str() {
             "t" | "true" | "on" | "y" | "yes" | "1" => true,
             "f" | "false" | "off" | "n" | "no" | "0" => false,
-            _ => return Err(InvalidJudgment(format!("success is not a boolean: {s:?}"))),
+            _ => return Err(Invalid(format!("success is not a boolean: {s:?}"))),
         },
         other => {
-            return Err(InvalidJudgment(format!("success is not a boolean: {}", shown(other))));
+            return Err(Invalid(format!("success is not a boolean: {}", shown(other))));
         }
     };
     let reason = match value.get("reason") {
         Some(Value::String(s)) => s.clone(),
         other => {
-            return Err(InvalidJudgment(format!("reason must be a string, got {}", shown(other))));
+            return Err(Invalid(format!("reason must be a string, got {}", shown(other))));
         }
     };
     Ok((success, reason))

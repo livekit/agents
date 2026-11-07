@@ -2,7 +2,7 @@
 //! window; once the user talks over it, the window goes to the gateway every 100 ms until a
 //! verdict or either side stops. [`InterruptionMachine`] decides; [`transport`] drives.
 
-use lk_agents_abi::inference::InvalidOption;
+use lk_agents_abi::errors::Invalid;
 use lk_agents_abi::turn::interruption::{InterruptionPort, InterruptionSource};
 use lk_agents_abi::{ApiConnectOptions, WallAnchor};
 use lk_agents_net::env::ProcessEnv;
@@ -63,11 +63,9 @@ impl lk_agents_abi::turn::inference::InterruptionDetector for NativeInterruption
         api_secret: Option<String>,
         conn_options: Option<ApiConnectOptions>,
         token_ttl_secs: u64,
-    ) -> Result<Self, InvalidOption> {
+    ) -> Result<Self, Invalid> {
         let required = |value: Option<String>, name: &str| {
-            value
-                .filter(|v| !v.is_empty())
-                .ok_or_else(|| InvalidOption(format!("{name} is required")))
+            value.filter(|v| !v.is_empty()).ok_or_else(|| Invalid(format!("{name} is required")))
         };
         let opts = InterruptionOptions::new(
             threshold,
@@ -80,7 +78,7 @@ impl lk_agents_abi::turn::inference::InterruptionDetector for NativeInterruption
             required(api_key, "api_key")?,
             required(api_secret, "api_secret")?,
         )
-        .map_err(|e| InvalidOption(e.to_string()))?;
+        .map_err(|e| Invalid(e.to_string()))?;
         // The session's stream owns its retries.
         let conn_options = ApiConnectOptions { max_retry: 0, ..conn_options.unwrap_or_default() };
         let config =

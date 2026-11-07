@@ -1,7 +1,8 @@
 //! Native runner sources adapted in Rust, without crossing the host boundary.
 
-use lk_agents_abi::agent::run::{InvalidRun, RunUpdate};
+use lk_agents_abi::agent::run::RunUpdate;
 use lk_agents_abi::agent::stream::StreamOutcome;
+use lk_agents_abi::errors::Invalid;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::text_session::{TextSessionDelivery, TextSessionUpdate};
 use lk_agents_abi::usage::Usage;
@@ -19,7 +20,7 @@ pub enum Message {
 
 pub trait Input: Send {
     fn next(&mut self) -> BoxFuture<'_, Result<Option<Message>, ProviderError>>;
-    fn release(&self, delivery: TextSessionDelivery) -> Result<(), InvalidRun>;
+    fn release(&self, delivery: TextSessionDelivery) -> Result<(), Invalid>;
     fn usage(&self) -> watch::Receiver<Usage>;
     fn close(self: Box<Self>, deadline: Ts) -> BoxFuture<'static, Closed>;
 }
@@ -46,7 +47,7 @@ impl Input for Direct {
             }))
         })
     }
-    fn release(&self, _: TextSessionDelivery) -> Result<(), InvalidRun> {
+    fn release(&self, _: TextSessionDelivery) -> Result<(), Invalid> {
         Ok(())
     }
     fn usage(&self) -> watch::Receiver<Usage> {
@@ -60,7 +61,7 @@ impl Input for Direct {
 pub struct Session {
     pub source: Box<dyn StreamOutput<TextSessionUpdate>>,
     pub usage: watch::Receiver<Usage>,
-    pub release: Arc<dyn Fn(TextSessionDelivery) -> Result<(), InvalidRun> + Send + Sync>,
+    pub release: Arc<dyn Fn(TextSessionDelivery) -> Result<(), Invalid> + Send + Sync>,
 }
 impl Input for Session {
     fn next(&mut self) -> BoxFuture<'_, Result<Option<Message>, ProviderError>> {
@@ -87,7 +88,7 @@ impl Input for Session {
             }))
         })
     }
-    fn release(&self, delivery: TextSessionDelivery) -> Result<(), InvalidRun> {
+    fn release(&self, delivery: TextSessionDelivery) -> Result<(), Invalid> {
         (self.release)(delivery)
     }
     fn usage(&self) -> watch::Receiver<Usage> {

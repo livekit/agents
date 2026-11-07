@@ -6,6 +6,7 @@ mod proto {
     pub use livekit_protocol::agent::*;
     pub use pbjson_types::Timestamp;
 }
+use crate::errors::Invalid;
 use crate::{ChatContent, ChatItem, ChatMessage, Extra, MetricsReport, Role};
 use serde_json::Value;
 
@@ -118,10 +119,10 @@ fn encode_chat_message(m: &ChatMessage) -> proto::ChatMessage {
     }
 }
 
-fn time(at: Option<pbjson_types::Timestamp>) -> Result<SystemTime, String> {
+fn time(at: Option<pbjson_types::Timestamp>) -> Result<SystemTime, Invalid> {
     let at = at.unwrap_or_default();
     if !(0..1_000_000_000).contains(&at.nanos) {
-        return Err("invalid chat timestamp nanoseconds".into());
+        return Err(Invalid("invalid chat timestamp nanoseconds".into()));
     }
     let base = if at.seconds >= 0 {
         UNIX_EPOCH.checked_add(Duration::from_secs(at.seconds as u64))
@@ -129,7 +130,7 @@ fn time(at: Option<pbjson_types::Timestamp>) -> Result<SystemTime, String> {
         UNIX_EPOCH.checked_sub(Duration::from_secs(at.seconds.unsigned_abs()))
     };
     base.and_then(|base| base.checked_add(Duration::from_nanos(at.nanos as u64)))
-        .ok_or_else(|| "chat timestamp out of range".into())
+        .ok_or_else(|| Invalid("chat timestamp out of range".into()))
 }
 
 /// [`encode_extra`]'s JSON text; a value that is not JSON is a string, as rows written before
@@ -152,16 +153,16 @@ fn metric_seconds(at: Option<pbjson_types::Timestamp>) -> Option<f64> {
         .map(|at| at.as_secs_f64())
 }
 
-pub fn decode_chat_item(item: proto::chat_context::ChatItem) -> Result<ChatItem, String> {
+pub fn decode_chat_item(item: proto::chat_context::ChatItem) -> Result<ChatItem, Invalid> {
     use proto::chat_context::chat_item::Item;
-    Ok(match item.item.ok_or_else(|| "empty chat item".to_owned())? {
+    Ok(match item.item.ok_or_else(|| Invalid("empty chat item".into()))? {
         Item::Message(message) => {
             let role = match proto::ChatRole::try_from(message.role) {
                 Ok(proto::ChatRole::Developer) => Role::Developer,
                 Ok(proto::ChatRole::System) => Role::System,
                 Ok(proto::ChatRole::User) => Role::User,
                 Ok(proto::ChatRole::Assistant) => Role::Assistant,
-                _ => return Err("unknown chat role".into()),
+                _ => return Err(Invalid("unknown chat role".into())),
             };
             let content = message
                 .content

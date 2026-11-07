@@ -9,7 +9,6 @@ use std::time::Duration;
 
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::llm::duplex as abi;
-use lk_agents_abi::llm::inference::InvalidPayload;
 use lk_agents_abi::llm::realtime::{
     Event, GenerateReplyFailed, HostRealtimeError, RealtimeCapabilities, RealtimeError,
 };
@@ -34,7 +33,7 @@ impl<G: AudioGate> GateClass<G> {
 
 impl<G: AudioGate + 'static> abi::AudioGate for GateClass<G> {
     fn update(&self, frame: AudioFrame) -> Result<bool, HostError> {
-        self.gate().update(&frame).map_err(HostError::new)
+        self.gate().update(&frame)
     }
 
     fn deactivate(&self) -> Result<(), HostError> {
@@ -55,8 +54,8 @@ impl abi::FixedGate for GateClass<FixedGate> {
         GateClass(Arc::new(Mutex::new(gate)))
     }
 
-    fn update(&self, frame: AudioFrame) -> Result<bool, InvalidPayload> {
-        self.gate().update(&frame).map_err(InvalidPayload)
+    fn update(&self, frame: AudioFrame) -> Result<bool, HostError> {
+        self.gate().update(&frame)
     }
 
     fn deactivate(&self) {
@@ -80,8 +79,8 @@ impl abi::AdaptiveNoiseGate for GateClass<AdaptiveNoiseGate> {
         GateClass(Arc::new(Mutex::new(gate)))
     }
 
-    fn update(&self, frame: AudioFrame) -> Result<bool, InvalidPayload> {
-        self.gate().update(&frame).map_err(InvalidPayload)
+    fn update(&self, frame: AudioFrame) -> Result<bool, HostError> {
+        self.gate().update(&frame)
     }
 
     fn deactivate(&self) {
@@ -100,8 +99,8 @@ impl SessionGate {
         }))
     }
 
-    pub(super) fn update(&self, frame: &AudioFrame) -> Result<bool, String> {
-        self.0.update(frame.clone()).map_err(|e| describe(&e))
+    pub(super) fn update(&self, frame: &AudioFrame) -> Result<bool, HostError> {
+        self.0.update(frame.clone())
     }
 
     pub(super) fn deactivate(&self) {

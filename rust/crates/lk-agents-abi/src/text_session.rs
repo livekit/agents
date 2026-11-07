@@ -179,8 +179,9 @@ impl std::fmt::Display for TextSessionError {
 
 impl std::error::Error for TextSessionError {}
 
-use crate::agent::run::{InvalidRun, StreamEvent};
+use crate::agent::run::StreamEvent;
 use crate::agent::{AgentCallbacks, AgentDefinition};
+use crate::errors::Invalid;
 use crate::utils::stream::StreamOutput;
 use crate::{ApiConnectOptions, HostRef, Llm};
 use std::sync::Arc;
@@ -280,10 +281,10 @@ pub trait TextSessionRunner: Send + Sync + Sized + 'static {
         root_agent: String,
         agents: Vec<TextSessionAgent>,
         max_depth: usize,
-    ) -> Result<Self, InvalidRun>;
+    ) -> Result<Self, Invalid>;
 
     #[host(call)]
-    fn run(&self, request: TextSessionRequest) -> Result<Self::Updates, InvalidRun>;
+    fn run(&self, request: TextSessionRequest) -> Result<Self::Updates, Invalid>;
 
     #[host(call)]
     fn run_stream(
@@ -291,7 +292,7 @@ pub trait TextSessionRunner: Send + Sync + Sized + 'static {
         request: TextSessionRequest,
         stream: Arc<Self::Stream>,
         resources: Arc<Self::Resources>,
-    ) -> Result<(), InvalidRun>;
+    ) -> Result<(), Invalid>;
 
     /// The latest usage snapshot of the turn, across its local invocations; never advances it.
     #[host(getter)]
@@ -299,13 +300,9 @@ pub trait TextSessionRunner: Send + Sync + Sized + 'static {
 
     /// Acknowledge selected presentation before the child can release its parent.
     #[host(call)]
-    fn release(&self, delivery: TextSessionDelivery) -> Result<(), InvalidRun>;
+    fn release(&self, delivery: TextSessionDelivery) -> Result<(), Invalid>;
 
     #[host(call)]
-    fn progress(
-        &self,
-        invocation_id: &str,
-        operation: u64,
-        message: String,
-    ) -> Result<(), InvalidRun>;
+    fn progress(&self, invocation_id: &str, operation: u64, message: String)
+    -> Result<(), Invalid>;
 }

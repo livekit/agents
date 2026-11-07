@@ -32,7 +32,7 @@ pub enum StreamError {
     Refused(#[from] StreamRefused),
     #[error(transparent)]
     #[host(delegate)]
-    Start(#[from] super::run::InvalidRun),
+    Start(#[from] crate::errors::Invalid),
     #[error("the stream outcome has already been hydrated by its host")]
     OutcomeTaken,
     #[error("the run was cancelled")]

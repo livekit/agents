@@ -54,7 +54,15 @@ impl TextSessionRunner {
                 })
                 .collect::<PyResult<Vec<_>>>()
         })?;
-        let out = py.detach(|| <TextSessionRunnerImpl as ::lk_agents_abi::text_session::TextSessionRunner>::new(&env, root_agent, agents, max_depth)).map_err(|e: ::lk_agents_abi::agent::run::InvalidRun| <::lk_agents_abi::agent::run::InvalidRun as crate::py_errors::HostException>::to_py_err(&e))?;
+        let out = py
+            .detach(|| {
+                <TextSessionRunnerImpl as ::lk_agents_abi::text_session::TextSessionRunner>::new(
+                    &env, root_agent, agents, max_depth,
+                )
+            })
+            .map_err(|e: ::lk_agents_abi::errors::Invalid| {
+                <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e)
+            })?;
         ::pyo3::PyResult::Ok(TextSessionRunner(::std::sync::Arc::new(out)))
     }
 
@@ -64,7 +72,15 @@ impl TextSessionRunner {
         let request = crate::generated::records::text_session::text_session_request_from_py(
             request.as_any(),
         )?;
-        let out = py.detach(|| <TextSessionRunnerImpl as ::lk_agents_abi::text_session::TextSessionRunner>::run(&self.0, request)).map_err(|e: ::lk_agents_abi::agent::run::InvalidRun| <::lk_agents_abi::agent::run::InvalidRun as crate::py_errors::HostException>::to_py_err(&e))?;
+        let out = py
+            .detach(|| {
+                <TextSessionRunnerImpl as ::lk_agents_abi::text_session::TextSessionRunner>::run(
+                    &self.0, request,
+                )
+            })
+            .map_err(|e: ::lk_agents_abi::errors::Invalid| {
+                <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e)
+            })?;
         ::pyo3::PyResult::Ok(TextSessionUpdates(
             ::lk_agents_runtime::net::source::SharedStream::new(
                 ::std::boxed::Box::new(out),
@@ -98,10 +114,8 @@ impl TextSessionRunner {
                 &self.0, request, stream, resources,
             )
         })
-        .map_err(|e: ::lk_agents_abi::agent::run::InvalidRun| {
-            <::lk_agents_abi::agent::run::InvalidRun as crate::py_errors::HostException>::to_py_err(
-                &e,
-            )
+        .map_err(|e: ::lk_agents_abi::errors::Invalid| {
+            <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e)
         })?;
         Ok(())
     }
@@ -130,10 +144,8 @@ impl TextSessionRunner {
                 &self.0, delivery,
             )
         })
-        .map_err(|e: ::lk_agents_abi::agent::run::InvalidRun| {
-            <::lk_agents_abi::agent::run::InvalidRun as crate::py_errors::HostException>::to_py_err(
-                &e,
-            )
+        .map_err(|e: ::lk_agents_abi::errors::Invalid| {
+            <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e)
         })?;
         Ok(())
     }
@@ -156,10 +168,8 @@ impl TextSessionRunner {
                 message,
             )
         })
-        .map_err(|e: ::lk_agents_abi::agent::run::InvalidRun| {
-            <::lk_agents_abi::agent::run::InvalidRun as crate::py_errors::HostException>::to_py_err(
-                &e,
-            )
+        .map_err(|e: ::lk_agents_abi::errors::Invalid| {
+            <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e)
         })?;
         Ok(())
     }

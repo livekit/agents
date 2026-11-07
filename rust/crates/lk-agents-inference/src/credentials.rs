@@ -1,7 +1,7 @@
 //! Credential resolution for the inference gateway and its host constructors.
 
 use lk_agents_abi::errors::ApiError;
-use lk_agents_abi::inference::InvalidOption;
+use lk_agents_abi::errors::Invalid;
 
 /// `api_key if is_given(api_key) else os.getenv("LIVEKIT_INFERENCE_API_KEY",
 /// os.getenv("LIVEKIT_API_KEY", ""))`. A set-but-empty `LIVEKIT_INFERENCE_API_KEY` shadows
@@ -78,8 +78,8 @@ impl lk_agents_abi::inference::InferenceCredentials for Credentials {
         server_url: Option<String>,
         server_api_key: Option<String>,
         server_api_secret: Option<String>,
-    ) -> Result<(String, String, String), InvalidOption> {
-        let invalid = |error: ApiError| InvalidOption(error.message);
+    ) -> Result<(String, String, String), Invalid> {
+        let invalid = |error: ApiError| Invalid(error.message);
         let inference = env("LIVEKIT_INFERENCE_API_KEY");
         let key =
             resolve_api_key(api_key.as_deref(), inference.as_deref(), server_api_key.as_deref())

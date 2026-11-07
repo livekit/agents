@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use lk_agents_abi::LlmChunk;
+use lk_agents_abi::errors::Invalid;
 use lk_agents_abi::errors::ProviderError;
-use lk_agents_abi::llm::inference::InvalidPayload;
 use lk_agents_abi::types::provider::NativeLabel;
 use lk_agents_abi::{BoxFuture, Spawner};
 use lk_agents_abi::{ChatRequest, Closed, Llm, LlmStream, StreamOutput, ToolChoice, Ts};
@@ -123,7 +123,7 @@ impl FallbackLlm {
         clock: Arc<dyn Clock>,
         spawner: Arc<dyn Spawner>,
         observer: Arc<dyn ChainObserver>,
-    ) -> Result<Self, InvalidPayload> {
+    ) -> Result<Self, Invalid> {
         let entries =
             llms.into_iter().map(|llm| LlmBackend::new(llm, Arc::clone(&clock))).collect();
         let chain = FallbackChain::new(entries, policy, clock, spawner, observer)?;
@@ -183,7 +183,7 @@ impl lk_agents_abi::llm::fallback::FallbackLlm for FallbackLlm {
         retry_interval: f64,
         sticky: bool,
         on_availability: Option<Arc<dyn ChainObserver>>,
-    ) -> Result<Self, InvalidPayload> {
+    ) -> Result<Self, Invalid> {
         let policy = ChainPolicy {
             max_retry_per_backend: max_retry_per_llm,
             attempt_timeout: Some(attempt_timeout),
@@ -195,7 +195,7 @@ impl lk_agents_abi::llm::fallback::FallbackLlm for FallbackLlm {
             llms,
             policy,
             env.clock.clone(),
-            (env.spawner)().map_err(|e| InvalidPayload(e.to_string()))?,
+            (env.spawner)().map_err(|e| Invalid(e.to_string()))?,
             observer,
         )
     }

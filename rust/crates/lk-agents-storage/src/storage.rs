@@ -249,8 +249,7 @@ pub fn thread_item_page(page: ItemPage) -> Result<ThreadItemPage, StorageError> 
 fn chat_item(
     item: lk_agents_abi::livekit_protocol::agent::chat_context::ChatItem,
 ) -> Result<lk_agents_abi::ChatItem, StorageError> {
-    lk_agents_abi::llm::chat_context::protocol::decode_chat_item(item)
-        .map_err(StorageError::Invalid)
+    lk_agents_abi::llm::chat_context::protocol::decode_chat_item(item).map_err(StorageError::from)
 }
 
 /// Every task of a thread, of `status` when given.

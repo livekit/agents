@@ -552,7 +552,15 @@ impl AgentRunner {
             crate::generated::records::agent_run::agent_definition_from_py(definition.as_any())?;
         let llm = crate::generated::llm::LlmProxy::from_host(llm.as_any())?;
         let host = crate::generated::agent::AgentCallbacksProxy::from_host(host.as_any())?;
-        let out = py.detach(|| <AgentRunnerImpl as ::lk_agents_abi::agent::run::AgentRunner>::new(&env, definition, llm, host)).map_err(|e: ::lk_agents_abi::agent::run::InvalidRun| <::lk_agents_abi::agent::run::InvalidRun as crate::py_errors::HostException>::to_py_err(&e))?;
+        let out = py
+            .detach(|| {
+                <AgentRunnerImpl as ::lk_agents_abi::agent::run::AgentRunner>::new(
+                    &env, definition, llm, host,
+                )
+            })
+            .map_err(|e: ::lk_agents_abi::errors::Invalid| {
+                <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e)
+            })?;
         ::pyo3::PyResult::Ok(AgentRunner(::std::sync::Arc::new(out)))
     }
 
@@ -561,7 +569,13 @@ impl AgentRunner {
     fn run(&self, py: Python<'_>, request: Bound<'_, PyAny>) -> PyResult<AgentRunUpdates> {
         crate::py_calls::check_pid()?;
         let request = crate::generated::records::agent_run::run_request_from_py(request.as_any())?;
-        let out = py.detach(|| <AgentRunnerImpl as ::lk_agents_abi::agent::run::AgentRunner>::run(&self.0, request)).map_err(|e: ::lk_agents_abi::agent::run::InvalidRun| <::lk_agents_abi::agent::run::InvalidRun as crate::py_errors::HostException>::to_py_err(&e))?;
+        let out = py
+            .detach(|| {
+                <AgentRunnerImpl as ::lk_agents_abi::agent::run::AgentRunner>::run(&self.0, request)
+            })
+            .map_err(|e: ::lk_agents_abi::errors::Invalid| {
+                <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e)
+            })?;
         ::pyo3::PyResult::Ok(AgentRunUpdates(::lk_agents_runtime::net::source::SharedStream::new(
             ::std::boxed::Box::new(out),
             ::lk_agents_runtime::process::host_clock(),
@@ -591,10 +605,8 @@ impl AgentRunner {
                 &self.0, request, stream, resources,
             )
         })
-        .map_err(|e: ::lk_agents_abi::agent::run::InvalidRun| {
-            <::lk_agents_abi::agent::run::InvalidRun as crate::py_errors::HostException>::to_py_err(
-                &e,
-            )
+        .map_err(|e: ::lk_agents_abi::errors::Invalid| {
+            <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e)
         })?;
         Ok(())
     }
@@ -607,7 +619,16 @@ impl AgentRunner {
         invocation_id: ::std::string::String,
     ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
-        let out = py.detach(|| <AgentRunnerImpl as ::lk_agents_abi::agent::run::AgentRunner>::usage(&self.0, &invocation_id)).map_err(|e: ::lk_agents_abi::agent::run::InvalidRun| <::lk_agents_abi::agent::run::InvalidRun as crate::py_errors::HostException>::to_py_err(&e))?;
+        let out = py
+            .detach(|| {
+                <AgentRunnerImpl as ::lk_agents_abi::agent::run::AgentRunner>::usage(
+                    &self.0,
+                    &invocation_id,
+                )
+            })
+            .map_err(|e: ::lk_agents_abi::errors::Invalid| {
+                <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e)
+            })?;
         crate::generated::records::usage::usage_to_py(py, out)
     }
 
@@ -632,10 +653,8 @@ impl AgentRunner {
                 message,
             )
         })
-        .map_err(|e: ::lk_agents_abi::agent::run::InvalidRun| {
-            <::lk_agents_abi::agent::run::InvalidRun as crate::py_errors::HostException>::to_py_err(
-                &e,
-            )
+        .map_err(|e: ::lk_agents_abi::errors::Invalid| {
+            <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e)
         })?;
         Ok(())
     }
@@ -1684,12 +1703,6 @@ impl crate::py_errors::HostException for ::lk_agents_abi::agent::resources::Reso
                 self,
             )),
         }
-    }
-}
-
-impl crate::py_errors::HostException for ::lk_agents_abi::agent::run::InvalidRun {
-    fn to_py_err(&self) -> ::pyo3::PyErr {
-        ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
     }
 }
 

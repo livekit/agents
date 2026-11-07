@@ -72,7 +72,7 @@ impl VoiceStore {
         .await?;
         let items = history
             .iter()
-            .map(|row| decode_chat_item(row.payload.clone()).map_err(StorageError::Invalid))
+            .map(|row| decode_chat_item(row.payload.clone()).map_err(StorageError::from))
             .collect::<Result<Vec<_>, _>>()?;
         let known = explicit_history
             .as_ref()
@@ -144,7 +144,7 @@ impl VoiceStore {
                 let mut stored = run
                     .history()
                     .iter()
-                    .map(|row| decode_chat_item(row.payload.clone()).map_err(StorageError::Invalid))
+                    .map(|row| decode_chat_item(row.payload.clone()).map_err(StorageError::from))
                     .collect::<Result<Vec<_>, _>>()?;
                 let ids: BTreeSet<_> = stored.iter().map(|item| item.id().to_owned()).collect();
                 let (mut instructions, pending): (Vec<_>, Vec<_>) =

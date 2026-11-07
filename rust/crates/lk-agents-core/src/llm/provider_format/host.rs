@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use lk_agents_abi::llm::provider_format::host::LlmAlgorithmError;
+use lk_agents_abi::errors::Invalid;
 use serde::Serialize;
 use serde_json::Value;
 #[cfg(test)]
@@ -24,10 +24,10 @@ pub fn to_provider_format(
     inject_dummy_user_message: bool,
     inject_trailing_user_message: bool,
     thought_signatures: Option<BTreeMap<String, Vec<u8>>>,
-) -> Result<(Vec<Value>, Value), LlmAlgorithmError> {
+) -> Result<(Vec<Value>, Value), Invalid> {
     let ctx = ChatContext::new(items);
     let images = PreResolved::from_pairs(images.unwrap_or_default());
-    let e = |e: super::FormatError| LlmAlgorithmError(e.to_string());
+    let e = |e: super::FormatError| Invalid(e.to_string());
     let formatted = match format {
         "openai" => finish(openai::to_chat_ctx(&ctx, &images).map_err(e)?),
         "openai.responses" => finish(openai::to_responses_chat_ctx(&ctx, &images).map_err(e)?),
@@ -51,13 +51,13 @@ pub fn to_provider_format(
             finish(f.map_err(e)?)
         }
         _ => {
-            return Err(LlmAlgorithmError(format!(
+            return Err(Invalid(format!(
                 "unknown provider format {format:?}: expected one of 'openai', 'openai.responses', \
                  'anthropic', 'aws', 'google', 'mistralai'"
             )));
         }
     };
-    formatted.map_err(|error| LlmAlgorithmError(error.to_string()))
+    formatted.map_err(|error| Invalid(error.to_string()))
 }
 
 /// `convert_mid_conversation_instructions(chat_ctx, role=, template=)` as `(index, rewritten)`: the
@@ -110,9 +110,9 @@ pub fn to_fnc_ctx(
     tools: Vec<Value>,
     tool_behavior: Option<&str>,
     use_parameters_json_schema: bool,
-) -> Result<Vec<Value>, LlmAlgorithmError> {
+) -> Result<Vec<Value>, Invalid> {
     let specs = tools.into_iter().map(tool_schema).collect::<Result<Vec<_>, _>>()?;
-    let e = |e: super::FormatError| LlmAlgorithmError(e.to_string());
+    let e = |e: super::FormatError| Invalid(e.to_string());
     // Mistral has no rewrapper, and an unknown format gets the same message.
     let formatted = match format {
         "openai" => serialize_list(&openai::to_fnc_ctx(&specs).map_err(e)?),
@@ -126,7 +126,7 @@ pub fn to_fnc_ctx(
                 lk_agents_abi::llm::provider_format::vocabulary::GeminiToolBehavior::from_wire(b)
                     .is_none()
             }) {
-                return Err(LlmAlgorithmError(format!(
+                return Err(Invalid(format!(
                     "unknown tool_behavior {b:?}: expected 'BLOCKING' or 'NON_BLOCKING'"
                 )));
             }
@@ -136,19 +136,17 @@ pub fn to_fnc_ctx(
             )
         }
         _ => {
-            return Err(LlmAlgorithmError(format!(
+            return Err(Invalid(format!(
                 "{format:?} has no tool-schema rewrapper: Mistral takes the OpenAI shape verbatim"
             )));
         }
     };
-    formatted.map_err(|error| LlmAlgorithmError(error.to_string()))
+    formatted.map_err(|error| Invalid(error.to_string()))
 }
 
-fn tool_schema(tool: Value) -> Result<ToolSchema, LlmAlgorithmError> {
+fn tool_schema(tool: Value) -> Result<ToolSchema, Invalid> {
     let Value::Array(mut parts) = tool else {
-        return Err(LlmAlgorithmError(format!(
-            "a tool schema is [kind, schema, name], got {tool}"
-        )));
+        return Err(Invalid(format!("a tool schema is [kind, schema, name], got {tool}")));
     };
     parts.resize(3, Value::Null);
     let (name, payload) = (parts.pop().unwrap_or_default(), parts.pop().unwrap_or_default());
@@ -157,7 +155,7 @@ fn tool_schema(tool: Value) -> Result<ToolSchema, LlmAlgorithmError> {
         "raw" => ToolSchema::Raw {
             name: name
                 .as_str()
-                .ok_or_else(|| LlmAlgorithmError("a raw tool schema carries its name".into()))?
+                .ok_or_else(|| Invalid("a raw tool schema carries its name".into()))?
                 .to_owned(),
             raw_schema: payload,
         },
@@ -165,7 +163,7 @@ fn tool_schema(tool: Value) -> Result<ToolSchema, LlmAlgorithmError> {
         "strict" => ToolSchema::Strict(payload),
         "provider" => ToolSchema::Provider(payload),
         _ => {
-            return Err(LlmAlgorithmError(format!(
+            return Err(Invalid(format!(
                 "unknown tool schema kind {kind:?}: expected 'raw', 'legacy', 'strict' or 'provider'"
             )));
         }

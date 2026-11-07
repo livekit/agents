@@ -422,7 +422,15 @@ impl FixedGate {
     fn update(&self, py: Python<'_>, frame: Bound<'_, PyAny>) -> PyResult<bool> {
         crate::py_calls::check_pid()?;
         let frame = crate::generated::records::rtc_frames::audio_frame_from_py(frame.as_any())?;
-        let out = py.detach(|| <FixedGateImpl as ::lk_agents_abi::llm::duplex::FixedGate>::update(&self.0, frame)).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as crate::py_errors::HostException>::to_py_err(&e))?;
+        let out = py
+            .detach(|| {
+                <FixedGateImpl as ::lk_agents_abi::llm::duplex::FixedGate>::update(&self.0, frame)
+            })
+            .map_err(|e: ::lk_agents_abi::errors::HostError| {
+                <::lk_agents_abi::errors::HostError as crate::py_errors::HostException>::to_py_err(
+                    &e,
+                )
+            })?;
         ::pyo3::PyResult::Ok(out)
     }
 
@@ -516,7 +524,17 @@ impl AdaptiveNoiseGate {
     fn update(&self, py: Python<'_>, frame: Bound<'_, PyAny>) -> PyResult<bool> {
         crate::py_calls::check_pid()?;
         let frame = crate::generated::records::rtc_frames::audio_frame_from_py(frame.as_any())?;
-        let out = py.detach(|| <AdaptiveNoiseGateImpl as ::lk_agents_abi::llm::duplex::AdaptiveNoiseGate>::update(&self.0, frame)).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as crate::py_errors::HostException>::to_py_err(&e))?;
+        let out = py
+            .detach(|| {
+                <AdaptiveNoiseGateImpl as ::lk_agents_abi::llm::duplex::AdaptiveNoiseGate>::update(
+                    &self.0, frame,
+                )
+            })
+            .map_err(|e: ::lk_agents_abi::errors::HostError| {
+                <::lk_agents_abi::errors::HostError as crate::py_errors::HostException>::to_py_err(
+                    &e,
+                )
+            })?;
         ::pyo3::PyResult::Ok(out)
     }
 
@@ -766,7 +784,21 @@ impl FallbackLlm {
         let on_availability = on_availability
             .map(|v| crate::generated::llm::ChainObserverProxy::from_host(v.as_any()))
             .transpose()?;
-        let out = py.detach(|| <FallbackLlmImpl as ::lk_agents_abi::llm::fallback::FallbackLlm>::new(&env, members, attempt_timeout, max_retry_per_llm, retry_interval, sticky, on_availability)).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as crate::py_errors::HostException>::to_py_err(&e))?;
+        let out = py
+            .detach(|| {
+                <FallbackLlmImpl as ::lk_agents_abi::llm::fallback::FallbackLlm>::new(
+                    &env,
+                    members,
+                    attempt_timeout,
+                    max_retry_per_llm,
+                    retry_interval,
+                    sticky,
+                    on_availability,
+                )
+            })
+            .map_err(|e: ::lk_agents_abi::errors::Invalid| {
+                <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e)
+            })?;
         ::pyo3::PyResult::Ok(FallbackLlm(::std::sync::Arc::new(out)))
     }
 
@@ -945,7 +977,20 @@ impl FallbackTts {
         let on_availability = on_availability
             .map(|v| crate::generated::llm::ChainObserverProxy::from_host(v.as_any()))
             .transpose()?;
-        let out = py.detach(|| <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::new(&env, members, max_retry_per_tts, attempt_timeout, sample_rate, on_availability)).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as crate::py_errors::HostException>::to_py_err(&e))?;
+        let out = py
+            .detach(|| {
+                <FallbackTtsImpl as ::lk_agents_abi::llm::fallback::FallbackTts>::new(
+                    &env,
+                    members,
+                    max_retry_per_tts,
+                    attempt_timeout,
+                    sample_rate,
+                    on_availability,
+                )
+            })
+            .map_err(|e: ::lk_agents_abi::errors::Invalid| {
+                <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e)
+            })?;
         ::pyo3::PyResult::Ok(FallbackTts(::std::sync::Arc::new(out)))
     }
 
@@ -1563,7 +1608,14 @@ impl LlmChoiceParser {
     ) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
         crate::py_calls::check_pid()?;
         let choice = crate::py_values::value_from_py(choice.as_any(), "choice")?;
-        let out = <LlmChoiceParserImpl as ::lk_agents_abi::llm::inference::ChoiceParser>::parse(&mut self.0, id, choice).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as crate::py_errors::HostException>::to_py_err(&e))?;
+        let out = <LlmChoiceParserImpl as ::lk_agents_abi::llm::inference::ChoiceParser>::parse(
+            &mut self.0,
+            id,
+            choice,
+        )
+        .map_err(|e: ::lk_agents_abi::errors::Invalid| {
+            <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e)
+        })?;
         out.map(|value| crate::generated::records::llm::chat_chunk_to_py(py, value)).transpose()
     }
 }
@@ -1581,7 +1633,7 @@ pub fn llm_usage_chunk<'py>(
 ) -> PyResult<::std::option::Option<Bound<'py, PyAny>>> {
     crate::py_calls::check_pid()?;
     let chunk = crate::py_values::value_from_py(chunk.as_any(), "chunk")?;
-    let out = py.detach(|| <CompletionWireImpl as ::lk_agents_abi::llm::inference::CompletionWire>::llm_usage_chunk(chunk)).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as crate::py_errors::HostException>::to_py_err(&e))?;
+    let out = py.detach(|| <CompletionWireImpl as ::lk_agents_abi::llm::inference::CompletionWire>::llm_usage_chunk(chunk)).map_err(|e: ::lk_agents_abi::errors::Invalid| <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e))?;
     out.map(|value| crate::generated::records::llm::chat_chunk_to_py(py, value)).transpose()
 }
 
@@ -2043,7 +2095,7 @@ pub fn to_provider_format<'py>(
         })
         .transpose()?;
     crate::py_calls::future_into_py(py, async move {
-        let out = <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::prepare_provider_format(&env, format, items, images, inject_dummy_user_message, inject_trailing_user_message, thought_signatures).await.map_err(|e: ::lk_agents_abi::llm::provider_format::host::LlmAlgorithmError| <::lk_agents_abi::llm::provider_format::host::LlmAlgorithmError as crate::py_errors::HostException>::to_py_err(&e))?;
+        let out = <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::prepare_provider_format(&env, format, items, images, inject_dummy_user_message, inject_trailing_user_message, thought_signatures).await.map_err(|e: ::lk_agents_abi::errors::Invalid| <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e))?;
         Python::attach(|py| {
             ::pyo3::IntoPyObjectExt::into_py_any(
                 {
@@ -2136,7 +2188,7 @@ pub fn to_fnc_ctx<'py>(
             })
             .collect::<PyResult<Vec<_>>>()
     })?;
-    let out = py.detach(|| <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::to_fnc_ctx(&format, tools, tool_behavior, use_parameters_json_schema)).map_err(|e: ::lk_agents_abi::llm::provider_format::host::LlmAlgorithmError| <::lk_agents_abi::llm::provider_format::host::LlmAlgorithmError as crate::py_errors::HostException>::to_py_err(&e))?;
+    let out = py.detach(|| <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::to_fnc_ctx(&format, tools, tool_behavior, use_parameters_json_schema)).map_err(|e: ::lk_agents_abi::errors::Invalid| <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e))?;
     ::pyo3::PyResult::Ok(
         ::pyo3::types::PyList::new(
             py,
@@ -2220,7 +2272,7 @@ pub fn parse_function_arguments<'py>(
     py: Python<'py>,
     raw: ::std::string::String,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let out = py.detach(|| <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::parse_function_arguments(&raw)).map_err(|e: ::lk_agents_abi::llm::provider_format::host::LlmAlgorithmError| <::lk_agents_abi::llm::provider_format::host::LlmAlgorithmError as crate::py_errors::HostException>::to_py_err(&e))?;
+    let out = py.detach(|| <LlmAlgorithmsImpl as ::lk_agents_abi::llm::provider_format::host::LlmAlgorithms>::parse_function_arguments(&raw)).map_err(|e: ::lk_agents_abi::errors::Invalid| <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e))?;
     ::pyo3::PyResult::Ok(crate::py_values::extra_to_py(py, &out)?.into_any())
 }
 
@@ -4989,12 +5041,6 @@ impl crate::py_errors::HostException for ::lk_agents_abi::llm::chat_context::Cha
     }
 }
 
-impl crate::py_errors::HostException for ::lk_agents_abi::llm::inference::InvalidPayload {
-    fn to_py_err(&self) -> ::pyo3::PyErr {
-        ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
-    }
-}
-
 impl crate::py_errors::HostException for ::lk_agents_abi::llm::mcp::McpError {
     fn to_py_err(&self) -> ::pyo3::PyErr {
         #[allow(unreachable_patterns)]
@@ -5045,14 +5091,6 @@ impl crate::py_errors::HostException for ::lk_agents_abi::llm::provider_format::
                 ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
             }
         }
-    }
-}
-
-impl crate::py_errors::HostException
-    for ::lk_agents_abi::llm::provider_format::host::LlmAlgorithmError
-{
-    fn to_py_err(&self) -> ::pyo3::PyErr {
-        ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
     }
 }
 

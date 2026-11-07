@@ -56,7 +56,7 @@ pub trait FallbackLlm: Send + Sync + Sized + 'static {
         #[host(default = 0.5)] retry_interval: f64,
         #[host(default = false)] sticky: bool,
         #[host(default = None)] on_availability: Option<std::sync::Arc<dyn ChainObserver>>,
-    ) -> Result<Self, crate::llm::inference::InvalidPayload>;
+    ) -> Result<Self, crate::errors::Invalid>;
 
     #[host(getter)]
     fn active_index(&self) -> usize;
@@ -109,7 +109,7 @@ pub trait FallbackTts: Send + Sync + Sized + 'static {
         #[host(default = None)] attempt_timeout: Option<f64>,
         #[host(default = None)] sample_rate: Option<u32>,
         #[host(default = None)] on_availability: Option<std::sync::Arc<dyn ChainObserver>>,
-    ) -> Result<Self, crate::llm::inference::InvalidPayload>;
+    ) -> Result<Self, crate::errors::Invalid>;
     #[host(getter)]
     fn active_index(&self) -> usize;
     #[host(getter)]

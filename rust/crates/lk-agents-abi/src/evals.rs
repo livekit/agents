@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use crate::errors::HostError;
+use crate::errors::{HostError, Invalid};
 use crate::telemetry::decl::SpanValue;
 use crate::usage::TokenUsage;
 use crate::utils::host_ref::HostRef;
@@ -12,8 +12,8 @@ use crate::{ChatItem, Llm};
 
 /// What a judge decided.
 #[crate::host(wire_enum(
-    err = InvalidJudgment,
-    msg = InvalidJudgment(format!("verdict must be 'pass', 'fail' or 'maybe', got {s:?}"))
+    err = Invalid,
+    msg = Invalid(format!("verdict must be 'pass', 'fail' or 'maybe', got {s:?}"))
 ))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, SpanValue)]
 #[span_value(wire_strs)]
@@ -109,12 +109,6 @@ pub struct EvaluationScore {
     pub none_failed: bool,
 }
 
-/// A judge, verdict or judged message the evaluation cannot use.
-#[crate::host(error(kind = "ValueError"))]
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("{0}")]
-pub struct InvalidJudgment(pub String);
-
 /// The host side of one evaluation: runs an application evaluator on the conversation under
 /// evaluation, with the evaluation's model.
 #[crate::host(proxy(host = "livekit.agents.evals._Evaluation"))]
@@ -155,7 +149,7 @@ pub trait JudgeRunner: Send + Sync + Sized + 'static {
         reference: Option<Vec<ChatItem>>,
         #[host(context)] context: crate::invoke::CallContext,
         cx: crate::telemetry::Cx,
-    ) -> Result<Vec<JudgeOutcome>, InvalidJudgment>;
+    ) -> Result<Vec<JudgeOutcome>, Invalid>;
 
     /// Whether `message` fulfills `intent`. A provider failure raises the provider's error.
     #[host(await)]

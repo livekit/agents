@@ -26,7 +26,7 @@ use lk_agents_abi::errors::{ApiError, ProviderError, TimeoutPhase};
 use lk_agents_abi::llm::fallback::AvailabilityChanged;
 use lk_agents_abi::llm::realtime::{
     Event, GenerationDone, GenerationStatus, HostRealtime, MessageDone, MessageModalities,
-    Modalities, RealtimeModelError,
+    Modalities, RealtimeConfigurationError, RealtimeModelError,
 };
 use lk_agents_abi::types::provider::NativeLabel;
 use lk_agents_abi::{ChatContext, Realtime, RealtimeCommand, RealtimeSession, WallAnchor};
@@ -129,9 +129,8 @@ impl lk_agents_abi::llm::fallback::RealtimeFallbackModel for RealtimeFallbackMod
         attempt_timeout: Option<f64>,
         regenerate_on_swap: bool,
         on_availability: Option<Arc<dyn ChainObserver>>,
-    ) -> Result<Self, lk_agents_abi::llm::realtime::RealtimeConfigurationError> {
+    ) -> Result<Self, RealtimeConfigurationError> {
         use lk_agents_abi::llm::fallback::RealtimeFallbackMember;
-        use lk_agents_abi::llm::realtime::RealtimeConfigurationError;
         let children = models
             .into_iter()
             .map(|model| {
@@ -153,7 +152,6 @@ impl lk_agents_abi::llm::fallback::RealtimeFallbackModel for RealtimeFallbackMod
             on_availability.unwrap_or_else(|| Arc::new(crate::fallback::IgnoreEvents)),
             env.clock.clone(),
         )
-        .map_err(RealtimeConfigurationError::Invalid)
     }
 
     fn active_index(&self) -> usize {
@@ -175,13 +173,18 @@ impl RealtimeFallbackModel {
         regenerate_on_swap: bool,
         observer: Arc<dyn ChainObserver>,
         clock: Arc<dyn lk_agents_abi::Clock>,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, RealtimeConfigurationError> {
+        let invalid = RealtimeConfigurationError::Invalid;
         if children.is_empty() {
-            return Err("at least one RealtimeModel instance must be provided.".to_owned());
+            return Err(invalid(
+                "at least one RealtimeModel instance must be provided.".to_owned(),
+            ));
         }
         let duration = |name: &str, seconds: f64| {
             Duration::try_from_secs_f64(seconds).map_err(|_| {
-                format!("{name} must be a finite, nonnegative duration within the supported range")
+                invalid(format!(
+                    "{name} must be a finite, nonnegative duration within the supported range"
+                ))
             })
         };
         duration("cooldown", cooldown)?;
@@ -189,7 +192,7 @@ impl RealtimeFallbackModel {
             attempt_timeout.map(|seconds| duration("attempt_timeout", seconds)).transpose()?;
         let caps =
             merge_capabilities(&children.iter().map(ChainModel::capabilities).collect::<Vec<_>>())
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| invalid(e.to_string()))?;
         Ok(RealtimeFallbackModel {
             children,
             caps,

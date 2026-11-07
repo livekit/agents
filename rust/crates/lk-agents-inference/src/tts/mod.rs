@@ -14,11 +14,11 @@ use crate::ids::{RequestKind, create_inference_request_id};
 use crate::telemetry;
 use futures_util::future::{Either, select};
 use lk_agents_abi::Spawner;
+use lk_agents_abi::errors::Invalid;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::inference::fallback::TtsFallbackModel;
 use lk_agents_abi::inference::models::InferenceProvider;
 use lk_agents_abi::inference::tts_client::InferenceTts;
-use lk_agents_abi::llm::inference::InvalidPayload;
 use lk_agents_abi::tts::stream_adapter::SentenceTextProcessor;
 use lk_agents_abi::types::provider::NativeLabel;
 use lk_agents_abi::utils::connection_pool::ConnectionPoolState;
@@ -702,7 +702,7 @@ impl InferenceTts for GatewayTts {
         sample_rate: u32,
         extra_kwargs: Option<serde_json::Map<String, serde_json::Value>>,
         fallback: Option<Vec<TtsFallbackModel>>,
-    ) -> Result<Self, InvalidPayload> {
+    ) -> Result<Self, Invalid> {
         let opts = TtsOptions {
             model,
             base_url,
@@ -719,7 +719,7 @@ impl InferenceTts for GatewayTts {
         Ok(GatewayTts::new(
             opts,
             Arc::new(lk_agents_net::websocket::TungsteniteTransport),
-            (env.spawner)().map_err(|e| InvalidPayload(e.to_string()))?,
+            (env.spawner)().map_err(|e| Invalid(e.to_string()))?,
             env.clock.clone(),
         ))
     }

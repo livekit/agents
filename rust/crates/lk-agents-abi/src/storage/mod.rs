@@ -85,6 +85,12 @@ impl StorageError {
     }
 }
 
+impl From<crate::errors::Invalid> for StorageError {
+    fn from(error: crate::errors::Invalid) -> Self {
+        Self::Invalid(error.0)
+    }
+}
+
 impl From<crate::errors::JobPanicked> for StorageError {
     fn from(error: crate::errors::JobPanicked) -> Self {
         Self::Invalid(error.to_string())

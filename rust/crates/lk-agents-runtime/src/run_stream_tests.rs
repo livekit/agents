@@ -32,7 +32,7 @@ impl Input for Fake {
     fn usage(&self) -> watch::Receiver<Usage> {
         self.state.usage.subscribe()
     }
-    fn release(&self, delivery: TextSessionDelivery) -> Result<(), InvalidRun> {
+    fn release(&self, delivery: TextSessionDelivery) -> Result<(), Invalid> {
         self.state.deliveries.lock().push(delivery);
         Ok(())
     }

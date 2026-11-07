@@ -221,8 +221,7 @@ impl Storage for AgentDbStorage {
                     message_id: item.message_id,
                     item: lk_agents_abi::llm::chat_context::protocol::decode_chat_item(
                         item.item.unwrap_or_default(),
-                    )
-                    .map_err(StorageError::Invalid)?,
+                    )?,
                 })
             })
             .collect::<Result<_, StorageError>>()?;

@@ -70,7 +70,7 @@ pub fn inference_credentials(
     server_api_secret: ::std::option::Option<::std::string::String>,
 ) -> PyResult<InferenceCredentialsInferenceCredentialsOutput> {
     crate::py_calls::check_pid()?;
-    let out = py.detach(|| <InferenceCredentialsImpl as ::lk_agents_abi::inference::InferenceCredentials>::inference_credentials(base_url, api_key, api_secret, server_url, server_api_key, server_api_secret)).map_err(|e: ::lk_agents_abi::inference::InvalidOption| <::lk_agents_abi::inference::InvalidOption as crate::py_errors::HostException>::to_py_err(&e))?;
+    let out = py.detach(|| <InferenceCredentialsImpl as ::lk_agents_abi::inference::InferenceCredentials>::inference_credentials(base_url, api_key, api_secret, server_url, server_api_key, server_api_secret)).map_err(|e: ::lk_agents_abi::errors::Invalid| <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e))?;
     ::pyo3::PyResult::Ok(out)
 }
 
@@ -312,7 +312,7 @@ pub fn amd_is_evaluated_model(
     model: ::std::string::String,
     kind: ::std::string::String,
 ) -> PyResult<bool> {
-    let out = py.detach(|| <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::amd_is_evaluated_model(model, kind)).map_err(|e: ::lk_agents_abi::inference::InvalidOption| <::lk_agents_abi::inference::InvalidOption as crate::py_errors::HostException>::to_py_err(&e))?;
+    let out = py.detach(|| <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::amd_is_evaluated_model(model, kind)).map_err(|e: ::lk_agents_abi::errors::Invalid| <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e))?;
     ::pyo3::PyResult::Ok(out)
 }
 
@@ -345,7 +345,21 @@ pub fn eot_select<'py>(
     secret: ::std::string::String,
     local_fallback: bool,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let out = py.detach(|| <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::eot_select(version, hosted, dev, url, key, secret, local_fallback)).map_err(|e: ::lk_agents_abi::inference::InvalidOption| <::lk_agents_abi::inference::InvalidOption as crate::py_errors::HostException>::to_py_err(&e))?;
+    let out = py
+        .detach(|| {
+            <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::eot_select(
+                version,
+                hosted,
+                dev,
+                url,
+                key,
+                secret,
+                local_fallback,
+            )
+        })
+        .map_err(|e: ::lk_agents_abi::errors::Invalid| {
+            <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e)
+        })?;
     ::pyo3::PyResult::Ok({
         let (x0, x1, x2) = out;
         ::pyo3::types::PyTuple::new(
@@ -484,7 +498,7 @@ pub fn merge_realtime_capabilities<'py>(
             })
             .collect::<PyResult<Vec<_>>>()
     })?;
-    let out = py.detach(|| <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::merge_realtime_capabilities(caps)).map_err(|e: ::lk_agents_abi::inference::InvalidOption| <::lk_agents_abi::inference::InvalidOption as crate::py_errors::HostException>::to_py_err(&e))?;
+    let out = py.detach(|| <InferenceModelsImpl as ::lk_agents_abi::inference::InferenceModels>::merge_realtime_capabilities(caps)).map_err(|e: ::lk_agents_abi::errors::Invalid| <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e))?;
     crate::generated::records::realtime::realtime_capabilities_to_py(py, out)
 }
 
@@ -736,7 +750,26 @@ impl InferenceTts {
                 })
             })
             .transpose()?;
-        let out = py.detach(|| <InferenceTtsImpl as ::lk_agents_abi::inference::tts_client::InferenceTts>::new(&env, model, base_url, api_key, api_secret, conn_options, voice, language, encoding, sample_rate, extra_kwargs, fallback)).map_err(|e: ::lk_agents_abi::llm::inference::InvalidPayload| <::lk_agents_abi::llm::inference::InvalidPayload as crate::py_errors::HostException>::to_py_err(&e))?;
+        let out = py
+            .detach(|| {
+                <InferenceTtsImpl as ::lk_agents_abi::inference::tts_client::InferenceTts>::new(
+                    &env,
+                    model,
+                    base_url,
+                    api_key,
+                    api_secret,
+                    conn_options,
+                    voice,
+                    language,
+                    encoding,
+                    sample_rate,
+                    extra_kwargs,
+                    fallback,
+                )
+            })
+            .map_err(|e: ::lk_agents_abi::errors::Invalid| {
+                <::lk_agents_abi::errors::Invalid as crate::py_errors::HostException>::to_py_err(&e)
+            })?;
         ::pyo3::PyResult::Ok(InferenceTts(::std::sync::Arc::new(out)))
     }
 
@@ -947,12 +980,6 @@ inventory::submit! {
             let native: ::std::sync::Arc<dyn ::lk_agents_abi::Tts> = this.get().0.clone();
             Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
         },
-    }
-}
-
-impl crate::py_errors::HostException for ::lk_agents_abi::inference::InvalidOption {
-    fn to_py_err(&self) -> ::pyo3::PyErr {
-        ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
     }
 }
 

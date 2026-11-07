@@ -1,7 +1,7 @@
 //! Declared runner and its cancellable, bounded update source.
 use super::*;
 use crate::telemetry;
-use lk_agents_abi::agent::run::InvalidRun;
+use lk_agents_abi::errors::Invalid;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::resources::{LlmRef, ResourceId};
 use lk_agents_abi::text_session::{TextSessionDelivery, TextSessionRunner};
@@ -38,7 +38,7 @@ impl TextSessionRunner for Runner {
         root_agent: String,
         agents: Vec<TextSessionAgent>,
         max_depth: usize,
-    ) -> Result<Self, InvalidRun> {
+    ) -> Result<Self, Invalid> {
         let config = TextSessionConfig::from_agents(
             root_agent,
             agents.iter().map(|agent| SessionAgent {
@@ -49,18 +49,18 @@ impl TextSessionRunner for Runner {
             }),
             max_depth,
         )
-        .map_err(|e| InvalidRun(e.to_string()))?;
+        .map_err(|e| Invalid(e.to_string()))?;
         let resources =
             agents.into_iter().map(|agent| (agent.definition.name.clone(), agent)).collect();
         let (control, runtime, clock) = (Mutex::new(None), env.runtime, env.clock.clone());
         Ok(Self { config, agents: resources, control, runtime, clock, tracer: env.tracer.clone() })
     }
 
-    fn run(&self, request: TextSessionRequest) -> Result<Updates, InvalidRun> {
-        let runtime = (self.runtime)().map_err(|error| InvalidRun(error.to_string()))?;
+    fn run(&self, request: TextSessionRequest) -> Result<Updates, Invalid> {
+        let runtime = (self.runtime)().map_err(|error| Invalid(error.to_string()))?;
         let mut current = self.control.lock();
         if current.as_ref().is_some_and(|c| !c.release.is_closed()) {
-            return Err(InvalidRun("this runner already has an active request".into()));
+            return Err(Invalid("this runner already has an active request".into()));
         }
         let (updates, control) = start(
             &runtime,
@@ -79,7 +79,7 @@ impl TextSessionRunner for Runner {
         request: TextSessionRequest,
         stream: Arc<Self::Stream>,
         resources: Arc<Self::Resources>,
-    ) -> Result<(), InvalidRun> {
+    ) -> Result<(), Invalid> {
         stream.bind(resources, || {
             let updates = self.run(request)?;
             let control =
@@ -94,7 +94,7 @@ impl TextSessionRunner for Runner {
                             invocation_id: delivery.invocation_id,
                             delivered: delivery.messages,
                         })
-                        .map_err(|e| InvalidRun(e.to_string()))
+                        .map_err(|e| Invalid(e.to_string()))
                 }),
             }))
         })
@@ -105,17 +105,17 @@ impl TextSessionRunner for Runner {
         current.as_ref().map(|c| c.usage.borrow().clone()).unwrap_or_default()
     }
 
-    fn release(&self, delivery: TextSessionDelivery) -> Result<(), InvalidRun> {
+    fn release(&self, delivery: TextSessionDelivery) -> Result<(), Invalid> {
         let current = self.control.lock();
         let control =
-            current.as_ref().ok_or_else(|| InvalidRun("session request is not running".into()))?;
+            current.as_ref().ok_or_else(|| Invalid("session request is not running".into()))?;
         control
             .release
             .try_send(Release {
                 invocation_id: delivery.invocation_id,
                 delivered: delivery.messages,
             })
-            .map_err(|e| InvalidRun(e.to_string()))
+            .map_err(|e| Invalid(e.to_string()))
     }
 
     fn progress(
@@ -123,14 +123,14 @@ impl TextSessionRunner for Runner {
         invocation_id: &str,
         operation: u64,
         message: String,
-    ) -> Result<(), InvalidRun> {
+    ) -> Result<(), Invalid> {
         let current = self.control.lock();
         let control =
-            current.as_ref().ok_or_else(|| InvalidRun("session request is not running".into()))?;
+            current.as_ref().ok_or_else(|| Invalid("session request is not running".into()))?;
         control
             .progress
             .try_send((invocation_id.into(), operation, message))
-            .map_err(|e| InvalidRun(e.to_string()))
+            .map_err(|e| Invalid(e.to_string()))
     }
 }
 
@@ -141,9 +141,9 @@ fn start(
     request: TextSessionRequest,
     clock: Arc<dyn Clock>,
     cx: telemetry::Cx,
-) -> Result<(Updates, Control), InvalidRun> {
+) -> Result<(Updates, Control), Invalid> {
     let ChatItem::Message(message) = request.message.clone() else {
-        return Err(InvalidRun("a session message must be a ChatMessage".into()));
+        return Err(Invalid("a session message must be a ChatMessage".into()));
     };
     let session = TextSession::new(
         config,
@@ -160,7 +160,7 @@ fn start(
             delegated: request.delegated,
         },
     )
-    .map_err(|e| InvalidRun(e.to_string()))?
+    .map_err(|e| Invalid(e.to_string()))?
     .with_checkpoints();
     let cancel = CancellationToken::new();
     let (updates, receiver) = mpsc::channel(UPDATE_QUEUE);

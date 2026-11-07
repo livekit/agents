@@ -7,8 +7,8 @@ use super::{
     EotTransport, LocalEotModel, LocalTransport, MetricsCallback, MountedTransport,
     TransportFactory,
 };
+use lk_agents_abi::errors::Invalid;
 use lk_agents_abi::errors::{ApiError, HostError, ProviderError};
-use lk_agents_abi::inference::InvalidOption;
 use lk_agents_abi::tokenize::language::{
     LanguageCode, ThresholdOptions, ThresholdOverride, TurnDetectorModel,
 };
@@ -216,7 +216,7 @@ pub fn select(
     key: &str,
     secret: &str,
     local_fallback: bool,
-) -> Result<(TurnDetectorModel, bool, Vec<String>), InvalidOption> {
+) -> Result<(TurnDetectorModel, bool, Vec<String>), Invalid> {
     let mut cloud = version.map_or(hosted || dev, |v| v == "v1");
     let mut warnings = vec![];
     if cloud {
@@ -232,7 +232,7 @@ pub fn select(
         if !missing.is_empty() {
             let missing = missing.join(", ");
             if version.is_some() {
-                return Err(InvalidOption(format!(
+                return Err(Invalid(format!(
                     "TurnDetector(version='v1') requires {missing} (env or constructor argument)."
                 )));
             }

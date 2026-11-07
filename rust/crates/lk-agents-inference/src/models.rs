@@ -1,8 +1,9 @@
 //! `_core`'s inference lookups ([`InferenceModels`]): the gateway's model tables, request headers
 //! and local model registry, answered by the modules that own them.
 
+use lk_agents_abi::errors::Invalid;
 use lk_agents_abi::inference::fallback::{SttFallbackModel, TtsFallbackModel};
-use lk_agents_abi::inference::{InferenceModels, InvalidOption, VadResolution};
+use lk_agents_abi::inference::{InferenceModels, VadResolution};
 use lk_agents_abi::llm::realtime::RealtimeCapabilities;
 use lk_agents_abi::tokenize::language::TurnDetectorModel;
 use lk_agents_abi::{SttCapabilities, TtsCapabilities};
@@ -35,9 +36,9 @@ impl InferenceModels for Models {
 
     fn merge_realtime_capabilities(
         caps: Vec<RealtimeCapabilities>,
-    ) -> Result<RealtimeCapabilities, InvalidOption> {
+    ) -> Result<RealtimeCapabilities, Invalid> {
         crate::fallback::merge_realtime_capabilities(&caps)
-            .map_err(|mismatch| InvalidOption(mismatch.to_string()))
+            .map_err(|mismatch| Invalid(mismatch.to_string()))
     }
 
     fn inference_quota_usage(headers: crate::headers::Headers) -> Vec<(String, String)> {
@@ -77,7 +78,7 @@ impl InferenceModels for Models {
         crate::amd::auto_select_models(&livekit_url, &api_key, &api_secret)
     }
 
-    fn amd_is_evaluated_model(model: String, kind: String) -> Result<bool, InvalidOption> {
+    fn amd_is_evaluated_model(model: String, kind: String) -> Result<bool, Invalid> {
         crate::amd::is_evaluated_model_of_kind(&model, &kind)
     }
 
@@ -106,7 +107,7 @@ impl InferenceModels for Models {
         key: String,
         secret: String,
         local_fallback: bool,
-    ) -> Result<(TurnDetectorModel, bool, Vec<String>), InvalidOption> {
+    ) -> Result<(TurnDetectorModel, bool, Vec<String>), Invalid> {
         crate::eot::select(version.as_deref(), hosted, dev, &url, &key, &secret, local_fallback)
     }
 

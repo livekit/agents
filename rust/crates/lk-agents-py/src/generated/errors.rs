@@ -40,6 +40,12 @@ pub fn http_error_display(
     ::pyo3::PyResult::Ok(out)
 }
 
+impl crate::py_errors::HostException for ::lk_agents_abi::errors::Invalid {
+    fn to_py_err(&self) -> ::pyo3::PyErr {
+        ::pyo3::exceptions::PyValueError::new_err(::std::string::ToString::to_string(self))
+    }
+}
+
 impl crate::py_errors::HostException for ::lk_agents_abi::errors::ApiError {
     fn to_py_err(&self) -> ::pyo3::PyErr {
         let err = match self.kind {

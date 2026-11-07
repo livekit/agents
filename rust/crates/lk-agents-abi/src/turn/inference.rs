@@ -4,8 +4,8 @@
 
 use std::sync::Arc;
 
+use crate::errors::Invalid;
 use crate::errors::{HostError, ProviderError};
-use crate::inference::InvalidOption;
 use crate::metrics::base::EotInferenceMetrics;
 use crate::tokenize::language::{LanguageCode, ThresholdOverride, TurnDetectorModel};
 use crate::{ApiConnectOptions, AudioFrame, EotPrediction};
@@ -178,7 +178,7 @@ pub trait InterruptionDetector: Send + Sync + Sized + 'static {
         #[host(default = None)] api_secret: Option<String>,
         #[host(default = None)] conn_options: Option<ApiConnectOptions>,
         #[host(default = 600)] token_ttl_secs: u64,
-    ) -> Result<Self, InvalidOption>;
+    ) -> Result<Self, Invalid>;
 
     /// Shared with live streams, which reconnect to pick the options up.
     #[host(call)]

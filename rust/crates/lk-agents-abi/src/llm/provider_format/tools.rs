@@ -31,9 +31,10 @@ impl From<ToolFlag> for u8 {
 
 /// A bit this version does not know is refused, so a newer host's flag is not reinterpreted.
 impl TryFrom<u8> for ToolFlag {
-    type Error = String;
-    fn try_from(bits: u8) -> Result<ToolFlag, String> {
-        ToolFlag::from_bits(bits).ok_or_else(|| format!("unknown ToolFlag bits {bits}"))
+    type Error = crate::errors::Invalid;
+    fn try_from(bits: u8) -> Result<ToolFlag, crate::errors::Invalid> {
+        ToolFlag::from_bits(bits)
+            .ok_or_else(|| crate::errors::Invalid(format!("unknown ToolFlag bits {bits}")))
     }
 }
 

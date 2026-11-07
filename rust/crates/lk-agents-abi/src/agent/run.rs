@@ -8,6 +8,7 @@ use std::sync::Arc;
 use serde_json::Value;
 
 use super::{AgentCallbacks, AgentDefinition};
+use crate::errors::Invalid;
 use crate::utils::stream::StreamOutput;
 use crate::{ApiConnectOptions, ChatItem, HostRef, Llm};
 
@@ -230,12 +231,6 @@ pub enum RunUpdate {
     },
 }
 
-/// The definition or the request cannot run: what is wrong with it.
-#[crate::host(error(kind = "ValueError"))]
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("{0}")]
-pub struct InvalidRun(pub String);
-
 /// Runs invocations of one agent definition: each `run` streams its updates, then its settled
 /// result; closing the stream cancels the invocation, whose work still settles.
 #[crate::host(class(name = "AgentRunner"))]
@@ -259,11 +254,11 @@ pub trait AgentRunner: Send + Sync + Sized + 'static {
         definition: AgentDefinition,
         llm: Arc<dyn Llm>,
         host: Arc<dyn AgentCallbacks>,
-    ) -> Result<Self, InvalidRun>;
+    ) -> Result<Self, Invalid>;
 
     /// Starts one invocation; nothing runs until the first pull.
     #[host(call)]
-    fn run(&self, request: RunRequest) -> Result<Self::Updates, InvalidRun>;
+    fn run(&self, request: RunRequest) -> Result<Self::Updates, Invalid>;
 
     #[host(call)]
     fn run_stream(
@@ -271,20 +266,16 @@ pub trait AgentRunner: Send + Sync + Sized + 'static {
         request: RunRequest,
         stream: Arc<Self::Stream>,
         resources: Arc<Self::Resources>,
-    ) -> Result<(), InvalidRun>;
+    ) -> Result<(), Invalid>;
 
     /// The latest usage snapshot of invocation `invocation_id`; never advances it.
     #[host(call)]
-    fn usage(&self, invocation_id: &str) -> Result<crate::usage::Usage, InvalidRun>;
+    fn usage(&self, invocation_id: &str) -> Result<crate::usage::Usage, Invalid>;
 
     /// `ctx.update(message)` from the tool body running as host `operation` of invocation
     /// `invocation_id`: the run streams it as progress. Never waits; an update racing its call's
     /// end is dropped. Refused for an invocation this runner is not running.
     #[host(call)]
-    fn progress(
-        &self,
-        invocation_id: &str,
-        operation: u64,
-        message: String,
-    ) -> Result<(), InvalidRun>;
+    fn progress(&self, invocation_id: &str, operation: u64, message: String)
+    -> Result<(), Invalid>;
 }

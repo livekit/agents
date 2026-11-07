@@ -1,5 +1,6 @@
 //! Chat and tool-format exports; implementations live in their owning cores and runtime.
 use super::{SerializedImage, StrictError};
+use crate::errors::Invalid;
 use crate::llm::schema::SchemaError;
 use crate::{ChatItem, Role};
 use serde_json::{Map, Value};
@@ -20,7 +21,7 @@ pub trait LlmAlgorithms {
         #[host(default = true)] inject_dummy_user_message: bool,
         #[host(default = false)] inject_trailing_user_message: bool,
         #[host(default = None)] thought_signatures: Option<BTreeMap<String, Vec<u8>>>,
-    ) -> Result<(Vec<Value>, Value), LlmAlgorithmError>;
+    ) -> Result<(Vec<Value>, Value), Invalid>;
     #[host(function, pid = true)]
     fn convert_mid_conversation_instructions(
         items: Vec<ChatItem>,
@@ -33,7 +34,7 @@ pub trait LlmAlgorithms {
         tools: Vec<Value>,
         #[host(kw, default = None)] tool_behavior: Option<String>,
         #[host(default = false)] use_parameters_json_schema: bool,
-    ) -> Result<Vec<Value>, LlmAlgorithmError>;
+    ) -> Result<Vec<Value>, Invalid>;
     #[host(function)]
     fn to_strict_json_schema(
         schema: &Value,
@@ -64,12 +65,7 @@ pub trait LlmAlgorithms {
         schema: &Value,
     ) -> Result<Map<String, Value>, SchemaError>;
     #[host(function)]
-    fn parse_function_arguments(raw: &str) -> Result<Map<String, Value>, LlmAlgorithmError>;
+    fn parse_function_arguments(raw: &str) -> Result<Map<String, Value>, Invalid>;
     #[host(function)]
     fn inject_confirm_duplicate(parameters: &Value) -> Map<String, Value>;
 }
-
-#[crate::host(error(kind = "ValueError"))]
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("{0}")]
-pub struct LlmAlgorithmError(pub String);

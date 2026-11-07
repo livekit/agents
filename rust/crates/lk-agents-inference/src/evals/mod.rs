@@ -14,10 +14,10 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use futures_util::future::join_all;
-use lk_agents_abi::errors::ProviderError;
+use lk_agents_abi::errors::{Invalid, ProviderError};
 use lk_agents_abi::evals::{
     EvaluationHost, EvaluationResult, EvaluationScore, Evaluations, IntentFailure, IntentJudgment,
-    InvalidJudgment, JudgeOutcome, JudgeRunner, JudgeSpec, JudgeVerdict, Judgment,
+    JudgeOutcome, JudgeRunner, JudgeSpec, JudgeVerdict, Judgment,
 };
 use lk_agents_abi::usage::TokenUsage;
 use lk_agents_abi::utils::host_ref::HostRef;
@@ -73,13 +73,13 @@ impl JudgeRunner for Judges {
         reference: Option<Vec<ChatItem>>,
         context: CallContext,
         cx: telemetry::Cx,
-    ) -> Result<Vec<JudgeOutcome>, InvalidJudgment> {
+    ) -> Result<Vec<JudgeOutcome>, Invalid> {
         let judges = judges
             .into_iter()
             .map(|spec| match spec {
                 JudgeSpec::BuiltIn { name } => prompts::built_in(&name)
                     .map(Judge::BuiltIn)
-                    .ok_or_else(|| InvalidJudgment(format!("no built-in judge {name:?}"))),
+                    .ok_or_else(|| Invalid(format!("no built-in judge {name:?}"))),
                 JudgeSpec::Host { name, evaluator } => Ok(Judge::Host { name, evaluator }),
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -179,7 +179,9 @@ impl Judges {
         };
         let span = telemetry::start(cx, telemetry::JudgeEvaluation { name: name.clone() });
         let judged = match judge {
-            Judge::BuiltIn(judge) => self.built_in(span.cx(), judge, chat_ctx, reference).await,
+            Judge::BuiltIn(judge) => {
+                self.built_in(span.cx(), judge, chat_ctx, reference).await.map_err(|e| e.0)
+            }
             Judge::Host { evaluator, .. } => {
                 self.host.evaluate(span.cx(), evaluator, context).await.map_err(|e| e.message)
             }
@@ -216,15 +218,15 @@ impl Judges {
         judge: &BuiltIn,
         chat_ctx: &[ChatItem],
         reference: Option<&[ChatItem]>,
-    ) -> Result<Judgment, String> {
+    ) -> Result<Judgment, Invalid> {
         if let Some(judgment) = judge.without_model(chat_ctx) {
             return Ok(judgment);
         }
         let llm = self.llm.as_ref().ok_or_else(|| {
-            format!(
+            Invalid(format!(
                 "No LLM provided for judge '{}'. Pass llm to JudgeGroup or to the judge constructor.",
                 judge.name
-            )
+            ))
         })?;
         let prompt = judge.prompt(chat_ctx, reference);
         let (arguments, _) = self
@@ -237,10 +239,12 @@ impl Judges {
                 JUDGE_CONN_OPTIONS,
             )
             .await
-            .map_err(|e| e.to_string())?;
-        let arguments = arguments.ok_or("LLM did not return verdict arguments")?;
-        let (verdict, reasoning) = prompts::parse_verdict(&arguments)
-            .map_err(|reason| format!("submit_verdict returned unusable arguments: {reason}"))?;
+            .map_err(|e| Invalid(e.to_string()))?;
+        let arguments =
+            arguments.ok_or_else(|| Invalid("LLM did not return verdict arguments".into()))?;
+        let (verdict, reasoning) = prompts::parse_verdict(&arguments).map_err(|reason| {
+            Invalid(format!("submit_verdict returned unusable arguments: {reason}"))
+        })?;
         Ok(Judgment { verdict, reasoning, instructions: judge.criteria.to_owned() })
     }
 
