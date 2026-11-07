@@ -5,7 +5,7 @@
 //! (`lk_agents_runtime::a2a`) runs the policies against storage and drives the host's handler.
 //!
 //! [`TurnHost::handle`] runs the handler to its [`HandlerOutput`], reporting progress, tokens and
-//! checkpoints as it goes; each checkpoint is answered with a [`Verdict`]. A turn yields at a
+//! checkpoints as it goes; each checkpoint is answered whether it should yield. A turn yields at a
 //! checkpoint once a newer message waits under `interrupt` or a client canceled its task.
 
 use lk_agents_abi::a2a_protocol as a2a;
@@ -41,7 +41,7 @@ pub use outcome::*;
 pub use policy::*;
 
 pub use lk_agents_abi::a2a::options::{Policy, TurnOptions};
-pub use lk_agents_abi::a2a::turn::{PendingCall, TurnEvent, TurnHost, Verdict};
+pub use lk_agents_abi::a2a::turn::{PendingCall, TurnEvent, TurnHost};
 use lk_agents_abi::storage::journal::ToolExecution;
 
 /// One incoming A2A message, as the handler sees it in `ctx.messages`.

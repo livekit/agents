@@ -2,7 +2,6 @@
 
 use super::{AgentRun, AgentRunEffect, CheckpointId, Phase, Purpose, RunError, RunResult};
 use lk_agents_abi::Ts;
-use lk_agents_abi::a2a::turn::Verdict;
 
 pub(super) struct Pending {
     pub(super) id: CheckpointId,
@@ -48,7 +47,7 @@ impl AgentRun {
     pub(super) fn checkpoint_done(
         &mut self,
         checkpoint: CheckpointId,
-        result: Result<Verdict, lk_agents_abi::errors::HostError>,
+        should_yield: Result<bool, lk_agents_abi::errors::HostError>,
         tools: Option<Vec<lk_agents_abi::agent::FunctionToolInfo>>,
         now: Ts,
         effects: &mut Vec<AgentRunEffect>,
@@ -59,15 +58,13 @@ impl AgentRun {
         let Phase::Checkpoint(pending) = std::mem::replace(&mut self.phase, Phase::Idle) else {
             unreachable!()
         };
-        match (result, pending.next) {
-            (Ok(Verdict::Continue), Next::Request { purpose, dynamic }) => {
-                match self.replace_tools(tools) {
-                    Ok(()) => self.start_request(purpose, dynamic, now, effects),
-                    Err(error) => self.finish_now(Err(error), effects),
-                }
-            }
-            (Ok(Verdict::Continue), Next::Finish(result)) => self.finish_now(Ok(*result), effects),
-            (Ok(Verdict::Yield), _) => self.complete_interrupted(effects),
+        match (should_yield, pending.next) {
+            (Ok(false), Next::Request { purpose, dynamic }) => match self.replace_tools(tools) {
+                Ok(()) => self.start_request(purpose, dynamic, now, effects),
+                Err(error) => self.finish_now(Err(error), effects),
+            },
+            (Ok(false), Next::Finish(result)) => self.finish_now(Ok(*result), effects),
+            (Ok(true), _) => self.complete_interrupted(effects),
             (Err(error), _) => self.finish_now(Err(RunError::Host(error.to_string())), effects),
         }
     }

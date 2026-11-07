@@ -24,7 +24,7 @@ use lk_agents_abi::storage::thread::{
 use serde_json::Value;
 
 use crate::a2a::{
-    HandlerOutput, HistoryEdit, Message, Policy, TaskTransition, TurnOptions, TurnResult, Verdict,
+    HandlerOutput, HistoryEdit, Message, Policy, TaskTransition, TurnOptions, TurnResult,
     failed_message, python_reason, resolve_debounce, resolve_policy, result_for,
     unpersisted_failed,
 };
@@ -86,9 +86,9 @@ pub enum Operation {
     Stage(Box<Stage>),
     /// Opens the handler's turn over the open run.
     Handle(Box<Handle>),
-    /// Answers the handler's last checkpoint with the verdict, when it asked, then reads its
-    /// next checkpoint or its output.
-    Next(Option<Verdict>),
+    /// Answers the handler's last checkpoint with whether it should yield, when it asked, then
+    /// reads its next checkpoint or its output.
+    Next(Option<bool>),
     /// What a checkpoint reads for each of the message's tasks (the answer, the receipt): the
     /// lane's waiter mark and the task's status.
     Checkpoint(Vec<String>),

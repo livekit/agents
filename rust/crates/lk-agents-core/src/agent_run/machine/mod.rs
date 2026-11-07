@@ -104,7 +104,8 @@ pub enum AgentRunEvent {
     Start,
     HostCheckpointDone {
         checkpoint: CheckpointId,
-        result: Result<lk_agents_abi::a2a::turn::Verdict, HostError>,
+        /// Whether the run yields at the checkpoint.
+        should_yield: Result<bool, HostError>,
         tools: Option<Vec<lk_agents_abi::agent::FunctionToolInfo>>,
     },
     InstructionsRendered {
@@ -393,8 +394,8 @@ impl AgentRun {
             event if matches!(self.phase, Phase::Aborting { .. } | Phase::Done) => {
                 self.settle_owed(event, &mut fx)
             }
-            AgentRunEvent::HostCheckpointDone { checkpoint, result, tools } => {
-                self.checkpoint_done(checkpoint, result, tools, now, &mut fx)
+            AgentRunEvent::HostCheckpointDone { checkpoint, should_yield, tools } => {
+                self.checkpoint_done(checkpoint, should_yield, tools, now, &mut fx)
             }
             AgentRunEvent::InstructionsRendered { render, result } => match self.phase {
                 Phase::Rendering(r) if r == render => match result {

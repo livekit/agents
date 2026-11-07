@@ -13,9 +13,10 @@ mod checkpoints {
     //! Yielding a child preserves its originating parent call and active frame.
 
     use super::*;
-    use lk_agents_abi::a2a::turn::Verdict;
+    const CONTINUE: bool = false;
+    const YIELD: bool = true;
 
-    fn verdict(driver: &mut Driver, verdict: Verdict) {
+    fn verdict(driver: &mut Driver, should_yield: bool) {
         let checkpoint = driver
             .effects
             .iter()
@@ -30,7 +31,7 @@ mod checkpoints {
             .expect("the active frame awaits a checkpoint");
         driver.run(agent_run::AgentRunEvent::HostCheckpointDone {
             checkpoint,
-            result: Ok(verdict),
+            should_yield: Ok(should_yield),
             tools: None,
         });
     }
@@ -45,10 +46,10 @@ mod checkpoints {
             auto_release: true,
         };
         driver.send(TextSessionEvent::Start(message("human", Role::User, "Book a room")));
-        verdict(&mut driver, Verdict::Continue);
+        verdict(&mut driver, CONTINUE);
         driver.reply("", &[("book", json!({"nights": 2}))]);
         driver.prepare(json!({"nights": 2}));
-        verdict(&mut driver, Verdict::Yield);
+        verdict(&mut driver, YIELD);
 
         let turn = driver.turn();
         assert!(turn.result.interrupted);

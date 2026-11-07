@@ -21,9 +21,7 @@ use lk_agents_abi::storage::thread::{
 };
 use lk_agents_abi::storage::{Ask, StorageError, TaskState};
 
-use crate::a2a::{
-    HandlerOutput, INTERRUPTION_NEW_MESSAGE, Message, TurnResult, Verdict, chat_message,
-};
+use crate::a2a::{HandlerOutput, INTERRUPTION_NEW_MESSAGE, Message, TurnResult, chat_message};
 
 /// One microsecond, in Unix seconds: how far apart items made in the same instant are ordered.
 pub(crate) const ITEM_ORDER_STEP: f64 = 1e-6;
@@ -46,10 +44,14 @@ pub enum Stop {
 }
 
 /// A checkpoint's decision from what the lane holds: another holder waiting for the lane stops
-/// the turn when `on_waiter` yields (under `interrupt`); a client's cancel of the message's task
-/// stops it under every policy.
-pub fn checkpoint_stop(on_waiter: Verdict, other_waiting: bool, canceled: bool) -> Option<Stop> {
-    if on_waiter == Verdict::Yield && other_waiting {
+/// the turn when it `yields_to_waiter` (under `interrupt`); a client's cancel of the message's
+/// task stops it under every policy.
+pub fn checkpoint_stop(
+    yields_to_waiter: bool,
+    other_waiting: bool,
+    canceled: bool,
+) -> Option<Stop> {
+    if yields_to_waiter && other_waiting {
         Some(Stop::Interrupted)
     } else if canceled {
         Some(Stop::ClientCanceled)
@@ -661,10 +663,10 @@ mod tests {
     #[test]
     fn a_checkpoint_yields_to_a_waiter_under_interrupt_and_to_a_client_cancel_always() {
         let stop = checkpoint_stop;
-        assert_eq!(stop(Verdict::Yield, true, false), Some(Stop::Interrupted));
-        assert_eq!(stop(Verdict::Continue, true, false), None, "queue does not yield to a waiter");
-        assert_eq!(stop(Verdict::Continue, false, true), Some(Stop::ClientCanceled));
-        assert_eq!(stop(Verdict::Yield, false, false), None);
+        assert_eq!(stop(true, true, false), Some(Stop::Interrupted));
+        assert_eq!(stop(false, true, false), None, "queue does not yield to a waiter");
+        assert_eq!(stop(false, false, true), Some(Stop::ClientCanceled));
+        assert_eq!(stop(true, false, false), None);
     }
 
     /// docs/server.md#handler-outcomes: a handler's `Rejected` and `Working` set those task

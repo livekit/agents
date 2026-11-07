@@ -4,7 +4,7 @@
 //! progress and tokens for room in the queue. The turn reads the queue in report order and
 //! sees the handler's output only once every report it awaited before returning was read.
 
-use lk_agents_abi::a2a::turn::{HandlerOutput, HandlerPort, TurnEvent, TurnHost, Verdict};
+use lk_agents_abi::a2a::turn::{HandlerOutput, HandlerPort, TurnEvent, TurnHost};
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::{BoxFuture, Clock, Ts};
 use lk_agents_net::task::Cancellation;
@@ -94,9 +94,9 @@ impl Handler {
     }
 
     /// Answers the checkpoint the handler waits at, if any.
-    pub fn answer(&mut self, verdict: Verdict) {
+    pub fn answer(&mut self, should_yield: bool) {
         if let Some(pending) = self.pending.take() {
-            let _ = pending.send(verdict == Verdict::Yield);
+            let _ = pending.send(should_yield);
         }
     }
 
@@ -231,7 +231,7 @@ mod tests {
         let token = TurnEvent::Token { task_id: "task".into(), delta: "reply".into() };
         assert!(matches!(handler.next().await, Some(Read::Event(e)) if e == token));
         assert!(matches!(handler.next().await, Some(Read::Checkpoint)));
-        handler.answer(Verdict::Yield);
+        handler.answer(true);
         assert!(matches!(handler.next().await, Some(Read::Event(e)) if e == progress("after")));
         assert!(
             matches!(handler.next().await, Some(Read::Output(out)) if matches!(*out, Ok(ref out) if out.interrupted))

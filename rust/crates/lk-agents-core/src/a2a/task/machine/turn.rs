@@ -14,8 +14,8 @@ use super::{
     RunStep, Stage, TASKS_IN_CONTEXT, TaskMachine,
 };
 use crate::a2a::{
-    HandlerOutput, Message, Policy, Settle, Stop, TurnIds, Verdict, answer_pending,
-    batch_to_chat_message, checkpoint_stop, settle,
+    HandlerOutput, Message, Policy, Settle, Stop, TurnIds, answer_pending, batch_to_chat_message,
+    checkpoint_stop, settle,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -41,8 +41,8 @@ pub(super) struct Turning {
     task_ids: Vec<String>,
     /// A batch inbox's drain, under the runner's kept lease.
     pub(super) drain: bool,
-    /// A checkpoint's answer while another holder waits for the lane: `Yield` under `interrupt`.
-    on_waiter: Verdict,
+    /// A checkpoint yields while another holder waits for the lane: under `interrupt`.
+    yields_to_waiter: bool,
     /// Unix seconds: after everything the run loaded.
     at: f64,
     answer_task: String,
@@ -77,11 +77,7 @@ impl TaskMachine {
             batch,
             task_ids,
             drain,
-            on_waiter: if !drain && self.policy == Policy::Interrupt {
-                Verdict::Yield
-            } else {
-                Verdict::Continue
-            },
+            yields_to_waiter: !drain && self.policy == Policy::Interrupt,
             at,
             answer_task,
             answer_tool: None,
@@ -122,7 +118,7 @@ impl TaskMachine {
             }
             (Step::Next, Completion::Event(HandlerEvent::Checkpoint)) => {
                 if self.turning().stop.is_some() {
-                    Operation::Next(Some(Verdict::Yield))
+                    Operation::Next(Some(true))
                 } else {
                     let turn = self.turning();
                     let answer = turn.answer_task.clone();
@@ -139,10 +135,10 @@ impl TaskMachine {
                 });
                 let canceled = rows.iter().any(|(_, status)| *status == Some(TaskState::Canceled));
                 let turn = self.turning();
-                turn.stop = checkpoint_stop(turn.on_waiter, other_waiting, canceled);
-                let verdict = if turn.stop.is_some() { Verdict::Yield } else { Verdict::Continue };
+                turn.stop = checkpoint_stop(turn.yields_to_waiter, other_waiting, canceled);
+                let should_yield = turn.stop.is_some();
                 self.phase = Phase::Turn(Step::Next);
-                Operation::Next(Some(verdict))
+                Operation::Next(Some(should_yield))
             }
             (Step::Next, Completion::Event(HandlerEvent::Output(output))) => {
                 let turn = self.turning();

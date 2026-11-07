@@ -731,7 +731,8 @@ mod checkpoints {
     //! Managed checkpoints settle before model admission and accepted answer delivery.
 
     use super::*;
-    use lk_agents_abi::a2a::turn::Verdict;
+    const CONTINUE: bool = false;
+    const YIELD: bool = true;
 
     fn managed(tools: Vec<FunctionToolInfo>) -> Driver {
         let input = input(Opening::Message(Box::new(user("message", "Find a room"))), Vec::new());
@@ -750,10 +751,10 @@ mod checkpoints {
             .expect("a managed checkpoint")
     }
 
-    fn verdict(driver: &mut Driver, verdict: Verdict) -> Vec<AgentRunEffect> {
+    fn verdict(driver: &mut Driver, should_yield: bool) -> Vec<AgentRunEffect> {
         driver.send(AgentRunEvent::HostCheckpointDone {
             checkpoint: checkpoint(driver),
-            result: Ok(verdict),
+            should_yield: Ok(should_yield),
             tools: None,
         })
     }
@@ -767,17 +768,17 @@ mod checkpoints {
             driver
                 .send(AgentRunEvent::HostCheckpointDone {
                     checkpoint: CheckpointId(first.0 + 1),
-                    result: Ok(Verdict::Continue),
+                    should_yield: Ok(CONTINUE),
                     tools: None,
                 })
                 .is_empty(),
             "a stale verdict cannot launch a request"
         );
-        verdict(&mut driver, Verdict::Continue);
+        verdict(&mut driver, CONTINUE);
         driver.reply("", &[("lookup", json!({"room":"suite"}))]);
         driver.run_tools(|_| value("suite found"));
         assert_eq!(driver.requests(), 1, "the next model still waits for admission");
-        let effects = verdict(&mut driver, Verdict::Yield);
+        let effects = verdict(&mut driver, YIELD);
         let result = driver.result();
         assert!(result.interrupted);
         assert_eq!(result.usage.requests, 1);
@@ -796,19 +797,19 @@ mod checkpoints {
     #[test]
     fn the_accepted_result_waits_for_its_delivery_verdict() {
         let mut driver = managed(Vec::new());
-        verdict(&mut driver, Verdict::Continue);
+        verdict(&mut driver, CONTINUE);
         driver.reply("the answer", &[]);
         assert!(driver.finished().is_none());
-        verdict(&mut driver, Verdict::Yield);
+        verdict(&mut driver, YIELD);
         assert!(driver.result().interrupted);
         assert!(driver.result().new_messages.iter().any(|item| matches!(item,
             ChatItem::Message(message) if message.raw_text_content().as_deref() == Some("the answer")
         )));
 
         let mut continued = managed(Vec::new());
-        verdict(&mut continued, Verdict::Continue);
+        verdict(&mut continued, CONTINUE);
         continued.reply("the accepted answer", &[]);
-        verdict(&mut continued, Verdict::Continue);
+        verdict(&mut continued, CONTINUE);
         assert!(!continued.result().interrupted);
         assert_eq!(
             continued.result().outcome,
@@ -823,14 +824,14 @@ mod checkpoints {
         let effects = driver.send(AgentRunEvent::Cancel);
         assert!(effects.contains(&AgentRunEffect::HostCheckpointCancel { checkpoint: pending }));
         assert!(driver.finished().is_none());
-        verdict(&mut driver, Verdict::Continue);
+        verdict(&mut driver, CONTINUE);
         assert!(matches!(driver.finished(), Some(Err(RunError::Cancelled))));
         assert_eq!(driver.requests(), 0);
         assert!(
             driver
                 .send(AgentRunEvent::HostCheckpointDone {
                     checkpoint: pending,
-                    result: Ok(Verdict::Continue),
+                    should_yield: Ok(CONTINUE),
                     tools: None
                 })
                 .is_empty()
@@ -840,22 +841,22 @@ mod checkpoints {
     #[test]
     fn discovered_tools_replace_the_previous_steps_tools_before_request_and_execution() {
         let mut driver = managed(vec![string_tool("search", "query")]);
-        verdict(&mut driver, Verdict::Continue);
+        verdict(&mut driver, CONTINUE);
         driver.reply("", &[("search", json!({"query":"room"}))]);
         driver.run_tools(|_| value("found book"));
         let pending = checkpoint(&driver);
         driver.send(AgentRunEvent::HostCheckpointDone {
             checkpoint: pending,
-            result: Ok(Verdict::Continue),
+            should_yield: Ok(CONTINUE),
             tools: Some(vec![string_tool("book", "room")]),
         });
         let (_, _, offered) = driver.request();
         assert_eq!(offered.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["book"]);
         driver.reply("", &[("book", json!({"room":"suite"}))]);
         driver.run_tools(|_| value("booked"));
-        verdict(&mut driver, Verdict::Continue);
+        verdict(&mut driver, CONTINUE);
         driver.reply("Reserved.", &[]);
-        verdict(&mut driver, Verdict::Continue);
+        verdict(&mut driver, CONTINUE);
         assert!(driver.result().new_messages.iter().any(|item| matches!(item,
             ChatItem::FunctionCallOutput(output) if output.output == "booked" && !output.is_error
         )));
@@ -867,7 +868,7 @@ mod checkpoints {
         let tool = string_tool("book", "room");
         driver.send(AgentRunEvent::HostCheckpointDone {
             checkpoint: checkpoint(&driver),
-            result: Ok(Verdict::Continue),
+            should_yield: Ok(CONTINUE),
             tools: Some(vec![tool.clone(), tool]),
         });
         assert_eq!(driver.requests(), 0);

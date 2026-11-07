@@ -79,13 +79,6 @@ pub struct TurnResult {
     pub run_id: Option<String>,
 }
 
-/// The turn's answer to a checkpoint the handler reached.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Verdict {
-    Continue,
-    Yield,
-}
-
 /// What a handler reports while it runs, for the turn's response stream.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TurnEvent {

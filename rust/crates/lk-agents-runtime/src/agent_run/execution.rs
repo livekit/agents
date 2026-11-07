@@ -3,7 +3,6 @@
 use super::*;
 use crate::host::HostInvoker;
 use crate::telemetry;
-use lk_agents_abi::a2a::turn::Verdict;
 use lk_agents_abi::agent::run::{RunInputRequirement, RunOutcome, RunResult};
 use lk_agents_abi::agent::{FunctionToolInfo, OutputCandidate, ToolArgumentError, ToolTemplate};
 use lk_agents_abi::errors::{ApiError, HostError};
@@ -188,8 +187,8 @@ impl Execution {
         let host = self.setup.host.clone();
         let cx = self.cx.clone();
         self.invoke(Work::Checkpoint(checkpoint), None, None, move |inv, events| async move {
-            let (result, tools) = checkpoint_host(host.as_ref(), &cx, &inv, list_tools).await;
-            let event = AgentRunEvent::HostCheckpointDone { checkpoint, result, tools };
+            let (should_yield, tools) = checkpoint_host(host.as_ref(), &cx, &inv, list_tools).await;
+            let event = AgentRunEvent::HostCheckpointDone { checkpoint, should_yield, tools };
             let _ = events.send(Report::Core(event)).await;
         });
     }
@@ -427,17 +426,16 @@ async fn checkpoint_host(
     cx: &telemetry::Cx,
     inv: &Invocation,
     list_tools: bool,
-) -> (Result<Verdict, HostError>, Option<Vec<FunctionToolInfo>>) {
-    let verdict = match host.checkpoint(cx, inv).await {
-        Ok(true) => Verdict::Yield,
-        Ok(false) => Verdict::Continue,
+) -> (Result<bool, HostError>, Option<Vec<FunctionToolInfo>>) {
+    let should_yield = match host.checkpoint(cx, inv).await {
+        Ok(should_yield) => should_yield,
         Err(error) => return (Err(error), None),
     };
-    if !list_tools || verdict == Verdict::Yield {
-        return (Ok(verdict), None);
+    if !list_tools || should_yield {
+        return (Ok(should_yield), None);
     }
     match host.list_tools(cx, inv).await {
-        Ok(tools) => (Ok(verdict), Some(tools)),
+        Ok(tools) => (Ok(should_yield), Some(tools)),
         Err(error) => (Err(error), None),
     }
 }

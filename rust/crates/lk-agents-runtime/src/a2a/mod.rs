@@ -17,7 +17,7 @@ use lk_agents_core::a2a::task::{
     RunEnd, Stage, TaskMachine, rejected_commit,
 };
 use lk_agents_core::a2a::{
-    HandlerOutput, Message, Policy, TurnContext, TurnHost, TurnOptions, TurnResult, Verdict,
+    HandlerOutput, Message, Policy, TurnContext, TurnHost, TurnOptions, TurnResult,
     caller_history_of, host_error, resolve_policy,
 };
 use lk_agents_net::env::ProcessEnv;
@@ -282,8 +282,8 @@ impl Turn {
             }
             Operation::Stage(staged) => call.stage(*staged).await?,
             Operation::Handle(handle) => self.open_handler(call, *handle).await?,
-            Operation::Next(verdict) => {
-                let event = self.next_event(call, verdict).await?;
+            Operation::Next(should_yield) => {
+                let event = self.next_event(call, should_yield).await?;
                 if !matches!(event, HandlerEvent::Checkpoint) {
                     self.close_handler(call).await;
                 }
@@ -439,14 +439,14 @@ impl Turn {
     async fn next_event(
         &self,
         call: &mut Call,
-        verdict: Option<Verdict>,
+        should_yield: Option<bool>,
     ) -> Result<HandlerEvent, StorageError> {
         let lease = call.run.as_ref().and_then(Run::lease).cloned();
         let handler = call
             .handler
             .as_mut()
             .ok_or_else(|| StorageError::Invalid("no A2A handler is open".into()))?;
-        let read = self.read_handler_event(handler, lease.as_ref(), verdict);
+        let read = self.read_handler_event(handler, lease.as_ref(), should_yield);
         match &lease {
             Some(lease) => tokio::select! {
                 biased;
@@ -463,13 +463,13 @@ impl Turn {
         &self,
         handler: &mut Handler,
         lease: Option<&Lease>,
-        verdict: Option<Verdict>,
+        should_yield: Option<bool>,
     ) -> Result<HandlerEvent, StorageError> {
         if let Some(lease) = lease {
             lease.check()?;
         }
-        if let Some(verdict) = verdict {
-            handler.answer(verdict);
+        if let Some(should_yield) = should_yield {
+            handler.answer(should_yield);
         }
         loop {
             let read = handler.next().await;
@@ -633,7 +633,7 @@ mod lease_tests {
             handler: Some(handler),
             caller_history: None,
         };
-        let result = turn.next_event(&mut call, Some(Verdict::Continue)).await;
+        let result = turn.next_event(&mut call, Some(false)).await;
         assert!(matches!(result, Err(StorageError::LeaseLost(_))));
         assert_eq!(
             probe.0.load(Ordering::Relaxed),
