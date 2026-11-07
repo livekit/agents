@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -25,6 +26,7 @@ import pytest
 from livekit.agents import APIConnectionError, APIStatusError
 from livekit.agents.language import LanguageCode
 from livekit.agents.stt import SpeechData, SpeechEventType
+from livekit.agents.types import TimedString
 
 pytestmark = pytest.mark.plugin("soniox")
 
@@ -1132,3 +1134,549 @@ async def test_internal_reconnect_reanchors_audio_clock(monkeypatch):
     finally:
         await stream.aclose()
         await provider.aclose()
+
+
+@pytest.mark.parametrize(
+    ("agent_text_input", "echo_cancellation", "requested"),
+    [(False, False, False), (True, False, True), (False, True, True)],
+)
+async def test_agent_text_input_websocket_config(
+    agent_text_input: bool, echo_cancellation: bool, requested: bool
+):
+    from livekit.plugins.soniox import STTOptions
+
+    stream = _make_stream()
+    stream._stt._params = STTOptions(
+        enable_agent_text_input=agent_text_input, enable_echo_cancellation=echo_cancellation
+    )
+    ws = MagicMock(spec=aiohttp.ClientWebSocketResponse)
+    ws.send_str = AsyncMock()
+    session = MagicMock(spec=aiohttp.ClientSession)
+    session.ws_connect = AsyncMock(return_value=ws)
+    stream._stt._http_session = session
+
+    await stream._connect_ws()
+
+    config = json.loads(ws.send_str.call_args.args[0])
+    assert ("enable_agent_text_input" in config) is requested
+
+
+def test_agent_text_input_advertises_chat_context():
+    from livekit.plugins.soniox import STT, STTOptions
+
+    assert not STT(api_key="test-key").capabilities.chat_context
+    stt_instance = STT(api_key="test-key", params=STTOptions(enable_agent_text_input=True))
+    assert stt_instance.capabilities.chat_context
+    # with echo cancellation each reply is already sent while it plays
+    stt_instance = STT(
+        api_key="test-key",
+        params=STTOptions(enable_agent_text_input=True, enable_echo_cancellation=True),
+    )
+    assert not stt_instance.capabilities.chat_context
+
+
+async def test_assistant_reply_is_queued_as_agent_text():
+    from livekit.agents.llm import ChatMessage
+    from livekit.agents.voice.events import ConversationItemAddedEvent
+    from livekit.plugins.soniox import STT, STTOptions
+
+    stt_instance = STT(api_key="test-key", params=STTOptions(enable_agent_text_input=True))
+
+    def _fake_create_task(coro, *args, **kwargs):
+        coro.close()
+        return MagicMock()
+
+    with patch("livekit.agents.stt.stt.asyncio.create_task", side_effect=_fake_create_task):
+        stream = stt_instance.stream()
+
+    stt_instance._push_conversation_item(
+        ConversationItemAddedEvent(item=ChatMessage(role="user", content=["lecadol please"]))
+    )
+    stt_instance._push_conversation_item(
+        ConversationItemAddedEvent(
+            item=ChatMessage(role="assistant", content=["Sure, Lekadol 500 mg."])
+        )
+    )
+
+    assert stream.audio_queue.qsize() == 1
+    assert {"type": "agent_text", **stream.audio_queue.get_nowait()._asdict()} == {
+        "type": "agent_text",
+        "text": "Sure, Lekadol 500 mg.",
+        "end_of_segment": True,
+    }
+
+
+async def test_agent_text_output_sends_played_text_and_ends_the_segment_when_playback_ends():
+    from livekit.plugins.soniox import STT, STTOptions
+
+    stt_instance = STT(api_key="test-key", params=STTOptions(enable_echo_cancellation=True))
+
+    def _fake_create_task(coro, *args, **kwargs):
+        coro.close()
+        return MagicMock()
+
+    with patch("livekit.agents.stt.stt.asyncio.create_task", side_effect=_fake_create_task):
+        stream = stt_instance.stream()
+
+    from .fake_io import FakeAudioOutput, FakeTextOutput
+
+    next_in_chain = FakeTextOutput()
+    output = stt_instance.agent_text_output(FakeAudioOutput(), next_in_chain=next_in_chain)
+
+    output.flush()  # nothing played yet, so no segment to end
+    await output.capture_text("Hello ")
+    await output.capture_text("there.")
+    output.flush()
+    _played_out(output, position=1.0)
+
+    sent = _sent(stream)
+    assert sent == [
+        {"type": "agent_text", "text": "Hello ", "end_of_segment": False},
+        {"type": "agent_text", "text": "there.", "end_of_segment": False},
+        {"type": "agent_text", "text": "", "end_of_segment": True},
+    ]
+    assert "".join(message["text"] for message in sent) == "Hello there."
+    assert next_in_chain._messages == ["", "Hello there."]
+
+
+async def test_agent_text_output_sends_only_what_the_voice_says():
+    from livekit.plugins.soniox import STT, STTOptions
+
+    stt_instance = STT(api_key="test-key", params=STTOptions(enable_echo_cancellation=True))
+
+    def _fake_create_task(coro, *args, **kwargs):
+        coro.close()
+        return MagicMock()
+
+    with patch("livekit.agents.stt.stt.asyncio.create_task", side_effect=_fake_create_task):
+        stream = stt_instance.stream()
+
+    from .fake_io import FakeAudioOutput
+
+    output = stt_instance.agent_text_output(FakeAudioOutput())
+
+    # A bracket cue is performed, not said, and can be split across chunks;
+    # Soniox TTS reads XML aloud, so that is sent.
+    for chunk in ["Right. [clears ", "throat] <emphasis>Anyway</emphasis>."]:
+        await output.capture_text(chunk)
+    output.flush()
+    _played_out(output, position=1.0)
+
+    sent = _sent(stream)
+    assert "".join(message["text"] for message in sent) == "Right. <emphasis>Anyway</emphasis>."
+    assert sent[-1]["end_of_segment"] is True
+
+
+def _agent_text_output(lead_ms: int = 700, transform=None):
+    """An agent text output with one Soniox stream behind it, and its audio output."""
+    from livekit.plugins.soniox import STT, STTOptions
+
+    from .fake_io import FakeAudioOutput
+
+    stt_instance = STT(
+        api_key="test-key",
+        params=STTOptions(enable_echo_cancellation=True, agent_text_lead_ms=lead_ms),
+    )
+
+    def _fake_create_task(coro, *args, **kwargs):
+        coro.close()
+        return MagicMock()
+
+    with patch("livekit.agents.stt.stt.asyncio.create_task", side_effect=_fake_create_task):
+        stream = stt_instance.stream()
+
+    audio_output = FakeAudioOutput()
+    kwargs = {"transform": transform} if transform else {}
+    return stt_instance.agent_text_output(audio_output, **kwargs), stream, audio_output
+
+
+def _heard(audio_output, seconds: float, *, offset: float = 0.0) -> None:
+    """Report a run of played audio, as the audio output does once it cannot be discarded.
+
+    `offset` is where the run starts in the reply, which the room output sets to
+    the end of the run before it; `seconds` is how long this run lasted.
+    """
+    audio_output.on_playback_progressed(
+        started_at=time.time() - seconds, offset=offset, duration=seconds
+    )
+
+
+def _played_out(output, *, position: float, interrupted: bool = False) -> None:
+    """Report that the reply's playback finished at `position`, as the audio output does."""
+    from livekit.agents.voice.io import PlaybackFinishedEvent
+
+    output._audio_output.emit(
+        "playback_finished",
+        PlaybackFinishedEvent(playback_position=position, interrupted=interrupted),
+    )
+
+
+def _sent(stream) -> list[dict[str, Any]]:
+    return [
+        {"type": "agent_text", **stream.audio_queue.get_nowait()._asdict()}
+        for _ in range(stream.audio_queue.qsize())
+    ]
+
+
+async def test_agent_text_is_held_until_the_lead_before_it_is_heard() -> None:
+    output, stream, audio_output = _agent_text_output(lead_ms=700)
+
+    _heard(audio_output, 0.1)
+    # Spoken at 1.5s, so with a 0.7s lead it is not due at 0.1s.
+    await output.capture_text(TimedString("later ", start_time=1.5, end_time=1.8))
+    assert _sent(stream) == []
+
+    _heard(audio_output, 0.9)
+    output._send_due()
+
+    assert [message["text"] for message in _sent(stream)] == ["later "]
+
+
+@pytest.mark.virtual_time
+async def test_agent_text_goes_out_early_when_playback_turns_out_to_be_ahead() -> None:
+    output, stream, audio_output = _agent_text_output(lead_ms=700)
+    _heard(audio_output, 0.0)
+
+    # Spoken at 1.5s, so on the estimate at hand it is 0.8s away.
+    await output.capture_text(TimedString("later ", start_time=1.5, end_time=1.8))
+    assert _sent(stream) == []
+
+    await asyncio.sleep(0.05)
+    # The audio output reports a run: a whole second has played, which it only
+    # says once the audio cannot be discarded, so the word is due right now.
+    _heard(audio_output, 1.0)
+    await asyncio.sleep(0.05)
+
+    # Waiting out the original 0.8s would put it after the caller heard it.
+    assert [message["text"] for message in _sent(stream)] == ["later "]
+
+
+@pytest.mark.virtual_time
+async def test_agent_text_waits_for_the_word_itself_not_for_a_fixed_interval() -> None:
+    output, stream, audio_output = _agent_text_output(lead_ms=0)
+    _heard(audio_output, 0.0)
+
+    # Due at 0.22s, which no multiple of a 50ms interval lands on: polling would
+    # hold it until 0.25s, while waiting for the word itself sends it at 0.22s.
+    await output.capture_text(TimedString("soon ", start_time=0.22, end_time=0.4))
+    assert _sent(stream) == []
+
+    await asyncio.sleep(0.23)
+
+    assert [message["text"] for message in _sent(stream)] == ["soon "]
+
+
+async def test_agent_text_sends_a_script_without_spaces_as_it_was_spoken() -> None:
+    output, stream, _ = _agent_text_output(lead_ms=0)
+
+    # Japanese, one word per character, with the whitespace piece a dropped tag
+    # would leave between two of them.
+    for word in ["今", "日", " ", "は"]:
+        await output.capture_text(TimedString(word, start_time=0.0, end_time=0.1))
+
+    # Soniox joins the pieces exactly as sent, so nothing may be added between
+    # characters of a script that has no spaces, and the lone space rides with
+    # the character that follows it.
+    assert [message["text"] for message in _sent(stream)] == ["今", "日", " は"]
+
+
+async def test_agent_text_counts_a_run_from_where_the_one_before_it_ended() -> None:
+    output, stream, audio_output = _agent_text_output(lead_ms=0)
+
+    # A second run of played audio: the output reports where it starts in the
+    # reply, not from zero, so 2.0s had already played before this run's 0.5s.
+    _heard(audio_output, 0.5, offset=2.0)
+    await output.capture_text(TimedString("heard ", start_time=2.4, end_time=2.6))
+    await output.capture_text(TimedString("later", start_time=9.0, end_time=9.2))
+
+    # Reading the run's own duration as the position would place playback at
+    # 0.5s and hold back a word the caller has already heard.
+    assert [message["text"] for message in _sent(stream)] == ["heard "]
+
+    output.on_detached()
+
+
+async def test_agent_text_drops_the_tail_the_caller_never_heard() -> None:
+    output, stream, audio_output = _agent_text_output(lead_ms=0)
+
+    await output.capture_text(TimedString("Heard. ", start_time=0.0, end_time=0.4))
+    await output.capture_text(TimedString("Cut off.", start_time=5.0, end_time=5.4))
+    _heard(audio_output, 0.4)
+
+    # The reply was interrupted at 0.4s: the rest was never played.
+    output.flush()
+    _played_out(output, position=0.4, interrupted=True)
+
+    assert _sent(stream) == [
+        {"type": "agent_text", "text": "Heard. ", "end_of_segment": False},
+        {"type": "agent_text", "text": "", "end_of_segment": True},
+    ]
+
+
+async def test_agent_text_warns_once_when_there_is_nothing_to_pace_against(caplog) -> None:
+    output, stream, _ = _agent_text_output()
+
+    await output.capture_text("No timestamps ")
+    await output.capture_text("here.")
+    output.flush()
+    _played_out(output, position=1.0)
+
+    sent = [message["text"] for message in _sent(stream)]
+    assert sent == ["No timestamps ", "here.", ""]
+    assert "".join(sent) == "No timestamps here."
+    assert sum("no word timestamps" in record.message for record in caplog.records) == 1
+
+
+async def test_agent_text_lead_cannot_be_negative() -> None:
+    from livekit.plugins.soniox import STTOptions
+
+    with pytest.raises(ValueError, match="agent_text_lead_ms"):
+        STTOptions(agent_text_lead_ms=-1)
+
+
+async def test_agent_text_keeps_two_turns_apart() -> None:
+    output, stream, audio_output = _agent_text_output(lead_ms=0)
+
+    await output.capture_text(TimedString("First turn.", start_time=0.0, end_time=0.5))
+    output.flush()
+    _played_out(output, position=0.5)
+    await output.capture_text(TimedString("Second turn.", start_time=0.0, end_time=0.5))
+    output.flush()
+    _played_out(output, position=0.5)
+
+    assert _sent(stream) == [
+        {"type": "agent_text", "text": "First turn.", "end_of_segment": False},
+        {"type": "agent_text", "text": "", "end_of_segment": True},
+        {"type": "agent_text", "text": "Second turn.", "end_of_segment": False},
+        {"type": "agent_text", "text": "", "end_of_segment": True},
+    ]
+
+
+async def test_agent_text_drops_a_tag_cut_off_by_an_interruption() -> None:
+    output, stream, _ = _agent_text_output(lead_ms=0)
+
+    # The reply's text ends inside a tag, then the caller cuts in after it: the
+    # text is flushed before playback reports the interruption, as LiveKit does.
+    await output.capture_text(TimedString("Ha ", start_time=0.0, end_time=0.3))
+    await output.capture_text(TimedString("[lau", start_time=0.5, end_time=0.5))
+    output.flush()
+    _played_out(output, position=1.0, interrupted=True)
+    await output.capture_text(TimedString("Next.", start_time=0.0, end_time=0.3))
+
+    assert _sent(stream) == [
+        {"type": "agent_text", "text": "Ha ", "end_of_segment": False},
+        {"type": "agent_text", "text": "", "end_of_segment": True},
+        {"type": "agent_text", "text": "Next.", "end_of_segment": False},
+    ]
+    output.on_detached()
+
+
+async def test_agent_text_paces_the_next_reply_after_one_that_never_played() -> None:
+    output, stream, _ = _agent_text_output(lead_ms=0)
+
+    await output.capture_text(TimedString("Never played.", start_time=4.0, end_time=4.4))
+    output.flush()
+    first = output._pacing
+    await asyncio.sleep(0)  # pacing is under way
+    await output.capture_text(TimedString("Later.", start_time=5.0, end_time=5.4))
+    second = output._pacing
+    # Let the cancelled task finish: it must not forget the one that replaced it.
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert first is not None and first.done()
+    assert output._pacing is second and second is not None
+    output.on_detached()
+    await asyncio.sleep(0)
+    assert second.done()
+
+
+async def test_agent_text_does_not_blame_the_tts_for_untimed_text(caplog) -> None:
+    output, stream, _ = _agent_text_output(lead_ms=0)
+
+    await output.capture_text(TimedString("Timed ", start_time=2.0, end_time=2.4))
+    await output.capture_text("untimed.")
+    output.on_detached()
+
+    assert not any("earlier than the previous one" in r.message for r in caplog.records)
+
+
+async def test_agent_text_sends_the_space_a_dropped_tag_leaves_with_the_next_word() -> None:
+    output, stream, _ = _agent_text_output(
+        lead_ms=0, transform=lambda words, held, final=False: words
+    )
+
+    # What drop_bracket_cues leaves of "Sure, [laughs] Lekadol." in one call.
+    for word in ["Sure,", " ", "Lekadol."]:
+        await output.capture_text(TimedString(word, start_time=0.0, end_time=0.1))
+
+    assert [message["text"] for message in _sent(stream)] == ["Sure,", " Lekadol."]
+
+
+async def test_agent_text_uses_the_transform_it_is_given() -> None:
+    output, stream, _ = _agent_text_output(
+        lead_ms=0, transform=lambda words, held, final=False: words
+    )
+
+    await output.capture_text(TimedString("[laughs] ", start_time=0.0, end_time=0.1))
+
+    assert [message["text"] for message in _sent(stream)] == ["[laughs] "]
+
+
+async def test_agent_text_leaves_no_state_behind_when_detached() -> None:
+    output, stream, audio_output = _agent_text_output(lead_ms=700)
+
+    await output.capture_text(TimedString("later", start_time=9.0, end_time=9.5))
+    assert output._pacing is not None
+
+    output.on_detached()
+    # Playback reports after detaching must not move the position, or a stale
+    # output would keep sending into a session it no longer belongs to.
+    _heard(audio_output, 9.0)
+
+    assert output._pacing is None
+    assert output._playback.seconds() == 0.0
+    # The open segment is closed, and the word nobody heard is not sent.
+    assert _sent(stream) == [{"type": "agent_text", "text": "", "end_of_segment": True}]
+
+
+async def test_agent_text_keeps_the_order_the_words_arrived_in(caplog) -> None:
+    output, stream, audio_output = _agent_text_output(lead_ms=0)
+
+    # A timestamp that goes backwards is the Text-to-Speech's mistake: the words
+    # still go in the order they were handed over, and it is reported.
+    await output.capture_text(TimedString("help ", start_time=0.5, end_time=0.8))
+    await output.capture_text(TimedString("you ", start_time=0.5, end_time=0.8))
+    await output.capture_text(TimedString("today?", start_time=0.1, end_time=0.4))
+    assert _sent(stream) == []
+
+    _heard(audio_output, 1.0)
+    output.flush()
+    _played_out(output, position=1.0)
+
+    assert "".join(message["text"] for message in _sent(stream)) == "help you today?"
+    assert sum("earlier than the previous one" in r.message for r in caplog.records) == 1
+
+
+async def test_agent_text_keeps_sending_after_the_text_is_complete() -> None:
+    output, stream, audio_output = _agent_text_output(lead_ms=0)
+
+    # The Text-to-Speech finishes the reply long before it is heard.
+    await output.capture_text(TimedString("Thanks ", start_time=0.0, end_time=0.4))
+    await output.capture_text(TimedString("for calling.", start_time=3.0, end_time=3.6))
+    output.flush()
+    assert _sent(stream) == [{"type": "agent_text", "text": "Thanks ", "end_of_segment": False}]
+
+    _heard(audio_output, 3.0)
+    output._send_due()
+    assert [message["text"] for message in _sent(stream)] == ["for calling."]
+
+    _played_out(output, position=3.6)
+    assert _sent(stream) == [{"type": "agent_text", "text": "", "end_of_segment": True}]
+
+
+async def test_agent_text_sends_the_whole_reply_when_playback_finishes() -> None:
+    output, stream, _ = _agent_text_output(lead_ms=0)
+
+    await output.capture_text(TimedString("one ", start_time=0.0, end_time=0.4))
+    await output.capture_text(TimedString("two", start_time=5.0, end_time=5.4))
+    output.flush()
+    # A sink that reports no progress: the end of playback is all there is.
+    _played_out(output, position=5.4)
+
+    assert [message["text"] for message in _sent(stream)] == ["one ", "two", ""]
+
+
+async def test_agent_text_closes_a_reply_that_never_played_when_the_next_begins() -> None:
+    output, stream, _ = _agent_text_output(lead_ms=0)
+
+    await output.capture_text(TimedString("Never ", start_time=0.0, end_time=0.4))
+    await output.capture_text(TimedString("played.", start_time=4.0, end_time=4.4))
+    output.flush()
+    await output.capture_text(TimedString("Next.", start_time=0.0, end_time=0.4))
+
+    assert _sent(stream) == [
+        {"type": "agent_text", "text": "Never ", "end_of_segment": False},
+        {"type": "agent_text", "text": "", "end_of_segment": True},
+        {"type": "agent_text", "text": "Next.", "end_of_segment": False},
+    ]
+
+
+async def test_agent_text_paces_the_next_reply_from_its_own_start() -> None:
+    output, stream, audio_output = _agent_text_output(lead_ms=0)
+
+    await output.capture_text(TimedString("A long first reply.", start_time=0.0, end_time=8.0))
+    _heard(audio_output, 8.0)
+    output.flush()
+    _played_out(output, position=8.0)
+    _sent(stream)
+
+    # Heard 5s into the next reply, which has not started playing.
+    await output.capture_text(TimedString("Later.", start_time=5.0, end_time=5.4))
+    assert _sent(stream) == []
+    output.on_detached()
+
+
+async def test_agent_text_lead_follows_a_runtime_change() -> None:
+    output, stream, audio_output = _agent_text_output(lead_ms=0)
+
+    await output.capture_text(TimedString("Soon.", start_time=0.5, end_time=0.9))
+    assert _sent(stream) == []
+
+    output._stt._params.agent_text_lead_ms = 700
+    output._send_due()
+    assert [message["text"] for message in _sent(stream)] == ["Soon."]
+
+
+async def test_assistant_reply_is_not_sent_twice_with_echo_cancellation() -> None:
+    from livekit.agents.llm import ChatMessage
+    from livekit.agents.voice.events import ConversationItemAddedEvent
+
+    output, stream, _ = _agent_text_output()
+    output._stt._params.enable_agent_text_input = True
+
+    output._stt._push_conversation_item(
+        ConversationItemAddedEvent(item=ChatMessage(role="assistant", content=["Sent already."]))
+    )
+
+    assert _sent(stream) == []
+
+
+async def test_agent_text_queued_before_connecting_survives_the_connection() -> None:
+    stream = _make_stream()
+    ws = MagicMock(spec=aiohttp.ClientWebSocketResponse)
+    ws.send_str = AsyncMock()
+    session = MagicMock(spec=aiohttp.ClientSession)
+    session.ws_connect = AsyncMock(return_value=ws)
+    stream._stt._http_session = session
+
+    stream.audio_queue.put_nowait(b"stale audio")
+    stream._push_agent_text("Hello.", end_of_segment=False)
+    await stream._connect_ws()
+
+    assert stream.audio_queue.qsize() == 1
+    assert stream.audio_queue.get_nowait().text == "Hello."
+
+
+async def test_agent_text_end_of_segment_is_not_sent_to_a_connection_that_never_saw_it() -> None:
+    stream = _make_stream()
+    ws = MagicMock(spec=aiohttp.ClientWebSocketResponse)
+    ws.send_str = AsyncMock()
+    stream._ws = ws
+
+    # The segment opened on a connection that has since been replaced.
+    stream._push_agent_text("", end_of_segment=True)
+    stream._push_agent_text("Next.", end_of_segment=False)
+    stream._push_agent_text("", end_of_segment=True)
+
+    sender = asyncio.create_task(stream._send_audio_task())
+    while not stream.audio_queue.empty():
+        await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    sender.cancel()
+    await asyncio.gather(sender, return_exceptions=True)
+
+    assert [json.loads(call.args[0]) for call in ws.send_str.call_args_list] == [
+        {"type": "agent_text", "text": "Next.", "end_of_segment": False},
+        {"type": "agent_text", "text": "", "end_of_segment": True},
+    ]
