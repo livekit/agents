@@ -103,11 +103,14 @@ class _ScriptedTransport:
         # idle — sleep until cancelled
         await asyncio.Future()
 
-    def run_inference(self, request_id: str) -> None:
+    def run_inference(self, request_id: str, *, chat_ctx: Any = None) -> None:
         self.events.append(("run_inference", request_id))
 
     def push_frame(self, frame: Any) -> None:
         self.events.append(("push_frame", frame))
+
+    def on_start_of_turn(self, elapsed: float) -> None:
+        self.events.append(("on_start_of_turn", elapsed))
 
     def flush(self) -> None:
         self.events.append(("flush", None))

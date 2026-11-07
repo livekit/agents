@@ -12,16 +12,19 @@ turn commits) lives in ``AudioRecognition`` and is covered by
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
+from livekit import rtc
 from livekit.agents.inference.eot.base import (
     TurnDetectorOptions,
     _BaseStreamingTurnDetectorStream,
 )
 from livekit.agents.inference.eot.languages import ThresholdOptions
+from livekit.agents.llm import ChatContext
 from livekit.agents.types import NOT_GIVEN
 
 pytestmark = pytest.mark.audio_eot
@@ -32,6 +35,7 @@ class _FakeTransport:
 
     def __init__(self) -> None:
         self.events: list[tuple[str, ...]] = []
+        self.audio_events: list[tuple[str, Any]] = []
         self._stream: _BaseStreamingTurnDetectorStream | None = None
         self.session_id: str | None = None
 
@@ -42,14 +46,18 @@ class _FakeTransport:
         assert self._stream is not None
         await self._stream._drain_audio_channel()
 
-    def run_inference(self, request_id: str) -> None:
+    def run_inference(self, request_id: str, *, chat_ctx: ChatContext | None = None) -> None:
         self.events.append(("run_inference", request_id))
+        self.audio_events.append(("run_inference", request_id))
 
     def push_frame(self, frame: Any) -> None:
-        pass
+        self.audio_events.append(("push_frame", frame.samples_per_channel))
+
+    def on_start_of_turn(self, elapsed: float) -> None:
+        self.audio_events.append(("on_start_of_turn", elapsed))
 
     def flush(self) -> None:
-        pass
+        self.audio_events.append(("flush", None))
 
     def detach(self) -> None:
         pass
@@ -80,6 +88,12 @@ def _make_opts(thresholds: dict[str, float] | None = None) -> TurnDetectorOption
     )
 
 
+async def _drain(s: _FakeBackend) -> None:
+    """Let the stream's drain loop hand the queued items to the transport."""
+    for _ in range(3):
+        await asyncio.sleep(0)
+
+
 def _make_stream(thresholds: dict[str, float] | None = None) -> _FakeBackend:
     return _FakeBackend(detector=MagicMock(), opts=_make_opts(thresholds))
 
@@ -87,13 +101,59 @@ def _make_stream(thresholds: dict[str, float] | None = None) -> _FakeBackend:
 class TestAudioTurnDetectionRequests:
     """Request lifecycle and hook dispatch for ``_BaseStreamingTurnDetectorStream``."""
 
+    async def test_start_of_turn_reaches_transport_in_audio_order(self) -> None:
+        """The turn length is measured when the start is queued, and it lands between the
+        frames pushed before and after the call, however late the transport drains it."""
+        s = _make_stream()
+        try:
+            frame = rtc.AudioFrame(
+                data=bytes(320), sample_rate=16000, num_channels=1, samples_per_channel=160
+            )
+            s.push_audio(frame)
+            with patch("livekit.agents.inference.eot.base.time.time", return_value=1000.25):
+                s.on_start_of_turn(1000.0)
+            s.push_audio(frame)
+            s.end_input()
+            await s._task
+            assert s._fake_transport.audio_events == [
+                ("push_frame", 160),
+                ("on_start_of_turn", 0.25),
+                ("push_frame", 160),
+                ("flush", None),
+            ]
+        finally:
+            await s.aclose()
+
     async def test_predict_starts_inference(self) -> None:
         s = _make_stream()
         try:
             fut = s.predict()
             assert s._request_id is not None
             assert not fut.done()
+            await _drain(s)
             assert s.events == [("run_inference", s._request_id)]
+        finally:
+            await s.aclose()
+
+    async def test_predict_runs_after_the_audio_pushed_before_it(self) -> None:
+        """predict queues behind the audio, so the transport sees every frame captured before
+        the call first and counts it in the turn length."""
+        s = _make_stream()
+        try:
+            frame = rtc.AudioFrame(
+                data=bytes(320), sample_rate=16000, num_channels=1, samples_per_channel=160
+            )
+            s.push_audio(frame)
+            s.push_audio(frame)
+            s.predict()
+            s.push_audio(frame)
+            await _drain(s)
+            assert s._fake_transport.audio_events == [
+                ("push_frame", 160),
+                ("push_frame", 160),
+                ("run_inference", s._request_id),
+                ("push_frame", 160),
+            ]
         finally:
             await s.aclose()
 
@@ -120,7 +180,9 @@ class TestAudioTurnDetectionRequests:
             assert s._request_id != old_id
             assert old_fut.done()
             assert old_fut.result().end_of_turn_probability == 0.0
-            assert sum(1 for e in s.events if e[0] == "run_inference") == 2
+            # the old request closed before the transport reached it, so only the new one runs
+            await _drain(s)
+            assert s.events == [("run_inference", s._request_id)]
         finally:
             await s.aclose()
 
@@ -160,7 +222,8 @@ class TestAudioTurnDetectionRequests:
             next_fut = s.predict()
             assert next_fut is not fut
             assert not next_fut.done()
-            assert sum(1 for e in s.events if e[0] == "run_inference") == 2
+            await _drain(s)
+            assert s.events == [("run_inference", s._request_id)]
         finally:
             await s.aclose()
 
