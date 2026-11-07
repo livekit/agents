@@ -647,6 +647,39 @@ async def test_roomio_set_participant_wakes_initial_waiter(initial_identity: str
         await room_io.aclose()
 
 
+@pytest.mark.parametrize("link_by", ["set_participant", "participant_connected"])
+async def test_roomio_unset_participant_keeps_initial_waiter(link_by: str) -> None:
+    room = _FakeRoom()
+    caller = MagicMock(
+        spec=rtc.RemoteParticipant,
+        identity="caller",
+        sid="PA_caller",
+        attributes={},
+        kind=rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
+    )
+    room_io = RoomIO(
+        MagicMock(spec=AgentSession),
+        room,
+        options=RoomOptions(
+            audio_input=False, audio_output=False, text_input=False, text_output=False
+        ),
+    )
+    await room_io.start()
+    try:
+        # startup is now waiting for a participant to link
+        await asyncio.sleep(0)
+        room_io.unset_participant()
+        room.remote_participants[caller.identity] = caller
+        if link_by == "set_participant":
+            room_io.set_participant(caller.identity)
+        else:
+            room.emit("participant_connected", caller)
+        await asyncio.wait_for(room_io.wait_for_ready(), timeout=1.0)
+        assert room_io.linked_participant is caller
+    finally:
+        await room_io.aclose()
+
+
 @pytest.mark.parametrize("replacement_connected", [True, False])
 async def test_roomio_dtmf_follows_participant_switch(replacement_connected: bool) -> None:
     room = _FakeRoom()
