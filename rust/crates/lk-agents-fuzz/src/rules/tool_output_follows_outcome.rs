@@ -2,18 +2,20 @@
 //! `_apply_transition` record it: a value's text (also when it asks for no reply), a transition's
 //! text (`Completed`'s value, `Failed`'s error, an `InputRequired`'s question), an error flagged
 //! as one, and a reply asked for exactly when the outcome asks for one. An `InputRequired` left
-//! open is answered by the person's next message: that call's output becomes what they said.
+//! open is answered by the person's next message only when selected: that call's output becomes
+//! what they said, while sibling questions remain pending.
 //!
 //! A step cut short records its outputs asking for no reply, and the close settles calls still
 //! running as an error, so neither is held to the reply flag; a body cancelled has no outcome. A
 //! `VoiceTask`'s speech runs its tools on the task's runner, whose `Completed` ends the task: its
 //! agent asks for no reply to it.
-use lk_agents_abi::{ChatItem, Role, llm::tool_executor::WAITING_PREFIX};
+use lk_agents_abi::{ChatItem, FunctionCall, Role, llm::tool_executor::WAITING_PREFIX};
 use lk_agents_core::tts::markup::ChatMessageExt;
 use lk_agents_voice::{
     events::SessionEvent,
     trace::{HandoffStep, Step},
 };
+use std::collections::BTreeSet;
 
 use crate::{
     authored::Authored,
@@ -27,8 +29,13 @@ pub struct ToolOutputFollowsOutcome;
 impl Rule for ToolOutputFollowsOutcome {
     const CONTRACT: Contract = Contract {
         id: "tool_output_follows_outcome",
-        guarantee: "Each answered tool call is recorded with its outcome's output, error flag and reply request, and a call left waiting on the person is answered by their next message.",
-        examples: &[a_value_asking_for_no_reply, a_question_answered],
+        guarantee: "Each answered tool call is recorded with its outcome's output, error flag and reply request, and the selected call waiting on the person is answered by their next message.",
+        examples: &[
+            a_value_asking_for_no_reply,
+            a_question_answered,
+            an_unselected_question_waits,
+            a_reply_only_answers_the_selected_question,
+        ],
         counterexamples: &[
             a_completion_recorded_silent,
             a_failure_not_an_error,
@@ -121,33 +128,54 @@ impl Rule for ToolOutputFollowsOutcome {
                 )
             });
         }
-        // Every output still waiting is an open question; the person's next message answers them.
-        let mut waiting: Vec<String> = Vec::new();
+        let mut selected = BTreeSet::new();
+        let mut waiting: Vec<(String, String)> = Vec::new();
         for (i, (at, item, speech)) in announced.iter().enumerate() {
             match item {
+                ChatItem::FunctionCall(call) => {
+                    let flag = call.extra.get(lk_agents_core::request::INPUT_REQUESTED_KEY);
+                    if flag.is_some_and(|flag| {
+                        flag.as_bool() == Some(true) || flag.as_str() == Some("true")
+                    }) {
+                        selected.insert(call.call_id.clone());
+                    } else {
+                        selected.remove(&call.call_id);
+                    }
+                }
                 // A step cut before its tools were awaited asks nothing.
                 ChatItem::FunctionCallOutput(o) if o.output.starts_with(WAITING_PREFIX) => {
                     let cut = speech.is_some_and(|s| host.speech(s.0).is_interrupted());
                     if !cut {
-                        waiting.push(o.id.clone());
+                        match waiting.iter_mut().find(|(call, _)| *call == o.call_id) {
+                            Some((_, id)) => *id = o.id.clone(),
+                            None => waiting.push((o.call_id.clone(), o.id.clone())),
+                        }
                     }
                 }
                 ChatItem::Message(m) if m.role == Role::User => {
-                    let open = std::mem::take(&mut waiting);
                     if closing.is_some_and(|c| c <= *at) {
                         continue;
                     }
+                    let Some(index) = waiting.iter().position(|(call, _)| selected.contains(call))
+                    else {
+                        continue;
+                    };
+                    let (_, id) = waiting.remove(index);
                     let said = m.text_content().unwrap_or_default();
-                    for id in open {
-                        let answered = announced[..i].iter().rev().any(|(_, prior, _)| {
-                            matches!(prior, ChatItem::FunctionCallOutput(o)
-                                if o.id == id && !o.output.starts_with(WAITING_PREFIX)
-                                    && o.output.contains(said.as_str()))
-                        });
-                        check.expect_with(Subject::Session, answered, || {
-                            format!("the question {id} waits on was never answered by {said:?}")
-                        });
-                    }
+                    let answered = announced[..i]
+                        .iter()
+                        .rev()
+                        .find_map(|(_, prior, _)| match prior {
+                            ChatItem::FunctionCallOutput(o) if o.id == id => Some(
+                                !o.output.starts_with(WAITING_PREFIX)
+                                    && o.output.contains(said.as_str()),
+                            ),
+                            _ => None,
+                        })
+                        .unwrap_or(false);
+                    check.expect_with(Subject::Session, answered, || {
+                        format!("the question {id} waits on was never answered by {said:?}")
+                    });
                 }
                 _ => {}
             }
@@ -194,6 +222,29 @@ fn answered(answer: ToolAnswer, text: &str) -> Authored {
     })
 }
 
+fn selected_question(call_id: &str) -> Step {
+    let mut call = FunctionCall {
+        id: call_id.into(),
+        call_id: call_id.into(),
+        name: "lookup".into(),
+        arguments: "{}".into(),
+        created_at: std::time::SystemTime::UNIX_EPOCH,
+        extra: Default::default(),
+        group_id: None,
+    };
+    call.extra.insert(lk_agents_core::request::INPUT_REQUESTED_KEY.into(), true.into());
+    Step::Emitted(SessionEvent::ConversationItemAdded {
+        item: Box::new(call.into()),
+        agent: "agent".into(),
+        source: lk_agents_voice::agent::Source::ToolCall {
+            speech: lk_agents_voice::agent_session::machine::activity::scheduling::SpeechId(1),
+            step: 1,
+        },
+        visibility: lk_agents_voice::agent::Visibility::Both,
+        run: None,
+    })
+}
+
 /// `ToolResult("sent DTMF 1", reply_required=False)`: kept, asking for nothing.
 fn a_value_asking_for_no_reply() -> Recording {
     answered(ToolAnswer::Recorded, "sent DTMF 1")
@@ -205,7 +256,25 @@ fn a_value_asking_for_no_reply() -> Recording {
 fn a_question_answered() -> Recording {
     let question = format!("{WAITING_PREFIX}Which day?");
     answered(ToolAnswer::Ask, "Which day?")
+        .journal(selected_question("c1"))
         .journal(output("c1", &question, false, false))
+        .journal(output("c1", "Monday", false, false))
+        .journal(user("Monday"))
+        .done()
+}
+
+fn an_unselected_question_waits() -> Recording {
+    answered(ToolAnswer::Ask, "Which day?")
+        .journal(output("c1", &format!("{WAITING_PREFIX}Which day?"), false, false))
+        .journal(user("Monday"))
+        .done()
+}
+
+fn a_reply_only_answers_the_selected_question() -> Recording {
+    answered(ToolAnswer::Ask, "Which day?")
+        .journal(selected_question("c1"))
+        .journal(output("c2", &format!("{WAITING_PREFIX}What time?"), false, false))
+        .journal(output("c1", &format!("{WAITING_PREFIX}Which day?"), false, false))
         .journal(output("c1", "Monday", false, false))
         .journal(user("Monday"))
         .done()
@@ -225,6 +294,7 @@ fn a_failure_not_an_error() -> Recording {
 fn a_question_never_answered() -> Recording {
     let question = format!("{WAITING_PREFIX}Which day?");
     answered(ToolAnswer::Ask, "Which day?")
+        .journal(selected_question("c1"))
         .journal(output("c1", &question, false, false))
         .journal(user("Monday"))
         .done()
