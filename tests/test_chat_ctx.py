@@ -228,11 +228,43 @@ def test_aws_cache_messages_needs_conversation_content():
     messages, _ = chat_ctx.to_provider_format(format="aws", cache_messages=True)
     assert _aws_cache_points(messages) == []
 
-    # a cachePoint can't open a message, so a turn with no Bedrock content gets none
-    chat_ctx.add_message(role="assistant", content=["Hello!"])
+    # an item with no Bedrock content isn't conversation content either
     chat_ctx.add_message(role="user", content=[""])
     messages, _ = chat_ctx.to_provider_format(format="aws", cache_messages=True)
     assert _aws_cache_points(messages) == []
+
+
+def test_aws_cache_messages_follows_serialized_order_for_late_tool_results():
+    # the older call's result arrives last, but it's serialized next to its call
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="user", content=["Look up both."])
+    chat_ctx.insert(FunctionCall(id="item_a", call_id="slow", name="slow_lookup", arguments="{}"))
+    chat_ctx.insert(FunctionCall(id="item_b", call_id="fast", name="fast_lookup", arguments="{}"))
+    for call_id, name in (("fast", "fast_lookup"), ("slow", "slow_lookup")):
+        chat_ctx.insert(
+            FunctionCallOutput(call_id=call_id, name=name, output="done", is_error=False)
+        )
+
+    messages, _ = chat_ctx.to_provider_format(format="aws", cache_messages=True)
+
+    assert messages[-1]["content"][0]["toolResult"]["toolUseId"] == "fast"
+    assert _aws_cache_points(messages) == [(len(messages) - 1, 1)]
+
+
+def test_aws_cache_messages_empty_item_keeps_the_last_conversation_block():
+    # the empty item adds nothing, so the boundary stays after the last real block, and
+    # the rewritten instructions in between never become the boundary
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="user", content=["Hello"])
+    chat_ctx.add_message(role="system", content=["Ask for the year they were born."])
+    chat_ctx.add_message(role="user", content=[""])
+
+    messages, _ = chat_ctx.to_provider_format(format="aws", cache_messages=True)
+
+    assert len(messages) == 1
+    assert messages[0]["content"][:2] == [{"text": "Hello"}, _AWS_CACHE_POINT]
+    assert "Ask for the year" in messages[0]["content"][2]["text"]
+    assert _aws_cache_points(messages) == [(0, 1)]
 
 
 def test_openai_format_preserves_mid_conversation_system_messages():
