@@ -132,26 +132,26 @@ pub fn cpu_count(py: Python<'_>) -> PyResult<f64> {
 }
 
 // Declared in rust/crates/lk-agents-abi/src/worker/ipc_host.rs.
-type JobLaunchImpl =
-    <crate::generated::implementations::Selected as super::Implementations>::JobLaunch;
+type ProcessLaunchImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::ProcessLaunch;
 
-fn _extract_job_launch_process_started_pid(
+fn _extract_process_launch_process_started_pid(
     obj: &Bound<'_, PyAny>,
-) -> PyResult<JobLaunchProcessStartedPidInput> {
+) -> PyResult<ProcessLaunchProcessStartedPidInput> {
     crate::py_values::number_from_py::<u32>(obj.as_any(), "pid")
 }
-type JobLaunchProcessStartedPidInput = u32;
+type ProcessLaunchProcessStartedPidInput = u32;
 
-fn _extract_job_launch_process_started_sentinel(
+fn _extract_process_launch_process_started_sentinel(
     obj: &Bound<'_, PyAny>,
-) -> PyResult<JobLaunchProcessStartedSentinelInput> {
+) -> PyResult<ProcessLaunchProcessStartedSentinelInput> {
     crate::py_values::number_from_py::<i64>(obj.as_any(), "sentinel")
 }
-type JobLaunchProcessStartedSentinelInput = i64;
+type ProcessLaunchProcessStartedSentinelInput = i64;
 
-fn _extract_job_launch_process_started_owned(
+fn _extract_process_launch_process_started_owned(
     obj: &Bound<'_, PyAny>,
-) -> PyResult<JobLaunchProcessStartedOwnedInput> {
+) -> PyResult<ProcessLaunchProcessStartedOwnedInput> {
     obj.try_iter().and_then(|items| {
         items
             .map(|item| {
@@ -161,46 +161,29 @@ fn _extract_job_launch_process_started_owned(
             .collect::<PyResult<Vec<_>>>()
     })
 }
-type JobLaunchProcessStartedOwnedInput = ::std::vec::Vec<i64>;
+type ProcessLaunchProcessStartedOwnedInput = ::std::vec::Vec<i64>;
 
-/// One launch of a job runner, as the launcher reports it.
-#[pyclass(frozen, name = "JobLaunch", module = "livekit.agents._core")]
-pub struct JobLaunch(pub(crate) ::std::sync::Arc<JobLaunchImpl>);
+/// A process launch: only the process's receipt can be reported.
+#[pyclass(frozen, name = "ProcessLaunch", module = "livekit.agents._core")]
+pub struct ProcessLaunch(pub(crate) ::std::sync::Arc<ProcessLaunchImpl>);
 
 #[pymethods]
-impl JobLaunch {
-    /// The runner is a thread of this process, else a process of the launcher's start method.
-    #[getter]
-    fn thread(&self, py: Python<'_>) -> PyResult<bool> {
-        crate::py_calls::check_pid()?;
-        let out = py.detach(|| {
-            <JobLaunchImpl as ::lk_agents_abi::worker::ipc_host::JobLaunch>::thread(&self.0)
-        });
-        ::pyo3::PyResult::Ok(out)
-    }
-
+impl ProcessLaunch {
     /// The process's receipt, reported on the launch worker right after the OS created it.
     #[pyo3(signature = (pid, sentinel, method, owned))]
     fn process_started(
         &self,
         py: Python<'_>,
-        #[pyo3(from_py_with = _extract_job_launch_process_started_pid)]
-        pid: JobLaunchProcessStartedPidInput,
-        #[pyo3(from_py_with = _extract_job_launch_process_started_sentinel)]
-        sentinel: JobLaunchProcessStartedSentinelInput,
+        #[pyo3(from_py_with = _extract_process_launch_process_started_pid)]
+        pid: ProcessLaunchProcessStartedPidInput,
+        #[pyo3(from_py_with = _extract_process_launch_process_started_sentinel)]
+        sentinel: ProcessLaunchProcessStartedSentinelInput,
         method: ::std::string::String,
-        #[pyo3(from_py_with = _extract_job_launch_process_started_owned)]
-        owned: JobLaunchProcessStartedOwnedInput,
+        #[pyo3(from_py_with = _extract_process_launch_process_started_owned)]
+        owned: ProcessLaunchProcessStartedOwnedInput,
     ) -> PyResult<()> {
         crate::py_calls::check_pid()?;
-        py.detach(|| <JobLaunchImpl as ::lk_agents_abi::worker::ipc_host::JobLaunch>::process_started(&self.0, pid, sentinel, method, owned)).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::py_errors::HostException>::to_py_err(&e))?;
-        Ok(())
-    }
-
-    /// The job thread returned, reported from that thread.
-    fn thread_exited(&self, py: Python<'_>) -> PyResult<()> {
-        crate::py_calls::check_pid()?;
-        py.detach(|| <JobLaunchImpl as ::lk_agents_abi::worker::ipc_host::JobLaunch>::thread_exited(&self.0)).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::py_errors::HostException>::to_py_err(&e))?;
+        py.detach(|| <ProcessLaunchImpl as ::lk_agents_abi::worker::ipc_host::ProcessLaunch>::process_started(&self.0, pid, sentinel, method, owned)).map_err(|e: ::lk_agents_abi::worker::ipc_host::WorkerError| <::lk_agents_abi::worker::ipc_host::WorkerError as crate::py_errors::HostException>::to_py_err(&e))?;
         Ok(())
     }
 }
@@ -210,7 +193,41 @@ inventory::submit! {
     crate::py_objects::HostNative {
         trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::worker::ipc_host::LaunchReport>(),
         read: |obj| {
-            let this = obj.cast::<JobLaunch>().ok()?;
+            let this = obj.cast::<ProcessLaunch>().ok()?;
+            let native: ::std::sync::Arc<dyn ::lk_agents_abi::worker::ipc_host::LaunchReport> = this.get().0.clone();
+            Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
+        },
+    }
+}
+
+// Declared in rust/crates/lk-agents-abi/src/worker/ipc_host.rs.
+type ThreadLaunchImpl =
+    <crate::generated::implementations::Selected as super::Implementations>::ThreadLaunch;
+
+/// A thread launch: only the thread's return can be reported.
+#[pyclass(frozen, name = "ThreadLaunch", module = "livekit.agents._core")]
+pub struct ThreadLaunch(pub(crate) ::std::sync::Arc<ThreadLaunchImpl>);
+
+#[pymethods]
+impl ThreadLaunch {
+    /// The job thread returned, reported from that thread.
+    fn thread_exited(&self, py: Python<'_>) -> PyResult<()> {
+        crate::py_calls::check_pid()?;
+        py.detach(|| {
+            <ThreadLaunchImpl as ::lk_agents_abi::worker::ipc_host::ThreadLaunch>::thread_exited(
+                &self.0,
+            )
+        });
+        Ok(())
+    }
+}
+
+// Wherever the host passes a `::lk_agents_abi::worker::ipc_host::LaunchReport`, an instance of this class is itself.
+inventory::submit! {
+    crate::py_objects::HostNative {
+        trait_id: || ::std::any::TypeId::of::<dyn ::lk_agents_abi::worker::ipc_host::LaunchReport>(),
+        read: |obj| {
+            let this = obj.cast::<ThreadLaunch>().ok()?;
             let native: ::std::sync::Arc<dyn ::lk_agents_abi::worker::ipc_host::LaunchReport> = this.get().0.clone();
             Some(::std::boxed::Box::new(native) as ::std::boxed::Box<dyn ::std::any::Any>)
         },

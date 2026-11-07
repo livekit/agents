@@ -76,8 +76,8 @@ async fn serve(endpoint: i64, launch: Arc<dyn LaunchReport>, child: Child) {
     }
     channel.close().await;
     let launch: Arc<dyn Any + Send + Sync> = launch;
-    let launch = launch.downcast::<JobLaunch>().unwrap();
-    ipc_host::JobLaunch::thread_exited(&*launch).unwrap();
+    let launch = launch.downcast::<ThreadLaunch>().unwrap();
+    ipc_host::ThreadLaunch::thread_exited(&*launch);
 }
 
 fn thread(child: Child) -> (JobSupervisor, Arc<Launcher>) {

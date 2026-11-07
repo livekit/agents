@@ -3,7 +3,6 @@
 //! launcher the host makes.
 
 use crate::ipc::telemetry;
-use std::any::Any;
 use std::sync::Arc;
 
 use lk_agents_abi::errors::HostError;
@@ -22,19 +21,17 @@ use lk_agents_net::env::ProcessEnv;
 use lk_agents_net::task::TokioSpawner;
 
 /// One of the pool's processes, compared by identity.
-#[derive(Clone)]
-pub struct Executor(pub(super) Arc<dyn SupervisedJob>);
+pub struct Executor<P = JobSupervisor>(pub(super) Arc<P>);
 
-impl PartialEq for Executor {
-    fn eq(&self, other: &Self) -> bool {
-        std::ptr::addr_eq(Arc::as_ptr(&self.0), Arc::as_ptr(&other.0))
+impl<P> Clone for Executor<P> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
     }
 }
 
-impl Executor {
-    fn supervisor(&self) -> Result<&JobSupervisor, HostError> {
-        let process: &dyn Any = &*self.0;
-        process.downcast_ref().ok_or_else(|| HostError::new("a foreign process in the pool"))
+impl<P> PartialEq for Executor<P> {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::addr_eq(Arc::as_ptr(&self.0), Arc::as_ptr(&other.0))
     }
 }
 
@@ -56,6 +53,7 @@ struct HostExecutors {
 
 #[async_trait::async_trait]
 impl Executors for HostExecutors {
+    type Process = JobSupervisor;
     async fn create(&self) -> Result<Executor, HostError> {
         let launcher = self.host.create(&telemetry::Cx::NONE).await?;
         let process =
@@ -65,11 +63,11 @@ impl Executors for HostExecutors {
     }
 
     async fn start(&self, proc: &Executor) -> Result<(), HostError> {
-        proc.supervisor()?.start().await.map_err(host_error)
+        proc.0.start().await.map_err(host_error)
     }
 
     async fn initialize(&self, proc: &Executor) -> Result<(), HostError> {
-        proc.supervisor()?.initialize().await.map(drop).map_err(host_error)
+        proc.0.initialize().await.map(drop).map_err(host_error)
     }
 
     async fn launch(
@@ -78,30 +76,28 @@ impl Executors for HostExecutors {
         job: &RunningJobInfo,
         cx: &telemetry::Cx,
     ) -> Result<(), HostError> {
-        let process = proc.supervisor()?;
+        let process = &proc.0;
         process.launch_job(job.clone(), self.context.clone(), cx.clone()).await.map_err(host_error)
     }
 
     async fn close(&self, proc: &Executor) -> Result<(), HostError> {
-        proc.supervisor()?.aclose().await;
+        proc.0.aclose().await;
         Ok(())
     }
 
     fn failed(&self, proc: &Executor, message: &'static str, error: HostError) {
-        if let Ok(process) = proc.supervisor() {
-            runner_log!(process.logger().runner(), log::Level::Error, exc_text:% = error.exc_text(); "{message}");
-        }
+        runner_log!(proc.0.logger().runner(), log::Level::Error, exc_text:% = error.exc_text(); "{message}");
     }
 
     async fn wait_exit(&self, proc: &Executor) -> Result<(), HostError> {
-        match proc.supervisor()?.wait_exit().await? {
+        match proc.0.wait_exit().await? {
             true => Ok(()),
             false => Err(HostError::new("ready process finished without an OS exit observation")),
         }
     }
 
     async fn join(&self, proc: &Executor) -> Result<PoolJoinOutcome, HostError> {
-        Ok(match proc.supervisor()?.join().await {
+        Ok(match proc.0.join().await {
             true => PoolJoinOutcome::Reaped,
             false => PoolJoinOutcome::NotLaunched,
         })
@@ -132,13 +128,15 @@ impl lk_agents_abi::worker::ipc_host::ProcessPool for ProcessPool {
             initialize_timeout: secs(options.initialize_timeout),
             close_timeout: secs(options.close_timeout),
         };
-        let spawner = TokioSpawner::new((env.runtime)().map_err(WorkerError::Failed)?);
+        let spawner = TokioSpawner::new(
+            (env.runtime)().map_err(|error| WorkerError::Failed(error.to_string()))?,
+        );
         let executors = HostExecutors { env: env.clone(), host, options, context };
         Ok(Self { pool: ProcPool::new(Arc::new(executors), opts), spawner })
     }
 
     fn processes(&self) -> Vec<Arc<dyn SupervisedJob>> {
-        self.pool.processes().into_iter().map(|proc| proc.0).collect()
+        self.pool.processes().into_iter().map(|proc| proc.0 as Arc<dyn SupervisedJob>).collect()
     }
 
     fn active_jobs(&self) -> Vec<RunningJobInfo> {
@@ -146,7 +144,7 @@ impl lk_agents_abi::worker::ipc_host::ProcessPool for ProcessPool {
             .processes()
             .into_iter()
             .filter_map(|proc| {
-                let process = proc.supervisor().ok()?;
+                let process = &proc.0;
                 (process.status() == Some(JobStatus::Running)).then(|| process.running_job())?
             })
             .collect()
@@ -157,10 +155,10 @@ impl lk_agents_abi::worker::ipc_host::ProcessPool for ProcessPool {
             .processes()
             .into_iter()
             .find(|proc| {
-                let job = proc.supervisor().ok().and_then(|process| process.running_job());
+                let job = proc.0.running_job();
                 job.is_some_and(|info| info.job.id == job_id)
             })
-            .map(|proc| proc.0)
+            .map(|proc| proc.0 as Arc<dyn SupervisedJob>)
     }
 
     fn jobs_waiting(&self) -> usize {

@@ -97,25 +97,26 @@ impl ProcessEvent {
 /// The pool's steps on its executors: the host's in production, a fake in tests.
 #[async_trait::async_trait]
 pub trait Executors: Send + Sync + 'static {
-    async fn create(&self) -> Result<Executor, HostError>;
-    async fn start(&self, proc: &Executor) -> Result<(), HostError>;
-    async fn initialize(&self, proc: &Executor) -> Result<(), HostError>;
+    type Process: Send + Sync + 'static;
+    async fn create(&self) -> Result<Executor<Self::Process>, HostError>;
+    async fn start(&self, proc: &Executor<Self::Process>) -> Result<(), HostError>;
+    async fn initialize(&self, proc: &Executor<Self::Process>) -> Result<(), HostError>;
     /// Hands `job` to `proc`, continuing the span `cx`.
     async fn launch(
         &self,
-        proc: &Executor,
+        proc: &Executor<Self::Process>,
         job: &RunningJobInfo,
         cx: &telemetry::Cx,
     ) -> Result<(), HostError>;
-    async fn close(&self, proc: &Executor) -> Result<(), HostError>;
+    async fn close(&self, proc: &Executor<Self::Process>) -> Result<(), HostError>;
     /// A step that failed on `proc`, as the host's diagnostic `message`.
-    fn failed(&self, proc: &Executor, message: &'static str, error: HostError);
+    fn failed(&self, proc: &Executor<Self::Process>, message: &'static str, error: HostError);
     fn cleanup_incomplete(&self, observation: PoolCleanupObservation) {
         log::error!(target: lk_agents_abi::LOG_TARGET, observation:? = observation; "process pool cleanup incomplete");
     }
-    async fn wait_exit(&self, proc: &Executor) -> Result<(), HostError>;
-    async fn join(&self, proc: &Executor) -> Result<PoolJoinOutcome, HostError>;
-    fn emit(&self, event: ProcessEvent, proc: &Executor);
+    async fn wait_exit(&self, proc: &Executor<Self::Process>) -> Result<(), HostError>;
+    async fn join(&self, proc: &Executor<Self::Process>) -> Result<PoolJoinOutcome, HostError>;
+    fn emit(&self, event: ProcessEvent, proc: &Executor<Self::Process>);
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -174,8 +175,8 @@ enum ReservationState {
     Failed(Failure),
 }
 
-struct Process {
-    executor: Option<Executor>,
+struct Process<P> {
+    executor: Option<Executor<P>>,
     phase: Phase,
     /// The reservation this process is created, initialized or reserved for.
     request: Option<ReservationId>,
@@ -204,14 +205,14 @@ enum Readiness {
 }
 
 /// Everything the pool decides on and owns, changed under one lock.
-struct State {
+struct State<P> {
     target_idle: usize,
     started: bool,
     draining: bool,
     closed: bool,
     next_process: u64,
     next_request: u64,
-    processes: BTreeMap<ProcessId, Process>,
+    processes: BTreeMap<ProcessId, Process<P>>,
     initializing: BTreeSet<ProcessId>,
     ready: VecDeque<ProcessId>,
     pending: VecDeque<ReservationId>,
@@ -225,15 +226,15 @@ struct State {
     /// The processes to report closed once the lock is released: a host call takes the host's
     /// own lock (Python's GIL), which a host thread reading the pool holds while it waits on
     /// this one.
-    released: Vec<Executor>,
+    released: Vec<Executor<P>>,
 }
 
-impl State {
+impl<P> State<P> {
     fn reservation(&self, id: ReservationId) -> Option<ReservationState> {
         self.requests.get(&id).map(|request| request.state)
     }
 
-    fn executor(&self, id: ProcessId) -> Option<Executor> {
+    fn executor(&self, id: ProcessId) -> Option<Executor<P>> {
         self.processes.get(&id).and_then(|process| process.executor.clone())
     }
 
@@ -280,7 +281,10 @@ impl State {
     }
 
     /// The reservation's process once it has one, or why it never will; `None` while it waits.
-    fn acquired(&self, request: ReservationId) -> Option<Result<(ProcessId, Executor), Failure>> {
+    fn acquired(
+        &self,
+        request: ReservationId,
+    ) -> Option<Result<(ProcessId, Executor<P>), Failure>> {
         match self.reservation(request) {
             Some(ReservationState::Reserved(id)) => {
                 self.executor(id).map(|executor| Ok((id, executor)))
@@ -304,39 +308,39 @@ impl State {
     }
 }
 
-struct Inner {
-    host: Arc<dyn Executors>,
+struct Inner<P> {
+    host: Arc<dyn Executors<Process = P>>,
     opts: PoolOptions,
     cleanup_timeout: Duration,
-    state: Mutex<State>,
+    state: Mutex<State<P>>,
     changed: Notify,
     idle_ready: watch::Sender<Readiness>,
     closed: tokio_util::sync::CancellationToken,
     close_ready: watch::Sender<bool>,
 }
 
-pub struct ProcPool(Arc<Inner>);
+pub struct ProcPool<P = super::owner::JobSupervisor>(Arc<Inner<P>>);
 
-impl Clone for ProcPool {
+impl<P> Clone for ProcPool<P> {
     fn clone(&self) -> Self {
         Self(self.0.clone())
     }
 }
 
 /// A launch's reservation, cancelled when the launch is dropped before it completed.
-struct Waiting {
-    pool: ProcPool,
+struct Waiting<P: Send + Sync + 'static> {
+    pool: ProcPool<P>,
     request: ReservationId,
 }
 
-impl Drop for Waiting {
+impl<P: Send + Sync + 'static> Drop for Waiting<P> {
     fn drop(&mut self) {
         self.pool.update(|pool, st| pool.cancel(st, self.request));
     }
 }
 
-impl ProcPool {
-    pub fn new(host: Arc<dyn Executors>, opts: PoolOptions) -> Self {
+impl<P: Send + Sync + 'static> ProcPool<P> {
+    pub fn new(host: Arc<dyn Executors<Process = P>>, opts: PoolOptions) -> Self {
         // CPU discovery is runtime configuration; constructing a pool performs no filesystem I/O.
         Self(Arc::new(Inner {
             host,
@@ -367,7 +371,7 @@ impl ProcPool {
         }))
     }
 
-    pub fn processes(&self) -> Vec<Executor> {
+    pub fn processes(&self) -> Vec<Executor<P>> {
         self.0.state.lock().processes.values().filter_map(|p| p.executor.clone()).collect()
     }
 
@@ -386,7 +390,7 @@ impl ProcPool {
 
     /// Changes the state, then allocates, publishes readiness, tells the host what was released
     /// and wakes the waiters. No host call is made under the lock.
-    fn update<R>(&self, f: impl FnOnce(&Self, &mut State) -> R) -> R {
+    fn update<R>(&self, f: impl FnOnce(&Self, &mut State<P>) -> R) -> R {
         let (result, released) = {
             let mut st = self.0.state.lock();
             if st.refill_paused_until.is_some_and(|until| Instant::now() >= until) {
@@ -410,7 +414,7 @@ impl ProcPool {
     }
 
     /// Runs `step` as a task the pool owns until its close joined it.
-    fn own(&self, st: &mut State, step: impl Future<Output = ()> + Send + 'static) {
+    fn own(&self, st: &mut State<P>, step: impl Future<Output = ()> + Send + 'static) {
         let (finished, active) = std::mem::take(&mut st.tasks)
             .into_iter()
             .partition::<Vec<_>, _>(|task| task.is_finished());
@@ -465,7 +469,7 @@ impl ProcPool {
 
     /// Hands ready processes to waiting reservations in order, creates processes for those still
     /// waiting, then tops the warm ones up to the target.
-    fn allocate(&self, st: &mut State) {
+    fn allocate(&self, st: &mut State<P>) {
         if !st.started || st.closed {
             return;
         }
@@ -532,7 +536,7 @@ impl ProcPool {
         }
     }
 
-    fn create(&self, st: &mut State) -> ProcessId {
+    fn create(&self, st: &mut State<P>) -> ProcessId {
         let id = ProcessId(st.next_process);
         st.next_process += 1;
         st.processes.insert(
@@ -624,14 +628,14 @@ impl ProcPool {
         });
     }
 
-    fn spawn_failed(&self, st: &mut State, id: ProcessId) {
+    fn spawn_failed(&self, st: &mut State<P>, id: ProcessId) {
         st.refill_paused_until = Some(Instant::now() + REFILL_INTERVAL);
         self.retire(st, id);
     }
 
     /// Takes the process out of service and closes it; its reservation waits for another one
     /// unless its attempts are spent.
-    fn retire(&self, st: &mut State, id: ProcessId) {
+    fn retire(&self, st: &mut State<P>, id: ProcessId) {
         let Some(process) = st.processes.get_mut(&id) else { return };
         if process.phase == Phase::Retiring {
             return;
@@ -679,7 +683,7 @@ impl ProcPool {
     }
 
     /// The host's close of a created process; then its reaping receipt releases it.
-    fn close_process(&self, st: &mut State, id: ProcessId) {
+    fn close_process(&self, st: &mut State<P>, id: ProcessId) {
         let Some(executor) = st.executor(id) else { return };
         let pool = self.clone();
         self.own(st, async move {
@@ -701,7 +705,7 @@ impl ProcPool {
     }
 
     /// Waits for the process's reaping receipt, `after` a delay; a failed join is retried.
-    fn join(&self, st: &mut State, id: ProcessId, after: Duration) {
+    fn join(&self, st: &mut State<P>, id: ProcessId, after: Duration) {
         let Some(executor) = st.executor(id) else { return };
         let pool = self.clone();
         self.own(st, async move {
@@ -714,7 +718,7 @@ impl ProcPool {
     }
 
     /// The process's reaping receipt takes it out of service; a closed one is released.
-    fn joined(&self, st: &mut State, id: ProcessId, outcome: PoolJoinOutcome) {
+    fn joined(&self, st: &mut State<P>, id: ProcessId, outcome: PoolJoinOutcome) {
         let Some(process) = st.processes.get_mut(&id) else { return };
         process.joining = false;
         process.receipt = Some(outcome);
@@ -725,7 +729,7 @@ impl ProcPool {
     }
 
     /// A failed join is reported, then retried while the process is still known.
-    fn join_failed(&self, executor: &Executor, id: ProcessId, error: HostError) {
+    fn join_failed(&self, executor: &Executor<P>, id: ProcessId, error: HostError) {
         self.0.host.emit(ProcessEvent::JoinFailed, executor);
         self.0.host.failed(executor, "error joining process", error);
         self.update(|pool, st| {
@@ -738,7 +742,7 @@ impl ProcPool {
 
     /// The process's OS exit, `after` a delay, takes it out of service; a failed observation is
     /// retried.
-    fn watch_exit(&self, st: &mut State, id: ProcessId, after: Duration) {
+    fn watch_exit(&self, st: &mut State<P>, id: ProcessId, after: Duration) {
         let Some(executor) = st.executor(id) else { return };
         let pool = self.clone();
         self.own(st, async move {
@@ -751,7 +755,7 @@ impl ProcPool {
     }
 
     /// A failed exit observation is reported, then retried while the process is still known.
-    fn exit_watch_failed(&self, executor: &Executor, id: ProcessId, error: HostError) {
+    fn exit_watch_failed(&self, executor: &Executor<P>, id: ProcessId, error: HostError) {
         self.0.host.emit(ProcessEvent::ExitFailed, executor);
         self.0.host.failed(executor, "error observing process exit", error);
         self.update(|pool, st| {
@@ -762,7 +766,7 @@ impl ProcPool {
         });
     }
 
-    fn release(&self, st: &mut State, id: ProcessId) {
+    fn release(&self, st: &mut State<P>, id: ProcessId) {
         st.initializing.remove(&id);
         st.ready.retain(|ready| *ready != id);
         if let Some(process) = st.processes.remove(&id)
@@ -772,7 +776,7 @@ impl ProcPool {
         }
     }
 
-    fn cancel(&self, st: &mut State, id: ReservationId) {
+    fn cancel(&self, st: &mut State<P>, id: ReservationId) {
         let Some(request) = st.requests.remove(&id) else { return };
         st.pending.retain(|pending| *pending != id);
         if let ReservationState::Reserved(process) = request.state {
@@ -786,7 +790,7 @@ impl ProcPool {
         }
     }
 
-    async fn acquire(&self, request: ReservationId) -> Result<(ProcessId, Executor), Failure> {
+    async fn acquire(&self, request: ReservationId) -> Result<(ProcessId, Executor<P>), Failure> {
         loop {
             let changed = self.0.changed.notified();
             tokio::pin!(changed);
@@ -826,7 +830,7 @@ impl ProcPool {
     }
 
     /// A launch on the reserved process failed: it is taken out of service.
-    fn launch_failed(&self, st: &mut State, request: ReservationId, id: ProcessId) {
+    fn launch_failed(&self, st: &mut State<P>, request: ReservationId, id: ProcessId) {
         if st.reservation(request) == Some(ReservationState::Reserved(id)) {
             self.retire(st, id);
         }
@@ -859,7 +863,7 @@ impl ProcPool {
     }
 
     /// Fails every reservation and retires every process; whether this was the first close.
-    fn close_all(&self, st: &mut State) -> bool {
+    fn close_all(&self, st: &mut State<P>) -> bool {
         let first = !st.closed;
         st.closed = true;
         st.refill_paused_until = None;

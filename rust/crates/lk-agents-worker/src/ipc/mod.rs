@@ -5,7 +5,7 @@
 //! - [`wire`]: the protocol's messages, a typed one per direction.
 //! - [`RunnerExecutor`] ([`executor`]): what a job runs in, a [`Runner`] launched with its channel;
 //!   a thread of the worker ([`ThreadExecutor`]) or a process ([`ProcessExecutor`]), both started
-//!   by the host's launcher, which reports the launch on a [`JobLaunch`].
+//!   by the host's launcher, which reports on a [`ProcessLaunch`] or [`ThreadLaunch`].
 //! - [`process`]: the process executor, the only code touching the OS process: spawn receipts,
 //!   exit, kill, reaping receipts, memory.
 //! - [`RunnerSupervisor`] ([`supervisor`]): the worker's policy for one job runner over its
@@ -39,11 +39,11 @@ pub use child::ChildChannel;
 pub use executor::{Exit, Runner, RunnerExecutor, ThreadExecutor};
 pub use ipc_channel::{Channel, ChannelError, SendError};
 pub use job_run::JobRun;
-pub use owner::{JobLaunch, JobSupervisor};
+pub use owner::{JobSupervisor, ProcessLaunch, ThreadLaunch};
 pub use process::{ProcessExecutor, ProcessReceipt};
 pub use process_pool::ProcessPool;
 pub use supervisor::secs;
-pub use supervisor::{InitError, ProtocolError, StartJobError, SupervisorOptions};
+pub use supervisor::{InitError, ProtocolError, StartJobError};
 pub use supervisor::{RunnerFields, RunnerSupervisor, SupervisorCallbacks};
 pub use wire::{Hello, StartJob, ToChild, ToParent};
 

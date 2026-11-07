@@ -48,13 +48,13 @@ class HttpExchange:
 def cpu_count() -> float:
     """Logical CPUs, fractional under a cgroup quota. Reads, starts nothing."""
 
-class JobLaunch:
-    """One launch of a job runner, as the launcher reports it."""
-    @property
-    def thread(self) -> bool:
-        """The runner is a thread of this process, else a process of the launcher's start method."""
+class ProcessLaunch:
+    """A process launch: only the process's receipt can be reported."""
     def process_started(self, pid: int, sentinel: int, method: str, owned: Sequence[int]) -> None:
         """The process's receipt, reported on the launch worker right after the OS created it."""
+
+class ThreadLaunch:
+    """A thread launch: only the thread's return can be reported."""
     def thread_exited(self) -> None:
         """The job thread returned, reported from that thread."""
 

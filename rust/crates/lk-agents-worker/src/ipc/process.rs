@@ -20,7 +20,7 @@ use tokio::sync::{Notify, watch};
 use super::SupervisorCallbacks;
 use super::executor::{Connection, Exit, Runner, RunnerExecutor, host_error};
 use super::ipc_channel::{self, Channel};
-use super::owner::{JobLaunch, JobLogger, Report};
+use super::owner::{JobLogger, ProcessLaunch};
 use super::supervisor::runner_log;
 
 #[cfg(unix)]
@@ -724,7 +724,7 @@ impl RunnerExecutor for ProcessExecutor {
         let (parent, child) = ipc_channel::pair().map_err(host_error)?;
         let connection = Channel::from_endpoint(parent).map_err(host_error)?;
         let (launcher, context) = (self.launcher.clone(), self.context.clone());
-        let launch = JobLaunch::report(Report::Process(self.receipt.clone()));
+        let launch = Arc::new(ProcessLaunch(self.receipt.clone()));
         let mut launching = TokioSpawner::current().spawn(async move {
             launcher.launch(&telemetry::Cx::NONE, &context, child, launch).await
         });

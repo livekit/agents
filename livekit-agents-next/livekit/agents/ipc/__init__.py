@@ -31,7 +31,7 @@ from . import child, prometheus
 class _JobThread:
     """A job thread: it reports its return on its launch, it is never killed."""
 
-    def __init__(self, args: child.JobArgs, launch: _core.JobLaunch) -> None:
+    def __init__(self, args: child.JobArgs, launch: _core.ThreadLaunch) -> None:
         def run() -> None:
             try:
                 child.thread_main(args)
@@ -77,10 +77,12 @@ class JobLauncher:
             env=tuple(env),
         )
 
-    async def _core_launch(self, endpoint: int, launch: _core.JobLaunch) -> None:
+    async def _core_launch(
+        self, endpoint: int, launch: _core.ProcessLaunch | _core.ThreadLaunch
+    ) -> None:
         # the job's end: a socket on Unix, a named pipe on Windows
         child_end = child.PipeEnd(endpoint) if os.name == "nt" else socket.socket(fileno=endpoint)
-        if launch.thread:
+        if isinstance(launch, _core.ThreadLaunch):
             try:
                 # the thread shares this process's logging and owns the job's end
                 self._proc = _JobThread(

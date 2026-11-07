@@ -21,8 +21,7 @@ use tokio::sync::watch;
 use super::executor::{RunnerExecutor, ThreadExecutor};
 use super::process::{ProcessExecutor, ProcessReceipt};
 use super::{
-    HEALTH_CHECK_GRACE, Hello, InitError, RunnerFields, RunnerSupervisor, SupervisorCallbacks,
-    SupervisorOptions, secs,
+    HEALTH_CHECK_GRACE, Hello, InitError, RunnerFields, RunnerSupervisor, SupervisorCallbacks, secs,
 };
 use lk_agents_net::env::ProcessEnv;
 
@@ -48,9 +47,9 @@ pub struct JobSupervisor {
     /// Set by `start()`.
     sup: Mutex<Option<RunnerSupervisor>>,
     /// Whether the runner initialized, once that settled (answered, failed, timed out, killed).
-    initialized: watch::Sender<Option<bool>>,
+    initialized: watch::Sender<Settlement>,
     /// Whether a runner ran, once its supervision is over and the launcher heard of it.
-    ran: watch::Sender<Option<bool>>,
+    ran: watch::Sender<Settlement>,
     /// The completion report; it ends with the runner, and dropping this object does not cancel
     /// it.
     tasks: Arc<TaskSet>,
@@ -58,13 +57,26 @@ pub struct JobSupervisor {
 
 impl SupervisedJob for JobSupervisor {}
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Settlement {
+    Pending,
+    Succeeded,
+    Failed,
+}
+
 impl JobSupervisor {
     fn sup(&self) -> Option<RunnerSupervisor> {
         self.sup.lock().clone()
     }
 
     fn settle(&self, initialized: bool) {
-        self.initialized.send_if_modified(|v| v.is_none() && v.replace(initialized).is_none());
+        self.initialized.send_if_modified(|state| {
+            if *state != Settlement::Pending {
+                return false;
+            }
+            *state = if initialized { Settlement::Succeeded } else { Settlement::Failed };
+            true
+        });
     }
 
     pub(crate) fn logger(&self) -> &JobLogger {
@@ -75,20 +87,6 @@ impl JobSupervisor {
     pub(crate) async fn wait_exit(&self) -> Result<bool, HostError> {
         let sup = self.sup().ok_or_else(|| HostError::new("process not started"))?;
         Ok(self.spawner.run(async move { sup.wait_exit().await }).await)
-    }
-
-    fn supervision(&self) -> SupervisorOptions {
-        let opts = &self.options;
-        SupervisorOptions {
-            runner: if opts.thread { "job thread" } else { "process" },
-            initialize_timeout: opts.initialize_timeout,
-            close_timeout: opts.close_timeout,
-            memory_warn_mb: opts.memory_warn_mb,
-            memory_limit_mb: opts.memory_limit_mb,
-            ping_interval: opts.ping_interval,
-            ping_timeout: opts.ping_timeout,
-            high_ping_threshold: opts.high_ping_threshold,
-        }
     }
 }
 
@@ -119,11 +117,13 @@ impl ipc_host::JobSupervisor for JobSupervisor {
             launcher,
             context,
             logger,
-            spawner: TokioSpawner::new((env.runtime)().map_err(WorkerError::Failed)?),
+            spawner: TokioSpawner::new(
+                (env.runtime)().map_err(|error| WorkerError::Failed(error.to_string()))?,
+            ),
             state,
             sup: Mutex::new(None),
-            initialized: watch::channel(None).0,
-            ran: watch::channel(None).0,
+            initialized: watch::channel(Settlement::Pending).0,
+            ran: watch::channel(Settlement::Pending).0,
             tasks: Arc::new(TaskSet::default()),
         })
     }
@@ -141,7 +141,7 @@ impl ipc_host::JobSupervisor for JobSupervisor {
     }
 
     fn initialized(&self) -> bool {
-        *self.initialized.borrow() == Some(true)
+        *self.initialized.borrow() == Settlement::Succeeded
     }
 
     fn closing(&self) -> bool {
@@ -197,7 +197,7 @@ impl ipc_host::JobSupervisor for JobSupervisor {
             let sup = RunnerSupervisor::new(
                 executor,
                 self.logger.clone(),
-                self.supervision(),
+                self.options.clone(),
                 lk_agents_net::blocking_io::blocking_io(),
             );
             *slot = Some(sup.clone());
@@ -212,7 +212,7 @@ impl ipc_host::JobSupervisor for JobSupervisor {
                 state.lock().completion = Some(completion.clone());
                 let _ = launcher.completed(&telemetry::Cx::NONE, &context, completion).await;
             }
-            ran.send_replace(Some(launched));
+            ran.send_replace(if launched { Settlement::Succeeded } else { Settlement::Failed });
         });
         // The launcher's own failure is raised as it was.
         self.spawner.run(async move { sup.launched().await }).await.map_err(WorkerError::Host)
@@ -312,31 +312,18 @@ impl ipc_host::JobSupervisor for JobSupervisor {
             return false;
         }
         let mut ran = self.ran.subscribe();
-        ran.wait_for(Option::is_some).await.map(|done| done.unwrap_or(false)).unwrap_or(false)
+        ran.wait_for(|state| *state != Settlement::Pending)
+            .await
+            .is_ok_and(|done| *done == Settlement::Succeeded)
     }
 }
 
-/// One launch's report channel (`_core.JobLaunch`): a process's receipt or a thread's return.
-pub struct JobLaunch(Report);
+/// The receipt of a process launch.
+pub struct ProcessLaunch(pub(crate) Arc<ProcessReceipt>);
 
-pub(crate) enum Report {
-    Process(Arc<ProcessReceipt>),
-    Thread(Arc<watch::Sender<bool>>),
-}
+impl LaunchReport for ProcessLaunch {}
 
-impl JobLaunch {
-    pub(crate) fn report(report: Report) -> Arc<dyn LaunchReport> {
-        Arc::new(Self(report))
-    }
-}
-
-impl LaunchReport for JobLaunch {}
-
-impl ipc_host::JobLaunch for JobLaunch {
-    fn thread(&self) -> bool {
-        matches!(self.0, Report::Thread(_))
-    }
-
+impl ipc_host::ProcessLaunch for ProcessLaunch {
     fn process_started(
         &self,
         pid: u32,
@@ -344,22 +331,20 @@ impl ipc_host::JobLaunch for JobLaunch {
         method: String,
         owned: Vec<i64>,
     ) -> Result<(), WorkerError> {
-        match &self.0 {
-            Report::Process(receipt) => receipt
-                .report(pid, sentinel, &method, owned)
-                .map_err(|error| WorkerError::Failed(error.to_string())),
-            Report::Thread(_) => Err(WorkerError::Failed("a job thread has no process".into())),
-        }
+        self.0
+            .report(pid, sentinel, &method, owned)
+            .map_err(|error| WorkerError::Failed(error.to_string()))
     }
+}
 
-    fn thread_exited(&self) -> Result<(), WorkerError> {
-        match &self.0 {
-            Report::Thread(exited) => {
-                exited.send_replace(true);
-                Ok(())
-            }
-            Report::Process(_) => Err(WorkerError::Failed("no job thread to report".into())),
-        }
+/// The return of a thread launch.
+pub struct ThreadLaunch(pub(crate) Arc<watch::Sender<bool>>);
+
+impl LaunchReport for ThreadLaunch {}
+
+impl ipc_host::ThreadLaunch for ThreadLaunch {
+    fn thread_exited(&self) {
+        self.0.send_replace(true);
     }
 }
 

@@ -227,7 +227,8 @@ pub trait Implementations: 'static {
     type JoinTokens: ::lk_agents_abi::worker::JoinTokens;
     type HttpExchange: ::lk_agents_abi::worker::http::HttpExchange;
     type ServerEnvironment: ::lk_agents_abi::worker::types::ServerEnvironment;
-    type JobLaunch: ::lk_agents_abi::worker::ipc_host::JobLaunch;
+    type ProcessLaunch: ::lk_agents_abi::worker::ipc_host::ProcessLaunch;
+    type ThreadLaunch: ::lk_agents_abi::worker::ipc_host::ThreadLaunch;
     type JobSupervisor: ::lk_agents_abi::worker::ipc_host::JobSupervisor;
     type IpcClient: ::lk_agents_abi::worker::ipc_host::IpcClient;
     type ProcessPool: ::lk_agents_abi::worker::ipc_host::ProcessPool;
@@ -515,7 +516,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(worker::room_join_token, m)?)?;
     m.add_class::<worker::HttpExchange>()?;
     m.add_function(wrap_pyfunction!(worker::cpu_count, m)?)?;
-    m.add_class::<worker::JobLaunch>()?;
+    m.add_class::<worker::ProcessLaunch>()?;
+    m.add_class::<worker::ThreadLaunch>()?;
     m.add_class::<worker::JobSupervisor>()?;
     m.add_class::<worker::IpcClient>()?;
     m.add_class::<worker::ProcPool>()?;
@@ -661,9 +663,12 @@ impl NativeToHost for dyn ::lk_agents_abi::worker::ipc_host::LaunchReport {
         native: ::std::sync::Arc<Self>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let native: ::std::sync::Arc<dyn ::std::any::Any + Send + Sync> = native;
-        match native.downcast::<<crate::generated::implementations::Selected as Implementations>::JobLaunch>() {
-            Ok(native) => Ok(Py::new(py, worker::JobLaunch(native))?.into_bound(py).into_any()),
+        match native.downcast::<<crate::generated::implementations::Selected as Implementations>::ProcessLaunch>() {
+            Ok(native) => Ok(Py::new(py, worker::ProcessLaunch(native))?.into_bound(py).into_any()),
+            Err(native) => match native.downcast::<<crate::generated::implementations::Selected as Implementations>::ThreadLaunch>() {
+            Ok(native) => Ok(Py::new(py, worker::ThreadLaunch(native))?.into_bound(py).into_any()),
             Err(_) => Err(::pyo3::exceptions::PyTypeError::new_err("this `::lk_agents_abi::worker::ipc_host::LaunchReport` is no declared class")),
+        },
         }
     }
 }

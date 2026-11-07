@@ -11,7 +11,7 @@ use lk_agents_abi::worker::ipc_host;
 use tokio::sync::watch;
 
 use super::ipc_channel::{self, Channel};
-use super::owner::{JobLaunch, Report};
+use super::owner::ThreadLaunch;
 use super::wire::{ToChild, ToParent};
 
 /// A local failure, as a launch reports it.
@@ -71,7 +71,7 @@ impl RunnerExecutor for ThreadExecutor {
     async fn launch(&self) -> Result<(Box<dyn Runner>, Connection), HostError> {
         let (parent, child) = ipc_channel::pair().map_err(host_error)?;
         let connection = Channel::from_endpoint(parent).map_err(host_error)?;
-        let launch = JobLaunch::report(Report::Thread(self.exited.clone()));
+        let launch = Arc::new(ThreadLaunch(self.exited.clone()));
         self.launcher.launch(&telemetry::Cx::NONE, &self.context, child, launch).await?;
         Ok((Box::new(JobThread(self.exited.subscribe())), connection))
     }

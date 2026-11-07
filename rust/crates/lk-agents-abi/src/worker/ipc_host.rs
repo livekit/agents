@@ -38,8 +38,7 @@ pub enum WorkerError {
 #[crate::host(proxy(host = "livekit.agents.ipc.JobLauncher"))]
 pub trait JobLauncher: Send + Sync {
     /// Start the runner on the job's end of the channel: a thread of this process when
-    /// `launch.thread`, else a process. A process reports its receipt through
-    /// `launch.process_started`, a thread its return through `launch.thread_exited`.
+    /// `launch` is a `ThreadLaunch`, else a `ProcessLaunch`. Each reports only its own outcome.
     #[host(await, name = "_core_launch")]
     fn launch<'a>(
         &'a self,
@@ -58,16 +57,13 @@ pub trait JobLauncher: Send + Sync {
     ) -> crate::BoxFuture<'a, Result<(), HostError>>;
 }
 
-/// A native `JobLaunch`, as the supervisor hands it to its launcher.
-#[crate::host(native(refused = "expected a native JobLaunch"))]
+/// A native process or thread launch, as the supervisor hands it to its launcher.
+#[crate::host(native(refused = "expected a native process or thread launch"))]
 pub trait LaunchReport: Any + Send + Sync {}
 
-/// One launch of a job runner, as the launcher reports it.
-#[crate::host(class(name = "JobLaunch", native = LaunchReport))]
-pub trait JobLaunch: Send + Sync + Sized + 'static {
-    /// The runner is a thread of this process, else a process of the launcher's start method.
-    #[host(getter)]
-    fn thread(&self) -> bool;
+/// A process launch: only the process's receipt can be reported.
+#[crate::host(class(name = "ProcessLaunch", native = LaunchReport))]
+pub trait ProcessLaunch: Send + Sync + Sized + 'static {
     /// The process's receipt, reported on the launch worker right after the OS created it.
     #[host(call)]
     fn process_started(
@@ -77,9 +73,14 @@ pub trait JobLaunch: Send + Sync + Sized + 'static {
         method: String,
         owned: Vec<i64>,
     ) -> Result<(), WorkerError>;
+}
+
+/// A thread launch: only the thread's return can be reported.
+#[crate::host(class(name = "ThreadLaunch", native = LaunchReport))]
+pub trait ThreadLaunch: Send + Sync + Sized + 'static {
     /// The job thread returned, reported from that thread.
     #[host(call)]
-    fn thread_exited(&self) -> Result<(), WorkerError>;
+    fn thread_exited(&self);
 }
 
 /// A native `JobSupervisor`, as the pool hands it to the host.

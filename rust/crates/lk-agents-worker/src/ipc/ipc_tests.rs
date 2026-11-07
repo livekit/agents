@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use lk_agents_abi::errors::HostError;
+use lk_agents_abi::worker::ipc::JobRunnerOptions;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
 use tokio::sync::watch;
 use tokio::time::Instant;
@@ -91,8 +92,8 @@ mod supervision {
         }
     }
 
-    fn short(close_timeout: f64) -> SupervisorOptions {
-        SupervisorOptions { initialize_timeout: 1.0, close_timeout, ..opts() }
+    fn short(close_timeout: f64) -> JobRunnerOptions {
+        JobRunnerOptions { initialize_timeout: 1.0, close_timeout, ..opts() }
     }
 
     /// Initialized and ready to take a job.
@@ -248,7 +249,7 @@ mod supervision {
     // Catches: a child's own shutdown still judged by the health pings, or left unbounded.
     #[tokio::test(start_paused = true)]
     async fn child_initiated_shutdown_uses_the_exit_deadline_instead_of_health_pings() {
-        let opts = SupervisorOptions { ping_interval: 0.25, ping_timeout: 0.5, ..short(2.0) };
+        let opts = JobRunnerOptions { ping_interval: 0.25, ping_timeout: 0.5, ..short(2.0) };
         let (sup, host, child) = setup(opts);
         ready(&sup, &child).await;
         sup.supervise().await;
@@ -268,7 +269,7 @@ mod supervision {
     // Catches: the memory warning missing the job's baseline and growth.
     #[tokio::test(start_paused = true)]
     async fn memory_warnings_include_the_job_baseline() {
-        let opts = SupervisorOptions { memory_warn_mb: 500.0, ..short(60.0) };
+        let opts = JobRunnerOptions { memory_warn_mb: 500.0, ..short(60.0) };
         let (sup, host, child) = setup(opts);
         host.samples.lock().extend([Some(100.0), Some(600.04)]);
         ready(&sup, &child).await;
@@ -338,6 +339,49 @@ mod supervision {
         assert_eq!(next_within(&child, Duration::from_millis(500)).await, None);
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn shutting_down_before_the_ack_preserves_the_exit_deadline() {
+        let (sup, host, child) = setup(short(2.0));
+        ready(&sup, &child).await;
+        let close = tokio::spawn({
+            let sup = sup.clone();
+            async move { sup.shutdown().await }
+        });
+        assert!(matches!(recv(&child).await, ToChild::Shutdown { .. }));
+        write(&child, &ToParent::ShuttingDown).await.unwrap();
+        write(&child, &ToParent::ShutdownAck).await.unwrap();
+        settle().await;
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert_eq!(host.kills.load(Ordering::SeqCst), 0);
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+        assert_eq!(host.kills.load(Ordering::SeqCst), 1);
+        write(&child, &ToParent::ShuttingDown).await.unwrap();
+        child.close().await;
+        finish(&sup, &host, -9).await;
+        close.await.unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn reader_finishing_does_not_extend_the_shutdown_exit_deadline() {
+        let (sup, host, child) = setup(short(2.0));
+        ready(&sup, &child).await;
+        let close = tokio::spawn({
+            let sup = sup.clone();
+            async move { sup.shutdown().await }
+        });
+        assert!(matches!(recv(&child).await, ToChild::Shutdown { .. }));
+        write(&child, &ToParent::ShutdownAck).await.unwrap();
+        write(&child, &ToParent::ShuttingDown).await.unwrap();
+        settle().await;
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        child.close().await;
+        settle().await;
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        assert_eq!(host.kills.load(Ordering::SeqCst), 1);
+        finish(&sup, &host, -9).await;
+        close.await.unwrap();
+    }
+
     // Catches: a child that refused the protocol version still given a job.
     #[tokio::test(start_paused = true)]
     async fn no_job_is_accepted_after_a_version_refusal() {
@@ -355,7 +399,7 @@ mod supervision {
     // Catches: a runner with no readable footprint (a thread, a process gone) sampled every interval.
     #[tokio::test(start_paused = true)]
     async fn memory_sampling_stops_when_the_runner_has_no_footprint() {
-        let opts = SupervisorOptions { memory_warn_mb: 500.0, ping_timeout: 120.0, ..short(60.0) };
+        let opts = JobRunnerOptions { memory_warn_mb: 500.0, ping_timeout: 120.0, ..short(60.0) };
         let (sup, host, child) = setup(opts);
         // A retry would read the second sample and warn.
         host.samples.lock().extend([None, Some(600.0)]);
@@ -509,9 +553,9 @@ async fn finish(sup: &RunnerSupervisor, host: &FakeHost, code: i64) {
     assert!(sup.wait_exit().await);
 }
 
-fn opts() -> SupervisorOptions {
-    SupervisorOptions {
-        runner: "process",
+fn opts() -> JobRunnerOptions {
+    JobRunnerOptions {
+        thread: false,
         initialize_timeout: 10.0,
         close_timeout: 60.0,
         memory_warn_mb: 0.0,
@@ -519,12 +563,14 @@ fn opts() -> SupervisorOptions {
         ping_interval: 2.5,
         ping_timeout: 90.0,
         high_ping_threshold: 0.5,
+        http_proxy: None,
+        asyncio_debug: false,
     }
 }
 
 /// Never initialized by the test: the startup deadline stays out of the way.
-fn uninitialized() -> SupervisorOptions {
-    SupervisorOptions { initialize_timeout: 1000.0, ..opts() }
+fn uninitialized() -> JobRunnerOptions {
+    JobRunnerOptions { initialize_timeout: 1000.0, ..opts() }
 }
 
 fn executor(parent: Channel<ToChild, ToParent>, host: &Arc<FakeHost>) -> FakeExecutor {
@@ -532,18 +578,14 @@ fn executor(parent: Channel<ToChild, ToParent>, host: &Arc<FakeHost>) -> FakeExe
     FakeExecutor { launch, gate: None, refusal: None }
 }
 
-fn start(
-    executor: FakeExecutor,
-    host: &Arc<FakeHost>,
-    opts: SupervisorOptions,
-) -> RunnerSupervisor {
+fn start(executor: FakeExecutor, host: &Arc<FakeHost>, opts: JobRunnerOptions) -> RunnerSupervisor {
     let blocking_io = blocking_io();
     RunnerSupervisor::new(Arc::new(executor), host.clone(), opts, blocking_io)
 }
 
 fn supervise(
     parent: Channel<ToChild, ToParent>,
-    opts: SupervisorOptions,
+    opts: JobRunnerOptions,
 ) -> (RunnerSupervisor, Arc<FakeHost>) {
     let host = Arc::new(FakeHost::default());
     (start(executor(parent, &host), &host, opts), host)
@@ -552,14 +594,14 @@ fn supervise(
 /// The job process's end of the supervised channel.
 type Child = Channel<ToParent, ToChild>;
 
-fn setup(opts: SupervisorOptions) -> (RunnerSupervisor, Arc<FakeHost>, Child) {
+fn setup(opts: JobRunnerOptions) -> (RunnerSupervisor, Arc<FakeHost>, Child) {
     let (parent, child) = memory();
     let (sup, host) = supervise(parent, opts);
     (sup, host, child)
 }
 
 /// A child writing raw bytes: its preamble is written, the parent's is read.
-async fn setup_raw(opts: SupervisorOptions) -> (RunnerSupervisor, Arc<FakeHost>, DuplexStream) {
+async fn setup_raw(opts: JobRunnerOptions) -> (RunnerSupervisor, Arc<FakeHost>, DuplexStream) {
     let (parent, mut child) = tokio::io::duplex(1 << 16);
     let (sup, host) = supervise(Channel::new(parent), opts);
     child.write_all(&MAGIC).await.unwrap();
@@ -795,8 +837,7 @@ async fn shutdown_kills_a_process_that_does_not_ack() {
 
 #[tokio::test(start_paused = true)]
 async fn a_runner_that_cannot_be_forced_is_asked_and_waited_for() {
-    let (sup, host, child) =
-        setup(SupervisorOptions { runner: "job thread", ping_timeout: 0.0, ..opts() });
+    let (sup, host, child) = setup(JobRunnerOptions { thread: true, ping_timeout: 0.0, ..opts() });
     host.forced.store(false, Ordering::SeqCst);
     sup.supervise().await;
     let close = tokio::spawn({
@@ -856,7 +897,7 @@ fn memory_warning_is_rate_limited() {
 // The native sampler runs on the process runtime; observe its completion on a real clock.
 #[tokio::test]
 async fn a_native_memory_sample_enforces_the_process_limit() {
-    let (sup, host, _child) = setup(SupervisorOptions { memory_limit_mb: 500.0, ..opts() });
+    let (sup, host, _child) = setup(JobRunnerOptions { memory_limit_mb: 500.0, ..opts() });
     host.samples.lock().push_back(Some(600.0));
     sup.supervise().await;
     let message = "process exceeded memory limit, stopping it";
@@ -942,7 +983,7 @@ async fn a_full_child_inbox_does_not_suspend_the_health_check() {
 
 #[tokio::test(start_paused = true)]
 async fn supervisor_blocked_writer() {
-    let (sup, host, mut child) = setup_raw(SupervisorOptions { ping_timeout: 1.0, ..opts() }).await;
+    let (sup, host, mut child) = setup_raw(JobRunnerOptions { ping_timeout: 1.0, ..opts() }).await;
     let initialize = waits(&sup).await;
     raw_hello(&mut child).await;
     let ready = postcard::to_allocvec(&ToParent::Ready { error: None }).unwrap();

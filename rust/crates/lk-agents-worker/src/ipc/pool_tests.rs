@@ -1,13 +1,11 @@
 use super::*;
 
-use std::any::Any;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use lk_agents_abi::BoxFuture;
-use lk_agents_abi::invoke::CallContext;
-use lk_agents_abi::worker::ipc::JobCompletion;
-use lk_agents_abi::worker::ipc_host::{JobLauncher, LaunchReport, SupervisedJob};
 use lk_agents_abi::worker::types::{AcceptArguments, JobInfo, RunningJobInfo};
+
+type Executor = super::super::process_pool::Executor<Numbered>;
+type ProcPool = super::ProcPool<Numbered>;
 
 /// Processes are numbered in creation order; `fail_init` makes every initialize fail,
 /// `fail_launch` the first n launches.
@@ -47,31 +45,8 @@ impl Host {
 /// The pool sees a process only by its identity: no step reaches its launcher.
 pub(in crate::ipc) struct Numbered(pub(in crate::ipc) usize);
 
-impl SupervisedJob for Numbered {}
-
-impl JobLauncher for Numbered {
-    fn launch<'a>(
-        &'a self,
-        _cx: &lk_agents_abi::telemetry::Cx,
-        _: &'a CallContext,
-        _: i64,
-        _: Arc<dyn LaunchReport>,
-    ) -> BoxFuture<'a, Result<(), HostError>> {
-        unreachable!()
-    }
-    fn completed<'a>(
-        &'a self,
-        _cx: &lk_agents_abi::telemetry::Cx,
-        _: &'a CallContext,
-        _: JobCompletion,
-    ) -> BoxFuture<'a, Result<(), HostError>> {
-        unreachable!()
-    }
-}
-
 fn number(process: &Executor) -> usize {
-    let process: &dyn Any = &*process.0;
-    process.downcast_ref::<Numbered>().expect("a numbered process").0
+    process.0.0
 }
 
 fn numbers(processes: &[Executor]) -> Vec<usize> {
@@ -107,9 +82,10 @@ pub(in crate::ipc) fn job(id: &str) -> RunningJobInfo {
 
 #[async_trait::async_trait]
 impl Executors for Host {
+    type Process = Numbered;
     async fn create(&self) -> Result<Executor, HostError> {
         let mut created = self.created.lock();
-        let process = Executor(Arc::new(Numbered(created.len())));
+        let process = super::super::process_pool::Executor(Arc::new(Numbered(created.len())));
         created.push(process.clone());
         Ok(process)
     }

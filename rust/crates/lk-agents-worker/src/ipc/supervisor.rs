@@ -14,6 +14,11 @@ use tokio::time::Instant;
 use super::executor::{Connection, Exit, Runner, RunnerExecutor};
 use super::ipc_channel::{ChannelError, SendError, VERSION};
 use super::wire::{Hello, StartJob, ToChild, ToParent};
+use lk_agents_abi::worker::ipc::JobRunnerOptions;
+
+#[path = "supervisor_lifecycle.rs"]
+mod lifecycle;
+use lifecycle::*;
 
 /// How often the memory monitor samples the process.
 pub const MEMORY_MONITOR_INTERVAL: Duration = Duration::from_secs(5);
@@ -50,17 +55,8 @@ macro_rules! runner_log {
 }
 pub(crate) use runner_log;
 
-#[derive(Clone, Debug)]
-pub struct SupervisorOptions {
-    /// What the logs call the runner: "process" or "job thread".
-    pub runner: &'static str,
-    pub initialize_timeout: f64,
-    pub close_timeout: f64,
-    pub memory_warn_mb: f64,
-    pub memory_limit_mb: f64,
-    pub ping_interval: f64,
-    pub ping_timeout: f64,
-    pub high_ping_threshold: f64,
+fn runner_name(opts: &JobRunnerOptions) -> &str {
+    if opts.thread { "job thread" } else { "process" }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -157,7 +153,7 @@ fn round(x: f64, digits: usize) -> f64 {
     format!("{x:.digits$}").parse().unwrap_or(x)
 }
 
-/// Converts the seconds of [`SupervisorOptions::high_ping_threshold`] to a pong's milliseconds.
+/// Converts the seconds of [`JobRunnerOptions::high_ping_threshold`] to a pong's milliseconds.
 const MILLIS_PER_SECOND: f64 = 1000.0;
 
 /// What the runner still reports once it exited: a refusal, or its own end.
@@ -169,16 +165,6 @@ fn read_after_exit(msg: &ToParent) -> bool {
             | ToParent::ShuttingDown
             | ToParent::Exiting { .. }
     )
-}
-
-/// Where a graceful close is.
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum Close {
-    None,
-    Ack(Duration),
-    ShuttingDown(Duration),
-    Exit(Duration),
-    Waiting,
 }
 
 /// Rate-limits the high memory warning: once per cooldown, or sooner when usage grew.
@@ -261,7 +247,7 @@ impl RunnerSupervisor {
     pub fn new<H: SupervisorCallbacks>(
         executor: Arc<dyn RunnerExecutor>,
         host: H,
-        opts: SupervisorOptions,
+        opts: JobRunnerOptions,
         blocking_io: lk_agents_net::blocking_io::BlockingIo,
     ) -> Self {
         let spawner = TokioSpawner::current();
@@ -393,7 +379,7 @@ type Sampling = Option<lk_agents_net::blocking_io::Job<Option<f64>>>;
 
 /// The supervisor's actor: the runner's state and every deadline, changed only here.
 struct Driver {
-    opts: SupervisorOptions,
+    opts: JobRunnerOptions,
     origin: Instant,
     host: Arc<dyn SupervisorCallbacks>,
     blocking_io: lk_agents_net::blocking_io::BlockingIo,
@@ -404,38 +390,15 @@ struct Driver {
     next_job_id: u64,
     status: watch::Sender<Status>,
     sampling: Sampling,
-    /// Waiting for `Ready`: since when, and until when.
-    init: Option<(Duration, Duration)>,
-    initialized_requested: bool,
-    initialized: bool,
-    pending_job: Option<(u64, Duration)>,
-    startup_at: Option<Duration>,
-    supervising: bool,
-    next_ping: Option<Duration>,
-    /// A ping is unanswered: the next waits for its pong, so a stalled child never fills the
-    /// channel with pings.
-    ping_unanswered: bool,
-    pong_deadline: Option<Duration>,
-    next_sample: Option<Duration>,
+    lifecycle: Lifecycle,
     baseline_mb: Option<f64>,
     gate: WarnGate,
-    close: Close,
-    acked: bool,
-    shutting_down: bool,
-    closing: bool,
-    /// `stop()` was called on the runner.
-    stopped: bool,
-    exit: Option<Exit>,
-    running_job: bool,
-    reader_closed: bool,
-    reader_deadline: Option<Duration>,
-    cleanup_at: Option<Duration>,
     protocol_failure: Option<Arc<ProtocolError>>,
 }
 
 impl Driver {
     fn new(
-        opts: SupervisorOptions,
+        opts: JobRunnerOptions,
         host: Arc<dyn SupervisorCallbacks>,
         blocking_io: lk_agents_net::blocking_io::BlockingIo,
         runner: Box<dyn Runner>,
@@ -444,7 +407,10 @@ impl Driver {
     ) -> Self {
         let origin = Instant::now();
         Self {
-            startup_at: Some(secs(opts.initialize_timeout)),
+            lifecycle: Lifecycle::Active {
+                phase: Active::Starting { deadline: secs(opts.initialize_timeout) },
+                health: Health::Idle,
+            },
             opts,
             origin,
             host,
@@ -456,27 +422,8 @@ impl Driver {
             next_job_id: 0,
             status,
             sampling: None,
-            init: None,
-            initialized_requested: false,
-            initialized: false,
-            pending_job: None,
-            supervising: false,
-            next_ping: None,
-            ping_unanswered: false,
-            pong_deadline: None,
-            next_sample: None,
             baseline_mb: None,
             gate: WarnGate::default(),
-            close: Close::None,
-            acked: false,
-            shutting_down: false,
-            closing: false,
-            stopped: false,
-            exit: None,
-            running_job: false,
-            reader_closed: false,
-            reader_deadline: None,
-            cleanup_at: None,
             protocol_failure: None,
         }
     }
@@ -501,8 +448,11 @@ impl Driver {
             let deadline = self.wake_at().map(|at| self.origin + at);
             tokio::select! {
                 biased;
-                () = async { tokio::time::sleep_until(deadline.unwrap()).await }, if deadline.is_some() => continue,
-                exit = runner.finished(), if self.exit.is_none() => self.input(AfterExit::Read, |d| d.on_finished(exit)),
+                () = async { match deadline {
+                    Some(at) => tokio::time::sleep_until(at).await,
+                    None => std::future::pending().await,
+                } } => continue,
+                exit = runner.finished(), if !self.exited() => self.input(AfterExit::Read, |d| d.on_finished(exit)),
                 changed = control.changed(), if control_open => match changed {
                     Ok(()) => self.on_control(*control.borrow_and_update(), &mut seen),
                     Err(_) => {
@@ -524,7 +474,10 @@ impl Driver {
                         self.input(AfterExit::Dropped, Self::end);
                     }
                 },
-                sample = async { self.sampling.as_mut().unwrap().await }, if self.sampling.is_some() => {
+                sample = async { match self.sampling.as_mut() {
+                    Some(sample) => sample.await,
+                    None => std::future::pending().await,
+                } } => {
                     self.sampling = None;
                     self.input(AfterExit::Dropped, |d| d.on_sample(sample.ok().flatten()));
                 }
@@ -603,7 +556,7 @@ impl Driver {
     }
 
     fn exited(&self) -> bool {
-        self.exit.is_some()
+        self.lifecycle.exit().is_some()
     }
 
     /// One input: what is due first (a reply at a deadline cannot revive an expired phase), then
@@ -621,7 +574,7 @@ impl Driver {
 
     fn publish(&self) {
         let failure = self.protocol_failure.as_deref().map(Into::into);
-        let exit = self.exit;
+        let exit = self.lifecycle.exit();
         self.status.send_modify(|s| {
             s.failure = failure;
             s.exit = exit;
@@ -630,38 +583,45 @@ impl Driver {
 
     /// Closing or ended: the memory monitor's failures are no longer worth a log.
     fn stopping(&self) -> bool {
-        self.closing || self.stopped || self.exited()
+        !matches!(self.lifecycle, Lifecycle::Active { .. })
     }
 
     fn cleaned(&self) -> bool {
-        self.exited() && (!self.initialized_requested || self.reader_closed)
+        matches!(self.lifecycle, Lifecycle::Exited { reader: Drain::Closed, .. })
     }
 
     fn wake_at(&self) -> Option<Duration> {
-        if self.cleaned() {
-            return None;
-        }
-        if self.exited() {
-            return self.reader_deadline;
-        }
-        let close = match self.close {
-            Close::Ack(at) | Close::ShuttingDown(at) | Close::Exit(at) => Some(at),
+        let init = self.lifecycle.initialization().map(|init| init.deadline);
+        let job = match self.lifecycle.job() {
+            Job::Pending { deadline, .. } => Some(deadline),
             _ => None,
         };
-        let sample = self.next_sample.filter(|_| self.sampling.is_none() && !self.stopping());
-        [
-            self.startup_at,
-            self.init.map(|(_, at)| at),
-            self.pending_job.map(|(_, at)| at),
-            self.next_ping,
-            self.pong_deadline,
-            sample,
-            close,
-            self.cleanup_at,
-        ]
-        .into_iter()
-        .flatten()
-        .min()
+        match self.lifecycle {
+            Lifecycle::Active { phase, health } => {
+                let startup = match phase {
+                    Active::Starting { deadline } => Some(deadline),
+                    _ => None,
+                };
+                let (ping, pong, sample) = match health {
+                    Health::Idle => (None, None, None),
+                    Health::Monitoring { next_ping, pong_deadline, next_sample, .. } => (
+                        Some(next_ping),
+                        pong_deadline,
+                        next_sample.filter(|_| self.sampling.is_none()),
+                    ),
+                };
+                [startup, init, job, ping, pong, sample].into_iter().flatten().min()
+            }
+            Lifecycle::Closing { phase, cleanup, .. } => {
+                let cleanup = match cleanup {
+                    Cleanup::At(at) => Some(at),
+                    Cleanup::Reported => None,
+                };
+                [init, job, phase.deadline(), cleanup].into_iter().flatten().min()
+            }
+            Lifecycle::Exited { reader: Drain::Until(at), .. } => Some(at),
+            Lifecycle::Exited { reader: Drain::Closed, .. } => None,
+        }
     }
 
     fn reply_init(&mut self, result: Result<Option<Duration>, InitError>) {
@@ -679,36 +639,35 @@ impl Driver {
     }
 
     fn initialize(&mut self, hello: Hello) {
-        if self.initialized_requested || self.closing {
+        let Lifecycle::Active { phase: Active::Starting { deadline }, health } = self.lifecycle
+        else {
             self.reply_init(Err(InitError::AlreadyInitializing));
             return;
-        }
-        self.initialized_requested = true;
-        runner_log!(self.host.runner(), log::Level::Info; "initializing {}", self.opts.runner);
+        };
+        self.lifecycle = Lifecycle::Active {
+            phase: Active::Initializing(Initialization { started: self.now(), deadline }),
+            health,
+        };
+        runner_log!(self.host.runner(), log::Level::Info; "initializing {}", runner_name(&self.opts));
         self.send(ToChild::Hello(hello));
-        if self.reader_closed {
-            self.reply_init(Err(InitError::Closed));
-        } else {
-            let now = self.now();
-            let until = self.startup_at.take().unwrap_or(now + secs(self.opts.initialize_timeout));
-            self.init = Some((now, until));
-        }
     }
 
     fn supervise(&mut self) {
-        if self.supervising {
+        let Lifecycle::Active { health: Health::Idle, phase } = self.lifecycle else {
             return;
-        }
+        };
         let now = self.now();
-        self.supervising = true;
-        self.next_ping = Some(now);
-        // `ping_timeout` 0: a late pong is only reported
-        if self.opts.ping_timeout > 0.0 {
-            self.pong_deadline = Some(now + secs(self.opts.ping_timeout));
-        }
-        if self.opts.memory_limit_mb > 0.0 || self.opts.memory_warn_mb > 0.0 {
-            self.next_sample = Some(now);
-        }
+        self.lifecycle = Lifecycle::Active {
+            phase,
+            health: Health::Monitoring {
+                next_ping: now,
+                ping: Ping::Ready,
+                pong_deadline: (self.opts.ping_timeout > 0.0)
+                    .then(|| now + secs(self.opts.ping_timeout)),
+                next_sample: (self.opts.memory_limit_mb > 0.0 || self.opts.memory_warn_mb > 0.0)
+                    .then_some(now),
+            },
+        };
     }
 
     fn start_job(&mut self, request_id: u64, job: StartJob) {
@@ -716,30 +675,27 @@ impl Driver {
             Some(StartJobError::Protocol(failure.clone()))
         } else if self.stopping() {
             Some(StartJobError::Closed)
-        } else if !self.initialized {
+        } else if !matches!(self.lifecycle, Lifecycle::Active { phase: Active::Ready(_), .. }) {
             Some(StartJobError::NotReady)
-        } else if self.pending_job.is_some() || self.running_job {
+        } else if !matches!(self.lifecycle.job(), Job::Idle) {
             Some(StartJobError::AlreadyRunning)
         } else {
             None
         };
-        match failure {
-            Some(error) => self.reply_job(request_id, Err(error)),
-            None => {
-                let message = ToChild::StartJob { request_id, job: Box::new(job) };
-                match self.channel.try_send(message) {
-                    Err(SendError::TooLarge(size)) => self.reply_job(
-                        request_id,
-                        Err(StartJobError::InvalidFields(format!(
-                            "a {size}-byte job is too large"
-                        ))),
-                    ),
-                    sent => {
-                        self.pending_job =
-                            Some((request_id, self.now() + secs(self.opts.initialize_timeout)));
-                        self.sent(sent);
-                    }
-                }
+        if let Some(error) = failure {
+            self.reply_job(request_id, Err(error));
+            return;
+        }
+        let message = ToChild::StartJob { request_id, job: Box::new(job) };
+        match self.channel.try_send(message) {
+            Err(SendError::TooLarge(size)) => self.reply_job(
+                request_id,
+                Err(StartJobError::InvalidFields(format!("a {size}-byte job is too large"))),
+            ),
+            sent => {
+                let deadline = self.now() + secs(self.opts.initialize_timeout);
+                self.set_job(Job::Pending { request_id, deadline });
+                self.sent(sent);
             }
         }
     }
@@ -747,12 +703,23 @@ impl Driver {
     /// The peer finishing after it said it was shutting down is the clean end; anything else is
     /// a protocol failure.
     fn on_reader_closed(&mut self, reason: ChannelError) {
-        if self.shutting_down && matches!(reason, ChannelError::Closed) {
-            self.reader_closed = true;
-            self.reader_deadline = None;
-            self.next_ping = None;
-            self.acked = true;
-            self.advance_close();
+        let shutting_down = match self.lifecycle {
+            Lifecycle::Closing { phase, .. } => phase.child() == Child::ShuttingDown,
+            Lifecycle::Exited { .. } => {
+                matches!(self.lifecycle_reader_child(), Child::ShuttingDown)
+            }
+            _ => false,
+        };
+        if shutting_down && matches!(reason, ChannelError::Closed) {
+            let deadline = self.now() + secs(self.opts.close_timeout);
+            match &mut self.lifecycle {
+                Lifecycle::Closing { phase, reader, .. } => {
+                    *reader = Reader::Closed;
+                    *phase = phase.acknowledged(deadline);
+                }
+                Lifecycle::Exited { reader, .. } => *reader = Drain::Closed,
+                _ => {}
+            }
         } else {
             self.fail_protocol(Arc::new(reason.into()));
         }
@@ -760,18 +727,19 @@ impl Driver {
 
     fn on_finished(&mut self, exit: Exit) {
         let now = self.now();
-        self.exit = Some(exit);
-        if self.initialized_requested && !self.reader_closed {
-            self.reader_deadline = Some(now + secs(self.opts.close_timeout));
-        }
-        if self.reader_closed && self.init.take().is_some() {
+        let work = self.lifecycle.work();
+        let reader = if matches!(work, Work::Uninitialized) || !self.lifecycle.reader_open() {
+            Drain::Closed
+        } else {
+            Drain::Until(now + secs(self.opts.close_timeout))
+        };
+        let child = self.lifecycle_reader_child();
+        self.lifecycle = Lifecycle::Exited { exit, reader, work, child };
+        if matches!(reader, Drain::Closed) && self.take_initialization().is_some() {
             self.reply_init(Err(InitError::Closed));
         }
-        (self.startup_at, self.cleanup_at) = (None, None);
-        (self.next_ping, self.pong_deadline, self.next_sample) = (None, None, None);
-        self.close = Close::None;
         if exit.code != 0 && !exit.killed {
-            runner_log!(self.host.runner(), log::Level::Error; "{} exited with non-zero exit code {}", self.opts.runner, exit.code);
+            runner_log!(self.host.runner(), log::Level::Error; "{} exited with non-zero exit code {}", runner_name(&self.opts), exit.code);
         }
     }
 
@@ -781,8 +749,8 @@ impl Driver {
             return;
         }
         let now = self.now();
-        if self.reader_deadline.is_some_and(|at| at <= now) {
-            self.reader_deadline = None;
+        if matches!(self.lifecycle, Lifecycle::Exited { reader: Drain::Until(at), .. } if at <= now)
+        {
             self.fail_protocol(Arc::new(ProtocolError::Channel(ChannelError::Io {
                 kind: std::io::ErrorKind::TimedOut,
                 os_error: None,
@@ -792,71 +760,75 @@ impl Driver {
         if self.exited() {
             return;
         }
-        if self.cleanup_at.is_some_and(|at| at <= now) {
-            self.cleanup_at = None;
-            runner_log!(self.host.runner(), log::Level::Error; "incomplete {} cleanup; retaining ownership", self.opts.runner);
+        if let Lifecycle::Closing { cleanup, .. } = &mut self.lifecycle
+            && matches!(*cleanup, Cleanup::At(at) if at <= now)
+        {
+            *cleanup = Cleanup::Reported;
+            runner_log!(self.host.runner(), log::Level::Error; "incomplete {} cleanup; retaining ownership", runner_name(&self.opts));
             self.status.send_modify(|s| s.incomplete = true);
         }
-        if self.startup_at.is_some_and(|at| at <= now) {
-            self.startup_at = None;
-            runner_log!(self.host.runner(), log::Level::Error; "{} launch did not enter initialization before its deadline", self.opts.runner);
+        if matches!(self.lifecycle, Lifecycle::Active { phase: Active::Starting { deadline }, .. } if deadline <= now)
+        {
+            runner_log!(self.host.runner(), log::Level::Error; "{} launch did not enter initialization before its deadline", runner_name(&self.opts));
             self.end();
         }
-        if let Some((_, at)) = self.init
-            && at <= now
+        if let Some(init) = self.lifecycle.initialization()
+            && init.deadline <= now
         {
-            self.init = None;
+            self.take_initialization();
             self.reply_init(Ok(None));
             self.end();
         }
-        if let Some((request_id, deadline)) = self.pending_job
+        if let Job::Pending { request_id, deadline } = self.lifecycle.job()
             && deadline <= now
         {
-            self.pending_job = None;
+            self.set_job(Job::Idle);
             self.reply_job(request_id, Err(StartJobError::Timeout));
             self.end();
         }
-        if let Some(at) = self.next_ping
-            && at <= now
+        if let Lifecycle::Active { health: Health::Monitoring { next_ping, ping, .. }, .. } =
+            &mut self.lifecycle
+            && *next_ping <= now
         {
-            if !self.ping_unanswered {
-                self.ping_unanswered = true;
+            let send = matches!(*ping, Ping::Ready);
+            *ping = Ping::Unanswered;
+            *next_ping = now + secs(self.opts.ping_interval).max(Duration::from_millis(1));
+            if send {
                 self.send(ToChild::Ping { sent_ms: unix_now_ms().max(0) as u64 });
             }
-            self.next_ping =
-                Some(now + secs(self.opts.ping_interval).max(Duration::from_millis(1)));
         }
-        if let Some(at) = self.pong_deadline
-            && at <= now
+        if matches!(self.lifecycle, Lifecycle::Active { health: Health::Monitoring { pong_deadline: Some(at), .. }, .. } if at <= now)
         {
-            self.pong_deadline = None;
-            runner_log!(self.host.runner(), log::Level::Error; "{} is unresponsive, stopping it", self.opts.runner);
+            runner_log!(self.host.runner(), log::Level::Error; "{} is unresponsive, stopping it", runner_name(&self.opts));
             self.end();
         }
-        if let Some(at) = self.next_sample
-            && at <= now
+        if let Lifecycle::Active { health: Health::Monitoring { next_sample, .. }, .. } =
+            &mut self.lifecycle
+            && next_sample.is_some_and(|at| at <= now)
             && self.sampling.is_none()
-            && !self.stopping()
         {
-            self.next_sample = None;
+            *next_sample = None;
             let runner = self.runner.clone();
             // Admission before any task: a saturated sampler retries at its next cadence.
             match self.blocking_io.try_spawn((), move || runner.memory_mb()) {
                 Ok(receipt) => self.sampling = Some(receipt),
-                Err(_) => self.next_sample = Some(now + MEMORY_MONITOR_INTERVAL),
+                Err(_) => *next_sample = Some(now + MEMORY_MONITOR_INTERVAL),
             }
         }
-        match self.close {
-            Close::Ack(at) if at <= now => {
+        match self.lifecycle {
+            Lifecycle::Closing { phase: Close::Ack { deadline, .. }, .. } if deadline <= now => {
                 let action = if self.stop() { "stopping it" } else { "waiting for it" };
-                runner_log!(self.host.runner(), log::Level::Error; "{} did not ack shutdown in time, {action}", self.opts.runner);
-                self.close = Close::ShuttingDown(now + secs(self.opts.close_timeout));
-                self.advance_close();
+                runner_log!(self.host.runner(), log::Level::Error; "{} did not ack shutdown in time, {action}", runner_name(&self.opts));
+                if let Lifecycle::Closing { phase, .. } = &mut self.lifecycle {
+                    *phase = phase.acknowledged(now + secs(self.opts.close_timeout));
+                }
             }
-            Close::ShuttingDown(at) | Close::Exit(at) if at <= now => {
+            Lifecycle::Closing { phase, .. } if phase.deadline().is_some_and(|at| at <= now) => {
                 let action = if self.stop() { "stopping it" } else { "waiting for it" };
-                runner_log!(self.host.runner(), log::Level::Error; "{} did not exit in time, {action}", self.opts.runner);
-                self.close = Close::Waiting;
+                runner_log!(self.host.runner(), log::Level::Error; "{} did not exit in time, {action}", runner_name(&self.opts));
+                if let Lifecycle::Closing { phase: close, .. } = &mut self.lifecycle {
+                    *close = Close::Waiting(phase.child());
+                }
             }
             _ => {}
         }
@@ -867,19 +839,22 @@ impl Driver {
             return;
         }
         let now = self.now();
-        if let Some((started, _)) = self.init.take() {
-            self.on_init_reply(started, now, msg);
+        if let Some(init) = self.take_initialization() {
+            self.on_init_reply(init.started, now, msg);
             return;
         }
         match msg {
             ToParent::Pong { sent_ms } => self.on_pong(sent_ms, now),
             ToParent::ShutdownAck => {
-                self.acked = true;
-                self.advance_close();
+                if let Lifecycle::Closing { phase: phase @ Close::Ack { .. }, .. } =
+                    &mut self.lifecycle
+                {
+                    *phase = phase.acknowledged(now + secs(self.opts.close_timeout));
+                }
             }
             ToParent::ShuttingDown => self.on_shutting_down(now),
             ToParent::Exiting { reason } => {
-                runner_log!(self.host.runner(), log::Level::Info, reason = reason.as_str(); "{} exiting", self.opts.runner);
+                runner_log!(self.host.runner(), log::Level::Info, reason = reason.as_str(); "{} exiting", runner_name(&self.opts));
             }
             ToParent::JobAccepted { request_id, error } => self.on_job_accepted(request_id, error),
             ToParent::Ready { .. } => {
@@ -893,9 +868,8 @@ impl Driver {
         let result = match msg {
             ToParent::Ready { error: Some(error) } => Err(InitError::Failed(error)),
             ToParent::Ready { error: None } => {
-                self.initialized = true;
                 let elapsed = now.saturating_sub(started);
-                runner_log!(self.host.runner(), log::Level::Info, elapsed_time = round(elapsed.as_secs_f64(), 2); "{} initialized", self.opts.runner);
+                runner_log!(self.host.runner(), log::Level::Info, elapsed_time = round(elapsed.as_secs_f64(), 2); "{} initialized", runner_name(&self.opts));
                 Ok(Some(elapsed))
             }
             _ => Err(InitError::Unexpected),
@@ -911,41 +885,43 @@ impl Driver {
     }
 
     fn on_pong(&mut self, sent_ms: u64, now: Duration) {
-        self.ping_unanswered = false;
+        if let Lifecycle::Active {
+            health: Health::Monitoring { ping, pong_deadline, .. }, ..
+        } = &mut self.lifecycle
+        {
+            *ping = Ping::Ready;
+            if pong_deadline.is_some() {
+                *pong_deadline = Some(now + secs(self.opts.ping_timeout));
+            }
+        }
         let delay = unix_now_ms().saturating_sub(sent_ms as i64);
         if delay as f64 > self.opts.high_ping_threshold * MILLIS_PER_SECOND {
-            runner_log!(self.host.runner(), log::Level::Warn, delay = delay; "{} is unresponsive", self.opts.runner);
-        }
-        // a late pong does not revive a deadline that fired
-        if self.pong_deadline.is_some() {
-            self.pong_deadline = Some(now + secs(self.opts.ping_timeout));
+            runner_log!(self.host.runner(), log::Level::Warn, delay = delay; "{} is unresponsive", runner_name(&self.opts));
         }
     }
 
     /// The runner is ending on its own: it has the close timeout to exit.
     fn on_shutting_down(&mut self, now: Duration) {
-        self.shutting_down = true;
-        self.next_ping = None;
-        self.pong_deadline = None;
-        if self.close == Close::None {
-            self.closing = true;
-            self.close = Close::Exit(now + secs(self.opts.close_timeout));
-            self.cleanup_at.get_or_insert(now + secs(self.opts.close_timeout));
+        let deadline = now + secs(self.opts.close_timeout);
+        match &mut self.lifecycle {
+            Lifecycle::Active { .. } => self.begin_close(Close::Exit { deadline }, deadline),
+            Lifecycle::Closing { phase, .. } => *phase = phase.shutting_down(deadline),
+            Lifecycle::Exited { child, .. } => *child = Child::ShuttingDown,
         }
-        self.advance_close();
     }
 
     /// The runner took the pending job, or refused it, which ends the runner.
     fn on_job_accepted(&mut self, request_id: u64, error: Option<String>) {
-        if !self.pending_job.is_some_and(|(pending, _)| pending == request_id) {
+        if !matches!(self.lifecycle.job(), Job::Pending { request_id: pending, .. } if pending == request_id)
+        {
             self.fail_protocol(Arc::new(ProtocolError::Unexpected(format!(
                 "job acknowledgment {request_id} has no pending submission"
             ))));
             return;
         }
-        self.pending_job = None;
+        self.set_job(Job::Idle);
         let Some(error) = error else {
-            self.running_job = true;
+            self.set_job(Job::Running);
             self.reply_job(request_id, Ok(()));
             return;
         };
@@ -959,14 +935,8 @@ impl Driver {
             return;
         }
         self.protocol_failure = Some(failure.clone());
-        self.reader_closed = true;
-        self.reader_deadline = None;
-        self.initialized = false;
-        self.next_ping = None;
-        self.pong_deadline = None;
-        self.closing = true;
         runner_log!(self.host.runner(), log::Level::Error; "invalid IPC message: {failure}");
-        if self.init.take().is_some() {
+        if self.take_initialization().is_some() {
             let error = match *failure {
                 ProtocolError::Channel(ChannelError::Version(theirs)) => InitError::Version(theirs),
                 ProtocolError::Channel(ChannelError::Closed) => InitError::Closed,
@@ -974,39 +944,84 @@ impl Driver {
             };
             self.reply_init(Err(error));
         }
-        if let Some((request_id, _)) = self.pending_job.take() {
+        if let Job::Pending { request_id, .. } = self.lifecycle.job() {
+            self.set_job(Job::Idle);
             self.reply_job(request_id, Err(StartJobError::Protocol(failure)));
         }
-        self.acked = true;
-        self.shutting_down = true;
-        self.advance_close();
+        let deadline = self.now() + secs(self.opts.close_timeout);
+        self.begin_close(Close::Exit { deadline }, deadline);
+        match &mut self.lifecycle {
+            Lifecycle::Closing { reader, phase, .. } => {
+                *reader = Reader::Closed;
+                *phase = Close::Exit { deadline };
+            }
+            Lifecycle::Exited { reader, .. } => *reader = Drain::Closed,
+            _ => {}
+        }
         // nothing more can be asked over the channel
         self.stop();
     }
 
     /// Asks the runner to shut down, with a deadline per phase.
     fn shutdown(&mut self) {
-        if self.close != Close::None {
+        if self.stopping() {
             return;
         }
         let now = self.now();
-        self.closing = true;
-        if let Some((request_id, _)) = self.pending_job.take() {
+        if let Job::Pending { request_id, .. } = self.lifecycle.job() {
+            self.set_job(Job::Idle);
             self.reply_job(request_id, Err(StartJobError::Closed));
         }
+        self.begin_close(
+            Close::Ack { deadline: now + secs(self.opts.close_timeout), child: Child::Running },
+            now + secs(self.opts.close_timeout) * 3,
+        );
         self.send(ToChild::Shutdown { reason: String::new() });
-        self.cleanup_at = Some(now + secs(self.opts.close_timeout) * 3);
-        self.close = Close::Ack(now + secs(self.opts.close_timeout));
-        self.advance_close();
     }
 
-    fn advance_close(&mut self) {
-        let now = self.now();
-        if matches!(self.close, Close::Ack(_)) && self.acked {
-            self.close = Close::ShuttingDown(now + secs(self.opts.close_timeout));
+    fn begin_close(&mut self, phase: Close, deadline: Duration) {
+        if matches!(self.lifecycle, Lifecycle::Active { .. }) {
+            self.lifecycle = Lifecycle::Closing {
+                phase,
+                cleanup: Cleanup::At(deadline),
+                stop: Stop::NotRequested,
+                reader: Reader::Open,
+                work: self.lifecycle.work(),
+            };
         }
-        if matches!(self.close, Close::ShuttingDown(_)) && self.shutting_down {
-            self.close = Close::Exit(now + secs(self.opts.close_timeout));
+    }
+
+    fn take_initialization(&mut self) -> Option<Initialization> {
+        match &mut self.lifecycle {
+            Lifecycle::Active { phase: phase @ Active::Initializing(_), .. } => {
+                let Active::Initializing(init) = *phase else { return None };
+                *phase = Active::Ready(Job::Idle);
+                Some(init)
+            }
+            Lifecycle::Closing { work: work @ Work::Initializing(_), .. }
+            | Lifecycle::Exited { work: work @ Work::Initializing(_), .. } => {
+                let Work::Initializing(init) = *work else { return None };
+                *work = Work::Ready(Job::Idle);
+                Some(init)
+            }
+            _ => None,
+        }
+    }
+
+    fn set_job(&mut self, next: Job) {
+        match &mut self.lifecycle {
+            Lifecycle::Active { phase: Active::Ready(job), .. }
+            | Lifecycle::Closing { work: Work::Ready(job), .. }
+            | Lifecycle::Exited { work: Work::Ready(job), .. } => *job = next,
+            _ => {}
+        }
+    }
+
+    fn lifecycle_reader_child(&self) -> Child {
+        match self.lifecycle {
+            Lifecycle::Closing { phase, .. } => phase.child(),
+            Lifecycle::Exited { child, .. } => child,
+            _ => Child::Running,
         }
     }
 
@@ -1022,23 +1037,23 @@ impl Driver {
         if self.exited() {
             return true;
         }
-        self.startup_at = None;
-        self.closing = true;
+        let deadline = self.now() + secs(self.opts.close_timeout);
+        self.begin_close(Close::Waiting(Child::Running), deadline);
         let forced = self.runner.stop();
-        if !std::mem::replace(&mut self.stopped, true) {
-            let runner = &self.opts.runner;
+        if let Lifecycle::Closing { stop: stop @ Stop::NotRequested, .. } = &mut self.lifecycle {
+            *stop = Stop::Requested;
+            let runner = runner_name(&self.opts);
             if forced {
                 runner_log!(self.host.runner(), log::Level::Info; "stopping {runner}");
             } else {
                 runner_log!(self.host.runner(), log::Level::Info; "waiting for {runner} to end");
             }
         }
-        self.cleanup_at.get_or_insert(self.now() + secs(self.opts.close_timeout));
         forced
     }
 
     fn send(&mut self, message: ToChild) {
-        if self.reader_closed || self.exited() {
+        if !self.lifecycle.reader_open() || self.exited() {
             return;
         }
         let sent = self.channel.try_send(message);
@@ -1062,17 +1077,19 @@ impl Driver {
         let warning = if over_limit {
             Some((
                 log::Level::Error,
-                format!("{} exceeded memory limit, stopping it", self.opts.runner),
+                format!("{} exceeded memory limit, stopping it", runner_name(&self.opts)),
             ))
         } else if warn_mb > 0.0 && memory_mb > warn_mb && self.gate.should_warn(memory_mb, now) {
             // without a hard limit nothing is stopped: say so
             let advisory = match limit_mb <= 0.0 {
-                true => format!(" (advisory only, the {} will not be stopped)", self.opts.runner),
+                true => {
+                    format!(" (advisory only, the {} will not be stopped)", runner_name(&self.opts))
+                }
                 false => String::new(),
             };
             let message = format!(
                 "{} memory usage is above the warning threshold{advisory}",
-                self.opts.runner
+                runner_name(&self.opts)
             );
             Some((log::Level::Warn, message))
         } else {
@@ -1086,7 +1103,7 @@ impl Driver {
                 memory_warn_mb = warn_mb,
                 memory_limit_mb = limit_mb,
                 uptime = round(now.as_secs_f64(), 1),
-                has_running_job = self.running_job,
+                has_running_job = matches!(self.lifecycle.job(), Job::Running),
                 baseline_memory_mb = round(baseline, 1),
                 growth_memory_mb = round(memory_mb - baseline, 1);
                 "{message}"
@@ -1095,8 +1112,10 @@ impl Driver {
         if over_limit {
             self.end();
         }
-        if !self.stopping() {
-            self.next_sample = Some(now + MEMORY_MONITOR_INTERVAL);
+        if let Lifecycle::Active { health: Health::Monitoring { next_sample, .. }, .. } =
+            &mut self.lifecycle
+        {
+            *next_sample = Some(now + MEMORY_MONITOR_INTERVAL);
         }
     }
 }
