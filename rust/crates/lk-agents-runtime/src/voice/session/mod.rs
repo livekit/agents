@@ -121,9 +121,11 @@ type InterruptionPortFactory = Box<
 
 /// The host's last line against a runtime that stopped ticking (above the close machine's bounds).
 const CLOSE_WATCHDOG: Duration = Duration::from_secs(30);
-/// One frame of virtual time per real millisecond while a virtual-clock close runs.
-const CLOSE_TICK: Duration = Duration::from_millis(20);
-const CLOSE_TICK_BUDGET: u32 = 30_000;
+
+#[derive(Default)]
+pub struct CloseOptions {
+    pub drain: bool,
+}
 
 enum Stage {
     Ready(Box<Ready>),
@@ -623,7 +625,7 @@ impl VoiceSession {
     pub fn close(
         &self,
         reason: CloseReason,
-        drain: bool,
+        options: CloseOptions,
         error: Option<lk_agents_voice::events::ErrorEvent>,
     ) -> impl Future<Output = ()> + Send + 'static {
         let (running, retired) = {
@@ -655,13 +657,10 @@ impl VoiceSession {
         let time = self.time.clone();
         async move {
             let Some((api, drained, loop_tasks, remote)) = running else { return };
-            let _ = api.send(Command::Close(Close { reason, drain, error }));
-            // Every close phase is bounded on the session clock; this watchdog is a backstop. On a
-            // virtual clock the host stopped advancing, so the clock is moved here.
-            if time.is_virtual() {
-                advance_until(&time, api.closed()).await;
-            } else {
-                let _ = time.timeout(CLOSE_WATCHDOG, api.closed()).await;
+            // A stopped receiver has already closed the session.
+            let _ = api.send(Command::Close(Close { reason, drain: options.drain, error }));
+            if time.timeout(CLOSE_WATCHDOG, api.closed()).await.is_err() {
+                log::warn!(target: lk_agents_abi::LOG_TARGET, timeout_ms = CLOSE_WATCHDOG.as_millis() as u64; "voice session close watchdog fired");
             }
             // `Closed` **before** awaiting the drain: `Running` holds the `PeerHandle`, a sender on
             // the host stream, and the drain only ends when every sender is gone.
@@ -670,8 +669,10 @@ impl VoiceSession {
                 *stage = Stage::Closed(remote);
             }
             // Then the drain: the host's `close` is queued before this future completes.
-            if let Some(drained) = drained {
-                let _ = time.timeout(HOST_TEARDOWN_TIMEOUT, drained).await;
+            if let Some(drained) = drained
+                && time.timeout(HOST_TEARDOWN_TIMEOUT, drained).await.is_err()
+            {
+                log::warn!(target: lk_agents_abi::LOG_TARGET, timeout_ms = HOST_TEARDOWN_TIMEOUT.as_millis() as u64; "voice session host drain timed out");
             }
             loop_tasks.into_iter().for_each(|task| tasks.cancel(task));
         }
@@ -685,7 +686,9 @@ impl VoiceSession {
         let time = self.time.clone();
         async move {
             outputs.aclose().await;
-            let _ = time.timeout(HOST_TEARDOWN_TIMEOUT, room_io.aclose()).await;
+            if time.timeout(HOST_TEARDOWN_TIMEOUT, room_io.aclose()).await.is_err() {
+                log::warn!(target: lk_agents_abi::LOG_TARGET, timeout_ms = HOST_TEARDOWN_TIMEOUT.as_millis() as u64; "voice session room cleanup timed out");
+            }
         }
     }
 
@@ -955,24 +958,6 @@ impl VoiceSession {
     ) {
         let clock = self.time.clock();
         self.tasks.spawn(self.spawner.as_ref(), "say feed", pusher.feed(source, clock));
-    }
-}
-
-/// For a host that stopped moving time (awaiting `aclose()`). Paced on real time (1 ms per step) so
-/// host tasks can run between steps.
-async fn advance_until(time: &Timebase, done: impl Future<Output = ()>) {
-    let pacer = lk_agents_net::clock::RealClock::new();
-    let mut done = std::pin::pin!(done);
-    for _ in 0..=CLOSE_TICK_BUDGET {
-        let tick = lk_agents_abi::Clock::wait_until(
-            &pacer,
-            lk_agents_abi::Clock::now(&pacer).saturating_add(Duration::from_millis(1)),
-        );
-        tokio::select! {
-            biased;
-            () = &mut done => return,
-            () = tick => time.advance(CLOSE_TICK),
-        }
     }
 }
 
