@@ -1801,3 +1801,17 @@ async def test_invalid_recorder_bit_rate_rejected(audio: bool) -> None:
     assert mock_ctx._primary_agent_session is None
     assert session._room_io is None
     assert not session._started
+
+
+def test_setup_cloud_tracer_skips_the_log_handler_after_the_hand_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livekit.agents import _hosted_logs
+    from livekit.agents.telemetry import traces as traces_mod
+
+    monkeypatch.setattr(_hosted_logs, "_handed_off", True)
+    with _stub_cloud_tracer_deps():
+        _setup_cloud_tracer_for_job()
+        cloud = traces_mod._cloud
+        assert cloud._log_batch_processor is not None
+        assert cloud.log_handler is None or cloud.log_handler not in logging.getLogger().handlers

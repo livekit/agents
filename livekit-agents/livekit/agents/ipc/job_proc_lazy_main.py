@@ -28,6 +28,7 @@ from opentelemetry import context as otel_context, trace
 from livekit import rtc
 from livekit.protocol import agent
 
+from .. import _hosted_logs
 from ..job import JobContext, JobExecutorType, JobProcess, RunningJobInfo, _JobContextVar
 from ..log import _add_global_log_fields, logger
 from ..telemetry import loop_monitor, trace_types, tracer, utils as trace_utils
@@ -291,6 +292,20 @@ class _JobProc:
             await aio.cancel_and_wait(read_task)
 
     def _start_job(self, msg: StartJobRequest) -> None:
+        job = msg.running_job.job
+        hosted_fields = {"job_id": job.id, "room": job.room.name, "room_id": job.room.sid}
+        if job.agent_name:
+            hosted_fields["agent_name"] = job.agent_name
+        hosted_output: _hosted_logs.JobOutput | None
+        if self._executor_type == JobExecutorType.THREAD:
+            hosted_output = _hosted_logs.thread_job_output(
+                job.id, hosted_fields, redaction=job.enable_redaction
+            )
+        else:
+            hosted_output = _hosted_logs.redirect_job_output(
+                job.id, hosted_fields, redaction=job.enable_redaction
+            )
+
         if msg.running_job.fake_job:
             from .mock_room import create_mock_room
 
@@ -338,6 +353,7 @@ class _JobProc:
         )
         # Reachable from SessionHost (via get_job_context) when a simulation finalizes.
         self._job_ctx._simulation_end_fnc = self._simulation_end_fnc
+        self._job_ctx._hosted_output = hosted_output
 
         def _exit_proc_cb(_: asyncio.Task[None]) -> None:
             self._exit_proc_flag.set()
@@ -353,6 +369,7 @@ class _JobProc:
         self._job_ctx._prepare_telemetry()
 
         job_ctx_token = _JobContextVar.set(self._job_ctx)
+        hosted_output_token = _hosted_logs.current_job_output.set(self._job_ctx._hosted_output)
         http_context._new_session_ctx()
 
         self._entrypoint_started_mono = time.monotonic()
@@ -440,7 +457,10 @@ class _JobProc:
 
             await self._job_ctx._on_cleanup()
             await http_context._close_http_ctx()
+            _hosted_logs.current_job_output.reset(hosted_output_token)
             _JobContextVar.reset(job_ctx_token)
+            if self._executor_type == JobExecutorType.THREAD and self._job_ctx._hosted_output:
+                self._job_ctx._hosted_output.close()
 
     async def _shutdown_job(
         self, job_entry_task: asyncio.Task[None], shutdown_info: _ShutdownInfo
