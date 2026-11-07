@@ -473,7 +473,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                     if not text:
                         continue
                     utt_id = utils.shortuuid()
-                    body = _request_body(self._opts, text=text, request_id=utt_id)
+                    # the owning TTS's current options: an update_options() between two
+                    # sentences applies to the next one, the socket stays
+                    body = _request_body(self._tts._opts, text=text, request_id=utt_id)
                     pending.append((utt_id, ev.segment_id or request_id))
                     self._mark_started()
                     await ws.send_str(json.dumps(body))
@@ -518,7 +520,11 @@ class SynthesizeStream(tts.SynthesizeStream):
                 ev_type = data.get("type")
                 ev_utt = data.get("request_id")
 
+                ours = bool(pending) and ev_utt == pending[0][0]
                 if ev_type == "error":
+                    if ev_utt is not None and not ours:
+                        # a late error of an utterance that is not ours (pooled socket leftover)
+                        continue
                     raise _status_error(
                         int(data.get("status") or 500),
                         str(data.get("error", "unknown error")),
@@ -526,7 +532,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         retry_after=data.get("retry_after"),
                     )
 
-                if not pending or ev_utt != pending[0][0]:
+                if not ours:
                     # an event of an utterance that is not ours (left over on a pooled socket)
                     continue
 
