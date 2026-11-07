@@ -101,6 +101,17 @@ impl<M, E> Core<M, E> {
         media
     }
 
+    /// Removes the oldest media past the floor that `filler` marks: no gap, not counted.
+    pub(super) fn drop_filler(&mut self, filler: impl Fn(&M) -> bool) -> Option<M> {
+        let index = (self.floor..self.items.len())
+            .find(|&i| matches!(self.items.get(i), Some(Item::Media(media)) if filler(media)))?;
+        let Some(Item::Media(media)) = self.items.remove(index) else {
+            unreachable!("the index found holds media");
+        };
+        self.frames -= 1;
+        Some(media)
+    }
+
     /// Widens the gap that starts the run past the floor by `duration`.
     pub(super) fn gap(&mut self, duration: Duration) {
         match self.items.get_mut(self.floor) {

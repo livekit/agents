@@ -45,6 +45,12 @@ pub trait StreamInput<T>: Send + Sync {
         self.push(item)
     }
 
+    /// Filler that stands in for nothing said (a recogniser's flush of silence): where `push`
+    /// would drop to keep the input bounded, filler goes first and never displaces what was said.
+    fn filler(&self, item: T) -> Result<(), ProviderError> {
+        self.push(item)
+    }
+
     /// End of the current segment (`_FlushSentinel`), not a close.
     fn flush(&self) -> Result<(), ProviderError>;
 
@@ -136,6 +142,10 @@ impl<T, S: StreamInput<T> + ?Sized> StreamInput<T> for Box<S> {
 
     fn head(&self, item: T) -> Result<(), ProviderError> {
         S::head(self, item)
+    }
+
+    fn filler(&self, item: T) -> Result<(), ProviderError> {
+        S::filler(self, item)
     }
 
     fn flush(&self) -> Result<(), ProviderError> {

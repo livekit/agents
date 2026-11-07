@@ -39,6 +39,13 @@ impl AudioInput {
         true
     }
 
+    /// Filler, dropped before any other audio. `false` once the input ended or its pump is gone.
+    pub(crate) fn filler(&self, frame: AudioFrame) -> bool {
+        let Some(audio) = self.open() else { return false };
+        audio.filler(frame);
+        true
+    }
+
     /// Pre-connect audio, kept in full. `false` once the input ended or its pump is gone.
     pub(crate) fn head(&self, frame: AudioFrame) -> bool {
         let Some(audio) = self.open() else { return false };

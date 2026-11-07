@@ -5,7 +5,7 @@
 //!
 //! Today it is the microphone fan-out, [`AudioInputRouter`] (`AgentActivity.push_audio`).
 
-use super::effects::AudioInputRouterEffect;
+use super::effects::{AudioInputRouterEffect, Delivery};
 use crate::agent_session::{DriverError, VoiceEvent};
 use crate::audio::{AudioChannel, DEFAULT_FRAME_MS, Feed};
 use lk_agents_abi::resources::ResourceId;
@@ -33,7 +33,7 @@ pub enum AudioInputRouterCommand {
     /// `input.set_audio_enabled(..)`: while `false` every frame is dropped at the source.
     SetInputEnabled(bool),
     /// `_commit_user_turn`'s "flush the stt by pushing silence": `frames` frames of 0.2 s, shaped
-    /// like the microphone's last frame. Bypasses the counters.
+    /// like the microphone's last frame, as filler. Bypasses the counters.
     FlushSttWithSilence { frames: u32 },
     /// Answered with [`VoiceEvent::InputCensus`].
     ReportCensus,
@@ -158,7 +158,8 @@ impl AudioInputRouter {
         }
     }
 
-    /// `frames` frames of silence into the STT, shaped as the last microphone frame.
+    /// `frames` frames of silence into the STT, shaped as the last microphone frame. Filler: it
+    /// never pushes the person's audio still queued out of a bounded input.
     fn flush_stt_with_silence(&self, frames: u32, effects: &mut Vec<AudioInputRouterEffect>) {
         let stt = self.slots[AudioChannel::Stt as usize].sink;
         let (Some(sink), Some((rate, channels))) = (stt, self.last_input) else { return };
@@ -166,11 +167,9 @@ impl AudioInputRouter {
         if per_frame == 0 {
             return;
         }
-        // Flushing silence is live input, not a pre-connect replay.
-        let head = false;
         effects.extend((0..frames).map(|_| {
             let frame = silence_frame(per_frame, rate, channels);
-            AudioInputRouterEffect::PushFrame { sink, frame, head }
+            AudioInputRouterEffect::PushFrame { sink, frame, delivery: Delivery::Filler }
         }));
     }
 
@@ -213,14 +212,15 @@ impl AudioInputRouter {
             )));
         }
         self.input_shape = Some((FrameShape::of(&frame), self.conversion.frame_shape()));
+        let delivery = if head { Delivery::Head } else { Delivery::Live };
         // `Raw` channels: the source frame; the substitute has the room frame's shape.
         let raw_silence = self.discard.then(|| silence_like(&frame));
-        self.push(Feed::Raw, &frame, raw_silence.as_ref(), head, &mut effects);
+        self.push(Feed::Raw, &frame, raw_silence.as_ref(), delivery, &mut effects);
         // `Converted` channels: the Rust detectors expect 16 kHz mono.
         let Ok(ready) = self.conversion.convert(&frame) else { return effects };
         for converted in ready {
             let substitute = self.discard.then(|| silence_like(&converted));
-            self.push(Feed::Converted, &converted, substitute.as_ref(), head, &mut effects);
+            self.push(Feed::Converted, &converted, substitute.as_ref(), delivery, &mut effects);
         }
         effects
     }
@@ -230,7 +230,7 @@ impl AudioInputRouter {
         feed: Feed,
         frame: &AudioFrame,
         silence: Option<&AudioFrame>,
-        head: bool,
+        delivery: Delivery,
         effects: &mut Vec<AudioInputRouterEffect>,
     ) {
         for channel in AudioChannel::ALL {
@@ -248,7 +248,8 @@ impl AudioInputRouter {
             };
             slot.frames += 1;
             slot.shape = Some(FrameShape::of(heard));
-            effects.push(AudioInputRouterEffect::PushFrame { sink, frame: heard.clone(), head });
+            let frame = heard.clone();
+            effects.push(AudioInputRouterEffect::PushFrame { sink, frame, delivery });
         }
     }
 }
@@ -344,7 +345,9 @@ mod tests {
 
     fn pushed(effects: &[AudioInputRouterEffect]) -> Vec<(ResourceId, bool)> {
         let pushes = effects.iter().filter_map(|effect| match effect {
-            AudioInputRouterEffect::PushFrame { sink, head, .. } => Some((*sink, *head)),
+            AudioInputRouterEffect::PushFrame { sink, delivery, .. } => {
+                Some((*sink, *delivery == Delivery::Head))
+            }
             _ => None,
         });
         pushes.collect()

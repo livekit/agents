@@ -386,3 +386,35 @@ fn a_push_racing_the_receiver_still_wakes_it() {
     producer.join().unwrap();
     assert_eq!(heard, (0..200).flat_map(|tag| [tag; 160]).collect::<Vec<_>>());
 }
+
+// Catches: a recogniser's flush of silence past the bound pushing the person's queued audio out
+// (`forwarded_while_enabled`, campaign seed 6573): filler is dropped, never what was said.
+#[test]
+fn filler_past_the_bound_never_drops_what_was_said() {
+    let (tx, mut rx) = queue::<&str>(CATCH_UP);
+    for _ in 0..3 {
+        tx.push(frame(20, 1));
+    }
+    let dropped: Duration = (0..10).map(|_| tx.filler(frame(20, 0))).sum();
+    assert_eq!(dropped, Duration::ZERO, "filler loses nothing said");
+    let items = drain(&mut rx);
+    assert!(timeline(&items).iter().all(|(kind, ..)| *kind == "audio"), "no gap");
+    let heard = samples(&items);
+    assert_eq!(heard.iter().filter(|&&s| s == 1).count(), 3 * 320, "every said sample");
+    assert_eq!(heard.len(), 5 * 320, "the bound holds");
+}
+
+// Catches: the bound dropping audio that was said while filler queued ahead of it could go.
+#[test]
+fn what_was_said_pushes_filler_out_first() {
+    let (tx, mut rx) = queue::<&str>(CATCH_UP);
+    for _ in 0..4 {
+        tx.filler(frame(20, 0));
+    }
+    let dropped: Duration = (0..4).map(|_| tx.push(frame(20, 1))).sum();
+    assert_eq!(dropped, Duration::ZERO);
+    let heard = samples(&drain(&mut rx));
+    assert_eq!(heard.iter().filter(|&&s| s == 1).count(), 4 * 320, "every said sample");
+    assert_eq!(heard.len(), 5 * 320, "one filler frame left, ahead of the speech");
+    assert_eq!(heard[0], 0);
+}

@@ -1,5 +1,6 @@
 //! Audio: bounded by its queued duration under a [`Policy`], what the bound drops reported as one
-//! gap and measured, a backlog merged into frames of up to [`MERGED_FRAME`].
+//! gap and measured, a backlog merged into frames of up to [`MERGED_FRAME`]. Filler audio, which
+//! stands in for nothing said, is what the bound drops first.
 
 use super::core::{Consumer, Core, Producer, channel};
 use super::metrics::Meter;
@@ -30,8 +31,14 @@ pub fn audio<E>(
     (AudioSender { queue: producer, meter }, receiver)
 }
 
+/// A queued frame, and whether it is filler.
+struct Queued {
+    frame: AudioFrame,
+    filler: bool,
+}
+
 struct AudioQueue<E> {
-    core: Core<AudioFrame, E>,
+    core: Core<Queued, E>,
     policy: Policy,
     /// The duration of the core's frames past the floor, which the policy bounds.
     lag: Duration,
@@ -42,13 +49,13 @@ struct AudioQueue<E> {
 }
 
 impl<E> AudioQueue<E> {
-    fn push(&mut self, frame: AudioFrame) -> Duration {
+    fn push(&mut self, frame: AudioFrame, filler: bool) -> Duration {
         if self.core.frames() == 0 {
             // Settled or drained: nothing is measured.
             self.lag = Duration::ZERO;
         }
         self.lag += frame_duration(&frame);
-        self.core.push(frame);
+        self.core.push(Queued { frame, filler });
         let mut dropped = Duration::ZERO;
         match self.policy {
             Policy::CatchUp(max) => {
@@ -68,7 +75,7 @@ impl<E> AudioQueue<E> {
     }
 
     fn head(&mut self, frame: AudioFrame) {
-        self.core.head(frame);
+        self.core.head(Queued { frame, filler: false });
         self.head_items = self.core.len();
     }
 
@@ -77,9 +84,14 @@ impl<E> AudioQueue<E> {
         self.core.flush(event)
     }
 
-    /// Drops the oldest frame the policy may drop into the gap that starts the run.
+    /// Drops the oldest filler the policy may drop, which leaves no gap and loses nothing said;
+    /// without one, the oldest frame, into the gap that starts the run. Returns what was lost.
     fn drop_oldest(&mut self) -> Duration {
-        let duration = frame_duration(&self.core.drop_oldest());
+        if let Some(filler) = self.core.drop_filler(|queued| queued.filler) {
+            self.lag = self.lag.saturating_sub(frame_duration(&filler.frame));
+            return Duration::ZERO;
+        }
+        let duration = frame_duration(&self.core.drop_oldest().frame);
         self.lag = self.lag.saturating_sub(duration);
         self.core.gap(duration);
         duration
@@ -94,7 +106,7 @@ impl<E> AudioQueue<E> {
         if let Item::Media(first) = &item {
             while let Some(Item::Media(next)) = self.core.front()
                 && (self.head_items > 0) == head
-                && joins(first, rest, next)
+                && joins(first, rest, &next.frame)
             {
                 if let Some(Item::Media(next)) = self.pop_front() {
                     rest.push(next);
@@ -108,14 +120,18 @@ impl<E> AudioQueue<E> {
         let (item, counted) = self.core.pop()?;
         let head = self.head_items > 0;
         self.head_items = self.head_items.saturating_sub(1);
-        if let Item::Media(frame) = &item {
-            if counted {
-                self.lag = self.lag.saturating_sub(frame_duration(frame));
-            } else if head {
-                self.head_received += frame_duration(frame);
+        Some(match item {
+            Item::Media(Queued { frame, .. }) => {
+                if counted {
+                    self.lag = self.lag.saturating_sub(frame_duration(&frame));
+                } else if head {
+                    self.head_received += frame_duration(&frame);
+                }
+                Item::Media(frame)
             }
-        }
-        Some(item)
+            Item::Gap(duration) => Item::Gap(duration),
+            Item::Event(event) => Item::Event(event),
+        })
     }
 }
 
@@ -164,7 +180,15 @@ impl<E> AudioSender<E> {
     /// Never fails and never blocks; the policy decides what is kept. Returns the audio it
     /// dropped, which the queue has measured.
     pub fn push(&self, frame: AudioFrame) -> Duration {
-        let dropped = self.queue.apply(|queue| queue.push(frame)).unwrap_or_default();
+        let dropped = self.queue.apply(|queue| queue.push(frame, false)).unwrap_or_default();
+        self.meter.dropped(dropped);
+        dropped
+    }
+
+    /// Audio that stands in for nothing said (a recogniser's flush of silence): the bound drops
+    /// it before any other audio, so it never pushes what was said out of the queue.
+    pub fn filler(&self, frame: AudioFrame) -> Duration {
+        let dropped = self.queue.apply(|queue| queue.push(frame, true)).unwrap_or_default();
         self.meter.dropped(dropped);
         dropped
     }

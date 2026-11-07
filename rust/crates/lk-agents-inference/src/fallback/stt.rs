@@ -53,6 +53,8 @@ enum PreFrame {
     Audio(AudioFrame),
     /// Pre-connect audio: replayed as head, never evicted and outside the bound.
     Head(AudioFrame),
+    /// Evicted before any audio, and never in its place.
+    Filler(AudioFrame),
     Flush,
 }
 
@@ -105,6 +107,7 @@ impl InputTee {
                 let _ = match item {
                     PreFrame::Audio(f) => sink.push(f),
                     PreFrame::Head(f) => sink.head(f),
+                    PreFrame::Filler(f) => sink.filler(f),
                     PreFrame::Flush => sink.flush(),
                 };
             }
@@ -134,15 +137,23 @@ impl InputTee {
         if matches!(item, PreFrame::Head(_)) {
             preroll.head += 1;
         } else if preroll.pending.len() - preroll.head >= Self::PREROLL_FRAMES {
-            let Some(index) =
-                preroll.pending.iter().position(|item| matches!(item, PreFrame::Audio(_)))
-            else {
-                return Err(ApiError::new("STT preroll is full of pending flush boundaries")
-                    .with_retryable(false)
-                    .into());
-            };
-            preroll.pending.remove(index);
-            preroll.dropped_frames += 1;
+            let filler =
+                preroll.pending.iter().position(|item| matches!(item, PreFrame::Filler(_)));
+            if let Some(index) = filler {
+                preroll.pending.remove(index);
+            } else if matches!(item, PreFrame::Filler(_)) {
+                return Ok(());
+            } else {
+                let Some(index) =
+                    preroll.pending.iter().position(|item| matches!(item, PreFrame::Audio(_)))
+                else {
+                    return Err(ApiError::new("STT preroll is full of pending flush boundaries")
+                        .with_retryable(false)
+                        .into());
+                };
+                preroll.pending.remove(index);
+                preroll.dropped_frames += 1;
+            }
         }
         preroll.pending.push_back(item);
         Ok(())
@@ -193,6 +204,14 @@ impl StreamInput<AudioFrame> for TeeSink {
         let main = self.0.serving(PreFrame::Head(item.clone()))?;
         self.0.fanout(main, |s| {
             let _ = s.head(item.clone());
+        });
+        Ok(())
+    }
+
+    fn filler(&self, item: AudioFrame) -> Result<(), ProviderError> {
+        let main = self.0.serving(PreFrame::Filler(item.clone()))?;
+        self.0.fanout(main, |s| {
+            let _ = s.filler(item.clone());
         });
         Ok(())
     }
@@ -694,6 +713,10 @@ mod preroll_tests {
             self.0.got.lock().push(format!("head:{}", item.sample_rate));
             Ok(())
         }
+        fn filler(&self, item: AudioFrame) -> Result<(), ProviderError> {
+            self.0.got.lock().push(format!("filler:{}", item.sample_rate));
+            Ok(())
+        }
         fn flush(&self) -> Result<(), ProviderError> {
             self.0.got.lock().push("flush".to_owned());
             Ok(())
@@ -786,6 +809,26 @@ mod preroll_tests {
         // The oldest ten went; the newest is still there.
         assert_eq!(got[0], "push:10");
         assert_eq!(got[got.len() - 1], format!("push:{}", InputTee::PREROLL_FRAMES + 9));
+    }
+
+    /// Catches: a flush's silence buffered while no stream serves evicting the person's audio.
+    #[test]
+    fn filler_goes_first_and_never_in_place_of_audio() {
+        let tee = InputTee::new();
+        let sink = TeeSink(Arc::clone(&tee));
+        let full = InputTee::PREROLL_FRAMES as u32;
+        sink.filler(frame(0)).unwrap();
+        for i in 1..=full {
+            sink.push(frame(i)).unwrap();
+        }
+        sink.filler(frame(full + 1)).unwrap();
+
+        let rec = Arc::new(Log::default());
+        tee.set_main(Box::new(Recorder(Arc::clone(&rec))));
+
+        let expected: Vec<String> = (1..=full).map(|i| format!("push:{i}")).collect();
+        assert_eq!(*rec.got.lock(), expected);
+        assert_eq!(tee.dropped_preroll_frames(), 0);
     }
 
     #[test]
