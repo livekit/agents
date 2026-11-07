@@ -24,7 +24,7 @@ impl Run {
     /// closed". Empty means the run is quiet and the settle can begin.
     pub fn releases(&self) -> Vec<Input> {
         let blank = || AgentText(String::new());
-        let each: [(Kind, &dyn Fn(u32) -> Input); 8] = [
+        let each: [(Kind, &dyn Fn(u32) -> Input); 7] = [
             (Kind::Stream, &|nth| Input::FeedEnd { stream: Ref::new(nth) }),
             (Kind::Chat, &|nth| Input::LlmEnd { chat: Ref::new(nth) }),
             // A prediction left pending holds the endpointing phase open until it times out.
@@ -34,7 +34,6 @@ impl Run {
                 backchannel: None,
             }),
             (Kind::Segment, &|nth| Input::PlayoutFinished { segment: Ref::new(nth) }),
-            (Kind::Tts, &|nth| Input::TtsRelease { tts: Ref::new(nth) }),
             // A recognition stream left mid-utterance keeps the caller "speaking", which keeps the
             // session from ever being idle.
             (Kind::Utterance, &|nth| Input::SttEnd { utterance: Ref::new(nth) }),
@@ -49,6 +48,16 @@ impl Run {
         for (kind, make) in each {
             out.extend(self.record.live().of(kind).into_iter().map(make));
         }
+        // A synthesis the case held is let through. One it never held waits on the driver to end
+        // its input, which a release cannot do (seed 7788: behind a speech held for the person).
+        out.extend(
+            self.record
+                .live()
+                .of(Kind::Tts)
+                .into_iter()
+                .filter(|nth| self.tts_held(*nth))
+                .map(|nth| Input::TtsRelease { tts: Ref::new(nth) }),
+        );
         // A realtime turn the server is still speaking is the case's to end.
         if let Some(socket) = self.record.live().of(Kind::Realtime).first().copied() {
             for _ in self.record.live().of(Kind::Generation) {
@@ -353,6 +362,21 @@ impl Run {
 
     /// How many `open` inputs the case applied without a matching `close`, in order. A close with
     /// nothing to close is a no-op in the product, so the count never goes below zero.
+    /// The case's last hold or release of this synthesis was a hold.
+    fn tts_held(&self, nth: u32) -> bool {
+        self.record
+            .applied()
+            .iter()
+            .filter(|a| a.accepted)
+            .filter_map(|a| match &a.input {
+                Input::TtsHold { tts } if tts.nth == nth => Some(true),
+                Input::TtsRelease { tts } if tts.nth == nth => Some(false),
+                _ => None,
+            })
+            .next_back()
+            .unwrap_or(false)
+    }
+
     fn outstanding(&self, open: Input, close: Input) -> u32 {
         let mut count: u32 = 0;
         for applied in self.record.applied() {
