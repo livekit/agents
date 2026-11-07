@@ -2,7 +2,7 @@
 
 Support for voice synthesis with [HeyGen Voice](https://developers.heygen.com/docs/voices/heygen-voice-speech).
 
-Voice agents stream text through a WebSocket and get word timing with the audio. `synthesize()` uses HTTP.
+Voice agents stream text through a WebSocket and get word timing with the audio. Set `use_tts_aligned_transcript=True` on `AgentSession` to use it. `synthesize()` uses HTTP.
 
 ## Installation
 
@@ -54,4 +54,4 @@ tts = heygen.TTS(voice_id="<professional voice id>", model="heygen-voice-1", str
 
 ## Rate limits
 
-HeyGen allows 30 speech requests per minute for each workspace member, and 120 on enterprise plans. Every WebSocket handshake and every turn counts as a request, so one API key carries about 6 live calls. A socket is reused when the next turn starts within 30 seconds. The plugin does not retry a rate limit.
+HeyGen allows 30 speech requests per minute for each workspace member, and 120 on enterprise plans. Every WebSocket handshake and every turn counts as a request, so one API key carries about 6 live calls. A socket is reused when turns start less than 30 seconds apart, and an interrupted turn closes its socket. The plugin does not retry a rate limit.

@@ -16,11 +16,13 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 import os
 import re
 import time
 import weakref
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import Any, Literal
 from urllib.parse import urlencode
@@ -55,7 +57,6 @@ NUM_CHANNELS = 1
 
 SAMPLE_RATES = (8000, 16000, 22050, 24000, 44100, 48000)
 
-AUTHORIZATION_HEADER = "x-api-key"
 _STREAM_PATH = "/v3/models/audio/tts/stream"
 _MULTI_STREAM_PATH = "/v3/models/audio/tts/multi-stream-input"
 
@@ -67,11 +68,11 @@ _INACTIVITY_TIMEOUT = 180
 # read, and an idle socket has no read. So an idle socket expires before the server drops it.
 _MAX_SESSION_DURATION = 30
 
-# The next turn waits for this close. A socket that does not answer must not delay that turn.
+# A barge-in or the next turn waits for this close. A socket that does not answer must not delay it.
 _CLOSE_TIMEOUT = 1.0
 
-# Without `enable_ssml_parsing`, a break tag makes the server close the socket. The turn is lost.
-_BREAK_TAG = re.compile(r"\s*<break\b[^>]*>", re.IGNORECASE)
+# Without `enable_ssml_parsing`, the server refuses a break tag and the turn is lost.
+_BREAK_TAG = re.compile(r"\s*</?break\b[^>]*>", re.IGNORECASE)
 # The alignment shows a parsed break tag in this form. It is not a spoken word.
 _PAUSE_MARKER = re.compile(r"<pause:[^>]*>\s*")
 
@@ -127,8 +128,9 @@ class TTS(tts.TTS):
             apply_text_normalization: ``auto``, ``on`` or ``off``. WebSocket only.
             pronunciation_dictionary: Term to IPA map, such as ``{"Acme": "/ˈækmi/"}``. Word timing
                 is turned off with a dictionary, since the timings cover the IPA, not the term.
-            enable_ssml_parsing: Turn ``<break time="1s"/>`` tags into pauses. WebSocket only. When
-                False, break tags are removed from the text.
+            enable_ssml_parsing: Turn ``<break time="1s"/>`` tags into pauses. Over HTTP, only
+                professional clones accept them. When False, break tags are removed from the text.
+                HeyGen refuses all other SSML.
             enable_logging: Set False to keep no copy of the audio and text at HeyGen. WebSocket
                 only: ``synthesize()`` and ``streaming=False`` use HTTP, which has no such option.
             end_user_id: Your identifier for the end user, recorded with HeyGen's usage.
@@ -142,6 +144,10 @@ class TTS(tts.TTS):
         """
         if sample_rate not in SAMPLE_RATES:
             raise ValueError(f"sample_rate must be one of {SAMPLE_RATES}, got {sample_rate}")
+        if not streaming and not enable_logging:
+            logger.warning(
+                "enable_logging=False has no effect with streaming=False: HTTP keeps logs"
+            )
 
         super().__init__(
             capabilities=tts.TTSCapabilities(
@@ -206,7 +212,7 @@ class TTS(tts.TTS):
         try:
             return await asyncio.wait_for(
                 self._ensure_session().ws_connect(
-                    _ws_url(self._opts), headers={AUTHORIZATION_HEADER: self._api_key}
+                    _ws_url(self._opts), headers={"x-api-key": self._api_key}
                 ),
                 timeout,
             )
@@ -222,12 +228,12 @@ class TTS(tts.TTS):
                 message,
                 status_code=e.status,
                 request_id=e.headers.get("x-request-id") if e.headers else None,
-                # A retry after a 429 only spends the limit.
-                retryable=e.status >= 500,
+                retryable=_retryable(e.status, e.headers),
             ) from None
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
-        await asyncio.wait_for(ws.close(), _CLOSE_TIMEOUT)
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(ws.close(), _CLOSE_TIMEOUT)
 
     def update_options(
         self,
@@ -249,6 +255,7 @@ class TTS(tts.TTS):
             apply_text_normalization: ``auto``, ``on`` or ``off``.
             end_user_id: Your identifier for the end user.
         """
+        url = _ws_url(self._opts)
         if is_given(voice_id):
             self._opts.voice_id = voice_id
         if is_given(model):
@@ -263,7 +270,7 @@ class TTS(tts.TTS):
             self._opts.end_user_id = end_user_id
 
         # A socket keeps the options of its URL until it closes.
-        if self._pool is not None:
+        if self._pool is not None and _ws_url(self._opts) != url:
             self._pool.invalidate()
 
     def synthesize(
@@ -308,7 +315,7 @@ class ChunkedStream(tts.ChunkedStream):
         try:
             async with self._tts._ensure_session().post(
                 f"{self._opts.base_url}{_STREAM_PATH}",
-                headers={AUTHORIZATION_HEADER: self._tts._api_key},
+                headers={"x-api-key": self._tts._api_key},
                 json=_http_body(self._opts, self._input_text),
                 timeout=aiohttp.ClientTimeout(
                     total=None,
@@ -380,9 +387,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal open_context, input_ended_at
             async for ev in sentence_stream:
-                text = ev.token
-                if not self._opts.enable_ssml_parsing:
-                    text = _BREAK_TAG.sub("", text)
+                text = _spoken_text(self._opts, ev.token)
                 if not text.strip():
                     continue
 
@@ -439,10 +444,13 @@ class SynthesizeStream(tts.SynthesizeStream):
             nonlocal open_context
             words = _WordTimer()
             audio_ms = 0.0
-            async for _ in contexts:
+            timed = self._tts.capabilities.aligned_transcript
+            async for context_id in contexts:
                 while True:
                     data = await next_message(ws)
-                    if alignment := data.get("alignment"):
+                    if data.get("contextId", context_id) != context_id:
+                        continue
+                    if timed and (alignment := data.get("alignment")):
                         output_emitter.push_timed_transcript(words.push(alignment, audio_ms))
                     if audio := data.get("audio"):
                         pcm = base64.b64decode(audio)
@@ -456,19 +464,26 @@ class SynthesizeStream(tts.SynthesizeStream):
             output_emitter.end_segment()
 
         try:
-            async with self._pool.connection(timeout=timeout) as ws:
-                self._acquire_time = self._pool.last_acquire_time
-                self._connection_reused = self._pool.last_connection_reused
-                tasks = [
-                    asyncio.create_task(input_task()),
-                    asyncio.create_task(send_task(ws)),
-                    asyncio.create_task(recv_task(ws)),
-                ]
-                try:
-                    await asyncio.gather(*tasks)
-                finally:
-                    await sentence_stream.aclose()
-                    await utils.aio.gracefully_cancel(*tasks)
+            ws = await self._pool.get(timeout=timeout)
+            self._acquire_time = self._pool.last_acquire_time
+            self._connection_reused = self._pool.last_connection_reused
+            tasks = [
+                asyncio.create_task(input_task()),
+                asyncio.create_task(send_task(ws)),
+                asyncio.create_task(recv_task(ws)),
+            ]
+            try:
+                await asyncio.gather(*tasks)
+            finally:
+                await sentence_stream.aclose()
+                await utils.aio.gracefully_cancel(*tasks)
+                if open_context is None and not ws.closed:
+                    self._pool.put(ws)
+                else:
+                    # `close_context` does not stop a flushed context. Only a socket close stops
+                    # it, and HeyGen charges each frame that it relays before the close.
+                    self._pool.remove(ws)
+                    await self._tts._close_ws(ws)
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except APIError:
@@ -518,6 +533,10 @@ class _WordTimer:
         return [word for word in timed if word]
 
 
+def _spoken_text(opts: _TTSOptions, text: str) -> str:
+    return text if opts.enable_ssml_parsing else _BREAK_TAG.sub("", text)
+
+
 def _shared_params(opts: _TTSOptions) -> dict[str, Any]:
     params: dict[str, Any] = {"voice_id": opts.voice_id, "model": opts.model}
     if is_given(opts.language):
@@ -545,12 +564,21 @@ def _ws_url(opts: _TTSOptions) -> str:
 
 def _http_body(opts: _TTSOptions, text: str) -> dict[str, Any]:
     body = _shared_params(opts) | {
-        "text": text,
+        "text": _spoken_text(opts, text),
         "output_format": {"encoding": "pcm", "sample_rate_hertz": opts.sample_rate},
     }
     if is_given(opts.pronunciation_dictionary):
         body["pronunciation_dictionary"] = opts.pronunciation_dictionary
     return body
+
+
+def _retryable(status: int, headers: Mapping[str, str] | None) -> bool:
+    if status != 429:
+        return status >= 500
+    # A rate limit asks for a long wait, and a retry only spends the limit. A full socket cap asks
+    # for 1s and full GPU capacity names no wait. A retry can succeed after both.
+    retry_after = (headers or {}).get("Retry-After", "0")
+    return retry_after.isdigit() and int(retry_after) <= 1
 
 
 def _error_text(error: dict[str, Any]) -> str:
@@ -586,5 +614,5 @@ async def _http_error(resp: aiohttp.ClientResponse) -> APIStatusError:
         status_code=resp.status,
         request_id=error.get("request_id") or resp.headers.get("x-request-id"),
         body=payload,
-        retryable=resp.status >= 500,
+        retryable=_retryable(resp.status, resp.headers),
     )
