@@ -1,0 +1,259 @@
+:root {
+  color-scheme: light;
+  --bg: #eef3f1;
+  --ink: #14201c;
+  --muted: #5a6b64;
+  --accent: #0f6b5c;
+  --panel: rgba(255, 255, 255, 0.88);
+  --line: rgba(20, 32, 28, 0.12);
+  font-family: "Segoe UI", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  color: var(--ink);
+  background:
+    radial-gradient(circle at 12% 18%, rgba(15, 107, 92, 0.14), transparent 42%),
+    radial-gradient(circle at 88% 8%, rgba(40, 90, 120, 0.12), transparent 36%),
+    linear-gradient(160deg, #f4f8f6 0%, #e7eeea 55%, #dde7e2 100%);
+}
+
+code {
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 0.9em;
+}
+
+.page {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 2rem 1.25rem 3rem;
+}
+
+.header {
+  display: flex;
+  gap: 1.5rem;
+  justify-content: space-between;
+  align-items: flex-end;
+  margin-bottom: 1.5rem;
+}
+
+.eyebrow {
+  margin: 0 0 0.35rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+h1 {
+  margin: 0;
+  font-size: clamp(1.8rem, 3vw, 2.6rem);
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.lede {
+  margin: 0.6rem 0 0;
+  max-width: 42rem;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.actions button,
+button {
+  appearance: none;
+  border: 0;
+  border-radius: 999px;
+  padding: 0.85rem 1.35rem;
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  font-size: 1rem;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
+button.secondary {
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid var(--line);
+}
+
+button.mic {
+  width: 100%;
+  margin-top: 0.5rem;
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid var(--line);
+}
+
+button.mic.on {
+  background: var(--accent);
+  color: #fff;
+  border-color: transparent;
+}
+
+.stage {
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(240px, 0.7fr);
+  gap: 1.5rem;
+  align-items: start;
+  justify-content: center;
+}
+
+/* Match aitwin.me/{slug} default 3:4 twin frame (twinFrameClassName). */
+.avatar-shell {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  max-width: min(100%, calc((100dvh - 16rem) * 0.75));
+}
+
+.avatar-container {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  height: auto;
+  max-height: min(70vh, 1264px);
+  border-radius: 1rem;
+  overflow: hidden;
+  background: #111;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.35);
+  line-height: 0;
+}
+
+@media (min-width: 1024px) {
+  .avatar-shell {
+    max-width: none;
+    width: auto;
+  }
+
+  .avatar-container {
+    width: auto;
+    height: min(70vh, 1264px);
+    max-height: none;
+    aspect-ratio: 3 / 4;
+    border-radius: 1.25rem;
+  }
+}
+
+.avatar-placeholder {
+  display: grid;
+  place-items: center;
+  position: absolute;
+  inset: 0;
+  color: #9aa8a2;
+  padding: 1.5rem;
+  text-align: center;
+  line-height: 1.4;
+}
+
+.avatar-container .aitwin-root,
+.avatar-container > div {
+  display: block !important;
+  width: 100% !important;
+  height: 100% !important;
+  line-height: 0;
+}
+
+.avatar-container canvas {
+  display: block !important;
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: cover;
+  object-position: top center;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 1.1rem 1.2rem;
+  line-height: 1.45;
+  align-self: start;
+}
+
+.panel ol {
+  padding-left: 1.2rem;
+  color: var(--muted);
+}
+
+.error {
+  color: #9b1c1c;
+}
+
+.heard {
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.text-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  margin: 1rem 0;
+}
+
+.mode-row {
+  display: flex;
+  gap: 0.4rem;
+}
+
+button.mode {
+  flex: 1;
+  border-radius: 999px;
+  padding: 0.45rem 0.7rem;
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  font-size: 0.85rem;
+}
+
+button.mode.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: transparent;
+}
+
+.text-form textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 4.5rem;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  padding: 0.7rem 0.8rem;
+  font: inherit;
+  background: #fff;
+  color: var(--ink);
+}
+
+.text-form .hint,
+.hint {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+@media (max-width: 800px) {
+  .header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .stage {
+    grid-template-columns: 1fr;
+  }
+
+  .avatar-shell {
+    margin: 0 auto;
+  }
+}
