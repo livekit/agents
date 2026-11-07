@@ -100,7 +100,7 @@ impl AgentRun {
                 item.call_id.clone(),
                 text,
                 shape.is_error,
-                self.stamp(now),
+                self.stamp(now).max(item.created_at),
             );
             output.name = item.name.clone();
             output.reply_required = reply_required;
@@ -108,7 +108,8 @@ impl AgentRun {
             outputs.push(ChatItem::FunctionCallOutput(output));
         }
         self.input_requirements.extend(input_requirements.iter().cloned());
-        // Calls retain their dispatch stamps; outputs are stamped when the step settles.
+        // Calls retain their dispatch stamps; outputs are stamped when the step settles, never
+        // before their call: a host that stamps its calls finer than the run's clock reads them.
         // One canonical order agrees with chronological voice/storage projections without
         // rewriting those stamps: all calls, then all outputs, each in model order.
         let items: Vec<ChatItem> = calls.into_iter().chain(outputs).collect();
