@@ -134,6 +134,9 @@ pub struct SyncedAudioOutput {
     tracker: Arc<dyn PlaybackTracker>,
     next: Arc<dyn AudioOutput>,
     observer: Mutex<Option<Arc<dyn PlaybackObserver>>>,
+    /// The playback last reported started or moving and not yet finished: the words a pause
+    /// shows are its.
+    playing: Mutex<Option<PlaybackSegment>>,
 }
 
 /// [`Weak`] so the tracker doesn't keep the chain alive.
@@ -161,6 +164,7 @@ impl SyncedAudioOutput {
             sync,
             next: next.clone(),
             observer: Mutex::new(None),
+            playing: Mutex::new(None),
         });
         let observer: Arc<dyn PlaybackObserver> = Arc::new(AudioEvents(Arc::downgrade(&node)));
         next.tracker().observe(observer.clone());
@@ -174,11 +178,13 @@ impl SyncedAudioOutput {
         match ev {
             PlaybackEvent::Started(e) => {
                 if self.tracker.playback_started(e.segment, e.created_at) {
+                    *self.playing.lock() = Some(e.segment);
                     self.sync.apply(TranscriptSyncEvent::PlaybackStarted, Some(e.segment));
                 }
             }
             PlaybackEvent::Progressed(e) => {
                 if self.tracker.playback_progressed(e.segment, e.started_at, e.offset, e.duration) {
+                    *self.playing.lock() = Some(e.segment);
                     self.sync.apply(
                         TranscriptSyncEvent::PlaybackProgressed(e.offset + e.duration),
                         Some(e.segment),
@@ -189,6 +195,7 @@ impl SyncedAudioOutput {
                 if !self.tracker.accepts_report(*segment) {
                     return;
                 }
+                self.playing.lock().take_if(|playing| playing == segment);
                 let position = e.playback_position;
                 let finished =
                     TranscriptSyncEvent::PlaybackFinished { position, interrupted: e.interrupted };
@@ -261,7 +268,8 @@ impl AudioOutput for SyncedAudioOutput {
 
     fn pause(&self) {
         self.next.pause();
-        self.sync.apply(TranscriptSyncEvent::PlaybackPaused, None);
+        let playing = *self.playing.lock();
+        self.sync.apply(TranscriptSyncEvent::PlaybackPaused, playing);
     }
 
     fn resume(&self) {
