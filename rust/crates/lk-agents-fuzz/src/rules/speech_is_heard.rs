@@ -46,6 +46,7 @@ impl Rule for SpeechIsHeard {
             waited_on_the_model,
             waited_behind_the_persons_utterance,
             waited_on_a_stalled_voice,
+            waited_on_a_voice_fed_after_its_open,
         ],
         counterexamples: &[
             silent_behind_a_paused_speech,
@@ -304,24 +305,30 @@ fn waits_on(r: &Recording, speech: u64, deadline: u64) -> Option<&'static str> {
         return Some("owed by the case");
     }
     // The text this speech asked its voice to speak before the bound: a stream that produced
-    // some of it is the speech's own.
-    let asked: Vec<&str> = r
-        .journal()
-        .iter()
-        .filter(|(a, _)| before(a))
-        .filter_map(|(_, s)| match s {
+    // some of it is the speech's own. A realtime message voiced from its first words on feeds
+    // the rest as it arrives, so the words it forwarded count as asked too (seed 4875).
+    let mut forwarded = String::new();
+    let mut asked: Vec<&str> = Vec::new();
+    for (_, s) in r.journal().iter().filter(|(a, _)| before(a)) {
+        match s {
             Step::Generation(GenerationStep::TtsRequested { speech: sp, text, .. })
                 if sp.0 == speech =>
             {
-                Some(text.as_str())
+                asked.push(text);
             }
-            _ => None,
-        })
-        .collect();
+            Step::Playout(PlayoutStep::TranscriptForwarded { speech: sp, text, .. })
+                if sp.0 == speech =>
+            {
+                forwarded.push_str(text);
+            }
+            _ => {}
+        }
+    }
     let own = |nth: u32| {
         r.produced().iter().filter(|(_, tts, _, _)| *tts == nth).any(|(_, _, _, text)| {
             let text = text.trim();
-            !text.is_empty() && asked.iter().any(|a| a.contains(text))
+            !text.is_empty()
+                && (forwarded.contains(text) || asked.iter().any(|a| a.contains(text)))
         })
     };
     // A voice asked before the bound whose first audio comes on its own clock after it: the
@@ -562,6 +569,32 @@ fn waited_on_the_model() -> Recording {
 /// A `say` whose voice stalls past the bound before its first audio, cut before that audio came.
 fn waited_on_a_stalled_voice() -> Recording {
     voiced(BOUND_MS * 3, 4)
+}
+
+/// A realtime message voiced from its first, empty, words: what it then fed its stalled voice is
+/// the words it forwarded.
+fn waited_on_a_voice_fed_after_its_open() -> Recording {
+    use lk_agents_voice::agent_session::machine::activity::scheduling::{SpeechId, SpeechKind};
+    Authored::new()
+        .output(true)
+        .speech_created(4, SpeechKind::Realtime)
+        .speech(4, Handle::live())
+        .tts()
+        .journal(Step::Generation(GenerationStep::TtsRequested {
+            speech: SpeechId(4),
+            segment: 0,
+            text: String::new(),
+        }))
+        .journal(Step::Playout(PlayoutStep::TranscriptForwarded {
+            speech: SpeechId(4),
+            text: "Hello there.".into(),
+            start_time: None,
+        }))
+        .produced(0, 0, "Hello there.")
+        .first_audio_due(0, BOUND_MS * 3)
+        .closed(Kind::Tts, 0)
+        .later(BOUND_MS * 2)
+        .done()
 }
 
 /// The same voice due long before the bound, its audio never handed to the speaker.
