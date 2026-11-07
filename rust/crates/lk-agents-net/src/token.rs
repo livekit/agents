@@ -41,6 +41,12 @@ pub fn worker_token(api_key: &str, api_secret: &str) -> Result<String, TokenErro
         .to_jwt()?)
 }
 
+#[derive(Default)]
+pub struct RoomJoinOptions {
+    pub agent: bool,
+    pub ttl: Option<Duration>,
+}
+
 /// A participant's join token for `room`: it publishes, subscribes and updates its own
 /// metadata. `agent` joins it as an agent (`kind="agent"` and the agent grant).
 pub fn room_join_token(
@@ -48,9 +54,9 @@ pub fn room_join_token(
     api_secret: &str,
     identity: &str,
     room: &str,
-    agent: bool,
-    ttl: Option<Duration>,
+    options: RoomJoinOptions,
 ) -> Result<String, TokenError> {
+    let RoomJoinOptions { agent, ttl } = options;
     require(api_key, api_secret)?;
     let mut token = AccessToken::with_api_key(api_key, api_secret)
         .with_identity(identity)
@@ -186,7 +192,7 @@ impl lk_agents_abi::worker::JoinTokens for JoinTokens {
                 })
             })
             .transpose()?;
-        room_join_token(&api_key, &api_secret, &identity, &room, agent, ttl)
+        room_join_token(&api_key, &api_secret, &identity, &room, RoomJoinOptions { agent, ttl })
             .map_err(|error| lk_agents_abi::worker::TokenRefused(error.to_string()))
     }
 }
@@ -248,7 +254,14 @@ mod tests {
         // Catches: the simulated agent joining without `kind="agent"` or without its room.
         #[test]
         fn the_join_token_names_the_agent_and_its_room() {
-            let t = room_join_token(KEY, SECRET, "fake-agent-1", "my-room", true, None).unwrap();
+            let t = room_join_token(
+                KEY,
+                SECRET,
+                "fake-agent-1",
+                "my-room",
+                RoomJoinOptions { agent: true, ..Default::default() },
+            )
+            .unwrap();
             let c = verify(&t);
             assert_eq!((c.sub.as_str(), c.kind.as_str()), ("fake-agent-1", "agent"));
             assert!(c.video.room_join && c.video.agent);

@@ -88,7 +88,7 @@ impl StreamOutput<LlmChunk> for TracedStream {
                 Ok(None) => {
                     if let Some((mut trace, run)) = self.trace.take() {
                         trace.end_attempt(run, None);
-                        trace.end(false, None);
+                        trace.end(Default::default());
                     }
                 }
                 Err(error) => {

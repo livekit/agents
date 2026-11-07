@@ -411,10 +411,7 @@ impl ServerRuntime for AgentServerRuntime {
             &self.settings(),
             &snapshot.worker_id,
             &room,
-            fake_job,
-            agent_identity,
-            room_info,
-            token,
+            server::SimulatedJobOptions { fake_job, agent_identity, room_info, token },
         )
         .map_err(WorkerError::Invalid)?;
         let runtime = self.runtime.clone();

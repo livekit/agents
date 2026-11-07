@@ -185,10 +185,12 @@ impl Door {
             if let Err(error) =
                 inner.execute(request, principal, sender.clone(), host_context, parent).await
             {
-                let _ = sender.try_send(match error {
+                if let Err(mpsc::error::TrySendError::Full(_)) = sender.try_send(match error {
                     DoorError::Storage(error) => Ok(rpc::storage_failure(id, &error)),
                     auth => Err(auth),
-                });
+                }) {
+                    log::warn!(target: lk_agents_abi::LOG_TARGET, capacity = RESPONSE_CAPACITY; "A2A response queue full while reporting a request failure");
+                }
             }
         });
         Response { streaming, receiver: Mutex::new(receiver), cancel }

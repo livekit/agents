@@ -520,6 +520,10 @@ async fn stream_request(
     cancelled: CancellationToken,
     mut trace: telemetry::LlmTrace,
 ) {
+    let deadline = req
+        .conn_options
+        .total_timeout
+        .map(|seconds| clock.now().saturating_add(Duration::from_secs_f64(seconds)));
     let attempt = trace.attempt();
     let opened = tokio::select! {
         biased;
@@ -541,17 +545,25 @@ async fn stream_request(
         }
         Some(Ok(stream)) => stream,
     };
-    loop {
+    let report = loop {
         let next = tokio::select! {
             biased;
             () = cancelled.cancelled() => None,
             next = stream.next() => Some(next),
         };
-        let report = match next {
+        match next {
             None => {
-                let deadline = clock.now().saturating_add(Duration::from_secs(5));
-                let _ = stream.close(deadline).await;
-                Report::Core(AgentRunEvent::LlmFailed { request, error: "cancelled".into() })
+                let deadline = deadline.unwrap_or_else(|| {
+                    clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT)
+                });
+                let closed = stream.close(deadline).await;
+                if closed != lk_agents_abi::Closed::Clean {
+                    log::warn!(target: lk_agents_abi::LOG_TARGET, request = request.0, outcome:? = closed; "cancelled model request cleanup incomplete");
+                }
+                break Report::Core(AgentRunEvent::LlmFailed {
+                    request,
+                    error: "cancelled".into(),
+                });
             }
             Some(Ok(Some(chunk))) => {
                 trace.observe(&chunk);
@@ -566,16 +578,110 @@ async fn stream_request(
             }
             Some(Ok(None)) => {
                 trace.end_attempt(attempt, None);
-                trace.end(false, None);
-                Report::Core(AgentRunEvent::LlmEnded { request })
+                trace.end(Default::default());
+                break Report::Core(AgentRunEvent::LlmEnded { request });
             }
             Some(Err(error)) => {
                 trace.end_attempt(attempt, Some(&error));
                 trace.fail(&error);
-                Report::LlmFailed { request, error }
+                break Report::LlmFailed { request, error };
             }
-        };
-        let _ = events.send(report).await;
-        return;
+        }
+    };
+    // A dropped run no longer consumes its terminal report.
+    let _ = events.send(report).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lk_agents_abi::{Closed, LlmChunk, LlmStream, StreamOutput, VirtualClock};
+
+    struct Model {
+        clock: Arc<VirtualClock>,
+        stop: CancellationToken,
+        closed_at: Arc<parking_lot::Mutex<Option<Ts>>>,
+    }
+
+    impl Llm for Model {
+        fn label(&self) -> String {
+            "test".into()
+        }
+
+        fn chat<'a>(
+            &'a self,
+            _: &telemetry::Cx,
+            _: &'a ChatRequest,
+        ) -> lk_agents_abi::BoxFuture<'a, Result<LlmStream, ProviderError>> {
+            Box::pin(async move {
+                Ok(Box::new(Waiting {
+                    clock: self.clock.clone(),
+                    stop: self.stop.clone(),
+                    closed_at: self.closed_at.clone(),
+                }) as LlmStream)
+            })
+        }
+    }
+
+    struct Waiting {
+        clock: Arc<VirtualClock>,
+        stop: CancellationToken,
+        closed_at: Arc<parking_lot::Mutex<Option<Ts>>>,
+    }
+
+    impl StreamOutput<LlmChunk> for Waiting {
+        fn next(
+            &mut self,
+        ) -> lk_agents_abi::BoxFuture<'_, Result<Option<LlmChunk>, ProviderError>> {
+            Box::pin(async move {
+                self.clock.advance(Duration::from_secs(2));
+                self.stop.cancel();
+                std::future::pending().await
+            })
+        }
+
+        fn close(self: Box<Self>, deadline: Ts) -> lk_agents_abi::BoxFuture<'static, Closed> {
+            Box::pin(async move {
+                *self.closed_at.lock() = Some(deadline);
+                Closed::Clean
+            })
+        }
+    }
+
+    impl lk_agents_abi::utils::stream::ProviderStream<LlmChunk> for Waiting {}
+
+    #[tokio::test]
+    async fn cancellation_preserves_the_request_deadline_or_uses_the_shared_cleanup_allowance() {
+        for total_timeout in [Some(17.0), None] {
+            let clock = Arc::new(VirtualClock::new());
+            let stop = CancellationToken::new();
+            let closed_at = Arc::new(parking_lot::Mutex::new(None));
+            let model = Arc::new(Model {
+                clock: clock.clone(),
+                stop: stop.clone(),
+                closed_at: closed_at.clone(),
+            });
+            let req = ChatRequest {
+                conn_options: lk_agents_abi::ApiConnectOptions {
+                    total_timeout,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let trace = telemetry::LlmTrace::start(&telemetry::Cx::NONE, model.as_ref(), &req);
+            let (tx, mut rx) = mpsc::channel(1);
+            let events = Reporter { id: "run".into(), tx };
+            stream_request(RequestId(1), req, model, clock.clone(), events, stop, trace).await;
+            let expected = total_timeout
+                .map(|seconds| Ts::ZERO.saturating_add(Duration::from_secs_f64(seconds)))
+                .unwrap_or_else(|| {
+                    clock.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT)
+                });
+            assert_eq!(*closed_at.lock(), Some(expected));
+            assert!(matches!(
+                rx.recv().await,
+                Some((_, Report::Core(AgentRunEvent::LlmFailed { .. })))
+            ));
+        }
     }
 }

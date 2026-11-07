@@ -641,8 +641,7 @@ async fn twilio_originate(
         room.as_ref(),
         Some(HUMAN_AGENT_IDENTITY.to_owned()),
         Some(vec![TRACK_KIND_AUDIO]),
-        false,
-        false,
+        crate::rtc::wait::TrackOptions::default(),
     );
     match ringing_timeout {
         Some(limit) => lk_agents_abi::timeout(clock, limit, answered)

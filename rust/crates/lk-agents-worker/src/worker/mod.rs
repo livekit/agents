@@ -405,7 +405,9 @@ impl ConnectionIo {
             drop(active.writing);
             self.cleanups.push(
                 async move {
-                    let _ = tokio::time::timeout(timeout, active.transport.sink.close()).await;
+                    if tokio::time::timeout(timeout, active.transport.sink.close()).await.is_err() {
+                        log::warn!(target: lk_agents_abi::LOG_TARGET, timeout_ms = timeout.as_millis() as u64; "worker transport close timed out");
+                    }
                 }
                 .boxed(),
             );

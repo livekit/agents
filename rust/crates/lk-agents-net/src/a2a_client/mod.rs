@@ -10,7 +10,7 @@ use std::future::Future;
 use std::ops::ControlFlow;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::transport::HttpRequest;
 use a2a::{AgentCard, JsonRpcId, Message};
@@ -21,7 +21,7 @@ use lk_agents_core::a2a::client::{
     Client, ClientError, HttpMethod, ReplyState, Request, TaskUpdate,
 };
 use lk_agents_core::a2a::rpc::TaskRef;
-use tokio::sync::{Mutex as AsyncMutex, Notify, mpsc, watch};
+use tokio::sync::{Mutex as AsyncMutex, mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
 use crate::env::ProcessEnv;
@@ -72,8 +72,7 @@ struct Inner {
     runtime: tokio::runtime::Handle,
     clock: Arc<dyn Clock>,
     connect: AsyncMutex<()>,
-    closed: AtomicBool,
-    closing: Notify,
+    closing: CancellationToken,
     requests: AtomicU64,
     operations: Mutex<BTreeMap<u64, Operation>>,
     observations: Mutex<Vec<CleanupObservation>>,
@@ -108,8 +107,7 @@ impl AgentClient {
                 endpoint: endpoint_url,
                 options,
                 connect: AsyncMutex::new(()),
-                closed: AtomicBool::new(false),
-                closing: Notify::new(),
+                closing: CancellationToken::new(),
                 requests: AtomicU64::new(1),
                 operations: Mutex::new(BTreeMap::new()),
                 observations: Mutex::new(Vec::new()),
@@ -125,12 +123,10 @@ impl AgentClient {
             return Ok(card.clone());
         }
         let request = self.inner.core.lock().card_request()?;
-        let closing = self.inner.closing.notified();
-        self.inner.ensure_open()?;
         let discovery = self.inner.read_response(&request);
         let body = tokio::select! {
             biased;
-            _ = closing => return Err(ClientError::Closed),
+            () = self.inner.closing.cancelled() => return Err(ClientError::Closed),
             body = discovery => body?,
         };
         self.inner.ensure_open()?;
@@ -280,8 +276,7 @@ impl AgentClient {
 
     /// Stops admission and settles owned exchanges. Missed cleanup remains observable and owned.
     pub async fn aclose(&self) {
-        self.inner.closed.store(true, Ordering::Release);
-        self.inner.closing.notify_waiters();
+        self.inner.closing.cancel();
         let waiting = self.inner.cancel_all();
         for mut state in waiting {
             let _ = state.wait_for(|state| state.settled).await;
@@ -299,15 +294,14 @@ impl AgentClient {
 
 impl Drop for AgentClient {
     fn drop(&mut self) {
-        self.inner.closed.store(true, Ordering::Release);
-        self.inner.closing.notify_waiters();
+        self.inner.closing.cancel();
         self.inner.cancel_all();
     }
 }
 
 impl Inner {
     fn ensure_open(&self) -> Result<(), ClientError> {
-        if self.closed.load(Ordering::Acquire) { Err(ClientError::Closed) } else { Ok(()) }
+        if self.closing.is_cancelled() { Err(ClientError::Closed) } else { Ok(()) }
     }
 
     fn next_id(&self) -> u64 {
@@ -411,7 +405,7 @@ impl Inner {
         let mut operations = self.operations.lock();
         operations.remove(&id);
         // One scope: no exchange settles between the check and the close.
-        if operations.is_empty() && self.closed.load(Ordering::Acquire) {
+        if operations.is_empty() && self.closing.is_cancelled() {
             self.core.lock().close();
         }
     }

@@ -133,7 +133,7 @@ fn a_request_records_its_attempt_metrics_and_messages() {
         let attempt = trace.attempt();
         trace.observe(&chunk("hi"));
         trace.end_attempt(attempt, None);
-        trace.end(false, Some("SP_1"));
+        trace.end(super::LlmEnd { speech_id: Some("SP_1"), ..Default::default() });
 
         let spans = records.spans();
         let request = named(&spans, "llm_request")[0];
@@ -175,7 +175,7 @@ fn request_metrics_carry_the_genai_labels() {
     let llm = Script { label: "openai.LLM", serves: true };
     let req = request();
     let trace = LlmTrace::start(&cx, &llm, &req);
-    trace.end(false, None);
+    trace.end(Default::default());
     let measured = records.measurements();
     let duration = measured
         .iter()
@@ -219,7 +219,7 @@ fn a_registered_node_makes_its_own_request() {
     trace.end_attempt(attempt, None);
     assert_eq!(trace.text(), "hi", "the node span still reads the response");
     assert_eq!(trace.cx().span(), Some(PARENT), "the node runs under the caller's context");
-    trace.end(false, None);
+    trace.end(Default::default());
     assert!(records.spans().is_empty() && records.measurements().is_empty());
 }
 
@@ -242,7 +242,7 @@ async fn a_fallback_adapter_records_one_request_per_entry_under_its_span() {
     let mut stream = chain.chat(trace.cx(), &req).await.expect("opens");
     while stream.next().await.expect("serves").is_some() {}
     stream.close(Ts::ZERO).await;
-    trace.end(false, None);
+    trace.end(Default::default());
     for _ in 0..50 {
         if !named(&records.spans(), "llm_fallback_adapter").is_empty() {
             break;

@@ -51,7 +51,7 @@ pub async fn detection_pass(
         if let Some(answer) = pass.handle(event, shared.time.wall_secs()) {
             if let Some(attempt) = attempt.take() {
                 trace.end_attempt(attempt, None);
-                trace.end(false, None);
+                trace.end(Default::default());
             }
             shared.report(answer);
             return;

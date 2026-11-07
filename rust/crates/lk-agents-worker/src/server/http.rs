@@ -184,9 +184,17 @@ where
         .header_read_timeout(HEADER_TIMEOUT);
     // Hyper also enforces the header deadline; this bounds the entire exchange, including
     // application callbacks and a peer that stops reading a response.
-    let _ =
-        tokio::time::timeout(CONNECTION_TIMEOUT, http.serve_connection(TokioIo::new(io), service))
-            .await;
+    match tokio::time::timeout(CONNECTION_TIMEOUT, http.serve_connection(TokioIo::new(io), service))
+        .await
+    {
+        Err(_) => {
+            log::warn!(target: lk_agents_abi::LOG_TARGET, timeout_ms = CONNECTION_TIMEOUT.as_millis() as u64; "worker HTTP exchange timed out")
+        }
+        Ok(Err(error)) => {
+            log::warn!(target: lk_agents_abi::LOG_TARGET, error:% = error; "worker HTTP exchange failed")
+        }
+        Ok(Ok(())) => {}
+    }
 }
 
 /// Bind numeric addresses directly; resolve names through the shared bounded resolver.

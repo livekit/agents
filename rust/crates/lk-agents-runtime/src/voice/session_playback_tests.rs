@@ -38,7 +38,7 @@ async fn missing_playback_progress_and_finish_ends_the_speech_without_inventing_
     drop(still_open);
     // Explicit resource cleanup settles the retained uncertain binding.
     output.0.reset();
-    api.close(CloseReason::UserInitiated, false, None).await;
+    close_session(&api).await;
 }
 
 struct PendingTextCleanup {
@@ -216,5 +216,5 @@ async fn a_hard_aborted_generation_keeps_its_text_binding_until_source_cleanup_f
     settle().await;
     assert!(state.completed.get(), "the cancelled source did not finish cleanup");
     assert!(old.0.load(Ordering::SeqCst), "the completed old binding was never retired");
-    api.close(CloseReason::UserInitiated, false, None).await;
+    close_session(&api).await;
 }

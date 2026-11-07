@@ -260,7 +260,9 @@ impl EndpointServer {
     /// to `stop_grace` for them to settle.
     pub async fn stop(&self) {
         self.enter(ServerState::Stopping);
-        let _ = tokio::time::timeout(self.limits.stop_grace, self.connections.idle()).await;
+        if tokio::time::timeout(self.limits.stop_grace, self.connections.idle()).await.is_err() {
+            log::warn!(target: lk_agents_abi::LOG_TARGET, timeout_ms = self.limits.stop_grace.as_millis() as u64; "worker HTTP connections did not stop in time");
+        }
     }
 
     /// Move to `state`, never back; the WebSockets open at that moment.

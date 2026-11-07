@@ -65,10 +65,6 @@ impl Timebase {
         lk_agents_abi::timeout(&*self.clock, limit, fut).await
     }
 
-    pub fn is_virtual(&self) -> bool {
-        self.virt.is_some()
-    }
-
     /// On a virtual clock only moving time releases it.
     pub async fn wait_until(&self, at: Ts) {
         self.clock.wait_until(at).await

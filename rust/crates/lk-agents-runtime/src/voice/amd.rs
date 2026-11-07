@@ -47,6 +47,7 @@ pub struct AmdHandle {
 
 impl AmdHandle {
     pub fn input(&self, input: In) {
+        // The detector has ended when its receiver is gone.
         let _ = self.tx.send(Msg::Input(input));
     }
 
@@ -196,7 +197,7 @@ impl AmdSystem {
         let spawner = system.peer.spawner.clone();
         let time = system.peer.time.clone();
         let callee_tx = tx.clone();
-        let _ = tasks.try_spawn(spawner.as_ref(), "amd callee", async move {
+        tasks.spawn(spawner.as_ref(), "amd callee", async move {
             tokio::select! {
                 biased;
                 () = callee_tx.closed() => {}
@@ -205,7 +206,7 @@ impl AmdSystem {
                 }
             }
         });
-        let _ = tasks.try_spawn(spawner.as_ref(), "amd", system.run(rx, msg_rx));
+        tasks.spawn(spawner.as_ref(), "amd", system.run(rx, msg_rx));
         AmdHandle { tx, listening, _tasks: tasks }
     }
 
@@ -426,7 +427,7 @@ impl AmdSystem {
         let time = self.peer.time.clone();
         let tx = self.tx.clone();
         let cx = self.cx.clone();
-        let _ = self.tasks.try_spawn(
+        self.tasks.spawn(
             self.peer.spawner.as_ref(),
             "amd classification",
             classify(time, tx, llm, request, n, req.transcript, cancelled, cx),
@@ -470,7 +471,7 @@ impl AmdSystem {
         let tx = self.tx.clone();
         let peer = self.peer.clone();
         let tasks = self.tasks.clone();
-        let _ = self.tasks.try_spawn(self.peer.spawner.as_ref(), "amd tap open", async move {
+        self.tasks.spawn(self.peer.spawner.as_ref(), "amd tap open", async move {
             if peer.closing.is_cancelled() || tx.is_closed() {
                 return;
             }
@@ -588,7 +589,12 @@ async fn await_callee(
         return Callee::Answered;
     };
     let audio = Some(vec![lk_agents_abi::voice::rtc::TRACK_KIND_AUDIO]);
-    let track = wait::track_publication(room.as_ref(), participant, audio, false, true);
+    let track = wait::track_publication(
+        room.as_ref(),
+        participant,
+        audio,
+        wait::TrackOptions { subscribed: true, ..Default::default() },
+    );
     let publisher = match time.timeout(TRACK_PUBLICATION_TIMEOUT, track).await {
         Err(_) => return Callee::Missing("timed out waiting for participant audio track".into()),
         Ok(Err(e)) => return Callee::Missing(e.to_string()),
@@ -734,7 +740,10 @@ async fn classify(
     }
     // Always, on every path: dropping does not cancel a host stream, and `close` consumes it.
     let deadline = time.now().saturating_add(lk_agents_abi::HOST_TEARDOWN_TIMEOUT);
-    let _ = stream.close(deadline).await;
+    let closed = stream.close(deadline).await;
+    if closed != lk_agents_abi::Closed::Clean {
+        log::warn!(target: lk_agents_abi::LOG_TARGET, request = req, outcome:? = closed; "AMD model stream cleanup incomplete");
+    }
     // A cancelled classification's request ends as cancelled when dropped.
     if aborted {
         return;
@@ -742,7 +751,7 @@ async fn classify(
     if let Some(attempt) = attempt.take() {
         trace.end_attempt(attempt, None);
     }
-    let metrics = trace.end(false, None).map(Box::new);
+    let metrics = trace.end(Default::default()).map(Box::new);
     let _ = tx.send(Msg::Answer { req, transcript, calls, failed, metrics });
 }
 

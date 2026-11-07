@@ -391,21 +391,52 @@ fn a_server_takes_a_job_only_with_a_voice_door() {
 #[test]
 fn a_simulated_job_names_its_agent_and_room() {
     let s = settings();
-    let fake =
-        simulated_job(&s, "W1", "console-room", true, Some("console".into()), None, None).unwrap();
+    let fake = simulated_job(
+        &s,
+        "W1",
+        "console-room",
+        SimulatedJobOptions {
+            fake_job: true,
+            agent_identity: Some("console".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
     assert!(fake.job.id.starts_with("mock-job-"));
     assert_eq!(fake.job.room.as_deref(), Some("console-room"));
     assert_eq!((fake.accept_arguments.identity.as_str(), fake.token.as_str()), ("console", ""));
     assert_eq!(fake.worker_id, "W1");
-    let real = simulated_job(&s, "W1", "r", false, Some("a".into()), None, None).unwrap_err();
-    assert_eq!(real, "room_info is None but fake_job is False");
+    let real = simulated_job(
+        &s,
+        "W1",
+        "r",
+        SimulatedJobOptions { agent_identity: Some("a".into()), ..Default::default() },
+    )
+    .unwrap_err();
+    assert_eq!(real, "a dispatched job requires room information");
     let mut creds = settings();
     creds.api_key = "APIkey".into();
     creds.api_secret = "thiskeyistotallyunsafe".into();
-    let minted = simulated_job(&creds, "W", "r", true, None, None, None).unwrap();
+    let minted = simulated_job(
+        &creds,
+        "W",
+        "r",
+        SimulatedJobOptions { fake_job: true, ..Default::default() },
+    )
+    .unwrap();
     assert!(minted.accept_arguments.identity.starts_with("fake-agent-"));
-    let named =
-        simulated_job(&creds, "W", "r", true, Some("x".into()), None, Some(minted.token)).unwrap();
+    let named = simulated_job(
+        &creds,
+        "W",
+        "r",
+        SimulatedJobOptions {
+            fake_job: true,
+            agent_identity: Some("x".into()),
+            token: Some(minted.token),
+            ..Default::default()
+        },
+    )
+    .unwrap();
     assert_eq!(named.accept_arguments.identity, minted.accept_arguments.identity);
 }
 

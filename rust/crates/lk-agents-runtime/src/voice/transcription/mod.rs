@@ -34,10 +34,6 @@ struct Synchronizer {
 }
 
 impl Synchronizer {
-    fn decide(&self, event: TranscriptSyncEvent) -> Vec<TranscriptSyncEffect> {
-        self.state.lock().handle(event)
-    }
-
     /// Step the pure lifecycle and perform its ordered synchronous effects. The words released
     /// are `reported`'s, the playback whose report this is, if any.
     fn apply(
@@ -46,21 +42,13 @@ impl Synchronizer {
         reported: Option<PlaybackSegment>,
     ) -> Option<Heard> {
         let mut heard = None;
-        for effect in self.decide(event) {
+        let effects = self.state.lock().handle(event);
+        for effect in effects {
             if let Some(report) = self.perform(effect, reported) {
                 heard = Some(report);
             }
         }
         heard
-    }
-
-    fn step(&self, event: TranscriptSyncEvent) -> Option<Heard> {
-        self.apply(event, None)
-    }
-
-    /// `input` from `segment`'s playback report.
-    fn step_reported(&self, segment: PlaybackSegment, event: TranscriptSyncEvent) -> Option<Heard> {
-        self.apply(event, Some(segment))
     }
 
     fn perform(
@@ -107,13 +95,16 @@ impl Synchronizer {
 
     /// The close's wait: give the forwarder until the decided deadline to send its words.
     async fn wait_for_forwarded_words(&self) {
-        for wait in self.decide(TranscriptSyncEvent::WaitStarted(self.clock.now())) {
+        let effects = self.state.lock().handle(TranscriptSyncEvent::WaitStarted(self.clock.now()));
+        for wait in effects {
             let TranscriptSyncEffect::WaitUntil(at) = wait else {
                 unreachable!("close only waits on its forwarded words");
             };
             let left = at.saturating_duration_since(self.clock.now());
             let forwarded = self.forwarder_done.wait_for(|set| *set);
-            let _ = lk_agents_abi::timeout(&*self.clock, left, forwarded).await;
+            if lk_agents_abi::timeout(&*self.clock, left, forwarded).await.is_err() {
+                log::warn!(target: lk_agents_abi::LOG_TARGET, timeout_ms = left.as_millis() as u64; "transcript forwarder drain timed out");
+            }
             self.apply(TranscriptSyncEvent::WaitFinished, None);
         }
     }
@@ -157,7 +148,7 @@ impl PlaybackObserver for AudioEvents {
 
     fn on_playback_reset(&self) {
         if let Some(node) = self.0.upgrade() {
-            node.sync.step(TranscriptSyncEvent::PlaybackReset);
+            node.sync.apply(TranscriptSyncEvent::PlaybackReset, None);
             node.tracker.on_playback_reset();
         }
     }
@@ -183,14 +174,14 @@ impl SyncedAudioOutput {
         match ev {
             PlaybackEvent::Started(e) => {
                 if self.tracker.playback_started(e.segment, e.created_at) {
-                    self.sync.step_reported(e.segment, TranscriptSyncEvent::PlaybackStarted);
+                    self.sync.apply(TranscriptSyncEvent::PlaybackStarted, Some(e.segment));
                 }
             }
             PlaybackEvent::Progressed(e) => {
                 if self.tracker.playback_progressed(e.segment, e.started_at, e.offset, e.duration) {
-                    self.sync.step_reported(
-                        e.segment,
+                    self.sync.apply(
                         TranscriptSyncEvent::PlaybackProgressed(e.offset + e.duration),
+                        Some(e.segment),
                     );
                 }
             }
@@ -201,7 +192,7 @@ impl SyncedAudioOutput {
                 let position = e.playback_position;
                 let finished =
                     TranscriptSyncEvent::PlaybackFinished { position, interrupted: e.interrupted };
-                let heard = self.sync.step_reported(*segment, finished);
+                let heard = self.sync.apply(finished, Some(*segment));
                 let synchronized_transcript =
                     heard.map(|h| h.text).or(e.synchronized_transcript.clone());
                 self.tracker.playback_finished(
@@ -243,19 +234,19 @@ impl AudioOutput for SyncedAudioOutput {
             // Counted before it passes: the sink below may report its playback from inside the
             // capture, and that playback is this segment's.
             let secs = lk_agents_abi::voice::rtc::frame_duration(frame).as_secs_f64();
-            self.sync.step(TranscriptSyncEvent::AudioCaptureStarted { secs });
+            self.sync.apply(TranscriptSyncEvent::AudioCaptureStarted { secs }, None);
             self.next.capture_frame(frame).await
         })
     }
 
     fn flush_segment(&self) {
         self.next.flush();
-        self.sync.step(TranscriptSyncEvent::AudioEnded);
+        self.sync.apply(TranscriptSyncEvent::AudioEnded, None);
     }
 
     fn clear_buffer(&self) {
         self.next.clear_buffer();
-        self.sync.step(TranscriptSyncEvent::AudioCleared);
+        self.sync.apply(TranscriptSyncEvent::AudioCleared, None);
     }
 
     fn on_attached(&self) {
@@ -270,7 +261,7 @@ impl AudioOutput for SyncedAudioOutput {
 
     fn pause(&self) {
         self.next.pause();
-        self.sync.step(TranscriptSyncEvent::PlaybackPaused);
+        self.sync.apply(TranscriptSyncEvent::PlaybackPaused, None);
     }
 
     fn resume(&self) {
@@ -287,8 +278,12 @@ pub struct SyncedTextOutput {
 impl SyncedTextOutput {
     /// `aligned` records whether the caller used the timed API.
     async fn capture(&self, text: &TranscriptChunk, aligned: bool) -> Result<()> {
-        for effect in self.sync.decide(TranscriptSyncEvent::Capture { text: text.clone(), aligned })
-        {
+        let effects = self
+            .sync
+            .state
+            .lock()
+            .handle(TranscriptSyncEvent::Capture { text: text.clone(), aligned });
+        for effect in effects {
             match effect {
                 TranscriptSyncEffect::Capture { text, aligned: true } => {
                     if let Some(next) = &self.next {
@@ -335,7 +330,8 @@ impl TextOutput for SyncedTextOutput {
     }
 
     fn flush(&self) {
-        for effect in self.sync.decide(TranscriptSyncEvent::FlushText) {
+        let effects = self.sync.state.lock().handle(TranscriptSyncEvent::FlushText);
+        for effect in effects {
             match effect {
                 TranscriptSyncEffect::FlushText => {
                     if let Some(next) = &self.next {
@@ -350,7 +346,8 @@ impl TextOutput for SyncedTextOutput {
     }
 
     fn on_attached(&self) {
-        for effect in self.sync.decide(TranscriptSyncEvent::AttachText) {
+        let effects = self.sync.state.lock().handle(TranscriptSyncEvent::AttachText);
+        for effect in effects {
             match effect {
                 TranscriptSyncEffect::AttachText => {
                     if let Some(next) = &self.next {
@@ -441,7 +438,8 @@ impl TranscriptSynchronizer {
     /// Close: end the live segment and give the forwarder [`lk_agents_abi::HOST_TEARDOWN_TIMEOUT`] to drain.
     /// `RoomIO.aclose` must close this before the transcription outputs it feeds.
     pub async fn aclose(&self) {
-        for effect in self.sync.decide(TranscriptSyncEvent::Close) {
+        let effects = self.sync.state.lock().handle(TranscriptSyncEvent::Close);
+        for effect in effects {
             match effect {
                 TranscriptSyncEffect::CloseSender => {
                     self.sync.tx.lock().take();

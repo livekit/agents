@@ -190,6 +190,7 @@ impl PeerHandle {
         self.watch.subscribe()
     }
 
+    /// Refused only after the session's receiver has ended; background reporters may discard it.
     pub fn send(
         &self,
         origin: VoiceCommandOrigin,

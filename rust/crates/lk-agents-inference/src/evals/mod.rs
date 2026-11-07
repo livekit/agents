@@ -286,7 +286,7 @@ impl Judges {
         if let Err(error) = &read {
             trace.fail(error);
         }
-        trace.end(false, None);
+        trace.end(Default::default());
         read
     }
 }

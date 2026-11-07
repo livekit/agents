@@ -130,14 +130,19 @@ impl<Out: Serialize, In: DeserializeOwned + Send + 'static> Channel<Out, In> {
         if let Some(mut writer) = writer
             && tokio::time::timeout(CLOSE_TIMEOUT, &mut writer).await.is_err()
         {
+            log::warn!(target: lk_agents_abi::LOG_TARGET, timeout_ms = CLOSE_TIMEOUT.as_millis() as u64; "IPC writer close timed out");
             writer.cancel();
             let _ = writer.await;
         }
-        let _ = tokio::time::timeout(CLOSE_TIMEOUT, async {
+        if tokio::time::timeout(CLOSE_TIMEOUT, async {
             let mut inbox = self.inbox.lock().await;
             while inbox.recv().await.is_some() {}
         })
-        .await;
+        .await
+        .is_err()
+        {
+            log::warn!(target: lk_agents_abi::LOG_TARGET, timeout_ms = CLOSE_TIMEOUT.as_millis() as u64; "IPC peer drain timed out");
+        }
         let reader = self.reader.lock().take();
         if let Some(reader) = reader {
             reader.cancel();

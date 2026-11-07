@@ -600,6 +600,12 @@ pub async fn wait_avatar_join_room(
     let started = lk_agents_abi::unix_secs(clock.wall());
     wait::participant(room.as_ref(), Some(identity.clone()), None, true).await?;
     let video = Some(vec![lk_agents_abi::voice::rtc::TRACK_KIND_VIDEO]);
-    wait::track_publication(room.as_ref(), Some(identity), video, true, false).await?;
+    wait::track_publication(
+        room.as_ref(),
+        Some(identity),
+        video,
+        wait::TrackOptions { include_local: true, ..Default::default() },
+    )
+    .await?;
     Ok((started, lk_agents_abi::unix_secs(clock.wall())))
 }

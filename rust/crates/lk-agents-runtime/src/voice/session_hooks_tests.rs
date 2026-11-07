@@ -11,6 +11,21 @@ use lk_agents_voice::agent_session::{Command, HookCall, HookId, HookOutcome};
 use parking_lot::Mutex;
 use std::sync::Arc;
 
+pub(super) async fn close_session(api: &super::VoiceSession) {
+    let closing = api.close(super::CloseReason::UserInitiated, Default::default(), None);
+    tokio::pin!(closing);
+    for _ in 0..30_000 {
+        tokio::select! {
+            biased;
+            () = &mut closing => return,
+            () = tokio::time::sleep(std::time::Duration::from_millis(1)) => {
+                api.time().advance(std::time::Duration::from_millis(20));
+            }
+        }
+    }
+    panic!("session close did not finish within the test clock budget");
+}
+
 struct NoRegistry;
 
 impl lk_agents_abi::RefRegistry for NoRegistry {

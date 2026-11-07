@@ -335,7 +335,11 @@ async fn handle_request(
     if let Err(e) = outcome {
         log::warn!(target: lk_agents_abi::LOG_TARGET, request_id = req.request_id.as_str(), error = e.to_string().as_str();
             "error handling session request");
-        let _ = transport.send_message(&super::internal_error_response(&req.request_id)).await;
+        if let Err(error) =
+            transport.send_message(&super::internal_error_response(&req.request_id)).await
+        {
+            log::warn!(target: lk_agents_abi::LOG_TARGET, error:% = error, request_id = req.request_id.as_str(); "remote session error response could not be sent");
+        }
     }
 }
 

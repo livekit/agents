@@ -86,7 +86,9 @@ impl WorkerSink for WsSink {
 
     async fn close(&self) {
         self.pinger.cancel();
-        let _ = self.write.lock().await.close().await;
+        if let Err(error) = self.write.lock().await.close().await {
+            log::warn!(target: lk_agents_abi::LOG_TARGET, error:% = error; "worker WebSocket close failed");
+        }
     }
 }
 

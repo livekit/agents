@@ -103,7 +103,13 @@ impl room_owner::RoomRuntime for RoomFactory {
         subscribed: bool,
     ) -> std::result::Result<(Option<ParticipantIdentity>, TrackSid), RtcError> {
         let room = room.rtc().ok_or(RtcError::NotConnected)?;
-        wait::track_publication(room.as_ref(), identity, kinds, include_local, subscribed).await
+        wait::track_publication(
+            room.as_ref(),
+            identity,
+            kinds,
+            wait::TrackOptions { include_local, subscribed },
+        )
+        .await
     }
 
     fn create_room_session(_env: &ProcessEnv, room: Option<Arc<dyn RtcRoom>>) -> FixedRoom {

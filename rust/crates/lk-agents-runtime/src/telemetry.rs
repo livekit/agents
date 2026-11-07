@@ -58,7 +58,9 @@ pub(crate) use lk_agents_abi::telemetry::spans::text::{
 };
 pub(crate) use lk_agents_core::telemetry::span::seeded_ids;
 pub(crate) use lk_agents_core::telemetry::{gen_ai, log_keys};
-pub(crate) use lk_agents_inference::telemetry::{LlmTrace, TtsTrace, model_labels, provider_name};
+pub(crate) use lk_agents_inference::telemetry::{
+    LlmEnd, LlmTrace, TtsTrace, model_labels, provider_name,
+};
 pub(crate) use lk_agents_net::telemetry::{
     Cx, ErrorType, Failed, Failure, ScopedSpan, SpanContext, Tracer, end, event, measure,
     random_seed, reserve, start,

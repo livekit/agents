@@ -48,8 +48,10 @@ impl SessionOutputs {
     }
 
     pub async fn aclose(&self) {
-        if let Some(sync) = &self.synchronizer {
-            let _ = self.time.timeout(HOST_TEARDOWN_TIMEOUT, sync.aclose()).await;
+        if let Some(sync) = &self.synchronizer
+            && self.time.timeout(HOST_TEARDOWN_TIMEOUT, sync.aclose()).await.is_err()
+        {
+            log::warn!(target: lk_agents_abi::LOG_TARGET, timeout_ms = HOST_TEARDOWN_TIMEOUT.as_millis() as u64; "transcript synchronizer cleanup timed out");
         }
     }
 }

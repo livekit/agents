@@ -7,7 +7,7 @@
 //! job's profile is locked once per sample; one process sample per tick serves both.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, LazyLock};
 use std::thread::{self, Thread};
@@ -17,6 +17,7 @@ use lk_agents_abi::telemetry;
 use lk_agents_abi::telemetry::record::{StackFrame as SampledFrame, StallState};
 use lk_agents_runtime::telemetry_export::profile::{self, Frame, Profile};
 use parking_lot::Mutex;
+use tokio_util::sync::CancellationToken;
 
 /// How often the loop beats, and the detector checks.
 const TICK: Duration = Duration::from_millis(20);
@@ -60,7 +61,7 @@ struct Watched {
     /// The process runs this job alone: its other running threads join the job's profile.
     whole_process: bool,
     last_beat: AtomicU64,
-    closed: AtomicBool,
+    closed: CancellationToken,
     /// The job's profile, which the recording upload takes.
     profile: Arc<Mutex<Profile>>,
 }
@@ -78,7 +79,7 @@ impl lk_agents_abi::telemetry::host::LoopWatch for LoopWatch {
             job,
             whole_process,
             last_beat: AtomicU64::new(now()),
-            closed: AtomicBool::new(false),
+            closed: CancellationToken::new(),
             profile: Arc::default(),
         });
         if let Some(job) = &watched.job {
@@ -105,9 +106,8 @@ impl Drop for LoopWatch {
 
 impl Watched {
     fn close(&self) {
-        if !self.closed.swap(true, Ordering::Relaxed)
-            && let Some(job) = &self.job
-        {
+        self.closed.cancel();
+        if let Some(job) = &self.job {
             profile::forget(&telemetry::record::JobKey(job.clone()), &self.profile);
         }
     }
@@ -291,7 +291,7 @@ impl Entry {
 
     /// One check at `t`, with this tick's process sample, if one was taken.
     fn check(&mut self, t: u64, paused: bool, threads: Option<&[ThreadStack]>) -> Checked {
-        let closed = self.watched.closed.load(Ordering::Relaxed);
+        let closed = self.watched.closed.is_cancelled();
         let last = self.watched.last_beat.load(Ordering::Relaxed).max(self.fresh_since);
         let mut checked = Checked { keep: !closed, record: None, stderr: None };
         if paused {
@@ -522,7 +522,7 @@ mod tests {
             job: Some(job.into()),
             whole_process,
             last_beat: AtomicU64::new(0),
-            closed: AtomicBool::new(false),
+            closed: CancellationToken::new(),
             profile: Arc::default(),
         });
         Entry { watched, fresh_since: 0, stall: None }
@@ -607,7 +607,7 @@ mod tests {
     fn closing_records_the_stall_in_progress_and_stops_watching() {
         let mut e = entry("AJ_1");
         assert!(e.check(150 * MS, false, None).record.is_none());
-        e.watched.closed.store(true, Ordering::Relaxed);
+        e.watched.closed.cancel();
         let checked = e.check(300 * MS, false, None);
         assert!(!checked.keep);
         assert_eq!(checked.record.map(|x| x.duration), Some(Duration::from_millis(300)));

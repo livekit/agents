@@ -2,6 +2,7 @@
 
 #[path = "session_hooks_tests.rs"]
 mod hooks;
+use hooks::close_session;
 #[path = "session_playback_tests.rs"]
 mod playback;
 mod recorder {
@@ -266,12 +267,9 @@ async fn close_on_a_virtual_clock_ends_the_drain_and_returns() {
     opening.await.expect("the loop starts");
 
     // Bounded on the paused runtime clock: a close parked on the virtual clock fails here.
-    tokio::time::timeout(
-        Duration::from_secs(60),
-        api.close(CloseReason::UserInitiated, false, None),
-    )
-    .await
-    .expect("close hung: the drain was still waiting on a sender the stage held");
+    tokio::time::timeout(Duration::from_secs(60), close_session(&api))
+        .await
+        .expect("close hung: the drain was still waiting on a sender the stage held");
 
     assert!(saw_close.load(Ordering::SeqCst), "the drain never saw the `close` event");
     assert!(
@@ -451,7 +449,7 @@ async fn a_drain_during_a_handoff_joins_it_and_is_answered_at_the_swap() {
     assert_eq!(swap.await.expect("answered"), Ok(()), "the handoff lands");
     assert_eq!(drain.await.expect("answered"), Ok(()), "joined, not refused");
     assert_eq!(on_exits(&api, None), 1, "the arriving frame's on_exit ran: the drain moved frames");
-    api.close(CloseReason::UserInitiated, false, None).await;
+    close_session(&api).await;
 }
 
 // Catches: a `drain()` refused during the close; it must wait for the close's drain.
@@ -474,7 +472,7 @@ async fn a_drain_during_the_close_is_answered_by_the_closes_drain() {
     answer_exit(&api, exit);
     assert_eq!(drain.await.expect("answered"), Ok(()), "joined the close, not refused");
     assert_eq!(on_exits(&api, None), 1, "one on_exit for the frame, the close's");
-    api.close(CloseReason::UserInitiated, false, None).await;
+    close_session(&api).await;
 }
 
 /// A `say(audio=)` from `origin`, its frames held by the returned sender, and its handle.
@@ -566,7 +564,7 @@ async fn a_host_say_during_a_handoff_is_spoken_by_the_arriving_agent_before_its_
     });
     assert!(updated.is_some() && updated < created, "created before the swap: {:#?}", api.steps());
     assert!(created < on_enter, "the arriving agent's on_enter went first: {:#?}", api.steps());
-    api.close(CloseReason::UserInitiated, false, None).await;
+    close_session(&api).await;
 }
 
 // Catches: the leaving agent's own speech (a tool's, a hook's) carried to the arriving agent; it
@@ -594,7 +592,7 @@ async fn the_leaving_agents_own_say_during_a_handoff_is_still_refused() {
         assert!(handle.interrupted(), "{origin:?}");
         assert!(handle.done(), "refused speech waited for cleanup of work that never started");
     }
-    api.close(CloseReason::UserInitiated, false, None).await;
+    close_session(&api).await;
 }
 
 // Catches: a held say the host interrupted before the swap played on the arriving agent anyway;
@@ -617,7 +615,7 @@ async fn a_held_say_interrupted_before_the_swap_does_not_play() {
         |s| matches!(s, Step::Playout(lk_agents_voice::trace::PlayoutStep::PlaybackStarted { speech, .. }) if *speech == handle.id()),
     );
     assert_eq!(played, None, "{:#?}", api.steps());
-    api.close(CloseReason::UserInitiated, false, None).await;
+    close_session(&api).await;
 }
 
 // Catches: a held say left unanswered when the close refuses the switch it waited on: the host
@@ -640,7 +638,7 @@ async fn a_held_say_is_refused_when_the_close_refuses_the_handoff() {
         settle().await;
         assert!(rejected(&api, handle.id()).is_some(), "drain={drain}: {:#?}", api.steps());
         assert!(handle.interrupted(), "drain={drain}");
-        let closing = api.close(CloseReason::UserInitiated, false, None);
+        let closing = close_session(&api);
         tokio::pin!(closing);
         loop {
             tokio::select! {
@@ -780,7 +778,7 @@ async fn options_view_changes_only_after_core_acceptance() {
     api.send_awaited(VoiceCommandOrigin::Host, wait, call).unwrap();
     assert!(answer.await.unwrap().is_ok());
     assert_eq!(api.resolved_options().unwrap().aec_warmup_duration, None);
-    api.close(CloseReason::UserInitiated, false, None).await;
+    close_session(&api).await;
     assert!(api.send(TurnCommand::Configure(Box::new(aec_warmup_layer(Some(9.0))))).is_err());
     assert_eq!(api.resolved_options().unwrap().aec_warmup_duration, None);
 }
@@ -1001,7 +999,7 @@ async fn a_finished_speech_leaves_the_sessions_registry() {
         assert!(speech.done(), "the say never finished");
     }
     assert_eq!(api.speeches.len(), 0, "finished speeches stayed in the session's registry");
-    api.close(CloseReason::UserInitiated, false, None).await;
+    close_session(&api).await;
 }
 
 // Catches: an override layer held before `start()` lost to a session build that failed, so the
@@ -1149,7 +1147,7 @@ async fn closing_between_task_launch_and_installation_retires_the_opening_execut
     let opening = api
         .open(Box::new(Executor::new(api.time().clone(), api.spawner())), None, move |_| {
             // Synchronous close admission wins before the prepared execution is installed.
-            drop(closing.close(CloseReason::UserInitiated, false, None));
+            drop(closing.close(CloseReason::UserInitiated, Default::default(), None));
             Box::pin(async {})
         })
         .unwrap();
@@ -1224,7 +1222,7 @@ async fn close_cancels_pending_provider_preparation_without_waiting_for_the_prov
         std::task::Poll::Ready(())
     })
     .await;
-    api.close(CloseReason::UserInitiated, false, None).await;
+    close_session(&api).await;
     assert!(matches!(opening.await, Err(DriverError::StartupClosed)));
     assert!(api.resources.live().is_empty());
     api.close_io().await;

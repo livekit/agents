@@ -899,7 +899,7 @@ impl VoiceSession {
         // host's to close.
         let was_running = self.api().is_ok();
         let remote = self.remote_host();
-        let closing = self.close(reason, drain, None);
+        let closing = self.close(reason, super::CloseOptions { drain }, None);
         let close_io = self.close_io();
         let clock = self.time.clock();
         let eot = self.host.eot.clone().filter(|_| was_running);
@@ -914,13 +914,15 @@ impl VoiceSession {
                         hooks.hook_failed("closing", e.host_ref.clone());
                     }
                     closing.await;
-                    if let Some(eot) = eot {
-                        let _ = lk_agents_abi::timeout(
+                    if let Some(eot) = eot
+                        && lk_agents_abi::timeout(
                             &*clock,
                             HOST_TEARDOWN_TIMEOUT,
                             eot.aclose(&telemetry::Cx::NONE),
                         )
-                        .await;
+                        .await.is_err()
+                    {
+                        log::warn!(target: lk_agents_abi::LOG_TARGET, timeout_ms = HOST_TEARDOWN_TIMEOUT.as_millis() as u64; "end-of-turn detector cleanup timed out");
                     }
                     if let Some(remote) = remote {
                         remote.aclose().await;

@@ -81,6 +81,12 @@ pub struct LlmTrace {
     failure: Option<ProviderError>,
 }
 
+#[derive(Default)]
+pub struct LlmEnd<'a> {
+    pub interrupted: bool,
+    pub speech_id: Option<&'a str>,
+}
+
 impl LlmTrace {
     /// Opens the request's span under `cx`'s current span, with the request's messages when
     /// message capture is on. A fallback adapter or a registered `llm_node` opens none: its call
@@ -231,8 +237,9 @@ impl LlmTrace {
     }
 
     /// Ends the request with its usage, timing and metrics, records its measurements, and returns
-    /// its metrics. `interrupted`: the reader stopped before the response ended.
-    pub fn end(mut self, interrupted: bool, speech_id: Option<&str>) -> Option<LlmMetrics> {
+    /// its metrics. An interrupted reader stopped before the response ended.
+    pub fn end(mut self, end: LlmEnd<'_>) -> Option<LlmMetrics> {
+        let LlmEnd { interrupted, speech_id } = end;
         let now = self.cx.now_nanos();
         let at = now as f64 / 1e9;
         let failed = self.failure.is_some();

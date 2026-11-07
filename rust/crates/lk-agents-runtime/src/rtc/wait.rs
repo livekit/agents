@@ -154,13 +154,19 @@ pub async fn participant_attribute(
     }
 }
 
+#[derive(Default)]
+pub struct TrackOptions {
+    pub include_local: bool,
+    pub subscribed: bool,
+}
+
 pub async fn track_publication(
     room: &dyn RtcRoom,
     identity: Option<String>,
     kinds: Option<Vec<i32>>,
-    include_local: bool,
-    subscribed: bool,
+    options: TrackOptions,
 ) -> Result<(Option<ParticipantIdentity>, TrackSid)> {
+    let TrackOptions { include_local, subscribed } = options;
     match perform(room, WaitFor::Track { identity, kinds, include_local, subscribed }).await? {
         Ready::Track(identity, sid) => Ok((identity, sid)),
         _ => unreachable!("a track wait resolves with a track"),

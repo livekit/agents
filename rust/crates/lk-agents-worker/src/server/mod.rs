@@ -44,19 +44,24 @@ use crate::{AcceptArguments, JobDecision, JobRequest, RunningJobInfo, WORKER_PRO
 
 // --------------------------------------------------------------------- simulated jobs
 
+#[derive(Default)]
+pub struct SimulatedJobOptions {
+    pub fake_job: bool,
+    pub agent_identity: Option<String>,
+    pub room_info: Option<proto::Room>,
+    pub token: Option<String>,
+}
+
 /// `simulate_job`'s job: a room job under `room` for `agent_identity` (read from `token` when one
 /// is given), with a join token minted from the credentials unless given, or none for a fake job
 /// without credentials.
-#[allow(clippy::too_many_arguments)]
 pub fn simulated_job(
     settings: &ServerSettings,
     worker_id: &str,
     room: &str,
-    fake_job: bool,
-    agent_identity: Option<String>,
-    room_info: Option<proto::Room>,
-    token: Option<String>,
+    options: SimulatedJobOptions,
 ) -> Result<RunningJobInfo, String> {
+    let SimulatedJobOptions { fake_job, agent_identity, room_info, token } = options;
     let token = token.filter(|t| !t.is_empty());
     let agent_identity = match (&token, agent_identity) {
         (Some(token), _) => {
@@ -67,7 +72,7 @@ pub fn simulated_job(
     let identity = match agent_identity {
         Some(identity) => identity,
         None if fake_job => lk_agents_net::strings::shortuuid("fake-agent-"),
-        None => return Err("agent_identity is None but fake_job is False".into()),
+        None => return Err("a dispatched job requires an agent identity".into()),
     };
     let room_info = match room_info {
         Some(info) => info,
@@ -76,7 +81,7 @@ pub fn simulated_job(
             name: room.to_owned(),
             ..Default::default()
         },
-        None => return Err("room_info is None but fake_job is False".into()),
+        None => return Err("a dispatched job requires room information".into()),
     };
     let job = proto::Job {
         id: lk_agents_net::strings::shortuuid(if fake_job { "mock-job-" } else { "job-" }),
@@ -94,8 +99,7 @@ pub fn simulated_job(
             &settings.api_secret,
             &identity,
             room,
-            true,
-            None,
+            lk_agents_net::token::RoomJoinOptions { agent: true, ..Default::default() },
         )
         .map_err(|e| e.to_string())?,
     };

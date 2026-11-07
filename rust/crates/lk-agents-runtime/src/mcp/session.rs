@@ -142,7 +142,9 @@ impl Drop for CancelOnDrop {
             let reason = Some(CALLER_CANCELLED.into());
             let notification =
                 CancelledNotification::new(CancelledNotificationParam::new(Some(id), reason));
-            let _ = peer.send_notification(notification.into()).await;
+            if let Err(error) = peer.send_notification(notification.into()).await {
+                log::warn!(target: lk_agents_abi::LOG_TARGET, error:% = error; "MCP notification could not be sent");
+            }
         });
     }
 }

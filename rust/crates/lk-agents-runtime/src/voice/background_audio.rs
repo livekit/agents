@@ -33,7 +33,7 @@ pub use lk_agents_abi::voice::background_audio::{FrameStream, PlaybackError, Sou
 pub struct PlaybackDone {
     fade_out: f64,
 
-    stopped: AtomicBool,
+    stopped: CancellationToken,
     done: tokio::sync::watch::Sender<bool>,
 }
 
@@ -49,13 +49,13 @@ impl PlaybackDone {
 
     fn with(fade_out: f64, done: bool) -> Self {
         let (done, _) = tokio::sync::watch::channel(done);
-        Self { fade_out, stopped: AtomicBool::new(false), done }
+        Self { fade_out, stopped: CancellationToken::new(), done }
     }
     pub fn done(&self) -> bool {
         *self.done.borrow()
     }
     pub fn stop_requested(&self) -> bool {
-        self.stopped.load(Ordering::Acquire)
+        self.stopped.is_cancelled()
     }
     /// Ask playback to stop; `true` if done now. With a fade-out the handle is not done yet, or
     /// the generator would be closed mid-fade.
@@ -64,7 +64,7 @@ impl PlaybackDone {
             if *done {
                 return false;
             }
-            self.stopped.store(true, Ordering::Release);
+            self.stopped.cancel();
             *done = self.fade_out <= 0.0;
             *done
         })
@@ -115,16 +115,18 @@ struct PublishedOutput {
     participant: Arc<dyn LocalParticipant>,
     publication: Arc<dyn TrackPublication>,
     source: Arc<dyn AudioSource>,
-    stop: tokio::sync::watch::Sender<bool>,
+    stop: CancellationToken,
     pump: tokio::sync::oneshot::Receiver<()>,
 }
 
 impl PublishedOutput {
     /// Stops the pump, closes the source and unpublishes the track.
     async fn retire(self) {
-        let _ = self.stop.send(true);
+        self.stop.cancel();
         let _ = self.pump.await;
-        let _ = self.source.close(&telemetry::Cx::NONE).await;
+        if let Err(error) = self.source.close(&telemetry::Cx::NONE).await {
+            log::warn!(target: lk_agents_abi::LOG_TARGET, error:% = error; "background audio source close failed");
+        }
         // The SDK can replace the publication on reconnect; resolve the current SID.
         let publications = match self.participant.track_publications() {
             Ok(publications) => publications,
@@ -289,17 +291,17 @@ impl BackgroundAudioPlayer {
     async fn pump(
         &self,
         source: Arc<dyn AudioSource>,
-        mut stop: tokio::sync::watch::Receiver<bool>,
+        stop: CancellationToken,
     ) -> Result<(), RtcError> {
         loop {
-            let pcm = tokio::select! { biased; _ = stop.changed() => return Ok(()), pcm = self.next_block() => pcm };
+            let pcm = tokio::select! { biased; _ = stop.cancelled() => return Ok(()), pcm = self.next_block() => pcm };
             let Some(pcm) = pcm else {
                 return Ok(());
             };
             let data: Vec<u8> = pcm.iter().flat_map(|s| s.to_le_bytes()).collect();
             let frame =
                 AudioFrame::new(data, self.sample_rate, self.num_channels, self.blocksize as u32);
-            tokio::select! { biased; _ = stop.changed() => return Ok(()), result = source.capture(&telemetry::Cx::NONE, &frame) => { result?; } }
+            tokio::select! { biased; _ = stop.cancelled() => return Ok(()), result = source.capture(&telemetry::Cx::NONE, &frame) => { result?; } }
         }
     }
 
@@ -765,7 +767,8 @@ impl lk_agents_abi::voice::background_audio::BackgroundAudioPlayer for Backgroun
                     },
                 )
                 .await?;
-            let (stop, stop_rx) = tokio::sync::watch::channel(false);
+            let stop = CancellationToken::new();
+            let stop_rx = stop.clone();
             let engine = this.clone();
             let sink = source.clone();
             let pump = spawn_owned((&this.tasks, this.spawner.as_ref()), async move {

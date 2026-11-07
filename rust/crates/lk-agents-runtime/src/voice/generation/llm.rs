@@ -157,9 +157,13 @@ impl LlmInference<'_> {
                     let ended = self.read_stream(&mut stream, &mut data, &mut trace).await;
                     trace.end_attempt(attempt, ended.as_ref().err().map(|(error, _)| error));
                     let ended = self.settle_attempt(stream, &data, ended).await;
+                    let end = telemetry::LlmEnd {
+                        interrupted: handle.interrupted(),
+                        speech_id: Some(handle.speech_id()),
+                    };
                     let Err((error, produced)) = ended else {
                         node.end(&trace, llm.as_ref(), None);
-                        trace.end(handle.interrupted(), Some(handle.speech_id()));
+                        trace.end(end);
                         return Ok(data);
                     };
                     if produced {
@@ -175,7 +179,10 @@ impl LlmInference<'_> {
                 // opened.
                 Retried::Interrupted => {
                     node.end(&trace, llm.as_ref(), None);
-                    trace.end(true, Some(handle.speech_id()));
+                    trace.end(telemetry::LlmEnd {
+                        interrupted: true,
+                        speech_id: Some(handle.speech_id()),
+                    });
                     let empty =
                         || LlmGenerationData::new(shared.time.wall_secs(), String::new(), None);
                     return Ok(data.unwrap_or_else(empty));

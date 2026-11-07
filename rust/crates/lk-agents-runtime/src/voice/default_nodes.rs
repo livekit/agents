@@ -210,16 +210,20 @@ async fn complete(
     let mut attempts = Attempts::retrying(&req.conn_options, clock.now());
     loop {
         let attempt = trace.attempt();
-        let (error, produced) = match llm.chat(trace.cx(), &req).await {
-            Err(error) => (error, false),
-            Ok(stream) => match forward_chunks(stream, &tx, &mut trace, clock.as_ref()).await {
-                Err(failed) => failed,
-                Ok(end) => {
-                    trace.end_attempt(attempt, None);
-                    trace.end(matches!(end, CompletionEnd::Cut), None);
-                    return;
-                }
-            },
+        let result = match llm.chat(trace.cx(), &req).await {
+            Err(error) => Err((error, false)),
+            Ok(stream) => forward_chunks(stream, &tx, &mut trace, clock.as_ref()).await,
+        };
+        let (error, produced) = match result {
+            Err(failed) => failed,
+            Ok(end) => {
+                trace.end_attempt(attempt, None);
+                trace.end(telemetry::LlmEnd {
+                    interrupted: matches!(end, CompletionEnd::Cut),
+                    ..Default::default()
+                });
+                return;
+            }
         };
         trace.end_attempt(attempt, Some(&error));
         if produced {
@@ -235,14 +239,14 @@ async fn complete(
         llm.failed(error.clone(), at.is_some());
         let Some(at) = at else {
             trace.fail(&error);
-            trace.end(false, None);
+            trace.end(Default::default());
             let _ = tx.send(Err(error)).await;
             return;
         };
         tokio::select! {
             biased;
             () = tx.closed() => {
-                trace.end(true, None);
+                trace.end(telemetry::LlmEnd { interrupted: true, ..Default::default() });
                 return;
             }
             () = clock.wait_until(at) => attempts.wake(at, None, &mut steps),
