@@ -12,7 +12,7 @@ use lk_agents_abi::{AudioFrame, Clock};
 use lk_agents_media::media_queue::{self, AudioReceiver, AudioSender, Item, Policy, Stuck};
 use lk_agents_net::audio_drops::AudioDrops;
 use lk_agents_net::env::ProcessEnv;
-use lk_agents_net::telemetry;
+use lk_agents_telemetry as telemetry;
 
 /// A duplex model talks over the caller in real time: old audio is worse than missing audio.
 pub const INPUT_POLICY: Policy = Policy::Now(Duration::from_millis(250));

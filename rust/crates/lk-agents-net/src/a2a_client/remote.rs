@@ -25,7 +25,7 @@ use super::host::message_from_wire;
 use super::{AgentClient, Reply};
 use crate::env::ProcessEnv;
 use crate::task::Cancellation;
-use crate::telemetry;
+use lk_agents_telemetry as telemetry;
 
 pub struct RemoteInteraction {
     inner: Interaction,

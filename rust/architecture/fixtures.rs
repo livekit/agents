@@ -54,6 +54,13 @@ pub async fn macro_growth() {
     tokio::select! { _ = async {} => {} }
     tokio::select! { _ = async {} => {} }
 }
+pub fn scoped_span(
+    cx: &lk_agents_telemetry::Cx,
+    request: lk_agents_abi::telemetry::spans::endpoint::HttpRequest,
+) {
+    let span: lk_agents_telemetry::ScopedSpan<_> = lk_agents_telemetry::start(cx, request);
+    drop(span);
+}
 fn main() {}
 
 pub fn argument_exemption(

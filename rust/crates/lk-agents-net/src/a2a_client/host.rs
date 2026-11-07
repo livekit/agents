@@ -40,7 +40,7 @@ impl port::AgentClient for AgentClient {
         task_id: Option<String>,
         metadata: Option<MessageMetadata>,
         chat_ctx: Option<Vec<ChatItem>>,
-        cx: crate::telemetry::Cx,
+        cx: lk_agents_telemetry::Cx,
     ) -> Result<Self::Reply, AgentClientError> {
         let mut message = message_to_wire(message)?;
         if let Some(metadata) = metadata {
@@ -68,7 +68,7 @@ impl port::AgentClient for AgentClient {
         &self,
         task_id: String,
         thread_id: String,
-        cx: crate::telemetry::Cx,
+        cx: lk_agents_telemetry::Cx,
     ) -> Result<Self::Reply, AgentClientError> {
         Ok(self.subscribe(TaskRef { id: task_id, context_id: thread_id }, None, &cx).await?)
     }

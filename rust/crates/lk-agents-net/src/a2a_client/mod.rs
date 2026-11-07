@@ -156,7 +156,7 @@ impl AgentClient {
         thread_id: Option<&str>,
         task_id: Option<&str>,
         history: Option<&lk_agents_core::a2a::caller_history::CallerHistory>,
-        cx: &crate::telemetry::Cx,
+        cx: &lk_agents_telemetry::Cx,
     ) -> Result<Reply, ClientError> {
         self.inner.core.lock().validate_message(&message, thread_id, task_id)?;
         self.connect().await?;
@@ -183,7 +183,7 @@ impl AgentClient {
         &self,
         task: TaskRef,
         offset: Option<&str>,
-        cx: &crate::telemetry::Cx,
+        cx: &lk_agents_telemetry::Cx,
     ) -> Result<Reply, ClientError> {
         self.connect().await?;
         let id = self.inner.next_id();

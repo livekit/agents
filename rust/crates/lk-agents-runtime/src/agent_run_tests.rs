@@ -737,9 +737,8 @@ async fn the_runner_refuses_an_invalid_definition_and_streams_a_run_to_its_resul
 /// An `agent_run` span recording to `spans`.
 fn run_span(
     spans: &Arc<Spans>,
-) -> lk_agents_net::telemetry::ScopedSpan<lk_agents_abi::telemetry::spans::text::AgentRun> {
-    let tracer =
-        lk_agents_net::telemetry::Tracer::new(spans.clone(), Arc::new(RealClock::new()), 9);
+) -> lk_agents_telemetry::ScopedSpan<lk_agents_abi::telemetry::spans::text::AgentRun> {
+    let tracer = lk_agents_telemetry::Tracer::new(spans.clone(), Arc::new(RealClock::new()), 9);
     telemetry::start(
         &tracer.root(),
         lk_agents_abi::telemetry::spans::text::AgentRun {

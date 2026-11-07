@@ -56,7 +56,7 @@ pub trait EotTransport: Send + Sync {
     }
 
     /// Measures the transport's input under `cx`'s job.
-    fn observe(&self, _cx: lk_agents_net::telemetry::Cx) {}
+    fn observe(&self, _cx: lk_agents_telemetry::Cx) {}
 
     fn flush(&self);
 

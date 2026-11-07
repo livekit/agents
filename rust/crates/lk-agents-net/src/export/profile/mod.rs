@@ -42,8 +42,7 @@ const TRUNCATED: Frame<'static> = Frame { function: "<truncated>", file: "", lin
 pub struct Profile {
     start_nanos: u64,
     last_nanos: u64,
-    strings: Vec<String>,
-    string_ids: HashMap<String, i64>,
+    strings: Strings,
     functions: HashMap<(i64, i64), u64>,
     locations: HashMap<(u64, i64), u64>,
     function_list: Vec<pprof::Function>,
@@ -110,16 +109,7 @@ impl Profile {
     /// The gzipped pprof profile.
     pub fn encode(&self) -> Vec<u8> {
         let mut strings = self.strings.clone();
-        if strings.is_empty() {
-            strings.push(String::new());
-        }
-        let mut string = |s: &str| match strings.iter().position(|x| x == s) {
-            Some(at) => at as i64,
-            None => {
-                strings.push(s.to_owned());
-                strings.len() as i64 - 1
-            }
-        };
+        let mut string = |s: &str| strings.intern(s);
         let (wall, nanoseconds) = (string("wall"), string("nanoseconds"));
         let (thread_name, end_timestamp) = (string("thread_name"), string("end_timestamp_ns"));
         let python = string("python");
@@ -160,14 +150,16 @@ impl Profile {
                 has_functions: true,
                 has_filenames: true,
                 has_line_numbers: true,
+                ..Default::default()
             }],
             location: self.location_list.clone(),
             function: self.function_list.clone(),
-            string_table: strings,
+            string_table: strings.list,
             time_nanos: self.start_nanos as i64,
             duration_nanos: self.last_nanos.saturating_sub(self.start_nanos) as i64 + PERIOD_NANOS,
             period_type: Some(pprof::ValueType { r#type: wall, unit: nanoseconds }),
             period: PERIOD_NANOS,
+            ..Default::default()
         };
         let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
         // Writing to a `Vec` cannot fail.
@@ -201,40 +193,32 @@ impl Profile {
             return *id;
         }
         let name = if self.threads.len() >= THREADS { "other" } else { name };
-        let id = self.string(name);
+        let id = self.strings.intern(name);
         if self.threads.len() < THREADS {
             self.threads.insert(name.to_owned(), id);
         }
         id
     }
 
-    fn string(&mut self, s: &str) -> i64 {
-        if self.strings.is_empty() {
-            self.strings.push(String::new());
-        }
-        if let Some(id) = self.string_ids.get(s) {
-            return *id;
-        }
-        let id = self.strings.len() as i64;
-        self.strings.push(s.to_owned());
-        self.string_ids.insert(s.to_owned(), id);
-        id
-    }
-
     fn known_location(&self, frame: &Frame<'_>) -> Option<u64> {
-        let name = *self.string_ids.get(frame.function)?;
-        let file = *self.string_ids.get(frame.file)?;
+        let name = *self.strings.ids.get(frame.function)?;
+        let file = *self.strings.ids.get(frame.file)?;
         let function = *self.functions.get(&(name, file))?;
         self.locations.get(&(function, frame.line)).copied()
     }
 
     fn location(&mut self, frame: &Frame<'_>) -> u64 {
-        let (name, file) = (self.string(frame.function), self.string(frame.file));
+        let (name, file) = (self.strings.intern(frame.function), self.strings.intern(frame.file));
         let next_function = self.function_list.len() as u64 + 1;
         let function = *self.functions.entry((name, file)).or_insert(next_function);
         if function == next_function {
-            let function =
-                pprof::Function { id: function, name, system_name: name, filename: file };
+            let function = pprof::Function {
+                id: function,
+                name,
+                system_name: name,
+                filename: file,
+                ..Default::default()
+            };
             self.function_list.push(function);
         }
         let next_location = self.location_list.len() as u64 + 1;
@@ -243,10 +227,34 @@ impl Profile {
             self.location_list.push(pprof::Location {
                 id: location,
                 mapping_id: 1,
-                line: vec![pprof::Line { function_id: function, line: frame.line }],
+                line: vec![pprof::Line { function_id: function, line: frame.line, column: 0 }],
+                ..Default::default()
             });
         }
         location
+    }
+}
+
+/// pprof's string table: each string once, the empty string first.
+#[derive(Clone, Default)]
+struct Strings {
+    list: Vec<String>,
+    ids: HashMap<String, i64>,
+}
+
+impl Strings {
+    fn intern(&mut self, s: &str) -> i64 {
+        if self.list.is_empty() {
+            self.list.push(String::new());
+            self.ids.insert(String::new(), 0);
+        }
+        if let Some(id) = self.ids.get(s) {
+            return *id;
+        }
+        let id = self.list.len() as i64;
+        self.list.push(s.to_owned());
+        self.ids.insert(s.to_owned(), id);
+        id
     }
 }
 
@@ -276,106 +284,8 @@ pub fn forget(job: &JobKey, profile: &Arc<Mutex<Profile>>) {
     }
 }
 
-/// The subset of pprof's `profile.proto` a job profile uses (field numbers as upstream).
-pub mod pprof {
-    #[derive(Clone, PartialEq, prost::Message)]
-    pub struct Profile {
-        #[prost(message, repeated, tag = "1")]
-        pub sample_type: Vec<ValueType>,
-        #[prost(message, repeated, tag = "2")]
-        pub sample: Vec<Sample>,
-        #[prost(message, repeated, tag = "3")]
-        pub mapping: Vec<Mapping>,
-        #[prost(message, repeated, tag = "4")]
-        pub location: Vec<Location>,
-        #[prost(message, repeated, tag = "5")]
-        pub function: Vec<Function>,
-        #[prost(string, repeated, tag = "6")]
-        pub string_table: Vec<String>,
-        #[prost(int64, tag = "9")]
-        pub time_nanos: i64,
-        #[prost(int64, tag = "10")]
-        pub duration_nanos: i64,
-        #[prost(message, optional, tag = "11")]
-        pub period_type: Option<ValueType>,
-        #[prost(int64, tag = "12")]
-        pub period: i64,
-    }
-
-    #[derive(Clone, PartialEq, prost::Message)]
-    pub struct ValueType {
-        #[prost(int64, tag = "1")]
-        pub r#type: i64,
-        #[prost(int64, tag = "2")]
-        pub unit: i64,
-    }
-
-    #[derive(Clone, PartialEq, prost::Message)]
-    pub struct Sample {
-        #[prost(uint64, repeated, tag = "1")]
-        pub location_id: Vec<u64>,
-        #[prost(int64, repeated, tag = "2")]
-        pub value: Vec<i64>,
-        #[prost(message, repeated, tag = "3")]
-        pub label: Vec<Label>,
-    }
-
-    #[derive(Clone, PartialEq, prost::Message)]
-    pub struct Label {
-        #[prost(int64, tag = "1")]
-        pub key: i64,
-        #[prost(int64, tag = "2")]
-        pub str: i64,
-        #[prost(int64, tag = "3")]
-        pub num: i64,
-        #[prost(int64, tag = "4")]
-        pub num_unit: i64,
-    }
-
-    #[derive(Clone, PartialEq, prost::Message)]
-    pub struct Mapping {
-        #[prost(uint64, tag = "1")]
-        pub id: u64,
-        #[prost(int64, tag = "5")]
-        pub filename: i64,
-        #[prost(bool, tag = "7")]
-        pub has_functions: bool,
-        #[prost(bool, tag = "8")]
-        pub has_filenames: bool,
-        #[prost(bool, tag = "9")]
-        pub has_line_numbers: bool,
-    }
-
-    #[derive(Clone, PartialEq, prost::Message)]
-    pub struct Location {
-        #[prost(uint64, tag = "1")]
-        pub id: u64,
-        #[prost(uint64, tag = "2")]
-        pub mapping_id: u64,
-        #[prost(message, repeated, tag = "4")]
-        pub line: Vec<Line>,
-    }
-
-    #[derive(Clone, PartialEq, prost::Message)]
-    pub struct Line {
-        #[prost(uint64, tag = "1")]
-        pub function_id: u64,
-        #[prost(int64, tag = "2")]
-        pub line: i64,
-    }
-
-    #[derive(Clone, PartialEq, prost::Message)]
-    pub struct Function {
-        #[prost(uint64, tag = "1")]
-        pub id: u64,
-        #[prost(int64, tag = "2")]
-        pub name: i64,
-        #[prost(int64, tag = "3")]
-        pub system_name: i64,
-        #[prost(int64, tag = "4")]
-        pub filename: i64,
-    }
-}
+/// pprof's `profile.proto` messages.
+pub mod pprof;
 
 #[cfg(test)]
 mod tests {
@@ -454,14 +364,14 @@ mod tests {
                 [Frame { function: "f", file: "app.py", line }].into_iter(),
             );
         }
-        let (strings, locations) = (p.strings.len(), p.location_list.len());
+        let (strings, locations) = (p.strings.list.len(), p.location_list.len());
         for line in 0..1_000 {
             let frame = Frame { function: "new_function", file: "new.py", line };
             p.add(2, P, "MainThread", true, [frame].into_iter());
         }
         assert_eq!(p.dropped(), 1_000);
         assert_eq!(
-            (p.strings.len(), p.location_list.len()),
+            (p.strings.list.len(), p.location_list.len()),
             (strings, locations),
             "nothing interned"
         );
@@ -520,3 +430,6 @@ mod tests {
         assert_eq!(decode(&Profile::default().encode()).string_table[0], "");
     }
 }
+
+#[cfg(test)]
+mod pprof_tests;

@@ -12,7 +12,7 @@ use lk_agents_abi::telemetry::report::{
 };
 use serde_json::Value;
 
-use lk_agents_net::env::ProcessEnv;
+use crate::env::ProcessEnv;
 
 /// One tag: its metadata and when it was added, from the session clock.
 #[derive(Debug, Clone, PartialEq)]

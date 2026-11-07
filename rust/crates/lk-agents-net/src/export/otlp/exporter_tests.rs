@@ -128,8 +128,8 @@ fn process() -> ProcessIdentity {
 
 fn exporter(limits: Limits) -> Exporter {
     Exporter::start(
-        &lk_agents_net::task::TokioSpawner::current(),
-        Arc::new(lk_agents_net::clock::RealClock::new()),
+        &crate::task::TokioSpawner::current(),
+        Arc::new(crate::clock::RealClock::new()),
         process(),
         limits,
     )

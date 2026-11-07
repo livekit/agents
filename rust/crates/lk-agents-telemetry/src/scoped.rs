@@ -1,9 +1,9 @@
-//! Framework spans of the async I/O crates (docs/internals/telemetry.md "Span API"): the process
-//! [`Tracer`], the context [`Cx`] work runs in, and [`ScopedSpan`], ended when its scope exits.
+//! Spans of async work (docs/internals/telemetry.md "Span API"): the process [`Tracer`], the
+//! context [`Cx`] work runs in, and [`ScopedSpan`], ended when its scope exits.
 //! Callers spell every touchpoint `telemetry::`: [`start`], [`end`], [`event`], [`measure`],
 //! [`reserve`] and `#[telemetry::span]`.
 //! Ended spans and measurements reach the tracer's `RecordSink`: in a process, the exporter
-//! `lk-agents-telemetry` installs.
+//! `lk_agents_net::export` installs.
 
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
@@ -23,6 +23,8 @@ use lk_agents_abi::telemetry::record::{
 use lk_agents_abi::telemetry::spans::common::{EverySpan, Exception, GENAI_CONTENT};
 use parking_lot::Mutex;
 
+pub use crate::span::Reserved;
+use crate::span::{IdSource, seeded_ids};
 /// `#[telemetry::span(Decl { .. })]` on a function taking `cx: &telemetry::Cx`: the function is
 /// that one span.
 pub use lk_agents_abi::telemetry::decl::{Failed, SpanEnd, span};
@@ -32,8 +34,6 @@ pub use lk_agents_abi::telemetry::instruments::{
 };
 pub use lk_agents_abi::telemetry::record::SpanContext;
 pub use lk_agents_abi::telemetry::{Cx, Recorder};
-pub use lk_agents_core::telemetry::span::Reserved;
-use lk_agents_core::telemetry::span::{IdSource, seeded_ids};
 
 /// The process's span recording: where records go, the clock that times them and the id source.
 /// One per process, lent through `ProcessEnv`; the DST builds its own with a fixed seed.
@@ -321,5 +321,5 @@ impl<D: SpanDecl> Drop for ScopedSpan<D> {
 }
 
 #[cfg(test)]
-#[path = "span_tests.rs"]
+#[path = "scoped_tests.rs"]
 mod tests;

@@ -8,7 +8,7 @@ use lk_agents_abi::telemetry::policy::UPLOAD_TIMEOUT_SECONDS;
 use lk_agents_abi::telemetry::record::{Record, RecordSink, SpanContext, SpanRecord, Status};
 use lk_agents_abi::worker::ipc_host::JobRun as _;
 use lk_agents_abi::worker::job::{ShutdownCause, StartJobFields};
-use lk_agents_net::telemetry::Tracer;
+use lk_agents_telemetry::Tracer;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 #[derive(Default)]

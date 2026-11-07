@@ -34,7 +34,7 @@ pub(crate) use lk_agents_abi::telemetry::spans::inference::{
     Attempt, LlmFallbackAdapter, LlmFallbackChoice, LlmRequestRun, TtsRequestRun,
 };
 pub(crate) use lk_agents_abi::telemetry::spans::text::{JudgeEvaluation, JudgeEvaluationEnd};
-pub(crate) use lk_agents_net::telemetry::{
+pub(crate) use lk_agents_telemetry::{
     Cx, ErrorType, Failed, Failure, ScopedSpan, end, measure, start,
 };
 
@@ -105,7 +105,7 @@ impl LlmTrace {
         let capture = cx.capture_content();
         let span = (llm.request_span() == RequestSpan::Request).then(|| {
             let items = &req.chat_ctx.items;
-            lk_agents_net::telemetry::start(
+            lk_agents_telemetry::start(
                 cx,
                 LlmRequest {
                     operation: GenAiOperation::Chat,
@@ -160,7 +160,7 @@ impl LlmTrace {
         self.attempts += 1;
         self.request_ids.clear();
         let span = self.span.as_ref()?;
-        Some(lk_agents_net::telemetry::start(
+        Some(lk_agents_telemetry::start(
             span.cx(),
             LlmRequestRun {
                 attempt: Attempt {
@@ -181,9 +181,9 @@ impl LlmTrace {
         let Some(span) = span else { return };
         let end = AttemptEnd::new(std::mem::take(&mut self.request_ids));
         if let Some(error) = failed {
-            lk_agents_net::telemetry::end(span, Failed { end, error });
+            lk_agents_telemetry::end(span, Failed { end, error });
         } else {
-            lk_agents_net::telemetry::end(span, end);
+            lk_agents_telemetry::end(span, end);
         }
     }
 
@@ -257,7 +257,7 @@ impl LlmTrace {
             model: Label(self.id.model.clone()),
             response_model: Some(Label(self.id.model.clone())),
         };
-        lk_agents_net::telemetry::measure(
+        lk_agents_telemetry::measure(
             cx,
             &GenAiOperationDuration { operation: labels() },
             seconds(self.started, now),
@@ -265,13 +265,13 @@ impl LlmTrace {
         let input = [usage.input_text_tokens, usage.input_image_tokens, usage.input_audio_tokens];
         for (modality, count) in by_modality(usage.input_tokens, input) {
             let labels = GenAiInputTokens { operation: labels(), modality };
-            lk_agents_net::telemetry::measure(cx, &labels, count);
+            lk_agents_telemetry::measure(cx, &labels, count);
         }
         let output =
             [usage.output_text_tokens, usage.output_image_tokens, usage.output_audio_tokens];
         for (modality, count) in by_modality(usage.output_tokens, output) {
             let labels = GenAiOutputTokens { operation: labels(), modality };
-            lk_agents_net::telemetry::measure(cx, &labels, count);
+            lk_agents_telemetry::measure(cx, &labels, count);
         }
         let summary = metrics.as_ref().map(|m| Json(LlmMetricsSummary::from(m)));
         let finish = gen_ai::finish_reason(!self.calls.is_empty(), interrupted);
@@ -301,9 +301,9 @@ impl LlmTrace {
                 .map(|at| Json(UtcInstant { unix_seconds: at as f64 / 1e9 })),
         };
         if let Some(error) = &self.failure {
-            lk_agents_net::telemetry::end(span, Failed { end, error });
+            lk_agents_telemetry::end(span, Failed { end, error });
         } else {
-            lk_agents_net::telemetry::end(span, end);
+            lk_agents_telemetry::end(span, end);
         }
         metrics
     }
@@ -313,7 +313,7 @@ impl LlmTrace {
 impl Drop for LlmTrace {
     fn drop(&mut self) {
         if let (Some(span), Some(error)) = (self.span.take(), &self.failure) {
-            lk_agents_net::telemetry::end(span, error);
+            lk_agents_telemetry::end(span, error);
         }
     }
 }
@@ -356,17 +356,17 @@ impl TtsRequestSpan {
             failure: Option<&ProviderError>,
         ) where
             D: lk_agents_abi::telemetry::decl::SpanDecl<End = TtsRequestEnd>,
-            TtsRequestEnd: lk_agents_net::telemetry::SpanEnd<D>,
+            TtsRequestEnd: lk_agents_telemetry::SpanEnd<D>,
         {
             match (end, failure) {
                 (Some(end), Some(error)) => {
-                    lk_agents_net::telemetry::end(span, Failed { end, error });
+                    lk_agents_telemetry::end(span, Failed { end, error });
                 }
                 (Some(end), None) => {
-                    lk_agents_net::telemetry::end(span, end);
+                    lk_agents_telemetry::end(span, end);
                 }
                 (None, Some(error)) => {
-                    lk_agents_net::telemetry::end(span, error);
+                    lk_agents_telemetry::end(span, error);
                 }
                 (None, None) => drop(span),
             }
@@ -389,7 +389,7 @@ impl TtsTrace {
             provider: provider_name(&id.provider),
             model: id.model.clone(),
         };
-        use lk_agents_net::telemetry::start;
+        use lk_agents_telemetry::start;
         let span = match tts.request_span() {
             RequestSpan::Request => {
                 Some(TtsRequestSpan::Request(start(cx, TtsRequest { target, recovery: None })))
@@ -416,7 +416,7 @@ impl TtsTrace {
         self.attempts += 1;
         self.request_ids.clear();
         self.span.as_ref()?;
-        Some(lk_agents_net::telemetry::start(
+        Some(lk_agents_telemetry::start(
             &self.cx,
             TtsRequestRun {
                 attempt: Attempt {
@@ -449,9 +449,9 @@ impl TtsTrace {
         let Some(span) = span else { return };
         let end = AttemptEnd::new(std::mem::take(&mut self.request_ids));
         if let Some(error) = failed {
-            lk_agents_net::telemetry::end(span, Failed { end, error });
+            lk_agents_telemetry::end(span, Failed { end, error });
         } else {
-            lk_agents_net::telemetry::end(span, end);
+            lk_agents_telemetry::end(span, end);
         }
     }
 

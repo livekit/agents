@@ -406,7 +406,7 @@ async fn exchange(
         sent: Default::default(),
     };
     let clock = Arc::new(lk_agents_abi::VirtualClock::new());
-    let cx = lk_agents_net::telemetry::Tracer::disabled(clock).root();
+    let cx = lk_agents_telemetry::Tracer::disabled(clock).root();
     serve(door, &exchange, serving, cx).await.unwrap();
     let mut answer = Answer { status: 0, headers: Vec::new(), body: Vec::new(), complete: false };
     for message in exchange.sent.into_inner() {

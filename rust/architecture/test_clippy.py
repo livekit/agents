@@ -276,6 +276,8 @@ class ClippyContracts(unittest.TestCase):
             "tokio::select",
             "tokio::join",
             "tokio::time::sleep",
+            "lk_agents_telemetry::scoped::start",
+            "ScopedSpan",
         ):
             with self.subTest(name=name):
                 self.assertIn(name, diagnostic_text)

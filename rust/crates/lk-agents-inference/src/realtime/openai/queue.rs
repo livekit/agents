@@ -312,7 +312,7 @@ mod tests {
         let ingress = Ingress {
             input,
             drops: lk_agents_net::audio_drops::AudioDrops::new(
-                lk_agents_net::telemetry::AudioConsumer::Realtime,
+                lk_agents_telemetry::AudioConsumer::Realtime,
                 policy,
             ),
             events,

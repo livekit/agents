@@ -6,7 +6,7 @@
 //!     https://github.com/open-telemetry/opentelemetry-proto/archive/refs/tags/v1.5.0.tar.gz \
 //!     | tar xz -C /tmp
 //! OTLP_PROTO_DIR=/tmp/opentelemetry-proto-1.5.0 \
-//!     cargo test -p lk-agents-telemetry --lib otlp::proto_tests -- --ignored
+//!     cargo test -p lk-agents-net --lib export::otlp::proto_tests -- --ignored
 //! ```
 
 use std::collections::BTreeMap;
@@ -70,7 +70,7 @@ fn regenerate_otlp_proto() {
     }
     tree.write(&mut text);
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let target = manifest.join("src/otlp/proto.rs");
+    let target = manifest.join("src/export/otlp/proto.rs");
     std::fs::write(&target, text).unwrap();
     let config = manifest.join("../../rustfmt.toml");
     let status = std::process::Command::new("rustfmt")

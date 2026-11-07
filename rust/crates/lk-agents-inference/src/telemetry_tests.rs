@@ -7,7 +7,7 @@ use lk_agents_abi::{
     ChatContext, ChatMessage, ChatRequest, ChoiceDelta, Closed, Llm, LlmChunk, LlmStream, Role,
     StreamOutput, Ts, VirtualClock,
 };
-use lk_agents_net::telemetry::{Cx, Tracer};
+use lk_agents_telemetry::{Cx, Tracer};
 use parking_lot::Mutex;
 
 use super::{LlmTrace, RequestSpan};

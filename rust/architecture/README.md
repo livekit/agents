@@ -21,6 +21,9 @@ From the repository root, `make -C rust check` runs this enforcement gate.
   PyO3, rusqlite and LiveKit SDKs; protocol records are allowed.
   The async I/O crates (inference, worker, net, storage) are outside the purity bans
   and the restricted Clippy policy; ordinary workspace Clippy still checks them.
+  `lk-agents-telemetry` (span recording) depends only on ABI, so the sans-I/O crates may
+  depend on it; it holds locks, so it runs under the I/O policy, and the restricted policy bans
+  its async half (`ScopedSpan`, `Tracer`, `start`/`end`/`measure`) in the sans-I/O crates.
 - A `#[path]` module stays inside its own crate's tree (`src/`, `tests/`, ..): a file under a core's
   directory compiled by another crate would escape that core's dependency and Clippy policy, so
   every core-directory file is either compiled by its own crate (and linted with it) or an
@@ -39,10 +42,11 @@ From the repository root, `make -C rust check` runs this enforcement gate.
   code calls through these entry adapters. Conversion subjects cannot call Python directly.
   Generators and declared Cargo integration test targets are exempt.
 - Telemetry is spelled `telemetry::` (`docs/internals/telemetry.md`, rule 4): in `lk-agents-voice`
-  and `lk-agents-core`, a non-test module outside a telemetry module (a `telemetry/` directory, a
-  `telemetry.rs` or `spans.rs` file) that imports a telemetry item by a short name
-  (`use ..::telemetry::Item`) is an identity of the shrink-only `telemetry-spelling-baseline.json`;
-  it imports the module (`use crate::telemetry;`) and writes `telemetry::Item`.
+  and `lk-agents-core`, a non-test module outside a telemetry module (a `telemetry/` directory,
+  net's exporter under `export/`, a `telemetry.rs` or `spans.rs` file) that imports a telemetry
+  item by a short name (`use ..::telemetry::Item`, `use lk_agents_telemetry::Item`) is an identity
+  of the shrink-only `telemetry-spelling-baseline.json`; it imports the module
+  (`use crate::telemetry;`, `use lk_agents_telemetry as telemetry;`) and writes `telemetry::Item`.
 - The runtime executors the DST runs (decision 92: `lk-agents-runtime/src/{voice,room_io,avatar,rtc}`,
   outside tests) use no Tokio runtime (`tokio::spawn`, `tokio::time`, `tokio::net`, `Handle`) and
   no unbiased `select!`; per file and kind, counts are ceilings in the shrink-only

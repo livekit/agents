@@ -4,7 +4,7 @@
 use lk_agents_abi::AudioFrame;
 use lk_agents_media::media_queue::{self, AudioReceiver, AudioSender, Policy, Stuck};
 use lk_agents_net::audio_drops::AudioDrops;
-use lk_agents_net::telemetry;
+use lk_agents_telemetry as telemetry;
 use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
 use std::time::Duration;
 

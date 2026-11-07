@@ -2,9 +2,9 @@
 //! observed job and warned about once, and how fast it drained its pre-connect head, measured as
 //! `lk.agents.audio.catch_up_time` and logged.
 
-use crate::telemetry;
 use lk_agents_abi::Ts;
 use lk_agents_media::media_queue::{Head, Policy};
+use lk_agents_telemetry as telemetry;
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;

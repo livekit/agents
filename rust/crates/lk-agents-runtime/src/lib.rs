@@ -36,12 +36,11 @@ extern crate lk_agents_voice as _;
 /// The provider clients, judges and detectors, wired to this process by [`process::env`]; the
 /// extension names their declared classes through this path.
 pub use lk_agents_inference as inference;
-/// The shared transport, A2A credentials and the delegation client, wired the same way.
+/// The shared transport, A2A credentials, the delegation client and telemetry's export (the host
+/// span and tagger classes), wired the same way.
 pub use lk_agents_net as net;
 /// Thread storage over AgentDB and local SQLite, wired the same way.
 pub use lk_agents_storage as storage;
-/// Telemetry's export: the host span and tagger classes, wired the same way.
-pub use lk_agents_telemetry as telemetry_export;
 
 pub mod a2a;
 pub mod agent_run;

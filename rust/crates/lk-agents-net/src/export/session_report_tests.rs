@@ -9,7 +9,7 @@ use tokio::net::TcpListener;
 
 use super::recording::{Multipart, encode_header, retry_delay};
 use super::*;
-use crate::otlp::{CloudRecording, Limits, ProcessIdentity, SdkName, SessionIdentity};
+use crate::export::otlp::{CloudRecording, Limits, ProcessIdentity, SdkName, SessionIdentity};
 
 struct Request {
     path: String,
@@ -77,7 +77,7 @@ fn cloud(url: &str) -> CloudEndpoint {
 }
 
 fn clock() -> Arc<dyn Clock> {
-    Arc::new(lk_agents_net::clock::RealClock::new())
+    Arc::new(crate::clock::RealClock::new())
 }
 
 fn recording(audio_path: Option<String>) -> RecordingUpload {
@@ -214,7 +214,7 @@ async fn send(url: &str) -> Result<(), PostError> {
 
 fn job_exporter(url: &str) -> Exporter {
     let exporter = Exporter::start(
-        &lk_agents_net::task::TokioSpawner::current(),
+        &crate::task::TokioSpawner::current(),
         clock(),
         ProcessIdentity {
             sdk_name: SdkName::Python,
@@ -310,16 +310,16 @@ async fn a_job_s_profile_is_written_beside_its_audio_and_not_uploaded_yet() {
     let audio = dir.join("audio.ogg");
     std::fs::write(&audio, b"OggS").unwrap();
     let key = JobKey("AJ_profiled".into());
-    let profile = Arc::new(parking_lot::Mutex::new(crate::profile::Profile::default()));
-    let frame = crate::profile::Frame { function: "busy", file: "app.py", line: 7 };
+    let profile = Arc::new(parking_lot::Mutex::new(crate::export::profile::Profile::default()));
+    let frame = crate::export::profile::Frame { function: "busy", file: "app.py", line: 7 };
     profile.lock().add(
         1_000,
-        crate::profile::PERIOD_NANOS,
+        crate::export::profile::PERIOD_NANOS,
         "MainThread",
         true,
         [frame].into_iter(),
     );
-    crate::profile::register(key.clone(), profile.clone());
+    crate::export::profile::register(key.clone(), profile.clone());
     let report = SessionReport {
         job_id: "AJ_profiled".into(),
         audio_recording_path: Some(audio.to_string_lossy().into_owned()),
@@ -331,7 +331,7 @@ async fn a_job_s_profile_is_written_beside_its_audio_and_not_uploaded_yet() {
     let (endpoint, clock) = (cloud(&url), clock());
     let outputs = ReportOutputs { exporter: None, cloud: Some(&endpoint), clock: &*clock };
     export(outputs, &key, &report, &options, false, Duration::from_secs(10)).await.unwrap();
-    crate::profile::forget(&key, &profile);
+    crate::export::profile::forget(&key, &profile);
 
     let written = std::fs::read(dir.join("profile.pb.gz")).unwrap();
     assert_eq!(&written[..2], [0x1f, 0x8b], "gzip");

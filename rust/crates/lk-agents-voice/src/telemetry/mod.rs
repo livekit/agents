@@ -21,11 +21,11 @@ pub(crate) use lk_agents_abi::telemetry::spans::common::log_keys;
 pub(crate) use lk_agents_abi::telemetry::spans::common::{GenAiOperation, ParticipantAttrs};
 use lk_agents_abi::voice::room_io::ParticipantInfo;
 use lk_agents_abi::voice::rtc::DisconnectReason;
-use lk_agents_core::telemetry::span::IdSource;
+use lk_agents_telemetry::span::IdSource;
 
 pub(crate) use agent_turn::{AgentTurnSpan, Reply};
 pub(crate) use lk_agents_abi::telemetry::spans::user_turn::EouSource;
-pub(crate) use lk_agents_core::telemetry::span::{ManualSpan, Reserved, Trace, seeded_ids};
+pub(crate) use lk_agents_telemetry::span::{ManualSpan, Reserved, Trace, seeded_ids};
 pub(crate) use session::{AmdDetection, Arriving, Blocking, Holding, HookSpan, ItemTurns, Under};
 pub(crate) use user_turn::{Endpointing, Stt, UserTurnSpan};
 

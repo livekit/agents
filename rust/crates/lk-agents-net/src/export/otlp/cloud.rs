@@ -36,18 +36,18 @@ pub(crate) enum PostError {
 }
 
 /// The process's client: no retries or redirects (each caller owns its attempts).
-pub(crate) async fn client() -> Result<reqwest::Client, lk_agents_net::tls::TlsError> {
+pub(crate) async fn client() -> Result<reqwest::Client, crate::tls::TlsError> {
     static CLIENT: lk_agents_media::pool::PerProcess<Arc<OnceCell<reqwest::Client>>> =
         lk_agents_media::pool::PerProcess::new(Arc::default);
     let cell = CLIENT.get();
     let client = cell
         .get_or_try_init(|| async {
-            lk_agents_net::tls::config().await?;
-            let builder = lk_agents_net::tls::http_client_builder()?
+            crate::tls::config().await?;
+            let builder = crate::tls::http_client_builder()?
                 .retry(reqwest::retry::never())
                 .connect_timeout(CONNECT_TIMEOUT)
                 .redirect(reqwest::redirect::Policy::none());
-            lk_agents_net::tls::build(builder)
+            crate::tls::build(builder)
         })
         .await?;
     Ok(client.clone())
@@ -90,7 +90,7 @@ impl CloudEndpoint {
         request: impl FnOnce(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
     ) -> Result<(), PostError> {
         let client = client().await.map_err(|error| PostError::Setup(error.to_string()))?;
-        let bearer = lk_agents_net::token::observability_bearer(&self.api_key, &self.api_secret)
+        let bearer = crate::token::observability_bearer(&self.api_key, &self.api_secret)
             .map_err(|error| PostError::Setup(error.to_string()))?;
         let url = format!("{}/observability/{path}", self.base_url.trim_end_matches('/'));
         let response = request(client.post(url).bearer_auth(bearer)).send().await?;

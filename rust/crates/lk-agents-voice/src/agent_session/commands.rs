@@ -54,9 +54,7 @@ pub enum Command {
 #[derive(Debug, Clone)]
 pub enum AmdSpan {
     /// Attached: `amd` opens with the context the detector's classification runs under.
-    Attached(
-        lk_agents_core::telemetry::span::Reserved<lk_agents_abi::telemetry::spans::session::Amd>,
-    ),
+    Attached(lk_agents_telemetry::span::Reserved<lk_agents_abi::telemetry::spans::session::Amd>),
     /// Released its verdict: `amd` ends.
     Verdict(lk_agents_abi::voice::amd::AmdPrediction),
 }

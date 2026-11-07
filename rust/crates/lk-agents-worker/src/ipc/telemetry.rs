@@ -12,10 +12,10 @@ use lk_agents_abi::telemetry::spans::job::{
     EntrypointStarted, JobAccepted, JobAssigned, JobReceived, JobStartedOnServer, ProcessAssigned,
 };
 use lk_agents_abi::worker::job::{Simulation, StartJobFields};
-pub(crate) use lk_agents_net::telemetry::Tracer;
-pub(crate) use lk_agents_telemetry::exporter;
-pub(crate) use lk_agents_telemetry::otlp::CloudEndpoint;
-use lk_agents_telemetry::otlp::SessionIdentity;
+pub(crate) use lk_agents_net::export::exporter;
+pub(crate) use lk_agents_net::export::otlp::CloudEndpoint;
+use lk_agents_net::export::otlp::SessionIdentity;
+pub(crate) use lk_agents_telemetry::Tracer;
 use prost::Message as _;
 
 pub(crate) use lk_agents_abi::telemetry::decl::SpanDecl;
@@ -28,11 +28,9 @@ pub(crate) use lk_agents_abi::telemetry::spans::job::{
     EntrypointCancelled, EntrypointReturned, JobEntrypoint, JobShutdown, OnSessionEnd,
     RoomDisconnect, SessionEndUpload, ShutdownCallback,
 };
-pub(crate) use lk_agents_net::telemetry::{
-    Cx, ScopedSpan, SpanContext, SpanEnd, end, event, start,
-};
-pub(crate) use lk_agents_telemetry::otlp::CloudRecording;
-pub(crate) use lk_agents_telemetry::session_report::{self, ReportOutputs};
+pub(crate) use lk_agents_net::export::otlp::CloudRecording;
+pub(crate) use lk_agents_net::export::session_report::{self, ReportOutputs};
+pub(crate) use lk_agents_telemetry::{Cx, ScopedSpan, SpanContext, SpanEnd, end, event, start};
 
 /// The job the exporter's registry knows, from its dispatch.
 pub(crate) struct Job {
@@ -132,22 +130,22 @@ pub(crate) fn start_job(
         dispatch_latency: gap(f.received_at, Some(started)),
     };
     let start = nanos(f.received_at.unwrap_or(started));
-    let span = lk_agents_net::telemetry::start_at(&cx, decl, start);
+    let span = lk_agents_telemetry::start_at(&cx, decl, start);
     if let Some(at) = f.received_at.map(nanos) {
-        lk_agents_net::telemetry::event_at(&span, JobReceived, at);
+        lk_agents_telemetry::event_at(&span, JobReceived, at);
     }
     if let Some(at) = f.accepted_at.map(nanos) {
-        lk_agents_net::telemetry::event_at(&span, JobAccepted, at);
+        lk_agents_telemetry::event_at(&span, JobAccepted, at);
     }
     if let Some(at) = f.assigned_at.map(nanos) {
-        lk_agents_net::telemetry::event_at(&span, JobAssigned, at);
+        lk_agents_telemetry::event_at(&span, JobAssigned, at);
     }
-    lk_agents_net::telemetry::event_at(&span, ProcessAssigned, nanos(f.launched_at));
-    lk_agents_net::telemetry::event_at(&span, EntrypointStarted, nanos(started));
+    lk_agents_telemetry::event_at(&span, ProcessAssigned, nanos(f.launched_at));
+    lk_agents_telemetry::event_at(&span, EntrypointStarted, nanos(started));
     // `JobState.started_at`: unix nanoseconds.
     let started_on_server = job.state.as_ref().and_then(|s| u64::try_from(s.started_at).ok());
     if let Some(at) = started_on_server.filter(|at| *at > 0) {
-        lk_agents_net::telemetry::event_at(&span, JobStartedOnServer, at);
+        lk_agents_telemetry::event_at(&span, JobStartedOnServer, at);
     }
     JobTrace { job: Job { key, simulation: simulation(&job) }, span }
 }

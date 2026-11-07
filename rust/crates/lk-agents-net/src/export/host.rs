@@ -11,8 +11,8 @@ use lk_agents_abi::telemetry::record::{
 use parking_lot::Mutex;
 use serde_json::Value;
 
-use lk_agents_net::env::ProcessEnv;
-use lk_agents_net::telemetry::Tracer;
+use crate::env::ProcessEnv;
+use lk_agents_telemetry::Tracer;
 
 pub struct HostSpan {
     tracer: Tracer,

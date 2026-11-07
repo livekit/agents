@@ -281,7 +281,7 @@ async fn each_judge_is_one_span_under_the_caller() {
     use lk_agents_abi::telemetry::record::{SpanContext, Status};
     let spans = Arc::new(Spans::default());
     let env = ProcessEnv {
-        tracer: lk_agents_net::telemetry::Tracer::new(
+        tracer: lk_agents_telemetry::Tracer::new(
             spans.clone(),
             Arc::new(lk_agents_abi::VirtualClock::new()),
             3,
@@ -338,7 +338,7 @@ impl EvaluationHost for Seen {
 async fn a_host_judge_runs_in_its_span_and_its_explanation_follows_capture() {
     for capture in [true, false] {
         let spans = Arc::new(Spans::default());
-        let tracer = lk_agents_net::telemetry::Tracer::new(
+        let tracer = lk_agents_telemetry::Tracer::new(
             spans.clone(),
             Arc::new(lk_agents_abi::VirtualClock::new()),
             3,

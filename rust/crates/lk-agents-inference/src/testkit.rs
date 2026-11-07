@@ -463,9 +463,9 @@ impl lk_agents_abi::telemetry::record::RecordSink for Measurements {
 
 impl Measurements {
     /// The job to observe a consumer under.
-    pub fn cx(&self) -> lk_agents_net::telemetry::Cx {
+    pub fn cx(&self) -> lk_agents_telemetry::Cx {
         let clock = Arc::new(lk_agents_abi::VirtualClock::new());
-        lk_agents_net::telemetry::Tracer::new(Arc::new(self.clone()), clock, 7).root()
+        lk_agents_telemetry::Tracer::new(Arc::new(self.clone()), clock, 7).root()
     }
 
     /// The values recorded for `instrument`, in order.

@@ -24,11 +24,11 @@ use lk_agents_core::request::{Request, Retry};
 use lk_agents_media::media_queue::{self, AudioSender, Item, Policy};
 use lk_agents_net::audio_drops::AudioDrops;
 use lk_agents_net::task::TokioSpawner;
-use lk_agents_net::telemetry;
 use lk_agents_net::token::{INFERENCE_TOKEN_TTL, inference_bearer_with_ttl};
 use lk_agents_net::transport::{
     TransportError, WsMessage, WsReceiver, WsSender, WsTransport, close_status, connect_error,
 };
+use lk_agents_telemetry as telemetry;
 use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};

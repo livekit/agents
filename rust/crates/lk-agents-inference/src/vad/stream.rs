@@ -11,7 +11,7 @@ use lk_agents_abi::{AudioFrame, Clock, Closed, StreamInput, StreamOutput, Ts};
 use lk_agents_media::media_queue::{self, AudioReceiver, AudioSender, Item, Policy};
 use lk_agents_media::pool::{Job, JobClass, MediaPool};
 use lk_agents_net::audio_drops::AudioDrops;
-use lk_agents_net::telemetry;
+use lk_agents_telemetry as telemetry;
 use parking_lot::Mutex;
 use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;

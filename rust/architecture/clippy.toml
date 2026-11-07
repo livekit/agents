@@ -77,9 +77,19 @@ disallowed-methods = [
   { path = "futures_channel::mpsc::unbounded", reason = "Decision cores consume supplied data and time; move execution and live resources to runtime." },
   { path = "crossbeam::channel::unbounded", reason = "Decision cores consume supplied data and time; move execution and live resources to runtime." },
   { path = "crossbeam_channel::unbounded", reason = "Decision cores consume supplied data and time; move execution and live resources to runtime." },
+  { path = "lk_agents_telemetry::scoped::start", reason = "Sans-I/O machines record through their Trace; scoped spans belong to async work." },
+  { path = "lk_agents_telemetry::scoped::start_at", reason = "Sans-I/O machines record through their Trace; scoped spans belong to async work." },
+  { path = "lk_agents_telemetry::scoped::end", reason = "Sans-I/O machines record through their Trace; scoped spans belong to async work." },
+  { path = "lk_agents_telemetry::scoped::event", reason = "Sans-I/O machines record through their Trace; scoped spans belong to async work." },
+  { path = "lk_agents_telemetry::scoped::event_at", reason = "Sans-I/O machines record through their Trace; scoped spans belong to async work." },
+  { path = "lk_agents_telemetry::scoped::measure", reason = "Sans-I/O machines record through their Trace; scoped spans belong to async work." },
+  { path = "lk_agents_telemetry::scoped::reserve", reason = "Sans-I/O machines record through their Trace; scoped spans belong to async work." },
+  { path = "lk_agents_telemetry::scoped::random_seed", reason = "Sans-I/O machines record through their Trace; scoped spans belong to async work." },
 ]
 
 disallowed-types = [
+  { path = "lk_agents_telemetry::scoped::ScopedSpan", reason = "Sans-I/O machines record through their Trace; scoped spans belong to async work." },
+  { path = "lk_agents_telemetry::scoped::Tracer", reason = "Sans-I/O machines record through their Trace; scoped spans belong to async work." },
   { path = "parking_lot::ReentrantMutex", reason = "Execute tasks and retain synchronization only in runtime." },
   { path = "lock_api::Mutex", reason = "Execute tasks and retain synchronization only in runtime." },
   { path = "lock_api::RwLock", reason = "Execute tasks and retain synchronization only in runtime." },

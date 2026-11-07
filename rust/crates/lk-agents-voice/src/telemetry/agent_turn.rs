@@ -24,7 +24,7 @@ use lk_agents_abi::telemetry::spans::agent_turn::{
 use lk_agents_abi::telemetry::spans::common::GenAiOperation;
 use lk_agents_abi::voice::room_io::ParticipantInfo;
 use lk_agents_abi::{FunctionCall, MetricsReport, ProviderId};
-use lk_agents_core::telemetry::span::{ManualSpan, Trace};
+use lk_agents_telemetry::span::{ManualSpan, Trace};
 use std::collections::BTreeSet;
 use std::time::Duration;
 

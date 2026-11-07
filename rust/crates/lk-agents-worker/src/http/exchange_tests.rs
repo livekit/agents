@@ -108,7 +108,7 @@ where
 {
     let app = App(Box::new(move |exchange| Box::pin(app(exchange))));
     let spans = Arc::new(Spans::default());
-    let tracer = lk_agents_net::telemetry::Tracer::new(
+    let tracer = lk_agents_telemetry::Tracer::new(
         spans.clone(),
         Arc::new(lk_agents_abi::VirtualClock::new()),
         7,
@@ -836,7 +836,7 @@ async fn a_door_route_is_served_by_its_door_and_everything_else_by_the_binding()
             })
         }))),
         HttpServerLimits::default(),
-        lk_agents_net::telemetry::Tracer::disabled(Arc::new(lk_agents_abi::VirtualClock::new())),
+        lk_agents_telemetry::Tracer::disabled(Arc::new(lk_agents_abi::VirtualClock::new())),
     )
     .with_text(text);
     let raw = b"GET /desk/v1 HTTP/1.1\r\nHost: x\r\n\r\n";

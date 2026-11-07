@@ -1,7 +1,7 @@
 //! The native A2A client against a local HTTP/SSE peer, including chunked request bodies and
 //! fragmented response bytes. The peer owns every accepted socket and settles them on shutdown.
 
-use lk_agents_net::telemetry::Cx;
+use lk_agents_telemetry::Cx;
 use std::collections::BTreeMap;
 use std::io;
 use std::sync::Arc;

@@ -47,7 +47,7 @@ pub struct ProcessEnv {
     /// The process's shared connection pool.
     pub http: fn() -> Result<Arc<GatewayHttp>, ProcessError>,
     /// The process's span recording, timed by `clock`.
-    pub tracer: crate::telemetry::Tracer,
+    pub tracer: lk_agents_telemetry::Tracer,
 }
 
 impl ProcessEnv {
@@ -68,7 +68,7 @@ impl ProcessEnv {
         ProcessEnv {
             runtime,
             spawner: || Ok(Arc::new(crate::task::TokioSpawner::new(runtime()?))),
-            tracer: crate::telemetry::Tracer::disabled(clock.clone()),
+            tracer: lk_agents_telemetry::Tracer::disabled(clock.clone()),
             clock,
             http: || {
                 GatewayHttp::new().map(Arc::new).map_err(|e| ProcessError::Start(e.to_string()))

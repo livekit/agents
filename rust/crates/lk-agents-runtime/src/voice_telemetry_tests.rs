@@ -52,7 +52,7 @@ async fn traced(name: &str) -> (VoiceRuntime, Arc<Records>) {
     let spawner = Arc::new(lk_agents_net::task::TokioSpawner::current());
     let mut builder = DriverBuilder::new("agent".into(), time, spawner, config);
     builder.session_id = Some(name.into());
-    builder.tracer = lk_agents_net::telemetry::Tracer::new(records.clone(), clock, 5);
+    builder.tracer = lk_agents_telemetry::Tracer::new(records.clone(), clock, 5);
     builder.trace =
         builder.tracer.root().continuing(Some(ENTRYPOINT)).with_job(Some(JobKey(JOB.into())));
     let mut executor = Executor::new(builder.time.clone(), builder.spawner.clone());
@@ -161,7 +161,7 @@ async fn late_realtime_metrics_become_a_child_of_the_ended_inference() {
 #[test]
 fn event_loop_stalls_are_rate_limited() {
     let records = Arc::new(Records::default());
-    let tracer = lk_agents_net::telemetry::Tracer::new(
+    let tracer = lk_agents_telemetry::Tracer::new(
         records.clone(),
         Arc::new(lk_agents_abi::VirtualClock::new()),
         1,
@@ -211,7 +211,7 @@ fn event_loop_stalls_are_rate_limited() {
 #[test]
 fn a_stall_span_keeps_its_formatted_stack_and_threshold() {
     let records = Arc::new(Records::default());
-    let tracer = lk_agents_net::telemetry::Tracer::new(
+    let tracer = lk_agents_telemetry::Tracer::new(
         records.clone(),
         Arc::new(lk_agents_abi::VirtualClock::new()),
         1,
@@ -314,7 +314,7 @@ async fn startup_runs_under_the_spans_start_reserved() {
     use lk_agents_abi::telemetry::spans::session::{AgentSession, SessionStart};
     let records = Arc::new(Records::default());
     let clock = Arc::new(lk_agents_abi::VirtualClock::new());
-    let tracer = lk_agents_net::telemetry::Tracer::new(records.clone(), clock.clone(), 5);
+    let tracer = lk_agents_telemetry::Tracer::new(records.clone(), clock.clone(), 5);
     let env = lk_agents_net::env::ProcessEnv {
         tracer: tracer.clone(),
         ..lk_agents_net::env::ProcessEnv::current_runtime()

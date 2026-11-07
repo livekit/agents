@@ -12,8 +12,8 @@ use lk_agents_abi::llm::provider_format::ImageResolver;
 use lk_agents_abi::{ApiConnectOptions, ChatContext};
 use lk_agents_abi::{Spawner, SpawnerExt};
 use lk_agents_media::media_queue::{self, Item};
-use lk_agents_net::telemetry;
 use lk_agents_net::transport::{TransportError, WsMessage, WsTransport};
+use lk_agents_telemetry as telemetry;
 use tokio::sync::{Mutex, mpsc};
 
 use crate::headers::{BoundIdentity, Headers, gateway_headers};

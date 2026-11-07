@@ -24,11 +24,11 @@ use lk_agents_abi::telemetry::instruments::{
 use lk_agents_abi::telemetry::record::Key;
 use lk_agents_abi::telemetry::spans::agent_turn::FunctionToolEnd;
 pub use lk_agents_abi::telemetry::{host, policy, record};
-use lk_agents_telemetry::ExporterSlot;
-use lk_agents_telemetry::otlp::{AppConfig, Exporter, Limits, ProcessIdentity, SdkName};
-pub use lk_agents_telemetry::profile;
-pub use lk_agents_telemetry::stall::stall_message;
-pub(crate) use lk_agents_telemetry::stall::{Blocked, event_loop_blocked};
+use lk_agents_net::export::ExporterSlot;
+use lk_agents_net::export::otlp::{AppConfig, Exporter, Limits, ProcessIdentity, SdkName};
+pub use lk_agents_net::export::profile;
+pub use lk_agents_net::export::stall::stall_message;
+pub(crate) use lk_agents_net::export::stall::{Blocked, event_loop_blocked};
 use parking_lot::Mutex;
 use serde_json::Value as JsonValue;
 
@@ -58,12 +58,12 @@ pub(crate) use lk_agents_abi::telemetry::spans::session::{
 pub(crate) use lk_agents_abi::telemetry::spans::text::{
     A2aRequest, AgentRun, AgentRunEnd, RunStatus,
 };
-pub(crate) use lk_agents_core::telemetry::span::seeded_ids;
 pub(crate) use lk_agents_core::telemetry::{gen_ai, log_keys};
 pub(crate) use lk_agents_inference::telemetry::{
     LlmEnd, LlmTrace, TtsTrace, model_labels, provider_name,
 };
-pub(crate) use lk_agents_net::telemetry::{
+pub(crate) use lk_agents_telemetry::span::seeded_ids;
+pub(crate) use lk_agents_telemetry::{
     Cx, ErrorType, Failed, Failure, ScopedSpan, SpanContext, Tracer, end, event, measure,
     random_seed, reserve, start,
 };
@@ -139,7 +139,7 @@ static PROCESS: LazyLock<Process> = LazyLock::new(|| {
 });
 
 fn seed() -> u64 {
-    lk_agents_net::telemetry::random_seed()
+    lk_agents_telemetry::random_seed()
 }
 
 /// A voice session ended: the spans its close swept and whether it was dropped without it.
@@ -316,7 +316,7 @@ pub(crate) fn function_tool(
     description: Option<&str>,
 ) -> ScopedSpan<FunctionTool> {
     let capture = cx.capture_content();
-    lk_agents_net::telemetry::start(
+    lk_agents_telemetry::start(
         cx,
         FunctionTool {
             id: call.id.clone(),
@@ -355,7 +355,7 @@ pub(crate) fn end_function_tool(
     let cx = span.cx();
     let error_type = error.then_some(ErrorType::ToolError);
     let seconds = cx.now_nanos().saturating_sub(started) as f64 / 1e9;
-    lk_agents_net::telemetry::measure(
+    lk_agents_telemetry::measure(
         cx,
         &ExecuteToolDuration {
             operation: GenAiOperation::ExecuteTool,
@@ -370,10 +370,10 @@ pub(crate) fn end_function_tool(
     let end = FunctionToolEnd { output: Content(output), is_error: error, result };
     match &failure {
         Some(error) => {
-            lk_agents_net::telemetry::end(span, Failed { end, error });
+            lk_agents_telemetry::end(span, Failed { end, error });
         }
         None => {
-            lk_agents_net::telemetry::end(span, end);
+            lk_agents_telemetry::end(span, end);
         }
     }
 }
@@ -394,7 +394,7 @@ pub(crate) fn record_usage(cx: &Cx, metrics: &AgentMetrics) {
     macro_rules! add {
         ($instrument:ident, $value:expr) => {
             if let Some(v) = $value {
-                lk_agents_net::telemetry::measure(&cx, &$instrument { model: model() }, v);
+                lk_agents_telemetry::measure(&cx, &$instrument { model: model() }, v);
             }
         };
     }
@@ -435,7 +435,7 @@ pub(crate) fn record_usage(cx: &Cx, metrics: &AgentMetrics) {
     if let Some((Some(acquire), reused)) = connection
         && acquire > 0.0
     {
-        lk_agents_net::telemetry::measure(
+        lk_agents_telemetry::measure(
             cx,
             &ConnectionAcquireTime { model: model(), reused: BoolString(reused) },
             acquire,

@@ -500,35 +500,39 @@ class HostCallContracts(unittest.TestCase):
                     "use lk_agents_abi::telemetry::spans::user_turn::UserTurn;\n"
                 ),
                 "rust/crates/lk-agents-voice/src/speech_tests.rs": (
-                    "use lk_agents_core::telemetry::span::Trace;\n"
+                    "use lk_agents_telemetry::span::Trace;\n"
                 ),
                 "rust/crates/lk-agents-media/src/codec.rs": (
                     "use lk_agents_abi::telemetry::record::SpanRef;\n"
                 ),
                 # The I/O crates: logic code is a violation, their telemetry modules are not.
                 "rust/crates/lk-agents-runtime/src/voice/io.rs": (
-                    "use lk_agents_net::telemetry::Cx;\n"
+                    "use lk_agents_telemetry::Cx;\n"
                 ),
                 "rust/crates/lk-agents-inference/src/fallback/llm.rs": (
-                    "use lk_agents_net::telemetry::{ScopedSpan, start};\n"
+                    "use lk_agents_telemetry::{ScopedSpan, start};\n"
                 ),
                 "rust/crates/lk-agents-worker/src/ipc/job_run.rs": (
                     "use super::telemetry::JobTrace;\n"
                 ),
                 "rust/crates/lk-agents-net/src/http.rs": (
-                    "use crate::telemetry::Tracer;\n"
+                    "use lk_agents_telemetry::{self as telemetry, Tracer};\n"
                 ),
                 "rust/crates/lk-agents-py/src/py_calls.rs": (
                     "use lk_agents_abi::telemetry::record::SpanRef;\n"
                 ),
                 "rust/crates/lk-agents-runtime/src/telemetry.rs": (
-                    "pub(crate) use lk_agents_net::telemetry::{Cx, start};\n"
+                    "pub(crate) use lk_agents_telemetry::{Cx, start};\n"
                 ),
                 "rust/crates/lk-agents-worker/src/ipc/telemetry.rs": (
-                    "pub(crate) use lk_agents_net::telemetry::Cx;\n"
+                    "pub(crate) use lk_agents_telemetry::Cx;\n"
                 ),
-                "rust/crates/lk-agents-net/src/telemetry/otlp/encode.rs": (
+                "rust/crates/lk-agents-net/src/export/otlp/encode.rs": (
                     "use lk_agents_abi::telemetry::record::SpanRecord;\n"
+                ),
+                # The recording crate brought in as the module: uses read `telemetry::Item`.
+                "rust/crates/lk-agents-inference/src/stt/input.rs": (
+                    "use lk_agents_telemetry as telemetry;\n"
                 ),
             }
             for path, text in files.items():

@@ -30,34 +30,42 @@ ASYNC = {
     "lk-agents-inference",
     "lk-agents-worker",
     "lk-agents-net",
-    "lk-agents-telemetry",
     "lk-agents-storage",
     "lk-agents-cli",
 }
+# Telemetry's recording: no executor or transport, so the sans-I/O crates may depend on it, but its
+# tracer and scoped spans hold locks, so it runs under the I/O policy. The purity policy bans its
+# async half.
+RECORDING = "lk-agents-telemetry"
 # The I/O policy's crates (rust/architecture/io/clippy.toml): everything that runs beside the host.
-IO = ASYNC | {"lk-agents-runtime", "lk-agents-py"}
+IO = ASYNC | {"lk-agents-runtime", "lk-agents-py", RECORDING}
 # The documented crate graph (rust-core.md "Crates and dependencies"): each checked crate's allowed
 # workspace dependencies. Build tools are unchecked.
 GRAPH = {
     "lk-agents-abi": set(),
     "lk-agents-core": {"lk-agents-abi"},
-    "lk-agents-voice": {"lk-agents-abi", "lk-agents-core", "lk-agents-media"},
+    "lk-agents-voice": {"lk-agents-abi", "lk-agents-core", "lk-agents-media", RECORDING},
     "lk-agents-media": {"lk-agents-abi"},
     # inference -> core: chat formatting, strict tool schemas and JSON repair.
-    "lk-agents-inference": {"lk-agents-abi", "lk-agents-core", "lk-agents-media", "lk-agents-net"},
-    # net -> core: the delegation A2A client executes core::a2a decisions. net -> media: the
-    # blocking I/O pool is an instance of media's worker pool.
-    "lk-agents-net": {"lk-agents-abi", "lk-agents-core", "lk-agents-media"},
-    # telemetry -> net: the exporter sends over net's TLS with its bearer and blocking pool, and
-    # its host classes take net's `ProcessEnv`; net's span API records to its exporter slot.
-    "lk-agents-telemetry": {"lk-agents-abi", "lk-agents-core", "lk-agents-media", "lk-agents-net"},
-    "lk-agents-worker": {"lk-agents-abi", "lk-agents-net", "lk-agents-telemetry"},
+    "lk-agents-inference": {
+        "lk-agents-abi",
+        "lk-agents-core",
+        "lk-agents-media",
+        "lk-agents-net",
+        RECORDING,
+    },
+    # net -> core: the delegation A2A client executes core::a2a decisions, and the exporter
+    # (`export`) applies core's content policy and report rules. net -> media: the blocking I/O
+    # pool is an instance of media's worker pool.
+    "lk-agents-net": {"lk-agents-abi", "lk-agents-core", "lk-agents-media", RECORDING},
+    RECORDING: {"lk-agents-abi"},
+    "lk-agents-worker": {"lk-agents-abi", "lk-agents-net", RECORDING},
     "lk-agents-cli": {"lk-agents-abi", "lk-agents-worker", "lk-agents-net"},
     "lk-agents-storage": {"lk-agents-abi", "lk-agents-net"},
     # The DST runs the runtime's real executors over faked ports (decision 92); providers and the
     # network are fakes at their ABI boundary, never inference's, net's or storage's code.
-    "lk-agents-fuzz": PURE | {"lk-agents-runtime"},
-    "lk-agents-runtime": PURE | ASYNC,
+    "lk-agents-fuzz": PURE | {"lk-agents-runtime", RECORDING},
+    "lk-agents-runtime": PURE | ASYNC | {RECORDING},
     "lk-agents-py": {"lk-agents-runtime", "lk-agents-abi"},
 }
 BANNED = {
@@ -402,15 +410,20 @@ TELEMETRY_SPELLED = (
     "lk-agents-net",
     "lk-agents-py",
 )
-# `use x::telemetry::Item` (or `::{..}`) brings a telemetry name in unspelled; `use x::telemetry;`
-# brings the module in, so uses read `telemetry::Item`.
-TELEMETRY_ITEM_USE = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?use\s+[\w:]*\btelemetry::", re.M)
+# `use x::telemetry::Item` or `use lk_agents_telemetry::Item` (or `::{..}`) brings a telemetry name
+# in unspelled; `use x::telemetry;` or `use lk_agents_telemetry as telemetry;` brings the module in,
+# so uses read `telemetry::Item`.
+TELEMETRY_ITEM_USE = re.compile(
+    r"^\s*(?:pub(?:\([^)]*\))?\s+)?use\s+(?:[\w:]*\btelemetry|lk_agents_telemetry)::", re.M
+)
+# Telemetry modules: a `telemetry` directory or file, and net's exporter (`lk_agents_net::export`).
+TELEMETRY_DIRS = {"telemetry", "export"}
 
 
 def telemetry_module(path: str) -> bool:
-    """A telemetry module: under a `telemetry` directory, or a `telemetry.rs` file."""
+    """A telemetry module: under a `telemetry` or `export` directory, or a `telemetry.rs` file."""
     parts = Path(path).parts
-    return "telemetry" in parts[:-1] or parts[-1] == "telemetry.rs"
+    return bool(TELEMETRY_DIRS & set(parts[:-1])) or parts[-1] == "telemetry.rs"
 
 
 def telemetry_spelling_violations(root: Path, paths: list[str]) -> set[str]:

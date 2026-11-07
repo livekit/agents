@@ -20,8 +20,8 @@ use lk_agents_abi::telemetry::report::{RecordingOptions, SessionReport};
 use lk_agents_core::telemetry::report;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
-use crate::otlp::cloud::PostError;
-use crate::otlp::{CloudEndpoint, Exporter};
+use crate::export::otlp::cloud::PostError;
+use crate::export::otlp::{CloudEndpoint, Exporter};
 pub use events::EventRetention;
 
 /// Whether the recording upload carries the job's profile: on once Cloud ingest accepts the
@@ -29,8 +29,8 @@ pub use events::EventRetention;
 const UPLOAD_PROFILES: bool = false;
 
 /// The job's profile, encoded on the blocking pool (an hour of samples takes tens of ms).
-async fn encode(profile: crate::profile::Profile) -> Option<Vec<u8>> {
-    let encoded = lk_agents_net::blocking_io::blocking_io().run((), move || profile.encode()).await;
+async fn encode(profile: crate::export::profile::Profile) -> Option<Vec<u8>> {
+    let encoded = crate::blocking_io::blocking_io().run((), move || profile.encode()).await;
     encoded.ok()
 }
 
@@ -41,7 +41,7 @@ async fn write_profile(audio: &str, profile: Vec<u8>) {
         return;
     };
     let file = dir.join("profile.pb.gz");
-    let io = lk_agents_net::blocking_io::blocking_io();
+    let io = crate::blocking_io::blocking_io();
     if let Err(error) = io.try_run((), move || std::fs::write(file, profile)).await {
         log::debug!(target: lk_agents_abi::LOG_TARGET, "the job's profile was not written: {error}");
     }
@@ -87,7 +87,7 @@ pub async fn export(
     let upload = cloud.and_then(|_| report::upload(report, options, simulated, &agent));
     let send_profile = UPLOAD_PROFILES && upload.is_some();
     let audio = report.audio_recording_path.clone();
-    let profile = match crate::profile::take(key) {
+    let profile = match crate::export::profile::take(key) {
         Some(profile) if audio.is_some() || send_profile => encode(profile).await,
         _ => None,
     };
@@ -98,7 +98,7 @@ pub async fn export(
         return Ok(());
     };
     let profile = profile.filter(|profile| {
-        let fits = profile.len() <= crate::profile::UPLOAD_BYTES;
+        let fits = profile.len() <= crate::export::profile::UPLOAD_BYTES;
         if send_profile && !fits {
             log::debug!(target: lk_agents_abi::LOG_TARGET, "the job's profile is too large to upload");
         }

@@ -11,10 +11,10 @@ use lk_agents_abi::errors::{ApiError, TimeoutPhase};
 use lk_agents_abi::{ApiConnectOptions, AudioFrame, Clock, Elapsed, EotInferenceMetrics};
 use lk_agents_media::media_queue::{self, AudioReceiver, AudioSender, Item, Policy};
 use lk_agents_net::audio_drops::AudioDrops;
-use lk_agents_net::telemetry;
 use lk_agents_net::transport::{
     TransportError, WsMessage, WsReceiver, WsSender, WsTransport, close_status,
 };
+use lk_agents_telemetry as telemetry;
 use parking_lot::Mutex;
 use prost::Message as _;
 

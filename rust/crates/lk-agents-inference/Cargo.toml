@@ -14,6 +14,8 @@ license.workspace = true
 lk-agents-abi = { path = "../lk-agents-abi" }
 # The shared HTTP/WebSocket transport and ProcessEnv.
 lk-agents-net = { path = "../lk-agents-net" }
+# The span API provider calls, judges and audio consumers record through.
+lk-agents-telemetry = { path = "../lk-agents-telemetry" }
 parking_lot.workspace = true
 # Chat formatting, strict tool schemas and JSON repair: the gateway LLM's, the realtime model's and
 # the judges' request bodies.

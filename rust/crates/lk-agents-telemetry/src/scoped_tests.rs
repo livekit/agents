@@ -190,13 +190,23 @@ async fn traced(cx: &Cx, name: &str, fail: bool) -> Result<AgentRunEnd, ApiError
     Ok(AgentRunEnd { status: RunStatus::Completed })
 }
 
+/// Runs a future that never waits: the span functions here await nothing.
+fn ready<T>(future: impl std::future::Future<Output = T>) -> T {
+    let mut future = std::pin::pin!(future);
+    let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+    match future.as_mut().poll(&mut context) {
+        std::task::Poll::Ready(output) => output,
+        std::task::Poll::Pending => panic!("the span function waited"),
+    }
+}
+
 // Catches: the `#[span]` attribute not opening exactly one span, its body not running under it,
 // an early `return` escaping `end`, or `Ok` not ending with its attributes.
-#[tokio::test]
-async fn span_functions_are_one_span() {
+#[test]
+fn span_functions_are_one_span() {
     let (tracer, sink) = tracer();
-    assert!(traced(&tracer.root(), "a", false).await.is_ok());
-    assert!(traced(&tracer.root(), "b", true).await.is_err());
+    assert!(ready(traced(&tracer.root(), "a", false)).is_ok());
+    assert!(ready(traced(&tracer.root(), "b", true)).is_err());
     let spans = sink.spans();
     let [judge, ok, failed] = spans.as_slice() else { panic!("{spans:?}") };
     assert_eq!(judge.parent, Some(ok.context.span_id));

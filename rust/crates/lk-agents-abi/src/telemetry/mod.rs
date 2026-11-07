@@ -122,7 +122,7 @@ use std::sync::Arc;
 use decl::SpanDecl;
 use record::{JobKey, Record, SpanContext};
 
-/// What records a context's spans: the process tracer (`lk_agents_net::telemetry::Tracer`), or
+/// What records a context's spans: the process tracer (`lk_agents_telemetry::Tracer`), or
 /// the DST's.
 pub trait Recorder: Send + Sync {
     fn record(&self, record: Record);

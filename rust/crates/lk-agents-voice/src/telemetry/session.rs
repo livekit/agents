@@ -9,7 +9,7 @@ use lk_agents_abi::telemetry::errors::SpanError;
 use lk_agents_abi::telemetry::spans::session::{
     AgentSessionEnd, Amd, DrainAgentActivity, OnEnter, OnExit, StartAgentActivity, UpdateAgent,
 };
-use lk_agents_core::telemetry::span::{ManualSpan, Reserved, Trace};
+use lk_agents_telemetry::span::{ManualSpan, Reserved, Trace};
 use std::collections::BTreeMap;
 
 /// The span an agent's activity runs in.

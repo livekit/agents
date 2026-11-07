@@ -1066,7 +1066,7 @@ async fn the_rooms_startup_runs_under_session_start() {
     use lk_agents_abi::telemetry::record::{SpanContext, Value};
     let (room, clock) = fake_room("startup-spans");
     let spans = Arc::new(Spans::default());
-    let tracer = lk_agents_runtime::net::telemetry::Tracer::new(spans.clone(), clock.clone(), 1);
+    let tracer = lk_agents_telemetry::Tracer::new(spans.clone(), clock.clone(), 1);
     let config =
         RoomIoConfig { audio_output: Some(AudioOutputConfig::default()), ..microphone_only() };
     let spawner = Arc::new(TokioSpawner::current());

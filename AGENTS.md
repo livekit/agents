@@ -149,12 +149,14 @@ specification; implementation cleanup must follow the agreed contracts.
   calling storage), thin MCP I/O, HostInvoker and the process runtime; it makes no decisions.
   Everything that can be faked at its boundary is ordinary async Rust, tested on its own and
   faked in the DST: `lk-agents-net` (the shared HTTP/SSE/WebSocket transport, the host stream
-  adapter, the delegation A2A client and the span API), `lk-agents-telemetry` (the OTLP
-  exporter and the Cloud session report upload),
+  adapter, the delegation A2A client, and telemetry's export: the OTLP exporter and the Cloud
+  session report upload),
   `lk-agents-inference` (providers, retry/fallback/reconnect, the TTS audio emitter and
   streaming decoder queue, evaluation judges), `lk-agents-worker` (registration, IPC,
   supervision) and `lk-agents-storage` (all database interaction, typed errors). Telemetry
-  (spans, metrics, report records) is declared in ABI and exported by `lk-agents-telemetry`;
+  (spans, metrics, report records) is declared in ABI, recorded through `lk-agents-telemetry`
+  (no executor or transport, so the sans-I/O crates can depend on it) and exported by
+  `lk_agents_net::export`;
   see `docs/internals/telemetry.md`.
   `lk-agents-abi` declares the boundary once and codegen emits the Python bindings from it; pyo3
   exists only in `lk-agents-py`.
@@ -205,8 +207,9 @@ rust/crates/            # The Rust core, built into livekit.agents._core; see do
 ├── lk-agents-voice     # Voice session lifecycle, turns, speech scheduling, interruption
 ├── lk-agents-storage   # Async I/O: AgentDB and SQLite, fencing, leases, typed errors
 ├── lk-agents-media     # Codecs, TTS framing, images, recording files, resampling; no async runtime
-├── lk-agents-net       # Async I/O: transport, token signing, host stream adapter, A2A client, ProcessEnv, span API
-├── lk-agents-telemetry # Async I/O: OTLP exporter, session report upload, host span and tagger, stall recording
+├── lk-agents-telemetry # Span recording: the machines' Trace and ManualSpan, the Tracer and ScopedSpan
+├── lk-agents-net       # Async I/O: transport, token signing, host stream adapter, A2A client, ProcessEnv,
+│                       # telemetry export (OTLP exporter, session report upload, host span, stalls)
 ├── lk-agents-inference # Async I/O: provider clients, retry/fallback/reconnect, TTS emitter, judges
 ├── lk-agents-worker    # Async I/O: registration, jobs, IPC, process pool and supervision
 ├── lk-agents-cli       # Host-neutral launcher: clap, JSON logs, remote CLI and process shutdown
@@ -276,7 +279,8 @@ STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
 - Dependency direction is `lk-agents-py -> lk-agents-runtime -> sans-I/O and async I/O crates ->
   lk-agents-abi`; `voice -> core`, `voice -> media`, `inference -> media`, `inference -> core`,
   `net -> core`, `net -> media`, `py -> abi`, `runtime -> cli -> worker/net/abi`, async I/O
-  crates `-> net`, `telemetry -> core/media`, `worker -> telemetry`, `fuzz -> sans-I/O crates + abi`, `fuzz -> runtime` (the DST runs the runtime's real
+  crates `-> net`, `voice/net/inference/worker/runtime/fuzz -> telemetry` (span recording,
+  which depends only on abi), `fuzz -> sans-I/O crates + abi`, `fuzz -> runtime` (the DST runs the runtime's real
   executors over faked ports, the fake room among them) are allowed composition edges.
   `lk-agents-py` depends only on the runtime and ABI (the runtime re-exports the
   implementations generated adapters select). ABI never depends on subjects or runtime; cores
@@ -305,8 +309,9 @@ STT, TTS, LLM, Realtime models have provider-agnostic interfaces with:
   (`spawn_blocking`, `block_in_place`, `tokio::fs`, `lookup_host`): blocking work runs on the
   media pool or `lk_agents_net::blocking_io`, and names resolve through `lk_agents_net::dns`.
 - Rust owns telemetry: spans, metrics and report records are typed declarations in
-  `lk-agents-abi`, recorded through `lk-agents-net`'s span API and exported over OTLP by
-  `lk-agents-telemetry`, with the session report upload.
+  `lk-agents-abi`, recorded through `lk-agents-telemetry` and exported over OTLP by
+  `lk_agents_net::export`, with the session report upload. The cores' Clippy policy bans the
+  recording crate's async half (`ScopedSpan`, `Tracer`, `start`/`end`/`measure`).
   Every telemetry touchpoint outside a telemetry module is spelled `telemetry::` (no imported
   telemetry names) and is output only. I/O crates open `ScopedSpan`s (`#[telemetry::span]`,
   `telemetry::start`); in sans-I/O crates the entity a span describes owns it in a `span` field,

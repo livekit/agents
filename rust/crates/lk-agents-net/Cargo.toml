@@ -8,8 +8,8 @@ license.workspace = true
 
 # The shared async transport (decision 77): owned tasks, server-sent events, HTTPS with phase
 # deadlines, the WebSocket seam and its tungstenite implementation, LiveKit token signing, the
-# delegation A2A client (decision 85) and the span API. Used by inference, storage backends,
-# telemetry, the worker and runtime.
+# delegation A2A client (decision 85) and telemetry's export (`export`). Used by inference,
+# storage backends, the worker and runtime.
 [lib]
 doctest = false
 
@@ -44,9 +44,19 @@ serde.workspace = true
 # (`lk_agents_core::a2a`, sans-I/O).
 a2a.workspace = true
 lk-agents-core = { path = "../lk-agents-core" }
+# The span API the transport and the A2A client record through, and whose records `export` sends.
+lk-agents-telemetry = { path = "../lk-agents-telemetry" }
+# The Cloud session report: its protobuf header and Google RPC retry records.
+prost.workspace = true
+pbjson-types.workspace = true
+tonic-types = { version = "0.14", default-features = false }
+# The OTLP exporter's gzip. Its message types are checked in (`export/otlp/proto.rs`).
+flate2 = "1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros", "test-util", "net", "io-util"] }
+# Regenerates `export/otlp/proto.rs` (an ignored test); already in the lock through livekit-protocol.
+prost-build = "0.14"
 
 [[test]]
 name = "a2a_client"

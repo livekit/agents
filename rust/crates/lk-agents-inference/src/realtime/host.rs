@@ -12,7 +12,7 @@ use lk_agents_abi::llm::realtime::{
 use lk_agents_abi::{Realtime, RealtimeCommand, RealtimeSession, WallAnchor};
 
 use lk_agents_net::env::ProcessEnv;
-use lk_agents_net::telemetry;
+use lk_agents_telemetry as telemetry;
 
 /// The plugin session opens only when the driver calls `session()`; asked again, it is the same.
 pub struct HostRealtimeModel {

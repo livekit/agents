@@ -8,7 +8,7 @@ use lk_agents_abi::telemetry::instruments::EventLoopBlockedDuration;
 use lk_agents_abi::telemetry::policy;
 use lk_agents_abi::telemetry::record::{StackFrame, StallState};
 use lk_agents_abi::telemetry::spans::session::{BlockingSeverity, EventLoopBlocked};
-use lk_agents_net::telemetry::{self, Cx};
+use lk_agents_telemetry::{self as telemetry, Cx};
 use parking_lot::Mutex;
 
 use std::collections::VecDeque;

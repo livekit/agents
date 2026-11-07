@@ -17,6 +17,8 @@ serde = { workspace = true }
 lk-agents-abi = { path = "../lk-agents-abi", features = ["serde"] }
 # The shared agent execution core: the tool outcome table, approval and AgentRun.
 lk-agents-core = { path = "../lk-agents-core" }
+# The spans the session machine owns (`Trace`, `ManualSpan`).
+lk-agents-telemetry = { path = "../lk-agents-telemetry" }
 # Audio framing, resampling, the endpointing filter and the pre-connect audio decode.
 lk-agents-media = { path = "../lk-agents-media" }
 log.workspace = true

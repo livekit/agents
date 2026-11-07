@@ -37,7 +37,7 @@ pub fn span_value_derive(input: TokenStream) -> TokenStream {
 /// `#[span(name, parent = A | B, end = T, events = [E, ..], kind, outlives_parent)]` on an `Attrs`
 /// struct: a span declaration and its start attributes. `#[span(Decl { .. })]` on a function
 /// taking `cx: &telemetry::Cx`: the function is that one span (`#[telemetry::span]`,
-/// `lk_agents_net::telemetry`).
+/// `lk_agents_telemetry`).
 #[proc_macro_attribute]
 pub fn span(attr: TokenStream, item: TokenStream) -> TokenStream {
     if let Ok(function) = syn::parse::<syn::ItemFn>(item.clone()) {

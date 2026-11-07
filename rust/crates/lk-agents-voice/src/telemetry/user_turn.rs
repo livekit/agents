@@ -16,7 +16,7 @@ use lk_agents_abi::telemetry::spans::user_turn::{
 };
 use lk_agents_abi::voice::events::OverlappingSpeechEvent;
 use lk_agents_abi::voice::room_io::ParticipantInfo;
-use lk_agents_core::telemetry::span::{ManualSpan, Trace};
+use lk_agents_telemetry::span::{ManualSpan, Trace};
 
 /// Every way a decided turn ends; a new verdict is a new arm here.
 impl From<UserTurnCommitVerdict> for UserTurnOutcome {

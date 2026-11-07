@@ -286,7 +286,7 @@ pub fn span_fn(args: TokenStream, mut function: syn::ItemFn) -> syn::Result<Toke
             "a `#[span]` function returns a `Result`",
         ));
     };
-    let t = quote!(::lk_agents_net::telemetry);
+    let t = quote!(::lk_agents_telemetry);
     let body = &function.block;
     let run = if function.sig.asyncness.is_some() {
         quote!(async { let __result: #output = #body; __result }.await)
@@ -414,17 +414,17 @@ mod tests {
             .to_string();
         assert!(
             out.contains(
-                "let __span : :: lk_agents_net :: telemetry :: ScopedSpan < LlmRequest > = :: lk_agents_net :: telemetry :: start (cx , LlmRequest { model : request . model () }) ;"
+                "let __span : :: lk_agents_telemetry :: ScopedSpan < LlmRequest > = :: lk_agents_telemetry :: start (cx , LlmRequest { model : request . model () }) ;"
             ),
             "{out}"
         );
         assert!(
-            out.contains("let cx : & :: lk_agents_net :: telemetry :: Cx = __span . cx () ;"),
+            out.contains("let cx : & :: lk_agents_telemetry :: Cx = __span . cx () ;"),
             "{out}"
         );
         assert!(out.contains("async { let __result : Result < Response , Error > ="), "{out}");
         assert!(
-            out.contains(":: lk_agents_net :: telemetry :: end (__span , __result . as_ref ()) ;"),
+            out.contains(":: lk_agents_telemetry :: end (__span , __result . as_ref ()) ;"),
             "{out}"
         );
         let sync = syn::parse2(quote! { fn f(cx: &Cx) -> Result<u8, E> { Ok(1) } }).unwrap();

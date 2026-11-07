@@ -13,7 +13,7 @@ use lk_agents_abi::{
 };
 use lk_agents_media::media_queue::{AudioReceiver, Item};
 use lk_agents_net::audio_drops::AudioDrops;
-use lk_agents_net::telemetry;
+use lk_agents_telemetry as telemetry;
 use tokio_util::sync::CancellationToken;
 
 use super::stream::{Flush, Input};

@@ -26,9 +26,10 @@ for validation and review.
 
 | Layer | Owns | Boundary |
 | --- | --- | --- |
+| Span recording | The spans sans-I/O machines own through their `Trace`, and the process `Tracer` with the `ScopedSpan`s of async work (`lk-agents-telemetry`) | No executor or transport: the sans-I/O crates depend on it; their Clippy policy bans its async half |
 | Decision cores | Agent execution, tool/approval/output policy, session lifecycle, scheduling, MCP and A2A task decisions | Synchronous events in, effects out; no I/O, executor, or host objects |
 | Data-plane core | Media transformations, buffering, gates, fan-out and playout accounting | Frames and control data in, transformed data and effects out; no device or network access |
-| Async I/O crates | The shared transport, the host stream adapter, the delegation A2A client and the span API (`lk-agents-net`); the OTLP exporter and the Cloud session report upload (`lk-agents-telemetry`); provider clients with retry, fallback and reconnect execution, provider-side media execution and evaluation judge orchestration; worker registration, IPC and supervision; storage (all database interaction, reported as typed errors) | Ordinary async Rust, tested on their own against real peers and processes and faked in the DST; host access only through declared proxies |
+| Async I/O crates | The shared transport, the host stream adapter, the delegation A2A client, and telemetry's export: the OTLP exporter and the Cloud session report upload (`lk-agents-net`); provider clients with retry, fallback and reconnect execution, provider-side media execution and evaluation judge orchestration; worker registration, IPC and supervision; storage (all database interaction, reported as typed errors) | Ordinary async Rust, tested on their own against real peers and processes and faked in the DST; host access only through declared proxies |
 | `lk-agents-runtime` | The I/O layer of voice and text: voice session executor, room I/O, avatar transport and recording ingress, AgentRun and TextSession drivers, A2A door and MCP session I/O, HostInvoker and the process runtime | Executes core effects, returns correlated events and wires the async I/O crates; makes no decisions |
 | `lk-agents-py` | Python module registration, generated conversions and adapters, and HostInvoker's Python entry | The only crate containing pyo3; no framework policy or I/O implementation |
 | Python package | Public API, user callbacks, provider implementations, host SDK objects and process launch/bootstrap | Calls `_core`; host objects are reached through generated proxies and HostInvoker |
@@ -197,8 +198,8 @@ audio; it does not authorize playback, route room tracks, or report what a perso
 | `lk-agents-voice` | Frontend/session lifecycle, recognition, speech scheduling, interruption, IVR, AMD and media coordination; transcript pacing decisions; composes agent execution from `lk-agents-core` |
 | `lk-agents-storage` | Async I/O: all database interaction: schema and statements, the AgentDB and SQLite backends, retries, fencing, lease renewal and lost-acknowledgment resolution; every failure is a typed error: the database's `Uncertain`, `Rejected { running_task_id }`, `LeaseLost`, `Unavailable`, `NotFound` and `VersionConflict`, the caller's `Invalid`, `NotSerializable`, `TooLarge` and `Unauthorized`, and `Cancelled` |
 | `lk-agents-media` | Synchronous decoding, encoding, TTS audio framing, image preparation and conversion, resampling, media filters, recording files and sample arithmetic; optional native codecs; synchronous CPU work with no async runtime; the one worker pool primitive (bounded plain threads with per-class admission) and the process's media pool |
-| `lk-agents-net` | Async I/O: the shared transport: HTTP with phase deadlines, SSE, WebSocket connect, owned tasks and gateway token signing; the host stream adapter through which native sources reach the host (one pull at a time, a close that settles the pull in flight); the delegation A2A client for remote agent calls; the span API (the tracer, `ScopedSpan`, `start`/`end`/`event`/`measure`); the process environment value (`lk_agents_net::env::ProcessEnv`) and the process's blocking I/O pool |
-| `lk-agents-telemetry` | Async I/O: the OTLP exporter for every telemetry destination and the process's exporter slot; the LiveKit Cloud session report and recording upload with its own bounded admission; the host span (`_core.TelemetrySpan`) and `Tagger` classes; event-loop stall recording. Sends over `lk-agents-net`'s TLS, bearer and blocking pool |
+| `lk-agents-net` | Async I/O: the shared transport: HTTP with phase deadlines, SSE, WebSocket connect, owned tasks and gateway token signing; the host stream adapter through which native sources reach the host (one pull at a time, a close that settles the pull in flight); the delegation A2A client for remote agent calls; telemetry's export (`lk_agents_net::export`): the OTLP exporter for every telemetry destination and the process's exporter slot, the LiveKit Cloud session report and recording upload with its own bounded admission, the host span (`_core.TelemetrySpan`) and `Tagger` classes and event-loop stall recording; the process environment value (`lk_agents_net::env::ProcessEnv`) and the process's blocking I/O pool |
+| `lk-agents-telemetry` | Span recording: `Trace` and `ManualSpan` for sans-I/O machines; the process `Tracer`, `Cx`'s recorder, `ScopedSpan` and `start`/`end`/`event`/`measure` for async work. Depends only on ABI; no executor or transport |
 | `lk-agents-inference` | Async I/O: provider clients for LLM, STT, TTS, VAD and EOT models, interruption, realtime, duplex and avatars, with their retry, fallback and reconnect execution; provider-side media execution: the TTS audio emitter (decode admission, drift timer, segment finalization), the streaming decoder's bounded output queue and provider image preparation on the media pool; speech stream adapters; evaluation judge orchestration |
 | `lk-agents-worker` | Async I/O: worker registration and job assignment, IPC, process pool and supervision, and endpoint byte-stream dispatch |
 | `lk-agents-cli` | Shared launcher: clap parsing, normalized JSON logs, remote CLI connection, and process shutdown deadline |
@@ -218,9 +219,8 @@ lk-agents-inference -> lk-agents-media
 lk-agents-inference -> lk-agents-core
 lk-agents-net -> lk-agents-core
 lk-agents-net -> lk-agents-media (the worker pool primitive)
-inference, worker, storage, telemetry -> lk-agents-net
-lk-agents-telemetry -> lk-agents-core, lk-agents-media
-lk-agents-worker -> lk-agents-telemetry
+inference, worker, storage -> lk-agents-net
+voice, net, inference, worker, runtime, fuzz -> lk-agents-telemetry -> lk-agents-abi
 async I/O crates -> lk-agents-abi
 fuzz -> sans-I/O crates + lk-agents-abi
 lk-agents-fuzz -> lk-agents-runtime (voice and room executors over fake ports)
@@ -1102,8 +1102,8 @@ scenario execution and simulator verdicts. Public contracts for SDK evals and
 `SimulationContext` live in [testing.md](../testing.md).
 
 Spans, metrics and report records are declared in `lk-agents-abi`, produced by
-the subject that owns the work and exported by `lk-agents-telemetry`
-([telemetry](#telemetry)).
+the subject that owns the work, recorded through `lk-agents-telemetry` and exported by
+`lk_agents_net::export` ([telemetry](#telemetry)).
 Observers cannot become a second policy owner. Binding construction and
 conversion follow the [binding rules](#binding-rules).
 
@@ -2518,11 +2518,11 @@ and verification. Placement:
 | Crate | Owns |
 | --- | --- |
 | `lk-agents-abi` | Span, event, metric and record declarations (`telemetry::spans`); the attribute wire types; `SpanContext` |
-| `lk-agents-core` | `ManualSpan` and `Trace` for sans-I/O machines; destination policy, admission and byte charges; report records and tags |
+| `lk-agents-telemetry` | Span recording: `ManualSpan` and `Trace` for sans-I/O machines; the tracer, `Cx`'s recorder, `ScopedSpan` |
+| `lk-agents-core` | Destination policy, admission and byte charges; report records and tags |
 | `lk-agents-voice` | The session's spans, each owned by the entity it describes (session, user turn, speech) |
 | `lk-agents-runtime`, `-inference`, `-worker` | `ScopedSpan` spans at their I/O choke points; activating the current span for host calls |
-| `lk-agents-net` | The span API: the tracer, `Cx`'s recorder, `ScopedSpan` |
-| `lk-agents-telemetry` | The OTLP exporter, per-destination queues and metric aggregation; the session report and recording upload |
+| `lk-agents-net` | Export (`export`): the OTLP exporter, per-destination queues and metric aggregation; the session report and recording upload |
 | `lk-agents-py` | The generated tracer, span and provider classes behind the Python OpenTelemetry API |
 
 Rules:

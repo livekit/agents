@@ -252,7 +252,7 @@ impl Run {
             ..Default::default()
         };
         let spans = Arc::new(SpanJournal { host: host.clone(), stamps: stamps.clone() });
-        let tracer = lk_agents_runtime::net::telemetry::Tracer::new(spans, time.clock(), 1);
+        let tracer = lk_agents_telemetry::Tracer::new(spans, time.clock(), 1);
         let session_room =
             Arc::new(FixedRoom { rtc: Some(room.clone()), time: time.clone(), pool: None });
         let api = Arc::new(
@@ -855,7 +855,7 @@ thread_local! {
 /// constructor reads it at once.
 fn scheduled(
     spawner: Arc<dyn Spawner>,
-    tracer: lk_agents_runtime::net::telemetry::Tracer,
+    tracer: lk_agents_telemetry::Tracer,
 ) -> lk_agents_runtime::net::env::ProcessEnv {
     SCHEDULER.with(|slot| *slot.borrow_mut() = Some(spawner));
     lk_agents_runtime::net::env::ProcessEnv {
