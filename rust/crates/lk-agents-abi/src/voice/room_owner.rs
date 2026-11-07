@@ -89,7 +89,7 @@ pub trait RoomIo: Send + Sync {
     /// Starts the room's IO; its startup spans (the participant, its track, the agent's
     /// publication) open under `startup`, the session's `session_start`.
     fn start(self: Arc<Self>, startup: crate::telemetry::Cx);
-    fn on_agent_state_changed(self: Arc<Self>, state: &str);
+    fn on_agent_state_changed(self: Arc<Self>, state: crate::voice::events::AgentState);
     fn wait_for_ready<'a>(&'a self) -> crate::BoxFuture<'a, Result<()>>;
     fn set_participant<'a>(
         &'a self,

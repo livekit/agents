@@ -9,6 +9,7 @@ use super::pre_connect_audio::PreConnectAudioHandler;
 use crate::monotone::Monotone;
 use crate::telemetry;
 use futures_util::FutureExt as _;
+use lk_agents_abi::voice::events::AgentState;
 use lk_agents_abi::voice::io::IoError;
 use lk_agents_abi::voice::io::{AudioInput, AudioOutput, Result, TextOutput};
 use lk_agents_abi::voice::room_io::{
@@ -71,7 +72,7 @@ pub struct RoomIo {
     /// Cancelled under the `execution` lock, so no work begins once the room closes.
     stopped: CancellationToken,
     started: Notify,
-    agent_state: watch::Sender<Option<String>>,
+    agent_state: watch::Sender<Option<AgentState>>,
     chat_registered: Mutex<bool>,
     /// The session's startup spans, under its `session_start`; ended with the first link.
     startup: Mutex<Option<Startup>>,
@@ -234,9 +235,9 @@ impl RoomIo {
                     event,
                     RoomEvent::ConnectionStateChanged { state: ConnectionState::Connected }
                 ) {
-                    let last = self.agent_state.borrow().clone();
+                    let last = *self.agent_state.borrow();
                     if let Some(state) = last {
-                        self.clone().on_agent_state_changed(&state);
+                        self.clone().on_agent_state_changed(state);
                     }
                 }
             }
@@ -524,7 +525,7 @@ impl RoomIo {
             if self.stopped.is_cancelled() {
                 return;
             }
-            let pending = updates.borrow_and_update().clone();
+            let pending = *updates.borrow_and_update();
             let result = async {
                 if let Some(state) = pending
                     && self.room.connection_state()?.is_connected()
@@ -533,7 +534,10 @@ impl RoomIo {
                         .local()
                         .set_attributes(
                             &telemetry::Cx::NONE,
-                            BTreeMap::from([(ATTRIBUTE_AGENT_STATE.to_owned(), state)]),
+                            BTreeMap::from([(
+                                ATTRIBUTE_AGENT_STATE.to_owned(),
+                                state.as_str().to_owned(),
+                            )]),
                         )
                         .await?;
                 }
@@ -858,9 +862,9 @@ impl room_owner::RoomIo for RoomIo {
     }
 
     /// Keep one ordered writer; a newer state cancels the pending older write.
-    fn on_agent_state_changed(self: Arc<Self>, state: &str) {
+    fn on_agent_state_changed(self: Arc<Self>, state: AgentState) {
         if !self.stopped.is_cancelled() {
-            self.agent_state.send_replace(Some(state.to_owned()));
+            self.agent_state.send_replace(Some(state));
         }
     }
 

@@ -30,7 +30,7 @@ mod agent_state_written_on_connect {
         let rtc = room.clone() as Arc<dyn RtcRoom>;
         let io = RoomIo::new(rtc, clock, spawner, ids, config, None, None);
         io.clone().start(lk_agents_abi::telemetry::Cx::NONE);
-        io.clone().on_agent_state_changed("listening");
+        io.clone().on_agent_state_changed(lk_agents_abi::voice::events::AgentState::Listening);
         tokio::time::sleep(Duration::from_millis(50)).await;
         room.set_connection_state(ConnectionState::Connected);
         tokio::time::sleep(Duration::from_millis(50)).await;

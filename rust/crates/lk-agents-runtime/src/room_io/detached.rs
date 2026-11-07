@@ -41,7 +41,7 @@ impl room_owner::RoomIo for DetachedRoomIo {
         None
     }
     fn start(self: Arc<Self>, _: telemetry::Cx) {}
-    fn on_agent_state_changed(self: Arc<Self>, _: &str) {}
+    fn on_agent_state_changed(self: Arc<Self>, _: lk_agents_abi::voice::events::AgentState) {}
     fn wait_for_ready<'a>(&'a self) -> lk_agents_abi::BoxFuture<'a, Result<()>> {
         Box::pin(async move { Ok(()) })
     }
