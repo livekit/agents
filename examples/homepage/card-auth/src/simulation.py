@@ -34,7 +34,7 @@ async def on_simulation_end(sim: SimulationContext) -> None:
 
 def grade(bank: Bank, expected: dict[str, Any], today: date) -> list[str]:
     problems: list[str] = []
-    verified = bank.state == "authenticated"
+    verified = bank.verified
     if "verified" in expected and verified != expected["verified"]:
         problems.append("ended verified" if verified else "never verified the caller")
     failed = sum(a["authenticated"] is False for a in bank.attempts)

@@ -76,7 +76,7 @@ async def card_verification(ctx: JobContext) -> None:
         )
 
     bank = Bank(publish=publish)
-    await publish("status", bank.state)
+    await publish("status", "unauthenticated")
     await publish(
         "call",
         {

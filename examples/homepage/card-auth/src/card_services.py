@@ -269,9 +269,8 @@ Once verified, describe the flagged purchase exactly as it came back: where, whi
         with _as_tool_error():
             if not full_name.strip():
                 raise BankError("Ask who you're speaking with first.")
-            await self._bank.confirm_cardholder(
-                full_name.strip(), birth_date(date_of_birth, _today())
-            )
+            birth_date(date_of_birth, _today())
+            await self._bank.confirm_cardholder(full_name.strip())
         assert self._bank.alert is not None
         return json.dumps(
             {"verified": True, "flagged_purchase": _charge(self._bank.alert)}
@@ -334,7 +333,7 @@ def outbound_caller_script(bank: Bank) -> str | None:
             "When Avery asks if they're traveling, say they're on vacation in "
             f"{alert.purchase.country} for two weeks."
         )
-    elif bank.state == "authenticated":
+    elif bank.verified:
         stage = "When Avery describes the purchase, say yes, that was them."
     else:
         stage = (
@@ -359,7 +358,7 @@ def caller_script(bank: Bank) -> str | None:
         )
     elif alert is not None and alert.made_by_cardholder is None:
         stage = "When Avery describes the charge, say that's the one, and they didn't make it."
-    elif bank.state == "authenticated":
+    elif bank.verified:
         stage = (
             "They're verified. Answer what Avery asks. When she asks if there's anything "
             "else, say that's all, thanks, and goodbye."

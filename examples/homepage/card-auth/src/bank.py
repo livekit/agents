@@ -15,7 +15,6 @@ DECLINED_CARD = "0000"
 MAX_ATTEMPTS = 3
 EARLIEST_BIRTH_DATE = date(1900, 1, 1)
 
-AuthState = Literal["unauthenticated", "authenticated"]
 CardState = Literal["active", "locked"]
 
 
@@ -119,7 +118,7 @@ async def _discard(_key: str, _value: Any) -> None:
 class Bank:
     publish: Publish = _discard
     attempts: list[dict[str, Any]] = field(default_factory=list)
-    state: AuthState = "unauthenticated"
+    verified: bool = False
     locked_out: bool = False
     card: Card = field(default_factory=Card)
     alert: Alert | None = None
@@ -138,7 +137,7 @@ class Bank:
         elif sum(not a["authenticated"] for a in self.attempts) >= MAX_ATTEMPTS:
             self.locked_out = True
             await self.publish("lockedOut", True)
-        await self._set_state("authenticated" if verified else "unauthenticated")
+        await self._set_verified(verified)
         return verified
 
     async def open_alert(self) -> Alert:
@@ -147,14 +146,14 @@ class Bank:
         await self._publish_card()
         return self.alert
 
-    async def confirm_cardholder(self, name: str, date_of_birth: date) -> None:
+    async def confirm_cardholder(self, name: str) -> None:
         """Outbound: confirms whoever picked up as the cardholder. Nothing is on file in the demo, so
         any name and real date of birth will do; the check is there to show the step."""
         alert = self._require_alert()
         alert.checks.append(True)
         await self._publish_alert()
         await self._verify_holder(name)
-        await self._set_state("authenticated")
+        await self._set_verified(True)
 
     async def recent_charges(self) -> Alert:
         """Inbound: the charge a verified caller is asking about, the bank's only recent one."""
@@ -213,7 +212,7 @@ class Bank:
         return self.alert
 
     def _require_verified(self) -> None:
-        if self.state != "authenticated":
+        if not self.verified:
             raise BankError("Verify the caller first.")
 
     async def _verify_holder(self, name: str) -> None:
@@ -226,9 +225,9 @@ class Bank:
     async def _publish_card(self) -> None:
         await self.publish("card", self.card.to_json())
 
-    async def _set_state(self, state: AuthState) -> None:
-        self.state = state
-        await self.publish("status", state)
+    async def _set_verified(self, verified: bool) -> None:
+        self.verified = verified
+        await self.publish("status", "authenticated" if verified else "unauthenticated")
 
 
 def card_digits(text: str) -> str:
