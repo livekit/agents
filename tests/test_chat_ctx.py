@@ -141,6 +141,100 @@ def _ctx_with_per_turn_instructions() -> tuple[ChatContext, str]:
     return chat_ctx, instructions
 
 
+_AWS_CACHE_POINT = {"cachePoint": {"type": "default"}}
+
+
+def _aws_cache_points(messages: list[dict]) -> list[tuple[int, int]]:
+    return [
+        (mi, bi)
+        for mi, m in enumerate(messages)
+        for bi, block in enumerate(m["content"])
+        if block == _AWS_CACHE_POINT
+    ]
+
+
+def test_aws_cache_messages_is_off_by_default():
+    chat_ctx, _ = _ctx_with_per_turn_instructions()
+
+    default, _ = chat_ctx.to_provider_format(format="aws")
+    disabled, _ = chat_ctx.to_provider_format(format="aws", cache_messages=False)
+
+    assert default == disabled
+    assert _aws_cache_points(default) == []
+
+
+def test_aws_cache_messages_ends_before_per_turn_instructions():
+    chat_ctx, instructions = _ctx_with_per_turn_instructions()
+
+    messages, extra = chat_ctx.to_provider_format(format="aws", cache_messages=True)
+
+    assert extra.system_messages == ["You are a helpful assistant."]
+    # messages[0] is the "(empty)" user turn Bedrock needs before the greeting
+    assert [m["role"] for m in messages] == ["user", "assistant", "user"]
+    assert _aws_cache_points(messages) == [(2, 1)]
+    user_turn = messages[2]["content"]
+    assert user_turn[0] == {"text": "I'd like to refill my prescription."}
+    assert instructions in user_turn[2]["text"]
+
+
+def test_aws_cache_messages_ends_after_the_tool_result():
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="user", content=["What's the weather in Paris?"])
+    chat_ctx.insert(FunctionCall(call_id="c1", name="get_weather", arguments='{"city": "Paris"}'))
+    chat_ctx.insert(
+        FunctionCallOutput(call_id="c1", name="get_weather", output="sunny", is_error=False)
+    )
+
+    messages, _ = chat_ctx.to_provider_format(format="aws", cache_messages=True)
+
+    assert [m["role"] for m in messages] == ["user", "assistant", "user"]
+    assert messages[-1]["content"][0]["toolResult"]["toolUseId"] == "c1"
+    assert _aws_cache_points(messages) == [(2, 1)]
+
+
+def test_aws_cache_messages_next_turn_starts_with_the_cached_prefix():
+    chat_ctx, _ = _ctx_with_per_turn_instructions()
+    first, _ = chat_ctx.to_provider_format(format="aws", cache_messages=True)
+    [(mi, bi)] = _aws_cache_points(first)
+    cached = [*first[:mi], {**first[mi], "content": first[mi]["content"][:bi]}]
+
+    # next turn: the per-turn instructions are gone, the reply and a new message follow
+    chat_ctx.items.pop()
+    chat_ctx.add_message(role="assistant", content=["Sure, which pharmacy?"])
+    chat_ctx.add_message(role="user", content=["The one on Main Street."])
+    second, _ = chat_ctx.to_provider_format(format="aws", cache_messages=True)
+
+    assert second[:mi] == cached[:mi]
+    assert second[mi]["content"][:bi] == cached[mi]["content"]
+    assert _aws_cache_points(second) == [(len(second) - 1, 1)]
+
+
+def test_aws_cache_messages_after_an_assistant_turn_ends_that_turn():
+    # a reply generated right after the agent spoke: the instructions open a new user turn
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="user", content=["Hi"])
+    chat_ctx.add_message(role="assistant", content=["Hello! How can I help you?"])
+    chat_ctx.add_message(role="system", content=["Ask if they are still there."])
+
+    messages, _ = chat_ctx.to_provider_format(format="aws", cache_messages=True)
+
+    assert [m["role"] for m in messages] == ["user", "assistant", "user"]
+    assert _aws_cache_points(messages) == [(1, 1)]
+
+
+def test_aws_cache_messages_needs_conversation_content():
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="system", content=["You are a helpful assistant."])
+    messages, _ = chat_ctx.to_provider_format(format="aws", cache_messages=True)
+    assert _aws_cache_points(messages) == []
+
+    # a cachePoint can't open a message, so a turn with no Bedrock content gets none
+    chat_ctx.add_message(role="assistant", content=["Hello!"])
+    chat_ctx.add_message(role="user", content=[""])
+    messages, _ = chat_ctx.to_provider_format(format="aws", cache_messages=True)
+    assert _aws_cache_points(messages) == []
+
+
 def test_openai_format_preserves_mid_conversation_system_messages():
     # intentional pass-through: the openai serializer keeps system messages where they are;
     # providers that need repositioning handle it in their own serializer

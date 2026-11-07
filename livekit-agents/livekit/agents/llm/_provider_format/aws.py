@@ -26,8 +26,21 @@ class BedrockFormatData:
 
 
 def to_chat_ctx(
-    chat_ctx: llm.ChatContext, *, inject_dummy_user_message: bool = True
+    chat_ctx: llm.ChatContext,
+    *,
+    inject_dummy_user_message: bool = True,
+    cache_messages: bool = False,
 ) -> tuple[list[dict], BedrockFormatData]:
+    """Convert to Bedrock Converse ``messages`` and system texts.
+
+    With ``cache_messages``, a ``cachePoint`` block follows the conversation's last item:
+    the latest user message, tool call or tool result. It comes before any system or
+    developer message after that item, such as ``generate_reply(instructions=...)``, which
+    is rewritten into a user turn for this request only. A cachePoint after that text would
+    end the prefix on content the next request no longer sends, so the cache would never
+    be read.
+    """
+    cache_after_id = _last_conversation_item_id(chat_ctx) if cache_messages else None
     chat_ctx = convert_mid_conversation_instructions(chat_ctx)
 
     messages: list[dict] = []
@@ -88,6 +101,11 @@ def to_chat_ctx(
                 }
             )
 
+        # never the first block of a message: an item that added no content (e.g. audio
+        # only) gets no cachePoint, and that request simply isn't cached
+        if msg.id == cache_after_id and current_content:
+            current_content.append({"cachePoint": {"type": "default"}})
+
     # Finalize the last message if there’s any content left
     if current_role is not None and current_content:
         messages.append({"role": current_role, "content": current_content})
@@ -97,6 +115,15 @@ def to_chat_ctx(
         messages.insert(0, {"role": "user", "content": [{"text": "(empty)"}]})
 
     return messages, BedrockFormatData(system_messages=system_messages)
+
+
+def _last_conversation_item_id(chat_ctx: llm.ChatContext) -> str | None:
+    for item in reversed(chat_ctx.items):
+        if item.type in ("function_call", "function_call_output"):
+            return item.id
+        if item.type == "message" and item.role not in ("system", "developer"):
+            return item.id
+    return None
 
 
 def _build_image(image: llm.ImageContent) -> dict:
