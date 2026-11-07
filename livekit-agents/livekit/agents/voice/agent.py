@@ -111,7 +111,9 @@ class Agent:
         self._expressive: NotGivenOr[bool | ExpressiveOptions] = expressive
 
         self._allow_interruptions: NotGivenOr[bool] = NOT_GIVEN
-        self._interruption_detection: NotGivenOr[Literal["adaptive", "vad"]] = NOT_GIVEN
+        self._interruption_detection: NotGivenOr[
+            Literal["adaptive", "vad"] | inference.InterruptionDetector
+        ] = NOT_GIVEN
         if is_given(raw_interruption := turn_handling.get("interruption", NOT_GIVEN)):
             if "enabled" in raw_interruption:
                 self._allow_interruptions = raw_interruption["enabled"]
@@ -179,7 +181,9 @@ class Agent:
         return _ReadOnlyChatContext(self._chat_ctx.items)
 
     @property
-    def interruption_detection(self) -> NotGivenOr[Literal["adaptive", "vad"]]:
+    def interruption_detection(
+        self,
+    ) -> NotGivenOr[Literal["adaptive", "vad"] | inference.InterruptionDetector]:
         return self._interruption_detection
 
     @property

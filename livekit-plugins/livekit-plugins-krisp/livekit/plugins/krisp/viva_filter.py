@@ -21,7 +21,7 @@ forwards to one of two underlying FrameProcessor implementations:
   authenticates via the LiveKit Cloud-managed JWT the agent framework hands
   to FrameProcessors through ``_on_credentials_updated``).
 - A local license-mode wrapper around ``krisp_audio`` (selected when the user
-  passes :class:`KrispLicenseAuthProvider`).
+  passes :class:`KrispLicenseAuthProvider` or sets ``KRISP_VIVA_FILTER_MODEL_PATH``).
 
 Note: ``isinstance(processor, SomeBackendInternal)`` will not match — the
 public class is the facade, not the backend it forwards to.
@@ -84,9 +84,12 @@ def _resolve_auth_provider(
     2. ``model_path`` given → construct ``KrispLicenseAuthProvider``
        (deprecation warning, since ``model_path`` should be passed on the
        provider instead).
-    3. Both ``KRISP_VIVA_SDK_LICENSE_KEY`` and ``KRISP_VIVA_FILTER_MODEL_PATH``
-       env vars set → construct ``KrispLicenseAuthProvider`` from the
-       environment (the user is responsible for installing ``krisp_audio``).
+    3. ``KRISP_VIVA_FILTER_MODEL_PATH`` env var set → construct
+       ``KrispLicenseAuthProvider`` from the environment (the user is
+       responsible for installing ``krisp_audio``). ``KRISP_VIVA_SDK_LICENSE_KEY``
+       is optional, since only Krisp's UAR builds need a key, and it doesn't
+       select this backend on its own: turn taking and interruption
+       prediction read it too.
     4. Otherwise → default ``LiveKitCloudAuthProvider``.
     """
     global _LEGACY_DEPRECATION_SHOWN
@@ -112,9 +115,9 @@ def _resolve_auth_provider(
             _LEGACY_DEPRECATION_SHOWN = True
         return KrispLicenseAuthProvider(model_path=model_path)
 
-    # Auto-select Krisp-direct license auth when both env vars are set;
-    # otherwise fall back to LiveKit Cloud auth.
-    if os.getenv("KRISP_VIVA_SDK_LICENSE_KEY") and os.getenv("KRISP_VIVA_FILTER_MODEL_PATH"):
+    # Auto-select Krisp-direct license auth when a model path is set (Krisp's
+    # regular builds take no key); otherwise fall back to LiveKit Cloud auth.
+    if os.getenv("KRISP_VIVA_FILTER_MODEL_PATH"):
         return KrispLicenseAuthProvider()
 
     return LiveKitCloudAuthProvider()
@@ -124,7 +127,7 @@ def _build_inner(
     mode: VivaMode,
     provider: LiveKitCloudAuthProvider | KrispLicenseAuthProvider,
     *,
-    noise_suppression_level: int,
+    noise_suppression_level: float,
     frame_duration_ms: int,
     sample_rate: int | None,
 ) -> _KrispBackend:
@@ -141,7 +144,7 @@ def _build_inner(
                 "broken install. Reinstall the plugin "
                 "(`pip install --force-reinstall livekit-plugins-krisp`), or "
                 "fall back to auth_provider=KrispLicenseAuthProvider(...) if "
-                "you have a Krisp license key + .kef model."
+                "you have the krisp_audio wheel and a .kef model."
             ) from e
 
         cloud_processor: _KrispBackend = _CloudKrispFrameProcessor(
@@ -206,18 +209,23 @@ class KrispVivaFilterFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
         mode: VivaMode = VivaMode.VOICE_ISOLATION,
         auth_provider: LiveKitCloudAuthProvider | KrispLicenseAuthProvider | None = None,
         model_path: str | None = None,
-        noise_suppression_level: int = 75,
+        noise_suppression_level: float = 100.0,
         frame_duration_ms: int | None = None,
         sample_rate: int | None = None,
     ) -> None:
         """Initialize the Krisp frame processor.
 
         Args:
-            noise_suppression_level: Noise suppression level (0-100, default: 75).
+            noise_suppression_level: Noise suppression level from 0.0 to 100.0
+                (default: 100.0). Ints are accepted and converted to float.
+                Below 100.0, background voices leak through and may interrupt
+                the agent.
             auth_provider: Authentication provider. Defaults to
                 :class:`LiveKitCloudAuthProvider` (LiveKit Cloud auth + bundled
-                model). Pass :class:`KrispLicenseAuthProvider` to use a Krisp
-                license key + ``.kef`` model file directly.
+                model), or to :class:`KrispLicenseAuthProvider` when
+                ``KRISP_VIVA_FILTER_MODEL_PATH`` is set. Pass
+                :class:`KrispLicenseAuthProvider` to use a ``.kef`` model file
+                directly, plus a license key on Krisp's UAR builds.
             model_path: **Deprecated.** Use
                 ``auth_provider=KrispLicenseAuthProvider(model_path=...)``
                 instead. Path to the Krisp model file (``.kef``).
@@ -229,7 +237,8 @@ class KrispVivaFilterFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
                 Sample rate in Hz.
 
         Raises:
-            RuntimeError: If the chosen backend wheel is not installed.
+            RuntimeError: If the chosen backend wheel is not installed, or a
+                UAR build of ``krisp_audio`` gets no license key.
             ValueError: If ``frame_duration_ms`` is not supported, or — for
                 :class:`KrispLicenseAuthProvider` — if ``model_path`` is
                 missing or does not have a ``.kef`` extension.
@@ -291,12 +300,16 @@ class KrispVivaFilterFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
 
     @property
     def noise_suppression_level(self) -> float:
-        """Current noise suppression level (0-100)."""
+        """Current noise suppression level (0.0-100.0)."""
         return self._inner.noise_suppression_level
 
     @noise_suppression_level.setter
     def noise_suppression_level(self, value: float) -> None:
-        """Adjust the noise suppression level (0-100) at runtime."""
+        """Adjust the noise suppression level (0.0-100.0) at runtime.
+
+        Ints are accepted and converted to float. Below 100.0, background voices
+        leak through and may interrupt the agent.
+        """
         self._inner.noise_suppression_level = value
 
     # ----- Backwards-compat shims ------------------------------------------
@@ -337,19 +350,22 @@ class KrispVivaFilterFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
 def voice_isolation(
     *,
     auth_provider: LiveKitCloudAuthProvider | KrispLicenseAuthProvider | None = None,
-    noise_suppression_level: int = 75,
+    noise_suppression_level: float = 100.0,
 ) -> KrispVivaFilterFrameProcessor:
     """Create a Krisp VIVA voice isolation ``FrameProcessor``.
 
     Pass the result as the ``noise_cancellation`` argument in
     :class:`~livekit.agents.room_io.AudioInputOptions`. Uses LiveKit Cloud auth
-    by default; pass ``auth_provider=krisp.auth.krisp_license(...)`` to run the
-    proprietary Krisp SDK with your own license key + ``.kef`` model.
+    by default; pass ``auth_provider=krisp.auth.krisp_license(...)``, or set
+    ``KRISP_VIVA_FILTER_MODEL_PATH``, to run the proprietary Krisp SDK with your
+    own ``.kef`` model (plus a license key on Krisp's UAR builds).
 
     Args:
         auth_provider: Authentication provider. Defaults to
             :class:`LiveKitCloudAuthProvider` (LiveKit Cloud auth + bundled model).
-        noise_suppression_level: Noise suppression level (0-100, default: 75).
+        noise_suppression_level: Noise suppression level from 0.0 to 100.0
+            (default: 100.0). Ints are accepted and converted to float. Below
+            100.0, background voices leak through and may interrupt the agent.
     """
     return KrispVivaFilterFrameProcessor(
         mode=VivaMode.VOICE_ISOLATION,
@@ -361,7 +377,7 @@ def voice_isolation(
 def voice_isolation_telephony(
     *,
     auth_provider: LiveKitCloudAuthProvider | KrispLicenseAuthProvider | None = None,
-    noise_suppression_level: int = 75,
+    noise_suppression_level: float = 100.0,
 ) -> KrispVivaFilterFrameProcessor:
     """Create a Krisp VIVA voice isolation ``FrameProcessor`` tuned for telephony.
 
@@ -371,7 +387,9 @@ def voice_isolation_telephony(
     Args:
         auth_provider: Authentication provider. Defaults to
             :class:`LiveKitCloudAuthProvider` (LiveKit Cloud auth + bundled model).
-        noise_suppression_level: Noise suppression level (0-100, default: 75).
+        noise_suppression_level: Noise suppression level from 0.0 to 100.0
+            (default: 100.0). Ints are accepted and converted to float. Below
+            100.0, background voices leak through and may interrupt the agent.
     """
     return KrispVivaFilterFrameProcessor(
         mode=VivaMode.VOICE_ISOLATION_TELEPHONY,

@@ -461,7 +461,7 @@ class AgentActivity(RecognitionHooks):
         )
         self._turn_detection = self._validate_turn_detection(turn_detection)
 
-        self._interruption_detector: inference.AdaptiveInterruptionDetector | None = (
+        self._interruption_detector: inference.InterruptionDetector | None = (
             self._resolve_interruption_detection()
         )
         self._interruption_detection_enabled: bool = self._interruption_detector is not None
@@ -1249,7 +1249,7 @@ class AgentActivity(RecognitionHooks):
         if isinstance(self.vad, vad.VAD):
             self.vad.on("metrics_collected", self._on_metrics_collected)
 
-        if isinstance(self._interruption_detector, inference.AdaptiveInterruptionDetector):
+        if isinstance(self._interruption_detector, inference.InterruptionDetector):
             self._interruption_detector.on("metrics_collected", self._on_metrics_collected)
             self._interruption_detector.on("error", self._on_error)
 
@@ -1634,7 +1634,7 @@ class AgentActivity(RecognitionHooks):
         if isinstance(self.vad, vad.VAD):
             self.vad.off("metrics_collected", self._on_metrics_collected)
 
-        if isinstance(self._interruption_detector, inference.AdaptiveInterruptionDetector):
+        if isinstance(self._interruption_detector, inference.InterruptionDetector):
             self._interruption_detector.off("metrics_collected", self._on_metrics_collected)
             self._interruption_detector.off("error", self._on_error)
 
@@ -5243,7 +5243,7 @@ class AgentActivity(RecognitionHooks):
         self._interruption_detection_enabled = False
         self.interruption_by_audio_activity_enabled = True
 
-        if isinstance(self._interruption_detector, inference.AdaptiveInterruptionDetector):
+        if isinstance(self._interruption_detector, inference.InterruptionDetector):
             self._interruption_detector.off("metrics_collected", self._on_metrics_collected)
             self._interruption_detector.off("error", self._on_error)
 
@@ -5296,7 +5296,7 @@ class AgentActivity(RecognitionHooks):
             return False
         return self._session._using_default_vad
 
-    def _resolve_interruption_detection(self) -> inference.AdaptiveInterruptionDetector | None:
+    def _resolve_interruption_detection(self) -> inference.InterruptionDetector | None:
         # text simulations carry no audio to detect interruptions in
         if self._text_only:
             return None
@@ -5313,12 +5313,13 @@ class AgentActivity(RecognitionHooks):
             or self.vad is None
             or self._turn_detection in ("manual", "realtime_llm")
         ):
-            if (
-                is_given(self._agent.interruption_detection)
-                and self._agent.interruption_detection == "adaptive"
-            ) or (
-                is_given(self._session.interruption_detection)
-                and self._session.interruption_detection == "adaptive"
+            if any(
+                is_given(mode)
+                and (mode == "adaptive" or isinstance(mode, inference.InterruptionDetector))
+                for mode in (
+                    self._agent.interruption_detection,
+                    self._session.interruption_detection,
+                )
             ):
                 logger.warning(
                     "interruption_detection is provided, but it's not compatible with the current configuration and will be disabled"
@@ -5327,6 +5328,13 @@ class AgentActivity(RecognitionHooks):
 
         if not self.allow_interruptions:
             return None
+
+        # a detector instance wins only if it is the first explicit setting (agent, then session)
+        for mode in (self._agent.interruption_detection, self._session.interruption_detection):
+            if is_given(mode):
+                if isinstance(mode, inference.InterruptionDetector):
+                    return mode
+                break
 
         if (
             is_given(self._agent.interruption_detection)

@@ -285,7 +285,7 @@ class AudioRecognition:
         endpointing: BaseEndpointing,
         stt: io.STTNode | None,
         vad: vad.VAD | None,
-        interruption_detection: inference.AdaptiveInterruptionDetector | None,
+        interruption_detection: inference.InterruptionDetector | None,
         turn_detection: TurnDetectionMode | None,
         stt_model: str | None = None,
         stt_provider: str | None = None,
@@ -988,7 +988,7 @@ class AudioRecognition:
         return pipeline
 
     def _update_interruption_detection(
-        self, interruption_detection: inference.AdaptiveInterruptionDetector | None
+        self, interruption_detection: inference.InterruptionDetector | None
     ) -> None:
         self._flush_held_transcripts()
         self._interruption_detection = interruption_detection
@@ -2028,7 +2028,7 @@ class AudioRecognition:
     @utils.log_exceptions(logger=logger)
     async def _interruption_task(
         self,
-        interruption_detection: inference.AdaptiveInterruptionDetector,
+        interruption_detection: inference.InterruptionDetector,
         audio_input: AsyncIterable[inference.InterruptionDataFrameType],
         task: asyncio.Task[None] | None,
     ) -> None:
