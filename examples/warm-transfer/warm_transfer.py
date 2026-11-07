@@ -42,9 +42,16 @@ async def twilio_caller_id(caller: rtc.RemoteParticipant | None) -> dict[str, An
     except rtc.RpcError:
         logger.warning("could not read SIP headers, using the business number")
         return fallback
-    headers: dict[str, str] = json.loads(response).get("headers", {})
-    call_token = next((v for k, v in headers.items() if k.lower() == "x-twilio-calltoken"), None)
-    if not call_token:
+    try:
+        headers = json.loads(response).get("headers") or {}
+        call_token = next(
+            (v for k, v in headers.items() if k.lower() == "x-twilio-calltoken"), None
+        )
+    except (ValueError, AttributeError):
+        # an empty or malformed response counts as a missing header
+        logger.warning("unexpected SIP headers response, using the business number")
+        return fallback
+    if not isinstance(call_token, str) or not call_token:
         return fallback
     return {"sip_number": caller_number, "sip_headers": {"X-Twilio-CallToken": call_token}}
 
