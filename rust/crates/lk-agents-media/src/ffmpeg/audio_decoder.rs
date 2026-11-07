@@ -3,14 +3,15 @@
 use std::ffi::CStr;
 
 use super::*;
+use crate::Container;
 use crate::audio_decoder::DecodeLimits;
 use crate::resample::AudioResampler;
 
-/// Decode one container through caller-owned I/O. This function creates no thread or queue.
+/// Decode one container (`None` probes it) through caller-owned I/O. This function creates no thread or queue.
 /// The runtime calls it on an admitted blocking worker because FFmpeg's AVIO calls `Read`.
 /// Native handles and callback pointers remain local to this invocation.
 pub fn decode_stream<R, F>(
-    format_short_name: Option<&str>,
+    container: Option<Container>,
     out_rate: u32,
     out_channels: u16,
     limits: DecodeLimits,
@@ -28,9 +29,8 @@ where
     {
         return Err(CodecError::DecodeLimit("invalid target format or transform limits"));
     }
-    let name = format_short_name.map(CString::new).transpose().map_err(|_| CodecError::Ffmpeg {
-        op: "container name",
-        detail: "contains a NUL byte".into(),
+    let name = container.map(|c| CString::new(c.as_str())).transpose().map_err(|_| {
+        CodecError::Ffmpeg { op: "container name", detail: "contains a NUL byte".into() }
     })?;
     // The reader outlives the native handle, which is dropped first.
     let mut reader = Reader { input, error: None };

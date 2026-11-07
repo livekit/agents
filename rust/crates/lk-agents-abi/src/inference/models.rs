@@ -2,6 +2,33 @@
 //! `inference.TTS`, `inference.LLM` and the local models. Model parameters stay `String`: a model
 //! the gateway serves before it is listed here is still accepted.
 
+/// The provider a gateway model string names: `"provider/model"`, or the bare provider.
+#[crate::host(wire_strs)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InferenceProvider {
+    Openai,
+    Google,
+    Xai,
+    #[host(rename = "deepseek-ai")]
+    DeepseekAi,
+    Moonshotai,
+    Zai,
+    Deepgram,
+    Assemblyai,
+    Cartesia,
+    Speechmatics,
+    Inworld,
+    Rime,
+    Fishaudio,
+}
+
+impl InferenceProvider {
+    /// `None` for a provider not listed here: it has no provider-specific behavior.
+    pub fn of_model(model: &str) -> Option<Self> {
+        Self::from_wire(model.split('/').next().unwrap_or(model))
+    }
+}
+
 // Speech-to-text.
 
 #[crate::host(record(

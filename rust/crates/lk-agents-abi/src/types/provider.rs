@@ -22,6 +22,33 @@ pub enum ResponseObservation {
     Complete,
 }
 
+/// The `label` of a native provider: the Python class it stands in for,
+/// `type(self).__module__ + "." + type(self).__name__` where the reference spells it so.
+#[crate::host(wire_strs)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeLabel {
+    #[host(rename = "livekit.agents.inference.stt.STT")]
+    InferenceStt,
+    #[host(rename = "livekit.agents.inference.tts.TTS")]
+    InferenceTts,
+    #[host(rename = "livekit.agents.inference.VAD")]
+    Vad,
+    #[host(rename = "livekit.agents.inference.TurnDetector")]
+    TurnDetector,
+    /// Stamped on every interruption detection error and read by the session's error routing.
+    #[host(rename = "livekit.agents.inference.AdaptiveInterruptionDetector")]
+    InterruptionDetector,
+    #[host(rename = "llm.FallbackAdapter")]
+    LlmFallback,
+    #[host(rename = "stt.FallbackAdapter")]
+    SttFallback,
+    #[host(rename = "tts.FallbackAdapter")]
+    TtsFallback,
+    /// Also labels the error of a swap that failed.
+    #[host(rename = "livekit.agents.llm.realtime.RealtimeModelFallbackAdapter")]
+    RealtimeFallback,
+}
+
 /// One host provider request, its attempts run by the native executor.
 ///
 /// The host implements one attempt; the executor decides when an attempt may start, runs it,

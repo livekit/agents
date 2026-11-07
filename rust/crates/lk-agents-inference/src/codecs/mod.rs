@@ -12,7 +12,7 @@ use lk_agents_abi::media::codecs::CodecFailure;
 use lk_agents_media::audio_decoder::DecodeLimits;
 use lk_agents_media::pool::{Job, JobClass, MediaPool, MediaPoolError};
 use lk_agents_media::source::{self, Source};
-use lk_agents_media::{AudioFormat, CodecError};
+use lk_agents_media::{AudioFormat, CodecError, Container};
 use parking_lot::Mutex;
 use tokio::sync::Notify;
 
@@ -185,20 +185,19 @@ impl AudioDecoder {
     }
 
     /// Bytes pushed as they arrive through the returned input, decoded by one admitted native
-    /// job. `sample_rate` `None` keeps the source's rate. EOF follows `end_input` and delivery
+    /// job. `container` is one [`source::check_stream`] accepted; `None` probes it.
+    /// `sample_rate` `None` keeps the source's rate. EOF follows `end_input` and delivery
     /// of everything it queued.
     pub fn open_stream(
         media_pool: &MediaPool,
-        mime: &str,
+        container: Option<Container>,
         sample_rate: Option<u32>,
         num_channels: u16,
         limits: DecoderLimits,
     ) -> Result<(Self, DecoderInput), DecoderError> {
-        source::check_stream(mime)?;
         let input = Arc::new(StreamBuffer::new());
         let pipe = input.clone();
-        let source =
-            Source::Stream { mime: mime.to_owned(), read: Box::new(move || pipe.read_chunk()) };
+        let source = Source::Stream { container, read: Box::new(move || pipe.read_chunk()) };
         let decoder = Self::start(
             media_pool,
             source,
@@ -401,8 +400,9 @@ impl lk_agents_abi::media::codecs::AudioDecoder for StreamDecoder {
     ) -> Result<Self, CodecFailure> {
         let media_pool = lk_agents_media::pool::media_pool();
         let limits = decoder_limits(sample_rate.unwrap_or(48_000), num_channels);
+        let container = source::check_stream(&mime).map_err(failure)?;
         let (output, input) =
-            AudioDecoder::open_stream(&media_pool, &mime, sample_rate, num_channels, limits)
+            AudioDecoder::open_stream(&media_pool, container, sample_rate, num_channels, limits)
                 .map_err(failure)?;
         Ok(Self { input, output: tokio::sync::Mutex::new(output) })
     }

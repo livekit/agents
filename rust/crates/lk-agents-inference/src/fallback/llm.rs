@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use lk_agents_abi::LlmChunk;
 use lk_agents_abi::errors::ProviderError;
 use lk_agents_abi::llm::inference::InvalidPayload;
+use lk_agents_abi::types::provider::NativeLabel;
 use lk_agents_abi::{BoxFuture, Spawner};
 use lk_agents_abi::{ChatRequest, Closed, Llm, LlmStream, StreamOutput, ToolChoice, Ts};
 use lk_agents_abi::{Clock, HOST_TEARDOWN_TIMEOUT};
@@ -303,7 +304,7 @@ impl lk_agents_abi::utils::stream::ProviderStream<LlmChunk> for FallbackLlmChunk
 
 impl Llm for FallbackLlm {
     fn label(&self) -> String {
-        "llm.FallbackAdapter".into()
+        NativeLabel::LlmFallback.as_str().into()
     }
 
     fn request_span(&self) -> telemetry::RequestSpan {

@@ -23,11 +23,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use lk_agents_abi::errors::{ApiError, ProviderError, TimeoutPhase};
-use lk_agents_abi::llm::fallback::{AvailabilityChanged, REALTIME_FALLBACK_LABEL};
+use lk_agents_abi::llm::fallback::AvailabilityChanged;
 use lk_agents_abi::llm::realtime::{
     Event, GenerationDone, GenerationStatus, HostRealtime, MessageDone, MessageModalities,
     Modalities, RealtimeModelError,
 };
+use lk_agents_abi::types::provider::NativeLabel;
 use lk_agents_abi::{ChatContext, Realtime, RealtimeCommand, RealtimeSession, WallAnchor};
 use parking_lot::Mutex;
 
@@ -219,7 +220,7 @@ impl RealtimeFallbackModel {
 
 impl Realtime for RealtimeFallbackModel {
     fn label(&self) -> String {
-        REALTIME_FALLBACK_LABEL.to_owned()
+        NativeLabel::RealtimeFallback.as_str().to_owned()
     }
 
     fn capabilities(&self) -> RealtimeCapabilities {

@@ -9,10 +9,10 @@ use lk_agents_abi::Maybe;
 use lk_agents_abi::errors::HostError;
 use lk_agents_abi::voice::rtc::{DisconnectReason, RoomEvent, RtcRoom, TRACK_KIND_AUDIO};
 use lk_agents_abi::voice::workflows::InstructionsArg;
-use lk_agents_abi::voice::workflows::TwilioDial;
 pub use lk_agents_abi::voice::workflows::warm_transfer::{
     HUMAN_AGENT_IDENTITY, TWILIO_RINGING_TIMEOUT, TransferFailed, WarmTransferRefused,
 };
+use lk_agents_abi::voice::workflows::{TwilioCallEnd, TwilioDial};
 use lk_agents_abi::{Clock, HostRef, Spawner, SpawnerExt};
 use lk_agents_net::room_service::{RoomService, SipCall, Telephony};
 use lk_agents_net::task::{TaskId, TaskSet};
@@ -533,10 +533,11 @@ async fn twilio_create_call(
 
 /// A call the transfer gave up on, cancelled, or completed when it was answered meanwhile.
 async fn twilio_cancel(api: Arc<dyn TransferApi>, dial: TwilioDial, sid: String) {
-    let cancelled = match twilio_send(&api, twilio_http::set_status(&dial, &sid, "canceled")).await
-    {
+    let cancel = twilio_http::end_call(&dial, &sid, TwilioCallEnd::Canceled);
+    let cancelled = match twilio_send(&api, cancel).await {
         Err(DialError::Twilio(error)) if twilio::complete_instead(&error) => {
-            twilio_send(&api, twilio_http::set_status(&dial, &sid, "completed")).await.map(drop)
+            let complete = twilio_http::end_call(&dial, &sid, TwilioCallEnd::Completed);
+            twilio_send(&api, complete).await.map(drop)
         }
         other => other.map(drop),
     };

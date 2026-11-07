@@ -21,7 +21,7 @@ from .chat_items import ChatItem
 from .connect import APIConnectOptions
 from .storage_class import ThreadInfo
 from .storage_handler import HandlerOutcome, HandlerRun
-from .storage_options import TurnOptions
+from .storage_options import Policy, TurnOptions
 from .storage_turn import HandlerOutput, TurnResult
 
 class _core_Credentials:
@@ -225,7 +225,7 @@ class Turn:
     ) -> Self: ...
     @property
     def lane(self) -> str: ...
-    def policy_for(self, channel: str) -> str: ...
+    def policy_for(self, channel: str) -> Policy: ...
     async def run(self, message: object, task_id: str | None = None) -> TurnResult: ...
 
 def normalize_handler_output(

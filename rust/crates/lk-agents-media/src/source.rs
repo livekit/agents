@@ -8,19 +8,19 @@ use lk_agents_abi::AudioFrame;
 
 use crate::audio_decoder::{DecodeLimits, remix};
 use crate::error::CodecError;
-use crate::{AudioDecoder, AudioFormat};
+use crate::{AudioDecoder, AudioFormat, Container};
 
 /// Encoded or raw input of one decode job.
 pub enum Source {
     /// Replayed from its start while `looping` and it produced audio.
     File { path: String, looping: bool },
-    /// A complete container held in memory.
-    Container { mime: String, data: Vec<u8> },
+    /// A complete container held in memory; `None` probes it.
+    Container { container: Option<Container>, data: Vec<u8> },
     /// Interleaved little-endian PCM in `format`.
     Pcm { data: Vec<u8>, format: AudioFormat },
     /// Written as it arrives: `read` blocks for the next write, `None` at the end of input. Each
     /// write is a WAV stream's restart boundary.
-    Stream { mime: String, read: Box<dyn FnMut() -> Option<Vec<u8>> + Send> },
+    Stream { container: Option<Container>, read: Box<dyn FnMut() -> Option<Vec<u8>> + Send> },
 }
 
 /// Where decoded PCM goes, already at the requested format. An error stops the job.
@@ -43,16 +43,18 @@ pub fn decode<E: From<CodecError>>(
                 return Ok(());
             }
             let file = std::fs::File::open(&path).map_err(read_error)?;
-            let emitted = format.decode(file_mime(&path), &mut Blocks(file), output)?;
+            let emitted = format.decode(file_container(&path), &mut Blocks(file), output)?;
             if !looping || !emitted {
                 return Ok(());
             }
         },
-        Source::Container { mime, data } => {
-            format.decode(&mime, &mut Blocks(std::io::Cursor::new(data)), output).map(drop)
+        Source::Container { container, data } => {
+            format.decode(container, &mut Blocks(std::io::Cursor::new(data)), output).map(drop)
         }
         Source::Pcm { data, format: source } => format.pcm(&data, source, output),
-        Source::Stream { mime, mut read } => format.decode(&mime, &mut read, output).map(drop),
+        Source::Stream { container, mut read } => {
+            format.decode(container, &mut read, output).map(drop)
+        }
     }
 }
 
@@ -74,9 +76,10 @@ pub fn frames(
 }
 
 /// Refuses, before any worker is admitted, a streamed container this build cannot decode.
-pub fn check_stream(mime: &str) -> crate::Result<()> {
-    if cfg!(feature = "ffmpeg") || crate::mime_to_av_format(Some(mime)) == Some("wav") {
-        return Ok(());
+pub fn check_stream(mime: &str) -> crate::Result<Option<Container>> {
+    let container = crate::mime_container(mime);
+    if cfg!(feature = "ffmpeg") || container == Some(Container::Wav) {
+        return Ok(container);
     }
     Err(CodecError::UnsupportedMime {
         mime: mime.into(),
@@ -85,10 +88,10 @@ pub fn check_stream(mime: &str) -> crate::Result<()> {
 }
 
 /// A file decodes by its WAV extension without ffmpeg, else by probing.
-fn file_mime(path: &str) -> &'static str {
+fn file_container(path: &str) -> Option<Container> {
     let wav =
         std::path::Path::new(path).extension().is_some_and(|ext| ext.eq_ignore_ascii_case("wav"));
-    if wav && !cfg!(feature = "ffmpeg") { "audio/wav" } else { "" }
+    (wav && !cfg!(feature = "ffmpeg")).then_some(Container::Wav)
 }
 
 fn read_error(error: std::io::Error) -> CodecError {
@@ -105,12 +108,12 @@ impl Target {
     /// Whether any audio came out.
     fn decode<E: From<CodecError>>(
         &self,
-        mime: &str,
+        container: Option<Container>,
         input: &mut dyn Chunks,
         output: Output<'_, E>,
     ) -> std::result::Result<bool, E> {
         let mut emitted = false;
-        if crate::mime_to_av_format(Some(mime)) == Some("wav") {
+        if container == Some(Container::Wav) {
             let mut decoder =
                 AudioDecoder::wav(self.sample_rate, self.num_channels, self.limits.whole_pushes())?;
             while let Some(chunk) = input.next_chunk().map_err(read_error)? {
@@ -126,7 +129,7 @@ impl Target {
             // FFmpeg's callback carries only codec errors; the caller's is kept aside.
             let mut refused = None;
             let decoded = crate::ffmpeg::decode_stream(
-                crate::mime_to_av_format(Some(mime)),
+                container,
                 self.sample_rate.unwrap_or(0),
                 self.num_channels,
                 self.limits,
@@ -149,7 +152,7 @@ impl Target {
         {
             let _ = (input, output);
             Err(CodecError::UnsupportedMime {
-                mime: mime.into(),
+                mime: container.map_or("unknown", Container::as_str).into(),
                 reason: "container decoding needs the ffmpeg feature",
             }
             .into())

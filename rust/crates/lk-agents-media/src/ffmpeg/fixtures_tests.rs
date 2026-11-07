@@ -13,7 +13,7 @@
 
 use super::*;
 use crate::wav::tests::wav_file;
-use crate::{AudioDecoder, AudioFormat, mime_to_av_format};
+use crate::{AudioDecoder, AudioFormat, Container, mime_container};
 
 /// 802 bytes. Produced by:
 ///   ffmpeg -f lavfi -i "sine=frequency=440:sample_rate=48000:duration=0.1" \
@@ -124,7 +124,7 @@ fn decode(
     }
     let mut pcm = Vec::new();
     let format = decode_stream(
-        mime_to_av_format(Some(mime)),
+        mime_container(mime),
         rate.unwrap_or(0),
         channels,
         decode_limits(),
@@ -340,8 +340,9 @@ fn synchronous_decode_propagates_a_reader_failure_instead_of_reporting_eof() {
         }
     }
     let mut input = FailingRead(std::io::Cursor::new(wav_file(24000, 1, &[1; 2400])));
-    let error = decode_stream(Some("wav"), 24000, 1, decode_limits(), &mut input, |_, _| Ok(()))
-        .unwrap_err();
+    let error =
+        decode_stream(Some(Container::Wav), 24000, 1, decode_limits(), &mut input, |_, _| Ok(()))
+            .unwrap_err();
     assert!(
         matches!(error, CodecError::Ffmpeg { op: "read", ref detail } if detail == "source read failed")
     );
@@ -352,10 +353,11 @@ fn synchronous_decode_stops_after_pcm_delivery_is_refused() {
     let mut input = std::io::Cursor::new(wav_file(24000, 1, &[1; 24000]));
     let refused = CodecError::Ffmpeg { op: "PCM delivery", detail: "receiver closed".into() };
     let mut callbacks = 0;
-    let result = decode_stream(Some("wav"), 24000, 1, decode_limits(), &mut input, |_, _| {
-        callbacks += 1;
-        Err(refused.clone())
-    });
+    let result =
+        decode_stream(Some(Container::Wav), 24000, 1, decode_limits(), &mut input, |_, _| {
+            callbacks += 1;
+            Err(refused.clone())
+        });
     assert_eq!(result, Err(refused));
     assert_eq!(callbacks, 1, "native decode must stop at the first refused output");
 }
@@ -376,10 +378,11 @@ fn a_panicking_pcm_callback_becomes_a_decode_error_without_crossing_the_c_abi() 
     // The short resampled stream is delivered only while draining the final soxr tail.
     for (rate, samples) in [(24_000, 2400), (48_000, 24)] {
         let mut input = std::io::Cursor::new(wav_file(24_000, 1, &vec![1; samples]));
-        let error = decode_stream(Some("wav"), rate, 1, decode_limits(), &mut input, |_, _| {
-            panic!("callback failed");
-        })
-        .unwrap_err();
+        let error =
+            decode_stream(Some(Container::Wav), rate, 1, decode_limits(), &mut input, |_, _| {
+                panic!("callback failed");
+            })
+            .unwrap_err();
         assert!(
             matches!(error, CodecError::Ffmpeg { op: "output", ref detail } if detail == "output callback panicked")
         );
@@ -391,7 +394,9 @@ fn native_pcm_expansion_is_rejected_before_allocating_an_oversized_output() {
     let mut input = std::io::Cursor::new(wav_file(8000, 1, &[1; 2400]));
     let limits =
         crate::audio_decoder::DecodeLimits { max_samples_per_frame: 128, ..decode_limits() };
-    assert!(decode_stream(Some("wav"), 192000, 1, limits, &mut input, |_, _| Ok(())).is_err());
+    assert!(
+        decode_stream(Some(Container::Wav), 192000, 1, limits, &mut input, |_, _| Ok(())).is_err()
+    );
 }
 
 #[test]
@@ -402,9 +407,15 @@ fn a_reader_that_overreports_its_buffer_is_refused_at_the_ffi_boundary() {
             Ok(output.len() + 1)
         }
     }
-    let error =
-        decode_stream(Some("wav"), 24000, 1, decode_limits(), &mut OverreportedRead, |_, _| Ok(()))
-            .unwrap_err();
+    let error = decode_stream(
+        Some(Container::Wav),
+        24000,
+        1,
+        decode_limits(),
+        &mut OverreportedRead,
+        |_, _| Ok(()),
+    )
+    .unwrap_err();
     assert!(matches!(error, CodecError::Ffmpeg { op: "read", ref detail }
         if detail == "input callback returned more bytes than its supplied buffer"));
 }
@@ -424,7 +435,7 @@ fn container_rate_conversion_matches_the_shared_resampler_including_short_tails(
         let wav = wav_file(from, channels, &samples);
         let mut decoded = Vec::new();
         let format = decode_stream(
-            Some("wav"),
+            Some(Container::Wav),
             to,
             channels,
             decode_limits(),

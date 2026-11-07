@@ -248,7 +248,7 @@ impl FallbackSession {
             }
             Err(error) => st.events.push_back(Event::Error(RealtimeModelError {
                 timestamp: lk_agents_abi::Ts::ZERO,
-                label: REALTIME_FALLBACK_LABEL.to_owned(),
+                label: NativeLabel::RealtimeFallback.as_str().to_owned(),
                 message: error.to_string(),
                 recoverable: false,
                 req_id: None,

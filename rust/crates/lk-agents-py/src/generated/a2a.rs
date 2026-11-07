@@ -847,16 +847,16 @@ impl Turn {
     }
 
     #[pyo3(signature = (channel))]
-    fn policy_for(
+    fn policy_for<'py>(
         &self,
-        py: Python<'_>,
+        py: Python<'py>,
         channel: ::std::string::String,
-    ) -> PyResult<::std::string::String> {
+    ) -> PyResult<Bound<'py, PyAny>> {
         crate::py_calls::check_pid()?;
         let out = py.detach(|| {
             <TurnImpl as ::lk_agents_abi::a2a::turn::Turn>::policy_for(&self.0, channel)
         });
-        ::pyo3::PyResult::Ok(out)
+        crate::generated::records::storage_options::policy_to_py(py, out)
     }
 
     #[pyo3(signature = (message, task_id = None))]

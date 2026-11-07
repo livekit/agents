@@ -2,6 +2,19 @@
 
 use crate::AudioFrame;
 
+/// An audio container a decoder reads, named as FFmpeg's demuxer is.
+#[crate::host(wire_strs)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Container {
+    Mp3,
+    Aac,
+    Flac,
+    Wav,
+    Ogg,
+    Webm,
+    Mp4,
+}
+
 #[crate::host(error(kind = "RuntimeError"))]
 #[derive(Debug, Clone, thiserror::Error)]
 #[error("{0}")]

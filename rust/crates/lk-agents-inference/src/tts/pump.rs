@@ -315,7 +315,7 @@ impl Pump {
             Either::Left((Either::Right(_), _)) => TtsSynthesisEvent::Wake,
             Either::Right((Either::Left((command, _)), _)) => command,
             Either::Right((Either::Right((received, _)), _)) => {
-                received_event(received, &self.provider)
+                received_event(received, self.provider)
             }
         }
     }
@@ -375,7 +375,7 @@ fn command_event(command: Option<TextCmd>) -> TtsSynthesisEvent {
 /// A gateway message as a machine event, with its audio decoded.
 fn received_event(
     received: Result<WsMessage, TransportError>,
-    provider: &str,
+    provider: Option<InferenceProvider>,
 ) -> TtsSynthesisEvent {
     let raw = match received {
         Err(error) => return TtsSynthesisEvent::Failed(connect_error(WHAT, error)),

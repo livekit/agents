@@ -5,7 +5,6 @@
 
 use crate::effects::InterruptionEffect;
 use crate::headers::HeaderProvider;
-use crate::interruption::LABEL;
 use crate::interruption::event::{InterruptionDetectionError, OverlappingSpeechEvent};
 use crate::interruption::machine::{
     InputEvent, InterruptionEvent, InterruptionMachine, RequestIdentity, StreamError,
@@ -19,6 +18,7 @@ use lk_agents_abi::AudioFrame;
 use lk_agents_abi::Clock;
 use lk_agents_abi::errors::ApiError;
 use lk_agents_abi::turn::detector::ReqId;
+use lk_agents_abi::types::provider::NativeLabel;
 use lk_agents_abi::types::retry::{RequestKind, RetryDecision};
 use lk_agents_abi::{OwnedTask, SpawnerExt, TaskError};
 use lk_agents_core::attempts::RequestPolicy;
@@ -193,7 +193,7 @@ impl StreamContext {
     fn emit_error(&self, request: Option<ReqId>, error: ApiError, recoverable: bool) {
         let err = Box::new(InterruptionDetectionError {
             timestamp: self.wall(),
-            label: LABEL.to_owned(),
+            label: NativeLabel::InterruptionDetector.as_str().to_owned(),
             error,
             recoverable,
         });

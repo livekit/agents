@@ -191,7 +191,7 @@ pub const MAX_BYTES: usize = 2 * 1024 * 1024;
 /// One buffered head as it arrives, within its encoded byte and PCM duration bounds.
 pub struct HeadBytes {
     format: (u32, u16),
-    mime: String,
+    container: Option<lk_agents_media::Container>,
     pcm_limit: Option<usize>,
     data: Vec<u8>,
 }
@@ -206,7 +206,12 @@ impl HeadBytes {
         }
         let raw = info.mime_type.is_empty() || info.mime_type == "audio/pcm";
         let pcm_limit = raw.then(|| sample_limit(format) * 2);
-        Ok(Self { format, mime: info.mime_type.clone(), pcm_limit, data: Vec::new() })
+        Ok(Self {
+            format,
+            container: lk_agents_media::mime_container(&info.mime_type),
+            pcm_limit,
+            data: Vec::new(),
+        })
     }
 
     pub fn push(&mut self, chunk: &[u8]) -> std::result::Result<(), HeadError> {
@@ -231,7 +236,7 @@ impl HeadBytes {
                 data: self.data,
                 format: AudioFormat::new(self.format.0, self.format.1),
             },
-            None => Source::Container { mime: self.mime, data: self.data },
+            None => Source::Container { container: self.container, data: self.data },
         };
         let limits = lk_agents_media::audio_decoder::DecodeLimits {
             min_sample_rate: 8_000,

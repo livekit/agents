@@ -381,7 +381,7 @@ mod bench {
             let mut decoded = 0_usize;
             let mut signal = false;
             lk_agents_media::ffmpeg::decode_stream(
-                Some("ogg"),
+                Some(lk_agents_media::Container::Ogg),
                 RATE,
                 2,
                 lk_agents_media::audio_decoder::DecodeLimits {

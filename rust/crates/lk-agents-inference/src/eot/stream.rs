@@ -9,6 +9,7 @@ use std::sync::Arc;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::tokenize::language::{ThresholdOptions, TurnDetectorModel};
 use lk_agents_abi::turn::inference::EotStream as AbiEotStream;
+use lk_agents_abi::types::provider::NativeLabel;
 use lk_agents_abi::{AudioFrame, EotInferenceMetrics, EotPrediction, ProviderId};
 use lk_agents_media::pool::{JobClass, MediaPoolError};
 use lk_agents_media::{Quality, Resampler};
@@ -99,7 +100,7 @@ impl EotStream {
     ) -> DetectorStream {
         let shell = (session.model() == TurnDetectorModel::V1).then(|| make(session.model()));
         let id = ProviderId {
-            label: "livekit.agents.inference.TurnDetector".into(),
+            label: NativeLabel::TurnDetector.as_str().into(),
             model: session.model().as_str().into(),
             provider: crate::eot::PROVIDER.into(),
         };

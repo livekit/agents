@@ -20,7 +20,7 @@ use lk_agents_media::Frame;
 use lk_agents_media::emitter;
 use lk_agents_media::emitter::effects::AudioEmitterEffect;
 use lk_agents_media::pool::MediaPool;
-use lk_agents_media::{AudioDecoder, AudioDecoding};
+use lk_agents_media::{AudioDecoder, AudioDecoding, Container};
 use parking_lot::{Mutex, MutexGuard};
 use tokio::sync::{Notify, watch};
 
@@ -73,7 +73,7 @@ enum Decode {
 }
 
 struct Queue {
-    mime: String,
+    container: Option<Container>,
     ops: Mutex<VecDeque<Op>>,
     ready: Notify,
     /// The task has framed everything up to the end of input, or stopped.
@@ -364,7 +364,7 @@ impl Inner {
         let (rate, channels) = self.format();
         let (output, input) = codecs::AudioDecoder::open_stream(
             &self.media_pool,
-            &queue.mime,
+            queue.container,
             Some(rate),
             channels,
             decoder_limits(rate, channels),
@@ -440,16 +440,12 @@ impl lk_agents_abi::media::emitter::AudioEmitter for AudioEmitter {
             .map_err(|e| EmitterError::UnsupportedMime(e.to_string()))?
         {
             AudioDecoding::Passthrough => Decode::Pcm,
-            AudioDecoding::Decode(mime)
-                if lk_agents_media::mime_to_av_format(Some(&mime)) == Some("wav") =>
-            {
-                Decode::Wav(Mutex::new(None))
-            }
-            AudioDecoding::Decode(mime) => {
-                lk_agents_media::source::check_stream(&mime)
+            AudioDecoding::Decode(Container::Wav) => Decode::Wav(Mutex::new(None)),
+            AudioDecoding::Decode(_) => {
+                let container = lk_agents_media::source::check_stream(&mime_type)
                     .map_err(|e| EmitterError::UnsupportedMime(e.to_string()))?;
                 Decode::Container(Queue {
-                    mime,
+                    container,
                     ops: Mutex::default(),
                     ready: Notify::new(),
                     drained: watch::Sender::new(false),

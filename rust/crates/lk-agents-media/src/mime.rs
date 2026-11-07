@@ -1,23 +1,20 @@
 //! `_mime_to_av_format` (`utils/codecs/decoder.py:35-62`).
 
+use lk_agents_abi::media::codecs::Container;
+
 /// `None` means "let ffmpeg probe". Divergence: media-type parameters are stripped first, so
 /// `audio/webm;codecs=opus` (what the JS SDK sends) is not left to a too-small probe.
-pub fn mime_to_av_format(mime: Option<&str>) -> Option<&'static str> {
-    let mime = mime?;
-    // `if not mime`: empty or all-whitespace is falsy.
+pub fn mime_container(mime: &str) -> Option<Container> {
     let base = mime.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
-    if base.is_empty() {
-        return None;
-    }
     Some(match base.as_str() {
-        "audio/mpeg" | "audio/mp3" | "audio/x-mpeg" => "mp3",
-        "audio/aac" | "audio/x-aac" => "aac",
-        "audio/flac" | "audio/x-flac" => "flac",
-        "audio/wav" | "audio/wave" | "audio/x-wav" => "wav",
+        "audio/mpeg" | "audio/mp3" | "audio/x-mpeg" => Container::Mp3,
+        "audio/aac" | "audio/x-aac" => Container::Aac,
+        "audio/flac" | "audio/x-flac" => Container::Flac,
+        "audio/wav" | "audio/wave" | "audio/x-wav" => Container::Wav,
         // Raw opus arrives in ogg in every producer; the reference maps it to `ogg` too.
-        "audio/opus" | "audio/ogg" => "ogg",
-        "audio/webm" => "webm",
-        "audio/mp4" => "mp4",
+        "audio/opus" | "audio/ogg" => Container::Ogg,
+        "audio/webm" => Container::Webm,
+        "audio/mp4" => Container::Mp4,
         _ => return None,
     })
 }
@@ -27,8 +24,8 @@ pub fn mime_to_av_format(mime: Option<&str>) -> Option<&'static str> {
 pub enum AudioDecoding {
     /// `audio/pcm` or `audio/raw`: no decoder is built.
     Passthrough,
-    /// The normalised (trimmed, lower-cased) MIME type passed to the container decoder.
-    Decode(String),
+    /// The container the decoder reads.
+    Decode(Container),
 }
 
 /// `Display` is the refusal's sentence.
@@ -56,10 +53,7 @@ pub fn audio_decoding(mime_type: &str) -> Result<AudioDecoding, UnknownMime> {
     if mt.starts_with("audio/pcm") || mt.starts_with("audio/raw") {
         return Ok(AudioDecoding::Passthrough);
     }
-    if mime_to_av_format(Some(&mt)).is_none() {
-        return Err(UnknownMime(mime_type.to_owned()));
-    }
-    Ok(AudioDecoding::Decode(mt))
+    mime_container(&mt).map(AudioDecoding::Decode).ok_or_else(|| UnknownMime(mime_type.to_owned()))
 }
 
 #[cfg(test)]
@@ -81,15 +75,12 @@ mod tests {
     // Catches: accepting a mime type nothing can decode, which is the obvious over-correction to
     // "we decode containers now" -- and the sentence, which a plugin author reads in a traceback.
     #[test]
-    fn a_known_container_is_decoded_under_its_normalised_name_and_an_unknown_one_is_refused() {
-        assert_eq!(
-            audio_decoding(" Audio/MPEG "),
-            Ok(AudioDecoding::Decode("audio/mpeg".to_owned()))
-        );
+    fn a_known_container_is_decoded_and_an_unknown_one_is_refused() {
+        assert_eq!(audio_decoding(" Audio/MPEG "), Ok(AudioDecoding::Decode(Container::Mp3)));
         assert_eq!(
             audio_decoding("audio/webm;codecs=opus"),
-            Ok(AudioDecoding::Decode("audio/webm;codecs=opus".to_owned())),
-            "the parameter survives normalisation; the table strips it on lookup"
+            Ok(AudioDecoding::Decode(Container::Webm)),
+            "the table strips the parameter on lookup"
         );
         let err = audio_decoding("audio/x-not-a-real-container").unwrap_err();
         assert_eq!(
@@ -133,9 +124,9 @@ mod tests {
             ("application/octet-stream", None),
         ];
         for (mime, want) in table {
-            assert_eq!(mime_to_av_format(Some(mime)), want, "{mime}");
-            assert_eq!(mime_to_av_format(Some(&mime.to_ascii_uppercase())), want, "{mime}");
+            assert_eq!(mime_container(mime).map(Container::as_str), want, "{mime}");
+            let upper = mime_container(&mime.to_ascii_uppercase());
+            assert_eq!(upper.map(Container::as_str), want, "{mime}");
         }
-        assert_eq!(mime_to_av_format(None), None);
     }
 }

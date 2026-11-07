@@ -61,7 +61,7 @@ impl InferenceModels for Models {
     }
 
     fn tts_markup_provider_key(model: String) -> String {
-        crate::tts::wire::markup_provider_key(&model).to_owned()
+        crate::tts::wire::markup_provider(&model).map_or("", |p| p.as_str()).to_owned()
     }
 
     fn stt_parse_model_string(model: String) -> (String, Option<String>) {

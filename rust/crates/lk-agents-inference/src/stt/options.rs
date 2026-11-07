@@ -1,6 +1,7 @@
 //! `inference/stt.py`'s option resolution. Several are truthiness tests on values providers send
 //! empty or `false`; getting one wrong silently flips a capability.
 
+use lk_agents_abi::inference::models::InferenceProvider;
 use lk_agents_abi::{AlignedTranscript, SttCapabilities};
 use serde_json::{Map, Value, json};
 
@@ -78,39 +79,37 @@ pub fn keyterms_extra_for_model(
     let empty = Map::new();
     let extra = extra_kwargs.unwrap_or(&empty);
 
-    if model == SPEECHMATICS_SERVER_TURNS {
-        return None;
-    }
-    if model.starts_with("speechmatics/") {
-        // Keep existing entries as-is (they may carry `sounds_like` etc.) and append new terms.
-        let existing: Vec<Value> =
-            extra.get("additional_vocab").and_then(Value::as_array).cloned().unwrap_or_default();
-        let seen: Vec<&str> =
-            existing.iter().filter_map(|v| v.get("content").and_then(Value::as_str)).collect();
-        // The reference's `set(...) - seen` has unspecified order; kept in input order here.
-        let mut additions: Vec<Value> = Vec::new();
-        let mut added: Vec<&str> = Vec::new();
-        for term in session_keyterms {
-            if seen.contains(&term.as_str()) || added.contains(&term.as_str()) {
-                continue;
+    let key = match InferenceProvider::of_model(model)? {
+        _ if model == SPEECHMATICS_SERVER_TURNS => return None,
+        InferenceProvider::Deepgram => "keyterm",
+        InferenceProvider::Assemblyai => "keyterms_prompt",
+        InferenceProvider::Speechmatics => {
+            // Keep existing entries as-is (they may carry `sounds_like` etc.) and append new terms.
+            let existing: Vec<Value> = extra
+                .get("additional_vocab")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let seen: Vec<&str> =
+                existing.iter().filter_map(|v| v.get("content").and_then(Value::as_str)).collect();
+            // The reference's `set(...) - seen` has unspecified order; kept in input order here.
+            let mut additions: Vec<Value> = Vec::new();
+            let mut added: Vec<&str> = Vec::new();
+            for term in session_keyterms {
+                if seen.contains(&term.as_str()) || added.contains(&term.as_str()) {
+                    continue;
+                }
+                added.push(term);
+                additions.push(json!({"content": term}));
             }
-            added.push(term);
-            additions.push(json!({"content": term}));
+            let mut out = Map::new();
+            out.insert(
+                "additional_vocab".into(),
+                Value::Array(existing.into_iter().chain(additions).collect()),
+            );
+            return Some(out);
         }
-        let mut out = Map::new();
-        out.insert(
-            "additional_vocab".into(),
-            Value::Array(existing.into_iter().chain(additions).collect()),
-        );
-        return Some(out);
-    }
-
-    let key = if model.starts_with("deepgram/") {
-        "keyterm"
-    } else if model.starts_with("assemblyai/") {
-        "keyterms_prompt"
-    } else {
-        return None;
+        _ => return None,
     };
 
     // Deepgram's `keyterm` may be a bare string; it must become a one-element list.

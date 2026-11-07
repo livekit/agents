@@ -143,9 +143,6 @@ pub enum RealtimeFallbackMember {
     Host(std::sync::Arc<dyn crate::llm::realtime::HostRealtime>),
 }
 
-/// The realtime fallback's `label`, which also labels the error of a swap that failed.
-pub const REALTIME_FALLBACK_LABEL: &str =
-    "livekit.agents.llm.realtime.RealtimeModelFallbackAdapter";
 /// The realtime fallback's `model` name, which labels the error of a full event queue.
 pub const REALTIME_FALLBACK_MODEL: &str = "RealtimeModelFallbackAdapter";
 /// The error code of a reply the held backlog refused during a swap.

@@ -12,6 +12,7 @@ use crate::abi::{AudioFrame, StreamInput, StreamOutput};
 use crate::telemetry;
 
 use lk_agents_abi::errors::{ApiError, ProviderError};
+use lk_agents_abi::types::provider::NativeLabel;
 use lk_agents_abi::vad::inference::VadModels;
 use lk_agents_abi::{ProviderId, Vad, VadCapabilities, VadEvent, VadSink, VadSource};
 use machine::{VadOptions, VadOutput};
@@ -169,7 +170,7 @@ impl VadModel for HostModel {
 
 impl Vad for LocalVad {
     fn label(&self) -> String {
-        "livekit.agents.inference.VAD".into()
+        NativeLabel::Vad.as_str().into()
     }
 
     fn capabilities(&self) -> VadCapabilities {

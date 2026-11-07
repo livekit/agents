@@ -1,6 +1,6 @@
 //! Twilio Calls API HTTP requests. Transfer decisions remain in the voice core.
 
-use lk_agents_abi::voice::workflows::TwilioDial;
+use lk_agents_abi::voice::workflows::{TwilioCallEnd, TwilioDial};
 use lk_agents_voice::workflows::twilio::TwilioError;
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
@@ -34,9 +34,9 @@ pub fn create_call(dial: &TwilioDial, from: String, twiml: &str, token: Option<S
     request(dial, "/Calls.json", form)
 }
 
-pub fn set_status(dial: &TwilioDial, sid: &str, status: &str) -> Request {
+pub fn end_call(dial: &TwilioDial, sid: &str, status: TwilioCallEnd) -> Request {
     let path = format!("/Calls/{}.json", quote(sid));
-    request(dial, &path, vec![("Status".to_owned(), status.to_owned())])
+    request(dial, &path, vec![("Status".to_owned(), status.as_str().to_owned())])
 }
 
 pub fn reply(status: u16, body: &str) -> Result<Map<String, Value>, TwilioError> {

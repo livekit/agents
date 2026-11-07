@@ -38,6 +38,14 @@ pub struct TwilioDial {
     pub original_caller_number: Option<String>,
 }
 
+/// The `Status` a Twilio call update ends a call with: `Canceled` before it is answered.
+#[crate::host(wire_strs)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TwilioCallEnd {
+    Canceled,
+    Completed,
+}
+
 /// `WorkflowInstructions` as the host passes it: the two fields a workflow's template reads.
 #[derive(Clone, PartialEq, Eq)]
 #[crate::host(record(module = "workflows", name = "WorkflowInstructions", extract))]

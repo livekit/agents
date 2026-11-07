@@ -539,8 +539,8 @@ impl TurnContract for Turn {
     fn lane(&self) -> String {
         self.lane().to_owned()
     }
-    fn policy_for(&self, channel: String) -> String {
-        self.policy_for(&channel).as_str().to_owned()
+    fn policy_for(&self, channel: String) -> Policy {
+        self.policy_for(&channel)
     }
     async fn run(
         &self,

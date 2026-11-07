@@ -16,9 +16,11 @@ use futures_util::future::{Either, select};
 use lk_agents_abi::Spawner;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::inference::fallback::TtsFallbackModel;
+use lk_agents_abi::inference::models::InferenceProvider;
 use lk_agents_abi::inference::tts_client::InferenceTts;
 use lk_agents_abi::llm::inference::InvalidPayload;
 use lk_agents_abi::tts::stream_adapter::SentenceTextProcessor;
+use lk_agents_abi::types::provider::NativeLabel;
 use lk_agents_abi::utils::connection_pool::ConnectionPoolState;
 use lk_agents_abi::{ApiConnectOptions, Clock, SentenceSplitter, Ts};
 use lk_agents_core::tts::AudioTranscriptNormalizer;
@@ -320,7 +322,7 @@ impl GatewayTts {
         if let Some(conn) = self.conn_options {
             opts.conn_options = conn;
         }
-        let provider = opts.model.split('/').next().unwrap_or("").to_owned();
+        let provider = InferenceProvider::of_model(&opts.model);
         let identification = match identification {
             Some(headers) => Some(headers.clone()),
             None => self.identity.for_connection(),
@@ -361,10 +363,13 @@ impl GatewayTts {
         };
         let prep = TextPrep {
             pending_bytes: 0,
-            markup: lk_agents_core::tts::markup::text_processor(wire::markup_provider_key(
-                &pump.opts.model,
+            markup: wire::markup_provider(&pump.opts.model).and_then(|provider| {
+                lk_agents_core::tts::markup::text_processor(provider.as_str())
+            }),
+            sentences: Box::new(sentences::sentence_splitter(
+                Some(pump.provider.map_or("", InferenceProvider::as_str)),
+                expressive,
             )),
-            sentences: Box::new(sentences::sentence_splitter(Some(&pump.provider), expressive)),
         };
         self.tasks.spawn(self.spawner.as_ref(), "tts stream", pump.run());
 
@@ -399,7 +404,7 @@ impl Tts for GatewayTts {
     }
 
     fn label(&self) -> String {
-        "livekit.agents.inference.tts.TTS".into()
+        NativeLabel::InferenceTts.as_str().into()
     }
 
     fn id(&self) -> lk_agents_abi::ProviderId {
@@ -424,7 +429,7 @@ impl Tts for GatewayTts {
     }
 
     fn markup_provider(&self) -> String {
-        wire::markup_provider_key(&self.model()).to_owned()
+        wire::markup_provider(&self.model()).map_or("", |p| p.as_str()).to_owned()
     }
 
     /// The gateway stream lowers the markup itself.
@@ -662,7 +667,7 @@ struct Pump {
     failure: watch::Sender<Option<ApiError>>,
     create_frame: serde_json::Value,
     opts: TtsOptions,
-    provider: String,
+    provider: Option<InferenceProvider>,
     sample_rate: u32,
     transcript: AudioTranscriptNormalizer,
     text_rx: mpsc::Receiver<TextCmd>,

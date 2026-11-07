@@ -3,6 +3,8 @@
 
 use super::TtsOptions;
 use lk_agents_abi::TranscriptChunk;
+use lk_agents_abi::inference::models::InferenceProvider;
+use lk_agents_abi::tts::markup::Provider as MarkupProvider;
 use serde_json::{Map, Value, json};
 
 pub const DEFAULT_ENCODING: &str = "pcm_s16le";
@@ -29,11 +31,10 @@ pub fn normalize_fallback_str(model: &str) -> lk_agents_abi::inference::fallback
 /// `_has_aligned_transcript`: whether this model and these options produce timings (recomputed
 /// on `update_options`).
 pub fn has_aligned_transcript(model: &str, extra_kwargs: &Map<String, Value>) -> bool {
-    let provider = model.split('/').next().unwrap_or("");
-    match provider {
+    match InferenceProvider::of_model(model) {
         // `bool(extra_kwargs.get("add_timestamps"))` -- `false`, `0` and `""` are all "no".
-        "cartesia" => truthy(extra_kwargs.get("add_timestamps")),
-        "inworld" => matches!(
+        Some(InferenceProvider::Cartesia) => truthy(extra_kwargs.get("add_timestamps")),
+        Some(InferenceProvider::Inworld) => matches!(
             extra_kwargs.get("timestamp_type").and_then(Value::as_str),
             Some("WORD") | Some("CHARACTER")
         ),
@@ -45,13 +46,15 @@ fn truthy(value: Option<&Value>) -> bool {
     value.is_some_and(lk_agents_core::llm::provider_format::is_truthy)
 }
 
-/// `TTS.Markup._provider_key()`: the markup dialect; "" means the model has no markup.
-pub fn markup_provider_key(model: &str) -> &str {
-    let provider = model.split('/').next().unwrap_or("");
-    if provider == "inworld" {
-        return if model.contains("tts-2") { "inworld" } else { "" };
+/// `TTS.Markup._provider_key()`: the markup dialect, `None` for a model with no markup.
+pub fn markup_provider(model: &str) -> Option<MarkupProvider> {
+    match InferenceProvider::of_model(model)? {
+        InferenceProvider::Cartesia => Some(MarkupProvider::Cartesia),
+        InferenceProvider::Inworld if model.contains("tts-2") => Some(MarkupProvider::Inworld),
+        InferenceProvider::Xai => Some(MarkupProvider::Xai),
+        InferenceProvider::Fishaudio => Some(MarkupProvider::FishAudio),
+        _ => None,
     }
-    provider
 }
 
 /// The opening `session.create` frame. `"type"` first, unlike STT's.
@@ -139,7 +142,7 @@ pub enum Incoming {
 
 /// Decode one text frame. `provider` selects Cartesia's re-added trailing space on word alignment
 /// (`f"{w['word']} "`).
-pub fn decode(text: &str, provider: &str) -> Option<Incoming> {
+pub fn decode(text: &str, provider: Option<InferenceProvider>) -> Option<Incoming> {
     if text.len() > MAX_FRAME_BYTES {
         return Some(Incoming::Malformed { detail: "TTS gateway frame exceeds its limit".into() });
     }
@@ -174,7 +177,10 @@ fn output_audio(obj: &Map<String, Value>, session_id: Option<String>) -> Incomin
     }
 }
 
-fn alignment_tokens(obj: &Map<String, Value>, provider: &str) -> Option<Vec<TranscriptChunk>> {
+fn alignment_tokens(
+    obj: &Map<String, Value>,
+    provider: Option<InferenceProvider>,
+) -> Option<Vec<TranscriptChunk>> {
     let words = match obj.get("words") {
         None => None,
         Some(value) => Some(value.as_array()?),
@@ -184,7 +190,9 @@ fn alignment_tokens(obj: &Map<String, Value>, provider: &str) -> Option<Vec<Tran
         Some(value) => Some(value.as_array()?),
     };
     let (items, key, trailing_space) = match (words, chars) {
-        (Some(words), _) if !words.is_empty() => (words, "word", provider == "cartesia"),
+        (Some(words), _) if !words.is_empty() => {
+            (words, "word", provider == Some(InferenceProvider::Cartesia))
+        }
         (_, Some(chars)) => (chars, "char", false),
         (Some(words), _) => (words, "word", false),
         _ => return None,
@@ -305,7 +313,9 @@ mod tests {
     #[test]
     fn an_empty_words_list_falls_through_to_character_alignment() {
         let frame = r#"{"type":"output_alignment","words":[],"chars":[{"char":"h","start":0.0,"end":0.1}]}"#;
-        let Some(Incoming::OutputAlignment { tokens, .. }) = decode(frame, "inworld") else {
+        let Some(Incoming::OutputAlignment { tokens, .. }) =
+            decode(frame, Some(InferenceProvider::Inworld))
+        else {
             panic!("not an alignment")
         };
         assert_eq!(tokens.len(), 1);
@@ -317,11 +327,15 @@ mod tests {
     fn cartesia_word_tokens_get_their_space_back_and_other_providers_do_not() {
         let frame =
             r#"{"type":"output_alignment","words":[{"word":"hello","start":0.0,"end":0.4}]}"#;
-        let Some(Incoming::OutputAlignment { tokens, .. }) = decode(frame, "cartesia") else {
+        let Some(Incoming::OutputAlignment { tokens, .. }) =
+            decode(frame, Some(InferenceProvider::Cartesia))
+        else {
             panic!()
         };
         assert_eq!(tokens[0].text, "hello ");
-        let Some(Incoming::OutputAlignment { tokens, .. }) = decode(frame, "inworld") else {
+        let Some(Incoming::OutputAlignment { tokens, .. }) =
+            decode(frame, Some(InferenceProvider::Inworld))
+        else {
             panic!()
         };
         assert_eq!(tokens[0].text, "hello");
@@ -330,8 +344,8 @@ mod tests {
     // Catches: an older Inworld model mapping to "inworld" instead of "".
     #[test]
     fn older_inworld_models_report_no_markup_dialect() {
-        assert_eq!(markup_provider_key("inworld/inworld-tts-2"), "inworld");
-        assert_eq!(markup_provider_key("inworld/inworld-tts-1.5"), "");
-        assert_eq!(markup_provider_key("cartesia/sonic-3"), "cartesia");
+        assert_eq!(markup_provider("inworld/inworld-tts-2"), Some(MarkupProvider::Inworld));
+        assert_eq!(markup_provider("inworld/inworld-tts-1.5"), None);
+        assert_eq!(markup_provider("cartesia/sonic-3"), Some(MarkupProvider::Cartesia));
     }
 }

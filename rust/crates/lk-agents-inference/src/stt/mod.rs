@@ -28,6 +28,7 @@ use executor::SttStreamExecutor;
 use input::{AudioInput, Flush};
 use lk_agents_abi::Spawner;
 use lk_agents_abi::errors::{ApiError, ProviderError};
+use lk_agents_abi::types::provider::NativeLabel;
 use lk_agents_abi::{ApiConnectOptions, Clock, SpeechEvent};
 use lk_agents_media::AudioByteStream;
 use lk_agents_media::{AudioResampler, OnChange, Quality};
@@ -459,7 +460,7 @@ impl Stt for GatewayStt {
     }
 
     fn label(&self) -> String {
-        "livekit.agents.inference.stt.STT".into()
+        NativeLabel::InferenceStt.as_str().into()
     }
 
     fn id(&self) -> lk_agents_abi::ProviderId {

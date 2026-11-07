@@ -116,7 +116,8 @@ async fn file_decoding_preserves_audio_and_reports_file_and_codec_failures() {
 #[tokio::test]
 async fn a_stream_keeps_its_slot_until_cancellation_settles_then_refuses_input() {
     let media_pool = media_pool();
-    let open = || AudioDecoder::open_stream(&media_pool, "audio/wav", Some(24_000), 1, limits());
+    let open =
+        || AudioDecoder::open_stream(&media_pool, Some(Container::Wav), Some(24_000), 1, limits());
     let (mut first, input) = open().unwrap();
     // A header alone leaves the native reader waiting for more input.
     input.push(&wav(1, &[1; 480])[..44]).unwrap();

@@ -161,7 +161,7 @@ pub trait Turn: Send + Sync + Sized + 'static {
     #[host(getter)]
     fn lane(&self) -> String;
     #[host(call)]
-    fn policy_for(&self, channel: String) -> String;
+    fn policy_for(&self, channel: String) -> crate::a2a::options::Policy;
     #[host(await)]
     async fn run(
         &self,

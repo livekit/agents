@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use async_trait::async_trait;
 use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::tokenize::language::LanguageCode;
+use lk_agents_abi::types::provider::NativeLabel;
 use lk_agents_abi::{
     AlignedTranscript, AudioFrame, StreamInput, Stt, SttCapabilities, SttSink, SttSource,
 };
@@ -574,7 +575,7 @@ impl Stt for FallbackStt {
     }
 
     fn label(&self) -> String {
-        "stt.FallbackAdapter".into()
+        NativeLabel::SttFallback.as_str().into()
     }
 
     /// The **active** member's identity (L-25: adapters are transparent to the metrics).

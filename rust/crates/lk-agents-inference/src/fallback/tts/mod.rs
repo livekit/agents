@@ -17,6 +17,7 @@ use lk_agents_abi::errors::{ApiError, ProviderError};
 use lk_agents_abi::llm::fallback as port;
 use lk_agents_abi::llm::inference::InvalidPayload;
 use lk_agents_abi::tts::stream_adapter::{SplitterFactory, TextProcessorFactory};
+use lk_agents_abi::types::provider::NativeLabel;
 use lk_agents_abi::utils::stream::{ProviderStream, StreamOutput};
 use lk_agents_abi::{BoxFuture, Spawner};
 use lk_agents_abi::{Clock, HOST_TEARDOWN_TIMEOUT};
@@ -647,7 +648,7 @@ impl Tts for FallbackTts {
     }
 
     fn label(&self) -> String {
-        "tts.FallbackAdapter".into()
+        NativeLabel::TtsFallback.as_str().into()
     }
 
     fn request_span(&self) -> telemetry::RequestSpan {
