@@ -141,7 +141,7 @@ impl LlmInference<'_> {
         let mut trace = telemetry::LlmTrace::start(node.cx(shared), llm.as_ref(), &req);
         let attempt = trace.attempt();
         let mut data = self.announce_request(&req, llm.as_ref());
-        let observer = retry_observer(shared, handle, ProviderKind::Llm);
+        let observer = give_up_observer(shared, handle, ProviderKind::Llm);
         let opened = lk_agents_inference::llm::chat(
             llm.clone(),
             trace.cx(),
@@ -156,6 +156,7 @@ impl LlmInference<'_> {
                 Err(error)
             }
             Ok(mut stream) => {
+                report_retries(shared, handle, ProviderKind::Llm, &mut stream);
                 let ended = self.read_stream(&mut stream, &mut data, &mut trace).await;
                 self.settle_attempt(stream, &data, ended).await
             }
@@ -296,23 +297,45 @@ fn mint_call(shared: &Arc<SessionShared>, raw: &lk_agents_abi::FunctionToolCall)
     }
 }
 
-pub(super) fn retry_observer(
+/// The request gave up: the session's unrecoverable error. Its retries reach the session through
+/// [`report_retries`].
+pub(super) fn give_up_observer(
     shared: &Arc<SessionShared>,
     handle: &Arc<SpeechHandle>,
     leg: ProviderKind,
 ) -> lk_agents_inference::retry::Observer {
     let (shared, handle) = (shared.clone(), handle.clone());
-    Arc::new(move |error, retry, attempt| {
-        shared.report(GenEvent::ProviderFailed {
-            speech: handle.id(),
-            leg,
-            recoverable: matches!(retry, lk_agents_core::request::Retry::At(_)),
-            error: Box::new(error.clone()),
-        });
-        if let lk_agents_core::request::Retry::At(at) = retry {
-            shared.trace(GenerationStep::RetryArmed { speech: handle.id(), leg, attempt, at: *at });
+    Arc::new(move |error, retry, _| {
+        if matches!(retry, lk_agents_core::request::Retry::GiveUp(_)) {
+            shared.report(GenEvent::ProviderFailed {
+                speech: handle.id(),
+                leg,
+                recoverable: false,
+                error: Box::new(error.clone()),
+            });
         }
     })
+}
+
+/// Every retry of a leg's stream, its own or a voice's that retries its sentences itself, is the
+/// session's recoverable error and a retry the journal waits out, whichever reply opened it.
+pub(super) fn report_retries<T>(
+    shared: &Arc<SessionShared>,
+    handle: &SpeechHandle,
+    leg: ProviderKind,
+    source: &mut Box<dyn lk_agents_abi::ProviderStream<T>>,
+) {
+    let (on, speech) = (Arc::clone(shared), handle.id());
+    source.report_retries(Arc::new(move |error, attempt, wait| {
+        on.report(GenEvent::ProviderFailed {
+            speech,
+            leg,
+            recoverable: true,
+            error: Box::new(error),
+        });
+        let at = on.time.now().saturating_add(wait);
+        on.trace(GenerationStep::RetryArmed { speech, leg, attempt, at });
+    }));
 }
 
 pub(crate) async fn until_interrupted<T>(

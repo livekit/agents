@@ -1,7 +1,7 @@
 //! `perform_tts_inference`: one segment's duplex synthesis, retried, and its buffered playout.
 
 use super::forward::{PlaybackGate, TextLeg, capture, drain_segment_text, take_text};
-use super::llm::{report_metrics, retry_observer};
+use super::llm::{give_up_observer, report_metrics, report_retries};
 use super::playout::{Next, Segment, SourceFailed, first_frame, perform_audio_forwarding, unheard};
 use crate::telemetry;
 use crate::voice::session::SessionShared;
@@ -108,7 +108,7 @@ impl TtsInference<'_, '_, '_> {
             self.expressive,
             shared.conn.tts.unwrap_or_default(),
             shared.time.clock(),
-            Some(retry_observer(shared, handle, ProviderKind::Tts)),
+            Some(give_up_observer(shared, handle, ProviderKind::Tts)),
         )
         .await
         {
@@ -119,7 +119,7 @@ impl TtsInference<'_, '_, '_> {
             }
         };
         let (sink, mut source) = stream.split();
-        report_retries(shared, handle, &mut source);
+        report_retries(shared, handle, ProviderKind::Tts, &mut source);
         let tts_data = SynthesisMetrics::new(
             self.tts.id(),
             self.segment,
@@ -221,26 +221,6 @@ impl TtsNodeTrace {
             telemetry::TtsNodeEnd { ttfb: telemetry::Measured(self.ttfb.map(telemetry::Seconds)) },
         );
     }
-}
-
-/// A voice that does not stream retries its sentences itself: each retry is the session's
-/// recoverable error and a retry the journal waits out, whichever reply opened the stream.
-pub(super) fn report_retries(
-    shared: &Arc<SessionShared>,
-    handle: &SpeechHandle,
-    source: &mut lk_agents_abi::TtsSource,
-) {
-    let (on, speech) = (Arc::clone(shared), handle.id());
-    source.report_retries(Arc::new(move |error, attempt, wait| {
-        on.report(GenEvent::ProviderFailed {
-            speech,
-            leg: ProviderKind::Tts,
-            recoverable: true,
-            error: Box::new(error),
-        });
-        let at = on.time.now().saturating_add(wait);
-        on.trace(GenerationStep::RetryArmed { speech, leg: ProviderKind::Tts, attempt, at });
-    }));
 }
 
 /// One duplex stream: `end_input` is always sent, or a duplex stream never yields its final frame.

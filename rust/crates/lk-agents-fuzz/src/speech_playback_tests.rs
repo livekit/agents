@@ -387,13 +387,14 @@ mod lost_voice_ends_its_audio_once {
             let at = |step: fn(&Step) -> bool| {
                 run.record.journal().iter().position(|(_, s)| step(s)).expect("the scenario")
             };
-            let played = at(|s| {
+            // Audio came first, so the request gives up at once rather than replay it.
+            at(|s| {
                 matches!(s, Step::Playout(PlayoutStep::PlaybackFinished { interrupted: false, .. }))
             });
-            let lost = at(
-                |s| matches!(s, Step::Emitted(SessionEvent::Error(e)) if e.source == ErrorSource::Tts),
-            );
-            assert!(played < lost, "the scenario: the voice is lost after its audio played whole");
+            at(|s| {
+                matches!(s, Step::Emitted(SessionEvent::Error(e))
+                    if e.source == ErrorSource::Tts && !e.recoverable)
+            });
             let outcome = finish(run, Outcome::default()).await;
             assert!(outcome.failures.is_empty(), "{:#?}", outcome.failures);
         });
@@ -444,7 +445,11 @@ mod lost_voice_words_shown_whole {
             }
             // The first reply's words reached the text output before the next reply's synthesis.
             let next = run.record.journal().iter().find_map(|(at, s)| match s {
-                Step::Generation(GenerationStep::TtsRequested { .. }) => Some(*at),
+                Step::Generation(GenerationStep::TtsRequested { text, .. })
+                    if text.contains("refund") =>
+                {
+                    Some(*at)
+                }
                 _ => None,
             });
             let next = next.expect("the second reply was synthesised");
