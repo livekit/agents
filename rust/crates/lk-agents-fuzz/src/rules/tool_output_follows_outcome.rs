@@ -7,6 +7,7 @@
 //!
 //! A step cut short records its outputs asking for no reply, and the close settles calls still
 //! running as an error, so neither is held to the reply flag; a body cancelled has no outcome. A
+//! step whose speech ended before its outputs were recorded asks for no reply to them. A
 //! `VoiceTask`'s speech runs its tools on the task's runner, whose `Completed` ends the task: its
 //! agent asks for no reply to it. A body its first `ctx.update()` detached answers with its final,
 //! recorded under `<call_id>_final`; a host update ending a body first answers its call.
@@ -60,6 +61,13 @@ impl Rule for ToolOutputFollowsOutcome {
                 _ => None,
             })
             .collect();
+        // When each speech was told done.
+        let mut done = std::collections::BTreeMap::new();
+        for (at, step) in r.journal() {
+            if let Step::Emitted(SessionEvent::SpeechDone { speech, .. }) = step {
+                done.entry(speech.0).or_insert(*at);
+            }
+        }
         // Each task's stretch, from its entry to its end: a speech created in one is the task's.
         let mut stretches = Vec::new();
         let mut open = Vec::new();
@@ -132,7 +140,10 @@ impl Rule for ToolOutputFollowsOutcome {
                 &outcome,
                 lk_agents_core::tool_outcome::Mode::Voice,
             );
-            if *answer == ToolAnswer::Completed && in_task(speech) {
+            let over = done.get(&speech).is_some_and(|done| done < at);
+            if *answer == ToolAnswer::Completed && in_task(speech)
+                || over && !detached.contains(&tool.nth)
+            {
                 shape.reply_required = false;
             }
             let want = lk_agents_core::tool_outcome::delivered(&outcome).unwrap_or(shape.text);

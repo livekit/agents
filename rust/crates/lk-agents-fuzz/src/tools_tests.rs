@@ -625,6 +625,66 @@ mod tool_update_as_first_report {
     }
 }
 
+mod tool_answered_after_its_speech_failed {
+    //! A call whose speech failed while its host handler ran asks for no reply: nothing is left to
+    //! give one.
+    use lk_agents_abi::ChatItem;
+    use lk_agents_fuzz::check::check_all;
+    use lk_agents_fuzz::drive::{Run, Setup, simulate};
+    use lk_agents_fuzz::input::{AgentText, Input, Millis, Ref, ToolAnswer, ToolArgs};
+    use lk_agents_voice::events::SessionEvent;
+    use lk_agents_voice::trace::Step;
+
+    // Catches: the rule held the reply flag of a call whose model request failed after it: the
+    // speech failed while `function_tools_executed` ran, and the driver asks no reply of a step
+    // over before its outputs are recorded (seed 1018 TaskBridge, tool_output_follows_outcome).
+    #[test]
+    fn the_output_asks_for_no_reply() {
+        let setup =
+            Setup { tools: vec!["lookup".into()], hook_bound_ms: Some(2_500), ..Setup::default() };
+        let inputs = [
+            Input::GenerateReply { user_input: None, instructions: None, allow: None },
+            Input::Advance { ms: Millis(100) },
+            Input::LlmToolCall {
+                chat: Ref::new(0),
+                name: "lookup".into(),
+                args: ToolArgs("{}".into()),
+            },
+            Input::LlmFail { chat: Ref::new(0) },
+            Input::Advance { ms: Millis(3_000) },
+            Input::ToolAnswered {
+                tool: Ref::new(0),
+                answer: ToolAnswer::Value,
+                text: AgentText("12C".into()),
+            },
+            Input::Advance { ms: Millis(3_000) },
+        ];
+        let run = simulate(async {
+            let mut run = Run::start(&setup, 0, Default::default()).await;
+            for input in &inputs {
+                run.apply(input).await;
+            }
+            run
+        });
+        let recorded: Vec<bool> = run
+            .record
+            .journal()
+            .iter()
+            .filter_map(|(_, s)| match s {
+                Step::Emitted(SessionEvent::ConversationItemAdded { item, .. }) => match &**item {
+                    ChatItem::FunctionCallOutput(o) => Some(o.reply_required),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        assert_eq!(recorded, [false], "the output, recorded once, asks for no reply");
+        let failed: Vec<String> =
+            check_all(&run.record).0.into_iter().map(|f| f.contract.to_string()).collect();
+        assert!(!failed.iter().any(|c| c == "tool_output_follows_outcome"), "{failed:?}");
+    }
+}
+
 mod canonical_terminal_tool_result {
     //! One canonical question wins in model order, regardless of body completion order.
     use std::collections::BTreeMap;
